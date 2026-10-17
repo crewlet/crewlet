@@ -508,13 +508,46 @@ node means nothing was done.
 > attacker controls. See
 > [Identity and Access § A cross-site write is refused by its Origin](../concepts/identity-and-access.md#a-cross-site-write-is-refused-by-its-origin).
 >
-> **A permitted origin may send three request headers**, `Authorization`,
-> `Content-Type` and `Idempotency-Key`: the preflight answers that closed set
-> and never echoes what the browser asked for, so a page on an
-> `api.auth.allowed_origins` entry can act through
-> [`/operator/act`](#operatoract--the-dashboards-write-surface), which requires
-> the key, and retry a write as the same write. `X-Crewlet-Reader` is not in it:
-> only the dashboard sends it, from this process's own origin. See
+> **A permitted origin may send exactly the request headers the routes read,
+> and read exactly the response headers a client acts on.** The preflight
+> answers a closed set and never echoes what the browser asked for, and the
+> answer exposes a closed set, so a page on an `api.auth.allowed_origins` entry
+> can make every request the dashboard can — the browser refuses the whole
+> request when it carries a header the preflight did not allow, and hides from
+> the page every response header the answer did not expose:
+>
+> | Request header a permitted origin may send | Read by |
+> |---|---|
+> | `Authorization` | the guard: the bearer token |
+> | `Content-Type` | every route that takes a body |
+> | `Idempotency-Key` | [`/operator/act`](#operatoract--the-dashboards-write-surface), which requires it, and `/work`, `/pages` and `/iam`, which make a retry the same write by it |
+> | `If-Match`, `If-None-Match` | `/config` and its entities, a work item, a project file and `/setup`'s disconnect — see [Conditional requests](#conditional-requests) |
+> | `X-Summary` | a `/config` write's revision summary |
+> | `X-Crewlet-Invite-Secret`, `X-Crewlet-Reset-Secret` | `GET /auth/invite/{id}` and `GET /auth/reset/{id}`: a link's secret, kept out of the URL |
+>
+> | Response header a permitted origin's script may read | What a client does with it |
+> |---|---|
+> | `ETag` | writes it back as `If-Match`, or revalidates with it as `If-None-Match` |
+> | `Retry-After` | waits that many seconds before asking again |
+> | `Accept-Patch` | sends a refused `PATCH /config` again in a format it names |
+> | `Allow` | uses a method an `OPTIONS` or a `405` lists |
+> | `Content-Disposition` | saves a downloaded project file under its name |
+>
+> `Content-Type`, `Content-Length` and `Cache-Control` are readable without
+> being listed, as every CORS-safelisted header is. `X-Crewlet-Reader` is
+> **not** offered and stays same-origin only: only the dashboard sends it, from
+> this process's own origin, and its whole job is to say which person a tab of
+> the dashboard was opened for. Neither are the headers only a browser or a
+> proxy sets (`Origin`, `Upgrade`, `Accept-Encoding`, `X-Forwarded-For`), the
+> webhook routes' vendor headers — no page calls `/webhooks/*` — nor the MCP
+> transport's own session headers: `/operator/mcp` and `/mcp/` are reached by
+> programs, not pages. Nor is `Last-Event-ID`, which the
+> [Dashboard Assistant's stream](#the-turns-stream) resumes by: the stream
+> answers nothing but a person's own browser session, and no answer here
+> allows another origin credentials, so only the dashboard, on this process's
+> own origin, ever opens it. A gate in `internal/api/auth` walks the API's source
+> for every header a route reads or sets and fails on one neither offered here
+> nor withheld for a stated reason. See
 > [Configuration § Auth](../concepts/configuration.md#auth).
 >
 > **A request that says who it is for is served only to them.**

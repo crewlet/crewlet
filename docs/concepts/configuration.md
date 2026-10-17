@@ -1342,21 +1342,31 @@ them are refused too, naming the form to write instead: one outside ASCII,
 which a browser sends in its punycode form (`xn--bcher-kva.example`); an IPv4
 address written other than as four decimal octets (`127.1`, `0x7f.0.0.1`, a
 leading zero, which a browser reads as octal); and an IPv6 zone, which no
-browser can address. `api.external_url` is held to the same three. A permitted origin's response carries `Access-Control-Allow-Origin` and
-`Vary: Origin`; an unlisted one carries neither and the browser blocks it — it
-is not refused with a status, because a same-origin `POST` carries an `Origin`
-too and the default allow-list is empty.
+browser can address. `api.external_url` is held to the same three. A permitted
+origin's response carries `Access-Control-Allow-Origin`,
+`Access-Control-Expose-Headers` and `Vary: Origin`; an unlisted one carries
+only the `Vary` and the browser blocks it — it is not refused with a status,
+because a same-origin `POST` carries an `Origin` too and the default allow-list
+is empty.
 
 Preflights are answered **before** the auth guard, and deliberately: a browser
 sends the `OPTIONS` itself with no `Authorization` header, so answering it
 behind the guard would be a `401` on every cross-origin write and the real
 request would never be sent. The request headers a permitted origin may send
-are a closed set — `Authorization`, `Content-Type` and `Idempotency-Key` — never
-an echo of what the browser asked for. `Idempotency-Key` is in it because a
-permitted origin may write: `POST /operator/act/{tool}` refuses a request
-without one, and `/work`, `/pages` and `/iam` read it to make a retry the same
-write. The dashboard's `X-Crewlet-Reader` is not, since only the dashboard
-sends it and it is same-origin. A preflight is cacheable for ten minutes —
+are a closed set — exactly the ones the routes read: `Authorization`,
+`Content-Type`, `Idempotency-Key`, `If-Match`, `If-None-Match`, `X-Summary` and
+the two link secrets — never an echo of what the browser asked for, and an
+answer to a permitted origin exposes exactly the headers a client acts on:
+`ETag`, `Retry-After`, `Accept-Patch`, `Allow` and `Content-Disposition`.
+Leaving one out does not strip it; the browser refuses the whole request, or
+hides the header from the page, so a route reading a header a permitted origin
+cannot send is a route that origin can never use. The Dashboard Assistant's
+`Last-Event-ID` is not offered, since the one route that reads it, the
+assistant's stream, answers nothing but a person's own browser session, and
+no answer here allows another origin credentials. The dashboard's
+`X-Crewlet-Reader` is not offered, since only the dashboard sends it and it is
+same-origin. The [API reference](../reference/api-endpoints.md#routes)
+says which route reads each one. A preflight is cacheable for ten minutes —
 short enough that removing an origin takes effect within one.
 
 The auth middleware compares tokens in constant time (`crypto/subtle`).
