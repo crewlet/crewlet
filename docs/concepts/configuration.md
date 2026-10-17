@@ -1349,8 +1349,10 @@ cannot send is a route that origin can never use. The Dashboard Assistant's
 assistant's stream, answers nothing but a person's own browser session, and
 no answer here allows another origin credentials. The dashboard's
 `X-Crewlet-Reader` is not offered, since only the dashboard sends it and it is
-same-origin. The [API reference](../reference/api-endpoints.md#routes)
-says which route reads each one. A preflight is cacheable for ten minutes —
+same-origin. The methods are likewise exactly the ones the routes serve —
+`OPTIONS` among them, for `OPTIONS /config`. The
+[API reference](../reference/api-endpoints.md#routes) says which route reads
+each one. A preflight is cacheable for ten minutes —
 short enough that removing an origin takes effect within one.
 
 The auth middleware compares tokens in constant time (`crypto/subtle`).

@@ -417,3 +417,108 @@ func TestTheCORSListsNameEachHeaderOnce(t *testing.T) {
 		}
 	}
 }
+
+// A PERMITTED ORIGIN MAY SEND EVERY METHOD A ROUTE SERVES, AND NO OTHER.
+//
+// Only GET, HEAD and POST leave a browser without asking; every other method a
+// script sends is preflighted, and a preflight that does not name it refuses
+// the whole request in the browser, where the engine never sees it. The set
+// was written down beside the routes rather than read off them, and it left
+// `OPTIONS` out while `OPTIONS /config` answers the `Allow` and `Accept-Patch`
+// [corsExposed] offers: a page on an allowed origin was offered both headers
+// and could never make the request that carries them.
+//
+// So this reads the method of every route pattern this API's handler source
+// registers — a pattern is a string that opens with its method and a space,
+// whole or as the head of a concatenation — and holds [corsMethods] to that
+// set in both directions. A GET pattern serves HEAD too, as the mux does, and
+// a pattern with no method constrains none, so it adds nothing. The webhook
+// package is skipped for the reason the header walk skips it.
+//
+// Mutation: drop OPTIONS from corsMethods and this fails naming it; add a
+// method no route serves and it fails naming that.
+func TestTheCORSMethodsAreTheMethodsTheRoutesServe(t *testing.T) {
+	t.Parallel()
+	served := routeMethods(t, sourcetree.Root(t))
+	// THE CONTROLS: the one OPTIONS route and a PATCH, so a walk that read
+	// nothing, or only the top-level table, cannot pass.
+	for _, method := range []string{http.MethodOptions, http.MethodPatch} {
+		if len(served[method]) == 0 {
+			t.Fatalf("control: the walk found no %s route (%d methods in all), so "+
+				"it is not reading the route table", method, len(served))
+		}
+	}
+	offered := map[string]bool{}
+	for _, method := range corsMethods {
+		offered[method] = true
+		if len(served[method]) == 0 {
+			t.Errorf("a permitted origin's preflight names %s and no route serves it",
+				method)
+		}
+	}
+	for method, where := range served {
+		if !offered[method] {
+			t.Errorf("%s is served (%s) and a permitted origin's preflight does not "+
+				"name it, so the browser refuses every such request", method,
+				strings.Join(where, ", "))
+		}
+	}
+}
+
+// routeMethods answers the method of every route pattern internal/api's
+// handler source spells, each with where.
+func routeMethods(t *testing.T, root string) map[string][]string {
+	t.Helper()
+	methods := map[string]bool{
+		http.MethodGet: true, http.MethodHead: true, http.MethodPost: true,
+		http.MethodPut: true, http.MethodPatch: true, http.MethodDelete: true,
+		http.MethodOptions: true, http.MethodConnect: true, http.MethodTrace: true,
+	}
+	out := map[string][]string{}
+	apiDir := filepath.Join(root, "internal", "api")
+	err := sourcetree.Walk(apiDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "testdata" || path == filepath.Join(apiDir, "webhooks") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return fmt.Errorf("parsing %s: %w", path, err)
+		}
+		rel, _ := filepath.Rel(root, path)
+		ast.Inspect(file, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			value, err := strconv.Unquote(lit.Value)
+			if err != nil {
+				return true
+			}
+			method, rest, found := strings.Cut(value, " ")
+			if !found || !methods[method] || (rest != "" && !strings.HasPrefix(rest, "/")) {
+				return true
+			}
+			where := fmt.Sprintf("%s:%d", rel, fset.Position(lit.Pos()).Line)
+			out[method] = append(out[method], where)
+			if method == http.MethodGet {
+				out[http.MethodHead] = append(out[http.MethodHead], where+" (a GET)")
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s: %v", apiDir, err)
+	}
+	return out
+}

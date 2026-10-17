@@ -77,10 +77,18 @@ const CORSMaxAge = 10 * time.Minute
 // `Content-Disposition` that names a downloaded project file. A
 // CORS-safelisted header (`Content-Type`, `Content-Length`, `Cache-Control`)
 // is readable without being listed.
+//
+// THE METHODS ARE EXACTLY THE ONES THE ROUTES SERVE, held so by
+// TestTheCORSMethodsAreTheMethodsTheRoutesServe over every route pattern the
+// API's source registers — `OPTIONS` among them, because `OPTIONS /config`
+// answers the `Allow` and `Accept-Patch` that corsExposed offers, and only
+// GET, HEAD and POST are sent without asking: a script's `OPTIONS` is
+// preflighted like a `PATCH`, and a preflight that did not name it refused the
+// request outright.
 var (
 	corsMethods = []string{
 		http.MethodGet, http.MethodHead, http.MethodPost,
-		http.MethodPut, http.MethodPatch, http.MethodDelete,
+		http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions,
 	}
 	corsHeaders = []string{
 		"Authorization", "Content-Type", opkey.Header,
