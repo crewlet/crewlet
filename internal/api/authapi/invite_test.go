@@ -32,9 +32,10 @@ const invitationID = "018f3a9c-4d2e-7000-8000-0000000001d1"
 // what every view presents in its header and every redemption in its body.
 const invitationSecret = "the-links-own-secret-beside-its-id"
 
-// secretHeader is the header an invitation's view reads the secret from — the
-// dashboard's own spelling of it, which a case holds the surface to.
-const secretHeader = "X-Crewlet-Invite-Secret"
+// secretHeader is the header an invitation's view reads the secret from, which
+// [TestTheDashboardSendsALinksSecretInTheHeaderItsViewReads] holds to the
+// dashboard's own spelling.
+const secretHeader = authapi.InviteSecretHeader
 
 // viewInvite is a GET of an invitation's view presenting its link's secret, as
 // the dashboard's screen asks it.

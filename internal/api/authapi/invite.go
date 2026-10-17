@@ -39,7 +39,7 @@ import (
 // browser never sends to any server — so neither half reaches a proxy's access
 // log by the person following it. The screen then calls these routes with the
 // id in the path and the secret beside it, never in a URL: the view in the
-// [inviteSecretHeader] header and the redemption in its JSON body. The id
+// [InviteSecretHeader] header and the redemption in its JSON body. The id
 // alone is in every snapshot, backup
 // and access log and opens nothing; what the estate keeps of the secret is its
 // verifier ([iamdomain.InvitationRow.Admits]).
@@ -50,13 +50,19 @@ import (
 // secret against a real id would say the id exists, and the id is the half
 // that leaks.
 
-// inviteSecretHeader carries an invitation link's secret to the view.
+// InviteSecretHeader carries an invitation link's secret to the view.
 //
 // A HEADER because the view is a GET and a GET has no body, and never the
 // query string, which every access log between the browser and this node
 // records: the secret rode in the URL's fragment precisely so that none of
 // them would see it.
-const inviteSecretHeader = "X-Crewlet-Invite-Secret"
+//
+// SPELLED TWICE BY NECESSITY — here, and by the dashboard's invitation screen
+// in `contract/identity.ts` `INVITE_SECRET_HEADER` — and held equal by
+// [TestTheDashboardSendsALinksSecretInTheHeaderItsViewReads]: a screen sending
+// it under another name presents no secret, and every invitation it opens is
+// the one `410` an id nobody issued answers.
+const InviteSecretHeader = "X-Crewlet-Invite-Secret"
 
 // inviteView is what the form renders from.
 type inviteView struct {
@@ -114,7 +120,7 @@ type inviteSeat struct {
 // inviteRedeem is what redeeming presents.
 type inviteRedeem struct {
 	// Secret is the half of the link after the id — REQUIRED, and in the
-	// body rather than the path for [inviteSecretHeader]'s reason.
+	// body rather than the path for [InviteSecretHeader]'s reason.
 	Secret string `json:"secret"`
 
 	// Login is REQUIRED: every person enrols with one, in the person
@@ -128,12 +134,12 @@ type inviteRedeem struct {
 // ViewInvite renders an invitation without spending it.
 //
 // UNGUARDED, because holding the link IS the credential — its secret, in
-// [inviteSecretHeader], 256 bits nobody can walk — and on no curve, because a
+// [InviteSecretHeader], 256 bits nobody can walk — and on no curve, because a
 // link names nobody until it opens: see [Service.uncounted].
 func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
 	adm := s.uncounted(r)
 	held, ok := s.presentedInvitation(w, r, adm, r.PathValue("id"),
-		r.Header.Get(inviteSecretHeader))
+		r.Header.Get(InviteSecretHeader))
 	if !ok {
 		return
 	}

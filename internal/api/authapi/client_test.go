@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/clientsource"
 )
 
@@ -79,6 +80,34 @@ func TestTheResetScreenReadsWhatTheResetViewSends(t *testing.T) {
 				t.Errorf("the view sends %q and ResetView does not declare it, "+
 					"so the screen cannot read it", key)
 			}
+		}
+	}
+}
+
+// THE DASHBOARD SENDS A LINK'S SECRET IN THE HEADER ITS VIEW READS.
+//
+// The invitation and reset screens open a link with its secret beside the id,
+// in a header, because the view is a GET and the secret must never ride a URL.
+// The engine and the dashboard each spell the two headers, and nothing held the
+// spellings equal: one renamed on either side alone and the screen presents no
+// secret, so every link it opens is the one `410` an id nobody issued answers —
+// at runtime, in a person's browser, with every test green. The dashboard
+// declares both in `contract/identity.ts`.
+//
+// Mutation: respell either declaration there and its row fails.
+func TestTheDashboardSendsALinksSecretInTheHeaderItsViewReads(t *testing.T) {
+	t.Parallel()
+	for name, want := range map[string]string{
+		"INVITE_SECRET_HEADER": authapi.InviteSecretHeader,
+		"RESET_SECRET_HEADER":  authapi.ResetSecretHeader,
+	} {
+		got, err := clientsource.Scalar(clientsource.Tree(t), name)
+		if err != nil {
+			t.Fatalf("%v — this gate cannot run without the dashboard's declaration, "+
+				"and skipping would certify nothing", err)
+		}
+		if got != want {
+			t.Errorf("the dashboard sends %s as %q and the view reads %q", name, got, want)
 		}
 	}
 }
