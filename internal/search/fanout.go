@@ -180,6 +180,13 @@ type FanQuery struct {
 
 	// Limit caps the fused answer. Zero takes [ReturnDepth].
 	Limit int
+
+	// Prefetch says the search is a turn's knowledge prefetch rather than
+	// somebody's deliberate search ([knowledge.Query.Prefetch]). The
+	// COORDINATOR'S ALONE: it changes no scan, only which budget
+	// [FanOut.Report] holds the search's duration to, so the slice request
+	// a participant answers carries no such field.
+	Prefetch bool
 }
 
 // runs reports whether this query asks a participant to run method m.
@@ -281,15 +288,18 @@ type FanOut struct {
 	// [SemanticScanBudget], which is the ceiling one search already has.
 	Budget time.Duration
 
-	// Report is told what every answer covered and what it cost.
+	// Report is told what every answer covered and what it cost, beside
+	// the query it answered — whose [FanQuery.Prefetch] says which budget
+	// the cost is held to.
 	//
 	// A HOOK RATHER THAN A METRICS DEPENDENCY, so this package does not
 	// import the recorder to say one sentence. It is what lets
-	// `search_scoped`, `search_degraded` and `search_slow` fire at all:
-	// each of those alarms is a fraction of the answers, and a fraction
-	// nobody counts is an alarm that is permanently silent and looks
-	// exactly like a system with nothing wrong.
-	Report func(Answer, time.Duration)
+	// `search_scoped`, `search_degraded`, `search_slow` and `prefetch_slow`
+	// fire at all: the first two are fractions of the answers and the last
+	// two percentiles of their cost, and an input nobody records is an
+	// alarm that is permanently silent and looks exactly like a system
+	// with nothing wrong.
+	Report func(FanQuery, Answer, time.Duration)
 
 	// Enter is called when a search BEGINS, and the function it returns
 	// when that search ends.
@@ -598,7 +608,7 @@ func (f *FanOut) Search(ctx context.Context, q FanQuery) (Answer, error) {
 		answer := Answer{Modes: f.Modes(), Degraded: degraded,
 			Nodes: []knowledge.NodeCoverage{}}
 		if f.Report != nil {
-			f.Report(answer, time.Since(started))
+			f.Report(q, answer, time.Since(started))
 		}
 		return answer, nil
 	}
@@ -687,7 +697,7 @@ func (f *FanOut) Search(ctx context.Context, q FanQuery) (Answer, error) {
 		answer.Degraded = knowledge.DegradedSemanticPartial
 	}
 	if f.Report != nil {
-		f.Report(answer, time.Since(started))
+		f.Report(q, answer, time.Since(started))
 	}
 	return answer, nil
 }

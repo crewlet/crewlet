@@ -518,7 +518,8 @@ func (Knowledge) CanSearch(*org.Role, *org.Organization) bool { return true }
 // the company has written nothing down, which it would act on by writing a
 // duplicate of a page that exists.
 func (k Knowledge) Search(ctx context.Context, q knowledge.Query) knowledge.Result {
-	args := knowledgeArgs{Text: q.Text, Limit: q.Limit, Mode: q.Mode, Scoped: q.Org != nil}
+	args := knowledgeArgs{Text: q.Text, Limit: q.Limit, Mode: q.Mode, Scoped: q.Org != nil,
+		Prefetch: q.Prefetch}
 	if q.Seat != nil {
 		args.Seat = q.Seat.Handle()
 	}

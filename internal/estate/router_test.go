@@ -1301,18 +1301,27 @@ func TestAWriteThatNamesNobodyIsRefused(t *testing.T) {
 }
 
 // A SEARCH KEEPS "NO EXCLUSION" APART FROM "THE DEFAULT EXCLUSION", which the
-// query tells apart on purpose, and is scoped by the serving node's chart.
+// query tells apart on purpose, and is scoped by the serving node's chart. And
+// a turn's prefetch arrives as one: the serving node coordinates the scan and
+// times it, against the turn start's budget only if it is told whose it is.
+//
+// Mutation: drop Prefetch from knowledgeArgs or its query, and the prefetch
+// arrives as a deliberate search.
 func TestAKnowledgeSearchKeepsItsExclusionAndTakesTheServersScope(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
 	seat := &org.Role{Name: "Engineer", DeclaredHandle: "swe"}
 	searcher := f.client.Knowledge()
 	searcher.Search(t.Context(), knowledge.Query{Text: "deploys", Seat: seat,
-		Org: &org.Organization{}, ExcludeAncestors: []string{}})
+		Org: &org.Organization{}, ExcludeAncestors: []string{}, Prefetch: true})
 	searcher.Search(t.Context(), knowledge.Query{Text: "deploys"})
 	got := f.nodes["data-a"].queries
 	if len(got) != 2 {
 		t.Fatalf("searches = %d", len(got))
+	}
+	if !got[0].Prefetch || got[1].Prefetch {
+		t.Errorf("a prefetch arrived as Prefetch=%t and a deliberate search as Prefetch=%t", got[0].Prefetch,
+			got[1].Prefetch)
 	}
 	if got[0].ExcludeAncestors == nil || len(got[0].ExcludeAncestors) != 0 {
 		t.Errorf("an empty exclusion arrived as %#v", got[0].ExcludeAncestors)

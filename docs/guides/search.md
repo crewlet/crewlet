@@ -282,13 +282,23 @@ results out of what should have been eight otherwise concludes the other three
 do not exist. The `search_scoped` alarm reports the fraction of searches
 answered that way; see [Alarms](../reference/alarms.md).
 
-The three search alarms are kept apart because they cost different things:
+The four search alarms are kept apart because they cost different things:
 
 | Alarm | What happened | What the answer lost |
 |---|---|---|
 | `search_scoped` | A node did not cover its assignment — it was silent, its own lexical index has not finished its first lap, or its copy of what the search reads is out of service. | A range of the corpus went unscanned. |
 | `search_degraded` | A semantic ranking was asked for and did not run — a node's vector scan failed or its copy of the vectors is out of service, or the provider could not compute the query's vector. | Over the range it *did* scan, only what shares words with the query was found. |
-| `search_slow` | Interactive search is over its p95 target. | Nothing — yet. The corpus has outgrown what one node's share can scan in the budget. |
+| `search_slow` | The deliberate searches this node coordinated — a seat's `search_knowledge` or `search_work_items`, a person's — are over their one-second p95 target. | Nothing — yet. The corpus has outgrown what one node's share can scan in the budget. |
+| `prefetch_slow` | The knowledge scans this node coordinated for turns' prefetches are over their half-second p95 budget. | Nothing — yet. Every turn whose prefetch it scans waits that long before its first token. |
+
+A turn's prefetch and a deliberate search are timed apart, in
+`crewlet.tracker.search.scan.duration`'s `path` (`prefetch` and `interactive`),
+because they were promised different budgets: a turn waits for its prefetch
+before it does anything, so that scan is held to half of what a person searching
+on purpose waits. Each is timed by the node that coordinated the scan — the
+node whose store and share of the corpus it is — whichever node's turn or
+request asked. A Confluence knowledge base is searched by the wiki and is timed
+by neither.
 
 **A company with no embeddings provider is not degraded** as far as the alarm
 is concerned. `search_degraded` counts semantic rankings that were asked for and

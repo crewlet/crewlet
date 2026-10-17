@@ -66,7 +66,11 @@ const (
 	// has been failing for some time.
 	ReadBudget = 2 * time.Second
 
-	// PrefetchScanBudget is what a turn's context assembly was promised.
+	// PrefetchScanBudget is what the knowledge scan a turn's prefetch runs
+	// was promised: the turn waits for it before its first token, so it is
+	// held to half of what a person searching on purpose waits
+	// ([InteractiveSearchTarget]). Read off the node that coordinates the
+	// scan — the one whose store and share of the corpus it is.
 	PrefetchScanBudget = 500 * time.Millisecond
 
 	// HeadroomAlarmFraction is how little of a log's byte ceiling may
@@ -318,7 +322,10 @@ type Reading struct {
 	// FloorUnknownFor is how long the trim floor has been unreadable.
 	FloorUnknownFor time.Duration
 
-	// PrefetchP95 and SearchP95 are the two latencies a turn waits on.
+	// PrefetchP95 and SearchP95 are the knowledge scans this node
+	// coordinated, at p95: those a turn's prefetch ran, which the turn waits
+	// on before its first token, and those somebody ran on purpose. Two
+	// series, never one, since each is held to its own budget.
 	PrefetchP95, SearchP95 time.Duration
 
 	// SearchDegradedFraction and SearchScopedFraction are the fractions of
@@ -591,12 +598,17 @@ var table = []rule{
 	{
 		kind: KindPrefetchSlow,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("turn-start context assembly is %s at p95, against "+
-					"a %s budget", spoken(r.PrefetchP95), spoken(PrefetchScanBudget)),
+			return fmt.Sprintf("the knowledge scans this node ran for turns' prefetches "+
+					"are %s at p95, against a %s budget", spoken(r.PrefetchP95),
+					spoken(PrefetchScanBudget)),
 				r.PrefetchP95 > PrefetchScanBudget
 		},
-		remedy: "Every turn on this node pays this before its first token. Check " +
-			"the store's own latency and the knowledge backend's.",
+		remedy: "Every turn whose knowledge prefetch this node scans waits for the " +
+			"scan before its first token, whichever node the turn runs on. Check " +
+			"this node's store latency (`pool_starved`, `barrier_slow`) and the " +
+			"corpus against what one node's share can scan in the budget: adding " +
+			"a data node divides the buckets again, with no configuration and no " +
+			"rebuild. See docs/guides/search.md.",
 	},
 	{
 		kind: KindSearchSlow,
