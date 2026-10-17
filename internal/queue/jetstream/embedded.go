@@ -28,68 +28,117 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
-// The budgets for an embedded server ACCEPTING CONNECTIONS.
+// THE TWO HALVES OF AN EMBEDDED SERVER'S START, and why only one of them is
+// bounded.
 //
-// Not to be confused with [clusterReadyTimeout] below, which bounds a
-// different and later wait: this one is "the listener is up", that one is
-// "this member's JetStream has caught up with the metadata group". A boot
-// waits for both in that order, and they fail for different reasons.
+// nats-server's Start does everything a server does before it can be used —
+// recovers JetStream's file store, stands up its metadata group, opens its
+// leaf and client listeners — and returns; the route listener follows from a
+// goroutine Start leaves behind. So a boot waits for two things, in order:
+// THE START, which on any store worth the name is its recovery, and THE
+// LISTENERS after it.
 //
-// # Why two, and why the clustered one is larger
+// Not to be confused with [clusterReadyTimeout] below, which bounds a later
+// wait again: these are "this server is up", that one is "this member's
+// JetStream has caught up with the metadata group".
 //
-// A SOLO server has one thing to do before it accepts: recover its own file
-// store. A CLUSTERED member does that while also standing up its route
-// listener and starting to gossip with peers that are themselves booting —
-// so on a host bringing several members up at once it is competing for the
-// same disk and the same scheduler. One number for both is wrong for one of
-// them.
+// # Why the recovery has no budget
 //
-// # And why both are generous
+// Because a budget on it bounds nothing and can only fail a boot that is
+// working. A recovery is linear in what the store holds, and the store holds
+// the company's files with no ceiling but the object collector's. Measured on
+// a cold page cache on a local virtio disk, nats-server v2.15.1: 2 GiB of 1 KiB
+// events across four streams recovered in 2.3 s after a clean stop and 3.0 s
+// after a crash; 4 GiB of 128 KiB objects in one stream, 3.9 s and 6.3 s — a
+// second or a second and a half per GiB. At the thirty seconds a solo
+// start used to be given, a store of twenty or thirty GiB on that disk
+// could not boot, and on a slower disk proportionally less. And it could not
+// boot EVER: nats-server gives no way to stop a recovery, so the failed boot
+// waited for it anyway ([shutdownAndClean] joins Start), shut down the server
+// it had just recovered, and the next boot recovered the same store again.
 //
-// The asymmetry decides it. Failing here fails the WHOLE BOOT, so a budget
-// that is too short turns a busy host into a node that refuses to start and
-// then works on the retry — which during a rolling restart is how one slow
-// member takes out the restart. Too long only means a genuinely broken
-// server is reported as broken later, and the wait is CANCELLABLE, so a
-// person who has seen enough gets their prompt back — at once, unless the
-// broker is still recovering its store, which nats-server cannot stop and a
-// second interrupt walks away from (see [startEmbedded]).
+// So the start is waited for as long as it takes, and is never silent about
+// it: a line every [startReportEvery] says the broker is still starting and
+// for how long. It stays cancellable — the first interrupt ends the boot as
+// soon as the recovery lets it, a second exits at once (see [startEmbedded])
+// — and the bound on a disk that never answers belongs to whatever supervises
+// the process, a startup probe or a person at a terminal, which can see what
+// this process cannot.
 //
-// The clustered case shared the solo 30 seconds and flaked under the full
-// race suite with several clusters forming at once — which is a smaller
-// version of exactly the production case it has to survive.
+// # Why the listeners keep one
+//
+// Because by then nothing is left that takes time. Every listener is a bind,
+// and a bind that fails is a Fatalf, which ends the wait at once ([Death]);
+// the route listener is a goroutine away. [listenTimeout] is there for what no
+// one can predict — a nats-server that stops reporting itself ready for a
+// reason this package does not know of — so that it fails the boot by name
+// rather than hanging it. One budget for a solo server and a clustered member,
+// where there were two (thirty seconds and two minutes): the clustered one was
+// larger because a member recovering its store competes for the disk with the
+// peers recovering theirs, and that is the half no longer bounded.
 //
 // # And the handshake of every connection after it
 //
-// The same budget bounds the CLIENT HANDSHAKE a connection to this server
-// makes ([embeddedServer.connect]) — INFO, CONNECT, PING, PONG with a broker
-// in this very process, or on its loopback. That used nats's own default,
-// two seconds, which is a figure for dialling a REMOTE server whose silence
-// means it is not there. This one has already answered ReadyForConnections,
-// so the only thing a slow handshake here measures is the same scheduler
-// and disk contention the accept budget exists to ride out: a loaded host
-// failed a boot with `connect nats: read pipe: i/o timeout` against a
-// server that was up. The asymmetry above holds unchanged — a handshake cut
-// short fails the queue, the coordination store or a donor's connection,
-// while a long one only reports a wedged broker later — so it is the same
-// number rather than a third one to keep in step: 2 s became 30 s solo and
-// two minutes clustered.
+// The listener budget also bounds the CLIENT HANDSHAKE a connection to this
+// server makes ([embeddedServer.connect]) — INFO, CONNECT, PING, PONG with a
+// broker in this very process, or on its loopback. That used nats's own
+// default, two seconds, which is a figure for dialling a REMOTE server whose
+// silence means it is not there. This one has already answered
+// ReadyForConnections, so the only thing a slow handshake here measures is the
+// host's scheduler: a loaded host failed a boot with `connect nats: read pipe:
+// i/o timeout` against a server that was up. A handshake cut short fails the
+// queue, the coordination store or a donor's connection, while a long one only
+// reports a wedged broker later — so it is the budget this package already
+// gives a started server to take a connection, rather than a third number to
+// keep in step: 2 s became 30 s, solo and clustered alike. (While the start was
+// bounded as a whole it was that budget, thirty seconds solo and two minutes
+// clustered; the two minutes were for a store recovery, which no handshake
+// waits on.)
 const (
-	// acceptTimeout bounds a solo server: its own file store, and nothing
-	// else.
-	acceptTimeout = 30 * time.Second
+	// listenTimeout bounds the listeners once Start has returned: a bind
+	// each, and the route listener's goroutine being scheduled. Measured
+	// with sixteen clustered members started at once under the race
+	// detector on four cores: at worst 37 ms from Start returning to ready,
+	// most of it nats-server's own 25 ms readiness poll. Thirty seconds is
+	// a thousand times that — a host this budget fails on is not running
+	// a broker — and still well inside the patience of anything watching
+	// a boot.
+	listenTimeout = 30 * time.Second
 
-	// clusterAcceptTimeout bounds a member that is also standing up a
-	// route listener and gossiping with peers mid-boot.
-	clusterAcceptTimeout = 2 * time.Minute
+	// startReportEvery is how often a start still running says so. A fresh
+	// store starts in milliseconds and a few gigabytes in a few seconds, so
+	// a start still running at ten seconds is recovering a large store or
+	// stuck on its disk — either worth a line — and ten seconds between
+	// lines is short enough that a person watching a quiet boot learns why
+	// before they reach for an interrupt.
+	startReportEvery = 10 * time.Second
 )
 
-// acceptBudget is how long this server gets to accept connections.
-func acceptBudget(clustered bool) time.Duration {
-	if clustered {
-		return clusterAcceptTimeout
+// startTiming is the bound on an embedded server's listeners and the interval
+// between reports of a long start.
+//
+// AN UNSET FIELD IS PRODUCTION'S ([startTiming.resolved]). It is a value at
+// all, rather than the constants alone, for the reason [readiness] is: the
+// branches worth a case — a start that outlives the listener budget, a server
+// that never reports ready — are reached only by a budget running out, and at
+// the production numbers a case proving one waits half a minute.
+type startTiming struct {
+	listen, report time.Duration
+}
+
+// resolved is t with each unset field at production's value.
+//
+// FIELD BY FIELD, never the whole struct at once: a case that tightens only
+// the listener budget would otherwise keep a zero report interval, which
+// [time.NewTicker] refuses with a panic.
+func (t startTiming) resolved() startTiming {
+	if t.listen <= 0 {
+		t.listen = listenTimeout
 	}
-	return acceptTimeout
+	if t.report <= 0 {
+		t.report = startReportEvery
+	}
+	return t
 }
 
 const (
@@ -141,6 +190,9 @@ type embeddedServer struct {
 	// started is closed when ns.Start has returned. Every shutdown waits for
 	// it; see [shutdownAndClean].
 	started <-chan struct{}
+	// death is the server's own declaration that it cannot go on, made by
+	// its logger's Fatalf — see [Death] and [Server.Death].
+	death *Death
 	// inProcess is true when nothing listens on a socket, which is the
 	// solo case: connections are made through an in-memory pipe, so the
 	// broker cannot be reached from outside the process at all.
@@ -229,6 +281,33 @@ func (s *Server) Conn() (*nats.Conn, error) {
 		return nil, errors.New("jetstream: server is shut down")
 	}
 	return s.embedded.connect(watched{})
+}
+
+// Death is this broker's own declaration that it cannot go on: closed when
+// its nats-server calls Fatalf, carrying nats-server's reason. Nil once the
+// server is shut down.
+//
+// # What it means after the boot
+//
+// During the boot a Fatalf fails [StartServer] itself; this is for every
+// moment after it, and the answer is the one stock nats-server gives: the
+// process ends. A broker that has called itself dead is not one a node can
+// keep serving on — it carries every seat's mailbox, every acknowledgement and
+// every lease — and nothing the server does after a Fatalf promises to
+// recover, since it returned from the step that failed and left the rest
+// undone. The engine owns the process, so the engine ends it
+// (internal/engine's watch, through the seat watchdog's exit); this package
+// only declares.
+//
+// None of nats-server v2.15.1's own Fatalf call sites is reachable after the
+// boot on the options this package sets — every listener is bound, and so
+// checked, before [StartServer] returns — so this is the contract for the
+// next one rather than a path anything walks today.
+func (s *Server) Death() *Death {
+	if s.embedded == nil {
+		return nil
+	}
+	return s.embedded.death
 }
 
 // AwaitClusterReady waits until this member can serve a stream of replicas
@@ -321,28 +400,6 @@ func (e *embeddedServer) routePeers() []string {
 	return peers
 }
 
-// ClusterPort is the port this member's ROUTE listener actually bound, and 0
-// when it bound none.
-//
-// # Why a caller needs to ask
-//
-// A member whose route port is already taken does not fail to start: the
-// server logs the listener error and carries on serving clients, so every
-// readiness check passes and the member simply never forms a route. From the
-// outside that is indistinguishable from a cluster that is merely slow to
-// converge — which is how it was found, as a harness waiting out its whole
-// budget for peers that could never arrive.
-func (s *Server) ClusterPort() int {
-	if s.embedded == nil {
-		return 0
-	}
-	addr := s.embedded.ns.ClusterAddr()
-	if addr == nil {
-		return 0
-	}
-	return addr.Port
-}
-
 // AnyPort is the [Config.LeafPort] that binds the leaf listener on whichever
 // port the OS hands out — nats-server's own spelling of that request — and
 // [Server.LeafPort] reads back which one it was.
@@ -366,7 +423,7 @@ const AnyPort = -1
 // READ OFF THE SERVER'S OWN REPORT (Varz), the one place nats-server says it:
 // it writes the port it bound back into its options before it reports ready,
 // and offers no listener address for leaves the way it does for routes
-// ([Server.ClusterPort]).
+// (nats-server's ClusterAddr).
 func (s *Server) LeafPort() int {
 	if s.embedded == nil {
 		return 0
@@ -665,27 +722,24 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	}
 	clustered := opts.Cluster.Name != ""
 
-	// THE ROUTE PORT IS PROBED BEFORE THE SERVER IS ASKED FOR IT, because
-	// nats-server does not report this failure in any way an operator can
-	// act on.
+	// THE ROUTE AND LEAF PORTS ARE PROBED BEFORE THE SERVER IS ASKED FOR
+	// THEM, because the server binds them LAST.
 	//
-	// A member whose configured route port is held by something else does
-	// not fail: the listener error goes to the log and the server carries
-	// on. It then never becomes READY either — ReadyForConnections waits
-	// for the cluster listener as well as the client one — so the boot
-	// spends its whole clustered accept budget and fails with a message
-	// about peers being unreachable. Measured: two minutes, and it sends
-	// whoever reads it to debug a network path that is fine.
+	// nats-server opens its leaf listener after JetStream has recovered its
+	// store, and its route listener after that, from a goroutine Start
+	// leaves behind. A bind that fails there is a Fatalf, and the wait below
+	// ends on it with the port named — but only once the store recovery
+	// before it has run, which on a large store is minutes of work thrown
+	// away over a setting that could have been read in microseconds. Before
+	// that Fatalf was carried at all ([Death]), a taken route port had no
+	// symptom but the readiness wait expiring two minutes later and blaming
+	// the network.
 	//
-	// The probe cannot close the race and does not try; what it buys is the
-	// common case, named, in microseconds. The accept-timeout message below
-	// covers the rest.
-	// THE LEAF LISTENER THE SAME WAY, and for the same reason: a member
-	// whose leaf port is taken logs the bind failure and never becomes
-	// ready, and the boot spends its budget reporting something else. Not
+	// The probe cannot close the race and does not try: a port taken between
+	// it and the bind is the Fatalf's to report ([deathError]). Not
 	// [AnyPort], which names no port to probe: the OS hands out a free one.
-	// Refused as [ErrLeafPortTaken], never the route listener's sentinel:
-	// the remedy is a different setting on a different listener.
+	// Each refused under its own sentinel, never the other's: the remedy is a
+	// different setting on a different listener.
 	if opts.LeafNode.Port > 0 {
 		free, probeErr := PortAvailable(ctx, opts.LeafNode.Host, opts.LeafNode.Port)
 		switch {
@@ -734,7 +788,20 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	// Trace is never enabled: it is a line per protocol message, and the
 	// engine publishes every event through here. Debug is the operator's
 	// own answer rather than the log level's — see [Config.Debug].
-	ns.SetLoggerV2(newNATSLogger(cfg.ServerName), cfg.Debug, false, false)
+	//
+	// AND IT IS HOW A FATALF REACHES THIS FUNCTION: the logger declares the
+	// broker's death, and the waits below end on it — see [Death].
+	death := newDeath()
+	ns.SetLoggerV2(newNATSLogger(cfg.ServerName, death), cfg.Debug, false, false)
+	// EVERYTHING READ OFF THE OPTIONS IS READ BEFORE Start: the server
+	// writes what it resolves — the ports it bound — back into these same
+	// options, from Start's goroutine. The listeners are what a death is
+	// judged against.
+	listeners := listenerSpecs{
+		route: listenerSpec{port: opts.Cluster.Port, host: opts.Cluster.Host},
+		leaf:  listenerSpec{port: opts.LeafNode.Port, host: opts.LeafNode.Host},
+	}
+	store, inProcess, leaf := opts.StoreDir, opts.DontListen, len(opts.LeafNode.Remotes) > 0
 	// START IS JOINED, and every shutdown of this server waits for it: see
 	// [shutdownAndClean] for what a Shutdown that overlaps it leaves behind.
 	started := make(chan struct{})
@@ -743,36 +810,24 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 		ns.Start()
 	}()
 
-	// THE WAIT IS CANCELLABLE, which is the whole reason this function takes
-	// a context. ReadyForConnections blocks for up to its budget with no way
-	// to interrupt it, so a Ctrl-C during a slow cold start — a large file
-	// store recovering its streams — used to sit out the full 30 seconds
-	// before the process could begin its drain. What a cancel cannot end is
-	// Start itself, which nats-server gives no way to stop: a cancel during a
-	// store's recovery waits for the recovery, says so, and a second
-	// interrupt is the operator's way out (cmd/crewlet hands the signals back
-	// at the first).
-	budget := acceptBudget(clustered)
-	ready := make(chan bool, 1)
-	go func() { ready <- ns.ReadyForConnections(budget) }()
-	select {
-	case ok := <-ready:
-		if !ok {
-			// FORMED BEFORE THE SHUTDOWN, which is the whole reason this
-			// is one expression rather than a branch below: Shutdown
-			// closes the route listener and clears ClusterAddr, so read
-			// afterwards it answers nil on every clustered member and
-			// every readiness failure there is would be reported as a
-			// port collision.
-			err := notReadyError(budget, clustered, opts.Cluster.Port,
-				opts.Cluster.Host, ns.ClusterAddr() != nil)
-			shutdownAndClean(ns, started, scratch)
-			return nil, err
-		}
-	case <-ctx.Done():
-		select {
-		case <-started:
-		default:
+	// THE START, THEN THE LISTENERS — see [listenTimeout] for why only the
+	// second is bounded, and [awaitBoot] for what ends each.
+	err = awaitBoot(ctx, bootWait{
+		started: started, death: death,
+		ready: ns.ReadyForConnections, listeners: listeners, clustered: clustered,
+		timing: cfg.start.resolved(),
+		slow: func(elapsed time.Duration) {
+			logging.Get("queue.jetstream").Info("embedded_broker_starting",
+				"server", cfg.ServerName, "store_dir", store,
+				"elapsed_seconds", int(elapsed.Seconds()),
+				"detail", "the embedded broker is still starting — recovering "+
+					"its file store, which takes as long as the store is large, "+
+					"and nats-server reports no progress of its own",
+				"hint", "nothing to do while this repeats; a store that recovers "+
+					"every time but slowly is recovering what it holds, and an "+
+					"interrupt stops the boot once the recovery lets it")
+		},
+		cancelWaits: func() {
 			logging.Get("queue.jetstream").Warn("embedded_start_cancel_waits",
 				"server", cfg.ServerName,
 				"detail", "the embedded broker is still starting — usually "+
@@ -780,51 +835,203 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 					"in progress, so this waits for it before shutting it down",
 				"hint", "interrupt again to exit at once; the store recovers "+
 					"again at the next start")
-		}
-		// The readiness goroutine is not waited for: it ends within its
-		// budget, into a channel buffered for the answer nobody reads.
+		},
+	})
+	if err != nil {
 		shutdownAndClean(ns, started, scratch)
-		return nil, fmt.Errorf("start embedded nats: %w", ctx.Err())
+		return nil, err
 	}
 	return &embeddedServer{
-		ns: ns, started: started, inProcess: opts.DontListen, scratch: scratch,
-		clustered: clustered, leaf: len(opts.LeafNode.Remotes) > 0, system: system,
+		ns: ns, started: started, death: death, inProcess: inProcess,
+		scratch: scratch, clustered: clustered, leaf: leaf, system: system,
 	}, nil
 }
 
-// notReadyError says what a readiness failure MEANS, which is not one thing:
-// a member that never bound its route listener has a different problem, a
-// different remedy and a different thing to go and look at from one whose
-// peers did not answer.
-//
-// routed is whether the route listener was bound, and it is the caller's to
-// read BEFORE it shuts the server down — see the call site. It is a plain
-// argument rather than a *server.Server for that reason: a helper handed the
-// server could read it at the wrong moment, which is the bug this shape
-// removes.
-func notReadyError(budget time.Duration, clustered bool,
-	routePort int, routeHost string, routed bool) error {
+// bootWait is what [awaitBoot] waits on.
+type bootWait struct {
+	// started is closed when the server's Start has returned.
+	started <-chan struct{}
+	// death is the server's declaration that it cannot go on.
+	death *Death
+	// ready is the server's ReadyForConnections.
+	ready func(time.Duration) bool
+	// listeners and clustered are what a failure is reported against.
+	listeners listenerSpecs
+	clustered bool
+	timing    startTiming
+	// slow is told how long the start has been running, once every
+	// timing.report while it is.
+	slow func(elapsed time.Duration)
+	// cancelWaits is told that the caller cancelled while the start was
+	// still running, so the shutdown after the wait will wait for it.
+	cancelWaits func()
+}
 
-	// THE ROUTE LISTENER FIRST, because when it is the cause every other
-	// word here is a wrong lead. The pre-bind probe catches the ordinary
-	// case; this catches the port lost in the window between that probe
-	// and the bind, and it is the only evidence of it — the listener error
-	// went to the log and the server carried on serving clients.
-	if clustered && routePort != 0 && !routed {
-		return fmt.Errorf(
-			"%w: embedded nats server bound no route listener within %v, "+
-				"so stream.cluster.port %d on %s was taken while this member "+
-				"was starting and it can never form a route to a peer",
-			ErrRoutePortTaken, budget, routePort, routeHostLabel(routeHost))
+// awaitBoot waits for a starting server: its Start, as long as that takes,
+// then its listeners, for at most the listener budget.
+//
+// THREE THINGS END IT BESIDES SUCCESS, each with its own answer: the server's
+// own death ([deathError], at once, in either half), a server that returned
+// from Start and never reported ready ([notReadyError]), and the caller's
+// context. The context ends the WAIT, never the start — nats-server gives no
+// way to stop a Start in progress — so a cancel during the first half says
+// that the shutdown after it will wait for the recovery, and a second interrupt
+// is the operator's way out (cmd/crewlet hands the signals back at the first).
+//
+// It shuts nothing down: the caller does, and the caller's shutdown waits for
+// Start ([shutdownAndClean]).
+func awaitBoot(ctx context.Context, w bootWait) error {
+	begun := time.Now()
+	report := time.NewTicker(w.timing.report)
+	defer report.Stop()
+	for running := true; running; {
+		select {
+		case <-w.started:
+			running = false
+		case <-w.death.Done():
+			return deathError(w.death.Err(), w.listeners)
+		case <-report.C:
+			w.slow(time.Since(begun))
+		case <-ctx.Done():
+			// ONLY A START STILL RUNNING IS WAITED FOR. A cancel and a Start
+			// that has returned can both be ready when the select looks, and
+			// it picks between them at random: told regardless, half of
+			// those would announce a wait for a start that had finished.
+			select {
+			case <-w.started:
+			default:
+				w.cancelWaits()
+			}
+			return fmt.Errorf("waiting for the embedded nats server to start: %w",
+				ctx.Err())
+		}
 	}
-	// THE BUDGET IS IN THE MESSAGE, and whether this member was waiting on
-	// peers: "did not become ready" alone sends an operator to the disk
-	// when a route was the problem.
-	return fmt.Errorf(
-		"embedded nats server did not become ready within %v (clustered: %v). "+
-			"A clustered member also waits for its routes to dial and for "+
-			"the metadata group to elect a leader, so check that the members "+
-			"named in stream.cluster.peers are reachable", budget, clustered)
+	// A START THAT RETURNED PAST A FATALF — early, before the steps after the
+	// one that failed, or, at the one v2.15.1 call site that does not
+	// return, after all of them — is asked about the death before anything
+	// else: the select above picks at random between a Start that returned
+	// and a death declared before it did.
+	if cause := w.death.Err(); cause != nil {
+		return deathError(cause, w.listeners)
+	}
+
+	ready := make(chan bool, 1)
+	go func() { ready <- w.ready(w.timing.listen) }()
+	select {
+	case ok := <-ready:
+		// A DEATH THAT CAME WITH READINESS is still a death. A Fatalf from
+		// a goroutine Start left behind — the route listener's — can land
+		// as the readiness answer does, and a select with both ready picks
+		// one at random; asked here, the death wins whichever it picked.
+		if cause := w.death.Err(); cause != nil {
+			return deathError(cause, w.listeners)
+		}
+		if !ok {
+			return notReadyError(w.timing.listen, w.clustered)
+		}
+		return nil
+	case <-w.death.Done():
+		return deathError(w.death.Err(), w.listeners)
+	case <-ctx.Done():
+		// The readiness goroutine is not waited for: it ends within its
+		// budget, into a channel buffered for the answer nobody reads.
+		return fmt.Errorf("waiting for the embedded nats server's listeners: %w",
+			ctx.Err())
+	}
+}
+
+// notReadyError is a server whose Start returned and which then neither
+// reported ready inside the listener budget nor declared itself dead.
+//
+// IT NAMES NO LISTENER, because there is no evidence that one failed: every
+// bind nats-server cannot make is a Fatalf, which ends the wait at once as
+// [deathError]. Inferring a taken route port from a listener that was merely
+// not bound YET is what reported a refused store as a port collision.
+func notReadyError(budget time.Duration, clustered bool) error {
+	return fmt.Errorf("embedded nats server finished starting but did not "+
+		"report its listeners ready within %v (clustered: %v), and declared no "+
+		"failure", budget, clustered)
+}
+
+// listenerSpec is one listener a member was configured to open: its port, 0
+// for none, and the address it binds.
+type listenerSpec struct {
+	port int
+	host string
+}
+
+// listenerSpecs is the two listeners a taken port is reported against, each
+// with its own sentinel and its own setting.
+type listenerSpecs struct{ route, leaf listenerSpec }
+
+// deathError is what a broker that declared itself dead during its boot means
+// to whoever started it.
+//
+// A PORT SOMEBODY ELSE HOLDS keeps its sentinel. The probes before the start
+// catch the ordinary case; this is the port lost in the window between the
+// probe and the bind, and it is the one fatal that a different number fixes —
+// which is why the harnesses retry on [ErrRoutePortTaken] and
+// [ErrLeafPortTaken] and on no other [ErrBrokerDied]. It is recognised from the
+// error VALUE nats-server handed its Fatalf, never from its sentence: the bind
+// failure names the address it could not bind and wraps EADDRINUSE.
+//
+// EVERYTHING ELSE IS NATS-SERVER'S OWN REASON, wrapped once. It names what
+// failed — "Can't start JetStream: storage directory is not writable" — far
+// better than any summary of it could.
+func deathError(cause error, listeners listenerSpecs) error {
+	var op *net.OpError
+	if errors.Is(cause, syscall.EADDRINUSE) && errors.As(cause, &op) {
+		if addr, ok := op.Addr.(*net.TCPAddr); ok {
+			switch listeners.bound(addr) {
+			case &listeners.route:
+				return fmt.Errorf("%w: stream.cluster.port %d on %s was taken "+
+					"while this member was starting, so its route listener could "+
+					"not bind and it could never form a route to a peer — free "+
+					"that port or give this node a different one: %w",
+					ErrRoutePortTaken, listeners.route.port,
+					routeHostLabel(listeners.route.host), cause)
+			case &listeners.leaf:
+				return fmt.Errorf("%w: stream.leaf.port %d on %s was taken "+
+					"while this member was starting, so no stateless node could "+
+					"join the fleet through it — free that port or give this "+
+					"node a different one: %w", ErrLeafPortTaken,
+					listeners.leaf.port, routeHostLabel(listeners.leaf.host), cause)
+			}
+		}
+	}
+	return fmt.Errorf("embedded nats server could not start: %w", cause)
+}
+
+// bound names which configured listener a failed bind was for, or nil.
+//
+// BY PORT, and by address only where the port alone cannot tell: Tier A lets
+// the two share a number only on addresses that cannot overlap, so two
+// candidates are told apart by the address the bind was for. A host given as
+// a name cannot be compared with the address it resolved to, and is answered
+// nil rather than guessed at — the caller then reports nats-server's own
+// sentence, which names the port.
+func (l *listenerSpecs) bound(addr *net.TCPAddr) *listenerSpec {
+	var hits []*listenerSpec
+	for _, spec := range []*listenerSpec{&l.route, &l.leaf} {
+		if spec.port > 0 && spec.port == addr.Port {
+			hits = append(hits, spec)
+		}
+	}
+	switch len(hits) {
+	case 0:
+		return nil
+	case 1:
+		return hits[0]
+	}
+	for _, spec := range hits {
+		if spec.host == "" && (len(addr.IP) == 0 || addr.IP.IsUnspecified()) {
+			return spec
+		}
+		if ip := net.ParseIP(spec.host); ip != nil && ip.Equal(addr.IP) {
+			return spec
+		}
+	}
+	return nil
 }
 
 // awaitClusterReady waits for this member to be able to serve the writes the
@@ -956,9 +1163,9 @@ var errNotAsked = errors.New("not asked: the member was never current with " +
 // BOTH HALVES, because either alone is a lie about the one that matters. The
 // link counts as up the moment it is accepted, while the member at the other
 // end may still be recovering its streams; and a JetStream answer proves the
-// link rather than merely the member. Bounded by the clustered accept budget,
-// because the far side IS a cluster as far as this node can tell — see
-// [Config.Clustered].
+// link rather than merely the member. Bounded by the wait a clustered member
+// gets for its metadata group ([clusterReadyTimeout]), because the far side IS
+// a cluster as far as this node can tell — see [Config.Clustered].
 //
 // A no-op for everything that is not a leaf.
 func (e *embeddedServer) awaitLeafReady(ctx context.Context, js jetstream.JetStream) error {
@@ -1022,24 +1229,23 @@ const embeddedReconnectWait = time.Second
 // them and never run out at all — which is why [embeddedServer.connect]
 // ignores what a member discovers.
 //
-// # The accept budget, spent one wait at a time
+// # The listener budget, spent one wait at a time
 //
-// It is the decision [acceptBudget] already made about this server — how long
-// it gets to take a connection, thirty seconds solo and two minutes on a
-// cluster member — because a reconnect asks the same server the same question
-// a boot does. It was nats.go's own default, sixty attempts two seconds apart,
-// which was nobody's decision: two minutes dark on a solo node whose broker a
-// boot would have given thirty seconds, and the one number on the path to a
-// node stopping itself that nothing here stated.
-func embeddedReconnects(clustered bool) int {
-	return int(acceptBudget(clustered) / embeddedReconnectWait)
-}
+// It is the decision [listenTimeout] already made about this server — how long
+// a server that has started gets to take a connection, thirty seconds, solo or
+// clustered — because a reconnect asks the same server the same question a
+// boot does once the broker's start has returned. It was nats.go's own
+// default, sixty attempts two seconds apart, which was nobody's decision: two
+// minutes dark on a node whose broker a boot would have given thirty seconds,
+// and the one number on the path to a node stopping itself that nothing here
+// stated.
+const embeddedReconnects = int(listenTimeout / embeddedReconnectWait)
 
 // connect opens a client connection to this server: through an in-memory
 // pipe when it listens on no socket, over its loopback client port when it
 // does.
 //
-// BOTH DIALS TAKE THE ACCEPT BUDGET as their handshake timeout, not nats's
+// BOTH DIALS TAKE THE LISTENER BUDGET as their handshake timeout, not nats's
 // two-second default — see the budgets' doc for why a handshake with a server
 // already accepting shares it — and as the span of their reconnects
 // ([embeddedReconnects]). One option list for the two branches, so the
@@ -1055,8 +1261,8 @@ func embeddedReconnects(clustered bool) int {
 // for a connection whose owner is the one to notice — see [watched].
 func (e *embeddedServer) connect(at watched) (*nats.Conn, error) {
 	opts := []nats.Option{
-		nats.Timeout(acceptBudget(e.clustered)),
-		nats.MaxReconnects(embeddedReconnects(e.clustered)),
+		nats.Timeout(listenTimeout),
+		nats.MaxReconnects(embeddedReconnects),
 		nats.ReconnectWait(embeddedReconnectWait),
 		// THIS MEMBER AND NO OTHER. A clustered member advertises every
 		// peer's client URL in the INFO it sends, and the client adds each
@@ -1239,8 +1445,8 @@ func dial(cfg Config, at watched) (*nats.Conn, error) {
 //
 // # Two seconds, and why the embedded member's budget does not transfer
 //
-// A connection to this process's own member takes the ACCEPT budget
-// ([acceptBudget]), because that server has already answered
+// A connection to this process's own member takes the LISTENER budget
+// ([listenTimeout]), because that server has already answered
 // ReadyForConnections and a slow handshake there measures only the host's
 // contention. Nothing has answered for a remote one, and here the figure is
 // also how long the reconnect loop waits on each member of the pool: it tries
@@ -1404,20 +1610,34 @@ func (q *Queue) runStreamHandler(ctx context.Context, h queue.StreamHandler, sub
 	h(ctx, subject, ev)
 }
 
-// ErrRoutePortTaken is a clustered member whose route port was held by
-// something else — found before the bind by the probe, or after it by the
-// readiness failure that follows a listener which never came up.
+// ErrRoutePortTaken is a clustered member whose route port
+// (`stream.cluster.port`) was held by something else.
 //
-// A SENTINEL because it is the one provisioning failure that is worth RETRYING
-// WITH A DIFFERENT NUMBER rather than reporting, and telling it apart from
+// TWO PLACES FIND IT, and nothing else may. The probe before the start
+// ([PortAvailable]) finds the ordinary case. A port taken in the window
+// between that probe and nats-server's bind is found by the bind itself: the
+// listener's failure is a Fatalf carrying the bind's own *net.OpError, which
+// names the address and wraps EADDRINUSE, and [deathError] reads that value —
+// so the error is an [ErrBrokerDied] as well as this. A listener that is merely
+// not bound yet is NOT one: inferring a taken port from it is what reported a
+// store nats-server had refused as a port collision ([notReadyError]).
+//
+// A SENTINEL because it is the one boot failure that is worth RETRYING WITH A
+// DIFFERENT NUMBER rather than reporting, and telling it apart from
 // everything else a boot can fail on is not something a caller should do by
-// matching text. The e2e harness retries on exactly this; a deterministic
-// failure — a bad company config, an engine that will not start — must fail
-// the first time rather than three times with a misleading diagnosis.
+// matching text. The e2e and jetstreamtest harnesses retry on exactly this
+// and on [ErrLeafPortTaken], and on no other [ErrBrokerDied]: every other
+// death is a fact about the configuration or the host that a new port does
+// not change, and a deterministic failure — a bad company config, a store
+// directory the broker cannot use — must fail the first time rather than
+// three times with a misleading diagnosis.
 var ErrRoutePortTaken = errors.New("cluster route port taken")
 
 // ErrLeafPortTaken is a member whose LEAF listener's port (`stream.leaf.port`)
-// was held by something else when the member probed it before binding.
+// was held by something else: found by the probe before the start, or by the
+// bind's own EADDRINUSE carried by nats-server's Fatalf when the port was
+// taken after the probe — the same two places as [ErrRoutePortTaken], and an
+// [ErrBrokerDied] beside this in the second.
 //
 // A SENTINEL OF ITS OWN, beside [ErrRoutePortTaken] rather than folded into
 // it: the two name different listeners with different remedies — a member
@@ -1433,11 +1653,11 @@ var ErrLeafPortTaken = errors.New("leaf listener port taken")
 // A PROBE, NOT A RESERVATION: it binds, reads the answer and lets go, so the
 // port is free again — and available to somebody else — the instant it
 // returns. Nothing can close that window short of never releasing the port,
-// and closing it is not what this is for. What it buys is the difference
-// between a named failure in microseconds and a two-minute readiness timeout
-// blaming the network, on the one condition that has no other symptom: a
-// clustered member whose route listener cannot bind starts anyway, serves
-// clients, answers health checks and silently never routes.
+// and closing it is not what this is for. What it buys is a taken port named
+// before the server starts: the server binds its route and leaf listeners only
+// after it has recovered its store, so the same port refused by the server's
+// own bind ([deathError]) is refused only once that recovery has been paid
+// for.
 //
 // host empty means every interface, which is what an unset stream.cluster.host
 // binds.

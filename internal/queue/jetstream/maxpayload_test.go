@@ -232,8 +232,8 @@ func TestAnEmbeddedBrokerWithoutTheCeilingFailsTheBootAndBlamesTheBuild(t *testi
 	}
 	started := startJoined(ns)
 	t.Cleanup(func() { shutdownAndClean(ns, started, scratch) })
-	if !ns.ReadyForConnections(acceptTimeout) {
-		t.Fatalf("the broker was not ready within %v", acceptTimeout)
+	if !ns.ReadyForConnections(listenTimeout) {
+		t.Fatalf("the broker was not ready within %v", listenTimeout)
 	}
 	broken := &embeddedServer{ns: ns, started: started, inProcess: true}
 

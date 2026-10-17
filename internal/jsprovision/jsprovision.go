@@ -24,12 +24,13 @@
 // CLUSTERED one is a raft round trip against a metadata group whose members
 // are themselves still booting, on a host bringing several of them up at once
 // — and on a fleet every node issues the whole sequence at the same instant.
-// One number for both is wrong for one of them, which is the conclusion
-// [internal/queue/jetstream]'s accept budget already reached: it was raised
-// from the solo thirty seconds to two minutes for exactly this symptom, while
-// the provisioning calls DOWNSTREAM of it kept the flat thirty. A create
-// cannot defensibly be more impatient than the readiness wait that precedes
-// it.
+// One number for both is wrong for one of them, which is the conclusion the
+// embedded broker's own start had already reached: [internal/queue/jetstream]
+// gave a clustered member two minutes to a solo server's thirty seconds for
+// exactly this symptom, while the provisioning calls DOWNSTREAM of it kept the
+// flat thirty. (That start budget has since moved off the store recovery it
+// was really bounding — see that package's listenTimeout — but the contention
+// it measured is the one a create meets.)
 //
 // Thirty seconds was measured failing: over a two-day window the engine's own
 // CI lost a cluster-start attempt in roughly two runs in five and failed the
@@ -88,16 +89,16 @@ const (
 	// clusterBudget bounds one create that is a raft round trip against a
 	// metadata group whose members may still be booting.
 	//
-	// TWO MINUTES, which is not a new number: it is what
-	// [internal/queue/jetstream]'s clusterAcceptTimeout already spends on
-	// the strictly EASIER problem of accepting a connection, and this call
-	// sits downstream of both that and the sixty-second readiness wait.
-	// The asymmetry is the accept budget's: failing here fails the whole
-	// boot, so a budget that is too short turns a busy host into a node
-	// that refuses to start and then works on the retry, while one that is
-	// too long only reports a genuinely wedged cluster later — and the
-	// wait is cancellable, so an operator who has seen enough gets their
-	// prompt back immediately.
+	// TWO MINUTES, which is not a new number: it is what a clustered
+	// member's start was given for the same contention — peers booting on
+	// one host, competing for its disk and its scheduler — and this call
+	// sits downstream of that start and the sixty-second readiness wait.
+	// The asymmetry decides it: failing here fails the whole boot, so a
+	// budget that is too short turns a busy host into a node that refuses
+	// to start and then works on the retry, while one that is too long only
+	// reports a genuinely wedged cluster later — and the wait is
+	// cancellable, so an operator who has seen enough gets their prompt
+	// back immediately.
 	clusterBudget = 2 * time.Minute
 )
 
@@ -130,11 +131,12 @@ const (
 	// FIVE MINUTES, sized so that one genuinely slow create can spend its
 	// whole two-minute budget and the rest of the sequence still has room
 	// — by then the metadata group has proven it works, so the others are
-	// fast. Anchored above the three minutes of waiting a clustered boot
-	// already tolerates before it provisions anything at all
-	// (clusterAcceptTimeout plus clusterReadyTimeout), and below the point
-	// where a wedged cluster stops being reported inside the patience of
-	// whatever is watching the node come up.
+	// fast. Anchored above the ninety seconds of BOUNDED waiting a clustered
+	// boot already tolerates before it provisions anything at all (the
+	// broker's thirty-second listener budget and its sixty-second readiness
+	// wait — its store recovery before them is waited out, not bounded), and
+	// below the point where a wedged cluster stops being reported inside the
+	// patience of whatever is watching the node come up.
 	clusterSequenceBudget = 5 * time.Minute
 )
 

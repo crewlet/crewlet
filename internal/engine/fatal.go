@@ -45,7 +45,10 @@ func lostDuring(q queue.EventQueue, err error) error {
 // Fatal is closed once this node has lost something it cannot run without, and
 // [Engine.FatalCause] then says what: today, a broker connection the NATS
 // client closed FOR GOOD — the queue's own, or on an embedded broker the
-// coordination store's beside it ([jetstream.Queue.DialWatched]).
+// coordination store's beside it ([jetstream.Queue.DialWatched]). An embedded
+// broker that declares itself dead is the one loss that does not come through
+// here: it closes no connection for a drain to fail on, so the engine ends the
+// node itself ([Engine.watchBroker]).
 //
 // # Why the engine reports it rather than acts on it
 //

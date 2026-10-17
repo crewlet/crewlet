@@ -137,7 +137,7 @@ func offered(t *testing.T, nc *nats.Conn, node, what string) {
 		t.Fatalf("encode an offer request: %v", err)
 	}
 	// THE DIAL'S OWN BUDGET AND THEN SOME: an embedded broker's handshake
-	// is given its accept budget on a loaded host, and the wait ends the
+	// is given its listener budget on a loaded host, and the wait ends the
 	// moment the donor answers.
 	deadline := time.Now().Add(time.Minute)
 	for time.Now().Before(deadline) {
