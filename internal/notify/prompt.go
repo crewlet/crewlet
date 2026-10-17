@@ -301,9 +301,17 @@ func cmpFirst(a, b string) string {
 // make registration order matter, leak one test's third-party app into the
 // next, and give a process no way to run two companies with different
 // integration sets, which is exactly what an epoch swap is.
+//
+// THE ZERO VALUE IS A REGISTRY WITH NO APPS, and answers every source with the
+// generic fallback. That is why the fallback is not a field: it held
+// [Generic] wherever [NewPrompts] built the value and nil everywhere else, so
+// a service handed a zero registry — an ordinary configuration, every node
+// has one before an integration is wired — panicked on the first delivery of
+// any source. A type that has to be constructed to be usable is one whose
+// zero value should have been refused, and this one is copied and passed by
+// value on every inbound event.
 type Prompts struct {
 	bySource map[string]Prompt
-	fallback Prompt
 }
 
 // NewPrompts builds a registry over the given third-party apps.
@@ -311,7 +319,7 @@ type Prompts struct {
 // A later entry for the same source REPLACES an earlier one, so a caller can
 // layer an override over the defaults without having to filter the list first.
 func NewPrompts(prompts ...Prompt) Prompts {
-	registry := Prompts{bySource: make(map[string]Prompt, len(prompts)), fallback: Generic{}}
+	registry := Prompts{bySource: make(map[string]Prompt, len(prompts))}
 	for _, p := range prompts {
 		if p == nil || p.Source() == "" {
 			continue
@@ -331,12 +339,9 @@ func (r Prompts) With(p Prompt) Prompts {
 	if p == nil || p.Source() == "" {
 		return r
 	}
-	next := Prompts{bySource: maps.Clone(r.bySource), fallback: r.fallback}
+	next := Prompts{bySource: maps.Clone(r.bySource)}
 	if next.bySource == nil {
 		next.bySource = map[string]Prompt{}
-	}
-	if next.fallback == nil {
-		next.fallback = Generic{}
 	}
 	next.bySource[p.Source()] = p
 	return next
@@ -351,7 +356,7 @@ func (r Prompts) For(source string) Prompt {
 	if p, ok := r.bySource[source]; ok {
 		return p
 	}
-	return r.fallback
+	return Generic{}
 }
 
 // Sources names the third-party apps with a prompt of their own, sorted.
