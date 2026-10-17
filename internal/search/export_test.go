@@ -146,6 +146,3 @@ var (
 // MaxPostingScan is [maxPostingScan], for the gate that holds which postings a
 // frequent chat term keeps.
 const MaxPostingScan = maxPostingScan
-
-// ChatSnippetBytes is [chatSnippetBytes].
-const ChatSnippetBytes = chatSnippetBytes
