@@ -95,6 +95,64 @@ func TestARequestMadeForAnotherReaderIsRefusedBeforeItRuns(t *testing.T) {
 	}
 }
 
+// A SOCKET'S HANDSHAKE NAMES ITS READER IN ITS URL, AND IS REFUSED BEFORE IT
+// IS SERVED.
+//
+// A browser sets no header on a WebSocket handshake, so a socket that dropped
+// and dialled again under a cookie a sign-in in another tab had moved was
+// served as the new person until the tab's next request was refused. Named in
+// the `reader` parameter, that dial is refused `409 reader_changed` before the
+// stream handler runs. The parameter is read on an upgrade ONLY, and only where
+// no header names the reader: on any other request a URL is never a second way
+// to say who it is for, and a request naming its reader in the header is
+// decided by the header.
+//
+// Mutation: read the parameter on every request, or ahead of the header, and a
+// served row below is refused; drop it and the refused rows run.
+func TestASocketHandshakeIsRefusedForAnotherReaderNamedInItsURL(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	g := rig.guard()
+	upgrade := func(r *http.Request) {
+		rig.withCookie(r)
+		r.Header.Set("Connection", "Upgrade")
+		r.Header.Set("Upgrade", "websocket")
+	}
+	at := func(reader string) string {
+		return "/ws/stream?" + auth.ReaderParam + "=" + reader
+	}
+	for _, c := range []struct {
+		name, path, header string
+		prepare            func(*http.Request)
+		refused            bool
+	}{
+		{name: "a handshake for somebody else", path: at(someoneElse),
+			prepare: upgrade, refused: true},
+		{name: "a handshake naming no principal", path: at("not-an-id"),
+			prepare: upgrade, refused: true},
+		{name: "a handshake whose header names somebody else", path: at(sessionPerson),
+			header: someoneElse, prepare: upgrade, refused: true},
+		{name: "a handshake for its own reader", path: at(sessionPerson), prepare: upgrade},
+		{name: "a handshake naming nobody", path: "/ws/stream", prepare: upgrade},
+		{name: "a handshake whose header names its own reader", path: at(someoneElse),
+			header: sessionPerson, prepare: upgrade},
+		{name: "the socket's plain re-ask", path: at(someoneElse), prepare: rig.withCookie},
+		{name: "an ordinary read", path: "/agents?" + auth.ReaderParam + "=" + someoneElse,
+			prepare: rig.withCookie},
+	} {
+		got := rig.send(g, http.MethodGet, c.path, c.header, c.prepare)
+		switch {
+		case c.refused && (got.ran || got.status != http.StatusConflict ||
+			got.code != string(httpjson.CodeReaderChanged)):
+			t.Errorf("%s ran=%v and answered %d %q, want 409 %q before it runs",
+				c.name, got.ran, got.status, got.code, httpjson.CodeReaderChanged)
+		case !c.refused && (!got.ran || got.status != http.StatusOK):
+			t.Errorf("%s ran=%v and answered %d %q, want served", c.name, got.ran,
+				got.status, got.code)
+		}
+	}
+}
+
 // THE PRINCIPAL'S OWN TAB, AND A CALLER THAT NAMES NOBODY, ARE SERVED.
 //
 // The controls for the case above, each a separate way the check could be
@@ -165,6 +223,24 @@ func TestOnlyAResolvedPrincipalIsHeldToTheReaderItWasSentFor(t *testing.T) {
 		seatless.withCookie); got.code != string(httpjson.CodeSeatUnavailable) {
 		t.Errorf("their own tab answered %d %q, want %q", got.status, got.code,
 			httpjson.CodeSeatUnavailable)
+	}
+}
+
+// THE DASHBOARD'S SOCKET NAMES ITS READER IN THE PARAMETER THE GUARD READS.
+//
+// `contract/identity.ts` `READER_PARAM` is the query parameter the socket's
+// handshake carries its reader in. Spelled differently there, every handshake
+// would name nobody and be served to whoever the cookie is — by design, as
+// any request naming nobody is — and nothing would go red.
+func TestTheDashboardsSocketNamesItsReaderInTheGuardsParameter(t *testing.T) {
+	t.Parallel()
+	got, err := clientsource.Scalar(clientsource.Tree(t), "READER_PARAM")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != auth.ReaderParam {
+		t.Errorf("the dashboard's socket names its reader in %q and the guard reads %q",
+			got, auth.ReaderParam)
 	}
 }
 

@@ -575,6 +575,22 @@ var RETRY_AFTER_MAX_MS = 3e4;
 * nobody, be served to whoever the cookie is, and nothing would go red.
 */
 var READER_HEADER = "X-Crewlet-Reader";
+/**
+* The query parameter the socket's HANDSHAKE names the tab's reader in:
+* `auth.ReaderParam`, held by
+* `internal/api/auth.TestTheDashboardsSocketNamesItsReaderInTheGuardsParameter`.
+*
+* A browser sets no header on a WebSocket, so the handshake is the one request
+* that cannot carry `READER_HEADER`. The engine reads this parameter on an
+* upgrade that carries no header, and refuses a dial made for anybody but the
+* cookie's principal `409 reader_changed` before the stream is served — which
+* the browser reports as 1006, and the socket's refusal probe reads and hands
+* the tab over on (`protocol/socket.ts`). The id is not a secret, but it is in
+* the socket's URL, so a proxy's access log of that path records it. Spelled
+* differently here, every handshake would name nobody and be served to
+* whoever the cookie is, until the tab's next request was refused.
+*/
+var READER_PARAM = "reader";
 //#endregion
 //#region src/protocol/signin.ts
 /**
@@ -757,6 +773,18 @@ function setTabReader(reader) {
 function readerHeaders() {
 	const reader = tabReader?.current() ?? null;
 	return reader === null ? {} : { [READER_HEADER]: reader };
+}
+/**
+* The socket's handshake URL query naming this tab's reader (`READER_PARAM`),
+* or "" where nothing is installed or the tab has learned nobody.
+*
+* A browser sets no header on a WebSocket, so the handshake is the one request
+* [readerHeaders] cannot reach; the engine reads this parameter on an upgrade
+* instead, and refuses a dial made for anybody but the cookie's principal.
+*/
+function readerQuery() {
+	const reader = tabReader?.current() ?? null;
+	return reader === null ? "" : `?${READER_PARAM}=${encodeURIComponent(reader)}`;
 }
 /** A request named this tab's reader and the engine said the session is somebody else's. */
 function readerMoved() {
@@ -1770,9 +1798,10 @@ function retryAfterMs(seconds) {
 *
 * # What a close means
 *
-* The handshake carries the session cookie and nothing else, and the engine
-* decides it once. After that it CLOSES the socket when the identity estate
-* moves under it — and the code says what the tab should do:
+* The handshake carries the session cookie, and the tab's reader in its URL
+* (a browser sets no header on a WebSocket), and the engine decides it once.
+* After that it CLOSES the socket when the identity estate moves under it —
+* and the code says what the tab should do:
 *
 *  - 4401 (`CLOSE_UNAUTHENTICATED`): the session the socket was opened with
 *    ended — a sign-out here or everywhere, a suspension, a removal, a
@@ -2328,7 +2357,7 @@ var LiveSocket = class {
 		const proto = location.protocol === "https:" ? "wss" : "ws";
 		let sock;
 		try {
-			sock = new WebSocket(`${proto}://${location.host}${PATH}`);
+			sock = new WebSocket(`${proto}://${location.host}${PATH}${readerQuery()}`);
 		} catch {
 			this.scheduleReconnect();
 			return;
