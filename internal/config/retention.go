@@ -206,8 +206,8 @@ const (
 	// and at a busy seat-day's ≈ 6.5 KiB that is about 217 MB: a gibibyte
 	// holds that window four times over, which is room for a fleet to grow
 	// before anybody has to touch the field. Beside the other logs it is
-	// the last gibibyte of the 4.5 GiB that five unset ceilings reserve at
-	// their smallest, which is what [StoreMaxBytesFloor] is sized from.
+	// one gibibyte of the 5.5 GiB that six unset ceilings reserve at their
+	// smallest, which is what [StoreMaxBytesFloor] is sized from.
 	//
 	// THE FLOOR IS 64 MiB, by the per-log rule [IamLogMaxBytesFloor]
 	// records: the broker grants a stream its whole ceiling when it creates
@@ -259,10 +259,11 @@ const (
 	// WHAT IT COSTS the chat log, stated: its horizon under a completely
 	// blocked trim on a small volume. Created at 2.25 GiB on that 64 GiB
 	// first boot, rather than 4.1 uncapped, it refuses ordinary writes after
-	// about 75 days of a fully blocked trim at the declared census rather
-	// than 137, and after about 30 at the supported 50 000 messages a day
-	// rather than 55. The log_headroom alarm names the log a tenth of the
-	// way before either, and from 128 GiB free the cap no longer binds.
+	// about 70 days of a fully blocked trim at the declared census rather
+	// than 127, and after about 29 at the supported 50 000 messages a day
+	// rather than 53 — its read barriers counted in both. The log_headroom
+	// alarm names the log a tenth of the way before either, and from
+	// 128 GiB free the cap no longer binds.
 	DerivedChatLogDivisor = 4
 
 	// DerivedLogMaxBytesFraction is the share of a volume's free space an
@@ -279,22 +280,26 @@ const (
 	// StoreMaxBytesFloor and StoreMaxBytesCeiling bound the embedded
 	// broker's own declared store limit.
 	//
-	// THE FLOOR IS SIX GIBIBYTES, which is the smallest limit the engine's
-	// own logs fit inside with room beside them. Every node reserves all
-	// FIVE state-log domains' ceilings whatever it runs, and left unset
-	// they come to 4.5 GiB at their smallest: the tracker's, the vectors',
-	// the knowledge base's and the usage log's at the gibibyte scaling stops
-	// at, and the identity log's 512 MiB default (never scaled below what
-	// it asks). What is left, about 1.5 GiB, is for the mailboxes, the event
-	// stream and every coordination bucket, which reserve nothing and grow
-	// against the same number. Below it a node provisions its way to a
-	// refusal on whichever stream happens to be last.
+	// THE FLOOR IS SEVEN GIBIBYTES, which is the smallest limit the
+	// engine's own logs fit inside with room beside them. Every node
+	// reserves all SIX state-log domains' ceilings whatever it runs, and
+	// left unset they come to 5.5 GiB at their smallest: the tracker's, the
+	// vectors', the knowledge base's and the chat log's at the gibibyte
+	// scaling stops at, the usage log's 1 GiB default and the identity
+	// log's 512 MiB one (neither scaled below what it asks). What is left,
+	// about 1.5 GiB, is for the mailboxes, the event stream and every
+	// coordination bucket, which reserve nothing and grow against the same
+	// number. Below it a node provisions its way to a refusal on whichever
+	// stream happens to be last.
 	//
-	// SIX AND NOT FIVE: at five gibibytes the unreserved streams would have
+	// SEVEN AND NOT SIX: at six gibibytes the unreserved streams would have
 	// half a gibibyte, so a document `crewlet validate` admits — every
 	// ceiling unset, which the cross-field check above cannot sum — would
 	// fail at boot on whichever stream the broker reached last, which is
 	// the failure that check exists to move forward to `crewlet validate`.
+	// It was six while five logs reserved 4.5 GiB, and the chat log's
+	// gibibyte is what moved it: the 1.5 GiB beside the logs is the margin
+	// this floor exists for, so it moves with what they reserve.
 	//
 	// THE COMPANY'S FILES RESERVE NOTHING HERE: the object store's NATS
 	// bucket is created with no byte ceiling, so it grows against this
@@ -307,7 +312,7 @@ const (
 	// knowledge base and chat, 64 GiB of usage and 16 GiB of identity —
 	// about 3.6 TiB together), so anything past it is a unit mistake rather
 	// than a deployment.
-	StoreMaxBytesFloor   int64 = 6 << 30
+	StoreMaxBytesFloor   int64 = 7 << 30
 	StoreMaxBytesCeiling int64 = 64 << 40
 )
 
@@ -566,7 +571,7 @@ func (s Stream) VectorsMaxBytes(free int64) (int64, bool) {
 // wrote is one the shared-budget scaling may lower, and one an operator wrote
 // is not. It used to report whether the operator SET it — the inverse of
 // every other ceiling's second return, read by a register that asks the same
-// question of all five.
+// question of every log.
 func (s Stream) UsageMaxBytes() (int64, bool) {
 	if s.UsageLogMaxBytes > 0 {
 		return s.UsageLogMaxBytes, false

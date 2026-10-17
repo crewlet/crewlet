@@ -483,30 +483,32 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 		says   string
 	}{
 		"unset": {func(*config.Bootstrap) {}, true, ""},
-		// SIX: what five state logs reserve at their smallest unset
-		// ceilings (4.5 GiB), and about 1.5 GiB for every stream that
+		// SEVEN: what six state logs reserve at their smallest unset
+		// ceilings (5.5 GiB), and about 1.5 GiB for every stream that
 		// reserves nothing.
-		"below six gibibytes": {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 6*gib - 1 }, false, "store_max_bytes"},
-		"at six gibibytes":    {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 6 * gib }, true, ""},
-		"at 64 TiB":           {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65536 * gib }, true, ""},
-		"past 64 TiB":         {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65537 * gib }, false, "store_max_bytes"},
-		// THE FLOOR IS WHY THE FLOOR MOVED. Five state-log domains at the
-		// ceilings they take unset come to 4.5 GiB, which fits the old
-		// five-gibibyte limit — and the cross-field rule below refuses
-		// only a sum GREATER than the limit, so at five this document
+		"below seven gibibytes": {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 7*gib - 1 }, false, "store_max_bytes"},
+		"at seven gibibytes":    {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 7 * gib }, true, ""},
+		"at 64 TiB":             {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65536 * gib }, true, ""},
+		"past 64 TiB":           {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65537 * gib }, false, "store_max_bytes"},
+		// THE FLOOR IS WHY THE FLOOR MOVED. Six state-log domains at the
+		// ceilings they take unset come to 5.5 GiB, which fits the old
+		// six-gibibyte limit — and the cross-field rule below refuses
+		// only a sum GREATER than the limit, so at six this document
 		// validated and the node was left half a gibibyte for every
 		// mailbox, the event stream and every coordination bucket. The
 		// floor is what moves that refusal forward to `crewlet validate`.
 		"every domain at its unset size inside the floor": {func(b *config.Bootstrap) {
-			b.Stream.StoreMaxBytes = 6 * gib
+			b.Stream.StoreMaxBytes = 7 * gib
 			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = gib, gib
 			b.Stream.PagesLogMaxBytes, b.Stream.UsageLogMaxBytes = gib, gib
+			b.Stream.ChatLogMaxBytes = gib
 			b.Stream.IamLogMaxBytes = 512 * mib
 		}, true, ""},
 		"every domain at its unset size inside the old limit": {func(b *config.Bootstrap) {
-			b.Stream.StoreMaxBytes = 5 * gib
+			b.Stream.StoreMaxBytes = 6 * gib
 			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = gib, gib
 			b.Stream.PagesLogMaxBytes, b.Stream.UsageLogMaxBytes = gib, gib
+			b.Stream.ChatLogMaxBytes = gib
 			b.Stream.IamLogMaxBytes = 512 * mib
 		}, false, "store_max_bytes"},
 		// EVERY STATE LOG IS IN THE SUM: ceilings that fit exactly, and

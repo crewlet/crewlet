@@ -15,7 +15,7 @@ var goPackages = map[string]bool{
 	"atlassian": true, "atlassianhost": true, "auth": true, "authapi": true,
 	"authevents": true, "authz": true, "auxspend": true, "backoff": true,
 	"backup": true, "builtin": true, "chain": true, "changefeed": true,
-	"claudemodel": true, "cliagent": true, "clientsource": true,
+	"chat": true, "claudemodel": true, "cliagent": true, "clientsource": true,
 	"cliprofile": true, "codingagent": true, "colleague": true, "collect": true,
 	"compact": true, "config": true, "configapi": true, "configplane": true,
 	"confluence": true, "coord": true,

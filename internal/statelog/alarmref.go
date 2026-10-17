@@ -58,8 +58,8 @@ var alarmMeaning = map[Kind]string{
 		"ordinary writes are held to. One alarm names every such log, " +
 		"leading with the one with the least room. A full log refuses writes " +
 		"rather than dropping records; on every log that claims identity (the " +
-		"tracker's, the knowledge base's and the identity estate's) an " +
-		"eviction still lands in the gate reserve above that ceiling.",
+		"tracker's, the knowledge base's, the identity estate's and chat's) " +
+		"an eviction still lands in the gate reserve above that ceiling.",
 	KindBackupAge: "No verified backup of a log has been recorded, or the " +
 		"newest one covering it is older than the policy asks for. The trim " +
 		"does not advance that log either way. One alarm names every such " +
@@ -118,10 +118,10 @@ var alarmMeaning = map[Kind]string{
 		"their query starts.",
 	KindCensusDrift: "A log is taking more than twice the linearizable reads " +
 		"its census allows (its domain's declared rate per agent seat — 125 a " +
-		"day on the tracker's and the knowledge base's logs, none on the " +
-		"identity estate's — at least one seat, plus what the object store's " +
-		"collector reads on its own schedule), so every sizing decision under " +
-		"it is stale.",
+		"day on the tracker's and the knowledge base's logs, 120 on chat's, " +
+		"none on the identity estate's — at least one seat, plus what the " +
+		"object store's collector reads on its own schedule), so every sizing " +
+		"decision under it is stale.",
 	KindLogCeilingShort: "At the rate this log took in over the last day, " +
 		"its byte ceiling holds less than the `min_age` window the trim " +
 		"keeps, so it will fill and refuse writes with every trim term " +

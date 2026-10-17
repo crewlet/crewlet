@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -452,6 +453,15 @@ func (h sizingHost) DomainStreamCeiling(_ context.Context, stream string) (int64
 // rule that took half the mutation log's ceiling asked for 8 GiB there and the
 // share scaled it to 6.9 GiB, under the peak — and beside an operator's 4 GiB
 // mutation log it asked for 2 GiB.
+//
+// AND HOLD IT WITHOUT ALARMING, because a model change is an excursion the
+// headroom alarm is designed not to fire on: the peak has to leave
+// [statelog.HeadroomAlarmFraction] of the created ceiling free. That is what
+// the chat log's quarter-share cap buys on this volume
+// ([config.DerivedChatLogDivisor]) — asked for at a third of the share, chat
+// left the changelog at 8.7 GiB and the peak at 9.5 % headroom, and asked for
+// in full at 8.2 GiB and 3.7 %. Mutation: set the divisor to 3, or drop the
+// cap, and the derived case fails here.
 func TestTheVectorChangelogIsCreatedToHoldAModelChange(t *testing.T) {
 	t.Parallel()
 	const free = 64 * gib
@@ -467,10 +477,17 @@ func TestTheVectorChangelogIsCreatedToHoldAModelChange(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: sizeCeilings: %v", name, err)
 		}
-		if got := sized[search.Domain{}.Name()].Bytes; got < yearFivePeak {
+		got := sized[search.Domain{}.Name()].Bytes
+		if got < yearFivePeak {
 			t.Errorf("%s: the vector changelog is created at %d bytes on %d free, "+
 				"under the reference company's fifth-year model change (%d)",
 				name, got, free, yearFivePeak)
+		}
+		if left := 1 - float64(yearFivePeak)/float64(got); left < statelog.HeadroomAlarmFraction {
+			t.Errorf("%s: the vector changelog is created at %d bytes on %d free, so "+
+				"the fifth-year model change leaves %.1f %% of it free and raises "+
+				"log_headroom, which fires under %.0f %%", name, got, free,
+				100*left, 100*statelog.HeadroomAlarmFraction)
 		}
 	}
 }
@@ -487,15 +504,18 @@ func TestTheVectorChangelogIsCreatedToHoldAModelChange(t *testing.T) {
 func TestALogCreatedBesideOnesThatExistFitsTheShare(t *testing.T) {
 	t.Parallel()
 	// 40 GiB free: the tracker and the vector changelog each ask for 10 GiB
-	// and the knowledge base's log for 2.5. The tracker's stream already
-	// holds 16 — more than its ask, so what the other two asked for does not
-	// fit what it leaves of any share below, and a sizing that counted the
-	// tracker at its ask, or added what it holds to free space, would hand
-	// them all of it. (At a volume where the tracker's ask equals what it
-	// holds, counting it at either reads the same, and neither mistake
-	// shows.)
+	// and the knowledge base's log and the chat log for 2.5 each. The
+	// tracker's stream already holds 15 — more than its ask, so what the
+	// others asked for does not fit what it leaves of any share below, and a
+	// sizing that counted the tracker at its ask, or added what it holds to
+	// free space, would hand them all of it. (At a volume where the
+	// tracker's ask equals what it holds, counting it at either reads the
+	// same, and neither mistake shows.) And no more than 15, because what it
+	// leaves of the 20 GiB share has to hold every other log at its floor —
+	// 4.5 GiB, the chat log's gibibyte among them — or no sizing could keep
+	// to the share and the case would fail every correct one.
 	const free = 40 * gib
-	const trackerHolds = 16 * gib
+	const trackerHolds = 15 * gib
 	for name, tc := range map[string]struct {
 		budget jetstream.StorageBudget
 		unread error
@@ -503,10 +523,10 @@ func TestALogCreatedBesideOnesThatExistFitsTheShare(t *testing.T) {
 		// nothing, worked out here rather than read back from the code.
 		grantable int64
 	}{
-		// 44 GiB, of which 4 GiB is reserved by other streams and 16 GiB
+		// 44 GiB, of which 4 GiB is reserved by other streams and 15 GiB
 		// by the tracker's.
 		"a broker that states its limit": {
-			budget: jetstream.StorageBudget{Limit: 44 * gib, Committed: 20 * gib,
+			budget: jetstream.StorageBudget{Limit: 44 * gib, Committed: 19 * gib,
 				Source: jetstream.BudgetServerStore},
 			grantable: 40 * gib,
 		},
@@ -704,9 +724,10 @@ func sizeAndProvision(t *testing.T, q *jetstream.Queue, stream config.Stream, fr
 // The broker's cap there is three quarters of the volume, 5.7 GiB. The tracker
 // and vector logs were scaled into half of the free space, 1.9 GiB each, and
 // the pages log then reserved its fixed 4 GiB on top: 7.8 GiB against 5.7.
-// Every log is sized inside one budget now, and all five fit — the identity
-// estate's and the usage log at their fixed defaults beside the three that
-// failed.
+// Every log is sized inside one budget now, and all six fit — the identity
+// estate's and the usage log at their fixed defaults, and the chat log at the
+// gibibyte scaling stops at, beside the three that failed: 5.5 GiB of the
+// 5.7.
 func TestTheStateLogsFitTheBrokerTheyBootOn(t *testing.T) {
 	t.Parallel()
 	// 7.6 GiB, in tenths so the arithmetic stays in integers.
@@ -1017,15 +1038,19 @@ func TestAnUnmeasuredVolumeNamesTheCeilingsItDecides(t *testing.T) {
 		want   []string
 	}{
 		{"nothing set", config.Stream{}, []string{"stream.tracker_log_max_bytes",
-			"stream.tracker_vectors_max_bytes", "stream.pages_log_max_bytes"}},
+			"stream.tracker_vectors_max_bytes", "stream.pages_log_max_bytes",
+			"stream.chat_log_max_bytes"}},
 		// THE KNOWLEDGE BASE'S LOG FOLLOWS THE MUTATION LOG'S CEILING, set
 		// or derived ([config.Stream.PagesMaxBytes]), so once the mutation
 		// log is set the volume decides it no more than it does the
-		// mutation log's own.
+		// mutation log's own. The CHAT LOG does not follow it: its cap is
+		// a share of the volume whatever the mutation log is set to
+		// ([chatMaxBytes]), so the volume still decides it.
 		{"the mutation log set", config.Stream{TrackerLogMaxBytes: 8 << 30},
-			[]string{"stream.tracker_vectors_max_bytes"}},
+			[]string{"stream.tracker_vectors_max_bytes", "stream.chat_log_max_bytes"}},
 		{"every volume-derived log set", config.Stream{TrackerLogMaxBytes: 8 << 30,
-			TrackerVectorsMaxBytes: 8 << 30, PagesLogMaxBytes: 2 << 30}, nil},
+			TrackerVectorsMaxBytes: 8 << 30, PagesLogMaxBytes: 2 << 30,
+			ChatLogMaxBytes: 2 << 30}, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -1111,5 +1136,47 @@ func TestALogNobodySizedIsRefusedBeforeItsStreamIsCreated(t *testing.T) {
 					unsized.Name(), unsized.Stream().Name, host.ensured)
 			}
 		})
+	}
+}
+
+// AN UNSET CHAT CEILING IS THE DOMAIN'S BUDGET, CAPPED BY THE VOLUME AND
+// NEVER BELOW ITS FIELD'S FLOOR.
+//
+// The chat log asks for the excursion budget its domain declares
+// ([chat.ChatLogMaxBytes]) rather than a ratio to the mutation log's, but on a
+// small volume no more than a quarter of the share the mutation log derives —
+// the cap that keeps the vector changelog's room for a model change clear of
+// the headroom alarm ([config.DerivedChatLogDivisor]). And whatever the volume
+// says it never asks for less than `stream.chat_log_max_bytes` accepts, so a
+// node never derives a ceiling its own validation would refuse to be told —
+// a property of the constants together, which this holds them to. A value an
+// operator wrote is theirs, the cap and the floor's reasons both being about
+// a number nobody chose. Mutation: drop the cap, the divisor or the domain's
+// budget, or let the derivation follow the mutation log's field, and a row
+// below names the volume it went wrong on.
+func TestAnUnsetChatCeilingIsTheDomainsBudgetCappedByTheVolume(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name    string
+		stream  config.Stream
+		free    int64
+		want    int64
+		derived bool
+	}{
+		{"an empty volume", config.Stream{}, 0, config.ChatLogMaxBytesFloor, true},
+		{"a 64 GiB volume", config.Stream{}, 64 * gib, 4 * gib, true},
+		{"the volume the whole budget is asked from", config.Stream{}, 128 * gib,
+			int64(chat.ChatLogMaxBytes), true},
+		{"a terabyte", config.Stream{}, 1 << 40, int64(chat.ChatLogMaxBytes), true},
+		{"beside a mutation log an operator sized", config.Stream{TrackerLogMaxBytes: 512 * gib},
+			64 * gib, 4 * gib, true},
+		{"a ceiling an operator wrote", config.Stream{ChatLogMaxBytes: 2 * gib}, 1 << 40,
+			2 * gib, false},
+	} {
+		got, derived := chatMaxBytes(c.stream, c.free)
+		if got != c.want || derived != c.derived {
+			t.Errorf("%s: the chat log asks for %d (derived %v), want %d (derived %v)",
+				c.name, got, derived, c.want, c.derived)
+		}
 	}
 }
