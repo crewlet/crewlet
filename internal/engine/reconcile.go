@@ -451,21 +451,36 @@ func (r *Reconciler) view(ctx context.Context) (configplane.FleetView, error) {
 	if err != nil {
 		return configplane.FleetView{}, err
 	}
-	attempts := progress.failedAttempts(target.Epoch)
+	view := progress.selfView(target.Epoch, r.now())
+	view.PeersOK, view.PeersReported = ok, reported
+	return view, nil
+}
+
+// selfView is this node's half of the fleet view against the epoch target, as
+// of now: the epoch it has applied, its own outcome, how long it has been
+// behind and how many attempts at target concluded in failure — every field
+// read from this one progress, so they describe one moment. The peers are the
+// other half, which only the posture reads ([Reconciler.view]).
+//
+// ONE CONSTRUCTION for the posture and for the engine's irreversible
+// judgements ([Engine.servedFleetRevision]), which tell a node merely applying
+// the pointer's epoch from one that failed it by the same rule
+// ([configplane.FleetView.LagConfirmed]) — so the two can never disagree about
+// which of those this node is.
+func (p applyProgress) selfView(target int64, now time.Time) configplane.FleetView {
+	attempts := p.failedAttempts(target)
 	return configplane.FleetView{
-		TargetEpoch:  target.Epoch,
-		AppliedEpoch: applied,
+		TargetEpoch:  target,
+		AppliedEpoch: p.applied,
 		SelfStatus:   selfStatus(attempts),
 		// MEASURED, because the tick is synchronous and the readers are
 		// not. A posture is asked for by the probes and the heartbeat
 		// WHILE an apply runs, when this node has neither reached the
 		// epoch nor failed it — which is propagation, and reads wait,
 		// until it has lasted longer than propagation could explain.
-		BehindFor:     progress.behindFor(target.Epoch, r.now()),
-		Attempts:      attempts,
-		PeersOK:       ok,
-		PeersReported: reported,
-	}, nil
+		BehindFor: p.behindFor(target, now),
+		Attempts:  attempts,
+	}
 }
 
 // selfStatus is this node's own outcome for the current target.

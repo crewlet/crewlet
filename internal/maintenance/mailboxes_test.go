@@ -589,6 +589,19 @@ func TestNothingIsRetiredWhileTheActiveRevisionCannotBeRead(t *testing.T) {
 		}
 	})
 
+	t.Run("a node still applying the fleet's revision is judged not at all, quietly", func(t *testing.T) {
+		h := newMailboxHarness(t, nil)
+		h.seat("swe")
+		h.roster.fail(fmt.Errorf("epoch 4 of the fleet, 3 served: %w", maintenance.ErrRevisionPropagating))
+		if n, err := h.tick(h.m, base.Add(grace+time.Hour)); err != nil || n != 0 {
+			t.Fatalf("tick = (%d, %v), want nothing done and no failure: every activation "+
+				"puts every node here for the seconds its apply takes", n, err)
+		}
+		if rec, _ := h.record("swe"); !rec.Present() {
+			t.Fatalf("a node still applying the fleet's revision had a seat stamped absent: %+v", rec)
+		}
+	})
+
 	t.Run("an unreadable seat lease retires nothing", func(t *testing.T) {
 		faulty := coordtest.NewFaulty(&coordmem.Backend{})
 		h := newMailboxHarness(t, func(o *maintenance.MailboxOptions) { o.Leases = faulty })

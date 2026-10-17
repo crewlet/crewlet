@@ -146,6 +146,48 @@ func TestLagAloneNeverSheds(t *testing.T) {
 	}
 }
 
+// LAG IS CONFIRMED BY EVIDENCE, NEVER BY ITS EXISTENCE: a concluded failure of
+// this node's own attempt, or a lag longer than propagation explains. Each row
+// is also held to the posture, because the two must draw one line — a node the
+// posture reads as waiting is one no other reader may report as behind, and a
+// node it sheds is one no reader may call propagation.
+func TestLagIsConfirmedOnlyByAFailureOrByOutlastingTheGrace(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		view FleetView
+		want bool
+	}{
+		{"not behind", FleetView{TargetEpoch: 7, AppliedEpoch: 7, BehindFor: time.Hour}, false},
+		{"ahead of the pointer", FleetView{TargetEpoch: 6, AppliedEpoch: 7, SelfStatus: StatusError}, false},
+		{"just seen, nothing tried", FleetView{TargetEpoch: 8, AppliedEpoch: 7}, false},
+		{"an attempt still running", FleetView{TargetEpoch: 8, AppliedEpoch: 7, BehindFor: ReconcileInterval}, false},
+		{"an instant inside the grace", FleetView{TargetEpoch: 8, AppliedEpoch: 7, BehindFor: LagGrace - time.Nanosecond}, false},
+		{"the grace outlasted", FleetView{TargetEpoch: 8, AppliedEpoch: 7, BehindFor: LagGrace}, true},
+		{"an attempt that failed", FleetView{TargetEpoch: 8, AppliedEpoch: 7, SelfStatus: StatusError, Attempts: 1}, true},
+		{"an attempt that degraded", FleetView{TargetEpoch: 8, AppliedEpoch: 7, SelfStatus: StatusDegraded, Attempts: 1}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tc.view.LagConfirmed(); got != tc.want {
+				t.Fatalf("LagConfirmed(%+v) = %v, want %v", tc.view, got, tc.want)
+			}
+			// With and without healthy peers, so every branch past the
+			// confirmation is reached.
+			for _, peers := range []int{0, 2} {
+				v := tc.view
+				v.PeersOK, v.PeersReported = peers, peers
+				posture := DecidePosture(v)
+				waits := posture == PostureServe || posture == PostureWait
+				if tc.want && posture == PostureServe || !tc.want && !waits {
+					t.Errorf("with %d healthy peers the posture is %s, which LagConfirmed = %v "+
+						"contradicts", peers, posture, tc.want)
+				}
+			}
+		})
+	}
+}
+
 // TestReadinessKeepsLaggingAndIsolatedNodesReady pins the split: failing
 // readiness on ordinary lag makes the fastest node cause a fleet outage, and
 // an isolated node is serving a rolled-back config correctly.

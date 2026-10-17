@@ -64,16 +64,19 @@ import (
 // # A duty declined while its work runs
 //
 // A duty that decides from a domain's rows is DECLINED by a node whose copy of
-// one of them is out of service (ADR-0031, [dutyDecline]), and a copy can go
-// out of service while the work runs — a training tick of the embedding duty
-// runs for minutes. So work kept with a decline check
+// one of them is out of service (ADR-0031, [dutyDecline]) — and the
+// code-retention duty also by a node that does not serve the revision the
+// fleet's activation pointer names ([Engine.servedFleetRevision]) — and either
+// can become true while the work runs: a training tick of the embedding duty
+// runs for minutes, and the fleet can activate a revision this node fails to
+// apply while a pass is under way. So work kept with a decline check
 // ([dutyRenewal.declining]) asks it before every renewal, and when it answers
 // that the node now declines, the work is ENDED with [errDutyDeclined] and the
 // duty is not renewed: renewed, the work would go on deciding from a copy that
-// went wrong after it began. The lease is given back by the work's holder once
-// the work has RETURNED, never by the renewal that ended it, because something
-// the work already sent could otherwise land after another node had taken the
-// duty.
+// went wrong, or against a revision the fleet replaced, after it began. The
+// lease is given back by the work's holder once the work has RETURNED, never
+// by the renewal that ended it, because something the work already sent could
+// otherwise land after another node had taken the duty.
 //
 // Lifted from the embedding duty's own keepClaimed, because written twice the
 // rule is what would differ between the two.
@@ -93,9 +96,11 @@ const keptDutyRenewals = 4
 var errDutyLost = errors.New("engine: another node holds the duty now")
 
 // errDutyDeclined is the cause work holding a duty is ended with when this
-// node declines the duty as the work runs: a copy the work decides from has
-// gone out of service ([dutyRenewal.declining], ADR-0031).
-var errDutyDeclined = errors.New("engine: this node declines the duty: a copy it decides from is out of service")
+// node declines the duty as the work runs ([dutyRenewal.declining]): a copy
+// the work decides from has gone out of service (ADR-0031), or — for a duty
+// that waits for it — this node no longer serves the revision the fleet's
+// activation pointer names. The duty's `_declined` line says which.
+var errDutyDeclined = errors.New("engine: this node declines the duty now")
 
 // errDutyUnconfirmed is the cause work holding a duty is ended with when no
 // renewal has confirmed the duty through the window its last confirmation
@@ -155,9 +160,10 @@ func newDutyRenewal(duty string, ttl time.Duration) dutyRenewal {
 
 // declining is r with declined asked before every renewal: when it answers
 // that this node now declines the duty — a copy the work decides from went out
-// of service ([dutyDecline]) — the work is ended with [errDutyDeclined] and the
-// duty is not renewed, and [keptDuty.Stop] says so, for the work's holder to
-// give the lease back once the work has returned.
+// of service, or this node stopped serving the fleet's revision ([dutyDecline])
+// — the work is ended with [errDutyDeclined] and the duty is not renewed, and
+// [keptDuty.Stop] says so, for the work's holder to give the lease back once
+// the work has returned.
 func (r dutyRenewal) declining(declined func(context.Context) bool) dutyRenewal {
 	r.declined = declined
 	return r
@@ -303,9 +309,10 @@ func (k *keptDuty) finish() (bool, error) {
 func (k *keptDuty) renew(work context.Context, claim schedule.DutyFunc) bool {
 	r := k.renewal
 	if r.declined != nil && r.declined(work) {
-		// DECLINED FIRST, whatever the window says: a node whose copy went
-		// out of service under the work decides nothing more from it, and
-		// a renewal would only keep the duty from a node whose copies serve.
+		// DECLINED FIRST, whatever the window says: a node that now
+		// declines — its copy gone out of service under the work, or the
+		// fleet's revision moved past it — decides nothing more, and a
+		// renewal would only keep the duty from a node that does not.
 		k.mu.Lock()
 		k.declined = true
 		k.mu.Unlock()

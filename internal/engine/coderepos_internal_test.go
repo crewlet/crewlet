@@ -351,8 +351,9 @@ func TestAPurgedRepositoryIsDeclaredAgainByTheDuty(t *testing.T) {
 // THE CODE-RETENTION DUTY RUNS WHERE A PURGE MAY BE WRITTEN, AND ONLY THERE: on
 // a data node whose runtime hosts code and that publishes — never on a company
 // that hosts none, nor on a node in a maintenance mode, whose lifecycle store
-// is withheld. And a turn that holds the duty runs the pass: the claim, the
-// renewal that keeps it while the pass runs, and the purge.
+// is withheld. And a turn that holds the duty, on a node serving the revision
+// the fleet is on, runs the pass: the claim, the renewal that keeps it while
+// the pass runs, and the purge.
 func TestTheCodeRetentionDutyRunsWhereAPurgeMayBeWritten(t *testing.T) {
 	t.Parallel()
 	t.Run("hosting code", func(t *testing.T) {
@@ -362,9 +363,14 @@ func TestTheCodeRetentionDutyRunsWhereAPurgeMayBeWritten(t *testing.T) {
 			t.Fatal("a data node hosting code armed no code-retention duty: a removed " +
 				"repository would be deleted and never purged")
 		}
+		// The duty below is the test's: the armed loop, whose first turn
+		// met a node with no reconciler and asks again a reconcile interval
+		// later, is not left to race it.
+		e.stopCodeRetention()
 		servesCodeReads(t, e)
 		reconciled(t, e)
-		applyReconciled(t, e, codeReposDoc("", ""))
+		r := fleetReconciler(t, e)
+		tickApplies(t, e, r, activateRevision(t, e, codeReposDoc("", "")))
 		d := e.newCodeRetentionDuty(e.writeSide().code, e.native.Load().codeReader)
 		d.pass.Retention = func() time.Duration { return time.Nanosecond }
 		report, ran := d.turn(t.Context())

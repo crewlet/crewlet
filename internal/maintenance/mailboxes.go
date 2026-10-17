@@ -158,6 +158,20 @@ const mailboxesJobName = "seat_mailboxes"
 // error is reported, because it is the reason nothing was retired.
 var ErrNoActiveRevision = errors.New("maintenance: no company revision has been activated")
 
+// ErrRevisionPropagating reports that the fleet has activated a revision this
+// node has not applied yet, and that its lag is still ORDINARY PROPAGATION —
+// no attempt of its own at that revision has failed and it has not been behind
+// longer than propagation explains, or it is starting and has not reconciled
+// yet — rather than a node that failed the apply or is stuck on it.
+//
+// The second roster failure that is not a fault, for the first one's reason:
+// every activation puts every node here for the seconds it takes to apply it,
+// and a sweep that met those seconds and warned would teach whoever reads it
+// to ignore the warning a node that genuinely failed the apply raises. The
+// sweep judges nothing on it, as on any roster error — the seats are judged at
+// the next tick, against a grace of a day — and says so at debug.
+var ErrRevisionPropagating = errors.New("maintenance: this node is still applying the revision the fleet is on")
+
 // MailboxRecords is the slice of the coordination store's mailbox registry this
 // package calls. Declared here, by the consumer, like every other seam in this
 // tree; [coord.Mailboxes] satisfies it.
@@ -198,7 +212,8 @@ type SeatRunRetirer func(ctx context.Context, handle, owner string, epoch int64)
 // at.
 //
 // An error means UNKNOWN, never "no seats": it is returned when the pointer
-// cannot be read, when this node has not applied the revision it names, and
+// cannot be read, when this node has not applied the revision it names —
+// [ErrRevisionPropagating] where that is still ordinary propagation — and
 // [ErrNoActiveRevision] when nothing has ever been activated.
 type SeatRoster func(ctx context.Context) ([]string, error)
 
@@ -428,7 +443,7 @@ func (c sweepClock) now() time.Time { return c.at.Add(time.Since(c.started)) }
 func (m *Mailboxes) sweep(ctx context.Context, now, cutoff time.Time) (int64, error) {
 	clock := newSweepClock(now)
 	roster, err := m.roster(ctx)
-	if errors.Is(err, ErrNoActiveRevision) {
+	if errors.Is(err, ErrNoActiveRevision) || errors.Is(err, ErrRevisionPropagating) {
 		log.DebugContext(ctx, "seat_mailboxes_not_judged", "reason", err.Error())
 		return 0, nil
 	}
