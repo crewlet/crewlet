@@ -226,6 +226,28 @@ type Reconciliation struct {
 	// standing that an administrator set on purpose.
 	Withheld  int
 	Conflicts []Conflict
+	// Shared is every id two or more human seats resolve to, registered for
+	// none of them.
+	Shared []SharedIdentity
+}
+
+// SharedIdentity is one id several human seats declared, which a reconcile
+// registers for none of them.
+//
+// VALIDATION CANNOT SEE ONE: it compares contacts as the chart writes them,
+// so two ${VAR} references that resolve to one value pass it. And one account
+// is not two people, so keeping either seat would be a guess — the reconcile
+// used to keep whichever it reached last, silently, and the other person's
+// mail and attribution went to them.
+//
+// Only the seats whose identities are registered contend: a seat the
+// directory withholds declares nothing this registry holds, so it shares
+// nothing with anybody.
+type SharedIdentity struct {
+	Namespace  string
+	ExternalID string
+	// Handles are the seats that declared it, in chart order.
+	Handles []string
 }
 
 // ReconcileHumanContacts brings the registry in line with the human seats'
@@ -242,6 +264,10 @@ type Reconciliation struct {
 // Only pairs THIS function registered are ever withdrawn. An agent identity
 // that happens to collide is left exactly where it is: a human must never
 // silently take over an agent's mapping, or the reverse.
+//
+// And an id two human seats both declare is registered for NEITHER, and
+// reported ([SharedIdentity]): whichever the walk reached last used to keep
+// it, which is a guess about which person an account is, made silently.
 //
 // # Human ids need no integration — except a NAME
 //
@@ -276,7 +302,7 @@ func (r *Registry) ReconcileHumanContacts(o *org.Organization, lookup org.EnvLoo
 	standing Standing) Reconciliation {
 
 	var rec Reconciliation
-	desired := make(map[identityKey]string)
+	declared := make(map[identityKey][]string)
 	withheld := make(map[string]Withholding)
 	seats := standing.Seats(o)
 	if o != nil {
@@ -288,9 +314,8 @@ func (r *Registry) ReconcileHumanContacts(o *org.Organization, lookup org.EnvLoo
 			if handle == "" {
 				continue
 			}
-			declared := len(role.Contact.Identities())
 			resolved := role.Contact.ResolvedIdentities(lookup)
-			rec.Unresolved += declared - len(resolved)
+			rec.Unresolved += len(role.Contact.Identities()) - len(resolved)
 			if why, ok := seats[handle]; ok {
 				// NOT REGISTERED, which is the whole of a withdrawal:
 				// a pair the previous pass registered is withdrawn
@@ -308,9 +333,20 @@ func (r *Registry) ReconcileHumanContacts(o *org.Organization, lookup org.EnvLoo
 					// is this function's to report either way.
 					continue
 				}
-				desired[identityKey{string(id.Transport), id.ExternalID}] = handle
+				key := identityKey{string(id.Transport), id.ExternalID}
+				declared[key] = append(declared[key], handle)
 			}
 		}
+	}
+	desired := make(map[identityKey]string, len(declared))
+	for _, key := range slices.SortedFunc(maps.Keys(declared), compareIdentityKey) {
+		if handles := declared[key]; len(handles) > 1 {
+			rec.Shared = append(rec.Shared, SharedIdentity{
+				Namespace: key.namespace, ExternalID: key.externalID, Handles: handles,
+			})
+			continue
+		}
+		desired[key] = declared[key][0]
 	}
 
 	// Withdraw ours that are no longer wanted, BEFORE registering — an id
@@ -359,15 +395,21 @@ func (r *Registry) ReconcileHumanContacts(o *org.Organization, lookup org.EnvLoo
 	r.standing, r.withheld = standing, withheld
 	r.mu.Unlock()
 	if rec.Registered > 0 || rec.Withdrawn > 0 || rec.Withheld > 0 ||
-		len(rec.Conflicts) > 0 {
+		len(rec.Conflicts) > 0 || len(rec.Shared) > 0 {
 		log.Info("human_contacts_reconciled",
 			"registered", rec.Registered, "withdrawn", rec.Withdrawn,
 			"withheld", rec.Withheld, "unresolved", rec.Unresolved,
-			"conflicts", len(rec.Conflicts))
+			"conflicts", len(rec.Conflicts), "shared", len(rec.Shared))
 	}
 	for _, c := range rec.Conflicts {
 		log.Warn("human_contact_id_conflict", "transport", c.Namespace,
 			"handle", c.Wanted, "already_held_by", c.HeldBy)
+	}
+	for _, shared := range rec.Shared {
+		log.Warn("human_contact_id_shared", "transport", shared.Namespace,
+			"handles", shared.Handles,
+			"detail", "these seats' contacts resolve to one account, which is "+
+				"registered for none of them: give each seat its own")
 	}
 	return rec
 }

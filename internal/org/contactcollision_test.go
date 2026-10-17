@@ -11,10 +11,11 @@ import (
 // TWO SEATS MAY NOT CLAIM ONE ACCOUNT.
 //
 // A walk of the chart answers the FIRST match while notification registration
-// keys a map and keeps the LAST, so a duplicate does not collide loudly — it
-// sends that person's wakes to one seat while an inbound message from them
-// resolves to the other, with both entries looking perfectly ordinary. It is
-// refused where every other chart-wide collision is refused: at validation.
+// registers an id two seats declare for NEITHER, so a duplicate does not
+// collide loudly — it sends that person's wakes to one seat while an inbound
+// message from them resolves to nobody, with both entries looking perfectly
+// ordinary. It is refused where every other chart-wide collision is refused: at
+// validation.
 func TestTwoSeatsMayNotClaimOneExternalAccount(t *testing.T) {
 	o := &org.Organization{
 		Name: "Nimbus",

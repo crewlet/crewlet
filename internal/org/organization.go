@@ -1058,20 +1058,23 @@ func describeUnits(units []placedUnit) string {
 //
 // # What a collision costs
 //
-// An identity is how an inbound message finds a person, and the two consumers
-// resolve a duplicate OPPOSITE WAYS. [notify.Registry.ReconcileHumanContacts]
-// keys a map on (transport, id), so the last seat in chart order wins and the
-// first silently stops being reachable, while every walk of the chart answers
-// the first. So a duplicated `slack_user_id` sends one person's wakes to
-// another while an inbound message resolves back to the first, and neither
-// seat looks wrong.
+// An identity is how an inbound message finds a person, and the consumers
+// resolve a duplicate DIFFERENT WAYS. [notify.Registry.ReconcileHumanContacts]
+// registers an id two seats declare for neither of them, so an inbound message
+// from it resolves to nobody, while every walk of the chart answers the first.
+// So a duplicated `slack_user_id` addresses one person's wakes to the other
+// while neither is recognised by what they write, and neither seat looks
+// wrong.
 //
 // It is checked on the DECLARED values rather than the resolved ones for the
 // reason [HumanContact.Identities] gives: validation runs where the config is
 // read, which is not always where the environment that resolves a ${VAR}
 // lives, and two seats sharing a literal is the collision somebody typed. Two
 // seats pointing at one ${VAR} is the same mistake spelled once, so it is
-// caught here too — the reference is compared as its own text.
+// caught here too — the reference is compared as its own text. Two DIFFERENT
+// references that resolve to one value are the collision this cannot see,
+// and the registry is what catches it, registering the id for neither seat
+// and naming both ([notify.SharedIdentity]).
 //
 // # Compared as the values SIT
 //

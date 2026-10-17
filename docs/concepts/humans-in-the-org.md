@@ -78,11 +78,14 @@ warning clears.
 **And no two seats may claim one identity.** Each of these fields is an
 external account, and an account belongs to one person. A duplicate is
 rejected at validation because it does not fail loudly on its own: inbound
-routing keys a map on the identity, so the *last* seat in the document takes it,
-while every walk of the org chart answers the *first*. One of the two people
-silently stops receiving their own mail, with both entries looking perfectly
-ordinary — an inbound message resolves to one seat while the same person's
-wakes go to the other. Surrounding whitespace is never part of an identity, so
+routing registers an identity two seats declare for *neither* of them, while
+every walk of the org chart answers the *first*. Both people stop being
+recognised by it on what they write, with both entries looking perfectly
+ordinary. Validation compares the values as written, a `${VAR}` reference as
+its own text, so two *different* references that resolve to one value pass
+it: that collision is caught when the contacts are registered, which
+registers the identity for neither seat and logs `human_contact_id_shared`
+naming both. Surrounding whitespace is never part of an identity, so
 the comparison ignores it on every field. Case is ignored exactly where the
 platform ignores it: a GitHub login, a GitLab username and a Mattermost
 username name one account however they are capitalised, so those three are
@@ -711,7 +714,10 @@ holds two kinds of entry:
   registered and the current organization no longer declares (a contact
   edit, a removed seat, a kind flip) is withdrawn, and an ID already held by
   a different seat is never taken over: the conflict is logged as
-  `human_contact_id_conflict` naming both seats.
+  `human_contact_id_conflict` naming both seats. An ID two human seats
+  resolve to — two `${VAR}` references naming one value, which validation
+  cannot see — is registered for neither, and logged as
+  `human_contact_id_shared` naming both.
 - **Human chat accounts named by NAME** are the one contact the reconcile
   leaves alone (`org.Transport.AddressedByName`): a Mattermost username is
   what an agent mentions a person by, while every post carries the person's

@@ -59,11 +59,11 @@ var (
 	//
 	// A contact identity is how an inbound message finds a person, and two
 	// seats declaring one id resolve DIFFERENTLY depending on who is
-	// asking: notification registration keys a map on the identity, so the
-	// LAST seat in chart order silently takes it, while every lookup that
-	// walks the chart answers the FIRST. The person who lost the race keeps
-	// a correct-looking config and stops receiving their own mail, while
-	// an inbound message from them still resolves to the seat that lost.
+	// asking: notification registration registers the identity for
+	// NEITHER seat, while every lookup that walks the chart answers the
+	// FIRST. Both people keep a correct-looking config; the second stops
+	// receiving their own mail, and an inbound message from either
+	// resolves to nobody.
 	//
 	// A RUNNABLE rule (see the class note above [Organization.Validate]),
 	// like the duplicate handle it is the contact-field twin of: an
