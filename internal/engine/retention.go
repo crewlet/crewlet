@@ -198,9 +198,10 @@ type retention struct {
 	// floor, for `floor_unknown`. See floorwatch.go.
 	floors *floorWatch
 
-	// now is the clock every evaluation, every report and every trim tick
-	// reads. Nil reads the wall clock; a case sets it to put a log's first
-	// days, or an eviction's fence window, behind it.
+	// now is the clock every evaluation, every report, every trim tick, the
+	// backup gauge and the alarm tracker's ages read ([retention.clock]) —
+	// the duty's one clock. Nil reads the wall clock; a case sets it to put a
+	// log's first days, or an eviction's fence window, behind it.
 	now func() time.Time
 
 	// beating serialises one alarm evaluation against another: the
@@ -244,7 +245,6 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		objectives:  e.objectives,
 		claim:       e.workerDuty(retentionDutyName, retentionDutyTTL),
 		nodeID:      s.nodeID,
-		alarms:      statelog.NewTracker(e.metrics, nil),
 		coverage:    e.vectorCoverage,
 		index:       e.indexReading,
 		objects:     e.objectsReading,
@@ -253,6 +253,11 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		pooled:      map[string]poolCounters{},
 		floors:      newFloorWatch(e.backends.Fleet.Floors),
 	}
+	// ON THE DUTY'S OWN CLOCK, which every report and evaluation reads: an
+	// alarm's age is the tracker's clock less the instant it was raised, and
+	// a tracker on the wall clock aged an alarm the evaluations beside it
+	// had raised on another.
+	r.alarms = statelog.NewTracker(e.metrics, r.clock)
 	// DETACHED from the caller's context, for the reason every other
 	// long-running loop here is: a loop bound to a signal context stops at
 	// SIGTERM, which would make its lifetime differ from the appliers it
