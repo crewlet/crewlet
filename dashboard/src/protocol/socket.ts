@@ -21,9 +21,10 @@
  *
  * # What a close means
  *
- * The handshake carries the session cookie and nothing else, and the engine
- * decides it once. After that it CLOSES the socket when the identity estate
- * moves under it — and the code says what the tab should do:
+ * The handshake carries the session cookie, and the tab's reader in its URL
+ * (a browser sets no header on a WebSocket), and the engine decides it once.
+ * After that it CLOSES the socket when the identity estate moves under it —
+ * and the code says what the tab should do:
  *
  *  - 4401 (`CLOSE_UNAUTHENTICATED`): the session the socket was opened with
  *    ended — a sign-out here or everywhere, a suspension, a removal, a
@@ -52,7 +53,7 @@ import { api } from "./api.ts";
 import { auth } from "./auth.ts";
 import { RestError, retryHintOf, whenRequestsSettle } from "./rest.ts";
 import { retryAfterMs } from "./retry.ts";
-import { needSession, READER_CHANGED, readerHeaders, readerMoved } from "./signin.ts";
+import { needSession, READER_CHANGED, readerHeaders, readerMoved, readerQuery } from "./signin.ts";
 import type { Store } from "./store.ts";
 import type {
   ArtifactChangedPush,
@@ -727,12 +728,21 @@ export class LiveSocket {
     }
     const proto = location.protocol === "https:" ? "wss" : "ws";
     // THE HANDSHAKE CARRIES THE SESSION COOKIE, which the browser attaches to
-    // a same-origin upgrade as it does to any request, and nothing else. There
-    // is deliberately no query-string credential: a URL is written into every
-    // proxy's access log, and the engine reads none there.
+    // a same-origin upgrade as it does to any request, and no credential
+    // beside it: a URL is written into every proxy's access log, and the
+    // engine reads none there.
+    //
+    // WHAT IT DOES CARRY IN ITS URL IS THE TAB'S READER (`readerQuery`), the
+    // one thing every other request says in a header and a handshake cannot:
+    // a browser sets no header on a WebSocket. A dial made under a cookie a
+    // sign-in in another tab moved is then refused before any frame of the
+    // new person's company is drawn — as 1006, which the refusal probe reads
+    // as `reader_changed` and hands the tab over on — rather than served
+    // until the tab's next request was refused. The id is not a secret; it is
+    // in the access log of the socket's path.
     let sock: WebSocket;
     try {
-      sock = new WebSocket(`${proto}://${location.host}${PATH}`);
+      sock = new WebSocket(`${proto}://${location.host}${PATH}${readerQuery()}`);
     } catch {
       this.scheduleReconnect();
       return;
@@ -874,10 +884,10 @@ export class LiveSocket {
   private async probeRefusal(): Promise<void> {
     if (this.isClosed) return;
     try {
-      // NAMING THE TAB'S READER, which the handshake itself cannot: a
-      // browser sets no header on a WebSocket. A dial refused while the
-      // browser is somebody else's is then told so here, and the tab handed
-      // to them, rather than re-asked as them.
+      // NAMING THE TAB'S READER in the header a plain GET can carry. A dial
+      // refused while the browser is somebody else's — for the reader its
+      // URL named, or for that person's own session — is then told so here,
+      // and the tab handed to them, rather than re-asked as them.
       const res = await fetch(PATH, {
         credentials: "same-origin",
         cache: "no-store",
