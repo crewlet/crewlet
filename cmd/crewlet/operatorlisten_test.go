@@ -99,7 +99,7 @@ func TestAListeningAssistantDoesNotHoldTheListenersShutdown(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), apiShutdownGrace/2)
 	defer cancel()
-	if err := n.surface.server.Shutdown(ctx); err != nil {
+	if err := n.surface.server.server.Shutdown(ctx); err != nil {
 		t.Errorf("the API listener's shutdown with an assistant listening: %v — "+
 			"the stream held it", err)
 	}
