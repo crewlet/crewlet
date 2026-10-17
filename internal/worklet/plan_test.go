@@ -169,6 +169,26 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 			}
 			refuseHeapScans(t, plan)
 			shown := strings.Join(plan, "\n")
+			// AND IT WALKS NOTHING IT DOES NOT NAME. A walk is every row
+			// of its table in its index's order, which is a heap scan by
+			// another route, and the one walk a read may make is the one
+			// its own order is for. Measured: the unblocked repair's
+			// dependents, written as a three-way join, walked every live
+			// task through `tracker_tasks_type_idx` on every tick and
+			// sought the history only per task — reaching the subject
+			// index it then named, and passing.
+			for _, line := range plan {
+				for _, table := range covered {
+					walked := indexesIn([]string{line})
+					if !strings.HasPrefix(line, "SCAN "+table+" ") || len(walked) == 0 ||
+						(read.walk && walked[0] == read.index) {
+						continue
+					}
+					t.Errorf("this read walks %s through %s, which it does not "+
+						"name — every row of that table, in that index's "+
+						"order:\n%s", table, walked[0], shown)
+				}
+			}
 			switch {
 			case !read.walk && !seeks(plan, read.index):
 				t.Errorf("this read does not SEEK %s:\n%s", read.index, shown)
@@ -431,7 +451,7 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]historyRea
 		"a person's inbox": seek(historyKey, inboxStatement([]string{"n.recipient = ?"}),
 			"ana", 51),
 		"the repair's horizon": seek(status, unblockHorizonStatement, at(9_000), at(9_000)),
-		"the repair's dependents": seek(subject, unblockedDependentsStatement,
+		"the repair's dependents": seek(status, unblockedDependentsStatement,
 			at(9_000), at(9_500), 64),
 		"a subject's effective instant": seek(subject, effectiveAtStatement,
 			task, at(9_000), task, at(9_000), instant),

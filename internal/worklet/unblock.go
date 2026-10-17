@@ -99,15 +99,26 @@ const unblockHorizonStatement = `
 
 // unblockedDependentsStatement is every ready dependent of a blocker whose
 // status moved between two positions, read by [ScanUnblocked].
+//
+// THE WINDOW DRIVES IT, which is why the dependents are an IN over the
+// window's rows rather than a join beside them: the window's status rows are
+// a range on the repair's own partial index, each blocker's edges a seek on
+// the dependency key, and each dependent one primary-key read. Written as a
+// three-way join, the planner — with no statistics, as on every node — chose
+// to drive from the TASKS instead: a walk of every live task in the company
+// through `tracker_tasks_type_idx`, seeking each one's edges and then the
+// history, on every tick of the duty, and never touching the index replicated
+// 0008 built for this read. An IN also needs no DISTINCT, since each task row
+// is read once whatever number of its blockers moved.
 const unblockedDependentsStatement = `
-		SELECT DISTINCT t.id, t.key, t.project_key, t.assignee,
+		SELECT t.id, t.key, t.project_key, t.assignee,
 		       (SELECT MAX(o.cleared_at) FROM tracker_task_deps o
 		        WHERE o.task_id = t.id AND o.cleared_at IS NOT NULL)
-		FROM tracker_history h
-		JOIN tracker_task_deps d ON d.blocker_id = h.subject_id
-		JOIN tracker_tasks t ON t.id = d.task_id
-		WHERE json_extract(h.fields_json, '$.status.to') IS NOT NULL
-		  AND h.log_seq > ? AND h.log_seq <= ?
+		FROM tracker_tasks t
+		WHERE t.id IN (SELECT d.task_id FROM tracker_history h
+		               JOIN tracker_task_deps d ON d.blocker_id = h.subject_id
+		               WHERE json_extract(h.fields_json, '$.status.to') IS NOT NULL
+		                 AND h.log_seq > ? AND h.log_seq <= ?)
 		  AND t.removed_at IS NULL
 		  -- AN UNASSIGNED DEPENDENT HAS NOBODY TO TELL: see the
 		  -- comment on ScanUnblocked.
@@ -123,10 +134,11 @@ const unblockedDependentsStatement = `
 //
 // # The query, and why each clause is there
 //
-// It reads status changes at `log_seq > since` — a keyset range on the
-// (log_seq) index — restricted to subjects that are BLOCKERS, collects their
-// dependents, and keeps a dependent only when it has no open blocker left and
-// the newest clearing among its blockers is later than what it was last told.
+// It reads status changes at `log_seq > since` — a range on the repair's own
+// partial index, `tracker_history_status_seq_idx` — restricted to subjects
+// that are BLOCKERS, collects their dependents, and keeps a dependent only when
+// it has no open blocker left and the newest clearing among its blockers is
+// later than what it was last told.
 //
 // # THE ROW'S OWN STATUS DELTA DECIDES, NOT ITS KIND
 //
@@ -168,15 +180,14 @@ func ScanUnblocked(ctx context.Context, db store.ReplicatedReader, since uint64,
 			return fmt.Errorf("worklet: read the repair's own horizon: %w", err)
 		}
 		// THE TWO PREDICATES ABOUT THE DEPENDENT ARE SUBQUERIES OVER
-		// ALL ITS EDGES, never aggregates over the joined ones.
+		// ALL ITS EDGES, never aggregates over the window's.
 		//
-		// The join reaches only the blockers whose status changed in
-		// this window, so an aggregate over it answers "has every
-		// blocker THAT MOVED cleared" — which is true the moment one of
-		// two closes, and wakes somebody for work they still cannot
-		// start. The same is true of the clearing instant: the newest
-		// clearing among the blockers that moved is not the newest among
-		// the blockers.
+		// The window reaches only the blockers whose status changed in
+		// it, so an aggregate over those answers "has every blocker THAT
+		// MOVED cleared" — which is true the moment one of two closes,
+		// and wakes somebody for work they still cannot start. The same
+		// is true of the clearing instant: the newest clearing among the
+		// blockers that moved is not the newest among the blockers.
 		rows, err := tx.QueryContext(ctx, unblockedDependentsStatement,
 			since, scan.Through, limit)
 		if err != nil {
