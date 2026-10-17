@@ -328,6 +328,43 @@ var nodeEstatePlacements = []placement{
 	// and rebuilt locally, so every node maintains its own.
 	// -----------------------------------------------------------------
 	{
+		Table: "chat_docs",
+		Why: "The chat keyword index's document side, and it is this node's " +
+			"for the same reason kb_docs is: it is derived from replicated " +
+			"rows by a local walk, so a peer's copy buys nothing a rebuild " +
+			"does not. Chat has no semantic half at all — a year of it needs " +
+			"several times the whole supported vector corpus — so this is the " +
+			"only index over the transcript.",
+	},
+	{
+		Table: "chat_postings",
+		Why:   "The inverted list over the documents above, and it goes where they go.",
+	},
+	{
+		Table: "chat_index_state",
+		Why: "How far THIS node has indexed the chat log and followed its " +
+			"erasures, and whether it is dropping its index to rebuild it. A " +
+			"watermark is a fact about one node's progress — two nodes are " +
+			"legitimately at different positions — so an agreed value would " +
+			"destroy the comparison it exists to make, and a rebuild is this " +
+			"node's answer to its own estate being replaced.",
+	},
+	{
+		Table: "chat_index_rooms",
+		Why: "Each room's share of the chat index — its documents and their " +
+			"tokens — which a search sums over the rooms it searches. It " +
+			"describes the index this node actually holds, a walk behind or " +
+			"ahead of a peer's, so the statistics a score reads have to be " +
+			"the ones of the postings it reads.",
+	},
+	{
+		Table: "chat_index_terms",
+		Why: "How many of each room's indexed documents carry each term — the " +
+			"document frequency a chat search sums over the rooms it " +
+			"searches. Derived from this node's own postings and moved with " +
+			"them, so it goes where they go.",
+	},
+	{
 		Table: "kb_docs",
 		Why: "The lexical search index's document side, built asynchronously " +
 			"behind replicated rows and droppable wholesale when the analyzer " +
