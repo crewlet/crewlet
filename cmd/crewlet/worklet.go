@@ -87,7 +87,7 @@ func workletPurge(environ config.Source, args []string, stdout, stderr io.Writer
 		reason = fs.String("reason", "", "why; recorded on the deletion marker")
 		confirm = fs.String("confirm", "",
 			"the item's KEY — this destroys the item and every row it produced")
-		opID = fs.String("op-id", "",
+		opID = opIDFlag(fs,
 			"retry a purge whose outcome is unknown with the id it printed, so "+
 				"the retry cannot append a second purge; empty starts a new one")
 	})

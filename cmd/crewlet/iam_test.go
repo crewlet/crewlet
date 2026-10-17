@@ -811,7 +811,7 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unknown write was reported as a success")
 	}
-	for _, want := range []string{"-idempotency-key " + op,
+	for _, want := range []string{"-op-id " + op,
 		"these changes were saved before it: seat",
 		"couldn't confirm whether this change was saved"} {
 		if !strings.Contains(err.Error(), want) {
@@ -822,7 +822,7 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 	if strings.Contains(err.Error(), "another node") {
 		t.Errorf("an unknown this node can settle was sent elsewhere: %v", err)
 	}
-	_ = run([]string{"iam", "bind", "p-1", "sre", "-idempotency-key",
+	_ = run([]string{"iam", "bind", "p-1", "sre", "-op-id",
 		op, "-config", cfg, "-api", node.URL}, &out, &errs)
 	if len(keys) != 2 || keys[0] != "" || keys[1] != op {
 		t.Errorf("the node saw keys %q, want none and then the retried op id",
@@ -836,9 +836,9 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 		{"iam", "token", "-person", "svc-1"},
 		{"iam", "show", "p-1"},
 	} {
-		err := run(append(args, "-idempotency-key", "k", "-config", cfg,
+		err := run(append(args, "-op-id", "k", "-config", cfg,
 			"-api", node.URL), &out, &errs)
-		if err == nil || !strings.Contains(err.Error(), "idempotency-key") {
+		if err == nil || !strings.Contains(err.Error(), "-op-id") {
 			t.Errorf("%v with a key answered %v, want it refused naming the flag",
 				args, err)
 		}
@@ -865,7 +865,7 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 //
 // A mint's route reads no Idempotency-Key and this command refuses the flag on
 // `token`, so the retry every other unknown prescribes here — the same command
-// with -idempotency-key — sent an operator to a flag they would be refused.
+// with -op-id — sent an operator to a flag they would be refused.
 // The node's own sentence says to mint again; the op id is named for the
 // trail. Mutation: prescribe the key for every 503 again and this goes red.
 func TestAnUnknownMintIsNotRetriedUnderAKey(t *testing.T) {
@@ -890,7 +890,7 @@ func TestAnUnknownMintIsNotRetriedUnderAKey(t *testing.T) {
 			t.Errorf("the refusal %q does not say %q", err, want)
 		}
 	}
-	if strings.Contains(err.Error(), "-idempotency-key") {
+	if strings.Contains(err.Error(), "-op-id") {
 		t.Errorf("an unknown mint prescribes a flag `iam token` refuses: %v", err)
 	}
 }
@@ -923,7 +923,7 @@ func TestAnUnvouchedIamWriteIsRetriedThroughAnotherNode(t *testing.T) {
 		t.Fatal("an unvouched write was reported as a success")
 	}
 	for _, want := range []string{"another node with -api",
-		"-idempotency-key " + op, "Don't use a new key"} {
+		"-op-id " + op, "Don't use a new id"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal %q does not say %q", err, want)
 		}
@@ -945,9 +945,9 @@ func TestAnIamKeyTheEngineNeverMintedIsRefusedBeforeItIsSent(t *testing.T) {
 	cfg := bootstrapWithKeyring(t, "k1")
 
 	var out, errs bytes.Buffer
-	err := run([]string{"iam", "suspend", "p-1", "-idempotency-key",
+	err := run([]string{"iam", "suspend", "p-1", "-op-id",
 		"people:update:p-1:k7", "-config", cfg, "-api", node.URL}, &out, &errs)
-	if err == nil || !strings.Contains(err.Error(), "-idempotency-key") {
+	if err == nil || !strings.Contains(err.Error(), "-op-id") {
 		t.Fatalf("a hand-made key answered %v, want a refusal naming the flag", err)
 	}
 	if asked {
@@ -1042,15 +1042,15 @@ func TestAnIamInviteAndCreateTakeTheSeatTheOperatorNamed(t *testing.T) {
 	for _, want := range []string{"p-1", "login lead, on seat platform-lead",
 		"applied at p (op " + personOp + ")", "password link for p-1",
 		"https://crewlet.example.com/dashboard#/reset/c-1.f1rst",
-		"shown once", "-idempotency-key " + personOp} {
+		"shown once", "-op-id " + personOp} {
 		if !strings.Contains(printed, want) {
 			t.Errorf("the person's create printed no %q:\n%s", want, printed)
 		}
 	}
-	// THE PRINTED RETRY RUNS: the key after -idempotency-key is one the
+	// THE PRINTED RETRY RUNS: the key after -op-id is one the
 	// command's own check admits, so the retry is not refused before it is
 	// sent.
-	_, after, _ := strings.Cut(printed, "-idempotency-key ")
+	_, after, _ := strings.Cut(printed, "-op-id ")
 	if key, _, _ := strings.Cut(strings.TrimSpace(after), " "); statelog.CheckCallerOpID(
 		strings.Trim(key, "`'\".,;")) != nil {
 		t.Errorf("the create printed a retry under %q, which the command refuses", key)
@@ -1154,7 +1154,7 @@ func TestACreateSaysWhatBecameOfItsLink(t *testing.T) {
 // HANDS BACK THE LINK.
 //
 // A person's first password link is derived from the operation, so the retry
-// an unknown answer prescribes — the same command with -idempotency-key — is
+// an unknown answer prescribes — the same command with -op-id — is
 // one that can hand the link back: the command has to name it, send it, and
 // print what the retry answers. Mutation: drop create from the keyed
 // subcommands and the retry is refused before it is sent.
@@ -1186,11 +1186,11 @@ func TestAnUnknownCreateIsRetriedUnderItsKeyForTheSameLink(t *testing.T) {
 
 	var out, errs bytes.Buffer
 	err := run(args, &out, &errs)
-	if err == nil || !strings.Contains(err.Error(), "-idempotency-key "+op) {
+	if err == nil || !strings.Contains(err.Error(), "-op-id "+op) {
 		t.Fatalf("an unknown create answered %v, want the retry named", err)
 	}
 	out.Reset()
-	if err := run(append(args, "-idempotency-key", op), &out, &errs); err != nil {
+	if err := run(append(args, "-op-id", op), &out, &errs); err != nil {
 		t.Fatalf("the retry under the key: %v", err)
 	}
 	if len(keys) != 2 || keys[1] != op {

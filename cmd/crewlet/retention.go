@@ -726,7 +726,7 @@ func retentionGate(environ config.Source, args []string, stdout, stderr io.Write
 	client, err := nodeClientFor(environ, rest, "retention "+verb, stderr, func(fs *flag.FlagSet) {
 		confirm = fs.String("confirm", "",
 			"repeat the node id, because this changes whether that machine's records apply")
-		opID = fs.String("op-id", "",
+		opID = opIDFlag(fs,
 			"the operation id an earlier run of this gesture answered with, to "+
 				"finish it on the logs it did not reach; empty starts a new one")
 		if evict {
