@@ -298,7 +298,6 @@ func register() []registration {
 
 				w, err := tracker.NewWriter(tracker.WriterDeps{
 					Publisher: publisher, DB: s.estate().Reader(), NodeID: s.nodeID,
-					Drain: running.runner.Drain, Metrics: s.metrics,
 					// THE NODE'S OWN IDENTITY, replaced per gesture with
 					// the operator who ran it — see [tracker.Writer.As].
 					Actor: s.nodeID, ActorKind: tracker.AuthorSystem,

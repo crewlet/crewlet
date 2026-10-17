@@ -53,7 +53,8 @@ func sectionBlurb(k Kind) string {
 		return "A distribution, exported with the engine's own bucket " +
 			"boundaries: twenty-one powers of two from 64 µs to 64 s, which " +
 			"resolves a percentile to within a factor of two at every scale " +
-			"here — from a 40 µs index probe to a 16-second bulk apply. The " +
+			"here — from a 40 µs index probe to a record applied tens of " +
+			"seconds after its commit behind a catch-up. The " +
 			"SDK's default boundaries stop at 10 s, so a slow apply would " +
 			"land in an overflow bucket and read as \"at least 10 s\" for ever.\n"
 	case KindGauge:

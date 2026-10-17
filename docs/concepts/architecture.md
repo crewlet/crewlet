@@ -653,7 +653,7 @@ days keep none.
 | Bucket | What it holds |
 |---|---|
 | **`crewlet_leases`** | `node:` · `seat:` ownership, and nothing else. The bucket's age **is** the lease TTL |
-| **`crewlet_duties`** | `worker:` ownership, and every other lease — the work tracker's `move:` · `merge:` · `bulk:` claims among them. Each record is judged by its own deadline; the bucket's age only has to outlive the longest duty |
+| **`crewlet_duties`** | `worker:` ownership, and every other lease — the work tracker's `move:` · `merge:` claims among them. Each record is judged by its own deadline; the bucket's age only has to outlive the longest duty |
 | **`crewlet_epochs`** | The monotonic fencing counter. No age at all — see below |
 | **`crewlet_config`** | The activation pointer and its payload — the pointer's own revision **is** the epoch |
 | **`crewlet_status`** | One key per node: which revision it applied |
