@@ -319,8 +319,8 @@ func checkView(view *View) error {
 	case paramsBytes(view.Params) > MaxViewParamsBytes:
 		// AND ONE ON ITS WEIGHT, because thirty-two keys say nothing
 		// about the size of a `q` or an `any` branch: one record with a
-		// megabyte of saved query is a record every node stores, ships
-		// in every snapshot and re-reads on every replay.
+		// megabyte of saved query is a record every data node stores,
+		// ships in every snapshot and re-reads on every replay.
 		return invalid("view %s's query is %d bytes and the "+
 			"maximum is %d — a saved view is a filter, not a document",
 			view.ID, paramsBytes(view.Params), MaxViewParamsBytes)
