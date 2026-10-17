@@ -1684,7 +1684,8 @@ units:
                                         #   native project/space or a Jira/Confluence one
         mcp_env:                        # optional: MCP creds shared by the unit's direct agent roles
           atlassian:                     #   (real tool credentials only; the chat transport
-            JIRA_API_TOKEN: "${BACK_JIRA_TOKEN}"  #   identity is per-agent)
+            JIRA_USERNAME: "${BACK_JIRA_USER}"    #   identity is per-agent; mcp-atlassian takes a
+            JIRA_API_TOKEN: "${BACK_JIRA_TOKEN}"  #   token only beside its account's address)
         roles:
           - name: Tech Lead             # required — unique agent identity
             goal: "..."                 # optional — individual mission
@@ -1967,15 +1968,21 @@ mcp_servers:
   # shared stdio server (one instance for all agents)
   - name: tavily
     command: npm
-    args: ["exec", "--yes", "--", "tavily-mcp@latest"]
+    args: ["exec", "--yes", "--", "tavily-mcp@0.2.22"]
     env:
       TAVILY_API_KEY: "${TAVILY_API_KEY}"
+    tool_annotations:                   # it advertises none; every tool only reads the web
+      tavily_search:   { read_only: true, open_world: true }
+      tavily_extract:  { read_only: true, open_world: true }
+      tavily_crawl:    { read_only: true, open_world: true }
+      tavily_map:      { read_only: true, open_world: true }
+      tavily_research: { read_only: true, open_world: true }
 
   # per-role stdio server — Jira + Confluence share one mcp-atlassian
   - name: atlassian
     shared: false                       # per-role: token from role.mcp_env.atlassian
     command: uvx
-    args: ["mcp-atlassian"]
+    args: ["mcp-atlassian==0.23.1"]
     env:
       JIRA_URL: "${JIRA_URL}"
       CONFLUENCE_URL: "${CONFLUENCE_URL}"

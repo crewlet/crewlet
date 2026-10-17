@@ -50,7 +50,7 @@ mcp_servers:
   - name: atlassian                               # shared by Jira + Confluence
     shared: false                                 # per-agent: each role supplies its own token
     command: uvx
-    args: ["mcp-atlassian"]
+    args: ["mcp-atlassian==0.23.1"]
     env:
       CONFLUENCE_URL: "${CONFLUENCE_URL}"         # declare explicitly — the engine does not inject it
 ```
@@ -59,7 +59,7 @@ mcp_servers:
 
 **Which deployment a `url` names is derived, by the rule the [Jira](jira.md#configuration) client uses.** A site under `atlassian.net`, `jira.com` or Atlassian Government Cloud's `atlassian-us-gov-mod.net` is Cloud, and serves Confluence under `/wiki`, which the engine appends when the address does not already end in it; a gateway a `cloud_id` is read through — `api.atlassian.com`, or Government Cloud's `api.atlassian-us-gov-mod.com`, chosen by the Cloud `site_url` names — is Cloud and already names the product, so nothing is appended. Any other host is what `integrations.atlassian.deployment` declares, and Data Center when nothing is declared, served at the address as written. An [Atlassian Isolated Cloud](https://support.atlassian.com/organization-administration/docs/ip-addresses-and-domains-for-atlassian-cloud-products/) site is at a base domain of its own, so it is Cloud by that declaration rather than by its host, and nothing is appended to it: write its `url` out whole, `/wiki` included. A `url` whose host is a `${VAR}` is judged when it resolves, so validation asks it for a Data Center's `webhook_secret` up front only when the company declares `data_center`.
 
-> **Human-clickable links agents share:** with `cloud_id`, the `mcp-atlassian` tools return `api.atlassian.com/ex/confluence/{cloud_id}/...` gateway URLs, which colleagues can't open. To have agents share a clickable `…atlassian.net/wiki/spaces/…/pages/…` link, set a [skill variable](../concepts/tool-skills.md#skill-variables) — `skill_variables.confluence_base_url: "https://mycompany.atlassian.net/wiki"` — for your mention/link Tool Skill to reference. (The bundled `examples/tool-skills/platform-mentions.md` already references this variable.) Note this is *enforced-reading guidance* (the required-skill guard puts the rule + base in context before the agent can post), not a rewrite of tool results — `mcp-atlassian` builds result links from `CONFLUENCE_URL` and does not read a site-URL env. (This is independent of `site_url`, which the notification transport and knowledge search use for their own links.)
+> **Human-clickable links agents share:** with `cloud_id`, the `mcp-atlassian` tools return `api.atlassian.com/ex/confluence/{cloud_id}/...` gateway URLs, which colleagues can't open. To have agents share a clickable `…atlassian.net/wiki/spaces/…/pages/…` link, set a [skill variable](../concepts/tool-skills.md#skill-variables) — `skill_variables.confluence_base_url: "https://mycompany.atlassian.net/wiki"` — for your mention/link Tool Skill to reference. (The bundled `examples/tool-skills/platform-mentions.md` does not: it links to the engine's own tracker and pages through `${crewlet_base_url}`, so a company on Confluence gives its link rule a skill of its own.) Note this is *enforced-reading guidance* (the required-skill guard puts the rule + base in context before the agent can post), not a rewrite of tool results — `mcp-atlassian` builds result links from `CONFLUENCE_URL` and does not read a site-URL env. (This is independent of `site_url`, which the notification transport and knowledge search use for their own links.)
 
 On **Cloud**, `crewlet confluence provision` registers token-bearing hooks on `/webhooks/confluence/{event}` through an endpoint Atlassian has never documented; the [Forge app](https://github.com/crewlet/forge) is the supported alternative and delivers to `POST /webhooks/forge`. `webhook_secret` signs Data Center deliveries; `webhook_token` authenticates Cloud ones. See [Webhooks](#webhooks-confluence-pushes-to-agents).
 
@@ -69,7 +69,7 @@ Since Jira and Confluence share the Atlassian platform, they use the **same** `m
 
 ## MCP Server (Agents Control Confluence)
 
-The `atlassian` MCP server gives agents full wiki capabilities — searching spaces, reading pages, creating and updating content, managing attachments, and adding comments. Set `CONFLUENCE_URL` in the server's `env`.
+The `atlassian` MCP server gives agents full wiki capabilities — searching spaces, reading pages, creating and updating content, managing attachments, and adding comments. Set `CONFLUENCE_URL` in the server's `env`. The release is pinned for the reasons the [Jira page](jira.md#mcp-server-agents-control-jira) gives, which also says which of its tools read files on the engine host and what that asks of the directory the engine runs in.
 
 ### Key MCP Tools
 
@@ -99,10 +99,10 @@ units:
     roles:
       - name: CTO
         mcp_env:
-          atlassian: { CONFLUENCE_API_TOKEN: "${CTO_CONFLUENCE_TOKEN}" }
+          atlassian: { CONFLUENCE_USERNAME: "${CTO_CONFLUENCE_USER}", CONFLUENCE_API_TOKEN: "${CTO_CONFLUENCE_TOKEN}" }
       - name: Architect
         mcp_env:
-          atlassian: { CONFLUENCE_API_TOKEN: "${ARCHITECT_CONFLUENCE_TOKEN}" }
+          atlassian: { CONFLUENCE_USERNAME: "${ARCHITECT_CONFLUENCE_USER}", CONFLUENCE_API_TOKEN: "${ARCHITECT_CONFLUENCE_TOKEN}" }
 
   - name: Product
     id: product
@@ -112,10 +112,10 @@ units:
     roles:
       - name: VP Product
         mcp_env:
-          atlassian: { CONFLUENCE_API_TOKEN: "${VP_PRODUCT_CONFLUENCE_TOKEN}" }
+          atlassian: { CONFLUENCE_USERNAME: "${VP_PRODUCT_CONFLUENCE_USER}", CONFLUENCE_API_TOKEN: "${VP_PRODUCT_CONFLUENCE_TOKEN}" }
 ```
 
-Each role keeps its own `CONFLUENCE_API_TOKEN` (and `CONFLUENCE_USERNAME`) in `mcp_env.atlassian` — the credential the mcp-atlassian server and the query-time searcher authenticate with. The unit's `space` is read by the engine (routing + skill-promotion), not passed to the MCP server.
+Each role keeps its own `CONFLUENCE_USERNAME` and `CONFLUENCE_API_TOKEN` in `mcp_env.atlassian` — the credential the mcp-atlassian server and the query-time searcher authenticate with. The server needs both: given a token and no username it says Confluence authentication is incomplete on its stderr, which reaches only the engine's log, and starts without a single Confluence tool, which the engine reports as a server that started, so the seat simply has no way to read or write a page. On Data Center a personal access token goes under `CONFLUENCE_PERSONAL_TOKEN` instead, the one name the server reads it from. The unit's `space` is read by the engine (routing + skill-promotion), not passed to the MCP server.
 
 ---
 
@@ -253,7 +253,7 @@ The query-time search authenticates **as the agent's own Atlassian user**, reusi
 - **Cloud** — `CONFLUENCE_USERNAME` + `CONFLUENCE_API_TOKEN`.
 - **Data Center** — `CONFLUENCE_PERSONAL_TOKEN`.
 
-The credential is read from `mcp_env.confluence` if a seat has one, otherwise from the shared `mcp_env.atlassian` — Atlassian's own MCP server covers both products, so the documented entry is named `atlassian` and a product-specific block exists only where somebody deliberately made one.
+The credential is read from `mcp_env.confluence` if a seat has one, otherwise from the shared `mcp_env.atlassian` — the community `mcp-atlassian` server these pages run covers both products, so the documented entry is named `atlassian` and a product-specific block exists only where somebody deliberately made one.
 
 > **One account, one answer, and it used to be three.** Jira, Confluence and the Atlassian provisioner each derived "does this seat have an Atlassian credential" from its own list of server names and key spellings, and those lists had drifted. A seat holding `mcp_env.atlassian.JIRA_API_TOKEN` — the spelling the provisioner's own advice tells you to write — read as *ready* to Jira and as *no Confluence credential yet* to Confluence, on the same account, in the same block, permanently. There is one reader now, and in the **shared** block each product will also accept the other's `*_API_TOKEN`: on Cloud one API token belongs to the account and authenticates both. A `*_PERSONAL_TOKEN` never crosses, because a Data Center PAT is issued by one product and refused by the other — the spelling already carries the distinction. `Authorization: Bearer …` is accepted here too, which Confluence never read before.
 

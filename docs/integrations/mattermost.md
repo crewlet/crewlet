@@ -303,7 +303,7 @@ mcp_servers:
   - name: mattermost
     shared: false                        # per-agent identity
     command: uvx
-    args: ["mcp-server-mattermost"]
+    args: ["mcp-server-mattermost==0.6.1"]
     env:
       MATTERMOST_URL: "https://chat.nimbus.example"
     tool_prefix: "mattermost_"
@@ -323,6 +323,18 @@ units:
           mattermost:
             MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_ENGINEER}"   # same token
 ```
+
+**The server is pinned, and two of its tools reach the engine host's disk.**
+The entry names `mcp-server-mattermost==0.6.1` because the bundled tool
+skills trigger on its tool names (`mattermost_post_message` among them), and a
+release that renamed one would disarm them without a sound — see
+[trigger width](../concepts/tool-skills.md#controlling-the-cost--keep-enforced-triggers-narrow-broad-bodies-tiny).
+Two of its tools act on the filesystem of the node the seat runs on, as the
+user the engine runs as: `upload_file` sends Mattermost any file that user can
+read, and `download_file`, new in 0.6.0, saves an attachment into any directory
+that user can write, replacing an existing file when the call asks it to. Every
+seat that runs this server can call both, so run the engine as a user whose
+files you would let an agent post and overwrite.
 
 Write this block **first**, with `${VAR}` placeholders — the provisioner
 reads the placeholder names out of the YAML and mints exactly those
@@ -1088,13 +1100,14 @@ before anything happens. That is what it is for.
 If a bot stays silent, check in this order:
 
 0. `crewlet mattermost doctor examples/nimbus-claude-cli.company.yaml` — this is what it
-   is for; checks 1–3 below are what it automates.
+   is for; checks 1 and 2 below are what it automates. It never starts the
+   tool server, so check 3 is yours.
 1. `crewlet mattermost provision examples/nimbus-claude-cli.company.yaml --dry-run` —
    does the seat exist, and is its token minted?
 2. The engine log, for one `mattermost_ws_connected` line per seat. A
    `mattermost_ws_auth_rejected` line instead means that seat's token is
    wrong, revoked, or its bot is disabled — re-run the provisioner.
-3. Whether `uvx mcp-server-mattermost==0.5.1` resolves. A missing MCP server
+3. Whether `uvx mcp-server-mattermost==0.6.1` resolves. A missing MCP server
    is the one failure mode where the agent reasons about a reply and then has
    no tool to send it with, so the logs show a complete turn and the channel
    stays quiet.
@@ -1165,11 +1178,11 @@ to the server than people do — an internal DNS name, say — and never point
 | The engine logs `the server redirects it to …` and no seat connects | `integrations.mattermost.url` is not where the server serves its API: outside the Site URL's path, or `http://` where a proxy sends it to `https://`. Neither the engine nor the agents' MCP server follows a redirect | Set `url` — and the MCP server's `MATTERMOST_URL`, the same variable in the examples — to the address the error names; its host may stay whatever reaches the server |
 | The engine logs `answered with text/html rather than the API's JSON` | `url` carries a path the server has no route for, so Mattermost answers its web app's page there | Give `url` the Site URL's path |
 | One bot stays silent while others work | Its token was revoked, or its account disabled | `crewlet mattermost doctor <company.yaml>`, then re-run the provisioner |
-| An agent receives messages but never answers in Mattermost | The `mcp-server-mattermost` MCP server is missing, so the turn completes with no tool to send with | Check `uvx mcp-server-mattermost` resolves |
+| An agent receives messages but never answers in Mattermost | The `mcp-server-mattermost` MCP server is missing, so the turn completes with no tool to send with | Check `uvx mcp-server-mattermost==0.6.1` resolves |
 | Every agent is deaf after a restart, and the log has `mattermost_ws_auth_rejected` | Personal access tokens were disabled server-wide, or the tokens were revoked | Re-enable under System Console → Integrations, re-run the provisioner |
 
 `crewlet mattermost doctor <company.yaml> -browser-url <address people type>`
-checks all of the above in one pass: reachability (and that `url` is answered
+checks all of the above but the tool server in one pass: reachability (and that `url` is answered
 without a redirect), the Site URL against the address people type, a
 **browser-shaped** websocket upgrade sent there (with the `Origin` a browser
 sends, which is what distinguishes a browser from the engine), and one real

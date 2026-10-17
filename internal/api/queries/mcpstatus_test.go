@@ -228,6 +228,47 @@ func TestAServerThatStartedNowhereIsFailing(t *testing.T) {
 	}
 }
 
+// AN ANNOTATION KEY IS UNLISTED ONLY WHERE NO STARTED INSTANCE LISTS IT,
+// FLEET-WIDE. Each node's row already names the keys none of its own
+// instances lists; a key one node names and another's instances list is a
+// key some seat's credentials reach — mcp-atlassian serves Confluence tools
+// only to a seat holding a Confluence credential — so only the keys every
+// node that started an instance names reach the answer. A node that started
+// none listed nothing and does not judge, nor does one that did not report;
+// a server started nowhere names nothing, never every key.
+func TestAnAnnotationKeyIsUnlistedOnlyWhereNoStartedInstanceListsIt(t *testing.T) {
+	t.Parallel()
+	backend := coordmemory.New()
+	presentNode(t, backend, "node-a", &coord.NodeStatus{
+		MCP: []coord.MCPServerStatus{
+			{Server: "github", Started: 2, Tools: 26, Unlisted: []string{"create_pull_reqest", "merge_pull_request"}},
+			{Server: "docs", Shared: true, Started: 1, Tools: 4, Unlisted: []string{"docs_search"}},
+		},
+	})
+	presentNode(t, backend, "node-b", &coord.NodeStatus{
+		MCP: []coord.MCPServerStatus{
+			{Server: "github", Started: 1, Tools: 30, Unlisted: []string{"create_pull_reqest"}},
+			{Server: "linear", Failed: 1, Error: "401", Unlisted: []string{"linear_typo"}},
+		},
+	})
+	presentNode(t, backend, "node-c", &coord.NodeStatus{
+		MCP: []coord.MCPServerStatus{
+			{Server: "github", Failed: 2, Error: "401 Bad credentials"},
+		},
+	})
+	presentNode(t, backend, "node-d", nil)
+	got := askMCPStatus(t, mcpSources(t, backend))
+	for name, want := range map[string][]string{
+		"github": {"create_pull_reqest"},
+		"docs":   {"docs_search"},
+		"linear": {},
+	} {
+		if row := serverRow(t, got, name); row.UnlistedAnnotations == nil || !slices.Equal(row.UnlistedAnnotations, want) {
+			t.Errorf("%s: unlisted_annotations = %#v, want %#v", name, row.UnlistedAnnotations, want)
+		}
+	}
+}
+
 // A SERVER ONLY A NODE KNOWS STAYS VISIBLE: a node on an older revision still
 // runs a server this node's configuration removed, and that is the one row an
 // operator who just removed it is looking for.

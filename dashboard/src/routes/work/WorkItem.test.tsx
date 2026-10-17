@@ -1673,14 +1673,10 @@ test("moving the rail to another task mounts a new body", async () => {
     </PeekNeighbours>,
   );
   // THE PEEK'S BODY IS A LAZY CHUNK, so it is waited for rather than settled.
-  await waitFor(() => expect(container.querySelector(".crewlet-object-header")).toBeTruthy(), {
-    timeout: 5000,
-  });
+  await waitFor(() => expect(container.querySelector(".crewlet-object-header")).toBeTruthy());
   const before = container.querySelector(".crewlet-object-header");
   location.hash = `#/work?peek=${refToken({ kind: "item", id: "ENG-43" })}`;
-  await waitFor(() => expect(container.querySelector(".crewlet-object-header")).not.toBe(before), {
-    timeout: 5000,
-  });
+  await waitFor(() => expect(container.querySelector(".crewlet-object-header")).not.toBe(before));
 });
 
 // THE DESCRIPTION IS NOT REBUILT ON EVERY TICK OF THE PAGE'S CLOCK: a reader

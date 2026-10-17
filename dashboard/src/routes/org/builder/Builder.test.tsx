@@ -661,7 +661,7 @@ describe("the selection in the URL", () => {
     // Then once a check has derived its handle: the URL names it, and there
     // is still no screen to open.
     engine.script = () => null;
-    expect(await screen.findByText("No problems", {}, { timeout: 4000 })).toBeDefined();
+    expect(await screen.findByText("No problems")).toBeDefined();
     await waitFor(() => expect(location.hash).toContain("seat=analyst"));
     menu = await actionsFor();
     expect(within(menu).queryByRole("menuitem", { name: "Open seat" })).toBeNull();

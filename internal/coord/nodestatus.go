@@ -1,6 +1,7 @@
 package coord
 
 import (
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -176,6 +177,19 @@ type MCPServerStatus struct {
 	// that handle.
 	Error     string
 	ErrorSeat uuid.UUID
+
+	// Unlisted are the entry's tool_annotations keys that NO instance this
+	// node started lists a tool for, sorted. Such a key overrides nothing
+	// here. Only the row can say it: one instance's listing is not the
+	// server's, because a per-role child serves what its seat's credentials
+	// reach, and a key one seat's child lacks may be exactly right for the
+	// next one's. Across nodes the same intersection is the status answer's.
+	//
+	// Whole keys and every one of them, unlike Error: the list is bounded by
+	// the entry's own configuration, as the row count is, rather than by
+	// anything a seat count multiplies — and a key cut short would name a
+	// tool nobody wrote.
+	Unlisted []string
 }
 
 // MaxMCPErrorBytes bounds [MCPServerStatus.Error] on the wire.
@@ -229,6 +243,9 @@ func (s NodeStatus) Meta() map[string]any {
 			}
 			if m.ErrorSeat != uuid.Nil {
 				row["error_seat"] = m.ErrorSeat.String()
+			}
+			if len(m.Unlisted) > 0 {
+				row["unlisted"] = m.Unlisted
 			}
 			rows[i] = row
 		}
@@ -286,6 +303,7 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 			Tools:     intFromMeta(row["tools"]),
 			Error:     stringFromMeta(row["error"]),
 			ErrorSeat: seatFromMeta(row["error_seat"]),
+			Unlisted:  stringsFromMeta(row["unlisted"]),
 		}
 		m.Shared, _ = row["shared"].(bool)
 		status.MCP = append(status.MCP, m)
@@ -344,4 +362,27 @@ func seatFromMeta(v any) uuid.UUID {
 		return uuid.Nil
 	}
 	return id
+}
+
+// stringsFromMeta accepts the []string this build writes and the []any a JSON
+// round trip returns, keeping only the strings in it; nil when there are none,
+// so a row that carried no list reads back as one that carried none.
+func stringsFromMeta(v any) []string {
+	switch l := v.(type) {
+	case []string:
+		if len(l) == 0 {
+			return nil
+		}
+		return slices.Clone(l)
+	case []any:
+		var out []string
+		for _, item := range l {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }

@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -113,6 +114,112 @@ func TestAnnotationOverrideMatchesEitherSpelling(t *testing.T) {
 				t.Fatal("the operator's whole point was to mark this a shared write")
 			}
 		})
+	}
+}
+
+// AN OVERRIDE A SERVER INSTANCE DOES NOT LIST IS RECORDED PER INSTANCE, AND
+// NEVER WARNED ABOUT THERE. Two children of one entry may list different
+// tools — mcp-atlassian serves a seat only the products it holds a
+// credential for — so a key one instance does not list can be exactly right
+// for its sibling. The instance's record is what the per-server row
+// intersects; a warning from one instance would fire on a correct entry.
+// A key spelled either way newTool accepts is listed, an excluded tool's
+// included. One bridge per seat, as the engine runs them: a seat's children
+// live on a bridge of their own.
+func TestAnOverrideAnInstanceDoesNotListIsRecordedNotWarned(t *testing.T) {
+	t.Parallel()
+	log, rec := recorder()
+	bridges := map[string]*Bridge{}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		for _, b := range bridges {
+			_, _ = b.StopAll(ctx)
+		}
+	})
+	overrides := map[string]Annotations{
+		"jira_add_comment":              {ReadOnly: No, OpenWorld: Yes},
+		"atl_confluence_create_page":    {ReadOnly: No, OpenWorld: Yes},
+		"jira_debug":                    {ReadOnly: Yes},
+		"jira_add_coment":               {ReadOnly: No},
+		"atl_confluence_create_comment": {ReadOnly: No},
+	}
+	instance := func(seat string, tools ...[3]string) Spec {
+		spec := helperSpec(t, InstanceName("atlassian", seat), "serve", map[string]string{
+			helperToolsEnv: toolsJSON(tools...),
+		})
+		spec.ToolPrefix = "atl_"
+		spec.ExcludeTools = []string{"jira_debug"}
+		spec.AnnotationOverrides = overrides
+		return spec
+	}
+	jira := [3]string{"jira_add_comment", "Comment", ""}
+	debug := [3]string{"jira_debug", "Skip me", ""}
+	page := [3]string{"confluence_create_page", "Page", ""}
+	for seat, spec := range map[string]Spec{
+		"jira-only": instance("jira-only", jira, debug),
+		"both":      instance("both", jira, debug, page),
+	} {
+		bridges[seat] = NewBridge(log)
+		if _, err := bridges[seat].Add(t.Context(), spec); err != nil {
+			t.Fatalf("Add %s: %v", spec.Name, err)
+		}
+	}
+
+	for seat, want := range map[string][]string{
+		"jira-only": {"atl_confluence_create_comment", "atl_confluence_create_page", "jira_add_coment"},
+		"both":      {"atl_confluence_create_comment", "jira_add_coment"},
+	} {
+		name := InstanceName("atlassian", seat)
+		if got := bridges[seat].UnlistedOverrides(name); !slices.Equal(got, want) {
+			t.Errorf("%s: unlisted = %v, want the keys its own listing names no tool for: %v", seat, got, want)
+		}
+		if !slices.ContainsFunc(rec.find("tools_discovered"), func(r recorded) bool {
+			keys, _ := r.Attrs["annotation_keys_unlisted"].([]string)
+			return r.Attrs["server"] == name && slices.Equal(keys, want)
+		}) {
+			t.Errorf("%s: tools_discovered does not carry its unlisted keys %v: %+v", seat, want, rec.find("tools_discovered"))
+		}
+	}
+	for _, r := range rec.all() {
+		if r.Level >= slog.LevelWarn {
+			t.Errorf("a start of a correct entry warned: %+v", r)
+		}
+	}
+	if got := bridges["both"].UnlistedOverrides(InstanceName("atlassian", "jira-only")); got != nil {
+		t.Errorf("an instance that is not running reports %v", got)
+	}
+}
+
+// AN INSTANCE WHOSE LISTING ANSWERS EVERY KEY RECORDS NOTHING, and says
+// nothing about it on its tools_discovered line.
+func TestAnInstanceListingEveryOverriddenToolRecordsNone(t *testing.T) {
+	t.Parallel()
+	log, rec := recorder()
+	b := NewBridge(log)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		_, _ = b.StopAll(ctx)
+	})
+	spec := helperSpec(t, "slack", "serve", map[string]string{
+		helperToolsEnv: toolsJSON([3]string{"conversations_add_message", "Post", ""}),
+	})
+	spec.ToolPrefix = "slack_"
+	spec.AnnotationOverrides = map[string]Annotations{
+		"conversations_add_message":       {ReadOnly: No},
+		"slack_conversations_add_message": {OpenWorld: Yes},
+	}
+	if _, err := b.Add(t.Context(), spec); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if got := b.UnlistedOverrides("slack"); got != nil {
+		t.Errorf("unlisted = %v, want none", got)
+	}
+	for _, r := range rec.find("tools_discovered") {
+		if _, ok := r.Attrs["annotation_keys_unlisted"]; ok {
+			t.Errorf("tools_discovered names unlisted keys when there are none: %+v", r)
+		}
 	}
 }
 

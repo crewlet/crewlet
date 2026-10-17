@@ -203,8 +203,8 @@ func fieldByJSONName(t reflect.Type, name string) (reflect.Type, bool) {
 // THE MANIFEST IS THE ENGINE'S OWN, so the app a person builds by hand and
 // the app the provisioning command pushes are the same app.
 //
-// Seventeen scopes and five event subscriptions decide whether an agent can
-// hear anything, and every one of them is a decision that lives in Go. A
+// The scopes and event subscriptions decide whether an agent can hear
+// anything, and every one of them is a decision that lives in Go. A
 // screen that asked an operator to reproduce them from a table would be
 // asking them to get one wrong, and the failure mode is a bot that reports
 // success and sees an empty workspace.

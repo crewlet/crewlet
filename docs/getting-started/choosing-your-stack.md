@@ -173,10 +173,12 @@ What **you** do, by hand:
    creates the tenancy.
 2. **Create per-agent identities**: an Atlassian account (or API token
    identity) per agent seat, so issues can be assigned to agents and comments
-   attribute correctly. Mint one API token per agent and reference them from
-   `role.mcp_env` (`JIRA_API_TOKEN` / `CONFLUENCE_API_TOKEN` for the
-   `atlassian` MCP server), plus one admin/service token for the engine's
-   org-level lookups (`integrations.jira.token`).
+   attribute correctly. Mint one API token per agent and reference it from
+   `role.mcp_env`, beside the account's address (`JIRA_USERNAME` and
+   `JIRA_API_TOKEN`, `CONFLUENCE_USERNAME` and `CONFLUENCE_API_TOKEN` for the
+   `atlassian` MCP server, which refuses a token without its address), plus
+   one admin/service token for the engine's org-level lookups
+   (`integrations.jira.token`).
 3. **Webhooks**:
    - **Cloud** — install the [Crewlet Forge app](https://github.com/crewlet/forge)
      in your site; it forwards Jira + Confluence events to
