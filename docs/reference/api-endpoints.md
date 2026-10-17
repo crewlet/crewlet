@@ -547,8 +547,15 @@ node means nothing was done.
 > allows another origin credentials, so only the dashboard, on this process's
 > own origin, ever opens it. A gate in `internal/api/auth` walks the API's source
 > for every header a route reads or sets and fails on one neither offered here
-> nor withheld for a stated reason. See
-> [Configuration § Auth](../concepts/configuration.md#auth).
+> nor withheld for a stated reason.
+>
+> **And it may use every method a route serves**: `GET`, `HEAD`, `POST`,
+> `PUT`, `PATCH`, `DELETE` and `OPTIONS`, the last for `OPTIONS /config`,
+> whose `Allow` and `Accept-Patch` say what the document takes. Every method
+> but the first three is preflighted, and the preflight names exactly the
+> methods the routes are registered with — a gate beside the header one holds
+> it to them — so a method left out is a request the browser refuses outright.
+> See [Configuration § Auth](../concepts/configuration.md#auth).
 >
 > **A request that says who it is for is served only to them.**
 > `X-Crewlet-Reader: <principal id>` — the `person` `GET /auth/session`
