@@ -596,11 +596,17 @@ type faultyRecords struct {
 	inner statelog.LogReader
 	mu    sync.Mutex
 	err   error
+	// once clears err after the first read it fails, which is what a
+	// transient fault looks like to the read after it.
+	once bool
 }
 
 func (r *faultyRecords) At(ctx context.Context, seq uint64) (string, []byte, time.Time, bool, error) {
 	r.mu.Lock()
 	err := r.err
+	if r.once {
+		r.err, r.once = nil, false
+	}
 	r.mu.Unlock()
 	if err != nil {
 		return "", nil, time.Time{}, false, err
@@ -612,6 +618,13 @@ func (r *faultyRecords) fail(err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.err = err
+}
+
+// failOnce fails the next read with err, and only that one.
+func (r *faultyRecords) failOnce(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.err, r.once = err, true
 }
 
 // sweep is this node's retention sweep deleting every ledger row, as a sweep
