@@ -150,8 +150,8 @@ const (
 	// fleet. A display column must never be able to delay that. One fifth
 	// of the interval (3 s at the shipped TTL) is far more than two
 	// indexed reads need and still leaves four fifths of the beat for the
-	// renewal itself; a hook that overruns publishes nothing, which reads
-	// as "did not say" rather than as an idle node.
+	// renewal itself; a hook that does not answer within it publishes
+	// nothing, which reads as "did not say" rather than as an idle node.
 	//
 	// A RATIO for the same reason [HeartbeatRatio] is one: a deployment
 	// that shortens its TTL shortens this with it, instead of leaving a

@@ -1092,7 +1092,11 @@ roles:
 			"the supervision that retries it", held)
 	}
 	// AS A PEER READS IT, off the heartbeat, which bounds the sentence.
-	sent, _ := coord.StatusFromMeta(map[string]any{coord.StatusKey: e.nodeStatus(ctx).Meta()})
+	status, err := e.nodeStatus(ctx)
+	if err != nil {
+		t.Fatalf("node status: %v", err)
+	}
+	sent, _ := coord.StatusFromMeta(map[string]any{coord.StatusKey: status.Meta()})
 	rows := sent.MCP
 	if len(rows) != 1 || rows[0].Server != "search" || rows[0].Failed != 1 ||
 		rows[0].Waiting != 0 || rows[0].Started != 0 {

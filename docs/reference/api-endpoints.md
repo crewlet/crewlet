@@ -7623,7 +7623,7 @@ started counts as failed until the engine has
 and a shared server whose start failed counts as started once a retry brings it
 up — one row per server with its instances counted (a per-seat template has one instance per seat that node holds), so
 one read of the lease table is every node's answer at once. A node whose last
-heartbeat carried no status (its status hook overran the beat) is
+heartbeat carried no status (its status hook did not answer within the beat) is
 `reported: false` and its cells are UNKNOWN — never a row of zeros, which would
 read as "started nothing". A node that reports and started nothing is
 `reported: true` with no rows.
@@ -7729,10 +7729,13 @@ answer would then be partial, it opens a new trust edge, and it duplicates
 the mechanism the lease table already is.
 
 
-**Absent is not zero.** A node whose status read overran its share of the
-heartbeat (`seat.StatusBudgetRatio`) publishes no status on that beat and
-omits those fields entirely, and the dashboard draws an em dash. A confident
-`0` would render an idle row for a process that is simply not saying.
+**Absent is not zero.** A node whose status read did not answer within its
+share of the heartbeat (`seat.StatusBudgetRatio`) — a read cut short by that
+budget, or one that failed — publishes no status on that beat and omits those
+fields entirely, and the dashboard draws an em dash. A confident `0` would
+render an idle row for a process that is simply not saying. Whether the read
+answered is decided by the read itself, not by the clock after it returned, so
+a complete answer is never dropped because the process was briefly descheduled.
 
 Two fields report the failures that are otherwise invisible, because
 their only symptom is an absence: `unmanned_roles` lists roles no live
