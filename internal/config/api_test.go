@@ -548,7 +548,7 @@ func TestTheSecondFactorIsRequiredUnlessOptionalIsStatedAndJudgedOnTheExternalUR
 	})
 	t.Run("optional on loopback is fine", func(t *testing.T) {
 		t.Parallel()
-		for _, url := range []string{"http://localhost:8000", "http://127.0.0.1:8000"} {
+		for _, url := range []string{"http://localhost:8000", "http://LocalHost:8000", "http://127.0.0.1:8000"} {
 			b := auth(iam.SecondFactorOptional, false, url)
 			if err := b.Validate(); err != nil {
 				t.Errorf("%s was refused: %v", url, err)

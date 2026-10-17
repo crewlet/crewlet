@@ -315,8 +315,11 @@ func (a API) externalLoopback() bool {
 	if err != nil {
 		return false
 	}
+	// A host name is compared as a browser compares it, case aside:
+	// `LOCALHOST` is the browser's localhost, and read as written it was
+	// held to the rules for a routable address it never is.
 	host := parsed.Hostname()
-	if host == "localhost" {
+	if strings.EqualFold(host, "localhost") {
 		return true
 	}
 	ip := net.ParseIP(host)
