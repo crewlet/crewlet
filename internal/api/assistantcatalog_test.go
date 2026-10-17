@@ -37,11 +37,11 @@ import (
 // naming it.
 func everySurfaceApp(t *testing.T) *api.App {
 	t.Helper()
-	operators, err := operator.New(operator.Options{
+	operators, err := operator.New(withSeatControls(operator.Options{
 		Halves:    func() (operator.Halves, bool) { return operator.Halves{}, false },
 		Authorize: builtin.Decide(authz.NoChart{}),
 		Audit:     &recordedAudit{},
-	})
+	}))
 	if err != nil {
 		t.Fatalf("operator.New: %v", err)
 	}

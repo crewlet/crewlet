@@ -158,7 +158,8 @@ func actSurface(t *testing.T, work *recordingWork) *operator.Server {
 				Reader: stubPageReader{}, Writer: stubPageWriter{},
 			},
 		}),
-		Org: company,
+		Org:       company,
+		Authorize: builtin.Decide(leadsNobody{}),
 	})
 }
 
@@ -560,7 +561,11 @@ func TestAReadToolIsRefusedOnTheActTransport(t *testing.T) {
 	}
 	// AND WHAT THE TABLE WOULD NEVER ADMIT IS NOT OFFERED: a screen enables
 	// exactly the controls a press of could be served.
-	if acts, _ := s.Acts(t.Context(), reader); slices.Contains(acts, worklet.CreateWorkItemTool) {
+	// THE ERROR IS READ: a list that could not be decided is nil, which
+	// contains nothing and passed this check while it decided nothing.
+	if acts, err := s.Acts(t.Context(), reader); err != nil {
+		t.Errorf("Acts for a reader: %v", err)
+	} else if slices.Contains(acts, worklet.CreateWorkItemTool) {
 		t.Errorf("a reader is offered %v, including a create the table refuses them", acts)
 	}
 	status, answer = act(t, guarded(s), "founder", "run_sandbox",

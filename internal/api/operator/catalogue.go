@@ -35,11 +35,19 @@
 // an apply, long after its API started serving — and the knowledge search
 // beside them is whatever backend the company runs NOW, which an apply can
 // add. So [Options.Halves] is read at the start of every call, and a node that
-// has not met its company answers `503 no_active_revision` while one whose
-// catalogue is empty answers as the route's absence would. A catalogue built
+// has not met its company answers `503 no_active_revision`. A catalogue built
 // once, when the API was wired, served the halves the node had at that moment
 // for the life of the process: none, on the node a company was bootstrapped
 // on.
+//
+// # Never empty once the company is up
+//
+// The seat controls — answering a parked run, pausing and resuming a seat,
+// steering a running turn — read and write the fleet's own records, which
+// every node reaches whatever backends its company runs. So [New] requires
+// them ([Options.Runs], [Options.Pauses], [Options.Steer]), and a company that
+// keeps neither native half is still served those four: there is no empty
+// catalogue for a transport to answer.
 //
 // # It is the SAME TOOLS a seat holds, with a different writer
 //
@@ -172,18 +180,22 @@ type Options struct {
 	// refusal [builtin.OperatorTools] makes of a nil one on every call.
 	Authorize builtin.Authorizer
 
-	// Runs answers a parked coding run by its turn (`answer_run`). A zero
-	// value serves no such tool. Its Actor is set per call.
+	// Runs answers a parked coding run by its turn (`answer_run`). Its
+	// Actor is set per call. REQUIRED (its Desk): see [Options.Steer].
 	Runs builtin.RunDeps
 
 	// Pauses is the fleet's record of which seats a person paused
-	// (`pause_seat`, `resume_seat`). A zero value serves neither tool. Its
-	// Actor is set per call.
+	// (`pause_seat`, `resume_seat`). Its Actor is set per call. REQUIRED
+	// (its Pauses): see [Options.Steer].
 	Pauses builtin.SeatPauseDeps
 
 	// Steer reaches the node running a turn, so a person can send it a note
-	// (`steer_turn`). A zero value serves no such tool. Its Actor is set per
-	// call.
+	// (`steer_turn`). Its Actor is set per call. REQUIRED (its Asker), with
+	// [Options.Runs] and [Options.Pauses]: the three are the fleet's own
+	// records, which every node reaches whatever its company runs, so a
+	// surface built without one is a wiring mistake rather than a company
+	// that does not want it — and they are what keep the catalogue from
+	// ever being empty once the company is up.
 	Steer builtin.SteerDeps
 
 	// Answer answers a person's question from the company's knowledge
@@ -236,11 +248,18 @@ var ErrNoHalves = errors.New("operator: Options.Halves is required: every " +
 	"call reads Worklet and Doclet as this node serves them when the call " +
 	"finds them")
 
+// ErrNoSeatControls refuses a surface built without one of the seat controls,
+// naming which: see [Options.Steer].
+var ErrNoSeatControls = errors.New("operator: the seat controls are required " +
+	"— every node reaches the fleet's records they read and write, whatever " +
+	"its company runs")
+
 // New builds the surface, or refuses a missing required dependency by name.
 //
-// ALWAYS A SURFACE, never the nil an empty one used to be: which tools exist is
-// a question a call asks ([Options.Halves]), and a transport over a catalogue
-// that turns out empty answers in the very bytes its absence would have.
+// ALWAYS A SURFACE, never the nil an empty one used to be: which of the
+// company's tools exist is a question a call asks ([Options.Halves]), and the
+// seat controls beside them are required, so the catalogue a call finds once
+// the company is up is never empty.
 func New(opts Options) (*Server, error) {
 	switch {
 	case opts.Halves == nil:
@@ -249,6 +268,13 @@ func New(opts Options) (*Server, error) {
 		return nil, ErrNoAuthorize
 	case opts.Audit == nil:
 		return nil, ErrNoAudit
+	case opts.Runs.Desk == nil:
+		return nil, fmt.Errorf("%w: Options.Runs.Desk (answer_run) is nil", ErrNoSeatControls)
+	case opts.Pauses.Pauses == nil:
+		return nil, fmt.Errorf("%w: Options.Pauses.Pauses (pause_seat, resume_seat) is nil",
+			ErrNoSeatControls)
+	case opts.Steer.Asker == nil:
+		return nil, fmt.Errorf("%w: Options.Steer.Asker (steer_turn) is nil", ErrNoSeatControls)
 	}
 	return &Server{
 		halves: opts.Halves, org: opts.Org, authorize: opts.Authorize,

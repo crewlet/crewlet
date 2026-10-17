@@ -579,9 +579,9 @@ type Options struct {
 	//
 	// ONE SERVER, BUILT ONCE, WHOSE CATALOGUE IS READ PER CALL: the
 	// catalogue is the native halves', which a node meets at its first
-	// company. A request before that answers `503 no_active_revision`, and
-	// one to a node whose catalogue is empty answers as the route's absence
-	// would. [HumanSurfaces.Mount] is what hands it over.
+	// company, beside the seat controls every node serves. A request before
+	// that answers `503 no_active_revision`. [HumanSurfaces.Mount] is what
+	// hands it over.
 	//
 	// GUARDED, like every route the exemption list does not name. It
 	// writes to the company, and the request's principal is what lands on

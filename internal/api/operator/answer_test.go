@@ -91,9 +91,10 @@ func (b *companyWindows) Refusing(context.Context) (builtin.BudgetRefusal, bool,
 func answerSurface(t *testing.T, model *countedModel, budget *companyWindows) *operator.Server {
 	t.Helper()
 	return newSurface(t, operator.Options{
-		Halves: fixed(operator.Halves{Knowledge: oneRunbook{}}),
-		Org:    company,
-		Answer: builtin.AnswerDeps{Models: model, Budget: budget},
+		Halves:    fixed(operator.Halves{Knowledge: oneRunbook{}}),
+		Org:       company,
+		Answer:    builtin.AnswerDeps{Models: model, Budget: budget},
+		Authorize: builtin.Decide(leadsNobody{}),
 	})
 }
 

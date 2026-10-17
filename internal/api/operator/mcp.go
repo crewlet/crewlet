@@ -128,13 +128,12 @@ func (s *Server) handlerFor(cat catalogue, name string) mcp.ToolHandler {
 // catalogue is read for each request, so there is no list-changed
 // notification to push, and no tool here asks the client anything back.
 //
-// # Three answers before any tool runs
+// # Two answers before any tool runs
 //
 // A node that has not been handed a company answers `503
-// no_active_revision`; one whose catalogue is empty — no native half, no
-// search, no seat controls — answers as the route's absence would, since an
-// endpoint that lists no tools reads to an operator as broken; and anything
-// else is served over the catalogue the request found.
+// no_active_revision`, and anything else is served over the catalogue the
+// request found — never an empty one, since [New] requires the seat controls
+// every node can serve whatever backends its company runs.
 //
 // EVERY METHOD IS STILL ROUTED HERE, so a GET for the server-to-client stream
 // and a DELETE to end a session are answered by the SDK's own 405 with
@@ -156,13 +155,9 @@ func (s *Server) MCPHandler() http.Handler {
 			return
 		}
 		cat, up := s.catalogueFor()
-		switch {
-		case !up:
+		if !up {
 			httpjson.NoActiveRevision(w, httpjson.Detail{
 				"detail": httpjson.NativeHalvesNotUp})
-			return
-		case len(cat.tools) == 0:
-			httpjson.NoRoute(w, r)
 			return
 		}
 		srv := s.mcpServer(cat)

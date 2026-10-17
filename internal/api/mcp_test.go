@@ -14,9 +14,11 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/authz"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/org"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -108,18 +110,30 @@ func bridgeFor(t *testing.T, opts mcpbridge.Options) *mcpbridge.Bridge {
 	return bridge
 }
 
+// withSeatControls is opts with the seat controls [operator.New] requires,
+// wired as a node wires them — over the fleet's own record and its queue —
+// here an in-memory fleet and queue nobody else reads.
+func withSeatControls(opts operator.Options) operator.Options {
+	fleet, queue := coordmemory.NewFleet(), queuememory.New()
+	opts.Runs = builtin.RunDeps{Desk: sandbox.AnswerDesk{
+		Pending: sandbox.NewCoordStore(fleet), Queue: queue}}
+	opts.Pauses = builtin.SeatPauseDeps{Pauses: fleet, Announce: queue}
+	opts.Steer = builtin.SteerDeps{Asker: queue}
+	return opts
+}
+
 // operatorSurface builds an operator surface whose catalogue is the work half
-// a case names, decided on grants alone and auditing onto a queue nobody
-// reads, and fails the test on a refusal.
+// a case names beside the seat controls, decided on grants alone and auditing
+// onto a queue nobody reads, and fails the test on a refusal.
 func operatorSurface(t *testing.T, work builtin.WorkDeps) *operator.Server {
 	t.Helper()
-	s, err := operator.New(operator.Options{
+	s, err := operator.New(withSeatControls(operator.Options{
 		Halves: func() (operator.Halves, bool) {
 			return operator.Halves{Work: work}, true
 		},
 		Authorize: builtin.Decide(authz.NoChart{}),
 		Audit:     queuememory.New(),
-	})
+	}))
 	if err != nil {
 		t.Fatalf("operator.New: %v", err)
 	}

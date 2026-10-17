@@ -29,47 +29,96 @@ import (
 
 // A SURFACE MISSING WHAT IT CANNOT SERVE WITHOUT IS NOT BUILT, and each
 // refusal names the field. A surface with nothing to read its catalogue from,
-// one wired with no authority decision, and one that would write to the
-// company and record nothing about who called it are each a wiring mistake
-// that would otherwise look exactly like a surface that worked.
+// one wired with no authority decision, one that would write to the company
+// and record nothing about who called it, and one without a seat control are
+// each a wiring mistake that would otherwise look exactly like a surface that
+// worked — the last a company told it cannot pause a seat that every node
+// could pause.
+//
+// Mutation: drop any one of New's refusals and its row is built.
 func TestNewRefusesASurfaceMissingARequirement(t *testing.T) {
 	t.Parallel()
 	halves := fixed(operator.Halves{})
 	decide := builtin.Decide(authz.NoChart{})
 	audit := &auditLog{}
+	whole := operator.Options{Halves: halves, Authorize: decide, Audit: audit,
+		Runs:   builtin.RunDeps{Desk: nowhere{}},
+		Pauses: builtin.SeatPauseDeps{Pauses: nowhere{}},
+		Steer:  builtin.SteerDeps{Asker: nowhere{}}}
+	without := func(drop func(*operator.Options)) operator.Options {
+		opts := whole
+		drop(&opts)
+		return opts
+	}
 	for name, tc := range map[string]struct {
-		opts operator.Options
-		want error
+		opts  operator.Options
+		want  error
+		names string
 	}{
-		"no halves":   {operator.Options{Authorize: decide, Audit: audit}, operator.ErrNoHalves},
-		"no decision": {operator.Options{Halves: halves, Audit: audit}, operator.ErrNoAuthorize},
-		"no audit":    {operator.Options{Halves: halves, Authorize: decide}, operator.ErrNoAudit},
+		"no halves": {without(func(o *operator.Options) { o.Halves = nil }),
+			operator.ErrNoHalves, "Options.Halves"},
+		"no decision": {without(func(o *operator.Options) { o.Authorize = nil }),
+			operator.ErrNoAuthorize, "Options.Authorize"},
+		"no audit": {without(func(o *operator.Options) { o.Audit = nil }),
+			operator.ErrNoAudit, "Options.Audit"},
+		"no run desk": {without(func(o *operator.Options) { o.Runs.Desk = nil }),
+			operator.ErrNoSeatControls, "Options.Runs.Desk"},
+		"no pause record": {without(func(o *operator.Options) { o.Pauses.Pauses = nil }),
+			operator.ErrNoSeatControls, "Options.Pauses.Pauses"},
+		"no fleet asker": {without(func(o *operator.Options) { o.Steer.Asker = nil }),
+			operator.ErrNoSeatControls, "Options.Steer.Asker"},
 	} {
 		s, err := operator.New(tc.opts)
 		if !errors.Is(err, tc.want) || s != nil {
 			t.Errorf("%s: answered (%v, %v), want %v", name, s, err, tc.want)
+			continue
 		}
+		if !strings.Contains(err.Error(), tc.names) {
+			t.Errorf("%s: refused %q, which does not name %s", name, err, tc.names)
+		}
+	}
+	// THE CONTROL: with every requirement met the surface is built, so each
+	// refusal above is its own field's doing.
+	if s, err := operator.New(whole); err != nil || s == nil {
+		t.Fatalf("a surface with every requirement was refused: %v", err)
 	}
 }
 
-// A COMPANY THAT KEEPS NEITHER HALF HERE IS ANSWERED AS THE ROUTE'S ABSENCE.
-// An endpoint that exists and lists no tools reads to an operator as broken;
-// one that is not there matches what their config says.
-func TestAnEmptyCatalogueAnswersAsTheRoutesAbsence(t *testing.T) {
+// A COMPANY THAT KEEPS NEITHER HALF HERE IS STILL SERVED ITS SEAT CONTROLS.
+//
+// Answering a parked run, pausing and resuming a seat and steering a running
+// turn read and write the fleet's own records, which every node reaches
+// whatever its company runs: a company on Jira and Confluence pauses a seat
+// here exactly as a native one does. So once the company is up the catalogue
+// is never empty — the surface used to answer an empty one as the route's
+// absence, a branch no engine could reach once these were wired — and an
+// assistant connected to such a company is offered exactly these.
+func TestACompanyWithNoNativeHalfIsStillServedItsSeatControls(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t, operator.Options{Halves: fixed(operator.Halves{})})
-	if got := s.Tools(); len(got) != 0 {
-		t.Fatalf("a company with no native backend is served %v", got)
+	want := []string{builtin.AnswerRunTool, builtin.PauseSeatTool,
+		builtin.ResumeSeatTool, builtin.SteerTurnTool}
+	slices.Sort(want)
+	got := s.Tools()
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Fatalf("a company with no native half is served %v, want the seat controls %v",
+			got, want)
 	}
-	rec := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, operator.MCPPath, strings.NewReader(`{}`))
-	r = r.WithContext(iam.WithPrincipal(r.Context(), machine("token:ops", iam.GrantWorklet)))
-	s.MCPHandler().ServeHTTP(rec, r)
-	if code := errorCode(t, rec); rec.Code != http.StatusNotFound ||
-		code != string(httpjson.CodeNoRoute) {
-
-		t.Errorf("an empty catalogue answered %d %q, want the mux's own 404 no_route",
-			rec.Code, code)
+	sess := dialOperator(t, s, machine("token:ops", iam.GrantWorklet))
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	listed, err := sess.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+	var names []string
+	for _, tool := range listed.Tools {
+		names = append(names, tool.Name)
+	}
+	slices.Sort(names)
+	if !slices.Equal(names, want) {
+		t.Errorf("over MCP the surface lists %v, want %v", names, want)
 	}
 }
 
