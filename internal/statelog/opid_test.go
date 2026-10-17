@@ -1,6 +1,7 @@
 package statelog_test
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -202,5 +203,148 @@ func TestAnOperationIDIsNamedForExactlyOneCall(t *testing.T) {
 	if statelog.OpNamed(statelog.NewOpID(at, ""), "") {
 		t.Error("an unnamed id was read as named for the empty call — a surface " +
 			"that names its calls has no call without a name")
+	}
+}
+
+// A KEYED WRITE IS ONE OPERATION FOR ONE ASK, and another for anything else.
+//
+// The ledger answers an operation it already holds before the write is
+// decided, so two writes under one id are one write: the second is answered
+// with the first's result and nothing of it lands. Each part of the
+// derivation is what keeps two different writes under one key apart — the
+// verb (a save and the rename after it), the object (two pages), and what
+// the write says (a second save with another body) — while a retry, which
+// resends all of it, has to land on the first attempt's id. And the content
+// is digested through its JSON encoding, so a map built in another order is
+// the same ask.
+//
+// Mutation: drop any part from the identity and its row collapses two writes.
+func TestAKeyedWriteIsOneOperationForOneAsk(t *testing.T) {
+	t.Parallel()
+	since := time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
+	key := statelog.NewOpID(since, "")
+	type ask struct{ Body, Title string }
+	for shape, keyed := range keyedShapes {
+		t.Run(shape, func(t *testing.T) {
+			t.Parallel()
+			derive := func(key, verb, object string, content any) string {
+				t.Helper()
+				id, err := keyed(key, verb, object, content)
+				if err != nil {
+					t.Fatalf("derive (%q, %q, %q): %v", key, verb, object, err)
+				}
+				return id
+			}
+			first := derive(key, "save", "page-1", ask{Body: "v2"})
+			if again := derive(key, "save", "page-1", ask{Body: "v2"}); again != first {
+				t.Errorf("the same write derived %q and then %q — a retry would "+
+					"land twice", first, again)
+			}
+			ordered := derive(key, "save", "page-1", map[string]any{"a": 1, "b": 2})
+			reordered := derive(key, "save", "page-1", map[string]any{"b": 2, "a": 1})
+			if ordered != reordered {
+				t.Errorf("one map built in two orders derived %q and %q — a re-run "+
+					"decoding the same call would be a second write", ordered, reordered)
+			}
+			for part, other := range map[string]string{
+				"another key": derive(statelog.NewOpID(since, ""), "save", "page-1",
+					ask{Body: "v2"}),
+				"another verb":    derive(key, "rename", "page-1", ask{Body: "v2"}),
+				"another object":  derive(key, "save", "page-2", ask{Body: "v2"}),
+				"another content": derive(key, "save", "page-1", ask{Body: "v3"}),
+			} {
+				if other == first {
+					t.Errorf("a write under %s derived the first write's id %q — "+
+						"the ledger would answer it as that write and drop it",
+						part, first)
+				}
+			}
+		})
+	}
+}
+
+// keyedShapes are the two shapes a keyed write's id takes, which one rule
+// derives: an operation's, named by its verb, and an object's own.
+var keyedShapes = map[string]func(key, verb, object string, content any) (string, error){
+	"operation": statelog.KeyedOpID, "object": statelog.KeyedObjectOpID,
+}
+
+// A KEYED ID CARRIES ITS KEY'S INSTANT, NAMED BY ITS VERB — or unnamed where
+// it is also the id of the object it makes.
+//
+// The instant is what the ledger vouches for a retry by, so an id that did
+// not carry the key's own would be read as minted at some other moment: at
+// the epoch, and answered `unknown` on every node whose ledger ever lost a
+// row; or at the call, and decided again after the loss. The name is how a
+// reader of the ledger finds the operation; an object's own id carries none,
+// because a reader addresses the object by it — and the two shapes of one
+// ask are two ids, so a comment and an operation under one key never collide.
+//
+// Mutation: derive at the zero instant, name the object's id, or derive the
+// two shapes alike, and the matching assertion fails.
+func TestAKeyedIDCarriesItsKeysInstant(t *testing.T) {
+	t.Parallel()
+	since := time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
+	key := statelog.NewOpID(since, "")
+	op, err := statelog.KeyedOpID(key, "comment-edit", "c-1", "words")
+	if err != nil {
+		t.Fatalf("KeyedOpID: %v", err)
+	}
+	object, err := statelog.KeyedObjectOpID(key, "comment-edit", "c-1", "words")
+	if err != nil {
+		t.Fatalf("KeyedObjectOpID: %v", err)
+	}
+	for shape, id := range map[string]string{"operation": op, "object": object} {
+		minted, ok := statelog.OpMintedAt(id)
+		if !ok || !minted.Equal(since) {
+			t.Errorf("the keyed %s id %q carries (%s, %v), want the key's own %s",
+				shape, id, minted, ok, since)
+		}
+	}
+	if !statelog.OpNamed(op, "comment-edit") {
+		t.Errorf("the operation id %q is not named for its verb — a reader of "+
+			"the ledger could not find what it did", op)
+	}
+	if len(object) != len(key) {
+		t.Errorf("the object's id %q carries a name — a reader addresses the "+
+			"object by it", object)
+	}
+	if object == op[:len(object)] {
+		t.Errorf("the object's id and the operation's share the uuid %q — the "+
+			"two shapes of one ask must be two ids", object)
+	}
+}
+
+// A KEYED WRITE REFUSES WHAT IT CANNOT DERIVE FROM, rather than deriving an id
+// that reads as something else.
+//
+// A key that carries no instant would derive an id read as minted before
+// every loss — every such write `unknown` once the ledger had swept anything,
+// and never published. A verb that is not a name would put a step in the
+// grammar, or no name at all. Content that will not encode has no digest to
+// bind. Each is refused, with no id.
+func TestAKeyedWriteRefusesWhatItCannotDeriveFrom(t *testing.T) {
+	t.Parallel()
+	key := statelog.NewOpID(time.Now(), "")
+	for name, c := range map[string]struct {
+		key, verb string
+		content   any
+	}{
+		"no key":                           {key: "", verb: "save"},
+		"a key with no instant":            {key: uuid.NewString(), verb: "save"},
+		"a key that is not an id":          {key: "my-retry-key", verb: "save"},
+		"a key with a space before it":     {key: " " + key, verb: "save"},
+		"no verb":                          {key: key, verb: ""},
+		"a verb that reads as a step":      {key: key, verb: "comment.edit"},
+		"content that will not encode":     {key: key, verb: "save", content: make(chan int)},
+		"a number JSON has no spelling of": {key: key, verb: "save", content: math.NaN()},
+	} {
+		for shape, derive := range keyedShapes {
+			id, err := derive(c.key, c.verb, "page-1", c.content)
+			if err == nil || id != "" {
+				t.Errorf("%s: the %s derivation answered (%q, %v), want a refusal "+
+					"and no id", name, shape, id, err)
+			}
+		}
 	}
 }
