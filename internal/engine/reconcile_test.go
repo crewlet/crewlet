@@ -2511,6 +2511,48 @@ func TestAnUnreadableControlPlaneReopensTheGate(t *testing.T) {
 	}
 }
 
+// THE HEARTBEAT'S READ NAMES THE PLANE IT COULD NOT READ instead of failing
+// open, and shuts nothing the probe's read would not: it reopens the gate
+// exactly as [engine.Reconciler.Posture] does, so the admission a node
+// applies cannot depend on which of the two read last.
+func TestReadPostureReportsAnUnreadablePlaneAndStillReopensTheGate(t *testing.T) {
+	t.Parallel()
+	var blind atomic.Bool
+	p := newPlane(t, func(o *engine.ReconcilerOptions) {
+		o.Fleet = &blindPlane{planeBackend: o.Fleet, blind: &blind}
+	})
+	p.activatePayload(t, "broken", brokenRevision)
+	_ = p.recon.Tick(t.Context())
+	target, _, err := p.fleet.Target(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.fleet.RecordApply(t.Context(), coord.NodeApply{
+		NodeID: "node-b", Epoch: target.Epoch, Status: string(configplane.StatusOK),
+		UpdatedAt: pinnedNow,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := p.recon.ReadPosture(t.Context()); err != nil || got != configplane.PostureShed {
+		t.Fatalf("posture = %q, %v; want shed — the premise", got, err)
+	}
+	if p.recon.Admits() {
+		t.Fatal("a shedding node still admitted work — the premise")
+	}
+
+	blind.Store(true)
+	got, err := p.recon.ReadPosture(t.Context())
+	if err == nil {
+		t.Fatalf("an unreadable control plane answered %q, want an error", got)
+	}
+	if got != "" {
+		t.Errorf("posture = %q beside the error, want none", got)
+	}
+	if !p.recon.Admits() {
+		t.Error("the gate stayed shut on a plane the heartbeat could not read")
+	}
+}
+
 // blindPlane is a control plane that stops answering on command — a broker
 // that was reachable and is not any more, which is the state the fail-open
 // rule exists for.

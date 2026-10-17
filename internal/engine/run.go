@@ -211,7 +211,7 @@ type Engine struct {
 
 	// posture reports this node's config lag, from whoever owns the
 	// control plane. Nil publishes none — see [Engine.SetPosture].
-	posture atomic.Pointer[func(context.Context) string]
+	posture atomic.Pointer[func(context.Context) (string, error)]
 
 	// onPublished is run after each published company is converged on, for
 	// the surfaces derived from the company itself. Nil runs nothing — see
@@ -3314,13 +3314,19 @@ func (e *Engine) nodeStatus(ctx context.Context) (coord.NodeStatus, error) {
 			"while the replication positions were being read: %w", err)
 	}
 	if fn := e.posture.Load(); fn != nil {
-		posture := (*fn)(ctx)
-		// A posture read that ran out of the beat's budget did not
-		// answer — what came back is the reporter's fail-open default,
-		// which is "serve". Publishing that would put a confident
-		// healthy posture on a node whose control plane is unreadable,
-		// so an unanswered read says nothing at all.
-		if ctx.Err() == nil {
+		// A POSTURE READ THAT DID NOT ANSWER SAYS NOTHING, however it
+		// failed. The reporter's fail-open answer is serve, and
+		// publishing it would put a confident healthy posture on a node
+		// whose control plane is unreadable — so only an answered read is
+		// carried, and the rest of the status still is: this node's own
+		// in-flight count, drain state and admin posture do not stop being
+		// true because the control plane cannot be read.
+		//
+		// The reporter's error, not this frame's clock, says which it
+		// was. Checking the beat's context caught only the read that
+		// overran the budget; a plane that refused at once came back
+		// fast, before the deadline, with serve.
+		if posture, err := (*fn)(ctx); err == nil {
 			status.Posture = posture
 		}
 	}
@@ -3349,8 +3355,11 @@ func (e *Engine) StartedAt() time.Time { return e.startedAt }
 // so a posture supplied late starts appearing within one interval rather
 // than at the next restart.
 //
-// The context is the beat's, already bounded — see [seat.Config].Status.
-func (e *Engine) SetPosture(fn func(context.Context) string) { e.posture.Store(&fn) }
+// The context is the beat's, already bounded — see [seat.Config].Status. An
+// error means the posture was not read, and the heartbeat then publishes
+// none rather than whatever answer came back with it: hand it
+// [Reconciler.ReadPosture], never the fail-open [Reconciler.Posture].
+func (e *Engine) SetPosture(fn func(context.Context) (string, error)) { e.posture.Store(&fn) }
 
 // SetAdmits supplies the gate that decides whether this node takes new
 // inbound work.

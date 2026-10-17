@@ -1394,8 +1394,11 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// THE POSTURE REACHES PEERS from here, because the reconciler owns it
 	// and is only built once the engine exists. Set before Start, so the
 	// first heartbeat already carries it.
-	e.SetPosture(func(ctx context.Context) string {
-		return string(reconciler.Posture(ctx))
+	e.SetPosture(func(ctx context.Context) (string, error) {
+		// ReadPosture, not Posture: the fail-open serve is the probe's
+		// answer, never one to broadcast to the fleet.
+		posture, readErr := reconciler.ReadPosture(ctx)
+		return string(posture), readErr
 	})
 
 	// AND THE GATE THAT ACTS ON IT. Reporting the posture is not applying

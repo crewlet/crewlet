@@ -118,6 +118,44 @@ export function BrokerCell({ broker }: { broker: string }) {
   return <BrokerKindTag kind={broker} />;
 }
 
+/**
+ * A node's posture, in the Posture column and among the node's facts alike:
+ * the word its control plane chose, or a dash that says which of two absences
+ * it is.
+ *
+ * A TAG RATHER THAN A `TableStatusCell`: a posture is a word the node itself
+ * chooses (`serve`, `wait`, `shed`, `isolated`, `stuck`, whatever it reports),
+ * and a glyph would claim a binary the posture does not have.
+ *
+ * TWO ABSENCES, told apart by `in_flight`, which every published status
+ * carries. A node that could not read its control plane on a heartbeat still
+ * publishes the rest of its status and leaves the posture out, rather than
+ * broadcast the `serve` its readiness probe falls back to
+ * (`coord.NodeStatus.Posture`), so its dash sends a reader to the control
+ * plane. A node whose heartbeat carried no status at all has neither field.
+ * One sentence for both, that the node had published no presence heartbeat,
+ * was true of neither: a listed node holds the presence lease its heartbeat
+ * renews.
+ *
+ * THE WORDS ARE THE DASH'S TITLE TOO, as the Lease column's are: `EmptyValue`
+ * gives its label to a screen reader alone, and a sighted reader saw one dash
+ * for both.
+ */
+function PostureCell({ node }: { node: FleetNode }) {
+  if (node.posture) {
+    return <Tag variant={node.posture === "serve" ? "success" : "warning"}>{node.posture}</Tag>;
+  }
+  const absence =
+    node.in_flight != null
+      ? "This node could not read the control plane on its last heartbeat"
+      : "This node's last heartbeat carried no status";
+  return (
+    <span title={absence}>
+      <EmptyValue label={absence} />
+    </span>
+  );
+}
+
 function FleetScreen() {
   const seatBadge = useSeatBadgeOf();
   const now = useNow();
@@ -346,16 +384,10 @@ function FleetScreen() {
                   header: "Posture",
                   shrink: true,
                   sortValue: (n) => n.posture ?? "",
-                  // A TAG RATHER THAN A `TableStatusCell`: the control plane's
-                  // postures are a vocabulary the node itself chooses a word
-                  // from — `serve`, `hold`, whatever it reports — and a glyph
-                  // would claim a binary this column does not have.
-                  cell: (n) =>
-                    n.posture ? (
-                      <Tag variant={n.posture === "serve" ? "success" : "warning"}>{n.posture}</Tag>
-                    ) : (
-                      <EmptyValue label="This node has published no presence heartbeat" />
-                    ),
+                  // ONE DRAWING WITH THE NODE'S OWN POSTURE FACT, so its row
+                  // and its peek cannot say different things about the same
+                  // absence.
+                  cell: (n) => <PostureCell node={n} />,
                 },
                 {
                   key: "config",
@@ -836,7 +868,7 @@ export function nodeFacts({
     {
       label: "Posture",
       // The control plane's own word, never a verdict of this screen's.
-      value: node.posture || <EmptyValue label="This node has published no presence heartbeat" />,
+      value: <PostureCell node={node} />,
     },
     {
       label: "Epoch",
