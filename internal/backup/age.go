@@ -9,26 +9,34 @@ import (
 	"time"
 )
 
-// How old the newest backup is, and why it is read from the artefacts.
+// How old this node's newest backup is, read from the artefacts it wrote.
 //
-// # The alarm needs a number nobody can be wrong about
+// # It feeds one gauge, and neither the trim nor the alarm
 //
-// The trim refuses to advance while the newest backup is older than the
-// operator's policy — a company that never backs up never trims, loudly and
-// by design — and the alarm beside it says so. Both need one number: how long
-// ago did a COMPLETE backup finish.
+// These functions answer `crewlet.backup.age`, which a node publishes for the
+// copies IT took: the manifests in the directories the positions register says
+// this node announced. The trim's backup term and the `backup_age` alarm do not
+// read them. Both read the register instead — per log, the newest verified
+// point the operator's policy counts that covers it, aged from when the copy
+// was TAKEN ([coord.NewestBackupOf]) — because the node holding the trim duty
+// is rarely the node that took the copy, and can never see a directory on
+// another host.
 //
-// It is derived from the artefacts on disk rather than from a counter the
-// engine keeps, and that is the decision. A counter records that this process
-// believed it took a backup; the directory records that one EXISTS. Those
-// differ in exactly the cases the alarm is for — a copy that was taken and
-// then deleted, a volume that was never mounted, a schedule pointing at a path
-// nobody ships from — and in every one of them the counter says the fleet is
-// protected and the disk says it is not.
+// # The gauge reads the disk because the register cannot say what it says
+//
+// The register records that a backup was announced; the directory records that
+// one still EXISTS. Those differ in exactly the cases an operator watching
+// the gauge wants caught — a copy announced and then deleted, a volume that
+// was never mounted, a schedule pointing at a path nobody ships from — and in
+// every one of them the register, and so the trim and the alarm, still count
+// the copy while the disk says it is gone. So the two answer different
+// questions and can disagree: the alarm says how old the backup the trim
+// counts is, per log and fleet-wide; the gauge says how old the newest copy on
+// this node's own disk is.
 //
 // A MANIFEST IS THE CLAIM, so a directory without one contributes nothing: it
 // is the debris of a run that did not finish, and reading its mtime as a
-// backup would be the alarm silenced by a failure.
+// backup would be the gauge silenced by a failure.
 
 // Newest is the finishing instant of the newest complete backup under root,
 // reporting false when there is none.
@@ -49,10 +57,10 @@ func Newest(root string) (time.Time, bool, error) {
 	}
 	entries, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {
-		// A path that does not exist yet is a fleet with no backup
+		// A path that does not exist yet is a node with no backup
 		// rather than a fault: it is what every deployment looks like
-		// before its first run, and refusing here would make the alarm
-		// unreadable exactly when it is most true.
+		// before its first run, and refusing here would make the gauge
+		// unreadable exactly when its absence is most true.
 		return newest, found, nil
 	}
 	if err != nil {
@@ -76,11 +84,12 @@ func Newest(root string) (time.Time, bool, error) {
 // Age is how long ago the newest complete backup under root finished.
 //
 // IT ANSWERS (value, ok, error) rather than a duration, because the three
-// facts are three different things and the alarm treats them differently: a
-// fleet with no backup at all, a fleet whose newest is old, and a path that
-// could not be read. Collapsing the first two would make an unconfigured
-// deployment page as a failing one, and collapsing the third into either would
-// let an unreadable volume read as a healthy fleet.
+// facts are three different things and the gauge treats them differently: a
+// node with no backup at all publishes no series, a node whose newest is old
+// publishes its age, and a path that could not be read is logged and skipped.
+// Collapsing the first two would give a node that never backed up an age
+// somebody alerts on as a real one, and collapsing the third into either would
+// let an unreadable volume read as a protected node.
 func Age(root string, now time.Time) (time.Duration, bool, error) {
 	at, ok, err := Newest(root)
 	if err != nil || !ok {
@@ -115,9 +124,9 @@ func finishedAt(dir string) (time.Time, bool, error) {
 			"not decode, so whether this fleet holds a backup cannot be "+
 			"established: %w", dir, err)
 	}
-	// THE FINISHING INSTANT, not the start. What the alarm asks is how
-	// long the fleet has been unprotected, and a backup protects nothing
-	// until its manifest is written.
+	// THE FINISHING INSTANT, not the start. What the gauge asks is how
+	// long this node has gone without a copy on its disk, and a backup
+	// protects nothing until its manifest is written.
 	if m.FinishedAt.IsZero() {
 		return time.Time{}, false, nil
 	}
