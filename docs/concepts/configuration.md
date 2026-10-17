@@ -981,11 +981,22 @@ needs no entry; list any other browser origin explicitly in
 operator happened to visit read every endpoint, so `*` is now **refused at
 boot** rather than honoured — name each site.
 
-An entry is compared against the browser's `Origin` header exactly, which is
-always `scheme://host[:port]`: an entry with no scheme, a trailing slash or a
-path matches nothing and is refused for that reason, because an allow-list that
-looks configured and never matches fails in a browser console this engine never
-sees. A permitted origin's response carries `Access-Control-Allow-Origin` and
+An entry is compared against the browser's `Origin` header, which is always
+`scheme://host[:port]`, in the spelling a browser gives it: the scheme and host
+in lower case, an IP address in its canonical form and no port where it is the
+scheme's default, so `https://Ops.Example.com:443` permits the
+`https://ops.example.com` a browser sends. An entry is refused when no
+browser could send it — no scheme, no host, a port outside 1–65535 — because
+an allow-list that looks configured and never matches fails in a browser
+console this engine never sees; and when it carries more than an origin — a
+path, a trailing slash, a query, a fragment or a user — because all of that is
+dropped before the comparison, so `https://ops.example.com/dashboard` would
+admit every page of the host. Three hosts a browser rewrites before it sends
+them are refused too, naming the form to write instead: one outside ASCII,
+which a browser sends in its punycode form (`xn--bcher-kva.example`); an IPv4
+address written other than as four decimal octets (`127.1`, `0x7f.0.0.1`, a
+leading zero, which a browser reads as octal); and an IPv6 zone, which no
+browser can address. `api.external_url` is held to the same three. A permitted origin's response carries `Access-Control-Allow-Origin` and
 `Vary: Origin`; an unlisted one carries neither and the browser blocks it — it
 is not refused with a status, because a same-origin `POST` carries an `Origin`
 too and the default allow-list is empty.

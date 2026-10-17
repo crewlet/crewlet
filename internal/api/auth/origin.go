@@ -1,9 +1,12 @@
 package auth
 
 import (
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -77,36 +80,81 @@ func NewCSRF(b *config.Bootstrap) *CSRF {
 		return &CSRF{}
 	}
 	out := make([]string, 0, len(b.API.Auth.AllowedOrigins)+1)
-	if own := originOf(b.API.ExternalBase()); own != "" {
+	if own := Origin(b.API.ExternalBase()); own != "" {
 		out = append(out, own)
 	}
 	for _, allowed := range b.API.Auth.AllowedOrigins {
-		if origin := originOf(allowed); origin != "" && !slices.Contains(out, origin) {
+		if origin := Origin(allowed); origin != "" && !slices.Contains(out, origin) {
 			out = append(out, origin)
 		}
 	}
 	return &CSRF{origins: out}
 }
 
-// originOf is the `scheme://host[:port]` a URL is at, which is the only shape
-// a browser's `Origin` header ever takes.
+// Origin is the `scheme://host[:port]` a URL is at, spelled as a browser's
+// `Origin` header spells it, or "" for a value that names no origin.
 //
 // A PATH IS DROPPED RATHER THAN REFUSED. `api.external_url` legitimately
 // carries one — a path-routing proxy needs it — and a browser reaching this
 // deployment at `https://ops.example.com/crewlet` still sends
 // `Origin: https://ops.example.com`, so comparing the whole value would refuse
 // every write from exactly the deployment shape the path is there for.
-func originOf(raw string) string {
+//
+// THE REST IS PUT IN THE BROWSER'S SPELLING, because a browser serializes an
+// origin rather than echoing what somebody typed: the scheme and host in lower
+// case, an IP address in its canonical form (`[::1]`, never
+// `[0:0:0:0:0:0:0:1]`), and the port as a number, left out where it is the
+// scheme's default. Kept as written, `https://Crewlet.Example.com:443` — an
+// address every browser and every link built on it reach — matched no
+// `Origin` a browser ever sends, and every sign-in and write from it was
+// refused as cross-site. Both sides of a comparison go through here, so an
+// address two spellings name — `[::ffff:127.0.0.1]` written, `[::ffff:7f00:1]`
+// sent — compares equal whichever one each side used.
+//
+// What this cannot put in a browser's spelling the configuration refuses
+// instead (config.checkBrowserHost): a host outside ASCII, which a browser
+// sends in its punycode form, an IPv4 address written other than as four
+// decimal octets, which a browser rewrites, and an IPv6 zone, which no browser
+// can address. The one rule, exported, so the command line states the origin
+// it sends by it too.
+func Origin(raw string) string {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+	if err != nil || parsed.Scheme == "" || parsed.Hostname() == "" {
 		return ""
 	}
-	return parsed.Scheme + "://" + parsed.Host
+	scheme := strings.ToLower(parsed.Scheme)
+	host := strings.ToLower(parsed.Hostname())
+	if addr, err := netip.ParseAddr(host); err == nil {
+		host = addr.String()
+	}
+	port := parsed.Port()
+	if port != "" {
+		n, err := strconv.ParseUint(port, 10, 16)
+		if err != nil {
+			return ""
+		}
+		port = strconv.FormatUint(n, 10)
+	}
+	if port == defaultPorts[scheme] {
+		port = ""
+	}
+	if port != "" {
+		return scheme + "://" + net.JoinHostPort(host, port)
+	}
+	if strings.Contains(host, ":") {
+		return scheme + "://[" + host + "]"
+	}
+	return scheme + "://" + host
 }
 
-// Permits reports whether an origin is one this deployment is reached at.
+// defaultPorts are the ports a browser leaves out of an origin it serializes.
+var defaultPorts = map[string]string{"http": "80", "https": "443"}
+
+// Permits reports whether an origin is one this deployment is reached at,
+// compared in the browser's spelling ([Origin]) on both sides.
 func (c *CSRF) Permits(origin string) bool {
-	return slices.Contains(c.origins, origin)
+	canonical := Origin(origin)
+	return canonical != "" && slices.Contains(c.origins, canonical)
 }
 
 // THE PATHS THIS CHECK DOES NOT JUDGE ARE [Public]'s, and exactly those: the

@@ -2163,7 +2163,18 @@ refused with a message saying exactly that. The **path is dropped** from the
 comparison: `api.external_url` legitimately carries one for a path-routing
 proxy, while a browser at `https://ops.example.com/crewlet` still sends
 `Origin: https://ops.example.com`, so comparing the whole value would refuse
-every write from precisely the deployment shape the path exists for.
+every write from precisely the deployment shape the path exists for. And both
+sides are compared **as a browser spells an origin** — the scheme and host in
+lower case, an IP address in its canonical form, no port where it is the
+scheme's default — because a browser serializes the origin rather than echoing
+the address somebody typed: compared as written, `https://Crewlet.Example.com`
+or `https://crewlet.example.com:443` refused every write from the deployment's
+own address. Three spellings cannot be compared this way, because a browser
+rewrites them in ways that need more than the engine knows, so the
+configuration refuses them and names the form to write: a host outside ASCII
+(a browser sends its punycode form), an IPv4 address written other than as
+four decimal octets (`127.1`, `0x7f.0.0.1`, an octet with a leading zero), and
+an IPv6 zone, which no browser can address.
 
 Reads are never refused for their origin — refusing one would break every
 cross-origin dashboard the CORS allowance exists to serve, to prevent a request

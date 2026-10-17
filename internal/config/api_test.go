@@ -426,6 +426,15 @@ func TestTheExternalURLIsRefusedWhenItCannotBeAnAddress(t *testing.T) {
 		{"no host", "https://", "has no host"},
 		{"a query", "https://crewlet.example.com?a=b", "query or fragment"},
 		{"a fragment", "https://crewlet.example.com#x", "query or fragment"},
+		// Hosts a browser rewrites before it sends them, which the origin
+		// check could not match against this spelling.
+		{"a host outside ASCII", "https://bücher.example", "outside ASCII"},
+		{"an IPv4 address in short form", "http://127.1:8080", "four decimal octets"},
+		{"an IPv4 address in hex", "http://0x7f.0.0.1:8080", "four decimal octets"},
+		{"an octet with a leading zero", "https://192.168.010.1", "four decimal octets"},
+		{"an IPv4 address with a trailing dot", "http://127.0.0.1.:8080", "four decimal octets"},
+		{"an IPv6 zone", "http://[fe80::1%25eth0]:8080", "IPv6 zone"},
+		{"a port out of range", "https://crewlet.example.com:99999", "a port is 1 to 65535"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -433,6 +442,22 @@ func TestTheExternalURLIsRefusedWhenItCannotBeAnAddress(t *testing.T) {
 			b.API.ExternalURL = tc.url
 			refuses(t, b, tc.want)
 		})
+	}
+	// The controls: the same host in its ASCII form, and spellings the
+	// origin check puts in the browser's form rather than refusing — a host
+	// in upper case, a default port written out or with a leading zero, an
+	// IPv4-mapped address, a dotted quad, a domain's trailing dot and a label
+	// that only begins with a digit.
+	for _, external := range []string{
+		"https://xn--bcher-kva.example", "https://Crewlet.Example.com:443",
+		"https://crewlet.example.com:0443", "http://[::ffff:127.0.0.1]:8080", "https://10.0.0.7",
+		"https://crewlet.example.com.", "https://crewlet-2.example.com",
+	} {
+		b := serving()
+		b.API.ExternalURL = external
+		if err := b.Validate(); err != nil {
+			t.Errorf("%s was refused: %v", external, err)
+		}
 	}
 	// A PATH IS ACCEPTED, and that is the deliberate asymmetry: a
 	// path-routing proxy in front of this engine needs one, and every

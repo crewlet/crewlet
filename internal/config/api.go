@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -361,6 +362,9 @@ func (a *API) validateExternalURL(path Path, serving bool) error {
 	p.wrap(checkExternalURL(at(path, "external_url"), raw,
 		"the scheme sets cookie security and every link, so it can't be guessed",
 		"people use to reach this deployment in a browser"))
+	if parsed, err := url.Parse(raw); err == nil && hasHTTPScheme(raw) {
+		p.wrap(checkBrowserHost(at(path, "external_url"), raw, parsed.Hostname()))
+	}
 	return p.err()
 }
 
@@ -382,6 +386,7 @@ func checkExternalURL(path Path, raw, why, reachedBy string) error {
 	if parsed.Hostname() == "" {
 		p.add(path, ErrShape, "%q has no host. It must be the address %s", raw, reachedBy)
 	}
+	p.wrap(checkPort(path, raw, parsed.Port()))
 	// A PATH, A QUERY OR A FRAGMENT IS REFUSED rather than trimmed. Every
 	// consumer concatenates onto this value, so `https://x/crewlet/`
 	// yields `https://x/crewlet/webhooks/github` — which may be exactly
@@ -1113,16 +1118,19 @@ func checkDurationRange(p *problems, path Path, raw string, lo, hi time.Duration
 	}
 }
 
-// checkOrigin refuses an origin a browser will never match.
+// checkOrigin refuses an entry that cannot name the origin it reads as.
 //
 // # Why each of these is refused rather than accepted and ignored
 //
-// A CORS allow-list is compared against the browser's `Origin` header
-// EXACTLY, and the header is always `scheme://host[:port]` with no path and
-// no trailing slash. Every shape below is a value an operator plausibly
-// writes and no browser can ever equal — so accepting it produces an
-// allow-list that looks configured, a fetch that fails in a console the
-// engine never sees, and nothing anywhere saying why.
+// An allowance is compared against the browser's `Origin` header, which is
+// always `scheme://host[:port]`, both sides put in a browser's spelling
+// (auth.Origin). Every shape below is a value an operator plausibly writes
+// that either no browser can ever send — accepted, it is an allow-list that
+// looks configured, a fetch that fails in a console the engine never sees,
+// and nothing anywhere saying why — or, with a path, a query, a fragment or
+// a user, one that permits more than it reads as: everything but the scheme,
+// host and port is dropped before the comparison, so
+// `https://ops.example.com/dashboard` would admit every page of that host.
 //
 // `*` is the sharpest of them, and it is refused rather than honoured: it was
 // this field's own previous default, and what it does is let any site a
@@ -1142,15 +1150,94 @@ func checkOrigin(path Path, origin string) error {
 		p.add(path, ErrShape, "%q has no scheme, so it matches nothing. "+
 			"Write https://%s", origin, origin)
 	case strings.HasSuffix(origin, "/"):
-		p.add(path, ErrShape, "%q ends in a slash, so it matches nothing. "+
-			"Write %q", origin, strings.TrimRight(origin, "/"))
+		p.add(path, ErrShape, "%q ends in a slash, and an origin has no path: "+
+			"it is only scheme://host[:port]. Write %q", origin, strings.TrimRight(origin, "/"))
 	default:
-		if rest := strings.TrimPrefix(strings.TrimPrefix(origin, "https://"), "http://"); strings.Contains(rest, "/") {
-			p.add(path, ErrShape, "%q has a path, so it matches nothing. Use "+
-				"only the scheme, host and port", origin)
+		parsed, err := url.Parse(origin)
+		switch {
+		case err != nil:
+			p.add(path, ErrShape, "%q is not a URL a browser can be at (%v). "+
+				"Write scheme://host[:port]", origin, err)
+		case parsed.Hostname() == "":
+			p.add(path, ErrShape, "%q has no host. Write scheme://host[:port]", origin)
+		default:
+			if parsed.Path != "" || parsed.RawQuery != "" || parsed.ForceQuery ||
+				parsed.Fragment != "" || parsed.User != nil {
+				p.add(path, ErrShape, "%q carries more than an origin, which is "+
+					"only scheme://host[:port]: the rest would be dropped and the "+
+					"entry would admit every page of %s. Write %q",
+					origin, parsed.Host, parsed.Scheme+"://"+parsed.Host)
+			}
+			p.wrap(checkPort(path, origin, parsed.Port()))
+			p.wrap(checkBrowserHost(path, origin, parsed.Hostname()))
 		}
 	}
 	return p.err()
+}
+
+// checkPort refuses a port no client can reach. The URL parser checks only
+// that a port is digits, so `:99999` would pass it and fail at every caller.
+func checkPort(path Path, raw, port string) error {
+	var p problems
+	if port == "" {
+		return nil
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+		p.add(path, ErrShape, "%q has port %s, and a port is 1 to 65535", raw, port)
+	}
+	return p.err()
+}
+
+// checkBrowserHost refuses an address a browser reaches whose host the
+// cross-site check could not compare: the check puts both sides in a
+// browser's spelling (auth.Origin), and these three are spellings a browser
+// changes in ways that need more than this engine knows. Kept, each refuses
+// every write from the address as it is written.
+//
+//   - A host outside ASCII: a browser sends its ASCII form (`bücher.example`
+//     is `xn--bcher-kva.example`), and spelling it so needs the IDNA tables,
+//     which nothing else in the engine has a use for.
+//   - An IPv4 address written other than as four decimal octets: a browser
+//     reads any host whose last label is a number as IPv4, and rewrites
+//     `127.1`, `2130706433`, `0x7f.0.0.1` and `192.168.010.1` (whose leading
+//     zero is octal) into the dotted form it sends.
+//   - An IPv6 zone (`[fe80::1%25eth0]`), which no browser can address.
+//
+// The ASCII and dotted forms reach the same host from every browser and every
+// link, so they are the ones to write. Only the browser's addresses are held
+// to this — `api.external_url` and `api.auth.allowed_origins` — and never the
+// public listener's, which no origin is compared against.
+func checkBrowserHost(path Path, raw, host string) error {
+	var p problems
+	switch {
+	case strings.IndexFunc(host, func(r rune) bool { return r > unicode.MaxASCII }) >= 0:
+		p.add(path, ErrShape, "%q has a host outside ASCII. Write the host in "+
+			"its ASCII (xn--) form, which is the form a browser sends", raw)
+	case strings.Contains(host, "%"):
+		p.add(path, ErrShape, "%q names an IPv6 zone, which no browser can "+
+			"address. Write the address without it", raw)
+	case !strings.Contains(host, ":") && endsInNumber(host):
+		if addr, err := netip.ParseAddr(host); err != nil || !addr.Is4() {
+			p.add(path, ErrShape, "%q has a host a browser reads as an IPv4 "+
+				"address and rewrites before it sends it. Write the address as "+
+				"four decimal octets, such as 127.0.0.1", raw)
+		}
+	}
+	return p.err()
+}
+
+// endsInNumber is the URL standard's test for a host a browser parses as IPv4:
+// its last label — a trailing dot aside — is all digits, or 0x and hex digits.
+func endsInNumber(host string) bool {
+	labels := strings.Split(host, ".")
+	if len(labels) > 1 && labels[len(labels)-1] == "" {
+		labels = labels[:len(labels)-1]
+	}
+	last := strings.ToLower(labels[len(labels)-1])
+	if last != "" && strings.Trim(last, "0123456789") == "" {
+		return true
+	}
+	return strings.HasPrefix(last, "0x") && strings.Trim(last[2:], "0123456789abcdef") == ""
 }
 
 // warnings are the API postures that are VALID and worth reading before this

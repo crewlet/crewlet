@@ -116,11 +116,13 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 			strings.Repeat("a", 59) + ", token: a}\n", "api.auth.tokens[0].id", ErrUnknownValue},
 
 		// A CORS ALLOW-LIST IS COMPARED AGAINST THE BROWSER'S `Origin`
-		// HEADER EXACTLY, and that header is always `scheme://host[:port]`
-		// with no path and no trailing slash. Every shape below is one an
-		// operator plausibly writes and no browser can ever equal, so
-		// accepting it produces an allow-list that looks configured and a
-		// fetch that fails in a console this engine never sees.
+		// HEADER, both put in a browser's spelling, and that header is always
+		// `scheme://host[:port]` with no path and no trailing slash. Every shape below is one an
+		// operator plausibly writes and either no browser can ever send —
+		// accepted, it is an allow-list that looks configured and a fetch
+		// that fails in a console this engine never sees — or, carrying
+		// more than an origin, one that would admit every page of its host,
+		// since the rest is dropped before the comparison.
 		// THE WILDCARD IS REFUSED RATHER THAN HONOURED, and the refusal
 		// says what honouring it would expose: it was this field's own
 		// previous default, and what it does is let any site a logged-in
@@ -130,6 +132,13 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 		{"origin with no scheme", "api:\n  auth:\n    allowed_origins: [ops.example.com]\n", "api.auth.allowed_origins[0]", ErrShape},
 		{"origin with a trailing slash", "api:\n  auth:\n    allowed_origins: ['https://ops.example.com/']\n", "api.auth.allowed_origins[0]", ErrShape},
 		{"origin with a path", "api:\n  auth:\n    allowed_origins: ['https://ops.example.com/dashboard']\n", "api.auth.allowed_origins[0]", ErrShape},
+		{"origin with a host outside ASCII", "api:\n  auth:\n    allowed_origins: ['https://bücher.example']\n", "api.auth.allowed_origins[0]", ErrShape},
+		{"origin with a port that is no number", "api:\n  auth:\n    allowed_origins: ['https://ops.example.com:8o80']\n", "api.auth.allowed_origins[0]", ErrShape},
+		{"origin with a port out of range", "api:\n  auth:\n    allowed_origins: ['https://ops.example.com:70000']\n", "api.auth.allowed_origins[0]", ErrShape},
+		{"origin with a query", "api:\n  auth:\n    allowed_origins: ['https://ops.example.com?tenant=a']\n", "api.auth.allowed_origins[0]", ErrShape},
+		{"origin with a user", "api:\n  auth:\n    allowed_origins: ['https://ops@ops.example.com']\n", "api.auth.allowed_origins[0]", ErrShape},
+		{"origin with a short IPv4 address", "api:\n  auth:\n    allowed_origins: ['http://127.1:3000']\n", "api.auth.allowed_origins[0]", ErrShape},
+		{"origin with an IPv6 zone", "api:\n  auth:\n    allowed_origins: ['http://[fe80::1%25eth0]:3000']\n", "api.auth.allowed_origins[0]", ErrShape},
 		{"empty origin", "api:\n  auth:\n    allowed_origins: ['']\n", "api.auth.allowed_origins[0]", ErrMissing},
 
 		// A COMPANY WRITER IS A TOKEN ID, held to what a token id is: an
