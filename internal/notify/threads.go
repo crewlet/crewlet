@@ -57,6 +57,31 @@ var followReasons = []FollowReason{
 	FollowMention, FollowCollective, FollowParticipated,
 }
 
+// keep is the reason a follow holds once a seat is asserted into its thread
+// for asserted: the STRONGER of that and what it held.
+//
+// NEVER A DOWNGRADE, because the reason is what decides whether a reply
+// obliges an answer ([FollowReason.Addresses]). Overwritten by whatever came
+// last, a seat named in a thread and then caught by an @here there followed
+// it as a broadcast, and the next reply that should have been answered was
+// one it was free to ignore. A shout followed by a mention still upgrades.
+//
+// A held reason this build does not know is KEPT. It was written by a newer
+// build, which a rolling upgrade guarantees, and nothing here can rank it —
+// so overwriting it could be exactly the downgrade this rule exists to
+// prevent. The write still refreshes it.
+func keep(held FollowReason, following bool, asserted FollowReason) FollowReason {
+	switch {
+	case !following || held == "":
+		return asserted
+	case !held.Valid():
+		return held
+	case slices.Index(followReasons, held) <= slices.Index(followReasons, asserted):
+		return held
+	}
+	return asserted
+}
+
 // Valid reports whether r is a reason the engine knows.
 //
 // A reason read back out of a follow store or off a notification's metadata
@@ -114,8 +139,18 @@ type MentionGrammar interface {
 // way back but for somebody to mention it again.
 //
 // THE SEAT IS NAMED BY ITS HANDLE, which is immutable (ADR-0013).
+//
+// Follow writes the reason choose answers for the record it replaces, and
+// answers that reason: choose is handed what is held and runs against the
+// record the write lands on, so a choice can never be made over a reason
+// another node wrote a moment before. That is what lets [ThreadTracker] keep
+// the STRONGER of two reasons when two messages in one thread are parsed at
+// once — which reason is stronger is this package's vocabulary, and the store
+// ranks nothing. Every call writes, an unchanged reason included, because the
+// write is the follow's activity stamp.
 type FollowStore interface {
-	Follow(ctx context.Context, backend, seat, channel, thread, reason string, at time.Time) error
+	Follow(ctx context.Context, backend, seat, channel, thread string, at time.Time,
+		choose func(held string, following bool) string) (string, error)
 	Following(ctx context.Context, backend, seat, channel, thread string) (string, bool, error)
 	Unfollow(ctx context.Context, backend, seat, channel, thread string) (bool, error)
 }
@@ -208,9 +243,19 @@ type Delivery struct {
 	// Deliver is whether the message reaches the seat.
 	Deliver bool
 
-	// Reason is why, when a follow is involved. Empty for a top-level
-	// channel message, which needs none — the bot is in the channel.
+	// Reason is why THIS MESSAGE reached the seat: what it triggered, or,
+	// for a reply that triggered nothing, why the seat follows the thread.
+	// Empty for a top-level channel message that triggered nothing, which
+	// needs no reason — the bot is in the channel.
 	Reason FollowReason
+
+	// Following is why the seat is in this message's THREAD once this
+	// message is counted — the reason the follow holds afterwards, which
+	// for a trigger is the stronger of what it held and what it asserted,
+	// so an @here in a thread the seat was named in reaches it as a
+	// broadcast while it stays there because it was named. Empty where no
+	// follow is involved, and where one could not be recorded.
+	Following FollowReason
 
 	// Followed is whether THIS message established or refreshed a follow,
 	// as opposed to riding one already held.
@@ -251,7 +296,8 @@ func (t *ThreadTracker) Reaches(ctx context.Context, seat, selfIdentity string, 
 		thread = m.ID
 	}
 	if triggered && thread != "" {
-		if err := t.store.Follow(ctx, t.Backend(), seat, m.Channel, thread, string(reason), at); err != nil {
+		following, err := t.assert(ctx, seat, m.Channel, thread, reason, at)
+		if err != nil {
 			// The follow was not recorded, but this message still
 			// named the seat — deliver it and let the next mention
 			// re-establish the follow. Dropping it too would mean a
@@ -260,9 +306,10 @@ func (t *ThreadTracker) Reaches(ctx context.Context, seat, selfIdentity string, 
 				"seat", seat, "thread", thread, "error", err.Error())
 			return Delivery{Deliver: true, Reason: reason}, err
 		}
+		return Delivery{Deliver: true, Reason: reason, Following: following, Followed: true}, nil
 	}
 	if triggered {
-		return Delivery{Deliver: true, Reason: reason, Followed: thread != ""}, nil
+		return Delivery{Deliver: true, Reason: reason}, nil
 	}
 	if m.Thread == "" {
 		// A top-level channel message. The bot is in the channel.
@@ -273,7 +320,27 @@ func (t *ThreadTracker) Reaches(ctx context.Context, seat, selfIdentity string, 
 	if err != nil {
 		return Delivery{}, err
 	}
-	return Delivery{Deliver: following, Reason: FollowReason(held)}, nil
+	if !following {
+		return Delivery{}, nil
+	}
+	return Delivery{Deliver: true, Reason: FollowReason(held), Following: FollowReason(held)}, nil
+}
+
+// assert records that a seat is in a thread for reason, keeping a stronger
+// reason the follow already holds, and answers the reason it holds afterwards.
+//
+// THE ONE WRITE every follow takes — a trigger and the seat's own post alike —
+// so the no-downgrade rule ([keep]) and the activity stamp are one path rather
+// than one per caller: each of them used to decide for itself, and only one
+// remembered not to downgrade.
+func (t *ThreadTracker) assert(ctx context.Context, seat, channel, thread string,
+	reason FollowReason, at time.Time) (FollowReason, error) {
+
+	held, err := t.store.Follow(ctx, t.Backend(), seat, channel, thread, at,
+		func(held string, following bool) string {
+			return string(keep(FollowReason(held), following, reason))
+		})
+	return FollowReason(held), err
 }
 
 // trigger combines the backend's targeting with the text's grammar.
@@ -307,20 +374,23 @@ func (t *ThreadTracker) trigger(m ChatMessage, selfIdentity string) (FollowReaso
 // not even be running has joined a conversation.
 //
 // It does not downgrade an existing follow: a seat already following because
-// it was named keeps that reason, because participation is the weaker
-// signal and an operator reading `participated` on a thread the seat was
-// summoned to would be reading a lie.
+// it was named keeps that reason, because participation is the weaker signal,
+// an operator reading `participated` on a thread the seat was summoned to
+// would be reading a lie, and the reason decides whether the next reply
+// obliges an answer.
+//
+// It DOES refresh it. The follow's record is its activity stamp — the broker
+// expires what has gone quiet for ninety days (coord.FollowRetention) — and
+// a seat posting in a thread is the plainest activity there is. Returning
+// early on a follow already held let a thread the seat kept answering expire
+// ninety days after it was last NAMED there, and the next unnamed reply was
+// dropped.
 func (t *ThreadTracker) Participated(ctx context.Context, seat, channel, thread string, at time.Time) error {
 	if thread == "" {
 		return nil
 	}
-	if _, following, err := t.store.Following(ctx, t.Backend(), seat, channel, thread); err != nil {
-		return err
-	} else if following {
-		return nil
-	}
-	return t.store.Follow(ctx, t.Backend(), seat, channel, thread,
-		string(FollowParticipated), at)
+	_, err := t.assert(ctx, seat, channel, thread, FollowParticipated, at)
+	return err
 }
 
 // Unfollow drops a follow, reporting whether one was there.

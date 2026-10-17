@@ -30,10 +30,11 @@ import (
 // record ([FleetStore.MutateSandboxRun], sandboxruns.go), which takes every
 // tool call its box makes over the bridge — from as many as twenty subagents at
 // once — beside its seat's own writes, a person's answer, a note and a stop.
-// The rest race writers something does bound — the two ends of a channel, a
-// follow's message and the person who ends it, a create that finds the key
-// removed between its refusal and its read — and lose for a whole patience only
-// on a store this engine does not produce; on those the rule costs nothing.
+// The rest race writers something does bound — the two ends of a channel, the
+// messages that assert a follow and the person who ends it, a create that
+// finds the key removed between its refusal and its read — and lose for a
+// whole patience only on a store this engine does not produce; on those the
+// rule costs nothing.
 //
 // The patience is the JetStream client's own request timeout. Every request
 // this package makes on a context with no deadline already waits that long for

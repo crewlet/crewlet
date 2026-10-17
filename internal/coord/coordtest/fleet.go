@@ -2422,11 +2422,22 @@ var integrationCases = []fleetCase{
 
 // ---- the chat thread-follows -------------------------------------------- //
 
+// follow records reason whatever is held: the store ranks nothing, so the
+// cases here are about what it does with a choice, not about which is right.
 func (h *fleetHarness) follow(backend, handle, channel, thread, reason string) {
 	h.t.Helper()
-	if err := h.f.Follow(h.ctx, backend, handle, channel, thread, reason, h.now()); err != nil {
+	got, err := h.f.Follow(h.ctx, backend, handle, channel, thread, h.now(), overwrite(reason))
+	if err != nil {
 		h.t.Fatalf("Follow(%s/%s/%s): %v", backend, handle, thread, err)
 	}
+	if got != reason {
+		h.t.Fatalf("Follow(%s/%s/%s) answered %q, want the %q it wrote", backend, handle, thread, got, reason)
+	}
+}
+
+// overwrite is the choice that writes reason whatever the record holds.
+func overwrite(reason string) func(string, bool) string {
+	return func(string, bool) string { return reason }
 }
 
 func (h *fleetHarness) following(backend, handle, channel, thread string) (string, bool) {
@@ -2455,16 +2466,90 @@ var followCases = []fleetCase{{
 		}
 	},
 }, {
-	// The reason is OVERWRITTEN rather than kept: a seat first pulled into
-	// a thread by a collective shout and later named personally is now
-	// following for the stronger reason, and an operator asking why it
-	// answered should see the mention.
-	name: "a re-assert overwrites the reason",
+	// A re-assert writes what the CALLER chooses, and the caller chooses
+	// against what is held: a seat first pulled into a thread by a
+	// collective shout and later named personally follows for the mention,
+	// and one named and then shouted at keeps the mention — a ranking the
+	// store does not know and must not need to.
+	name: "a re-assert writes the reason the caller chose against the record",
 	fn: func(h *fleetHarness) {
-		h.follow("slack", "agent-pm", "C1", "1700.1", "collective")
-		h.follow("slack", "agent-pm", "C1", "1700.1", "mention")
+		var shown []string
+		record := func(reason string) func(string, bool) string {
+			return func(held string, following bool) string {
+				shown = append(shown, fmt.Sprintf("%s/%v", held, following))
+				return reason
+			}
+		}
+		at := h.now()
+		for _, reason := range []string{"collective", "mention"} {
+			got, err := h.f.Follow(h.ctx, "slack", "agent-pm", "C1", "1700.1", at, record(reason))
+			if err != nil {
+				h.t.Fatalf("Follow: %v", err)
+			}
+			if got != reason {
+				h.t.Fatalf("Follow answered %q, want the %q chosen", got, reason)
+			}
+		}
+		if want := []string{"/false", "collective/true"}; !slices.Equal(shown, want) {
+			h.t.Fatalf("the choice was shown %v, want %v: a fresh thread holds nothing and "+
+				"a re-assert is shown what the first wrote", shown, want)
+		}
 		if reason, _ := h.following("slack", "agent-pm", "C1", "1700.1"); reason != "mention" {
-			h.t.Fatalf("reason = %q, want the re-asserted one", reason)
+			h.t.Fatalf("reason = %q, want the chosen one", reason)
+		}
+	},
+}, {
+	// THE CHOICE IS MADE AGAINST THE RECORD THE WRITE LANDS ON. A choice
+	// formed from an earlier read and written blind lands over whatever
+	// another node wrote in between, so the reason ends up being the last
+	// writer's rather than the one the caller would have kept — and the
+	// reason decides whether a reply obliges an answer. Here one node
+	// names the seat while seven others shout in the same thread, every
+	// one of them keeping a mention it is shown; the mention must survive.
+	name: "concurrent re-asserts never write over a reason their choice would keep",
+	fn: func(h *fleetHarness) {
+		keep := func(asserted string) func(string, bool) string {
+			return func(held string, following bool) string {
+				if following && held == "mention" {
+					return held
+				}
+				return asserted
+			}
+		}
+		at := h.now()
+		var (
+			wg    sync.WaitGroup
+			once  sync.Once
+			named = make(chan struct{})
+		)
+		name := func() { once.Do(func() { close(named) }) }
+		for i, node := range h.nodes(8) {
+			wg.Go(func() {
+				if i == 0 {
+					<-named
+					if _, err := node.Follow(h.ctx, "slack", "agent-swe", "C1", "busy", at, keep("mention")); err != nil {
+						h.t.Errorf("Follow(mention): %v", err)
+					}
+					return
+				}
+				// The mention goes in while the shouting is under way,
+				// and goes in whatever happens to this writer.
+				defer name()
+				for n := range 10 {
+					if i == 1 && n == 2 {
+						name()
+					}
+					if _, err := node.Follow(h.ctx, "slack", "agent-swe", "C1", "busy", at, keep("collective")); err != nil {
+						h.t.Errorf("Follow(collective): %v", err)
+						return
+					}
+				}
+			})
+		}
+		wg.Wait()
+		if reason, _ := h.following("slack", "agent-swe", "C1", "busy"); reason != "mention" {
+			h.t.Fatalf("reason = %q after a mention raced seven broadcasts, want the mention: "+
+				"a broadcast decided before the mention was written over it", reason)
 		}
 	},
 }, {
@@ -2604,7 +2689,7 @@ var followCases = []fleetCase{{
 			{"slack", "", "t-1"},
 			{"slack", "agent-swe", ""},
 		} {
-			err := h.f.Follow(h.ctx, missing.backend, missing.handle, "C1", missing.thread, "mention", at)
+			_, err := h.f.Follow(h.ctx, missing.backend, missing.handle, "C1", missing.thread, at, overwrite("mention"))
 			if err == nil {
 				h.t.Errorf("a follow with backend=%q handle=%q thread=%q was accepted",
 					missing.backend, missing.handle, missing.thread)
