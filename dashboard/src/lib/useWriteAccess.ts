@@ -26,7 +26,7 @@
  *  - NO ACCESS — the change is an app's and the reader does not hold that
  *    app: "This change needs Worklet access. An admin can give it to you."
  *    Decided only for a change `viewer.acts` leaves out, and only where the
- *    app the change writes to ([actionApp]) is one the reader lacks — so a
+ *    reader holds none of the apps the change needs ([actionApps]) — so a
  *    change the engine DOES offer without the app (answering an ask you were
  *    asked) is never held by it;
  *  - NOT SERVED — the engine does not make this change for this person at
@@ -57,7 +57,7 @@ import { isOwnSeat } from "./seats.ts";
 import { useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
 import { useServicesRun, type Service, type ServicesRun } from "./services.ts";
-import { ADMIN, DOCLET, WORKLET, holds, needsWords, type App } from "./access.ts";
+import { ADMIN, holds, needsWords, type App } from "./access.ts";
 import type { ActionTool } from "~/protocol/act.ts";
 import { ACTIONS } from "~/contract/actions.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
@@ -107,20 +107,25 @@ export const WRITE_REASONS: Readonly<Record<Exclude<WriteBlock, "held" | "no_acc
   not_served: "This can’t be changed from here.",
 };
 
+// EVERY ROW'S APPS ARE APPS, checked by the compiler: an app spelled wrong in
+// the table would be a lock that names access nobody can be given.
+const NEEDS: { readonly [T in ActionTool]: { readonly apps: readonly App[] } } = ACTIONS;
+
 /**
- * The app a change writes to — the tracker for a change landing in the
- * tracker's log, the knowledge base for one landing in its pages — or null
- * for a change that is no app's (pausing a seat, answering a coding run).
+ * The apps ANY ONE of which a change needs — its app for an app's change,
+ * every app for one that draws on whichever the caller holds
+ * (`answer_knowledge`), none for a change that is no app's (pausing a seat,
+ * answering a coding run).
  *
- * READ OFF THE ROW'S OWN `domain` (`contract/actions.ts`), the log the
- * engine says the write lands in, never a list of tool names kept here: a
- * change lands in an app's log exactly when it is that app's to make.
+ * THE ROW'S OWN `apps` (`contract/actions.ts`), which an engine gate holds to
+ * the authority table's row for the tool. It used to be read off the row's
+ * `domain`, the log the write lands in — a different fact, which agreed only
+ * while every app's change landed in that app's log: `answer_knowledge` lands
+ * in none and needs an app, so a reader holding neither was told the engine
+ * does not make the change rather than what to ask an admin for.
  */
-export function actionApp(tool: ActionTool): App | null {
-  const domain: string | null = ACTIONS[tool].domain;
-  if (domain === "tracker") return WORKLET;
-  if (domain === "pages") return DOCLET;
-  return null;
+export function actionApps(tool: ActionTool): readonly App[] {
+  return NEEDS[tool].apps;
 }
 
 /**
@@ -147,9 +152,9 @@ export const SERVICE_OFF_REASONS: Readonly<Record<Service, string>> = {
   knowledge: "Doclet is not in use, so no page can be written here.",
 };
 
-/** The sentence a change is held with when the reader lacks its app. */
-export function noAccessReason(app: App): string {
-  return needsWords("This change", [app]);
+/** The sentence a change is held with when the reader holds none of its apps. */
+export function noAccessReason(apps: readonly App[]): string {
+  return needsWords("This change", apps);
 }
 
 /** The decision itself, over values — what the hook reads, and what a test pins. */
@@ -181,9 +186,9 @@ export function writeAccess(
     // remedy they can ask an admin for, and "this engine does not make this
     // change for you" about a change it would make once they held it sends
     // them nowhere.
-    const app = actionApp(tool);
-    if (app !== null && !holds(viewer.grants, app)) {
-      return { can: false, block: "no_access", reason: noAccessReason(app) };
+    const apps = actionApps(tool);
+    if (apps.length > 0 && !apps.some((app) => holds(viewer.grants, app))) {
+      return { can: false, block: "no_access", reason: noAccessReason(apps) };
     }
     return blocked("not_served");
   }

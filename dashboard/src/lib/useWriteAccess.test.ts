@@ -114,6 +114,31 @@ test("a change in an app the reader lacks names that app", () => {
   ).toMatchObject({ block: "no_access", reason: expect.stringContaining("Doclet access") });
 });
 
+// A CHANGE THAT NEEDS AN APP AND LANDS IN NO LOG. `answer_knowledge` spends a
+// model call and writes nothing a question reads, and it is any app's: a
+// reader holding none is told any would do, where reading the app off the log
+// the write lands in told them the engine does not make the change.
+// The CONTROL is a reader holding one app, whom the app does not hold — what
+// holds them is the engine's own list. Mutation: read the app off `domain`
+// again and the first reads `not_served`.
+test("a change any app opens names every app to a reader holding none", () => {
+  const none: ViewerState = {
+    ...BOUND,
+    grants: [],
+    worklet: false,
+    doclet: false,
+    acts: [],
+  };
+  expect(writeAccess("answer_knowledge", none, "open", EVERY)).toEqual({
+    can: false,
+    block: "no_access",
+    reason: "This change needs Worklet or Doclet or Artifacts access. An admin can give it to you.",
+  });
+  expect(
+    writeAccess("answer_knowledge", { ...none, grants: ["doclet"], doclet: true }, "open", EVERY),
+  ).toMatchObject({ block: "not_served" });
+});
+
 // A QUEUED WRITE IS ONE THE PERSON WALKED AWAY FROM believing it happened:
 // offline outranks every other reason, including a reader who could act.
 test("offline outranks everything, a bound person included", () => {

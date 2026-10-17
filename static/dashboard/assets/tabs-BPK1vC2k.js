@@ -1,0 +1,1 @@
+import{Wn as e}from"./seats-_zvBq8bA.js";import{l as t}from"./keymap-b9qwIbrq.js";function n(n,r,i=`section`,a=r[0]){let[o,s]=e(n,a,i),c=r.includes(o)?o:a;return t({tab:{run:(e,t)=>s(r[t]),when:e=>i===`section`&&e<r.length}}),[c,s]}export{n as t};
