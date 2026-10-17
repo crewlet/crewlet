@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -436,10 +439,10 @@ func TestRetentionStatusPrintsTheLogsAnAlarmStandsOn(t *testing.T) {
 			Detail: "no verified backup of this log has been recorded, and the policy asks for one every 24h",
 			Remedy: "Run `crewlet backup` against any node.",
 			Domains: []statelog.AlarmDomain{
-				{Domain: "tracker", Detail: "no verified backup of this log has been recorded, and the " +
+				{Domains: []string{"tracker"}, Detail: "no verified backup of this log has been recorded, and the " +
 					"policy asks for one every 24h; the trim has not advanced for 46h, and the log is " +
 					"keeping up to 1200 record(s) older than its 24h replay window", Term: statelog.TermBackupFloor},
-				{Domain: "pages", Detail: "the newest verified backup of this log is 46h old, and the " +
+				{Domains: []string{"pages"}, Detail: "the newest verified backup of this log is 46h old, and the " +
 					"policy asks for 24h; the trim has not advanced for 46h, and the log is " +
 					"keeping up to 7 record(s) older than its 24h replay window", Term: statelog.TermBackupFloor},
 			},
@@ -448,7 +451,7 @@ func TestRetentionStatusPrintsTheLogsAnAlarmStandsOn(t *testing.T) {
 			Kind:    statelog.KindLogHeadroom,
 			Detail:  "3% of the log's byte ceiling for ordinary writes is left",
 			Remedy:  "Raise the log's ceiling.",
-			Domains: []statelog.AlarmDomain{{Domain: "vectors", Detail: "3% of the log's byte ceiling for ordinary writes is left"}},
+			Domains: []statelog.AlarmDomain{{Domains: []string{"vectors"}, Detail: "3% of the log's byte ceiling for ordinary writes is left"}},
 		},
 	}
 	node.report = report
@@ -471,6 +474,61 @@ func TestRetentionStatusPrintsTheLogsAnAlarmStandsOn(t *testing.T) {
 	}
 	if strings.Count(stderr, "3% of the log's byte ceiling") != 1 {
 		t.Errorf("the single log's measurement is printed twice:\n%s", stderr)
+	}
+}
+
+// A MEASUREMENT TAKEN ALIKE ON EVERY LOG IS PRINTED ONCE, naming them.
+//
+// A deployment minutes old has no backup of any log, and the report measured
+// that in the same sentence on each: printed as the headline and then once per
+// log, it said one fact six times. The report carries it once, naming the
+// logs, and this prints what it is given — read here off the engine's own
+// rendering (internal/api/testdata/retention_alarms.json, `make
+// retention-alarms`), so a report that went back to an entry per log fails
+// this rather than a fixture typed to agree with the printer.
+//
+// Mutation: carry each log's entry on its own again in the report, regenerate
+// the golden, and the sentence is printed six times.
+func TestRetentionStatusPrintsAYoungFleetsMissingBackupOnce(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join(sourcetree.Root(t), "internal", "api",
+		"testdata", "retention_alarms.json"))
+	if err != nil {
+		t.Fatalf("read the engine's retention alarms: %v", err)
+	}
+	var golden struct {
+		Alarms map[string][]statelog.Alarm `json:"alarms"`
+	}
+	if err := json.Unmarshal(raw, &golden); err != nil {
+		t.Fatalf("decode the engine's retention alarms: %v", err)
+	}
+	young := golden.Alarms["young"]
+	if len(young) != 1 || young[0].Kind != statelog.KindBackupAge || len(young[0].Domains) == 0 {
+		t.Fatalf("the young fleet's alarms are %+v, want backup_age standing on its logs", young)
+	}
+	var logs []string
+	for _, d := range young[0].Domains {
+		logs = append(logs, d.Domains...)
+	}
+	if len(logs) < 2 {
+		t.Fatalf("the young fleet's backup_age stands on %v; this case needs several logs", logs)
+	}
+	node := newFakeRetentionNode(t)
+	report := blockedReport()
+	report.Alarms = young
+	node.report = report
+
+	_, stderr, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if err == nil {
+		t.Fatal("an active alarm exited zero")
+	}
+	headline := "backup_age on " + strings.Join(logs, ", ") + ": " + young[0].Detail
+	if !strings.Contains(stderr, headline) {
+		t.Errorf("stderr never says %q:\n%s", headline, stderr)
+	}
+	if n := strings.Count(stderr, young[0].Detail); n != 1 {
+		t.Errorf("the young fleet's missing backup is printed %d times, want once "+
+			"naming every log:\n%s", n, stderr)
 	}
 }
 

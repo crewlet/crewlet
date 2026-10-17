@@ -159,7 +159,7 @@ func TestABlockedTrimIsNamedOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 	// EVERY LOG IS NAMED FOR ITS MISSING BACKUP, and none with the hold: a
 	// block that keeps nothing past the window raised no trim_blocked to fold.
 	if !slices.ContainsFunc(backup.Domains, func(d statelog.AlarmDomain) bool {
-		return d.Domain == name
+		return slices.Contains(d.Domains, name)
 	}) {
 		t.Fatalf("backup_age stands on %+v and not on the %s log, which no "+
 			"backup covers", backup.Domains, name)
@@ -200,7 +200,7 @@ func TestABlockedTrimIsNamedOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 	backup, _ = alarmOf(aging, statelog.KindBackupAge)
 	var held *statelog.AlarmDomain
 	for i, d := range backup.Domains {
-		if d.Domain == name {
+		if slices.Contains(d.Domains, name) {
 			held = &backup.Domains[i]
 		}
 	}
@@ -362,7 +362,9 @@ func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 		}
 		raised++
 		for _, d := range a.Domains {
-			byLog[d.Domain] = d
+			for _, domain := range d.Domains {
+				byLog[domain] = d
+			}
 		}
 	}
 	if raised != 1 {
@@ -539,7 +541,7 @@ func awaitObservation(t *testing.T, r *retention, after time.Time,
 // standsOn reports whether an alarm stands on exactly one log, the named one,
 // with that log's measurement as its own detail.
 func standsOn(a statelog.Alarm, domain string) bool {
-	return len(a.Domains) == 1 && a.Domains[0].Domain == domain &&
+	return len(a.Domains) == 1 && slices.Equal(a.Domains[0].Domains, []string{domain}) &&
 		a.Domains[0].Detail == a.Detail
 }
 

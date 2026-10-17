@@ -102,9 +102,12 @@ alarm list is in [Alarms](../reference/alarms.md).
 that is a property of a log (`log_headroom`, `log_ceiling_short`,
 `backup_age`, `trim_blocked`, `deferred_old`, `floor_unknown`, `census_drift`)
 lists every log it stands on in its `domains`, each with that log's own
-measurement, so four held logs are one `trim_blocked` on the health count, the
+measurement — and a measurement taken in the same words on several logs no term
+holds once, naming them, so a fleet with no backup yet says so once for every
+log — so four held logs are one `trim_blocked` on the health count, the
 gauge and the dashboard rather than four; `crewlet retention status` prints
-them under the alarm, one log in its headline and several as a line each. The
+them under the alarm, one measurement in its headline and several as a line
+each. The
 `alarm_raised` and `alarm_cleared` log lines are still written per log,
 carrying it as `domain`, so a second log joining an alarm that is already up,
 and the first one leaving it while the second stands, are each said with their

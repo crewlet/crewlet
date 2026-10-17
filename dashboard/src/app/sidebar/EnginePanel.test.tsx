@@ -240,7 +240,10 @@ const twoAlarms = {
 // another term holds is the trim alarm's.
 const alarms = engineAlarms("held_beside_a_blocked_trim");
 const report = {
-  domains: alarms.flatMap((a) => a.domains ?? []).map(({ domain }) => ({ domain })),
+  domains: alarms
+    .flatMap((a) => a.domains ?? [])
+    .flatMap(({ domains }) => domains)
+    .map((domain) => ({ domain })),
   alarms,
 } as unknown as RetentionReport;
 
