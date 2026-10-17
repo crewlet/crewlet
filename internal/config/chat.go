@@ -3,6 +3,8 @@ package config
 import (
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // Chat is which chat surface this company talks on.
@@ -85,6 +87,14 @@ type chatVendor struct {
 	// howToDeclare is how an author declares it, for the refusal of a vendor
 	// backend with no vendor to talk to.
 	howToDeclare string
+	// title is how a sentence names the surface to a person.
+	title string
+	// transport is the contact identity a person is reached at on this
+	// surface ([org.HumanContact.Identities]), and contactKey the key it is
+	// written under in a seat's `contact` — for the advisory that names a
+	// person nobody can mention here ([Company.unreachableWarnings]).
+	transport  org.Transport
+	contactKey string
 }
 
 // chatVendors is EVERY vendor chat surface, in the order a screen names them
@@ -93,11 +103,12 @@ type chatVendor struct {
 // STATED ONCE, and read by everything that asks the question: which backend a
 // company derives ([Company.ChatBackendFor]), the refusals that name what to
 // delete ([Company.validateChat]), whether a company declares the surface at
-// all ([Company.DeclaresIntegration]) and the list a client is told
-// ([Company.ChatVendors]). It was a list of names beside a function that
-// tested the same two blocks by hand, with nothing tying them: a vendor added
-// to one would have had the viewer answer `vendor` naming none, or name one
-// the backend decision never counted.
+// all ([Company.DeclaresIntegration]), the list a client is told
+// ([Company.ChatVendors]) and the advisory naming a person nobody can
+// mention there ([Company.unreachableWarnings]). It was a list of names
+// beside a function that tested the same two blocks by hand, with nothing
+// tying them: a vendor added to one would have had the viewer answer
+// `vendor` naming none, or name one the backend decision never counted.
 var chatVendors = []chatVendor{
 	{
 		name: "mattermost",
@@ -108,6 +119,9 @@ var chatVendors = []chatVendor{
 			return ""
 		},
 		howToDeclare: "integrations.mattermost",
+		title:        "Mattermost",
+		transport:    org.TransportMattermost,
+		contactKey:   "mattermost_user_id",
 	},
 	{
 		name: "slack",
@@ -130,6 +144,9 @@ var chatVendors = []chatVendor{
 			return ""
 		},
 		howToDeclare: "integrations.slack, or a seat carrying its own Slack app",
+		title:        "Slack",
+		transport:    org.TransportSlack,
+		contactKey:   "slack_user_id",
 	},
 }
 

@@ -270,7 +270,7 @@ func TestABareEnvArgNothingSuppliesIsAdvised(t *testing.T) {
 // reachablePerson is a `roles:` block declaring one human seat somebody can be
 // reached at — what a fixture counting advisories declares, so the count is its
 // subject's alone: a company with no human seat is advised that nobody can
-// join it, and a human seat with no contact identity that nobody can be
-// mentioned at.
+// join it, and on a vendor chat surface a human seat with no account there
+// that nobody can be mentioned at.
 const reachablePerson = "roles:\n  - name: Founder\n    kind: human\n" +
 	"    contact:\n      slack_user_id: U0FOUNDER\n"
