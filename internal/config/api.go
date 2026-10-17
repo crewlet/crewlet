@@ -390,14 +390,14 @@ func checkExternalURL(path Path, raw, why, reachedBy string) error {
 		p.add(path, ErrShape, "%q has no host. It must be the address %s", raw, reachedBy)
 	}
 	p.wrap(checkPort(path, raw, parsed.Port()))
-	// A PATH, A QUERY OR A FRAGMENT IS REFUSED rather than trimmed. Every
-	// consumer concatenates onto this value, so `https://x/crewlet/`
-	// yields `https://x/crewlet/webhooks/github` — which may be exactly
-	// what a path-routing proxy needs — while a query or a fragment yields
-	// an address no proxy can route and no vendor will accept. Trimming
-	// the first would break the deployment it is correct for, so only the
-	// two that can never be right are refused, and the trailing slash is
-	// the one thing normalised.
+	// A QUERY OR A FRAGMENT IS REFUSED, AND A PATH IS NOT. Every consumer
+	// concatenates onto this value, so `https://x/crewlet/` yields
+	// `https://x/crewlet/webhooks/github` — which may be exactly what a
+	// path-routing proxy needs — while a query or a fragment yields an
+	// address no proxy can route and no vendor will accept. Refusing or
+	// trimming the path would break the deployment it is correct for, so
+	// only the two that can never be right are refused, and the trailing
+	// slash is the one thing normalised.
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
 		p.add(path, ErrShape,
 			"%q has a query or fragment. Use only the scheme, host, port and "+
