@@ -56,7 +56,7 @@ export function nodeCellWords(cell: McpServerNode): {
   return { text: `${cell.failed} of ${launched} failed`, tone: "warning" };
 }
 
-/** How many tools a started instance serves, or null where none started. */
+/** How many tools a serving instance serves, or null where none is serving. */
 export function toolsOf(server: McpServerStatus): number | null {
   return server.started > 0 ? server.tools : null;
 }
@@ -179,7 +179,7 @@ export function McpServers({
               shrink: true,
               align: "right",
               drop: 3,
-              // A COUNT ONLY WHERE AN INSTANCE STARTED: with none running, how
+              // A COUNT ONLY WHERE AN INSTANCE IS SERVING: with none running, how
               // many tools the server serves is unknown, not zero — a 0 beside
               // a failing server reads as a server that offers nothing.
               sortValue: (s) => toolsOf(s),

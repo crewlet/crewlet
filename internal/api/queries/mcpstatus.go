@@ -1,4 +1,4 @@
-// What each configured MCP server did on each live node.
+// What each configured MCP server is doing on each live node.
 
 package queries
 
@@ -24,15 +24,16 @@ import (
 type MCPServerState string
 
 const (
-	// MCPRunning — every instance any node launched started and listed
-	// its tools.
+	// MCPRunning — every instance any node launched is serving: it
+	// started, listed its tools and was up at its node's last beat.
 	MCPRunning MCPServerState = "running"
-	// MCPPartial — some instances started and some did not: a node's
-	// environment, or one seat's credentials, rather than the server.
+	// MCPPartial — some instances are serving and some are not: a node's
+	// environment, one seat's credentials, or one child that died and is
+	// being restarted, rather than the server.
 	MCPPartial MCPServerState = "partial"
-	// MCPFailing — instances were launched and none started: the server
-	// itself, its command, its address or the credentials every seat
-	// shares.
+	// MCPFailing — instances were launched and none is serving: the
+	// server itself, its command, its address or the credentials every
+	// seat shares — or every instance went down and is being restarted.
 	MCPFailing MCPServerState = "failing"
 	// MCPNotStarted — every node that reports started nothing for it: a
 	// per-seat template no seat on a live node declares credentials for,
@@ -121,19 +122,22 @@ type MCPServerNode struct {
 	Tools    int  `json:"tools"`
 	// Error is one failed instance's reason, bounded on the wire, and
 	// ErrorSeat the seat it was launched for ("" for a shared server), by
-	// its handle. The whole text is the node's
-	// `mcp_server_failed` log line.
+	// its handle. The whole text is the node's `mcp_server_failed` log
+	// line for a start that failed, and its `server_exited` or
+	// `server_restart_failed` line for an instance that went down after
+	// starting.
 	Error     string `json:"error"`
 	ErrorSeat string `json:"error_seat"`
 }
 
 // mcpServersStatus answers what each MCP server did on each node.
 //
-// FROM THE HEARTBEATS, NOT A FAN-OUT. Every node re-publishes what its starts
-// concluded on its presence lease ([coord.NodeStatus.MCP]), so one listing of
-// the lease table is every node's answer at once — there is no node that did
-// not answer in time, only one whose last heartbeat carried no status, and
-// that is a column of its own rather than a row of zeros.
+// FROM THE HEARTBEATS, NOT A FAN-OUT. Every node re-publishes its servers as
+// they are at each beat on its presence lease ([coord.NodeStatus.MCP]) — a
+// child that died since it started counts as failed until it is back — so one
+// listing of the lease table is every node's answer at once. There is no node
+// that did not answer in time, only one whose last heartbeat carried no
+// status, and that is a column of its own rather than a row of zeros.
 //
 // ADMIN'S, AS THE CONFIGURATION IS (ADR-0033): it names the launch commands
 // and the first line of each failure, which is the configuration and what

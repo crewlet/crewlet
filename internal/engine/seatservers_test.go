@@ -400,7 +400,7 @@ func TestAChildThatFailedIsRetriedUntilItStarts(t *testing.T) {
 	t.Parallel()
 	ready := filepath.Join(t.TempDir(), "vendor-is-up")
 	doc := convergingCompany(map[string]string{toolServerReadyEnv: ready})
-	opts := engine.WithSeatRetryBase(sealingOptions(t, doc), 20*time.Millisecond)
+	opts := engine.WithMCPRetryBase(sealingOptions(t, doc), 20*time.Millisecond)
 	e := newEngine(t, opts)
 	seal(t, e, "CEO_TRACKER_TOKEN", "ceo-token")
 	reactivate(t, e, doc)
@@ -443,7 +443,7 @@ func TestARetryStartsNothingForASeatThisNodeReleased(t *testing.T) {
 	doc := convergingCompany(map[string]string{
 		toolServerReadyEnv: ready, toolServerLaunchesEnv: starts,
 	})
-	opts := engine.WithSeatRetryBase(sealingOptions(t, doc), 20*time.Millisecond)
+	opts := engine.WithMCPRetryBase(sealingOptions(t, doc), 20*time.Millisecond)
 	e := newEngine(t, opts)
 	seal(t, e, "CEO_TRACKER_TOKEN", "ceo-token")
 	reactivate(t, e, doc)

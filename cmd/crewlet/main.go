@@ -2335,6 +2335,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// Registered after the app exists, which is the whole reason it is a
 	// setter — see Engine.SetOnCompanyPublished.
 	e.SetOnCompanyPublished(func(context.Context) { app.Stream().CompanyPublished() })
+	// AND THE TOOL CATALOGUE ALONE when it moves between publishes: a shared
+	// MCP server that came back with other tools, or came up on a retry, is
+	// refiled into the company already published — see
+	// Engine.SetOnCatalogueChanged.
+	e.SetOnCatalogueChanged(func(context.Context) { app.Stream().ToolsChanged() })
 
 	return surface, nil
 }

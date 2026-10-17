@@ -655,6 +655,24 @@ func (s *Service) CompanyPublished() {
 	s.listeners.each(func(l *listener) { signal(l.published) })
 }
 
+// ToolsChanged re-sends the tool catalogue alone, to every client whose
+// audience receives it.
+//
+// FOR A CATALOGUE THAT MOVED WITHOUT A PUBLISHED COMPANY. The catalogue is the
+// current epoch's registry, and an epoch is published whole but for its shared
+// MCP servers' tools, which the engine refiles when a server comes back with a
+// different list or a retried start brings one up
+// ([engine.Engine.SetOnCatalogueChanged]). No event corrects this push either,
+// so without a re-send an open dashboard listed the tools the server had when
+// the company was published until somebody reloaded.
+//
+// THE CATALOGUE ALONE: nothing else [Service.CompanyPublished] re-sends has
+// moved, and deciding every socket again against an unchanged company is work
+// with no new answer.
+func (s *Service) ToolsChanged() {
+	s.hub.Broadcast(Push(KindTools, s.Tools(), s.now()))
+}
+
 // InboxChange is the payload of an `inbox_changed` frame: whose inbox moved,
 // by how many notices, and the subject and reason of the newest.
 //

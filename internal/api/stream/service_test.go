@@ -671,3 +671,29 @@ func TestAPublishedCompanyReSendsEveryCompanyDerivedPush(t *testing.T) {
 		t.Errorf("a published company re-sent %v, want %v", got, want)
 	}
 }
+
+// A CATALOGUE THAT MOVED BETWEEN PUBLISHES RE-SENDS THE CATALOGUE ALONE.
+//
+// A shared MCP server the engine brought back with other tools is refiled into
+// the company already published, and no event corrects the `tools` push, so it
+// is re-sent whole — and nothing else is: the roster, the org tree and the
+// schedules have not moved, and a re-send of each would redraw every open
+// screen for a change to one.
+func TestACatalogueChangeReSendsTheCatalogueAlone(t *testing.T) {
+	t.Parallel()
+	s, c := newService(t, stream.Options{})
+	s.ToolsChanged()
+	select {
+	case frame := <-c.Out():
+		if frame.Kind() != stream.KindTools {
+			t.Fatalf("a catalogue change sent a %q push, want %q", frame.Kind(), stream.KindTools)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a catalogue change re-sent nothing")
+	}
+	select {
+	case frame := <-c.Out():
+		t.Fatalf("a catalogue change also sent a %q push", frame.Kind())
+	case <-time.After(100 * time.Millisecond):
+	}
+}

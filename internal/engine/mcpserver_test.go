@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/engine"
 )
 
 // A REAL MCP server, run as a REAL child process, for the ENGINE's wiring.
@@ -27,35 +30,64 @@ import (
 // DESCRIPTION, so a test can read back what credential the child actually
 // received rather than what the engine intended to send.
 
+// The server's environment. Each value is declared inside the package
+// (export_test.go), because a case there launches this same server and a test
+// file inside a package can never read one outside it.
 const (
-	toolServerModeEnv = "CREWLET_ENGINE_TEST_MCP"
-	// toolServerToolEnv names the single tool this server publishes.
-	toolServerToolEnv = "CREWLET_ENGINE_TEST_TOOL"
+	toolServerModeEnv = engine.ToolServerModeEnv
+	// toolServerToolEnv names the single tool this server publishes, with
+	// launchToken in it replaced by the launch's number, so a server can
+	// list a different tool after a restart.
+	toolServerToolEnv = engine.ToolServerToolEnv
 	// toolServerEchoEnv names an environment variable whose value is
 	// reported back in the tool's description.
-	toolServerEchoEnv = "CREWLET_ENGINE_TEST_ECHO"
+	toolServerEchoEnv = engine.ToolServerEchoEnv
 
 	// toolServerRequireEnv names an environment variable the server
 	// REFUSES TO START without: empty, it says so on stderr and exits
 	// non-zero before speaking MCP, which is what a vendor's server does
 	// when the token it authenticates with is empty.
-	toolServerRequireEnv = "CREWLET_ENGINE_TEST_REQUIRE"
+	toolServerRequireEnv = engine.ToolServerRequireEnv
 
 	// toolServerHoldEnv is a path. A server about to refuse for want of its
 	// required variable first writes <path>.started and then waits for
 	// <path> to exist, so a case can land an apply while the start that is
 	// going to fail is still in flight.
-	toolServerHoldEnv = "CREWLET_ENGINE_TEST_HOLD"
+	toolServerHoldEnv = engine.ToolServerHoldEnv
 
 	// toolServerReadyEnv is a path the server refuses to start without,
 	// standing for a vendor that is not up yet: the failure passes when
 	// the file appears, with nothing about the server's spec changing.
-	toolServerReadyEnv = "CREWLET_ENGINE_TEST_READY"
+	toolServerReadyEnv = engine.ToolServerReadyEnv
 
 	// toolServerLaunchesEnv is a directory every launch records itself in,
-	// before anything else, so a case can count the starts the engine made.
-	toolServerLaunchesEnv = "CREWLET_ENGINE_TEST_LAUNCHES"
+	// before anything else, so a case can count the starts the engine made
+	// and the server can number its own launch (recordLaunch).
+	toolServerLaunchesEnv = engine.ToolServerLaunchesEnv
+
+	// toolServerFailLaunchesEnv lists launch numbers, comma-separated, on
+	// which the server exits 1 before speaking MCP: a vendor that was down
+	// for those launches. Numbered by toolServerLaunchesEnv's directory,
+	// which a case using it must name.
+	toolServerFailLaunchesEnv = engine.ToolServerFailLaunchesEnv
+
+	// toolServerCrashLaunchesEnv lists launch numbers, comma-separated,
+	// whose process exits with toolServerCrashCode once it has answered its
+	// first tools/call: a child that dies after a successful start. Only
+	// those launches, so the child that replaces it stays up for the case
+	// to read.
+	toolServerCrashLaunchesEnv = engine.ToolServerCrashLaunchesEnv
+
+	// toolServerCrashCode is the status a server that dies on purpose exits
+	// with, so a case can find it in what the engine reports.
+	toolServerCrashCode = engine.ToolServerCrashCode
+
+	// launchToken in toolServerToolEnv is replaced by the launch's number.
+	launchToken = engine.ToolServerLaunchToken
 )
+
+// thisLaunch is this server process's launch number, zero when unrecorded.
+var thisLaunch int
 
 func TestMain(m *testing.M) {
 	if os.Getenv(toolServerModeEnv) != "" {
@@ -67,11 +99,13 @@ func TestMain(m *testing.M) {
 // runToolServer speaks newline-delimited JSON-RPC until stdin closes, or
 // refuses to start the way the environment asks it to.
 func runToolServer() int {
-	if dir := os.Getenv(toolServerLaunchesEnv); dir != "" {
-		if f, err := os.CreateTemp(dir, "launch-*"); err == nil {
-			_ = f.Close()
-		}
+	launch := recordLaunch()
+	thisLaunch = launch
+	if listsLaunch(toolServerFailLaunchesEnv, launch) {
+		fmt.Fprintf(os.Stderr, "refusing launch %d\n", launch)
+		return 1
 	}
+	crashes := listsLaunch(toolServerCrashLaunchesEnv, launch)
 	if key := os.Getenv(toolServerRequireEnv); key != "" && os.Getenv(key) == "" {
 		if hold := os.Getenv(toolServerHoldEnv); hold != "" {
 			holdUntil(hold)
@@ -88,13 +122,51 @@ func runToolServer() int {
 	in := bufio.NewReaderSize(os.Stdin, 1<<20)
 	for {
 		line, err := in.ReadString('\n')
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			answerRPC(trimmed)
+		if trimmed := strings.TrimSpace(line); trimmed != "" && answerRPC(trimmed) && crashes {
+			// AFTER the answer is written: the engine must still read the
+			// reply of a server that exits on the spot.
+			return toolServerCrashCode
 		}
 		if err != nil {
 			return 0
 		}
 	}
+}
+
+// recordLaunch records this launch in toolServerLaunchesEnv's directory, before
+// anything else, and returns its number counting from one — zero when no
+// directory is named. Two launches racing may read the same number, which is
+// why a case names every launch it means to fail or crash.
+func recordLaunch() int {
+	dir := os.Getenv(toolServerLaunchesEnv)
+	if dir == "" {
+		return 0
+	}
+	f, err := os.CreateTemp(dir, "launch-*")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "launch counter:", err)
+		return 0
+	}
+	_ = f.Close()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	return len(entries)
+}
+
+// listsLaunch reports whether the comma-separated launch numbers in env name
+// this launch. An unrecorded launch is number zero, which no list names.
+func listsLaunch(env string, launch int) bool {
+	if launch == 0 {
+		return false
+	}
+	for field := range strings.SplitSeq(os.Getenv(env), ",") {
+		if n, err := strconv.Atoi(strings.TrimSpace(field)); err == nil && n == launch {
+			return true
+		}
+	}
+	return false
 }
 
 // holdUntil announces that this start is in flight and waits for the case to
@@ -111,7 +183,8 @@ func holdUntil(path string) {
 	}
 }
 
-func answerRPC(line string) {
+// answerRPC answers one request, reporting whether it was a tools/call.
+func answerRPC(line string) bool {
 	var req struct {
 		ID     json.RawMessage `json:"id"`
 		Method string          `json:"method"`
@@ -120,7 +193,7 @@ func answerRPC(line string) {
 	if err := json.Unmarshal([]byte(line), &req); err != nil || len(req.ID) == 0 {
 		// Unparseable, or a notification: either way there is nothing to
 		// answer. A reply to a notification is a protocol violation.
-		return
+		return false
 	}
 	switch req.Method {
 	case "server/discover":
@@ -139,7 +212,7 @@ func answerRPC(line string) {
 	case "ping":
 		reply(req.ID, `{}`, "")
 	case "tools/list":
-		name := os.Getenv(toolServerToolEnv)
+		name := strings.ReplaceAll(os.Getenv(toolServerToolEnv), launchToken, strconv.Itoa(thisLaunch))
 		if name == "" {
 			name = "probe"
 		}
@@ -155,9 +228,11 @@ func answerRPC(line string) {
 			name, desc), "")
 	case "tools/call":
 		reply(req.ID, `{"content":[{"type":"text","text":"ok"}]}`, "")
+		return true
 	default:
 		reply(req.ID, "", `{"code":-32601,"message":"method not found"}`)
 	}
+	return false
 }
 
 // reply writes one JSON-RPC response. Exactly one of result and rpcErr is set.

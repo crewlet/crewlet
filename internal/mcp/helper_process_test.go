@@ -44,8 +44,13 @@ const (
 	helperPagesEnv = "CREWLET_MCP_TEST_PAGES"
 
 	// helperCallEnv selects tools/call behaviour: "", "error", "hang",
-	// "empty", "blocks".
+	// "empty", "blocks", "die".
 	helperCallEnv = "CREWLET_MCP_TEST_CALL"
+
+	// helperCallSeenEnv is a path the helper creates when a tools/call
+	// reaches it, before it acts on helperCallEnv: the one sign from outside
+	// that a call is in flight at the server rather than still on its way.
+	helperCallSeenEnv = "CREWLET_MCP_TEST_CALL_SEEN"
 
 	// helperStderrEnv is a \n-separated script written to stderr at startup.
 	helperStderrEnv = "CREWLET_MCP_TEST_STDERR"
@@ -57,6 +62,42 @@ const (
 	// helperExitEnv makes the helper exit with this code after writing its
 	// stderr script, without ever speaking MCP.
 	helperExitEnv = "CREWLET_MCP_TEST_EXIT"
+
+	// helperStartsEnv names a file each helper process appends one line to
+	// as it starts, so a test can count the starts a bridge made — the only
+	// way to tell from outside that a server was restarted, or that one was
+	// NOT.
+	helperStartsEnv = "CREWLET_MCP_TEST_STARTS"
+
+	// helperFailStartsEnv makes the helper refuse its first N starts (as
+	// counted in helperStartsEnv's file): it exits 1 before speaking MCP, the
+	// way a server whose vendor is down at boot fails.
+	helperFailStartsEnv = "CREWLET_MCP_TEST_FAIL_STARTS"
+
+	// helperMuteFromEnv makes every start from this one on (as counted in
+	// helperStartsEnv's file) hold its pipes and answer nothing: a server
+	// whose vendor hangs its handshake, so a start of it lasts until its
+	// deadline or until whoever made it gives up.
+	helperMuteFromEnv = "CREWLET_MCP_TEST_MUTE_FROM"
+
+	// helperExitAfterEnv makes the helper exit with helperCrashCode once it
+	// has answered this many tools/call requests — a server that dies after
+	// a successful start, between one call and the next.
+	helperExitAfterEnv = "CREWLET_MCP_TEST_EXIT_AFTER"
+
+	// helperHangupAfterEnv makes the helper close its stdout once it has
+	// answered this many tools/call requests, and go on running until its
+	// stdin closes: a session that ends while the process lives on, which
+	// is all an HTTP server's end ever looks like.
+	helperHangupAfterEnv = "CREWLET_MCP_TEST_HANGUP_AFTER"
+
+	// helperCrashCode is the status a helper that dies on purpose exits with,
+	// so a test can tell its exit from any other.
+	helperCrashCode = 3
+
+	// startToken in helperToolsEnv is replaced by the start's number, so a
+	// server can list different tools after a restart.
+	startToken = "{start}"
 )
 
 func TestMain(m *testing.M) {
@@ -112,6 +153,14 @@ func toolsJSON(tools ...[3]string) string {
 // --- the helper process ----------------------------------------------------
 
 func runHelper(mode string) int {
+	start := countStart()
+	if limit, _ := strconv.Atoi(os.Getenv(helperFailStartsEnv)); start > 0 && start <= limit {
+		fmt.Fprintf(os.Stderr, "refusing start %d of the first %d\n", start, limit)
+		return 1
+	}
+	if from, _ := strconv.Atoi(os.Getenv(helperMuteFromEnv)); from > 0 && start >= from {
+		procgrouptest.Hold()
+	}
 	if script := os.Getenv(helperStderrEnv); script != "" {
 		for line := range strings.SplitSeq(script, "\n") {
 			fmt.Fprintln(os.Stderr, line)
@@ -165,6 +214,24 @@ func runHelper(mode string) int {
 			fmt.Fprintln(os.Stderr, "grandchild failed:", err)
 		}
 		serve()
+	case "launcher":
+		// A package runner whose real server is a child that INHERITS ITS
+		// STDOUT and outlives it: when the runner exits, the pipe the engine
+		// reads never reaches EOF, so only the runner's own exit says the
+		// server is gone.
+		grandchild := exec.Command(os.Args[0])
+		grandchild.Env = append(os.Environ(),
+			helperModeEnv+"=grandchild",
+			helperStartsEnv+"=",
+			helperStderrEnv+"=",
+			helperEchoEnv+"=",
+			helperExitEnv+"=")
+		grandchild.Stdout = os.Stdout
+		grandchild.Stderr = os.Stderr
+		if err := grandchild.Start(); err != nil {
+			fmt.Fprintln(os.Stderr, "grandchild failed:", err)
+		}
+		serve()
 	case "spawn-grandchild-mute":
 		// The same runner, on the one path where a leftover tree is most
 		// likely: the server never completes the MCP handshake, so the
@@ -193,16 +260,58 @@ type rpcRequest struct {
 	Params json.RawMessage `json:"params,omitempty"`
 }
 
+// countStart appends this process's start to helperStartsEnv's file and
+// returns its number, counting from one — or zero when no file is named.
+func countStart() int {
+	path := os.Getenv(helperStartsEnv)
+	if path == "" {
+		return 0
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "start counter:", err)
+		return 0
+	}
+	_, _ = fmt.Fprintln(f, os.Getpid())
+	_ = f.Close()
+	return startsIn(path)
+}
+
+// startsIn is how many helper processes have started against a counter file.
+func startsIn(path string) int {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	return strings.Count(string(data), "\n")
+}
+
 // serve is a newline-delimited JSON-RPC MCP server, hand-rolled so a test can
 // put any wire shape on the pipe.
 func serve() {
 	in := bufio.NewReaderSize(os.Stdin, 1<<20)
 	out := os.Stdout
 	page := 0
+	exitAfter, _ := strconv.Atoi(os.Getenv(helperExitAfterEnv))
+	hangupAfter, _ := strconv.Atoi(os.Getenv(helperHangupAfterEnv))
+	calls := 0
 	for {
 		line, err := in.ReadString('\n')
 		if line != "" {
-			handleRPC(out, strings.TrimSpace(line), &page)
+			if handleRPC(out, strings.TrimSpace(line), &page) {
+				calls++
+				if exitAfter > 0 && calls >= exitAfter {
+					// AFTER the answer is written: the engine must read
+					// the last reply of a server that exits on the spot.
+					os.Exit(helperCrashCode)
+				}
+				if hangupAfter > 0 && calls >= hangupAfter {
+					// Alive, and saying nothing more: whatever arrives
+					// from here is read and never answered, until the
+					// engine closes stdin.
+					_ = out.Close()
+				}
+			}
 		}
 		if err != nil {
 			return
@@ -210,16 +319,17 @@ func serve() {
 	}
 }
 
-func handleRPC(out *os.File, line string, page *int) {
+// handleRPC answers one request, reporting whether it was a tools/call.
+func handleRPC(out *os.File, line string, page *int) bool {
 	if line == "" {
-		return
+		return false
 	}
 	var req rpcRequest
 	if err := json.Unmarshal([]byte(line), &req); err != nil {
-		return
+		return false
 	}
 	if len(req.ID) == 0 {
-		return // a notification: no reply
+		return false // a notification: no reply
 	}
 	switch req.Method {
 	case "server/discover":
@@ -243,18 +353,26 @@ func handleRPC(out *os.File, line string, page *int) {
 	case "tools/list":
 		result := listToolsResult(req.Params, page)
 		if result == "" {
-			return // answer nothing, for ever
+			return false // answer nothing, for ever
 		}
 		writeResult(out, req.ID, result)
 	case "tools/call":
 		callResult(out, req.ID, req.Params)
+		return true
 	default:
 		writeError(out, req.ID, -32601, "method not found: "+req.Method)
 	}
+	return false
+}
+
+// listedTools is the helperToolsEnv payload as this start serves it.
+func listedTools() string {
+	return strings.ReplaceAll(os.Getenv(helperToolsEnv), startToken,
+		strconv.Itoa(startsIn(os.Getenv(helperStartsEnv))))
 }
 
 func listToolsResult(params json.RawMessage, page *int) string {
-	tools := os.Getenv(helperToolsEnv)
+	tools := listedTools()
 	if tools == "" {
 		tools = toolsJSON([3]string{"search", "Search for items", ""})
 	}
@@ -295,8 +413,17 @@ func callResult(out *os.File, id json.RawMessage, params json.RawMessage) {
 		Arguments map[string]any `json:"arguments"`
 	}
 	_ = json.Unmarshal(params, &p)
+	if seen := os.Getenv(helperCallSeenEnv); seen != "" {
+		if err := os.WriteFile(seen, nil, 0o600); err != nil {
+			fmt.Fprintln(os.Stderr, "call seen:", err)
+		}
+	}
 
 	switch os.Getenv(helperCallEnv) {
+	case "die":
+		// Dies with the call in flight, answering nothing: the call was
+		// delivered, and whether it did anything nobody can say.
+		os.Exit(helperCrashCode)
 	case "hang":
 		// Answer nothing, for ever. The per-call deadline is the only thing
 		// between this and a wedged phase.
@@ -321,7 +448,7 @@ func callResult(out *os.File, id json.RawMessage, params json.RawMessage) {
 		// A real server refuses a tool it does not have, and it refuses it as
 		// an MCP tool error rather than a protocol error — so the model can
 		// see it and self-correct.
-		if !strings.Contains(os.Getenv(helperToolsEnv)+`"search"`, `"`+p.Name+`"`) {
+		if !strings.Contains(listedTools()+`"search"`, `"`+p.Name+`"`) {
 			writeResult(out, id, fmt.Sprintf(
 				`{"content":[{"type":"text","text":%q}],"isError":true}`,
 				"no such tool: "+p.Name))

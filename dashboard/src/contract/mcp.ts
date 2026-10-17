@@ -1,7 +1,8 @@
 /**
- * `mcp_servers_status`: what each MCP server did on each live node, read off
- * every node's presence heartbeat, beside what the configuration declares for
- * it — the launch and never a credential (`env` and `headers` are not here).
+ * `mcp_servers_status`: what each MCP server is doing on each live node, read
+ * off every node's presence heartbeat, beside what the configuration declares
+ * for it — the launch and never a credential (`env` and `headers` are not
+ * here).
  *
  * EXACTLY WHAT `internal/api/queries` SENDS — held there by
  * `TestTheToolsScreenReadsWhatTheServerStatusSends` in both directions, the
@@ -10,15 +11,16 @@
 
 /**
  * A server's condition across the fleet, decided by the engine. `running`:
- * every instance launched started. `partial`: some started and some did not —
- * a node or one seat's credentials rather than the server. `failing`: none
- * that was launched started. `not_started`: every reporting node started
- * nothing for it. `unreported`: no live node's latest heartbeat carried the
- * report.
+ * every instance launched is serving — it started, listed its tools and was up
+ * at its node's last beat. `partial`: some are serving and some are not — a
+ * node, one seat's credentials or one child being restarted rather than the
+ * server. `failing`: none that was launched is serving. `not_started`: every
+ * reporting node started nothing for it. `unreported`: no live node's latest
+ * heartbeat carried the report.
  */
 export type McpServerState = "running" | "partial" | "failing" | "not_started" | "unreported";
 
-/** One live node, and whether its latest heartbeat carried its MCP starts. */
+/** One live node, and whether its latest heartbeat carried its MCP servers. */
 export interface McpStatusNode {
   id: string;
   /** False: the node's last heartbeat carried no status (its status hook
@@ -32,7 +34,7 @@ export interface McpServerNode {
   reported: boolean;
   started: number;
   failed: number;
-  /** Tools one started instance serves. */
+  /** Tools one serving instance serves. */
   tools: number;
   /** One failed instance's reason, cut to 240 bytes, or "". */
   error: string;
@@ -56,7 +58,7 @@ export interface McpServerStatus {
   /** Summed over the nodes that report. */
   started: number;
   failed: number;
-  /** The most tools one started instance serves. */
+  /** The most tools one serving instance serves. */
   tools: number;
   /**
    * The entry's `tool_annotations` keys that no instance started on a
