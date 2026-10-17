@@ -620,6 +620,17 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 	return out, nil
 }
 
+// taskReadScopeStatement is [taskReadScope]'s resolution, named for the plan
+// test.
+const taskReadScopeStatement = `
+		SELECT id, project_key FROM tracker_tasks WHERE id = ?
+		UNION ALL
+		SELECT t.id, t.project_key FROM tracker_task_keys k
+		  JOIN tracker_tasks t ON t.id = k.task_id WHERE k.key = ?
+		UNION ALL
+		SELECT id, project_key FROM tracker_tasks WHERE key = ?
+		LIMIT 1`
+
 // taskReadScope is what a point read of one task is about, resolved from the
 // reference the caller named.
 //
@@ -648,14 +659,7 @@ func taskReadScope(ctx context.Context, tx *sql.Tx, idOrKey string) (statelog.Sc
 		named = &term
 	}
 	var id, project string
-	err := tx.QueryRowContext(ctx, `
-		SELECT id, project_key FROM tracker_tasks WHERE id = ?
-		UNION ALL
-		SELECT t.id, t.project_key FROM tracker_task_keys k
-		  JOIN tracker_tasks t ON t.id = k.task_id WHERE k.key = ?
-		UNION ALL
-		SELECT id, project_key FROM tracker_tasks WHERE key = ?
-		LIMIT 1`,
+	err := tx.QueryRowContext(ctx, taskReadScopeStatement,
 		ref, strings.ToUpper(ref), strings.ToUpper(ref)).Scan(&id, &project)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -677,6 +681,16 @@ func taskReadScope(ctx context.Context, tx *sql.Tx, idOrKey string) (statelog.Sc
 	return statelog.ScopeSet{Paths: paths}.Normalised(), nil
 }
 
+// resolveTaskStatement is [resolveTaskID]'s one statement, named for the plan
+// test.
+const resolveTaskStatement = `
+		SELECT id FROM tracker_tasks WHERE id = ?
+		UNION ALL
+		SELECT task_id FROM tracker_task_keys WHERE key = ?
+		UNION ALL
+		SELECT id FROM tracker_tasks WHERE key = ?
+		LIMIT 1`
+
 // resolveTaskID turns an id or a key — current or former — into an id.
 //
 // THE FORMER KEY RESOLVES TOO, and that is not a nicety: a task moved between
@@ -692,14 +706,7 @@ func taskReadScope(ctx context.Context, tx *sql.Tx, idOrKey string) (statelog.Sc
 func resolveTaskID(ctx context.Context, tx *sql.Tx, idOrKey string) (string, error) {
 	var id string
 	key := strings.ToUpper(idOrKey)
-	err := tx.QueryRowContext(ctx, `
-		SELECT id FROM tracker_tasks WHERE id = ?
-		UNION ALL
-		SELECT task_id FROM tracker_task_keys WHERE key = ?
-		UNION ALL
-		SELECT id FROM tracker_tasks WHERE key = ?
-		LIMIT 1`,
-		idOrKey, key, key).Scan(&id)
+	err := tx.QueryRowContext(ctx, resolveTaskStatement, idOrKey, key, key).Scan(&id)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return "", fmt.Errorf("%w: %s", ErrNoTask, idOrKey)

@@ -291,6 +291,7 @@ func registeredQueries() map[string]map[string]any {
 		"several keys":      {"key": "ENG-1,ENG-7"},
 		"tagged":            {"container": "project:P01", "tag": "urgent"},
 		"blocked":           {"container": "project:P01", "blocked": "true"},
+		"with dependencies": {"container": "project:P01", "has_dependencies": "true"},
 		// ONE REGISTERED QUERY PER TYPED COLUMN, because the four
 		// partial indexes on tracker_field_values are one per column and
 		// a fixture that only ever filtered on text would leave three of
@@ -343,30 +344,14 @@ func dutyReads() map[string]plannedRead {
 		"the embed duty's coverage":     read(search.TaskCoverageCount("m", 8)),
 		"the re-spread walk":            {respreadRowsStatement, []any{"P01"}},
 		"the re-spread hand-off":        {respreadPendingStatement, []any{"P01", "P01"}},
-		"the abandoned merge walk": {
-			`SELECT id FROM tracker_tasks
-			 WHERE merging = 1 AND removed_at IS NULL ORDER BY id LIMIT ?`,
-			[]any{64}},
-		"the abandoned merge gate": {
-			`SELECT EXISTS (SELECT 1 FROM tracker_tasks
-			                WHERE merging = 1 AND removed_at IS NULL)`, nil},
-		"the abandoned move walk": {
-			`SELECT id FROM tracker_tasks
-			 WHERE moving = 1 AND removed_at IS NULL ORDER BY id LIMIT ?`,
-			[]any{64}},
-		"the abandoned move gate": {
-			`SELECT EXISTS (SELECT 1 FROM tracker_tasks
-			                WHERE moving = 1 AND removed_at IS NULL)`, nil},
-		"the move stragglers gate": {
-			`SELECT EXISTS (SELECT 1 ` + strandedFrom + `)`, nil},
-		"the move stragglers walk": {
-			`SELECT DISTINCT t.root_id ` + strandedFrom +
-				` AND t.root_id > ? ORDER BY t.root_id LIMIT ?`,
-			[]any{"", 64}},
-		"the apply's duplicate probe": {
-			`SELECT 1 FROM tracker_tasks
-			 WHERE project_key = ? AND rank = ? AND id <> ?`,
-			[]any{"P01", "a000001", "t-00002"}},
+		"the abandoned merge gate":      {mergePendingStatement, nil},
+		"the abandoned merge walk":      {mergingAfterStatement, []any{"", WalkBatch}},
+		"the abandoned move gate":       {movePendingStatement, nil},
+		"the abandoned move walk":       {movingStatement, []any{WalkBatch}},
+		"the move stragglers gate":      {strandedPendingStatement, nil},
+		"the move stragglers walk":      {strandedAfterStatement, []any{"", WalkBatch}},
+		"the apply's duplicate probe": {rankDuplicateStatement,
+			[]any{"P01", "P01", "a000001", "t-00002"}},
 		// THE RESTORE'S OWN STATEMENT, because whether a partial index may
 		// serve a read is a property of the statement rather than of the
 		// schema: this entry was a copy that spelled the index's predicate
@@ -376,11 +361,8 @@ func dutyReads() map[string]plannedRead {
 		"the trash": {
 			`SELECT id FROM tracker_tasks WHERE removed_at IS NOT NULL
 			 ORDER BY removed_at DESC LIMIT 51`, nil},
-		"key resolution": {
-			`SELECT id FROM tracker_tasks WHERE key = ?`, []any{"ENG-1"}},
-		"one task's blockers": {
-			`SELECT blocker_id FROM tracker_task_deps
-			 WHERE task_id = ? AND blocker_open = 0`, []any{"t-00001"}},
+		"key resolution":       {resolveTaskStatement, []any{"ENG-1", "ENG-1", "ENG-1"}},
+		"a point read's scope": {taskReadScopeStatement, []any{"ENG-1", "ENG-1", "ENG-1"}},
 		"one tag's tasks": {
 			`SELECT task_id FROM tracker_task_tags
 			 WHERE project_key = ? AND slug = ?`, []any{"P01", "tag-1"}},

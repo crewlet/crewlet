@@ -345,6 +345,14 @@ func placeTask(ctx context.Context, tx *sql.Tx, c applyContext, project string,
 	})
 }
 
+// rankDuplicateStatement is the duplicate-rank probe [Applier.applyRankOrder]
+// runs for each key it wrote, named for the plan test.
+const rankDuplicateStatement = `
+		UPDATE tracker_projects SET rank_duplicate_pending = 1
+		WHERE key = ? AND EXISTS (
+			SELECT 1 FROM tracker_tasks t
+			WHERE t.project_key = ? AND t.rank = ? AND t.id <> ?)`
+
 // respreadPendingStatement is the re-spread hand-off [Applier.applyRankOrder]
 // sets and clears. Named for the plan test, and a variable because [longRank]
 // spells its threshold.
@@ -408,11 +416,7 @@ func (a *Applier) applyRankOrder(ctx context.Context, tx *sql.Tx, c applyContext
 	// A unique index instead would turn a rare cosmetic anomaly into a
 	// deterministic fleet-wide stalled log.
 	for _, placement := range order.Placements {
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE tracker_projects SET rank_duplicate_pending = 1
-			WHERE key = ? AND EXISTS (
-				SELECT 1 FROM tracker_tasks t
-				WHERE t.project_key = ? AND t.rank = ? AND t.id <> ?)`,
+		if _, err := tx.ExecContext(ctx, rankDuplicateStatement,
 			order.Project, order.Project, string(placement.Rank),
 			placement.Task); err != nil {
 			return 0, fmt.Errorf("worklet: probe for a duplicate of rank %s "+
