@@ -6011,13 +6011,16 @@ hidden: the document is not allowed to grow, so the invariant is unreachable
 rather than merely unused.
 
 Two other kinds of scroller sit inside it, and both are covered below. A
-**full-height screen** (`useFillScreen`: a task, the Inbox, a Doclet page)
-holds `#screen-scroll` still and lets its own columns scroll — `.task-main` and
-`.task-rail`, `.inbox-list` and `.inbox-pane-scroll`, `.kpage-main` and
-`.kpage-rail`. Each is exactly the main region's height, so `100cqb` is its view
-too, and on that screen those columns are the page's scrollers: a box inside
-one hands the wheel to the column, not to `#screen-scroll`. And a **box inside
-the page** may scroll its own content, on the two conditions below.
+**full-height screen** (`useFillScreen`, whose doc in `app/fill.tsx` is the one
+list of the screens that ask and of when each withdraws) holds `#screen-scroll`
+still. A canvas fills it and pans rather than scrolls; a screen of two columns
+lets each column scroll on its own, as a task does with its body and its rail
+(`.task-main`, `.task-rail`) and the Inbox with its list and its pane
+(`.inbox-list`, `.inbox-pane`). Each column is exactly the main region's
+height, so `100cqb` is its view too, and on that screen those columns are the
+page's scrollers: a box inside one hands the wheel to the column, not to
+`#screen-scroll`. And a **box inside the page** may scroll its own content, on
+the two conditions below.
 
 The shell hands the kit that id as its `mainId`, and everything that needs the
 scroller finds it through ONE accessor, `screenScroller()` in `lib/scroller.ts`:

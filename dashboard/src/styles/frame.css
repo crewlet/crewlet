@@ -40,13 +40,14 @@
 /* ---- The page column's own furniture -------------------------------------
    The PAGE'S scroll container is the kit's `main` on every screen that
    scrolls as a page; the toolbar a screen puts its own controls in and the
-   command palette are ours. A FULL-HEIGHT screen (`useFillScreen`: a task,
-   the Inbox, a knowledge page) holds `main` still and lets its own columns
-   scroll instead — each exactly `main`'s height, so they are the page's
-   scrollers there and `100cqb` is their view too. A box INSIDE the page may
-   still scroll its own content (a running phase's transcript, a seat's thread
-   list, the Settings column, a board lane, a long record), and each of those
-   is held to the rules under "The document does not scroll" in
+   command palette are ours. A FULL-HEIGHT screen (`useFillScreen`, whose doc
+   in `app/fill.tsx` names the screens that ask and when each withdraws) holds
+   `main` still: a canvas fills it, and a two-column screen lets its own
+   columns scroll instead — each exactly `main`'s height, so they are the
+   page's scrollers there and `100cqb` is their view too. A box INSIDE the
+   page may still scroll its own content (a running phase's transcript, a
+   seat's thread list, the Settings column, a board lane, a long record), and
+   each of those is held to the rules under "The document does not scroll" in
    docs/reference/dashboard-design.md: bounded to the scroller's view, and
    handing the wheel back, at either end, to whichever of those scrolls it. */
 
