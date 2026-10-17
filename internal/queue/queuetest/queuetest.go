@@ -822,6 +822,10 @@ const (
 	// verdictUnknown — something arrived under an opaque condition, so
 	// whether more was still in flight cannot be determined.
 	verdictUnknown
+	// verdictUnmet — a wait that records no deliveries (on backend state,
+	// on a signal) and whose condition never held, so it concludes nothing
+	// about them.
+	verdictUnmet
 )
 
 // timedOut ends a case that overran the settle budget, naming only what the
@@ -865,6 +869,11 @@ func timedOut(t *testing.T, what string, v deliveryVerdict, observed any) {
 			"helper cannot decompose\n"+
 			"\tWhether more was still in flight is unknown, so treat timing and behaviour "+
 			"as both live. %s", settleFor, what, observed, budgetNote)
+	case verdictUnmet:
+		t.Fatalf("timed out after %s waiting for %s; the condition never held\n"+
+			"\tThis wait records no deliveries, so it has none to report and cannot tell "+
+			"a backend slower than this budget from a wrong one: treat timing and "+
+			"behaviour as both live. %s", settleFor, what, budgetNote)
 	default:
 		seen := deliveriesObserved.Load()
 		evidence := fmt.Sprintf("This backend delivered %d events elsewhere in this run "+
@@ -1025,7 +1034,9 @@ func awaitSignal(t *testing.T, ch <-chan struct{}, what string, rescue func()) {
 	case <-ch:
 	case <-time.After(settleFor):
 		rescue()
-		timedOut(t, what, verdictNothing, nil)
+		// The case closes some of these channels itself, so a signal that
+		// never came says nothing about what was delivered.
+		timedOut(t, what, verdictUnmet, nil)
 	}
 }
 
@@ -1044,8 +1055,12 @@ func awaitState(t *testing.T, what string, cond func() bool) {
 		if time.Now().After(deadline) {
 			// State the suite polls has no "saw something" half — the
 			// condition is simply still false — so this always reports the
-			// ambiguous case, which it genuinely is.
-			timedOut(t, what, verdictNothing, nil)
+			// ambiguous case, which it genuinely is. Not verdictNothing,
+			// whose "NOTHING was delivered" this poll cannot know: most
+			// cases wait here on state their handlers were already handed
+			// events to move, and that sentence sent the reader to the
+			// case's subject and setup.
+			timedOut(t, what, verdictUnmet, nil)
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
