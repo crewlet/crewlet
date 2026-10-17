@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/node"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -140,6 +142,15 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		// every listing that meets one pays a leader read for it. See
 		// [maintenance.MarkerJobs].
 		jobs = append(jobs, maintenance.MarkerJobs(fleet)...)
+		// AND EACH HUMAN SEAT'S CHAT READ STATE, for the mailboxes'
+		// reason: its bucket has no age, so the record of a seat the
+		// company no longer has is forgotten only by a decision taken
+		// against the revision the fleet is pointed at — a grace after a
+		// sweep first saw the seat gone. Registered whatever chat backend
+		// the company runs, because the records outlive a move off Chatlet
+		// and the job costs one listing of an empty bucket where
+		// there are none. See [maintenance.ChatReadJobs].
+		jobs = append(jobs, maintenance.ChatReadJobs(fleet, e.humanSeatHandles)...)
 		// The NATIVE backends' own records, on the same edge and for a
 		// related reason: their family holds several classes under one
 		// grammar, and only some of them age out — so no bucket age can
@@ -383,15 +394,44 @@ func (e *Engine) activeSeats(ctx context.Context) ([]placement.Seat, error) {
 	return company.Seats(), nil
 }
 
+// humanSeatHandles is the chat read-state reconcile's roster: every HUMAN seat
+// of the revision the fleet is pointed at, or an error saying why that is
+// unknown ([Engine.fleetCompany]).
+//
+// HUMAN SEATS, because a read state is kept under the seat a person acts as
+// and only a human seat is ever acted as by a person or a bound machine: a
+// record under any other handle is one nobody can reach, which this roster
+// lets the reconcile forget a grace after it is first seen rather than keep
+// for as long as an agent seat of that name exists. And the SEAT rather than
+// its holder, because the record is the seat's: a person removed or moved
+// from a seat the company still has leaves it to the seat's next holder, as
+// the seat's inbox stays.
+func (e *Engine) humanSeatHandles(ctx context.Context) ([]string, error) {
+	company, err := e.fleetCompany(ctx, e.Company())
+	if err != nil {
+		return nil, err
+	}
+	var handles []string
+	for role := range company.Org.AllRoles() {
+		if role.EffectiveKind() == org.KindHuman {
+			handles = append(handles, role.Handle())
+		}
+	}
+	slices.Sort(handles)
+	return handles, nil
+}
+
 // fleetCompany is c when it is the company of the activation the fleet is
 // pointed at, or an error saying why that is unknown.
 //
 // THE RULE EVERY CALLER THAT JUDGES A SEAT ABSENT AND ACTS ON IT FOLLOWS — the
-// mailbox sweep, and the clearing of a removed seat's pause
-// ([Engine.clearRemovedSeatPauses]) — because both act on something no undo
-// restores: a retired mailbox's mail, a pause a person placed. A node applying
-// a revision the fleet has since replaced does not have a seat the newer one
-// added, and would judge it absent.
+// mailbox sweep, the clearing of a removed seat's pause
+// ([Engine.clearRemovedSeatPauses]) and the forgetting of a removed human
+// seat's chat read state ([Engine.humanSeatHandles]) — because each acts on
+// something no undo restores: a retired mailbox's mail, a pause a person
+// placed, every room's cursor a seat held. A node applying a revision the
+// fleet has since replaced does not have a seat the newer one added, and would
+// judge it absent.
 //
 // COMPARED ON THE ACTIVATION'S INSTANT, which the pointer publishes strictly
 // later on every activation ([coord.ActivationAt]) and which a company carries
