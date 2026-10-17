@@ -829,6 +829,18 @@ node's new rows only once its own count passes the fleet's. The node derives no
 day at all until its usage applier has replayed the log to its end, so the
 rows it joins with are the fleet's and not a restore's.
 
+And every day again after a **reanchor** of the usage log on any data node. A
+restored log is followed from its end, so the node that re-anchored never
+applies what was published after the restore and before its reanchor; a node
+sends a day only when it moves, so a day published in that tail would stay at
+its pre-restore value there. So when any data node's generation of the usage
+log rises in the positions register past the generations a node last answered,
+that node publishes every day its event log still holds again — under operation
+ids no copy from before the rise carries, which the broker's duplicate window
+would otherwise collapse onto the copy that was skipped — and logs
+`usage_republish_started`, then `usage_republish_settled`; see [Retention §
+Re-anchoring](retention.md#re-anchoring-a-recreated-or-restored-log).
+
 History older than 181 days leaves in the same transaction that applies the
 day that makes it old, on every data node alike — there is no sweep.
 The decision is [ADR-0020](https://github.com/crewlet/crewlet/blob/main/adr/0020-a-nodes-own-day-is-a-compacted-domain.md).

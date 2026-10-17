@@ -1582,6 +1582,28 @@ every data node re-anchors its own copy of each: the vectors' coverage
 legitimately differs node to node, and each data node's usage days are written
 by that node alone.
 
+**A reanchor of the usage log is followed by every data node publishing every
+day again.** A restored usage log is followed from its end like any other, so
+the node that re-anchors it never applies what the data nodes published after
+the restore and before the reanchor — a late turn of yesterday, a custody batch
+settled onto an older day — and a day published there and not moved since
+would stay at its pre-restore value on that node for the 181 days the history
+keeps it. So each data node watches the usage log's generation on every data
+node in the positions register, and when one rises past what it last answered,
+it publishes every day its own event log still holds again (30 days back), under
+operation ids no earlier copy carries, so the broker's two-minute duplicate
+window cannot collapse an unchanged day onto the copy the reanchor skipped. The
+re-anchoring node does the same as soon as its usage applier resumes, and every
+other data node within a heartbeat and a publish tick (`usage_republish_started`,
+then `usage_republish_settled` once every day has landed; the generations it
+answered are kept in its own `usage_republished` row, so a node down while a
+peer re-anchored answers the rise when it starts; a data node's very first start
+logs the pair once too, its `detail` naming no reanchor, because its row records
+no pass yet). A day the tail held that is
+now more than the event log's 30 days old is not derived again, so re-anchor a
+restored usage log within that window of the restore. Re-anchor each data node's
+copy in turn: each reanchor is a rise the others answer again.
+
 **And one generation is only ever opened once.** Two nodes that re-anchor the
 same log at the same moment — each before the other's position row says so, or
 both forced while the register could not be read — derive the same next

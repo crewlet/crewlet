@@ -997,6 +997,98 @@ func TestAReanchorOfTheUsageLogLetsTodaysSpendMoveAgain(t *testing.T) {
 	waitUntil(t, 10*time.Second, "the seat-day to move after the reanchor", turnsHeld(2))
 }
 
+// A REANCHOR OF THE USAGE LOG ENDS BY PUBLISHING EVERY DAY AGAIN.
+//
+// A restored usage log is followed from its end, so the node that re-anchors it
+// never applies what the data nodes published after the restore — and a day
+// published there, and unmoved since, stays at its pre-restore value on it. So
+// a reanchor of this log is a rise in that node's generation, which every
+// data node's publisher answers by publishing every day its event log holds
+// again (internal/usage's republish.go). The heartbeat hands the publisher the
+// generation of every data node off the positions register, this node's own
+// off its runner — so its own reanchor is a rise at once — and the applier the
+// reanchor relaunches wakes the publisher on its first drain, the moment it
+// can publish, rather than leaving the pass for its next tick.
+//
+// The publisher here ticks once an hour, so only that wake can have run the
+// pass this case waits for.
+//
+// Mutations, each checked red: take this node's own generation off its row
+// rather than its runner (the pass answers the generation the reanchor left);
+// drop the wake from the usage applier's drain (nothing answers inside the
+// hour); drop the observation from the heartbeat (a peer's generation is never
+// seen).
+func TestAReanchorOfTheUsageLogEndsByPublishingEveryDayAgain(t *testing.T) {
+	t.Parallel()
+	b := testBootstrap(t)
+	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+	SeedStore(t, &b)
+	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
+	if err != nil {
+		t.Fatalf("parse the company: %v", err)
+	}
+	back, err := OpenBackends(t.Context(), &b, cfg)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(context.Background()) })
+	e, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: back,
+		usageEvery: time.Hour})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.Background()) })
+	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
+	q, ok := back.Queue.(interface{ Conn() *nats.Conn })
+	if !ok {
+		t.Fatalf("the stream is %T, not the JetStream backend", back.Queue)
+	}
+	js, err := natsjs.New(q.Conn())
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	c := e.core.Load()
+	s := c.log
+	name := usage.Domain{}.Name()
+	if s.usagePublisher.Load() == nil {
+		t.Fatal("this data node armed no usage publisher for a reanchor to wake")
+	}
+
+	// A PEER'S GENERATION IS READ OFF ITS ROW.
+	if err := e.backends.Fleet.PutPositions(t.Context(), coord.NodePositions{
+		NodeID: "node-peer", At: time.Now().UTC(),
+		Domains: map[string]coord.DomainPosition{name: {Generation: 3, Seq: 1, AppliedThrough: 1}},
+	}); err != nil {
+		t.Fatalf("publish the peer's row: %v", err)
+	}
+	s.publishPositions(t.Context())
+	seen, read := s.usageGenerations()
+	if !read || seen["node-peer"] != 3 || seen[c.nodeID] != 0 {
+		t.Fatalf("the heartbeat hands the publisher %v (read %v), want the peer at 3 "+
+			"and this node at 0", seen, read)
+	}
+
+	rebuildLog(t, js, usage.Domain{}.Stream())
+	s.publishPositions(t.Context())
+	stream := usage.Domain{}.Stream().Name
+	view, err := e.ReanchorStatus(t.Context(), stream)
+	if err != nil {
+		t.Fatalf("ReanchorStatus: %v", err)
+	}
+	plan, err := e.Reanchor(t.Context(), ReanchorRequest{
+		Stream: stream, Confirm: statelog.ConfirmationOf(view.CreatedAt), By: reanchorOperator,
+	})
+	if err != nil {
+		t.Fatalf("Reanchor: %v", err)
+	}
+	want := usage.Generations{"node-peer": 3, c.nodeID: plan.Generation}.String()
+	waitUntil(t, 20*time.Second, "the reanchor's pass over every day to be answered", func() bool {
+		got, ok, err := e.backends.Store.UsageRepublished(t.Context())
+		return err == nil && ok && got == want
+	})
+}
+
 // ONE DOMAIN'S LOOP HALTS AND RESUMES WITHOUT THE OTHERS.
 //
 // A reanchor moves one domain's checkpoint, whose only other writer is that

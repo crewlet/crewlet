@@ -195,6 +195,14 @@ var nodeEstatePlacements = []placement{
 			"of rows the peer does not hold.",
 	},
 	{
+		Table: "usage_republished",
+		Why: "The usage log's generation on every data node as this node's " +
+			"usage publisher last republished every day it holds under, so a " +
+			"peer's reanchor seen once — on the first beat after a restart " +
+			"included — is answered once. Only this node publishes its days; " +
+			"which reanchors it has answered is a fact about its own publisher.",
+	},
+	{
 		Table: "usage_watermark",
 		Why: "The oldest of this node's own days its usage publisher has not " +
 			"confirmed published whole, which its next start derives again — " +
