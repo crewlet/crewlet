@@ -438,11 +438,11 @@ func (w *Writer) readParties(ctx context.Context, change DependencyChange) (part
 			}
 		}
 	}
-	if len(wanted) > MaxBulkTasks {
+	if len(wanted) > MaxTasksNamed {
 		return parties{}, invalid("this dependency change names %d "+
 			"counterparties and one call may name %d — each is a commit of "+
 			"its own, and a gesture larger than that is a batch",
-			len(wanted), MaxBulkTasks)
+			len(wanted), MaxTasksNamed)
 	}
 	required := append(slices.Clone(change.WaitingOnAdd), change.BlockingAdd...)
 	out := parties{byID: make(map[string]Task, len(wanted))}
