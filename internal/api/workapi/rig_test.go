@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/workapi"
 	"github.com/crewlet/crewlet/internal/authz"
@@ -24,8 +25,10 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/org"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -520,8 +523,14 @@ func (r *rig) options(c authz.Chart) workapi.Options {
 func (r *rig) operator(c authz.Chart, halves func() (workapi.Halves, bool)) *operator.Server {
 	r.t.Helper()
 	// THE SEAT CONTROLS operator.New requires, over an in-memory fleet and
-	// queue nobody else reads: no case here calls one.
+	// queue nobody else reads, a company with no chart, a steer channel under
+	// a key no node holds and run records no turn has: no case here calls one.
 	fleet, queue := coordmemory.NewFleet(), queuememory.New()
+	wire, err := signedask.New[steer.Request, steer.Reply](steer.Channel,
+		statelog.OneKey("k1", "the work surface cases' seat-control key material"))
+	if err != nil {
+		r.t.Fatalf("the steer channel: %v", err)
+	}
 	s, err := operator.New(operator.Options{
 		Halves: func() (operator.Halves, bool) {
 			h, up := halves()
@@ -531,13 +540,26 @@ func (r *rig) operator(c authz.Chart, halves func() (workapi.Halves, bool)) *ope
 		Audit:     r.audit,
 		Runs: builtin.RunDeps{Desk: sandbox.AnswerDesk{
 			Pending: sandbox.NewCoordStore(fleet), Queue: queue}},
-		Pauses: builtin.SeatPauseDeps{Pauses: fleet, Announce: queue},
-		Steer:  builtin.SteerDeps{Asker: queue},
+		Pauses: builtin.SeatPauseDeps{Pauses: fleet, Announce: queue,
+			Org: func() *org.Organization { return nil }},
+		Steer: builtin.SteerDeps{Asker: queue, Wire: wire, Runs: noRunRecords{}},
 	})
 	if err != nil {
 		r.t.Fatalf("operator.New: %v", err)
 	}
 	return s
+}
+
+// noRunRecords is the run records the rig's steer control files a note on: a
+// fleet in which no turn has launched its coding run.
+type noRunRecords struct{}
+
+func (noRunRecords) Seat(context.Context, string) (builtin.RunSeat, bool, error) {
+	return builtin.RunSeat{}, false, nil
+}
+
+func (noRunRecords) File(context.Context, string, steer.Note) (builtin.RunFiled, error) {
+	return builtin.RunFiled{}, errors.New("no turn here has a run record to file a note on")
 }
 
 // auditLog records every runtime audit record the surface publishes.

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -30,27 +31,38 @@ import (
 // A SURFACE MISSING WHAT IT CANNOT SERVE WITHOUT IS NOT BUILT, and each
 // refusal names the field. A surface with nothing to read its catalogue from,
 // one wired with no authority decision, one that would write to the company
-// and record nothing about who called it, and one without a seat control are
-// each a wiring mistake that would otherwise look exactly like a surface that
-// worked — the last a company told it cannot pause a seat that every node
-// could pause.
+// and record nothing about who called it, and one without a seat control — or
+// without any seam a control is required with, its announcer, its chart, its
+// signed wire, its run records — are each a wiring mistake that would
+// otherwise look exactly like a surface that worked: the last two a company
+// told it cannot pause a seat that every node could pause, or offered a
+// control that refuses every call as unavailable.
 //
-// Mutation: drop any one of New's refusals and its row is built.
+// AND EVERY SEAM OF A CONTROL'S DEPENDENCIES HAS ITS ROW, read off builtin's
+// types themselves, but the actor the surface sets per call and a pause's
+// clock, whose nil is the wall clock. New's refusals are a list written beside
+// builtin's, and it missed the run records a note to a turn's coding run is
+// filed on: steer_turn was listed, and refused every call, on a surface New
+// built without them.
+//
+// Mutation: drop any one of New's refusals and its row is built; drop a seam's
+// row and the walk over the types names it.
 func TestNewRefusesASurfaceMissingARequirement(t *testing.T) {
 	t.Parallel()
 	halves := fixed(operator.Halves{})
 	decide := builtin.Decide(authz.NoChart{})
 	audit := &auditLog{}
 	whole := operator.Options{Halves: halves, Authorize: decide, Audit: audit,
-		Runs:   builtin.RunDeps{Desk: nowhere{}},
-		Pauses: builtin.SeatPauseDeps{Pauses: nowhere{}},
-		Steer:  builtin.SteerDeps{Asker: nowhere{}}}
+		Runs: builtin.RunDeps{Desk: nowhere{}},
+		Pauses: builtin.SeatPauseDeps{Pauses: nowhere{}, Announce: nowhere{},
+			Org: nowhereChart},
+		Steer: builtin.SteerDeps{Asker: nowhere{}, Wire: nowhereWire, Runs: nowhere{}}}
 	without := func(drop func(*operator.Options)) operator.Options {
 		opts := whole
 		drop(&opts)
 		return opts
 	}
-	for name, tc := range map[string]struct {
+	rows := map[string]struct {
 		opts  operator.Options
 		want  error
 		names string
@@ -65,9 +77,20 @@ func TestNewRefusesASurfaceMissingARequirement(t *testing.T) {
 			operator.ErrNoSeatControls, "Options.Runs.Desk"},
 		"no pause record": {without(func(o *operator.Options) { o.Pauses.Pauses = nil }),
 			operator.ErrNoSeatControls, "Options.Pauses.Pauses"},
+		"no pause announcer": {without(func(o *operator.Options) { o.Pauses.Announce = nil }),
+			operator.ErrNoSeatControls, "Options.Pauses.Announce"},
+		"no pause chart": {without(func(o *operator.Options) { o.Pauses.Org = nil }),
+			operator.ErrNoSeatControls, "Options.Pauses.Org"},
 		"no fleet asker": {without(func(o *operator.Options) { o.Steer.Asker = nil }),
 			operator.ErrNoSeatControls, "Options.Steer.Asker"},
-	} {
+		"no steer wire": {without(func(o *operator.Options) { o.Steer.Wire = nil }),
+			operator.ErrNoSeatControls, "Options.Steer.Wire"},
+		"no run records": {without(func(o *operator.Options) { o.Steer.Runs = nil }),
+			operator.ErrNoSeatControls, "Options.Steer.Runs"},
+	}
+	held := make(map[string]bool, len(rows))
+	for name, tc := range rows {
+		held[tc.names] = true
 		s, err := operator.New(tc.opts)
 		if !errors.Is(err, tc.want) || s != nil {
 			t.Errorf("%s: answered (%v, %v), want %v", name, s, err, tc.want)
@@ -75,6 +98,19 @@ func TestNewRefusesASurfaceMissingARequirement(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), tc.names) {
 			t.Errorf("%s: refused %q, which does not name %s", name, err, tc.names)
+		}
+	}
+	perCall := map[string]bool{"Runs.Actor": true, "Pauses.Actor": true,
+		"Pauses.Now": true, "Steer.Actor": true}
+	for control, deps := range map[string]any{"Runs": whole.Runs,
+		"Pauses": whole.Pauses, "Steer": whole.Steer} {
+
+		fields := reflect.TypeOf(deps)
+		for i := range fields.NumField() {
+			seam := control + "." + fields.Field(i).Name
+			if !perCall[seam] && !held["Options."+seam] {
+				t.Errorf("Options.%s is a seam of a seat control no row holds New to", seam)
+			}
 		}
 	}
 	// THE CONTROL: with every requirement met the surface is built, so each

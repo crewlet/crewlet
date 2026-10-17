@@ -9,12 +9,16 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/signedask"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // auditLog records every audit record a surface publishes, with the topic it
@@ -56,10 +60,24 @@ func fixed(h operator.Halves) func() (operator.Halves, bool) {
 }
 
 // nowhere is the seat controls a case that is not about them is built with,
-// since [operator.New] requires them: a fleet holding no parked run and no
-// paused seat, and one no node answers a note on. Nothing here is a fault a
-// call could mistake for one of the case's own.
+// since [operator.New] requires them: a fleet holding no parked run, no paused
+// seat and no run record a note waits on, and one no node answers a note on.
+// Nothing here is a fault a call could mistake for one of the case's own.
 type nowhere struct{}
+
+// nowhereChart is the chart the empty fleet's pauses name seats of: none.
+func nowhereChart() *org.Organization { return nil }
+
+// nowhereWire is the steer channel the empty fleet signs its notes on, under
+// a key no node of any case holds.
+var nowhereWire = func() *signedask.Channel[steer.Request, steer.Reply] {
+	wire, err := signedask.New[steer.Request, steer.Reply](steer.Channel,
+		statelog.OneKey("k1", "the operator cases' empty fleet key material"))
+	if err != nil {
+		panic(err)
+	}
+	return wire
+}()
 
 // errNowhere is every write the empty fleet is asked to make.
 var errNowhere = errors.New("this fleet records nothing: the case is not about the seat controls")
@@ -92,6 +110,16 @@ func (nowhere) DeleteSeatPause(context.Context, uuid.UUID, uint64) (bool, error)
 
 func (nowhere) Ask(context.Context, string, []byte, int) ([][]byte, error) { return nil, nil }
 
+func (nowhere) Seat(context.Context, string) (builtin.RunSeat, bool, error) {
+	return builtin.RunSeat{}, false, nil
+}
+
+func (nowhere) File(context.Context, string, steer.Note) (builtin.RunFiled, error) {
+	return builtin.RunFiled{}, errNowhere
+}
+
+func (nowhere) Publish(context.Context, string, *events.Event) error { return errNowhere }
+
 // leadsNobody is a company chart in which nobody leads anybody, written down
 // rather than read off [authz.NoChart], which answers no relation at all. A
 // case that asks [operator.Server.Acts] what a person may act on decides it on
@@ -118,8 +146,8 @@ func (leadsNobody) MemberOf(context.Context, string, string) (bool, error) { ret
 
 // newSurface builds a surface, filling an unset audit with a log nobody reads,
 // an unset decision with the authority table over no chart — what every
-// grant-only case is decided by — and unset seat controls with [nowhere], and
-// fails the test on a refusal.
+// grant-only case is decided by — and every unset seam of the seat controls
+// with [nowhere]'s, and fails the test on a refusal.
 func newSurface(t *testing.T, opts operator.Options) *operator.Server {
 	t.Helper()
 	if opts.Audit == nil {
@@ -134,8 +162,20 @@ func newSurface(t *testing.T, opts operator.Options) *operator.Server {
 	if opts.Pauses.Pauses == nil {
 		opts.Pauses.Pauses = nowhere{}
 	}
+	if opts.Pauses.Announce == nil {
+		opts.Pauses.Announce = nowhere{}
+	}
+	if opts.Pauses.Org == nil {
+		opts.Pauses.Org = nowhereChart
+	}
 	if opts.Steer.Asker == nil {
 		opts.Steer.Asker = nowhere{}
+	}
+	if opts.Steer.Wire == nil {
+		opts.Steer.Wire = nowhereWire
+	}
+	if opts.Steer.Runs == nil {
+		opts.Steer.Runs = nowhere{}
 	}
 	s, err := operator.New(opts)
 	if err != nil {
