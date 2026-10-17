@@ -308,29 +308,38 @@ func (c *Cache) sweepPacks(e *entry, inc *incarnation, strays []string) (bool, e
 // dropIndexes moves the multi-pack-index files and the commit-graph into
 // trash/ — before a pack they may name is removed.
 func (c *Cache) dropIndexes(inc *incarnation) error {
+	if err := c.dropMultiPackIndex(inc); err != nil {
+		return err
+	}
+	graph := filepath.Join(inc.dir, "objects", "info", "commit-graph")
+	if err := toTrash(c.dir, graph, newV7()+"-"+filepath.Base(graph)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return syncDir(filepath.Dir(graph))
+}
+
+// dropMultiPackIndex moves the multi-pack-index files — the index, its bitmap
+// and its reverse index — into trash/, and nothing else: what the repair of a
+// damaged multi-pack-index drops (apply). The commit-graph beside it is a file
+// of its own that names no position in the index, so it stays: dropped too, a
+// repair of the index would also put every walk of the repository back on
+// commit dates until the maintainer had written the graph again.
+func (c *Cache) dropMultiPackIndex(inc *incarnation) error {
 	packDir := filepath.Join(inc.dir, "objects", "pack")
 	list, err := os.ReadDir(packDir)
 	if err != nil {
 		return err
 	}
-	var paths []string
 	for _, d := range list {
-		if midxFile.MatchString(d.Name()) {
-			paths = append(paths, filepath.Join(packDir, d.Name()))
+		if !midxFile.MatchString(d.Name()) {
+			continue
 		}
-	}
-	paths = append(paths, filepath.Join(inc.dir, "objects", "info", "commit-graph"))
-	for _, path := range paths {
-		if err = toTrash(c.dir, path, newV7()+"-"+filepath.Base(path)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		path := filepath.Join(packDir, d.Name())
+		if err = toTrash(c.dir, path, newV7()+"-"+d.Name()); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
 	}
-	for _, d := range []string{packDir, filepath.Join(inc.dir, "objects", "info")} {
-		if err = syncDir(d); err != nil {
-			return err
-		}
-	}
-	return nil
+	return syncDir(packDir)
 }
 
 // measure sets inc's counts from its directory: the packs installed (an .idx

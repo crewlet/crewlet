@@ -76,8 +76,9 @@ func cacheCount(c *codetest.Case, name string, attrs map[string]string) uint64 {
 // refuses every process the directory is asked to run: a clone (its
 // advertisement), a push (its advertisement, whose view's one alternate is the
 // cache), a push whose cache is damaged between its advertisement and its POST
-// (its scratch's one alternate is the cache), and a fetch whose wants are
-// checked in the cache before upload-pack runs. The SAME directory serves
+// (its scratch's one alternate is the cache), a fetch whose wants are checked
+// in the cache before upload-pack runs, and an ls-refs, which checks no wants
+// and so meets the refusal at upload-pack itself. The SAME directory serves
 // after it — a full round put its shape right and reused every pack, no
 // rebuild — counted once under shape, and nothing answered as the code log
 // failing. Before, every one of them was a 503 saying the code log could not
@@ -85,7 +86,9 @@ func cacheCount(c *codetest.Case, name string, attrs map[string]string) uint64 {
 // fetch, refused only by a push's processes.
 //
 // Mutation: read ErrRepoShape as no damage (cache.DamageReason and
-// cache.ShapeReason), and each fails with a 503.
+// cache.ShapeReason), and each fails with a 503; read an upload-pack run's
+// failure from its answer's side band alone (fetchDamage), and the ls-refs
+// does.
 func TestACacheGitRefusesForItsShapeIsRepairedUnderTheRequest(t *testing.T) {
 	t.Parallel()
 	for damageName, damage := range shapeDamage {
@@ -158,6 +161,28 @@ func TestACacheGitRefusesForItsShapeIsRepairedUnderTheRequest(t *testing.T) {
 				resp, answer := post(t, c, 0, "ceo", "git-upload-pack", v2, fetchWants([]string{head}))
 				if resp.StatusCode != http.StatusOK || !strings.Contains(answer, "packfile") {
 					t.Errorf("a fetch of %s from the damaged cache answered %d: %q", head, resp.StatusCode, short(answer))
+				}
+				assertShapeRepaired(t, c, &l, dir, "code_fetch_retried")
+			})
+			t.Run("an ls-refs", func(t *testing.T) {
+				// A v2 POST with no GET first — the cache damaged between
+				// a client's advertisement and its ls-refs, or a client
+				// that skips the advertisement — checks no wants, so the
+				// pool's refusal of upload-pack itself is what has to be
+				// repaired: a refusal before git starts, never git's own
+				// words, which a request cannot write.
+				t.Parallel()
+				var l logs
+				c := newCase(t, codetest.SoloOptions{Logger: l.logger()}, codetest.Settings())
+				p := codetest.NewPerson(t, c.Fleet, "ceo")
+				work := p.Init()
+				head := p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+				c.MustPush(p, work, "main")
+				dir := incarnationDir(t, c)
+				damage(t, dir)
+				resp, answer := post(t, c, 0, "ceo", "git-upload-pack", v2, lsRefs())
+				if resp.StatusCode != http.StatusOK || !strings.Contains(answer, head+" refs/heads/main") {
+					t.Errorf("an ls-refs of the damaged cache answered %d: %q", resp.StatusCode, short(answer))
 				}
 				assertShapeRepaired(t, c, &l, dir, "code_fetch_retried")
 			})

@@ -30,9 +30,16 @@ import (
 // refused it, and read back as a stream wherever it is needed — never held
 // whole. A request that finds no room in the spool allowance WAITS ITS TURN
 // for it, holding its head in a place of the waiting room and nothing more
-// (spool.go). And the body is GIVEN BACK the moment upload-pack has read it to
-// its end and written its answer's first byte, since nothing reads it again
-// then: a transfer paced by its client holds neither memory nor a spool.
+// (spool.go). And the body is GIVEN BACK when the answer's FIRST BYTE is
+// written (sink.onStart), because a retry over a repaired cache reads it until
+// then and no further. For a FETCH that first byte is its PACK's: upload-pack
+// writes its answer's opening line, then runs pack-objects, and only its pack
+// is the first byte — so the body (and its spool) is held through
+// pack-objects' enumeration, at most a progress line (about a second) or one
+// keepalive (5 s, uploadpack.keepAlive) for a client using side-band, and
+// until the raw pack for one that is not. An ls-refs' or a push's first byte is
+// its first output, so its body is given back at once. Past the first byte a
+// transfer paced by its client holds neither memory nor a spool.
 
 // The refusals reading a request makes, each answered in its own status.
 var (

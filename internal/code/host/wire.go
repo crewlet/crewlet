@@ -152,11 +152,13 @@ func encodePkt(p pkt) []byte {
 
 // The side-band channels a refusal report travels in when the client asked
 // for side-band-64k: the report itself, and progress (git prints it as
-// `remote: …`). The third, a fatal error, is receive-pack's to send; the
-// engine's refusals are reports.
+// `remote: …`). The third, a fatal error, is git's own to send — the engine's
+// refusals are reports — and is read only in an upload-pack answer, where
+// pack-objects' last words arrive (answerScan).
 const (
 	bandData     byte = 1
 	bandProgress byte = 2
+	bandError    byte = 3
 )
 
 // banded is data in channel ch, as pkt-lines of at most maxPktPayload bytes

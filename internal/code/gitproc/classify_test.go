@@ -194,6 +194,34 @@ func TestClassifiesWhatRealGitSays(t *testing.T) {
 			{"rev-list", func(_ *testing.T, dir, _ string) gitproc.Cmd { return read(dir, "rev-list", "--objects", f.tip()) }, gitproc.ErrCorrupt},
 			{"index-pack", func(t *testing.T, _, newer string) gitproc.Cmd { return indexPack(t, newer+".pack") }, gitproc.ErrCorrupt},
 		}},
+		// THE BITMAP'S POSITIONS, which the reverse index maps: the
+		// maintainer's whole multi-pack-index with its bitmap, as a clone
+		// reads it, and its reverse index (the RIDX chunk) overwritten —
+		// every position it holds past the index's objects. The bitmap
+		// itself is left whole: overwritten too, git 2.56 stops at the
+		// bitmap first and says only "Out of memory, realloc failed".
+		{"a multi-pack-index whose reverse index is overwritten beside its bitmap", func(t *testing.T, dir, _ string) {
+			if v := p.Version(); !v.AtLeast(gittest.NamesMidxPosition) {
+				t.Skipf("git %s does not check a multi-pack-index's object positions (from %s): a bitmapped "+
+					"walk over this damage dies of a segmentation fault, saying nothing a table can read",
+					v, gittest.NamesMidxPosition)
+			}
+			c := maintenance(dir, "multi-pack-index", "write", "--bitmap", "--no-progress")
+			c.Config = []gitproc.KV{{Key: "core.multiPackIndex", Value: "true"},
+				{Key: "pack.writeBitmapLookupTable", Value: "true"}}
+			if _, err := p.Run(t.Context(), c); err != nil {
+				t.Fatal(err)
+			}
+			midx := filepath.Join(dir, "objects", "pack", "multi-pack-index")
+			start, end := gittest.MidxChunk(t, midx, "RIDX")
+			overwrite(t, midx, start, bytes.Repeat([]byte{0xff}, int(end-start)))
+		}, []row{
+			{"rev-list over its bitmap", func(_ *testing.T, dir, _ string) gitproc.Cmd {
+				c := read(dir, "rev-list", "--objects", "--use-bitmap-index", "--count", "--all")
+				c.Config = []gitproc.KV{{Key: "core.multiPackIndex", Value: "true"}}
+				return c
+			}, gitproc.ErrCorrupt},
+		}},
 		{"a multi-pack-index with its signature overwritten", func(t *testing.T, dir, _ string) {
 			c := maintenance(dir, "multi-pack-index", "write", "--no-progress")
 			c.Config = []gitproc.KV{{Key: "core.multiPackIndex", Value: "true"}}
@@ -354,6 +382,9 @@ var examples = []struct {
 	{gitproc.ErrCorrupt, `CRC mismatch`, "error: index CRC mismatch for object " + oid + " from /c/objects/pack/pack-1.pack at offset 285"},
 	{gitproc.ErrCorrupt, `cannot unpack`, "error: cannot unpack " + oid + " from /c/objects/pack/pack-1.pack at offset 285"},
 	{gitproc.ErrCorrupt, `^(error|fatal): .*multi-pack-index`, "fatal: multi-pack-index signature 0xdeadbeef does not match signature 0x4d494458"},
+	// git 2.47's and later's — one line, each half a pattern.
+	{gitproc.ErrCorrupt, `MIDX is likely corrupt`, "fatal: invalid MIDX object position, MIDX is likely corrupt"},
+	{gitproc.ErrCorrupt, `invalid MIDX object position`, "fatal: invalid MIDX object position, MIDX is likely corrupt"},
 	{gitproc.ErrCorrupt, `^(error|fatal): .*commit-graph`, "error: commit-graph signature 0 does not match signature 43475048"},
 	{gitproc.ErrMissingObject, `bad object [0-9a-f]{40}`, "fatal: bad object " + oid},
 	{gitproc.ErrMissingObject, `missing (blob|tree|commit|tag) [0-9a-f]{40}`, "missing blob " + oid},
@@ -389,6 +420,11 @@ func TestTheTableMatchesItsLines(t *testing.T) {
 		if got := gitproc.ClassifyLine(e.line); !errors.Is(got, e.kind) {
 			t.Errorf("%q classifies as %v, want %v", e.line, got, e.kind)
 		}
+		var w gitproc.Words
+		if w.Add([]byte(e.line)); !errors.Is(w.Kind(), e.kind) || w.Named() != e.line {
+			t.Errorf("%q read as git's words elsewhere is %v named by %q, want %v named by it",
+				e.line, w.Kind(), w.Named(), e.kind)
+		}
 		if strings.Contains(e.pattern, "[0-9a-f]") && !regexp.MustCompile(`\[0-9a-f\]\{40\}`).MatchString(e.pattern) {
 			t.Errorf("%s matches an object id looser than its 40 hex digits", e.pattern)
 		}
@@ -400,5 +436,91 @@ func TestTheTableMatchesItsLines(t *testing.T) {
 	}
 	if got := gitproc.ClassifyLine("fatal: something else entirely"); !errors.Is(got, gitproc.ErrFailed) {
 		t.Errorf("an unknown line classifies as %v, want ErrFailed", got)
+	}
+}
+
+// A LINE NAMING THE MULTI-PACK-INDEX IS TOLD APART from other corruption:
+// every such line is [gitproc.ErrCorrupt] and names the index, while a pack's
+// or an object's damage is corrupt but names no index — which is what lets the
+// cache repair a damaged index IN PLACE (drop and rewrite it) rather than read
+// the whole repository again. The predicate is bounded to the first MaxLine
+// bytes as the classifier is.
+func TestNamesMultiPackIndex(t *testing.T) {
+	t.Parallel()
+	for _, line := range []string{
+		"fatal: invalid MIDX object position, MIDX is likely corrupt",
+		"fatal: multi-pack-index signature 0xdeadbeef does not match signature 0x4d494458",
+		"error: multi-pack-index file /c/objects/pack/multi-pack-index is too small",
+	} {
+		if !gitproc.NamesMultiPackIndex(line) {
+			t.Errorf("%q names the multi-pack-index, read as not", line)
+		}
+		if got := gitproc.ClassifyLine(line); !errors.Is(got, gitproc.ErrCorrupt) {
+			t.Errorf("%q classifies as %v, want ErrCorrupt", line, got)
+		}
+	}
+	for _, line := range []string{
+		"fatal: packed object " + oid + " (stored in /c/objects/pack/pack-1.pack) is corrupt",
+		"fatal: early EOF",
+		"error: commit-graph signature 0 does not match signature 43475048",
+		"fatal: bad object " + oid,
+	} {
+		if gitproc.NamesMultiPackIndex(line) {
+			t.Errorf("%q does not name the multi-pack-index, read as naming it", line)
+		}
+	}
+	long := strings.Repeat("x", gitproc.MaxLine)
+	if gitproc.NamesMultiPackIndex(long + "MIDX is likely corrupt") {
+		t.Error("damage past the first MaxLine bytes names the index, want bounded out")
+	}
+}
+
+// GIT'S WORDS READ ELSEWHERE THAN ITS STDERR are classified as its stderr is —
+// the highest kind any line names winning, damage outranking the want it
+// explains — and remember the first line that named the winner, which is what
+// a log quotes: upload-pack relays its pack-objects' words in its answer's
+// side band, and a fetch's damage is named nowhere else.
+func TestWordsKeepTheHighestKindAndTheLineThatNamedIt(t *testing.T) {
+	t.Parallel()
+	const (
+		progress = "Enumerating objects: 12, done."
+		midx     = "fatal: invalid MIDX object position, MIDX is likely corrupt"
+		short    = "error: index file /c/objects/pack/pack-1.idx is too small"
+		missing  = "fatal: bad object " + oid
+		notOurs  = "fatal: git upload-pack: not our ref " + oid
+	)
+	past := strings.Repeat("x", gitproc.MaxLine)
+	for _, tc := range []struct {
+		name   string
+		lines  []string
+		kind   error
+		damage bool
+		named  string
+	}{
+		{"nothing read", nil, gitproc.ErrFailed, false, ""},
+		{"progress alone", []string{progress, "Counting objects: 33% (1/3)"}, gitproc.ErrFailed, false, ""},
+		{"a refused want", []string{progress, notOurs}, gitproc.ErrNotOurRef, false, notOurs},
+		{"damage after the want it explains", []string{notOurs, short}, gitproc.ErrCorrupt, true, short},
+		{"damage outranks a missing object", []string{missing, midx, short}, gitproc.ErrCorrupt, true, midx},
+		{"a missing object", []string{progress, missing, missing + " again"}, gitproc.ErrMissingObject, true, missing},
+		{"damage in a line's first MaxLine bytes", []string{midx + past}, gitproc.ErrCorrupt, true,
+			(midx + past)[:gitproc.MaxLine]},
+		{"damage past a line's first MaxLine bytes", []string{past + midx}, gitproc.ErrFailed, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var w gitproc.Words
+			for _, l := range tc.lines {
+				w.Add([]byte(l))
+			}
+			if !errors.Is(w.Kind(), tc.kind) {
+				t.Errorf("Kind = %v, want %v", w.Kind(), tc.kind)
+			}
+			if got := w.Damage(); (got != nil) != tc.damage || (tc.damage && !errors.Is(got, tc.kind)) {
+				t.Errorf("Damage = %v, want damage %v", got, tc.damage)
+			}
+			if w.Named() != tc.named {
+				t.Errorf("Named = %.80q, want %.80q", w.Named(), tc.named)
+			}
+		})
 	}
 }

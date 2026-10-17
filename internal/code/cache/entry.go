@@ -186,15 +186,26 @@ type incarnation struct {
 	// at once.
 	converged bool
 	// reread is why its next full round reads it whole again — a log
-	// recreated or gone back under it (Cache.reread), or a git process the
-	// pool refused there for its shape (markWhole) — counted when that
-	// round completes; "" for none.
+	// recreated or gone back under it (Cache.reread), or an in-place repair
+	// (markWhole: a git process the pool refused there for its shape, or one
+	// that named its multi-pack-index damaged) — counted when that round
+	// completes; "" for none. The FIRST reason is kept: one whole read
+	// answers every reason it was marked for, and is counted once.
 	reread RebuildReason
 	// marks counts the times it was marked to be read whole IN PLACE
 	// (markWhole): a round converges it only when no mark was made since the
 	// round began, since a round that swept it before the damage a mark
 	// answers did not repair that damage.
 	marks uint64
+	// dropMidx: a git process over it named its multi-pack-index damaged
+	// (markWhole for RebuildMidx), so its next full round DROPS that index
+	// before deciding its own (apply). A mark of its own rather than a
+	// reading of reread, which keeps only the first reason: a copy already
+	// marked to be read whole for its shape, or for a log recreated under
+	// it, would otherwise be read whole with the damaged index kept, and the
+	// fetch that asked for the repair meet the same damage on its retry.
+	// Taken by the round that drops the index.
+	dropMidx bool
 	// rebuilds is how many rebuild attempts in a row stand behind this
 	// incarnation without having ended the failure that asked for them: none
 	// for one no rebuild made, one more than its predecessor's for a

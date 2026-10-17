@@ -109,15 +109,27 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	out := newSink(w, "application/x-git-upload-pack-result", nil, s.now)
+	out := newSink(w, "application/x-git-upload-pack-result", s.now)
 	// THE BODY IS GIVEN BACK at the answer's first byte once upload-pack has
 	// read it (requestBody.feed): no retry reads it past that byte.
 	out.onStart = body.started
+	if n.recorded() == commandFetch {
+		// A FETCH'S ANSWER IS HELD UNTIL ITS PACK BEGINS (band.go): its
+		// pack-objects names a damaged cache only after upload-pack's first
+		// line, in the side band, and a run whose answer started can no
+		// longer be run again.
+		out.holdPack()
+	}
 	defer out.End()
-	// A DAMAGED CACHE IS REBUILT AND THE FETCH RETRIED ONCE, over the same
-	// request (repairing) — never for `not our ref`, which a want the
-	// repository never served prints exactly as a lost pack does.
-	err = s.repairing(ctx, r, adm.name, &synced, cache.DamageReason, out.Started, func(in cache.Synced) error {
+	// A DAMAGED CACHE IS REBUILT AND THE FETCH RETRIED, over the same request
+	// (repairing) — never for `not our ref`, which a want the repository never
+	// served prints exactly as a lost pack does. The repair is keyed on
+	// fetchDamage, which reads git's words from the SIDE BAND alone —
+	// upload-pack's own stderr echoes the client's request, so classifying
+	// it would let a crafted fetch force a rebuild (band.go) — and the pool's
+	// refusal of the incarnation's shape, which no request reaches.
+	err = s.repairing(ctx, r, adm.name, &synced, fetchDamage, out.Started, func(in cache.Synced) error {
+		out.again()
 		_, gerr := s.runGit(ctx, gitproc.Cmd{
 			Dir:    in.Dir,
 			Args:   []string{"upload-pack", "--stateless-rpc", in.Dir},
@@ -125,9 +137,65 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request) {
 			Stdin: body.feed(), Stdout: out, Class: gitproc.ClassTransfer,
 			Deadline: gitproc.UploadPackDeadline(in.Repo.LiveBytes), Stall: s.o.Timing.Stall,
 		})
-		return gerr
+		return out.judged(gerr)
 	})
+	if gitsAnswer(err) {
+		// The run's answer stands — what it held reaches the client as git
+		// wrote it, its own failure included. Anything else (the node
+		// ending git, a repair that did not end the damage, the repair's
+		// own failure) is answered with a status, which nothing held has
+		// yet preceded.
+		if rerr := out.release(); err == nil {
+			err = rerr
+		}
+	}
 	s.finishFetch(w, r, adm.name, n.recorded(), synced.Kind, start, out, err)
+}
+
+// gitsAnswer reports whether a fetch's last run ended in an answer of git's
+// own: it succeeded, or git failed by itself (exitedByItself) on a copy the
+// host did not find still damaged after its repair (errStillDamaged), which is
+// answered with the cache's status instead.
+func gitsAnswer(err error) bool {
+	return err == nil || (exitedByItself(err) && !errors.Is(err, errStillDamaged))
+}
+
+// fetchDamage is the repair an upload-pack run — a fetch's, an ls-refs', a v0
+// negotiation's — asks for, read ONLY from what its request cannot write:
+//
+//   - GIT'S OWN VERDICT (a *gitproc.ExitError) is read from its answer's SIDE
+//     BAND alone (bandDamage): pack-objects' words over object ids. Never
+//     from upload-pack's own stderr, which echoes the client's request
+//     ("unexpected line: '<arg>'", with any newline the arg carries), so a
+//     request quoting a damage phrase there would force a cache rebuild
+//     (band.go). A line naming the multi-pack-index is RebuildMidx — a
+//     derived file repaired in place, no download — and any other corruption
+//     RebuildCorrupt, a whole re-read from the store; a retry whose damage the
+//     in-place repair did not end names the underlying pack and so escalates
+//     to RebuildCorrupt (repair.go).
+//   - A FAILURE THAT IS NOT GIT'S VERDICT is read as every process over the
+//     cache reads it (cache.DamageReason): the pool refusing the incarnation
+//     for its SHAPE (gitproc.ErrRepoShape) before git starts or reads a byte
+//     of the request — repaired in place, with no download. Every other such
+//     failure (the node ending git, a refusal of the engine's own call) names
+//     no damage.
+//
+// So what upload-pack names on its OWN stderr before its first byte — an
+// object its negotiation could not parse — is answered in git's words and
+// never repaired under that request (repair.go says what repairs it instead).
+func fetchDamage(err error) (cache.RebuildReason, bool) {
+	var bd *bandDamage
+	if errors.As(err, &bd) {
+		if gitproc.NamesMultiPackIndex(bd.named) {
+			return cache.RebuildMidx, true
+		}
+		return cache.DamageReason(bd.kind)
+	}
+	var exit *gitproc.ExitError
+	if errors.As(err, &exit) {
+		return "", false
+	}
+	return cache.DamageReason(err)
 }
 
 // decodedBody is a request's body, paced a mebibyte at a time and decoded

@@ -684,3 +684,20 @@ func HashPacks(ctx context.Context, dir string) (int64, error) {
 	}
 	return read, nil
 }
+
+// MarkWhole marks repoID's current incarnation to be read whole in place for
+// reason, as a request's in-place repair does before its round runs
+// (markWhole) — and nothing more: no round is asked.
+func MarkWhole(c *Cache, repoID string, reason RebuildReason) {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	markWhole(e.current, reason)
+}
+
+// Reread marks every current incarnation to be read whole for reason, as a
+// code log recreated or gone back under the node does (Cache.reread) — and
+// nothing more: no round is asked.
+func Reread(c *Cache, reason RebuildReason) {
+	c.reread(reason, func(*incarnation) bool { return true })
+}

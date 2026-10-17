@@ -705,12 +705,19 @@ func Catalogue() []Instrument {
 			Name: CodeCacheRebuilds, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"reason"},
 			Shows: "Repositories this node's git cache read whole from the " +
-				"rows again, by `reason`. `corrupt`, `missing` and `shape` " +
-				"are a repair a git process asked for — a request's or a " +
-				"sync's own. `corrupt` and `missing` are a rebuild into a " +
-				"new directory beside the damaged one, downloading every " +
+				"rows again, by `reason`. `corrupt`, `midx`, `missing` and " +
+				"`shape` are a repair a git process asked for — a request's " +
+				"or a sync's own. `corrupt` and `missing` are a rebuild into " +
+				"a new directory beside the damaged one, downloading every " +
 				"pack again: it found a pack or an index it could not read, " +
-				"or an object a row names that no pack held. `shape` is the " +
+				"or an object a row names that no pack held. `midx` is a " +
+				"damaged multi-pack-index (its reverse index, its bitmap, or " +
+				"the index itself), repaired IN PLACE — the same directory " +
+				"read whole again, its multi-pack-index DROPPED so the round " +
+				"or the maintainer rewrites a sound one over the same packs, " +
+				"none downloaded — since that index is a derived file, not " +
+				"the repository; damage it does not end escalates to " +
+				"`corrupt`. `shape` is the " +
 				"pool refusing to run git there because the directory is " +
 				"not the shape the engine writes (its config edited, a " +
 				"commondir, an objects directory not its own, or an " +
@@ -735,7 +742,12 @@ func Catalogue() []Instrument {
 				"repository on the node once, as its next sync converges to " +
 				"the rows the log holds rather than taking a delta from a " +
 				"position that log never had or has since given to other " +
-				"records.",
+				"records. A repository marked to be read whole for more " +
+				"than one reason at once is read once and counted once, " +
+				"under the first: a damaged multi-pack-index found on a " +
+				"copy already marked for its shape or for the log is " +
+				"counted under that reason, its index dropped all the same " +
+				"(logged `code_cache_midx_repaired`).",
 		},
 		{
 			Name: CodeCacheRepos, Kind: KindGauge, Unit: UnitCount,

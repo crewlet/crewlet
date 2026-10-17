@@ -44,19 +44,22 @@ const (
 	// credential's requests may hold at once: a quarter of the allowance's
 	// bytes (SpoolCredentialBytes) and of the waiting room
 	// (SpoolWaitersPerCredential). A spool's bytes are held from its first
-	// byte until upload-pack has read it and started answering — through its
-	// sync, a cold one included — so without a cap one credential could hold
-	// the node's whole allowance in the requests of a few CI runners or a few
-	// slow clients at almost no cost to itself. A quarter still lets a CI
-	// fleet behind one token spool a quarter of the node's room at once —
-	// the rest WAIT THEIR TURN, never refused for it (spool.go) — and leaves
-	// three quarters to everybody else. WHAT IT COSTS is that wait, which is
-	// the sync of the requests ahead: behind a cold one of a minute or two the
-	// waits past the quarter reach Timing.SpoolWait first and are answered
-	// 503, so N lazy fetches of B bytes behind one token fail on a cold node
-	// once N × B passes the quarter — thirteen of 20 MB on a four-core node's
-	// 256 MiB (TestACredentialsEndedSpoolsOutlastingTheWait); a token per
-	// runner moves that to the node's whole room.
+	// byte until the answer's first byte is written — through its sync (a cold
+	// one included), upload-pack's read of it, and, for a fetch, pack-objects'
+	// run before its pack begins (at most a progress line or one keepalive, 5
+	// s, for a side-band client; body.go) — so without a cap one credential
+	// could hold the node's whole allowance in the requests of a few CI
+	// runners or a few slow clients at almost no cost to itself. A quarter
+	// still lets a CI fleet behind one token spool a quarter of the node's
+	// room at once — the rest WAIT THEIR TURN, never refused for it (spool.go)
+	// — and leaves three quarters to everybody else. WHAT IT COSTS is that
+	// wait: the sync of the requests ahead plus each one's pack-objects before
+	// its pack — behind a cold sync of a minute or two the waits past the
+	// quarter reach Timing.SpoolWait first and are answered 503, so N lazy
+	// fetches of B bytes behind one token fail on a cold node once N × B passes
+	// the quarter — thirteen of 20 MB on a four-core node's 256 MiB
+	// (TestACredentialsEndedSpoolsOutlastingTheWait); a token per runner moves
+	// that to the node's whole room.
 	SpoolCredentialShare = 4
 
 	// MaxCommandSectionBytes bounds a push's command section — the ref
@@ -130,8 +133,9 @@ func RequestBound(repo code.RepoRef) int64 {
 // each — 64 MiB on a lane of 64 slots, the default at sixteen cores with the
 // 32 GiB that back them (gitproc: four a core, and no more than one for every
 // gitproc.TransferShare of the node's memory).
-// Charged as each request's in-memory part grows and given back as soon as
-// upload-pack has read it, so it bounds what requests WAITING for their sync
+// Charged as each request's in-memory part grows and given back at the
+// answer's first byte (a fetch's is its pack's, after pack-objects; body.go),
+// so it bounds what requests WAITING for their sync
 // and their transfer slot hold, however many arrive at once; a request that
 // finds it spent has the rest spooled, never refused for it. Per slot for
 // SpoolPerTransfer's reason: the lane is what puts a request to use. ONLY the

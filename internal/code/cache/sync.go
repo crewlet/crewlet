@@ -447,13 +447,19 @@ func (c *Cache) damagedRound(e *entry, r *round, d *damaged) (*refused, []*waite
 // reason; its entry's mu is held. Nothing is answered from it at once until
 // that round has run (atOnce), the round is a full one — its sweep makes the
 // directory its image, reusing every pack it holds — and it counts reason as
-// it converges. The mark is counted on the incarnation (marks), so a round that
-// began before it, whose sweep may predate the damage it answers, converges
-// nothing. No new incarnation, and no GET for a pack the incarnation holds:
-// a directory the pool refuses for its shape lost none of its packs.
+// it converges, unless inc was already marked for another. The mark is
+// counted on the incarnation (marks), so a round that began before it, whose
+// sweep may predate the damage it answers, converges nothing. No new
+// incarnation, and no GET for a pack the incarnation holds: a directory the
+// pool refuses for its shape lost none of its packs, and a multi-pack-index
+// is a derived file — RebuildMidx also has the round drop it (dropMidx),
+// whatever reason the read is counted under.
 func markWhole(inc *incarnation, reason RebuildReason) {
 	inc.converged = false
 	inc.marks++
+	if reason == RebuildMidx {
+		inc.dropMidx = true
+	}
 	if inc.reread == "" {
 		inc.reread = reason
 	}
@@ -754,6 +760,36 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	indexed := false
 	var strays []string
 	if snap.full {
+		// A MIDX-DAMAGE REPAIR (RebuildMidx) drops the multi-pack-index here,
+		// before the round's own index decides: the damage is confined to
+		// that derived file, which git only mmaps and the maintainer rewrites
+		// from the packs this incarnation already holds, so the round (at
+		// MidxRoundPacks packs) or the maintainer (its next tick, now due
+		// because measure finds no bitmap) writes a sound one over the same
+		// packs — no download, where a whole-repository rebuild would GET
+		// every pack again. packStrays drops it too when a pack is removed;
+		// this covers the common case where only the index is damaged and no
+		// pack moves. Read off its own mark (dropMidx), whatever the read is
+		// counted under, and TAKEN before the drop, so a request that names
+		// the index damaged while this round runs marks it again for the
+		// next; a drop that fails puts the mark back.
+		e.mu.Lock()
+		dropMidx := inc.dropMidx
+		inc.dropMidx = false
+		e.mu.Unlock()
+		if dropMidx {
+			if err = c.dropMultiPackIndex(inc); err != nil {
+				e.mu.Lock()
+				inc.dropMidx = true
+				e.mu.Unlock()
+				return res, fmt.Errorf("cache: sync %s: drop multi-pack-index: %w", e.id, err)
+			}
+			res.trashed = true
+			// A multi-pack-index git could not read, dropped in place: the
+			// derived file was damaged, not the repository, and the round or
+			// the maintainer writes a sound one over the same packs.
+			c.log.Warn("code_cache_midx_repaired", "repo", e.id, "incarnation", inc.n)
+		}
 		// The sweep's pack half is DECIDED here and done once the refs are
 		// in; an index that may name a pack it will remove goes now, and so
 		// does whatever in objects/pack is no pack's file, so the round's

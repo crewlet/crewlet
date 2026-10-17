@@ -306,6 +306,56 @@ var allowed = []Allowance{
 			"against an operator's own ceiling, which is never scaled and is told what " +
 			"would have fitted instead.",
 	},
+
+	// -----------------------------------------------------------------
+	// Environment: a git that says what it found. git 2.47 is the first to
+	// check the object positions it reads through a multi-pack-index and die
+	// "invalid MIDX object position, MIDX is likely corrupt"; an older git
+	// (2.40 to 2.46, the suite's floor up) dies of a segmentation fault on
+	// the same damaged reverse index and says nothing a table can read, so a
+	// case whose subject is that message has nothing to provoke there
+	// (gittest.NamesMidxPosition). It does not fire where the engine runs —
+	// the image's git is 2.47 — nor on CI's runners, whose git is newer; it
+	// fires on a workstation with an older distribution's git, such as
+	// Ubuntu 24.04's 2.43.
+	// -----------------------------------------------------------------
+	{
+		Package: "internal/code/gitproc",
+		Test: "TestClassifiesWhatRealGitSays/" +
+			"a_multi-pack-index_whose_reverse_index_is_overwritten_beside_its_bitmap/rev-list_over_its_bitmap",
+		When: Environment,
+		Why: "Needs git 2.47 or newer. It is the only row that provokes the line from a real " +
+			"damaged multi-pack-index; TestTheTableMatchesItsLines holds both patterns to git's " +
+			"own wording of it on every machine, through the same compiled table.",
+	},
+	{
+		Package: "internal/code/host",
+		Test:    "TestADamagedMidxBitmapIsRepaired/protocol=0",
+		When:    Environment,
+		Why: "Needs git 2.47 or newer, for a clone's pack-objects to name the damage it " +
+			"meets. The side band's reading and the held answer are held on every machine " +
+			"by the answerScan and sink cases, over the bytes such a git writes, and the " +
+			"in-place repair by cache's TestADamagedMidxIsRepairedInPlace, which needs no " +
+			"such git.",
+	},
+	{
+		Package: "internal/code/host",
+		Test:    "TestADamagedMidxBitmapIsRepaired/protocol=0/progress",
+		When:    Environment,
+		Why:     "Needs git 2.47 or newer: the protocol=0 case's reason, with --progress.",
+	},
+	{
+		Package: "internal/code/host",
+		Test:    "TestADamagedMidxBitmapIsRepaired/protocol=2",
+		When:    Environment,
+		Why:     "Needs git 2.47 or newer: the protocol=0 case's reason, under protocol v2.",
+	},
+	{
+		Package: "internal/code/host",
+		Test:    "TestADamagedMidxBitmapIsRepaired/protocol=2/progress",
+		When:    Environment,
+		Why:     "Needs git 2.47 or newer: the protocol=0 case's reason, under v2 with --progress.",
+	},
 }
 
 // Measurement is one test whose OUTPUT reaches the log even when it PASSES.

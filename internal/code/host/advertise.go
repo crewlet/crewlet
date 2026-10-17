@@ -75,7 +75,7 @@ func (s *Server) infoRefs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out := newSink(w, "application/x-"+svc+"-advertisement", nil, s.now)
+	out := newSink(w, "application/x-"+svc+"-advertisement", s.now)
 	defer out.End()
 	w.Header().Set("Cache-Control", "no-cache")
 	if push {

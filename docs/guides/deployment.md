@@ -1140,12 +1140,19 @@ cache on its own disk. What such a node needs from its host:
 - **A balancer that does not cut a quiet git request.** git keeps a transfer
   alive by itself while `upload-pack` counts, and the engine writes a
   keepalive every 5 s on a push from its hook onward — so an idle timeout of a
-  minute or more on `/git/` is enough for both. Neither covers the silence
-  **before a request's first byte**, which is a cache sync: warm, a few
+  minute or more on `/git/` is enough for both. Neither keepalive covers the
+  silence **before a request's first byte**, which has two parts. The first is
+  a cache sync: warm, a few
   milliseconds; on a node that has never served the repository, or whose budget
   evicted it, a **cold** sync downloads one object for every push the
   repository ever took (about 70 to 130 s at 10 000 pushes from S3, which
-  answers each request in about 100 to 200 ms).
+  answers each request in about 100 to 200 ms). The second is the hold on a
+  fetch's answer until its pack begins: the host holds upload-pack's answer so
+  that a cache its `pack-objects` finds damaged can be repaired and the fetch
+  served, rather than failing it past the first byte. For a client using
+  side-band (every git since 1.6) that wait is at most a progress line (about a
+  second) or one upload-pack keepalive (5 s) — pack-objects' first word — and a
+  client that asks for no side-band waits until the raw pack's first byte.
   Either size the idle timeout to the cold sync of your largest repository, or
   route `/git/<name>` by repository — a balancer hashing the path to a node,
   with the next one in line when it is down — so each repository stays warm on

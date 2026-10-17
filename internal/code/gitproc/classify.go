@@ -77,20 +77,34 @@ func (r Result) LastLine() string {
 }
 
 // kinds is the classification table, in rank order: the HIGHEST RANK SEEN ON
-// ANY LINE WINS. Every pattern is a message git 2.43 prints (its own format
+// ANY LINE WINS. Every pattern is a message git prints (its own format
 // strings, and the lines classify_test.go provokes from real damaged
-// repositories), matched against one stderr line under LC_ALL=C.
+// repositories), matched against one stderr line under LC_ALL=C — 2.43's
+// messages, and the one a multi-pack-index's object-position check prints
+// from 2.47.
 //
 // Corrupt outranks Missing outranks NotOurRef because damage explains the
 // other two: a truncated .idx makes upload-pack print "index file … is too
 // small" and then "not our ref" for the tip it can no longer find, and that is
 // a damaged cache, not an absent want.
+//
+// THE MULTI-PACK-INDEX'S OBJECT POSITIONS: git from 2.47 checks every
+// position it reads through a multi-pack-index — the reverse index its bitmap
+// is read by among them — and dies "invalid MIDX object position, MIDX is
+// likely corrupt" on one past its objects, naming neither the file nor the
+// word multi-pack-index. A bitmapped walk over a damaged reverse index prints
+// nothing else, and pack-objects under upload-pack prints it on every clone
+// that uses the bitmap, so without it a damaged index was answered as git's
+// own failure on every fetch and never repaired. Both halves are patterns, so
+// a git that rewords one still names the damage by the other. (git before
+// 2.47 has no such check: the same walk dies of a segmentation fault, which
+// says nothing a table can read.)
 var kinds = []struct {
 	kind     error
 	patterns []string
 	re       *regexp.Regexp
 }{
-	{kind: ErrCorrupt, patterns: []string{
+	{kind: ErrCorrupt, patterns: append([]string{
 		`is corrupt`,
 		`bad packed object`,
 		`does not match index`,
@@ -103,9 +117,8 @@ var kinds = []struct {
 		`pack checksum mismatch`,
 		`CRC mismatch`,
 		`cannot unpack`,
-		`^(error|fatal): .*multi-pack-index`,
 		`^(error|fatal): .*commit-graph`,
-	}},
+	}, midxPatterns...)},
 	{kind: ErrMissingObject, patterns: []string{
 		`bad object [0-9a-f]{40}`,
 		`missing (blob|tree|commit|tag) [0-9a-f]{40}`,
@@ -120,6 +133,34 @@ var kinds = []struct {
 	{kind: ErrNotOurRef, patterns: []string{
 		`not our ref [0-9a-f]{40}`,
 	}},
+}
+
+// midxPatterns are the [ErrCorrupt] patterns that name the MULTI-PACK-INDEX —
+// its object-position check (git 2.47+), its signature or any other error git
+// prints about it. They are their own list because the host reads them apart
+// ([NamesMultiPackIndex]): a damaged multi-pack-index is a DERIVED file, so a
+// fetch that meets one is repaired IN PLACE by dropping and rewriting it over
+// the same packs, where other corruption needs the whole repository read
+// again. Each is one line, each half a pattern, so a rewording of either half
+// still names the damage.
+var midxPatterns = []string{
+	`MIDX is likely corrupt`,
+	`invalid MIDX object position`,
+	`^(error|fatal): .*multi-pack-index`,
+}
+
+// midxRe matches a line naming the multi-pack-index, compiled once.
+var midxRe = regexp.MustCompile(strings.Join(midxPatterns, "|"))
+
+// NamesMultiPackIndex reports whether git's line names the multi-pack-index —
+// a derived file the cache drops and rewrites in place rather than reading the
+// whole repository again. The caller has already classified the line as
+// [ErrCorrupt]; this says which kind of corruption it is.
+func NamesMultiPackIndex(line string) bool {
+	if len(line) > MaxLine {
+		line = line[:MaxLine]
+	}
+	return midxRe.MatchString(line)
 }
 
 // Each kind's patterns are ONE alternation compiled once, so a line costs at
@@ -152,6 +193,46 @@ func kindOf(rank int) error {
 	return kinds[len(kinds)-rank].kind
 }
 
+// Words classifies git's own words read SOMEWHERE OTHER THAN A PROCESS'S
+// STDERR — the text upload-pack relays from its pack-objects on side band 2
+// and 3 of its answer, which is where a fetch's damage is named, upload-pack's
+// own stderr then saying only that pack-objects died — by the table a run's
+// stderr is read by, the highest kind on any line winning. A run's stderr is
+// read through one too (stderrSink), so there is one reading of what git says,
+// wherever it says it. The zero value has read nothing; it is not safe for
+// concurrent use.
+type Words struct {
+	rank  int
+	named string // the first line read at rank
+}
+
+// Add classifies one line, without its line ending — a line past MaxLine by
+// its first MaxLine bytes, as a stderr line is.
+func (w *Words) Add(line []byte) {
+	if len(line) > MaxLine {
+		line = line[:MaxLine]
+	}
+	if r := classifyLine(line); r > w.rank {
+		w.rank, w.named = r, string(line)
+	}
+}
+
+// Kind is the highest kind read: [ErrFailed] when no line classified.
+func (w *Words) Kind() error { return kindOf(w.rank) }
+
+// Damage is [Words.Kind] when it is damage to the repository the words are
+// about — [ErrCorrupt] or [ErrMissingObject] — and nil otherwise.
+func (w *Words) Damage() error {
+	if k := w.Kind(); errors.Is(k, ErrCorrupt) || errors.Is(k, ErrMissingObject) {
+		return k
+	}
+	return nil
+}
+
+// Named is the first line read of [Words.Kind] — the words that named it —
+// and "" when no line classified.
+func (w *Words) Named() string { return w.named }
+
 // stderrSink reads git's stderr as it arrives: it counts every byte (the
 // stall watchdog's third term — a receive-pack relaying its hook's keepalives
 // on stderr is moving), classifies every complete line, and keeps the tail a
@@ -164,7 +245,7 @@ type stderrSink struct {
 	pending []byte
 	tailBuf []byte
 	cut     bool // the tail buffer has dropped bytes from its front
-	rank    int
+	words   Words
 }
 
 func (s *stderrSink) Write(p []byte) (int, error) {
@@ -198,9 +279,7 @@ func (s *stderrSink) Write(p []byte) (int, error) {
 // line classifies one line and appends it to the tail, kept to at most
 // twice StderrTail so the copy it trims to is amortised.
 func (s *stderrSink) line(l []byte) {
-	if r := classifyLine(l); r > s.rank {
-		s.rank = r
-	}
+	s.words.Add(l)
 	s.tailBuf = append(s.tailBuf, l...)
 	s.tailBuf = append(s.tailBuf, '\n')
 	if len(s.tailBuf) > 2*StderrTail {
@@ -222,16 +301,11 @@ func (s *stderrSink) finish() {
 	}
 }
 
-func (s *stderrSink) kind() error { return kindOf(s.rank) }
+func (s *stderrSink) kind() error { return s.words.Kind() }
 
 // damage is the kind when it is damage to the repository — ErrCorrupt or
 // ErrMissingObject — and nil otherwise (Result.Damage).
-func (s *stderrSink) damage() error {
-	if k := s.kind(); errors.Is(k, ErrCorrupt) || errors.Is(k, ErrMissingObject) {
-		return k
-	}
-	return nil
-}
+func (s *stderrSink) damage() error { return s.words.Damage() }
 
 // tail is the last StderrTail bytes git wrote, marked where it was cut —
 // including a cut the buffer's own trimming made, which leaves fewer bytes

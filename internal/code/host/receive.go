@@ -202,7 +202,7 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 	// before git starts or a byte of the body is read — the push is received
 	// whole on the second run. Everything judged on the row is judged again
 	// on the rebuilt one, from the refusals that needed no object.
-	out := newSink(w, "application/x-git-receive-pack-result", nil, s.now)
+	out := newSink(w, "application/x-git-receive-pack-result", s.now)
 	defer out.End()
 	var rcv received
 	runErr := s.repairing(ctx, r, adm.name, &synced, cache.ShapeReason,
