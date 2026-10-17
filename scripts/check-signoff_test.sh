@@ -9,14 +9,49 @@
 # once during this script's own development, which is why this exists.
 #
 # Each case builds a throwaway repository under a temp directory and runs the
-# REAL script against it. Nothing here touches the repository it lives in.
+# REAL script against it. Nothing here touches the repository it lives in,
+# and nothing here reads the git of the person running it (below).
 set -euo pipefail
+
+# THE PERSON'S GIT ENVIRONMENT, GONE before the first git runs: every variable
+# whose name begins GIT_. Git EXPORTS its repository to every hook it runs —
+# measured on 2.43, a pre-commit hook in a linked worktree gets GIT_DIR naming
+# that worktree's git directory and an absolute GIT_INDEX_FILE (in the main
+# checkout too under `commit -a`), beside GIT_PREFIX, GIT_EXEC_PATH and the
+# outer command's -c settings as GIT_CONFIG_PARAMETERS — so this suite, run by
+# a `make check` a hook started, sent every `git -C <throwaway>` below to the
+# developer's repository: re-initialised it, staged and committed the cases'
+# files there, and ran the developer's pre-commit hook again at each commit.
+# The rest of the prefix for the reason cmd/crewlet's scrubGitEnv gives:
+# GIT_CONFIG_COUNT and its pairs outrank every configuration file,
+# GIT_EXEC_PATH chooses git's programs, GIT_TEMPLATE_DIR the hooks `init`
+# installs, and one prefix stays right as git reads new names where a list —
+# `git rev-parse --local-env-vars` included, which names the repository's
+# variables alone — is a fact about one git.
+for name in $(compgen -e); do
+	case "$name" in
+	GIT_*) unset "$name" ;;
+	esac
+done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECK="$SCRIPT_DIR/check-signoff.sh"
 
 TMPROOT="$(mktemp -d)"
 trap 'rm -rf "$TMPROOT"' EXIT
+
+# AND THE PERSON'S GIT CONFIGURATION FILES: a HOME and a configuration home of
+# the suite's own, no system file and no system attributes. A developer's
+# global configuration decides what these cases build — measured: a global
+# core.hooksPath whose commit-msg hook signs off every commit (a DCO
+# convenience) turned "an unsigned commit fails" into a pass and the remedy
+# case into a failure, and commit.gpgsign with a signing program that fails
+# failed the first commit. XDG_CONFIG_HOME is pinned beside HOME because git
+# reads $XDG_CONFIG_HOME/git/config, attributes and ignore whatever HOME says.
+export HOME="$TMPROOT/home"
+export XDG_CONFIG_HOME="$HOME/.config"
+export GIT_CONFIG_NOSYSTEM=1 GIT_ATTR_NOSYSTEM=1
+mkdir -p "$HOME"
 
 pass=0
 fail=0
@@ -218,6 +253,68 @@ if (cd "$r" && "$CHECK" HEAD~2 HEAD) | grep -q '2 commit(s)'; then
 else
 	fail=$((fail + 1))
 	echo "FAIL a pass must say how many commits it judged, so a wrong base is visible"
+fi
+
+# --- the suite reads nothing of the git of the person running it -----------
+
+# This suite started again where a `make check` a pre-commit hook runs starts
+# it: in a SENTINEL repository's linked worktree, under the variables git
+# exports to that hook (GIT_DIR naming the worktree's git directory, its
+# absolute GIT_INDEX_FILE, GIT_PREFIX, the outer command's -c settings as
+# GIT_CONFIG_PARAMETERS), and with a developer's own HOME and configuration
+# home. Every channel of configuration installs a commit-msg hook that signs
+# off whatever it commits. The nested run must pass, having run its cases, and
+# leave every file of the sentinel and its worktree exactly as it found them.
+#
+# Mutation: drop the GIT_ scrub at the top -> the nested run's init and
+# commits land in the sentinel (red). Mutation: drop the HOME or the
+# XDG_CONFIG_HOME pin -> the planted hook signs "an unsigned commit" off (red).
+snapshot() { # <dir>...: every file under each, with its checksum
+	find "$@" -type f -exec cksum {} + | LC_ALL=C sort
+}
+
+if [ -z "${CHECK_SIGNOFF_TEST_NESTED-}" ]; then
+	sentinel="$TMPROOT/sentinel"
+	sentinel_wt="$TMPROOT/sentinel-wt"
+	git init -q -b main "$sentinel"
+	git_env
+	echo sentinel >"$sentinel/s"
+	git -C "$sentinel" add s
+	git -C "$sentinel" commit -qm "chore: the sentinel"
+	git -C "$sentinel" worktree add -q -b work "$sentinel_wt"
+
+	devhooks="$TMPROOT/devhooks"
+	mkdir -p "$devhooks" "$TMPROOT/devhome/.config/git"
+	cat >"$devhooks/commit-msg" <<'EOF'
+#!/bin/sh
+grep -q '^Signed-off-by:' "$1" || printf '\nSigned-off-by: Dev Eloper <dev@example.com>\n' >>"$1"
+EOF
+	chmod +x "$devhooks/commit-msg"
+	printf '[core]\n\thooksPath = %s\n' "$devhooks" >"$TMPROOT/devhome/.gitconfig"
+	printf '[core]\n\thooksPath = %s\n' "$devhooks" >"$TMPROOT/devhome/.config/git/config"
+
+	before="$(snapshot "$sentinel" "$sentinel_wt")"
+	nested="$(cd "$sentinel_wt" &&
+		CHECK_SIGNOFF_TEST_NESTED=1 \
+			GIT_DIR="$sentinel/.git/worktrees/sentinel-wt" \
+			GIT_INDEX_FILE="$sentinel/.git/worktrees/sentinel-wt/index" \
+			GIT_PREFIX= \
+			GIT_CONFIG_PARAMETERS="'core.hookspath'='$devhooks'" \
+			HOME="$TMPROOT/devhome" \
+			XDG_CONFIG_HOME="$TMPROOT/devhome/.config" \
+			"$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")" 2>&1)" && status=0 || status=$?
+	after="$(snapshot "$sentinel" "$sentinel_wt")"
+
+	if [ "$status" -eq 0 ] && grep -q '^ok   a signed commit passes$' <<<"$nested" &&
+		grep -q ' 0 failed$' <<<"$nested" && [ "$before" = "$after" ]; then
+		pass=$((pass + 1))
+		echo "ok   from a hook's environment the suite touches nothing of the hook's repository"
+	else
+		fail=$((fail + 1))
+		echo "FAIL from a hook's environment (exit $status) the suite must pass and touch nothing of the hook's"
+		echo "     repository; the sentinel's files changed: $([ "$before" = "$after" ] && echo no || echo yes)"
+		sed 's/^/     | /' <<<"$nested"
+	fi
 fi
 
 echo
