@@ -135,8 +135,8 @@ type Thread struct {
 // straddle two threads) and the detached-sandbox round trip.
 func ThreadOf(metadata map[string]string) (Thread, bool) {
 	backend := metadata[TransportField]
-	channel := metadata["channel"]
-	root := metadata["thread_ts"]
+	channel := metadata[ChannelField]
+	root := metadata[ThreadField]
 	if backend == "" || channel == "" || root == "" {
 		return Thread{}, false
 	}
