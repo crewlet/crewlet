@@ -350,11 +350,12 @@ Config:
 
 Environment:
   %s
-            The token for commands that talk to a running node (budgets,
-            backup, retention, work, seats, artifacts, secrets, config,
-            iam): one of the node's api.auth.tokens values, or an access
-            token from "crewlet iam token". It's never a flag (flags end up
-            in shell history) and never read from the config file.
+            The token every command that talks to a running node sends,
+            reads included, to whichever node its -api names: one of the
+            node's api.auth.tokens values, or an access token from "crewlet
+            iam token" (whose -login form signs in instead and reads none).
+            It's never a flag (flags end up in shell history) and never
+            read from the config file.
 `, version.String(), defaultBootstrapPath, defaultCompanyPath, apiTokenEnv)
 }
 

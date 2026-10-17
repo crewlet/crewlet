@@ -1262,14 +1262,13 @@ crewlet budgets show                       # usage per scope
 | `-api URL` | the `api` block of the config named on the command line | The running node's base URL. A wildcard bind (`0.0.0.0`, `::`) becomes the loopback address, because a wildcard is not something anything can dial |
 
 **The credential is `CREWLET_API_TOKEN` and nothing else**, here and on every
-command that talks to a running node: `backup`, `retention`, `worklet`,
-`objects`, `fleet`, `seats`, `secrets`, `config` and `iam` too. Every guarded route needs one,
-reads included. It is never a flag: a token typed as an argument is in the
-shell history, in `ps`, and in any CI log that echoes the command, so
-`-token` is refused as an unknown flag. And it is never read out of the
-config's own `api.auth.tokens`: that list is what the node *accepts*, and a
-write authored by whichever entry came first landed under a name nobody
-chose. The one command that reads no token is `iam token -login`, which mints
+command that talks to a running node, each of which names that node with
+`-api`. Every guarded route needs one, reads included. It is never a flag: a
+token typed as an argument is in the shell history, in `ps`, and in any CI log
+that echoes the command, so `-token` is refused as an unknown flag. And it is
+never read out of the config's own `api.auth.tokens`: that list is what the
+node *accepts*, and a write authored by whichever entry came first landed
+under a name nobody chose. The one command that reads no token is `iam token -login`, which mints
 your own and so signs in as you for that request instead — a person's token is
 theirs alone to mint. A `401` therefore has one thing to check — the value exported in
 `CREWLET_API_TOKEN`.
