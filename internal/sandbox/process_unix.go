@@ -72,8 +72,13 @@ func runHost(ctx context.Context, cmd hostCommand) (ExecResult, error) {
 	case <-ctx.Done():
 		logSignal("kill", proc.Process.Pid, procgroup.Kill(proc.Process.Pid))
 		// Reap it, so the pid does not linger as a zombie that the liveness
-		// probe would read as alive.
-		<-done
+		// probe would read as alive. Wait answers the kill's own exit here,
+		// which the timeout below already reports; anything else — the
+		// output copy failing — is not the timeout, and is logged rather
+		// than lost behind it.
+		if err := exitOnly(<-done); err != nil {
+			localLog.Warn("local_sandbox_wait_failed", "pgid", proc.Process.Pid, "error", err.Error())
+		}
 		// THE NOTICE, THEN WHAT IT SAID. Replacing the captured stderr with
 		// the timeout line threw away the only account of what the command
 		// was doing when it hung — a registry auth prompt, a pull stalling,
