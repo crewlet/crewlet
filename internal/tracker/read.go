@@ -718,9 +718,6 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		add("EXISTS (SELECT 1 FROM tracker_task_closure c "+
 			"WHERE c.descendant_id = t.id AND c.ancestor_id = ?)", q.Root)
 	}
-	if q.Batch != "" {
-		add("t.batch_id = ?", q.Batch)
-	}
 	if q.References != "" {
 		add("EXISTS (SELECT 1 FROM tracker_references r "+
 			"JOIN tracker_task_keys k ON k.task_id = r.to_task "+
