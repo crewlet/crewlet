@@ -36,6 +36,14 @@
 // delete that cannot be undone is not idempotent in the way a range delete is,
 // so it does not lean on the duty at all. Every write is a compare-and-set,
 // and the retirement claims the seat's own lease while it deletes.
+//
+// A human seat's chat read state is judged the same way and for the same
+// reason ([ChatReadJobs], chatreads.go): it lives in a coordination bucket with
+// no age, so the record of a seat that left is forgotten only by a decision
+// taken against the human seats of the company the fleet is pointed at —
+// stamped when a sweep first finds the seat gone, forgotten
+// [ChatReadForgetGrace] later, the mailbox's grace, so a seat restored inside
+// it gets back its mail and its rooms together.
 package maintenance
 
 import (
