@@ -365,14 +365,19 @@ table and move it once you have that number.
 is what the trim reads, and it is deliberately not derived from the schedule:
 a company that never backs up never trims, loudly and by design, so the engine
 has to know what "recent enough" means to *you* rather than inferring it from
-how often a cron happened to fire. The age itself is read from the newest
-complete **manifest** on disk rather than from a counter the engine keeps —
-a counter records that a process believed it took a backup, and the disk
-records that one exists. They differ in exactly the cases the alarm is for — a
-copy taken and then deleted, a volume never mounted, a schedule pointing at a
-path nobody ships from — and in every one of them the counter says the fleet is
-protected. It is published as `crewlet.backup.age`, by the node that holds the
-artefact, because that is the only process whose disk the manifests are on; a
+how often a cron happened to fire. The age the trim and the `backup_age` alarm
+read is the **register's**: per log, the newest verified backup your policy
+counts — the announcement described below, or under `backup_floor: operator`
+your acknowledgement of that log — aged from when the copy was taken, because
+the node holding the trim duty can never see a directory on another host.
+[`crewlet.backup.age`](../reference/metrics.md) answers a different question.
+It is published by the node that took the copy, from that node's newest
+complete **manifest** on disk, because that is the only process whose disk the
+manifests are on: the register records that a copy was announced, and the disk
+records that it still exists. They differ in exactly the cases worth catching —
+a copy taken and then deleted, a volume never mounted, a schedule pointing at a
+path nobody ships from — and in every one of them the register, and so the
+trim and the alarm, still count the copy while the gauge reports it gone. A
 node that has never taken one publishes nothing rather than a zero, since zero
 is the freshest backup imaginable.
 
