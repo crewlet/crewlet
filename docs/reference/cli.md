@@ -1104,8 +1104,10 @@ unit keys, bad cron expressions, invalid timezones, two seats declaring one
 contact identity, and a knowledge scope with no backend behind it all fail here
 rather than at run time. A human seat with **no** contact identity is not among
 them: a person who works only through the dashboard has no chat account to
-name, so validation admits the seat and prints a warning at its `contact`
-instead. It reads
+name, so validation admits the seat — and on a company that talks on
+Mattermost or Slack prints a warning at its `contact` when it names no account
+on that workspace. On the engine's own chat, or with no chat at all, there is
+no such warning: a person reads the engine's rooms on the dashboard. It reads
 **no environment**: Tier B keeps `${VAR}` references verbatim, so a config
 validates fully before any secret exists.
 For the same reason a company with no `providers.llm` at all validates, and

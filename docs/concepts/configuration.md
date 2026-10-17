@@ -1045,16 +1045,15 @@ The [charter's rules](#mission-vision-and-policies) are judged on an edit's **ch
 ### What an applied company is worth knowing
 
 A revision can also be valid and carry a consequence: a company with no human
-seat, which can admit nobody; a human seat with no contact, which nobody can
-message on a chat surface; a token ceiling another ceiling leaves unable to
-refuse a turn; a `-e NAME` in `providers.sandbox.local.run_args` that nothing
-supplies; an agent seat whose `llm` chain mixes a `claude-code` or `opencode`
+seat, which can admit nobody; a human seat with no account on the Mattermost or
+Slack workspace the company talks on, which nobody can mention there; a token
+ceiling another ceiling leaves unable to refuse a turn; a `-e NAME` in
+`providers.sandbox.local.run_args` that nothing supplies; an agent seat whose `llm` chain mixes a `claude-code` or `opencode`
 entry with another CLI, which a launch skips (it still serves the reviewer,
-workers and side passes). `crewlet
-validate`, a `/config` write and a dry run answer these to whoever asked, as
-`advisory` warnings. **Every node also logs them, once for each epoch it
-applies**, one `config_advisory` line at `WARN` each, and never for a revision
-it refused:
+workers and side passes). `crewlet validate`, a
+`/config` write and a dry run answer these to whoever asked, as `advisory`
+warnings. **Every node also logs them, once for each epoch it applies**, one
+`config_advisory` line at `WARN` each, and never for a revision it refused:
 
 | Field | Meaning |
 |---|---|

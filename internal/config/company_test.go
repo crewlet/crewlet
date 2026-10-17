@@ -555,41 +555,141 @@ roles:
 }
 
 // A HUMAN SEAT WITH NO CONTACT IDENTITY IS A COMPANY THE CONFIG ACCEPTS, on
-// both classes of rule. A person who works through the dashboard is bound to
-// the seat in the identity directory and has no chat account to write down.
-// Refusing the document refused them. That nobody can be MESSAGED at the seat is a warning, at the seat's
-// `contact` — and the control is the same seat with an identity, which warns
-// about nothing.
+// both classes of rule and on every chat surface. A person who works through
+// the dashboard is bound to the seat in the identity directory and has no
+// chat account to write down. Refusing the document refused them. That
+// nobody can be MESSAGED at the seat on a vendor chat surface is a warning, at
+// the seat's `contact` — see
+// TestAHumanSeatNobodyCanMentionIsAdvisedOnlyOnAVendorSurface.
 func TestAHumanSeatWithNoContactIsAValidCompany(t *testing.T) {
 	t.Parallel()
-	cfg := mustCompany(t, "name: Acme\nroles:\n  - name: Founder\n    kind: human\n")
-	if err := cfg.ValidateAdmission(); err != nil {
-		t.Fatalf("ValidateAdmission() = %v, want nil", err)
+	for name, doc := range map[string]string{
+		"on the engine's own chat": "name: Acme\nroles:\n  - name: Founder\n    kind: human\n",
+		"on a vendor's": "name: Acme\n" + mattermostBlock +
+			"roles:\n  - name: Founder\n    kind: human\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cfg := mustCompany(t, doc)
+			if err := cfg.ValidateAdmission(); err != nil {
+				t.Fatalf("ValidateAdmission() = %v, want nil", err)
+			}
+			o, err := cfg.Organization()
+			if err != nil {
+				t.Fatalf("Organization() = %v, want the company to build", err)
+			}
+			if founder := o.Role("founder"); founder == nil || !founder.IsHuman() {
+				t.Fatalf("the founder seat is missing or not human: %+v", founder)
+			}
+		})
 	}
-	var unreachable []Warning
-	for _, w := range cfg.AdvisoryWarnings() {
-		if w.Seat == "founder" {
-			unreachable = append(unreachable, w)
+}
+
+// A HUMAN SEAT NOBODY CAN MENTION IS SAID SO ONLY WHERE THAT IS TRUE: on a
+// vendor chat surface this company talks on, and only when the seat names no
+// account there.
+//
+// The advisory used to fire for every human seat with an empty `contact`,
+// whatever the company ran, and said nothing addressed to it on a chat
+// surface reached anybody. On the engine's own chat that is false — the
+// person reads the rooms on the dashboard as their seat — and with no chat at
+// all there is no surface to be unreachable on. And the contact block as a
+// whole was the wrong question on a vendor surface: a GitHub login silenced
+// it on a Slack company where no mention reaches the person.
+//
+// Each vendor's rows are built from [chatVendors], so a third surface is
+// covered by being added there, and the row that writes the vendor's own
+// contact key holds that key to the field it is decoded into.
+//
+// Mutations: fire on every backend and the chatlet and `none` rows warn;
+// judge the contact block as a whole and the code-host and other-vendor rows
+// go quiet; read only the first declared surface and the two-workspace row
+// warns.
+func TestAHumanSeatNobodyCanMentionIsAdvisedOnlyOnAVendorSurface(t *testing.T) {
+	t.Parallel()
+	const person = "roles:\n  - name: Founder\n    kind: human\n"
+	const both = "integrations:\n" +
+		"  mattermost: {enabled: true, url: https://chat.example.com, team: acme}\n" +
+		"  slack: {typing_status: addressed}\n"
+	declaring := map[string]string{
+		"mattermost": mattermostBlock,
+		"slack":      "integrations:\n  slack: {typing_status: addressed}\n",
+	}
+	type row struct {
+		doc  string
+		says []string // nil: the seat is not advised about
+	}
+	rows := map[string]row{
+		"the engine's own chat": {doc: "name: Acme\n" + person},
+		"no chat at all, beside a vendor block": {
+			doc: "name: Acme\nchat: {backend: none}\n" + mattermostBlock + person,
+		},
+		"both workspaces, an account in one": {
+			doc: "name: Acme\n" + both + person + "    contact: {slack_user_id: U0FOUNDER}\n",
+		},
+		"both workspaces, an account in neither": {
+			doc:  "name: Acme\n" + both + person,
+			says: []string{"Mattermost or Slack", "`mattermost_user_id` or `slack_user_id`"},
+		},
+	}
+	for _, vendor := range chatVendors {
+		block, ok := declaring[vendor.name]
+		if !ok {
+			t.Fatalf("no document in this test declares the chat vendor %q", vendor.name)
+		}
+		rows[vendor.name+": no contact at all"] = row{
+			doc:  "name: Acme\n" + block + person,
+			says: []string{vendor.title, "`" + vendor.contactKey + "`"},
+		}
+		rows[vendor.name+": an account there"] = row{
+			doc: "name: Acme\n" + block + person +
+				"    contact: {" + vendor.contactKey + ": founder}\n",
+		}
+		rows[vendor.name+": an account there, by reference"] = row{
+			doc: "name: Acme\n" + block + person +
+				"    contact: {" + vendor.contactKey + ": \"${FOUNDER_ID}\"}\n",
+		}
+		rows[vendor.name+": only a code host's login"] = row{
+			doc:  "name: Acme\n" + block + person + "    contact: {github_login: founder}\n",
+			says: []string{vendor.title},
+		}
+		for _, other := range chatVendors {
+			if other.name != vendor.name {
+				rows[vendor.name+": only an account on "+other.name] = row{
+					doc: "name: Acme\n" + block + person +
+						"    contact: {" + other.contactKey + ": founder}\n",
+					says: []string{vendor.title},
+				}
+			}
 		}
 	}
-	if len(unreachable) != 1 || unreachable[0].Path != "roles[0].contact" ||
-		unreachable[0].Kind != WarningAdvisory {
-		t.Errorf("the founder's warnings = %+v, want one advisory at "+
-			"roles[0].contact saying nobody can be messaged there", unreachable)
-	}
-	reachable := mustCompany(t, "name: Acme\nroles:\n  - name: Founder\n"+
-		"    kind: human\n    contact: {slack_user_id: U0FOUNDER}\n")
-	for _, w := range reachable.AdvisoryWarnings() {
-		if w.Seat == "founder" {
-			t.Errorf("a seat with a contact identity is warned about: %+v", w)
-		}
-	}
-	o, err := cfg.Organization()
-	if err != nil {
-		t.Fatalf("Organization() = %v, want the company to build", err)
-	}
-	if founder := o.Role("founder"); founder == nil || !founder.IsHuman() {
-		t.Fatalf("the founder seat is missing or not human: %+v", founder)
+	for name, tc := range rows {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var got []Warning
+			for _, w := range mustCompany(t, tc.doc).AdvisoryWarnings() {
+				if w.Seat == "founder" {
+					got = append(got, w)
+				}
+			}
+			if tc.says == nil {
+				if len(got) != 0 {
+					t.Errorf("a seat somebody can reach, or no vendor surface to "+
+						"be unreachable on, was advised about: %+v", got)
+				}
+				return
+			}
+			if len(got) != 1 || got[0].Path != "roles[0].contact" ||
+				got[0].Kind != WarningAdvisory {
+				t.Fatalf("the founder's warnings = %+v, want one advisory at "+
+					"roles[0].contact saying nobody can be messaged there", got)
+			}
+			for _, says := range tc.says {
+				if !strings.Contains(got[0].Message, says) {
+					t.Errorf("the advisory does not say %q: %q", says, got[0].Message)
+				}
+			}
+		})
 	}
 }
 

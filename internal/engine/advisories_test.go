@@ -13,11 +13,12 @@ import (
 )
 
 // advisoryCompanyDoc applies cleanly and raises two advisories: one about a
-// seat — a human seat with no contact identity, which nobody can message on a
-// chat surface — and one about no seat at all, a company day ceiling the week
-// ceiling makes unable to refuse a turn. It also carries a `manages:` entry
-// naming nobody, a dangling reference, which is a warning of another kind and
-// must not be logged as an advisory. The embeddings block is what lets
+// seat — a human seat with no account on the Mattermost workspace the company
+// declares (disabled, so nothing is dialled), which nobody can mention there —
+// and one about no seat at all, a company day ceiling the week ceiling makes
+// unable to refuse a turn. It also carries a `manages:` entry naming nobody, a
+// dangling reference, which is a warning of another kind and must not be
+// logged as an advisory. The embeddings block is what lets
 // [advisoryRefusedDoc] be refused at build while still validating, as
 // [danglingCompanyDoc]'s is.
 const advisoryCompanyDoc = `
@@ -35,6 +36,11 @@ providers:
 token_budget:
   day: 20000000
   week: 10000000
+integrations:
+  mattermost:
+    enabled: false
+    url: https://chat.example.com
+    team: acme
 roles:
   - name: Founder
     handle: founder

@@ -734,8 +734,26 @@ func (c *Company) peoplelessWarnings() []Warning {
 		"run it alone. Otherwise add a human seat for each person")}
 }
 
-// unreachableWarnings is every human seat that declares no contact identity:
-// nothing addressed to it on a chat surface reaches anybody.
+// unreachableWarnings is every human seat with no account on the vendor chat
+// surfaces this company talks on: nothing addressed to it there reaches
+// anybody.
+//
+// ONLY ON A VENDOR SURFACE (`chat.backend: vendor`), because that is the only
+// chat the sentence is true of. On the engine's own chat a person reads the
+// rooms on the dashboard as their seat, and a mention of the seat reaches
+// them with no identity to declare; with `chat.backend: none` there is no
+// chat surface for it to be about at all. Said everywhere, it told every
+// founder of a Chatlet company that the people they had just added could
+// not be reached, which is false, and an advisory that is false on the
+// default configuration is one an author learns to skip.
+//
+// JUDGED AGAINST THE SURFACES THIS COMPANY DECLARES ([chatVendors]), not
+// against the contact block as a whole: a GitHub login or an Atlassian
+// account id is how a code host or a tracker attributes the person, and says
+// nothing about whether a Mattermost mention reaches them. A seat reachable
+// on ANY of the declared surfaces is reachable — a company running both
+// Mattermost and Slack has people who are in one workspace and not the
+// other.
 //
 // A WARNING AND NOT A RULE, because the state is legitimate: a person who
 // works only through the dashboard has no chat account to declare, and
@@ -745,19 +763,46 @@ func (c *Company) peoplelessWarnings() []Warning {
 //
 // AT THE SEAT'S `contact`, which is where the remedy is written.
 func (c *Company) unreachableWarnings() []Warning {
+	if c.ChatBackendFor() != ChatVendor {
+		return nil
+	}
+	var surfaces []chatVendor
+	var titles, keys []string
+	for _, vendor := range chatVendors {
+		if vendor.declaredAt(c) != "" {
+			surfaces = append(surfaces, vendor)
+			titles = append(titles, vendor.title)
+			keys = append(keys, "`"+vendor.contactKey+"`")
+		}
+	}
 	var out []Warning
 	for role, path := range c.EachRole() {
-		if role.Kind != org.KindHuman || !role.Contact.IsEmpty() {
+		if role.Kind != org.KindHuman || reachableOn(role.Contact, surfaces) {
 			continue
 		}
 		handle := role.IdentityKey()
 		w := advisory(at(path, "contact"), fmt.Sprintf("%s is a human seat with "+
-			"no chat contact, so chat messages to it reach nobody. Add one, or "+
-			"leave it if they only use the dashboard", handle))
+			"no account on %s, so chat messages to it there reach nobody. Add a "+
+			"%s to its `contact`, or leave it if they only use the dashboard",
+			handle, strings.Join(titles, " or "), strings.Join(keys, " or ")))
 		w.Seat = handle
 		out = append(out, w)
 	}
 	return out
+}
+
+// reachableOn reports whether a human seat's contact names an account on any
+// of surfaces. A ${VAR} reference counts, as [org.HumanContact.IsEmpty]
+// counts one: it is an identity the operator has committed to.
+func reachableOn(contact *org.HumanContact, surfaces []chatVendor) bool {
+	for _, identity := range contact.Identities() {
+		for _, surface := range surfaces {
+			if identity.Transport == surface.transport {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Warnings is everything valid about this bootstrap that its author should
