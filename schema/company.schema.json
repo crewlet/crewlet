@@ -1589,7 +1589,7 @@
           ]
         },
         "startup_timeout_seconds": {
-          "description": "Connect, handshake and first tool listing budget.",
+          "description": "Bounds connect and handshake, and separately the first tool listing. 0 is the engine's default.",
           "minimum": 0,
           "type": [
             "number",
