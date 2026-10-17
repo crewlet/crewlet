@@ -202,6 +202,15 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 	// snapshot interval is up to a day in which they have nothing to adopt.
 	s.publishPositions(ctx)
 	s.nudgeSnapshot()
+	// AND A REANCHOR OF THE USAGE LOG OWES EVERY DAY AGAIN: a restored copy is
+	// followed from its end, so what this node — and every other data node —
+	// published after the restore is in a tail it never applies. The row
+	// above names this node's new generation, which is what the other data
+	// nodes' publishers republish on. This node's own finds the same rise in
+	// its runner's generation, and is woken for it by the last step of all:
+	// the applier this transition relaunches tells it on its first drain
+	// ([stateLog.onDrained]), the moment it can publish (internal/usage's
+	// republish.go).
 	// NO LINE OF ITS OWN: [statelog.Reanchor] writes `statelog_reanchored`
 	// with the domain, the generation, the case, the stream and its prior
 	// high-water mark, and a second line under that name here made one
