@@ -141,7 +141,7 @@ type Transport struct {
 	// people is what is known about the human seats; see people.go.
 	people people
 
-	// registering serialises [Transport.registerPeople] whole, from the
+	// registering serialises [Transport.publishPeople] whole, from the
 	// read of what is known to the last write into the registry. An apply
 	// and an answer both register, and each reads before it writes: let
 	// one read, the other read newer facts and write them, and the first
@@ -174,12 +174,16 @@ func NewTransport(opts TransportOptions) (*Transport, error) {
 		return nil, fmt.Errorf("mattermost: the transport needs a publisher")
 	}
 	t := &Transport{
-		cfg:         opts.Config,
-		registry:    opts.Registry,
-		now:         opts.Now,
-		seats:       map[string]runningSeat{},
-		throttle:    DefaultTypingThrottle,
-		people:      people{want: slices.Clone(opts.Config.People)},
+		cfg:      opts.Config,
+		registry: opts.Registry,
+		now:      opts.Now,
+		seats:    map[string]runningSeat{},
+		throttle: DefaultTypingThrottle,
+		people: people{
+			want: slices.Clone(opts.Config.People), held: map[string]User{},
+			missing: map[string]bool{}, agents: map[string]string{},
+			anchor: map[string]string{},
+		},
 		peopleEvery: opts.PeopleRefresh,
 		peoplePoke:  make(chan struct{}, 1),
 		onPeople:    opts.OnPeople,
@@ -300,13 +304,22 @@ func (t *Transport) Start(ctx context.Context) error {
 	// None when every seat failed, which the end of this function reports
 	// as the one problem it is — asked anyway, it would add a second line
 	// blaming the people for it.
+	//
+	// AND ONLY ONCE EVERY SEAT'S ACCOUNT IS KNOWN, because a person's name
+	// that holds one of them is refused rather than registered (people.go),
+	// and asked before, it would be judged against no agent at all.
 	if len(resolved) > 0 {
 		clients := make([]*Client, 0, len(resolved))
+		t.mu.Lock()
 		for _, seat := range slices.SortedFunc(slices.Values(resolved), func(a, b identifiedSeat) int {
 			return strings.Compare(a.seat.Handle, b.seat.Handle)
 		}) {
 			clients = append(clients, seat.client)
+			if seat.seat.UserID != "" {
+				t.people.agents[seat.seat.UserID] = seat.seat.Handle
+			}
 		}
+		t.mu.Unlock()
 		t.resolvePeople(ctx, clients)
 	}
 	// THE SOCKETS ATTACH ONLY ONCE THE INSTANCE IS READ, because the first
@@ -432,7 +445,15 @@ func (t *Transport) register(seat Seat) {
 // corrects a name. A registry the identity directory rebuilds for the same
 // org — a suspension, a reinstatement — comes through here too, and what it
 // withholds gets no account (people.go).
-func (t *Transport) Reregister(reg *notify.Registry, people []Person) {
+//
+// AND AN APPLY STATES WHO THEY ARE, which a directory rebuild does not:
+// restated says which this is. On an apply each name is anchored to the
+// account it holds now, so a name reported as moved stops being reported: the
+// company has been stated again with it, which is the operator's answer to
+// the report (people.go, "The name is the authority, and a move is said"). A
+// rebuild for the same company keeps the anchors, or suspending anybody would
+// withdraw a report about somebody else that nobody answered.
+func (t *Transport) Reregister(reg *notify.Registry, people []Person, restated bool) {
 	if reg == nil {
 		return
 	}
@@ -443,12 +464,19 @@ func (t *Transport) Reregister(reg *notify.Registry, people []Person) {
 	}
 	t.registry = func() *notify.Registry { return reg }
 	t.people.want = slices.Clone(people)
+	if restated {
+		for _, s := range t.people.standings(reg) {
+			if s.id != "" {
+				t.people.anchor[s.Username] = s.id
+			}
+		}
+	}
 	t.mu.Unlock()
 
 	for _, seat := range seats {
 		t.register(seat)
 	}
-	t.registerPeople()
+	t.publishPeople()
 	t.pokePeople()
 }
 

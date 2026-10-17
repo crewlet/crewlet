@@ -335,6 +335,12 @@ func (e *Engine) rebuildPartiesLocked(c *Company, standing notify.Standing) {
 	e.notify.mu.Lock()
 	chat := e.notify.mattermost
 	hosted := e.notify.slack
+	// AN APPLY STATES THE COMPANY AGAIN; a directory rebuild does not. The
+	// one is a registry for a company the live one was not built from, the
+	// other for the same company under another reading (directory.go), and
+	// only the first is the operator's answer to a person's name reported
+	// as moved.
+	restated := e.notify.registryFor != c
 	e.notify.mu.Unlock()
 
 	// THE CHAT IDENTITIES ARE CARRIED ACROSS, not rebuilt: they are facts
@@ -358,7 +364,7 @@ func (e *Engine) rebuildPartiesLocked(c *Company, standing notify.Standing) {
 		// directory, judged by the transport against the registry it
 		// writes into rather than filtered here. Their names resolve
 		// through the one snapshot above, as every other contact id does.
-		chat.Reregister(reg, mattermost.PeopleFrom(c.Org, lookup))
+		chat.Reregister(reg, mattermost.PeopleFrom(c.Org, lookup), restated)
 	}
 	if hosted != nil {
 		hosted.Reregister(reg)
