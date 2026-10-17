@@ -101,6 +101,9 @@ func Run(t *testing.T, factory Factory) {
 		if got := idsOf(detail.Rows); !slices.Equal(got, []string{"p1", "c1", "p2", "c2"}) {
 			t.Fatalf("the turn's rows are %v, want both nodes' in order", got)
 		}
+		if want := []string{nodes[0].id, nodes[2].id}; !slices.Equal(detail.Nodes, want) {
+			t.Fatalf("the turn ran on %v, want %v — the two nodes that published it", detail.Nodes, want)
+		}
 	})
 
 	t.Run("turns_at_one_microsecond_are_each_on_one_page", func(t *testing.T) {
@@ -299,6 +302,9 @@ func Run(t *testing.T, factory Factory) {
 		first, done := phase("x-phase", "t-x", at.Add(-2*time.Minute), 40, "m"),
 			completion("x-done", "t-x", at.Add(-time.Minute), false, 25)
 		first.TraceID, done.TraceID = "tr-x", "tr-x"
+		// PUBLISHED BY THE STATELESS NODE, as a keeper writes every row of a
+		// batch: the row names its origin, never its keeper.
+		first.Node, done.Node = "seats-1", "seats-1"
 		batch := store.CustodyBatch{ID: "batch-x", Origin: "seats-1",
 			Records: []store.EventRecord{first, done}}
 		for _, n := range nodes[1:] {
@@ -334,6 +340,12 @@ func Run(t *testing.T, factory Factory) {
 			if axis.Total != 2 || trace.Total != 2 || turn.Total != 2 {
 				t.Errorf("%s: the axis counts %d, the trace %d and the turn %d, want the batch's two "+
 					"rows once in each", state, axis.Total, trace.Total, turn.Total)
+			}
+			// THE TURN RAN ON THE NODE THAT PUBLISHED IT, and on neither
+			// keeper — which are the only nodes holding it.
+			if !slices.Equal(turn.Nodes, []string{"seats-1"}) {
+				t.Errorf("%s: the turn ran on %v, want the stateless node that published it, "+
+					"not the data nodes keeping it", state, turn.Nodes)
 			}
 			if len(page.Turns) != 1 || page.Turns[0].TotalTokens != 40 || page.Turns[0].Phases != 1 ||
 				page.Turns[0].DurationMS != 25 {
@@ -442,10 +454,16 @@ func asker(nodes []*member) *eventfan.Fleet {
 	}
 }
 
+// write stores a row in a member's own log as its publish listener would: one
+// the member PUBLISHED, so it names the member as its origin unless the case
+// says otherwise.
 func write(t *testing.T, m *member, rec store.EventRecord) {
 	t.Helper()
 	if rec.Payload == nil {
 		rec.Payload = json.RawMessage(`{}`)
+	}
+	if rec.Node == "" {
+		rec.Node = m.id
 	}
 	if err := m.log.Append(t.Context(), rec); err != nil {
 		t.Fatalf("%s: append %s: %v", m.id, rec.ID, err)

@@ -102,7 +102,12 @@ func Record(ev *events.Event) (store.EventRecord, bool) {
 		SpanID:       ev.SpanID,
 		ParentSpanID: ev.ParentSpanID,
 		Tags:         store.ExtractTags(raw),
-		Payload:      payload,
+		// THE ORIGIN, off the envelope rather than off the node writing
+		// the row: a custody keeper writes another node's events through
+		// this same function, and the row must still say where they
+		// happened. See [store.EventRecord.Node].
+		Node:    ev.Node,
+		Payload: payload,
 	}, true
 }
 

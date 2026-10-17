@@ -632,7 +632,7 @@ export function useTurnView(turnId: string): TurnView {
   const startedAt =
     tsKey(str(opened, "started_at")) ||
     (seatRow?.turn?.turn_id === turnId ? tsKey(seatRow.turn.started_at) : 0);
-  // No answering node holding the turn's events yet (or the answer not read
+  // No stored event naming where the turn ran yet (or the answer not read
   // yet) leaves the node the live call reports running it.
   const nodes = data?.nodes.length ? data.nodes : liveCall?.node ? [liveCall.node] : [];
 
