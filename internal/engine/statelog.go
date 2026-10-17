@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/version"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -372,6 +373,22 @@ type stateLog struct {
 	// snapshot loop is mid-copy, and a nil reads honestly as a node whose
 	// loop has not concluded anything yet.
 	snapshot atomic.Pointer[snapshotHeld]
+
+	// usageSeen is the usage log's generation on every data node as
+	// the heartbeat last read the positions register, this node's own taken
+	// from its runner — what the usage publisher holds a peer's reanchor
+	// against ([usage.PublisherDeps.Generations]). Nil before any reading.
+	// An atomic pointer because the heartbeat writes it while the
+	// publisher's tick reads it.
+	usageSeen atomic.Pointer[usage.Generations]
+
+	// usagePublisher is this node's usage publisher while it runs, nil
+	// otherwise — what the usage applier's first drain wakes
+	// ([stateLog.onDrained], [usage.Publisher.Nudge]), which after a
+	// reanchor of the usage log is the transition's last step. An atomic
+	// pointer because the publisher is armed and stopped by the engine
+	// while an applier runs.
+	usagePublisher atomic.Pointer[usage.Publisher]
 
 	// donor is this node's own donor once [Engine.startSnapshots] has built
 	// it, and nil before — which is every boot's join, since that runs
@@ -1285,8 +1302,9 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 			return evicted[node], readErr
 		},
 		// THE FIRST DRAIN WAKES THE SNAPSHOT LOOP, whose commonest boot
-		// skip — `unhydrated` — it is the end of ([stateLog.snapshotNudge]).
-		OnDrained: s.nudgeSnapshot,
+		// skip — `unhydrated` — it is the end of ([stateLog.snapshotNudge]),
+		// and the usage publisher for the usage log ([stateLog.onDrained]).
+		OnDrained: s.onDrained(domain),
 		// NO LOGGER, here or at any other statelog constructor: an absent
 		// one is the framework's own `component=statelog` logger. The
 		// engine's own labelled those lines `component=engine`, and the
@@ -4395,6 +4413,7 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	rows, rowsErr := s.fleet.Positions(ctx)
 	generations, genErr := map[string]uint32(nil), rowsErr
 	if rowsErr == nil {
+		s.observeUsageGenerations(rows)
 		generations, genErr = s.fleetGenerations(ctx, rows, s.openLogs(), above)
 		if genErr != nil && ctx.Err() == nil {
 			log.WarnContext(ctx, "statelog_generations_unread",

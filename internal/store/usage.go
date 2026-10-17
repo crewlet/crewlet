@@ -472,6 +472,46 @@ func (d *DB) SetUsageWatermark(ctx context.Context, since time.Time) error {
 	return nil
 }
 
+// UsageRepublished reads the usage log's generation on every data node, in the
+// usage publisher's canonical spelling, as it last republished every day its
+// event log holds under — and false when it never has.
+//
+// THREE ANSWERS, for [DB.UsageRederive]'s reason: a publisher that could not
+// read what it last answered must not take a reanchor it has not answered for
+// one it has, nor republish every day on every tick.
+func (d *DB) UsageRepublished(ctx context.Context) (string, bool, error) {
+	if d == nil || d.sql == nil {
+		return "", false, ErrNoEstate
+	}
+	var generations string
+	err := d.sql.QueryRowContext(ctx,
+		`SELECT generations FROM usage_republished WHERE id = 1`).Scan(&generations)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("store: read the usage generations last republished under: %w", err)
+	}
+	return generations, true, nil
+}
+
+// SetUsageRepublished records the usage log's generation on every data node
+// that the usage publisher has answered: every day its event log holds is
+// published again under them — or, where they moved without any node
+// re-anchoring, nothing needed publishing. See the migration that made the
+// table for why it is kept across a restart.
+func (d *DB) SetUsageRepublished(ctx context.Context, generations string) error {
+	if d == nil || d.sql == nil {
+		return ErrNoEstate
+	}
+	if _, err := d.sql.ExecContext(ctx, `
+		INSERT INTO usage_republished (id, generations) VALUES (1, ?)
+		ON CONFLICT (id) DO UPDATE SET generations = excluded.generations`, generations); err != nil {
+		return fmt.Errorf("store: write the usage generations republished under: %w", err)
+	}
+	return nil
+}
+
 // UsageDayWindow reads the window this node's usage publisher first cut the
 // company day `label` on ([DB.PinUsageDay]), and false when it has cut none.
 //

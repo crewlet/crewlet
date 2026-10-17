@@ -90,6 +90,7 @@ func publisherWith(t *testing.T, own *store.DB, st usage.Store, c *clock, log *l
 	lines := &refusalLines{}
 	p, err := usage.NewPublisher(usage.PublisherDeps{
 		Store: st, Log: log, Estate: own.Replicated(), NodeID: "node-a", Caught: o.caught,
+		Generations: unseen,
 		Handle:      o.handle,
 		Zone:        o.zone,
 		Now:         c.now,
@@ -801,8 +802,9 @@ func TestAnOrderlyStopPublishesTheDaysLastChange(t *testing.T) {
 	log := &loopback{t: t, into: own, node: "node-a"}
 	p, err := usage.NewPublisher(usage.PublisherDeps{
 		Store: marks, Log: log, Estate: own.Replicated(), NodeID: "node-a", Caught: caught,
-		Zone: func() *time.Location { return santiago },
-		Now:  func() time.Time { return noon },
+		Generations: unseen,
+		Zone:        func() *time.Location { return santiago },
+		Now:         func() time.Time { return noon },
 		// AN HOUR, so no tick after the first can be what publishes it.
 		Every:       time.Hour,
 		FireHistory: fireHistory,
@@ -850,6 +852,7 @@ func TestTheStopsFlushLeavesAnOlderDayOwed(t *testing.T) {
 	log := &loopback{t: t, into: own, node: "node-a"}
 	p, err := usage.NewPublisher(usage.PublisherDeps{
 		Store: own, Log: log, Estate: own.Replicated(), NodeID: "node-a", Caught: caught,
+		Generations: unseen,
 		Zone:        func() *time.Location { return santiago },
 		Now:         func() time.Time { return noon },
 		Every:       time.Hour,
