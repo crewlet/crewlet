@@ -419,8 +419,11 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	// change whoever sent it, and BEFORE ANYTHING IS READ.
 	pagesShown := shows(ctx, authz.KindPage)
 	if !pagesShown && !shows(ctx, authz.KindTask) {
+		// THE APPS OF THE TWO KINDS JUST ASKED ABOUT, and never "every
+		// app": the refusal names what would admit, and an app this
+		// question reads nothing of would not.
 		return nil, &Refusal{What: "knowledge", Reason: authz.ReasonNoGrant,
-			Grants: slices.Clone(iam.Apps)}
+			Grants: []iam.Grant{authz.AppFor(authz.KindTask), authz.AppFor(authz.KindPage)}}
 	}
 	organization := s.organization()
 	out := map[string]any{
