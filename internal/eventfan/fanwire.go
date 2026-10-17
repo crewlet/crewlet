@@ -66,11 +66,16 @@ import (
 //   - `notification_outcomes` asks what became of the notifications each
 //     third-party app delivered over a window the asker names, rather than
 //     over the span of the newest page of notification events.
-const Protocol = 6
+//   - A turn's part answers `nodes`, the nodes that PUBLISHED the rows it
+//     holds ([store.EventLog.TurnNodes]), which the asker unions into where
+//     the turn ran: the node holding a turn's rows is a custody keeper for a
+//     turn that ran on a node without `data`, so which nodes answered no
+//     longer says it.
+const Protocol = 7
 
 // Subject is where a history question is scattered: ONE subject for the whole
-// fleet, every node serving it, because the answerers are every node rather
-// than whichever the asker thought to name.
+// fleet, every data node serving it, because the answerers are every data node
+// rather than whichever the asker thought to name.
 const Subject = topics.ObserveRead
 
 // Question names what a request asks.
