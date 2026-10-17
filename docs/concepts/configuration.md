@@ -1334,8 +1334,13 @@ too and the default allow-list is empty.
 Preflights are answered **before** the auth guard, and deliberately: a browser
 sends the `OPTIONS` itself with no `Authorization` header, so answering it
 behind the guard would be a `401` on every cross-origin write and the real
-request would never be sent. Only `Authorization` and `Content-Type` are
-permitted as request headers, and a preflight is cacheable for ten minutes —
+request would never be sent. The request headers a permitted origin may send
+are a closed set — `Authorization`, `Content-Type` and `Idempotency-Key` — never
+an echo of what the browser asked for. `Idempotency-Key` is in it because a
+permitted origin may write: `POST /operator/act/{tool}` refuses a request
+without one, and `/work`, `/pages` and `/iam` read it to make a retry the same
+write. The dashboard's `X-Crewlet-Reader` is not, since only the dashboard
+sends it and it is same-origin. A preflight is cacheable for ten minutes —
 short enough that removing an origin takes effect within one.
 
 The auth middleware compares tokens in constant time (`crypto/subtle`).

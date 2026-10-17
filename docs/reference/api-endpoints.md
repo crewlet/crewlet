@@ -502,6 +502,15 @@ node means nothing was done.
 > attacker controls. See
 > [Identity and Access § A cross-site write is refused by its Origin](../concepts/identity-and-access.md#a-cross-site-write-is-refused-by-its-origin).
 >
+> **A permitted origin may send three request headers**, `Authorization`,
+> `Content-Type` and `Idempotency-Key`: the preflight answers that closed set
+> and never echoes what the browser asked for, so a page on an
+> `api.auth.allowed_origins` entry can act through
+> [`/operator/act`](#operatoract--the-dashboards-write-surface), which requires
+> the key, and retry a write as the same write. `X-Crewlet-Reader` is not in it:
+> only the dashboard sends it, from this process's own origin. See
+> [Configuration § Auth](../concepts/configuration.md#auth).
+>
 > **A request that says who it is for is served only to them.**
 > `X-Crewlet-Reader: <principal id>` — the `person` `GET /auth/session`
 > answers — names the principal a request is made FOR, and the dashboard sends

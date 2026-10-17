@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/config"
 )
 
@@ -35,12 +36,25 @@ const CORSMaxAge = 10 * time.Minute
 // `Access-Control-Request-Headers` is the common shortcut and it turns the
 // allow-list into the only control left — every header a page can invent is
 // then permitted, including ones a future route might read.
+//
+// THE OPERATION KEY IS IN IT ([opkey.Header]), because a permitted origin is
+// permitted to write: `POST /operator/act/{tool}` refuses a request without
+// one, and the human write surface (`/worklet`, `/doclet/pages`) and `/iam` read it to
+// make a retry the same write rather than a second one. Left out, the browser
+// stripped nothing — it refused the whole request at the preflight — so an
+// origin the allow-list named could never act, and never send a retry those
+// surfaces could recognise as the write it was.
+//
+// THE READER IS NOT ([ReaderHeader]): only the dashboard sends it, and the
+// dashboard is served by this process, same-origin, where no preflight is
+// asked. A page on another origin has no tab of the dashboard's to name the
+// reader of.
 var (
 	corsMethods = []string{
 		http.MethodGet, http.MethodHead, http.MethodPost,
 		http.MethodPut, http.MethodPatch, http.MethodDelete,
 	}
-	corsHeaders = []string{"Authorization", "Content-Type"}
+	corsHeaders = []string{"Authorization", "Content-Type", opkey.Header}
 )
 
 // CORS is the set of browser origins this API answers cross-origin.
