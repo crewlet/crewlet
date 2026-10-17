@@ -713,7 +713,7 @@ counts name) — is answered by **every live data node at query time**
 (`internal/eventfan`, ADR-0021). The same scatter seeds the live
 projection when a node starts. It seeds the feed and each seat's last turn,
 so a restarted node's screens show the company rather than the part of it
-this node published, and the 24-hour spend window (the `phase_tokens`
+this node's store holds, and the 24-hour spend window (the `phase_tokens`
 question, cut to the asker's window and floored at the asker's instant, so
 every node answers the same one) behind the
 [`tokens` push](../reference/api-endpoints.md#pushes), which no screen draws:
