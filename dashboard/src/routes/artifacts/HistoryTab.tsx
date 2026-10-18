@@ -104,7 +104,7 @@ export function HistoryTab({
         kind: v.restored_from ? "restore" : "publish",
         ...(v.label ? { label: v.label } : {}),
         ...(v.forced ? { summary: "Published over a newer version" } : {}),
-        author: people.seatPrincipal(v.author.Name),
+        author: people.seatPrincipal(v.author.name),
         at: v.created_at,
         ...(v.restored_from ? { restoredFrom: v.restored_from } : {}),
       })),

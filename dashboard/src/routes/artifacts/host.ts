@@ -153,9 +153,9 @@ export function bridgeDoc(
     id: doc.id,
     data: fields,
     version: doc.version,
-    createdBy: doc.created_by.Name,
+    createdBy: doc.created_by.name,
     createdAt: doc.created_at,
-    updatedBy: doc.updated_by.Name,
+    updatedBy: doc.updated_by.name,
     updatedAt: doc.updated_at,
     pending,
   };

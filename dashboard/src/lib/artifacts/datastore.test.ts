@@ -14,7 +14,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const actor = { Name: "maya", Kind: "human" };
+const actor = { name: "maya", kind: "human" };
 
 function doc(
   id: string,

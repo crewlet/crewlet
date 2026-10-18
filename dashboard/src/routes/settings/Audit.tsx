@@ -788,9 +788,9 @@ export function Audit() {
         at: entry.at,
         source: "artifacts",
         kind: entry.op,
-        actor: entry.actor.Name,
-        actorKind: entry.actor.Kind,
-        through: throughOf(entry.actor.Name, entry.actor.OperatorID),
+        actor: entry.actor.name,
+        actorKind: entry.actor.kind,
+        through: throughOf(entry.actor.name, entry.actor.operator_id),
         // A TITLE IS WHAT A PERSON NAMES AN ARTIFACT BY, and the row links to
         // it; one the head no longer holds is named by its id and links
         // nowhere, since a purge takes the page with it.

@@ -189,7 +189,7 @@ function Trashed({ detail, onChanged }: { detail: ArtifactDetail; onChanged: () 
       <EmptyState
         icon={<TrashGlyph size="xl" />}
         title="This artifact is in the trash"
-        description={`${people.seatName(detail.trashed_by.Name)} moved it to the trash. It is deleted for good 30 days after that unless its owner restores it.`}
+        description={`${people.seatName(detail.trashed_by.name)} moved it to the trash. It is deleted for good 30 days after that unless its owner restores it.`}
         action={
           <span className="artifact-actions">
             <Button
@@ -393,7 +393,7 @@ function Loaded({
     },
   ]);
 
-  const updater = people.seatName(detail.updated_by.Name);
+  const updater = people.seatName(detail.updated_by.name);
   return (
     <div className="artifact-page">
       <ObjectHeader

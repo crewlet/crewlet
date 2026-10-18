@@ -16,7 +16,7 @@ function entry(over: Partial<ArtifactHistoryEntry>): ArtifactHistoryEntry {
     op_id: "op-1",
     op: "publish",
     outcome: "applied",
-    actor: { Name: "maya", Kind: "human" },
+    actor: { name: "maya", kind: "human" },
     at: "2026-10-18T10:00:00Z",
     summary: {},
     ...over,
@@ -65,8 +65,8 @@ describe("a history row", () => {
 
 describe("an actor", () => {
   test("is the seat's name, or the engine for a system write", () => {
-    expect(actorName({ Name: "maya", Kind: "human" }, names.seat)).toBe("Maya Ortiz");
-    expect(actorName({ Name: "compactor", Kind: "system" }, names.seat)).toBe("the engine");
+    expect(actorName({ name: "maya", kind: "human" }, names.seat)).toBe("Maya Ortiz");
+    expect(actorName({ name: "compactor", kind: "system" }, names.seat)).toBe("the engine");
     expect(actorName(undefined, names.seat)).toBe("the engine");
   });
 });

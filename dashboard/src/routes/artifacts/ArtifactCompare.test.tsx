@@ -34,7 +34,7 @@ const version = (n: number, files: ArtifactEntry[]) => ({
   base: n - 1,
   files: files.length,
   bytes: 64 * files.length,
-  author: { Name: "ada", Kind: "agent" },
+  author: { name: "ada", kind: "agent" },
   created_at: "2026-10-18T10:00:00Z",
   position: n,
   manifest: { entry: "index.html", files },

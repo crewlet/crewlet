@@ -86,9 +86,9 @@ export function actorName(
   actor: ArtifactActor | undefined,
   nameOf: (handle: string) => string,
 ): string {
-  if (!actor || !actor.Name) return "the engine";
-  if (actor.Kind === "system") return "the engine";
-  return nameOf(actor.Name);
+  if (!actor || !actor.name) return "the engine";
+  if (actor.kind === "system") return "the engine";
+  return nameOf(actor.name);
 }
 
 /** A share's audience in words: a seat's name, a team's name, the company's. */

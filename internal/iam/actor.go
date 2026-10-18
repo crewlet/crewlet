@@ -60,6 +60,12 @@ func (a ActorKind) Valid() bool { return slices.Contains(ActorKinds, a) }
 const AnonymousActor = "anonymous"
 
 // Actor is how a principal is recorded on a row it authors.
+//
+// ITS WIRE KEYS ARE THE API'S SNAKE CASE (`name`, `kind`, `operator_id`), set
+// here once, because every surface that answers a row's author (the artifact
+// reads, the audit feed, a record's payload) encodes this struct as it is. A
+// struct with no tags answered `Name`, `Kind` and `OperatorID`, the only
+// PascalCase keys in the API, and every consumer had to spell them that way.
 type Actor struct {
 	// Name is the author, bare. NO PREFIX: internal/api/opsmcp used to
 	// record an operator as "operator:" + id while a work commit recorded
@@ -68,10 +74,10 @@ type Actor struct {
 	// kind is already a column, so the prefix was a second encoding of a
 	// fact the row carries, and what it bought was that a reader
 	// filtering on a name matched half of what somebody did.
-	Name string
+	Name string `json:"name"`
 
 	// Kind is which of the four this author is.
-	Kind ActorKind
+	Kind ActorKind `json:"kind"`
 
 	// OperatorID is the CREDENTIAL the write was made through, recorded
 	// BESIDE the author rather than instead of it — the `operator_id`
@@ -82,7 +88,7 @@ type Actor struct {
 	// its login otherwise, so "what did this credential do" is a question
 	// an audit answers without reasoning about kinds — for a person bound
 	// to a seat too, whose author is the seat.
-	OperatorID string
+	OperatorID string `json:"operator_id,omitempty"`
 }
 
 // ActorFor is how a principal is written down.

@@ -5015,14 +5015,14 @@ export type DataOpKind = (typeof DATA_OP_KINDS)[number];
 export type DataVerdict = (typeof DATA_VERDICTS)[number];
 
 /**
- * Who did something, as `iam.Actor` encodes itself: a struct with NO JSON
- * TAGS, so its keys are the Go field names. `Kind` is `agent`, `human`,
- * `operator` or `system`.
+ * Who did something (`iam.Actor`). `kind` is `agent`, `human`, `operator` or
+ * `system`; `operator_id` is the credential the author acted through, absent
+ * where the row records none.
  */
 export interface ArtifactActor {
-  Name: string;
-  Kind: string;
-  OperatorID?: string;
+  name: string;
+  kind: string;
+  operator_id?: string;
 }
 
 /** A state-log position (`statelog.Position`). */
