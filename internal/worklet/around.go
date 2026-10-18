@@ -295,9 +295,9 @@ func segmentFrom(seg segment, terms []sortTerm, set taskSet,
 func segmentHolds(ctx context.Context, tx *sql.Tx, seg segment, set taskSet,
 	id string) (bool, error) {
 
-	from, bound := segmentFrom(seg, nil, set, "t.id = ?", []any{id})
+	statement, bound := segmentHoldsStatement(seg, set, id)
 	var one int
-	err := tx.QueryRowContext(ctx, "SELECT 1"+from+" LIMIT 1", bound...).Scan(&one)
+	err := tx.QueryRowContext(ctx, statement, bound...).Scan(&one)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return false, nil
@@ -305,6 +305,18 @@ func segmentHolds(ctx context.Context, tx *sql.Tx, seg segment, set taskSet,
 		return false, fmt.Errorf("worklet: find the around task in its run: %w", err)
 	}
 	return true, nil
+}
+
+// segmentHoldsStatement is [segmentHolds]' probe, named for the plan test.
+//
+// ONE TASK, READ BY ITS KEY ([taskSet.byKey]), because the probe names the
+// task it asks about. Read through the set's own source it was not: a trash's
+// set names the trash's index ([taskSource]), which has no id to seek, and
+// asking which run held one removed task walked every removal in scope once
+// per run of the answer.
+func segmentHoldsStatement(seg segment, set taskSet, id string) (string, []any) {
+	from, bound := segmentFrom(seg, nil, set.byKey(), "t.id = ?", []any{id})
+	return "SELECT 1" + from + " LIMIT 1", bound
 }
 
 // segmentCount counts one run's rows matching a clause, stopping one past the

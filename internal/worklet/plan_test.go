@@ -257,7 +257,6 @@ func registeredQueries() map[string]map[string]any {
 		"overdue":           {"container": "project:P01", "due": "lt:today"},
 		"starting":          {"container": "project:P01", "start": "gt:today"},
 		"finished recently": {"container": "project:P01", "show_closed": "recent:168h"},
-		"the trash":         {"container": "project:P01", "removed": "true"},
 		"the attention set": {"container": "project:P01", "flag": "cycle"},
 		"unarchived":        {"container": "project:P01", "archived": "false"},
 		"one key":           {"key": "ENG-1"},
@@ -292,6 +291,20 @@ func registeredQueries() map[string]map[string]any {
 		"the children everywhere": {"parent": "t-00001"},
 		"one subtree everywhere":  {"root": "t-00001"},
 		"by spend everywhere":     {"sort": "-spend_tokens"},
+
+		// THE TRASH AS ITS TAB ASKS FOR IT ([ViewKeyTrash]), and with every
+		// row filtered on its own, which is how the dashboard and
+		// `list_work_items` run any view — at both scopes, because each is
+		// read through an index of its own ([taskSource]). Every statement
+		// over it, not only its page, is held to that index by
+		// [TestTheTrashIsReadThroughItsOwnIndex].
+		"the trash": {"container": "project:P01", "removed": "true",
+			"show_closed": "true"},
+		"the trash, flat": {"container": "project:P01", "removed": "true",
+			"show_closed": "true", "subtasks": "separate"},
+		"the trash everywhere": {"removed": "true", "show_closed": "true"},
+		"the trash everywhere, flat": {"removed": "true", "show_closed": "true",
+			"subtasks": "separate"},
 	}
 }
 
@@ -354,9 +367,6 @@ func dutyReads() map[string]indexedRead {
 		// the restore read every task.
 		"the subtree restore": seek("tracker_tasks_removed_with_idx",
 			removedWithStatement, "t-00001"),
-		"the trash": walk("tracker_tasks_removed_idx",
-			`SELECT id FROM tracker_tasks WHERE removed_at IS NOT NULL
-			 ORDER BY removed_at DESC LIMIT 51`),
 		"key resolution":       seek(keys, resolveTaskStatement, "ENG-1", "ENG-1", "ENG-1"),
 		"a point read's scope": seek(keys, taskReadScopeStatement, "ENG-1", "ENG-1", "ENG-1"),
 		"one tag's tasks": seek("tracker_task_tags_slug_idx",
@@ -1029,6 +1039,142 @@ func TestTheSubtaskRollupKeepsItsContainer(t *testing.T) {
 			}
 		})
 	}
+}
+
+// THE TRASH IS READ THROUGH ITS OWN INDEX, BY EVERY STATEMENT OVER IT.
+//
+// A removed task is a fraction of the company and only the trash reads one, so
+// a trash costs what is in it — never what the company holds. That is a claim
+// about every statement an answer over the trash issues, not only about its
+// page: measured before [taskSource] named the index, the workspace trash's
+// page walked the old index but its count, its totals, a board's column counts
+// and the subtree rollup's own subquery each read every task in the company
+// from the heap (this engine's planner reaches a partial index only for an
+// order it provides or a seek on its leading column, and the tombstone is
+// neither), a project's trash sought the project's whole board through
+// `tracker_tasks_rank_idx` at every level and sorted it, and a click on the
+// Title column sorted the company.
+//
+// So each statement here is the reader's own ([taskRowsStatement],
+// [cappedCountStatement], [totalsStatement], [groupCountsStatement]) over the
+// set [compile] produces, at both scopes and in both subtask modes, and every
+// line of its plan that reads the task table reads the scope's index — at
+// every level, the rollup's subquery included. The page in the trash's own
+// order is held to it unsorted as well, because that order is the index's and
+// a LIMIT stops it after a page; a page ordered by something else may sort,
+// and sorts the trash.
+func TestTheTrashIsReadThroughItsOwnIndex(t *testing.T) {
+	t.Parallel()
+	db := planStore(t)
+	cases := map[string]struct {
+		params map[string]any
+		index  string
+	}{
+		"a project's trash": {map[string]any{"container": "project:P01"},
+			projectRemovedIndex},
+		"a project's trash, flat": {map[string]any{"container": "project:P01",
+			"subtasks": "separate"}, projectRemovedIndex},
+		"the company's trash": {map[string]any{}, removedIndex},
+		"the company's trash, flat": {map[string]any{"subtasks": "separate"},
+			removedIndex},
+	}
+	for name, c := range cases {
+		for _, sort := range []string{"", "title"} {
+			t.Run(name+" sorted by "+cmpOr(sort, "its removal"), func(t *testing.T) {
+				params := map[string]any{"removed": "true", "show_closed": "true",
+					"totals": "tasks:count,points:sum", "group_by": "status"}
+				for key, value := range c.params {
+					params[key] = value
+				}
+				if sort != "" {
+					params["sort"] = sort
+				}
+				q, err := ParseQuery(MapParams(params), planNow, time.UTC)
+				if err != nil {
+					t.Fatalf("ParseQuery: %v", err)
+				}
+				fields := planFields(q)
+				set, err := compile(q, planNow, fields)
+				if err != nil {
+					t.Fatalf("compile: %v", err)
+				}
+				terms := sortTerms(q, fields)
+				page, pageArgs := taskRowsStatement("", nil, set, terms)
+				_, exprs, totalArgs, err := compileTotals(q.Totals, fields)
+				if err != nil {
+					t.Fatalf("compileTotals: %v", err)
+				}
+				axis, err := compileGroup(q.GroupBy, fields, q.dayWindow(), q.Units)
+				if err != nil {
+					t.Fatalf("compileGroup: %v", err)
+				}
+				columns, columnArgs := groupCountsStatement(axis, set)
+				clause, values := axis.joinedFilter(string(StatusTodo))
+				column, columnRowArgs := taskRowsStatement(axis.Join, axis.JoinArgs,
+					set.and(clause, values), terms)
+				statements := map[string]plannedRead{
+					"the page": {page, append(pageArgs, 51)},
+					"the count it carries": {cappedCountStatement(set.from, set.where),
+						append(append([]any{}, set.args...), TotalHintCeiling+1)},
+					"its totals": {totalsStatement(set, exprs),
+						append(append([]any{}, set.args...), totalArgs...)},
+					"a board's columns": {columns, append(columnArgs, MaxGroups+1)},
+					"one column's rows": {column, append(columnRowArgs, 21)},
+				}
+				for what, statement := range statements {
+					plan := explain(t, db, statement.sql, statement.args)
+					shown := strings.Join(plan, "\n")
+					others, read := tasksReadOtherwise(plan, c.index)
+					switch {
+					case !read:
+						t.Errorf("%s reads no task at all, so this case "+
+							"measures nothing:\n%s", what, shown)
+					case len(others) > 0:
+						t.Errorf("%s reads the task table other than through "+
+							"%s — every task of the company, or of the "+
+							"project, to find the removed ones:\n%s",
+							what, c.index, shown)
+					}
+					if what == "the page" && sort == "" && sorts(plan) {
+						t.Errorf("the page in the trash's own order sorts what "+
+							"it read, so it is the whole trash rather than a "+
+							"page:\n%s", shown)
+					}
+				}
+			})
+		}
+	}
+}
+
+// cmpOr is value, or otherwise when value is empty.
+func cmpOr(value, otherwise string) string {
+	if value == "" {
+		return otherwise
+	}
+	return value
+}
+
+// tasksReadOtherwise is every line of a plan that reads the task table through
+// anything but index — a heap scan, or another of its indexes — and whether
+// any line reads the table at all.
+//
+// A LINE READS IT when it scans `tracker_tasks` or seeks under the alias `t`,
+// which every statement over a compiled set gives it: this engine writes a
+// scan under the table's name and a seek under the alias (see [seeks]).
+func tasksReadOtherwise(plan []string, index string) ([]string, bool) {
+	var others []string
+	read := false
+	for _, line := range plan {
+		if !strings.HasPrefix(line, "SCAN tracker_tasks ") && line != "SCAN tracker_tasks" &&
+			!strings.HasPrefix(line, "SEARCH t ") {
+			continue
+		}
+		read = true
+		if !slices.Contains(indexesIn([]string{line}), index) {
+			others = append(others, line)
+		}
+	}
+	return others, read
 }
 
 // THE COMPANY-WIDE HISTORY READS SEARCH THEIR PARTIAL INDEX.

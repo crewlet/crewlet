@@ -577,21 +577,22 @@ func compile(q Query, now time.Time, fields map[string]resolvedField) (taskSet, 
 	if err != nil {
 		return taskSet{}, err
 	}
-	return taskSet{from: taskTable, where: where, args: args}, nil
+	return taskSet{from: taskSource(q), where: where, args: args}, nil
 }
 
 // taskSet is a compiled query's tasks: the source every statement over them
-// reads from and the predicate that keeps them.
+// reads from ([taskSource]) and the predicate that keeps them.
 //
 // ONE VALUE RATHER THAN A PREDICATE AND A TABLE NAME BESIDE IT, because the
 // two are one decision and every statement over an answer is a statement over
 // the same set — its page, the count it carries, its totals, its board's
-// columns and where one task sits in it. A statement that spelled its own
-// `FROM tracker_tasks t` is one that could read a different source from the
-// page it sits beside.
+// columns and where one task sits in it. A trash predicate read from the plain
+// table is the heap scan [taskSource] exists to prevent, and a statement that
+// spelled its own `FROM tracker_tasks t` was one that could.
 type taskSet struct {
 	// from is the FROM clause's source: the task table under the alias `t`
-	// every predicate here is written against.
+	// every predicate here is written against, and the index it is read
+	// through where the query names one ([taskSource]).
 	from string
 	// where and args are the predicate and its arguments, in statement
 	// order.
@@ -611,6 +612,19 @@ func tasksWhere(where string, args []any) taskSet {
 	return taskSet{from: taskTable, where: where, args: args}
 }
 
+// byKey is the set as a statement about ONE task it names by id reads it: the
+// same predicate, over the plain table, so the planner seeks that one row by
+// the table's own key and tests the predicate on it.
+//
+// NOT THE SET'S OWN SOURCE, because an index the set names ([taskSource]) is
+// the only one its statements may then read, and the trash's leads with the
+// removal rather than the id: a probe of one removed task read through it was
+// a walk of every removal in scope. The predicate keeps whatever it names
+// itself — the subtree rollup's subquery still reads the scope's index.
+func (s taskSet) byKey() taskSet {
+	return taskSet{from: taskTable, where: s.where, args: s.args}
+}
+
 // and is the set narrowed by one more clause, whose arguments bind after the
 // set's own because the clause is written after them.
 //
@@ -621,6 +635,56 @@ func (s taskSet) and(clause string, values []any) taskSet {
 		from:  s.from,
 		where: "(" + s.where + ") AND " + clause,
 		args:  append(append([]any{}, s.args...), values...),
+	}
+}
+
+// The two indexes the trash is read through (replicated 0056), one per scope
+// a task listing has.
+const (
+	removedIndex        = "tracker_tasks_removed_idx"
+	projectRemovedIndex = "tracker_tasks_project_removed_idx"
+)
+
+// taskSource is where a query's tasks are read from: the task table, and for a
+// listing of the TRASH the index that holds it.
+//
+// # Why the trash NAMES its index
+//
+// A removed task is a fraction of the table and only the trash reads one, so
+// the index over removed rows is partial on exactly that and is the size of the
+// trash rather than of the company. But this engine's planner reaches a partial
+// index only for an ORDER it provides or a SEEK on its leading column, and
+// `removed_at IS NOT NULL` is neither — so with no statistics (nothing here
+// runs ANALYZE) every statement over the trash that is not ordered by the
+// removal read every task in the company through the heap to keep the removed
+// ones: the count the answer carries, its totals, a board's columns, the
+// subtree rollup's own subquery and a pinned view's count. A `sort=title` read
+// the heap and sorted it, and inside a project every one of them sought the
+// project's whole board through `tracker_tasks_rank_idx`. Measured over the
+// plan fixture's corpus, and held there for every one of those statements.
+// Named, each reads the trash — a sort the caller asks for sorts the trash, a
+// count counts it — and the default order walks it and stops after a page.
+//
+// AND THE INDEX FOLLOWS THE SCOPE. Inside a project the trash is a seek on the
+// project's key in the trash's own order; the workspace's index has no project
+// to seek and leads with the order itself. A project's trash read through the
+// workspace's index would walk every removal in the company to keep one
+// project's.
+//
+// It is a GUARD as well, which is the clause's documented purpose: an index
+// that went fails the statement with `no such index`, and a removed listing
+// that stopped stating the predicate the index is partial on (the tombstone
+// [compileWhere] writes at the top level and inside the subtree rollup) fails
+// with `no query solution` — loudly, at the first trash anybody opens, rather
+// than as a tab that quietly started reading the company.
+func taskSource(q Query) string {
+	switch {
+	case q.Removed == nil || !*q.Removed:
+		return taskTable
+	case q.Scope.Project != "":
+		return taskTable + " INDEXED BY " + projectRemovedIndex
+	default:
+		return taskTable + " INDEXED BY " + removedIndex
 	}
 }
 
@@ -677,8 +741,9 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 	// `removed=true` is the OTHER side of it and the only way to reach the
 	// trash: a removal hides a task, and a restore is a gesture somebody
 	// makes about a task they can see. It is `IS NOT NULL` rather than a
-	// date bound so `tracker_tasks_removed_idx`, which is partial on
-	// exactly that, is the plan.
+	// date bound because the trash's two indexes are partial on exactly
+	// that and [taskSource] names one: a removed listing whose predicate
+	// did not imply the index's could not be read through it at all.
 	if !branch {
 		if q.Removed != nil && *q.Removed {
 			add("t.removed_at IS NOT NULL")
@@ -1004,12 +1069,17 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 	// AND IT DOES NOT APPLY WHEN THE CALLER ASKED FOR A SUBTREE: `parent`
 	// and `root` are questions ABOUT subtasks, so filtering their roots
 	// would answer the parent's siblings instead.
+	//
+	// THE SUBQUERY READS FROM THE QUERY'S OWN SOURCE ([taskSource]),
+	// because it selects the same tasks the outer row does: in the trash
+	// its predicate is a removed root, and read from the plain table it
+	// walked every task in the company to find the roots the trash holds.
 	if !branch && q.Subtasks != SubtasksSeparate && q.Parent == "" &&
 		q.Root == "" && len(where) > 0 {
 
 		inner := strings.Join(where, " AND ")
-		rooted := "t.root_id IN (SELECT t.id FROM tracker_tasks t WHERE " +
-			inner + ")"
+		rooted := "t.root_id IN (SELECT t.id FROM " + taskSource(q) +
+			" WHERE " + inner + ")"
 		// THE ROW'S OWN TOMBSTONE STILL APPLIES: a removed subtask must
 		// not ride along on a live root, and the predicate above tests
 		// the ROOT's.
@@ -1395,7 +1465,8 @@ var sortColumns = map[string]sortColumn{
 // order even if a duplicate rank ever occurs — and it is free wherever an
 // order has an index, because each such index carries it as its trailing
 // column (the board's, the recent listing's, the workspace's, spend's,
-// estimate's and points') and still serves the range with no sort step.
+// estimate's, points' and the trash's) and still serves the range with no
+// sort step.
 func sortTerms(q Query, fields map[string]resolvedField) []sortTerm {
 	var terms []sortTerm
 	for i, sort := range q.Sort {
@@ -1440,9 +1511,9 @@ func sortTerms(q Query, fields map[string]resolvedField) []sortTerm {
 			// THE TRASH IS ORDERED BY WHEN IT WAS REMOVED, never by
 			// rank: a removed task's rank is its position on a board
 			// it is no longer on, so ordering a trash listing by it
-			// is ordering by a stale number — and the only index over
-			// removed rows is the partial one on this column, so the
-			// board default also made the listing a heap scan.
+			// is ordering by a stale number — and the indexes a trash
+			// is read through ([taskSource]) are in this order, so it
+			// is the one a page of the trash reads without a sort.
 			// NULLABLE — it is what "removed" MEANS — and descending, so
 			// the clause is SQLite's own default either way.
 			terms = append(terms, sortTerm{
