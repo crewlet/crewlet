@@ -306,6 +306,51 @@ Three narrow rules sit beside the apps, each the owner's own decision:
   task in a project the company does not declare is. See [Who may write
   where](knowledge-system.md#who-may-write-where).
 
+### Artifacts: an app for authoring, and shares for everything else
+
+[Artifacts](artifacts.md) are the third app, and they use the vocabulary
+differently from the other two in one respect: **the `artifacts` permission
+gates authoring only.** Creating an artifact, publishing a version, changing a
+datastore's schema, trashing and restoring ask the app beside a relation.
+Everything else about an artifact (opening it, its versions and its history,
+being present in it, writing its data within the collection rules) is decided
+by a **share** alone, so a colleague handed no app at all still opens and
+fills in every artifact shared with them.
+
+A share is a relation, never a permission. It names a seat, a unit (every seat
+in it or below it, live) or the whole company, with one role on a ladder:
+`viewer`, `commenter`, `contributor`, `editor`, `owner`, each including the
+ones before it. `owner` is never shared and moves only by transfer, and a share
+never grants above the sharer's own role. Sharing `editor` with somebody who
+does not use Artifacts lets them do everything but publish and change the
+schema, and the share dialog says so.
+
+Four arms decide beside the shares:
+
+- **The owner** holds every role.
+- **The lead of an agent owner** holds the owner's role on that agent's
+  artifacts. The lead of a person holds nothing of theirs: a person's drafts
+  are not their team's work queue.
+- **An administrator** reads and manages every artifact through the admin
+  path, and a read of one the administrator has no share in is recorded as an
+  elevated read, shown to its owner and editors. On a node that refuses admin
+  there is no admin path, and an administrator signed in there reads only what
+  is shared with them.
+- **Nobody else.** A caller with no share is answered exactly as if the
+  artifact did not exist (`404 artifact_not_found`); a share below what the
+  gesture needs is `403`, naming the role that would change the answer.
+
+An agent seat holds the app, like every app, and is held back by rules about
+the gesture rather than its shares: it never widens a share to the whole
+company; trashing, restoring, transferring, pinning and forcing a publish over
+a newer version are human-only; it manages only artifacts it owns unless the
+company sets `artifacts.agents_manage_others`; and every artifact tool passes
+the requester ceiling, so an agent reads and writes for somebody only what that
+somebody could. A purge, as everywhere in the engine, is an administrator's and
+asks for a [recent proof](#some-gestures-ask-how-recently-you-proved-who-you-are).
+The decision is
+[ADR-0034](https://github.com/crewlet/crewlet/blob/main/adr/0034-an-artifact-is-shared-and-a-share-is-a-relation.md).
+
 ### What admin runs
 
 `admin` covers every gesture that changes what the company *is* or reads what
