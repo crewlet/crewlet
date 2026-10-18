@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,12 +39,48 @@ var soonAfter = retry.BackoffDelayerFunc(func(int, error) (time.Duration, error)
 // (the zero Clock is the wall clock's).
 func openRetrying(t *testing.T, srv *s3fake.Server, prefix string, c s3obj.Clock) *s3obj.Backend {
 	t.Helper()
-	b, err := s3obj.OpenRetrying(t.Context(), fakeConfig(srv, prefix), soonAfter, c)
+	return openPaced(t, srv, prefix, soonAfter, c)
+}
+
+// openPaced is [openRetrying] with the client's attempts paced by backoff.
+func openPaced(t *testing.T, srv *s3fake.Server, prefix string, backoff retry.BackoffDelayer,
+	c s3obj.Clock) *s3obj.Backend {
+	t.Helper()
+	b, err := s3obj.OpenRetrying(t.Context(), fakeConfig(srv, prefix), backoff, c)
 	if err != nil {
 		t.Fatalf("open the bucket: %v", err)
 	}
 	s3obj.CutParts(b, part)
 	return b
+}
+
+// stepping is the production give-up rule driven deterministically: a backoff
+// that waits a millisecond and moves its clock on by the backoff's twenty-second
+// ceiling, so a request asked again at the ceiling is judged as the clock
+// reads it — and that, where next is set, tells next which retry it is pacing
+// (1 for the wait before the second attempt), so a case scripts the bucket's
+// next answer from inside the same call.
+type stepping struct {
+	clock *stoppedClock
+	next  func(retry int)
+	calls atomic.Int64
+}
+
+func (s *stepping) BackoffDelay(int, error) (time.Duration, error) {
+	n := s.calls.Add(1)
+	s.clock.Advance(retry.DefaultMaxBackoff)
+	if s.next != nil {
+		s.next(int(n))
+	}
+	return time.Millisecond, nil
+}
+
+// openStepped is the backend over srv with its attempts paced by a [stepping]
+// backoff on a clock of its own, and the production give-up rule.
+func openStepped(t *testing.T, srv *s3fake.Server, next func(retry int)) (*s3obj.Backend, *stepping) {
+	t.Helper()
+	s := &stepping{clock: newStoppedClock(), next: next}
+	return openPaced(t, srv, "", s, s.clock.Clock()), s
 }
 
 // stoppedClock is a gate's time a case moves by hand: its instant moves only
@@ -861,5 +899,464 @@ func TestOnlyTheSessionRequestPassesTheGate(t *testing.T) {
 					op, ran, want)
 			}
 		})
+	}
+}
+
+// statusOf is the HTTP status inside err, 0 for none.
+func statusOf(err error) int {
+	var resp interface{ HTTPStatusCode() int }
+	if errors.As(err, &resp) {
+		return resp.HTTPStatusCode()
+	}
+	return 0
+}
+
+// A REQUEST FAILED FOR A MINUTE IS GIVEN UP. With nothing counting attempts, a
+// request the bucket answered with nothing but failures was asked again until
+// its deadline — sixteen and a half minutes for a full part. Now one whose
+// failures span its own bound inside [s3obj.GiveUpAfterBound] is not asked
+// again: on a clock the backoff moves twenty seconds an attempt, failures at
+// 0, 20, 40 and 60 seconds, given up at the fourth whatever bound its span
+// drew, since every bound lies past forty seconds and by the minute — its
+// error the give-up, naming the minute, with the bucket's last answer inside
+// it, never its deadline's. A server error, a gateway's own 503 (asked through
+// a GET: a HEAD's 503 carries no code and is a throttle) and a bucket that
+// refuses the connection alike.
+func TestARequestFailedForAMinuteIsGivenUp(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		// fail makes the bucket fail every request from here on.
+		fail func(srv *s3fake.Server)
+		do   func(ctx context.Context, b *s3obj.Backend) error
+		// op is the operation the bucket counts the request's attempts
+		// under: empty for one it was sent none of it could count.
+		op string
+		// last holds the bucket's last answer inside the give-up.
+		last func(t *testing.T, err error)
+	}{
+		{name: "a server error", op: "HeadObject",
+			fail: func(srv *s3fake.Server) { srv.FailNext(1_000_000, http.StatusInternalServerError, "InternalError") },
+			do:   func(ctx context.Context, b *s3obj.Backend) error { _, err := b.Stat(ctx, "k"); return err },
+			last: func(t *testing.T, err error) {
+				if _, ok := errors.AsType[smithy.APIError](err); !ok || statusOf(err) != http.StatusInternalServerError {
+					t.Fatalf("the give-up %v holds no API error answered 500", err)
+				}
+			}},
+		{name: "a gateway's own 503", op: "GetObject",
+			fail: func(srv *s3fake.Server) {
+				srv.FailNext(1_000_000, http.StatusServiceUnavailable, "XMinioReadQuorum")
+			},
+			do: func(ctx context.Context, b *s3obj.Backend) error {
+				r, err := b.Get(ctx, "k", 0, 1)
+				if err == nil {
+					_ = r.Close()
+				}
+				return err
+			},
+			last: func(t *testing.T, err error) {
+				if api, ok := errors.AsType[smithy.APIError](err); !ok || api.ErrorCode() != "XMinioReadQuorum" {
+					t.Fatalf("the give-up %v holds no API error naming XMinioReadQuorum", err)
+				}
+			}},
+		{name: "a connection refused", op: "",
+			fail: func(srv *s3fake.Server) { srv.Close() },
+			do:   func(ctx context.Context, b *s3obj.Backend) error { _, err := b.Stat(ctx, "k"); return err },
+			last: func(t *testing.T, err error) {
+				if _, ok := errors.AsType[*net.OpError](err); !ok {
+					t.Fatalf("the give-up %v holds no network error", err)
+				}
+				if _, isAPI := errors.AsType[smithy.APIError](err); isAPI {
+					t.Fatalf("the give-up %v holds an API error from a bucket that never answered", err)
+				}
+			}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			srv := s3fake.Start(t, "files")
+			srv.Put("k", []byte("an object"))
+			b, paced := openStepped(t, srv, nil)
+			before := srv.RequestsOf(c.op)
+			c.fail(srv)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			err := c.do(ctx, b)
+			if err == nil || ctx.Err() != nil {
+				t.Fatalf("a request the bucket kept failing = %v (its guard: %v); want it given up "+
+					"before its guard", err, ctx.Err())
+			}
+			given, ok := errors.AsType[*s3obj.GivenUp](err)
+			if !ok {
+				t.Fatalf("a request the bucket kept failing = %v; want it given up", err)
+			}
+			for _, want := range []string{"failed every attempt", s3obj.GiveUpAfterBound.String()} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("the give-up %q does not name %q", err, want)
+				}
+			}
+			c.last(t, err)
+			// FAILURES AT 0, 20, 40 AND 60 SECONDS: the fourth reaches the
+			// minute.
+			const attempts = 4
+			if n := given.Attempts(); n != attempts {
+				t.Fatalf("the request was given up after %d attempts, want %d", n, attempts)
+			}
+			if n := paced.calls.Load(); n != attempts-1 {
+				t.Fatalf("the request waited %d times between attempts, want %d", n, attempts-1)
+			}
+			if c.op != "" {
+				if n := srv.RequestsOf(c.op) - before; n != attempts {
+					t.Fatalf("the bucket was sent %d attempts, want %d", n, attempts)
+				}
+			}
+		})
+	}
+}
+
+// A THROTTLE BETWEEN FAILURES STARTS THE MINUTE AGAIN: a bucket that asks the
+// node to slow down is up, and a request it throttles is the gate's and its
+// deadline's to govern. Answered 500, 500, SlowDown and then 500s on a clock
+// the backoff moves twenty seconds an attempt — failures at 0 and 20 seconds,
+// the throttle at 40, failures from 60 — the request is given up at its
+// seventh attempt, a minute after the failure at 60 that began a span of its
+// own (past any bound that span could draw, and short of none before it),
+// never at its fourth.
+func TestAThrottleBetweenFailuresStartsTheMinuteAgain(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	srv.Put("k", []byte("an object"))
+	script := []struct {
+		status int
+		code   string
+	}{
+		{http.StatusInternalServerError, "InternalError"},
+		{http.StatusInternalServerError, "InternalError"},
+		{http.StatusServiceUnavailable, "SlowDown"},
+	}
+	for range 5 {
+		script = append(script, script[0])
+	}
+	b, _ := openStepped(t, srv, func(retry int) {
+		if retry < len(script) {
+			srv.FailNext(1, script[retry].status, script[retry].code)
+		}
+	})
+	before := srv.RequestsOf("HeadObject")
+	srv.FailNext(1, script[0].status, script[0].code)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	_, err := b.Stat(ctx, "k")
+	given, ok := errors.AsType[*s3obj.GivenUp](err)
+	if !ok {
+		t.Fatalf("a head failed, throttled and failed again = %v; want it given up", err)
+	}
+	if !strings.Contains(err.Error(), s3obj.GiveUpAfterBound.String()) {
+		t.Fatalf("the give-up %q does not name the minute", err)
+	}
+	if n := given.Attempts(); n != 7 {
+		t.Fatalf("a head failed, throttled and failed again was given up after %d attempts, want 7", n)
+	}
+	if n := srv.RequestsOf("HeadObject") - before; n != 7 {
+		t.Fatalf("the bucket was sent %d attempts, want 7", n)
+	}
+}
+
+// A BRIEF FAILURE IS RIDDEN THROUGH, and a long one ends a put — single or in
+// parts — at the bound rather than at its deadline. In real time, at a bound
+// of 300 ms: a bucket failing every request for 100 ms still stores a put and
+// an upload in parts; one that refuses part 2 of an upload and then everything
+// after it, the abandonment included, ends the upload naming part 2 and the
+// abandonment's own failure within a couple of seconds, and then a single put
+// likewise — where their deadlines are minutes.
+func TestABriefFailureIsRiddenThrough(t *testing.T) {
+	t.Parallel()
+	const bound = 300 * time.Millisecond
+	single := bytes.Repeat([]byte("s"), part-1)
+	parts := bytes.Repeat([]byte("p"), 2*part+part/2)
+	put := func(t *testing.T, b *s3obj.Backend, name string, data []byte) (time.Duration, error) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		began := time.Now()
+		err := b.Put(ctx, name, bytes.NewReader(data), objstore.PutMeta{})
+		if ctx.Err() != nil {
+			t.Fatalf("a put of %s ended at its guard: %v", name, err)
+		}
+		return time.Since(began), err
+	}
+
+	t.Run("ridden through", func(t *testing.T) {
+		t.Parallel()
+		srv := s3fake.Start(t, "files")
+		b := openRetrying(t, srv, "", s3obj.Clock{})
+		s3obj.GiveUpAfter(b, bound)
+		for _, c := range []struct {
+			name string
+			data []byte
+		}{{"one-part", single}, {"in-parts", parts}} {
+			srv.FailFor(100*time.Millisecond, http.StatusInternalServerError, "InternalError")
+			if _, err := put(t, b, c.name, c.data); err != nil {
+				t.Fatalf("a put of %d bytes against a bucket failing for 100ms = %v; want it stored",
+					len(c.data), err)
+			}
+		}
+	})
+
+	t.Run("given up", func(t *testing.T) {
+		t.Parallel()
+		srv := s3fake.Start(t, "files")
+		srv.FailPart(2, http.StatusInternalServerError, "InternalError")
+		// PART 2 FAILS FIRST, AND EVERYTHING AFTER IT: its first arrival
+		// waits for parts 1 and 3 to have arrived — past the refusal
+		// they would otherwise meet — and then fails the bucket for good,
+		// so part 2 is the request given up and the abandonment fails too.
+		var (
+			first, third = make(chan struct{}), make(chan struct{})
+			once         = map[int32]*sync.Once{1: {}, 2: {}, 3: {}}
+		)
+		srv.PartHook = func(n int32) {
+			switch n {
+			case 1:
+				once[1].Do(func() { close(first) })
+			case 3:
+				once[3].Do(func() { close(third) })
+			case 2:
+				once[2].Do(func() {
+					for _, arrived := range []chan struct{}{first, third} {
+						select {
+						case <-arrived:
+						case <-time.After(10 * time.Second):
+						}
+					}
+					srv.FailFor(time.Hour, http.StatusInternalServerError, "InternalError")
+				})
+			}
+		}
+		b := openRetrying(t, srv, "", s3obj.Clock{})
+		s3obj.GiveUpAfter(b, bound)
+		for _, c := range []struct {
+			name string
+			data []byte
+			// names is what the error must name.
+			names []string
+		}{
+			{"in-parts", parts, []string{"part 2", "could not be abandoned"}},
+			{"one-part", single, []string{"put one-part"}},
+		} {
+			took, err := put(t, b, c.name, c.data)
+			if _, ok := errors.AsType[*s3obj.GivenUp](err); !ok {
+				t.Fatalf("a put of %d bytes against a failing bucket = %v; want it given up", len(c.data), err)
+			}
+			if took > bound+2*time.Second {
+				t.Fatalf("a put of %d bytes against a failing bucket was given up after %v, want at most %v",
+					len(c.data), took, bound+2*time.Second)
+			}
+			for _, want := range c.names {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("a put of %d bytes given up = %q; want it naming %q", len(c.data), err, want)
+				}
+			}
+		}
+	})
+}
+
+// THE LAST ATTEMPT IS SENT AT THE BOUND: a request inside its span of failures
+// waits no longer than what is left of its span's bound before it is asked
+// again, so it is asked once more AT the bound rather than up to twenty
+// seconds past it — where a wait for any other answer is drawn from the whole
+// ceiling.
+func TestTheLastAttemptIsSentAtTheBound(t *testing.T) {
+	t.Parallel()
+	const left = 3 * time.Second
+	failure := answer(http.StatusInternalServerError, "InternalError")
+	most, atLeft := time.Duration(0), false
+	for range 1000 {
+		d, err := s3obj.FullJitter.BackoffDelay(10, s3obj.Failing(failure, left))
+		if err != nil {
+			t.Fatal(err)
+		}
+		most, atLeft = max(most, d), atLeft || d == left
+	}
+	if most > left || !atLeft {
+		t.Fatalf("a thousand waits with %v of the bound left ran up to %v (one at it: %v); want none "+
+			"past it, and some at it", left, most, atLeft)
+	}
+	most = 0
+	for range 1000 {
+		d, err := s3obj.FullJitter.BackoffDelay(10, failure)
+		if err != nil {
+			t.Fatal(err)
+		}
+		most = max(most, d)
+	}
+	if most <= left {
+		t.Fatalf("a thousand waits for a failure outside any span ran up to %v; want the ceiling's spread", most)
+	}
+}
+
+// THE LAST ATTEMPTS OF REQUESTS THAT BEGAN FAILING TOGETHER ARE SPREAD over the
+// minute's last third, each at its own span's bound — where one bound of a
+// minute for every request sent every last attempt in one instant, on the
+// minute: every write open on every node when the bucket fell over, onto a
+// bucket that may just be recovering. And what a failing request sends before
+// it is given up is a distribution the backoff decides, derived here once for
+// the docs to quote.
+//
+// Two thousand heads, one at a time, against a bucket failing every request,
+// through the production backoff and bounds — each seeded, so every run draws
+// alike — on a clock of the client's own that the backoff moves by each wait
+// and by a modelled first byte of 100 ms (S3's, at its lower end): every head
+// is given up forty seconds to a minute after its first failure (and its last
+// attempt's first byte), no tenth of a second holding more than one in fifty
+// of their last attempts; and their attempts run to a median of nine, twelve
+// at the 95th percentile and fourteen at the most — the figures giveUpAfter's
+// doc, newRetryer's and docs/concepts/object-store.md quote, so a change to
+// the backoff or the rule that moves them fails here.
+func TestAFailingRequestsLastAttemptsAreSpreadOverTheirBounds(t *testing.T) {
+	t.Parallel()
+	const (
+		requests  = 2000
+		firstByte = 100 * time.Millisecond
+		window    = 100 * time.Millisecond
+	)
+	srv := s3fake.Start(t, "files")
+	srv.Put("k", []byte("an object"))
+	clock := newStoppedClock()
+	b := openPaced(t, srv, "", &onTheClock{clock: clock, backoff: s3obj.SeededJitter(1), firstByte: firstByte},
+		clock.Clock())
+	s3obj.SeedBounds(b, 2)
+	srv.FailFor(time.Hour, http.StatusInternalServerError, "InternalError")
+	least := s3obj.GiveUpAfterBound - s3obj.GiveUpAfterBound/3
+	var (
+		lasts    []time.Duration
+		attempts []int
+	)
+	for range requests {
+		began := clock.Now()
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		_, err := b.Stat(ctx, "k")
+		cancel()
+		given, ok := errors.AsType[*s3obj.GivenUp](err)
+		if !ok {
+			t.Fatalf("a head the bucket kept failing = %v; want it given up", err)
+		}
+		// GIVEN UP at its first failure at or past its span's bound, a first
+		// byte after that attempt was sent — which a wait cut to the bound
+		// sends on it, and one drawn short of the bound up to a first byte
+		// before it. The first failure is the first attempt's answer, which
+		// the clock read as the head began.
+		took := clock.Now().Sub(began)
+		if took < least || took > s3obj.GiveUpAfterBound+firstByte {
+			t.Fatalf("a head the bucket kept failing was given up %v after its first failure (%d attempts); "+
+				"want it inside [%v, %v], its own bound and its last attempt's first byte", took,
+				given.Attempts(), least, s3obj.GiveUpAfterBound+firstByte)
+		}
+		lasts, attempts = append(lasts, took-firstByte), append(attempts, given.Attempts())
+	}
+
+	slices.Sort(lasts)
+	most, at := 0, time.Duration(0)
+	for i, from := range lasts {
+		n, _ := slices.BinarySearch(lasts[i:], from+window)
+		if n > most {
+			most, at = n, from
+		}
+	}
+	// EVEN, a tenth of a second of the bounds' twenty holds one in two
+	// hundred — ten here, and the fullest of two hundred such windows about
+	// twice that; four times it is no spread at all.
+	if most > requests/50 {
+		t.Fatalf("%d of %d last attempts were sent within %v of each other, %v after the first failure; "+
+			"want them spread over the minute's last third", most, requests, window, at)
+	}
+
+	slices.Sort(attempts)
+	median, p95, worst := attempts[requests/2], attempts[requests*95/100], attempts[requests-1]
+	t.Logf("attempts a request: median %d, 95th percentile %d, most %d; last attempts at most %d of %d "+
+		"in a %v window", median, p95, worst, most, requests, window)
+	if median != 9 || p95 != 12 || worst != 14 {
+		t.Fatalf("a failing request's attempts ran to a median of %d, %d at the 95th percentile and %d "+
+			"at the most; the docs quote 9, 12 and 14 — measure again and restate them", median, p95, worst)
+	}
+}
+
+// onTheClock is a backoff that waits on clock rather than in real time: it
+// moves clock on by the wait backoff draws and by firstByte, the time the
+// attempt it leads to then takes to be answered, and waits for nothing — so
+// a request's attempts are judged where a bucket a first byte away would
+// have them, as fast as the fake answers.
+type onTheClock struct {
+	clock     *stoppedClock
+	backoff   retry.BackoffDelayer
+	firstByte time.Duration
+}
+
+func (o *onTheClock) BackoffDelay(attempt int, err error) (time.Duration, error) {
+	d, err := o.backoff.BackoffDelay(attempt, err)
+	o.clock.Advance(d + o.firstByte)
+	return 0, err
+}
+
+// A GIVEN-UP REQUEST IS STILL THE BUCKET'S FAILURE: the give-up holds the
+// bucket's last answer, so a batch deletion given up on 500s is the bucket
+// failing — never [objstore.ErrNoBatch], which would send its caller to ask
+// for every name on its own — and its 500 is still found inside it.
+func TestAGivenUpRequestIsStillTheBucketsFailure(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	b, _ := openStepped(t, srv, nil)
+	srv.FailNext(1_000_000, http.StatusInternalServerError, "InternalError")
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	err := b.DeleteBatch(ctx, []string{"files/a", "files/b"})
+	if _, ok := errors.AsType[*s3obj.GivenUp](err); !ok {
+		t.Fatalf("a batch deletion the bucket kept failing = %v; want it given up", err)
+	}
+	if errors.Is(err, objstore.ErrNoBatch) {
+		t.Fatalf("a batch deletion given up on 500s = %v, which reads as a bucket without the verb", err)
+	}
+	if code := statusOf(err); code != http.StatusInternalServerError {
+		t.Fatalf("a batch deletion given up on 500s = %v, holding status %d; want the 500", err, code)
+	}
+}
+
+// A SESSION GIVEN UP GIVES UP ITS WAITER. A directory bucket's request waits
+// in GetIdentity for its S3 Express session, which is a request of its own: a
+// session endpoint failing for a minute is given up like any request, and the
+// request waiting for it fails with it — never sent itself — after exactly the
+// session's four attempts. The SDK hands the waiter the session's failure as
+// TEXT, so the waiter holds no give-up of its own, and is final because
+// nothing reads that text as worth asking again: should a later SDK keep the
+// chain, this case says so.
+func TestASessionGivenUpGivesUpItsWaiter(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files--use1-az4--x-s3")
+	srv.SessionLife = -time.Minute
+	srv.Put("k", []byte("an object"))
+	b, _ := openStepped(t, srv, nil)
+	srv.RefuseSessions(http.StatusInternalServerError, "InternalError")
+	sessions := srv.RequestsOf("CreateSession")
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	_, err := b.Stat(ctx, "k")
+	if err == nil || ctx.Err() != nil {
+		t.Fatalf("a head whose session the bucket kept failing = %v (its guard: %v); want it failed "+
+			"with its session", err, ctx.Err())
+	}
+	for _, want := range []string{"CreateSession", "failed every attempt"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("a head whose session was given up = %q; want it naming %q", err, want)
+		}
+	}
+	if _, ok := errors.AsType[*s3obj.GivenUp](err); ok {
+		t.Fatalf("a head whose session was given up holds a give-up in its chain (%v); the SDK used "+
+			"to flatten the session's error to text, and the waiter's reading of it is now worth "+
+			"restating", err)
+	}
+	if n := srv.RequestsOf("CreateSession") - sessions; n != 4 {
+		t.Fatalf("the session was asked for %d times, want the 4 of its minute", n)
+	}
+	if n := srv.RequestsOf("HeadObject"); n != 0 {
+		t.Fatalf("the head waiting for its session was sent %d times, want none", n)
 	}
 }

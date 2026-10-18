@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"time"
 
@@ -48,6 +49,43 @@ func OpenRetrying(ctx context.Context, cfg Config, backoff retry.BackoffDelayer,
 		kept.after = c.After
 	}
 	return open(ctx, cfg, backoff, kept)
+}
+
+// GiveUpAfter makes b give up a request the bucket answers with nothing but
+// failures within d rather than [giveUpAfter] — each span's bound drawn from
+// d's last third, as the minute's is — so a case runs the rule in real time at
+// a span it can afford: see [Backend.judge].
+func GiveUpAfter(b *Backend, d time.Duration) { b.judge.giveUpAfter = d }
+
+// SeedBounds makes b draw each span's bound ([judge.bound]) from a source
+// seeded with seed, so a case that derives a figure from the bounds derives
+// the same figure on every run. Not safe for concurrent use: a case drives one
+// request at a time through it.
+func SeedBounds(b *Backend, seed uint64) { b.judge.draw = seeded(seed) }
+
+// GiveUpAfterBound is [giveUpAfter], for the cases that hold the rule to it.
+const GiveUpAfterBound = giveUpAfter
+
+// GivenUp is [givenUp], for the cases that find a request given up.
+type GivenUp = givenUp
+
+// Attempts is how many attempts g's request had sent when it was given up.
+func (g *GivenUp) Attempts() int { return g.attempts }
+
+// Failing is err as a failure inside a request's span with left of the span's
+// bound to go ([failing]), for the case that holds the backoff to it.
+func Failing(err error, left time.Duration) error { return &failing{err: err, left: left} }
+
+// SeededJitter is the production backoff ([fullJitter]) drawing its shares
+// from a source seeded with seed — so a case that derives a figure from its
+// draws derives the same figure on every run. Not safe for concurrent use: a
+// case drives one request at a time through it.
+func SeededJitter(seed uint64) retry.BackoffDelayer { return fullJitter{draw: seeded(seed)} }
+
+// seeded is a random share of n from a source seeded with seed.
+func seeded(seed uint64) func(n time.Duration) time.Duration {
+	r := rand.New(rand.NewPCG(seed, seed))
+	return func(n time.Duration) time.Duration { return time.Duration(r.Int64N(int64(n))) }
 }
 
 // ClientRetryer is the retryer b's client retries every request with, read off

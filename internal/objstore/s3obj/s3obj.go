@@ -100,18 +100,31 @@
 // every range of it — is bounded by the deadline its caller must carry
 // ([objstore.CheckRead]).
 //
-// THE DEADLINE IS ALSO THE ONLY END OF A REQUEST'S ATTEMPTS: one the bucket
-// throttles, fails with a server error, or cannot be reached for is asked
-// again, after a jittered backoff ([fullJitter]), until it is answered or its
-// deadline passes — never for a count of attempts, which `AWS_MAX_ATTEMPTS`
-// cannot put back — and a request its deadline ends names the bucket's last
-// answer beside it. Only a refusal asking again cannot change is final at
-// once: a client error, a certificate the node does not trust. A READ'S
-// deadline is the longest — its whole budget, hours for a large object — so
-// what ends a read whose first request the bucket keeps failing is the
-// store's stall watchdog instead, which watches the open of a read as it
-// watches each piece after ([objstore.ReadStall]): such a read ends in a
-// minute, the bucket's last answer named.
+// A REQUEST'S ATTEMPTS END AT ITS DEADLINE, OR A MINUTE INTO NOTHING BUT
+// FAILURES: one the bucket throttles, fails with a server error, or cannot be
+// reached for is asked again, after a jittered backoff ([fullJitter]), until
+// it is answered or its deadline passes — never for a count of attempts, which
+// `AWS_MAX_ATTEMPTS` cannot put back — and a request its deadline ends names
+// the bucket's last answer beside it. But one the bucket answers with nothing
+// but FAILURES — server errors that are no throttle, or no answer at all — is
+// given up within [giveUpAfter], a minute from the first ([judge]): at a bound
+// drawn for its span of failures between forty seconds and the minute, its
+// last attempt sent at that bound, so the requests that began failing
+// together do not all ask again in one instant at the minute; and its caller
+// is told how long the bucket failed every attempt and what it last answered.
+// A throttle answered to the request starts the span again, since a bucket
+// asking the node to slow down is up. An upload in parts whose part is given
+// up is answered up to [callBudget] later, once its unfinished upload has
+// been abandoned — asked once instead, a bucket that recovered inside those
+// seconds would hold the parts, billed, for the collector's day of grace. Only
+// a refusal asking again cannot change is final at once: a client error, a
+// certificate the node does not trust. A READ'S deadline is the longest — its
+// whole budget, hours for a large object — so what ends a read whose first
+// request the bucket keeps failing is that request's bound, forty seconds to
+// a minute in, or the store's stall watchdog, which watches the open of a
+// read as it watches each piece after ([objstore.ReadStall]) and would end it
+// at the minute measured from the open — whichever comes first, the bucket's
+// last answer named either way.
 //
 // # A throttle slows the whole client
 //
@@ -140,7 +153,8 @@
 // own width, so a retry holds the slot its request held; a person's upload or
 // download is bounded by its own deadline, and by the gate once the bucket
 // has throttled — and a server error that is no throttle is asked again by
-// every request open at the time, each at the backoff, until its deadline
+// every request open at the time, each at the backoff, for no longer than a
+// minute after its first failure or its deadline, whichever is first
 // ([newRetryer]).
 //
 // # What it costs the node, measured
@@ -434,7 +448,10 @@ func sendBudget(n int64) time.Duration { return callBudget + objstore.PaceFor(n)
 // share is at worst one in [partsInFlight] while the link divides fairly
 // between the connections carrying them, which is what it is given. What it
 // costs is the notice a part that has stopped moving gets: sixteen and a half
-// minutes for a full part, where the link to itself was four and a half.
+// minutes for a full part, where the link to itself was four and a half — a
+// part the bucket keeps failing is given up within a minute of its first
+// failure ([giveUpAfter]); what this budget still bounds is a part the bucket
+// has stopped answering.
 func partBudget(size int64) time.Duration { return sendBudget(size * partsInFlight) }
 
 // Backend is the objects in a bucket.
@@ -472,6 +489,13 @@ type Backend struct {
 	// every request of the node's, slowed together once the bucket has
 	// throttled one ([gate]).
 	gate *gate
+
+	// judge reads every attempt's answer, and gives up a request the bucket
+	// keeps failing within [giveUpAfter] ([judge]) — that bound and the draw
+	// of each span's own FIELDS, which nothing in the engine changes, so this
+	// package's cases run the rule at a span they can afford, and seeded, as
+	// [Backend.partBytes] is for the part.
+	judge *judge
 }
 
 // cutParts sizes every part but the last at n bytes, and the buffers that
@@ -565,6 +589,11 @@ func open(ctx context.Context, cfg Config, backoff retry.BackoffDelayer, c clock
 		return nil, err
 	}
 	g := newGate(c)
+	// ONE RETRYER, read by the SDK's retry step and by the judge alike, so
+	// what the judge counts as a failure is exactly an answer the retry step
+	// would ask again.
+	retryer := newRetryer(backoff)
+	j := &judge{now: c.now, retryer: retryer, giveUpAfter: giveUpAfter}
 	client := s3.NewFromConfig(base, func(o *s3.Options) {
 		// THE BUCKET IS REACHED THROUGH THE ENGINE'S OWN TRANSPORT
 		// (internal/httpx), never a pool of the SDK's.
@@ -588,13 +617,14 @@ func open(ctx context.Context, cfg Config, backoff retry.BackoffDelayer, c clock
 		// retryer in that count: an operator's environment would
 		// silently put back the cap that failed requests a bucket would
 		// have answered.
-		o.Retryer = newRetryer(backoff)
+		o.Retryer = retryer
 		o.RetryMaxAttempts = 0
-		// A THROTTLE SLOWS THE WHOLE CLIENT ([gate]), and a request its
-		// deadline ends names the bucket's last answer.
-		o.APIOptions = append(o.APIOptions, paced(g))
+		// A THROTTLE SLOWS THE WHOLE CLIENT ([gate]), a request the bucket
+		// keeps failing is given up within a minute ([judge]), and a
+		// request its deadline ends names the bucket's last answer.
+		o.APIOptions = append(o.APIOptions, paced(g, j))
 	})
-	b := &Backend{client: client, bucket: cfg.Bucket, prefix: cfg.Prefix, gate: g}
+	b := &Backend{client: client, bucket: cfg.Bucket, prefix: cfg.Prefix, gate: g, judge: j}
 	b.cutParts(PartBytes)
 	headCtx, cancel := context.WithTimeout(ctx, callBudget)
 	defer cancel()

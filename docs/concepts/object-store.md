@@ -312,18 +312,46 @@ promises, and its size is the provider's problem rather than any node's disk.
   the gateway's own — MinIO answering an object it cannot rebuild from its
   drives — is no throttle and slows nothing else; a 503 to a `HEAD` is read as
   one whatever the gateway meant, since its answer has no body to say. A
-  request the bucket throttles, fails with a server error or cannot be reached
-  for is asked again, after a random wait of up to twenty seconds, until its
-  deadline above — never for a number of attempts, which `AWS_MAX_ATTEMPTS`
-  does not change — and one its deadline ends says so and names the bucket's
-  last answer; a download the bucket keeps failing ends at the stall limit,
-  a minute, rather than at its deadline. A refusal that asking again cannot
-  change — a key the bucket refuses, a bucket that is not there, a certificate
-  the node does not trust — fails at once, the check at boot included; a
-  bucket that does not answer at all holds that check for its thirty seconds.
-  A server error that is no throttle is asked again by every request open at
-  the time, a person's upload and download among them, each until its own
-  deadline.
+  request the bucket throttles is asked again, after a random wait of up to
+  twenty seconds, until its deadline above — never for a number of attempts,
+  which `AWS_MAX_ATTEMPTS` does not change. A request the bucket answers with
+  nothing but failures — a server error that is no throttle, or no answer at
+  all — is asked again the same way until a bound of its own, drawn as the
+  failures begin, somewhere between forty seconds and a minute after the
+  first; its last attempt is sent at that bound, and then it is given up: its
+  caller is told how long the bucket failed every attempt and what it last
+  answered. Each request draws its own bound so that the writes a bucket
+  outage catches open, on every node, do not all ask again in the same
+  instant at the minute, onto a bucket that may just be recovering; the price
+  is that a failure ending in the minute's last twenty seconds is ridden
+  through only by the requests whose bound lies past it. A failing request
+  makes nine attempts at the median and twelve at the 95th percentile at
+  S3's 100 ms first byte. A person's upload or download the bucket keeps
+  failing is answered `503` within that minute — an upload made in parts up
+  to thirty seconds later, once its unfinished upload is abandoned — where a
+  part of a large upload used to wait sixteen and a half minutes and a
+  download the stall limit's minute. A throttle between two failures starts
+  the span again, since a bucket asking the node to slow down is up. One its
+  deadline ends says so and names the bucket's last answer. A refusal that
+  asking again cannot change — a key the bucket refuses, a bucket that is not
+  there, a certificate the node does not trust — fails at once, the check at
+  boot included; a bucket that does not answer at all holds that check for
+  its thirty seconds.
+
+  Measured against the S3 fake 100 ms away, every request answered
+  `500 InternalError`, eight or four runs of each at once: an 8 MiB upload
+  given up at 43.3 to 58.1 s after 8 to 12 attempts, where its deadline was
+  4 min 30 s; a 20 MiB upload in parts whose second part the bucket kept
+  failing answered at 71.9 to 84.0 s — the part given up 41.4 to 53.5 s in
+  after 9 to 12 attempts, then thirty seconds abandoning the upload — where
+  the part's own deadline was 16 min 30 s; one whose completion the bucket
+  kept failing answered at 77.8 to 87.3 s, where it waited 5 min 30 s; a
+  20 MiB download ended at 46.9 to 59.6 s, where the stall limit ended it at
+  60 s. A failure of thirty seconds was ridden through (an upload answered at
+  35.7 and 40.4 s), as is any failure shorter than forty; one of fifty-five
+  seconds was ridden through by one upload in eight, of 8 MiB and of 100 KiB
+  alike — the requests whose bound fell past it. These figures are the
+  fake's.
 - **The prefix is optional**, and with or without one the engine touches only
   names under its own `files/` corner: another application's objects in the
   same bucket are never listed as the engine's, judged or deleted.

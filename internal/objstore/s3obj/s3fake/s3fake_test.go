@@ -671,3 +671,83 @@ func TestADirectoryBucketHandsOutSessions(t *testing.T) {
 		})
 	}
 }
+
+// FAIL FOR REFUSES EVERYTHING FOR ITS SPAN: what [s3fake.Server.FailFor] arms
+// is a bucket that fails for a while measured in time, so every request inside
+// the span — whatever it is — is answered the S3 error named, without spending
+// a [s3fake.Server.FailNext] count, and a request after the span is answered
+// as ever.
+func TestFailForRefusesEverythingForItsSpan(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	srv.Put("k", []byte("an object"))
+	do := func(method string) int {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), method, srv.URL+"/files/k", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", method, err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	srv.FailNext(1, http.StatusServiceUnavailable, "SlowDown")
+	// A SPAN NO REQUEST HERE OUTLASTS, so every one sent is inside it.
+	srv.FailFor(time.Hour, http.StatusInternalServerError, "InternalError")
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodGet} {
+		if status := do(method); status != http.StatusInternalServerError {
+			t.Fatalf("a %s inside the span answered %d, want 500", method, status)
+		}
+	}
+	// A SPAN THAT HAS ENDED, waited past, so the next request is after it.
+	const span = 50 * time.Millisecond
+	srv.FailFor(span, http.StatusInternalServerError, "InternalError")
+	time.Sleep(span)
+	// THE COUNT FAILNEXT ARMED IS STILL THERE, untouched by the span.
+	if status := do(http.MethodGet); status != http.StatusServiceUnavailable {
+		t.Fatalf("the first request after the span answered %d, want FailNext's 503", status)
+	}
+	if status := do(http.MethodGet); status != http.StatusOK {
+		t.Fatalf("a request after the span answered %d, want 200", status)
+	}
+}
+
+// A DIRECTORY BUCKET'S SESSIONS ARE REFUSED AS ASKED: every CreateSession
+// [s3fake.Server.RefuseSessions] refuses is answered the S3 error named while
+// its objects answer as ever, and a status of zero hands sessions out again.
+func TestRefusedSessionsAreAnsweredTheErrorNamed(t *testing.T) {
+	t.Parallel()
+	const bucket = "files--use1-az4--x-s3"
+	srv := s3fake.Start(t, bucket)
+	srv.Put("k", []byte("an object"))
+	do := func(path string) int {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	srv.RefuseSessions(http.StatusInternalServerError, "InternalError")
+	if status := do("/" + bucket + "?session"); status != http.StatusInternalServerError {
+		t.Fatalf("a refused CreateSession answered %d, want 500", status)
+	}
+	if status := do("/" + bucket + "/k"); status != http.StatusOK {
+		t.Fatalf("an object of a bucket whose sessions are refused answered %d, want 200", status)
+	}
+	srv.RefuseSessions(0, "")
+	if status := do("/" + bucket + "?session"); status != http.StatusOK {
+		t.Fatalf("a CreateSession once sessions are handed out again answered %d, want 200", status)
+	}
+	if n := srv.RequestsOf("CreateSession"); n != 2 {
+		t.Fatalf("two CreateSessions counted as %d", n)
+	}
+}

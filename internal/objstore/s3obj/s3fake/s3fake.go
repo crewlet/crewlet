@@ -17,9 +17,10 @@
 // first one's tag is tested against a bucket that holds it to the tag.
 //
 // It REFUSES WHAT A CASE ASKS IT TO, with the S3 error the case names: the next
-// few requests whatever they are ([Server.FailNext]) — a bucket that throttles
-// or fails for a while and recovers — or every upload of one part
-// ([Server.FailPart]).
+// few requests whatever they are ([Server.FailNext]), or every request for a
+// span of time ([Server.FailFor]) — a bucket that throttles or fails for a
+// while and recovers — every upload of one part ([Server.FailPart]), or every
+// session a directory bucket's client asks for ([Server.RefuseSessions]).
 //
 // It does its OWN WORK AT MEMORY SPEED — a body read into one buffer of its
 // declared length, an entity tag computed once per object or part by a
@@ -188,6 +189,13 @@ type Server struct {
 	// failNextWith what with.
 	failNext     int
 	failNextWith refusal
+	// failUntil is when the span [Server.FailFor] refuses every request in
+	// ends, and failForWith what with.
+	failUntil   time.Time
+	failForWith refusal
+	// sessionRefusal is what every CreateSession answers while its status is
+	// set ([Server.RefuseSessions]).
+	sessionRefusal refusal
 	// held is the part [Server.HoldPart] holds, or nil.
 	held *heldPart
 	// undated is the keys whose listings leave the date out.
@@ -419,9 +427,10 @@ func (s *Server) Parts(key string) int {
 // refuses none.
 //
 // A REFUSAL THE CLIENT TAKES AS FINAL is what such a test wants: a client error
-// such as `403 AccessDenied`. A throttle or a server error is one the client
-// asks again until its deadline, so a part refused with one for good is a part
-// that fails only when its deadline does.
+// such as `403 AccessDenied`. A throttle is one the client asks again until its
+// deadline, and a server error one it asks again for up to a minute before it
+// gives the request up, so a part refused with either for good is a part that
+// fails only that much later.
 func (s *Server) FailPart(n int32, status int, code string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -442,16 +451,43 @@ func (s *Server) FailNext(n int, status int, code string) {
 	s.failNext, s.failNextWith = n, refusal{status: status, code: code}
 }
 
+// FailFor makes every request the bucket is sent for d from now — whatever it
+// is — answer the S3 error status and code before anything else is made of
+// it: a bucket that fails for a while, measured in time rather than in
+// requests, since how many requests a client sends in that time is the
+// backoff's to decide. It is asked before [Server.FailNext]'s count, which a
+// request it refuses does not spend.
+func (s *Server) FailFor(d time.Duration, status int, code string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failUntil, s.failForWith = time.Now().Add(d), refusal{status: status, code: code}
+}
+
+// RefuseSessions makes every CreateSession answer the S3 error status and
+// code — a directory bucket whose session endpoint fails while its objects
+// would answer — until it is called with a status of zero.
+func (s *Server) RefuseSessions(status int, code string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessionRefusal = refusal{status: status, code: code}
+}
+
 // refuseNext answers true, having answered the request with the refusal, for a
-// request [Server.FailNext] still refuses.
+// request [Server.FailFor] or [Server.FailNext] still refuses.
 //
 // ITS BODY IS READ FIRST, so the client hears the refusal rather than a
 // connection the server closed under a body it was still sending.
 func (s *Server) refuseNext(w http.ResponseWriter, r *http.Request) bool {
 	s.mu.Lock()
-	refuse := s.failNext > 0
-	with := s.failNextWith
-	if refuse {
+	var (
+		refuse bool
+		with   refusal
+	)
+	switch {
+	case time.Now().Before(s.failUntil):
+		refuse, with = true, s.failForWith
+	case s.failNext > 0:
+		refuse, with = true, s.failNextWith
 		s.failNext--
 	}
 	s.mu.Unlock()
@@ -521,7 +557,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	case key == "" && r.Method == http.MethodPost && q.Has("delete"):
 		s.deleteObjects(w, r)
 	case key == "" && r.Method == http.MethodGet && q.Has("session"):
-		s.createSession(w)
+		s.createSession(w, r)
 	case key == "":
 		s.fail(w, r, http.StatusNotImplemented, "NotImplemented")
 
@@ -987,8 +1023,16 @@ type sessionCredentials struct {
 }
 
 // createSession answers S3 Express's CreateSession: credentials that last
-// [Server.SessionLife] from now, a session nothing here checks again.
-func (s *Server) createSession(w http.ResponseWriter) {
+// [Server.SessionLife] from now, a session nothing here checks again — or the
+// refusal [Server.RefuseSessions] set.
+func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	refused := s.sessionRefusal
+	s.mu.Unlock()
+	if refused.status != 0 {
+		s.fail(w, r, refused.status, refused.code)
+		return
+	}
 	life := s.SessionLife
 	if life == 0 {
 		life = sessionLife
