@@ -142,11 +142,13 @@ interface Doc<T = Record<string, Json>> {
 interface Page<T> { docs: Doc<T>[]; cursor?: string }
 
 interface Query {
-  where?: [field: string, op: "eq" | "ne" | "lt" | "lte" | "gt" | "gte" | "in", value: Json][];
-  order?: [field: string, dir: "asc" | "desc"][];
-  limit?: number;                            // at most 500
-  cursor?: string;
+  where?: [field: string, op: QueryOp, value: Json][];   // ANDed, at most 16; `in` takes a list of at most 100
+  order?: [[field: string, dir: "asc" | "desc"]];        // one field; the document id breaks ties
+  limit?: number;                            // at most 500, 100 when unset
+  cursor?: string;                           // the cursor the previous page answered
 }
+
+type QueryOp = "eq" | "ne" | "lt" | "lte" | "gt" | "gte" | "in" | "contains" | "prefix";
 
 interface WriteOptions { ifVersion?: number }
 
@@ -230,7 +232,13 @@ and nothing else, unless the viewer is an editor.
 `subscribe` delivers the collection's current documents, then every change as
 the engine applies it, with the documents a remote write changed listed in
 `changed`. In contract 1.0 a subscription is to a whole collection and a page
-filters on its side; a collection holds at most 50 000 documents.
+filters on its side; a store holds at most 50 000 documents across its
+collections.
+
+A query filters and orders only on paths the collection indexes (its declared
+columns, or what a schemaless collection's documents hold), and is refused
+`invalid` naming the path otherwise. `contains` asks whether an array field
+holds the value; `prefix` whether a text field starts with it.
 
 ### State
 

@@ -71,6 +71,12 @@ rule, and warns on success about what is legal but likely wrong.
   version at publish, checking its integrity, and rewrites the reference to
   the copy; viewers never reach the CDN. Any other remote reference is
   refused: upload the file instead.
+- An ES module imports another origin only through an **import map**
+  (`<script type="importmap">`), never by a literal URL in an `import`. Each
+  map entry naming another origin is held to the rule above and rewritten to
+  the version's copy. The copied module must import nothing itself, so map a
+  self-contained build, and an entry mapping a whole folder (`"lodash/":
+  "https://..."`) is refused, since a folder cannot be copied in.
 - `eval`, `new Function` and WebAssembly compilation are admitted only for a
   page the linter finds needs them (an in-browser transform, a `.wasm`
   module); every other page runs without them.
@@ -189,7 +195,10 @@ tab even when your page is broken.
 
 The store's names are restricted: a collection matches `^[a-z][a-z0-9_]{0,47}$`,
 a document id `^[A-Za-z0-9_-]{1,128}$` and a field
-`^[A-Za-z][A-Za-z0-9_]{0,63}$`. A leading `_` is reserved for the engine.
+`^[A-Za-z][A-Za-z0-9_]{0,63}$`. A leading `_` is reserved for the engine, and
+so are the collection names `schema`, `history`, `state`, `writes`, `undo` and
+`export` and the document id `query`, which the data routes' own path segments
+take.
 
 ---
 

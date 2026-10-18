@@ -222,12 +222,15 @@ A share names an **audience** and a **role**:
 - **The owner holds every role.** The lead of an **agent** owner holds the
   owner's role on that agent's artifacts; the lead of a **person** holds
   nothing of theirs.
-- **An administrator reads anything**, through the admin path, and every read
-  of an artifact the administrator has no share in is recorded as an elevated
-  read that the artifact's owner and editors see in its history.
+- **An administrator reads anything**, through the admin path. An
+  administrator a share already admits acts at the share's role; on an artifact
+  shared with them in no way, every content read is recorded first as an
+  elevated read, which the artifact's owner and editors see in its history and
+  every administrator sees on the company trail of artifact history (the Audit
+  screen, `artifact_trail`).
 - **A caller with no share is told the artifact does not exist**: `404
-  artifact_not_found`, identical to an id nothing holds. A share below what a
-  gesture needs is `403`, naming the role that would change the answer.
+  not_found`, identical to an id nothing holds. A share below what a gesture
+  needs is `403`, naming the role that would change the answer.
 - **A share never grants above the sharer's own role**, and every narrowing (an
   unshare, a lower role, a trash, a transfer) stops the next document request
   on the serving origin and withdraws every socket from the room.
@@ -301,9 +304,15 @@ sequenceDiagram
   `allow-popups`: an external link goes through the host, which names the
   destination before it opens it.
 - **No third party at view time.** Script and stylesheet files a page
-  references on the allowed CDNs are copied into the version when it is
-  published, integrity-checked, so viewing works without the CDN and the CDN
-  never sees a viewer.
+  references on the allowed CDNs, as a script or link element, a module import
+  or an import map entry, are copied into the version when it is published,
+  integrity-checked, so viewing works without the CDN and the CDN never sees a
+  viewer. Any other remote script a page states is refused. What the linter
+  cannot read is a script the page's own script builds at run time:
+  `'strict-dynamic'` trusts it from any host, so a page whose author means to
+  can send what a viewer may read to another site. Only an `editor` publishes,
+  and every version names who did; share `editor` accordingly (see
+  `SECURITY.md`).
 
 The raw bytes of a version are also downloadable from the API, always as an
 attachment and text as `text/plain`, never rendered.
@@ -462,7 +471,7 @@ and the human-only verbs hold whatever a model does.
 |---|---|
 | A page acting as whoever opened it | The artifact origin holds no credential and never reads a cookie; the page talks to the host only through a port, and every call is decided as the viewer |
 | One artifact reading another's storage | An origin per artifact on a site of its own, or an opaque origin; never the dashboard's |
-| A page leaking its data to a third party | `connect-src`, `img-src` and `media-src` reach only the artifact's own origin; no popups; external links are confirmed by the host |
+| A page leaking its data to a third party by accident | `connect-src`, `img-src` and `media-src` reach only the artifact's own origin; no popups; external links are confirmed by the host; every remote script a page states is copied in or refused. A page whose own script loads another site's script on purpose is not stopped: publishing is an `editor`'s, and every version names its publisher |
 | Script injected through a viewer's row | A fresh nonce with `'strict-dynamic'` per document; no `'unsafe-inline'` |
 | A compromised CDN | Third-party files are copied in at publish and served from the artifact's own version |
 | A revoked share that keeps working | Documents re-authorized on every request; a stale node asks a peer or answers `503` |
@@ -483,8 +492,8 @@ stream and ceiling:
 
 | Domain | Stream | Holds | Ceiling (Tier A) |
 |---|---|---|---|
-| `artifacts` | `CREWLET_ARTIFACTS_LOG` | Artifacts, versions and their object references, assets, shares, pins, reads, history | `stream.artifacts_log_max_bytes`; unset derives a quarter of the tracker log's ceiling, 1 GiB to 256 GiB |
-| `artifactdata` | `CREWLET_ARTIFACT_DATA_LOG` | Every store's collections, documents, field index and write history | `stream.artifact_data_log_max_bytes`; unset derives half of the tracker log's ceiling, 1 GiB to 512 GiB |
+| `artifacts` | `CREWLET_ARTIFACTS_LOG` | Artifacts, versions and their object references, assets, shares, pins, reads, history | `stream.artifacts_log_max_bytes`, 1 GiB to 256 GiB; unset derives a quarter of the mutation log's ceiling, 1 GiB to 16 GiB from a volume alone |
+| `artifactdata` | `CREWLET_ARTIFACT_DATA_LOG` | Every store's collections, documents, field index and write history | `stream.artifact_data_log_max_bytes`, 1 GiB to 512 GiB; unset derives a quarter of the mutation log's ceiling, 1 GiB to 16 GiB from a volume alone |
 
 Every record that adds or removes an object reference is arbitrated on its
 artifact's subject, so the broker orders every carry against every removal.
