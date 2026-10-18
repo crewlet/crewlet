@@ -39,6 +39,8 @@ const READER: ViewerState = {
   asking: false,
   configWriter: false,
   configManagedBy: [],
+  chatBackend: "",
+  chatVendors: [],
 };
 
 class InertWebSocket {

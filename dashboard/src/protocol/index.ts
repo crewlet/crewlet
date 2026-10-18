@@ -12,7 +12,7 @@
  */
 
 export { Store } from "./store.ts";
-export type { StoreState, Slice } from "./store.ts";
+export type { ChatLive, ChatRoomLive, HeldChatChange, StoreState, Slice } from "./store.ts";
 export {
   LiveSocket,
   QueryError,

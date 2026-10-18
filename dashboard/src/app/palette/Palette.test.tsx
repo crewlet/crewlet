@@ -62,6 +62,8 @@ const JANE: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  chatBackend: "",
+  chatVendors: [],
 };
 
 const ANONYMOUS: ViewerState = {
@@ -333,6 +335,34 @@ describe("scopes and sigils", () => {
     expect(screen.getByText("Teams")).toBeDefined();
     expect(screen.getByText("Platform")).toBeDefined();
     expect(screen.getByText("SWE")).toBeDefined();
+  });
+});
+
+// A DESTINATION SAYS WHAT OPENS IT BEFORE A PRESS, read from the navigation's
+// own table: Chat is the Chat app's, so a reader holding the tracker and the
+// knowledge base but not Chat is told which access to ask for — and a reader
+// holding it is told nothing. Mutation: drop the row's `grants` and the first
+// case goes red; lock on the table's grants whatever the reader holds and the
+// second does.
+describe("a destination's lock", () => {
+  const WITHOUT_CHAT: ViewerState = {
+    ...JANE,
+    grants: ["tracker", "knowledge"],
+    admin: false,
+    chat: false,
+  };
+
+  test.each([
+    ["without Chat", WITHOUT_CHAT, true],
+    [
+      "holding Chat",
+      { ...WITHOUT_CHAT, grants: ["tracker", "knowledge", "chat"], chat: true },
+      false,
+    ],
+  ])("Chat's lock, to a reader %s", async (_, viewer, locked) => {
+    const p = mount({ viewer });
+    await p.type("chat");
+    expect(/· needs Chat access$/.test(p.row(/^Chat$/).textContent ?? "")).toBe(locked);
   });
 });
 
@@ -1343,13 +1373,18 @@ describe("a screen found by what it holds", () => {
   // A LABEL STILL WINS: a screen called what was typed is never pushed under
   // one that merely holds the word. "s" starts two of Account's words
   // ("sessions", "security"), which a flat ranking scored ahead of every label
-  // with an "s" in its middle — Tasks, Projects, Agents.
+  // with an "s" in its middle — Tasks, Projects, Agents. Chat holds it only
+  // in its words too ("messages", "rooms"), so the two are found and ranked
+  // after every label that has one.
   test("every label match ranks above a keyword match, however good", () => {
     const nav = { to: vi.fn() } as unknown as Parameters<typeof destinationHits>[1];
     const hits = destinationHits("s", nav, Infinity, null).map((h) => h.label);
-    expect(hits.at(-1)).toBe("Account");
+    const tail = hits.findIndex((label) => !label.toLowerCase().includes("s"));
+    expect(tail).toBeGreaterThan(0);
     expect(hits).toContain("Tasks");
-    for (const label of hits.slice(0, -1)) expect(label.toLowerCase()).toContain("s");
+    for (const label of hits.slice(0, tail)) expect(label.toLowerCase()).toContain("s");
+    for (const label of hits.slice(tail)) expect(label.toLowerCase()).not.toContain("s");
+    expect(hits.slice(tail)).toEqual(expect.arrayContaining(["Account", "Chat"]));
   });
 
   // THE HINT IS PROSE AND IS NEVER SEARCHED: People & access's mentions "API

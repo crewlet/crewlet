@@ -52,6 +52,7 @@ describe("the tray's sections", () => {
       "me",
       "work",
       "agents",
+      "chat",
       "live",
       "knowledge",
       "spend",
@@ -81,6 +82,15 @@ describe("who may add what", () => {
 
   test("an admin is offered every widget", () => {
     for (const def of WIDGETS.values()) expect(canUse(def, ADMIN), def.key).toBe(true);
+  });
+
+  test("a reader without Chat is offered none of Chat's widgets", () => {
+    const chat = AREAS.find((a) => a.key === "chat")!.widgets;
+    expect(chat.length).toBeGreaterThan(0);
+    for (const def of chat) {
+      expect(canUse(def, MEMBER), def.key).toBe(false);
+      expect(canUse(def, ["chat"]), def.key).toBe(true);
+    }
   });
 
   test("a reader without the tracker is offered none of the tracker's widgets", () => {
