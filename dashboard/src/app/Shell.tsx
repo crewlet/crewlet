@@ -457,7 +457,9 @@ export function FrameReadings({ children }: { children: ReactNode }) {
  * sign-in the app follows, and nothing is dialled; any session is dialled,
  * whatever access it holds, because the socket serves everybody the overview
  * and decides each push by the reader's access; any other failure says
- * nothing about a session, and the dial's own handshake decides.
+ * nothing about a session, and the socket — which holds a dial for a tab that
+ * has recorded no reader behind a session read of its own (`learnReader` in
+ * `protocol/socket.ts`) — decides.
  */
 export function Shell({ children }: { children: ReactNode }) {
   return (
@@ -491,7 +493,7 @@ function Frame({ children }: { children: ReactNode }) {
 
   // DIAL FOR SOMEBODY — see [Shell] — when the session is first read. A read
   // that failed on anything but a `401` says nothing about the session, and
-  // the handshake decides.
+  // the socket reads it again itself before it dials.
   const serves = session.answer !== null;
   const undecided =
     session.answer === null && session.error !== null && session.error.status !== 401;

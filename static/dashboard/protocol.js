@@ -1182,6 +1182,20 @@ function readerHeaders() {
 	return reader === null ? {} : { [READER_HEADER]: reader };
 }
 /**
+* Whether this tab is read by somebody it has not learned yet: the application
+* keeps a reader, and has recorded nobody — a tab opened with a session
+* already in the browser, before any read of it has answered.
+*
+* FALSE WITH NOTHING INSTALLED, which is a client that keeps no reader at all
+* (the e2e replay, a suite that installs none): there is nobody for it to
+* learn, and a request it makes is served as the cookie is. The live socket
+* asks this before it dials, because a dial that names nobody is served as
+* whoever holds the cookie at that moment — see `socket.ts`'s `learnReader`.
+*/
+function readerUnlearned() {
+	return tabReader !== null && tabReader.current() === null;
+}
+/**
 * The socket's handshake URL query naming this tab's reader (`READER_PARAM`),
 * or "" where nothing is installed or the tab has learned nobody.
 *
@@ -2796,8 +2810,20 @@ var LiveSocket = class {
 		else if (kind === "data") listener.data?.(data);
 		else listener.presence?.(data);
 	}
-	connect() {
-		if (this.isClosed || this.refused || this.held || this.sock && (this.sock.readyState === WebSocket.OPEN || this.sock.readyState === WebSocket.CONNECTING)) return;
+	/**
+	* Dial, for the tab's reader.
+	*
+	* `learned` is a caller that has just read the session and taken it
+	* ([learnReader], [redialIfSignedIn]): the reader is whatever that left,
+	* and asking again could not learn more — a browser refusing storage
+	* records nobody however often it is asked.
+	*/
+	connect(learned = false) {
+		if (this.isClosed || this.refused || this.held || this.learning || this.sock && (this.sock.readyState === WebSocket.OPEN || this.sock.readyState === WebSocket.CONNECTING)) return;
+		if (!learned && readerUnlearned()) {
+			this.learnReader();
+			return;
+		}
 		const proto = location.protocol === "https:" ? "wss" : "ws";
 		let sock;
 		try {
@@ -2883,8 +2909,38 @@ var LiveSocket = class {
 				this.authRejected();
 				return;
 			}
+			this.connect();
+			return;
 		}
-		this.connect();
+		this.connect(true);
+	}
+	/** Whether [learnReader]'s session read is out, which a dial waits for. */
+	learning = false;
+	/**
+	* Read who this browser is signed in as, take it, and only then dial.
+	*
+	* THE READ FIRST, so the dial names the reader the tab has just recorded
+	* and the engine refuses it if the cookie moves before it lands. A `401`
+	* is nobody, the sign-in need every transport raises. ANY OTHER FAILURE
+	* DIALS NOTHING and asks again on the backoff: the read says nothing about
+	* who this is, and a dial now would be served as whoever holds the cookie
+	* to a tab that could not tell them from its next reader. A session the
+	* app hands the tab over for dials nothing: the tab is being reloaded.
+	*/
+	async learnReader() {
+		this.learning = true;
+		let person;
+		try {
+			person = (await auth.session()).person;
+		} catch (err) {
+			this.learning = false;
+			if (err instanceof RestError && err.status === 401) this.authRejected();
+			else this.scheduleReconnect();
+			return;
+		}
+		this.learning = false;
+		if (this.isClosed || this.held || !this.takeSession(person)) return;
+		this.connect(true);
 	}
 	/**
 	* Ask, over plain HTTP, whether that dial was refused or merely failed.
