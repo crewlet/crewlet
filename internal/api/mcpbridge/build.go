@@ -42,12 +42,21 @@ const BaseURLVar = "CREWLET_MCP_BRIDGE_URL"
 // and a seat that asks for agent mode is refused with the variable named —
 // which is a better failure than a run that starts and cannot call a tool.
 func Build(env func(string) string, material runtoken.Material) (*Bridge, error) {
-	if env == nil {
+	if !Configured(env) {
 		return nil, nil
 	}
-	base := strings.TrimSpace(env(BaseURLVar))
-	if base == "" {
-		return nil, nil
-	}
-	return New(Options{Material: material, BaseURL: base})
+	return New(Options{Material: material, BaseURL: strings.TrimSpace(env(BaseURLVar))})
+}
+
+// Configured reports whether env names a bridge base URL: whether [Build]
+// builds a bridge at all.
+//
+// ITS OWN FUNCTION because a node asks it before there is an engine to build
+// one: `crewlet run` binds the listener a seats node serves its bridge on the
+// moment the process can, which is long before the engine reads the variable,
+// and a second spelling of "is it set" there would be a node binding a
+// listener for a bridge its engine never builds, or building one with no
+// listener bound for it.
+func Configured(env func(string) string) bool {
+	return env != nil && strings.TrimSpace(env(BaseURLVar)) != ""
 }

@@ -164,6 +164,10 @@ describe("classifyCheck", () => {
         { status: "unreachable", detail: "restarting" },
       ],
       [
+        { status: 503, body: { error: "starting", detail: "recovering" } },
+        { status: "unreachable", detail: "recovering" },
+      ],
+      [
         { status: 0, body: { error: "unreachable" } },
         { status: "unreachable", detail: "unreachable" },
       ],

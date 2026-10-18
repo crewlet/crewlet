@@ -78,8 +78,9 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context) error {
 }
 
 // Start runs the reconcile every interval until Stop, the first one interval
-// from now — the boot's own reconcile is the caller's, made before the listener
-// binds so the first snapshot a socket gets already holds the fleet's runs.
+// from now — the boot's own reconcile is the caller's, made before the node
+// hands its listener the API surface (`crewlet run`'s serveAPI), so the first
+// snapshot a socket gets already holds the fleet's runs.
 func (r *SandboxReconciler) Start(ctx context.Context) {
 	if r == nil {
 		return

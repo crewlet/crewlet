@@ -85,10 +85,13 @@ COPY static/dashboard/THIRD_PARTY_NOTICES.txt /usr/share/doc/crewlet/dashboard/
 
 # The node's HTTP port, bound whenever Tier A's `api.port` is set — the
 # operator's choice rather than the company's; `api.port: 0` serves no HTTP at
-# all, so publishing it is a convenience, not a promise. `node.roles` decides
-# what it carries: with `ingress`, the whole API (the dashboard, the REST API
-# and every webhook route); without it, only the /health and /ready probes,
-# and a seats node's agent-mode tool bridge. A deployment that sets
+# all, so publishing it is a convenience, not a promise. It is bound as the
+# process starts, before the store is opened: until the node serves, /health
+# answers 503 while it recovers what it holds and 200 after, /ready 503, and
+# every route it will serve 503 `starting`. `node.roles` decides what it then
+# carries: with `ingress`, the whole API (the dashboard, the REST API and
+# every webhook route); without it, only the /health and /ready probes, and a
+# seats node's agent-mode tool bridge. A deployment that sets
 # `api.public.port` moves the webhook, OTLP and bridge routes to that second
 # listener, which is the operator's to publish beside this one.
 #

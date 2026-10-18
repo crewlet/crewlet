@@ -422,22 +422,24 @@ type listener struct {
 // orchestrator could neither steer traffic from it while it drains nor tell it
 // from a dead one.
 //
-// ONLY ON AN INGRESS NODE. A node without the role serves no probe on any
-// port, so the reason does not reach it, and refusing it there broke the one
-// file every role reads: the documented `-roles data,seats,workers -api-port 0`
-// for a node that binds nothing was refused the moment the shared file set
-// api.public for its ingress peer. On such a node api.port 0 is still the hard
-// off switch — it binds no tool bridge on api.public either.
+// ONLY ON AN INGRESS NODE. A node without the role serves its probes on
+// api.port and never on api.public, so with api.port 0 it serves none whatever
+// api.public says: the reason does not reach it, and refusing it there broke
+// the one file every role reads — the documented
+// `-roles data,seats,workers -api-port 0` for a node that binds nothing was
+// refused the moment the shared file set api.public for its ingress peer. On
+// such a node api.port 0 is still the hard off switch — it binds no tool
+// bridge on api.public either.
 //
 // # No two listeners on one port
 //
 // Every one of them binds on the same host, so a shared port is a bind that
-// fails at boot — after the broker started, or with the API answering on one
-// of the two and the other silent — long after `crewlet validate` called the
-// file good. Worse is the pair that does NOT fail: nothing here can bind a
-// port twice, but an operator who wrote api.public.port equal to api.port
-// meant two sockets, and the admin API and the routes published to the
-// internet would have been one.
+// fails at boot — the second of the API's two listeners, or the broker's
+// route or leaf port behind an API listener already holding it — long after
+// `crewlet validate` called the file good. Worse is the pair that does NOT
+// fail: nothing here can bind a port twice, but an operator who wrote
+// api.public.port equal to api.port meant two sockets, and the admin API and
+// the routes published to the internet would have been one.
 //
 // Two listeners on DIFFERENT specific addresses may share a port — an
 // interface each is a real deployment — so a port is refused only when the

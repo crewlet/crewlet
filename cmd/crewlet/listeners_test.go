@@ -109,7 +109,8 @@ func TestANodeWithAPublicListenerBindsTwoSockets(t *testing.T) {
 
 // A PUBLIC BIND THAT FAILS TAKES THE NODE'S LISTENER DOWN WITH IT. A node that
 // served its dashboard while every webhook found nothing listening would look
-// healthy to every probe and be deaf to every integration.
+// healthy to every probe and be deaf to every integration. Both are bound
+// before the boot, so the failure is found before anything slow has run.
 func TestAnUnbindablePublicPortFailsTheNode(t *testing.T) {
 	t.Parallel()
 	taken, err := net.Listen("tcp", "127.0.0.1:0")
@@ -229,13 +230,19 @@ func TestASeatsNodeWithNoAPIPortBindsNothing(t *testing.T) {
 	// NOTHING BOUND AT ALL, asked of the one path every listener is opened
 	// through rather than of the public port after the fact — which this
 	// case holds itself, so nothing else can be listening there either.
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, bindNothing(t), logging.Get("test"))
+	listeners, err := bindListeners(t.Context(), boot, e.Node().ID(), true, bindNothing(t),
+		logging.Get("test"))
+	if err != nil || listeners != nil {
+		listeners.close(context.Background(), logging.Get("test"))
+		t.Fatalf("bindListeners on api.port 0 = %v, %v; want nothing bound", listeners, err)
+	}
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, listeners, logging.Get("test"))
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
 	if surface != nil {
 		surface.stop(context.Background(), logging.Get("test"))
-		t.Fatal("a node with api.port 0 bound a listener")
+		t.Fatal("a node with api.port 0 built an HTTP surface")
 	}
 }
 
