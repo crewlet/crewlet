@@ -15,6 +15,7 @@
  * that is not exactly a call is dropped.
  */
 
+import { EXTERNAL_URL_MAX, externalUrl } from "@crewlethq/ui";
 import { QueryError, type DataDoc, type DataOp, type LiveSocket } from "~/protocol/index.ts";
 import { RUNTIME_CONTRACT, STATE_COLLECTION } from "~/contract/artifacts.ts";
 import {
@@ -474,15 +475,19 @@ export class PageHost {
         }));
       }
       case "openLink": {
-        let url: URL;
-        try {
-          url = new URL(str(p["url"], "url"));
-        } catch (err) {
-          if (err instanceof Refusal) throw err;
-          throw new Refusal("invalid", "openLink takes an absolute https or http URL");
-        }
-        if (url.protocol !== "https:" && url.protocol !== "http:") {
-          throw new Refusal("invalid", "openLink takes an absolute https or http URL");
+        // ONE RULE FOR EVERY WAY A FRAME ASKS TO LEAVE: the frame protocol's
+        // open-link message and this call both go through `externalUrl`, so
+        // a link carrying a user name or password (a trusted name in front
+        // of another host) or past its length bound never reaches the
+        // interstitial. The bridge's contract is narrower than the protocol's
+        // by `mailto:`, which it does not open.
+        const url = externalUrl(str(p["url"], "url"));
+        if (!url || (url.protocol !== "https:" && url.protocol !== "http:")) {
+          throw new Refusal(
+            "invalid",
+            `openLink takes an absolute https or http URL of at most ${EXTERNAL_URL_MAX} ` +
+              "characters, with no user name or password",
+          );
         }
         return this.options.openLink(url);
       }

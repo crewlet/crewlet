@@ -208,6 +208,23 @@ describe("the host", () => {
     expect(openLink).toHaveBeenCalledTimes(1);
   });
 
+  test("refuses a link the frame protocol refuses: userinfo, past the bound, or mail", async () => {
+    const openLink = vi.fn(async () => true);
+    const { h } = host([], { openLink });
+    for (const url of [
+      "https://accounts.example.com:443@evil.example/login",
+      "https://user:secret@example.com/",
+      `https://example.com/${"a".repeat(2048)}`,
+      "mailto:someone@example.com",
+    ]) {
+      expect(await call(h, "openLink", { url })).toMatchObject({
+        ok: false,
+        error: { code: "invalid" },
+      });
+    }
+    expect(openLink).not.toHaveBeenCalled();
+  });
+
   test("pins presence to the page's version and bounds what it says", async () => {
     const setPresence = vi.fn();
     const { h } = host(["presence"], { setPresence });
