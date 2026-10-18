@@ -235,7 +235,8 @@ look for a switch that turns authentication off. There was one — Tier A's
 operator authority with no check on the bind address anywhere, so one unset
 environment variable was a total bypass of every gate, on any deployment,
 reachable by anyone who could reach the port. It is retired; a file still
-carrying it is refused, as one carrying any key this build does not know is.
+carrying it is refused at that line, and the refusal says the key was removed
+and that local development uses `crewlet run -dev-principal` instead.
 
 `-dev-principal` is the thing somebody actually wanted, with the two guards
 that field never had:
@@ -640,12 +641,12 @@ The remaining subcommands operate on the [secret store](../concepts/secret-store
 ### `crewlet secrets set`
 
 ```
-crewlet secrets set <NAME> [-value V] [-source STR] [-config PATH] [-api URL]
+crewlet secrets set <NAME> [-value V] [-config PATH] [-api URL]
 ```
 
 Stores one encrypted secret under `NAME`, which must be a valid environment-variable name — a name outside the `${VAR}` grammar could never be read back, so it is rejected. Existing names are replaced.
 
-The value comes from **stdin** by default (`echo "$TOKEN" | crewlet secrets set GITLAB_TOKEN_SWE`), or from an interactive prompt on a terminal. `-value` exists for scripted use, but an argv value is visible in `ps` and lands in shell history, so prefer stdin. `-source` records provenance (default `cli`); the provisioning CLIs stamp their own. The **author** is the node's to decide when the write goes through a running node — whoever the credential in `CREWLET_API_TOKEN` resolves to, `token:<id>` for a Tier A token or the owner with the token beside them for a machine token — and the line printed after the write is what the node recorded, never the shell's own user; it is `$CREWLET_OPERATOR`/`$USER`, with no credential, when the write goes to the local table.
+The value comes from **stdin** by default (`echo "$TOKEN" | crewlet secrets set GITLAB_TOKEN_SWE`), or from an interactive prompt on a terminal. `-value` exists for scripted use, but an argv value is visible in `ps` and lands in shell history, so prefer stdin. The row's **source** is the write path's own word and no flag sets it: a running node records its route's `api`, and a stopped node's own table `cli` (the provisioning commands record `provision` there, and `crewlet llm login` and `export` `llm-login`), which becomes `migrated` when the engine moves the row onto the fleet at its next start — see [Secret Store](../concepts/secret-store.md#the-design). The **author** is the node's to decide when the write goes through a running node — whoever the credential in `CREWLET_API_TOKEN` resolves to, `token:<id>` for a Tier A token or the owner with the token beside them for a machine token — and the line printed after the write is what the node recorded, never the shell's own user; it is `$CREWLET_OPERATOR`/`$USER`, with no credential, when the write goes to the local table.
 
 A running engine picks the new value up at its next config activation or restart, not immediately — the command says so after each write, along with which of the two stores it wrote.
 

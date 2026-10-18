@@ -99,7 +99,7 @@ func (g *mintGate) enter(ctx context.Context) (func(), error) {
 // deleted one that every stored blind was derived under — and only the caller
 // knows what its estate would say about that. It is REQUIRED; see the file's
 // header.
-func (e *Engine) companyKey(ctx context.Context, name, source string,
+func (e *Engine) companyKey(ctx context.Context, name string, source secrets.Source,
 	may func(context.Context) error) (string, error) {
 
 	if may == nil {
@@ -152,8 +152,8 @@ func (e *Engine) companyKey(ctx context.Context, name, source string,
 }
 
 // mintKey mints a company key under the hold, unless it has appeared since.
-func (e *Engine) mintKey(ctx context.Context, store *fleetsecrets.Estate, name,
-	source string, may func(context.Context) error) (string, error) {
+func (e *Engine) mintKey(ctx context.Context, store *fleetsecrets.Estate, name string,
+	source secrets.Source, may func(context.Context) error) (string, error) {
 
 	// AGAIN UNDER THE HOLD: a peer that held it a moment ago may have
 	// written the key between this node's last read and its claim.
@@ -233,7 +233,7 @@ func (s personBlindSource) Blinder(ctx context.Context) (*iamdomain.Blinder, err
 	if held != nil {
 		return held, nil
 	}
-	value, err := s.e.companyKey(ctx, iamdomain.BlindKeyName, "iam",
+	value, err := s.e.companyKey(ctx, iamdomain.BlindKeyName, secrets.SourceIAM,
 		s.e.mayMintPersonBlindKey)
 	if err != nil {
 		return nil, err

@@ -19,10 +19,11 @@ import (
 // `api.auth.disabled` authenticated the EMPTY credential into full operator
 // authority, with no check on the bind address anywhere — so one unset
 // environment variable was a total bypass of every gate this package has, on
-// any deployment, reachable by anybody who could reach the port. It is retired
-// (see config.retiredBootstrapFields), and this is the thing somebody actually
-// wanted when they reached for it: a laptop where the dashboard opens without
-// a token while its author is writing a feature.
+// any deployment, reachable by anybody who could reach the port. It is removed,
+// and a Tier A file that still carries it is refused by name (see config's
+// removedKeys); this is the thing somebody actually wanted when they reached
+// for it: a laptop where the dashboard opens without a token while its author
+// is writing a feature.
 //
 // # The two refusals, and why neither alone is enough
 //

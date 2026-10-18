@@ -93,9 +93,10 @@ func operatorName(name string) error {
 }
 
 // Set seals a value and writes it for the whole fleet, recording its author
-// and the credential beside them — see [secrets.Author].
+// and the credential beside them — see [secrets.Author] — and the write path
+// it arrived by, which [secrets.CheckSource] holds to the paths' own words.
 func (s *Store) Set(ctx context.Context, name, value string, by secrets.Author,
-	source string, now time.Time) error {
+	source secrets.Source, now time.Time) error {
 
 	if s == nil || s.cipher == nil {
 		return secrets.ErrNoKeyring
@@ -109,13 +110,16 @@ func (s *Store) Set(ctx context.Context, name, value string, by secrets.Author,
 	if err := secrets.CheckName(name); err != nil {
 		return err
 	}
+	if err := secrets.CheckSource(source); err != nil {
+		return err
+	}
 	return s.put(ctx, name, value, by, source, now)
 }
 
 // put seals a value under its own name and writes it, once the caller's view
 // has established the name is one it may write.
 func (s *Store) put(ctx context.Context, name, value string, by secrets.Author,
-	source string, now time.Time) error {
+	source secrets.Source, now time.Time) error {
 
 	rec, err := s.seal(provenance(name, by, source, now), value)
 	if err != nil {
@@ -126,13 +130,13 @@ func (s *Store) put(ctx context.Context, name, value string, by secrets.Author,
 
 // provenance is a row's name and who is writing it, before anything is
 // sealed: the author, what sort of author, the credential beside them, the
-// surface it arrived by and when.
-func provenance(name string, by secrets.Author, source string,
+// write path it arrived by and when.
+func provenance(name string, by secrets.Author, source secrets.Source,
 	now time.Time) coord.SecretRecord {
 
 	return coord.SecretRecord{
 		Name: name, UpdatedAt: now.UTC(), UpdatedBy: by.Name,
-		UpdatedByKind: by.Kind, OperatorID: by.OperatorID, Source: source,
+		UpdatedByKind: by.Kind, OperatorID: by.OperatorID, Source: string(source),
 	}
 }
 
@@ -472,7 +476,8 @@ func record(row coord.SecretRecord) secrets.Record {
 	return secrets.Record{
 		Name: row.Name, KeyID: row.KeyID, UpdatedAt: row.UpdatedAt,
 		UpdatedBy: row.UpdatedBy, UpdatedByKind: row.UpdatedByKind,
-		OperatorID: row.OperatorID, Source: row.Source, Version: row.Version,
+		OperatorID: row.OperatorID, Source: secrets.Source(row.Source),
+		Version: row.Version,
 	}
 }
 
@@ -514,12 +519,15 @@ func (e *Estate) Get(ctx context.Context, name string) (string, error) {
 // minter to the same outcome. Only the store can decide "none is there" and
 // "write mine" as one step.
 func (e *Estate) Create(ctx context.Context, name, value string, by secrets.Author,
-	source string, now time.Time) (bool, error) {
+	source secrets.Source, now time.Time) (bool, error) {
 
 	if e == nil || e.store.cipher == nil {
 		return false, secrets.ErrNoKeyring
 	}
 	if err := secrets.CheckEstateName(name); err != nil {
+		return false, err
+	}
+	if err := secrets.CheckSource(source); err != nil {
 		return false, err
 	}
 	rec, err := e.store.seal(provenance(name, by, source, now), value)

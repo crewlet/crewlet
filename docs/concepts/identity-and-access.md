@@ -670,7 +670,8 @@ claim sitting on disk until somebody enrolled. The token is already the root
 of trust, and putting somebody on their seat — an invitation or a create — is
 already the path everybody else takes.
 `api.auth.bootstrap`, which configured it, is gone, and a file still carrying
-it is refused as any unknown key is.
+it is refused, with a message saying it was removed and that the first person
+is invited with an `api.auth.tokens` token instead.
 
 ## A person arrives on their seat: invited, or created
 
@@ -3122,8 +3123,9 @@ today is smaller, and lives in two places:
   `min_password_length`; and the `session` and `audit` blocks under it.
   Password sign-in is always served; there is no setting that turns it off. `allow_anonymous_read`,
   `disabled` and `oidc` are all retired, and a file still carrying one is
-  refused as any unknown key is (Tier A decodes with unknown keys refused) —
-  see [Configuration § Auth](configuration.md#auth) for what replaced each.
+  refused (Tier A decodes with unknown keys refused) by a message that names
+  the key as removed and says what replaced it — see
+  [Configuration § Auth](configuration.md#auth) for each.
 - **The identity directory** — who is a *person*, who is a machine, and which
   seat each is bound to: the human seat every person holds, and the one a
   service account or a token's row may be bound to. It is written from the seat

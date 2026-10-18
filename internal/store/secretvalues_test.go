@@ -54,7 +54,7 @@ func secretStore(t *testing.T, k secrets.Keyring) (*store.SecretValues, *store.D
 
 func mustSet(t *testing.T, s *store.SecretValues, name, value string) {
 	t.Helper()
-	if err := s.Set(context.Background(), name, value, byOperator, "cli", secretClock); err != nil {
+	if err := s.Set(context.Background(), name, value, byOperator, secrets.SourceCLI, secretClock); err != nil {
 		t.Fatalf("Set(%s): %v", name, err)
 	}
 }
@@ -163,7 +163,7 @@ func TestAWrongKeyringRaisesRatherThanReturningNothing(t *testing.T) {
 func TestWithoutAKeyringTheStoreRefusesEverything(t *testing.T) {
 	t.Parallel()
 	s, _, _ := secretStore(t, secrets.Keyring{})
-	if err := s.Set(context.Background(), "TOKEN", "v", byOperator, "cli", secretClock); !errors.Is(err, secrets.ErrNoKeyring) {
+	if err := s.Set(context.Background(), "TOKEN", "v", byOperator, secrets.SourceCLI, secretClock); !errors.Is(err, secrets.ErrNoKeyring) {
 		t.Errorf("Set err = %v, want secrets.ErrNoKeyring", err)
 	}
 	if _, err := s.Get(context.Background(), "TOKEN"); !errors.Is(err, secrets.ErrNoKeyring) {
@@ -223,7 +223,7 @@ func TestAListingIsMetadataOnly(t *testing.T) {
 	// ALL THREE, which is the row's whole provenance: the author, what sort
 	// of author, and the credential beside them.
 	if got := (secrets.Author{Name: list[0].UpdatedBy, Kind: list[0].UpdatedByKind,
-		OperatorID: list[0].OperatorID}); got != byOperator || list[0].Source != "cli" {
+		OperatorID: list[0].OperatorID}); got != byOperator || list[0].Source != secrets.SourceCLI {
 		t.Errorf("provenance = %+v", list[0])
 	}
 	if !list[0].UpdatedAt.Equal(secretClock) {
@@ -283,7 +283,7 @@ func TestRekeyMovesOnlyWhatIsNotAlreadyActive(t *testing.T) {
 	after := db.SecretValues(cipher)
 	// A value written after the rotation is already on the active key and
 	// must not be touched by the pass.
-	if err = after.Set(context.Background(), "NEW_C", "c", byOperator, "cli", secretClock); err != nil {
+	if err = after.Set(context.Background(), "NEW_C", "c", byOperator, secrets.SourceCLI, secretClock); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 
@@ -317,7 +317,7 @@ func TestRekeyMovesOnlyWhatIsNotAlreadyActive(t *testing.T) {
 	}
 	for _, r := range list {
 		if got := (secrets.Author{Name: r.UpdatedBy, Kind: r.UpdatedByKind,
-			OperatorID: r.OperatorID}); got != byOperator || r.Source != "cli" ||
+			OperatorID: r.OperatorID}); got != byOperator || r.Source != secrets.SourceCLI ||
 			!r.UpdatedAt.Equal(secretClock) {
 			t.Errorf("%s records %+v, %q at %s after a rekey, want who stored it",
 				r.Name, got, r.Source, r.UpdatedAt)
@@ -358,7 +358,7 @@ func TestARekeyAbortsOnARowItCannotOpen(t *testing.T) {
 	}
 	if _, err := db.SQL().ExecContext(t.Context(),
 		`INSERT INTO secret_values (name, value, key_id, updated_at, updated_by, source)
-		 VALUES ('ORPHAN', ?, 'lost', 0, 'op', 'test')`, sealed); err != nil {
+		 VALUES ('ORPHAN', ?, 'lost', 0, 'op', 'cli')`, sealed); err != nil {
 		t.Fatalf("insert orphan: %v", err)
 	}
 
@@ -378,7 +378,7 @@ func TestASecretNameOutsideTheReferenceGrammarIsRefused(t *testing.T) {
 	t.Parallel()
 	s, _, _ := secretStore(t, ring(t, "k1"))
 	for _, name := range []string{"", "gitlab token", "gitlab-token", "9LIVES"} {
-		err := s.Set(context.Background(), name, "value", byOperator, "cli", secretClock)
+		err := s.Set(context.Background(), name, "value", byOperator, secrets.SourceCLI, secretClock)
 		if !errors.Is(err, secrets.ErrInvalidName) {
 			t.Errorf("Set(%q) = %v, want secrets.ErrInvalidName", name, err)
 		}
@@ -393,4 +393,30 @@ func TestASecretNameOutsideTheReferenceGrammarIsRefused(t *testing.T) {
 	// AND THE ORDINARY NAMES STILL PASS, or the guard is just an outage.
 	mustSet(t, s, "GITLAB_TOKEN", "glpat-not-a-real-token")
 	mustSet(t, s, "_leading_underscore", "value")
+}
+
+// THE NODE-LOCAL HALF OF THE OTHER RULE BOTH STORES KEEP: a row records the
+// word of the path that wrote it and no other, and `crewlet secrets set` lost
+// the flag that let its caller pick one. Whatever lands here is migrated onto
+// the fleet, so a word the fleet would refuse is refused here first. Its twin
+// is TestAWriteWithAWordNoPathStampsIsRefused in internal/fleetsecrets.
+// Mutation: drop the CheckSource call and every word below is stored.
+func TestAWriteWithAWordNoPathStampsIsRefused(t *testing.T) {
+	t.Parallel()
+	s, _, _ := secretStore(t, ring(t, "k1"))
+	for _, word := range []secrets.Source{"", "operator", "gitlab-provision", "rekey"} {
+		if err := s.Set(context.Background(), "GITLAB_TOKEN", "value", byOperator,
+			word, secretClock); err == nil {
+			t.Errorf("Set stamped %q, which no write path stamps", word)
+		}
+	}
+	rows, err := s.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("a refused write left %d row(s) in the table", len(rows))
+	}
+	// AND THE PATHS' OWN WORDS PASS, or the guard is just an outage.
+	mustSet(t, s, "GITLAB_TOKEN", "glpat-not-a-real-token")
 }

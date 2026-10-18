@@ -19,16 +19,6 @@ type LocalStore interface {
 	Unset(ctx context.Context, name string) (bool, error)
 }
 
-// MigrateSource is the provenance stamped on a migrated row.
-//
-// Distinct from "cli" and "provision" so a listing says where a value came
-// from: an operator looking at a row written by this pass is looking at
-// something they set with `crewlet secrets set` while this node's engine was
-// stopped, and the original provenance is genuinely gone — the local row's own
-// UpdatedBy and UpdatedAt are preserved, but the write that put it on the KV
-// was this one.
-const MigrateSource = "migrated"
-
 // Migrate moves a node's own secret rows onto the fleet and removes them.
 //
 // # Why it must both copy AND remove
@@ -106,19 +96,24 @@ func Migrate(ctx context.Context, from LocalStore, to *Store) ([]string, error) 
 					row.Name, err)
 			}
 			// The ORIGINAL author — who, of what kind, through which
-			// credential — and the ORIGINAL instant are preserved and
-			// the source is stamped: "who set this" is the question the
-			// provenance columns exist to answer, and "when" is what the
-			// next migration compares against. Stamped with this pass's
-			// own clock, the record would say when this node booted
-			// rather than when its operator wrote the value, and a second
-			// stopped node's later offline write would read as the
-			// earlier one — and be dropped — whenever this node happened
-			// to start first.
+			// credential — and the ORIGINAL instant are preserved: "who
+			// set this" is the question the provenance columns exist to
+			// answer, and "when" is what the next migration compares
+			// against. Stamped with this pass's own clock, the record
+			// would say when this node booted rather than when its
+			// operator wrote the value, and a second stopped node's
+			// later offline write would read as the earlier one — and be
+			// dropped — whenever this node happened to start first.
+			//
+			// THE SOURCE IS THE ONE FACT REPLACED, with this pass's own
+			// [secrets.SourceMigrated], because it names the write path
+			// and the write that put the row on the fleet was this one:
+			// the stopped node's word (`cli`, `provision`, `llm-login`)
+			// named a write to its own table, which no peer ever saw.
 			if err := to.Set(ctx, row.Name, value, secrets.Author{
 				Name: row.UpdatedBy, Kind: row.UpdatedByKind,
 				OperatorID: row.OperatorID,
-			}, MigrateSource, row.UpdatedAt); err != nil {
+			}, secrets.SourceMigrated, row.UpdatedAt); err != nil {
 				return moved, fmt.Errorf("fleetsecrets: migrate %s: %w", row.Name, err)
 			}
 			moved = append(moved, row.Name)

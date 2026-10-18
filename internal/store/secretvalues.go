@@ -81,9 +81,12 @@ ON CONFLICT (name) DO UPDATE SET
 // path and two operators rotating at once must not produce a row that holds
 // neither of their values.
 //
-// BY IS THE AUTHOR AND THE CREDENTIAL, both kept — see [secrets.Author].
+// BY IS THE AUTHOR AND THE CREDENTIAL, both kept — see [secrets.Author] —
+// and SOURCE is the command that wrote the row, held to the write paths' own
+// words by [secrets.CheckSource] here as on the fleet's store, since this row
+// is migrated onto the fleet at the next start.
 func (s *SecretValues) Set(ctx context.Context, name, value string,
-	by secrets.Author, source string, now time.Time) error {
+	by secrets.Author, source secrets.Source, now time.Time) error {
 
 	if s.cipher == nil {
 		return secrets.ErrNoKeyring
@@ -93,6 +96,9 @@ func (s *SecretValues) Set(ctx context.Context, name, value string,
 	// stopped node, and whatever lands here is migrated onto the fleet
 	// unchanged at the next start.
 	if err := secrets.CheckName(name); err != nil {
+		return err
+	}
+	if err := secrets.CheckSource(source); err != nil {
 		return err
 	}
 	// THE NAME IS BOUND IN as associated data, so a ciphertext moved to
@@ -108,7 +114,7 @@ func (s *SecretValues) Set(ctx context.Context, name, value string,
 		return fmt.Errorf("store: seal %s: the cipher produced no key id", name)
 	}
 	_, err = s.db.sql.ExecContext(ctx, secretUpsertSQL, name, sealed, keyID,
-		EncodeTime(now), by.Name, by.Kind, by.OperatorID, source)
+		EncodeTime(now), by.Name, by.Kind, by.OperatorID, string(source))
 	if err != nil {
 		return fmt.Errorf("store: write secret %s: %w", name, err)
 	}
@@ -162,11 +168,12 @@ func (s *SecretValues) List(ctx context.Context) ([]secrets.Record, error) {
 	for rows.Next() {
 		var r secrets.Record
 		var micros int64
+		var source string
 		if err := rows.Scan(&r.Name, &r.KeyID, &micros, &r.UpdatedBy,
-			&r.UpdatedByKind, &r.OperatorID, &r.Source); err != nil {
+			&r.UpdatedByKind, &r.OperatorID, &source); err != nil {
 			return nil, fmt.Errorf("store: scan secret: %w", err)
 		}
-		r.UpdatedAt = DecodeTime(micros)
+		r.UpdatedAt, r.Source = DecodeTime(micros), secrets.Source(source)
 		out = append(out, r)
 	}
 	return out, rows.Err()

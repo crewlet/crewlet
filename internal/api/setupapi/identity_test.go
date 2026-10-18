@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // A company whose one agent is provisioned into every app that grades it by
@@ -69,7 +71,7 @@ func TestAWorkingSeatNamesTheAccountItIsAtEachApp(t *testing.T) {
 		"SRE_DATADOG":   "dd-key",
 		"SRE_MM":        "mm-token",
 	} {
-		if err := s.vault.Set(t.Context(), name, value, testAuthor, "test", pinned); err != nil {
+		if err := s.vault.Set(t.Context(), name, value, testAuthor, secrets.SourceAPI, pinned); err != nil {
 			t.Fatal(err)
 		}
 	}

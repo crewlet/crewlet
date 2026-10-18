@@ -77,13 +77,13 @@ func (c *secretsClient) Describe() string {
 func (c *secretsClient) List(ctx context.Context) ([]secrets.Record, error) {
 	var body struct {
 		Secrets []struct {
-			Name          string `json:"name"`
-			KeyID         string `json:"key_id"`
-			UpdatedAt     string `json:"updated_at"`
-			UpdatedBy     string `json:"updated_by"`
-			UpdatedByKind string `json:"updated_by_kind"`
-			OperatorID    string `json:"operator_id"`
-			Source        string `json:"source"`
+			Name          string         `json:"name"`
+			KeyID         string         `json:"key_id"`
+			UpdatedAt     string         `json:"updated_at"`
+			UpdatedBy     string         `json:"updated_by"`
+			UpdatedByKind string         `json:"updated_by_kind"`
+			OperatorID    string         `json:"operator_id"`
+			Source        secrets.Source `json:"source"`
 		} `json:"secrets"`
 	}
 	if err := c.call(ctx, http.MethodGet, "/secrets", nil, &body); err != nil {
@@ -107,23 +107,22 @@ func (c *secretsClient) List(ctx context.Context) ([]secrets.Record, error) {
 
 // Set stores or rotates one value, and reports the author the node recorded.
 //
-// `by` is DELIBERATELY not sent. The node stamps the party its own guard
+// NEITHER `by` NOR `source` IS SENT. The node stamps the party its own guard
 // authenticated, which is the only attribution that means anything on this
 // path — a client-supplied author would be a field the caller chooses — and
-// it answers with what it stamped, which is what the command prints.
+// its route's own source, `api`, and it refuses a write that names either:
+// the route takes no query at all. It answers with what it stamped, which is
+// what the command prints.
 func (c *secretsClient) Set(ctx context.Context, name, value string, _ secrets.Author,
-	source string, _ time.Time) (secrets.Author, error) {
+	_ secrets.Source, _ time.Time) (secrets.Author, error) {
 
-	path := "/secrets/" + url.PathEscape(name)
-	if source != "" {
-		path += "?source=" + url.QueryEscape(source)
-	}
 	var body struct {
 		UpdatedBy     string `json:"updated_by"`
 		UpdatedByKind string `json:"updated_by_kind"`
 		OperatorID    string `json:"operator_id"`
 	}
-	if err := c.call(ctx, http.MethodPut, path, []byte(value), &body); err != nil {
+	if err := c.call(ctx, http.MethodPut, "/secrets/"+url.PathEscape(name),
+		[]byte(value), &body); err != nil {
 		return secrets.Author{}, err
 	}
 	return secrets.Author{Name: body.UpdatedBy, Kind: body.UpdatedByKind,

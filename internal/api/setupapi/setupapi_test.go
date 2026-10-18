@@ -86,7 +86,7 @@ type vault struct {
 }
 
 func (v *vault) Set(_ context.Context, name, value string, by secrets.Author,
-	_ string, _ time.Time) error {
+	_ secrets.Source, _ time.Time) error {
 
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -1087,7 +1087,7 @@ func (s *surface) withPassSink(
 type sinkStore struct{ v *vault }
 
 func (s sinkStore) Set(ctx context.Context, name, value string, by secrets.Author,
-	source string, at time.Time) error {
+	source secrets.Source, at time.Time) error {
 
 	return s.v.Set(ctx, name, value, by, source, at)
 }
@@ -1128,7 +1128,7 @@ func (s *surface) seedGitHub(t *testing.T) {
 	}
 	// The secret has to RESOLVE, or the requirement is outstanding and the
 	// pass is refused before it runs, which is a different test.
-	if err := s.vault.Set(t.Context(), "GH_SECRET", "s", testAuthor, "test", pinned); err != nil {
+	if err := s.vault.Set(t.Context(), "GH_SECRET", "s", testAuthor, secrets.SourceAPI, pinned); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1288,7 +1288,7 @@ func TestACheckWithNoExternalURLRunsAndReportsIt(t *testing.T) {
 	if res.Code != http.StatusCreated {
 		t.Fatalf("seed = %d: %s", res.Code, res.Body)
 	}
-	if err := s.vault.Set(t.Context(), "GH_SECRET", "s", testAuthor, "test", pinned); err != nil {
+	if err := s.vault.Set(t.Context(), "GH_SECRET", "s", testAuthor, secrets.SourceAPI, pinned); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1359,7 +1359,7 @@ func TestAProvisionPassNeedsAnExternalURL(t *testing.T) {
 	if res.Code != http.StatusCreated {
 		t.Fatalf("seed = %d: %s", res.Code, res.Body)
 	}
-	if err := s.vault.Set(t.Context(), "GH_SECRET", "s", testAuthor, "test", pinned); err != nil {
+	if err := s.vault.Set(t.Context(), "GH_SECRET", "s", testAuthor, secrets.SourceAPI, pinned); err != nil {
 		t.Fatal(err)
 	}
 

@@ -114,10 +114,10 @@ const (
 	// past the cap — which the detail names.
 	CodeInvalidBody Code = "invalid_body"
 
-	// CodeInvalidQuery is a query parameter that is not one of the values
-	// the route accepts. Its own code rather than invalid_body, because the
-	// body may be perfectly good, and a client told the body is wrong
-	// changes the one thing that was right.
+	// CodeInvalidQuery is a query parameter the route does not take, or a
+	// value of one it does that it does not accept. Its own code rather
+	// than invalid_body, because the body may be perfectly good, and a
+	// client told the body is wrong changes the one thing that was right.
 	CodeInvalidQuery Code = "invalid_query"
 	// CodeNonCanonicalPath is a request path carrying a `.` or `..` segment
 	// or an empty one. Refused rather than redirected to where it resolves,
@@ -851,7 +851,7 @@ var codes = map[Code]string{
 		"Send a smaller document, or split the change across more than one request.",
 	CodeUnreadableBody: "The request body did not arrive in full. Send it again.",
 	CodeInvalidBody:    "The request body isn't valid, so nothing changed.",
-	CodeInvalidQuery:   "One of the query parameters is not a value this endpoint accepts.",
+	CodeInvalidQuery:   "A query parameter is not one this endpoint takes, or not a value it accepts.",
 	CodeNonCanonicalPath: "The request path has a dot segment or an empty " +
 		"segment in it. Send the path it resolves to instead.",
 	CodeInternalError: "Something went wrong inside the engine. The reason is " +
