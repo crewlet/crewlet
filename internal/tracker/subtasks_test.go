@@ -135,11 +135,18 @@ func TestARemovedSubtaskDoesNotRideAlong(t *testing.T) {
 	assertIDs(t, ids(r.ask(map[string]any{"container": "project:ENG"})),
 		[]string{"root-d", "sub-d"})
 	// AND THE TRASH STILL REACHES IT, because a removal hides a task
-	// rather than destroying it.
-	if got := ids(r.ask(map[string]any{
-		"container": "project:ENG", "removed": "true", "subtasks": "separate",
-	})); !containsString(got, "sub-gone") {
-		t.Fatalf("the trash is %v and does not hold the removed subtask", got)
+	// rather than destroying it — in every subtask mode, since its
+	// tombstone names no other task's removal and so it is a removal of its
+	// own, listed on its own in the default mode too.
+	for _, mode := range []string{"", "collapsed", "separate"} {
+		params := map[string]any{"container": "project:ENG", "removed": "true"}
+		if mode != "" {
+			params["subtasks"] = mode
+		}
+		if got := ids(r.ask(params)); !containsString(got, "sub-gone") {
+			t.Fatalf("the trash in mode %q is %v and does not hold the removed "+
+				"subtask", mode, got)
+		}
 	}
 }
 
