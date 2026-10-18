@@ -57,7 +57,7 @@ instrument (see [Metrics](metrics.md)).
   publish slows the write-ahead log it shares disks with.
 - **Presence costs memory and frames, never storage**: a map per room on each
   node holding its sockets, and a few hundred bytes per broadcast. Measured
-  (S6), a room of 200 viewers costs the fleet a twelfth of one core.
+  (S6), a room of 200 viewers costs the fleet under a tenth of one core.
 
 ---
 
@@ -87,7 +87,7 @@ citing it, by the change that owns it; the spikes never change a decision.
 
 | | |
 |---|---|
-| Commit | `feat/artifacts-p15` at `2033e8132` (S6 rerun at `a4805719a`, after the presence fix below; S7 memory at `beb07f219`) |
+| Commit | `feat/artifacts-p15` at `2033e8132` (S6 rerun at `21f6024a0`, after the presence fix below; S7 memory at `beb07f219`) |
 | Machine | Apple M1 Pro, 8 cores, 16 GiB, macOS 27.0.1, internal SSD |
 | Fsync | `sync: always`; on darwin every fsync is a full flush to the medium (`F_FULLFSYNC`), several milliseconds each |
 | Topology | `solo`: one embedded broker and one data node. `fleet3`: a three-member embedded cluster, every stream at three replicas, a data node on each member, all in one process on one disk |
@@ -173,8 +173,9 @@ half writing blind; it fails if a blind write ever conflicts.
 and the plan's 25 records a second both fit inside the fleet's measured rate
 (56 a second) on this machine, so throughput holds with about twice the
 headroom; latency does not: the datastore op objective (p95 within 250 ms) is
-missed by a factor of four, because each record is two fsynced appends and
-three fsynced commits deep and darwin's flushes are slow. Blind writes never
+missed by a factor of four, because each write waits for a quorum of members
+to flush its append and for its own node's applier to flush the commit, darwin's
+flushes are slow, and here three members and three appliers share one disk. Blind writes never
 conflicted; guarded writes on ten rows written by thirty people conflicted on
 69 to 73 percent of attempts, which is the correct verdict for a version that moved
 and the reason a sheet's cell edit is blind and a long text is guarded.
@@ -357,12 +358,12 @@ second and is timed to the moment the last node's sockets are shown it.
 
 | Viewers | Moves/s each | Frames/s per socket | Busiest node to its sockets | Broker per node, sent / heard | Fleet CPU | Join shown everywhere | Cursor across nodes p50 / p95 |
 |---|---|---|---|---|---|---|---|
-| 30 | 1 | 4.8 | 69 KiB/s | 2.7 / 8.2 KiB/s | 0.030 cores | 0.4 s | 246 / 400 ms |
-| 30 | 10 | 5.0 | 316 KiB/s | 10.4 / 31.2 KiB/s | 0.040 cores | 2.0 s | 246 / 301 ms |
-| 50 | 1 | 4.8 | 184 KiB/s | 4.0 / 12.1 KiB/s | 0.039 cores | 2.2 s | 239 / 272 ms |
-| 50 | 10 | 4.9 | 816 KiB/s | 16.7 / 50.2 KiB/s | 0.043 cores | 2.0 s | 231 / 302 ms |
-| 200 | 1 | 4.9 | 2,566 KiB/s | 13.5 / 40.6 KiB/s | 0.050 cores | 2.0 s | 232 / 280 ms |
-| 200 | 10 | 4.9 | 3,355 KiB/s | 64.1 / 192.2 KiB/s | 0.083 cores | 2.0 s | 18 of 19 probes never shown |
+| 30 | 1 | 4.8 | 69 KiB/s | 2.7 / 8.1 KiB/s | 0.030 cores | 0.4 s | 274 / 400 ms |
+| 30 | 10 | 4.9 | 306 KiB/s | 10.4 / 31.1 KiB/s | 0.039 cores | 2.0 s | 279 / 402 ms |
+| 50 | 1 | 4.8 | 183 KiB/s | 4.0 / 12.1 KiB/s | 0.036 cores | 2.2 s | 86 / 248 ms |
+| 50 | 10 | 4.9 | 826 KiB/s | 16.7 / 50.2 KiB/s | 0.043 cores | 2.0 s | 258 / 301 ms (7 of 19 probes never shown) |
+| 200 | 1 | 4.9 | 2,587 KiB/s | 13.5 / 40.6 KiB/s | 0.054 cores | 2.2 s | 233 / 288 ms |
+| 200 | 10 | 4.9 | 3,339 KiB/s | 64.2 / 192.6 KiB/s | 0.077 cores | 2.0 s | 19 of 19 probes never shown |
 
 Before the presence fix below, four of the six runs took 15 seconds (one
 rebroadcast) to show a join on every node.
@@ -373,11 +374,13 @@ presence's CPU and broker cost is negligible. What grows with the room is the
 frame: a room past fifty presents its fifty most recent members, and when
 everyone moves, the fifty change constantly, so each frame names most of them
 again (about 10 KiB a frame, 50 KiB a second a socket at 200 viewers), and one
-viewer's move is shown only for the moment it is among the most recent (18 of
-19 probe moves were displaced before the other node's next frame). A join is
+viewer's move is shown only for the moment it is among the most recent (every
+probe move in the busiest room, and 7 of 19 in a room of 51, were displaced
+before the other node's next frame). A join is
 shown everywhere once the join-time ask has waited out its budget (2 seconds,
 `eventfan.FleetReadBudget`), and a cursor crosses nodes in two coalescing
-windows, one on each node (200 ms each).
+windows, one on each node (200 ms each), so its p50 lands anywhere between a
+few tens of ms and 400 ms by where in each window the move falls.
 
 **Target**: the per-artifact coalescing (5 frames a second) and the client
 throttle (10 a second) keep the busiest node's socket traffic bounded, and the
