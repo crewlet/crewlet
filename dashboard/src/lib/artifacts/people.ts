@@ -11,6 +11,7 @@
 
 import { useMemo } from "react";
 import {
+  PRESENCE_LABELS,
   assignPresenceHues,
   isNodeHue,
   type NodeHue,
@@ -52,6 +53,18 @@ export function principalOfUnit(unit: Unit | undefined, key: string): Principal 
     name: unit.name,
     detail: `${plural(people, "person", "people")}, ${plural(agents, "agent")}`,
   };
+}
+
+/**
+ * The turn an agent in the room is working in, for the People rail's Open
+ * turn: the roster is keyed by session, which is the drawn member's `id`. A
+ * person, or an agent between turns, has none.
+ */
+export function memberTurn(
+  roster: ReadonlyMap<string, ArtifactPresenceMember>,
+  member: Pick<PresenceMember, "id" | "kind">,
+): string {
+  return member.kind === "agent" ? (roster.get(member.id)?.turn ?? "") : "";
 }
 
 /** The chart's lookups for an artifact's surfaces, over an org projection. */
@@ -146,8 +159,11 @@ export function presenceMembers(
       out.character = seat.avatar.character;
       if (isNodeHue(seat.avatar.color)) out.hue = seat.avatar.color;
     }
+    // THE WHOLE PHRASE, VERB FIRST, which is what uilet's `PresenceMember.location`
+    // means: the People rail prints it in place of the activity, and the
+    // presence stack reads it out in place of the activity too.
     const where = memberLocation(m, title);
-    if (where) out.location = where;
+    if (where) out.location = `${PRESENCE_LABELS.activity(m.activity, kind)} ${where}`;
     return out;
   });
   const hues = assignPresenceHues(drawn, held);

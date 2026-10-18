@@ -10836,9 +10836,10 @@ a.live-row:focus-visible {
   font: inherit;
 }
 
-/* The People rail beside an artifact's body: a column at the right where the
-   page is wide, and above the body on a phone, where a reader follows a
-   presenter from it. */
+/* The People rail (uilet's PeopleRail, given `.artifact-people` for its place
+   here) beside an artifact's body: a column at the right where the page is
+   wide, and above the body on a phone, where a reader follows a presenter
+   from it. */
 .artifact-with-rail {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem);
@@ -10855,61 +10856,4 @@ a.live-row:focus-visible {
   .artifact-with-rail > .artifact-people {
     order: 0;
   }
-}
-.artifact-people {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  min-width: 0;
-  padding: var(--spacing-3);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-elevated);
-}
-.artifact-people-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-2);
-}
-.artifact-people-title {
-  margin: 0;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-}
-.artifact-people-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.artifact-person {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-width: 0;
-}
-.artifact-person-text {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-}
-.artifact-person-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.artifact-person-where {
-  overflow-wrap: anywhere;
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-sm);
-}
-.artifact-person-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-1);
-  justify-content: flex-end;
 }
