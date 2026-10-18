@@ -208,6 +208,17 @@ var routes = map[Kind]Route{
 	KindArtifactData:     RouteRoom,
 	KindArtifactPresence: RouteRoom,
 
+	// The company's own chat, each frame to the viewers its room admits —
+	// decided by the chat hub per recipient, never fanned out by route.
+	KindChatPosted:            RouteViewer,
+	KindChatEdited:            RouteViewer,
+	KindChatDeleted:           RouteViewer,
+	KindChatReacted:           RouteViewer,
+	KindChatRoomChanged:       RouteViewer,
+	KindChatMembershipChanged: RouteViewer,
+	KindChatCursorMoved:       RouteViewer,
+	KindChatPresence:          RouteViewer,
+
 	// The answers, to the one client that asked.
 	KindResult: RouteDirect,
 	KindError:  RouteDirect,
@@ -251,6 +262,12 @@ const (
 	// NO APP'S NEED, the `artifacts` app's included ([NeedFor]): that app
 	// gates authoring an artifact and never reading one.
 	NeedArtifact Need = "artifact"
+	// NeedChatlet is Chatlet's: every chat frame — a committed record, a
+	// person's own read state, a room's presence — is the chat questions'
+	// rows, which their holders alone ask. It is the reader's half of
+	// what admits a chat frame; WHICH room is the chat hub's per-recipient
+	// decision on top of it.
+	NeedChatlet = Need(iam.GrantChatlet)
 )
 
 // NeedFor is the need of a kind one app's holders may read.
@@ -308,6 +325,15 @@ var needs = map[Kind]Need{
 	KindArtifactChanged:  NeedArtifact,
 	KindArtifactData:     NeedArtifact,
 	KindArtifactPresence: NeedArtifact,
+
+	KindChatPosted:            NeedChatlet,
+	KindChatEdited:            NeedChatlet,
+	KindChatDeleted:           NeedChatlet,
+	KindChatReacted:           NeedChatlet,
+	KindChatRoomChanged:       NeedChatlet,
+	KindChatMembershipChanged: NeedChatlet,
+	KindChatCursorMoved:       NeedChatlet,
+	KindChatPresence:          NeedChatlet,
 }
 
 // NeedOf is who may read kind, and false for a kind that says nothing about
@@ -894,6 +920,25 @@ func (c *Client) Posture() FramePosture {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.posture
+}
+
+// admits is the posture this client takes a push of kind under, and false
+// where its audience's need or its posture refuses the kind — the two filters
+// every push passes before it is shaped and encoded ([fanOut]), stated once so
+// a producer choosing its recipients one by one can ask them FIRST: a client a
+// frame will never reach is not worth a read to decide whether it may see it.
+func (c *Client) admits(kind Kind) (FramePosture, bool) {
+	// WHO MAY READ IT before what the posture delivers: a client the kind
+	// is not declared for is not in its audience whatever the route says.
+	// See [needs].
+	if !c.Receives(kind) {
+		return "", false
+	}
+	posture := c.Posture()
+	if posture.index() < 0 || !posture.Delivers(kind) {
+		return "", false
+	}
+	return posture, true
 }
 
 // SetPosture moves this client to p, reporting whether it took.
@@ -1488,9 +1533,11 @@ func (h *Hub) Clients() int {
 // [RouteBroadcast] is every client; [RouteRoom] is the clients in the frame's
 // room and nobody else. [RouteDirect] is REFUSED here: a result carries the
 // correlation id of one client's question, and fanning it out would answer
-// every other tab's question with it. A kind with no route at all is refused
-// for the same reason: there is no safe default, and "everyone" is the unsafe
-// one.
+// every other tab's question with it. [RouteViewer] is refused too: its
+// recipients are chosen one by one by the chat hub, and a chat frame fanned
+// out by route is a private room on every tab. A kind with no route at all is
+// refused for the same reason: there is no safe default, and "everyone" is the
+// unsafe one.
 //
 // Never blocks on any client: each client's own queue absorbs the difference,
 // and one that has fallen behind loses its oldest frame rather than holding up
@@ -1506,6 +1553,12 @@ func (h *Hub) Broadcast(env Envelope) {
 	case route == RouteDirect:
 		log.Error("stream_direct_kind_broadcast", "kind", env.Kind,
 			"hint", "an answer belongs to the client that asked; use Client.Reply")
+		return
+	case route == RouteViewer:
+		log.Error("stream_viewer_kind_broadcast", "kind", env.Kind,
+			"hint", "a chat frame reaches the viewers its room admits, decided "+
+				"one by one by the chat hub; broadcast, it is a private room "+
+				"delivered to every open tab")
 		return
 	case route == RouteRoom && env.room == "":
 		log.Error("stream_room_frame_without_a_room", "kind", env.Kind,
@@ -1543,17 +1596,13 @@ func fanOut(targets []*Client, env Envelope) {
 	}
 	cache := map[encoding]*Frame{}
 	for _, c := range targets {
-		// WHO MAY READ IT before how it is encoded: a client the kind is
-		// not declared for is not in its audience whatever the route
-		// says. See [needs].
-		if !c.Receives(env.Kind) {
+		// WHO MAY READ IT AND WHAT ITS POSTURE DELIVERS, before how it is
+		// encoded. See [Client.admits].
+		posture, admitted := c.admits(env.Kind)
+		if !admitted {
 			continue
 		}
-		posture := c.Posture()
 		slot := posture.index()
-		if slot < 0 || !posture.Delivers(env.Kind) {
-			continue
-		}
 		reader, member := c.reader(env.room, env.Kind)
 		if !member {
 			continue

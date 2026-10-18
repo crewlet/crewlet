@@ -350,7 +350,7 @@ func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 			if err != nil || listeners != nil {
 				t.Fatalf("bindListeners on api.port 0 = %v, %v; want nothing bound", listeners, err)
 			}
-			surface, err := serveAPI(t.Context(), boot, nil, nil, nil, nil, nil, listeners, engine.DeepHost{}, log)
+			surface, err := serveAPI(t.Context(), boot, nil, nil, nil, nil, nil, nil, listeners, engine.DeepHost{}, log)
 			if err != nil {
 				t.Fatalf("serveAPI: %v", err)
 			}
@@ -731,6 +731,17 @@ func serveNodeWith(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
 	log *slog.Logger,
 ) (*httpSurface, *engine.Reconciler, error) {
 	t.Helper()
+	// THE PROCESS'S CHAT HUB, as `crewlet run` attaches it beside the engine.
+	chatLive := api.NewEngineChatLive(t.Context(), e)
+	t.Cleanup(func() { chatLive.Stop(context.WithoutCancel(t.Context())) })
+	return serveNodeOver(t, boot, e, chatLive, log)
+}
+
+// serveNodeOver is [serveNodeWith] over a chat hub the case built.
+func serveNodeOver(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
+	chatLive *api.EngineChatLive, log *slog.Logger,
+) (*httpSurface, *engine.Reconciler, error) {
+	t.Helper()
 	cipher := e.Cipher()
 	// THROUGH runEngine's OWN CONSTRUCTOR, so a node this builds holds the
 	// config surface exactly where a running one would — and none on a node
@@ -759,12 +770,51 @@ func serveNodeWith(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, reconciler, err
 	}
-	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface, nil, listeners, engine.DeepHost{}, log)
+	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface,
+		chatLive.Hub(), nil, listeners, engine.DeepHost{}, log)
 	if err != nil {
 		// THE CALLER'S TO CLOSE until the handover, as in runEngine.
 		listeners.close(context.Background(), log)
 	}
 	return surface, reconciler, err
+}
+
+// THE CHAT HUB IS THE PROCESS'S, AND IT SERVES SOCKETS ONLY WHERE THE API IS
+// MOUNTED OVER IT.
+//
+// It is attached beside the engine on every node, a node that serves no API
+// included — a seat raises its working indicator wherever its turn runs — and
+// what it says to the engine's live relay is whether this node shows anybody
+// what it hears: false where no socket surface was built over it, which is
+// what stops a node with no listener following a peer's batches for nobody,
+// and true once the API is.
+func TestTheChatHubServesSocketsOnlyWhereTheAPIIsMountedOverIt(t *testing.T) {
+	t.Parallel()
+	log := logging.Get("test")
+	e := testEngine(t)
+	chatLive := api.NewEngineChatLive(t.Context(), e)
+	t.Cleanup(func() { chatLive.Stop(context.WithoutCancel(t.Context())) })
+
+	surface, err := serveAPI(t.Context(), bootstrapFor(t, 0), e, nil, nil, nil,
+		chatLive.Hub(), nil, nil, engine.DeepHost{}, log)
+	if err != nil || surface != nil {
+		t.Fatalf("a node with api.port 0 served %v (%v)", surface, err)
+	}
+	if chatLive.Hub().ServesSockets() {
+		t.Fatal("a node that serves no API says its hub shows somebody what it hears")
+	}
+
+	surface, _, err = serveNodeOver(t, bootstrapFor(t, reservePort(t)), e, chatLive, log)
+	if err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	t.Cleanup(func() { surface.stop(context.WithoutCancel(t.Context()), log) })
+	if !chatLive.Hub().ServesSockets() {
+		t.Error("the API was mounted over the hub and the hub does not know it")
+	}
+	// AND IT IS STOPPED ONCE, whichever teardown reaches it first.
+	chatLive.Stop(t.Context())
+	chatLive.Stop(t.Context())
 }
 
 // testEngine builds a real engine on an embedded stream in a temp directory.

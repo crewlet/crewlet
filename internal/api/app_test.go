@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
@@ -269,6 +270,11 @@ func withRequired(opts api.Options) api.Options {
 	if opts.Credentials == nil {
 		opts.Credentials = &fakeCredentials{}
 	}
+	if opts.ChatLive == nil {
+		// A HUB WITH NOTHING TO SAY: no rooms to decide by, so it pushes
+		// no committed frame and no presence, and never started.
+		opts.ChatLive = stream.NewChatHub(stream.ChatHubOptions{})
+	}
 	if opts.Audit == nil {
 		opts.Audit = queuememory.New()
 	}
@@ -300,7 +306,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		"Sources.Chart", "Sources.Holders", "Sources.WithheldContacts", "Sources.Coord",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
 		"Config", "Secrets", "Setup", "Retention", "Capacity", "FleetBroker", "Backup",
-		"AuthEvents", "Inbox", "Credentials", "Nodes", "Audit",
+		"AuthEvents", "Inbox", "Credentials", "ChatLive", "Nodes", "Audit",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)

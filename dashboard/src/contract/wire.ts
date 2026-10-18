@@ -8,8 +8,10 @@
  * addressed to a ROOM rather than to every tab (`inbox_changed`, sent only to
  * a socket whose `watch` of that seat was allowed, and `artifact_changed`,
  * `artifact_data` and `artifact_presence`, sent only to the sockets whose
- * `artifact_join` of that artifact was allowed), the two answers to a query,
- * and the pong.
+ * `artifact_join` of that artifact was allowed), the company's own chat
+ * (`chat_*`, each frame sent only to the viewers its room admits, a person's
+ * read state only to their own sockets), the two answers to a query, and the
+ * pong.
  *
  * EXACTLY THE ENGINE'S `stream.Kind` CONSTANTS, held both ways by
  * `internal/api/stream`'s push-kind gate. A kind the engine sends that this
@@ -34,6 +36,14 @@ export type PushKind =
   | "artifact_changed"
   | "artifact_data"
   | "artifact_presence"
+  | "chat_posted"
+  | "chat_edited"
+  | "chat_deleted"
+  | "chat_reacted"
+  | "chat_room_changed"
+  | "chat_membership_changed"
+  | "chat_cursor_moved"
+  | "chat_presence"
   | "result"
   | "error"
   | "pong";

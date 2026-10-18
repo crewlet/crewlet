@@ -5,9 +5,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // chatReadRoutes are the chat questions as the published API spells them, one
@@ -109,5 +115,91 @@ func TestEachChatReadRouteAsksItsOwnQuestionWithItsPath(t *testing.T) {
 	if string(namedRaw) != string(genericRaw) {
 		t.Errorf("the named route and the generic form answered differently:\n"+
 			"  named:   %s\n  generic: %s", namedRaw, genericRaw)
+	}
+}
+
+// quietChat is a chat reader that answers every read empty, for a case about
+// which questions exist rather than what they answer.
+type quietChat struct{}
+
+func (quietChat) Channels(context.Context, string, chatlet.ChannelsQuery,
+	statelog.Freshness) (chatlet.ChannelListing, error) {
+	return chatlet.ChannelListing{}, nil
+}
+
+func (quietChat) Channel(context.Context, string, string,
+	statelog.Freshness) (chatlet.ChannelDetail, error) {
+	return chatlet.ChannelDetail{}, nil
+}
+
+func (quietChat) ChannelNamed(context.Context, string, string,
+	statelog.Freshness) (chatlet.ChannelDetail, error) {
+	return chatlet.ChannelDetail{}, nil
+}
+
+func (quietChat) Messages(context.Context, string, chatlet.TranscriptQuery,
+	statelog.Freshness) (chatlet.Transcript, error) {
+	return chatlet.Transcript{}, nil
+}
+
+func (quietChat) Thread(context.Context, string, chatlet.ThreadQuery,
+	statelog.Freshness) (chatlet.Thread, error) {
+	return chatlet.Thread{}, nil
+}
+
+func (quietChat) Mentions(context.Context, string, chatlet.MentionQuery,
+	statelog.Freshness) (chatlet.MentionFeed, error) {
+	return chatlet.MentionFeed{}, nil
+}
+
+func (quietChat) Search(context.Context, estate.ChatQuery) (estate.ChatSearchAnswer, error) {
+	return estate.ChatSearchAnswer{}, nil
+}
+
+// NO CHAT PUSH KIND IS ALSO A QUESTION.
+//
+// A frame carries a `kind` and nothing else says which direction it was
+// travelling, so a name that is both a push and a question makes a frame
+// unreadable without knowing who sent it — the dashboard's dispatch would
+// treat an answer as a push or a push as the answer to something it never
+// asked. The push kinds are past tense and the questions are not, and this
+// holds the two registries apart by their own names, the chat questions
+// registered.
+func TestNoChatPushKindIsAlsoAQuestion(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{Sources: queries.Sources{
+		Chat: quietChat{}, ChatSearch: quietChat{},
+	}})
+	names := a.Queries().Names()
+	if !slices.Contains(names, "chat_channels") || !slices.Contains(names, "chat_search") {
+		t.Fatalf("the chat questions are not registered, so this case asserts "+
+			"nothing: %v", names)
+	}
+	for _, kind := range stream.ChatPushKinds() {
+		if slices.Contains(names, string(kind)) {
+			t.Errorf("%q is both a push kind and a question", kind)
+		}
+	}
+}
+
+// THE APP TELLS THE HUB IT SERVES ITS SOCKETS, AND ONLY ONCE IT IS BUILT.
+//
+// What the hub reports is what the engine's live relay follows a peer's chat
+// batches for, so a hub told it serves sockets by an app that then failed to
+// build would follow them for nobody — and one never told would leave a node
+// whose copy is out of service silent to every screen it serves.
+func TestTheAppTellsTheChatHubItServesSocketsOnceBuilt(t *testing.T) {
+	t.Parallel()
+	refused := stream.NewChatHub(stream.ChatHubOptions{})
+	if _, err := api.New(api.Options{ChatLive: refused}); err == nil {
+		t.Fatal("an app wired to nothing but a hub was built")
+	}
+	if refused.ServesSockets() {
+		t.Error("an app that failed to build told its hub it serves sockets")
+	}
+	built := stream.NewChatHub(stream.ChatHubOptions{})
+	newApp(t, api.Options{ChatLive: built})
+	if !built.ServesSockets() {
+		t.Error("the app mounted its socket over the hub and never said so")
 	}
 }
