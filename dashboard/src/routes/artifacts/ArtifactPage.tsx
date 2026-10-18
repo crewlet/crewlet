@@ -65,7 +65,8 @@ import { relTime } from "~/lib/format.ts";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
-import { pinArtifact, untrashArtifact } from "~/lib/artifacts/api.ts";
+import { untrashArtifact } from "~/lib/artifacts/api.ts";
+import { usePinToggle, usePins } from "~/lib/artifacts/pins.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { memberTurn, presenceMembers, useArtifactPeople } from "~/lib/artifacts/people.ts";
 import { useArtifactRoom } from "~/lib/artifacts/room.ts";
@@ -357,26 +358,13 @@ function Loaded({
   }, [viewer.handle, people]);
 
   // WHETHER THE READER PINNED IT is their own record, which the head does not
-  // carry: their pins are a listing of their own, read once and kept current
-  // by their own presses here.
-  const pins = useQuery("artifacts", { scope: "all", pinned: true, limit: 200 });
-  const pinGesture = useKeyedGesture();
-  const [pinnedHere, setPinned] = useState<boolean | null>(null);
-  const pinned = pinnedHere ?? (pins.data?.items ?? []).some((item) => item.id === detail.id);
-  const pin = useCallback(async () => {
-    const next = !pinned;
-    const answer = await pinGesture.run(pinArtifact(detail.id, next));
-    if (answer?.kind === "done") {
-      setPinned(next);
-      toast.ok(next ? "Pinned to your sidebar" : "Removed from your sidebar");
-    } else if (answer) {
-      toast.show({
-        variant: "danger",
-        title: next ? "Could not pin it" : "Could not unpin it",
-        message: answer.text,
-      });
-    }
-  }, [pinned, pinGesture, detail.id, toast]);
+  // carry: their pins are a listing of their own, the same one the sidebar
+  // draws, and every press anywhere in this tab asks it again.
+  const pins = usePins();
+  const pin = usePinToggle(
+    detail.id,
+    (pins.data?.items ?? []).some((item) => item.id === detail.id),
+  );
 
   usePageMenu([
     {
@@ -387,9 +375,9 @@ function Loaded({
     },
     {
       key: "pin",
-      label: pinned ? "Unpin" : "Pin to your sidebar",
+      label: pin.label,
       icon: <PinGlyph size="sm" />,
-      onSelect: () => void pin(),
+      onSelect: () => void pin.toggle(),
     },
   ]);
 
@@ -452,9 +440,9 @@ function Loaded({
                   },
                   {
                     key: "pin",
-                    label: pinned ? "Unpin" : "Pin to your sidebar",
+                    label: pin.label,
                     icon: <PinGlyph size="sm" />,
-                    onSelect: () => void pin(),
+                    onSelect: () => void pin.toggle(),
                   },
                 ]}
               />

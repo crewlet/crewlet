@@ -396,7 +396,7 @@ share does not move.
 
 **One sidebar, and three nouns that keep it one.** The sidebar lists where a
 reader can go — nine **workspaces** — and the few objects they keep coming back
-to: the views they pinned and the pages they starred. A
+to: the views and artifacts they pinned and the pages they starred. A
 workspace's own **sections** are paths drawn as tabs in its page header
 (Settings draws its eleven, and cross-links to the reader's Account and to
 Budgets, as a grouped column; Work draws its as the lenses of the scope its
@@ -670,7 +670,12 @@ pinned row RUNS the view, `#/work/tasks?view=<key>` or its project's list for a 
 saved on a project, rather than opening the inventory page about it — and the
 total beside it is that list's own: the engine counts a pinned view with every
 task filtered on its own, as every surface that runs a view asks for it, never
-in the grammar's tree mode, where an open epic's finished subtasks rode along),
+in the grammar's tree mode, where an open epic's finished subtasks rode along;
+then the ARTIFACTS this reader pinned, each a row to its page with its kind's
+glyph, listed for every reader the engine serves because a share alone admits
+a reader to Artifacts, and read from the one listing For you and an artifact's
+Pin item read (`lib/artifacts/pins.ts`), so a pin made anywhere moves the
+sidebar at once),
 **Starred** (drawn only when there is one), and **Running** — one row per seat
 the engine says is working, drawn while one is: the seat's badge with its
 status glyph, its name, the key of the item its turn is charged to as the lead,
