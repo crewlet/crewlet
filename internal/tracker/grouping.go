@@ -305,7 +305,8 @@ func compileAxis(key, alias string, fields map[string]resolvedField,
 		}
 		return groupAxis{
 			Expr: alias + "." + column,
-			Join: " LEFT JOIN tracker_field_values " + alias + " ON " + alias +
+			Join: " LEFT JOIN tracker_field_values " + alias + " INDEXED BY " +
+				fieldValuesKey + " ON " + alias +
 				".task_id = t.id AND " + alias + ".field_id = ? AND " +
 				strings.ReplaceAll(liveFieldValue, "v.", alias+".") + pin,
 			JoinArgs: []any{field.ID},
@@ -319,6 +320,7 @@ func compileAxis(key, alias string, fields map[string]resolvedField,
 			Labels: labelsOf(field.Labels),
 			Exists: func(key string) (string, []any) {
 				inner := "SELECT 1 FROM tracker_field_values v " +
+					"INDEXED BY " + fieldValuesKey + " " +
 					"WHERE v.task_id = t.id AND v.field_id = ? AND " +
 					liveFieldValue
 				if !field.Multi {
