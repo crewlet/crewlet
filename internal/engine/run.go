@@ -708,6 +708,11 @@ type Engine struct {
 	// tick instead, so a model change lands without a restart.
 	embedding *embedDuty
 
+	// trashReaper is the trash reaper's duty loop (trashreap.go). On the
+	// ENGINE for the embedding duty's reason: a loop this process runs
+	// once, which an apply must not build a second of.
+	trashReaper trashReaper
+
 	// usage is this node's usage publisher: the loop that republishes the
 	// days this node's own event log holds. On the ENGINE for the embedding
 	// duty's reason — a second loop after an apply would be two writers on
@@ -2301,6 +2306,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// AND BEFORE the native runtime below, whose tracker reader it reads
 	// the references through.
 	e.stopObjectCollector()
+	// THE TRASH REAPER for the collector's reason, and before the native
+	// runtime below, whose knowledge store its passes purge through.
+	e.stopTrashReaper()
 	// AFTER every duty loop above has stopped and waited out its tick, so no
 	// tick of this node runs once a peer can take the duty, and no turn of
 	// this node can claim one again once it is given back.

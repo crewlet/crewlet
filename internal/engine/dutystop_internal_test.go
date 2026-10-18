@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/trashreap"
 )
 
 // A DUTY'S LOOP IS STOPPED BEFORE THE DUTY IS GIVEN BACK, so a node that stops
@@ -31,6 +32,13 @@ func TestADutyIsNotTakenBackAsTheNodeStops(t *testing.T) {
 			defer o.collectorMu.Unlock()
 			o.collector.stop()
 			o.collector = start()
+		},
+		trashreap.Name: func(e *Engine, start func() *loop) {
+			r := &e.trashReaper
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			r.loop.stop()
+			r.loop = start()
 		},
 	} {
 		t.Run(duty, func(t *testing.T) {

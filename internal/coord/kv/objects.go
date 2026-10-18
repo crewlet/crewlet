@@ -9,8 +9,9 @@ import (
 
 // ---- the object store ------------------------------------------------- //
 
-// objectBackendKey and collectionKey are the objects bucket's two keys: the
-// fleet's recorded object backend, and the collector's last report.
+// objectBackendKey and collectionKey are the objects bucket's keys for the
+// object store: the fleet's recorded object backend, and the collector's last
+// report. The trash reaper's report shares the bucket ([trashReapKey]).
 const (
 	objectBackendKey = "backend"
 	collectionKey    = "collection"
