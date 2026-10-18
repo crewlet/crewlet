@@ -1750,10 +1750,14 @@ left as it is, and a call that names none is refused before anything is sent.
 
 Every write sends an operation id as the request's `Idempotency-Key`: `-op-id`
 takes one in the engine's operation-id grammar, and without it the command
-mints one. An `unknown` outcome, or no answer at all, prints it; send it again
-with `-op-id` so the retry is the same operation rather than a second one. A
-publish keys its upload intent with the id and its version with a step of it,
-so a retried publish reuses the upload and lands one version.
+mints one before it asks. An `unknown` outcome, no answer at all, or a
+success whose outcome this build cannot read **exits non-zero** and prints it;
+send it again with `-op-id` so the retry is the same operation rather than a
+second one — through another node with `-api` where the node answering cannot
+vouch for it. A `503` refusal that wrote nothing says so, and the retry once
+the node can take it is under the same id. A publish keys its upload intent
+with the id and its version with a step of it, so a retried publish reuses the
+upload and lands one version.
 
 **`sources` lists the dashboard source catalogue** the node answers: each
 engine source a `dashboard`'s datasets may read, what it reads, who may read
