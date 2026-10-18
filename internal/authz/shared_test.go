@@ -75,8 +75,8 @@ func holding(handle string) iam.Principal {
 // BELOW.
 //
 // Walked over every row the shared class decides, every role on the ladder,
-// and every way a role is held — a share naming the caller's seat, a unit
-// they sit in, the whole company — with every app held, so the role is the
+// and every way a role is held (a share naming the caller's seat, a unit
+// they sit in, the whole company) with every app held, so the role is the
 // only thing deciding. A role that includes the row's is admitted on the
 // share ([authz.ReasonShared]) and stands at exactly that role; one below is
 // refused naming the role it needs ([authz.ReasonRole], [authz.Decision.Role])
@@ -239,7 +239,7 @@ func TestTheLeadArmOpensOnlyAnAgentOwnersArtifacts(t *testing.T) {
 // row is never shown by its kind at all, whatever the reader holds, and goes
 // through [authz.Visible], which reads the row: shown to its owner, to
 // whoever it is shared with and to the lead of its agent owner, and to nobody
-// else — an administrator included, who may OPEN any artifact (a recorded
+// else, an administrator included, who may OPEN any artifact (a recorded
 // override) but is never handed private titles in a listing by it. A chart
 // that cannot answer is unknown, never a dropped row. Mutation: let Shows
 // answer an artifact by its app, or let Visible honour an elevated admission,
@@ -359,9 +359,9 @@ func TestTheAdminPathIsMarkedExactlyWhereItAloneAdmitted(t *testing.T) {
 // The role a write is stamped with is the BEST the caller's relations grant,
 // not the first that clears the row: a viewer seat share beside an editor unit
 // share is an editor. An arm the chart cannot answer leaves the decision
-// unknown only where it could have admitted — a viewer unit share nobody can
+// unknown only where it could have admitted (a viewer unit share nobody can
 // read changes nothing about a publish, and answering that 503 would send
-// somebody back for the same refusal — while a read the seat share already
+// somebody back for the same refusal), while a read the seat share already
 // admits is decided, and its standing reports itself unsettled, which
 // [authz.StandingOn] answers as unknown. Mutation: stop at the first arm that
 // admits, or answer unknown on every chart failure, and this goes red.
@@ -523,8 +523,8 @@ func TestTheAppGatesAuthoringAndAShareAloneOpensParticipation(t *testing.T) {
 //
 // By default an agent holds at most contributor on an artifact it does not own
 // however it is shared and whoever it leads: it reads and fills in the data,
-// and is refused as a seat — naming nothing, because no share would change it
-// — on every row above contributor. Its own artifacts are wholly its own. The
+// and is refused as a seat, naming nothing because no share would change it,
+// on every row above contributor. Its own artifacts are wholly its own. The
 // company's setting lifts the cap. And an agent with no relation is still told
 // the artifact is not found, so the cap discloses nothing. Mutation: apply the
 // cap to the owner, or answer the capped agent [authz.ReasonRole], and this
@@ -673,8 +673,8 @@ func TestTheArtifactRowsOutOfCirculationArePeoples(t *testing.T) {
 //
 // A tool's gate forms the object from its arguments, and the owner and the
 // shares are on the stored row, so every caller but an administrator is told
-// to read it and ask again — never admitted, never refused on what nobody
-// read — and a caller without the app an authoring row asks is refused there
+// to read it and ask again (never admitted, never refused on what nobody
+// read), and a caller without the app an authoring row asks is refused there
 // and then, naming it, because no row could admit them. An object naming
 // nobody at all is a caller who forgot to read it. Mutation: refuse the
 // unread object outright and every surface lists no artifact verb before it
