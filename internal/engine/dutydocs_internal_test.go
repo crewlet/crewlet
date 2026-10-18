@@ -35,6 +35,7 @@ var dutyNames = map[string][]string{
 	"trashreap.Name":      {trashreap.Name},
 	"embedDutyName":       {embedDutyName},
 	"objectCollectorDuty": {objectCollectorDuty},
+	"chatPruneDutyName":   {chatPruneDutyName},
 	"name":                identityDutyNames(),
 }
 
@@ -52,6 +53,7 @@ var dutyPhrases = map[string][]string{
 	trashreap.Name:      {"trash reaper"},
 	embedDutyName:       {"embedding"},
 	objectCollectorDuty: {"collector"},
+	chatPruneDutyName:   {"message horizon", "chat prune"},
 	identitySweepDuty:   {"identity sweep"},
 }
 

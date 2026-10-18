@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // ── the fakes ──
@@ -581,5 +582,21 @@ func TestTheBackendsOwnDropsAreCountedInTheNotice(t *testing.T) {
 	if blocks.ThreadContextPosts != read {
 		t.Fatalf("the block rendered %d of the %d messages read",
 			blocks.ThreadContextPosts, read)
+	}
+}
+
+// THE THREAD READ'S DEADLINE COVERS A CHATLET READ THAT IS ANSWERING.
+//
+// The engine's own chat reads a woken seat's thread as a linearizable estate
+// read, and a serving node may wait a statelog.ReadBudget for the floor and
+// another for the level before it runs the query. A deadline inside those two
+// waits renders the unreadable hint for a thread a healthy node was about to
+// answer, on every wake that found it catching up — so raising ReadBudget
+// without revisiting this is the change this case is here to stop.
+func TestTheThreadDeadlineCoversAChatletReadThatIsAnswering(t *testing.T) {
+	t.Parallel()
+	if waits := 2 * statelog.ReadBudget; prefetch.ThreadTimeout <= waits {
+		t.Errorf("ThreadTimeout is %v, inside the %v a serving node may wait "+
+			"before it runs the query", prefetch.ThreadTimeout, waits)
 	}
 }

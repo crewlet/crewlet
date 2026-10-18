@@ -102,6 +102,12 @@ func (b answerBudget) Refusing(ctx context.Context) (builtin.BudgetRefusal, bool
 // write to any of them can change what an answer would say, and moves the
 // position, which is what retires every answer cached at the old one.
 //
+// AND NOT CHAT'S, deliberately: a conversation is outside the knowledge corpus
+// (ADR-0065) — an answer is drawn from the knowledge seam, which searches no
+// room — so a message changes nothing an answer would say. Keyed on chat's log
+// as well, every cached answer would be retired each time anybody spoke, which
+// on a busy company is every answer, all the time.
+//
 // FALSE FOR A COMPANY WHOSE KNOWLEDGE BASE IS NOT DOCLET: an external wiki
 // changes without this node hearing, so a position that covered only the
 // tracker would keep serving an answer whose pages had moved.

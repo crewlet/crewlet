@@ -141,7 +141,7 @@ func (e *Engine) stopTrashReaper() {
 // a maintenance mode is handed no source and arms no duty.
 func (e *Engine) trashSources() []trashreap.Source {
 	var out []trashreap.Source
-	if _, kb := e.writeSide(); kb != nil {
+	if kb := e.writeSide().pages; kb != nil {
 		out = append(out, pagesTrash{store: kb})
 	}
 	// THE ARTIFACTS', which every data node runs whatever its company keeps:

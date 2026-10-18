@@ -801,6 +801,15 @@ type Engine struct {
 	// chart per tick instead.
 	usage *usageLoop
 
+	// chatPrune is the chat domain's retention duty: the fleet singleton
+	// that publishes the cutoff every node deletes below. On the ENGINE
+	// for the reason the trim and the embedding pass are — it is a loop
+	// this process runs, and rebuilding it on an apply would leave two
+	// loops publishing one company's ladder of cutoffs. It reads the
+	// current epoch's horizon per tick instead, so a retention change
+	// lands without a restart.
+	chatPrune *chatPrune
+
 	// usageEvery is Options.usageEvery.
 	usageEvery time.Duration
 	// resumeGate is Options.resumeGate.
@@ -1568,7 +1577,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// this one is the recovery to measure.
 	log.InfoContext(ctx, "engine_recovered", "node", nodeID,
 		"detail", "what this node holds is open and recovered; what its company "+
-			"configures (its secret snapshot, sandboxes, Worklet and Doclet, tool "+
+			"configures (its secret snapshot, sandboxes, Worklet, Doclet and Chatlet, tool "+
 			"servers, coding CLI logins) starts next")
 	if opts.Recovered != nil {
 		opts.Recovered()
@@ -1634,8 +1643,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		if err := e.startSandboxFor(ctx, company); err != nil {
 			return nil, fmt.Errorf("engine: sandbox: %w", err)
 		}
-		// BEFORE equip too, and for exactly the same reason: the ten
-		// Worklet and Doclet tools are registered only where
+		// BEFORE equip too, and for exactly the same reason: the Worklet,
+		// Doclet and Chatlet tools are registered only where
 		// their halves exist, so a node that equipped first would run a
 		// company on the native backends whose seats have no way to read
 		// or write them.
@@ -2467,12 +2476,13 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopSandbox()
 	e.stopNotifications(ctx)
 	e.stopMaintenance()
-	// THE NATIVE HALF'S DUTY BEFORE THE CORE'S, in the order the halves
-	// come down below: the vector domain's writer publishes into a log the
-	// core's trim is deciding how far to purge — and so does this node's
-	// usage publisher, which is not a duty but writes the usage log the trim
-	// counts.
+	// THE NATIVE HALF'S DUTIES BEFORE THE CORE'S, in the order the halves
+	// come down below: the vector domain's writer and the chat prune publish
+	// into logs the core's trim is deciding how far to purge — and so does
+	// this node's usage publisher, which is not a duty but writes the usage
+	// log the trim counts.
 	e.stopEmbedding()
+	e.stopChatRetention()
 	// EVERY WRITER OF A ROW THIS NODE'S USAGE DAY COUNTS, before the usage
 	// publisher's last flush — or what they write after it is published only
 	// by a next start, and a node that never starts again leaves it out of

@@ -419,14 +419,25 @@ func (e *Engine) humanSeatHandles(ctx context.Context) ([]string, error) {
 // fleetCompany is c when it is the company of the activation the fleet is
 // pointed at, or an error saying why that is unknown.
 //
-// THE RULE EVERY CALLER THAT JUDGES A SEAT ABSENT AND ACTS ON IT FOLLOWS — the
-// mailbox sweep, the clearing of a removed seat's pause
-// ([Engine.clearRemovedSeatPauses]) and the forgetting of a removed human
-// seat's chat read state ([Engine.humanSeatHandles]) — because each acts on
-// something no undo restores: a retired mailbox's mail, a pause a person
-// placed, every room's cursor a seat held. A node applying a revision the
-// fleet has since replaced does not have a seat the newer one added, and would
-// judge it absent.
+// THE RULE EVERY FLEET DECISION FOLLOWS THAT DESTROYS, BY THE COMPANY
+// DOCUMENT, SOMETHING NO UNDO RESTORES:
+//
+//   - the mailbox sweep, which judges a seat absent and retires its mail;
+//   - the clearing of a removed seat's pause ([Engine.clearRemovedSeatPauses]),
+//     a pause a person placed;
+//   - the forgetting of a removed human seat's chat read state
+//     ([Engine.humanSeatHandles]), every room's cursor the seat held;
+//   - the chat prune ([Engine.chatRetentionPolicy]), which deletes on every
+//     data node each message older than the horizon the document states;
+//   - the assistant's retention purge ([Engine.assistantRetention]), which
+//     purges every conversation left unused for the term the document states.
+//
+// A node applying a revision the fleet has since replaced, or running one the
+// fleet never activated, has neither a seat the newer revision added nor the
+// horizon it states, and would destroy by what it has instead. So each of them
+// acts only on the company this answers and on nothing while it is unknown:
+// what it would have destroyed waits for a node that runs the fleet's
+// revision, which is late rather than wrong.
 //
 // COMPARED ON THE ACTIVATION'S INSTANT, which the pointer publishes strictly
 // later on every activation ([coord.ActivationAt]) and which a company carries
@@ -434,8 +445,9 @@ func (e *Engine) humanSeatHandles(ctx context.Context) ([]string, error) {
 // an unchanged revision, the rotation gesture, is a different activation here
 // too, and a company applied from the pointer's own activation is accepted
 // even while the reconciler is still inside the apply that publishes it. A
-// company no activation has named — one handed to [New] in code — is unknown
-// until the reconciler's first apply.
+// company no activation has named, whether one handed to [New] in code or an
+// offline command's offer the fleet has not taken, is unknown until this node
+// applies the pointer's revision.
 func (e *Engine) fleetCompany(ctx context.Context, c *Company) (*Company, error) {
 	if e.backends == nil || e.backends.Fleet == nil {
 		return nil, fmt.Errorf("engine: this node has no fleet store to read the activation pointer from")
@@ -449,12 +461,22 @@ func (e *Engine) fleetCompany(ctx context.Context, c *Company) (*Company, error)
 	}
 	switch {
 	case c == nil:
-		return nil, errors.New("engine: this node publishes no company yet; seats are " +
-			"judged once it does")
+		return nil, errors.New("engine: this node publishes no company yet; nothing " +
+			"the company document would destroy is decided here until it does")
+	case c.ActivatedAt.IsZero():
+		// AN OFFER, most likely: what this node runs no activation has
+		// named, so there is no instant of its own to report.
+		return nil, fmt.Errorf("engine: this node serves a company no activation has "+
+			"named (an offline command's choice the fleet has not taken, or one "+
+			"handed to the engine in code) and the fleet is on activation epoch %d "+
+			"of %s; nothing the company document would destroy is decided here "+
+			"until this node has applied it", target.Epoch,
+			target.At.Format(time.RFC3339Nano))
 	case store.EncodeTime(c.ActivatedAt) != store.EncodeTime(target.At):
 		return nil, fmt.Errorf("engine: this node serves the activation of %s and the "+
-			"fleet is on activation epoch %d of %s; seats are judged once this node "+
-			"has applied it", c.ActivatedAt.Format(time.RFC3339Nano), target.Epoch,
+			"fleet is on activation epoch %d of %s; nothing the company document would "+
+			"destroy is decided here until this node has applied it",
+			c.ActivatedAt.Format(time.RFC3339Nano), target.Epoch,
 			target.At.Format(time.RFC3339Nano))
 	}
 	return c, nil

@@ -315,7 +315,12 @@ address, and a box on another machine cannot dial it.
 ## Retention and erasure
 
 A conversation untouched for `assistant.retention_days` (30 by default, 1 to
-365) is purged by the trash reaper. **Clear** in the panel purges one at once.
+365) is purged by the trash reaper. The setting is read from the revision the
+fleet's activation pointer names, and only on a node that runs that revision:
+a node that refused the fleet's revision, or booted on an offline import the
+fleet has not taken, purges no conversation for its age until it runs the
+fleet's, so a purge comes late rather than by a setting the company has since
+changed. **Clear** in the panel purges one at once.
 Removing a person from the directory erases every conversation they own in one
 record. Messages, cards and previews are sealed under the fleet keyring in the
 replicated estate, and nothing a person did not see is stored, apart from the

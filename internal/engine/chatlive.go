@@ -1,9 +1,26 @@
 package engine
 
-import "github.com/crewlet/crewlet/internal/chatlet"
+import (
+	"context"
+
+	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/notify"
+)
 
 // ChatLive is what the process attaches for the engine's own chat's live half:
-// where a committed chat batch is announced to the sockets this node serves.
+// where a committed chat batch is announced to the sockets this node serves,
+// and the poster a Chatlet seat's working indicator is raised on.
+//
+// ONE VALUE FOR BOTH HALVES, because both are one hub: the room a person is
+// watching is where a committed message is pushed AND where "is thinking…"
+// appears, and the hub's presence answer is how a screen on another node sees
+// an indicator raised here. Two attachments could be handed two hubs, and then
+// a seat's indicator is recorded in one that no presence answer reads.
+//
+// ATTACHED ON EVERY NODE, sockets or none: a seat raises its indicator on the
+// node its turn runs on, and a node without the `ingress` role, or with no
+// listener, runs turns too. So an attached hub is not by itself a node with
+// screens to tell, which is why [ChatLive.ServesSockets] is asked.
 //
 // DECLARED HERE, by the consumer, and kept to what the engine calls. The api's
 // chat hub implements it.
@@ -21,6 +38,26 @@ type ChatLive interface {
 	// committed in between is not replayed: a screen reads its rooms again.
 	// It must not block either.
 	Reread()
+
+	// ServesSockets reports whether this node shows anybody what Applied
+	// hears: true where the API's socket surface is built over this hub,
+	// whether or not a screen is open right now, and false on a node that
+	// serves no API and attached its hub for the working indicator alone.
+	// A FACT ABOUT THE NODE rather than about who is looking, as the inbox's
+	// listener is one the API registers wherever it serves: a count of open
+	// screens would let the first screen of a node out of service hear its
+	// own applier until the relay's follower next looked.
+	//
+	// The live relay's follower reads it ([Engine.liveListening]): on a node
+	// that answers false, a peer's batches have nowhere to go, and following
+	// them would be a loop asking a peer every few seconds for batches it
+	// hands to nobody, reported as relaying. It must not block.
+	ServesSockets() bool
+
+	// StatusPoster is where a Chatlet seat's working indicator is raised —
+	// in the mode `chat.chatlet.typing_status` names, by the driver
+	// [Engine.applyChatStatus] builds over it.
+	notify.StatusPoster
 }
 
 // SetChatLive attaches the chat live half — the api's hub — to this engine.
@@ -33,11 +70,17 @@ type ChatLive interface {
 // announced to nobody, which is what a screen nobody has opened needs. Safe to
 // call while the engine is running, and safe to leave unset; nil detaches.
 //
+// AND IT REBUILDS THE WORKING INDICATOR, which is the half no hook reaches:
+// [New] ran [Engine.startNotifications] before the hub existed, so the boot
+// company has no Chatlet driver until one is built over what arrives here —
+// and a hub replaced or detached takes its driver with it.
+//
 // START THE HUB BEFORE ATTACHING IT: what is attached is called on the
 // applier's goroutine, and a hub whose own loop is not running is a buffer that
 // fills during a catch-up.
-func (e *Engine) SetChatLive(live ChatLive) {
+func (e *Engine) SetChatLive(ctx context.Context, live ChatLive) {
 	e.chatLive.Store(&live)
+	e.applyChatStatus(ctx, e.Company())
 }
 
 // chatApplied is what the chat applier calls after a committed batch: announced
@@ -56,8 +99,12 @@ func (e *Engine) attachedChat() ChatLive {
 	return *live
 }
 
-// chatListening reports whether a chat live half is attached on this node.
-func (e *Engine) chatListening() bool { return e.attachedChat() != nil }
+// chatListening reports whether a chat live half is attached on this node and
+// shows what it hears to sockets here — see [ChatLive.ServesSockets].
+func (e *Engine) chatListening() bool {
+	live := e.attachedChat()
+	return live != nil && live.ServesSockets()
+}
 
 // deliverChat hands one committed chat batch to the attached live half.
 func (e *Engine) deliverChat(batch []chatlet.Applied) {
