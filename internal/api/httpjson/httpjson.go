@@ -873,8 +873,8 @@ var codes = map[Code]string{
 	// THE THREE PERMISSIONS there are (ADR-0033), because a person reading it
 	// on a screen has to know what to ask an admin for, and the refusal's
 	// `grants` beside it says which one.
-	CodeUnauthorized: "You don't have the access this needs (Admin, Tracker " +
-		"or Knowledge). Ask an admin for it.",
+	CodeUnauthorized: "You don't have the access this needs (Admin, Tracker, " +
+		"Knowledge or Artifacts). Ask an admin for it.",
 	CodeQueryFailed: "That query could not be answered. The reason is in " +
 		"this node's log.",
 	CodeNotFound:  "There is no such record here.",
