@@ -78,9 +78,9 @@ var alarmMeaning = map[Kind]string{
 	KindDeferredOld: "This node has been holding a record it cannot apply on " +
 		"a log for longer than the thirty-minute deferral grace. One alarm " +
 		"names every log that is, leading with the one held longest. Where a " +
-		"log judges this node's copy of the estate (the tracker's and the " +
-		"knowledge base's do), the node no longer serves its copy, and its " +
-		"seats read the estate from the other data nodes.",
+		"log judges this node's copy of the estate (the tracker's, the " +
+		"knowledge base's and chat's do), the node no longer serves its copy, " +
+		"and its seats read the estate from the other data nodes.",
 	KindFloorUnknown: "This node has been unable to read a log's trim floor " +
 		"for four heartbeats, so every read of that log here refuses. One " +
 		"alarm names every such log, which is every log at once when " +
