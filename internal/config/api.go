@@ -577,9 +577,14 @@ type APIAuth struct {
 
 	// AcceptInsecure is the deliberate acknowledgement that this
 	// deployment is reachable off loopback with a posture that should not
-	// be. It is what lets `totp: optional` and an `http://` external URL
-	// stand on a routable address, and it is logged at WARN on every
-	// start for the whole life of the deployment.
+	// be. It is what lets `totp: optional` stand on an address a browser
+	// reaches over the network, which [APIAuth.validatePasswords] refuses
+	// without it, and it is logged at WARN on every start for the whole
+	// life of the deployment.
+	//
+	// NOT what lets an `http://` external URL stand: plain http off
+	// loopback is a warning with or without it ([API.warnings]), never a
+	// refusal, so there is nothing for an acknowledgement to lift there.
 	//
 	// A FIELD RATHER THAN A FLAG, unlike `-dev-principal`, and the
 	// difference is what each one opens: the flag authenticates every
