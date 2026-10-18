@@ -350,7 +350,7 @@ func collaboratingBlock(handle string) blockQuery {
 	open := openGroups()
 	return blockQuery{
 		where: "t.removed_at IS NULL AND t.assignee <> ? AND t.status_group IN (" +
-			placeholders(len(open)) + ") AND " + peopleClause("SELECT c.task_id FROM "+
+			placeholders(len(open)) + ") AND " + peopleClause(rowAlias, "SELECT c.task_id FROM "+
 			"tracker_collaborators c WHERE c.handle = ?"),
 		args:  append(append([]any{handle}, open...), handle),
 		terms: []sortTerm{{Column: "t.updated_at", Descending: true}, {Column: "t.id"}},
@@ -363,7 +363,7 @@ func collaboratingBlock(handle string) blockQuery {
 func watchingBlock(handle string) blockQuery {
 	return blockQuery{
 		where: "t.removed_at IS NULL AND t.assignee <> ? AND " +
-			peopleClause("SELECT w.task_id FROM tracker_watchers w "+
+			peopleClause(rowAlias, "SELECT w.task_id FROM tracker_watchers w "+
 				"WHERE w.handle = ? AND w.muted = 0"),
 		args:  []any{handle, handle},
 		terms: []sortTerm{{Column: "t.updated_at", Descending: true}, {Column: "t.id"}},

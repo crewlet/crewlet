@@ -573,7 +573,7 @@ func incompleteFrom(in *statelog.Incomplete) *Incomplete {
 // declared in the grammar. A filter's value reaching a statement as text is
 // how a saved view becomes a way to run a query nobody wrote.
 func compile(q Query, now time.Time, fields map[string]resolvedField) (taskSet, error) {
-	where, args, err := compileWhere(q, now, fields, false)
+	where, args, err := compileWhere(q, now, fields)
 	if err != nil {
 		return taskSet{}, err
 	}
@@ -601,9 +601,38 @@ type taskSet struct {
 }
 
 // taskTable is the plain source: the task table under the alias every
-// predicate in this package is written against, read through whatever index
-// the planner chooses.
+// statement over a compiled set reads its rows as ([rowAlias]), read through
+// whatever index the planner chooses.
 const taskTable = "tracker_tasks t"
+
+// alias is the name a compiled predicate calls the task it tests.
+//
+// A VALUE THE COMPILER IS HANDED rather than a letter every clause spells,
+// because one predicate is asked of two different tasks: of the row a
+// statement returns ([rowAlias]), and — under the subtask rollup — of the
+// task that row hangs from, which a subquery reads under a name of its own
+// ([anchorAlias]). A clause that spelled `t.` where it should have spelled
+// its alias would not fail: inside the subquery `t` still names the OUTER
+// row, so it would silently ask the row's question of the row instead of its
+// anchor's, and the answer would be a different set with nothing to say so.
+// [TestAPredicateCompiledForAnAliasNamesNoOther] is what holds every clause
+// to the alias it was handed.
+//
+// The aliases a clause's own subqueries use for OTHER tables (`x`, `c`, `r`,
+// `k`, `m`, `d`, `p`, `v`) are that clause's business and stay as they are;
+// none is either of these.
+type alias string
+
+const (
+	// rowAlias is the rows a statement over a compiled set returns.
+	rowAlias alias = "t"
+	// anchorAlias is the task a row's subtree hangs from, read by the
+	// rollup's probe ([compileWhere]).
+	anchorAlias alias = "a"
+)
+
+// col is one column of the task this alias names.
+func (on alias) col(name string) string { return string(on) + "." + name }
 
 // tasksWhere is a set read from the plain table — what a statement whose
 // predicate this package writes itself, rather than compiles from a query,
@@ -664,8 +693,8 @@ const (
 // planner does not prove `assignee IN (…)` implies an owner, so the subquery
 // says so — a value the filter is given is never empty — and without it read
 // every checklist item in the company from the heap.
-func peopleClause(subquery string) string {
-	return "t.id IN (" + subquery + ")"
+func peopleClause(on alias, subquery string) string {
+	return on.col("id") + " IN (" + subquery + ")"
 }
 
 // taskSource is where a query's tasks are read from: the task table, for a
@@ -725,369 +754,13 @@ func taskSource(q Query) string {
 	}
 }
 
-// compileWhere is [compile], with `branch` telling it whether it is compiling
-// one arm of a disjunction rather than the query itself.
-//
-// # Why a branch is not simply the same compiler run again
-//
-// A branch is a PREDICATE, and four of the decisions this function makes are
-// not predicates the caller wrote — they are the shape of the ANSWER, applied
-// by default whether or not anybody asked: a removed task is excluded, a
-// finished one is excluded, an archived project's tasks are excluded, and a
-// subtask mode rewrites the whole predicate to be about roots.
-//
-// Run again inside a branch, each of those emits its DEFAULT and is ANDed
-// inside the OR — so `show_closed=true` at the top level was defeated by every
-// branch's own `status_group IN (not_started, active)`, and the identical
-// predicate written as a disjunction answered a strictly smaller set than the
-// one written flat. [Query.parseAny] refuses those keys in a branch for the
-// same reason; this is the other half, because refusing the key does not stop
-// the default the absent key resolves to.
-//
-// The scope IS a predicate and stays: a branch naming a container is asking
-// about that container's rows, which is exactly what the unassigned-work arm
-// of a personal queue is for.
-func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
-	branch bool) (string, []any, error) {
-
-	var where []string
-	var args []any
-	add := func(clause string, values ...any) {
-		where = append(where, clause)
-		args = append(args, values...)
-	}
-
-	// THE SCOPE IS KEPT SEPARATELY as well as added, because the subtask
-	// rollup below replaces the whole predicate with a subquery and the
-	// container has to survive that — see the rewrite for what it costs
-	// when it does not.
-	scope, scopeArgs := "", []any(nil)
-	switch {
-	case q.Scope.Project != "":
-		scope, scopeArgs = "t.project_key = ?", []any{q.Scope.Project}
-		add(scope, scopeArgs...)
-	case q.Scope.Workspace:
-		// The Everything level, and it is explicit: no predicate.
-	}
-
-	// EVERY QUERY EXCLUDES A REMOVED TASK except the ones that are about
-	// them. ONE predicate for a removed task's whole life, at any age —
-	// which is what makes a restore at any age answer exactly what it
-	// answered before.
-	//
-	// `removed=true` is the OTHER side of it and the only way to reach the
-	// trash: a removal hides a task, and a restore is a gesture somebody
-	// makes about a task they can see. It is `IS NOT NULL` rather than a
-	// date bound because the trash's two indexes are partial on exactly
-	// that and [taskSource] names one: a removed listing whose predicate
-	// did not imply the index's could not be read through it at all.
-	if !branch {
-		if q.Removed != nil && *q.Removed {
-			add("t.removed_at IS NOT NULL")
-		} else {
-			add("t.removed_at IS NULL")
-		}
-	}
-
-	if len(q.Keys) > 0 {
-		add("t.key IN ("+placeholders(len(q.Keys))+")", anyOf(q.Keys)...)
-	}
-	if q.PriorityListOf != "" {
-		if len(q.PriorityList) == 0 {
-			// AN EMPTY LIST IS AN EMPTY ANSWER, stated rather than
-			// omitted: dropping the clause would answer every task in
-			// scope as though it were on somebody's list.
-			add("0")
-		} else {
-			add("t.id IN ("+placeholders(len(q.PriorityList))+")",
-				anyOf(q.PriorityList)...)
-		}
-	}
-
-	if len(q.Status) > 0 {
-		add("t.status IN ("+placeholders(len(q.Status))+")", anyOf(q.Status)...)
-	}
-	if len(q.StatusNot) > 0 {
-		add("t.status NOT IN ("+placeholders(len(q.StatusNot))+")", anyOf(q.StatusNot)...)
-	}
-	if len(q.StatusGroups) > 0 {
-		add("t.status_group IN ("+placeholders(len(q.StatusGroups))+")",
-			anyOf(q.StatusGroups)...)
-	}
-	if len(q.Priorities) > 0 {
-		add("t.priority IN ("+placeholders(len(q.Priorities))+")",
-			anyOf(q.Priorities)...)
-	}
-	if len(q.Types) > 0 {
-		add("t.type IN ("+placeholders(len(q.Types))+")", anyOf(q.Types)...)
-	}
-	// BOTH UNIT FILTERS RESOLVE THROUGH THE CHART to the key the rows
-	// hold — see [unitKeys].
-	if units := unitKeys(q.Units, q.Unit); len(units) > 0 {
-		add("t.filed_unit IN ("+placeholders(len(units))+")", anyOf(units)...)
-	}
-	if units := unitKeys(q.Units, q.RoutingUnit); len(units) > 0 {
-		add("t.routing_unit IN ("+placeholders(len(units))+")", anyOf(units)...)
-	}
-	if handles := q.Assignee; len(handles) > 0 {
-		// `none` is a VALUE rather than a missing filter: "unassigned"
-		// is a real question and the commonest half of the queue preset.
-		clause, values := handleClause("t.assignee", handles)
-		add(clause, values...)
-	}
-	if len(q.Reporter) > 0 {
-		clause, values := handleClause("t.reporter", q.Reporter)
-		add(clause, values...)
-	}
-	// A PERSON'S WORK IS READ FROM THEIR OWN ROWS: the tasks a
-	// collaborator, a watcher or a checklist item's owner is on, found by
-	// the person ([peopleClause]).
-	for _, join := range []struct {
-		handles []string
-		table   string
-	}{
-		{q.Collaborator, "tracker_collaborators"},
-		{q.Watcher, "tracker_watchers"},
-	} {
-		if len(join.handles) > 0 {
-			add(peopleClause("SELECT x.task_id FROM "+join.table+
-				" x WHERE x.handle IN ("+placeholders(len(join.handles))+")"),
-				anyOf(join.handles)...)
-		}
-	}
-	if len(q.ChecklistAssignee) > 0 {
-		add(peopleClause("SELECT x.task_id FROM tracker_checklist_items x "+
-			"WHERE x.assignee IN ("+placeholders(len(q.ChecklistAssignee))+
-			") AND x.assignee <> ''"), anyOf(q.ChecklistAssignee)...)
-	}
-	if len(q.Tags.Tags) > 0 {
-		clause, values := tagClause(q.Tags, q.Scope.Project)
-		add(clause, values...)
-	}
-	if q.Parent != "" {
-		add("t.parent_id = ?", q.Parent)
-	}
-	if q.Root != "" {
-		add("EXISTS (SELECT 1 FROM tracker_task_closure c "+
-			"WHERE c.descendant_id = t.id AND c.ancestor_id = ?)", q.Root)
-	}
-	if q.References != "" {
-		add("EXISTS (SELECT 1 FROM tracker_references r "+
-			"JOIN tracker_task_keys k ON k.task_id = r.to_task "+
-			"WHERE r.from_task = t.id AND k.key = ?)", q.References)
-	}
-	if q.LinkedPage != "" {
-		add("EXISTS (SELECT 1 FROM tracker_relations x WHERE x.task_id = t.id "+
-			"AND x.kind = ? AND x.other_id = ?)", string(RelationPage), q.LinkedPage)
-	}
-	if q.Blocked != nil {
-		clause := "EXISTS (SELECT 1 FROM tracker_task_deps d " +
-			"WHERE d.task_id = t.id AND d.blocker_open = 1)"
-		if !*q.Blocked {
-			clause = "NOT " + clause
-		}
-		add(clause)
-	}
-	if q.HasChildren != nil {
-		clause := "EXISTS (SELECT 1 FROM tracker_tasks c WHERE c.parent_id = t.id)"
-		if !*q.HasChildren {
-			clause = "NOT " + clause
-		}
-		add(clause)
-	}
-	if q.HasParent != nil {
-		if *q.HasParent {
-			add("t.parent_id IS NOT NULL")
-		} else {
-			add("t.parent_id IS NULL")
-		}
-	}
-	if q.HasOpenAsks != nil {
-		clause := "EXISTS (SELECT 1 FROM tracker_comments m WHERE m.task_id = t.id " +
-			"AND " + openAskSQL + ")"
-		if !*q.HasOpenAsks {
-			clause = "NOT " + clause
-		}
-		add(clause)
-	}
-	// THE TWO ENDS OF AN OPEN ASK, and they are different questions: what
-	// is waiting on me, and what I am waiting for. Both narrow the same
-	// predicate [Query.HasOpenAsks] uses, because an ask that is resolved
-	// or answered is nobody's queue.
-	if q.AskedOf != "" {
-		add("EXISTS (SELECT 1 FROM tracker_comments m WHERE m.task_id = t.id "+
-			"AND m.ask = ? AND m.resolved = 0 AND m.answered_by IS NULL "+
-			"AND m.removed = 0)", q.AskedOf)
-	}
-	if q.AskedBy != "" {
-		add("EXISTS (SELECT 1 FROM tracker_comments m WHERE m.task_id = t.id "+
-			"AND m.ask <> '' AND m.author = ? AND m.resolved = 0 "+
-			"AND m.answered_by IS NULL AND m.removed = 0)", q.AskedBy)
-	}
-	// BLOCKING IS THE OTHER END OF BLOCKED, not its negation: "this task
-	// is holding something up" reads the dependency table by BLOCKER_ID
-	// where blocked reads it by task_id, and a task can be both.
-	if q.Blocking != nil {
-		clause := "EXISTS (SELECT 1 FROM tracker_task_deps d " +
-			"WHERE d.blocker_id = t.id AND d.blocker_open = 1)"
-		if !*q.Blocking {
-			clause = "NOT " + clause
-		}
-		add(clause)
-	}
-	if q.HasDependencies != nil {
-		clause := "EXISTS (SELECT 1 FROM tracker_task_deps d WHERE d.task_id = t.id)"
-		if !*q.HasDependencies {
-			clause = "NOT " + clause
-		}
-		add(clause)
-	}
-	if q.Text != "" {
-		// THE FIND, and it is a substring of a KEY or a TITLE — what
-		// the tool that carries it promises, and the only thing this
-		// grammar can honestly do: ranked search over what an item says
-		// is the search index's ([Searcher]), which a filter composed
-		// into this query cannot be.
-		//
-		// THE KEY MATCHES FROM THE FRONT and the title anywhere. A key
-		// is `PROJECT-N`, so it is only ever typed from its start —
-		// while unanchored, every bare number in a find becomes a key
-		// match: `2` would hand back ENG-2, ENG-12 and ENG-20 beside
-		// whatever the person actually meant. A title is prose, where
-		// the useful match is in the middle.
-		pattern := likeEscape(q.Text)
-		add(`(t.key LIKE ? ESCAPE '\' OR t.title LIKE ? ESCAPE '\')`,
-			pattern+"%", "%"+pattern+"%")
-	}
-
-	for _, filter := range q.Fields {
-		field, held := fields[filter.Ref]
-		if !held {
-			// UNREACHABLE THROUGH [Reader.Tasks], which refuses an
-			// unresolved ref before it reaches here — and a refusal
-			// rather than a skip anyway, because a filter nobody
-			// resolved is a board showing more than the person asked
-			// for, silently.
-			return "", nil, fmt.Errorf("worklet: f.%s was never resolved, so "+
-				"this answer would be wider than the caller asked for",
-				filter.Ref)
-		}
-		clause, values, err := fieldClause(filter, field)
-		if err != nil {
-			return "", nil, err
-		}
-		add(clause, values...)
-	}
-	for column, filter := range q.Dates {
-		clause, values, err := dateClause(column, filter)
-		if err != nil {
-			return "", nil, err
-		}
-		add(clause, values...)
-		if filter.Overdue {
-			// THE ALIAS CARRIES ITS OPEN CONDITION, which is what makes
-			// it the same predicate as the preset that means the same
-			// thing rather than a second one that drifts.
-			add("t.status_group IN (" + openGroupsSQL + ")")
-		}
-	}
-	for column, filter := range map[string]*NumFilter{
-		"t.estimate_min": q.Estimate, "t.points": q.Points,
-		"t.spend_tokens": q.Spend,
-	} {
-		if filter == nil {
-			continue
-		}
-		clause, values := numClause(column, *filter)
-		add(clause, values...)
-	}
-	if len(q.Flags) > 0 {
-		clause, onTask, err := flagsClause(q.Flags)
-		if err != nil {
-			return "", nil, err
-		}
-		if onTask {
-			// THE INDEX'S OWN PREDICATE, stated because it is what
-			// makes the index reachable. The attention index is
-			// partial over the four task flags together — a task
-			// with any of them is a fraction of a percent of the
-			// table — and `cycle = 1` alone does not imply that
-			// disjunction to a planner, so a flag filter without it
-			// reads every task in the company.
-			//
-			// ONLY WHEN EVERY NAMED FLAG IS ON THE TASK ROW. The two
-			// dependency flags live on `tracker_relations`, and a
-			// task whose edge is one-sided carries none of these
-			// four — so adding this predicate beside them would
-			// silently answer nothing.
-			add(anyFlagSet)
-		}
-		add(clause)
-	}
-
-	switch {
-	case branch:
-		// THE ANSWER'S SHAPE, NOT THIS ARM'S — see [compileWhere].
-	case q.Archived == ArchivedExclude:
-		// A JOIN RATHER THAN A COLUMN: a project's archive is the
-		// project's own fact, and copying it onto every task was the one
-		// unbounded cross-object write this design removed.
-		add("t.archived = 0 AND NOT EXISTS (SELECT 1 FROM tracker_projects p " +
-			"WHERE p.key = t.project_key AND p.archived = 1)")
-	case q.Archived == ArchivedOnly:
-		add("(t.archived = 1 OR EXISTS (SELECT 1 FROM tracker_projects p " +
-			"WHERE p.key = t.project_key AND p.archived = 1))")
-	}
-
-	switch {
-	case branch:
-		// THE ANSWER'S SHAPE, NOT THIS ARM'S — see [compileWhere].
-	case q.ShowClosed.All:
-	case q.ShowClosed.Recent > 0 || q.ShowClosed.Since != nil:
-		// THE WINDOW APPLIES TO THE WHOLE FINISHED SET, so a task
-		// cancelled inside it is in the answer exactly as one done
-		// inside it is — which is what the finish stamp being by GROUP
-		// buys, and why the board's Cancelled column is not empty.
-		//
-		// ONE CLAUSE FOR BOTH SPELLINGS of the bound — a duration back
-		// from now, or a calendar instant the parse resolved on the
-		// company's clock — because they are one question with two ways
-		// to name where the window starts.
-		since := now.Add(-q.ShowClosed.Recent)
-		if q.ShowClosed.Since != nil {
-			since = *q.ShowClosed.Since
-		}
-		add("(t.status_group IN ("+openGroupsSQL+") OR "+
-			"(t.finished_at IS NOT NULL AND t.finished_at >= ?))",
-			store.EncodeTime(since))
-	default:
-		add("t.status_group IN (" + openGroupsSQL + ")")
-	}
-
-	if len(q.Any) > 0 {
-		var branches []string
-		for i, arm := range q.Any {
-			clause, values, err := compileWhere(arm, now, fields, true)
-			if err != nil {
-				return "", nil, err
-			}
-			if clause == "" {
-				// AN EMPTY ARM IS "EVERYTHING", which makes the whole
-				// disjunction true and every other arm decoration. It
-				// is refused rather than rendered, because `()` is not
-				// SQL and "you selected nothing" is a thing a caller
-				// fixes.
-				return "", nil, fmt.Errorf("worklet: any branch %d selects "+
-					"nothing — a branch is a predicate, and an empty one "+
-					"matches every task and makes the other branches "+
-					"decoration", i)
-			}
-			branches = append(branches, "("+clause+")")
-			args = append(args, values...)
-		}
-		// ONE LEVEL, ANDed with the top-level keys — which is what makes
-		// a disjunction a filter rather than a second query.
-		where = append(where, "("+strings.Join(branches, " OR ")+")")
+// compileWhere is [compile]'s predicate over the rows a statement returns: the
+// query's own ([compilePredicate]), the subtask rollup when the query rolls
+// its subtasks up, and a board column's narrowing.
+func compileWhere(q Query, now time.Time, fields map[string]resolvedField) (string, []any, error) {
+	where, args, err := compilePredicate(q, now, fields, false, rowAlias)
+	if err != nil {
+		return "", nil, err
 	}
 
 	// THE SUBTASK MODE, and it is a predicate on the ROOT rather than on
@@ -1102,8 +775,7 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 	// WRITTEN AS A SELF-SCOPED SUBQUERY, with the predicate built so far
 	// repeated inside it. The inner `tracker_tasks t` shadows the outer
 	// alias, so every `t.` in that predicate binds to the inner row and
-	// nothing has to be rewritten — which is what makes this possible at
-	// all without an alias-parameterised compiler.
+	// nothing has to be rewritten.
 	//
 	// AND IT DOES NOT APPLY WHEN THE CALLER ASKED FOR A SUBTREE: `parent`
 	// and `root` are questions ABOUT subtasks, so filtering their roots
@@ -1113,9 +785,7 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 	// because it selects the same tasks the outer row does: in the trash
 	// its predicate is a removed root, and read from the plain table it
 	// walked every task in the company to find the roots the trash holds.
-	if !branch && q.Subtasks != SubtasksSeparate && q.Parent == "" &&
-		q.Root == "" && len(where) > 0 {
-
+	if rollsUp(q) {
 		inner := strings.Join(where, " AND ")
 		rooted := "t.root_id IN (SELECT t.id FROM " + taskSource(q) +
 			" WHERE " + inner + ")"
@@ -1133,12 +803,8 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		// predicate is the opposite one. `removed=true` in the default
 		// subtask mode therefore answered nothing at all, which is the
 		// one query that has to work for a removal to be reversible.
-		tomb := "t.removed_at IS NULL"
-		if q.Removed != nil && *q.Removed {
-			tomb = "t.removed_at IS NOT NULL"
-		}
-		where = []string{tomb}
-		if scope != "" {
+		where = []string{tombClause(q, rowAlias)}
+		if scope, scopeArgs := scopeClause(q, rowAlias); scope != "" {
 			// AND THE CONTAINER SURVIVES THE REWRITE.
 			//
 			// Without it the outer row carried no scope at all, so
@@ -1166,7 +832,7 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		where = append(where, rooted)
 	}
 
-	if q.Group != nil && !branch {
+	if q.Group != nil {
 		// A COLUMN FILTER IS A PREDICATE OF THE WHOLE QUERY, in its
 		// JOIN-FREE form: the count hint and the totals share this
 		// predicate and carry no join, so an axis expressed only as one
@@ -1177,10 +843,396 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 			return "", nil, err
 		}
 		clause, values := axis.filter(*q.Group)
-		add(clause, values...)
+		where = append(where, clause)
+		args = append(args, values...)
 	}
 
 	return strings.Join(where, " AND "), args, nil
+}
+
+// rollsUp reports a query whose subtasks ride along on the task they hang
+// from rather than being filtered on their own — see [SubtaskMode].
+func rollsUp(q Query) bool {
+	return q.Subtasks != SubtasksSeparate && q.Parent == "" && q.Root == ""
+}
+
+// scopeClause is the container a query is about, as a predicate on the task
+// on names — empty at the workspace, which is the Everything level and
+// explicit: no predicate.
+func scopeClause(q Query, on alias) (string, []any) {
+	if q.Scope.Project != "" {
+		return on.col("project_key") + " = ?", []any{q.Scope.Project}
+	}
+	return "", nil
+}
+
+// tombClause is the side of the trash a query reads, as a predicate on the
+// task on names.
+//
+// EVERY QUERY EXCLUDES A REMOVED TASK except the ones that are about them. ONE
+// predicate for a removed task's whole life, at any age — which is what makes
+// a restore at any age answer exactly what it answered before.
+//
+// `removed=true` is the OTHER side of it and the only way to reach the trash: a
+// removal hides a task, and a restore is a gesture somebody makes about a task
+// they can see. It is `IS NOT NULL` rather than a date bound because the
+// trash's two indexes are partial on exactly that and [taskSource] names one: a
+// removed listing whose predicate did not imply the index's could not be read
+// through it at all.
+func tombClause(q Query, on alias) string {
+	if q.Removed != nil && *q.Removed {
+		return on.col("removed_at") + " IS NOT NULL"
+	}
+	return on.col("removed_at") + " IS NULL"
+}
+
+// compilePredicate is the query's own predicate, every clause of it asked of
+// the task `on` names, with `branch` telling it whether it is compiling one
+// arm of a disjunction rather than the query itself.
+//
+// # Why a branch is not simply the same compiler run again
+//
+// A branch is a PREDICATE, and three of the decisions this function makes are
+// not predicates the caller wrote — they are the shape of the ANSWER, applied
+// by default whether or not anybody asked: a removed task is excluded, a
+// finished one is excluded, and an archived project's tasks are excluded.
+// ([compileWhere] adds a fourth, the subtask rollup, which rewrites the whole
+// predicate to be about roots.)
+//
+// Run again inside a branch, each of those emits its DEFAULT and is ANDed
+// inside the OR — so `show_closed=true` at the top level was defeated by every
+// branch's own `status_group IN (not_started, active)`, and the identical
+// predicate written as a disjunction answered a strictly smaller set than the
+// one written flat. [Query.parseAny] refuses those keys in a branch for the
+// same reason; this is the other half, because refusing the key does not stop
+// the default the absent key resolves to.
+//
+// The scope IS a predicate and stays: a branch naming a container is asking
+// about that container's rows, which is exactly what the unassigned-work arm
+// of a personal queue is for.
+func compilePredicate(q Query, now time.Time, fields map[string]resolvedField,
+	branch bool, on alias) ([]string, []any, error) {
+
+	var where []string
+	var args []any
+	add := func(clause string, values ...any) {
+		where = append(where, clause)
+		args = append(args, values...)
+	}
+
+	if scope, scopeArgs := scopeClause(q, on); scope != "" {
+		add(scope, scopeArgs...)
+	}
+	if !branch {
+		add(tombClause(q, on))
+	}
+
+	if len(q.Keys) > 0 {
+		add(on.col("key")+" IN ("+placeholders(len(q.Keys))+")", anyOf(q.Keys)...)
+	}
+	if q.PriorityListOf != "" {
+		if len(q.PriorityList) == 0 {
+			// AN EMPTY LIST IS AN EMPTY ANSWER, stated rather than
+			// omitted: dropping the clause would answer every task in
+			// scope as though it were on somebody's list.
+			add("0")
+		} else {
+			add(on.col("id")+" IN ("+placeholders(len(q.PriorityList))+")",
+				anyOf(q.PriorityList)...)
+		}
+	}
+
+	if len(q.Status) > 0 {
+		add(on.col("status")+" IN ("+placeholders(len(q.Status))+")", anyOf(q.Status)...)
+	}
+	if len(q.StatusNot) > 0 {
+		add(on.col("status")+" NOT IN ("+placeholders(len(q.StatusNot))+")",
+			anyOf(q.StatusNot)...)
+	}
+	if len(q.StatusGroups) > 0 {
+		add(on.col("status_group")+" IN ("+placeholders(len(q.StatusGroups))+")",
+			anyOf(q.StatusGroups)...)
+	}
+	if len(q.Priorities) > 0 {
+		add(on.col("priority")+" IN ("+placeholders(len(q.Priorities))+")",
+			anyOf(q.Priorities)...)
+	}
+	if len(q.Types) > 0 {
+		add(on.col("type")+" IN ("+placeholders(len(q.Types))+")", anyOf(q.Types)...)
+	}
+	// BOTH UNIT FILTERS RESOLVE THROUGH THE CHART to the key the rows
+	// hold — see [unitKeys].
+	if units := unitKeys(q.Units, q.Unit); len(units) > 0 {
+		add(on.col("filed_unit")+" IN ("+placeholders(len(units))+")", anyOf(units)...)
+	}
+	if units := unitKeys(q.Units, q.RoutingUnit); len(units) > 0 {
+		add(on.col("routing_unit")+" IN ("+placeholders(len(units))+")", anyOf(units)...)
+	}
+	if handles := q.Assignee; len(handles) > 0 {
+		// `none` is a VALUE rather than a missing filter: "unassigned"
+		// is a real question and the commonest half of the queue preset.
+		clause, values := handleClause(on.col("assignee"), handles)
+		add(clause, values...)
+	}
+	if len(q.Reporter) > 0 {
+		clause, values := handleClause(on.col("reporter"), q.Reporter)
+		add(clause, values...)
+	}
+	// A PERSON'S WORK IS READ FROM THEIR OWN ROWS: the tasks a
+	// collaborator, a watcher or a checklist item's owner is on, found by
+	// the person ([peopleClause]).
+	for _, join := range []struct {
+		handles []string
+		table   string
+	}{
+		{q.Collaborator, "tracker_collaborators"},
+		{q.Watcher, "tracker_watchers"},
+	} {
+		if len(join.handles) > 0 {
+			add(peopleClause(on, "SELECT x.task_id FROM "+join.table+
+				" x WHERE x.handle IN ("+placeholders(len(join.handles))+")"),
+				anyOf(join.handles)...)
+		}
+	}
+	if len(q.ChecklistAssignee) > 0 {
+		add(peopleClause(on, "SELECT x.task_id FROM tracker_checklist_items x "+
+			"WHERE x.assignee IN ("+placeholders(len(q.ChecklistAssignee))+
+			") AND x.assignee <> ''"), anyOf(q.ChecklistAssignee)...)
+	}
+	if len(q.Tags.Tags) > 0 {
+		clause, values := tagClause(q.Tags, q.Scope.Project, on)
+		add(clause, values...)
+	}
+	if q.Parent != "" {
+		add(on.col("parent_id")+" = ?", q.Parent)
+	}
+	if q.Root != "" {
+		add("EXISTS (SELECT 1 FROM tracker_task_closure c "+
+			"WHERE c.descendant_id = "+on.col("id")+" AND c.ancestor_id = ?)", q.Root)
+	}
+	if q.References != "" {
+		add("EXISTS (SELECT 1 FROM tracker_references r "+
+			"JOIN tracker_task_keys k ON k.task_id = r.to_task "+
+			"WHERE r.from_task = "+on.col("id")+" AND k.key = ?)", q.References)
+	}
+	if q.LinkedPage != "" {
+		add("EXISTS (SELECT 1 FROM tracker_relations x WHERE x.task_id = "+
+			on.col("id")+" AND x.kind = ? AND x.other_id = ?)",
+			string(RelationPage), q.LinkedPage)
+	}
+	if q.Blocked != nil {
+		clause := "EXISTS (SELECT 1 FROM tracker_task_deps d " +
+			"WHERE d.task_id = " + on.col("id") + " AND d.blocker_open = 1)"
+		if !*q.Blocked {
+			clause = "NOT " + clause
+		}
+		add(clause)
+	}
+	if q.HasChildren != nil {
+		clause := "EXISTS (SELECT 1 FROM tracker_tasks c WHERE c.parent_id = " +
+			on.col("id") + ")"
+		if !*q.HasChildren {
+			clause = "NOT " + clause
+		}
+		add(clause)
+	}
+	if q.HasParent != nil {
+		if *q.HasParent {
+			add(on.col("parent_id") + " IS NOT NULL")
+		} else {
+			add(on.col("parent_id") + " IS NULL")
+		}
+	}
+	if q.HasOpenAsks != nil {
+		clause := "EXISTS (SELECT 1 FROM tracker_comments m WHERE m.task_id = " +
+			on.col("id") + " AND " + openAskSQL + ")"
+		if !*q.HasOpenAsks {
+			clause = "NOT " + clause
+		}
+		add(clause)
+	}
+	// THE TWO ENDS OF AN OPEN ASK, and they are different questions: what
+	// is waiting on me, and what I am waiting for. Both narrow the same
+	// predicate [Query.HasOpenAsks] uses, because an ask that is resolved
+	// or answered is nobody's queue.
+	if q.AskedOf != "" {
+		add("EXISTS (SELECT 1 FROM tracker_comments m WHERE m.task_id = "+
+			on.col("id")+" AND m.ask = ? AND m.resolved = 0 AND "+
+			"m.answered_by IS NULL AND m.removed = 0)", q.AskedOf)
+	}
+	if q.AskedBy != "" {
+		add("EXISTS (SELECT 1 FROM tracker_comments m WHERE m.task_id = "+
+			on.col("id")+" AND m.ask <> '' AND m.author = ? AND m.resolved = 0 "+
+			"AND m.answered_by IS NULL AND m.removed = 0)", q.AskedBy)
+	}
+	// BLOCKING IS THE OTHER END OF BLOCKED, not its negation: "this task
+	// is holding something up" reads the dependency table by BLOCKER_ID
+	// where blocked reads it by task_id, and a task can be both.
+	if q.Blocking != nil {
+		clause := "EXISTS (SELECT 1 FROM tracker_task_deps d " +
+			"WHERE d.blocker_id = " + on.col("id") + " AND d.blocker_open = 1)"
+		if !*q.Blocking {
+			clause = "NOT " + clause
+		}
+		add(clause)
+	}
+	if q.HasDependencies != nil {
+		clause := "EXISTS (SELECT 1 FROM tracker_task_deps d WHERE d.task_id = " +
+			on.col("id") + ")"
+		if !*q.HasDependencies {
+			clause = "NOT " + clause
+		}
+		add(clause)
+	}
+	if q.Text != "" {
+		// THE FIND, and it is a substring of a KEY or a TITLE — what
+		// the tool that carries it promises, and the only thing this
+		// grammar can honestly do: ranked search over what an item says
+		// is the search index's ([Searcher]), which a filter composed
+		// into this query cannot be.
+		//
+		// THE KEY MATCHES FROM THE FRONT and the title anywhere. A key
+		// is `PROJECT-N`, so it is only ever typed from its start —
+		// while unanchored, every bare number in a find becomes a key
+		// match: `2` would hand back ENG-2, ENG-12 and ENG-20 beside
+		// whatever the person actually meant. A title is prose, where
+		// the useful match is in the middle.
+		pattern := likeEscape(q.Text)
+		add("("+on.col("key")+` LIKE ? ESCAPE '\' OR `+on.col("title")+
+			` LIKE ? ESCAPE '\')`, pattern+"%", "%"+pattern+"%")
+	}
+
+	for _, filter := range q.Fields {
+		field, held := fields[filter.Ref]
+		if !held {
+			// UNREACHABLE THROUGH [Reader.Tasks], which refuses an
+			// unresolved ref before it reaches here — and a refusal
+			// rather than a skip anyway, because a filter nobody
+			// resolved is a board showing more than the person asked
+			// for, silently.
+			return nil, nil, fmt.Errorf("worklet: f.%s was never resolved, so "+
+				"this answer would be wider than the caller asked for",
+				filter.Ref)
+		}
+		clause, values, err := fieldClause(filter, field, on)
+		if err != nil {
+			return nil, nil, err
+		}
+		add(clause, values...)
+	}
+	for key, filter := range q.Dates {
+		clause, values, err := dateClause(on, key, filter)
+		if err != nil {
+			return nil, nil, err
+		}
+		add(clause, values...)
+		if filter.Overdue {
+			// THE ALIAS CARRIES ITS OPEN CONDITION, which is what makes
+			// it the same predicate as the preset that means the same
+			// thing rather than a second one that drifts.
+			add(on.col("status_group") + " IN (" + openGroupsSQL + ")")
+		}
+	}
+	for column, filter := range map[string]*NumFilter{
+		"estimate_min": q.Estimate, "points": q.Points, "spend_tokens": q.Spend,
+	} {
+		if filter == nil {
+			continue
+		}
+		clause, values := numClause(on.col(column), *filter)
+		add(clause, values...)
+	}
+	if len(q.Flags) > 0 {
+		clause, onTask, err := flagsClause(on, q.Flags)
+		if err != nil {
+			return nil, nil, err
+		}
+		if onTask {
+			// THE INDEX'S OWN PREDICATE, stated because it is what
+			// makes the index reachable. The attention index is
+			// partial over the four task flags together — a task
+			// with any of them is a fraction of a percent of the
+			// table — and `cycle = 1` alone does not imply that
+			// disjunction to a planner, so a flag filter without it
+			// reads every task in the company.
+			//
+			// ONLY WHEN EVERY NAMED FLAG IS ON THE TASK ROW. The two
+			// dependency flags live on `tracker_relations`, and a
+			// task whose edge is one-sided carries none of these
+			// four — so adding this predicate beside them would
+			// silently answer nothing.
+			add(anyFlagSet(on))
+		}
+		add(clause)
+	}
+
+	switch {
+	case branch:
+		// THE ANSWER'S SHAPE, NOT THIS ARM'S — see above.
+	case q.Archived == ArchivedExclude:
+		// A JOIN RATHER THAN A COLUMN: a project's archive is the
+		// project's own fact, and copying it onto every task was the one
+		// unbounded cross-object write this design removed.
+		add(on.col("archived") + " = 0 AND NOT EXISTS (SELECT 1 FROM " +
+			"tracker_projects p WHERE p.key = " + on.col("project_key") +
+			" AND p.archived = 1)")
+	case q.Archived == ArchivedOnly:
+		add("(" + on.col("archived") + " = 1 OR EXISTS (SELECT 1 FROM " +
+			"tracker_projects p WHERE p.key = " + on.col("project_key") +
+			" AND p.archived = 1))")
+	}
+
+	switch {
+	case branch:
+		// THE ANSWER'S SHAPE, NOT THIS ARM'S — see above.
+	case q.ShowClosed.All:
+	case q.ShowClosed.Recent > 0 || q.ShowClosed.Since != nil:
+		// THE WINDOW APPLIES TO THE WHOLE FINISHED SET, so a task
+		// cancelled inside it is in the answer exactly as one done
+		// inside it is — which is what the finish stamp being by GROUP
+		// buys, and why the board's Cancelled column is not empty.
+		//
+		// ONE CLAUSE FOR BOTH SPELLINGS of the bound — a duration back
+		// from now, or a calendar instant the parse resolved on the
+		// company's clock — because they are one question with two ways
+		// to name where the window starts.
+		since := now.Add(-q.ShowClosed.Recent)
+		if q.ShowClosed.Since != nil {
+			since = *q.ShowClosed.Since
+		}
+		add("("+on.col("status_group")+" IN ("+openGroupsSQL+") OR "+
+			"("+on.col("finished_at")+" IS NOT NULL AND "+on.col("finished_at")+
+			" >= ?))", store.EncodeTime(since))
+	default:
+		add(on.col("status_group") + " IN (" + openGroupsSQL + ")")
+	}
+
+	if len(q.Any) > 0 {
+		var branches []string
+		for i, arm := range q.Any {
+			clauses, values, err := compilePredicate(arm, now, fields, true, on)
+			if err != nil {
+				return nil, nil, err
+			}
+			if len(clauses) == 0 {
+				// AN EMPTY ARM IS "EVERYTHING", which makes the whole
+				// disjunction true and every other arm decoration. It
+				// is refused rather than rendered, because `()` is not
+				// SQL and "you selected nothing" is a thing a caller
+				// fixes.
+				return nil, nil, fmt.Errorf("worklet: any branch %d selects "+
+					"nothing — a branch is a predicate, and an empty one "+
+					"matches every task and makes the other branches "+
+					"decoration", i)
+			}
+			branches = append(branches, "("+strings.Join(clauses, " AND ")+")")
+			args = append(args, values...)
+		}
+		// ONE LEVEL, ANDed with the top-level keys — which is what makes
+		// a disjunction a filter rather than a second query.
+		where = append(where, "("+strings.Join(branches, " OR ")+")")
+	}
+	return where, args, nil
 }
 
 // pageClause is the keyset resume, and it is DELIBERATELY NOT PART OF
@@ -1270,10 +1322,11 @@ func handleClause(column string, handles []string) (string, []any) {
 //
 // `none:` is about rows that are ABSENT, which no index over present rows can
 // drive, so it stays a probe of the task's own rows by the primary key.
-func tagClause(filter TagFilter, project string) (string, []any) {
+func tagClause(filter TagFilter, project string, on alias) (string, []any) {
 	if filter.Mode == TagNone {
-		return "NOT EXISTS (SELECT 1 FROM tracker_task_tags x WHERE x.task_id = t.id " +
-			"AND x.slug IN (" + placeholders(len(filter.Tags)) + "))", anyOf(filter.Tags)
+		probe := "NOT EXISTS (SELECT 1 FROM tracker_task_tags x WHERE x.task_id = " +
+			on.col("id") + " AND x.slug IN (" + placeholders(len(filter.Tags)) + "))"
+		return probe, anyOf(filter.Tags)
 	}
 	arms := make([]string, 0, len(filter.Tags))
 	var args []any
@@ -1287,29 +1340,31 @@ func tagClause(filter TagFilter, project string) (string, []any) {
 		arms = append(arms, arm)
 	}
 	if filter.Mode == TagAll {
-		return "t.id IN (" + strings.Join(arms, " INTERSECT ") + ")", args
+		return on.col("id") + " IN (" + strings.Join(arms, " INTERSECT ") + ")", args
 	}
-	return "t.id IN (" + strings.Join(arms, " UNION ALL ") + ")", args
+	return on.col("id") + " IN (" + strings.Join(arms, " UNION ALL ") + ")", args
 }
 
-// dateColumns maps a grammar key to the column it filters.
+// dateColumns maps a grammar key to the column it filters, by the column's
+// own name: [dateClause] reads it on the task its alias names.
 //
 // `status_entered` reads the EFFECTIVE instant because it is the start of a
 // duration; the rest read the AUTHORED one, because each is a wall-clock bound
 // the caller typed and a clamp would answer a different question from the one
 // on the screen.
 var dateColumns = map[string]string{
-	"due": "t.due_at", "start": "t.start_at", "created": "t.created_at",
-	"updated": "t.updated_at", "done": "t.done_at", "closed": "t.closed_at",
-	"finished": "t.finished_at", "archived_at": "t.archived_at",
-	"status_entered": "t.status_entered_at",
+	"due": "due_at", "start": "start_at", "created": "created_at",
+	"updated": "updated_at", "done": "done_at", "closed": "closed_at",
+	"finished": "finished_at", "archived_at": "archived_at",
+	"status_entered": "status_entered_at",
 }
 
-func dateClause(key string, filter DateFilter) (string, []any, error) {
-	column, ok := dateColumns[key]
+func dateClause(on alias, key string, filter DateFilter) (string, []any, error) {
+	name, ok := dateColumns[key]
 	if !ok {
 		return "", nil, fmt.Errorf("worklet: %q names no date column", key)
 	}
+	column := on.col(name)
 	from := store.EncodeTime(filter.From.At)
 
 	// THE NULL PREDICATE IS SPELLED OUT, and it is not redundant.
@@ -1361,24 +1416,23 @@ func numClause(column string, filter NumFilter) (string, []any) {
 	return "1", nil
 }
 
+// anyFlagSet is the attention index's own partial predicate on the task on
+// names, written once so the DDL and the query cannot disagree about what it
+// is: on the row, it is the DDL's own text with the row's alias in front of
+// each column.
+func anyFlagSet(on alias) string {
+	return "(" + on.col("inconsistent_project") + " = 1 OR " + on.col("cycle") +
+		" = 1 OR " + on.col("too_deep") + " = 1 OR " + on.col("key_collision") +
+		" = 1)"
+}
+
 // flagColumn maps an attention flag to its column, from a CLOSED SET — the one
 // place a grammar value reaches a statement as a name rather than a bound
 // value, and therefore the one that has to be enumerated.
-// anyFlagSet is the attention index's own partial predicate, written once so
-// the DDL and the query cannot disagree about what it is.
-const anyFlagSet = `(t.inconsistent_project = 1 OR t.cycle = 1 OR ` +
-	`t.too_deep = 1 OR t.key_collision = 1)`
-
-func flagColumn(flag string) (string, bool) {
+func flagColumn(on alias, flag string) (string, bool) {
 	switch flag {
-	case "cycle":
-		return "t.cycle = 1", true
-	case "too_deep":
-		return "t.too_deep = 1", true
-	case "inconsistent_project":
-		return "t.inconsistent_project = 1", true
-	case "key_collision":
-		return "t.key_collision = 1", true
+	case "cycle", "too_deep", "inconsistent_project", "key_collision":
+		return on.col(flag) + " = 1", true
 	}
 	return "", false
 }
@@ -1402,22 +1456,22 @@ func flagColumn(flag string) (string, bool) {
 // are an EXISTS rather than a column, and why the caller is told whether every
 // flag it named is on the task row: the attention index's partial predicate
 // applies to those four and to nothing else.
-func flagsClause(flags []string) (clause string, allOnTask bool, err error) {
+func flagsClause(on alias, flags []string) (clause string, allOnTask bool, err error) {
 	terms := make([]string, 0, len(flags))
 	allOnTask = true
 	for _, flag := range flags {
-		switch term, onTask := flagColumn(flag); {
+		switch term, onTask := flagColumn(on, flag); {
 		case onTask:
 			terms = append(terms, term)
 		case flag == "one_sided":
 			allOnTask = false
 			terms = append(terms, "EXISTS (SELECT 1 FROM tracker_relations x "+
-				"WHERE x.task_id = t.id AND x.one_sided = 1 "+
+				"WHERE x.task_id = "+on.col("id")+" AND x.one_sided = 1 "+
 				"AND x.one_sided_final = 0)")
 		case flag == "one_sided_final":
 			allOnTask = false
 			terms = append(terms, "EXISTS (SELECT 1 FROM tracker_relations x "+
-				"WHERE x.task_id = t.id AND x.one_sided_final = 1)")
+				"WHERE x.task_id = "+on.col("id")+" AND x.one_sided_final = 1)")
 		default:
 			return "", false, fmt.Errorf("worklet: %q is not an attention "+
 				"flag. The flags are: %s", flag, strings.Join(AttentionFlags, ", "))

@@ -195,7 +195,7 @@ type ShowClosed struct {
 }
 
 // Finished reports whether any finished work is in the answer — the one
-// question [compileWhere] and [admittedStatuses] both ask of this, stated
+// question [compilePredicate] and [admittedStatuses] both ask of this, stated
 // once so a fourth way to ask cannot reach one of them and not the other.
 func (s ShowClosed) Finished() bool {
 	return s.All || s.Recent > 0 || s.Since != nil
