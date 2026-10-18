@@ -19,7 +19,14 @@
  */
 
 import { useMemo } from "react";
-import { Card, EmptyState, EmptyValue, Skeleton } from "@crewlethq/ui";
+import {
+  Card,
+  EmptyState,
+  EmptyValue,
+  Skeleton,
+  TableNumberCell,
+  TableDateCell,
+} from "@crewlethq/ui";
 import {
   ClockGlyph,
   FileTextGlyph,
@@ -30,11 +37,11 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
-import { DateCell, NumberCell } from "~/app/frame/cells.tsx";
+
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { plural, relTime, tsKey } from "~/lib/format.ts";
+import { plural, relTime, tsKey, fmtCount } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type {
@@ -119,12 +126,12 @@ function spaceFacts({
   return [
     // ZERO IS A REAL COUNT: a space whose pages were all trashed is a state an
     // operator comes here for. Trashed pages are not counted by the engine.
-    { label: "Pages", value: <NumberCell value={space.pages} /> },
+    { label: "Pages", value: <TableNumberCell value={space.pages} format={fmtCount} /> },
     {
       label: "Last written",
       // A LIST THAT DID NOT ANSWER IS NOT AN EMPTY SPACE: this value is derived
       // from that read alone, and "never" would be a claim nothing was read for.
-      value: unread ? <EmptyValue label="Unknown" /> : <DateCell at={newest} now={now} />,
+      value: unread ? <EmptyValue label="Unknown" /> : <TableDateCell value={newest} now={now} />,
       // A listing is ordered by title, so a capped read's newest row is a
       // floor on the answer rather than the answer, and the note says so.
       note: capped ? "newest page" : undefined,
@@ -145,7 +152,7 @@ function spaceFacts({
       // units may share, and a link by it opened whichever came first.
       path: units?.length === 1 && lead?.id ? ["agents", "teams", lead.id] : undefined,
     },
-    { label: "Created", value: <DateCell at={space.created_at} now={now} /> },
+    { label: "Created", value: <TableDateCell value={space.created_at} now={now} /> },
   ];
 }
 
@@ -296,7 +303,7 @@ function SpacePages({
             <span key={page.id} className="row gap-2">
               <PageLink page={page} />
               <span className="spacer" />
-              <DateCell at={page.updated_at} now={now} />
+              <TableDateCell value={page.updated_at} now={now} />
             </span>
           ))}
           {rest > 0 && (
@@ -395,7 +402,10 @@ function pageFacts(detail: PageDetail, who: Who, now: number): Fact[] {
         : "Not saved over since it was written",
     },
     // ZERO IS THE READING: the wire drops an empty watcher list.
-    { label: "Watchers", value: <NumberCell value={page.watchers?.length ?? 0} /> },
+    {
+      label: "Watchers",
+      value: <TableNumberCell value={page.watchers?.length ?? 0} format={fmtCount} />,
+    },
   ];
 }
 
@@ -516,7 +526,7 @@ export function PagePeek({ id }: { id: string }) {
                           <span className="truncate">{by ? who(by).name : "The engine"}</span>
                           {rev.message && <span className="muted truncate">{rev.message}</span>}
                           <span className="spacer" />
-                          <DateCell at={rev.created_at} now={now} />
+                          <TableDateCell value={rev.created_at} now={now} />
                         </span>
                       );
                     })}

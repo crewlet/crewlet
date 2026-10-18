@@ -21,6 +21,8 @@
  */
 
 import { useState } from "react";
+import { uiletTone } from "~/ui/primitives.tsx";
+import { href } from "~/app/router.tsx";
 import {
   Button,
   Card,
@@ -31,6 +33,9 @@ import {
   StatCard,
   StatGroup,
   Tag,
+  TableKeyCell,
+  TableDateCell,
+  TableStatusCell,
 } from "@crewlethq/ui";
 import {
   ClockGlyph,
@@ -44,7 +49,7 @@ import { QueryState } from "~/components/common.tsx";
 import { CoverageNote, missingFrom } from "~/components/CoverageNote.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, KeyCell, StatusCell } from "~/app/frame/cells.tsx";
+
 import { useEngineHealth } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -258,7 +263,7 @@ export function BackupRecord({
                   sortValue: (p) => p.owner,
                   cell: (p) =>
                     p.kind === "node" ? (
-                      <KeyCell value={p.owner} path={["settings", "nodes", p.owner]} />
+                      <TableKeyCell value={p.owner} href={href(["settings", "nodes", p.owner])} />
                     ) : (
                       <span className="muted">{OWNER_KIND_WORDS.operator}</span>
                     ),
@@ -268,7 +273,7 @@ export function BackupRecord({
                   header: "Taken",
                   shrink: true,
                   sortValue: (p) => p.taken_at,
-                  cell: (p) => <DateCell at={p.taken_at} now={now} />,
+                  cell: (p) => <TableDateCell value={p.taken_at} now={now} />,
                 },
                 {
                   key: "dir",
@@ -358,7 +363,7 @@ export function BackupRecord({
                   header: "When",
                   shrink: true,
                   sortValue: (r) => r.at,
-                  cell: (r) => <DateCell at={r.at} now={now} />,
+                  cell: (r) => <TableDateCell value={r.at} now={now} />,
                 },
                 {
                   key: "node",
@@ -367,7 +372,7 @@ export function BackupRecord({
                   sortValue: (r) => r.node ?? "",
                   cell: (r) =>
                     r.node ? (
-                      <KeyCell value={r.node} path={["settings", "nodes", r.node]} />
+                      <TableKeyCell value={r.node} href={href(["settings", "nodes", r.node])} />
                     ) : (
                       <EmptyValue label="The node was not recorded" />
                     ),
@@ -394,7 +399,11 @@ export function BackupRecord({
                   sortValue: (r) => throughOf(r.actor, r.operator_id),
                   cell: (r) => {
                     const through = throughOf(r.actor, r.operator_id);
-                    return through ? <KeyCell value={through} /> : <EmptyValue label="Their own" />;
+                    return through ? (
+                      <TableKeyCell value={through} />
+                    ) : (
+                      <EmptyValue label="Their own" />
+                    );
                   },
                 },
                 {
@@ -414,15 +423,15 @@ export function BackupRecord({
                   phoneLead: true,
                   sortValue: (r) => r.outcome,
                   cell: (r) => (
-                    <StatusCell
+                    <TableStatusCell
                       glyph={r.outcome === "applied" ? "●" : "✕"}
                       label={OUTCOME_WORDS[r.outcome]}
-                      tone={r.outcome === "applied" ? "positive" : "critical"}
                       title={
                         r.outcome === "applied"
                           ? `Manifest written ${fmtDateTime(r.at)}`
                           : "Incomplete, not a usable backup"
                       }
+                      tone={uiletTone(r.outcome === "applied" ? "positive" : "critical")}
                     />
                   ),
                 },

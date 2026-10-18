@@ -8,7 +8,7 @@
 
 import { useCallback, useMemo, useRef, type CSSProperties } from "react";
 import { useSearchTarget } from "~/app/searchTarget.ts";
-import { plural } from "~/lib/format.ts";
+import { plural, fmtCount } from "~/lib/format.ts";
 import { useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import {
   Button,
@@ -23,6 +23,8 @@ import {
   StatCard,
   StatGroup,
   Tag,
+  TableKeyCell,
+  TableNumberCell,
 } from "@crewlethq/ui";
 import {
   WrenchGlyph,
@@ -35,7 +37,7 @@ import {
 import { Section, SeatChip } from "~/components/common.tsx";
 import { uiletTone } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { NumberCell, KeyCell } from "~/app/frame/cells.tsx";
+
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
@@ -131,7 +133,10 @@ function toolFacts(tool: ToolRow): Fact[] {
       // fact the registry recorded, not a value somebody forgot to set.
       value: tool.delivers || "nobody",
     },
-    { label: "Arguments", value: <NumberCell value={argumentCount(tool)} /> },
+    {
+      label: "Arguments",
+      value: <TableNumberCell value={argumentCount(tool)} format={fmtCount} />,
+    },
     { label: "Advertised", value: `${hintsAdvertised(tool.annotations)} of 4 hints` },
   ];
 }
@@ -827,7 +832,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
                 // identifier a reader is matching against a config file, so
                 // a break in the middle of one is worse than a narrower
                 // description beside it. A shrunk cell never wraps, which is
-                // what `KeyCell` inherits here rather than restating.
+                // what `TableKeyCell` inherits here rather than restating.
                 shrink: true,
                 // TWICE A SHRINK COLUMN'S SHARE. The name is the identifier the
                 // list is scanned by, and at a shrink column's fifth of the grid
@@ -837,7 +842,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
                 // columns a tool's own page answers.
                 width: "fit-content(40%)",
                 sortValue: (t) => t.name,
-                cell: (t) => <KeyCell value={t.name} />,
+                cell: (t) => <TableKeyCell value={t.name} />,
               },
               {
                 key: "origin",
@@ -929,7 +934,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
                   const required = fields.filter((f) => f.required).length;
                   return (
                     <span className="row gap-1">
-                      <NumberCell
+                      <TableNumberCell
                         value={argumentCount(t)}
                         title={
                           fields.length
@@ -941,6 +946,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
                                 .join("\n")
                             : undefined
                         }
+                        format={fmtCount}
                       />
                       {required > 0 && <span className="t-caption">{required} required</span>}
                     </span>

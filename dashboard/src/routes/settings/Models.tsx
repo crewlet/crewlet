@@ -38,11 +38,14 @@ import {
   StatCard,
   StatGroup,
   Tag,
+  TableKeyCell,
+  TableEntityCell,
+  TableTextCell,
 } from "@crewlethq/ui";
 import { ClockGlyph, CpuGlyph, KeyGlyph, PencilGlyph, UsersGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
+import { linkedSeat } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { href } from "~/app/router.tsx";
@@ -492,11 +495,13 @@ function ModelPage({
                 floor: "10rem",
                 sortValue: (u) => u.seat.name,
                 cell: (u) => (
-                  <SeatCell
-                    handle={u.seat.handle}
-                    name={u.seat.name}
-                    kind={u.seat.kind}
-                    avatar={u.seat.avatar}
+                  <TableEntityCell
+                    {...linkedSeat({
+                      handle: u.seat.handle,
+                      name: u.seat.name,
+                      kind: u.seat.kind,
+                      avatar: u.seat.avatar,
+                    })}
                   />
                 ),
               },
@@ -505,9 +510,9 @@ function ModelPage({
                 header: "Runs on it",
                 cell: (u) =>
                   u.every ? (
-                    <TextCell>Every phase</TextCell>
+                    <TableTextCell>Every phase</TableTextCell>
                   ) : u.runs.length ? (
-                    <TextCell>{u.runs.join(", ")}</TextCell>
+                    <TableTextCell>{u.runs.join(", ")}</TableTextCell>
                   ) : (
                     <EmptyValue label="Nothing first" />
                   ),
@@ -518,7 +523,7 @@ function ModelPage({
                 drop: 1,
                 cell: (u) =>
                   u.fallback.length ? (
-                    <TextCell>{u.fallback.join(", ")}</TextCell>
+                    <TableTextCell>{u.fallback.join(", ")}</TableTextCell>
                   ) : (
                     <EmptyValue label="Never" />
                   ),
@@ -576,7 +581,7 @@ function KeyLabel({ keyRow, at }: { keyRow: CredentialKeyRow; at: number }) {
   }
   return (
     <span className="row gap-2">
-      <KeyCell value={keyRow.ref} />
+      <TableKeyCell value={keyRow.ref} />
       {keyRow.source === "default" && (
         <Tag size="sm" appearance="outline" title={`${keyRow.ref}: ${KEY_SOURCE_WORDS.default}`}>
           default
@@ -657,10 +662,10 @@ function ReachLine({ uses }: { uses: ModelUse[] }) {
   const behind = uses.length - runs;
   if (uses.length === 0) return <EmptyValue label={NO_SEAT} />;
   return (
-    <TextCell>
+    <TableTextCell>
       {plural(runs, "seat")}
       {behind > 0 && <span className="muted"> · fallback for {behind}</span>}
-    </TextCell>
+    </TableTextCell>
   );
 }
 

@@ -38,9 +38,12 @@ import {
   StatGroup,
   Tag,
   InlineCode,
+  TableNumberCell,
+  TableDateCell,
+  TableEntityCell,
 } from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, NumberCell, SeatLabel } from "~/app/frame/cells.tsx";
+import { plainSeat } from "~/app/frame/cells.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
@@ -59,6 +62,7 @@ import {
   plural,
   relTime,
   tsKey,
+  fmtCount,
 } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { A2AChannel } from "~/protocol/index.ts";
@@ -133,9 +137,9 @@ function channelFacts(
       value: seatName(channel.target),
       path: ["agents", "seats", channel.target],
     },
-    { label: "Messages", value: <NumberCell value={channel.messages} /> },
-    { label: "Opened", value: <DateCell at={channel.opened_at} now={now} /> },
-    { label: "Last message", value: <DateCell at={channel.last_at} now={now} /> },
+    { label: "Messages", value: <TableNumberCell value={channel.messages} format={fmtCount} /> },
+    { label: "Opened", value: <TableDateCell value={channel.opened_at} now={now} /> },
+    { label: "Last message", value: <TableDateCell value={channel.last_at} now={now} /> },
   ];
 }
 
@@ -482,18 +486,18 @@ export function Conversations() {
                   // give way first beside a peek (DataGrid's `fitColumns`).
                   floor: "9rem",
                   sortValue: (c) => seatName(c.requester),
-                  // NOT `SeatCell`, and not the `SeatChip` this column used to
+                  // NOT `linkedSeat`, and not the `SeatChip` this column used to
                   // draw: both are anchors and every row here is one now, and
                   // an anchor inside an anchor is markup no browser agrees
                   // about. The seat is a link again in the peek's own facts.
-                  cell: (c) => <SeatLabel {...seatBadge(c.requester)} />,
+                  cell: (c) => <TableEntityCell {...plainSeat({ ...seatBadge(c.requester) })} />,
                 },
                 {
                   key: "to",
                   header: "Asked",
                   floor: "9rem",
                   sortValue: (c) => seatName(c.target),
-                  cell: (c) => <SeatLabel {...seatBadge(c.target)} />,
+                  cell: (c) => <TableEntityCell {...plainSeat({ ...seatBadge(c.target) })} />,
                 },
                 {
                   key: "messages",
@@ -506,7 +510,7 @@ export function Conversations() {
                   // channel with nothing on it yet is a real zero and must
                   // read as one, and the tabular face is what lets a column of
                   // counts be compared down the page.
-                  cell: (c) => <NumberCell value={c.messages} />,
+                  cell: (c) => <TableNumberCell value={c.messages} format={fmtCount} />,
                 },
                 {
                   key: "opened",
@@ -514,14 +518,14 @@ export function Conversations() {
                   shrink: true,
                   drop: 1,
                   sortValue: (c) => tsKey(c.opened_at),
-                  cell: (c) => <DateCell at={c.opened_at} now={now} />,
+                  cell: (c) => <TableDateCell value={c.opened_at} now={now} />,
                 },
                 {
                   key: "last",
                   header: "Last message",
                   shrink: true,
                   sortValue: (c) => tsKey(c.last_at),
-                  cell: (c) => <DateCell at={c.last_at} now={now} />,
+                  cell: (c) => <TableDateCell value={c.last_at} now={now} />,
                 },
               ]}
             />

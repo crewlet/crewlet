@@ -686,6 +686,16 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
+    name: "crewlet-table-cell__entity",
+    why: "uilet's TableEntityCell writes it on a seat's badge and name. styles/screens.css reads its presence on Spend › By agent's phone rows (`.spend-agents`): a lead cell that is NOT the seat (the figures) keeps its own width, so the seat's name takes the first line's room. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-table-cell__key",
+    why: "uilet's TableKeyCell writes it on an identifier. styles/screens.css gives the work item key on Spend › Expensive tasks' phone rows (`.spend-tasks`) a seven-character floor, so every title on the compact row starts at one x rather than at an indent set by each key's own width. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-card__header-actions",
     why: 'uilet\'s Card.Header writes it. styles/screens.css takes the name block out of the shrink where the head holds no actions or panel controls, because the kit\'s 100-to-1 subtitle shrink is proportional and still took a fraction of a pixel off the title — enough, with our ellipsis, to draw "When" as "Wh…" beside a whole subtitle on a phone. Where a head DOES hold actions and a subtitle, a narrow screen moves the subtitle to a line of its own instead (see crewlet-card__subtitle). Another rule about OUR composition of the package\'s component.',
     pkg: "@crewlethq/ui/styles.css",

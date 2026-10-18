@@ -7670,8 +7670,7 @@ a.work-cal-chip {
    name is a link". At rest the name is `--color-text-primary` and `a:hover` moves it to
    `--color-text-primary`, which is no move at all; the step here is the other direction,
    onto the accent's one text rung, which is the same ink every other link in
-   the product wears. Same decision as `.cell-seat` in frame.css, which is the
-   same object — a person's name inside a table row. */
+   the product wears. */
 .wl-who:hover {
   color: var(--color-brand-accent-ink);
 }
@@ -9748,7 +9747,9 @@ a.live-row:focus-visible {
   /* THE NAME TAKES THE FIRST LINE'S ROOM, the tokens and share sit at its end
      at their own width — the compact row gives EVERY lead cell the rest of
      the line, which is right for a key-and-title row and wrong for figures. */
-  .spend-agents .grid-wrap[data-phone-rows="compact"] .grid-cell[data-lead]:not(:has(.cell-seat)) {
+  .spend-agents
+    .grid-wrap[data-phone-rows="compact"]
+    .grid-cell[data-lead]:not(:has(.crewlet-table-cell__entity)) {
     flex: none;
     font-weight: inherit;
   }
@@ -9762,7 +9763,7 @@ a.live-row:focus-visible {
      sized to its own width, ENG-4 and LEAD-6 put the titles beside them at
      two different indents. Seven characters of the key's own monospace fit a
      project key and a two-digit number; a longer key grows its own row. */
-  .spend-tasks .grid-wrap[data-phone-rows="compact"] .key-cell {
+  .spend-tasks .grid-wrap[data-phone-rows="compact"] .crewlet-table-cell__key {
     display: inline-block;
     min-width: 7ch;
   }

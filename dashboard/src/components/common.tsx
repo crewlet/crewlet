@@ -61,7 +61,7 @@ export function SeatChip({
   /**
    * The seat's kind, which decides the badge's one variant.
    *
-   * THE SAME PROP [SeatCell] TAKES, and it was a `human` boolean here — one
+   * THE SAME PROP [linkedSeat] TAKES, and it was a `human` boolean here: one
    * fact spelled two ways across two components drawing the same badge, so a
    * caller holding the chart's answer had to translate it at every site and
    * eighteen of the nineteen simply did not. Both take the pair [seatLookup]

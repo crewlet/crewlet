@@ -5,11 +5,12 @@
  */
 
 import { useMemo } from "react";
-import { Card, EmptyState, EmptyValue, Tag, InlineCode } from "@crewlethq/ui";
+import { Mark } from "~/ui/glyph.tsx";
+import { Card, EmptyState, EmptyValue, Tag, InlineCode, TableTextCell } from "@crewlethq/ui";
 import { CalendarGlyph } from "@crewlethq/icons/glyphs";
 import { peekHref } from "~/app/frame/DetailRail.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { TextCell } from "~/app/frame/cells.tsx";
+
 import { describe as describeCron } from "~/lib/cron.ts";
 import { fmtDateTime, inTime, tsKey } from "~/lib/format.ts";
 import { useSchedules } from "~/lib/store-hooks.ts";
@@ -49,7 +50,9 @@ export function Schedules({ seat, now }: { seat: Seat; now: number }) {
           {
             key: "name",
             header: "Name",
-            cell: (row) => <TextCell icon="calendar">{row.name}</TextCell>,
+            cell: (row) => (
+              <TableTextCell icon={<Mark name={"calendar"} size="xs" />}>{row.name}</TableTextCell>
+            ),
             sortValue: (row) => row.name,
           },
           {
@@ -76,7 +79,9 @@ export function Schedules({ seat, now }: { seat: Seat; now: number }) {
               row.scope_type === "role" ? (
                 <span className="muted">theirs</span>
               ) : (
-                <TextCell icon="building-complex">{row.scope_name}</TextCell>
+                <TableTextCell icon={<Mark name={"building-complex"} size="xs" />}>
+                  {row.scope_name}
+                </TableTextCell>
               ),
             sortValue: (row) => `${row.scope_type}/${row.scope_name}`,
           },
@@ -96,7 +101,7 @@ export function Schedules({ seat, now }: { seat: Seat; now: number }) {
               ) : !row.enabled ? (
                 <Tag appearance="outline">disabled</Tag>
               ) : row.next_run ? (
-                // FORWARD, not `DateCell`: `relTime` spells a future instant
+                // FORWARD, not `TableDateCell`: `relTime` spells a future instant
                 // as an elapsed one.
                 <span className="t-caption" title={fmtDateTime(row.next_run)}>
                   {inTime(row.next_run, now)}
@@ -108,7 +113,7 @@ export function Schedules({ seat, now }: { seat: Seat; now: number }) {
           {
             key: "task",
             header: "Task",
-            cell: (row) => <TextCell>{row.task}</TextCell>,
+            cell: (row) => <TableTextCell>{row.task}</TableTextCell>,
           },
         ]}
       />

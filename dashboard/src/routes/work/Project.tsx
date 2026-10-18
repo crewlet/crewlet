@@ -57,7 +57,7 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
 // [ObjectHeader] renders. Both are right and neither may be renamed for the
 // other's benefit, so the type is aliased where it is imported.
 import { ObjectHeader, type Fact as HeaderFact } from "~/app/frame/ObjectHeader.tsx";
-import { NumberCell } from "~/app/frame/cells.tsx";
+
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Coverage, type RowChrome } from "~/components/work.tsx";
 import {
@@ -69,6 +69,7 @@ import {
   TabPanel,
   Tabs,
   Tag,
+  TableNumberCell,
 } from "@crewlethq/ui";
 import {
   LayoutDashboardGlyph,
@@ -80,7 +81,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useWriteAccess } from "~/lib/useWriteAccess.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatResolvers } from "~/lib/seats.ts";
-import { fmtDateTime, relTime } from "~/lib/format.ts";
+import { fmtDateTime, relTime, fmtCount } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import {
   pageCount,
@@ -728,10 +729,19 @@ function projectFacts(detail: WorkProjectDetail, chrome?: RowChrome): HeaderFact
     // THE FOUR COUNTS ARE CELLS, not bare numbers: a project with nothing
     // waiting is the one an operator is most often looking for here, and a
     // zero rendered as a blank or as a dash is the one reading that hides it.
-    { label: "To do", value: <NumberCell value={detail.task_counts.todo} /> },
-    { label: "Active", value: <NumberCell value={detail.task_counts.active} /> },
-    { label: "Done", value: <NumberCell value={detail.task_counts.done} /> },
-    { label: "Closed", value: <NumberCell value={detail.task_counts.closed} /> },
+    {
+      label: "To do",
+      value: <TableNumberCell value={detail.task_counts.todo} format={fmtCount} />,
+    },
+    {
+      label: "Active",
+      value: <TableNumberCell value={detail.task_counts.active} format={fmtCount} />,
+    },
+    { label: "Done", value: <TableNumberCell value={detail.task_counts.done} format={fmtCount} /> },
+    {
+      label: "Closed",
+      value: <TableNumberCell value={detail.task_counts.closed} format={fmtCount} />,
+    },
   ];
 }
 

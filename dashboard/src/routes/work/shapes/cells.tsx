@@ -212,7 +212,7 @@ function CellPicker({
 }
 
 /** A status cell: the badge, or for a writer the picker drawn as the badge. */
-export function StatusCell({ row, defs }: { row: WorkSummary; defs?: WorkStatusDef[] }) {
+export function WorkStatusCell({ row, defs }: { row: WorkSummary; defs?: WorkStatusDef[] }) {
   const edits = useEdits();
   const badge = <StatusBadge status={row.status} defs={defs} />;
   if (!edits) return badge;

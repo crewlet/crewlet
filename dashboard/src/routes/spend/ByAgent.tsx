@@ -24,10 +24,11 @@
  * thousand pixels of scrolling before the next card.
  */
 
-import { Card, EmptyValue, Meter } from "@crewlethq/ui";
+import { Card, EmptyValue, Meter, TableEntityCell, TableNumberCell } from "@crewlethq/ui";
+import { plainSeat } from "~/app/frame/cells.tsx";
 import { href } from "~/app/router.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { NumberCell, TokenCell } from "~/app/frame/cells.tsx";
+
 import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { fmtCount, fmtExact, plural } from "~/lib/format.ts";
@@ -36,7 +37,6 @@ import { useAgents } from "~/lib/store-hooks.ts";
 import type { Window } from "~/lib/range.ts";
 import { isRange, windowParam } from "~/lib/range.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
-import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { useMemo } from "react";
 import type { AgentLine } from "./model.ts";
 
@@ -138,19 +138,7 @@ export function ByAgent({
             cell: (l) => {
               const badge = badgeOf(l.row.handle || l.row.role);
               const status = statusOf(activityOf(byAgent.get(l.row.agent_id)));
-              return (
-                <span className="cell-seat" title={badge.name}>
-                  <SeatAvatar
-                    name={badge.name}
-                    size="xs"
-                    kind={badge.kind === "human" ? "human" : "agent"}
-                    avatar={badge.avatar}
-                    status={status}
-                    decorative
-                  />
-                  <span className="truncate">{badge.name}</span>
-                </span>
-              );
+              return <TableEntityCell {...plainSeat({ ...badge, status })} />;
             },
           },
           {
@@ -167,7 +155,7 @@ export function ByAgent({
                 <EmptyValue label={PERSON_TAKES_NO_TURNS} />
               ) : (
                 <>
-                  <NumberCell value={l.row.turns} />
+                  <TableNumberCell value={l.row.turns} format={fmtCount} />
                   <PhoneUnit words={l.row.turns === 1 ? "turn" : "turns"} />
                 </>
               ),
@@ -179,7 +167,7 @@ export function ByAgent({
             width: "5.5rem",
             phoneLead: true,
             sortValue: (l) => l.row.total_tokens,
-            cell: (l) => <TokenCell value={l.row.total_tokens} />,
+            cell: (l) => <TableNumberCell value={l.row.total_tokens} format={fmtCount} />,
           },
           {
             key: "share",
