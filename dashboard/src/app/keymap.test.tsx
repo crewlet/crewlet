@@ -385,7 +385,7 @@ describe("the table is the only way a key is bound", () => {
     expect([...listening].sort()).toEqual(Object.keys(LISTENERS).sort());
     const undoKeys = modules().find((m) => m.path === "lib/useUndoKeys.ts")!;
     expect(undoKeys.text).toContain('matchesRow("draft.undo", e)');
-    for (const surface of ["routes/org/builder/Builder.tsx"]) {
+    for (const surface of ["routes/org/builder/Builder.tsx", "routes/home/Home.tsx"]) {
       expect(modules().find((m) => m.path === surface)!.text).toContain("useUndoKeys(");
     }
   });

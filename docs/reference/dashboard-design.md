@@ -2397,7 +2397,8 @@ mode that arrives on the first day: a company where nothing is wrong renders as
 a blank page, and a reader cannot tell that from a dashboard that is broken.
 
 **So the first fold is the company, then what needs the reader, then what the
-company did.** Top to bottom:
+company did.** That is Home until its reader arranges it (see
+[Home is the reader's board](#home-is-the-readers-board)). Top to bottom:
 
 - **The greeting.** The reader's morning, by the first word of their OWN
   name as `GET /auth/session` answers it from their directory row (`ownName`)
@@ -2503,10 +2504,57 @@ company did.** Top to bottom:
 
 Five tiles sit in a row while the page column holds them — five tiles at their
 176px floor and four gaps, 928px — three a row under that, one on a phone; the
-paired cards stack below the same width. Every one of those is measured from
+board's blocks stack below the same width. Every one of those is measured from
 the SCREEN's column (`@container page`), which the shell declares on its
 content as well as on its header, because the sidebar and an open peek take
 their share of the window first.
+
+#### Home is the reader's board
+
+**Edit Home**, in the page bar, turns the page into a board on a fine hatch:
+the reader drags a widget to move it, drags its corner (or, for a group, its
+edge) to resize it on twelve columns and 16px rows, groups widgets under a
+coloured heading that folds away, and adds widgets from a tray. While Home is
+arranged, the page bar holds the editor alone: how many changes are unsaved,
+Undo and Redo (Mod+Z and Mod+Shift+Z, the key table's `draft.*` rows), Add
+widgets, Cancel and Done. New task steps aside until Done.
+
+- **A draft, kept on Done.** Nothing is stored until Done. Cancel with changes
+  asks before discarding them, and so does leaving the page. Folding a group
+  outside editing is kept at once, because it is a choice about the page rather
+  than a layout change to confirm.
+- **The tray** offers Home's own cards (one each: two "Needs your decision"
+  cards would be one decision drawn twice), a single figure, a shortcut to any
+  page, the reader's own notes, headings, dividers and links, and the widgets
+  every section of the dashboard offers, under the section's sidebar name and
+  in the sidebar's order, with a search. A widget with a choice to make (which
+  saved view, which project, which agent) opens a sheet of its own first, with
+  a step back to the tray beside its title and **Add to Home** at its end,
+  disabled until the choice is made; nothing is added until then.
+- **A section offers its own widgets.** Each lives in a `home.widgets.tsx`
+  beside the section's screens (`dashboard/src/routes/<section>/`), exporting
+  `widgets = defineWidgets([...])` from `routes/home/board/kit.tsx`; the
+  registry finds every such file at build time, so a section added later
+  offers widgets by adding that one file. A widget names the page it
+  summarises by its `DESTINATIONS` key, and takes from there the tray section
+  it is listed under, the access that opens it and where its card's **Open**
+  goes: a reader whose access does not open the page is never offered the
+  widget (the tray says how many were held back), and one who loses that access
+  later sees a sentence in its place, never the data. A widget asks the same
+  questions its page asks and only reads; every write stays on the page. A
+  contribution that names no such page is left out and reported, and a suite
+  (`board/registry.test.ts`) fails the build on it.
+- **Per reader, per browser**, as stars are (`STORAGE_KEYS.homeBoard`), and
+  read back as untrusted input: every field is checked, every string capped,
+  and every link held to a `#/` address or an `https://` one. A widget whose
+  section no longer offers it keeps its place and says so.
+- **Links open in a new tab while Home is arranged**, so following one never
+  leaves an unsaved board. At rest they behave as everywhere else.
+- **Below the stacking width** (928px of the page's own column) every block
+  spans the page and cannot be resized, as the paired cards always stacked.
+- **No star in Home's bar.** Home is the sidebar's first row and has no
+  sections whose bar a disabled star would hold steady (`WorkspaceRow.starless`),
+  so the bar carries Edit Home instead.
 
 ### The Inbox is where you act
 

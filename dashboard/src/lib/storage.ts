@@ -59,6 +59,12 @@ export const STORAGE_KEYS = {
    */
   starred: "crewlet_starred/",
   /**
+   * The PREFIX of each reader's Home board, the widgets they placed and how
+   * they arranged them (`routes/home/board/model.ts`): the reader's id
+   * follows it.
+   */
+  homeBoard: "crewlet_home_board/",
+  /**
    * Which principal this TAB was last read by, in `sessionStorage` rather
    * than `localStorage` — it describes one tab, and goes with everything else
    * the tab holds (`lib/reader.ts`).
