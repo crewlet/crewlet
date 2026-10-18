@@ -1050,9 +1050,13 @@ const (
 	fontBudget = 90_000
 	// treeBudget is the whole of static/dashboard, raw, which is what every
 	// engine binary and image carries whether or not anybody opens the page.
-	// It measured about 2.3 MB when this was set; 3 MiB leaves room for the
-	// screens still to come and refuses a bundle that doubled.
-	treeBudget = 3 << 20
+	// It measured about 2.3 MB when first set at 3 MiB. The artifacts
+	// workspace (the gallery, the viewer, the native sheet, presence and
+	// version compare) took it from about 2.85 MiB to about 3.05 MiB, the
+	// screen that room was left for, and it moved to 3.5 MiB then: room for
+	// the screens still to come, while a bundle that doubled from the 2.3 MB
+	// baseline is still refused.
+	treeBudget = 7 << 19
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

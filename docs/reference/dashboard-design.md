@@ -7759,7 +7759,7 @@ and fails a build over any of four numbers:
 | The initial load: the entry, its static imports and the linked stylesheet | 300 KiB | gzip at the best level, which is what the engine serves |
 | Each chunk fetched later: a workspace, the org builder, a lazy stylesheet | 150 KiB | the same |
 | Every font face the build embeds | 90 KB | as served — woff2 is never recompressed |
-| The whole of `static/dashboard`, which every binary and image carries | 3 MiB | raw |
+| The whole of `static/dashboard`, which every binary and image carries | 3.5 MiB | raw |
 
 The initial load is the shell's scripts and stylesheet and everything they reach
 through a static `import`, derived from the modules themselves rather than from
