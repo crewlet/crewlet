@@ -71,7 +71,6 @@ func TestAnArtifactDocumentGetsTheStrictPolicy(t *testing.T) {
 		"base-uri":        "'none'",
 		"form-action":     "'none'",
 		"frame-src":       "'none'",
-		"webrtc":          "'block'",
 		"frame-ancestors": "https://crewlet.example.com",
 		"sandbox":         "allow-scripts allow-forms allow-same-origin",
 	}
@@ -230,5 +229,42 @@ func TestTheDashboardMayFrameTheArtifactOriginAndNothingElse(t *testing.T) {
 	}
 	if got["frame-src"] != "https://*.example-usercontent.net" || len(got) != len(base)+1 {
 		t.Errorf("frame-src = %q in %v", got["frame-src"], got)
+	}
+}
+
+// recognized is every directive a shipping browser parses (CSP Level 3 as
+// Chrome, Firefox and Safari implement it). A directive outside it is logged as
+// "Unrecognized Content-Security-Policy directive" on every response that
+// carries it, which is what the retired `webrtc 'block'` did to every frame.
+var recognized = map[string]bool{
+	"default-src": true, "script-src": true, "script-src-elem": true, "script-src-attr": true,
+	"style-src": true, "style-src-elem": true, "style-src-attr": true, "img-src": true,
+	"media-src": true, "font-src": true, "connect-src": true, "worker-src": true,
+	"object-src": true, "base-uri": true, "form-action": true, "frame-src": true,
+	"child-src": true, "manifest-src": true, "frame-ancestors": true, "sandbox": true,
+	"upgrade-insecure-requests": true, "report-uri": true, "report-to": true,
+	"require-trusted-types-for": true, "trusted-types": true,
+}
+
+// TestEveryArtifactDirectiveIsOneBrowsersRecognize: the artifact origin's
+// policies name only directives a browser parses, so a frame load logs no
+// console error for the policy itself.
+func TestEveryArtifactDirectiveIsOneBrowsersRecognize(t *testing.T) {
+	t.Parallel()
+	for _, shared := range []bool{false, true} {
+		doc := http.Header{}
+		pagepolicy.ArtifactDocument(doc, origin(shared, true), "n", &artifacts.ScriptPolicy{Nonced: true})
+		sub := http.Header{}
+		pagepolicy.ArtifactSubresource(sub, origin(shared, true))
+		for _, policy := range []string{doc.Get("Content-Security-Policy"), sub.Get("Content-Security-Policy")} {
+			if policy == "" {
+				continue
+			}
+			for name := range directives(t, policy) {
+				if !recognized[name] {
+					t.Errorf("the artifact policy names %q, which browsers do not recognize: %s", name, policy)
+				}
+			}
+		}
 	}
 }
