@@ -251,3 +251,21 @@ type Manifest struct {
 // any other document (an SVG or XML file, an asset) it is inert text, since
 // the constant is public.
 const NoncePlaceholder = "__CREWLET_NONCE_03252d69b9fa46508ca1f9ade71be8ee__"
+
+// KitPrefix is the URL path on the artifact origin under which the embedded
+// artifact kit is served: `/_crewlet/kit/<version>/<file>`, one directory per
+// release of the design system's artifact build. The origin routes it and the
+// publish linter reads a page's links against it, so both take it from here.
+const KitPrefix = "/_crewlet/kit/"
+
+// The two kit files that make a page follow its reader's appearance. The
+// stylesheet carries the light and dark palettes, keyed on the root element's
+// data-theme attribute (and on prefers-color-scheme where none is set); the
+// theme bootstrap writes the reader's chosen mode into that attribute before
+// first paint and keeps it current. The stylesheet alone follows the device
+// rather than the reader, and the bootstrap alone sets an attribute nothing
+// styles.
+const (
+	KitStylesheet = "kit.css"
+	KitTheme      = "theme.js"
+)

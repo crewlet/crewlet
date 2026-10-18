@@ -272,21 +272,87 @@ func truncateText(s string, n int) string {
 	return s[:n]
 }
 
-// darkModeWarning warns a page that ignores the reader's theme: no page or
-// stylesheet the run read carries a dark-mode rule.
-func (r *run) darkModeWarning(m artifacts.Manifest) {
+// fileTheme is what one page or stylesheet of the version does about the
+// reader's appearance, and whether this publish brought its bytes.
+type fileTheme struct {
+	path string
+
+	// fresh is a file this publish brings new bytes for; a carried one was
+	// judged when it was published.
+	fresh bool
+
+	lint.Theme
+}
+
+// themeWarnings warns a version that ignores its reader's appearance, and every
+// link a fresh file makes to a kit release this build does not serve.
+//
+// THE VERSION IS THE UNIT, as a page and the rules that theme it are often
+// different files. It follows the reader when any page or stylesheet carries a
+// dark-mode rule of its own, or when its pages link BOTH of the kit's theming
+// files at a release the build serves: the kit's stylesheet alone follows the
+// device rather than the reader (only the bootstrap writes the reader's chosen
+// mode onto the page), and a link to a release the origin does not hold loads
+// nothing at all. The kit's own rules are not in the version, which is why its
+// links are read rather than its text.
+func (r *run) themeWarnings(m artifacts.Manifest) {
 	if r.kind != artifacts.KindHTML || m.Entry == "" {
 		return
 	}
-	for _, text := range r.read {
-		if lint.MentionsDarkMode(text) {
-			return
+	rules, sheet, bootstrap := false, "", ""
+	for _, f := range r.themes {
+		rules = rules || f.Rules
+		for _, k := range f.Kit {
+			if !r.s.kits.Serves(k.Version) {
+				if f.fresh {
+					r.warnings = append(r.warnings, lint.Finding{Path: f.path, Line: k.Line,
+						Code: lint.CodeKitUnserved, Message: fmt.Sprintf("%s is a kit release "+
+							"this engine does not serve, so the page loads no kit; %s",
+							kitFile(k.Version, k.File), r.kitHint(k.File))})
+				}
+				continue
+			}
+			switch k.File {
+			case artifacts.KitStylesheet:
+				sheet = k.Version
+			case artifacts.KitTheme:
+				bootstrap = k.Version
+			}
 		}
 	}
-	r.warnings = append(r.warnings, lint.Finding{Path: m.Entry, Code: lint.CodeNoDarkMode,
-		Message: "no page or stylesheet of the version carries a prefers-color-scheme rule, so " +
-			"it ignores the reader's theme"})
+	switch {
+	case rules || sheet != "" && bootstrap != "":
+	case sheet != "":
+		r.warnings = append(r.warnings, lint.Finding{Path: m.Entry, Code: lint.CodeNoDarkMode,
+			Message: fmt.Sprintf("the version links the kit's %s without its %s, so it follows "+
+				"the device's appearance rather than the reader's; add <script src=\"%s\"> "+
+				"to the page's head", artifacts.KitStylesheet, artifacts.KitTheme,
+				kitFile(sheet, artifacts.KitTheme))})
+	case bootstrap != "":
+		r.warnings = append(r.warnings, lint.Finding{Path: m.Entry, Code: lint.CodeNoDarkMode,
+			Message: fmt.Sprintf("the version links the kit's %s without its %s, so nothing "+
+				"styles the mode it applies; add <link rel=\"stylesheet\" href=\"%s\"> to the "+
+				"page's head", artifacts.KitTheme, artifacts.KitStylesheet,
+				kitFile(bootstrap, artifacts.KitStylesheet))})
+	default:
+		r.warnings = append(r.warnings, lint.Finding{Path: m.Entry, Code: lint.CodeNoDarkMode,
+			Message: fmt.Sprintf("no page or stylesheet of the version carries a "+
+				"prefers-color-scheme rule or links the kit's %s and %s, so it ignores the "+
+				"reader's theme", artifacts.KitStylesheet, artifacts.KitTheme)})
+	}
 }
+
+// kitHint is what to link instead of a kit release the build does not serve.
+func (r *run) kitHint(file string) string {
+	latest := r.s.kits.Latest()
+	if latest == "" {
+		return "this engine serves no kit, so style the page with rules of its own"
+	}
+	return "link " + kitFile(latest, file) + ", the newest it serves"
+}
+
+// kitFile is the path a page links one file of a kit release at.
+func kitFile(version, file string) string { return artifacts.KitPrefix + version + "/" + file }
 
 // fail answers a publish the domain or the pipeline refused, undoing what the
 // run wrote: every object it produced is deleted and its reservation released,

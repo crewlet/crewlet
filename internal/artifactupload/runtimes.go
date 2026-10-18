@@ -12,58 +12,60 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 )
 
-// contractName is one runtime contract's name: an exact semantic version.
-var contractName = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)$`)
+// releaseName is one embedded release's directory name: an exact semantic
+// version, as a runtime contract and a kit release are both named.
+var releaseName = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)$`)
 
 // LatestContract asks for the newest contract the build serves, resolved to
 // that exact version at publish.
 const LatestContract = "latest"
 
-// RuntimeSet is the runtime contracts one build serves.
-type RuntimeSet struct {
-	contracts []string
+// ReleaseSet is the releases one embedded tree holds: the runtime contracts a
+// page may pin, or the kit versions a page may link.
+type ReleaseSet struct {
+	versions []string
 }
 
-// RuntimesIn is the contracts a runtime tree holds: one directory per exact
-// version (`1.0.0/`), as the build embeds them and the artifact origin serves
-// them. A tree with no such directory, or none at all, is a build serving no
-// runtime, which is a set rather than an error: a page that declares no
-// capability needs none.
-func RuntimesIn(tree fs.FS) (RuntimeSet, error) {
+// ReleasesIn is the releases a tree holds: one directory per exact version
+// (`1.0.0/`), as the build embeds them and the artifact origin serves them. A
+// tree with no such directory, or none at all, is a build serving no release,
+// which is a set rather than an error: a page that declares no capability needs
+// no runtime, and one that links no kit needs no kit.
+func ReleasesIn(tree fs.FS) (ReleaseSet, error) {
 	entries, err := fs.ReadDir(tree, ".")
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return RuntimeSet{}, nil
+		return ReleaseSet{}, nil
 	case err != nil:
-		return RuntimeSet{}, fmt.Errorf("artifactupload: read the runtime tree: %w", err)
+		return ReleaseSet{}, fmt.Errorf("artifactupload: read the release tree: %w", err)
 	}
-	var set RuntimeSet
+	var set ReleaseSet
 	for _, e := range entries {
-		if e.IsDir() && contractName.MatchString(e.Name()) {
-			set.contracts = append(set.contracts, e.Name())
+		if e.IsDir() && releaseName.MatchString(e.Name()) {
+			set.versions = append(set.versions, e.Name())
 		}
 	}
-	slices.SortFunc(set.contracts, compareContracts)
+	slices.SortFunc(set.versions, compareReleases)
 	return set, nil
 }
 
-// Latest is the newest contract, empty for none.
-func (r RuntimeSet) Latest() string {
-	if len(r.contracts) == 0 {
+// Latest is the newest release, empty for none.
+func (r ReleaseSet) Latest() string {
+	if len(r.versions) == 0 {
 		return ""
 	}
-	return r.contracts[len(r.contracts)-1]
+	return r.versions[len(r.versions)-1]
 }
 
-// Serves reports whether contract is one of the set.
-func (r RuntimeSet) Serves(contract string) bool { return slices.Contains(r.contracts, contract) }
+// Serves reports whether version is one of the set.
+func (r ReleaseSet) Serves(version string) bool { return slices.Contains(r.versions, version) }
 
-// Contracts is every contract served, oldest first.
-func (r RuntimeSet) Contracts() []string { return slices.Clone(r.contracts) }
+// Versions is every release served, oldest first.
+func (r ReleaseSet) Versions() []string { return slices.Clone(r.versions) }
 
-// compareContracts orders two exact versions numerically.
-func compareContracts(a, b string) int {
-	pa, pb := contractName.FindStringSubmatch(a), contractName.FindStringSubmatch(b)
+// compareReleases orders two exact versions numerically.
+func compareReleases(a, b string) int {
+	pa, pb := releaseName.FindStringSubmatch(a), releaseName.FindStringSubmatch(b)
 	for i := 1; i <= 3; i++ {
 		x, _ := strconv.Atoi(pa[i])
 		y, _ := strconv.Atoi(pb[i])

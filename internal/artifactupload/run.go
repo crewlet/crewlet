@@ -58,9 +58,9 @@ type run struct {
 	// stylesheets reference, by path.
 	vendored map[string]bool
 
-	// read are the version's pages and stylesheets as this run read them,
-	// for the dark-mode warning.
-	read [][]byte
+	// themes are what the version's pages and stylesheets, as this run read
+	// them, do about the reader's appearance: the theme warnings' input.
+	themes []fileTheme
 
 	warnings []lint.Finding
 }
@@ -249,7 +249,7 @@ func (r *run) compose(ctx context.Context, mode manifest.Mode, specs []FileSpec,
 	if err != nil {
 		return artifactsdomain.PublishInput{}, err
 	}
-	r.darkModeWarning(m)
+	r.themeWarnings(m)
 	return artifactsdomain.PublishInput{
 		Contract: resolved, Capabilities: caps, Manifest: m, Uploaded: uploaded, SearchText: search,
 	}, nil
@@ -578,7 +578,8 @@ func (r *run) lintFiles(ctx context.Context) error {
 			var page lint.Page
 			if page, err = lint.HTML(p, f.text, opts); err == nil {
 				r.warnings = append(r.warnings, page.Warnings...)
-				r.read = append(r.read, f.text)
+				r.themes = append(r.themes, fileTheme{path: p, fresh: true,
+					Theme: lint.ThemeOf(f.text, true)})
 				policy := page.Policy
 				f.script = &policy
 				f.produce(page.Text)
@@ -590,7 +591,8 @@ func (r *run) lintFiles(ctx context.Context) error {
 			)
 			if css, warnings, err = lint.CSS(p, f.text, opts, nil); err == nil {
 				r.warnings = append(r.warnings, warnings...)
-				r.read = append(r.read, f.text)
+				r.themes = append(r.themes, fileTheme{path: p, fresh: true,
+					Theme: lint.ThemeOf(f.text, false)})
 				f.produce(css)
 			}
 		case f.typ.Class == mediatype.ClassScript:
@@ -650,7 +652,7 @@ func (r *run) carryVendored(ctx context.Context) error {
 				return fmt.Errorf("artifactupload: read carried %q: %w", p, err)
 			}
 			body = read
-			r.read = append(r.read, body)
+			r.themes = append(r.themes, fileTheme{path: p, Theme: lint.ThemeOf(body, isHTML)})
 			if isHTML && f.script == nil {
 				policy, err := lint.Stored(p, body, lint.Options{Hosts: r.s.hosts})
 				if err != nil {

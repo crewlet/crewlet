@@ -48,15 +48,16 @@ type Presigner interface {
 	PresignPut(ctx context.Context, k objstore.Key, r objstore.PresignRequest) (objstore.Presigned, error)
 }
 
-// Runtimes is the page runtime contracts this build serves (the embedded
-// runtime tree the artifact origin answers `/_crewlet/runtime/` from).
-type Runtimes interface {
-	// Latest is the newest contract served, empty when the build serves
+// Releases is the versions of one embedded tree this build serves: the page
+// runtime contracts (the tree the artifact origin answers `/_crewlet/runtime/`
+// from) or the artifact kit's releases ([artifacts.KitPrefix]).
+type Releases interface {
+	// Latest is the newest version served, empty when the build serves
 	// none.
 	Latest() string
 
-	// Serves reports whether an exact contract is one this build serves.
-	Serves(contract string) bool
+	// Serves reports whether an exact version is one this build serves.
+	Serves(version string) bool
 }
 
 // Meter is where the pipeline's measurements go: the node's metrics recorder.
@@ -100,7 +101,11 @@ type Deps struct {
 	Hosts lint.Allowlist
 
 	// Runtimes are the runtime contracts a page may pin.
-	Runtimes Runtimes
+	Runtimes Releases
+
+	// Kits are the artifact kit releases a page may link, which the
+	// publish judges a page's kit links against.
+	Kits Releases
 
 	// Meter records the pipeline's measurements; nil records none.
 	Meter Meter
@@ -125,7 +130,8 @@ type Service struct {
 	limits   func() artifacts.Limits
 	vendor   *vendor.Cache
 	hosts    lint.Allowlist
-	runtimes Runtimes
+	runtimes Releases
+	kits     Releases
 	meter    Meter
 	judged   Objectives
 	now      func() time.Time
@@ -150,6 +156,9 @@ func New(deps Deps) (*Service, error) {
 	case deps.Runtimes == nil:
 		return nil, errors.New("artifactupload: the runtime contracts are required: a page " +
 			"pins one at publish")
+	case deps.Kits == nil:
+		return nil, errors.New("artifactupload: the kit releases are required: a page's " +
+			"links to the kit are judged against them at publish")
 	case len(deps.Hosts.Hosts) == 0:
 		return nil, errors.New("artifactupload: the CDN allowlist is required: the linter " +
 			"holds every page's scripts to it")
@@ -157,7 +166,7 @@ func New(deps Deps) (*Service, error) {
 	s := &Service{
 		objects: deps.Objects, res: deps.Reservations, writes: deps.Writes, reads: deps.Reads,
 		presign: deps.Presign, limits: deps.Limits, vendor: deps.Vendor, hosts: deps.Hosts,
-		runtimes: deps.Runtimes, meter: deps.Meter, judged: deps.Objectives, now: deps.Now,
+		runtimes: deps.Runtimes, kits: deps.Kits, meter: deps.Meter, judged: deps.Objectives, now: deps.Now,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }

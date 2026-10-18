@@ -39,7 +39,7 @@ func RuntimePath(contract string) string {
 // versionPattern is an exact version: three numbers, as a contract and a kit
 // release are both named. Nothing looser reaches the tree. Which contracts the
 // tree holds is the publish pipeline's reading of the same directories
-// (internal/artifactupload's RuntimesIn), which resolves a version's pin to one
+// (internal/artifactupload's ReleasesIn), which resolves a version's pin to one
 // of them; this side only ever serves a name of that shape.
 var versionPattern = regexp.MustCompile(`^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$`)
 

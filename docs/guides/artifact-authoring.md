@@ -99,8 +99,15 @@ rule, and warns on success about what is legal but likely wrong.
 **What the linter warns about**
 
 Browser storage used for state other viewers should see (use the datastore),
-no dark-mode styling (artifacts follow each reader's own appearance setting),
-and no `<meta name="viewport">`.
+no `<meta name="viewport">`, and a version that ignores its reader's
+appearance (artifacts follow each reader's own appearance setting). A version
+follows it when its pages link both of [the kit's](#capabilities-and-the-runtime)
+theming files, `kit.css` and `theme.js`, at a release the engine serves, or
+when a page or stylesheet of its own carries a `prefers-color-scheme` rule.
+`kit.css` alone is warned (it follows the device, not the reader's chosen
+mode), as is `theme.js` alone (it applies a mode nothing styles). A link to a
+kit release the engine does not serve is warned too, naming the newest one it
+does: the origin answers it with a 404, so the page loads no kit at all.
 
 ---
 

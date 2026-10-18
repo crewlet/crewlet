@@ -34,9 +34,14 @@ type artifactUploads struct {
 // store, no coordination store or no estate router.
 var ErrNoUploads = errors.New("engine: this node takes no artifact uploads")
 
-// runtimeTree is where the build embeds the page runtime, one directory per
-// contract: the tree the artifact origin serves `/_crewlet/runtime/` from.
-const runtimeTree = "artifacts/runtime"
+// The embedded trees the pipeline reads its releases from, one directory per
+// version: the page runtime's contracts (the tree the artifact origin serves
+// `/_crewlet/runtime/` from) and the artifact kit's releases (served under
+// [artifacts.KitPrefix]).
+const (
+	runtimeTree = "artifacts/runtime"
+	kitTree     = "artifacts/kit"
+)
 
 // ArtifactUploads is this node's upload and publish pipeline: every surface
 // that publishes an artifact (the API, the CLI through it, the agent tools)
@@ -57,11 +62,11 @@ func (e *Engine) buildArtifactUploads() (*artifactupload.Service, error) {
 	case e.router == nil:
 		return nil, fmt.Errorf("%w: it reaches no artifacts estate", ErrNoUploads)
 	}
-	tree, err := fs.Sub(static.FS(), runtimeTree)
+	runtimes, err := embeddedReleases(runtimeTree)
 	if err != nil {
-		return nil, fmt.Errorf("engine: the embedded runtime tree: %w", err)
+		return nil, err
 	}
-	runtimes, err := artifactupload.RuntimesIn(tree)
+	kits, err := embeddedReleases(kitTree)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +79,7 @@ func (e *Engine) buildArtifactUploads() (*artifactupload.Service, error) {
 	estate := e.router.Artifacts()
 	deps := artifactupload.Deps{
 		Objects: store, Reservations: e.backends.Fleet, Writes: estate, Reads: estate,
-		Limits: e.artifactLimits, Vendor: cache, Hosts: hosts, Runtimes: runtimes,
+		Limits: e.artifactLimits, Vendor: cache, Hosts: hosts, Runtimes: runtimes, Kits: kits,
 	}
 	// A DIRECT PUT ONLY WHERE THE BACKEND PROVED IT: the s3 backend's boot
 	// probe decided it once, and the broker's own bucket never offers one.
@@ -100,4 +105,17 @@ func (e *Engine) artifactLimits() artifacts.Limits {
 		return config.Artifacts{}.Stamp()
 	}
 	return e.boot.Artifacts.Stamp()
+}
+
+// embeddedReleases is the releases one embedded tree holds.
+func embeddedReleases(dir string) (artifactupload.ReleaseSet, error) {
+	tree, err := fs.Sub(static.FS(), dir)
+	if err != nil {
+		return artifactupload.ReleaseSet{}, fmt.Errorf("engine: the embedded tree %s: %w", dir, err)
+	}
+	set, err := artifactupload.ReleasesIn(tree)
+	if err != nil {
+		return artifactupload.ReleaseSet{}, fmt.Errorf("engine: the embedded tree %s: %w", dir, err)
+	}
+	return set, nil
 }
