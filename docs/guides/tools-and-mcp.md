@@ -176,9 +176,9 @@ the engine mirrors no state it would have to keep in step. See
 
 ### Artifacts
 
-Eight more, registered wherever the node takes artifact uploads (an object
-store, a coordination store and the estate router, which every node with a
-data node to reach has), whatever tracker or knowledge base the company runs.
+Eight more, registered on every node that takes artifact uploads (one with an
+object store, a coordination store and a data node to reach), whatever tracker
+or knowledge base the company runs.
 Each tool is named for its authority row, and the operator catalogue serves the
 same eight, so an operator's own assistant publishes exactly as a seat does.
 
