@@ -595,8 +595,11 @@ declared by a person would be a company whose tags were never declared.
 A tag has a **slug** and a **label**. The slug is what every task's row holds
 and what a filter compares, so it is normalised on the way in — `Regression`,
 `regression` and `needs design` arrive as `regression` and `needs-design` — and
-it never changes. The label is what a person reads, and renaming a tag moves
-only that.
+it never changes. A filter normalises what it is given the same way, so
+`tag=Needs Design` finds the work filed under `needs-design`, and a value that
+normalises to no slug at all is refused naming it rather than answered as an
+empty board. The label is what a person reads, and renaming a tag moves only
+that.
 
 **A tag is declared before it is used.** A write naming a label the project does
 not have is refused, listing the ones it does and the nearest match, because
