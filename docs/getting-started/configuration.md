@@ -1412,6 +1412,21 @@ api:
                         #   where VENDORS and sandboxes reach this listener:
                         #   every webhook, app manifest and per-run sandbox
                         #   endpoint is built on it
+  artifacts:            # optional: the artifact origin, a THIRD listener that
+    port: 8001          #   serves the files of artifact versions, their assets
+                        #   and the embedded page runtime, and nothing else: no
+                        #   API route, no probe, no cookie. Ingress nodes only;
+                        #   0 / unset serves no artifacts on this node.
+                        #   host defaults to every interface
+    external_url: "https://{artifact}.example-usercontent.net"
+                        # REQUIRED once artifacts.port is set on an ingress
+                        #   node. {artifact} at the start of the leftmost
+                        #   label gives every artifact an origin of its own
+                        #   (wildcard DNS and TLS, on a registrable domain
+                        #   that is not the dashboard's); a plain origin
+                        #   (https://artifacts.example.com, or a second port
+                        #   on the dashboard's host) serves every document
+                        #   with an opaque origin
   auth:
     admin: serve        # serve | refuse. Required once port is set: whether
                         #   THIS node grants admin to those who hold it.
@@ -1551,6 +1566,35 @@ nothing, the bridge included. It also refuses any two listeners the
 file opens on one port — `api.port`, `api.public.port`, `stream.cluster.port`
 and `stream.leaf.port` — when they bind the same address or either binds every
 interface; `-roles`, `-api-host` and `-api-port` are held to the same rules.
+
+**`api.artifacts` is where artifacts are opened**, on a listener of its own,
+because an artifact is a page somebody (or some agent) wrote, and nothing it
+runs may share an origin with the dashboard's session. It serves four routes:
+one file of a version under a view ticket (`/t/{ticket}/...`), one asset of
+the ticket's artifact (`/t/{ticket}/_assets/{asset}`), and the embedded
+runtime and kit (`/_crewlet/runtime/{contract}/...`, `/_crewlet/kit/{version}/...`),
+public and cached for a year. Every other path, `/health` included, is an empty
+`404`; it never reads a cookie and never sets one. A ticket is minted by the
+dashboard for the signed-in viewer, lives an hour (never past the credential it
+was minted through), and every document request is authorized again: a share
+withdrawn, a session ended or an artifact trashed stops the next one. A node
+whose own copy of the artifacts or identity log is out of service or more than
+the stall grace behind decides through a data node whose copy answers, and
+answers `503` with `Retry-After` when none does. **`api.artifacts.external_url`**
+decides the origin mode: a template naming `{artifact}` at the start of its
+leftmost label gives each artifact a real origin, but only on a registrable
+domain other than the dashboard's (checked against the Public Suffix List); on
+the dashboard's own site, or with a plain origin, every document is served with
+an opaque origin, its browser storage unavailable, and `crewlet validate` warns
+about the same-site template. Validation refuses an artifact origin equal to
+`api.external_url`'s, `api.public.external_url`'s or an `api.auth.allowed_origins`
+entry, a parent domain of the API's host, plain `http` off loopback, and a port
+with no `external_url` on an ingress node. Whatever proxy stands in front of
+the listener must pass the original `Host` (every request is checked against
+the host its ticket's artifact is served on) and the `Sec-Fetch-*` headers
+through, must leave the response headers alone, and must never cache a `/t/`
+path in a shared cache. The dashboard on every ingress node names this origin
+in its `frame-src`, whether or not that node binds the listener itself.
 
 **`api.auth.admin` says whether this node serves admin**, and it is required
 once a port is set: `serve`, or `refuse`. A person's

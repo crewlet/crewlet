@@ -699,7 +699,11 @@ func New(opts Options) (*App, error) {
 	if tree == nil {
 		tree = static.FS()
 	}
-	files := newAssets(tree)
+	policy, err := dashboardPolicy(opts.Bootstrap)
+	if err != nil {
+		return nil, err
+	}
+	files := newAssets(tree, policy)
 
 	// ONE registry, and both transports go through it. Two surfaces
 	// answering one question from two implementations is how they end up

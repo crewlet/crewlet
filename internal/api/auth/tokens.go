@@ -163,17 +163,35 @@ func (g *Guard) token(r *http.Request, presented credential.Token) (*http.Reques
 
 	// A MACHINE TOKEN ENDS ON ITS OWN AT ITS EXPIRY — see [Lifetime].
 	ctx = withLifetime(ctx, row.ExpiresAt)
+	p, unresolved, refusal := g.machinePrincipal(ctx, presented.ID, row, now)
+	if unresolved != nil {
+		return r.WithContext(iam.WithUnresolved(ctx, unresolved)), nil
+	}
+	return r.WithContext(iam.WithPrincipal(ctx, p)), refusal
+}
+
+// machinePrincipal composes the principal a machine token whose rows checked
+// out acts as: its owner, carrying the grants the mint conferred that the
+// owner still holds, under this node's admin posture, as their seat where they
+// are bound to one. unresolved is the reason this node could not say, and
+// refusal a binding the chart will not let it act as.
+//
+// ONE COMPOSITION for a token presented as a bearer and a token a view ticket
+// names ([Lineages]), so the two can never compose one token two ways.
+func (g *Guard) machinePrincipal(ctx context.Context, id string, row credential.TokenRow,
+	now time.Time) (p iam.Principal, unresolved error, refusal *Refusal) {
+
 	owner := row.Owner
-	id, err := uuid.Parse(owner.ID)
+	ownerID, err := uuid.Parse(owner.ID)
 	if err != nil {
 		// A ROW THIS ENGINE WROTE carries a uuid it minted, so this is a
 		// store that is not answering the question it was asked.
 		log.WarnContext(ctx, "api_token_owner_unreadable",
-			"credential", presented.ID, "error", err)
-		return r.WithContext(iam.WithUnresolved(ctx, errTokenUnavailable)), nil
+			"credential", id, "error", err)
+		return iam.Principal{}, errTokenUnavailable, nil
 	}
-	p := iam.Principal{
-		ID: id, Login: owner.Login, Kind: owner.Kind, Stage: owner.Stage,
+	p = iam.Principal{
+		ID: ownerID, Login: owner.Login, Kind: owner.Kind, Stage: owner.Stage,
 		// THE MINT'S GRANTS THE OWNER STILL HOLDS, under this node's
 		// admin posture on this request.
 		Grants: g.admin.Effective(row.EffectiveGrants()),
@@ -182,7 +200,7 @@ func (g *Guard) token(r *http.Request, presented credential.Token) (*http.Reques
 		// and a token minted on somebody's account could file, edit and
 		// close their work with no row saying a token was used. The
 		// author stays the owner; the operator column names the token.
-		Via: iam.MachineTokenName(presented.ID),
+		Via: iam.MachineTokenName(id),
 	}
 	// STEPPED UP BY CONSTRUCTION, as every non-interactive credential is —
 	// there is nothing else it could present.
@@ -201,7 +219,7 @@ func (g *Guard) token(r *http.Request, presented credential.Token) (*http.Reques
 	// in front of it decided, so a leaked token never rewrites who may act.
 	g.proof.stamp(&p, now)
 	if owner.Seat == "" {
-		return r.WithContext(iam.WithPrincipal(ctx, p)), nil
+		return p, nil, nil
 	}
 	// A BOUND OWNER ACTS AS THEIR SEAT, through the table every other
 	// credential's binding goes through — refused NAMING the seat once it
@@ -213,9 +231,9 @@ func (g *Guard) token(r *http.Request, presented credential.Token) (*http.Reques
 	switch binding.Answer() {
 	case session.AnswerUnavailable:
 		log.Log(ctx, UnreadLevel(ctx), "api_token_seat_unavailable",
-			"credential", presented.ID, "seat", owner.Seat,
+			"credential", id, "seat", owner.Seat,
 			"detail", binding.Detail, "error", errText(binding.Err))
-		return r.WithContext(iam.WithUnresolved(ctx, errBindingUnavailable)), nil
+		return iam.Principal{}, errBindingUnavailable, nil
 	case session.AnswerServe:
 		// THE KIND FOLLOWS THE SEAT, for [Guard.principalFor]'s reason:
 		// [iam.ActorFor] splits a person on their seat and a machine has
@@ -223,7 +241,7 @@ func (g *Guard) token(r *http.Request, presented credential.Token) (*http.Reques
 		// the seat.
 		p.Kind, p.Seat = iam.KindPerson, binding.Handle()
 		p.Position = binding.Seat.Unit
-		return r.WithContext(iam.WithPrincipal(ctx, p)), nil
+		return p, nil, nil
 	}
-	return r.WithContext(iam.WithPrincipal(ctx, p)), seatRefusal(binding)
+	return p, nil, seatRefusal(binding)
 }

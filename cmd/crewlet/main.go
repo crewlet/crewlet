@@ -52,6 +52,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/version"
+	"github.com/crewlet/crewlet/static"
 
 	"gopkg.in/yaml.v3"
 )
@@ -1463,6 +1464,12 @@ type httpSurface struct {
 	public    *apiListener
 	projector *observe.Projector
 
+	// artifacts is the artifact origin's listener (api.artifacts), nil on a
+	// node that sets no port for it, and stopArtifacts ends its handler's
+	// subscription to this node's artifacts movements.
+	artifacts     *apiListener
+	stopArtifacts func()
+
 	// auth is the sign-in surface, held here for the work it runs after
 	// its answers — a stale password's rewrite — which is its own to stop
 	// and must stop before the engine its writes go to does.
@@ -1494,6 +1501,14 @@ type apiListener struct {
 // that is doing exactly what it should. Each gets its own grace, so a bridge
 // session holding the public listener open never cuts a dashboard request.
 func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
+	// THE ARTIFACT ORIGIN FIRST: it serves no probe, and an artifact frame
+	// is the request most able to wait for a node that is going away.
+	if s.artifacts != nil {
+		shutdownListener(ctx, s.artifacts, "artifacts", log)
+	}
+	if s.stopArtifacts != nil {
+		s.stopArtifacts()
+	}
 	if s.public != nil {
 		shutdownListener(ctx, s.public, "public", log)
 	}
@@ -2302,6 +2317,16 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			return nil, err
 		}
 	}
+	// AND THE ARTIFACT ORIGIN, the third listener, where api.artifacts sets
+	// a port: a failed bind takes the node down with it, as the public
+	// listener's does, rather than serving a dashboard whose every artifact
+	// frame finds nothing listening.
+	if boot.API.Artifacts.Enabled() {
+		if err = serveArtifacts(ctx, boot, e, app, surface, bind, log); err != nil {
+			surface.stop(context.WithoutCancel(ctx), log)
+			return nil, err
+		}
+	}
 
 	log.InfoContext(ctx, "api_listening", "addr", addr,
 		"external_url", boot.API.ExternalBase(),
@@ -2354,6 +2379,36 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	return surface, nil
 }
 
+// serveArtifacts binds the artifact origin, the api.artifacts listener, onto
+// surface: the handler internal/artifactserve builds over this engine, whose
+// ticket principals are re-composed through the API's own guard, so a frame's
+// credential is decided by exactly the arms a request through it is.
+func serveArtifacts(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
+	app *api.App, surface *httpSurface, bind bindFunc, log *slog.Logger) error {
+
+	creds, err := auth.NewLineages(app.Guard(), e)
+	if err != nil {
+		return fmt.Errorf("api: the artifact origin: %w", err)
+	}
+	handler, stop, err := engine.ArtifactOrigin(e, boot, creds, static.FS())
+	if err != nil {
+		return fmt.Errorf("api: the artifact origin: %w", err)
+	}
+	listener, addr, err := listenAPI(ctx, bind, boot.API.Artifacts.Addr(), handler, log)
+	if err != nil {
+		stop()
+		return err
+	}
+	surface.artifacts, surface.stopArtifacts = listener, stop
+	log.InfoContext(ctx, "api_artifacts_listening", "addr", addr,
+		"external_url", boot.API.Artifacts.ExternalBase(),
+		// WHAT ISOLATES ONE ARTIFACT FROM ANOTHER on this deployment: a
+		// real origin of its own, or an opaque one. Same-site templates
+		// are served opaque, and `crewlet validate` says why.
+		"mode", string(boot.ArtifactOriginMode()))
+	return nil
+}
+
 // serveProbes is serveAPI for a node whose roles leave out ingress: it binds
 // api.port for the node's probes, and for its tool bridge where it has one —
 // api.public instead when the file sets it — and serves nothing else.
@@ -2383,6 +2438,14 @@ func serveProbes(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	handler, err := api.Probes(opts)
 	if err != nil {
 		return nil, err
+	}
+	if boot.API.Artifacts.Enabled() {
+		// THE ARTIFACT ORIGIN IS INGRESS'S, like the dashboard whose frames
+		// it serves: said here, at info, so a port set in a file shared
+		// across roles is not read as a listener this node failed to open.
+		log.InfoContext(ctx, "api_artifacts_not_bound", "addr", boot.API.Artifacts.Addr(),
+			"hint", "node.roles does not include ingress, so this node serves no "+
+				"artifacts; api.artifacts is bound by the ingress nodes")
 	}
 	server, addr, err := listenAPI(ctx, bind, boot.API.Addr(), handler, log)
 	if err != nil {

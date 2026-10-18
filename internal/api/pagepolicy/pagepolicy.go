@@ -28,6 +28,17 @@
 // handler thought about (the mux's own 404 and 405, the redirect from `/`) is
 // covered by construction. A handler that serves a page replaces the policy
 // with the one that page needs.
+//
+// # And the origin that holds no session
+//
+// The artifact origin (the api.artifacts listener, internal/artifactserve)
+// serves pages nobody at this company necessarily wrote, so its policies live
+// here too: [ArtifactDocument] for a document in an artifact frame, a strict
+// script policy under a nonce fresh to the response; [ArtifactSubresource] for
+// a file it loads; [ArtifactPublic] for the embedded runtime and kit. And the
+// dashboard's own policy names that origin as the one thing it may frame
+// ([DashboardFor]). One package, so every policy this engine writes can be
+// read side by side.
 package pagepolicy
 
 import (
