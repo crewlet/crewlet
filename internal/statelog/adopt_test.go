@@ -928,3 +928,120 @@ func TestAnEarlierAttemptsDebrisIsClearedBeforeTheFetch(t *testing.T) {
 		t.Fatalf("%v survive the adoption", left)
 	}
 }
+
+// AN ADOPTED ESTATE IS NAMED A NEW COPY, BEFORE IT IS IN PLACE.
+//
+// What a node derives from the replicated rows by a forward walk — the chat
+// keyword index — cannot see a row below its watermark being replaced, and the
+// engine's signal that one was is held in memory, so a restart between the
+// install and the next sweep lost it. What survives the restart is the file's
+// own name for itself, [statelog.EstateInstance]: minted afresh by the adopter,
+// so it is neither the joiner's old copy nor the donor's — a node adopting twice
+// from one donor must not come back to an instance a reader already recorded —
+// and stamped before the rename, so the file is never at the live path under a
+// name it does not own. The donor's copy carries a name of its own, as one a
+// join installed would, so the artefact arrives naming something; and the
+// joiner adopts the same artefact twice, which a name fixed per build or
+// derived from the artefact would answer with the same name both times.
+func TestAnAdoptedEstateIsNamedANewCopy(t *testing.T) {
+	t.Parallel()
+	const donorsOwn = "the-donors-own-copy"
+	h := newJoinHarnessFrom(t, joinDonor{seed: func(t *testing.T, estate store.ReplicatedHandle) {
+		t.Helper()
+		if err := estate.Tx(t.Context(), func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(t.Context(),
+				`UPDATE statelog_estate SET instance = ? WHERE id = 1`, donorsOwn)
+			return err
+		}); err != nil {
+			t.Fatalf("name the donor's copy: %v", err)
+		}
+	}})
+	logs := &lockedBuffer{}
+	h.logger = slog.New(slog.NewJSONHandler(logs, nil))
+	instanceOf := func(estate interface {
+		Read(context.Context, func(*sql.Tx) error) error
+	}) string {
+		t.Helper()
+		var instance string
+		if err := estate.Read(t.Context(), func(tx *sql.Tx) error {
+			var err error
+			instance, err = statelog.EstateInstance(t.Context(), tx)
+			return err
+		}); err != nil {
+			t.Fatalf("read the estate's instance: %v", err)
+		}
+		return instance
+	}
+	before := instanceOf(h.joinEstate)
+	donor, err := store.OpenEstate(t.Context(), store.EstateReplicated, h.snapPath, store.Options{})
+	if err != nil {
+		t.Fatalf("open the donor's artefact: %v", err)
+	}
+	carried := instanceOf(donor)
+	if err := donor.Close(); err != nil {
+		t.Fatalf("close the donor's artefact: %v", err)
+	}
+	if carried != donorsOwn {
+		t.Fatalf("the premise: the artefact carries the instance %q, want the "+
+			"donor's own %q", carried, donorsOwn)
+	}
+	// Reading the artefact grew sidecars beside it, which a fetch would
+	// otherwise serve; the file goes back to the one the manifest hashes.
+	if err := store.QuiesceCopy(t.Context(), h.snapPath); err != nil {
+		t.Fatalf("quiesce the donor's artefact: %v", err)
+	}
+
+	// THE NAME THE ARTEFACT CARRIES AS THE INSTALL BEGINS, read at the
+	// last moment before the rename.
+	var atInstall string
+	h.onClose = func() {
+		part, err := store.OpenEstate(t.Context(), store.EstateReplicated,
+			h.joinPath+statelog.AdoptPartSuffix, store.Options{})
+		if err != nil {
+			t.Errorf("open the artefact before its install: %v", err)
+			return
+		}
+		atInstall = instanceOf(part)
+		if err := part.Close(); err != nil {
+			t.Errorf("close the artefact before its install: %v", err)
+		}
+	}
+
+	if _, err := h.adopter(t).Join(t.Context()); err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+
+	after := instanceOf(h.joinEstate)
+	if atInstall != after {
+		t.Fatalf("the artefact was named %q as its install began and the estate "+
+			"is named %q after it — stamped after the rename, a crash between "+
+			"the two leaves the donor's rows at the live path under a name a "+
+			"reader may already have recorded", atInstall, after)
+	}
+	if after == before {
+		t.Fatalf("the adopted estate is still named %q, the copy it replaced — a "+
+			"reader that recorded that name reads the donor's rows as the ones "+
+			"it was built from", after)
+	}
+	if after == carried {
+		t.Fatalf("the adopted estate is named %q, the donor's own name — a node "+
+			"that adopts from one donor twice comes back to a name a reader has "+
+			"already recorded", after)
+	}
+	adopted := logRecords(t, logs.Bytes(), "statelog_adopted")
+	if len(adopted) != 1 || adopted[0]["instance"] != after {
+		t.Errorf("statelog_adopted names the instance %v, want the one the "+
+			"estate now holds (%s)", adopted, after)
+	}
+
+	// THE SAME ARTEFACT AGAIN, from the same donor: a reader that rebuilt
+	// from the first install must see the second as another copy.
+	if _, err := h.adopter(t).Join(t.Context()); err != nil {
+		t.Fatalf("the second Join: %v", err)
+	}
+	if again := instanceOf(h.joinEstate); again == after || again == carried {
+		t.Fatalf("a second adoption of the same artefact named the estate %q, "+
+			"after the first named it %q and the donor's is %q — a reader that "+
+			"rebuilt from the first reads the second as no change", again, after, carried)
+	}
+}
