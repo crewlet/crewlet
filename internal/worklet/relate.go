@@ -348,6 +348,12 @@ func (w *Writer) scopeForDependents(ctx context.Context, id string,
 	return scope.withObjects(id, dependents, filed), nil
 }
 
+// tasksFiledStatement is [dependentsFiled]' read of where n tasks are filed,
+// named for the plan test.
+func tasksFiledStatement(n int) string {
+	return `SELECT id, project_key FROM tracker_tasks WHERE id IN (` + placeholders(n) + `)`
+}
+
 // dependentsFiled is where each of these tasks is filed — its project — for
 // the ones this node holds.
 //
@@ -361,8 +367,7 @@ func dependentsFiled(ctx context.Context, tx *sql.Tx, ids []string) (map[string]
 	if len(ids) == 0 {
 		return filed, nil
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id, project_key FROM tracker_tasks
-		WHERE id IN (`+placeholders(len(ids))+`)`, anyOf(ids)...)
+	rows, err := tx.QueryContext(ctx, tasksFiledStatement(len(ids)), anyOf(ids)...)
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read where %d dependent(s) are filed: %w",
 			len(ids), err)

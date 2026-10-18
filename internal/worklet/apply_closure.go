@@ -54,6 +54,13 @@ func (a *Applier) maintainClosure(ctx context.Context, tx *sql.Tx, task Task) (i
 	return written, nil
 }
 
+// ancestryStampStatement is [Applier.rebuildAncestry]'s write of the columns
+// its walk derived, named for the plan test.
+const ancestryStampStatement = `
+		UPDATE tracker_tasks SET root_id = ?, depth = ?, cycle = ?, too_deep = ?,
+			inconsistent_project = ?
+		WHERE id = ?`
+
 // rebuildAncestry writes one task's closure rows and its derived columns: the
 // root, the depth, and the three flags the walk decides — a cycle, a subtree
 // deeper than [MaxDepth], and a task in another project than its root's.
@@ -105,16 +112,20 @@ func (a *Applier) rebuildAncestry(ctx context.Context, tx *sql.Tx, id string,
 	if err != nil {
 		return 0, err
 	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE tracker_tasks SET root_id = ?, depth = ?, cycle = ?, too_deep = ?,
-			inconsistent_project = ?
-		WHERE id = ?`,
+	if _, err := tx.ExecContext(ctx, ancestryStampStatement,
 		root, depth, boolInt(cycle), boolInt(depth > MaxDepth),
 		boolInt(inconsistent), id); err != nil {
 		return 0, fmt.Errorf("worklet: stamp the ancestry of %s: %w", id, err)
 	}
 	return written + 1, nil
 }
+
+// rootsProjectStatement is [outsideRootsProject]'s comparison, named for the
+// plan test.
+const rootsProjectStatement = `
+		SELECT t.project_key <> r.project_key
+		FROM tracker_tasks t JOIN tracker_tasks r ON r.id = ?
+		WHERE t.id = ?`
 
 // outsideRootsProject reports a task filed in another project than its root —
 // the `inconsistent_project` attention flag.
@@ -142,10 +153,7 @@ func outsideRootsProject(ctx context.Context, tx *sql.Tx, id, root string) (bool
 		return false, nil
 	}
 	var differ int
-	err := tx.QueryRowContext(ctx, `
-		SELECT t.project_key <> r.project_key
-		FROM tracker_tasks t JOIN tracker_tasks r ON r.id = ?
-		WHERE t.id = ?`, root, id).Scan(&differ)
+	err := tx.QueryRowContext(ctx, rootsProjectStatement, root, id).Scan(&differ)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return false, nil
@@ -186,6 +194,9 @@ func descendantsOf(ctx context.Context, tx *sql.Tx, id string) ([]string, error)
 	return out, nil
 }
 
+// parentStatement is [parentOf]'s read, named for the plan test.
+const parentStatement = `SELECT parent_id FROM tracker_tasks WHERE id = ?`
+
 // parentOf reads one task's parent, answering nil for a root and for a task
 // this node does not have.
 //
@@ -195,8 +206,7 @@ func descendantsOf(ctx context.Context, tx *sql.Tx, id string) ([]string, error)
 // the fleet deliberately removed.
 func parentOf(ctx context.Context, tx *sql.Tx, id string) (*string, error) {
 	var parent sql.NullString
-	err := tx.QueryRowContext(ctx,
-		`SELECT parent_id FROM tracker_tasks WHERE id = ?`, id).Scan(&parent)
+	err := tx.QueryRowContext(ctx, parentStatement, id).Scan(&parent)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, nil

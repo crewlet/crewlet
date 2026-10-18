@@ -97,6 +97,35 @@ func (o OneSided) Final() (string, bool) {
 	return "", false
 }
 
+// oneSidedStatement is [ScanOneSided]'s read, named for the plan test.
+const oneSidedStatement = `
+		SELECT r.task_id, r.other_id,
+		       COALESCE(t.key, ''), t.project_key, COALESCE(t.assignee, ''),
+		       COALESCE(b.project_key, ''), COALESCE(b.key, ''),
+		       COALESCE(b.assignee, ''),
+		       (SELECT COUNT(*) FROM tracker_task_dependents d
+		        WHERE d.task_id = r.other_id),
+		       CASE WHEN b.removed_at IS NULL THEN 0 ELSE 1 END,
+		       CASE WHEN b.id IS NULL THEN 1 ELSE 0 END
+		FROM tracker_relations r
+		JOIN tracker_tasks t ON t.id = r.task_id
+		LEFT JOIN tracker_tasks b ON b.id = r.other_id
+		WHERE r.one_sided = 1 AND r.one_sided_final = 0
+		  AND r.kind = 'waiting_on'
+		  -- THE DEPENDENT'S OWN TOMBSTONE ENDS THE MATTER. A
+		  -- removed task's edges are frozen, and announcing a
+		  -- dependency on work nobody is doing wakes somebody
+		  -- about nothing.
+		  AND t.removed_at IS NULL
+		  -- THE EDGE'S OWN AGE, never the task's updated_at: any
+		  -- unrelated edit to the dependent resets that column, and a
+		  -- busy task would postpone its own repair indefinitely --
+		  -- while the busiest tasks are exactly the ones that acquire
+		  -- dependencies.
+		  AND r.created_at <= ?
+		ORDER BY r.task_id, r.other_id
+		LIMIT ?`
+
 // ScanOneSided reads the edges whose mirror has not been written.
 //
 // SELECTED ON THE STORED FLAG, which the applier derives on both ends — so
@@ -110,33 +139,7 @@ func ScanOneSided(ctx context.Context, db store.ReplicatedReader, before time.Ti
 	}
 	var out []OneSided
 	err := db.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT r.task_id, r.other_id,
-			       COALESCE(t.key, ''), t.project_key, COALESCE(t.assignee, ''),
-			       COALESCE(b.project_key, ''), COALESCE(b.key, ''),
-			       COALESCE(b.assignee, ''),
-			       (SELECT COUNT(*) FROM tracker_task_dependents d
-			        WHERE d.task_id = r.other_id),
-			       CASE WHEN b.removed_at IS NULL THEN 0 ELSE 1 END,
-			       CASE WHEN b.id IS NULL THEN 1 ELSE 0 END
-			FROM tracker_relations r
-			JOIN tracker_tasks t ON t.id = r.task_id
-			LEFT JOIN tracker_tasks b ON b.id = r.other_id
-			WHERE r.one_sided = 1 AND r.one_sided_final = 0
-			  AND r.kind = 'waiting_on'
-			  -- THE DEPENDENT'S OWN TOMBSTONE ENDS THE MATTER. A
-			  -- removed task's edges are frozen, and announcing a
-			  -- dependency on work nobody is doing wakes somebody
-			  -- about nothing.
-			  AND t.removed_at IS NULL
-			  -- THE EDGE'S OWN AGE, never the task's updated_at: any
-			  -- unrelated edit to the dependent resets that column, and a
-			  -- busy task would postpone its own repair indefinitely --
-			  -- while the busiest tasks are exactly the ones that acquire
-			  -- dependencies.
-			  AND r.created_at <= ?
-			ORDER BY r.task_id, r.other_id
-			LIMIT ?`, store.EncodeTime(before), limit)
+		rows, err := tx.QueryContext(ctx, oneSidedStatement, store.EncodeTime(before), limit)
 		if err != nil {
 			return fmt.Errorf("worklet: read the one-sided dependency edges: %w", err)
 		}

@@ -120,6 +120,11 @@ func appliesToType(field FieldDef, taskType string) bool {
 	})
 }
 
+// foreignFieldsStatement is [foreignFieldIDs]' read, named for the plan test.
+const foreignFieldsStatement = `
+		SELECT DISTINCT field_id FROM tracker_field_values
+		 WHERE task_id = ? AND kind = ?`
+
 // foreignFieldIDs is which of a task's values were mirrored in from another
 // tracker, read from the one place that records it.
 //
@@ -127,9 +132,7 @@ func appliesToType(field FieldDef, taskType string) bool {
 // anything the document says: a foreign value looks exactly like a native one
 // on the record, and `kind` is the column that tells them apart.
 func foreignFieldIDs(ctx context.Context, tx *sql.Tx, taskID string) (map[string]bool, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT DISTINCT field_id FROM tracker_field_values
-		 WHERE task_id = ? AND kind = ?`, taskID, FieldValueForeign)
+	rows, err := tx.QueryContext(ctx, foreignFieldsStatement, taskID, FieldValueForeign)
 	if err != nil {
 		return nil, err
 	}

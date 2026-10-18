@@ -748,6 +748,10 @@ type TaskCreate struct {
 	Origin *Origin `json:"origin,omitempty"`
 }
 
+// taskPresentStatement is [Writer.writeTask]'s read of a create's guarding
+// row, named for the plan test.
+const taskPresentStatement = `SELECT COUNT(*) FROM tracker_tasks WHERE id = ?`
+
 // writeTask is sequence 1's second append: a whole task at expectation zero,
 // guarded by its own row — carrying the ask the task was filed as, where it is
 // one.
@@ -779,8 +783,7 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 			// below the trim floor has no record left on the log to
 			// prove it existed and its own row is what still says so.
 			var present int
-			if err := tx.QueryRowContext(ctx,
-				`SELECT COUNT(*) FROM tracker_tasks WHERE id = ?`, task.ID).
+			if err := tx.QueryRowContext(ctx, taskPresentStatement, task.ID).
 				Scan(&present); err != nil {
 				return statelog.Decision{}, fmt.Errorf("worklet: read the "+
 					"guarding row for %s: %w", task.ID, err)
@@ -1144,6 +1147,14 @@ func refuseMidMove(ctx context.Context, tx *sql.Tx, task Task, role, why string)
 		task.ID, task.Project, target, why, target, statelog.ErrUnavailable)
 }
 
+// movingAwayStatement is [movingAway]'s read, named for the plan test: the
+// task's ancestors by the closure, each read by its key.
+const movingAwayStatement = `
+		SELECT a.project_key
+		FROM tracker_task_closure c JOIN tracker_tasks a ON a.id = c.ancestor_id
+		WHERE c.descendant_id = ? AND a.moving = 1 AND a.project_key <> ?
+		ORDER BY c.distance DESC LIMIT 1`
+
 // movingAway reports the project a move is carrying a task into when a task
 // ABOVE it is marked mid-move and in another project than it is, and "" when
 // none is — see [refuseMidMove].
@@ -1157,11 +1168,7 @@ func refuseMidMove(ctx context.Context, tx *sql.Tx, task Task, role, why string)
 // into, so it is never its own answer.
 func movingAway(ctx context.Context, tx *sql.Tx, id, project string) (string, error) {
 	var target string
-	err := tx.QueryRowContext(ctx, `
-		SELECT a.project_key
-		FROM tracker_task_closure c JOIN tracker_tasks a ON a.id = c.ancestor_id
-		WHERE c.descendant_id = ? AND a.moving = 1 AND a.project_key <> ?
-		ORDER BY c.distance DESC LIMIT 1`, id, project).Scan(&target)
+	err := tx.QueryRowContext(ctx, movingAwayStatement, id, project).Scan(&target)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return "", nil
@@ -1171,6 +1178,14 @@ func movingAway(ctx context.Context, tx *sql.Tx, id, project string) (string, er
 	}
 	return target, nil
 }
+
+// uncarriedStatement is [carriedAll]'s read, named for the plan test: the
+// root's descendants by the closure, each read by its key.
+const uncarriedStatement = `
+		SELECT d.id, d.key, d.project_key
+		FROM tracker_task_closure c JOIN tracker_tasks d ON d.id = c.descendant_id
+		WHERE c.ancestor_id = ? AND c.distance > 0 AND d.project_key <> ?
+		ORDER BY c.distance, d.id LIMIT 1`
 
 // carriedAll is the amendment a move's last append is decided under: the mark
 // comes down only in a snapshot where nothing beneath the root is outside the
@@ -1194,11 +1209,7 @@ func carriedAll(ctx context.Context, tx *sql.Tx, current Task,
 	patch TaskPatch) (TaskPatch, error) {
 
 	var id, key, project string
-	err := tx.QueryRowContext(ctx, `
-		SELECT d.id, d.key, d.project_key
-		FROM tracker_task_closure c JOIN tracker_tasks d ON d.id = c.descendant_id
-		WHERE c.ancestor_id = ? AND c.distance > 0 AND d.project_key <> ?
-		ORDER BY c.distance, d.id LIMIT 1`, current.ID, current.Project).
+	err := tx.QueryRowContext(ctx, uncarriedStatement, current.ID, current.Project).
 		Scan(&id, &key, &project)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):

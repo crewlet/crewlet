@@ -352,12 +352,14 @@ type TaskRef struct {
 	Status Status `json:"status"`
 }
 
+// taskRefStatement is [readTaskRef]'s read, named for the plan test.
+const taskRefStatement = `SELECT key, key_collision, title, status FROM tracker_tasks WHERE id = ?`
+
 // readTaskRef names one task, or nil for an id this node holds no row for.
 func readTaskRef(ctx context.Context, tx *sql.Tx, id string) (*TaskRef, error) {
 	ref := TaskRef{ID: id}
 	var collision int
-	err := tx.QueryRowContext(ctx,
-		`SELECT key, key_collision, title, status FROM tracker_tasks WHERE id = ?`, id).
+	err := tx.QueryRowContext(ctx, taskRefStatement, id).
 		Scan(&ref.Key, &collision, &ref.Title, &ref.Status)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -451,6 +453,14 @@ type HistoryEntry struct {
 	// from another.
 	LogSeq uint64 `json:"log_seq"`
 }
+
+// detailFlagsStatement is [Reader.Task]'s read of the two badges a board row
+// carries beside its own, named for the plan test.
+const detailFlagsStatement = `
+		SELECT EXISTS (SELECT 1 FROM tracker_task_deps d
+		         WHERE d.task_id = ? AND d.blocker_open = 1),
+		       COALESCE((SELECT key_collision FROM tracker_tasks
+		                 WHERE id = ?), 0) = 1`
 
 // Task reads one task by id or by key, with whatever else was asked for.
 //
@@ -552,11 +562,7 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 		// flag beside it, from the same column the row reads, for the
 		// same reason.
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := tx.QueryRowContext(ctx,
-			`SELECT EXISTS (SELECT 1 FROM tracker_task_deps d
-			         WHERE d.task_id = ? AND d.blocker_open = 1),
-			        COALESCE((SELECT key_collision FROM tracker_tasks
-			                  WHERE id = ?), 0) = 1`,
+		if err := tx.QueryRowContext(ctx, detailFlagsStatement,
 			id, id).Scan(&out.Blocked, &out.KeyCollision); err != nil {
 			return fmt.Errorf("worklet: read %s's open blockers: %w", id, err)
 		}
@@ -757,6 +763,13 @@ func keyOpensAnother(key, id string) string {
 	          WHERE kd.key = ` + key + ` AND kd.task_id <> ` + id + `))`
 }
 
+// taskDocumentStatement is [readTaskDocument]'s read, named for the plan test.
+const taskDocumentStatement = `
+		SELECT document, status_entered_at, rank, spend_turns, spend_rounds,
+		       spend_input, spend_output, spend_cache_read, spend_cache_write,
+		       spend_wall_ms, spend_tokens, spend_workers, spend_sent_back
+		  FROM tracker_tasks WHERE id = ?`
+
 // readTaskDocument decodes the task's own record.
 //
 // FROM THE DOCUMENT rather than from the columns, and that is the same rule
@@ -793,11 +806,7 @@ func readTaskDocument(ctx context.Context, tx *sql.Tx, id string) (Task, error) 
 	var entered int64
 	var rank string
 	var spend Spend
-	err := tx.QueryRowContext(ctx,
-		`SELECT document, status_entered_at, rank, spend_turns, spend_rounds,
-		        spend_input, spend_output, spend_cache_read, spend_cache_write,
-		        spend_wall_ms, spend_tokens, spend_workers, spend_sent_back
-		   FROM tracker_tasks WHERE id = ?`,
+	err := tx.QueryRowContext(ctx, taskDocumentStatement,
 		id).Scan(&body, &entered, &rank, &spend.Turns, &spend.Rounds, &spend.Input,
 		&spend.Output, &spend.CacheRead, &spend.CacheWrite, &spend.WallMs,
 		&spend.Tokens, &spend.Workers, &spend.SentBack)
@@ -1078,6 +1087,24 @@ func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]H
 	return out, rows.Err()
 }
 
+// linksStatement is one half of [readLinks], named for the plan test: the
+// edges this task owns, or with mirror the edges pointing at it, each with the
+// task at its other end.
+func linksStatement(mirror bool) string {
+	other, own := "r.other_id", "r.task_id"
+	if mirror {
+		other, own = "r.task_id", "r.other_id"
+	}
+	return `
+		SELECT r.kind, ` + other + `, r.derived, r.one_sided, r.one_sided_final, r.note,
+		       COALESCE(t.key, ''), COALESCE(t.title, ''), COALESCE(t.status, ''),
+		       COALESCE(t.key_collision, 0)
+		FROM tracker_relations r
+		LEFT JOIN tracker_tasks t ON t.id = ` + other + `
+		WHERE ` + own + ` = ?
+		ORDER BY r.kind, ` + other
+}
+
 // readLinks is both directions of every relation.
 //
 // TWO QUERIES RATHER THAN A UNION, because the two halves mean different
@@ -1086,22 +1113,14 @@ func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]H
 // in SQL would make a renderer re-derive which end authored the edge from a
 // column that no longer says.
 func readLinks(ctx context.Context, tx *sql.Tx, taskID string) ([]DetailLink, error) {
-	const columns = `
-		SELECT r.kind, %s, r.derived, r.one_sided, r.one_sided_final, r.note,
-		       COALESCE(t.key, ''), COALESCE(t.title, ''), COALESCE(t.status, ''),
-		       COALESCE(t.key_collision, 0)
-		FROM tracker_relations r
-		LEFT JOIN tracker_tasks t ON t.id = %s
-		WHERE %s = ?
-		ORDER BY r.kind, %s`
 	// NEVER NIL — see [readHistory] and [readProjectRows].
 	out := []DetailLink{}
 	for _, q := range []struct {
 		statement string
 		derived   bool
 	}{
-		{fmt.Sprintf(columns, "r.other_id", "r.other_id", "r.task_id", "r.other_id"), false},
-		{fmt.Sprintf(columns, "r.task_id", "r.task_id", "r.other_id", "r.task_id"), true},
+		{linksStatement(false), false},
+		{linksStatement(true), true},
 	} {
 		rows, err := tx.QueryContext(ctx, q.statement, taskID)
 		if err != nil {

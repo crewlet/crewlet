@@ -795,6 +795,12 @@ var counterpartyDeltaFields = func() []string {
 	return append(out, "blocking", "priorities", "parent", "removed_with")
 }()
 
+// taskKeysStatement is [resolveTaskKeys]' read of n tasks' keys, named for
+// the plan test.
+func taskKeysStatement(n int) string {
+	return `SELECT id, key FROM tracker_tasks WHERE id IN (` + placeholders(n) + `)`
+}
+
 // resolveTaskKeys reads the item keys of ids this node holds a row for.
 //
 // CHUNKED ON THE ESTATE'S OWN PARAMETER LIMIT, which is the shape the applier
@@ -816,9 +822,7 @@ func resolveTaskKeys(ctx context.Context, tx *sql.Tx, ids []string,
 		for _, id := range chunk {
 			args = append(args, id)
 		}
-		rows, err := tx.QueryContext(ctx,
-			`SELECT id, key FROM tracker_tasks WHERE id IN (`+
-				placeholders(len(chunk))+`)`, args...)
+		rows, err := tx.QueryContext(ctx, taskKeysStatement(len(chunk)), args...)
 		if err != nil {
 			return nil, fmt.Errorf("worklet: resolve the item keys this "+
 				"activity page points at: %w", err)

@@ -125,6 +125,10 @@ type TaskTurns struct {
 	Incomplete     *Incomplete        `json:"incomplete,omitempty"`
 }
 
+// turnsTaskStatement is [Reader.TurnsOf]'s read of the task the turns are
+// on, named for the plan test.
+const turnsTaskStatement = `SELECT key, key_collision, project_key FROM tracker_tasks WHERE id = ?`
+
 // TurnsOf reads one page of a task's turns, newest first. The task is named by
 // id or key; the cursor is a previous page's [TaskTurns.Next], or empty for the
 // newest page; limit is held to [MaxTaskTurns].
@@ -164,8 +168,7 @@ func (r *Reader) TurnsOf(ctx context.Context, idOrKey, cursor string, limit int,
 		}
 		var project string
 		var collision int
-		if err = tx.QueryRowContext(ctx,
-			`SELECT key, key_collision, project_key FROM tracker_tasks WHERE id = ?`, id).
+		if err = tx.QueryRowContext(ctx, turnsTaskStatement, id).
 			Scan(&out.Key, &collision, &project); err != nil {
 			return fmt.Errorf("worklet: read task %s for its turns: %w", id, err)
 		}

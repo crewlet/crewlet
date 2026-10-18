@@ -221,6 +221,23 @@ func (d *duty) clearDuplicates(ctx context.Context, now, _ time.Time) (int64, er
 	return fixed, nil
 }
 
+// The two reads [duty.duplicatesIn] takes, named for the plan test: a page of
+// the project's live tasks holding a rank an earlier task of it holds too, in
+// the board's order, and the next rank above a shared one over every row of
+// the project.
+const (
+	duplicateRanksStatement = `
+		SELECT t.id, t.rank FROM tracker_tasks t
+		WHERE t.project_key = ? AND t.removed_at IS NULL
+		  AND EXISTS (SELECT 1 FROM tracker_tasks o
+		              WHERE o.project_key = t.project_key
+		                AND o.rank = t.rank AND o.id < t.id)
+		ORDER BY t.rank, t.id LIMIT ?`
+	rankAboveStatement = `
+		SELECT MIN(rank) FROM tracker_tasks
+		WHERE project_key = ? AND rank > ?`
+)
+
 // duplicatesIn mints a fresh key for every task but the first at each shared
 // rank.
 //
@@ -244,13 +261,7 @@ func (d *duty) duplicatesIn(ctx context.Context, project string) ([]Placement, e
 		ceiling = map[Rank]Rank{}
 	)
 	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT t.id, t.rank FROM tracker_tasks t
-			WHERE t.project_key = ? AND t.removed_at IS NULL
-			  AND EXISTS (SELECT 1 FROM tracker_tasks o
-			              WHERE o.project_key = t.project_key
-			                AND o.rank = t.rank AND o.id < t.id)
-			ORDER BY t.rank, t.id LIMIT ?`, project, WalkBatch)
+		rows, err := tx.QueryContext(ctx, duplicateRanksStatement, project, WalkBatch)
 		if err != nil {
 			return fmt.Errorf("worklet: read %s's duplicate ranks: %w", project, err)
 		}
@@ -275,9 +286,7 @@ func (d *duty) duplicatesIn(ctx context.Context, project string) ([]Placement, e
 				continue
 			}
 			var next sql.NullString
-			if err := tx.QueryRowContext(ctx, `
-				SELECT MIN(rank) FROM tracker_tasks
-				WHERE project_key = ? AND rank > ?`,
+			if err := tx.QueryRowContext(ctx, rankAboveStatement,
 				project, string(loser.Rank)).Scan(&next); err != nil {
 				return fmt.Errorf("worklet: read the key above %q in %s: %w",
 					loser.Rank, project, err)
@@ -1000,6 +1009,17 @@ func (d *duty) projectsWith(ctx context.Context, column string) ([]string, error
 	return projects, err
 }
 
+// clearDuplicateProbeStatement is [duty.clearProbe]'s write, named for the
+// plan test.
+const clearDuplicateProbeStatement = `
+		UPDATE tracker_projects SET rank_duplicate_pending = 0
+		WHERE key = ? AND NOT EXISTS (
+			SELECT 1 FROM tracker_tasks t
+			WHERE t.project_key = ? AND t.removed_at IS NULL
+			  AND EXISTS (SELECT 1 FROM tracker_tasks o
+			              WHERE o.project_key = t.project_key
+			                AND o.rank = t.rank AND o.id < t.id))`
+
 // clearProbe clears the applier-owned duplicate flag on this node.
 //
 // LOCAL, and that is correct where the re-spread flag's clear is not: the
@@ -1035,15 +1055,7 @@ func (d *duty) projectsWith(ctx context.Context, column string) ([]string, error
 // tick of a running node.
 func (d *duty) clearProbe(ctx context.Context, project string) error {
 	return d.deps.DB.Tx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `
-			UPDATE tracker_projects SET rank_duplicate_pending = 0
-			WHERE key = ? AND NOT EXISTS (
-				SELECT 1 FROM tracker_tasks t
-				WHERE t.project_key = ? AND t.removed_at IS NULL
-				  AND EXISTS (SELECT 1 FROM tracker_tasks o
-				              WHERE o.project_key = t.project_key
-				                AND o.rank = t.rank AND o.id < t.id))`,
-			project, project)
+		_, err := tx.ExecContext(ctx, clearDuplicateProbeStatement, project, project)
 		return err
 	})
 }

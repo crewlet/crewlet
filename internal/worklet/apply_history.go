@@ -292,6 +292,10 @@ const newestStatusStatement = `
 		ORDER BY h.log_seq DESC
 		LIMIT 1`
 
+// statusEnteredStatement is [Applier.stampStatusEntered]'s write, named for
+// the plan test.
+const statusEnteredStatement = `UPDATE tracker_tasks SET status_entered_at = ? WHERE id = ?`
+
 // stampStatusEntered rewrites a task's `status_entered_at` from its history.
 //
 // # Why the history rather than the record in hand
@@ -335,9 +339,7 @@ func (a *Applier) stampStatusEntered(ctx context.Context, tx *sql.Tx, taskID str
 	case err != nil:
 		return 0, fmt.Errorf("worklet: read the newest status of %s: %w", taskID, err)
 	}
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE tracker_tasks SET status_entered_at = ? WHERE id = ?`,
-		at, taskID); err != nil {
+	if _, err := tx.ExecContext(ctx, statusEnteredStatement, at, taskID); err != nil {
 		return 0, fmt.Errorf("worklet: stamp the entered instant of %s: %w",
 			taskID, err)
 	}

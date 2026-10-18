@@ -148,15 +148,7 @@ func readAround(ctx context.Context, tx *sql.Tx, q Query,
 	if err != nil {
 		return nil, err
 	}
-	after, afterArgs := keysetAfter(terms, keys)
-	// BEFORE IS "NOT AFTER AND NOT THIS ROW". The order is TOTAL — every
-	// one ends in the id — so a row that is neither after this one nor this
-	// one is before it; and the after predicate is never NULL (see
-	// [keysetAfter], whose every leg is spelled NULL-safely), so its
-	// negation is exact rather than dropping the rows a NULL comparison
-	// would.
-	before := "NOT " + after + " AND t.id <> ?"
-	beforeArgs := append(append([]any{}, afterArgs...), id)
+	after, afterArgs, before, beforeArgs := aroundSides(terms, keys, id)
 
 	counted, err := segmentCount(ctx, tx, seg, terms, set, before,
 		beforeArgs)
@@ -243,14 +235,11 @@ func drawingOrder(q Query, fields map[string]resolvedField,
 		if column.Count == 0 {
 			continue
 		}
-		clause, values := outer.joinedFilter(column.Key)
 		if q.GroupBy2 == "" {
-			out = append(out, segment{
-				Join: outer.Join, JoinArgs: outer.JoinArgs,
-				Clause: clause, Args: values, Count: column.Count,
-			})
+			out = append(out, outer.run(column.Key, column.Count))
 			continue
 		}
+		clause, values := outer.joinedFilter(column.Key)
 		for _, lane := range column.Subgroups {
 			if lane.Count == 0 {
 				continue
@@ -267,6 +256,32 @@ func drawingOrder(q Query, fields map[string]resolvedField,
 		}
 	}
 	return out, nil
+}
+
+// run is one column of the axis as a run of the drawing order: the axis's
+// join, and the column's predicate on the joined value.
+func (a groupAxis) run(key string, count int) segment {
+	clause, values := a.joinedFilter(key)
+	return segment{Join: a.Join, JoinArgs: a.JoinArgs, Clause: clause,
+		Args: values, Count: count}
+}
+
+// aroundSides is the two sides of one task in an order, given its own sort
+// values: the rows after it — the keyset a cursor minted on it resumes at —
+// and the rows before it, each with its arguments.
+//
+// BEFORE IS "NOT AFTER AND NOT THIS ROW". The order is TOTAL — every one ends
+// in the id — so a row that is neither after this one nor this one is before
+// it; and the after predicate is never NULL (see [keysetAfter], whose every
+// leg is spelled NULL-safely), so its negation is exact rather than dropping
+// the rows a NULL comparison would.
+func aroundSides(terms []sortTerm, keys []any, id string) (after string,
+	afterArgs []any, before string, beforeArgs []any) {
+
+	after, afterArgs = keysetAfter(terms, keys)
+	before = "NOT " + after + " AND t.id <> ?"
+	beforeArgs = append(append([]any{}, afterArgs...), id)
+	return after, afterArgs, before, beforeArgs
 }
 
 // segmentFrom renders a statement's FROM and WHERE over one run, with the
@@ -325,15 +340,23 @@ func segmentCount(ctx context.Context, tx *sql.Tx, seg segment,
 	terms []sortTerm, set taskSet, extra string,
 	extraArgs []any) (int, error) {
 
-	from, bound := segmentFrom(seg, terms, set, extra, extraArgs)
+	statement, bound := segmentCountStatement(seg, terms, set, extra, extraArgs)
 	var n int
-	if err := tx.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM (SELECT 1"+from+" LIMIT ?)",
-		append(bound, TotalHintCeiling+1)...).Scan(&n); err != nil {
+	if err := tx.QueryRowContext(ctx, statement, bound...).Scan(&n); err != nil {
 		return 0, fmt.Errorf("worklet: count the rows ahead of the around "+
 			"task: %w", err)
 	}
 	return n, nil
+}
+
+// segmentCountStatement is [segmentCount]'s count and every argument it binds,
+// the ceiling's included, named for the plan test.
+func segmentCountStatement(seg segment, terms []sortTerm, set taskSet,
+	extra string, extraArgs []any) (string, []any) {
+
+	from, bound := segmentFrom(seg, terms, set, extra, extraArgs)
+	return "SELECT COUNT(*) FROM (SELECT 1" + from + " LIMIT ?)",
+		append(bound, TotalHintCeiling+1)
 }
 
 // segmentFirst is the address ([ItemAddress]) of the first row of one run in
@@ -342,12 +365,11 @@ func segmentFirst(ctx context.Context, tx *sql.Tx, seg segment,
 	terms []sortTerm, set taskSet, extra string, extraArgs []any,
 	order string) (*string, error) {
 
-	from, bound := segmentFrom(seg, terms, set, extra, extraArgs)
+	statement, bound := segmentFirstStatement(seg, terms, set, extra,
+		extraArgs, order)
 	var id, key string
 	var collision int
-	err := tx.QueryRowContext(ctx,
-		"SELECT t.id, t.key, t.key_collision"+from+" ORDER BY "+order+" LIMIT 1",
-		bound...).Scan(&id, &key, &collision)
+	err := tx.QueryRowContext(ctx, statement, bound...).Scan(&id, &key, &collision)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, nil
@@ -357,6 +379,15 @@ func segmentFirst(ctx context.Context, tx *sql.Tx, seg segment,
 	}
 	address := ItemAddress(id, key, collision == 1)
 	return &address, nil
+}
+
+// segmentFirstStatement is [segmentFirst]'s read, named for the plan test.
+func segmentFirstStatement(seg segment, terms []sortTerm, set taskSet,
+	extra string, extraArgs []any, order string) (string, []any) {
+
+	from, bound := segmentFrom(seg, terms, set, extra, extraArgs)
+	return "SELECT t.id, t.key, t.key_collision" + from + " ORDER BY " + order +
+		" LIMIT 1", bound
 }
 
 // sortValuesOf reads one task's value for every column an order sorts by,

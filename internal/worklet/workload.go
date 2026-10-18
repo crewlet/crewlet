@@ -136,34 +136,20 @@ func (r *Reader) Workload(ctx context.Context, q WorkloadQuery, now time.Time,
 	return out, nil
 }
 
-func readWorkload(ctx context.Context, tx *sql.Tx, q WorkloadQuery,
-	now time.Time, loc *time.Location, out *WorkloadAnswer) error {
-
-	// THE DAY BOUNDARY the overdue count is against, resolved exactly as
-	// [readMyWork] resolves it and for the same reason: the company's own
-	// midnight, so a person's overdue count here is the number of tasks a
-	// board marks overdue for them.
-	anchor, err := period.Resolve("today", now, loc)
-	if err != nil {
-		return err
-	}
-	dayStart := store.EncodeTime(anchor.At)
-
+// workloadStatement is [readWorkload]'s one statement, named for the plan
+// test: every assignee's open work, across the company or in the projects of
+// units, counted against the day that begins at dayStart.
+func workloadStatement(units []string, dayStart int64) (string, []any) {
 	where := "t.removed_at IS NULL AND t.archived = 0 AND t.assignee <> '' " +
 		"AND t.status_group IN (" + openGroupsSQL + ")"
 	args := []any{dayStart}
-	// THE UNIT'S KEY, through the chart — see [unitKeys]. A workload
-	// narrowed to a team is read from a screen that got the unit from
-	// somewhere else, so its id and its name both have to work.
-	if units := unitKeys(q.Units, []string{q.Unit}); len(units) > 0 {
+	if len(units) > 0 {
 		where += " AND EXISTS (SELECT 1 FROM tracker_projects p " +
 			"WHERE p.key = t.project_key AND p.unit IN (" +
 			placeholders(len(units)) + "))"
 		args = append(args, anyOf(units)...)
 	}
-	args = append(args, MaxWorkloadHandles+1)
-
-	rows, err := tx.QueryContext(ctx, `
+	return `
 		SELECT t.assignee,
 		       COUNT(*),
 		       COALESCE(SUM(t.points), 0),
@@ -177,10 +163,30 @@ func readWorkload(ctx context.Context, tx *sql.Tx, q WorkloadQuery,
 		       COALESCE(SUM(CASE WHEN t.start_at IS NULL AND t.due_at IS NULL
 		         THEN 1 ELSE 0 END), 0)
 		FROM tracker_tasks t
-		WHERE `+where+`
+		WHERE ` + where + `
 		GROUP BY t.assignee
 		ORDER BY 2 DESC, t.assignee
-		LIMIT ?`, args...)
+		LIMIT ?`, append(args, MaxWorkloadHandles+1)
+}
+
+func readWorkload(ctx context.Context, tx *sql.Tx, q WorkloadQuery,
+	now time.Time, loc *time.Location, out *WorkloadAnswer) error {
+
+	// THE DAY BOUNDARY the overdue count is against, resolved exactly as
+	// [readMyWork] resolves it and for the same reason: the company's own
+	// midnight, so a person's overdue count here is the number of tasks a
+	// board marks overdue for them.
+	anchor, err := period.Resolve("today", now, loc)
+	if err != nil {
+		return err
+	}
+	dayStart := store.EncodeTime(anchor.At)
+
+	// THE UNIT'S KEY, through the chart — see [unitKeys]. A workload
+	// narrowed to a team is read from a screen that got the unit from
+	// somewhere else, so its id and its name both have to work.
+	statement, args := workloadStatement(unitKeys(q.Units, []string{q.Unit}), dayStart)
+	rows, err := tx.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return fmt.Errorf("worklet: read the company's workload: %w", err)
 	}
