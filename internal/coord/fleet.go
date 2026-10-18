@@ -59,6 +59,7 @@ import (
 // every node charges (budget.go), the [PositionRegister] and its neighbours
 // the state log trims against, the [Rebases] a retried unit of work inherits
 // its instant from, the [ObjectStores] backend the fleet's files are in, the
+// [TrashReaps] account of the trash reaper's last pass, the
 // [Custody] of a stateless node's event batches, and the [Markers] sweep that
 // keeps every removal from being read again for ever. The list above is the
 // migration, not the estate.
@@ -1421,6 +1422,7 @@ type Fleet interface {
 	Integrations
 	Mailboxes
 	ObjectStores
+	TrashReaps
 	SeatPauses
 	PositionRegister
 	HoldRegister
@@ -1467,6 +1469,34 @@ type ObjectStores interface {
 	// ObjectCollection reads the last report, false when none was ever
 	// written.
 	ObjectCollection(ctx context.Context) ([]byte, bool, error)
+}
+
+// TrashReaps is where the trash reaper's last report is kept (internal/
+// trashreap): which node ran the latest pass, against which cutoff, what each
+// domain's trash gave up, and when the next pass is due.
+//
+// # Why the fleet keeps it, and not the node that ran it
+//
+// The reaper is a fleet duty, so it moves: the node that ran the last pass is
+// rarely the one asked about it, and a node that takes the duty over reads
+// when the next pass is due from here rather than reaping again at once. The
+// report is a whole account rather than a delta, so the last write is the
+// answer, whoever wrote it.
+//
+// # Nothing else, and no lock
+//
+// A purge is decided by its domain against that domain's own trash, in a
+// snapshot the broker arbitrates, so two reapers that overlap while the duty
+// moves purge nothing twice. The record is an account of what happened and
+// never a claim anybody reads to decide a purge.
+type TrashReaps interface {
+	// RecordTrashReap stores the reaper's last report, an opaque value its
+	// owner (internal/trashreap) encodes, replacing the one before.
+	RecordTrashReap(ctx context.Context, value []byte) error
+
+	// TrashReap reads the last report, false when none was ever written.
+	// An error is UNKNOWN: the caller must not read it as "never ran".
+	TrashReap(ctx context.Context) ([]byte, bool, error)
 }
 
 // Follows is which chat threads each seat is following.

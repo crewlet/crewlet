@@ -57,6 +57,10 @@ type Fleet struct {
 	objectBackend    string
 	objectCollection []byte
 
+	// trashReap is the trash reaper's last report, nil until a pass
+	// records one.
+	trashReap []byte
+
 	pauses      map[uuid.UUID]coord.SeatPause
 	positions   map[string]coord.NodePositions
 	holds       map[string]coord.TrimHold

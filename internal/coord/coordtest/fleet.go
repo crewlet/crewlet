@@ -64,6 +64,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) (node func() coord.Fleet
 		{"integrations", integrationCases},
 		{"mailboxes", mailboxCases},
 		{"object stores", objectStoreCases},
+		{"trash reaps", trashReapCases},
 		{"seat_pauses", seatPauseCases},
 		{"maintenance", maintenanceCases},
 		{"listings", listingCases},
