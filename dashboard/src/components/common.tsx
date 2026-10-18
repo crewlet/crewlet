@@ -50,6 +50,7 @@ import {
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import type { AgentRow, FeedRow, LogRefusal, QueryRefusal } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
+import { REFUSAL_SENTENCES } from "~/contract/authority.ts";
 
 /** A seat's name and handle, linked. The one way a person appears in a list. */
 export function SeatChip({
@@ -432,23 +433,31 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
 
 /**
  * A refusal on authority that says WHY: the access any one of which would
- * have admitted the reader ("needs Worklet access"), or (an empty list) that
- * none would, because what is missing is a relation the org chart does not
- * hold.
+ * have admitted the reader ("needs Worklet access"), or (an empty list) what
+ * the deciding rule asks that no access gives, in its own sentence
+ * ([REFUSAL_SENTENCES], keyed by the rule's reason).
  *
  * FROM THE ANSWER, NEVER WRITTEN HERE. The engine's error frame carries the
  * deciding rule's own reason and grants under the keys its REST envelope uses;
  * a sentence naming a permission typed into this file is a second statement
- * of the rule, and it is the one that goes stale the day the rule moves.
+ * of the rule, and it is the one that goes stale the day the rule moves. One
+ * sentence for every empty list was exactly that: it told a credential bound
+ * to no seat, and a token on a gesture that needs the person, that what they
+ * lacked was leading somebody. A reason this build has no sentence for says
+ * only that no access would change it.
  */
 function RefusedOnAuthority({ refusal }: { refusal: QueryRefusal }) {
-  // NO ACCESS WOULD ADMIT THIS READER: the rule asks a relation the org chart
-  // does not hold (leading this person, or the record being their own), so
-  // signing in again changes nothing and no button offers it.
+  // NO ACCESS WOULD ADMIT THIS READER, so signing in again changes nothing
+  // and no button offers it: what the deciding rule asks instead is its own
+  // sentence.
   if (refusal.grants.length === 0) {
     return (
       <Callout variant="warning" icon={<KeyGlyph size="md" />}>
-        Only this person and their lead can see this.
+        {REFUSAL_SENTENCES[refusal.reason] ??
+          "You can’t see this, and no access would change that."}{" "}
+        <span className="t-caption">
+          Refused as <InlineCode>{refusal.reason}</InlineCode>.
+        </span>
       </Callout>
     );
   }

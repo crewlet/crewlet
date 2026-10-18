@@ -4911,9 +4911,10 @@ export interface Frame {
  * same keys the REST envelope does.
  *
  * `grants` are the capabilities any ONE of which would have admitted the
- * caller; an empty list means no capability would, and what is missing is a
- * relation the org chart does not hold (leading the person, owning the record).
- * `reason` is the deciding rule's own word (`not_self`, `no_grant`, …).
+ * caller; an empty list means no capability would, and what the rule asks is
+ * something else — a relation the org chart does not hold, an agent's own
+ * seat, a seat to act as — which `reason`, the deciding rule's own word
+ * (`not_self`, `unseated`, …), names and `contract/authority.ts` says.
  */
 export interface QueryRefusal {
   reason: string;
