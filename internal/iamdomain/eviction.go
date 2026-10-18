@@ -307,12 +307,10 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 // generationActor is who a generation record names as its author, and the
 // principal kind this domain's records carry for them.
 //
-// THE FACTS' KIND IS READ IN EITHER VOCABULARY — a principal's kind, or the
-// kind [iam.ActorFor] records it under — as the knowledge base's and the
-// tracker's generation records read it, so one reanchor names one party the
-// same way on every log: the reanchor verb is the framework's and names its
-// operator the way every other domain's audit columns do, while this domain's
-// records carry the PRINCIPAL's kind.
+// [statelog.GenerationFacts.Author]'s party, which every domain's generation
+// record names alike, so one reanchor names one party the same way on every
+// log — in the PRINCIPAL's kind, which this domain's records carry where the
+// others carry the actor's.
 //
 // THREE ACTOR KINDS NAME ONE PRINCIPAL KIND EACH, AND THE FOURTH DOES NOT.
 // [iam.ActorOperator] is a principal acting under its own login — a MACHINE's,
@@ -325,25 +323,24 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 // NOBODY NAMED IS THE NODE, recorded as the node's own writer records itself —
 // its id, a machine — rather than as an empty author column.
 func generationActor(f statelog.GenerationFacts) (string, iam.Kind) {
-	if f.By == "" {
+	party, named := f.Author()
+	if !named {
 		return f.Writer, iam.KindMachine
 	}
-	if kind := iam.Kind(f.ByKind); kind.Valid() {
-		return f.By, kind
-	}
-	switch iam.ActorKind(f.ByKind) {
+	switch party.Kind {
 	case iam.ActorAgent:
-		return f.By, iam.KindSeat
+		return party.Name, iam.KindSeat
 	case iam.ActorHuman:
-		return f.By, iam.KindPerson
+		return party.Name, iam.KindPerson
 	case iam.ActorSystem:
-		return f.By, iam.KindEngine
+		return party.Name, iam.KindEngine
 	}
-	// AN OPERATOR, and a kind nobody stated, by the login's shape: a
-	// person's where it is one, and a machine's otherwise — the kind a
-	// credential nobody enrolled, a Tier A token, is recorded under.
-	if iam.ValidLogin(f.By) {
-		return f.By, iam.KindPerson
+	// AN OPERATOR, a machine named by its principal kind and a kind nobody
+	// stated alike, by the login's shape: a person's where it is one, and a
+	// machine's otherwise — the kind a credential nobody enrolled, a Tier A
+	// token, is recorded under.
+	if iam.ValidLogin(party.Name) {
+		return party.Name, iam.KindPerson
 	}
-	return f.By, iam.KindMachine
+	return party.Name, iam.KindMachine
 }
