@@ -1,4 +1,4 @@
-package workapi
+package paced
 
 import (
 	"errors"
@@ -49,15 +49,14 @@ func TestAPacedBodyChargesOnlyTheTimeInsideRead(t *testing.T) {
 	rc := http.NewResponseController(httptest.NewRecorder())
 	clock := &stepClock{at: time.Date(2001, 2, 3, 4, 5, 6, 0, time.UTC)}
 
-	slow := &pacedBody{r: trickle{clock: clock, wait: 300 * time.Millisecond}, rc: rc,
-		pace: time.Second, now: clock.now}
+	slow := newBody(trickle{clock: clock, wait: 300 * time.Millisecond}, rc, time.Second, clock.now)
 	buf := make([]byte, 64)
 	var err error
 	reads := 0
 	for ; reads < 10 && err == nil; reads++ {
 		_, err = slow.Read(buf)
 	}
-	if !errors.Is(err, errFileBody) || !strings.Contains(err.Error(), "took more than") {
+	if !errors.Is(err, ErrBody) || !strings.Contains(err.Error(), "took more than") {
 		t.Fatalf("a trickle read for 10 rounds ended with %v, want it refused as the client's", err)
 	}
 	// Four waits of 300 ms spend the second; the fifth read finds it gone.
@@ -66,7 +65,7 @@ func TestAPacedBodyChargesOnlyTheTimeInsideRead(t *testing.T) {
 			"its budget ran out", reads)
 	}
 
-	waited := &pacedBody{r: prompt{}, rc: rc, pace: time.Second, now: clock.now}
+	waited := newBody(prompt{}, rc, time.Second, clock.now)
 	for range 4 {
 		// THE SERVER'S OWN WORK between reads: more than the pace in
 		// all, none of it the client's.
@@ -78,7 +77,7 @@ func TestAPacedBodyChargesOnlyTheTimeInsideRead(t *testing.T) {
 
 	// A MEBIBYTE THAT ARRIVES OPENS THE NEXT ONE'S WHOLE BUDGET: what was
 	// left over is not carried, and what was spent is not either.
-	whole := &pacedBody{r: io.LimitReader(prompt{}, 3<<20), rc: rc, pace: time.Hour, now: clock.now}
+	whole := newBody(io.LimitReader(prompt{}, 3<<20), rc, time.Hour, clock.now)
 	whole.budget, whole.left = time.Millisecond, 10
 	if _, err := whole.Read(make([]byte, 20)); err != nil {
 		t.Fatal(err)
