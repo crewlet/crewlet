@@ -211,6 +211,16 @@ api:
 			"engine_draining, drain_complete, engine_stopped and run_failed "+
 			"logged at lines %v", order)
 	}
+
+	// AND THE START SAID WHAT ITS TIER A IS WORTH KNOWING before it built
+	// the engine: this document names no backup owner, so it carries that
+	// advisory, and a node booted from it logs the line whether or not
+	// anybody ever ran `crewlet validate` on the file.
+	if order := logOrder(output.String(), "config_advisory", "engine_starting"); !slices.IsSorted(order) ||
+		slices.Contains(order, -1) {
+		t.Errorf("config_advisory and engine_starting logged at lines %v, want the "+
+			"advisory first", order)
+	}
 }
 
 const (

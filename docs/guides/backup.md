@@ -395,7 +395,8 @@ ceiling.
 scheduler's name — and `crewlet backup` records it in the manifest, which is
 where it stops being configuration and becomes durable evidence of who was
 responsible for the artefact somebody is now restoring. `crewlet validate`
-warns when it is unset.
+warns when it is unset, and every node logs the same warning at every start
+(`config_advisory`).
 
 Two rules carry over from the cold runbook and are worth repeating because
 this path makes them easier to forget: the directory holds every credential

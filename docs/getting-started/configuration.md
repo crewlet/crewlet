@@ -1457,11 +1457,11 @@ retention:
                                   #   person, a team, a scheduler's name. Free
                                   #   text, read by a human at the moment an
                                   #   alarm names it. `crewlet validate` warns
-                                  #   when it is unset — a company that never
-                                  #   backs up never trims, so "who is
-                                  #   responsible for this" has a real answer on
-                                  #   every deployment that intends to keep
-                                  #   working
+                                  #   when it is unset, and every start logs
+                                  #   it — a company that never backs up never
+                                  #   trims, so "who is responsible for this"
+                                  #   has a real answer on every deployment
+                                  #   that intends to keep working
 ```
 
 **`crewlet validate` prints warnings as well as refusals**, and they are
@@ -1474,6 +1474,13 @@ member count because it is this node's own route or a repeat, a node that
 declares the `ingress` role and binds no port, a unit keyed on a name somebody
 will rename, a company that declares no human seat and so can admit nobody.
 
+**`validate` is not the only place a Tier A warning is said.** Most
+deployments never run it — an image, a chart or an operator renders the
+document and starts the node — so `crewlet run` logs every Tier A warning at
+every start too, one `config_advisory` line at `WARN` each, into the log file
+when there is one, and judged on the document with that run's flags folded in
+(see [`crewlet run`](../reference/cli.md#every-start-says-what-its-tier-a-is-worth-knowing)).
+
 `api.port` is **one** listener per node, on every node, and `node.roles`
 decides what it carries rather than whether it exists. A node without the
 `ingress` role serves its two
@@ -1485,7 +1492,9 @@ on this listener, and a second address for the same two routes would be one
 more thing to keep in step. `crewlet validate` warns about a node whose
 declared roles include `ingress` while its port is `0`: the node every
 integration, browser and probe looks for would bind nothing. It warns rather
-than refuses, because `crewlet run -api-port` sets the port at run time.
+than refuses, because `crewlet run -api-port` sets the port at run time — and
+`crewlet run` judges the same warning on the port and roles its flags leave
+the node with, logging it as `config_advisory` at every start.
 
 `api.host` and `api.port` are what this node **binds**, which is rarely where it
 **answers**: a fleet behind a load balancer binds `0.0.0.0:8000` and is reached

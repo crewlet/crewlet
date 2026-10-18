@@ -17,8 +17,7 @@ import (
 //
 // The DEFAULTS ARE THE POINT: a flag carries its default whether or not
 // anyone typed it, so a test that constructed the values directly would
-// never exercise the thing [logSettings] and [logFileSettings] exist to get
-// right.
+// never exercise the thing [overrideLogging] exists to get right.
 func runFlags(t *testing.T, args ...string) (*flag.FlagSet, string, string, string, bool) {
 	t.Helper()
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
@@ -39,7 +38,11 @@ func runFlags(t *testing.T, args ...string) (*flag.FlagSet, string, string, stri
 // was never read, and applying the flags unconditionally instead would have
 // replaced that silence with a different one — every node pinned at the
 // flag's own default, and `logging.level: warn` in the file dead on arrival.
-func TestLogSettingsFlagsOverrideTheFileOnlyWhenGiven(t *testing.T) {
+//
+// Read back through [config.Bootstrap.LogSettings], the one reader `crewlet
+// run` installs its verbosity from, so what is asserted is the folded
+// document rather than a value computed beside it.
+func TestTheLoggingFlagsOverrideTheFileOnlyWhenGiven(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name       string
@@ -111,8 +114,11 @@ func TestLogSettingsFlagsOverrideTheFileOnlyWhenGiven(t *testing.T) {
 			if err != nil {
 				t.Fatalf("expected a valid Tier A document, got: %v", err)
 			}
-			fs, level, format, _, debug := runFlags(t, tc.args...)
-			gotLevel, gotFormat := logSettings(boot, fs, level, format, debug)
+			fs, level, format, logFile, debug := runFlags(t, tc.args...)
+			if err := overrideLogging(boot, fs, level, format, debug, logFile); err != nil {
+				t.Fatalf("overrideLogging: %v", err)
+			}
+			gotLevel, gotFormat := boot.LogSettings()
 			if gotLevel != tc.wantLevel {
 				t.Errorf("level = %v, want %v", gotLevel, tc.wantLevel)
 			}
@@ -141,6 +147,37 @@ func TestFlagLogLevelIsTheShorthandThenTheFlag(t *testing.T) {
 		if got := flagLogLevel(tc.level, tc.debug); got != tc.want {
 			t.Errorf("flagLogLevel(%q, %v) = %v, want %v",
 				tc.level, tc.debug, got, tc.want)
+		}
+	}
+}
+
+// A FOLDED LEVEL IS ONE THE DOCUMENT'S OWN VALIDATOR ACCEPTS. The flag reads
+// leniently — `warning` is warn and a typo is info, because a flag may not
+// fail a run — and engine.New validates the document again after the fold,
+// so what lands in `logging.level` is the level the flag RESOLVED to, spelled
+// as Tier A spells it.
+func TestAFoldedLevelIsSpelledAsTierASpellsIt(t *testing.T) {
+	t.Parallel()
+	cases := map[string]logging.Level{
+		"warning": logging.LevelWarn,
+		"WARN":    logging.LevelWarn,
+		" debug ": logging.LevelDebug,
+		"":        logging.LevelInfo,
+		"dbug":    logging.LevelInfo,
+	}
+	// Every level of the set folds to itself, which is what holds the
+	// lowering of slog's names to the set: a fifth level, or slog renaming
+	// one, fails here.
+	for _, l := range logging.Levels {
+		cases[string(l)] = l
+	}
+	for name, want := range cases {
+		got := flagLevel(name)
+		if got != want {
+			t.Errorf("flagLevel(%q) = %q, want %q", name, got, want)
+		}
+		if !got.Valid() {
+			t.Errorf("flagLevel(%q) = %q, which Tier A refuses", name, got)
 		}
 	}
 }

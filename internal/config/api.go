@@ -1267,8 +1267,10 @@ func (a API) warnings(serving bool) []Warning {
 
 	// AN INSECURE POSTURE SOMEBODY ACKNOWLEDGED IS STILL INSECURE. The
 	// acknowledgement is what makes it legal, and it is a decision made
-	// once that everybody after inherits — so `crewlet validate` says it
-	// out loud every time, exactly as the engine logs it on every start.
+	// once that everybody after inherits — so it is said out loud every
+	// time: by `crewlet validate`, and by every start of a node serving
+	// the API, which logs this advisory as `config_advisory`. A line that
+	// fired only the first time would be a decision nobody can see.
 	if auth.AcceptInsecure {
 		out = append(out, advisory(field("api.auth.accept_insecure"),
 			"insecure sign-in settings are allowed at "+a.ExternalBase()+

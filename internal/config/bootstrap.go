@@ -340,8 +340,9 @@ func (l *Logging) StderrEnabled() bool { return l.Stderr == nil || *l.Stderr }
 //
 // ONE WAY TO SAY IT. `logging.level` is the only key that sets the level,
 // because two keys setting one value is a state where they disagree and
-// something has to arbitrate. The CLI's flags are layered on top of this by
-// `crewlet run`, and only when actually given.
+// something has to arbitrate. `crewlet run` folds its flags into the
+// document before it asks, and only those actually given, so this is the one
+// reader of the answer the run applies.
 func (b *Bootstrap) LogSettings() (slog.Level, logging.Format) {
 	level := slog.LevelInfo
 	if b.Logging.Level != "" {
@@ -1473,8 +1474,11 @@ type Stream struct {
 	// It does NOT gate the broker's warnings and errors, which reach the
 	// log at their own severity whatever this says — that half is what the
 	// bridge exists for. The lines it unlocks are still DEBUG lines, so
-	// they also need a destination at `debug` to be recorded; Warnings()
-	// says so when this is set and none is.
+	// they also need a destination at `debug` to be recorded;
+	// [Bootstrap.Warnings] says so when this is set and none is — in
+	// `crewlet validate`, and in the `config_advisory` lines every
+	// `crewlet run` logs at its start, judged with that run's own logging
+	// flags folded in.
 	//
 	// Refused for `type: nats`: an external cluster logs wherever its own
 	// operator configured it to, and a flag recorded here would reach

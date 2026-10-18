@@ -862,7 +862,9 @@ name the proxy's own block in `api.trusted_proxies` too, or every caller shares
 the proxy's address — one sign-in throttle curve per login for everybody,
 so a stranger guessing at somebody's login slows that person's own sign-in,
 and one client in every audit row. `crewlet validate` warns about an `https` external
-URL with no proxy trusted, because the engine never terminates TLS itself.
+URL with no proxy trusted, and every start of a node serving the API logs the
+same warning as `config_advisory`, because the engine never terminates TLS
+itself.
 
 ```bash
 crewlet run -config crewlet.yaml    # engine + embedded API on :80
@@ -1771,7 +1773,14 @@ rule in both directions: it replaces `logging.file.path` for one run, and an
 explicit `-log-file ""` is how a node with a file configured is asked to write
 none. It moves only the *path* — the shape and the rotation caps describe the
 disk this deployment runs on rather than this invocation, so they stay the
-file's.
+file's. Each flag given is folded into the document the node runs, so the
+level, the file and the [advisories every start
+logs](../reference/cli.md#every-start-says-what-its-tier-a-is-worth-knowing)
+all read one answer: a node started with `-debug` is not told the embedded
+broker's debug output has nowhere to go — unless `logging.stderr: false` hands
+the stream to a log file that keeps a quieter `logging.file.level` of its own,
+which `-debug` does not raise, and then the line names that level rather than
+`-debug`.
 
 **The first lines of a run come out in the flag's shape, not the file's — and
 before any log file exists.** The `${VAR}` warnings a Tier A document produces
@@ -1783,6 +1792,18 @@ the right way round: `-debug` is turned on most often to watch the config load
 itself fail, so the flags have to take effect first. If a boot fails on the
 document itself, stderr is the only place it is recorded — start there before
 the log file.
+
+**What the document is worth knowing comes out after the file is open.** A
+Tier A that is valid and carries a consequence — no backup owner, a declined
+fsync, an acknowledged insecure sign-in posture — is logged at `WARN` on every
+start as one `config_advisory` line per warning, with `config=bootstrap`, the
+`path` the remedy is written at and the whole message as `detail`: the same
+list `crewlet validate` prints, for every deployment nobody ran `validate` on.
+Unlike the `${VAR}` lines above they come out once the document, with the
+run's flags folded in, has passed every Tier A rule and the log file is
+attached, so they are in it, and they are judged on that same document. A
+deployment that has said everything logs none. See
+[`crewlet run`](../reference/cli.md#every-start-says-what-its-tier-a-is-worth-knowing).
 
 A value the build does not recognise is treated differently in the two
 places, on purpose. In a **flag** it resolves to the default — a bad log level
@@ -2030,7 +2051,12 @@ broker narrating its own housekeeping.
 Both switches have to agree for these to appear: `stream.debug` decides
 whether nats-server produces them, and a destination at `debug` decides
 whether anything records them. `crewlet validate` warns when the first is set
-and the second is not. `stream.debug` is **refused** for `stream.type: nats` —
+and the second is not, and so does every start, as `config_advisory` — judged
+with the run's own `-debug` / `-log-level` folded in, so a node started with
+`-debug` is not warned unless `logging.stderr: false` hands the stream to a log
+file that keeps a quieter level of its own. The line names the cause it found
+and only the changes that would record the broker: there, `logging.file.level`,
+never `-debug`. `stream.debug` is **refused** for `stream.type: nats` —
 an external cluster logs wherever its own operator configured it to, so a flag
 here would reach nothing.
 

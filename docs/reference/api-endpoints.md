@@ -518,7 +518,8 @@ caller shares the proxy's address and therefore one curve per login — a
 stranger guessing at somebody's login puts that person's own sign-in behind the
 same wait — and every audit row names the proxy.
 `crewlet validate` warns when `api.external_url` is `https` and no proxy is
-trusted, because the engine never terminates TLS itself.
+trusted, and every start of the node logs the same warning as
+`config_advisory`, because the engine never terminates TLS itself.
 
 ### Which permission a route needs
 

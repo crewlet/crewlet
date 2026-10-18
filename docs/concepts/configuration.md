@@ -177,11 +177,13 @@ both ways out: a data node on a leaf, a broker member without `data`, and
 `ingress` or `workers` without `data`. Every data node holds the whole estate
 as a member of the broker, and a node without `data` reaches the estate
 through one — so a node without `data` on an embedded stream joins the fleet
-as a leaf through `stream.leaf.urls`. `crewlet validate` also warns about two
-valid shapes: a member whose peer list names more than four other members
-(no stream keeps more than five copies, so a sixth member is a voter holding
-nothing — a fleet grows by adding leaves), and a fleet node that left
-`node.roles` undeclared and so runs every role.
+as a leaf through `stream.leaf.urls`. Two valid shapes are warned about, by
+`crewlet validate` and by every start of the node, which logs them as
+`config_advisory`: a member whose peer list names more than four other
+members (no stream keeps more than five copies, so a sixth member is a voter
+holding nothing — a fleet grows by adding leaves), and a fleet node that left
+`node.roles` undeclared and so runs every role. The start judges the roles it
+runs with, so a fleet node given `-roles` is not told they are undeclared.
 
 #### `node.labels`
 
@@ -216,7 +218,7 @@ The engine boots in this order:
    the only thing that sets the console destination; a later command changes how
    loud it is with `SetVerbosity` and keeps the sink already installed. The level
    and format come from the file's `logging:` block with any `-log-level` /
-   `-log-format` / `-debug` flag layered on top, and only where the flag was
+   `-log-format` / `-debug` flag folded into it, and only where the flag was
    actually given. Lines emitted *before* this — the file's own `${VAR}`
    warnings, a refused field — come out under the flags alone, which is the
    best a process can do about a file it has not opened yet
@@ -233,12 +235,19 @@ The engine boots in this order:
    the Tier A document itself never reaches this step, so stderr is the only
    record of it, `logging.stderr` notwithstanding
 4. Hold the Tier A this process is about to run to Tier A's rules once more —
-   the file with every `-roles`, `-api-host` and `-api-port` flag applied. The
-   engine does this itself, before it opens anything, because it is the one
-   thing that runs Tier A: the file was validated as it loaded, but a flag, or
-   a bootstrap a tool built in code, reaches the engine having passed no rule,
-   and a node that opened its store first would have migrated a database for a
-   config it was always going to refuse
+   the file with every run flag applied: `-roles`, `-api-host`, `-api-port`
+   and the four logging flags. The file was validated as it loaded, but a flag
+   reaches every rule that reads what it moved — `-api-port` on a file with no
+   `api:` block turns on an API that has to name `api.external_url` — so
+   `crewlet run` asks as soon as the flags are in, and its refusal names them.
+   Once that has passed, every advisory Tier A raises is logged, one
+   `config_advisory` line at `WARN` each — after the file is open, so they are
+   in it, and judged on that same document (see
+   [what every start says](../reference/cli.md#every-start-says-what-its-tier-a-is-worth-knowing)).
+   The engine asks the rules again itself, before it opens anything, because
+   it is the one thing that runs Tier A: a bootstrap a tool built in code
+   reaches it having passed no rule, and a node that opened its store first
+   would have migrated a database for a config it was always going to refuse
 5. Open the store file and start or dial the stream — a node without `data` opens a scratch store, deleted at every boot, and joins the members' broker as a leaf
 6. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
 7. Start the **core runtime** — on every data node, with a company or without one: the [state log](../guides/consistency.md) for **every** registered domain, the node gate over every identity-claiming log, the [identity estate](identity-and-access.md) with the loops that keep this node's view of it, and — on a node that publishes — the log's own trim and the identity duties. None of it depends on a company, and a node with none is exactly the one that has to sign a Tier A token's session in — `ingress` requires `data`, so the node anybody signs in on always has it — because that session is what the dashboard creates the company through; the company's first person is invited or created once it declares the human seat they will hold. It is **every** domain rather than the identity estate alone because a join replaces the whole replicated file and a snapshot names every registered domain, and because the trim counts nodes per log: a node that applied part of the register could neither adopt nor donate, and would pin the rest of the logs' trims for as long as it was up. A node without `data` starts none of it: it applies no log, and reaches the estate — the identity directory included — through a node that holds it ([A node that holds no data](scaling.md#a-node-that-holds-no-data))
@@ -955,15 +964,17 @@ are separate settings because they are separate sockets — a person reaches
 Without a public listener the two are the same address and only
 `api.external_url` is stated.
 
-### What `crewlet validate` warns about
+### The API postures Tier A warns about
 
 Three API postures are **valid** and worth reading before a deployment runs on
 them. None can be a refusal, because each is a configuration that works exactly
-as written with its consequence somewhere else:
+as written with its consequence somewhere else. `crewlet validate` prints each,
+and every start of a node serving the API logs each as a `config_advisory`
+line at `WARN`:
 
 | Warning | Why it is not a refusal |
 |---------|-------------------------|
-| `api.auth.accept_insecure` is set | It is what makes an otherwise-refused posture legal. The acknowledgement is a decision made once that everybody after inherits, so `crewlet validate` says it every time and the engine logs it on every start |
+| `api.auth.accept_insecure` is set | It is what makes an otherwise-refused posture legal — `totp: optional` on an address a browser reaches over the network. The acknowledgement is a decision made once that everybody after inherits, so `crewlet validate` says it every time and every start logs it |
 | `api.external_url` is `http://` off loopback | The session cookie cannot carry `Secure` and no `__Host-` prefix protects it, so every credential travels in the clear — but a tunnel, a staging box and an internal network genuinely look like this. The one posture it *would* be a refusal for, an optional second factor, already is one |
 | `api.external_url` is `https://` and `api.trusted_proxies` is empty | The engine never terminates TLS itself, so something in front of it does — and unless it is named, every caller's source is its address. The sign-in throttle then keys every caller's attempts at one login together, so a stranger guessing at somebody's login slows that person's own sign-in, and every audit row names the proxy. Not a refusal because one front end is right with the list empty: a balancer that passes each client's own address through as the peer rather than in a header |
 
@@ -1092,7 +1103,8 @@ answer says whether the caller's credential may change the document
 writes the document — a lead's edit of their own team included — is drawn
 disabled with that sentence, and the org builder opens read-only.
 
-`crewlet validate` warns about a list that is valid and almost certainly wrong:
+`crewlet validate` warns about a list that is valid and almost certainly wrong,
+and so does every start of the node, as `config_advisory`:
 an id that names no token in `api.auth.tokens` (it lets nobody write), and a
 list naming no configured token at all (nothing may change the document
 through the API — a frozen document). An entry outside the token-id grammar
