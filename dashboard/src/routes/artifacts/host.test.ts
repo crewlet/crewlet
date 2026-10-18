@@ -67,11 +67,27 @@ describe("a write's verdict", () => {
     });
   });
 
-  test("is a refusal when nothing was decided, or the transport refused it", () => {
-    expect(() => bridgeOutcome({ verdict: "unknown", reason: "lost" } as never)).toThrow("lost");
-    expect(() =>
-      bridgeOutcome({ verdict: "refused", code: "write_budget", reason: "slow down" } as never),
-    ).toThrow("slow down");
+  test("is an answer whichever side of the log decided it", () => {
+    // A VALUE THE GRAMMAR REFUSES BEFORE THE LOG is the same answer as one
+    // the applier refuses: the contract resolves both, so a page handles
+    // `invalid` one way.
+    expect(bridgeOutcome({ verdict: "invalid", reason: "score is a number" })).toEqual({
+      verdict: "invalid",
+      reason: "score is a number",
+    });
+    expect(bridgeOutcome({ verdict: "forbidden", reason: "view only" })).toEqual({
+      verdict: "forbidden",
+      reason: "view only",
+    });
+  });
+
+  test("is a refusal only when nothing was decided", () => {
+    expect(() => bridgeOutcome({ verdict: "unknown", reason: "lost" })).toThrow(
+      expect.objectContaining({ code: "unavailable", message: "lost" }),
+    );
+    expect(() => bridgeOutcome({ verdict: "rate_limited", reason: "slow down" })).toThrow(
+      expect.objectContaining({ code: "rate_limited", message: "slow down" }),
+    );
   });
 });
 

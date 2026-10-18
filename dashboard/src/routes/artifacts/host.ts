@@ -161,7 +161,12 @@ export function bridgeDoc(
   };
 }
 
-/** A write's result as a page handles it. */
+/**
+ * A write's result as a page handles it: RESOLVED for every verdict the engine
+ * decided, whichever side of the log decided it, and REJECTED only where it
+ * decided nothing (a spent budget, an answer nobody could establish), as the
+ * runtime contract says (`docs/reference/artifact-runtime.md`).
+ */
 export function bridgeOutcome(result: WriteResult): BridgeWriteOutcome {
   switch (result.verdict) {
     case "applied":
@@ -170,15 +175,8 @@ export function bridgeOutcome(result: WriteResult): BridgeWriteOutcome {
       return { verdict: "pending" };
     case "unknown":
       throw new Refusal("unavailable", result.reason);
-    case "refused":
-      throw new Refusal(
-        result.code === "write_budget"
-          ? "rate_limited"
-          : result.code === "forbidden"
-            ? "forbidden"
-            : "invalid",
-        result.reason,
-      );
+    case "rate_limited":
+      throw new Refusal("rate_limited", result.reason);
     default:
       return {
         verdict: result.verdict,

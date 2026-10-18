@@ -226,10 +226,15 @@ document has moved, and `conflict` carries the current documents.
 | `gone` | The store was purged or the artifact trashed |
 | `pending` | Accepted, and not yet applied on the node that answered; the runtime resolves it from the push that follows |
 
-A write may also reject before it reaches the log: `rate_limited` (with how
-long to wait), `capability_not_declared`, `forbidden` (no share that writes
-data) and `unavailable` (the engine could not be reached; nothing was written
-unless a later read shows it).
+A write RESOLVES with its verdict whichever side of the log the engine decided
+it on: a value the grammar refuses before anything is appended is `invalid`
+exactly as one the applier refuses is, a share that writes no data is
+`forbidden`, and a trashed or purged store is `gone`. A write REJECTS only
+where nothing about it was decided: `rate_limited` (this node's write budget is
+spent; the message says how long to wait, and the same write may be sent
+again), `capability_not_declared` (refused by the host before the engine) and
+`unavailable` (the engine could not be reached; nothing was written unless a
+later read shows it).
 
 Reads honour the collection's read rule on every path, the subscription
 included: a page reading an `own_rows` collection receives the viewer's rows
@@ -354,6 +359,7 @@ Every call returns a promise. A rejection carries `{ code, message }`, with
 | `rate_limited` | Too many writes; the message says how long to wait |
 | `unavailable` | The host could not reach the engine |
 
-Data writes resolve with a `WriteOutcome` rather than rejecting for every
-verdict the engine decided, so a page handles `conflict` and `invalid` as
-answers, not exceptions.
+Data writes resolve with a `WriteOutcome` for every verdict the engine
+decided, so a page handles `conflict`, `invalid` and `forbidden` as answers,
+not exceptions; they reject only with `rate_limited`,
+`capability_not_declared` or `unavailable`.
