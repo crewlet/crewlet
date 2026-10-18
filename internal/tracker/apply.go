@@ -273,6 +273,19 @@ func (c applyContext) skewMs() int64 {
 	return c.brokerAt.Sub(c.authored()).Milliseconds()
 }
 
+// turnSpendStatement is [Applier.applyTurn]'s write of a turn's spend onto
+// its task's running totals, named for the plan test.
+const turnSpendStatement = `
+		UPDATE tracker_tasks SET
+			spend_turns = spend_turns + ?, spend_rounds = spend_rounds + ?,
+			spend_input = spend_input + ?, spend_output = spend_output + ?,
+			spend_cache_read = spend_cache_read + ?,
+			spend_cache_write = spend_cache_write + ?,
+			spend_wall_ms = spend_wall_ms + ?, spend_tokens = spend_tokens + ?,
+			spend_workers = spend_workers + ?,
+			spend_sent_back = spend_sent_back + ?
+		WHERE id = ?`
+
 // applyTurn records a turn and adds its spend to the task.
 //
 // THE ONE ADDITIVE OP. The insert is what gates the addition — the counters
@@ -322,16 +335,7 @@ func (a *Applier) applyTurn(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		// A REDELIVERY, and the whole point of gating on the insert.
 		return 0, nil
 	}
-	spend, err := tx.ExecContext(ctx, `
-		UPDATE tracker_tasks SET
-			spend_turns = spend_turns + ?, spend_rounds = spend_rounds + ?,
-			spend_input = spend_input + ?, spend_output = spend_output + ?,
-			spend_cache_read = spend_cache_read + ?,
-			spend_cache_write = spend_cache_write + ?,
-			spend_wall_ms = spend_wall_ms + ?, spend_tokens = spend_tokens + ?,
-			spend_workers = spend_workers + ?,
-			spend_sent_back = spend_sent_back + ?
-		WHERE id = ?`,
+	spend, err := tx.ExecContext(ctx, turnSpendStatement,
 		turn.Spend.Turns, turn.Spend.Rounds, turn.Spend.Input, turn.Spend.Output,
 		turn.Spend.CacheRead, turn.Spend.CacheWrite, turn.Spend.WallMs,
 		turn.Spend.Tokens(), turn.Spend.Workers, turn.Spend.SentBack, turn.Task)
