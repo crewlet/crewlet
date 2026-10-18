@@ -2,8 +2,17 @@
 /** What the artifacts' screens say: history rows as sentences, audiences and roles. */
 
 import { describe, expect, test } from "vitest";
-import type { ArtifactHistoryEntry } from "~/protocol/index.ts";
-import { actorName, audienceKey, historyWords, roleIncludes } from "./words.ts";
+import type { ArtifactHistoryEntry, DataHistoryEntry } from "~/protocol/index.ts";
+import {
+  actorName,
+  audienceKey,
+  cellChangeWords,
+  dataChangeWords,
+  dataRefusalReason,
+  dataRefusalText,
+  historyWords,
+  roleIncludes,
+} from "./words.ts";
 
 const names = {
   audience: (raw: string) => (raw === "seat:pm" ? "Pat Mills" : raw),
@@ -85,5 +94,59 @@ describe("a role", () => {
     expect(roleIncludes("editor", "contributor")).toBe(true);
     expect(roleIncludes("viewer", "contributor")).toBe(false);
     expect(roleIncludes("", "viewer")).toBe(false);
+  });
+});
+
+describe("a datastore write in words", () => {
+  const entry = (over: Partial<DataHistoryEntry>): DataHistoryEntry => ({
+    seq: 1,
+    op_id: "op",
+    op: "write",
+    verdict: "applied",
+    actor: { name: "miles", kind: "human" },
+    at: "2026-10-18T10:00:00Z",
+    changes: [],
+    digest: "",
+    ...over,
+  });
+  const label = (_: string, field: string) => ({ notes: "Notes", gate: "Gate" })[field] ?? field;
+
+  test("names the columns it changed by their labels", () => {
+    expect(
+      dataChangeWords(
+        entry({ changes: [{ c: "gates", d: "r7", op: "update", f: [{ f: "notes" }] }] }),
+        label,
+      ),
+    ).toBe("changed Notes in 1 row");
+  });
+
+  test("a refused write says what it tried, and never the applier's own reason", () => {
+    const refused = entry({
+      verdict: "invalid",
+      reason:
+        "op 0: notes is long text, written whole only guarded: name the if_version you edited, or append",
+      changes: [{ c: "gates", d: "r7", op: "update", f: [{ f: "notes" }] }],
+    });
+    const said = dataChangeWords(refused, label);
+    expect(said).toBe("tried to change Notes in 1 row");
+    expect(said).not.toMatch(/op 0|if_version/);
+    expect(dataRefusalReason("conflict")).toBe("It changed since it was read.");
+    expect(dataRefusalText("invalid")).toBe("Not saved: the value does not fit this column.");
+  });
+
+  test("a refused write with nothing recorded says it tried to make a change", () => {
+    expect(dataChangeWords(entry({ verdict: "conflict" }), label)).toBe("tried to make a change");
+  });
+});
+
+describe("a cell's change in its history", () => {
+  test("says what it was set to, never “empty to”", () => {
+    expect(cellChangeWords({ f: "gate", a: "Settlement algorithm" })).toBe(
+      "Set to “Settlement algorithm”",
+    );
+    expect(cellChangeWords({ f: "gate", b: "a", a: "b" })).toBe("Changed from “a” to “b”");
+    expect(cellChangeWords({ f: "gate", b: "a" })).toBe("Cleared “a”");
+    expect(cellChangeWords({ f: "tags", b: [], a: ["x", "y"] })).toBe("Set to “x, y”");
+    expect(cellChangeWords({ f: "notes", bh: "d1", ah: "d2" })).toBe("Changed the text");
   });
 });
