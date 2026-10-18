@@ -28,6 +28,7 @@ import {
   Preferences,
   UserBlock,
   accountOf,
+  viaLine,
   whoLine,
   type Account,
 } from "./UserBlock.tsx";
@@ -98,6 +99,17 @@ const ada: ViewerState = {
   handle: "ada",
   owner: "ada",
   name: "Ada Lovelace",
+  kind: "human",
+};
+
+/** A Tier A token bound to Miles's human seat, as `/viewer` answers it. */
+const reviewToken: ViewerState = {
+  ...nobody,
+  login: "token:review",
+  grants: ["admin"],
+  handle: "miles",
+  owner: "miles",
+  name: "Miles",
   kind: "human",
 };
 
@@ -222,6 +234,43 @@ describe("who the block says this is", () => {
       detail: "bob.smith · No seat",
       grants: "Access: Overview only",
     });
+  });
+
+  // A CREDENTIAL ACTING AS A SEAT IS THE SEAT. A Tier A token bound to
+  // Miles's seat read "token:review" over "Miles": the credential's spelling
+  // as the name, and the place it acts for as the aside. It has no name of
+  // its own, so it is called by the seat, and the line under it says how it
+  // is signed in. Mutation: name it by `readerName` and the first case reads
+  // "token:review" again.
+  test("a token bound to a seat is the seat, with how it is signed in under it", () => {
+    const session = { login: "token:review", seat: "miles", kind: "person" };
+    expect(whoLine(reviewToken, "Miles", session)).toEqual({
+      name: "Miles",
+      detail: "via API token review",
+      grants: "Access: Admin",
+    });
+    // THE CHART UNREAD, the handle stands in, written as a handle.
+    expect(whoLine({ ...reviewToken, name: "" }, "", session).name).toBe("@miles");
+    // A SERVICE ACCOUNT BOUND TO A SEAT is the seat too.
+    expect(
+      whoLine({ ...reviewToken, login: "ci:deploy" }, "Miles", { login: "ci:deploy" }),
+    ).toMatchObject({ name: "Miles", detail: "via service account ci:deploy" });
+    // AND WHILE THE VIEWER HAS NOT ANSWERED, from the session alone.
+    expect(whoLine({ ...nobody, loading: true }, "", { ...session, grants: ["admin"] })).toEqual({
+      name: "@miles",
+      detail: "via API token review",
+      grants: "Access: Admin",
+    });
+  });
+
+  // THE CREDENTIAL IS READ OFF THE LOGIN'S GRAMMAR, never the session's kind,
+  // which is a person's for a seat-bound token. A person's login is never
+  // said this way.
+  test("how a credential is signed in is read off its login", () => {
+    expect(viaLine("token:review")).toBe("via API token review");
+    expect(viaLine("ci:deploy")).toBe("via service account ci:deploy");
+    expect(viaLine("ada.lovelace")).toBe("");
+    expect(viaLine("")).toBe("");
   });
 
   test("nobody and not-yet-known are their own sentences", () => {
@@ -376,6 +425,23 @@ describe("who the block says this is", () => {
     expect(badge().textContent).not.toBe("");
   });
 
+  // A TOKEN ACTING AS A SEAT keeps the seat's face, its initials, and wears
+  // the key on its corner, so the face says who and the corner says how.
+  // The CONTROL is the unbound token above, whose key is its whole face.
+  // Mutation: drop the mark and the corner is bare; draw the key as the face
+  // and the initials are gone.
+  test("a token bound to a seat wears the seat's initials, with a key on its corner", () => {
+    const frame = () => document.querySelector(".crewlet-account-row .crewlet-avatar-frame")!;
+    render(block(reviewToken, "Miles"));
+    expect(frame().querySelector(".crewlet-avatar")!.textContent).toBe("MI");
+    expect(frame().querySelector(".crewlet-avatar__icon")).toBeNull();
+    expect(frame().querySelector(".crewlet-avatar__status--mark svg")).not.toBeNull();
+    cleanup();
+    // A PERSON wears neither.
+    render(block(ada, "Founder"));
+    expect(document.querySelector(".crewlet-account-row .crewlet-avatar__status--mark")).toBeNull();
+  });
+
   // THE ONE BADGE THAT IS THE READER carries the accent's ring — and a badge
   // standing in for nobody, or for an answer still out, does not.
   test("the reader's own badge is ringed in the accent, once the engine has said who it is", () => {
@@ -386,6 +452,11 @@ describe("who the block says this is", () => {
     cleanup();
     render(block({ ...nobody, login: "token:ops", unbound: true }));
     expect(ringed()).toBe(1);
+    // A MARKED BADGE draws no ring: the kit cuts the mark's notch from the
+    // outline the ring would follow.
+    cleanup();
+    render(block(reviewToken, "Miles"));
+    expect(ringed()).toBe(0);
     for (const unknown of [
       { ...nobody, anonymous: true },
       { ...nobody, loading: true },
@@ -395,6 +466,21 @@ describe("who the block says this is", () => {
       expect(document.querySelector(".crewlet-account-row .crewlet-avatar")).not.toBeNull();
       expect(ringed()).toBe(0);
     }
+  });
+
+  // ONE CONTROL BESIDE THE NAME: the preferences, the mode among them. The
+  // foot also carried a one-press mode flip, which with the link's chevron
+  // left a name already cut short by the rail's width two glyph buttons to
+  // share it with. Mutation: put the flip back and there are two.
+  test("the row holds one control, the preferences, and the mode is inside it", async () => {
+    render(block(ada, "Founder"));
+    const controls = document.querySelectorAll(".crewlet-account-row__actions button");
+    expect([...controls].map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Account and preferences",
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Account and preferences" }));
+    const menu = await screen.findByRole("dialog", { name: "Account and preferences" });
+    expect(within(menu).getByRole("radiogroup", { name: "Mode" })).toBeTruthy();
   });
 
   // A TAB OPENED WITH A SESSION ALREADY IN THE BROWSER learns who it is read

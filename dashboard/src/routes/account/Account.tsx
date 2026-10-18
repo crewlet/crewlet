@@ -101,6 +101,7 @@ import { fmtDateTime } from "~/lib/format.ts";
 import { useIamGesture } from "~/lib/iamWrite.ts";
 import { refusalText } from "~/lib/refusal.ts";
 import { goSignIn } from "~/lib/session.ts";
+import { ownsAccount, tierATokenOf } from "~/lib/login.ts";
 import { SignOutEverywhereDialog } from "~/components/SignOutEverywhere.tsx";
 import { handleLabel, indexOrg } from "~/lib/seats.ts";
 import { useConnection, useOrg } from "~/lib/store-hooks.ts";
@@ -119,11 +120,6 @@ const READ = { refetchOnFocus: true };
 function listOf<T>(answer: unknown, field: string): T[] {
   const list = (answer as Record<string, unknown> | null)?.[field];
   return Array.isArray(list) ? (list as T[]) : [];
-}
-
-/** The Tier A token id a session exchanged from one acts under, or "". */
-export function tierATokenOf(login: string): string {
-  return login.startsWith("token:") ? login.slice("token:".length) : "";
 }
 
 export function Account() {
@@ -153,7 +149,7 @@ export function Account() {
   return (
     <>
       <PageNote>{noteFor(answer)}</PageNote>
-      {answer.kind === "person" ? (
+      {ownsAccount(answer) ? (
         <PersonAccount session={answer} onSessionMoved={sessionMoved} />
       ) : (
         <NotAPerson session={answer} />
@@ -171,7 +167,7 @@ export function Account() {
  * telling a Tier A token's session that it holds none of them.
  */
 function noteFor(session: SessionAnswer): string {
-  if (session.kind === "person") {
+  if (ownsAccount(session)) {
     return "Your profile, security, sessions and tokens.";
   }
   return tierATokenOf(session.login)

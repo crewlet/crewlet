@@ -10,6 +10,7 @@
  */
 
 import { CREDENTIAL_CLASSES, MACHINE_LOGIN, MAX_LOGIN, PERSON_LOGIN } from "~/contract/identity.ts";
+import type { SessionAnswer } from "~/protocol/index.ts";
 
 /** Whose login it is: a person's (dots) or a service account's (a colon). */
 export type LoginKind = "person" | "machine";
@@ -51,4 +52,28 @@ export function loginKind(login: string): LoginKind | null {
   if (GRAMMAR.person.test(login)) return "person";
   if (GRAMMAR.machine.test(login)) return "machine";
   return null;
+}
+
+/**
+ * The Tier A token id a login names (`review` for `token:review`), or "" for
+ * any other login. A Tier A token's session acts under `token:<id>`, the one
+ * machine login the engine mints itself (`iam.TokenLogin`).
+ */
+export function tierATokenOf(login: string): string {
+  return login.startsWith("token:") ? login.slice("token:".length) : "";
+}
+
+/**
+ * Whether a session is a PERSON'S, with a directory row of their own: a
+ * profile, a password, a second factor, sessions and tokens to manage.
+ *
+ * NOT THE SESSION'S `kind` ALONE. A Tier A token bound to a human seat acts
+ * as that seat's holder, so the engine answers its session `kind: "person"`
+ * (`internal/api/auth`, `principalFor`), and its id is derived from the
+ * token rather than a row's. Read as a person, the Account page asked the
+ * directory for a profile nobody holds and drew "Not found". The login says
+ * which it is, by its grammar.
+ */
+export function ownsAccount(session: Pick<SessionAnswer, "kind" | "login">): boolean {
+  return session.kind === "person" && tierATokenOf(session.login) === "";
 }
