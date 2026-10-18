@@ -202,8 +202,30 @@ const MaxHold = objstore.MaxPresignTerm + time.Duration((artifacts.MaxTextFileBy
 // holdUntil is the end of a hold whose bytes are stored no later than last.
 func holdUntil(last time.Time) time.Time { return last.Add(holdTail) }
 
-// Report is what the linter found: refusals never reach here (they are
-// errors); warnings ride on success.
+// Report is what a publish found and did beside the version it landed:
+// the linter's warnings (its refusals are errors and never reach here), and
+// where the version's files came from.
 type Report struct {
 	Warnings []lint.Finding `json:"warnings,omitempty"`
+
+	// Files counts the version's files by where their bytes came from; nil
+	// where the pipeline did not compose the manifest (a rollback, whose
+	// files the domain copies from the version it restores).
+	Files *FileCounts `json:"files,omitempty"`
+}
+
+// FileCounts is one version's files by where their bytes came from.
+//
+// IT IS COUNTED FROM THE MANIFEST THAT LANDED, never from the upload intent:
+// the intent judges a file by the digest of its author's bytes, while a page
+// is stored in its linted form, so an unchanged page never matches what the
+// artifact holds, is sent, and is then found held once linted. Only the
+// manifest knows that.
+type FileCounts struct {
+	// Stored are the files whose bytes this publish stored as new objects.
+	Stored int `json:"stored"`
+
+	// Carried are the files whose bytes the artifact already held, however
+	// they arrived: named as carried, or sent and then found held.
+	Carried int `json:"carried"`
 }

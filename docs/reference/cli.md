@@ -1328,8 +1328,13 @@ refused rather than overwritten; `-force` publishes over it, a person's
 gesture. A new version keeps the head's runtime contract and capabilities
 unless `-contract` or `-capabilities` names others: `-capabilities db,state`
 declares exactly that set, `-capabilities none` declares none, and a name this
-build does not serve is refused before any byte moves. The publish policy's
-warnings are printed beneath the result.
+build does not serve is refused before any byte moves. The result line counts
+the files two ways: how many this command sent, and how many of the version's
+files are new and how many the artifact already held, as the node counted the
+manifest that landed. The two differ for an unchanged page: a page is stored
+in its linted form, so its own digest never matches what the artifact holds
+and it is sent, and the node then finds the linted page already held and
+carries it. The publish policy's warnings are printed beneath the result.
 
 **`update` changes the title, the description or the icon** (`PATCH
 /artifacts/{id}`, an editor's) and sends exactly the flags it names: an

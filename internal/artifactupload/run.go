@@ -63,6 +63,10 @@ type run struct {
 	themes []fileTheme
 
 	warnings []lint.Finding
+
+	// counts are the composed manifest's files by where their bytes came
+	// from, nil until it is composed.
+	counts *FileCounts
 }
 
 // pending is one file of the new version, as the run assembles it.
@@ -198,8 +202,9 @@ func artifactString(id artifacts.ID) string {
 	return id.String()
 }
 
-// report is what the run's linter found.
-func (r *run) report() Report { return Report{Warnings: r.warnings} }
+// report is what the run's linter found and where the version's files came
+// from.
+func (r *run) report() Report { return Report{Warnings: r.warnings, Files: r.counts} }
 
 // compose assembles the next version from the request: every file's bytes
 // found, read back and checked, the edits applied, every page and stylesheet
@@ -250,6 +255,14 @@ func (r *run) compose(ctx context.Context, mode manifest.Mode, specs []FileSpec,
 		return artifactsdomain.PublishInput{}, err
 	}
 	r.themeWarnings(m)
+	r.counts = &FileCounts{}
+	for _, e := range m.Files {
+		if e.Carried {
+			r.counts.Carried++
+		} else {
+			r.counts.Stored++
+		}
+	}
 	return artifactsdomain.PublishInput{
 		Contract: resolved, Capabilities: caps, Manifest: m, Uploaded: uploaded, SearchText: search,
 	}, nil

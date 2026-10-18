@@ -431,7 +431,7 @@ func (r *run) close(ctx context.Context, published artifactsdomain.Published, m 
 			}
 		}
 		rec.State, rec.Claimed = stateClosed, time.Time{}
-		rec.Outcome = &outcome{Published: published, Warnings: r.warnings}
+		rec.Outcome = &outcome{Published: published, Report: r.report()}
 		return nil
 	})
 	if err != nil {

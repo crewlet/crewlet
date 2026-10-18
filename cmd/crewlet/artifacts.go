@@ -996,6 +996,10 @@ func (p publishing) run(target, entry string, head newHead, label, contract, ite
 			Line    int    `json:"line"`
 			Message string `json:"message"`
 		} `json:"warnings"`
+		Files *struct {
+			Stored  int `json:"stored"`
+			Carried int `json:"carried"`
+		} `json:"files"`
 	}
 	body := map[string]any{"upload": intent.Upload, "files": specs, "entry": entry,
 		"label": label, "contract": contract, "work_item": item}
@@ -1030,8 +1034,17 @@ func (p publishing) run(target, entry string, head newHead, label, contract, ite
 			return err
 		}
 	}
-	fmt.Fprintln(p.stdout, outcomeLine(fmt.Sprintf("published %s version %d (%d sent, %d carried)",
-		answer.Artifact, answer.Number, len(intent.Transfers), len(intent.Carried)), answer.writtenAnswer))
+	// WHAT MOVED AND WHAT LANDED ARE TWO COUNTS: the transfers are what this
+	// command sent, and the node's count of the manifest is what the
+	// version holds new. A page the upload sent can still be one the
+	// artifact held (it is stored linted, so its author's digest never
+	// matches), which the intent cannot know and the manifest does.
+	files := fmt.Sprintf("files: %d sent", len(intent.Transfers))
+	if answer.Files != nil {
+		files += fmt.Sprintf(", %d new, %d already held", answer.Files.Stored, answer.Files.Carried)
+	}
+	fmt.Fprintln(p.stdout, outcomeLine(fmt.Sprintf("published %s version %d (%s)",
+		answer.Artifact, answer.Number, files), answer.writtenAnswer))
 	for _, w := range answer.Warnings {
 		fmt.Fprintf(p.stdout, "  warning: %s:%d: %s\n", w.Path, w.Line, w.Message)
 	}

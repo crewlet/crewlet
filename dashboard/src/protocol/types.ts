@@ -5343,6 +5343,8 @@ export interface ArtifactPublished {
   number: number;
   version_id: string;
   warnings?: ArtifactLintFinding[];
+  /** The version's files by where their bytes came from (`artifactupload.FileCounts`). */
+  files?: { stored: number; carried: number };
   op_id: string;
   outcome: "applied" | "pending" | "unknown";
   position: LogPosition;

@@ -6264,7 +6264,10 @@ A file is named by `upload: true` (its bytes came through the upload),
 file at that path); in `mode: patch` a file left out is carried from the base
 and `remove: true` drops one, and `edits` (`old_str`/`new_str`, each matching
 exactly once) change the base version's text. The answer is the new
-version's `number` and the policy linter's `warnings`; `work_item` names the
+version's `number`, the policy linter's `warnings` and `files`
+(`{"stored", "carried"}`: how many of the version's files this publish stored
+new and how many the artifact already held, counted from the manifest that
+landed, so an unchanged page the upload sent is counted as held); `work_item` names the
 tracker item the version is made for, which lists the artifact there
 (`GET /artifacts?work_item=CRW-412`).
 

@@ -31,6 +31,7 @@ type fakeArtifactsNode struct {
 	publishes []map[string]any
 	patches   []map[string]any
 	ifMatch   []string
+	files     map[string]int
 	shares    []map[string]any
 	purges    int
 	refuse    map[string]any
@@ -86,8 +87,11 @@ func newFakeArtifactsNode(t *testing.T) *fakeArtifactsNode {
 			n.keys = append(n.keys, r.Header.Get(opkey.Header))
 			n.ifMatch = append(n.ifMatch, r.Header.Get("If-Match"))
 			n.mu.Unlock()
-			answer(w, http.StatusOK, map[string]any{"artifact": cliArtifact, "number": number,
-				"outcome": "applied"})
+			out := map[string]any{"artifact": cliArtifact, "number": number, "outcome": "applied"}
+			if n.files != nil {
+				out["files"] = n.files
+			}
+			answer(w, http.StatusOK, out)
 		}
 	}
 	mux.HandleFunc("POST /artifacts", record(&n.creates, 1))
@@ -386,6 +390,36 @@ func TestArtifactsPublishSendsOnlyNewBytes(t *testing.T) {
 	}
 	if !carriedBy["style.css"] || !carriedBy["img/logo.svg"] || carriedBy["index.html"] {
 		t.Errorf("the publish carried %v", carriedBy)
+	}
+}
+
+// THE PUBLISH LINE COUNTS WHAT IT SENT AND WHAT THE VERSION HOLDS NEW
+// SEPARATELY: a page the intent asked for is sent, and the node may still find
+// its linted form already held, so "sent" is the transfers and "new" and
+// "already held" are the node's count of the manifest that landed.
+func TestArtifactsPublishCountsWhatWasSentAndWhatWasHeld(t *testing.T) {
+	t.Parallel()
+	node := newFakeArtifactsNode(t)
+	node.carried = []string{"style.css", "img/logo.svg"}
+	node.files = map[string]int{"stored": 0, "carried": 3}
+	stdout, stderr, err := cli(t, "artifacts", "publish", site(t), "-artifact", cliArtifact,
+		bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatalf("publish: %v\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "version 4 (files: 1 sent, 0 new, 3 already held)") {
+		t.Errorf("printed %q", stdout)
+	}
+
+	// A node that answers no count (a rollback's answer has none) is
+	// reported by what was sent alone, never as nothing held.
+	bare := newFakeArtifactsNode(t)
+	stdout, stderr, err = cli(t, "artifacts", "publish", site(t), bootstrapForURL(t, bare.server.URL))
+	if err != nil {
+		t.Fatalf("publish: %v\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "version 1 (files: 3 sent)") {
+		t.Errorf("printed %q", stdout)
 	}
 }
 
