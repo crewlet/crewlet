@@ -549,10 +549,26 @@ func (w *Writer) zone() *time.Location {
 // on the record. Deciding it in the applier instead would make every node
 // re-derive it from rows it applied in its own order, and a counter derived
 // twice is a counter two nodes can disagree about.
+//
+// # A remark's edit is not a patch a caller forms
+//
+// A patch carrying a comment POSTS it, and the one way to rewrite a remark is
+// [Writer.EditComment], which forms the edit from the stored row inside the
+// decide and refuses anybody but its author. A caller stating the edit kind
+// here would be stating a remark it read in another transaction, under an
+// author rule nothing checked — so a patch carrying a comment under that kind
+// is refused, and the kind the applier rewrites words on is only ever this
+// writer's own.
 func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 	ifMatch uint64, patch TaskPatch, kind ChangeKind,
 	notify *Notify) (WriteResult, error) {
 
+	if patch.Comment != nil && kind == ChangeCommentEdited {
+		return WriteResult{}, invalid("an edit of comment %s on task %s is not "+
+			"a patch: a remark is rewritten through EditComment, which forms "+
+			"the edit from the stored row and refuses anybody but its author",
+			patch.Comment.ID, id)
+	}
 	return w.updateTask(ctx, opID, id, project, ifMatch, patch, kind, notify, nil)
 }
 
@@ -746,6 +762,22 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 				return statelog.Decision{}, missingTask(ctx, tx, id,
 					"no change can be made to it")
 			}
+			if patch.Comment != nil && kind != ChangeCommentEdited {
+				// A REMARK ALREADY POSTED IS ANSWERED FROM ITS ROW — see
+				// [postedComment] — and asked before anything about the
+				// item as it stands now, for the reason the ledger answers
+				// a landed operation before its decide runs: the post has
+				// landed, so whatever has become of the item since is not
+				// a reason to refuse it.
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
+				posted, err := postedComment(ctx, tx, id, patch.Comment.ID)
+				if err != nil {
+					return statelog.Decision{}, err
+				}
+				if posted {
+					return statelog.Decision{Version: int64(current.Version)}, nil
+				}
+			}
 			// THE PROJECT THE CALLER DECIDED ON IS STILL THIS TASK'S —
 			// see [stillIn]. A re-route is the project's own decision and
 			// the tag set, the scope and every lead check upstream were
@@ -844,15 +876,17 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 				}
 			}
 			asks := ""
-			if patch.Comment != nil {
-				//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-				fresh, err := settleComment(ctx, tx, id, patch.Comment)
-				if err != nil {
+			if patch.Comment != nil && kind != ChangeCommentEdited {
+				// A POST, and a new one — [postedComment] answered every
+				// other above — so the question it asks is asked now.
+				// An edit asks nobody: what it carries beyond its words
+				// is the stored remark's, and its own amendment is its
+				// check.
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
+				if err := settleAnswer(ctx, tx, id, patch.Comment); err != nil {
 					return statelog.Decision{}, err
 				}
-				if fresh {
-					asks = patch.Comment.Ask
-				}
+				asks = patch.Comment.Ask
 			}
 			charged, err := w.chargeHandOff(current, patch)
 			if err != nil {
@@ -954,63 +988,70 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 	return result, err
 }
 
-// settleComment is the comment's check against the rows it lands among.
+// postedComment reports whether a remark is already on this task under its id.
 //
-// INSIDE THE DECIDE SNAPSHOT, because both facts it checks are about OTHER
-// rows and one of them moves: whether the ask an answer names is still open.
-// The thread read that routes the wake runs before the publish, so two answers
-// decided at once both passed it; the applier's `answered_by IS NULL` then
-// kept the first on the ask while the second landed anyway, claiming to
-// answer a question it did not close. Checked here, the second loses: the
-// first answer's append moved the task's subject, the broker refused the
-// second round's expectation, and the re-decide reads the ask answered and
-// refuses it by name. The ask's decision is immutable, so the choice checked
-// against it here is the choice every node will read beside it.
+// A POST IS WRITTEN ONCE, and the row is its durable record. A re-run of the
+// call that posted it names the same id — derived as the work began, so a
+// rebased attempt names it too even though its operation is new and the
+// ledger does not hold it ([commentID] in internal/agent/builtin) — and the
+// decide answers it from the row and publishes nothing: no history row, no
+// second wake, no watch gesture. Published, the post re-sent the remark as it
+// was first written, and its watch put back on the item somebody who had since
+// stopped following it; the apply leaves an existing row alone
+// ([writeComment]), so the row was safe, but nothing else the record carried
+// was.
 //
-// It reports whether the comment is NEW — no row holds its id yet — because a
-// question asks somebody only when it is written: an edit re-sends the whole
-// comment, `ask` included, and must not put the person asked back on a
-// watcher list they have since left.
-func settleComment(ctx context.Context, tx *sql.Tx, task string,
-	comment *Comment) (bool, error) {
-	var document []byte
-	fresh := false
-	err := tx.QueryRowContext(ctx, `
-		SELECT document FROM tracker_comments WHERE id = ? AND task_id = ?`,
-		comment.ID, task).Scan(&document)
+// AN ID ANOTHER TASK HOLDS IS REFUSED rather than answered: the row is that
+// task's remark, not this one, and a post under its id would be a remark that
+// can never land.
+func postedComment(ctx context.Context, tx *sql.Tx, task, comment string) (bool, error) {
+	var holder string
+	err := tx.QueryRowContext(ctx,
+		`SELECT task_id FROM tracker_comments WHERE id = ?`, comment).Scan(&holder)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		// A NEW COMMENT, which is the only place a decision may be set.
-		fresh = true
+		return false, nil
 	case err != nil:
-		return false, fmt.Errorf("tracker: read comment %s: %w", comment.ID, err)
-	default:
-		var stored Comment
-		if len(document) > 0 {
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			if err := json.Unmarshal(document, &stored); err != nil {
-				return false, fmt.Errorf("tracker: decode comment %s: %w", comment.ID, err)
-			}
-		}
-		if !sameDecision(stored.Decision, comment.Decision) {
-			return false, invalid("comment %s on task %s already exists, and "+
-				"a decision is set only when the question is asked and never "+
-				"changed after — an answer names an option by id, and options "+
-				"edited under it would make that answer mean something else; "+
-				"ask again in a new comment", comment.ID, task)
-		}
+		return false, fmt.Errorf("tracker: read comment %s: %w", comment, err)
+	case holder != task:
+		return false, invalid("comment %s is a remark on task %s, so it "+
+			"cannot be posted on task %s — a new remark takes an id of its own",
+			comment, holder, task)
 	}
+	return true, nil
+}
+
+// settleAnswer is a new remark's check against the rows it lands among: the
+// question it answers, if it answers one.
+//
+// INSIDE THE DECIDE SNAPSHOT, because what it checks is about ANOTHER row and
+// moves: whether the ask an answer names is still open. The thread read that
+// routes the wake runs before the publish, so two answers decided at once both
+// passed it; the applier's `answered_by IS NULL` then kept the first on the
+// ask while the second landed anyway, claiming to answer a question it did not
+// close. Checked here, the second loses: the first answer's append moved the
+// task's subject, the broker refused the second round's expectation, and the
+// re-decide reads the ask answered and refuses it by name. The ask's decision
+// is immutable, so the choice checked against it here is the choice every node
+// will read beside it.
+//
+// ONLY A NEW REMARK REACHES IT. A decision is set when its question is asked
+// and never after, and nothing here has to say so: a post naming a remark
+// already on the thread is answered from that row before this runs
+// ([postedComment]), and an edit carries the stored remark's decision whole
+// ([Writer.EditComment]) and is never settled here at all.
+func settleAnswer(ctx context.Context, tx *sql.Tx, task string, comment *Comment) error {
 	if comment.Answers == nil || *comment.Answers == "" {
-		return fresh, nil
+		return nil
 	}
 	ask, err := readAsk(ctx, tx, task, *comment.Answers)
 	if err != nil {
-		return false, err
+		return err
 	}
 	if err = ask.answerableBy("", comment.ID); err != nil {
-		return false, err
+		return err
 	}
-	return fresh, checkChoice(task, ask.id, ask.decision, comment.Choice)
+	return checkChoice(task, ask.id, ask.decision, comment.Choice)
 }
 
 // settleAskWatch puts the person a new question asks on the task's watchers.

@@ -3534,9 +3534,10 @@ func unansweredWarning(task tracker.Task, actor Actor, comment *tracker.Comment)
 // it. A rebased attempt ([Actor.RebasedTo], ADR-0029) mints its operations
 // afresh so the ledger decides them again, and that is all a rebase is about:
 // the ledger, which forgets. The comment's row does not, so a remark the
-// attempt before it posted is found by its id and left as it stands rather
-// than posted a second time beside it — the one write of a rebased attempt
-// that still lands once. Why a UUIDv5 here and an operation id for a page's
+// attempt before it posted is found by its id, and the writer answers the post
+// from that row and publishes nothing — so an answer, an edit or an unwatch
+// since stands, and nobody is woken a second time. It is the one write of a
+// rebased attempt that still lands once. Why a UUIDv5 here and an operation id for a page's
 // comment is [callOpKey]'s, "What the tracker's tools derive from it".
 //
 // A CALLER WITH NO TURN derives it from the call's operation instead
