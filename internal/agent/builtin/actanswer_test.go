@@ -655,8 +655,11 @@ func (f *ledgerFake) WriteView(_ context.Context, opID string, _ worklet.View,
 	return f.written(opID)
 }
 
+// ViewPrior holds every view a case names, as a shared tab on ENG: a save
+// naming an id no view holds is refused before it writes anything.
 func (f *ledgerFake) ViewPrior(context.Context, string) (worklet.ViewPrior, error) {
-	return worklet.ViewPrior{}, nil
+	return worklet.ViewPrior{Held: true,
+		Container: worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}}, nil
 }
 
 func (f *ledgerFake) WriteTypes(_ context.Context, opID string, _ []worklet.TaskType) (worklet.WriteResult, error) {

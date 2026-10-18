@@ -138,8 +138,10 @@ func (t *saveWorkView) Parameters() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"id": map[string]any{
-				"type":        "string",
-				"description": "The view to replace. Omit to create a new one.",
+				"type": "string",
+				"description": "The view to replace: an id list_work_views " +
+					"lists, or that a save answered. Omit to create a new " +
+					"one, whose id is minted and answered back.",
 			},
 			"container": containerParameter(),
 			"name": map[string]any{
@@ -279,12 +281,24 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		if prior, err = writer.ViewPrior(ctx, id); err != nil {
 			return readFailure(ctx, worklet.SaveWorkViewTool, err), nil
 		}
-		if prior.Held {
-			if denied := t.deps.mayWrite(ctx, authz.ActionViewSave,
-				viewObject(prior.Owner, prior.Container)); denied != nil {
+		if !prior.Held {
+			// AN ID IS ONLY EVER ONE THIS ENGINE MINTED: a view's id is
+			// its create's ([createdViewID]), answered back by the save
+			// that made it and listed by list_work_views. A save naming
+			// an id no view holds CREATED a view under whatever the
+			// caller typed — dots, spaces, a path — as its primary key
+			// and the subject its writes arbitrate on, where "the view
+			// to replace" was what the argument promised.
+			return refused(tools.RefusalNotFound, fmt.Sprintf(
+				"save_work_view: there is no view %q to replace. Name a "+
+					"view list_work_views lists, or omit `id` to create a "+
+					"new one — its id is minted and answered back.",
+				clip(id))), nil
+		}
+		if denied := t.deps.mayWrite(ctx, authz.ActionViewSave,
+			viewObject(prior.Owner, prior.Container)); denied != nil {
 
-				return *denied, nil
-			}
+			return *denied, nil
 		}
 	}
 	view := worklet.View{
