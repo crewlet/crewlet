@@ -21,6 +21,16 @@ type room struct {
 	local  map[string]*localMember
 	remote map[remoteKey]*remoteMember
 
+	// told is, per peer node, the instant of the newest frame this room has
+	// applied from it (the frame's Until, which the peer stamps from its
+	// own clock), and departed the sessions a peer said left, at the
+	// instant of the frame that said so. Together they let a frame that
+	// arrives after newer ones from the same node (the join-time answer,
+	// which waits out the ask's budget before it is applied) fill in only
+	// what the room has not heard since, never undo it.
+	told     map[string]time.Time
+	departed map[remoteKey]time.Time
+
 	// presented is what this node's sockets were last shown, by session:
 	// the fan-out is the difference between it and what the room presents
 	// now. counts is the large-room count they were last shown, nil while
@@ -72,6 +82,7 @@ type remoteMember struct {
 
 func newRoom(id artifacts.ID) *room {
 	return &room{id: id, local: map[string]*localMember{}, remote: map[remoteKey]*remoteMember{},
+		told: map[string]time.Time{}, departed: map[remoteKey]time.Time{},
 		presented: map[string]artifacts.PresenceMember{},
 		outUpsert: map[string]struct{}{}, outLeave: map[string]struct{}{}}
 }
@@ -118,10 +129,29 @@ func (r *room) localMembers() []artifacts.PresenceMember {
 }
 
 // hear lands a peer's frame, reporting whether the room changed. A full frame
-// replaces everything the room held from that node.
+// replaces everything the room held from that node, unless it is OLDER than a
+// frame the room already applied from that node.
+//
+// # A late full frame fills in; it never undoes
+//
+// Frames from one node arrive in the order it sent them, with one exception:
+// the answer to this node's join-time ask is sealed when the peer answers and
+// applied only once the ask has waited out its budget, by which time the
+// peer's broadcasts have already said what changed since. Applied as a
+// replacement, that answer deleted every member the peer gained in between,
+// and the room showed them again only at the peer's next rebroadcast,
+// [artifacts.PresenceRebroadcast] later: measured (internal/artifactspike,
+// S6), a room of fifty joined at once across three nodes took fifteen seconds
+// to show everybody everywhere, against the second the join objective allows.
+// So a frame older than the newest one heard from its node deletes nothing,
+// leaves a member it names alone where a newer frame spoke for that member,
+// and does not bring back a member a newer frame said left. A leave is always
+// applied: a session id is never reused, so a leave is final whenever it
+// arrives.
 func (r *room) hear(f Frame, now time.Time) bool {
 	moved := false
-	if f.Full {
+	stale := f.Until.Before(r.told[f.Node])
+	if f.Full && !stale {
 		named := make(map[string]bool, len(f.Upsert))
 		for _, m := range f.Upsert {
 			named[m.Session] = true
@@ -136,6 +166,11 @@ func (r *room) hear(f Frame, now time.Time) bool {
 	for _, m := range f.Upsert {
 		key := remoteKey{node: f.Node, session: m.Session}
 		held, ok := r.remote[key]
+		if stale {
+			if _, gone := r.departed[key]; ok || gone {
+				continue
+			}
+		}
 		if !ok || held.member != m {
 			moved = true
 		}
@@ -143,10 +178,16 @@ func (r *room) hear(f Frame, now time.Time) bool {
 	}
 	for _, s := range f.Leave {
 		key := remoteKey{node: f.Node, session: s}
+		if at, ok := r.departed[key]; !ok || f.Until.After(at) {
+			r.departed[key] = f.Until
+		}
 		if _, ok := r.remote[key]; ok {
 			delete(r.remote, key)
 			moved = true
 		}
+	}
+	if !stale {
+		r.told[f.Node] = f.Until
 	}
 	return moved
 }
@@ -161,6 +202,19 @@ func (r *room) expire(now time.Time) bool {
 		if now.Sub(m.heard) >= artifacts.PresenceExpiry {
 			delete(r.remote, key)
 			moved = true
+		}
+	}
+	// A DEPARTURE IS REMEMBERED UNTIL ITS FRAME STOPS BEING BELIEVED: any
+	// frame sealed before it has an earlier Until and is refused unopened
+	// by then, so none is left that could bring the member back.
+	for key, until := range r.departed {
+		if !now.Before(until) {
+			delete(r.departed, key)
+		}
+	}
+	for node, until := range r.told {
+		if !now.Before(until) {
+			delete(r.told, node)
 		}
 	}
 	for s, m := range r.local {
