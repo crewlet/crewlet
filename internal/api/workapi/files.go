@@ -341,7 +341,7 @@ func (s *served) putFile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	actor, ok := s.actor(w, r, key)
+	actor, ok := s.actor(w, r)
 	if !ok {
 		return
 	}
@@ -418,7 +418,7 @@ func (s *served) deleteFile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	actor, ok := s.actor(w, r, key)
+	actor, ok := s.actor(w, r)
 	if !ok {
 		return
 	}
