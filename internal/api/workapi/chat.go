@@ -144,9 +144,11 @@ func (s *served) postChatErase(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	written, err := s.ChatStore.Erase(r.Context(), actor,
-		keyedOp(key, "chat-erase", channelID, eraseArgs(set, reason)),
-		channelID, set, reason)
+	opID, ok := keyedOp(w, r, key, "chat-erase", channelID, eraseArgs(set, reason))
+	if !ok {
+		return
+	}
+	written, err := s.ChatStore.Erase(r.Context(), actor, opID, channelID, set, reason)
 	operator.AuditGesture(r.Context(), s.audit, types.TransportWork,
 		string(authz.ActionChatErase), key, written.Outcome.Outcome,
 		written.Outcome.Position, err)
@@ -212,8 +214,11 @@ func (s *served) postChatPrune(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	written, err := s.ChatStore.Prune(r.Context(), actor,
-		keyedOp(key, "chat-prune", channelID, pruneArgs(cutoff)), channelID, cutoff)
+	opID, ok := keyedOp(w, r, key, "chat-prune", channelID, pruneArgs(cutoff))
+	if !ok {
+		return
+	}
+	written, err := s.ChatStore.Prune(r.Context(), actor, opID, channelID, cutoff)
 	operator.AuditGesture(r.Context(), s.audit, types.TransportWork,
 		string(authz.ActionChatPrune), key, written.Outcome.Outcome,
 		written.Outcome.Position, err)

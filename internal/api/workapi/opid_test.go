@@ -612,6 +612,76 @@ func TestAKeySentWithAnotherRequestIsAnotherOperation(t *testing.T) {
 	}
 }
 
+// A WRITE THIS SURFACE MAKES ITSELF IS KEYED BY THE ONE RULE.
+//
+// The remark's edit, the purge and chat's erase and prune publish under the id
+// [statelog.KeyedOpID] derives from the request's key, the verb, the object
+// and what the request asks — the rule the knowledge base's and chat's stores
+// derive every keyed write by — and never a spelling of this surface's own. A
+// second spelling had a namespace the stores' did not and read the key's
+// instant without asking whether it carried one; one rule cannot answer one
+// key two ways.
+//
+// Mutation: restore a namespace in [keyedOp]'s derivation and every row goes
+// red.
+func TestAWriteThisSurfaceMakesIsKeyedByTheOneRule(t *testing.T) {
+	t.Parallel()
+	cutoff := time.Date(2026, 5, 1, 9, 30, 0, 0, time.UTC)
+	erasePath, eraseBody := eraseOf("2", []string{"m-2", "m-1"}, "a key was pasted")
+	for _, c := range []struct {
+		name, method, target string
+		body                 any
+		verb, object         string
+		asks                 map[string]any
+		published            func(r *rig) string
+	}{
+		{name: "a remark's edit", method: http.MethodPatch,
+			target: "/worklet/items/ENG-1/comments/c-1",
+			body:   map[string]any{"body": "second"},
+			verb:   "comment-edit", object: "c-1",
+			asks:      map[string]any{"body": "second"},
+			published: func(r *rig) string { return r.writes.opIDs[0] }},
+		{name: "a purge", method: http.MethodPost,
+			target: "/worklet/items/t-1/purge?confirm=ENG-1&reason=retention",
+			verb:   "purge", object: "t-1",
+			asks:      map[string]any{"confirm": "ENG-1", "reason": "retention"},
+			published: func(r *rig) string { return r.writes.opIDs[0] }},
+		{name: "an erase", method: http.MethodPost, target: erasePath, body: eraseBody,
+			verb: "chat-erase", object: theRoom,
+			asks: map[string]any{"message_ids": []string{"m-1", "m-2"},
+				"reason": "a key was pasted"},
+			published: func(r *rig) string { return r.rooms.all()[0].opID }},
+		{name: "a prune", method: http.MethodPost,
+			target: pruneAt(cutoff.Format(time.RFC3339), cutoff.Format(time.RFC3339)),
+			verb:   "chat-prune", object: theRoom,
+			asks:      map[string]any{"cutoff": cutoff.UnixNano()},
+			published: func(r *rig) string { return r.rooms.all()[0].opID }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, chart{})
+			r.reader.addComment("t-1", worklet.Comment{ID: "c-1", Task: "t-1",
+				Author: "ana", AuthorKind: worklet.AuthorHuman, Body: "first"})
+			got := r.do(as(admin("ana")), c.method, c.target, c.body,
+				opkey.Header, statelog.NewOpID(time.Now(), ""))
+			if got.status != http.StatusOK {
+				t.Fatalf("answered %d: %v", got.status, got.body)
+			}
+			// THE KEY THE ANSWER NAMES, which is the caller's scoped by who
+			// sent it — the key every id the request writes derives from.
+			key, _ := got.body["op_id"].(string)
+			want, err := statelog.KeyedOpID(key, c.verb, c.object, c.asks)
+			if err != nil {
+				t.Fatalf("KeyedOpID: %v", err)
+			}
+			if published := c.published(r); published != want {
+				t.Errorf("the write was published as %q, want %q — the id the "+
+					"one keyed rule derives from the request's key", published, want)
+			}
+		})
+	}
+}
+
 // THE KNOWLEDGE BASE IS HANDED THE REQUEST'S OPERATION: the caller's key,
 // scoped by who sent it, and nothing derived from the request beside that.
 //

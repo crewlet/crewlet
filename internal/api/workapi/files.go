@@ -254,11 +254,14 @@ func (s *served) putFile(w http.ResponseWriter, r *http.Request) {
 	// bytes is another write, which lands as asked.
 	asked := map[string]any{"hash": object.Hash, "content_type": contentType,
 		"if_match": version}
-	result, err := s.Work.FileWriter(actor).PutFile(r.Context(),
-		keyedOp(key, "file-put", project+"/"+filePath, asked), worklet.FilePut{
-			Project: project, Path: filePath, ContentType: contentType,
-			Object: object, IfMatch: version,
-		})
+	opID, ok := keyedOp(w, r, key, "file-put", project+"/"+filePath, asked)
+	if !ok {
+		return
+	}
+	result, err := s.Work.FileWriter(actor).PutFile(r.Context(), opID, worklet.FilePut{
+		Project: project, Path: filePath, ContentType: contentType,
+		Object: object, IfMatch: version,
+	})
 	operator.AuditGesture(r.Context(), s.audit, types.TransportWork,
 		string(authz.ActionFileWrite), key, result.Outcome, result.Position, err)
 	if err != nil {
@@ -291,10 +294,13 @@ func (s *served) deleteFile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	result, err := s.Work.FileWriter(actor).RemoveFile(r.Context(),
-		keyedOp(key, "file-remove", project+"/"+filePath,
-			map[string]any{"if_match": version}),
-		project, filePath, version)
+	opID, ok := keyedOp(w, r, key, "file-remove", project+"/"+filePath,
+		map[string]any{"if_match": version})
+	if !ok {
+		return
+	}
+	result, err := s.Work.FileWriter(actor).RemoveFile(r.Context(), opID, project,
+		filePath, version)
 	operator.AuditGesture(r.Context(), s.audit, types.TransportWork,
 		string(authz.ActionFileRemove), key, result.Outcome, result.Position, err)
 	if err != nil {
