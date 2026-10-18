@@ -132,7 +132,7 @@ func TestTextWithNothingToEscapeIsUnchanged(t *testing.T) {
 	}
 	fenced := Fence(fixed, SourcePageBody, TrustColleague, nil, text)
 	want := "[untrusted:" + string(fixed) + " source=page_body trust=colleague authors=unknown]\n" +
-		text + "[/untrusted:" + string(fixed) + "]"
+		text + "\n[/untrusted:" + string(fixed) + "]"
 	if fenced != want {
 		t.Fatalf("fence =\n%s\nwant\n%s", fenced, want)
 	}
@@ -233,6 +233,65 @@ func TestOwnTrustNeedsEveryAuthorToBeTheReader(t *testing.T) {
 	if got := TrustForPartial("analyst", []Author{{Kind: iam.ActorHuman}}); got != TrustExternal {
 		t.Fatalf("TrustForPartial must not raise an outside party to colleague, got %q", got)
 	}
+	if got := TrustForPartial("analyst", nil); got != TrustColleague {
+		t.Fatalf("TrustForPartial with nobody named = %q, want colleague: the surface vouches "+
+			"for its writers", got)
+	}
+}
+
+// TestTheLeastTrustDecidesAWholeResult: one colleague's comment on the seat's
+// own page makes the answer colleague text, and an outside party's makes it
+// external, whatever else the answer holds.
+func TestTheLeastTrustDecidesAWholeResult(t *testing.T) {
+	cases := []struct {
+		trusts []Trust
+		want   Trust
+	}{
+		{[]Trust{TrustOwn, TrustOwn}, TrustOwn},
+		{[]Trust{TrustOwn, TrustColleague}, TrustColleague},
+		{[]Trust{TrustColleague, TrustPage, TrustOwn}, TrustPage},
+		{[]Trust{TrustPage, TrustExternal}, TrustExternal},
+		{[]Trust{TrustOwn, "trusted"}, TrustExternal},
+		{nil, TrustExternal},
+	}
+	for _, c := range cases {
+		if got := Least(c.trusts...); got != c.want {
+			t.Fatalf("Least(%v) = %q, want %q", c.trusts, got, c.want)
+		}
+	}
+}
+
+// TestAFenceSentBackWholeIsTakenOff: a model that saves the body it read with
+// the fence still round it stores the body, byte for byte, and nothing else
+// that merely resembles a fence is touched.
+func TestAFenceSentBackWholeIsTakenOff(t *testing.T) {
+	authors := []Author{{Kind: iam.ActorHuman, Seat: "ana"}}
+	for _, body := range []string{"", "one line", "ends in a newline\n", "\n\n", "  indented\n\ttext  "} {
+		fenced := Fence(fixed, SourcePageBody, TrustColleague, authors, body)
+		if got := Unfence(fixed, fenced); got != body {
+			t.Fatalf("Unfence(Fence(%q)) = %q", body, got)
+		}
+		if got := Unfence(fixed, "\n  "+fenced+"\n"); got != body {
+			t.Fatalf("Unfence with whitespace round the fence = %q, want %q", got, body)
+		}
+	}
+	other := Fence("ZZZZZZZZZZZZZZZZ", SourcePageBody, TrustColleague, authors, "body")
+	two := Fence(fixed, SourcePageBody, TrustColleague, authors, "a") + "\nmine\n" +
+		Fence(fixed, SourcePageBody, TrustColleague, authors, "b")
+	for name, text := range map[string]string{
+		"another turn's fence": other,
+		"two fences":           two,
+		"a quoted fence":       "see:\n" + Fence(fixed, SourcePageBody, TrustColleague, authors, "x"),
+		"plain text":           "nothing fenced here",
+		"an opener alone":      "[untrusted:" + string(fixed) + " source=page_body]",
+	} {
+		if got := Unfence(fixed, text); got != text {
+			t.Fatalf("%s was changed: %q", name, got)
+		}
+		if got := Unfence("", text); got != text {
+			t.Fatalf("%s was changed under no boundary: %q", name, got)
+		}
+	}
 }
 
 func TestTheEnvelopeNamesEachAuthorOnceWithItsTrustsNote(t *testing.T) {
@@ -256,7 +315,7 @@ func TestTheStandingInstructionIsOneSentence(t *testing.T) {
 	if strings.Count(StandingInstruction, ". ") != 0 || !strings.HasSuffix(StandingInstruction, ".") {
 		t.Fatalf("StandingInstruction is not one sentence: %q", StandingInstruction)
 	}
-	if strings.Contains(StandingInstruction, "—") || strings.Contains(fenceRule, "—") {
+	if strings.Contains(StandingInstruction, "\u2014") || strings.Contains(fenceRule, "\u2014") {
 		t.Fatal("the shipped sentences carry an em dash")
 	}
 }

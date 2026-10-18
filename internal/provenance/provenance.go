@@ -141,7 +141,8 @@ const markerWord = "untrusted"
 // Fence wraps text another principal wrote for a model to read.
 //
 // The result is the opening line, the text with both escapes applied (see the
-// package doc), and the closing line, each line ending where the next begins.
+// package doc) followed by one newline of the fence's own, and the closing
+// line. Empty text is the two lines alone.
 // Every label value is escaped and reduced to a safe character set, so a seat
 // handle or an author kind off the wire cannot break the opening line either.
 //
@@ -169,14 +170,58 @@ func Fence(b Boundary, src Source, trust Trust, authors []Author, text string) s
 	out.WriteString(" trust=" + string(trust))
 	out.WriteString(" authors=" + authorLabel(b, authors))
 	out.WriteString("]\n")
-	out.WriteString(body)
-	if body != "" && !strings.HasSuffix(body, "\n") {
+	if body != "" {
+		// ALWAYS ITS OWN NEWLINE, even after text that ends in one, so the
+		// closing line is never on a line of content and [Unfence] takes
+		// off exactly what was added.
+		out.WriteString(body)
 		out.WriteString("\n")
 	}
 	out.WriteString("[/" + markerWord + ":")
 	out.WriteString(string(b))
 	out.WriteString("]")
 	return out.String()
+}
+
+// Unfence takes off a fence of the turn's own boundary that wraps the whole of
+// text, and returns text unchanged otherwise.
+//
+// FOR WRITES: a model that read a page body as a fence and saves its edit has
+// been handed the body with two lines around it, and the likeliest mistake is
+// sending both back. Stored, they would sit in the page for ever as junk every
+// later reader sees. Only the turn's own boundary is recognised, because only
+// a fence this turn wrote can be told apart from text that merely looks like
+// one, and only a fence around the WHOLE text, because a quoted fence inside
+// a longer text is the writer's own choice to keep.
+//
+// What comes back is the fenced text as the fence carried it, escapes
+// included: the escapes are not undone, since the original bytes are not
+// recoverable from them and a marker-shaped run in a page is better left
+// defused. The newline [Fence] adds before its closing line is taken off with
+// it, so text with nothing to escape round-trips byte for byte.
+func Unfence(b Boundary, text string) string {
+	if !b.Valid() {
+		return text
+	}
+	trimmed := strings.TrimSpace(text)
+	opening := "[" + markerWord + ":" + string(b) + " "
+	closing := "[/" + markerWord + ":" + string(b) + "]"
+	if !strings.HasPrefix(trimmed, opening) || !strings.HasSuffix(trimmed, closing) {
+		return text
+	}
+	nl := strings.IndexByte(trimmed, '\n')
+	if nl < 0 || !strings.HasSuffix(trimmed[:nl], "]") {
+		return text
+	}
+	inner := trimmed[nl+1 : len(trimmed)-len(closing)]
+	// ONE FENCE, not two: text that is a fence, some writing and another
+	// fence starts and ends like one fence and is not one. Content inside a
+	// fence never carries the boundary (Fence removed it), so a token in
+	// what lies between is a second fence's line.
+	if containsFold(inner, string(b)) {
+		return text
+	}
+	return strings.TrimSuffix(inner, "\n")
 }
 
 // Neutralise applies the fence's two escapes without the fence.
@@ -360,15 +405,49 @@ func TrustFor(self string, authors []Author) Trust {
 }
 
 // TrustForPartial is [TrustFor] for text a read knows had writers it cannot
-// name: a page whose oldest revisions were pruned, a description edited by
-// somebody the record no longer says. It is never `own`, because the unnamed
-// writer may be anybody who could write there; on a surface only company
-// principals write, the named authors decide the rest.
+// name, on a surface only company principals write: a page whose oldest
+// revisions were pruned, a description edited by somebody the record no longer
+// says, a file overwritten by writers the row does not list.
+//
+// It is never `own`, because the unnamed writer may be anybody who could write
+// there. With nobody named at all it is `colleague` rather than [TrustFor]'s
+// `external`: the surface itself vouches that whoever wrote it was a company
+// principal. A named outside party still makes it `external`.
 func TrustForPartial(self string, named []Author) Trust {
+	if len(named) == 0 {
+		return TrustColleague
+	}
 	if trust := TrustFor(self, named); trust != TrustOwn {
 		return trust
 	}
 	return TrustColleague
+}
+
+// trustRank orders the levels by how far a reader may rely on them, so the
+// least of several is a comparison. `page` sits above `external` because a
+// page script ran on the engine's own origin on somebody's behalf, while
+// external text vouches for nothing at all; both are data only.
+var trustRank = map[Trust]int{TrustExternal: 0, TrustPage: 1, TrustColleague: 2, TrustOwn: 3}
+
+// Least is the trust a result earns from the fences it carries: the lowest of
+// them, so one colleague's comment on the seat's own page makes the whole
+// answer colleague text. An invalid trust counts as `external`, as [Fence]
+// writes it, and no trusts at all is `external` too: a label that cannot say
+// who wrote something says nobody vouches for it.
+func Least(trusts ...Trust) Trust {
+	least := TrustOwn
+	if len(trusts) == 0 {
+		return TrustExternal
+	}
+	for _, t := range trusts {
+		if !t.Valid() {
+			t = TrustExternal
+		}
+		if trustRank[t] < trustRank[least] {
+			least = t
+		}
+	}
+	return least
 }
 
 // Envelope is the provenance label of a whole read result, beside the fields

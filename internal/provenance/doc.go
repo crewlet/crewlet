@@ -47,10 +47,21 @@
 //
 // [TrustFor] decides from the authors alone: `own` only when every author is
 // the reading seat, `external` when any author is an outside party or nobody
-// could be named, `colleague` otherwise. `page` is never inferred; a caller
-// whose text a page script produced says so. The [Envelope] is the same label
-// for a whole result, beside the fields it fences, and carries the sentence an
-// assistant without the seat prompt needs to read the fences correctly.
+// could be named, `colleague` otherwise. [TrustForPartial] is the same rule for
+// text whose record says it had writers it does not name, on a surface only
+// company principals write: never `own`, and `colleague` even with nobody
+// named. `page` is never inferred; a caller whose text a page script produced
+// says so. The [Envelope] is the same label for a whole result, beside the
+// fields it fences, at the [Least] trust of those fields, and carries the
+// sentence an assistant without the seat prompt needs to read the fences
+// correctly.
+//
+// # Writing back
+//
+// A model that edits what it read is likely to send the fence back with it.
+// [Unfence] takes off a fence of the turn's own boundary that wraps a whole
+// text, so a write stores the body and not this turn's label; a fence of any
+// other token, or one quoted inside a longer text, is left as written.
 //
 // A LEAF: it imports the identity vocabulary and nothing else from the engine,
 // so every tool and prompt builder can use it.
