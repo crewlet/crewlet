@@ -179,6 +179,21 @@ type Health struct {
 	// that missed a node started those screens a node short, and this is
 	// the only place that says so after the log line scrolled away.
 	SeededFrom *eventfan.Coverage `json:"seeded_from,omitempty"`
+
+	// Objects is what this node's object store offers beyond streaming
+	// bytes through the engine. ABSENT on a node running no object store.
+	Objects *HealthObjects `json:"objects,omitempty"`
+}
+
+// HealthObjects is the object store's half of a health body.
+type HealthObjects struct {
+	// DirectUpload is `available` where an upload may go straight to the
+	// S3 bucket on a presigned put, or `unavailable (<reason>)`: the
+	// broker's own bucket, or a provider the boot probe could not prove
+	// enforces the checksum and the If-None-Match condition a presigned
+	// put relies on. Unavailable is no fault: every upload then streams
+	// through the engine.
+	DirectUpload string `json:"direct_upload"`
 }
 
 // HealthAlarms is the alarm table as a public health body can carry it: how
@@ -295,6 +310,9 @@ func (a *App) health(ctx context.Context) Health {
 	body.Nodes, body.Alarms = fleetCounts(fleet)
 	if coverage, seeded := a.state.SeededFrom(); seeded {
 		body.SeededFrom = &coverage
+	}
+	if state.DirectUpload != "" {
+		body.Objects = &HealthObjects{DirectUpload: state.DirectUpload}
 	}
 	return body
 }

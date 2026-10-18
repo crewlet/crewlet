@@ -402,6 +402,29 @@ this path makes them easier to forget: the directory holds every credential
 the company has, so treat it exactly as you treat the secret store; and the
 **keyring must not travel with it**, or the sealing is undone.
 
+## Moving the files to a bucket
+
+`crewlet objects migrate --to s3` moves the company's files from the fleet's
+NATS bucket to an S3-compatible bucket ([the
+procedure](../concepts/object-store.md#moving-the-files-to-a-bucket)). It
+changes what a backup carries, so take one on each side of it:
+
+- **Take a backup before the final pass.** Until the move, the objects ride
+  the `OBJ_crewlet_files` stream snapshot; a backup taken then holds every
+  file the old store holds.
+- **After the move, the next backup copies the objects into `objects/`**, the
+  way every backup on `s3` does, and the `OBJ_crewlet_files` snapshot it
+  still takes (the stream is sealed, not deleted) is no longer where the files
+  are. A restore of a backup taken before the move restores the fleet onto the
+  NATS bucket, and its nodes must be started with the old `store.objects`
+  block.
+- **Delete the old bucket only after the first backup on the bucket** has
+  finished: that backup is the first that holds the files without it.
+
+The move never deletes anything, so a migration that stops part of the way is
+resumed by running it again, and the fleet keeps working on the NATS bucket
+until the final pass.
+
 ## The cold backup runbook
 
 Still the belt to the online path's braces, and the one whose restore

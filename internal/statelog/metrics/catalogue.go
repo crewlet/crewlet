@@ -630,6 +630,25 @@ func Catalogue() []Instrument {
 				"the operator record renders and the CLI exits non-zero on, " +
 				"so a collector and a person see one answer.",
 		},
+		// ---- the object store's bucket ----------------------------------
+		{
+			Name: ObjectsBucketBytes, Kind: KindGauge, Unit: UnitBytes,
+			Shows: "How many bytes the fleet's own object bucket on the broker " +
+				"holds (OBJ_crewlet_files: the company's files, their " +
+				"metadata and any upload in flight), as the object " +
+				"collector's duty holder read it; only that node reports it, " +
+				"and only on the nats backend. Read against " +
+				"`crewlet.objects.bucket.max_bytes`: a full bucket refuses " +
+				"every upload, and `objects_bucket_near_ceiling` fires at " +
+				"four fifths.",
+		},
+		{
+			Name: ObjectsBucketMaxBytes, Kind: KindGauge, Unit: UnitBytes,
+			Shows: "The byte reservation the broker holds the object bucket " +
+				"to (store.objects.nats_max_bytes, or the share the node " +
+				"that created the bucket derived): the ceiling the bucket " +
+				"keeps for its life, whatever a node's Tier A says later.",
+		},
 	}
 }
 

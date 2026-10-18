@@ -851,7 +851,7 @@
           ]
         },
         "prefix": {
-          "description": "Prepended to every key, so one bucket can hold more than one company; e.g. acme/.",
+          "description": "Prepended to every object's key, e.g. acme/. Companies sharing a bucket are isolated only by credentials scoped to their own prefix.",
           "type": [
             "string",
             "number",

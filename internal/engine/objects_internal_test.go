@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -59,7 +60,8 @@ func (*namedNothing) Referenced(context.Context, []objstore.Key,
 	return map[objstore.Key]struct{}{}, true, nil
 }
 
-func (*namedNothing) Each(context.Context, statelog.Position, func(collect.Reference) error) (bool, error) {
+func (*namedNothing) Each(context.Context, statelog.Position, objstore.Key,
+	func(collect.Reference) error) (bool, error) {
 	return true, nil
 }
 
@@ -262,7 +264,11 @@ func (s *namedObject) Referenced(_ context.Context, among []objstore.Key,
 	return out, true, nil
 }
 
-func (s *namedObject) Each(_ context.Context, _ statelog.Position, visit func(collect.Reference) error) (bool, error) {
+func (s *namedObject) Each(_ context.Context, _ statelog.Position, after objstore.Key,
+	visit func(collect.Reference) error) (bool, error) {
+	if !after.IsZero() && s.k.Compare(after) <= 0 {
+		return true, nil
+	}
 	return true, visit(collect.Reference{
 		Object:  objstore.Object{Key: s.k, Hash: objstore.HashOf(nil), Size: 0},
 		NamedBy: "ENG/lost.md",
@@ -419,5 +425,46 @@ func TestAnUnknownClaimKeepsTheAlarm(t *testing.T) {
 	if f := rec.Status.Audit.Found; f == nil || f.Missing != 2 || len(f.MissingFiles) != 2 {
 		t.Fatalf("the pass after an unknown claim recorded findings %+v; "+
 			"want the two files the holder in between found lost", f)
+	}
+}
+
+// reservedBackend is a store that holds a byte reservation, as the broker's
+// own bucket does.
+type reservedBackend struct {
+	*memobj.Backend
+	usage objstore.Usage
+}
+
+func (b *reservedBackend) Usage(context.Context) (objstore.Usage, error) { return b.usage, nil }
+
+// THE BUCKET'S USAGE IS THE DUTY HOLDER'S TO REPORT, like the missing count:
+// the holder's reading of the one bucket is the fleet's, and a node that gave
+// the duty up reports nothing that could raise the alarm a second time.
+func TestTheBucketUsageIsReportedOnlyByTheDutyHolder(t *testing.T) {
+	t.Parallel()
+	e, duty, _ := collectorNode(t, &namedNothing{})
+	backend := &reservedBackend{Backend: memobj.New(), usage: objstore.Usage{Bytes: 9 << 30, MaxBytes: 10 << 30}}
+	store, err := objstore.NewStore(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.objects.store = store
+	e.collectorTurn(t.Context(), nil, duty)
+	var r statelog.Reading
+	e.objectsReading(time.Now(), &r)
+	if r.ObjectsBucketBytes != 9<<30 || r.ObjectsBucketMaxBytes != 10<<30 {
+		t.Fatalf("the holder reads %d of %d, want the bucket's 9 GiB of 10 GiB",
+			r.ObjectsBucketBytes, r.ObjectsBucketMaxBytes)
+	}
+	if !slices.ContainsFunc(statelog.Evaluate(r), func(a statelog.Alarm) bool {
+		return a.Kind == statelog.KindObjectsBucketNearCeiling
+	}) {
+		t.Fatal("a bucket at nine tenths of its reservation raised no alarm")
+	}
+	e.collectorTurn(t.Context(), func(context.Context) (bool, error) { return false, nil }, duty)
+	r = statelog.Reading{}
+	e.objectsReading(time.Now(), &r)
+	if r.ObjectsBucketMaxBytes != 0 {
+		t.Errorf("a node that gave the duty up still reports a reservation of %d", r.ObjectsBucketMaxBytes)
 	}
 }

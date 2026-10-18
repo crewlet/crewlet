@@ -169,6 +169,11 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{ObjectsMissing: 2},
 			"2 file(s) are missing from the object store or damaged in it",
 		},
+		"an object bucket near its reservation": {
+			statelog.KindObjectsBucketNearCeiling,
+			statelog.Reading{ObjectsBucketBytes: 9 << 30, ObjectsBucketMaxBytes: 10 << 30},
+			"holds 9.0 GiB of its 10.0 GiB reservation",
+		},
 		"a ceiling smaller than the replay window at the measured rate": {
 			statelog.KindLogCeilingShort,
 			// 300 MiB a day for seven days is 2.05 GiB against a
@@ -923,5 +928,28 @@ func TestHistoryPartialNamesTheBudgetItsReadsWaitedOn(t *testing.T) {
 	}
 	if _, found := find(statelog.Evaluate(statelog.Reading{}), statelog.KindHistoryPartial); found {
 		t.Error("a node that read no fleet history alarmed about it")
+	}
+}
+
+// THE BUCKET ALARM FIRES AT FOUR FIFTHS, TWICE A LOG'S HEADROOM, and an
+// unmeasured or unreserved bucket raises nothing.
+func TestTheBucketAlarmFiresAtTwiceALogsHeadroom(t *testing.T) {
+	t.Parallel()
+	if statelog.ObjectsHeadroomAlarmFraction != 2*statelog.HeadroomAlarmFraction {
+		t.Fatalf("the bucket's headroom is %v, want twice a log's %v",
+			statelog.ObjectsHeadroomAlarmFraction, statelog.HeadroomAlarmFraction)
+	}
+	for _, c := range []struct {
+		bytes, max int64
+		fires      bool
+	}{
+		{79, 100, false}, {81, 100, true}, {100, 100, true}, {5, 0, false}, {0, 0, false},
+	} {
+		_, fired := find(statelog.Evaluate(statelog.Reading{
+			ObjectsBucketBytes: c.bytes << 20, ObjectsBucketMaxBytes: c.max << 20,
+		}), statelog.KindObjectsBucketNearCeiling)
+		if fired != c.fires {
+			t.Errorf("%d MiB of %d MiB: fired %v, want %v", c.bytes, c.max, fired, c.fires)
+		}
 	}
 }

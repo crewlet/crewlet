@@ -58,6 +58,8 @@ type App struct {
 
 	// backup takes a copy of this node's durable state.
 	backup backupTaker
+	// objects moves the company's files to an S3 bucket (see objectsmigrate.go).
+	objects objectsMigrator
 
 	// audit publishes the runtime audit record every backup leaves; see
 	// [operator.Audit].
@@ -553,6 +555,10 @@ type Options struct {
 	// names.
 	Backup backupTaker
 
+	// Objects moves the company's files from the fleet's object store to
+	// an S3 bucket (`crewlet objects migrate --to s3`).
+	Objects objectsMigrator
+
 	// Identity says whether anybody is enrolled, for /health. See
 	// [Identity].
 	//
@@ -746,6 +752,7 @@ func New(opts Options) (*App, error) {
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)
 	a.backup, a.audit = opts.Backup, opts.Audit
+	a.objects = opts.Objects
 	a.retention, a.nodes = opts.Retention, opts.Nodes
 	a.capacity = opts.Capacity
 	a.fleetBroker = opts.FleetBroker
@@ -985,6 +992,7 @@ func (o Options) missing() error {
 		{"Capacity", o.Capacity == nil},
 		{"FleetBroker", o.FleetBroker == nil},
 		{"Backup", o.Backup == nil},
+		{"Objects", o.Objects == nil},
 		{"Nodes", o.Nodes == nil},
 		{"AuthEvents", o.AuthEvents == nil},
 		{"Audit", o.Audit == nil},
@@ -1058,6 +1066,10 @@ func (a *App) deploymentRoutes(mount func(string, http.HandlerFunc)) {
 	// a read. There is no budget reset beside it — a window's turnover IS
 	// the reset (ADR-0019), and a raw reset would re-arm a company mid-window.
 	mount("POST /backup", a.serveBackup)
+	// The move of the company's files to an S3 bucket: a copy every
+	// object passes through, and on the final pass the fleet's record of
+	// where its files are. See objectsmigrate.go.
+	mount("POST /objects/migrate", a.serveMigrateObjects)
 	// The three retention gestures that write. See retention.go.
 	a.mountRetention(mount)
 	// The capacity window's own control surface. It is the one thing a

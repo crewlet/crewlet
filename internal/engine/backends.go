@@ -556,8 +556,10 @@ func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js nat
 		openCtx, cancel := context.WithTimeout(ctx,
 			jsprovision.Clustered(clusteredStream(b)).SequenceBudget())
 		defer cancel()
+		reservation, explicit := objectsReservation(ctx, b, out.Queue)
 		backend, err := natsobj.Open(openCtx, js, natsobj.Config{
 			Replicas: b.Stream.Replicas, Clustered: clusteredStream(b),
+			MaxBytes: reservation, Explicit: explicit,
 		})
 		if err != nil {
 			return fmt.Errorf("engine: the object store (store.objects.backend: nats): %w", err)
@@ -566,6 +568,102 @@ func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js nat
 		out.objectsStream = natsobj.Stream
 	}
 	return nil
+}
+
+// THE NATS BUCKET'S RESERVATION, and what it is carved out of.
+//
+// The broker grants a stream its whole ceiling when it creates it, against one
+// limit (stream.store_max_bytes, or the share of its volume the embedded
+// broker takes). The state logs reserve [StreamBudgetShare] of what it can
+// grant; every seat's mailbox and every coordination bucket reserve nothing
+// and share what is left. The bucket is given a reservation of its own
+// (internal/objstore/natsobj says why it may not grow into that remainder),
+// so it is sized here, beside the logs' share and a floor the remainder keeps.
+//
+// ITS RESERVATION IS SPENT BEFORE THE LOGS ARE SIZED. The object store opens
+// with the backends, ahead of the state logs, so the logs size themselves
+// from what the broker has left once the bucket holds its reservation
+// ([sizeCeilings] reads [jetstream.StorageBudget.Available]) and every
+// restart divides the same remainder, which keeps the logs' ceilings
+// reproducible from boot to boot.
+
+// objectsCoordinationFloor is what the derived reservation always leaves the
+// broker beside the state logs' share: the mailboxes and coordination buckets
+// reserve nothing and grow inside it.
+//
+// A GIBIBYTE, the figure the object storage review states, and the size of the
+// smallest corpus-sized log ([MinDomainCeiling]): the leases, ledgers and
+// counters are kilobytes each, and the mailboxes are bounded by the event
+// retention, so a gibibyte is months of a reference company's coordination
+// traffic even with nothing trimmed.
+const objectsCoordinationFloor int64 = 1 << 30
+
+// objectsBucketShare is the most of the broker's limit the derived reservation
+// takes: a quarter, the review's figure. Half of the limit is the state logs',
+// and a quarter left over keeps the coordination remainder as large as the
+// bucket however full the bucket gets.
+const objectsBucketShare = 4
+
+// budgetReader is the broker as the bucket's reservation is sized against it:
+// the JetStream queue's own budget read, declared here by its one caller.
+type budgetReader interface {
+	StreamBudget(ctx context.Context) (jetstream.StorageBudget, error)
+}
+
+// objectsReservation is the byte reservation the nats bucket is created with,
+// and whether an operator wrote it (store.objects.nats_max_bytes). An unset
+// one is derived from the broker's limit ([derivedObjectsReservation]); where
+// the broker states none this node can read, from the stream volume's free
+// space, which is the one figure it has, as the logs' sizing does.
+func objectsReservation(ctx context.Context, b *config.Bootstrap, q any) (int64, bool) {
+	if set := b.Store.Objects.NatsMaxBytes; set > 0 {
+		return set, true
+	}
+	limit := int64(-1)
+	if broker, ok := q.(budgetReader); ok {
+		readCtx, cancel := context.WithTimeout(ctx, jsprovision.LookupBudget)
+		budget, err := broker.StreamBudget(readCtx)
+		cancel()
+		switch {
+		case err != nil:
+			log.WarnContext(ctx, "objects_reservation_budget_unread", "error", err.Error(),
+				"detail", "the nats bucket's reservation is derived from this node's "+
+					"free space instead; set store.objects.nats_max_bytes to choose it")
+		case budget.Limit >= 0:
+			limit = budget.Limit
+		}
+	}
+	if limit < 0 {
+		volume := streamVolume(b)
+		free, err := volumeFree(volume)
+		if err != nil {
+			log.WarnContext(ctx, "objects_reservation_free_space_unmeasured",
+				"path", volume, "error", err.Error(),
+				"detail", "the nats bucket is reserved at its smallest; set "+
+					"store.objects.nats_max_bytes to choose it")
+		}
+		limit = free
+	}
+	reservation := derivedObjectsReservation(limit, b.Stream.DeclaredLogCeilings())
+	log.InfoContext(ctx, "objects_reservation_derived", "bytes", reservation,
+		"broker_limit", limit, "detail", "a bucket created now reserves this much "+
+			"of the broker; one that exists keeps the ceiling it holds")
+	return reservation, false
+}
+
+// derivedObjectsReservation is the reservation an unset
+// store.objects.nats_max_bytes takes against a broker limit of limit bytes,
+// beside state-log ceilings an operator declared summing to declared: the
+// smaller of [objectsBucketShare] of the limit and what the limit leaves once
+// the logs' share (or the declared ceilings, where they exceed it) and
+// [objectsCoordinationFloor] are taken out, held inside the bounds Tier A
+// accepts for the field.
+//
+// Pure arithmetic, so every case is a table row rather than a broker.
+func derivedObjectsReservation(limit, declared int64) int64 {
+	logs := max(int64(float64(limit)*StreamBudgetShare), declared)
+	share := min(limit/objectsBucketShare, limit-logs-objectsCoordinationFloor)
+	return min(max(share, config.NatsObjectsMaxBytesFloor), config.NatsObjectsMaxBytesCeiling)
 }
 
 // openStream dials or starts the broker, and answers the connection

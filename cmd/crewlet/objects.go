@@ -7,6 +7,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -22,6 +24,9 @@ import (
 // topology is the engine's own embedded broker: a command that opened it from
 // outside would find nothing — see nodeclient.go. So `status` reads the fleet
 // view (`GET /fleet`), whose objects block every node answers from that record.
+// And `migrate` asks a data node to copy the files into a bucket
+// (`POST /objects/migrate`): only the engine reads the objects, the estate
+// naming them and the record the final pass moves.
 
 // runObjects dispatches `crewlet objects`.
 func runObjects(environ config.Source, args []string, stdout, stderr io.Writer) error {
@@ -29,8 +34,12 @@ func runObjects(environ config.Source, args []string, stdout, stderr io.Writer) 
 	switch sub {
 	case "status":
 		return objectsStatus(environ, rest, stdout, stderr)
+	case "migrate":
+		return objectsMigrate(environ, rest, stdout, stderr)
 	case "", "help":
 		fmt.Fprintln(stderr, "usage: crewlet objects status [<config.yaml>] [-url] [-json]")
+		fmt.Fprintln(stderr, "       crewlet objects migrate -to s3 -target <absolute path on the "+
+			"engine's host> [-final] [<config.yaml>] [-url] [-json]")
 		return flag.ErrHelp
 	default:
 		return fmt.Errorf("unknown objects command %q", sub)
@@ -206,4 +215,140 @@ func passNote(completed bool, skipped, failed string) string {
 		return " (incomplete)"
 	}
 	return ""
+}
+
+// migrateWait is how long `crewlet objects migrate` waits for a pass.
+//
+// SIX HOURS, a ceiling rather than an expectation: a pass is bounded by the
+// bytes it copies, seconds for a company that has just started and hours for
+// one holding the hundred gibibytes the broker's bucket is sized for, at the
+// pace a link to a bucket sustains. The node finishes a pass whatever this
+// command does, so a command that stopped waiting has lost only the answer,
+// and running it again reports where the copy stands (it copies only what the
+// bucket does not hold).
+const migrateWait = 6 * time.Hour
+
+// migrateView is the node's answer to POST /objects/migrate, in a shape of
+// this command's own (see [objectsView] for why).
+type migrateView struct {
+	From         string `json:"from"`
+	To           string `json:"to"`
+	Final        bool   `json:"final"`
+	Sealed       bool   `json:"sealed"`
+	Moved        bool   `json:"moved"`
+	DirectUpload string `json:"direct_upload"`
+	Next         string `json:"next"`
+	Pass         struct {
+		Referenced  int   `json:"referenced"`
+		Present     int   `json:"present"`
+		Copied      int   `json:"copied"`
+		CopiedBytes int64 `json:"copied_bytes"`
+		Unreadable  int   `json:"unreadable"`
+		Complete    bool  `json:"complete"`
+		Files       []struct {
+			Object  string `json:"object"`
+			NamedBy string `json:"named_by"`
+			Damaged bool   `json:"damaged"`
+		} `json:"unreadable_files"`
+	} `json:"pass"`
+}
+
+// objectsMigrate is `crewlet objects migrate --to s3`: a copy pass on a live
+// fleet, or with -final, the pass that moves it (see
+// docs/concepts/object-store.md).
+func objectsMigrate(environ config.Source, args []string, stdout, stderr io.Writer) error {
+	var to, target *string
+	var final, asJSON *bool
+	var wait *time.Duration
+	client, err := nodeClientFor(environ, args, "objects migrate", stderr, func(fs *flag.FlagSet) {
+		to = fs.String("to", "", "the backend the files move to; s3 is the one there is")
+		target = fs.String("target", "", "absolute path ON THE ENGINE'S HOST to a Tier A file "+
+			"whose store.objects block names the bucket; required")
+		final = fs.Bool("final", false, "run the final pass, which moves the fleet; every node "+
+			"must be running with -mode maintenance")
+		wait = fs.Duration("wait", migrateWait, "how long to wait for the pass before giving up on the answer")
+		asJSON = fs.Bool("json", false, "print the node's report as it answered it")
+	})
+	if err != nil {
+		return err
+	}
+	if *to != "s3" {
+		return fmt.Errorf("name where the files move to with -to s3 (got %q): an S3-compatible "+
+			"bucket is the one other store there is", *to)
+	}
+	if strings.TrimSpace(*target) == "" {
+		return errors.New("name the bucket with -target: an absolute path, on the engine's " +
+			"host, to a Tier A file whose store.objects block names it")
+	}
+	// POSIX semantics, for the backup's -dir reason: the path is judged on
+	// the engine's host.
+	if !path.IsAbs(*target) {
+		return fmt.Errorf("-target %s is relative, and it is read on the engine's host rather "+
+			"than in this shell; give an absolute path", *target)
+	}
+	query := "/objects/migrate?target=" + url.QueryEscape(*target)
+	if *final {
+		query += "&final=true"
+	}
+	var raw json.RawMessage
+	if err := client.patiently(*wait).post(context.Background(), query, &raw); err != nil {
+		return err
+	}
+	if *asJSON {
+		_, err := fmt.Fprintf(stdout, "%s\n", raw)
+		return err
+	}
+	var view migrateView
+	if err := json.Unmarshal(raw, &view); err != nil {
+		return fmt.Errorf("the node's migration report is not the shape this build reads: %w", err)
+	}
+	return renderMigrate(stdout, view)
+}
+
+// renderMigrate prints what a pass did and what to do next.
+func renderMigrate(w io.Writer, v migrateView) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "From:              %s\n", backendName(v.From))
+	fmt.Fprintf(&b, "To:                %s\n", backendName(v.To))
+	p := v.Pass
+	fmt.Fprintf(&b, "Objects named:     %d (%d already in the bucket, %d copied, %s)\n",
+		p.Referenced, p.Present, p.Copied, humanBytes(p.CopiedBytes))
+	fmt.Fprintf(&b, "Direct uploads:    %s\n", v.DirectUpload)
+	if !p.Complete {
+		fmt.Fprintln(&b, "                   this node holds a record it could not apply, so "+
+			"an object it did not see may be named")
+	}
+	if p.Unreadable > 0 {
+		fmt.Fprintf(&b, "\n%d file(s) could not be read from the fleet's own store and were not "+
+			"copied; no copy can bring them back (see `crewlet objects status`):\n", p.Unreadable)
+		for _, f := range p.Files {
+			what := "missing"
+			if f.Damaged {
+				what = "damaged"
+			}
+			fmt.Fprintf(&b, "  %s (%s, object %s)\n", f.NamedBy, what, f.Object)
+		}
+		if shown := len(p.Files); shown < p.Unreadable {
+			fmt.Fprintf(&b, "  and %d more\n", p.Unreadable-shown)
+		}
+	}
+	switch {
+	case v.Moved:
+		fmt.Fprintf(&b, "\nThe fleet now keeps its files in the bucket%s.\n", sealedNote(v.Sealed))
+	case v.Final:
+		fmt.Fprintln(&b, "\nThe fleet was not moved.")
+	}
+	if v.Next != "" {
+		fmt.Fprintf(&b, "\n%s\n", v.Next)
+	}
+	_, err := io.WriteString(w, b.String())
+	return err
+}
+
+// sealedNote says the old bucket was sealed, where it was.
+func sealedNote(sealed bool) string {
+	if !sealed {
+		return ""
+	}
+	return ", and the old bucket on the broker is sealed: it is read, and never written again"
 }

@@ -111,6 +111,11 @@ type RuntimeState struct {
 	// nothing routes.
 	RoutedSources []string
 
+	// DirectUpload is whether this node's object store hands clients
+	// presigned puts: "available", "unavailable (<reason>)", or "" on a
+	// node running no object store ([engine.Engine.DirectUploadStatus]).
+	DirectUpload string
+
 	// VerifiableSources names the integrations whose RESOLVED verification
 	// material could accept a delivery right now.
 	//
