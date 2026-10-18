@@ -174,6 +174,66 @@ or GitLab issues — an agent works those through the vendor's own MCP tools, so
 the engine mirrors no state it would have to keep in step. See
 [The Tracker](../concepts/task-engine.md).
 
+### Artifacts
+
+Eight more, registered on every node that takes artifact uploads (one with an
+object store, a coordination store and a data node to reach), whatever tracker
+or knowledge base the company runs.
+Each tool is named for its authority row, and the operator catalogue serves the
+same eight, so an operator's own assistant publishes exactly as a seat does.
+
+| Tool | Description |
+|------|-------------|
+| `list_artifacts` | The artifacts the caller can open, by `scope` (`mine`, `shared`, `company`, `agents`, `all`), `kind` and `query`, a page at a time |
+| `get_artifact` | One artifact: its head, its newest versions, its files and a page of one file's source. The answer says the caller's `role` and whether they may publish (`writer`) |
+| `create_artifact` | A new `html`, `markdown` or `sheet` artifact, from inline `content` and `files`, a project file, or a build in the turn's coding run (`source.sandbox`). When a person asked for it, they are made its editor |
+| `publish_artifact` | A new version on a stated `base_version`: `edits` (exact `old_str` and `new_str` pairs), `content`, `files` (null removes one), a build's whole `source`, or `restore_version` |
+| `update_artifact` | The title, description, icon or one version's label |
+| `share_artifact` / `unshare_artifact` | Grant a seat, a unit (`unit:<key>`) or the company (`company`) one role up to editor, or withdraw it. The owner's |
+| `upload_artifact_asset` | Add an image, data file or font to the asset store of an artifact that declares the `assets` capability; the answer's `reference` is the path the page uses |
+
+**Every verb is decided twice inside a turn somebody woke.** The tool reads the
+stored artifact and asks the authority table for the seat, then for whoever the
+turn is acting for (the **requester ceiling**): an agent never shows an
+artifact to a requester who could not open it, and never writes for one what
+they could not write. The exception is an artifact the agent owns, which
+anybody who can message the agent may ask it to edit, as with all other agent
+work; reading and sharing are never exempt. A turn woken by somebody the
+company does not know opens no artifact at all. A caller with no relation to an
+artifact is told it does not exist, in exactly the words an id nothing holds is
+answered with. An agent is held to `contributor` on artifacts it does not own
+unless `artifacts.agents_manage_others` lifts it.
+
+**A publish names its base.** One over a version somebody published since is
+refused `stale_version` and handed the live version, who published it and
+when, the paths that changed since the caller's base and the first page of each
+changed text file, fenced as text that author wrote. No tool takes `force`:
+discarding a colleague's newer version is a present person's decision in the
+dashboard. Trash, restore, purge, transfer and pins are not tools either.
+
+**Where the bytes come from.** Inline content is at most 1 MiB decoded per
+call. A coding run's build and a project's file are streamed: their digests
+are declared to an upload the publish pipeline reserves first, each file is put
+through the engine, and the version is decided only after every byte is read
+back verified. A sandbox is never handed an upload URL; the engine lists the
+directory through the box itself, holds every path to the workspace, and
+refuses one file more than a version holds rather than truncating. A box is
+readable after `run_sandbox` returns and until the Execute phase ends.
+
+**Per turn**, an agent makes at most 20 publishes, 10 of them on one artifact,
+and writes at most 128 MiB; past either the call is refused `turn_quota` and
+told to stop and report. File text another principal wrote is
+[fenced](../concepts/agent-runtime.md#text-somebody-else-wrote), and a long one
+is condensed by the seat's auxiliary model unless the call passes `offset`.
+**Publishing delivers nowhere**: no artifact tool counts as a delivery, so a
+seat asked in a chat thread posts the `url` every answer carries with its chat
+tools. The bundled `skill:artifacts` [Tool Skill](../concepts/tool-skills.md)
+teaches the design contract and is enforced on the three tools that write
+bytes; `skills/crewlet-artifacts/SKILL.md` carries the same contract for your
+own assistant, installed as the
+[`company-architect` skill](../getting-started/ai-authoring.md#the-company-architect-skill)
+is (copy the directory into your assistant's skills folder).
+
 ### Per-Role MCP Servers (GitHub)
 
 Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring goes through the [code sandbox](../concepts/code-sandbox.md). See [GitHub Integration](../integrations/github.md).
