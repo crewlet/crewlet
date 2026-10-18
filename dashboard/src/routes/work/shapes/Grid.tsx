@@ -87,7 +87,7 @@
  */
 
 import { useMemo } from "react";
-import { EmptyValue, Tag } from "@crewlethq/ui";
+import { EmptyValue, Tag, TableKeyCell, TableDateCell, TableEntityCell } from "@crewlethq/ui";
 
 import {
   columnChoicesOf,
@@ -96,7 +96,7 @@ import {
   type GridBand,
   type GridColumn,
 } from "~/app/frame/DataGrid.tsx";
-import { DateCell, KeyCell, SeatCell } from "~/app/frame/cells.tsx";
+import { linkedSeat } from "~/app/frame/cells.tsx";
 import { peekRow } from "~/app/frame/DetailRail.tsx";
 import { Assignee, DueMark, TypeIcon, blockedBy, type RowChrome } from "~/components/work.tsx";
 import { GroupMark, headingOf } from "./group.tsx";
@@ -104,7 +104,7 @@ import { type Shape, itemAddress } from "~/lib/work.ts";
 import { COLUMN_SORT_KEYS } from "~/contract/work.ts";
 import { fmtDuration } from "~/lib/format.ts";
 import { RestoreButton } from "~/components/writes.tsx";
-import { AssigneeCell, InlineEdits, PriorityCell, StatusCell } from "./cells.tsx";
+import { AssigneeCell, InlineEdits, PriorityCell, WorkStatusCell } from "./cells.tsx";
 import type {
   WorkActivityRecord,
   WorkGroup,
@@ -236,7 +236,7 @@ function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
       // NOT SORTABLE. A key is `PROJ-<n>` and the engine has no ordering
       // over it; the nearest thing is `created`, which is a different
       // claim and is not on the row at all.
-      cell: (row) => <KeyCell value={row.key} />,
+      cell: (row) => <TableKeyCell value={row.key} />,
     },
     {
       key: "status",
@@ -245,7 +245,7 @@ function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
       // NOT SORTABLE, for the reason the table's own status column gives:
       // there is no ordering over a company's own status words, and
       // `group_by=status` is what a reader asking this actually wants.
-      cell: (row) => <StatusCell row={row} defs={detail?.statuses} />,
+      cell: (row) => <WorkStatusCell row={row} defs={detail?.statuses} />,
     },
     sorted("title", {
       header: "Title",
@@ -345,7 +345,7 @@ function tableColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
       key: "key",
       header: "Key",
       shrink: true,
-      cell: (row) => <KeyCell value={row.key} />,
+      cell: (row) => <TableKeyCell value={row.key} />,
     },
     {
       key: "type",
@@ -370,7 +370,7 @@ function tableColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
       // and alphabetical order over them means nothing. `group_by=status`
       // is what a reader asking this actually wants, and the filter bar
       // already offers it.
-      cell: (row) => <StatusCell row={row} defs={detail?.statuses} />,
+      cell: (row) => <WorkStatusCell row={row} defs={detail?.statuses} />,
     },
     sorted("priority", {
       header: "Priority",
@@ -390,11 +390,13 @@ function tableColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
           named
           readOnly={
             row.assignee ? (
-              <SeatCell
-                handle={row.assignee}
-                name={chrome.seatName?.(row.assignee)}
-                kind={chrome.seatKind?.(row.assignee)}
-                avatar={chrome.seatAvatar?.(row.assignee)}
+              <TableEntityCell
+                {...linkedSeat({
+                  handle: row.assignee,
+                  name: chrome.seatName?.(row.assignee),
+                  kind: chrome.seatKind?.(row.assignee),
+                  avatar: chrome.seatAvatar?.(row.assignee),
+                })}
               />
             ) : (
               <EmptyValue label="Nobody holds this" />
@@ -461,7 +463,7 @@ function startColumn(now: number): GridColumn<WorkSummary> {
     optional: true,
     sortValue: (row) => row.start ?? "",
     cell: (row) =>
-      row.start ? <DateCell at={row.start} now={now} /> : <EmptyValue label="No date" />,
+      row.start ? <TableDateCell value={row.start} now={now} /> : <EmptyValue label="No date" />,
   });
 }
 
@@ -497,7 +499,7 @@ function estimateColumn(): GridColumn<WorkSummary> {
   });
 }
 
-// RELATIVE, WITH THE INSTANT ON THE TITLE — [DateCell]'s own rendering, which
+// RELATIVE, WITH THE INSTANT ON THE TITLE: [TableDateCell]'s own rendering, which
 // is what the compact row spelled by hand. One value, one drawing, wherever it
 // appears: that is the rule `app/frame/cells.tsx` exists for.
 function updatedColumn(now: number): GridColumn<WorkSummary> {
@@ -509,7 +511,7 @@ function updatedColumn(now: number): GridColumn<WorkSummary> {
     // wrapped onto a third line of its own.
     phoneOmit: true,
     sortValue: (row) => row.updated ?? "",
-    cell: (row) => <DateCell at={row.updated} now={now} />,
+    cell: (row) => <TableDateCell value={row.updated} now={now} />,
   });
 }
 
@@ -853,7 +855,7 @@ function trashColumns(
         // loaded has no record here, and the honest cell says which fact is
         // missing rather than drawing an empty one that reads as "just now".
         if (!record) return <EmptyValue label="Its removal is older than the loaded history" />;
-        return <DateCell at={record.at} now={now} />;
+        return <TableDateCell value={record.at} now={now} />;
       },
     }),
     {
@@ -870,11 +872,13 @@ function trashColumns(
         const who = record.actor;
         return (
           <span className="row gap-1">
-            <SeatCell
-              handle={who}
-              name={chrome.seatName?.(who)}
-              kind={chrome.seatKind?.(who)}
-              avatar={chrome.seatAvatar?.(who)}
+            <TableEntityCell
+              {...linkedSeat({
+                handle: who,
+                name: chrome.seatName?.(who),
+                kind: chrome.seatKind?.(who),
+                avatar: chrome.seatAvatar?.(who),
+              })}
             />
             {/* WHICH KIND OF WRITER, because that is the question a trash
                 screen exists to answer: an assistant removing a subtree and

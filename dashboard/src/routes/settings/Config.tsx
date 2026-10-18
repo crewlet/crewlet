@@ -30,6 +30,9 @@ import {
   InlineCode,
   Skeleton,
   Tag,
+  TableKeyCell,
+  TableDateCell,
+  TableTextCell,
 } from "@crewlethq/ui";
 import {
   FileTextGlyph,
@@ -49,7 +52,7 @@ import { QueryState } from "~/components/common.tsx";
 // note on `useRovingGroup`; this is the trade the pattern itself names.
 import { Segmented } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, KeyCell, TextCell } from "~/app/frame/cells.tsx";
+
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
@@ -143,7 +146,7 @@ export function RevisionAuthor({ revision }: { revision: RevisionMeta }) {
       title={name ? `${authorLabel(name, revision.operator_id)} · ${kind}` : undefined}
     >
       {name ? (
-        <TextCell>{authorLabel(name, revision.operator_id)}</TextCell>
+        <TableTextCell>{authorLabel(name, revision.operator_id)}</TableTextCell>
       ) : (
         <EmptyValue label="No name recorded" />
       )}
@@ -982,7 +985,7 @@ export function ConfigScreen({
                     // held the rest.
                     drop: 1,
                     sortValue: (r) => tsKey(r.created_at),
-                    cell: (r) => <DateCell at={r.created_at} now={now} />,
+                    cell: (r) => <TableDateCell value={r.created_at} now={now} />,
                   },
                   {
                     key: "id",
@@ -995,7 +998,7 @@ export function ConfigScreen({
                     width: "max-content",
                     cell: (r) => (
                       <span className="row gap-1">
-                        <KeyCell value={r.revision_id.slice(0, 10)} />
+                        <TableKeyCell value={r.revision_id.slice(0, 10)} />
                         {r.is_active && <Tag variant="success">active</Tag>}
                       </span>
                     ),
@@ -1017,7 +1020,7 @@ export function ConfigScreen({
                     // than standing in for an empty string.
                     cell: (r) =>
                       r.summary ? (
-                        <TextCell>{r.summary}</TextCell>
+                        <TableTextCell>{r.summary}</TableTextCell>
                       ) : (
                         <EmptyValue label="No summary was written" />
                       ),

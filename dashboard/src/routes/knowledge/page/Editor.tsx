@@ -38,6 +38,7 @@ import {
   MarkdownEditor,
   SegmentedControl,
   markdownWords,
+  VersionCompare,
 } from "@crewlethq/ui";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { PAGE_MESSAGE_MAX_BYTES } from "~/contract/pages.ts";
@@ -46,7 +47,6 @@ import { renderMarkdown } from "~/lib/markdown.ts";
 import { merge3, mergedText, type Merge, type Resolution } from "~/lib/merge.ts";
 import { useAct } from "~/lib/useAct.ts";
 import type { PageDetail } from "~/protocol/index.ts";
-import { BodyDiff } from "./History.tsx";
 import { LinkPageButton } from "./LinkPicker.tsx";
 
 /** A page's markdown as the reader will see it, for an editor's Preview. */
@@ -152,7 +152,18 @@ export function PageEditor({ detail, onDone }: { detail: PageDetail; onDone: () 
       )}
       {moved && theirs && !merging && (
         <div className="knowledge-theirs">
-          <BodyDiff before={base.body} after={page.body ?? ""} against={`rev ${base.version}`} />
+          <VersionCompare
+            title="What changed since you started"
+            fromLabel={`rev ${base.version}`}
+            toLabel="the saved page"
+            lens="changes"
+            before={base.body}
+            after={page.body ?? ""}
+            labels={{
+              identicalTitle: "The body did not change",
+              identicalDescription: "Only the title, labels or position changed.",
+            }}
+          />
         </div>
       )}
       {merging && (

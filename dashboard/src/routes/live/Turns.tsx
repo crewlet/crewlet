@@ -54,7 +54,16 @@ import { useCallback, useMemo, useState } from "react";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
-import { Button, Card, Select, Skeleton, Tag } from "@crewlethq/ui";
+import {
+  Button,
+  Card,
+  Select,
+  Skeleton,
+  Tag,
+  TableNumberCell,
+  TableDateCell,
+  TableEntityCell,
+} from "@crewlethq/ui";
 import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 // OURS, AND DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
 // `semantics`: `radio` selects as the arrows move, `tabs` is manual but
@@ -69,22 +78,14 @@ import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useClient, useAgents, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg, useSeatBadgeOf } from "~/lib/seats.ts";
-import { plural } from "~/lib/format.ts";
+import { plural, fmtCount, fmtDuration } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { spanWords, useTimeRange } from "~/lib/range.ts";
 import type { Offer } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { Histogram, type Bar } from "~/ui/Histogram.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import {
-  DateCell,
-  DurationCell,
-  NumberCell,
-  SeatLabel,
-  TokenCell,
-  TurnWhatCell,
-  UnsettledCell,
-} from "~/app/frame/cells.tsx";
+import { TurnWhatCell, UnsettledCell, plainSeat } from "~/app/frame/cells.tsx";
 import { openState, runningNow, UNSETTLED, type OpenState } from "~/lib/turns.ts";
 import type { EventSeries, TurnRow, TurnsAnswer } from "~/protocol/index.ts";
 
@@ -398,16 +399,16 @@ export function Turns() {
               key: "started",
               header: "Started",
               shrink: true,
-              cell: (t) => <DateCell at={t.started_at} now={now} />,
+              cell: (t) => <TableDateCell value={t.started_at} now={now} />,
             },
             {
               key: "seat",
               header: "Seat",
               shrink: true,
-              // NOT `SeatCell`: it is a link, and the row around it is one.
+              // NOT `linkedSeat`: it is a link, and the row around it is one.
               cell: (t) =>
                 t.role ? (
-                  <SeatLabel {...seatBadge(t.role)} />
+                  <TableEntityCell {...plainSeat({ ...seatBadge(t.role) })} />
                 ) : (
                   // NOT a dash: a turn with no seat is the engine's own work.
                   <span className="muted">the engine</span>
@@ -450,14 +451,24 @@ export function Turns() {
               label: "Iterations",
               shrink: true,
               align: "right",
-              cell: (t) => (t.complete ? <NumberCell value={t.iterations} /> : <UnsettledCell />),
+              cell: (t) =>
+                t.complete ? (
+                  <TableNumberCell value={t.iterations} format={fmtCount} />
+                ) : (
+                  <UnsettledCell />
+                ),
             },
             {
               key: "tokens",
               header: "Tokens",
               shrink: true,
               align: "right",
-              cell: (t) => (t.complete ? <TokenCell value={t.total_tokens} /> : <UnsettledCell />),
+              cell: (t) =>
+                t.complete ? (
+                  <TableNumberCell value={t.total_tokens} format={fmtCount} />
+                ) : (
+                  <UnsettledCell />
+                ),
             },
             {
               key: "took",
@@ -468,7 +479,11 @@ export function Turns() {
               // busiest turns look like the cheapest — so the cell is handed
               // null and draws the dash that says nothing was measured.
               cell: (t) => (
-                <DurationCell ms={t.complete && t.duration_ms > 0 ? t.duration_ms : null} />
+                <TableNumberCell
+                  value={t.complete && t.duration_ms > 0 ? t.duration_ms : null}
+                  format={fmtDuration}
+                  emptyLabel="Not measured"
+                />
               ),
             },
           ]}

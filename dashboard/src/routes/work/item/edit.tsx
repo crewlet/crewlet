@@ -16,7 +16,7 @@
  *
  * A field is changed looking at this task as it is on screen, so every edit
  * carries `if_match: task.version`. A race lost to somebody else is refused
- * `stale_version`, and [ConflictNote] names who won it from the task's own
+ * `stale_version`, and [WorkConflictNote] names who won it from the task's own
  * history — the person to talk to. The refusal has already asked the task
  * again (`protocol/act.ts`), so the page redraws at the version that won and
  * the next press is made against it.
@@ -36,7 +36,7 @@
 
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { RefusalNote } from "~/components/WriteButton.tsx";
-import { ConflictNote } from "../shapes/cells.tsx";
+import { WorkConflictNote } from "../shapes/cells.tsx";
 import { useAct, type Act } from "~/lib/useAct.ts";
 import type { ActionArgs, ActResult } from "~/protocol/act.ts";
 
@@ -150,7 +150,7 @@ export function ItemEditNote({ readOnly }: { readOnly?: string }) {
   if (!edits) return null;
   if (edits.lost && edits.write.refusal) {
     return (
-      <ConflictNote
+      <WorkConflictNote
         item={edits.item}
         label={edits.label}
         seatName={edits.seatName}

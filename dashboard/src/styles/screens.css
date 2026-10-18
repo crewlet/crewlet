@@ -3197,7 +3197,9 @@ a.prof-row:hover {
   color: var(--color-text-primary);
 }
 
-/* COMMENTS, then a remark of one's own. */
+/* The page's sections under its body: the comment thread (uilet's
+   CommentThread, given this class for its rule and spacing), its changes and
+   its connections. */
 .knowledge-comments,
 .knowledge-changes,
 .knowledge-connections {
@@ -3207,42 +3209,12 @@ a.prof-row:hover {
   padding-top: var(--spacing-5);
   border-top: 1px solid var(--color-border-default);
 }
-.knowledge-comment-list,
 .knowledge-change-list {
   display: flex;
   flex-direction: column;
   margin: 0;
   padding: 0;
   list-style: none;
-}
-.knowledge-comment {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  padding: var(--spacing-3) 0;
-  border-bottom: 1px solid var(--color-border-default);
-}
-.knowledge-comment-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-2);
-}
-.knowledge-compose {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-}
-.knowledge-compose-foot,
-.knowledge-replying {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-2);
-}
-.knowledge-replying {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
 }
 
 /* THE PAGE'S CHANGES, in History. */
@@ -3413,32 +3385,6 @@ a.knowledge-reader-how:hover {
   width: var(--size-control-sm);
 }
 
-/* ONE REVISION, read in the page's place. */
-.knowledge-version {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-}
-.knowledge-version-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-2);
-  padding: var(--spacing-2) var(--spacing-3);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface-subtle);
-}
-.knowledge-version-what {
-  min-width: 0;
-  font-size: var(--font-size-compact);
-  color: var(--color-text-secondary);
-}
-.knowledge-version-what b {
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-}
-
 /* ---- Editing ------------------------------------------------------------ */
 
 .knowledge-editor {
@@ -3576,11 +3522,11 @@ a.knowledge-reader-how:hover {
    list, so the values start at one edge all the way down rather than wherever
    each row's own path happened to end.
 
-   ITS OWN CLASS NAMES. The knowledge page's line diff is `.diff-line`, later
-   in this sheet, and while this list spelled the same class that rule won the
-   cascade and laid every change out in its line-number tracks (`3.5ch 3.5ch
-   2ch`): at 1440 a 92px path got 23px and a 931px value 13px, and each change
-   read "− mc… {…". Two components never share a class here.
+   ITS OWN CLASS NAMES. The knowledge page's line diff is uilet's `DiffView`
+   now, but while this list once spelled the same class as the local line
+   diff, that rule won the cascade and laid every change out in its
+   line-number tracks: at 1440 a 92px path got 23px and a 931px value 13px.
+   Two components never share a class here.
 
    NOTHING IS CUT. The path is what a reader looks for in their YAML and the
    value is the change itself, so both wrap — a path breaks anywhere rather
@@ -7366,69 +7312,6 @@ a.work-cal-chip {
   white-space: nowrap;
 }
 
-/* A LINE DIFF. Monospace and line-numbered on both sides, because the two
-   numbers are what a reader uses to find the paragraph in the version beside
-   it. Marked with a glyph as well as a tint: colour alone is not a signal, and
-   a printed or forced-colours render loses the tint entirely. */
-.diff {
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  line-height: var(--font-line-height-normal);
-}
-.diff-section + .diff-section,
-.diff-skip + .diff-line {
-  border-top: 1px solid var(--color-border-default);
-}
-/* A GAP SAYS WHAT IT STANDS FOR. Silently closed, a document edited at both
-   ends looks like one rewritten in the middle. */
-.diff-skip {
-  padding: var(--spacing-1) var(--spacing-3);
-  background: var(--color-surface-elevated);
-  color: var(--color-text-tertiary);
-  font-family: var(--font-family-sans);
-  font-size: var(--font-size-xs);
-}
-.diff-line {
-  display: grid;
-  grid-template-columns: 3.5ch 3.5ch 2ch minmax(0, 1fr);
-  gap: var(--spacing-2);
-  padding: 1px var(--spacing-3) 1px var(--spacing-2);
-}
-.diff-no {
-  color: var(--color-text-tertiary);
-  text-align: right;
-  user-select: none;
-}
-.diff-mark {
-  user-select: none;
-  text-align: center;
-}
-.diff-text {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.diff-line.is-add {
-  background: var(--color-feedback-success-soft);
-}
-.diff-line.is-add .diff-mark {
-  color: var(--color-feedback-success-ink);
-}
-.diff-line.is-remove {
-  background: var(--color-feedback-danger-soft);
-}
-.diff-line.is-remove .diff-mark {
-  color: var(--color-feedback-danger-ink);
-}
-.diff-add-ink {
-  color: var(--color-feedback-success-ink);
-}
-.diff-del-ink {
-  color: var(--color-feedback-danger-ink);
-}
-
 /* A schedule's expression over what it means — in a grid cell, on a phone's
    card, and as the Cron fact of the schedule's own header, one drawing in all
    three (`CronReading`). THE EXPRESSION HUGS ITS OWN TEXT: stretched to the column's width by
@@ -7787,8 +7670,7 @@ a.work-cal-chip {
    name is a link". At rest the name is `--color-text-primary` and `a:hover` moves it to
    `--color-text-primary`, which is no move at all; the step here is the other direction,
    onto the accent's one text rung, which is the same ink every other link in
-   the product wears. Same decision as `.cell-seat` in frame.css, which is the
-   same object — a person's name inside a table row. */
+   the product wears. */
 .wl-who:hover {
   color: var(--color-brand-accent-ink);
 }
@@ -9865,7 +9747,9 @@ a.live-row:focus-visible {
   /* THE NAME TAKES THE FIRST LINE'S ROOM, the tokens and share sit at its end
      at their own width — the compact row gives EVERY lead cell the rest of
      the line, which is right for a key-and-title row and wrong for figures. */
-  .spend-agents .grid-wrap[data-phone-rows="compact"] .grid-cell[data-lead]:not(:has(.cell-seat)) {
+  .spend-agents
+    .grid-wrap[data-phone-rows="compact"]
+    .grid-cell[data-lead]:not(:has(.crewlet-table-cell__entity)) {
     flex: none;
     font-weight: inherit;
   }
@@ -9879,7 +9763,7 @@ a.live-row:focus-visible {
      sized to its own width, ENG-4 and LEAD-6 put the titles beside them at
      two different indents. Seven characters of the key's own monospace fit a
      project key and a two-digit number; a longer key grows its own row. */
-  .spend-tasks .grid-wrap[data-phone-rows="compact"] .key-cell {
+  .spend-tasks .grid-wrap[data-phone-rows="compact"] .crewlet-table-cell__key {
     display: inline-block;
     min-width: 7ch;
   }
@@ -10908,9 +10792,9 @@ a.live-row:focus-visible {
   gap: var(--spacing-2);
 }
 
-/* The History tab's comparison of two versions: across both columns, the two
-   sides next to each other where the page is wide and one above the other on
-   a phone. */
+/* The History tab's comparison of two versions (uilet's VersionCompare, which
+   lays the two sides out itself), across both columns, and the files lens
+   inside it. */
 .artifact-compare-row {
   grid-column: 1 / -1;
   min-width: 0;
@@ -10921,19 +10805,7 @@ a.live-row:focus-visible {
   gap: var(--spacing-4);
   min-width: 0;
 }
-.artifact-compare-sides {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--spacing-4);
-}
-@container page (width < 860px) {
-  .artifact-compare-sides {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-/* One side, and the list of a text file's changed lines: a heading over its
-   content. */
-.artifact-compare-side,
+/* The list of a text file's changed lines: a heading over its content. */
 .artifact-compare-lines {
   display: flex;
   flex-direction: column;
@@ -10952,9 +10824,10 @@ a.live-row:focus-visible {
   font: inherit;
 }
 
-/* The People rail beside an artifact's body: a column at the right where the
-   page is wide, and above the body on a phone, where a reader follows a
-   presenter from it. */
+/* The People rail (uilet's PeopleRail, given `.artifact-people` for its place
+   here) beside an artifact's body: a column at the right where the page is
+   wide, and above the body on a phone, where a reader follows a presenter
+   from it. */
 .artifact-with-rail {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem);
@@ -10971,61 +10844,4 @@ a.live-row:focus-visible {
   .artifact-with-rail > .artifact-people {
     order: 0;
   }
-}
-.artifact-people {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  min-width: 0;
-  padding: var(--spacing-3);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-elevated);
-}
-.artifact-people-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-2);
-}
-.artifact-people-title {
-  margin: 0;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-}
-.artifact-people-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.artifact-person {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-width: 0;
-}
-.artifact-person-text {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-}
-.artifact-person-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.artifact-person-where {
-  overflow-wrap: anywhere;
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-sm);
-}
-.artifact-person-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-1);
-  justify-content: flex-end;
 }

@@ -13,7 +13,7 @@
  *
  * COMPARING IS ADDRESSED: the version a reader compares the picked one with is
  * `against=` and the way they compare is `lens=`, so a link to a comparison
- * opens it ([VersionCompare]).
+ * opens it ([ArtifactCompare]).
  */
 
 import { useMemo, useState } from "react";
@@ -47,11 +47,11 @@ import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
 import type { PresenceReport } from "./presence.ts";
 import {
+  ArtifactCompare,
   COMPARE_LENSES,
-  VersionCompare,
   drawnSideBySide,
   type CompareLens,
-} from "./VersionCompare.tsx";
+} from "./ArtifactCompare.tsx";
 
 export function HistoryTab({
   detail,
@@ -182,7 +182,7 @@ export function HistoryTab({
       </div>
       {against !== undefined && (
         <div className="artifact-compare-row">
-          <VersionCompare
+          <ArtifactCompare
             detail={detail}
             picked={picked}
             against={against}

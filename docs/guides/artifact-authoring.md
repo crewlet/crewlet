@@ -137,10 +137,16 @@ datastore and presence, used without a framework). It is served from
 `/_crewlet/kit/<version>/` on the artifact origin:
 
 ```html
-<link rel="stylesheet" href="/_crewlet/kit/0.18.0/kit.css">
-<script src="/_crewlet/kit/0.18.0/theme.js"></script>
-<script type="module" src="/_crewlet/kit/0.18.0/kit.js"></script>
+<link rel="stylesheet" href="/_crewlet/kit/0.20.0/kit.css">
+<script src="/_crewlet/kit/0.20.0/theme.js"></script>
+<script type="module" src="/_crewlet/kit/0.20.0/kit.js"></script>
 ```
+
+Link the version shown here, which is the newest this engine serves. The
+version in the path is a pin: the engine keeps serving every kit version it
+has shipped, so a page published against an older kit keeps the exact files
+it was written against when the engine moves to a newer one. To take a newer
+kit, publish a new version of the page that links it.
 
 Colours, spacing and type come from the kit's tokens, never literal values,
 so a page looks like the rest of the company in both themes.

@@ -57,6 +57,12 @@ refusal codes. Treat a refusal code you do not recognise as a generic failure.
 
 `crewlet.version` is the exact contract the page is running.
 
+The artifact kit is versioned the same way, by the page itself: it links
+`/_crewlet/kit/<version>/` with an exact version, and the engine serves every
+kit version it has shipped, public and immutable, so a published page keeps
+the kit it was written against. The
+[authoring guide](../guides/artifact-authoring.md) names the newest.
+
 ---
 
 ## The surface

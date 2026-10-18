@@ -2,7 +2,7 @@
  * Who is in an artifact's room, one entry a seat, and what following one of
  * them moves (plan 05, 5.1 and 5.5).
  *
- * PURE: the People rail draws [bySeat] and the artifact page applies
+ * PURE: [followTarget] picks a seat's entry by [bySeat], and the artifact page applies
  * [followMoves] to its own address, so what following does is held by tests
  * rather than by a screen.
  *

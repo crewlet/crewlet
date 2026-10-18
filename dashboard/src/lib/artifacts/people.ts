@@ -11,6 +11,7 @@
 
 import { useMemo } from "react";
 import {
+  PRESENCE_LABELS,
   assignPresenceHues,
   isNodeHue,
   type NodeHue,
@@ -20,7 +21,7 @@ import {
   type SheetPerson,
 } from "@crewlethq/ui";
 import type { ArtifactAudience, ArtifactPresenceMember, OrgProjection } from "~/protocol/index.ts";
-import { indexOrg, type OrgIndex, type Seat, type Unit } from "../seats.ts";
+import { indexOrg, principalOfSeat, type OrgIndex, type Unit } from "../seats.ts";
 import { useOrg } from "../store-hooks.ts";
 import { plural } from "../format.ts";
 
@@ -41,22 +42,6 @@ export interface ArtifactPeople {
   sheetPeople: SheetPerson[];
 }
 
-/** A seat as a principal. A seat the chart does not hold keeps its handle and is drawn as an agent, the kit's default. */
-export function principalOfSeat(seat: Seat | undefined, handle: string): Principal {
-  if (!seat) return { id: handle, kind: "agent", name: handle, detail: handle };
-  const out: Principal = {
-    id: seat.handle,
-    kind: seat.kind === "human" ? "person" : "agent",
-    name: seat.name,
-    detail: seat.unit ? seat.unit.name : seat.handle,
-  };
-  if (seat.kind === "agent" && seat.avatar) {
-    out.character = seat.avatar.character as Principal["character"];
-    if (isNodeHue(seat.avatar.color)) out.hue = seat.avatar.color;
-  }
-  return out;
-}
-
 /** A unit as a principal: everybody in it and below it. */
 export function principalOfUnit(unit: Unit | undefined, key: string): Principal {
   if (!unit) return { id: key, kind: "team", name: key };
@@ -68,6 +53,18 @@ export function principalOfUnit(unit: Unit | undefined, key: string): Principal 
     name: unit.name,
     detail: `${plural(people, "person", "people")}, ${plural(agents, "agent")}`,
   };
+}
+
+/**
+ * The turn an agent in the room is working in, for the People rail's Open
+ * turn: the roster is keyed by session, which is the drawn member's `id`. A
+ * person, or an agent between turns, has none.
+ */
+export function memberTurn(
+  roster: ReadonlyMap<string, ArtifactPresenceMember>,
+  member: Pick<PresenceMember, "id" | "kind">,
+): string {
+  return member.kind === "agent" ? (roster.get(member.id)?.turn ?? "") : "";
 }
 
 /** The chart's lookups for an artifact's surfaces, over an org projection. */
@@ -162,8 +159,11 @@ export function presenceMembers(
       out.character = seat.avatar.character;
       if (isNodeHue(seat.avatar.color)) out.hue = seat.avatar.color;
     }
+    // THE WHOLE PHRASE, VERB FIRST, which is what uilet's `PresenceMember.location`
+    // means: the People rail prints it in place of the activity, and the
+    // presence stack reads it out in place of the activity too.
     const where = memberLocation(m, title);
-    if (where) out.location = where;
+    if (where) out.location = `${PRESENCE_LABELS.activity(m.activity, kind)} ${where}`;
     return out;
   });
   const hues = assignPresenceHues(drawn, held);

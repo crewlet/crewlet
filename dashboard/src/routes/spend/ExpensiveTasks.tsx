@@ -26,11 +26,11 @@
  * drawn locked by the navigation for the same reader.
  */
 
-import { Card, Skeleton } from "@crewlethq/ui";
+import { Card, Skeleton, TableKeyCell, TableNumberCell } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { KeyCell, TokenCell } from "~/app/frame/cells.tsx";
+
 import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -243,7 +243,7 @@ export function ExpensiveTasks() {
                 header: "Task",
                 shrink: true,
                 phoneLead: true,
-                cell: (r) => <KeyCell value={r.key || r.id.slice(0, 8)} />,
+                cell: (r) => <TableKeyCell value={r.key || r.id.slice(0, 8)} />,
               },
               {
                 key: "title",
@@ -277,7 +277,7 @@ export function ExpensiveTasks() {
                         }}
                       />
                     </span>
-                    <TokenCell value={r.spend?.tokens} />
+                    <TableNumberCell value={r.spend?.tokens} format={fmtCount} />
                   </span>
                 ),
               },

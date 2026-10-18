@@ -46,6 +46,7 @@
  */
 
 import { Fragment, useEffect, useRef, useState } from "react";
+import { uiletTone } from "~/ui/primitives.tsx";
 import {
   Button,
   Callout,
@@ -59,6 +60,9 @@ import {
   StatGroup,
   Tag,
   type DescriptionListEntry,
+  TableKeyCell,
+  TableDateCell,
+  TableStatusCell,
 } from "@crewlethq/ui";
 import {
   DatabaseGlyph,
@@ -68,7 +72,7 @@ import {
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, KeyCell, StatusCell } from "~/app/frame/cells.tsx";
+
 import { href, useRoute } from "~/app/router.tsx";
 import { ALARMS_AT, alarmKindTitle, alarmLogLines, type AlarmLogLine } from "~/lib/alarms.ts";
 import { bindingTerm, TERM_WORDS } from "~/lib/retention.ts";
@@ -425,7 +429,7 @@ export function RetentionPanels({
                       is deliberately NOT a peek row — it carries the evict
                       gesture, and a button inside a link is markup no browser
                       agrees about. */}
-                  <KeyCell value={n.node_id} path={["settings", "nodes", n.node_id]} />
+                  <TableKeyCell value={n.node_id} href={href(["settings", "nodes", n.node_id])} />
                   {n.node_id === thisNode && <Tag variant="brand">this one</Tag>}
                   {n.counted && !n.live && <Tag variant="warning">counted · not live</Tag>}
                   {n.evicted && <Tombstone evicted={n.evicted} now={now} />}
@@ -447,15 +451,15 @@ export function RetentionPanels({
               // faint prose on the no branch read as two different kinds of
               // fact, and this is one: whether the trim waits for this node.
               cell: (n) => (
-                <StatusCell
+                <TableStatusCell
                   glyph={n.counted ? "●" : "○"}
                   label={n.counted ? "yes" : "no"}
-                  tone={n.counted ? "positive" : "neutral"}
                   title={
                     n.counted
                       ? "the trim waits for this node's position"
                       : "the trim no longer waits for this node"
                   }
+                  tone={uiletTone(n.counted ? "positive" : "neutral")}
                 />
               ),
             },
@@ -466,7 +470,7 @@ export function RetentionPanels({
               sortValue: (n) => n.at ?? "",
               cell: (n) =>
                 n.at ? (
-                  <DateCell at={n.at} now={now} />
+                  <TableDateCell value={n.at} now={now} />
                 ) : (
                   // NOT A ZERO AND NOT AN EM-DASH. A live node that has
                   // never published a position is COUNTED — the trim waits
@@ -577,7 +581,9 @@ export function SnapshotsCard({
               key: "node",
               header: "Node",
               sortValue: (s) => s.node_id,
-              cell: (s) => <KeyCell value={s.node_id} path={["settings", "nodes", s.node_id]} />,
+              cell: (s) => (
+                <TableKeyCell value={s.node_id} href={href(["settings", "nodes", s.node_id])} />
+              ),
             },
             {
               key: "at",
@@ -585,7 +591,7 @@ export function SnapshotsCard({
               sortValue: (s) => s.at ?? "",
               cell: (s) =>
                 s.at ? (
-                  <DateCell at={s.at} now={now} />
+                  <TableDateCell value={s.at} now={now} />
                 ) : (
                   // THE LOOP'S OWN REASON, never an empty cell: "node-4
                   // none" is not an answer, and `lagging`, `unhydrated`,

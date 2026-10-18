@@ -13,7 +13,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
-import { AssigneeCell, InlineEdits, PriorityCell, StatusCell } from "./cells.tsx";
+import { AssigneeCell, InlineEdits, PriorityCell, WorkStatusCell } from "./cells.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
@@ -107,7 +107,7 @@ function mount(
           <ViewerProvider>
             <InlineEdits seatName={seatName}>
               <div role="row">
-                <StatusCell row={row} />
+                <WorkStatusCell row={row} />
                 <PriorityCell row={row} word />
                 <AssigneeCell
                   row={row}

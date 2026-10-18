@@ -34,14 +34,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Button,
+  ButtonLink,
   Callout,
   EmptyState,
   FollowBanner,
   Menu,
+  PeopleRail,
   PresenceStack,
   Skeleton,
+  peopleRailKey,
   useToast,
   type NodeHue,
+  type PeopleRailSelf,
 } from "@crewlethq/ui";
 import {
   CopyGlyph,
@@ -50,7 +54,7 @@ import {
   TrashGlyph,
   UsersGlyph,
 } from "@crewlethq/icons/glyphs";
-import { useNavigator, useParam } from "~/app/router.tsx";
+import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { useOwnStar, usePageLabels, usePageMenu } from "~/app/Shell.tsx";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { ObjectTabs } from "~/app/frame/ObjectTabs.tsx";
@@ -63,7 +67,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { pinArtifact, untrashArtifact } from "~/lib/artifacts/api.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
-import { useArtifactPeople, presenceMembers } from "~/lib/artifacts/people.ts";
+import { memberTurn, presenceMembers, useArtifactPeople } from "~/lib/artifacts/people.ts";
 import { useArtifactRoom } from "~/lib/artifacts/room.ts";
 import { useDataStore } from "~/lib/artifacts/useDataStore.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
@@ -81,7 +85,6 @@ import { HistoryTab } from "./HistoryTab.tsx";
 import { DataTab } from "./DataTab.tsx";
 import { PurgeControl, SettingsTab } from "./SettingsTab.tsx";
 import { useArtifactPresence } from "./presence.ts";
-import { PeopleRail } from "./PeopleRail.tsx";
 import { followMoves, followTarget, moves } from "~/lib/artifacts/follow.ts";
 import { useViewer } from "~/lib/viewer.ts";
 
@@ -340,6 +343,18 @@ function Loaded({
     held.current = out.hues;
     return out.members;
   }, [room.others, people]);
+  // The reader, first on the People rail as "You", drawn as their own seat.
+  const selfFace = useMemo<PeopleRailSelf | undefined>(() => {
+    if (!viewer.handle) return undefined;
+    const p = people.seatPrincipal(viewer.handle);
+    return {
+      name: p.name,
+      kind: p.kind === "person" ? "human" : "agent",
+      character: p.character,
+      hue: p.hue,
+      src: p.src,
+    };
+  }, [viewer.handle, people]);
 
   // WHETHER THE READER PINNED IT is their own record, which the head does not
   // carry: their pins are a listing of their own, read once and kept current
@@ -518,15 +533,23 @@ function Loaded({
       <div className={peopleOpen ? "artifact-with-rail" : undefined}>
         {peopleOpen && (
           <PeopleRail
-            members={room.others}
-            self={viewer.handle ?? ""}
-            people={people}
-            following={followed}
-            onFollow={(seat) => {
+            className="artifact-people"
+            members={drawn}
+            self={selfFace}
+            following={followed || undefined}
+            onFollow={(member) => {
               setLeft(null);
-              setFollow(seat ?? "");
+              setFollow(member ? peopleRailKey(member) : "");
             }}
             onClose={() => setRail("")}
+            actions={(member) => {
+              const turn = memberTurn(room.roster.members, member);
+              return turn ? (
+                <ButtonLink size="small" variant="ghost" href={href(["live", "turns", turn])}>
+                  Open turn
+                </ButtonLink>
+              ) : null;
+            }}
           />
         )}
         <div className="artifact-body" ref={body}>

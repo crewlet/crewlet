@@ -110,6 +110,9 @@ import {
   Skeleton,
   Tag,
   DownloadButton,
+  TableDateCell,
+  TableEntityCell,
+  TableTextCell,
 } from "@crewlethq/ui";
 import { FileTextGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 
@@ -117,7 +120,7 @@ import { href } from "~/app/router.tsx";
 import { useParam } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
-import { DateCell, SeatCell, SeatLabel, TextCell } from "~/app/frame/cells.tsx";
+import { linkedSeat, plainSeat } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { toCsv } from "~/lib/csv.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
@@ -553,17 +556,19 @@ export function WriterCell({ writer }: { writer: Writer }) {
   switch (writer.as) {
     case "seat":
       return (
-        <SeatCell
-          handle={writer.handle}
-          name={writer.name}
-          kind={writer.kind}
-          avatar={writer.avatar}
+        <TableEntityCell
+          {...linkedSeat({
+            handle: writer.handle,
+            name: writer.name,
+            kind: writer.kind,
+            avatar: writer.avatar,
+          })}
         />
       );
     case "login":
-      return <SeatLabel name={writer.name} kind="human" />;
+      return <TableEntityCell {...plainSeat({ name: writer.name, kind: "human" })} />;
     case "system":
-      return <TextCell>{writer.name}</TextCell>;
+      return <TableTextCell>{writer.name}</TableTextCell>;
     case "engine":
       // THE ENGINE IS A WRITER. A chart apply and a repair duty carry no
       // actor at all, and rendering them as a blank would make the five
@@ -865,14 +870,14 @@ export function Audit() {
         header: "When",
         shrink: true,
         sortValue: (row) => row.at,
-        cell: (row) => <DateCell at={row.at} now={now} />,
+        cell: (row) => <TableDateCell value={row.at} now={now} />,
       },
       {
         key: "source",
         header: "Where",
         shrink: true,
         sortValue: (row) => row.source,
-        cell: (row) => <TextCell>{SOURCE_LABEL[row.source]}</TextCell>,
+        cell: (row) => <TableTextCell>{SOURCE_LABEL[row.source]}</TableTextCell>,
       },
       {
         key: "actor",

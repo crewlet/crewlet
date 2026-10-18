@@ -109,6 +109,10 @@ import {
   Link,
   Text,
   Stack,
+  TableKeyCell,
+  TableDateCell,
+  TableEntityCell,
+  TableTextCell,
 } from "@crewlethq/ui";
 import {
   EllipsisGlyph,
@@ -143,7 +147,7 @@ import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import type { ObjectRef } from "~/app/frame/objects.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
-import { DateCell, KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
+import { linkedSeat } from "~/app/frame/cells.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -835,7 +839,7 @@ export function PeopleAndAccess() {
                   drop: 3,
                   sortValue: (p) => p.login ?? "",
                   cell: (p) =>
-                    p.login ? <KeyCell value={p.login} /> : <EmptyValue label="No login" />,
+                    p.login ? <TableKeyCell value={p.login} /> : <EmptyValue label="No login" />,
                 },
                 {
                   key: "kind",
@@ -843,7 +847,7 @@ export function PeopleAndAccess() {
                   shrink: true,
                   drop: 2,
                   sortValue: (p) => p.kind,
-                  cell: (p) => <TextCell>{KIND_WORDS[p.kind] ?? p.kind}</TextCell>,
+                  cell: (p) => <TableTextCell>{KIND_WORDS[p.kind] ?? p.kind}</TableTextCell>,
                 },
                 {
                   key: "stage",
@@ -874,7 +878,7 @@ export function PeopleAndAccess() {
                   floor: "8rem",
                   drop: 1,
                   sortValue: (p) => accessLine(p.grants ?? []),
-                  cell: (p) => <TextCell>{accessLine(p.grants ?? [])}</TextCell>,
+                  cell: (p) => <TableTextCell>{accessLine(p.grants ?? [])}</TableTextCell>,
                 },
               ]}
             />
@@ -919,7 +923,11 @@ export function PeopleAndAccess() {
                       header: "Seat",
                       floor: "12rem",
                       sortValue: (s) => s.name || s.handle,
-                      cell: (s) => <SeatCell handle={s.handle} name={s.name} kind="human" />,
+                      cell: (s) => (
+                        <TableEntityCell
+                          {...linkedSeat({ handle: s.handle, name: s.name, kind: "human" })}
+                        />
+                      ),
                     },
                     {
                       key: "unit",
@@ -929,7 +937,9 @@ export function PeopleAndAccess() {
                       sortValue: (s) => (s.unit ? (unitByKey(index, s.unit)?.name ?? s.unit) : ""),
                       cell: (s) => {
                         if (!s.unit) return <EmptyValue label="No team" />;
-                        return <TextCell>{unitByKey(index, s.unit)?.name ?? s.unit}</TextCell>;
+                        return (
+                          <TableTextCell>{unitByKey(index, s.unit)?.name ?? s.unit}</TableTextCell>
+                        );
                       },
                     },
                     {
@@ -987,7 +997,7 @@ export function PeopleAndAccess() {
                     header: "Label",
                     shrink: true,
                     sortValue: (t) => t.id,
-                    cell: (t) => <KeyCell value={t.id} />,
+                    cell: (t) => <TableKeyCell value={t.id} />,
                   },
                   {
                     key: "login",
@@ -995,7 +1005,7 @@ export function PeopleAndAccess() {
                     shrink: true,
                     drop: 1,
                     sortValue: (t) => t.login,
-                    cell: (t) => <KeyCell value={t.login} />,
+                    cell: (t) => <TableKeyCell value={t.login} />,
                   },
                   {
                     key: "row",
@@ -1086,7 +1096,7 @@ function PersonName({ row }: { row: DirectoryRow }) {
         icon={row.kind === "person" ? undefined : <KeyGlyph size="sm" />}
         decorative
       />
-      <TextCell>{name}</TextCell>
+      <TableTextCell>{name}</TableTextCell>
     </Inline>
   );
 }
@@ -1109,7 +1119,7 @@ function Holder({ seat }: { seat: HumanSeat }) {
         {invitation.sealed ? (
           <SealedTag />
         ) : invitation.email ? (
-          <TextCell>{invitation.email}</TextCell>
+          <TableTextCell>{invitation.email}</TableTextCell>
         ) : null}
       </Inline>
     );
@@ -1117,14 +1127,14 @@ function Holder({ seat }: { seat: HumanSeat }) {
   // OPEN SEAT, IN WORDS, as the chart's cards and the stat tile say it: a
   // seat nothing holds is one an admin can invite somebody onto, which a dash
   // did not say.
-  if (!holder) return <TextCell>Open seat</TextCell>;
+  if (!holder) return <TableTextCell>Open seat</TableTextCell>;
   // THE HOLDER BY NAME, as plain text. Status colour is reserved for status, so
   // the stage is a tag of its own, and only where it is news: an active holder
   // is the ordinary case.
   const stage = holder.stage ?? "";
   return (
     <Inline gap={1} wrap>
-      <TextCell>{holderName(holder)}</TextCell>
+      <TableTextCell>{holderName(holder)}</TableTextCell>
       {stage !== "active" && <WordTag words={STAGE_WORDS[stage]} fallback={stage} />}
     </Inline>
   );
@@ -1164,7 +1174,11 @@ function Contacts({ contact }: { contact: ConfigRole["contact"] }) {
 function BoundSeat({ seat, index }: { seat?: string; index: ReturnType<typeof indexOrg> }) {
   if (!seat) return <EmptyValue label="No seat" />;
   const held = index.byHandle.get(seat);
-  return <SeatCell handle={seat} name={held?.name ?? seat} kind={held?.kind} />;
+  return (
+    <TableEntityCell
+      {...linkedSeat({ handle: seat, name: held?.name ?? seat, kind: held?.kind })}
+    />
+  );
 }
 
 /** A finding's fix, opened from its row: the dialog the person's peek opens for it. */
@@ -1381,7 +1395,7 @@ function Invitations({
                 i.sealed ? (
                   <SealedTag />
                 ) : i.email ? (
-                  <TextCell>{i.email}</TextCell>
+                  <TableTextCell>{i.email}</TableTextCell>
                 ) : (
                   // NO ADDRESS AND NONE SEALED: a removal erases every value
                   // of its person's that other rows hold, the invitation
@@ -1401,7 +1415,7 @@ function Invitations({
               header: "Access",
               drop: 1,
               sortValue: (i) => accessLine(i.grants ?? []),
-              cell: (i) => <TextCell>{accessLine(i.grants ?? [])}</TextCell>,
+              cell: (i) => <TableTextCell>{accessLine(i.grants ?? [])}</TableTextCell>,
             },
             {
               key: "by",
@@ -1418,7 +1432,7 @@ function Invitations({
               sortValue: (i) => i.expires_at ?? "",
               cell: (i) =>
                 i.state === "open" ? (
-                  <DateCell at={i.expires_at} now={now} />
+                  <TableDateCell value={i.expires_at} now={now} />
                 ) : (
                   <WordTag words={INVITATION_WORDS[i.state]} fallback={i.state} />
                 ),
@@ -1469,9 +1483,11 @@ function Inviter({ author, index }: { author?: string; index: ReturnType<typeof 
   if (!author) return <EmptyValue label="Unknown" />;
   const seat = index.byHandle.get(author);
   return seat ? (
-    <SeatCell handle={author} name={seat.name || author} kind={seat.kind} />
+    <TableEntityCell
+      {...linkedSeat({ handle: author, name: seat.name || author, kind: seat.kind })}
+    />
   ) : (
-    <KeyCell value={author} />
+    <TableKeyCell value={author} />
   );
 }
 
@@ -1915,10 +1931,10 @@ function Principal({
                 floor: "8rem",
                 sortValue: (c) => c.method,
                 cell: (c) => (
-                  <TextCell>
+                  <TableTextCell>
                     {METHOD_WORDS[c.method] ?? c.method}
                     {c.label ? ` · ${c.label}` : ""}
-                  </TextCell>
+                  </TableTextCell>
                 ),
               },
               {
@@ -1947,7 +1963,7 @@ function Principal({
                 shrink: true,
                 drop: 3,
                 sortValue: (c) => c.created_at ?? "",
-                cell: (c) => <DateCell at={c.created_at} now={now} />,
+                cell: (c) => <TableDateCell value={c.created_at} now={now} />,
               },
               {
                 key: "expires",
@@ -2026,7 +2042,7 @@ function Principal({
                   header: "Session",
                   width: "max-content",
                   sortValue: (s) => s.created_at ?? "",
-                  cell: (s) => <DateCell at={s.created_at} now={now} />,
+                  cell: (s) => <TableDateCell value={s.created_at} now={now} />,
                 },
                 {
                   key: "state",
@@ -2076,7 +2092,7 @@ function Principal({
                     !s.live && !s.ended_at && s.expires_at && tsKey(s.expires_at) > now ? (
                       <EmptyValue label="Not recorded" />
                     ) : (
-                      <DateCell at={s.ended_at ?? s.expires_at} now={now} />
+                      <TableDateCell value={s.ended_at ?? s.expires_at} now={now} />
                     ),
                 },
               ]}

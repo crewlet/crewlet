@@ -357,7 +357,9 @@ describe("the lease tables", () => {
   test("Held by is the same link to the node in both lease tables", async () => {
     const view = mountFleet();
     expect(await screen.findByText("integration-reconciler")).toBeDefined();
-    const held = [...view.container.querySelectorAll(".grid-wrap .held-by")];
+    const held = [...view.container.querySelectorAll(".grid-wrap a")].filter(
+      (a) => a.textContent === "harness-0",
+    );
     expect(held).toHaveLength(2);
     for (const cell of held) {
       expect(cell.tagName).toBe("A");

@@ -39,6 +39,7 @@
  */
 
 import { useState } from "react";
+import { href } from "~/app/router.tsx";
 
 import {
   Button,
@@ -50,10 +51,12 @@ import {
   Input,
   Modal,
   Tag,
+  TableKeyCell,
+  TableTagsCell,
 } from "@crewlethq/ui";
 import { ServerGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { KeyCell, TagsCell } from "~/app/frame/cells.tsx";
+
 import { QueryState } from "~/components/common.tsx";
 import { BROKER_REMOVE_TIMEOUT_MS, rest, RestError } from "~/protocol/index.ts";
 import type {
@@ -269,9 +272,9 @@ export function BrokerMembership({
               !r.node ? (
                 <span className="t-caption">name unknown</span>
               ) : live.has(r.node) ? (
-                <KeyCell value={r.node} path={["settings", "nodes", r.node]} />
+                <TableKeyCell value={r.node} href={href(["settings", "nodes", r.node])} />
               ) : (
-                <KeyCell value={r.node} />
+                <TableKeyCell value={r.node} />
               ),
           },
           {
@@ -290,7 +293,7 @@ export function BrokerMembership({
             key: "roles",
             header: "Roles",
             sortValue: (r) => (r.roles ?? []).join(","),
-            cell: (r) => <TagsCell tags={r.roles} />,
+            cell: (r) => <TableTagsCell tags={r.roles} />,
           },
           {
             key: "voter",

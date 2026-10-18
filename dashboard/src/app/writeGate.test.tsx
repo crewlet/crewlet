@@ -98,7 +98,7 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "way on top of somebody else's save",
     suite: "routes/knowledge/page/PageView.test.tsx",
   },
-  "routes/knowledge/page/Comments.tsx": {
+  "routes/knowledge/page/CommentThread.tsx": {
     why: "a page's Comment and Reply (comment_on_page)",
     suite: "routes/knowledge/page/PageView.test.tsx",
   },

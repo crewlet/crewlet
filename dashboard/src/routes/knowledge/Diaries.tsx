@@ -29,13 +29,22 @@
  */
 
 import { useMemo, type ReactNode } from "react";
-import { Callout, Card, EmptyState, EmptyValue, InlineCode } from "@crewlethq/ui";
+import {
+  Callout,
+  Card,
+  EmptyState,
+  EmptyValue,
+  InlineCode,
+  TableNumberCell,
+  TableDateCell,
+  TableEntityCell,
+} from "@crewlethq/ui";
 import { BrainGlyph, CircleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { seatKindKey } from "~/app/crumbs.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, NumberCell, SeatLabel } from "~/app/frame/cells.tsx";
+import { plainSeat } from "~/app/frame/cells.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
@@ -44,7 +53,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { handleLabel, indexOrg, type OrgIndex } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
-import { plural, relTime, tsKey } from "~/lib/format.ts";
+import { plural, relTime, tsKey, fmtCount } from "~/lib/format.ts";
 import type { MemoryOverviewSeat } from "~/contract/memory.ts";
 
 /**
@@ -74,7 +83,7 @@ export function Diaries() {
 
   const count = (row: MemoryOverviewSeat, value: number) => {
     const why = uncounted(row);
-    return why ? <EmptyValue label={why} /> : <NumberCell value={value} />;
+    return why ? <EmptyValue label={why} /> : <TableNumberCell value={value} format={fmtCount} />;
   };
 
   return (
@@ -123,9 +132,11 @@ export function Diaries() {
                 phoneLead: true,
                 sortValue: (r) => nameOf(index, r.handle).toLowerCase(),
                 cell: (r) => (
-                  <SeatLabel
-                    name={nameOf(index, r.handle)}
-                    kind={index.byHandle.get(r.handle)?.kind}
+                  <TableEntityCell
+                    {...plainSeat({
+                      name: nameOf(index, r.handle),
+                      kind: index.byHandle.get(r.handle)?.kind,
+                    })}
                   />
                 ),
               },
@@ -146,7 +157,7 @@ export function Diaries() {
                   uncounted(r) ? (
                     <EmptyValue label={uncounted(r)!} />
                   ) : (
-                    <DateCell at={r.last_reflection_at} now={now} />
+                    <TableDateCell value={r.last_reflection_at} now={now} />
                   ),
               },
               {

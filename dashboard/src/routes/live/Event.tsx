@@ -98,7 +98,7 @@ function eventFacts(event: EventRecord, now: number, handle: string): Fact[] {
     },
     {
       label: "When",
-      // Relative in the line and absolute on hover, the way `DateCell` reads
+      // Relative in the line and absolute on hover, the way `TableDateCell` reads
       // in every grid: a reader who has the record open asks "how long ago"
       // first and "at what instant" only once they are writing it down.
       value: <span title={fmtDateTime(event.timestamp)}>{relTime(event.timestamp, now)}</span>,

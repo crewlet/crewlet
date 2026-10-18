@@ -290,7 +290,7 @@ export function Assignee({
           a screen reader is free to ignore — so the four columns that draw the
           badge alone announced the assignee as nothing at all.
 
-          AND THE OUTLINE IS THE ONE VARIANT A BADGE HAS: `SeatCell` drew it
+          AND THE OUTLINE IS THE ONE VARIANT A BADGE HAS: `linkedSeat` drew it
           from the kind it was handed and this cell could not be handed one,
           so the same human seat was drawn two ways on the two column sets of
           ONE grid. A kind the chart does not hold takes the kit's default,

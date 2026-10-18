@@ -79,7 +79,7 @@ import {
   type Who,
 } from "../parts.tsx";
 import { withoutRepeatedTitle } from "./body.ts";
-import { PageComments } from "./Comments.tsx";
+import { PageCommentThread } from "./CommentThread.tsx";
 import { Connections, Revisions } from "./Connections.tsx";
 import { PageEditor } from "./Editor.tsx";
 import { PageChanges, VersionView } from "./History.tsx";
@@ -463,11 +463,10 @@ export function PageView({ id }: { id: string }) {
                 <PageChanges pageID={page.id} who={who} now={now} />
               ) : (
                 <>
-                  <PageComments
+                  <PageCommentThread
                     pageID={page.id}
                     title={page.title}
                     comments={data.comments ?? []}
-                    who={who}
                     now={now}
                   />
                   <Connections
