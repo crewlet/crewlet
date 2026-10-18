@@ -268,29 +268,34 @@ func lowerASCII(c byte) byte {
 }
 
 // authorLabel renders the authors as the opening line names them:
-// `kind:seat` or `kind` alone, comma-separated, `unknown` for nobody.
+// `kind:seat`, `kind` alone for a company principal under no seat, `external`
+// for an outside party, comma-separated and each once, `unknown` for nobody.
 func authorLabel(b Boundary, authors []Author) string {
 	if len(authors) == 0 {
 		return "unknown"
 	}
 	parts := make([]string, 0, len(authors))
 	for _, a := range authors {
+		var part string
 		if a.outside() {
 			// SEATLESS BY DEFINITION, so the kind alone: who they are is
 			// beside the text where the surface names them (a chat line's
 			// speaker), and this says only that nothing vouches for them.
-			parts = append(parts, string(TrustExternal))
-			continue
+			part = string(TrustExternal)
+		} else {
+			part = labelValue(b, string(a.Kind))
+			if part == "" {
+				part = "unknown"
+			}
+			if seat := labelValue(b, a.Seat); seat != "" {
+				part += ":" + seat
+			}
 		}
-		kind := labelValue(b, string(a.Kind))
-		if kind == "" {
-			kind = "unknown"
+		// EACH ONCE: a thread where one colleague spoke ten times has one
+		// author, and the line a model reads is not a transcript.
+		if !slices.Contains(parts, part) {
+			parts = append(parts, part)
 		}
-		if seat := labelValue(b, a.Seat); seat != "" {
-			parts = append(parts, kind+":"+seat)
-			continue
-		}
-		parts = append(parts, kind)
 	}
 	return strings.Join(parts, ",")
 }
