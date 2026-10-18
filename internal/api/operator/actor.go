@@ -5,6 +5,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -71,6 +72,23 @@ func pageActor(ctx context.Context, turn *turnctx.Turn) (doclet.Actor, error) {
 	actor, err := builtin.PrincipalPageActor(ctx, turn)
 	if err != nil {
 		return doclet.Actor{}, err
+	}
+	actor.OpKey = keyFrom(ctx)
+	return actor, nil
+}
+
+// chatActor is [pageActor] for chat, which binds the call's operation to what
+// each gesture says ([chatlet.Actor.OpKey]), as the knowledge base does.
+//
+// A CREDENTIAL ACTING AS ITSELF CONVERTS, to [chatlet.AuthorOperator], rather
+// than failing here: who may SPEAK is the authority table's (every chat verb
+// is seated) and the store's (it refuses that kind every gesture said in a
+// room), and a conversion that refused it would be a third answer to the
+// question, worded where neither of those two can be read.
+func chatActor(ctx context.Context, turn *turnctx.Turn) (chatlet.Actor, error) {
+	actor, err := builtin.PrincipalChatActor(ctx, turn)
+	if err != nil {
+		return chatlet.Actor{}, err
 	}
 	actor.OpKey = keyFrom(ctx)
 	return actor, nil
