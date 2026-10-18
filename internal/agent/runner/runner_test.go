@@ -274,8 +274,20 @@ func TestARefusalOnTheTrackerNamesTheTrackersOwnTools(t *testing.T) {
 
 	chatted := decodeWork(turn.ToolReply("work"),
 		func() []ledger.Call { return []ledger.Call{{Name: "mattermost_post_message"}} }, surface)
-	if err := mustErr(t, chatted, claim); !strings.Contains(err.Error(), "somewhere else") {
-		t.Errorf("the refusal does not say the turn's write landed elsewhere: %v", err)
+	elsewhere := mustErr(t, chatted, claim)
+	if !strings.Contains(elsewhere.Error(), "somewhere else") {
+		t.Errorf("the refusal does not say the turn's write landed elsewhere: %v", elsewhere)
+	}
+
+	// BOTH OPEN WITH THE ONE EXPORTED CLAUSE, which is what a scripted model
+	// recognises the refusal by: a copy of the sentence that drifted from
+	// this one never sees it, and answers the same claim until the rounds
+	// run out.
+	for _, refused := range []error{err, elsewhere} {
+		if !strings.HasPrefix(refused.Error(), NotDeliveredOn("work")) {
+			t.Errorf("a refusal naming the surface does not open with %q: %v",
+				NotDeliveredOn("work"), refused)
+		}
 	}
 }
 
