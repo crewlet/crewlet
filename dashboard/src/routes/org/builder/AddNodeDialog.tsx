@@ -308,8 +308,9 @@ function AddNodeFields({ form }: { form: AddForm }) {
               onValue={form.setContact}
             />
             <p className="t-caption">
-              Optional. Without one, no agent can mention them and they’re reached only through the
-              dashboard. Add it now or later in the seat’s editor.
+              Optional: the account another system knows them by — a chat vendor’s, a code host’s,
+              the tracker’s — so an agent there can reach them. Without one they’re reached through
+              the dashboard only. Add it now or later in the seat’s editor.
             </p>
           </>
         ) : (
