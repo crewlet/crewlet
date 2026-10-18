@@ -30,6 +30,9 @@ subcommand below is served by it.
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it. The token takes `admin` |
 | `crewlet seats pause <handle> [-stop] [-reason TEXT] [-op-id ID]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round. Taken by the seat's holder, whoever leads it, or an administrator, and recorded under the caller's own name, kind and credential |
 | `crewlet seats resume <handle> [-op-id ID]` | Lift the pause; what waited is delivered first, in order. The same authority as `pause` |
+| `crewlet artifacts list\|get\|versions\|assets\|usage` | Read the company's artifacts through a running node, as the token's principal: the listing it may see (`-scope`, `-kind`, `-q`, `-status`, `-work-item`), one artifact's head and audience, its versions, its assets, and the company's usage against its quota (an administrator's). See [`crewlet artifacts`](#crewlet-artifacts) |
+| `crewlet artifacts publish <dir\|file> [-artifact ID] [-op-id ID]` | Publish a directory or a file as a new artifact, or as the next version of one: an upload intent first, then only the files the artifact does not already hold are sent, then the version is published against the head it read |
+| `crewlet artifacts restore\|label\|share\|unshare\|trash\|untrash\|purge` | Roll back to a version, label one, share with a seat, a unit or the company, withdraw a share, move to and from the trash, and purge for good (an administrator's, with a person present; the id is asked twice) |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load a company file as a new active `company_config` revision — through a running node's `PUT /config`, which activates it fleet-wide, or offline into this node's store, which the node publishes at its next start; the line it prints says which it did |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -1181,6 +1184,58 @@ without it the command mints one, `<uuidv7>.pause` or `<uuidv7>.resume`. An
 `-op-id` so the retry is the same operation rather than a second one. Pass it
 exactly as printed: it carries the instant it was minted, which a node reads
 to decide whether it can still vouch for a retry.
+
+## `crewlet artifacts`
+
+```
+crewlet artifacts list [-scope mine|shared|company|agents|all] [-kind html|markdown|sheet]
+    [-q TEXT] [-status live|trashed] [-work-item KEY] [-limit N]
+crewlet artifacts get <id>
+crewlet artifacts publish <dir|file> [-artifact ID] [-title TEXT] [-kind html|markdown]
+    [-entry PATH] [-label TEXT] [-contract VERSION] [-capabilities a,b]
+    [-work-item KEY] [-force] [-op-id ID]
+crewlet artifacts versions <id>
+crewlet artifacts restore <id> <version> [-label TEXT] [-op-id ID]
+crewlet artifacts label <id> <version> <label> [-op-id ID]
+crewlet artifacts share <id> <seat:HANDLE|unit:KEY|company> <role> [-op-id ID]
+crewlet artifacts unshare <id> <seat:HANDLE|unit:KEY|company> [-op-id ID]
+crewlet artifacts trash <id> [-op-id ID]
+crewlet artifacts untrash <id> [-op-id ID]
+crewlet artifacts purge <id> -confirm <id> [-op-id ID]
+crewlet artifacts assets <id>
+crewlet artifacts usage
+    ... [<config.yaml>] [-url URL]
+```
+
+The company's artifacts from a shell, through the same routes the dashboard is
+built on ([Artifacts](api-endpoints.md#artifacts)), as whoever
+`CREWLET_API_TOKEN` resolves to. The node decides every gesture on that
+principal exactly as it decides the dashboard's: publishing, renaming and
+labelling are an editor's and ask the artifacts app, sharing and withdrawing a
+share are the owner's, a move to the trash and back is the owner's and a
+person's, and a purge is an administrator's with a fresh proof of identity
+and a person present, which a machine token never is.
+
+**`publish` moves only the bytes the artifact does not hold.** It declares
+every file first (its path, its SHA-256 and its size; a directory is walked,
+and any name starting with a dot is left out with everything beneath it), and
+the node answers which files the artifact already holds, which are carried by
+their digest and move no byte, and how each of the rest is sent: straight to
+the bucket on a presigned put where the object store offers one, through the
+node otherwise. Then the version is published. A new artifact opens on
+`index.html`, else `index.md`, else the only file, unless `-entry` names
+another; its title defaults to the entry's name and its kind to `markdown`
+for a `.md` entry and `html` otherwise. A new version of `-artifact` names the
+head it read as its base, so a version somebody else published meanwhile is
+refused rather than overwritten; `-force` publishes over it, a person's
+gesture. The publish policy's warnings are printed beneath the result.
+
+Every write sends an operation id as the request's `Idempotency-Key`: `-op-id`
+takes one in the engine's operation-id grammar, and without it the command
+mints one. An `unknown` outcome, or no answer at all, prints it; send it again
+with `-op-id` so the retry is the same operation rather than a second one. A
+publish keys its upload intent with the id and its version with a step of it,
+so a retried publish reuses the upload and lands one version.
 
 ## `crewlet retention`
 

@@ -3,6 +3,8 @@ package artifactsapi_test
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -613,18 +615,31 @@ func TestEveryRefusalOfAPublishHasItsOwnAnswer(t *testing.T) {
 	}
 }
 
-// EVERY ROUTE STATES ITS AUTHORITY WHERE IT IS MOUNTED, and the path the
-// pipeline hands a client for an engine-streamed file is one the surface
-// routes.
-func TestEveryRouteStatesItsAuthority(t *testing.T) {
+// EVERY ROUTE IS MOUNTED THROUGH THE AUTHORITY TABLE AND DOCUMENTED, and the
+// path the pipeline hands a client for an engine-streamed file is one the
+// surface routes. The router refuses a route with no policy, so a route that
+// mounts at all states its authority; the reference is what an operator reads,
+// and a route missing from it is invisible to them.
+func TestEveryRouteIsGuardedAndDocumented(t *testing.T) {
 	t.Parallel()
 	rec := &recorder{}
 	g := newRig(t, true)
 	if err := g.svc.Routes(rec); err != nil {
 		t.Fatal(err)
 	}
-	if len(rec.patterns) < 20 {
-		t.Fatalf("the surface mounts %d routes", len(rec.patterns))
+	if len(rec.patterns) != 21 {
+		t.Fatalf("the surface mounts %d routes, and this case knows 21: %v", len(rec.patterns), rec.patterns)
+	}
+	doc, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "reference", "api-endpoints.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pattern := range rec.patterns {
+		_, route, _ := strings.Cut(pattern, " ")
+		route = strings.ReplaceAll(route, "...}", "}")
+		if !strings.Contains(string(doc), "/"+strings.TrimPrefix(route, "/")) {
+			t.Errorf("%s is mounted and docs/reference/api-endpoints.md does not document %s", pattern, route)
+		}
 	}
 	req, _ := http.NewRequest(http.MethodPut, artifactupload.TransferPath("u-1", "a/b.css"), nil)
 	if _, pattern := g.mux.Handler(req); pattern != "PUT /artifacts/uploads/{upload}/files/{path...}" {
