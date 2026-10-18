@@ -6,12 +6,14 @@ var ReceiptOf = receiptOf
 // AuditOutcomeOf is the audit's reading of what became of one call.
 var AuditOutcomeOf = auditOutcome
 
-// WorkActor and PageActor are the actors this surface hands the tracker's and
-// the knowledge base's tools, and WithKey marks a context with the operation
-// one call's transport named — what [Server.Dispatch] does for a [Call.Key].
+// WorkActor, PageActor and ChatActor are the actors this surface hands the
+// tracker's, the knowledge base's and chat's tools, and WithKey marks a
+// context with the operation one call's transport named — what
+// [Server.Dispatch] does for a [Call.Key].
 var (
 	WorkActor = workActor
 	PageActor = pageActor
+	ChatActor = chatActor
 	WithKey   = withKey
 )
 

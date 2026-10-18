@@ -22,7 +22,7 @@ import (
 //
 // # Why nothing here is captured when the API is built
 //
-// A node's own Worklet and Doclet come up with its FIRST COMPANY, and
+// A node's own Worklet, Doclet and Chatlet come up with its FIRST COMPANY, and
 // a node that booted with none meets that at an apply — after its API has been
 // serving for as long as it took somebody to import one. The API used to take
 // every native source from the engine ONCE, while it was being wired: the read
@@ -442,6 +442,7 @@ func NativeOperatorHalves(e *engine.Engine) func() (operator.Halves, bool) {
 		}
 		var halves operator.Halves
 		halves.Work, halves.Pages = NativeToolDeps(e)
+		halves.Chat = ChatletDeps(e)
 		if e.Knowledge() != nil {
 			halves.Knowledge = operatorKnowledge{engine: e}
 		}

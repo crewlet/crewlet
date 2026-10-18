@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/workapi"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -721,4 +722,110 @@ func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 		}
 	}
 	return work, kb
+}
+
+// ChatletDeps are chat's tool deps for the same surfaces [NativeToolDeps]
+// builds the tracker's and the knowledge base's for, on the same terms: Actor
+// and Authorize are the operator surface's to set per call, and every read and
+// every write goes through this node's estate router ([engine.OperatorChat],
+// [engine.OperatorChatWriter], [engine.OperatorChatSearch]).
+//
+// # A person's read state, whenever the rooms are the engine's
+//
+// The one half no seat's surface has: how far a person has read in each room,
+// what they muted and when their do-not-disturb ends, which `list_channels`
+// counts its badges against ([builtin.ChatDeps.ReadState]) and `mark_chat_read`
+// writes ([builtin.ChatDeps.Cursors]). It is the fleet's coordination record
+// rather than a record on the chat log, so it is wired WHEREVER THE ROOMS ARE
+// THE ENGINE'S, a maintenance mode included: the mode forbids a node to
+// publish a record, and has nothing to say about a compare-and-set in the
+// coordination store — and every gesture the dashboard makes is a tool here
+// (ADR-0024), so withholding it would leave a person on such a node no way to
+// clear a badge at all.
+//
+// # The rooms, both halves or neither
+//
+// On the knowledge base's terms: a node that hands out no chat writer — one in
+// a maintenance mode — serves none of the tools that read or write the rooms,
+// rather than reads answered beside writes refused on every press. The search
+// goes with them, since a node that searches the rooms but cannot post in them
+// is a surface no seat has.
+func ChatletDeps(e *engine.Engine) builtin.ChatDeps {
+	reader, readable := engine.OperatorChat(e)
+	if !readable {
+		return builtin.ChatDeps{}
+	}
+	reads := chatReads{store: e.Backends().Fleet}
+	writer, writable := engine.OperatorChatWriter(e)
+	searcher, searchable := engine.OperatorChatSearch(e)
+	if !writable || !searchable {
+		return builtin.ChatDeps{Cursors: reads, ReadState: reads.ReadState}
+	}
+	return builtin.ChatDeps{
+		Reader: reader, Writer: writer, Search: searcher,
+		// THE CHART CURRENT WHEN THE MESSAGE IS WRITTEN, for the reason a
+		// work comment's mentions are resolved against it: these deps are
+		// built per call, over an engine an apply moves underneath them.
+		Mentions: engine.LiveMentions(e),
+		// THE ROUTER'S SESSION FLOOR, which every write above raises — a
+		// person's own message is in the room their next read draws.
+		Await:   e.AwaitEstate,
+		Cursors: reads, ReadState: reads.ReadState,
+	}
+}
+
+// chatReadStore is the coordination store's half of a person's chat read state
+// these deps reach: one read and one merge, and nothing else of the fleet's
+// shared state, so a seam serving a person's cursors is given no reason to
+// reach the activation pointer or the sealed secrets.
+type chatReadStore interface {
+	ChatRead(ctx context.Context, handle string) (coord.ChatReadState, error)
+	AdvanceChatRead(ctx context.Context, handle string, delta coord.ChatReadDelta) (
+		coord.ChatReadState, error)
+}
+
+// chatReads is a person's read state as the chat tools read and write it — the
+// [builtin.ChatCursors] seam, and [builtin.ChatDeps.ReadState] through its
+// ReadState.
+//
+// THE PERSON'S STATE AND NOTHING OF THE RECONCILE'S, both ways: the absence
+// stamp the maintenance sweep keeps on a record
+// ([coord.ChatReadState.AbsentSince]) is its machinery, so it is neither
+// answered to a listing nor handed back from a flush.
+//
+// THE STORE'S ERROR IS RETURNED AS IT IS, never re-worded or wrapped: the tool
+// tells a flush the merge refused ([coord.ErrInvalidReadState], the caller's
+// to change) from one whose answer was lost ([coord.ErrWriteUnknown], which
+// may have landed) and from a store that could not take it by the sentinel
+// alone, and says the first in the merge's own words — re-worded, a refusal
+// that can never land would read "try again". And a read that failed is never
+// a zero state in its place: a zero state is somebody who has opened nothing,
+// to whom every room's tail is unread.
+type chatReads struct{ store chatReadStore }
+
+var (
+	_ builtin.ChatCursors                                        = chatReads{}
+	_ func(context.Context, string) (coord.ChatReadState, error) = chatReads{}.ReadState
+)
+
+// ReadState is one person's read state, as a listing counts its badges by.
+func (r chatReads) ReadState(ctx context.Context, handle string) (coord.ChatReadState, error) {
+	state, err := r.store.ChatRead(ctx, handle)
+	if err != nil {
+		return coord.ChatReadState{}, err
+	}
+	state.AbsentSince = time.Time{}
+	return state, nil
+}
+
+// AdvanceChatRead merges one flush into a person's read state.
+func (r chatReads) AdvanceChatRead(ctx context.Context, handle string,
+	delta coord.ChatReadDelta) (coord.ChatReadState, error) {
+
+	state, err := r.store.AdvanceChatRead(ctx, handle, delta)
+	if err != nil {
+		return coord.ChatReadState{}, err
+	}
+	state.AbsentSince = time.Time{}
+	return state, nil
 }

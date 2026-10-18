@@ -71,8 +71,9 @@ func (a *App) mountOperator(mux httpjson.Router, server *operator.Server) {
 	mux.Handle(operator.MCPPath, server.MCPHandler())
 	log.Info("operator_mcp_mounted", "path", operator.MCPPath,
 		"detail", "an operator's own AI assistant can read and write "+
-			"Worklet and Doclet here, authenticated with "+
-			"an api.auth.tokens entry or a person's own credential; the tools "+
+			"Worklet, Doclet and Chatlet here, authenticated with "+
+			"an api.auth.tokens entry or a person's own credential (chat "+
+			"only as a person, or a credential bound to a seat); the tools "+
 			"it lists are the ones this node serves when it asks")
 	// AND THE PERSON'S OWN TRANSPORT over the same catalogue: POST only, one
 	// tool per request, as the principal the request resolved to

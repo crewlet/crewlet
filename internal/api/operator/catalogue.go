@@ -1,4 +1,4 @@
-// Package operator serves Worklet and Doclet to the
+// Package operator serves Worklet, Doclet and Chatlet to the
 // people who run it: ONE catalogue of tools, built for every call from what
 // this node serves at that moment, and every transport that reaches it
 // drawing from that one value through one dispatch.
@@ -30,15 +30,15 @@
 //
 // # Built for every call, never captured
 //
-// The catalogue is the native halves' — a node's tracker and knowledge base
-// come up with its FIRST COMPANY, which a node that booted with none meets at
-// an apply, long after its API started serving — and the knowledge search
-// beside them is whatever backend the company runs NOW, which an apply can
-// add. So [Options.Halves] is read at the start of every call, and a node that
-// has not met its company answers `503 no_active_revision`. A catalogue built
-// once, when the API was wired, served the halves the node had at that moment
-// for the life of the process: none, on the node a company was bootstrapped
-// on.
+// The catalogue is the native halves' — a node's tracker, knowledge base and
+// chat come up with its FIRST COMPANY, which a node that booted with none
+// meets at an apply, long after its API started serving — and the knowledge
+// search beside them is whatever backend the company runs NOW, which an apply
+// can add. So [Options.Halves] is read at the start of every call, and a node
+// that has not met its company answers `503 no_active_revision`. A catalogue
+// built once, when the API was wired, served the halves the node had at that
+// moment for the life of the process: none, on the node a company was
+// bootstrapped on.
 //
 // # Never empty once the company is up
 //
@@ -46,8 +46,8 @@
 // steering a running turn — read and write the fleet's own records, which
 // every node reaches whatever backends its company runs. So [New] requires
 // them ([Options.Runs], [Options.Pauses], [Options.Steer]), and a company that
-// keeps neither native half is still served those four: there is no empty
-// catalogue for a transport to answer.
+// keeps none of the native halves is still served those four: there is no
+// empty catalogue for a transport to answer.
 //
 // # It is the SAME TOOLS a seat holds, with a different writer
 //
@@ -69,6 +69,17 @@
 // record read one answer, and a directory rebind or a company revision
 // landing while a call runs changes the next request, never this one.
 //
+// CHAT IS THE ONE HALF A CREDENTIAL ACTING AS ITSELF CANNOT USE, and the
+// authority table says so rather than this surface: a room renders its
+// speakers by seat, its membership is seats and a direct conversation is
+// named by their handles, so every chat verb is SEATED and a principal no seat
+// binds is refused it — its reads included — by the table's own row
+// (`unauthorized`, reason `unseated`, no grant named), on every transport and
+// before any tool runs. A pipeline that should post is given a human seat and
+// its credential bound to it. The chat destructions that are said in nobody's
+// voice — an erase, a prune, a room's retention — are no seat's verb, so no
+// tool serves them and they are not in this catalogue.
+//
 // # A retry is the same operations
 //
 // A person has no turn and nothing redelivers their call, but they RETRY: a
@@ -79,8 +90,8 @@
 //     `Idempotency-Key` header (internal/api/opkey), SCOPED by the principal
 //     that sent it, and every write the call makes derives its id from that
 //     key (Worklet's through [builtin.Actor.WorkKey], Doclet's through
-//     [doclet.Actor.OpKey]), so the request sent again is the
-//     first attempt's writes rather than new ones;
+//     [doclet.Actor.OpKey], chat's through [chatlet.Actor.OpKey]), so the
+//     request sent again is the first attempt's writes rather than new ones;
 //   - an MCP client names none, so each of its calls is a new operation, and a
 //     tracker write answers with the `op_id` that operation was, which the
 //     assistant sends back with the same arguments to finish a write that
@@ -129,7 +140,7 @@ import (
 
 var log = logging.Get("api.operator")
 
-// Halves are Worklet, Doclet and knowledge search as
+// Halves are Worklet, Doclet, Chatlet and knowledge search as
 // ONE call finds them. Their Actor and Authorize fields are this surface's to
 // set and are overwritten: the actor is the request's principal carrying the
 // call's operation, and the decision is [Options.Authorize].
@@ -138,6 +149,14 @@ type Halves struct {
 	// its tools — the honest shape for a company on Jira or Confluence.
 	Work  builtin.WorkDeps
 	Pages builtin.PageDeps
+
+	// Chat is the company's own chat: its rooms through the estate router,
+	// their ranked search, and a person's read state. A zero half serves
+	// none of its tools — a company talking on Slack or Mattermost — and a
+	// half holding the read state alone serves `mark_chat_read` alone: a
+	// node in a maintenance mode publishes no chat record, and a person's
+	// read cursor is the fleet's coordination record rather than one.
+	Chat builtin.ChatDeps
 
 	// Knowledge is the company's ranked search, or nil. It is offered
 	// whatever backend the company runs, Doclet or not: ranked search over
@@ -256,8 +275,8 @@ var ErrNoAuthorize = errors.New("operator: Options.Authorize is required: " +
 
 // ErrNoHalves refuses a surface with nothing to build a catalogue from.
 var ErrNoHalves = errors.New("operator: Options.Halves is required: every " +
-	"call reads Worklet and Doclet as this node serves them when the call " +
-	"finds them")
+	"call reads Worklet, Doclet and Chatlet as this node serves them when the " +
+	"call finds them")
 
 // ErrNoSeatControls refuses a surface built without one of the seat controls,
 // naming which: see [Options.Steer].
@@ -340,8 +359,8 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 	if !up {
 		return catalogue{}, false
 	}
-	work, kb, arts := halves.Work, halves.Pages, halves.Artifacts
-	work.Actor, kb.Actor = workActor, pageActor
+	work, kb, arts, talk := halves.Work, halves.Pages, halves.Artifacts, halves.Chat
+	work.Actor, kb.Actor, talk.Actor = workActor, pageActor, chatActor
 	// THE CALL'S OWN OPERATION, where its transport names one: an artifact
 	// write's records derive from it, as a page write's do.
 	arts.CallerKey = keyFrom
@@ -349,8 +368,8 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 	runs.Actor, pauses.Actor, steer.Actor, answer.Actor =
 		workActor, workActor, workActor, workActor
 	callables := builtin.OperatorTools(builtin.OperatorDeps{
-		Work: work, Pages: kb, Knowledge: halves.Knowledge, Artifacts: arts,
-		ArtifactData: halves.ArtifactData, Org: s.org,
+		Work: work, Pages: kb, Chat: talk, Knowledge: halves.Knowledge,
+		Artifacts: arts, ArtifactData: halves.ArtifactData, Org: s.org,
 		Authorize: s.authorize, Runs: runs, Pauses: pauses,
 		Steer: steer, Answer: answer,
 	})
@@ -429,7 +448,7 @@ type Call struct {
 // ErrNotUp is a call to a node that has not been handed a company yet, which
 // every transport answers `503 no_active_revision`.
 var ErrNotUp = errors.New("operator: this node has not been handed a company " +
-	"yet, so it serves neither Worklet nor Doclet")
+	"yet, so it serves none of Worklet, Doclet and Chatlet")
 
 // ErrNotServed is a call naming a tool this company's catalogue does not
 // serve. Not a refusal: the call is not one at all, so it is neither made nor
