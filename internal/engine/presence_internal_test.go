@@ -31,8 +31,7 @@ func presenceEngine(t *testing.T, broker *memory.Broker, id string) *Engine {
 // EVERY NODE WITH A BROKER RUNS A PRESENCE HUB, sealed under the fleet keyring
 // and named by the node's own id, and a seat's tool call on one node puts the
 // seat in a room a socket holds on another: the hubs the engine arms are the
-// ones that tell each other. A node with no broker runs none, and its
-// datastore tools are told no hub rather than a nil one.
+// ones that tell each other.
 func TestEveryNodeRunsAPresenceHubTheFleetHears(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()
@@ -79,8 +78,8 @@ func TestEveryNodeRunsAPresenceHubTheFleetHears(t *testing.T) {
 	}
 }
 
-// A NODE WITH NO BROKER RUNS NO HUB, and its datastore tools are handed none:
-// a nil hub wrapped in the tools' interface would be called.
+// A NODE WITH NO BROKER RUNS NO HUB, and a node with no router hands its
+// datastore tools nothing to act through.
 func TestANodeWithNoBrokerRunsNoPresence(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
@@ -90,7 +89,7 @@ func TestANodeWithNoBrokerRunsNoPresence(t *testing.T) {
 	if e.Presence() != nil {
 		t.Fatal("a node with no broker armed a presence hub")
 	}
-	if deps := ArtifactDataToolDeps(e); deps.Presence != nil || deps.Store != nil {
+	if deps := ArtifactDataToolDeps(e); deps.Store != nil || deps.Turns != nil {
 		t.Fatalf("a node with no router was handed datastore tool deps %+v", deps)
 	}
 }

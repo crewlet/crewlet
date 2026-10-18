@@ -29,8 +29,8 @@ import (
 // for whoever the turn is acting for, deriving the operation a write is named
 // by and stamping its authority are exactly what the artifacts tools do
 // ([ArtifactDeps]), so these tools take that half from the same deps rather
-// than a copy of it: one head read, one decision, one stamp. [ArtifactDataDeps]
-// adds only the datastore, the presence hub and the turn guardrail.
+// than a copy of it: one head read, one decision, one stamp, one presence hub.
+// [ArtifactDataDeps] adds only the datastore and the turn guardrail.
 //
 // # The requester's rows are the ceiling too
 //
@@ -86,7 +86,8 @@ type ArtifactPresence interface {
 }
 
 // ArtifactDataDeps are what the datastore tools act through beyond the
-// artifacts tools' own half. The zero value serves none of them.
+// artifacts tools' own half (whose presence hub they share). The zero value
+// serves none of them.
 type ArtifactDataDeps struct {
 	// Store is the datastore.
 	Store ArtifactDataStore
@@ -97,10 +98,6 @@ type ArtifactDataDeps struct {
 	// path with no guardrail would let a looping turn rewrite a sheet a
 	// thousand times over.
 	Turns *DataTurns
-
-	// Presence puts a seat in the rooms of the artifacts it reads and
-	// writes. Nil tells nobody, which is a node with no presence hub.
-	Presence ArtifactPresence
 }
 
 // dataTools is one registry's datastore tools: the artifacts half they read
@@ -269,15 +266,12 @@ func requesterRecord(c artifactCaller) string {
 	return p.Login
 }
 
-// touch puts a seat calling on id in the artifact's room. A person's call (an
-// operator's assistant) is not presence: their own tab is.
+// touch puts a seat calling on id in the artifact's room, through the
+// artifacts half's presence ([ArtifactDeps.present]).
 func (d dataTools) touch(c artifactCaller, id artifacts.ID, activity artifacts.PresenceActivity,
 	focus artifacts.Focus) {
 
-	if d.data.Presence == nil || !c.agent() || c.principal.Seat == "" {
-		return
-	}
-	d.data.Presence.Touch(id, c.principal.Seat, activity, focus)
+	d.art.present(c, id, activity, focus)
 }
 
 // dataFailure explains a datastore call the domain or the transport refused

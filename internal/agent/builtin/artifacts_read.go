@@ -352,6 +352,7 @@ func (t *getArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed(fmt.Sprintf("get_artifact: artifact %s has versions 1..%d.",
 			h.ID, h.HeadNumber)), nil
 	}
+	t.deps.present(c, h.ID, artifacts.PresenceViewing, artifacts.Focus{Version: number})
 	version, err := t.deps.Reader.Version(ctx, h.ID, number)
 	if err != nil {
 		if errors.Is(err, artifactsdomain.ErrNotFound) {

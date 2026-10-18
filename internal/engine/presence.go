@@ -79,19 +79,15 @@ func (e *Engine) Presence() *presence.Hub { return e.presence }
 func (e *Engine) PresenceDomain() string { return e.presenceWire.Domain() }
 
 // ArtifactDataToolDeps are the datastore tools' own half on this node: the
-// datastore through the estate router, this node's turn guardrail and its
-// presence hub. The tools act only beside the artifacts tools' half
-// ([ArtifactToolDeps]), which is the zero value where the node takes no
+// datastore through the estate router and this node's turn guardrail. The
+// tools act only beside the artifacts tools' half ([ArtifactToolDeps]), which
+// carries the presence hub and is the zero value where the node takes no
 // artifact uploads, so they are served exactly where those are.
 func ArtifactDataToolDeps(e *Engine) builtin.ArtifactDataDeps {
 	if e == nil || e.router == nil {
 		return builtin.ArtifactDataDeps{}
 	}
-	deps := builtin.ArtifactDataDeps{Store: e.router.ArtifactData(), Turns: e.dataTurns}
-	if e.presence != nil {
-		deps.Presence = e.presence
-	}
-	return deps
+	return builtin.ArtifactDataDeps{Store: e.router.ArtifactData(), Turns: e.dataTurns}
 }
 
 // SetOnArtifactsServing registers what this node does when its artifact

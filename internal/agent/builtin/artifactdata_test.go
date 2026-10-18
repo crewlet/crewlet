@@ -31,10 +31,10 @@ func newDataRig(t *testing.T, chart artifactChart, req requesters) dataRig {
 	t.Helper()
 	r := dataRig{art: newFakeArtifacts(), data: newFakeData(), presence: &touches{},
 		reg: tools.NewRegistry()}
-	data := artifactDataDeps(r.data)
-	data.Presence = r.presence
-	if _, err := builtin.Register(r.reg, builtin.Deps{Artifacts: artifactDeps(r.art, chart, req),
-		ArtifactData: data, Authorize: builtin.Decide(chart)}); err != nil {
+	art := artifactDeps(r.art, chart, req)
+	art.Presence = r.presence
+	if _, err := builtin.Register(r.reg, builtin.Deps{Artifacts: art,
+		ArtifactData: artifactDataDeps(r.data), Authorize: builtin.Decide(chart)}); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	return r
@@ -342,5 +342,27 @@ func TestADataWriteWhoseOutcomeIsUnknownIsNotReportedDone(t *testing.T) {
 			"fields": map[string]any{"x": 1}}}})
 	if !got.Failed || !strings.Contains(got.Output, "unknown") {
 		t.Fatalf("a write of unknown outcome answered %q", got.Output)
+	}
+}
+
+// A SEAT READING OR PUBLISHING AN ARTIFACT IS IN ITS ROOM TOO, the artifacts
+// tools sharing the datastore tools' presence: viewing the version it read,
+// editing the head it published over, and nowhere it was refused.
+func TestAnArtifactCallPutsTheSeatInTheRoom(t *testing.T) {
+	t.Parallel()
+	r := newDataRig(t, artifactChart{}, requesters{})
+	h := r.art.seed("agent-cto", iam.ActorAgent, cto, nil, [2]string{"index.html", "<p>x</p>"})
+	private := r.art.seed("founder", iam.ActorHuman, founder, nil, [2]string{"index.html", "<p>y</p>"})
+	turn, _ := readerTurn(t)
+	r.call(t, turn, builtin.GetArtifactTool, map[string]any{"artifact": h.ID.String()})
+	r.call(t, turn, builtin.PublishArtifactTool, map[string]any{"artifact": h.ID.String(),
+		"base_version": 1, "content": "<p>z</p>"})
+	r.call(t, turn, builtin.GetArtifactTool, map[string]any{"artifact": private.ID.String()})
+	want := []string{
+		string(h.ID.Label()) + " agent-cto viewing /",
+		string(h.ID.Label()) + " agent-cto editing /",
+	}
+	if got := r.presence.all(); !slices.Equal(got, want) {
+		t.Fatalf("the seat was put in rooms as %v, want %v", got, want)
 	}
 }

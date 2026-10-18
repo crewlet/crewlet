@@ -299,6 +299,7 @@ func (t *uploadArtifactAsset) CallForTurn(ctx context.Context, turn *turnctx.Tur
 	if refusal != nil {
 		return *refusal, nil
 	}
+	t.deps.present(c, h.ID, artifacts.PresenceEditing, artifacts.Focus{})
 	if !slices.Contains(h.Capabilities, artifacts.CapabilityAssets) {
 		return failed(fmt.Sprintf("upload_artifact_asset: artifact %s does not declare "+
 			"the `assets` capability, so its page cannot reference an asset. Publish a "+

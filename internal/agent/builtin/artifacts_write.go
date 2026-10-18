@@ -607,6 +607,7 @@ func (t *publishArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
+	t.deps.present(c, h.ID, artifacts.PresenceEditing, artifacts.Focus{Version: h.HeadNumber})
 
 	files := newFileSources(t.deps, c, t.Name())
 	mode := manifest.ModePatch
@@ -915,6 +916,7 @@ func (t *updateArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
+	t.deps.present(c, h.ID, artifacts.PresenceEditing, artifacts.Focus{})
 	written, err := t.deps.Writer.Patch(ctx, t.deps.call(c, dec.Standing.Role, dec.Elevated), h.ID, p)
 	if err != nil {
 		return publishFailure(ctx, t.Name(), c, err), nil
