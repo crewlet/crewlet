@@ -1682,18 +1682,35 @@ func interruptContext() (context.Context, context.CancelFunc) {
 //
 // A nil surface is a node that bound no listener — api.port 0, or a node
 // without the ingress role and with no tool bridge to serve — and it drains
-// and stops the same way with nothing to close between the two. A nil hub is
-// a boot that never built one.
-func shutdown(ctx context.Context, e *engine.Engine, surface *httpSurface,
-	chatLive *api.EngineChatLive, log *slog.Logger) {
+// and stops the same way with nothing to close between the two
+// ([httpSurface.stop] is nil-safe). A nil hub is a boot that never built one.
+//
+// ITS PARTS ARE INTERFACES, declared here, so the order is a test's to pin
+// ([TestShutdownTakesANodeDownInOneOrder]): every step's reason is a step that
+// came before it, and an order nothing asserts is one a later edit reverses
+// without a symptom until a rolling restart.
+func shutdown(ctx context.Context, e drainingEngine, surface listeners,
+	chatLive stoppingHub, log *slog.Logger) {
 
 	e.Drain(ctx)
-	if surface != nil {
-		surface.stop(ctx, log)
-	}
+	surface.stop(ctx, log)
 	chatLive.Stop(ctx)
 	e.Stop(ctx)
 }
+
+// drainingEngine is the engine as [shutdown] takes it down.
+type drainingEngine interface {
+	Drain(ctx context.Context)
+	Stop(ctx context.Context)
+}
+
+// listeners is the HTTP surface as [shutdown] closes it.
+type listeners interface {
+	stop(ctx context.Context, log *slog.Logger)
+}
+
+// stoppingHub is the chat hub as [shutdown] stops it.
+type stoppingHub interface{ Stop(ctx context.Context) }
 
 // httpSurface is the HTTP listeners a node binds: the whole API on a node with
 // the ingress role — on api.port, with the routes outside parties call on a
@@ -1772,6 +1789,10 @@ func (l *apiListener) serve(h http.Handler) { l.handler.store(h) }
 // that is doing exactly what it should. Each gets its own grace, so a bridge
 // session holding the public listener open never cuts a dashboard request.
 func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
+	if s == nil {
+		// NO LISTENER TO CLOSE: a node that bound none.
+		return
+	}
 	// THE ASSISTANT BEFORE EVERY LISTENER: each turn it runs ends
 	// interrupted and is recorded so, which ends every stream following it,
 	// and a stream is a request a listener's grace would otherwise wait out
