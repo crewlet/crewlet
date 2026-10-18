@@ -36,6 +36,12 @@ import (
 // gesture that removed it, so a restore brings back exactly what one removal
 // took and never a task that was already in the trash for its own reasons.
 //
+// It is how the trash is LISTED as well. What somebody restores is a removal,
+// so in the default subtask mode the trash lists each one once, under the task
+// the gesture was made on, with what it took riding along: a task's anchor
+// there is the task its tombstone names, and itself where it names none
+// ([anchorOf]).
+//
 // That inverse is also why a restore can be asked for its task ALONE: whoever
 // filed a task may take it out of the trash, and what went in with it at a
 // project lead's or an admin's hand is not theirs to bring back. Whether
