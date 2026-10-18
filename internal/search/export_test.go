@@ -114,6 +114,8 @@ var (
 	ChatChangedRowsStatement      = chatChangedRowsStatement
 	ChatErasedReachStatement      = chatErasedReachStatement
 	ChatErasedRowsStatement       = chatErasedRowsStatement
+	ChatPastWatermarkStatement    = chatPastWatermarkStatement
+	ChatPastErasedStatement       = chatPastErasedStatement
 	ChatLiveOldestStatement       = chatLiveOldestStatement
 	ChatHeldOldestStatement       = chatHeldOldestStatement
 	ChatRoomRotationStatement     = chatRoomRotationStatement

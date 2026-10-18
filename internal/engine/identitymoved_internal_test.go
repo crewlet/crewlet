@@ -187,18 +187,19 @@ func TestAReplacedEstateRebuildsTheChatIndex(t *testing.T) {
 			break
 		}
 	}
-	if !index.Ready() {
-		t.Fatal("the premise: the chat index over an empty transcript has not caught up")
+	if ready, err := index.Ready(t.Context()); err != nil || !ready {
+		t.Fatalf("the premise: the chat index over an empty transcript has not "+
+			"caught up (ready %v, %v)", ready, err)
 	}
 
 	e := &Engine{directoryNudge: make(chan struct{}, 1)}
 	e.native.Store(&native{chatIndex: index})
 	s := &stateLog{applyHooks: e.applyHooks()}
 	s.estateReplaced()
-	if index.Ready() {
-		t.Fatal("the chat index still answers as caught up over an estate that was " +
-			"replaced under it, so every search reads what it indexed from the " +
-			"copy that is gone")
+	if ready, err := index.Ready(t.Context()); err != nil || ready {
+		t.Fatalf("the chat index still answers as caught up (%v, %v) over an estate "+
+			"that was replaced under it, so every search reads what it indexed "+
+			"from the copy that is gone", ready, err)
 	}
 }
 
