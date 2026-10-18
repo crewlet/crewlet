@@ -1935,15 +1935,34 @@ func pageArmSets(set taskSet, resume []keyset.Arm, terms []sortTerm) []taskSet {
 	if len(resume) == 0 {
 		return []taskSet{set}
 	}
+	reads := armReads(terms, resume)
+	out := make([]taskSet, len(reads))
+	for i, read := range reads {
+		out[i] = set.and(read.clause, read.args)
+	}
+	return out
+}
+
+// armRead is one read of a side of a row: the predicate an arm, or every arm
+// of an order on a joined column, is rendered to, with its arguments.
+type armRead struct {
+	clause string
+	args   []any
+}
+
+// armReads is the reads one side of a row is taken through, in the order
+// they are read: an arm each, nearest first — or, for an order on a joined
+// column, the arms' disjunction as one read, for the reason [pageArmSets]
+// gives.
+func armReads(terms []sortTerm, arms []keyset.Arm) []armRead {
 	order := keysetTerms(terms)
 	if joinsColumn(terms) {
-		clause, args := keyset.Disjunction(order, resume)
-		return []taskSet{set.and(clause, args)}
+		clause, args := keyset.Disjunction(order, arms)
+		return []armRead{{clause, args}}
 	}
-	out := make([]taskSet, len(resume))
-	for i, arm := range resume {
-		clause, args := arm.SQL(order)
-		out[i] = set.and(clause, args)
+	out := make([]armRead, len(arms))
+	for i, arm := range arms {
+		out[i].clause, out[i].args = arm.SQL(order)
 	}
 	return out
 }
@@ -1957,75 +1976,6 @@ func joinsColumn(terms []sortTerm) bool {
 		}
 	}
 	return false
-}
-
-// keysetAfter builds the lexicographic "strictly after" predicate, as one
-// expression — what the around read's two sides are written with
-// ([aroundSides]); a page resumes through [keyset]'s arms instead.
-//
-// # NULL IS A POSITION IN THE ORDER, not a missing value
-//
-// `sort=due` and every `sort=f.<slug>` reach columns that are genuinely NULL
-// for some rows — the custom-field join is a LEFT JOIN precisely so a task that
-// set no value still appears — and a comparison written with bare `>`, `<` and
-// `=` is NULL for every one of them. Written that way the boundary matched
-// nothing the moment a page ended on a row with no value, so the caller was
-// handed a short list with no next_cursor and no way to tell; and in the
-// descending direction the NULL rows were unreachable at every page, because
-// `col < ?` excludes them.
-//
-// SQLite sorts NULL below every value, so it leads an ascending order and
-// trails a descending one, and each direction needs both halves spelled out:
-//
-//   - ascending, after a value: `col > ?` — the NULLs are already behind.
-//   - ascending, after a NULL: `col IS NOT NULL` — every value is ahead, and
-//     the remaining NULL rows are reached through the equality leg.
-//   - descending, after a value: `col < ? OR col IS NULL` — the NULLs are the
-//     tail, so they are still ahead.
-//   - descending, after a NULL: nothing is ahead but other NULLs, so the
-//     "after" leg is false and only the tie-break carries the page.
-//
-// The equality leg is `IS NULL` rather than `= NULL` for the same reason, and
-// the recursion always bottoms out on `t.id`, which is NOT NULL.
-func keysetAfter(terms []sortTerm, keys []any) (string, []any) {
-	after, afterArgs := keysetAfterOne(terms[0], keys[0])
-	if len(terms) == 1 {
-		return after, afterArgs
-	}
-	equal, equalArgs := keysetEqualOne(terms[0], keys[0])
-	rest, restArgs := keysetAfter(terms[1:], keys[1:])
-	args := append(append([]any{}, afterArgs...), equalArgs...)
-	args = append(args, restArgs...)
-	return "(" + after + " OR (" + equal + " AND " + rest + "))", args
-}
-
-// keysetAfterOne is "strictly after this key on this column", NULLs included.
-func keysetAfterOne(term sortTerm, key any) (string, []any) {
-	// NOTHING IS AFTER A NULL IN EITHER DIRECTION, because [renderOrder]
-	// puts the absent values last both ways — and `0` says so literally
-	// rather than through a comparison that would itself be NULL.
-	if key == nil {
-		return "0", nil
-	}
-	// AND THE NULLS ARE AFTER EVERY VALUE, so a page resuming from one
-	// includes them. Symmetric in both directions for the same reason:
-	// this leg is the order's own comparison written out, and the moment
-	// the two spellings diverge a paged answer silently skips whatever
-	// falls between them.
-	if term.Descending {
-		return "(" + term.Column + " < ? OR " + term.Column + " IS NULL)",
-			[]any{key}
-	}
-	return "(" + term.Column + " > ? OR " + term.Column + " IS NULL)",
-		[]any{key}
-}
-
-// keysetEqualOne is the tie-break leg: the same position on this column.
-func keysetEqualOne(term sortTerm, key any) (string, []any) {
-	if key == nil {
-		return term.Column + " IS NULL", nil
-	}
-	return term.Column + " = ?", []any{key}
 }
 
 // mintCursor encodes the page's own resume point.
