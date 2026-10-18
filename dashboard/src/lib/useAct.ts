@@ -58,6 +58,11 @@ export interface Refusal {
    * which a sentence alone cannot say for a gate the person cannot see.
    */
   grants: readonly string[];
+  /**
+   * The rule a refusal on authority was decided by, "" otherwise: with
+   * [grants], what says whether access is the way past it.
+   */
+  reason: string;
   /** Sending it again may succeed; the Retry reuses the operation key. */
   retryable: boolean;
   /** Where the limit that caused it is changed, for a refusal a limit caused (a spent budget). */
@@ -287,6 +292,7 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
               sentence: result.sentence,
               hint: result.hint,
               grants: result.grants,
+              reason: result.reason,
               retryable: result.retryable,
               remedy: result.remedy,
             },

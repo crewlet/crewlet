@@ -121,6 +121,17 @@ export class RestError extends Error {
   }
 
   /**
+   * The rule a refusal on authority was decided by (the envelope's `reason`),
+   * or "" where the answer named none. Beside [grants] it says whether the
+   * access they name is a way past the refusal, which they cannot say alone:
+   * a stale proof names the grants that admitted the person
+   * (`lib/authorityRemedy.ts` decides by both).
+   */
+  get reason(): string {
+    return typeof this.body.reason === "string" ? this.body.reason : "";
+  }
+
+  /**
    * This refusal in the shape `QueryState` renders from — the one the
    * socket's error frame carries, under the same keys and on the same terms:
    * a `403 unauthorized`'s rule and the grants that would have admitted the
