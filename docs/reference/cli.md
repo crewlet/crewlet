@@ -1271,8 +1271,8 @@ crewlet artifacts list [-scope mine|shared|company|agents|all] [-kind html|markd
     [-q TEXT] [-status live|trashed] [-work-item KEY] [-limit N]
 crewlet artifacts get <id>
 crewlet artifacts publish <dir|file> [-artifact ID] [-title TEXT] [-description TEXT]
-    [-icon NAME] [-kind html|markdown] [-entry PATH] [-label TEXT] [-contract VERSION]
-    [-capabilities a,b] [-work-item KEY] [-force] [-op-id ID]
+    [-icon NAME] [-kind html|markdown] [-entry PATH] [-exclude PATTERN]... [-label TEXT]
+    [-contract VERSION] [-capabilities a,b] [-work-item KEY] [-force] [-op-id ID]
 crewlet artifacts update <id> [-title TEXT] [-description TEXT] [-icon NAME] [-op-id ID]
 crewlet artifacts versions <id>
 crewlet artifacts restore <id> <version> [-label TEXT] [-op-id ID]
@@ -1298,11 +1298,24 @@ and a person present, which a machine token never is.
 
 **`publish` moves only the bytes the artifact does not hold.** It declares
 every file first (its path, its SHA-256 and its size; a directory is walked,
-and any name starting with a dot is left out with everything beneath it), and
+any name starting with a dot is left out with everything beneath it, and a
+symbolic link inside it is never followed), and
 the node answers which files the artifact already holds, which are carried by
 their digest and move no byte, and how each of the rest is sent: straight to
 the bucket on a presigned put where the object store offers one, through the
-node otherwise. Then the version is published. A new artifact opens on
+node otherwise. Then the version is published.
+
+`-exclude PATTERN` leaves files out of a directory, once per pattern
+(`-exclude '*.map' -exclude drafts`). A pattern with no slash matches a file's
+or a folder's name at any depth; one with a slash matches its path from the
+directory published (`notes/*.md`, where `*` stops at a slash). A folder a
+pattern matches is left out with everything beneath it, and a leading `./` or
+a trailing `/` is ignored. The grammar is Go's `path.Match`: `*` and `?`
+within one name, `[...]` for a class, `\` to escape. A malformed pattern, one
+reaching outside the directory, or `-exclude` beside a single file is refused
+before anything is sent. Quote a pattern so the shell does not expand it.
+
+A new artifact opens on
 `index.html`, else `index.md`, else the only file, unless `-entry` names
 another; its title defaults to the entry's name and its kind to `markdown`
 for a `.md` entry and `html` otherwise, and `-description` and `-icon` set the

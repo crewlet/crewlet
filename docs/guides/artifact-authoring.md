@@ -229,7 +229,9 @@ crewlet artifacts publish ./dist
 `crewlet artifacts` also lists, reads, updates, versions, restores, labels, shares,
 unshares, trashes, untrashes and purges artifacts, manages assets and reports
 usage. It always asks for an upload intent first and sends only files the
-artifact does not already hold. See [CLI](../reference/cli.md).
+artifact does not already hold. A directory's dotted names are never
+published; leave anything else out with `-exclude` (`-exclude '*.map'
+-exclude drafts`). See [CLI](../reference/cli.md#crewlet-artifacts).
 
 **From an agent**, through `create_artifact` and `publish_artifact`. An agent
 building in a sandbox passes `from_sandbox` and the engine reads the files out

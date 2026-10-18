@@ -59,8 +59,8 @@ const artifactsUsage = `usage: crewlet artifacts <command> [arguments] [<config.
        [-q TEXT] [-status live|trashed] [-work-item KEY] [-limit N]
   get <id>
   publish <dir|file> [-artifact ID] [-title TEXT] [-description TEXT] [-icon NAME]
-       [-kind html|markdown] [-entry PATH] [-label TEXT] [-contract VERSION]
-       [-capabilities a,b] [-work-item KEY] [-force] [-op-id ID]
+       [-kind html|markdown] [-entry PATH] [-exclude PATTERN]... [-label TEXT]
+       [-contract VERSION] [-capabilities a,b] [-work-item KEY] [-force] [-op-id ID]
   update <id> [-title TEXT] [-description TEXT] [-icon NAME] [-op-id ID]
   versions <id>
   restore <id> <version> [-label TEXT] [-op-id ID]
@@ -677,12 +677,17 @@ type localFile struct {
 }
 
 // collectFiles is every file a publish of root sends: root itself, or every
-// regular file under a directory, a dotted name (`.git`, `.DS_Store`) left out
-// with everything beneath it.
-func collectFiles(root string) ([]localFile, error) {
+// regular file under a directory, a dotted name (`.git`, `.DS_Store`) and a
+// name exclude matches left out with everything beneath it. A symbolic link
+// inside the directory is never followed: a link out of it would publish what
+// the author did not put in it.
+func collectFiles(root string, exclude excludeFlag) ([]localFile, error) {
 	info, err := os.Stat(root)
 	if err != nil {
 		return nil, err
+	}
+	if !info.IsDir() && len(exclude.patterns) > 0 {
+		return nil, fmt.Errorf("-exclude leaves files out of a directory, and %s is a file", root)
 	}
 	var files []localFile
 	add := func(published, disk string) error {
@@ -698,11 +703,26 @@ func collectFiles(root string) ([]localFile, error) {
 	if !info.IsDir() {
 		return files, add(filepath.Base(root), root)
 	}
-	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	// THE DIRECTORY NAMED IS WALKED WHERE IT LIVES: a root that is itself a
+	// link (`dist` pointing at a build folder) is the operator's own choice,
+	// and walked as the link it would hold nothing.
+	walked, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, err
+	}
+	err = filepath.WalkDir(walked, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if p != root && strings.HasPrefix(d.Name(), ".") {
+		if p == walked {
+			return nil
+		}
+		rel, err := filepath.Rel(walked, p)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if strings.HasPrefix(d.Name(), ".") || exclude.excludes(rel) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -711,16 +731,63 @@ func collectFiles(root string) ([]localFile, error) {
 		if !d.Type().IsRegular() {
 			return nil
 		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
-		return add(filepath.ToSlash(rel), p)
+		return add(rel, p)
 	})
 	if len(files) == 0 && err == nil {
 		err = fmt.Errorf("%s holds no file to publish", root)
 	}
 	return files, err
+}
+
+// excludeFlag is `-exclude`, named once per pattern. A pattern is matched by
+// [path.Match] against a file's or a directory's path relative to the
+// directory published, slash-separated, or against its name alone (at any
+// depth) when the pattern holds no slash; a directory it matches is left out
+// with everything beneath it.
+//
+// A FLAG RATHER THAN AN IGNORE FILE: every other input to this CLI is on its
+// command line, a file in the directory would be one more thing a publish
+// reads that the command does not show, and its grammar (gitignore's
+// negation and anchoring) would be a second one beside the path grammar the
+// engine already holds paths to.
+type excludeFlag struct {
+	patterns []string
+}
+
+func (f *excludeFlag) String() string { return strings.Join(f.patterns, " ") }
+
+// Set adds one pattern, refused here when it is malformed or reaches outside
+// the directory, so a typo never publishes what it meant to leave out. A
+// leading `./` and a trailing `/` are dropped, as a shell's completion
+// writes them.
+func (f *excludeFlag) Set(value string) error {
+	p := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(value), "./"), "/")
+	switch {
+	case p == "":
+		return errors.New("name a pattern, such as *.map or drafts")
+	case strings.HasPrefix(p, "/") || slices.Contains(strings.Split(p, "/"), ".."):
+		return fmt.Errorf("%q reaches outside the directory: a pattern is relative to it", value)
+	}
+	if _, err := path.Match(p, ""); err != nil {
+		return fmt.Errorf("%q is not a pattern: %w", value, err)
+	}
+	f.patterns = append(f.patterns, p)
+	return nil
+}
+
+// excludes reports whether rel, a path relative to the directory published,
+// is one a pattern leaves out.
+func (f excludeFlag) excludes(rel string) bool {
+	for _, p := range f.patterns {
+		target := rel
+		if !strings.Contains(p, "/") {
+			target = path.Base(rel)
+		}
+		if ok, _ := path.Match(p, target); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // entryFor is the entry a publish of files names: the one asked for, or
@@ -763,12 +830,15 @@ func artifactsPublish(environ config.Source, args []string, stdout, stderr io.Wr
 	var target, title, description, icon, kind, entry, label, contract, item, opID *string
 	var force *bool
 	var caps capabilitiesFlag
+	var exclude excludeFlag
 	client, err := nodeClientFor(environ, rest, "artifacts publish", stderr, func(fs *flag.FlagSet) {
 		flags = fs
 		target = fs.String("artifact", "", "publish a new version of this artifact; empty creates one")
 		title, description, icon = headFlags(fs, "of a new artifact", " (default: the entry's name)")
 		kind = fs.String("kind", "", "html or markdown, for a new artifact (default: from the entry)")
 		entry = fs.String("entry", "", "the file the artifact opens on (default: index.html, index.md)")
+		fs.Var(&exclude, "exclude", "leave out of the directory every file and folder this pattern "+
+			"matches, by its path or (with no slash) its name, e.g. *.map or drafts; repeat for more")
 		label = fs.String("label", "", "a label for the version")
 		contract = fs.String("contract", "", "the runtime contract the page pins: latest or an exact version")
 		fs.Var(&caps, "capabilities", "what the page uses, comma-separated: "+
@@ -797,7 +867,7 @@ func artifactsPublish(environ config.Source, args []string, stdout, stderr io.Wr
 	if err != nil {
 		return err
 	}
-	files, err := collectFiles(pos[0])
+	files, err := collectFiles(pos[0], exclude)
 	if err != nil {
 		return err
 	}

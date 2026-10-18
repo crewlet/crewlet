@@ -166,6 +166,116 @@ func TestArtifactsPublishCreatesFromADirectory(t *testing.T) {
 	}
 }
 
+// tree writes files (slash-separated path to body) under a fresh directory.
+func tree(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, body := range files {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// declaredPaths is every path the node's first upload intent declared, sorted.
+func (n *fakeArtifactsNode) declaredPaths() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	var out []string
+	for _, e := range n.intents[0].Entries {
+		out = append(out, e.Path)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// -exclude LEAVES OUT WHAT IT MATCHES, AND ONLY THAT: a pattern without a slash
+// matches a name at any depth, one with a slash the path from the directory, a
+// directory matched takes everything beneath it, and the walker's own rules
+// (no dotted name, no symbolic link followed) hold beside it.
+func TestArtifactsPublishExcludesWhatThePatternsMatch(t *testing.T) {
+	t.Parallel()
+	outside := tree(t, map[string]string{"secret.txt": "outside", "dir/also.txt": "outside"})
+	dir := tree(t, map[string]string{
+		"index.html":         "<!doctype html>",
+		"app.js":             "1",
+		"app.js.map":         "{}",
+		"lib/vendor.js.map":  "{}",
+		"lib/vendor.js":      "2",
+		"drafts/old.html":    "old",
+		"drafts/deep/x.html": "x",
+		"notes/a.md":         "a",
+		"notes/keep.txt":     "k",
+		"notes/sub/b.md":     "b",
+		".env":               "SECRET=1",
+		"img/.hidden.png":    "h",
+		"img/logo.svg":       "<svg/>",
+	})
+	for link, target := range map[string]string{"linked.txt": "secret.txt", "linked": "dir"} {
+		if err := os.Symlink(filepath.Join(outside, target), filepath.Join(dir, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	node := newFakeArtifactsNode(t)
+	if _, stderr, err := cli(t, "artifacts", "publish", dir, "-exclude", "*.map", "-exclude", "./drafts/",
+		"-exclude", "notes/*.md", bootstrapForURL(t, node.server.URL)); err != nil {
+		t.Fatalf("publish: %v\n%s", err, stderr)
+	}
+	want := []string{"app.js", "img/logo.svg", "index.html", "lib/vendor.js", "notes/keep.txt", "notes/sub/b.md"}
+	if got := node.declaredPaths(); !slices.Equal(got, want) {
+		t.Errorf("declared %v, want %v", got, want)
+	}
+}
+
+// A MALFORMED OR ESCAPING PATTERN IS REFUSED BEFORE ANYTHING IS SENT, and so is
+// -exclude beside a single file, which has nothing to leave out.
+func TestArtifactsPublishRefusesABadExclusion(t *testing.T) {
+	t.Parallel()
+	dir := site(t)
+	for name, args := range map[string][]string{
+		"malformed":     {dir, "-exclude", "[a-"},
+		"escaping":      {dir, "-exclude", "../site"},
+		"absolute":      {dir, "-exclude", "/index.html"},
+		"empty":         {dir, "-exclude", " "},
+		"a single file": {filepath.Join(dir, "index.html"), "-exclude", "*.css"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			node := newFakeArtifactsNode(t)
+			args := append(append([]string{"artifacts", "publish"}, args...), bootstrapForURL(t, node.server.URL))
+			if _, _, err := cli(t, args...); err == nil {
+				t.Fatal("the publish was not refused")
+			}
+			if len(node.intents) != 0 {
+				t.Errorf("declared %d uploads before refusing", len(node.intents))
+			}
+		})
+	}
+}
+
+// A ROOT THAT IS ITSELF A LINK IS WALKED WHERE IT POINTS: naming it is the
+// operator's choice, and walked as a link it held nothing to publish.
+func TestArtifactsPublishWalksALinkedRoot(t *testing.T) {
+	t.Parallel()
+	target := tree(t, map[string]string{"index.html": "<!doctype html>", "css/app.css": "a{}"})
+	link := filepath.Join(t.TempDir(), "dist")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	node := newFakeArtifactsNode(t)
+	if _, stderr, err := cli(t, "artifacts", "publish", link, bootstrapForURL(t, node.server.URL)); err != nil {
+		t.Fatalf("publish: %v\n%s", err, stderr)
+	}
+	if got := node.declaredPaths(); !slices.Equal(got, []string{"css/app.css", "index.html"}) {
+		t.Errorf("declared %v", got)
+	}
+}
+
 // A NEW ARTIFACT CARRIES ITS DESCRIPTION AND ICON in the create, beside its
 // title.
 func TestArtifactsPublishDescribesANewArtifact(t *testing.T) {
