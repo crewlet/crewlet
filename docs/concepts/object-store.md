@@ -107,9 +107,46 @@ logs survive, on the same members:
   stream is, and there is no repair, map or membership for the engine to run
   beside it.
 - **An object is a run of 128 KiB messages**, closed by one message naming
-  them — so an upload holds 128 KiB of it at a time, and a stateless node's
-  upload never holds its leaf link for longer than one message takes to
-  cross.
+  them; an upload holds one message's worth of memory at a time.
+- **A node's uploads share one window of messages out.** Every upload a
+  node makes — a person's file, a push's bundle, a seat's file — rides the
+  connection its leases and events ride, so the messages they have sent and
+  the broker has not yet acknowledged are counted for the connection, not
+  for each upload. Across a leaf's link, or to an external cluster, the
+  window **follows the node's lease**: it is as many messages as a link at
+  the floor of thirty seconds a mebibyte carries in one heartbeat of the
+  lease the node holds (the lease TTL in force over three), so a lease
+  renewal queued behind the node's uploads still lands within one heartbeat
+  and the node does not lose its seats to its own uploads. At the default
+  45-second lease that is four messages — half a mebibyte, fifteen seconds
+  at the floor; a lease under 22.5 seconds gets one, and one of three
+  minutes or more the sixteen a data node gets. A shorter lease costs
+  throughput on a fast link: through a leaf on loopback, a window of one
+  carried a lone 16 MiB upload at 47–83 MB/s and eight at once at 56–78
+  together, against 120–139 and 130–135 with four — about half — and on a
+  link with a longer round trip the share lost is larger. A lease under **11.25 seconds** has a
+  heartbeat shorter than even one 128 KiB message takes at the floor, so a
+  renewal behind it lands with less than a heartbeat to spare — and under
+  5.6 seconds, after the lease. `crewlet validate` warns of such a
+  `coordination.lease_ttl_seconds` on a node whose uploads cross a link,
+  and on a member that serves leaves. On a data node's own client, where
+  no link lies between the upload and the stream, the window is sixteen.
+  An upload waits its turn for a place behind the others, first come
+  first served.
+- **A put is paced by the broker's acknowledgements.** An upload ends only
+  once the broker has acknowledged nothing for a minute while some of its
+  messages are out — or, waiting for a place, nothing of the node's at all;
+  a put waiting on the person's own slow upload is not waiting on the
+  broker. No message waits behind more than the window, so across a link at
+  the floor each is acknowledged within a heartbeat of the node's lease —
+  fifteen seconds at the default — a leaf's compressed link, which delivers
+  what it flushed as one block, included.
+  An upload crossing a slow link is never failed for being slow — the floor
+  of thirty seconds a mebibyte included — where the client library's own put
+  failed any message the broker had not acknowledged five seconds after it
+  was sent. A put that fails takes back what it stored, so no listing finds
+  it; pieces a very slow link delivers after that are swept by the collector
+  a day later.
 - **A node without `data` reaches the bucket across its leaf link**, with the
   rest of the fleet's JetStream API — it holds nothing.
 - **The bucket is created once and never rewritten.** A node looks the bucket

@@ -6,7 +6,9 @@
 // the collector rest on properties no single backend's own tests would think
 // to state: that a put which fails or is abandoned leaves nothing anybody can
 // find — a body cut short, which reads much like a body's end, included — that
-// a read with no deadline is refused rather than bounded by some default of
+// a put the backend stops taking fails as stalled a stall after it last moved
+// rather than at the end of a deadline sized for its bytes, that a read with no
+// deadline is refused rather than bounded by some default of
 // the backend's, that a read whose context ends stops rather than hands over
 // what it had in hand, that a delete leaves nothing a listing could find, and
 // that a listing visits every name it holds — verbatim, once, however slowly
@@ -91,6 +93,16 @@ type Options struct {
 	// the suite holds it to NOT implementing the interface, so the
 	// collector never hands a batch to a deletion nothing certified.
 	BatchDeletes bool
+
+	// Stalling builds a backend whose stall bound is short — a case's,
+	// never [objstore.Stall] — and answers it with that bound, the most its
+	// clean-up after a stall may add to the put's time, and a freeze that
+	// makes it stop taking a put's bytes by its own means: a broker that
+	// stops acknowledging, a bucket that stops reading. The freeze answers
+	// the thaw that undoes it, so the case can ask the backend what the
+	// put left. Nil is a backend that can never stall — the twin stores
+	// an object whole or not at all — which the suite then does not judge.
+	Stalling func(t *testing.T) (b objstore.Backend, stall, cleanup time.Duration, freeze func() (thaw func()))
 }
 
 // defaultPiece is a piece for a backend with none of its own.
@@ -120,6 +132,7 @@ func Run(t *testing.T, newBackend Factory, opts Options) {
 		{"a_deleted_object_is_gone_and_a_second_delete_is_fine", aDeletedObjectIsGone},
 		{"a_put_whose_reader_fails_leaves_nothing", aPutWhoseReaderFailsLeavesNothing},
 		{"a_put_whose_context_ends_leaves_nothing", aPutWhoseContextEndsLeavesNothing},
+		{"a_put_the_backend_stops_taking_fails_as_stalled", aPutTheBackendStopsTakingFailsAsStalled},
 		{"a_listing_visits_every_name_once", aListingVisitsEveryNameOnce},
 		{"a_listing_stops_at_the_visitors_error", aListingStopsAtTheVisitorsError},
 		{"a_listing_waits_for_a_slow_visitor", aListingWaitsForASlowVisitor},
@@ -486,6 +499,48 @@ func aPutWhoseContextEndsLeavesNothing(t *testing.T, b objstore.Backend, opts Op
 		t.Fatalf("Put whose context ended = %v, want context.Canceled", err)
 	}
 	gone(t, b, "abandoned", "an abandoned put")
+}
+
+// A PUT THE BACKEND STOPS TAKING FAILS AS STALLED ([objstore.ErrStalled]) a
+// stall after the backend last moved it — never at the end of a deadline
+// sized for its bytes, and never before its stall — and leaves nothing a stat
+// or a listing finds once the backend moves again.
+//
+// THE BACKEND STOPS AT ONCE, before the put's first byte, so its last
+// movement is the put's start: the put has to end between its stall and its
+// stall plus what its clean-up may add, give or take a second for the
+// machine. The case's own deadline is far past that, so a put that waited
+// for its deadline instead fails here as not stalled.
+func aPutTheBackendStopsTakingFailsAsStalled(t *testing.T, _ objstore.Backend, opts Options) {
+	if opts.Stalling == nil {
+		return
+	}
+	b, stall, cleanup, freeze := opts.Stalling(t)
+	thaw := freeze()
+	thawed := false
+	defer func() {
+		if !thawed {
+			thaw()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(t.Context(), stall+cleanup+30*time.Second)
+	defer cancel()
+	started := time.Now()
+	err := b.Put(ctx, "stalled", streamed{bytes.NewReader(patterned(3*opts.piece(), 6))}, objstore.PutMeta{})
+	took := time.Since(started)
+	if !errors.Is(err, objstore.ErrStalled) {
+		t.Fatalf("a put the backend stopped taking = %v after %v; want objstore.ErrStalled", err, took)
+	}
+	if took < stall {
+		t.Fatalf("a put the backend stopped taking ended after %v, before its %v stall", took, stall)
+	}
+	if most := stall + cleanup + time.Second; took > most {
+		t.Fatalf("a put the backend stopped taking ended after %v; want it ended within %v "+
+			"(its stall %v and its clean-up %v)", took, most, stall, cleanup)
+	}
+	thaw()
+	thawed = true
+	gone(t, b, "stalled", "a put the backend stopped taking")
 }
 
 func aListingVisitsEveryNameOnce(t *testing.T, b objstore.Backend, _ Options) {

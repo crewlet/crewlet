@@ -2,6 +2,7 @@ package natsobj
 
 import (
 	"context"
+	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 
@@ -33,3 +34,25 @@ func SwapStream(b *Backend, wrap func(jetstream.Stream) jetstream.Stream) {
 func OpenAt(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprovision.Timing) (*Backend, error) {
 	return open(ctx, js, cfg, timing)
 }
+
+// MemberWindow, MessageCrossing and PurgeWait are [memberWindow],
+// [messageCrossing] and [purgeWait], for the cases that count what a
+// connection's puts hold out, hold the link's window to the lease, and time
+// what a clean-up may add.
+const (
+	MemberWindow    = memberWindow
+	MessageCrossing = messageCrossing
+	PurgeWait       = purgeWait
+)
+
+// LinkWindow is [linkWindow]: the window a connection across a link is given
+// for a node renewing its leases every heartbeat.
+func LinkWindow(heartbeat time.Duration) int { return linkWindow(heartbeat) }
+
+// SetWindow gives b's puts a window of n messages in place of the one Open
+// chose, so a case can make its puts wait their turn for a place.
+func SetWindow(b *Backend, n int) { b.window = newWindow(n) }
+
+// SetStall shortens how long b's puts wait for an acknowledgement before they
+// end as stalled, so a case sees a stall without waiting [objstore.Stall].
+func SetStall(b *Backend, d time.Duration) { b.stall = d }

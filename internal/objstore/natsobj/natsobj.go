@@ -18,28 +18,48 @@
 // company whose files outgrow one member's disk takes the S3 backend
 // (internal/objstore/s3obj) instead.
 //
-// # The bucket's own format, and the library only for the put
+// # The bucket's own format, and none of the library's object-store verbs
 //
 // The bucket is a NATS object store in that store's own documented layout —
 // an object is a run of messages on `$O.<bucket>.C.<nuid>`, closed by one
 // message on `$O.<bucket>.M.<name, base64url>` naming them — so every object
-// stays readable by NATS's own tools (`nats object get`). The library writes
-// it: a put is the library's streaming put, made safe by two rules, each the
-// answer to a measured failure:
+// stays readable by NATS's own tools (`nats object get`). The backend writes
+// it ITSELF ([Backend.Put]) rather than through the library's put, which could
+// not be made safe:
 //
-//   - EVERY MESSAGE BUT THE LAST IS FULL ([MessageBytes]). The library sends
-//     one message per Read of the reader it is handed, so a reader that
-//     answers a few bytes at a time — a network body — would store an object
-//     as thousands of tiny messages; a put reads through a filler that
-//     answers only full ones, and ends the object only where its reader
-//     answers io.EOF itself ([objstore.Fill]) — never at a body cut short.
-//   - A PUT IS ENDED BY ITS READER, never by its context. A put whose
-//     context ends purges the pieces it stored under that same, dead
-//     context, which fails, and leaves them on the stream with nothing
-//     naming them; one whose reader fails purges them with a live one. So
-//     the library's put runs under a context that does not end with the
-//     caller's, and the caller giving up reaches it as a read error
-//     ([objstore.ContextReader]).
+//   - IT FAILED A PUT THAT WAS MOVING. It gave each message's acknowledgement
+//     five seconds from its publish, and a message published behind bytes the
+//     link has not yet carried is acknowledged only once they have crossed —
+//     so a put across any link slower than its queued bytes in five seconds
+//     failed while it moved: 2 MiB at 1.25× the floor failed at 10.0 s, over
+//     TCP and through a leaf alike, where the backend's own put stored it in
+//     48.5 s, the link's own time. A node without `data` uploading across a
+//     slow leaf link is exactly the floor every leg is promised
+//     ([objstore.MiBPace]), broken by a timeout nobody chose.
+//   - ON A FROZEN LINK IT TOOK THE CONNECTION DOWN. Its 4,000 outstanding
+//     messages filled the socket until the connection's own write deadline
+//     failed the node's whole connection — leases, events and subscriptions
+//     with it (65.01 s, `i/o timeout`); and through a frozen leaf it failed in
+//     five seconds on a metadata lookup a key that is never reused does not
+//     need.
+//   - ITS RETRY RE-SENT ANOTHER PIECE'S BYTES. A piece answered "no
+//     responders" is published again 250 ms later from the library's one
+//     reused message over its one reused buffer, which by then holds a later
+//     piece (read from the code, not reproduced).
+//
+// The backend's put publishes FULL messages ([MessageBytes]) in order from one
+// buffer, read through [objstore.Fill] so the object ends only where its
+// reader answers io.EOF itself — never at a body cut short — with no publish
+// retry and its messages out held to a WINDOW the connection's puts share
+// ([window]: [linkWindow] across a leaf's link or to an external cluster,
+// sized from the node's own lease heartbeat so a lease renewal queued behind
+// it at the floor still lands inside a heartbeat; [memberWindow] on a
+// member's own client); it is ended only when
+// the broker has acknowledged nothing for [objstore.Stall] while messages are
+// out ([objstore.ErrStalled]); and a put that fails, the caller giving up among
+// the ways, drains what is out and purges what it stored under a context that
+// does not end with the caller's ([objstore.ContextReader]) — the metadata
+// first, so an object never names pieces that are gone.
 //
 // EVERYTHING ELSE IS READ AND REMOVED THROUGH THE STREAM ITSELF, because the
 // library's other verbs cannot be made safe:
@@ -134,6 +154,38 @@
 //     one that kept its pull took about 4. A Stat is a leader read
 //     across a route — 2,100–2,800 a second from one goroutine, 5,600–23,400
 //     at 32 in flight — and a listing named 80,000–92,000 objects a second.
+//   - THE PUT FIGURES ABOVE ARE THE LIBRARY'S PUT, which [Backend.Put]
+//     replaced. The two measured against each other, interleaved, on one
+//     machine (four vCPUs of an Intel Xeon at 2.1 GHz, 2026-10-18, at
+//     `stream.sync: always`): on a member's own client 64 KiB took
+//     1.64–1.68 ms against 1.58–1.65, 1 MiB ran at 116–140 MB/s against
+//     109–137 and 16 MiB at 146–167 against 161–174; through a leaf 64 KiB
+//     took 2.43–2.61 ms against 2.26–2.73 and 16 MiB ran at 123–137 MB/s
+//     against 120–144; at three replicas 64 KiB took 4.6–5.5 ms against
+//     3.5–4.3 — the quorum round trip the metadata waits for its pieces'
+//     acknowledgements in ([Backend.Put]) — and 16 MiB ran at 55–66 MB/s
+//     against 72–76.
+//   - THE WINDOW SHARED BY A CONNECTION'S PUTS ([window]) against one a put,
+//     interleaved runs of each on one machine (2026-10-18, `stream.sync:
+//     always`, the machine running other work): on a member's own client,
+//     sixteen either way, a lone 16 MiB put ran at 147–167 MB/s against
+//     132–171 and eight at once at 159–177 MB/s together against 164–183;
+//     through a leaf, four shared against sixteen a put, a lone 16 MiB put
+//     at 122–134 MB/s against 129–153, eight at once at 119–140 against
+//     158, and 64 KiB in 2.2–2.7 ms against 2.0–2.7; at three replicas,
+//     sixteen either way, a lone 16 MiB put at 59–63 MB/s against 62–63,
+//     eight at once at 56–58 against 47–63 together, and 64 KiB in 5.8–6.0
+//     ms against 5.8–6.2 — and sixty-four shared, beside sixteen in a run of
+//     its own, 48–69 MB/s alone against 59–68 and 42–65 eight at once
+//     against 50–62: nothing a member measured bought by a wider one.
+//   - THE LINK'S WINDOW ON A SHORTER LEASE ([linkWindow] follows the
+//     lease's heartbeat), through a leaf, interleaved runs of each on one
+//     machine (2026-10-18, `stream.sync: always`, four vCPUs running other
+//     work; four rounds, a fifth that overlapped another run left out): one
+//     message out — a lease under 22.5 s — ran a lone 16 MiB put at
+//     47–83 MB/s and eight at once at 56–78 together; two, at 109–125 and
+//     102–122; four, the shipped lease's, at 120–139 and 130–135. A 64 KiB
+//     put, one message whatever the window, took 2.3–4.0 ms in all three.
 package natsobj
 
 import (
@@ -191,19 +243,48 @@ type Config struct {
 	// Clustered says the broker is a cluster, which is what the
 	// provisioning budget branches on (see [jsprovision]).
 	Clustered bool
+	// AcrossLink says the connection reaches the stream across a LINK the
+	// node's leases and events ride too — a leaf's link to its members, or
+	// a dial to an external cluster — rather than to the node's own member
+	// in its own process: it decides the puts' [window] ([linkWindow],
+	// [memberWindow]).
+	AcrossLink bool
+	// LeaseHeartbeat is how often the node renews the leases its connection
+	// carries — the seat and presence leases' heartbeat, the lease TTL IN
+	// FORCE over seat.HeartbeatRatio, never the shipped one — which sizes
+	// the window across a link ([linkWindow]). Required with AcrossLink,
+	// and refused as zero there rather than read as some default, because
+	// a window sized for a lease the node does not hold is the one that
+	// loses its seats; read nowhere else.
+	LeaseHeartbeat time.Duration
 }
 
 // Backend is the objects in the broker's object store.
 type Backend struct {
-	// store is the library's handle on the bucket, which only a put goes
-	// through — see the package doc.
-	store jetstream.ObjectStore
+	// js is the client the bucket was opened on, whose connection a put
+	// publishes on — see [Backend.Put].
+	js jetstream.JetStream
 	// stream is the stream behind the bucket, which a get and a listing
-	// consume and a delete purges.
+	// consume and a delete and a failed put purge.
 	stream jetstream.Stream
 	// leader reads one object's metadata from the stream's leader.
 	leader *jsapi.Leader
+	// stall is [objstore.Stall], the longest a put waits for the broker to
+	// acknowledge any of its messages out — a field so a test can watch a
+	// stall end a put without waiting a minute for it.
+	stall time.Duration
+	// window is the places every put on the connection shares for the
+	// messages it holds out ([window]).
+	window *window
 }
+
+// Window is how many messages the puts on b's connection may hold out at
+// once: [linkWindow] for [Config.LeaseHeartbeat] where [Config.AcrossLink]
+// said the connection crosses a link to the stream, [memberWindow] where it
+// did not. Whoever opens the bucket decides which, and the engine's choice —
+// by the node's broker kind, at the heartbeat of the lease in force — is held
+// by a test of its own that reads it here.
+func (b *Backend) Window() int { return b.window.size }
 
 // Open binds to the bucket, creating it first if it is not there.
 //
@@ -244,6 +325,11 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 		return nil, errors.New("natsobj: the nats object store needs the broker's " +
 			"JetStream, and this node has none")
 	}
+	if cfg.AcrossLink && cfg.LeaseHeartbeat <= 0 {
+		return nil, fmt.Errorf("natsobj: a bucket reached across a link needs the "+
+			"node's lease heartbeat (Config.LeaseHeartbeat), which sizes the window "+
+			"its uploads share; got %v", cfg.LeaseHeartbeat)
+	}
 	replicas := max(cfg.Replicas, 1)
 	// ONE BREADCRUMB OVER THE WHOLE OF IT, because either half can be the
 	// one that stalls and the operator's question is the same: which object
@@ -257,7 +343,7 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 	})
 	defer stop()
 
-	store, err := lookupBucket(ctx, js, timing)
+	_, err := lookupBucket(ctx, js, timing)
 	switch {
 	case err == nil:
 	case errors.Is(err, jetstream.ErrBucketNotFound), jsprovision.Unanswered(ctx, err):
@@ -274,7 +360,7 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 					"so the create below decides it: absent and it is made, "+
 					"present and it comes back as a peer's win and is read back")
 		}
-		if store, err = createBucket(ctx, js, timing, replicas); err != nil {
+		if _, err = createBucket(ctx, js, timing, replicas); err != nil {
 			return nil, err
 		}
 	default:
@@ -300,7 +386,11 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 	if err != nil {
 		return nil, fmt.Errorf("natsobj: address the %s stream's leader: %w", Stream, err)
 	}
-	return &Backend{store: store, stream: stream, leader: leader}, nil
+	size := memberWindow
+	if cfg.AcrossLink {
+		size = linkWindow(cfg.LeaseHeartbeat)
+	}
+	return &Backend{js: js, stream: stream, leader: leader, stall: objstore.Stall, window: newWindow(size)}, nil
 }
 
 // lookupBucket asks whether the bucket exists, under the lookup ceiling and at
@@ -379,50 +469,6 @@ func createBucket(ctx context.Context, js jetstream.JetStream, timing jsprovisio
 			"(and reading it back: %w)", Bucket, replicas, err, readErr)
 	}
 	return store, nil
-}
-
-// Put implements [objstore.Backend].
-//
-// UNDER [context.WithoutCancel] and with no deadline, so the library bounds
-// each message's acknowledgement by its own default instead, and every way
-// the put can fail — the caller's context ending among them — reaches it as a
-// failed read, which it cleans up after under a context that still works. See
-// the package doc.
-func (b *Backend) Put(ctx context.Context, name string, r io.Reader, m objstore.PutMeta) error {
-	meta := jetstream.ObjectMeta{Name: name,
-		Opts: &jetstream.ObjectMetaOptions{ChunkSize: MessageBytes}}
-	if m.ContentType != "" {
-		meta.Headers = nats.Header{"Content-Type": []string{m.ContentType}}
-	}
-	body := filler{r: objstore.ContextReader(ctx, r)}
-	if _, err := b.store.Put(context.WithoutCancel(ctx), meta, body); err != nil {
-		return fmt.Errorf("natsobj: put %s: %w", name, err)
-	}
-	return nil
-}
-
-// filler hands the library only full messages: every Read answers as many
-// bytes as it was asked for, short only at the end of the object.
-//
-// The library publishes one message per Read and cuts nothing itself, so
-// without this a body arriving a few hundred bytes at a time is stored as a
-// message per few hundred bytes — a gibibyte as millions of messages.
-//
-// THROUGH [objstore.Fill], which is what keeps a failure a failure: the
-// library compares the error it is handed against io.EOF to find the end and
-// purges what it stored on anything else, so the end has to reach it as
-// io.EOF itself and every failure — a body cut short's io.ErrUnexpectedEOF
-// among them — as the failure it is.
-type filler struct {
-	r io.Reader
-}
-
-func (f filler) Read(p []byte) (int, error) {
-	n, end, err := objstore.Fill(f.r, p)
-	if end {
-		return n, io.EOF
-	}
-	return n, err
 }
 
 // metaSubject is the subject the bucket keeps name's metadata on, and

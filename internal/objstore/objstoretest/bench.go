@@ -70,6 +70,11 @@ type BenchFactory func(b *testing.B) BenchBackend
 // names a comparison keys on:
 //
 //   - put/size=…: [objstore.Store.Put] of a fresh object.
+//   - put/streams=8/size=16MiB: eight puts of fresh objects at once, the
+//     figure reported for all eight together — a node's uploads under way
+//     together (a person's file, a push's bundle, seats' files), which share
+//     whatever the backend gives one node: its connection, its window of
+//     messages out, its allowance of spare parts.
 //   - get/size=…: [objstore.Backend.Get] of a whole object, unverified.
 //   - open/size=…: [objstore.Store.Open] of a whole object, every byte
 //     verified and the last one held back until it is.
@@ -105,6 +110,9 @@ func Bench(b *testing.B, newBackend BenchFactory) {
 	for _, s := range benchSizes {
 		b.Run("put/size="+s.name, func(b *testing.B) { benchPut(b, newBackend(b), s.n) })
 	}
+	b.Run(fmt.Sprintf("put/streams=%d/size=16MiB", parallelPuts), func(b *testing.B) {
+		benchPutParallel(b, newBackend(b))
+	})
 	BenchReads(b, newBackend)
 	// THE BACKEND AND ITS OBJECTS LIVE IN THE PARENT. The stat children
 	// count b.N themselves (see benchStat), and a benchmark that does is run
@@ -226,6 +234,13 @@ const (
 	parallelReads = 8
 	parallelBytes = 16 << 20
 
+	// parallelPuts is how many puts of parallelBytes go at once: the same
+	// eight, a quantity of the WORK for the reason parallelReads is — a
+	// node's turns writing files beside a push's bundle and a person's
+	// upload — so the figure says what eight uploads under way together
+	// get from whatever the backend shares between them.
+	parallelPuts = 8
+
 	// auditWorkers is a pool of stats in flight at once, measured beside
 	// one at a time: a stat is a round trip, so how many are in flight is
 	// what decides how long an audit of a large store takes, and the two
@@ -254,12 +269,13 @@ const (
 // flatter one with another's. A population's objects take its seed in the
 // high word and their own index in the low one.
 const (
-	seedPut      = 1
-	seedRead     = 2
-	seedRanged   = 3
-	seedStat     = 5
-	seedList     = 6
-	seedParallel = 10 // one per stream, from here
+	seedPut        = 1
+	seedRead       = 2
+	seedRanged     = 3
+	seedStat       = 5
+	seedList       = 6
+	seedParallel   = 10 // one per stream, from here
+	seedPutsAtOnce = 20 // one per stream, from here
 )
 
 // content is n bytes of seed's stream.
@@ -430,6 +446,45 @@ func benchPut(b *testing.B, backend BenchBackend, size int64) {
 		cancel()
 		if err != nil {
 			b.Fatalf("delete %s: %v", o.Key, err)
+		}
+		b.StartTimer()
+	}
+	backend.reportRequests(b, requests)
+}
+
+// benchPutParallel is b.N rounds of [parallelPuts] puts at once, each of a
+// fresh object of [parallelBytes] with content of its own, every one deleted
+// outside the timer as [benchPut]'s is.
+func benchPutParallel(b *testing.B, backend BenchBackend) {
+	s := benchStore(b, backend.Backend)
+	data := make([][]byte, parallelPuts)
+	for i := range data {
+		data[i] = content(parallelBytes, seedPutsAtOnce+uint64(i))
+	}
+	var requests int64
+	b.SetBytes(parallelPuts * parallelBytes)
+	b.ReportAllocs()
+	for b.Loop() {
+		before := backend.sent()
+		objects := make([]objstore.Object, parallelPuts)
+		errs := make([]error, parallelPuts)
+		var wg sync.WaitGroup
+		for i := range data {
+			wg.Go(func() { objects[i], errs[i] = store(b.Context(), s, data[i]) })
+		}
+		wg.Wait()
+		if err := errors.Join(errs...); err != nil {
+			b.Fatalf("put %d objects of %d bytes at once: %v", parallelPuts, parallelBytes, err)
+		}
+		requests += backend.sent() - before
+		b.StopTimer()
+		for _, o := range objects {
+			ctx, cancel := context.WithTimeout(b.Context(), time.Minute)
+			err := s.Delete(ctx, o.Key)
+			cancel()
+			if err != nil {
+				b.Fatalf("delete %s: %v", o.Key, err)
+			}
 		}
 		b.StartTimer()
 	}

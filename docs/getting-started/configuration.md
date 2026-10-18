@@ -1283,7 +1283,15 @@ coordination:
                                     #   fractions of the live value too. So
                                     #   make it agree across the fleet:
                                     #   changing it requires deleting the
-                                    #   bucket while the fleet is down
+                                    #   bucket while the fleet is down.
+                                    #   A node whose uploads cross a link to
+                                    #   the files bucket (a leaf, a client of
+                                    #   an external cluster) holds fewer of
+                                    #   them out on a shorter lease, so a
+                                    #   renewal queued behind them still lands
+                                    #   in a heartbeat; under 11.25s even one
+                                    #   128 KiB message is too many at the
+                                    #   floor, and `crewlet validate` warns
 
 api:
   host: "0.0.0.0"

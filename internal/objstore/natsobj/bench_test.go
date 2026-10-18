@@ -5,6 +5,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/objstore/natsobj"
 	"github.com/crewlet/crewlet/internal/objstore/objstoretest"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 )
@@ -19,7 +20,9 @@ import (
 //
 // ON A MEMBER'S OWN CLIENT (`via=member`), as a data node reaches the bucket,
 // and THROUGH A LEAF (`via=leaf`), as a node without `data` does: its broker
-// runs no JetStream and every piece crosses the leaf link.
+// runs no JetStream and every piece crosses the leaf link — opened across a
+// link, as the engine opens a leaf's at the shipped lease, so its puts share
+// the window a link is given there ([natsobj.LinkWindow]).
 //
 // ONE MEMBER, never a cluster: standing a cluster up here would make this
 // package one of the solo half's (`go doc ./internal/solo`), and its whole
@@ -31,13 +34,14 @@ func BenchmarkBackend(b *testing.B) {
 	for _, via := range []struct {
 		name   string
 		client func(testing.TB, js.Config) jetstream.JetStream
+		cfg    natsobj.Config
 	}{
-		{"member", memberClientAt},
-		{"leaf", leafClientAt},
+		{"member", memberClientAt, natsobj.Config{Replicas: 1}},
+		{"leaf", leafClientAt, acrossLink},
 	} {
 		b.Run("via="+via.name, func(b *testing.B) {
 			objstoretest.Bench(b, func(b *testing.B) objstoretest.BenchBackend {
-				return objstoretest.BenchBackend{Backend: open(b, via.client(b, member))}
+				return objstoretest.BenchBackend{Backend: openWith(b, via.client(b, member), via.cfg)}
 			})
 		})
 	}

@@ -772,6 +772,46 @@ func (b *Bootstrap) Warnings() []Warning {
 				"`-debug` to `crewlet run`"))
 	}
 
+	// A LEASE TOO SHORT FOR AN UPLOAD ACROSS A LINK. A node whose uploads to
+	// the broker's object store cross a link — a leaf, a client of an
+	// external cluster — sends them on the connection its lease renewals
+	// ride, so a renewal can queue behind the message an upload holds out;
+	// the window that bounds how many shrinks with the lease to as few as
+	// one, and under [LinkLeaseFloor] even one crosses a link at the floor
+	// in more than a heartbeat. A MEMBER that opens a leaf listener is told
+	// too: its leaves renew at the lease the fleet's bucket holds, which
+	// the members' own setting decides — a fleet runs one lease TTL.
+	//
+	// A WARNING RATHER THAN A REFUSAL: a link whose uploads never slow to
+	// the floor never meets it, and a short lease is a legitimate trade for
+	// a quicker failover. Only the setting this file states, and only where
+	// renewals ride the broker (`embedded-kv`), since `local` coordination
+	// holds its leases in this process.
+	if b.Coordination.Type == CoordinationEmbeddedKV &&
+		b.Store.Objects.BackendOrDefault() == ObjectBackendNATS {
+		ttl := b.Coordination.LeaseTTL()
+		who := ""
+		switch {
+		case b.BrokerKind() != placement.BrokerMember:
+			who = "this node uploads to the broker's object store across a link, on " +
+				"the connection its lease renewals ride"
+		case b.Stream.Leaf.Port != 0:
+			who = "the leaves this member serves upload to the broker's object store " +
+				"across their link, on the connection their lease renewals ride — at the " +
+				"lease the fleet's bucket holds, which the members' setting decides"
+		}
+		if who != "" && ttl > 0 && ttl < LinkLeaseFloor {
+			out = append(out, advisory(field("coordination.lease_ttl_seconds"), fmt.Sprintf(
+				"is %v, under %v: %s, and one 128 KiB message of an upload crosses a "+
+					"link at the floor of thirty seconds a mebibyte in more than this "+
+					"lease's heartbeat. A renewal queued behind it lands with less than a "+
+					"heartbeat of the lease to spare, and under %v after the lease, losing "+
+					"that node its seats. Raise it to at least %v on every node, or keep "+
+					"the files in store.objects.backend: s3",
+				ttl, LinkLeaseFloor, who, LinkLeaseFloor/2, LinkLeaseFloor)))
+		}
+	}
+
 	// A GIT BLOCK ON A NODE THAT SERVES NO GIT is read by nothing: the cache,
 	// its budget and its processes exist only where the role does, and an
 	// operator who sized them believes this node serves code.

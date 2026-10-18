@@ -91,9 +91,11 @@ func spoil(t *testing.T, b objstore.Backend, name string) {
 // THE BROKER'S OWN OBJECT STORE PASSES THE SUITE, on a member's own client.
 func TestContract(t *testing.T) {
 	t.Parallel()
+	opts := suite
+	opts.Stalling = stallingMember
 	objstoretest.Run(t, func(t *testing.T) objstore.Backend {
 		return open(t, memberClient(t))
-	}, suite)
+	}, opts)
 }
 
 // AND THROUGH A LEAF: a node without `data` runs no JetStream and reaches the
@@ -101,14 +103,16 @@ func TestContract(t *testing.T) {
 // exactly that.
 func TestContractThroughALeaf(t *testing.T) {
 	t.Parallel()
+	opts := suite
+	opts.Stalling = stallingLeaf
 	objstoretest.Run(t, func(t *testing.T) objstore.Backend {
 		return open(t, leafClient(t))
-	}, suite)
+	}, opts)
 }
 
 // EVERY MESSAGE OF A PUT BUT ITS LAST IS FULL, however few bytes at a time the
-// reader yields. The library sends one message per read it makes, so a body
-// arriving a byte at a time would otherwise be stored as a message per byte.
+// reader yields: a put that sent a message per read of its body would store a
+// body arriving a byte at a time as a message per byte.
 func TestEveryMessageButTheLastIsFull(t *testing.T) {
 	t.Parallel()
 	client := memberClient(t)
@@ -1926,7 +1930,13 @@ func TestABucketReplicatedBelowThisNodeIsRefused(t *testing.T) {
 
 func open(t testing.TB, client jetstream.JetStream) *natsobj.Backend {
 	t.Helper()
-	b, err := natsobj.Open(t.Context(), client, natsobj.Config{Replicas: 1})
+	return openWith(t, client, natsobj.Config{Replicas: 1})
+}
+
+// openWith is [open] with the configuration cfg.
+func openWith(t testing.TB, client jetstream.JetStream, cfg natsobj.Config) *natsobj.Backend {
+	t.Helper()
+	b, err := natsobj.Open(t.Context(), client, cfg)
 	if err != nil {
 		t.Fatalf("open the bucket: %v", err)
 	}

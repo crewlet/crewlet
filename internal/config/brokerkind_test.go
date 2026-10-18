@@ -311,6 +311,67 @@ func TestTheBrokerWarnings(t *testing.T) {
 	}
 }
 
+// A LEASE TOO SHORT FOR AN UPLOAD ACROSS A LINK is warned of where uploads to
+// the broker's object store cross one on the connection lease renewals ride:
+// a leaf, a client of an external cluster, and a member that serves leaves,
+// whose setting is the lease its leaves renew at. Under [LinkLeaseFloor] one
+// message of an upload crosses a link at the floor in more than the lease's
+// heartbeat; at it and over, nothing is said, and nothing is said where no
+// renewal crosses a link behind an upload — a member serving no leaves, the
+// S3 store, `local` coordination.
+func TestALeaseTooShortForAnUploadAcrossALinkIsWarned(t *testing.T) {
+	t.Parallel()
+	const (
+		kv          = "coordination:\n  type: embedded-kv\n"
+		leafNode    = "node:\n  roles: [seats]\nstore:\n  scratch: true\n"
+		s3          = "  objects:\n    backend: s3\n    s3:\n      bucket: files\n      region: us-east-1\n"
+		leafStream  = "stream:\n  leaf:\n    urls: [nats-leaf://data-a.example.com:7422]\n"
+		memberBlock = "stream:\n  store_dir: /var/lib/crewlet/stream\n  replicas: 3\n" +
+			"  cluster:\n    name: acme\n    peers: [nats://b.example.com:6222, nats://c.example.com:6222]\n"
+		servesLeaves = "  leaf:\n    port: 7422\n"
+	)
+	lease := func(seconds string) string { return "  lease_ttl_seconds: " + seconds + "\n" }
+	for _, tc := range []struct {
+		name string
+		doc  string
+		want bool
+	}{
+		{"a leaf on an 8 s lease", leafNode + leafStream + kv + lease("8"), true},
+		{"a leaf on an 11 s lease", leafNode + leafStream + kv + lease("11"), true},
+		{"a leaf on the floor's own lease", leafNode + leafStream + kv + lease("11.25"), false},
+		{"a leaf on a 15 s lease", leafNode + leafStream + kv + lease("15"), false},
+		{"a leaf on the default lease", leafNode + leafStream + kv, false},
+		{"a client on an 8 s lease", brokerStreams[placement.BrokerClient] + lease("8"), true},
+		{"a member serving leaves on an 8 s lease", memberBlock + servesLeaves + kv + lease("8"), true},
+		{"a member serving no leaves on an 8 s lease", memberBlock + kv + lease("8"), false},
+		{"a leaf on an 8 s lease keeping its files in s3",
+			leafNode + s3 + leafStream + kv + lease("8"), false},
+		{"a solo node with local coordination on an 8 s lease",
+			"coordination:\n  type: local\n" + lease("8"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b, err := ParseBootstrap([]byte(tc.doc), EnvOnly())
+			if err != nil {
+				t.Fatalf("the fixture must be valid, since a warning is: %v", err)
+			}
+			var got []Warning
+			for _, w := range b.Warnings() {
+				if w.Path == "coordination.lease_ttl_seconds" {
+					got = append(got, w)
+				}
+			}
+			if warned := len(got) > 0; warned != tc.want {
+				t.Fatalf("warned of the lease: %v (%v), want %v", warned, got, tc.want)
+			}
+			if tc.want && !strings.Contains(got[0].Message, LinkLeaseFloor.String()) {
+				t.Fatalf("the warning %q does not name the %v floor to raise it to", got[0].Message,
+					LinkLeaseFloor)
+			}
+		})
+	}
+}
+
 // THE IN-MEMORY STREAM IS A MEMBER'S WARNING, because only a member holds a
 // stream: it is the one broker running JetStream in this process. A stateless
 // leaf runs none and is REFUSED a store directory, so warning it that its
