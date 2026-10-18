@@ -717,8 +717,9 @@ func TestTokenIDsAreTheLabelsTheGuardAccepts(t *testing.T) {
 // and this fails.
 func TestATierATokenCarriesWhatTheNodesAdminPostureAllows(t *testing.T) {
 	t.Parallel()
-	every := []iam.Grant{iam.GrantAdmin, iam.GrantTracker, iam.GrantKnowledge}
-	apps := []iam.Grant{iam.GrantTracker, iam.GrantKnowledge}
+	// EVERY APP THIS BUILD DECLARES, read from the declaration rather than
+	// spelled: an app added to internal/iam is one more an admin confers.
+	every, apps := iam.AllGrants, iam.Apps
 	for _, tc := range []struct {
 		posture iam.AdminPosture
 		listed  []iam.Grant

@@ -175,8 +175,7 @@ func TestATokenActsAsItsOwnerWithTheNarrowestOfThreeGrantSets(t *testing.T) {
 	minted.row.Grants = []iam.Grant{iam.GrantAdmin}
 	got, _ = present(t, minted.guard(nil), http.MethodGet, "/agents",
 		minted.presented.Value())
-	if !slices.Equal(got.principal.Grants, []iam.Grant{iam.GrantAdmin,
-		iam.GrantTracker, iam.GrantKnowledge}) {
+	if !slices.Equal(got.principal.Grants, iam.AllGrants) {
 		t.Errorf("grants %v, want admin and every app it includes",
 			got.principal.Grants)
 	}
@@ -188,8 +187,7 @@ func TestATokenActsAsItsOwnerWithTheNarrowestOfThreeGrantSets(t *testing.T) {
 	clamped.admin = iam.AdminRefuse
 	got, _ = present(t, clamped.guard(nil), http.MethodGet, "/agents",
 		clamped.presented.Value())
-	if !slices.Equal(got.principal.Grants, []iam.Grant{iam.GrantTracker,
-		iam.GrantKnowledge}) {
+	if !slices.Equal(got.principal.Grants, iam.Apps) {
 		t.Errorf("grants %v on a node refusing admin, want every app and no "+
 			"admin", got.principal.Grants)
 	}
