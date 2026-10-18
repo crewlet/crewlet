@@ -1,0 +1,505 @@
+[
+ {
+  "file": "alpine-csp-build.html",
+  "what": "A settings menu on Alpine's CSP build, its component registered from a script",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "alpine-dropdown.html",
+  "what": "A settings menu on Alpine's standard build, which the linter admits string evaluation for",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "base-href.html",
+  "what": "A docs index with a base element pointing at another site",
+  "refused": [],
+  "breaks": [
+   "base"
+  ],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "bootstrap-modal.html",
+  "what": "A release checklist on pinned Bootstrap CSS and JS with a modal",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "bootstrap-unpinned.html",
+  "what": "A status page loading Bootstrap from jsDelivr with no version",
+  "refused": [
+   "unpinned_version"
+  ],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "calculator-eval.html",
+  "what": "A calculator whose equals key calls eval",
+  "refused": [],
+  "breaks": [
+   "eval"
+  ],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "chartjs-esm-import.html",
+  "what": "A chart importing Chart.js as an ES module from jsDelivr",
+  "refused": [
+   "remote_import"
+  ],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "chartjs-unpinned.html",
+  "what": "A chart loading Chart.js from jsDelivr with no version",
+  "refused": [
+   "unpinned_version"
+  ],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "contact-form-formspree.html",
+  "what": "A contact form posting to a form service",
+  "refused": [
+   "form_off_origin"
+  ],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "countdown-moment.html",
+  "what": "A launch countdown on pinned Moment.js",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "d3-jsdelivr-remote-csv.html",
+  "what": "A d3 chart reading its CSV from GitHub",
+  "refused": [],
+  "breaks": [
+   "remote_runtime"
+  ],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "d3-official-cdn.html",
+  "what": "A d3 bar chart loading d3 from d3js.org",
+  "refused": [
+   "remote_script"
+  ],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "fontawesome-icons.html",
+  "what": "A feature grid with Font Awesome from cdnjs",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "google-fonts-landing.html",
+  "what": "A studio landing page on a Google Fonts family",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "gsap-animation.html",
+  "what": "A hero animation on pinned GSAP",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "http-cdn-script.html",
+  "what": "A widget loading jQuery from cdnjs over http",
+  "refused": [
+   "remote_script"
+  ],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "importmap-offlist.html",
+  "what": "A chart whose import map points a module at esm.sh",
+  "refused": [],
+  "breaks": [],
+  "escapes": [
+   "import_map_remote"
+  ],
+  "storage": false
+ },
+ {
+  "file": "inline-handlers-tabs.html",
+  "what": "An onboarding guide driven by sixteen inline onclick handlers",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "innerhtml-dynamic-handlers.html",
+  "what": "An expense splitter writing rows with onclick handlers through innerHTML",
+  "refused": [],
+  "breaks": [
+   "runtime_handler"
+  ],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "javascript-url-link.html",
+  "what": "A menu link with a javascript: URL",
+  "refused": [
+   "javascript_url"
+  ],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "jquery-github-api.html",
+  "what": "An issue list on pinned jQuery reading the GitHub API",
+  "refused": [],
+  "breaks": [
+   "remote_runtime"
+  ],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "kanban-dragdrop.html",
+  "what": "A drag-and-drop sprint board kept in localStorage",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": true
+ },
+ {
+  "file": "kpi-dashboard-chartjs.html",
+  "what": "A revenue dashboard on pinned Chart.js from cdnjs",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "leaflet-map.html",
+  "what": "An office map on pinned Leaflet with OpenStreetMap tiles",
+  "refused": [],
+  "breaks": [
+   "remote_runtime"
+  ],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "lodash-template.html",
+  "what": "Release notes rendered with lodash's template compiler",
+  "refused": [],
+  "breaks": [
+   "eval"
+  ],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "markdown-notes-marked.html",
+  "what": "A Markdown notes preview on pinned marked and DOMPurify",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "mermaid-esm-import.html",
+  "what": "A Mermaid diagram importing Mermaid as an ES module",
+  "refused": [
+   "remote_import"
+  ],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "mermaid-umd.html",
+  "what": "A Mermaid diagram on the pinned UMD build",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "meta-refresh-offsite.html",
+  "what": "A moved page refreshing to another site",
+  "refused": [
+   "refresh_off_origin"
+  ],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "papaparse-local-csv.html",
+  "what": "A CSV explorer parsing a chosen file with pinned Papa Parse",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "password-login-mock.html",
+  "what": "A mock sign-in form with a password field",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "plotly-cdn.html",
+  "what": "A funnel chart loading Plotly from cdn.plot.ly",
+  "refused": [
+   "remote_script"
+  ],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "pomodoro-remote-audio.html",
+  "what": "A focus timer playing a chime from another site",
+  "refused": [],
+  "breaks": [
+   "remote_runtime"
+  ],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "pricing-static-noviewport.html",
+  "what": "A static pricing table with no viewport meta and no script",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "quiz-string-timer.html",
+  "what": "A quiz advancing with a string setTimeout",
+  "refused": [],
+  "breaks": [
+   "eval"
+  ],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "react-babel-counter.html",
+  "what": "A React counter compiled in the browser by Babel standalone",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "setattribute-handler.html",
+  "what": "An FAQ accordion setting onclick through setAttribute",
+  "refused": [],
+  "breaks": [
+   "runtime_handler"
+  ],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "share-window-open.html",
+  "what": "A share button opening a social site in a popup",
+  "refused": [],
+  "breaks": [
+   "popup"
+  ],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "signup-form-handled.html",
+  "what": "A waitlist form handled by a submit listener, kept in localStorage",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": true
+ },
+ {
+  "file": "snake-canvas-game.html",
+  "what": "A canvas Snake game keeping its best score in localStorage",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": true
+ },
+ {
+  "file": "survey-form-navigates.html",
+  "what": "A survey form that submits by navigating",
+  "refused": [],
+  "breaks": [
+   "form_navigation"
+  ],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "svg-infographic.html",
+  "what": "An inline SVG infographic with CSS animation and no script",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "tabs-handlers-and-storage.html",
+  "what": "A notes pad saved to sessionStorage from an inline handler",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": true
+ },
+ {
+  "file": "tailwind-play-pinned.html",
+  "what": "A landing page on Tailwind's Play CDN at an exact version",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "tailwind-play-unpinned.html",
+  "what": "A landing page on Tailwind's Play CDN with no version",
+  "refused": [
+   "unpinned_version"
+  ],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "threejs-importmap.html",
+  "what": "A three.js scene whose import map points at jsDelivr",
+  "refused": [],
+  "breaks": [],
+  "escapes": [
+   "import_map_remote"
+  ],
+  "storage": false
+ },
+ {
+  "file": "todo-localstorage.html",
+  "what": "A to-do list with inline handlers, kept in localStorage",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": true
+ },
+ {
+  "file": "unlisted-cdn-script.html",
+  "what": "A confetti button loading a script from an unlisted CDN",
+  "refused": [
+   "remote_script"
+  ],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "unsplash-gallery.html",
+  "what": "A photo gallery hotlinking Unsplash images",
+  "refused": [],
+  "breaks": [
+   "remote_media"
+  ],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "vue-full-build.html",
+  "what": "An inventory list on Vue's full build with an in-DOM template",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "weather-widget-fetch.html",
+  "what": "A weather widget fetching a public API",
+  "refused": [],
+  "breaks": [
+   "remote_runtime"
+  ],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "websocket-ticker.html",
+  "what": "A live ticker on a WebSocket to another site",
+  "refused": [],
+  "breaks": [
+   "remote_runtime"
+  ],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "worker-from-blob.html",
+  "what": "A prime finder on a worker built from a Blob",
+  "refused": [],
+  "breaks": [],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "worker-from-file.html",
+  "what": "A prime finder on a worker started from a file URL",
+  "refused": [],
+  "breaks": [
+   "worker_url"
+  ],
+  "escapes": [],
+  "storage": false
+ },
+ {
+  "file": "youtube-embed.html",
+  "what": "A launch page embedding a YouTube video",
+  "refused": [],
+  "breaks": [
+   "frame",
+   "remote_media"
+  ],
+  "escapes": [],
+  "storage": false
+ }
+]
