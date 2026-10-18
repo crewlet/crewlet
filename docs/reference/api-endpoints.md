@@ -86,7 +86,10 @@ one JSON object, and it always has the same three parts in the same places:
 - **`message` is one sentence for a person**, written as product copy and
   rendered verbatim by the dashboard. It belongs to the *code*, not to the call
   site, so a refusal reads the same wherever it came from — and a route with
-  more to say says it in the detail rather than rewording the sentence.
+  more to say says it in the detail rather than rewording the sentence. A code
+  whose refusals have different remedies picks its sentence by the facts the
+  detail carries, never by which route wrote it: `unauthorized` says the rule
+  its `reason` names ([below](#which-permission-a-route-needs)).
   Never match on it: the wording is copy and can be improved at any time. Every
   refusal carries one — `/config`, `/secrets` and `/setup` included,
   which used to build their own bodies with the code alone, and every
@@ -742,6 +745,18 @@ a seat-only verb, a verb made as a seat asked by a credential bound to none, or
 a relation the org chart does not hold. The [human write
 surface](#the-human-write-surface) answers its own refusals `403 forbidden` in
 its tools' wording instead.
+
+The `message` follows the `reason`, and names a permission only where one is a
+way past the rule. `no_grant` names the permissions in `grants` ("You don't
+have the access this needs (Tracker)"); a refused relation —
+`not_self`, `not_lead`, `not_author`, `unnamed` — says what the rule asked and
+names the `grants` beside it as what would admit you anyway, or says that no
+access would; and every other reason says what does clear it, whatever `grants`
+holds: `unseated` a credential bound to a human seat (`crewlet iam bind`),
+`stage` an account an admin activates (`crewlet iam activate`), `step_up` a
+fresh proof of who you are, `seat_refused` and `seat_only` that the verb is a
+person's or an agent's. A refusal carrying no `reason` is told the code's own
+sentence, which names every permission there is.
 
 A request the node **cannot decide** — it holds no company yet — is
 `503 unavailable` with a `Retry-After`, never a `403`: a lead
