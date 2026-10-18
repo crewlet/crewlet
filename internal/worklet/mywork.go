@@ -450,7 +450,7 @@ func readPriorityRows(ctx context.Context, tx *sql.Tx, handle string,
 		return nil, 0, err
 	}
 	if !held || len(person.Priorities) == 0 {
-		// EMPTY, NOT NIL — see [readTasksJoined]. A person with no
+		// EMPTY, NOT NIL — see [readTasks]. A person with no
 		// stored list has an empty one, and the block renders as
 		// absent rather than throwing on its own length.
 		return []TaskRow{}, 0, nil
