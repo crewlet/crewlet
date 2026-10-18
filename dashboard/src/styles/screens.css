@@ -10792,9 +10792,9 @@ a.live-row:focus-visible {
   gap: var(--spacing-2);
 }
 
-/* The History tab's comparison of two versions: across both columns, the two
-   sides next to each other where the page is wide and one above the other on
-   a phone. */
+/* The History tab's comparison of two versions (uilet's VersionCompare, which
+   lays the two sides out itself), across both columns, and the files lens
+   inside it. */
 .artifact-compare-row {
   grid-column: 1 / -1;
   min-width: 0;
@@ -10805,19 +10805,7 @@ a.live-row:focus-visible {
   gap: var(--spacing-4);
   min-width: 0;
 }
-.artifact-compare-sides {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--spacing-4);
-}
-@container page (width < 860px) {
-  .artifact-compare-sides {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-/* One side, and the list of a text file's changed lines: a heading over its
-   content. */
-.artifact-compare-side,
+/* The list of a text file's changed lines: a heading over its content. */
 .artifact-compare-lines {
   display: flex;
   flex-direction: column;

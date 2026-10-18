@@ -8,7 +8,7 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { VersionCompare } from "./VersionCompare.tsx";
+import { ArtifactCompare } from "./ArtifactCompare.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
 import type { ArtifactDetail, ArtifactEntry } from "~/protocol/index.ts";
@@ -93,7 +93,7 @@ afterEach(() => {
 const mount = (picked: number, against: number) =>
   render(
     <Router>
-      <VersionCompare
+      <ArtifactCompare
         detail={detail}
         picked={picked}
         against={against}

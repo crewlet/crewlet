@@ -16,13 +16,16 @@
  *
  * The older version is always the left side and the "from" half, whichever of
  * the two the reader picked first, so a comparison reads forward in time.
+ *
+ * The frame, the heading, the lens switch and the two panes are uilet's
+ * [VersionCompare]; what stays here is what only an artifact has: its
+ * manifests compared by digest, the per-file fetch and the two renderings.
  */
 
 import { useMemo, useState } from "react";
-import { Callout, DiffList, Select, Skeleton, type DiffRow } from "@crewlethq/ui";
+import { Callout, DiffList, Select, Skeleton, VersionCompare, type DiffRow } from "@crewlethq/ui";
 import type { ArtifactDetail, ArtifactEntry, ArtifactVersionSummary } from "~/protocol/index.ts";
-import { QueryState, Section } from "~/components/common.tsx";
-import { Segmented } from "~/ui/primitives.tsx";
+import { QueryState } from "~/components/common.tsx";
 import { fmtBytes, plural } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useRest } from "~/lib/useRest.ts";
@@ -56,7 +59,7 @@ export function drawnSideBySide(kind: ArtifactDetail["kind"]): boolean {
 /** The most changed runs of lines one file shows before it says how many more there are. */
 const SHOWN_HUNKS = 200;
 
-export function VersionCompare({
+export function ArtifactCompare({
   detail,
   picked,
   against,
@@ -80,57 +83,42 @@ export function VersionCompare({
   const older = Math.min(picked, against);
   const newer = Math.max(picked, against);
   const visual = drawnSideBySide(detail.kind);
-  const shown: CompareLens = visual ? lens : "source";
+  const side = (n: number) =>
+    detail.kind === "html" ? (
+      <FrameView
+        detail={detail}
+        version={n}
+        versions={versions}
+        room={room}
+        presence={presence}
+        bridgeStores={bridgeStores}
+      />
+    ) : (
+      <MarkdownView detail={detail} version={n} />
+    );
+  // THE PANES ARE HANDED OVER ONLY FOR A KIND DRAWN SIDE BY SIDE, and uilet
+  // mounts them only while that lens is on show, so no frame runs behind the
+  // Files lens. Without `onLensChange` a sheet gets no switch and shows Files.
   return (
-    <Section
+    <VersionCompare
+      fromLabel={`Version ${older}`}
+      toLabel={`Version ${newer}`}
       title={`Version ${older} and version ${newer}`}
-      hint="What changed between them"
-      actions={
-        visual ? (
-          <Segmented<CompareLens>
-            ariaLabel="Compare by"
-            size="sm"
-            value={shown}
-            onChange={onLens}
-            options={[
-              { value: "source", label: "Files" },
-              { value: "visual", label: "Side by side" },
-            ]}
-          />
-        ) : undefined
+      description="What changed between them"
+      lens={visual && lens === "visual" ? "versions" : "changes"}
+      onLensChange={
+        visual ? (next) => onLens(next === "versions" ? "visual" : "source") : undefined
       }
-    >
-      {shown === "source" ? (
-        <SourceCompare detail={detail} older={older} newer={newer} />
-      ) : (
-        <div className="artifact-compare">
-          {detail.kind === "html" && (
-            <p className="artifact-note">
-              Both versions show today's data: a page's data is live and is not versioned with it.
-            </p>
-          )}
-          <div className="artifact-compare-sides">
-            {[older, newer].map((n) => (
-              <div key={n} className="artifact-compare-side">
-                <h3 className="artifact-compare-heading">Version {n}</h3>
-                {detail.kind === "html" ? (
-                  <FrameView
-                    detail={detail}
-                    version={n}
-                    versions={versions}
-                    room={room}
-                    presence={presence}
-                    bridgeStores={bridgeStores}
-                  />
-                ) : (
-                  <MarkdownView detail={detail} version={n} />
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </Section>
+      labels={{ changes: "Files", versions: "Side by side" }}
+      changes={<SourceCompare detail={detail} older={older} newer={newer} />}
+      note={
+        detail.kind === "html"
+          ? "Both versions show today's data: a page's data is live and is not versioned with it."
+          : undefined
+      }
+      from={visual ? side(older) : undefined}
+      to={visual ? side(newer) : undefined}
+    />
   );
 }
 
