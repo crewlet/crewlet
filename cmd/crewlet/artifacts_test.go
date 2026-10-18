@@ -237,3 +237,66 @@ func TestArtifactsAnUnknownOutcomeNamesTheOperation(t *testing.T) {
 		t.Errorf("an unknown outcome: %v", err)
 	}
 }
+
+// A NEW VERSION KEEPS THE HEAD'S CAPABILITIES UNLESS -capabilities SAYS
+// OTHERWISE: a publish that does not name the flag sends no capabilities, which
+// the node reads as "keep the head's", so republishing a page that reads its
+// datastore never strips `db` from it. Naming the flag declares that set, and
+// `none` (or an empty value) declares none on purpose.
+func TestArtifactsPublishKeepsTheHeadsCapabilitiesUnlessNamed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		args []string
+		want any // nil: the field is absent
+	}{
+		{"absent", nil, nil},
+		{"named", []string{"-capabilities", "db, state"}, []any{"db", "state"}},
+		{"none", []string{"-capabilities", "none"}, []any{}},
+		{"empty", []string{"-capabilities", ""}, []any{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			node := newFakeArtifactsNode(t)
+			args := append([]string{"artifacts", "publish", site(t), "-artifact", cliArtifact},
+				tc.args...)
+			if _, stderr, err := cli(t, append(args, bootstrapForURL(t, node.server.URL))...); err != nil {
+				t.Fatalf("publish: %v\n%s", err, stderr)
+			}
+			got, present := node.publishes[0]["capabilities"]
+			if tc.want == nil {
+				if present {
+					t.Errorf("sent capabilities %v, want the field absent so the head's are kept", got)
+				}
+				return
+			}
+			if !present || !slices.Equal(anyStrings(got), anyStrings(tc.want)) {
+				t.Errorf("sent capabilities %v (present %v), want %v", got, present, tc.want)
+			}
+		})
+	}
+}
+
+// A capability other than one this build knows is refused before a byte moves.
+func TestArtifactsPublishRefusesAnUnknownCapability(t *testing.T) {
+	t.Parallel()
+	node := newFakeArtifactsNode(t)
+	_, _, err := cli(t, "artifacts", "publish", site(t), "-capabilities", "db,camera",
+		bootstrapForURL(t, node.server.URL))
+	if err == nil || !strings.Contains(err.Error(), "camera") {
+		t.Fatalf("publish = %v, want the unknown capability named", err)
+	}
+	if len(node.intents) != 0 {
+		t.Errorf("declared %d uploads before refusing", len(node.intents))
+	}
+}
+
+func anyStrings(v any) []string {
+	list, _ := v.([]any)
+	out := make([]string, 0, len(list))
+	for _, x := range list {
+		s, _ := x.(string)
+		out = append(out, s)
+	}
+	return out
+}
