@@ -366,6 +366,21 @@ A few things worth knowing when deploying Crewlet:
   `docs/guides/retention.md#the-configuration-archive-and-the-one-thing-a-purge-cannot-reach`),
   and backups hold what they held until you delete them, so apply your own
   retention to those.
+- **An artifact page can send what its viewers may read to a site its
+  author chooses.** Pages run on the separate artifact origin in a sandboxed
+  frame, and their policy keeps a viewer's datastore row from running as
+  script and keeps fetches, sockets, images and media on the artifact's own
+  origin. It does not stop the page's OWN script from loading a script from
+  another site (the strict policy's `'strict-dynamic'` trusts every script a
+  page's scripts create, and a page can read its own nonce), and a script
+  load carries whatever the page puts in its URL. A page whose author means
+  to can therefore send each viewer's readable rows, and who the bridge says
+  the viewer is, to a third party without a click. Only someone holding
+  `editor` (or the owner) publishes, every version names who published it,
+  and the publish-time linter refuses literal remote scripts, so an honest
+  page never does this by accident; share `editor` with seats and people you
+  would trust with every viewer's readable rows. See
+  `internal/api/pagepolicy` for why a nonce-based policy cannot close this.
 - **Sandbox isolation depends on the cell a seat runs in.** A coding agent
   runs fully permissioned — the sandbox boundary, not the agent's own
   permission prompts, is the isolation model — so where it runs is the

@@ -1611,7 +1611,12 @@ the listener must pass the original `Host` (every request is checked against
 the host its ticket's artifact is served on) and the `Sec-Fetch-*` headers
 through, must leave the response headers alone, and must never cache a `/t/`
 path in a shared cache. The dashboard on every ingress node names this origin
-in its `frame-src`, whether or not that node binds the listener itself.
+in its `frame-src`, whether or not that node binds the listener itself. A
+page's policy keeps a viewer's row from running as script and its fetches,
+sockets, images and media on its own origin, but a script the page's own
+script creates may load from any site, so a page whose author means to can
+send what its viewers may read elsewhere: share `editor` accordingly (see
+the artifact note in `SECURITY.md`).
 
 **`api.auth.admin` says whether this node serves admin**, and it is required
 once a port is set: `serve`, or `refuse`. A person's

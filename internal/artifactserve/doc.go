@@ -61,7 +61,10 @@
 // and the scripts they create under 'strict-dynamic', its published inline
 // handlers by digest, and nothing an attacker writes into the page through a
 // row. Connections, images, media, fonts and styles reach only the artifact's
-// own origin; object-src, base-uri, form-action and frame-src are 'none'; no
+// own origin; scripts the page's own scripts create are admitted from any
+// origin, so the policy does not keep a page's author from sending what a
+// viewer may read to another site (pagepolicy's package comment says why that
+// is the price of D41 and what bounds it instead); object-src, base-uri, form-action and frame-src are 'none'; no
 // Cross-Origin-Embedder-Policy is ever sent, so an untrusted page never becomes
 // cross-origin isolated; the resource policy follows the origin mode.
 //

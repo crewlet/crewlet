@@ -24,17 +24,36 @@ import (
 // renders such a row as markup would run whatever script the row carries, as
 // every viewer who opens it, with the viewer's bridge in reach. So the script
 // policy admits the page's own scripts and the scripts they load, and nothing
-// an attacker writes into the page; and connections, images and media reach
-// only the artifact's own origin, so a page that was talked into it cannot
-// ship the rows it can read to a third party without a person clicking a link
-// the dashboard names first.
+// a row writes into the page; and fetches, sockets, beacons, images, media,
+// fonts and styles reach only the artifact's own origin.
+//
+// # What the policy does not bound: the page's own author
+//
+// 'strict-dynamic' (D41) trusts every script a nonced script creates, from
+// any URL, so a page's OWN script can load a script from another site, and a
+// script load is an outbound request whose URL carries whatever the page put
+// in it. A page whose author means to (an editor, or an agent talked into it)
+// can therefore send what its viewer may read through the bridge to a third
+// party, silently, as each viewer opens it. Dropping 'strict-dynamic' would
+// not close that: a nonced script element loads from any URL whatever the
+// host list says, and a page's own script can read its nonce. Only a policy
+// with no nonce (inline scripts by hash, external ones by host) would, and it
+// breaks every page whose libraries insert scripts at run time, which is why
+// D41 chose this one. What does bound it is who may publish (an editor, by
+// the role the publish is decided on), the version history that names who
+// published what, and the linter, which refuses every literal remote script
+// source so an honest page never loads third-party code by accident. A viewer
+// who writes a row cannot reach this channel at all: their markup carries no
+// nonce, so nothing it injects runs.
 
 // ArtifactOrigin is what every artifact response's headers are built from: the
 // facts about the origin and the frame a document is served into.
 type ArtifactOrigin struct {
 	// Origin is the artifact's own origin (`https://<label>.example.net`, or
 	// the one shared origin): the only place a document may connect to and
-	// load images, media, fonts and styles from.
+	// load images, media, fonts and styles from. Scripts are admitted by
+	// nonce and 'strict-dynamic' instead, which name no host (see the
+	// package comment on what that leaves open).
 	//
 	// NAMED RATHER THAN 'self'. In a document served with an opaque origin
 	// (shared mode) 'self' is the policy's own origin, which browsers have
@@ -98,6 +117,10 @@ const ArtifactPermissions = "accelerometer=(), ambient-light-sensor=(), autoplay
 // A nil script, an HTML file the linter recorded nothing for, admits no script
 // but the nonce, which nothing in such a document carries: the closed reading.
 //
+// 'strict-dynamic' names no host, so a script the page's own script creates
+// loads from anywhere: the policy keeps a row's markup from running, not the
+// page's author from sending what it reads elsewhere (the package comment).
+//
 // # And the rest of the policy says what the page may reach
 //
 //   - object-src, base-uri, form-action and frame-src are 'none': no plugin, no
@@ -107,7 +130,7 @@ const ArtifactPermissions = "accelerometer=(), ambient-light-sensor=(), autoplay
 //     no frame inside the frame;
 //   - connect-src, img-src, media-src, font-src and style-src name the
 //     artifact's own origin and nothing else, plus data: and blob: where a
-//     page legitimately makes its own;
+//     page legitimately makes its own (script-src names no host, above);
 //   - worker-src is blob: alone, so no service worker can register on the
 //     artifact origin and outlive a revocation in the viewer's browser;
 //   - webrtc 'block', where a browser implements it, closes the one channel
