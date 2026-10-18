@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -146,8 +147,12 @@ func TestTheArtifactsRoutesAndQuestionsShareOneMux(t *testing.T) {
 	estate := apiArtifacts{}
 	gate := artifactsapi.Gate{Heads: estate, Chart: authz.NoChart{}, Marks: estate, Roster: estate,
 		Limits: func() artifacts.Limits { return artifacts.Limits{CompanyBytes: 1, Artifacts: 1} }}
+	ready, err := objectives.NewBeacon(objectives.NewMeter(nil, nil), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	surface, err := artifactsapi.New(artifactsapi.Options{Gate: gate, Reads: estate, Writes: estate,
-		Objects: estate, Uploads: func() (artifactsapi.Pipeline, error) {
+		Objects: estate, Ready: ready, Uploads: func() (artifactsapi.Pipeline, error) {
 			return nil, artifactupload.ErrInvalid
 		}})
 	if err != nil {
