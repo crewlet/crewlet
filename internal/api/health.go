@@ -23,10 +23,38 @@ import (
 // with a delivery: with no revision it refuses every one, whatever it
 // concluded about the fleet's epoch, and the posture still travels beside it
 // in its own field.
+//
+// StatusStarting is answered before any of them, by the surface a node's
+// listener serves from its bind until the node hands it its own ([Boot]):
+// shutting_down outranks it there as everywhere, and the other three are facts
+// about a running engine, which a starting node has none of yet.
 const (
 	StatusOK           = "ok"
 	StatusUnconfigured = "unconfigured"
 	StatusShuttingDown = "shutting_down"
+	StatusStarting     = "starting"
+)
+
+// The phases a starting node's /health names, in the order a boot passes
+// through them. See [Boot] for where the line between them is drawn and why.
+const (
+	// PhaseRecovering: the node is opening and recovering what it holds
+	// itself — its store and its migrations, the broker's file store, the
+	// replicated estate, the logs it provisions and a join's snapshot.
+	// Bounded by the deployment, which alone knows how large a store it gave
+	// the node, so /health answers 503 for all of it. Applying the logs is
+	// not part of it: that catches up in the background afterwards, and
+	// holds a seat's acquisition rather than this answer.
+	PhaseRecovering = "recovering"
+
+	// PhasePreparing: what the node holds is open, and it is bringing up
+	// what its company configures — the shared tool servers, the sandboxes,
+	// the native halves, the first apply, the dashboard's projection. /health
+	// answers 200: the process is alive and past the part only a dead disk
+	// could hold for ever, and nothing the company configures may hold a
+	// startup probe. A part of it that never returns leaves the node here,
+	// which /ready's `starting` shows and no probe restarts — see [Boot].
+	PhasePreparing = "preparing"
 )
 
 // The answers [Health.Identity] gives.
@@ -73,6 +101,13 @@ const (
 // each an admin's.
 type Health struct {
 	Status string `json:"status"`
+
+	// Phase is how far a STARTING node's boot has got — [PhaseRecovering] or
+	// [PhasePreparing] — beside [StatusStarting], on the body the boot
+	// surface answers ([BootHealth]) before the node serves. ABSENT on every
+	// body built here: this one is answered only once the node serves, so
+	// its boot is over, and the absence is that answer.
+	Phase string `json:"phase,omitempty"`
 
 	// Node names the process that answered — the field that turns "the
 	// config apply failed" into "the config apply failed on node-2" once a
@@ -210,7 +245,8 @@ type Readiness struct {
 	Posture    string `json:"posture"`
 
 	// Reason names what took this node out of rotation, and is absent while
-	// it is in rotation: [ReasonDraining], [ReasonUnconfigured], or the
+	// it is in rotation: [ReasonStarting] before the node serves at all, then
+	// [ReasonDraining], [ReasonUnconfigured], or the
 	// diverged posture itself — then, on a node with the ingress role,
 	// [ReasonEstateBehind], and on a node without it
 	// [ReasonBrokerUnlinked], [ReasonNoPresence] or
@@ -233,9 +269,14 @@ type Readiness struct {
 // ReasonDraining is the drain gate's own code, spelled once: a node that
 // refuses a webhook because it is draining and a probe that reports it out of
 // rotation are describing one fact.
+//
+// ReasonStarting is the boot surface's ([Boot]): a node whose listener is
+// bound and whose own surface is not served yet, spelled as the code its
+// other routes answer with for the same reason.
 const (
 	ReasonDraining     = string(httpjson.CodeDraining)
 	ReasonUnconfigured = StatusUnconfigured
+	ReasonStarting     = string(httpjson.CodeStarting)
 )
 
 // The reasons only a node WITHOUT the ingress role refuses readiness on — see

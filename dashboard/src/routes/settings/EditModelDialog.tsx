@@ -97,6 +97,8 @@ function refusalWords(refusal: ConfigRefusal, id: string): string {
         : `The configuration changed since ${id} was opened, so nothing was stored. Close this and edit it again from what is there now.`;
     case "draining":
       return `This node is draining and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
+    case "starting":
+      return `This node is still starting and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
     case "unreachable":
       return "The engine did not answer, so the change may or may not have been stored. Reopen the model before trying again.";
     case "problems":

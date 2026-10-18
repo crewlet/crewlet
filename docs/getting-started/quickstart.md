@@ -412,6 +412,14 @@ crewlet run                             # boots from the store
 Both flags default to files in the working directory — `crewlet.yaml` and
 `company.yaml` — so a node whose files are named that way needs neither.
 
+**Starting:** the port answers within a second of `crewlet run`, before the
+node is ready to serve. While it boots, `curl -s localhost:8000/health` says
+`"status": "starting"` — `503` while the node opens its store and broker, `200`
+once it is bringing up the company's tools — and every other route answers
+`503 starting` with a `Retry-After`; the dashboard is there once the log says
+`api_listening` and `/ready` answers `200`. See
+[While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting).
+
 **Stopping:** press `Ctrl+C` once for a graceful drain. Running agent turns
 finish, and the HTTP surface stays up until they have: the dashboard shows the
 node draining, `/health` stays `200` and `/ready` answers `503`, while every

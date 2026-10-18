@@ -911,9 +911,10 @@ func summaryLine(res validation) string {
 // errSilent asks the caller to exit non-zero without printing anything more.
 var errSilent = errors.New("")
 
-// runEngine is `crewlet run`. bind opens every listener the node serves on:
-// [bindTCP] for the binary, and a socket the caller already holds for a test
-// that starts a whole node (see [bindFunc]).
+// runEngine is `crewlet run`. bind opens every listener the node serves on,
+// before the boot ([bindListeners]): [bindTCP] for the binary, and a socket
+// the caller already holds for a test that starts a whole node (see
+// [bindFunc]).
 func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	file, args := splitSubject(args)
 
@@ -1135,21 +1136,40 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	ctx, stop := interruptContext()
 	defer stop()
 
-	// TRACING BEFORE THE ENGINE, because engine.New starts subscriptions
-	// and registers the publish listener, and every one of those can open a
-	// span. A provider installed after them would leave the boot — the one
-	// stretch an operator most often wants a trace of — reporting nothing.
-	//
-	// The flush is DEFERRED rather than written at each return. There are
-	// six ways out of this function, five of them boot failures, and a
-	// deferred call registered here runs after all of them AND after the
-	// drain below, which is exactly the ordering the batch processor needs:
-	// the spans the drain itself emits are in the buffer when it flushes.
-	// Writing it at each return is how five of the six quietly stop doing it.
 	nodeID, err := config.ResolveNodeID(boot, nil)
 	if err != nil {
 		return err
 	}
+	// THE LISTENERS, BOUND NOW: before the first step of the boot that can
+	// take time, which is everything from [bootOptions] on. What they answer
+	// until the node hands them its own surface is internal/api's boot
+	// surface ([api.Boot]): /health 503 while the node recovers what it holds
+	// and 200 once it has — so a startup probe bounds the recovery exactly as
+	// it did, and nothing the company configures, which all starts after it,
+	// can hold the probe — /ready 503 throughout, and every route the node
+	// will serve a 503 `starting` with a Retry-After rather than a refused
+	// connection.
+	//
+	// AND A PORT ALREADY TAKEN FAILS THE BOOT HERE, at once, rather than
+	// after a recovery that can take minutes and is then thrown away.
+	//
+	// THE BRIDGE IS READ OFF THE ENVIRONMENT the engine will build it from
+	// (it is handed no Options.Environment, so that is this process's), for
+	// a node that binds api.public only to serve it.
+	listeners, err := bindListeners(ctx, boot, nodeID, mcpbridge.Configured(os.Getenv), bind, log)
+	if err != nil {
+		return err
+	}
+	// CLOSED ON EVERY FAILURE BEFORE THE HANDOVER, which disarms this: from
+	// [serveAPI]'s return the surface owns both sockets and [shutdown] closes
+	// them. Deferred, so it runs after the inline engine stops below — the
+	// probes answer through the teardown, as they do through a drain.
+	handedOver := false
+	defer func() {
+		if !handedOver {
+			listeners.close(context.WithoutCancel(ctx), log)
+		}
+	}()
 	// ONE RECORDER FOR THE PROCESS, built here and handed to both halves.
 	// The engine writes into it from its apply loops and its write paths;
 	// the MeterProvider tracing installs is a READER of it. Two recorders
@@ -1161,6 +1181,17 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	if err != nil {
 		return err
 	}
+	// TRACING BEFORE THE ENGINE, because engine.New starts subscriptions
+	// and registers the publish listener, and every one of those can open a
+	// span. A provider installed after them would leave the boot — the one
+	// stretch an operator most often wants a trace of — reporting nothing.
+	//
+	// The flush is DEFERRED rather than written at each return. Nearly
+	// every way out of this function from here is a boot failure, and a
+	// deferred call registered here runs after all of them AND after the
+	// drain below, which is exactly the ordering the batch processor needs:
+	// the spans the drain itself emits are in the buffer when it flushes.
+	// Writing it at each return is how most of them quietly stop doing it.
 	flushTraces, err := tracing.Configure(ctx, tracing.Options{
 		NodeID:   nodeID,
 		Version:  version.String(),
@@ -1186,6 +1217,9 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 		return err
 	}
 	opts.Metrics, opts.Mode = recorder, nodeMode
+	// AND THE MOMENT /health TURNS 200: the engine says when it has
+	// recovered what this node holds — see [engine.Options.Recovered].
+	opts.Recovered = listeners.recovered
 
 	log.InfoContext(ctx, "engine_starting", "version", version.String(),
 		"company", companyName(opts.Company))
@@ -1271,26 +1305,30 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// through it), so an engine that ran without it would hold seats and
 	// hear nothing.
 	//
-	// BOUND BEFORE THE ENGINE STARTS, and the order is a fix rather than a
-	// preference. Starting the engine first means claiming seats first, and
-	// a seat is not claimed until its per-role MCP children are up (one
-	// subprocess per server per seat, each a spawn and a handshake and a
-	// tools/list). On the Nimbus example that is 21 children, and the whole
-	// inbound edge (dashboard, REST, every third-party app's webhook) was
-	// dark for as long as they took. Measured at 37 seconds with four seats
-	// and every vendor failing FAST; a company whose vendors actually answer
-	// takes minutes, and it scales with seats times servers.
+	// SERVED BEFORE THE ENGINE STARTS — the listeners were bound before the
+	// boot, and this is where they are handed the node's own surface — and
+	// the order is a fix rather than a preference. Starting the engine first
+	// means claiming seats first, and a seat is not claimed until its
+	// per-role MCP children are up (one subprocess per server per seat, each
+	// a spawn and a handshake and a tools/list). On the Nimbus example that
+	// is 21 children, and the whole inbound edge (dashboard, REST, every
+	// third-party app's webhook) went unserved for as long as they took —
+	// dark, before the listeners were bound early, and `503 starting` now.
+	// Measured at 37 seconds with four seats and every vendor failing FAST;
+	// a company whose vendors actually answer takes minutes, and it scales
+	// with seats times servers.
 	//
 	// Nothing here needs a started engine: the node exists, /health's seat
 	// list reports honestly that it holds no seats yet (/ready carries none),
 	// and a webhook that arrives in the window is retained rather than
 	// dropped because the mailboxes are created before any claiming (see
 	// Node.Start).
-	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, configSurface, dev, bind, log)
+	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, configSurface, dev, listeners, log)
 	if err != nil {
 		e.Stop(context.WithoutCancel(ctx))
 		return err
 	}
+	handedOver = true
 
 	if err = e.Start(ctx); err != nil {
 		// Everything the engine opened comes down with it. Returning
@@ -1497,7 +1535,8 @@ type httpSurface struct {
 	runs *observe.SandboxReconciler
 }
 
-// apiListener is one socket a node binds and the server serving it.
+// apiListener is one socket a node binds, the server serving it, and the slot
+// holding what that server answers with.
 //
 // THE SOCKET IS KEPT BESIDE THE SERVER because the server does not hold it
 // until Serve has registered it, and Serve runs in the background
@@ -1506,10 +1545,23 @@ type httpSurface struct {
 // api.port was bound — returned with api.port still accepting connections,
 // until the scheduler next ran that goroutine. [shutdownListener] closes the
 // socket itself.
+//
+// ONE SERVER FOR THE LIFE OF THE PROCESS, and the handler is what changes
+// ([handlerSlot]): the socket is bound before the boot and served the boot
+// surface, then handed the node's own ([apiListener.serve]). Neither obvious
+// alternative works. An http.Server's Handler must not be changed once Serve
+// has started, and a second server Serving the same socket races the first
+// one's Accept; and a Shutdown before the handover would close the very socket
+// the handover needs.
 type apiListener struct {
-	server *http.Server
-	socket net.Listener
+	server  *http.Server
+	socket  net.Listener
+	handler *handlerSlot
 }
+
+// serve hands this listener the handler it answers with from now on. A request
+// already being answered finishes under the handler it began under.
+func (l *apiListener) serve(h http.Handler) { l.handler.store(h) }
 
 // stop closes the HTTP surface, once the engine has drained. See [shutdown]
 // for why it is then and not earlier.
@@ -1683,11 +1735,18 @@ func companySurface(e *engine.Engine, boot *config.Bootstrap,
 	})
 }
 
-// serveAPI binds the HTTP surface through bind, or reports that this node
-// serves none.
+// serveAPI hands the listeners [bindListeners] bound the node's HTTP surface,
+// or reports that this node serves none.
+//
+// IT BINDS NOTHING. The sockets were bound before the boot, answering what
+// internal/api's boot surface answers; this builds the surface they serve
+// from now on and stores it into each listener's handler slot, which is the
+// whole of the handover. A failure here leaves both listeners with the
+// caller, which closes them.
 func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	reconciler *engine.Reconciler, cipher secrets.Cipher,
-	configSurface *configapi.Service, dev *auth.DevPrincipal, bind bindFunc, log *slog.Logger,
+	configSurface *configapi.Service, dev *auth.DevPrincipal, listeners *nodeListeners,
+	log *slog.Logger,
 ) (*httpSurface, error) {
 	if boot.API.Port == 0 {
 		// A real posture: a node with no listener at all. Saying so is the
@@ -1726,6 +1785,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		log.Log(ctx, level, "api_disabled", "hint", hint)
 		return nil, nil
 	}
+	if listeners == nil {
+		return nil, fmt.Errorf("api: api.port is %d and no listener was bound for it; "+
+			"bindListeners binds it before the boot", boot.API.Port)
+	}
 
 	// THE NAME THE ENGINE RUNS UNDER, not a second resolution of it. The
 	// engine resolved it once, from `node.id` or CREWLET_NODE_ID, and its
@@ -1750,7 +1813,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// so a seats node running an agent-mode seat is the only node its box can
 	// reach. See [api.Probes].
 	if !boot.Profile(nodeID).RunsIngress() {
-		return serveProbes(ctx, boot, e, reconciler, bind, log)
+		return serveProbes(ctx, boot, e, reconciler, listeners, log)
 	}
 	// The config surface is the caller's, built before this function so a
 	// node with no HTTP listener still has a config WRITER (see runEngine).
@@ -2252,7 +2315,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// broadcast subscription because a browser attached here must see turns
 	// that ran anywhere — see observe.Projector.
 	//
-	// Started before the listener binds, so a socket cannot open onto a
+	// Started before the handover, so a socket cannot open onto a
 	// projection that is not yet being fed.
 	projector := observe.NewProjector(e.Backends().Queue, app.Stream())
 	if err = projector.Start(ctx); err != nil {
@@ -2267,8 +2330,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	//
 	// After the subscription above, so an event published between the read
 	// and the subscribe cannot fall into the gap; the projection counts one
-	// that arrives both ways once. Before the bind, so the first socket to
-	// open sees the seeded snapshot rather than an empty one it will never
+	// that arrives both ways once. Before the handover, so the first socket
+	// to open sees the seeded snapshot rather than an empty one it will never
 	// be sent a correction for.
 	//
 	// THE FLEET'S HISTORY, read from every live node's store through the
@@ -2297,7 +2360,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 				"from its next pause or resume; the pause itself is in force")
 	}
 	// AND THE RUNNING CODING RUNS, from the durable record every node
-	// opens, before the bind for the seed's reason: a run parked on a
+	// opens, before the handover for the seed's reason: a run parked on a
 	// question for days is exactly the one the events of this process's
 	// lifetime will never mention. Then every interval, which is what
 	// corrects a panel whose completion event never arrived.
@@ -2312,30 +2375,35 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	runs.Start(ctx)
 
 	surface := &httpSurface{app: app, projector: projector, runs: runs, auth: humans.SignIn}
-	// api.port FIRST, then the public listener: the probes are on api.port,
-	// so the moment anything is reachable an orchestrator can read it. A
-	// public bind that fails takes the admin one down with it, through the
-	// one stop every shutdown takes, rather than leaving a node serving its
-	// dashboard while every webhook finds nothing listening.
-	server, addr, err := listenAPI(ctx, bind, boot.API.Addr(), app, log)
-	if err != nil {
-		// THROUGH THE ONE STOP, with no listener on it yet: the projector
-		// is already running, on a broadcast subscription to the engine's
+	// THE PUBLIC LISTENER WAS BOUND BY THE SAME RULE THE APP SERVES ONE BY
+	// ([api.PublicListener]), and a disagreement is a node that would serve
+	// its webhooks on no socket, or leave one bound that answers `starting`
+	// for ever. Refused rather than papered over.
+	if (app.Public() != nil) != (listeners.public != nil) {
+		// THROUGH THE ONE STOP, with no listener on it: the projector is
+		// already running, on a broadcast subscription to the engine's
 		// queue, and the sign-in surface owns work of its own — nothing
-		// else holds either once this returns.
+		// else holds either once this returns. The listeners are the
+		// caller's to close.
 		surface.stop(context.WithoutCancel(ctx), log)
-		return nil, err
+		return nil, fmt.Errorf("api: this node serves a public listener: %t, and bound one: %t",
+			app.Public() != nil, listeners.public != nil)
 	}
-	surface.server = server
-	publicAddr := ""
-	if app.Public() != nil {
-		surface.public, publicAddr, err = listenAPI(ctx, bind, boot.API.Public.Addr(), app.Public(), log)
-		if err != nil {
-			surface.stop(context.WithoutCancel(ctx), log)
-			return nil, err
-		}
+	// THE HANDOVER, api.port FIRST and then the public listener: the probes
+	// are on api.port, so the node's own answers reach an orchestrator before
+	// they reach a vendor.
+	listeners.api.serve(app)
+	surface.server = listeners.api
+	addr, publicAddr := listeners.api.socket.Addr().String(), ""
+	if listeners.public != nil {
+		listeners.public.serve(app.Public())
+		surface.public = listeners.public
+		publicAddr = listeners.public.socket.Addr().String()
 	}
 
+	// KEPT AT THE HANDOVER, though the sockets were bound long before (see
+	// api_bound): it is the moment this node serves, which is what an
+	// operator timing a boot reads off it.
 	log.InfoContext(ctx, "api_listening", "addr", addr,
 		"external_url", boot.API.ExternalBase(),
 		"second_factor", boot.API.Auth.SecondFactor(),
@@ -2374,9 +2442,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	return surface, nil
 }
 
-// serveProbes is serveAPI for a node whose roles leave out ingress: it binds
-// api.port for the node's probes, and for its tool bridge where it has one —
-// api.public instead when the file sets it — and serves nothing else.
+// serveProbes is serveAPI for a node whose roles leave out ingress: it hands
+// api.port the node's probes, and its tool bridge where it has one — api.public
+// instead when the file sets it — and serves nothing else.
 //
 // The bridge needs a seats node and a bridge URL. A node that runs no seats
 // opens no session, so the route there could only answer every box with 401;
@@ -2385,7 +2453,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 // [api.EngineProbeOptions]' decision, the one the end-to-end suite probes
 // through too.
 func serveProbes(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
-	reconciler *engine.Reconciler, bind bindFunc, log *slog.Logger,
+	reconciler *engine.Reconciler, listeners *nodeListeners, log *slog.Logger,
 ) (*httpSurface, error) {
 	opts, err := api.EngineProbeOptions(boot, e, reconciler)
 	if err != nil {
@@ -2404,19 +2472,21 @@ func serveProbes(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, err
 	}
-	server, addr, err := listenAPI(ctx, bind, boot.API.Addr(), handler, log)
-	if err != nil {
-		return nil, err
+	// THE BRIDGE GOES WHERE ITS LISTENER WAS BOUND, by the one predicate both
+	// read ([api.PublicListener]); see serveAPI for why a disagreement is
+	// refused.
+	public := opts.Bridge == nil && bridge != nil
+	if public != (listeners.public != nil) {
+		return nil, fmt.Errorf("api: this node serves its tool bridge on a public "+
+			"listener: %t, and bound one: %t", public, listeners.public != nil)
 	}
-	surface := &httpSurface{server: server}
-	publicAddr := ""
-	if opts.Bridge == nil && bridge != nil {
-		surface.public, publicAddr, err = listenAPI(ctx, bind, boot.API.Public.Addr(),
-			api.BridgeOnly(boot, bridge), log)
-		if err != nil {
-			surface.stop(context.WithoutCancel(ctx), log)
-			return nil, err
-		}
+	listeners.api.serve(handler)
+	surface := &httpSurface{server: listeners.api}
+	addr, publicAddr := listeners.api.socket.Addr().String(), ""
+	if public {
+		listeners.public.serve(api.BridgeOnly(boot, bridge))
+		surface.public = listeners.public
+		publicAddr = listeners.public.socket.Addr().String()
 	}
 	log.InfoContext(ctx, "api_probes_listening", "addr", addr, "node", opts.NodeID,
 		"roles", opts.Roles, "tool_bridge", bridge != nil,
@@ -2438,10 +2508,10 @@ func serveProbes(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 // node has to write the node's port into its configuration before the node
 // binds it, and a port it found free and let go is one anything else on the
 // machine can take in between: the rest of the suite opens sockets by the
-// thousand, and the bind waits for the dashboard's projection to be seeded
-// first, which under load takes seconds. So such a test HOLDS the socket from
-// the moment it picks the port and hands it over here, where every listener
-// the node opens is opened.
+// thousand, and a case that builds its engine before serving it binds only
+// after that engine has booted, which under load takes seconds. So such a test
+// HOLDS the socket from the moment it picks the port and hands it over here,
+// where every listener the node opens is opened ([bindListeners]).
 type bindFunc func(ctx context.Context, addr string) (net.Listener, error)
 
 // bindTCP binds addr, which is how a running node opens a listener.
@@ -2455,12 +2525,12 @@ func bindTCP(ctx context.Context, addr string) (net.Listener, error) {
 }
 
 // listenAPI opens addr through bind and serves handler on it, in the
-// background.
+// background, until [apiListener.serve] hands it another.
 //
-// ONE PATH for every listener a node opens — the whole API, the public
-// listener beside it, the probe surface ([api.Probes]) and the bridge's own —
-// so they cannot drift apart on the timeouts that bound an unauthenticated
-// client or on how a bind failure is reported.
+// ONE PATH for every listener a node opens — api.port and the public listener,
+// whichever surface each serves over its life — so they cannot drift apart on
+// the timeouts that bound an unauthenticated client or on how a bind failure is
+// reported.
 func listenAPI(ctx context.Context, bind bindFunc, addr string, handler http.Handler,
 	log *slog.Logger,
 ) (*apiListener, string, error) {
@@ -2468,8 +2538,9 @@ func listenAPI(ctx context.Context, bind bindFunc, addr string, handler http.Han
 	if err != nil {
 		return nil, "", fmt.Errorf("api: bind %s: %w", addr, err)
 	}
+	slot := newHandlerSlot(handler)
 	server := &http.Server{
-		Handler: handler,
+		Handler: slot,
 		// A read that never completes holds a connection open forever,
 		// and the listener is the one surface an unauthenticated client
 		// can reach.
@@ -2482,7 +2553,8 @@ func listenAPI(ctx context.Context, bind bindFunc, addr string, handler http.Han
 			log.ErrorContext(ctx, "api_serve_failed", "error", err)
 		}
 	}()
-	return &apiListener{server: server, socket: listener}, listener.Addr().String(), nil
+	return &apiListener{server: server, socket: listener, handler: slot},
+		listener.Addr().String(), nil
 }
 
 // apiReadHeaderTimeout bounds how long a client may take to send its request
@@ -2508,9 +2580,10 @@ const apiReadHeaderTimeout = 10 * time.Second
 // silent each of them waits that budget, so the read stops where the budget
 // ends and seeds the window's newest records, its coverage saying it is short.
 // It stays a ceiling on the one case that matters: a fleet that will not
-// answer must not hold the listener shut, since nothing else can accept a
-// webhook while the bind is waiting. A seed that times out costs history on a
-// screen, never a delivery, and the warning it logs says which reads it cost.
+// answer must not hold the handover back, since until it every webhook is
+// answered `503 starting` and nothing on this node accepts one. A seed that
+// times out costs history on a screen, never a delivery, and the warning it
+// logs says which reads it cost.
 const projectionSeedBudget = 5 * time.Second
 
 // apiIdleTimeout bounds how long a kept-alive connection may sit between
@@ -2923,6 +2996,12 @@ func overrideNode(boot *config.Bootstrap, fs *flag.FlagSet,
 // runs — a warning beside the refusal it should have come after — and without
 // naming the flag that made the document wrong. Asked here, the refusal names
 // the flags given and comes first.
+//
+// AND BEFORE ANYTHING ACTS ON IT: the listeners bind on its addresses next
+// ([bindListeners]) and [bootOptions] opens and migrates the node's store, so
+// a document a flag broke is refused as the rule it broke rather than as a
+// bind error about an address, and before a store is opened for a
+// configuration the engine would refuse.
 //
 // IT NORMALIZES in place, as [config.Bootstrap.Validate] always does, so what
 // reads the document after it — the dev principal's bind check, the node id,

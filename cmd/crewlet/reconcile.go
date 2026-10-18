@@ -490,7 +490,8 @@ func companyFromStore(ctx context.Context, bootstrapPath string) (*config.Compan
 	// the stored-form decode holds a revision to no rule. The engine checks
 	// the same rules again as it builds the epoch, but only this frame knows
 	// which revision it is and that an offline import is the way out: the
-	// node is not serving its API yet.
+	// node is not serving its API yet, and its listener answers every route
+	// it will serve `503 starting`.
 	//
 	// The RUNNABLE rules only, like every apply: an admission rule is one
 	// an apply does not enforce, because a newer peer may have admitted the

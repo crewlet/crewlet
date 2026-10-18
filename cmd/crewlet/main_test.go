@@ -344,7 +344,13 @@ func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 			boot := bootstrapFor(t, 0)
 			boot.Node.Roles = tc.roles
 
-			surface, err := serveAPI(t.Context(), boot, nil, nil, nil, nil, nil, bindNothing(t), log)
+			// NOTHING BOUND before the boot, asked of the one path every
+			// listener is opened through.
+			listeners, err := bindListeners(t.Context(), boot, "node-0", false, bindNothing(t), log)
+			if err != nil || listeners != nil {
+				t.Fatalf("bindListeners on api.port 0 = %v, %v; want nothing bound", listeners, err)
+			}
+			surface, err := serveAPI(t.Context(), boot, nil, nil, nil, nil, nil, listeners, log)
 			if err != nil {
 				t.Fatalf("serveAPI: %v", err)
 			}
@@ -788,9 +794,22 @@ func serveNodeWith(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		t.Fatalf("reconciler: %v", err)
 	}
-	// ON THE SOCKET THE CASE RESERVED for each port it configured, rather
-	// than a second bind of a port it let go: see [reservePort].
-	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface, nil, bindReserved, log)
+	// BOUND AS runEngine BINDS, on the socket the case reserved for each port
+	// it configured rather than a second bind of a port it let go (see
+	// [reservePort]) — and here after the engine has booted, which is the
+	// one difference from a running node: the boot surface's own answers are
+	// [TestAStartingNodeAnswersItsProbesBeforeItServes]'s. The bridge is the
+	// engine's own, since a case hands it one rather than the environment.
+	listeners, err := bindListeners(t.Context(), boot, e.Node().ID(), e.Bridge() != nil,
+		bindReserved, log)
+	if err != nil {
+		return nil, reconciler, err
+	}
+	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface, nil, listeners, log)
+	if err != nil {
+		// THE CALLER'S TO CLOSE until the handover, as in runEngine.
+		listeners.close(context.Background(), log)
+	}
 	return surface, reconciler, err
 }
 

@@ -27,7 +27,9 @@
  * request was never answered or the engine failed (status 0, or a 5xx). A
  * draining node's `503 draining` is one of those, deliberately: the drain
  * ends, so the retry reaches a peer behind a load balancer, or this node once
- * it has restarted.
+ * it has restarted. So is a starting node's `503 starting`, for the same
+ * reason the other way round: the node is about to serve, and the retry
+ * reaches it once it does.
  *
  * TWO OF THEM HALT. `conflict` and `guarded` do not change by asking again
  * on their own: the answer to the next check is the same refusal. So a change
@@ -213,6 +215,7 @@ export function classifyCheck(
         currentRevisionId: refusal.currentRevisionId,
       };
     case "draining":
+    case "starting":
     case "unreachable":
       return { status: "unreachable", detail: refusal.detail };
     case "problems":

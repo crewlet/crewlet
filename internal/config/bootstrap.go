@@ -434,12 +434,12 @@ type listener struct {
 // # No two listeners on one port
 //
 // Every one of them binds on the same host, so a shared port is a bind that
-// fails at boot — after the broker started, or with the API answering on one
-// of the two and the other silent — long after `crewlet validate` called the
-// file good. Worse is the pair that does NOT fail: nothing here can bind a
-// port twice, but an operator who wrote api.public.port equal to api.port
-// meant two sockets, and the admin API and the routes published to the
-// internet would have been one.
+// fails at boot — the second of the API's two listeners, or the broker's
+// route or leaf port behind an API listener already holding it — long after
+// `crewlet validate` called the file good. Worse is the pair that does NOT
+// fail: nothing here can bind a port twice, but an operator who wrote
+// api.public.port equal to api.port meant two sockets, and the admin API and
+// the routes published to the internet would have been one.
 //
 // Two listeners on DIFFERENT specific addresses may share a port — an
 // interface each is a real deployment — so a port is refused only when the

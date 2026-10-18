@@ -2649,6 +2649,7 @@ var ACT_ERRORS = {
 	unreadable_body: "The change could not be read in full by the engine.",
 	no_active_revision: "This node has not been handed a company yet, so there is nothing to change. Try again once it has.",
 	draining: "This node is shutting down and takes no changes now. Try again in a moment.",
+	starting: "This node is still starting and takes no changes yet. Try again in a moment.",
 	invalid: null,
 	not_found: "It is not there any more. Somebody may have removed or moved it.",
 	forbidden: null,

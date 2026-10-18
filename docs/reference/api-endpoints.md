@@ -166,6 +166,91 @@ the dashboard shell, the Slack OAuth landing — answer as what they are.
 
 ---
 
+## While a node is starting
+
+`crewlet run` binds `api.port` — and `api.public`, where the node serves one —
+as soon as it has read and checked its Tier A, before it opens its store, and
+logs `api_bound`. A port somebody else holds therefore fails the boot at once,
+naming the address. Until the node's own surface takes the socket over (logged
+as `api_listening`, or `api_probes_listening` on a node without `ingress`), it
+answers its probes and tells a caller to come back for any route it will
+serve — and only for one it will serve:
+
+| Request | While the node starts | Why |
+|---|---|---|
+| `GET /health`, on `api.port` | `503` while the node recovers what it holds, then `200`, `status: "starting"` both times | The `503` is what a startup probe sized for the node's store bounds; nothing after the recovery holds it. See the phases below. |
+| `GET /ready`, on `api.port` | `503`, `reason: "starting"` | The node does no work and takes no traffic until it serves, so no load balancer and no rollout counts it. |
+| A route this listener will serve | `503 starting`, with `Retry-After: 10` | The caller is told to come back rather than meeting a refused connection, which reads as a node that is not there. On an `ingress` node that is every route of [Which listener serves what](#which-listener-serves-what) on the listener that serves it; on a node without `ingress` it is its agent-mode tool bridge (`/mcp/{token}`), on `api.public` when that is set and beside the probes otherwise. |
+| Anything else | The `404` that listener answers once the node serves | So a socket says no more while the node starts than it does afterwards, and nobody is sent back to wait for a route this node will never serve. On `api.public` that is the router's own `404 no_route`, the probes included; on `api.port` of an `ingress` node with `api.public` set, the `404` naming `api.public` for a route outside parties call; and on `api.port` of a node without `ingress`, the router's own `404` for every path but the two above (once it serves, its guard answers `401` for a path that asks for a credential, and a `404` says no more than that). |
+
+Nothing here asks for a credential, since nothing is served that one could
+unlock. Every answer carries the security headers every answer of the node's
+carries, and on an `ingress` node the CORS permission its own answers carry, so
+a dashboard on an origin `api.auth.allowed_origins` lists reads `starting`
+rather than a network error; a path with a dot segment is
+refused `400 non_canonical_path` as always.
+
+`/health` names how far the boot has got:
+
+```json
+{
+  "status": "starting",
+  "node": "core-1",
+  "version": "v0.4.0",
+  "phase": "recovering"
+}
+```
+
+| `phase` | `/health` | What the node is doing |
+|---|---|---|
+| `recovering` | `503` | Opening and recovering what it holds itself: its own store and that release's schema migrations, the embedded broker's file store and listeners, JetStream catching up with its peers — or, on a node without `data`, its leaf link to a member — the streams and buckets it provisions, the replicated estate and its state logs, and a joining node's snapshot. It takes as long as the store is large, and the deployment bounds it with a startup probe: see [Sizing the startup probe](../guides/deployment.md#sizing-the-startup-probe). It ends with `engine_recovered` in the log. Applying the state logs is not part of it: that catches up in the background from then on, and what waits for it is the node's first seat, never `/health`. |
+| `preparing` | `200` | Bringing up what its company configures: its shared MCP servers, its sandboxes, its native tracker and knowledge base, the first apply of its active revision, and the dashboard's projection. None of it holds a probe. A part that waits on something else is bounded by its own setting — a tool server by its `startup_timeout_seconds` — but the first apply has no deadline beyond its parts', so a part that never returns leaves the node here, with `/ready` naming `starting`, and nothing restarts it: watch for a node that stays unready (see [Sizing the startup probe](../guides/deployment.md#sizing-the-startup-probe)). |
+
+Every field of that body is a field of [the health envelope](#the-health-envelope)
+under the same name, so a script reading `/health` reads one shape whichever
+answered it. What it leaves out is every fact about a running engine — its
+queue, its seats, its posture, its applied epoch, `started_at` — because a
+starting node has none of them yet, and a zero standing in for one would be a
+fiction. The envelope carries no `phase`: the node that answers it is serving,
+so its boot is over.
+
+`/ready` says the same thing in its own shape:
+
+```json
+{
+  "ready": false,
+  "node": "core-1",
+  "configured": false,
+  "draining": false,
+  "posture": "",
+  "reason": "starting"
+}
+```
+
+`configured` is `false` because it is true: no revision is active in this
+process yet, whatever its store holds, and `posture` is empty because nothing
+has concluded one. A route the node will serve is refused in the engine's
+envelope:
+
+```json
+{
+  "error": "starting",
+  "message": "This node is still starting and is not serving yet. Try again in a moment.",
+  "detail": "This node is recovering what it holds — its store, its broker and its copy of the estate — and serves nothing until it has started.",
+  "hint": "Retry after the Retry-After: once the node serves, /health stops answering status \"starting\" and /ready stops naming reason \"starting\"."
+}
+```
+
+A node told to stop before it serves (a signal during the boot) answers a
+drain's answers from then on, as far as a starting node can: `/health` says
+`status: "shutting_down"` but keeps the status code of its phase — `503` while
+it still recovers, since a stop does not cut a recovery short and the startup
+probe is still what bounds it, and `200` after — `/ready` answers
+`reason: "draining"` and `draining: true`, and every route it would have
+served `503 draining` with the drain's `Retry-After` of 30 seconds.
+
+---
+
 ## During a drain
 
 A node that has been told to stop (SIGTERM, or `Ctrl+C` once) keeps serving HTTP for the whole of its [drain](../concepts/agent-runtime.md#graceful-shutdown), and closes its listener only once the drain has completed. What changes from the drain's first moment is which requests it will still take:
@@ -221,8 +306,8 @@ node means nothing was done.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)). Stays `200` through a drain (see [During a drain](#during-a-drain)); use `/ready` to steer traffic |
-| `GET` | `/ready` | Readiness for a load balancer: `503` while draining, before the first config revision applies, on a `shed` or `stuck` posture, or while this node can no longer route the estate's reads and writes, and `200` otherwise. A `503` names why in `reason`: `draining`, `unconfigured`, `shed` or `stuck`, then `estate_behind`, in that order of precedence. `estate_behind` is the verdict that also gives a node's seats back ([`unserviceable`](../concepts/seat-ownership.md#a-copy-that-is-behind-and-a-copy-that-is-wrong)): its calls need another data node — its own copy is out of service — and its view of who serves the estate has been unreadable for longer than 60 seconds. A copy that is merely behind never takes a node out of rotation. The term that decided it is logged at debug (`ready_withheld_for_the_estate`), never put in the body, so a load balancer records one code for one outage. It never reads the fleet's presence or alarm counts, which decide nothing here. A node without the `ingress` role answers a different question on the same route — whether it is doing its work — see [Probes on a node without ingress](#probes-on-a-node-without-ingress) |
+| `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)). Stays `200` through a drain (see [During a drain](#during-a-drain)); use `/ready` to steer traffic. Before the node serves it answers a shorter body, `503` while the node recovers what it holds and `200` after (see [While a node is starting](#while-a-node-is-starting)) |
+| `GET` | `/ready` | Readiness for a load balancer: `503` with `reason: "starting"` before the node serves (see [While a node is starting](#while-a-node-is-starting)), then `503` while draining, before the first config revision applies, on a `shed` or `stuck` posture, or while this node can no longer route the estate's reads and writes, and `200` otherwise. A `503` names why in `reason`: `draining`, `unconfigured`, `shed` or `stuck`, then `estate_behind`, in that order of precedence. `estate_behind` is the verdict that also gives a node's seats back ([`unserviceable`](../concepts/seat-ownership.md#a-copy-that-is-behind-and-a-copy-that-is-wrong)): its calls need another data node — its own copy is out of service — and its view of who serves the estate has been unreadable for longer than 60 seconds. A copy that is merely behind never takes a node out of rotation. The term that decided it is logged at debug (`ready_withheld_for_the_estate`), never put in the body, so a load balancer records one code for one outage. It never reads the fleet's presence or alarm counts, which decide nothing here. A node without the `ingress` role answers a different question on the same route — whether it is doing its work — see [Probes on a node without ingress](#probes-on-a-node-without-ingress) |
 | `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_call`). [Human seats](../concepts/humans-in-the-org.md) are excluded — they appear only in `/org` with `"kind": "human"` |
 | `GET` | `/agents/{id}` | Single agent — its `handle`, `agent_id` and `role` (its name), the live overlay (incl. `live_call`), and `llm_history`: the seat's finished phases newest first, capped at 50. `{id}` is the seat's **handle**, which is what every roster row carries as its `id`. A role name is NOT accepted: two seats may share one, and a name-addressed answer read one seat's live call and transcript as the other's. A handle no agent seat answers to is `404` |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills). Same `{id}` — the seat's handle, which the rest is keyed by, resolves to the derived agent id the diary is keyed by |
@@ -2999,8 +3084,8 @@ instead.) What a seat has spent is that rollup's per-agent row: the
 projection keeps no second total of its own.
 
 **The projection is seeded from the fleet's event stores when the process
-starts**, after the broadcast subscription is attached and before the HTTP
-listener binds. The seed makes three bounded reads, side by side, and each read is bounded by the projection's own limit:
+starts**, after the broadcast subscription is attached and before the node
+hands its listener the API surface — before it serves. The seed makes three bounded reads, side by side, and each read is bounded by the projection's own limit:
 
 - the newest 400 persisted events, for the feed;
 - the newest 24 000 spend records — phases and auxiliary records — inside the 24-hour spend window, read in pages of 4 096 records a node, because a busy node's whole day is more than one reply of the scatter carries (8 MiB) — asked whole, its reply was cut, and every node's records were cut with it;
@@ -3026,12 +3111,12 @@ already moved is left as the stream left it. A read that fails is logged as
 reads run side by side, so a slow read does not use up the time budget of the others.
 
 **The paused seats are seeded from the coordination record**, beside the
-reads above and before the bind: a pause taken before this process started is
+reads above and before the node serves: a pause taken before this process started is
 in no event it will hear, and a paused seat drawn as working is the one state a
 person pausing it must not be shown. A failed read is logged as
 `seat_pauses_not_seeded`; the pause itself is in force either way.
 
-**The running coding runs are reconciled against the durable run record**. The record is read once before the listener binds and then every 30 seconds. The stream is lossy and in memory, so it cannot say which runs exist, and the record can. See [the running-runs panel](../concepts/code-sandbox.md)
+**The running coding runs are reconciled against the durable run record**. The record is read once before the node serves and then every 30 seconds. The stream is lossy and in memory, so it cannot say which runs exist, and the record can. See [the running-runs panel](../concepts/code-sandbox.md)
 for which of the two wins when they disagree. A reconcile that changed the set pushes it as `sandboxes`, and a reconcile that changed nothing pushes nothing.
 
 ### `GET /stream/snapshot`
@@ -3162,7 +3247,7 @@ exists](../concepts/identity-and-access.md#how-the-first-person-exists)):
 
 | Field | Meaning |
 |-------|---------|
-| `status` | `shutting_down`, `unconfigured`, a diverged posture (`shed`, `stuck` or `isolated`), or `ok`, in that order of precedence. A draining engine is draining first, whatever else is true of it, and a node with no active revision is that before it is anything else. The two ordinary postures, `serve` and `wait`, read as `ok`. A node applying its first company reads `unconfigured` until that apply completes and `ok` from then on; a later apply reads `ok` throughout. |
+| `status` | `shutting_down`, `unconfigured`, a diverged posture (`shed`, `stuck` or `isolated`), or `ok`, in that order of precedence — and `starting` on the shorter body a node answers before it serves ([While a node is starting](#while-a-node-is-starting)), which never appears in this envelope. A draining engine is draining first, whatever else is true of it, and a node with no active revision is that before it is anything else. The two ordinary postures, `serve` and `wait`, read as `ok`. A node applying its first company reads `unconfigured` until that apply completes and `ok` from then on; a later apply reads `ok` throughout. |
 | `node` | The name this node's engine runs under — `node.id`, else `CREWLET_NODE_ID`, else `node-0` — which is what its presence lease carries and the only way a caller can tell which node a load balancer sent it to. |
 | `configured` | Whether a company revision is active. Read off the engine's live epoch on every call, so an apply that brings this node its first revision flips it. When `false` the node **refuses** every inbound webhook with `503`, so an operator watching empty screens needs to be told this rather than left to infer it. |
 | `version` | The `crewlet` version this process is running. |
@@ -3191,9 +3276,11 @@ would force one encode per client per tick. A connection that lost envelopes
 to backpressure is logged as `stream_client_left_behind`, with the count, when
 it disconnects.
 
-`GET /health` always returns **200**, including when `status` is
-`unconfigured` or a diverged posture: the status code is liveness, and an
-engine waiting for a configuration is alive. Steer traffic with
+`GET /health` always returns **200** once the node serves, including when
+`status` is `unconfigured` or a diverged posture: the status code is liveness,
+and an engine waiting for a configuration is alive. Before then it answers
+`503` only while the node recovers what it holds — see
+[While a node is starting](#while-a-node-is-starting). Steer traffic with
 [`GET /ready`](#routes) instead, which answers `503` and names the reason.
 
 ### Probes on a node without ingress
@@ -3215,7 +3302,9 @@ whether the bridge is mounted and `public_addr` naming the public listener when
 the bridge has one. `api.port: 0` binds nothing, on this node as on any other.
 
 `GET /health` is liveness, `200` while the process is alive — through a drain
-and through a broker link that is down. Its body is the node's half of
+and through a broker link that is down — once the node serves; before then it
+answers as every starting node does (see
+[While a node is starting](#while-a-node-is-starting)). Its body is the node's half of
 [the health envelope](#the-health-envelope), under the same field names, plus
 the node's `roles`; it leaves out what describes a dashboard this node does not
 serve (`clients`, `event_history_seconds`, `spend_history_seconds`,
@@ -3248,6 +3337,7 @@ order of precedence:
 
 | `reason` | The node is not ready because |
 |---|---|
+| `starting` | It has not started yet, and its probes are still the boot's: see [While a node is starting](#while-a-node-is-starting). |
 | `draining` | It is stopping. |
 | `broker_unlinked` | It cannot reach the fleet's broker: a leaf whose link to every member is down, or a connection to an external cluster that is reconnecting. `detail` carries the cause. Ahead of what follows, because each of those is what a lost broker looks like. |
 | `unconfigured` | No company revision is active here. |
@@ -5132,6 +5222,7 @@ surface](#the-human-write-surface) answers with too. The transport's own codes:
 | `invalid_body` / `body_too_large` / `unreadable_body` | `400` / `413` / `400` | The envelope is not one JSON object of `{args}`, carries an `op_id`, names an argument the tool does not declare, is over the cap, or did not arrive |
 | `no_active_revision` | `503` | This node has not been handed a company yet; `Retry-After: 15` |
 | `draining` | `503` | This node is [draining](#during-a-drain) |
+| `starting` | `503` | This node is [still starting](#while-a-node-is-starting): its listener is bound and the surface that serves this route is not up yet; `Retry-After: 10` |
 
 And the tool's own refusal, carrying the tool's sentence as `detail`:
 

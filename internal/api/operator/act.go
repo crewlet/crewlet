@@ -66,7 +66,7 @@ const MaxActBody = 2*pages.MaxBody + 64<<10
 // ActTransportCodes is every `error` the act transport can answer with that
 // is NOT a tool's refusal class: its own three, the operation key's, the
 // shared body refusals, the guard's, the identity estate's, the authority
-// table's, the drain gate's and the unknown outcome's.
+// table's, the drain gate's, a starting node's and the unknown outcome's.
 //
 // THE ONE LIST, so the client's table of what it may be told is held against
 // the engine's rather than against a copy: a code the client does not know is
@@ -97,8 +97,10 @@ var ActTransportCodes = []httpjson.Code{
 	// The shared body refusals, an argument the tool does not declare
 	// among them.
 	httpjson.CodeInvalidBody, httpjson.CodeBodyTooLarge, httpjson.CodeUnreadableBody,
-	// A node that has not been handed a company, or is draining.
-	httpjson.CodeNoActiveRevision, httpjson.CodeDraining,
+	// A node that has not been handed a company, or is draining — or is
+	// still starting, which its listener answers for every route before the
+	// node hands it this surface (internal/api's Boot).
+	httpjson.CodeNoActiveRevision, httpjson.CodeDraining, httpjson.CodeStarting,
 }
 
 // ActAnswer is what a write that went through answers.

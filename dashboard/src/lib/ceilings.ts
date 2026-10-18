@@ -198,6 +198,11 @@ export function refusalWords(
         message: `This node is draining and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`,
         reload: false,
       };
+    case "starting":
+      return {
+        message: `This node is still starting and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`,
+        reload: false,
+      };
     case "unreachable":
       return {
         message:

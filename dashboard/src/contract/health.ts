@@ -41,6 +41,13 @@ interface HealthAlarms {
  */
 export interface EngineHealth {
   status: string;
+  /**
+   * How far a STARTING node's boot has got — `recovering`, then `preparing` —
+   * beside `status: "starting"`. Only `/health` answers it, before the node
+   * serves anything else; every body that reaches a dashboard comes from a node
+   * that is serving, so its boot is over and this is absent.
+   */
+  phase?: "recovering" | "preparing" | (string & {});
   node: string;
   configured: boolean;
   version: string;
