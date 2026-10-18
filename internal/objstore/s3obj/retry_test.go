@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -585,5 +586,135 @@ func TestARequestItsDeadlineEndsNamesTheBucketsLastAnswer(t *testing.T) {
 	if _, isAPI := errors.AsType[smithy.APIError](err); isAPI {
 		t.Fatalf("a head its deadline ended = %v, which reads as the bucket's own answer; "+
 			"want the deadline, the answer only named", err)
+	}
+}
+
+// THE SESSION REQUEST IS NEVER HELD BY THE GATE. A directory bucket's every
+// request is signed with an S3 Express session, which the SDK asks for —
+// CreateSession, through the same client — from inside a request that has
+// already taken its place at the gate. Held there, the session request waited
+// behind its own waiter: at one place, every request needing a new session
+// ended at its deadline with no session asked for. Here a request whose
+// session has expired, at a gate cut to one place, is answered at once with
+// one session asked for — and is itself still gated: with the one place held,
+// it waits its turn.
+func TestTheSessionRequestIsNeverHeldByTheGate(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files--use1-az4--x-s3")
+	// EVERY SESSION ALREADY EXPIRED, so every request needs a new one.
+	srv.SessionLife = -time.Minute
+	srv.Put("k", []byte("an object"))
+	b := openRetrying(t, srv, "", nil)
+	if n := srv.RequestsOf("CreateSession"); n < 1 {
+		t.Fatalf("opening the bucket asked for %d sessions; the SDK does not take it for a directory bucket", n)
+	}
+	// ONE PLACE: the node has had one attempt out (its check at open) — two,
+	// were its session request held at the gate beside it, which a throttle
+	// cuts to 1.4 — so the throttle leaves one either way.
+	cut, err := s3obj.Enter(t.Context(), b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cut.Leave(slowDown)
+	if out := s3obj.LetOut(b, 10); out != 1 {
+		t.Fatalf("the gate lets out %d at once after the throttle, want 1", out)
+	}
+
+	sessions := srv.RequestsOf("CreateSession")
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	began := time.Now()
+	if _, err := b.Stat(ctx, "k"); err != nil {
+		t.Fatalf("a head needing a new session at a gate of one place = %v after %v, %d sessions asked "+
+			"for; want it answered — its session request held behind the place it holds itself",
+			err, time.Since(began), srv.RequestsOf("CreateSession")-sessions)
+	}
+	took := time.Since(began)
+	if took > time.Second {
+		t.Fatalf("a head needing a new session at a gate of one place took %v", took)
+	}
+	t.Logf("a head needing a new session at a gate of one place was answered in %v", took)
+	if n := srv.RequestsOf("CreateSession") - sessions; n != 1 {
+		t.Fatalf("a head needing a new session asked for %d sessions, want 1", n)
+	}
+
+	// THE REQUEST ITSELF IS STILL GATED: with every place of the gate held —
+	// two by now, the head's answer having grown it by one — a head waits in
+	// line, and is answered once a place is given back.
+	places := s3obj.LetOut(b, 10)
+	if places == 10 {
+		t.Fatal("the gate was lifted before the control could hold its places")
+	}
+	var held []s3obj.Attempt
+	for range places {
+		a, err := s3obj.Enter(t.Context(), b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		held = append(held, a)
+	}
+	answered := make(chan error, 1)
+	go func() {
+		_, err := b.Stat(t.Context(), "k")
+		answered <- err
+	}()
+	for deadline := time.Now().Add(10 * time.Second); s3obj.Waiting(b) != 1; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("a head at a gate whose every place is held never waited in line")
+		}
+	}
+	select {
+	case err := <-answered:
+		t.Fatalf("a head at a gate whose every place is held was answered (%v) without waiting", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	for _, a := range held {
+		a.Leave(nil)
+	}
+	select {
+	case err := <-answered:
+		if err != nil {
+			t.Fatalf("the head let out once the places were given back = %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the head was never let out once the places were given back")
+	}
+}
+
+// sends is every operation the backend sends its bucket: the twelve it asks
+// of any bucket, and S3 Express's session request for a directory bucket.
+var sends = []string{"HeadBucket", "HeadObject", "GetObject", "PutObject", "CreateMultipartUpload",
+	"UploadPart", "CompleteMultipartUpload", "AbortMultipartUpload", "DeleteObject", "DeleteObjects",
+	"ListObjectsV2", "ListMultipartUploads", "CreateSession"}
+
+// ONLY THE SESSION REQUEST PASSES THE GATE: of every operation the backend
+// sends, and of names it does not, an attempt is let past a gate whose one
+// place is held only for CreateSession — known by the operation the SDK names
+// in its context, so no other request a directory bucket's URL shares slips
+// through beside it.
+func TestOnlyTheSessionRequestPassesTheGate(t *testing.T) {
+	t.Parallel()
+	b := openRetrying(t, s3fake.Start(t, "files"), "", nil)
+	cut, err := s3obj.Enter(t.Context(), b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cut.Leave(slowDown)
+	held, err := s3obj.Enter(t.Context(), b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// AFTER EVERY SUBTEST, which run once this function has returned.
+	t.Cleanup(func() { held.Leave(nil) })
+	for _, op := range append(slices.Clone(sends), "other", "") {
+		t.Run("operation="+op, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+			defer cancel()
+			if ran, want := s3obj.GateLetsOut(ctx, b, op), op == "CreateSession"; ran != want {
+				t.Fatalf("an attempt of %q at a gate whose one place is held: let out = %v, want %v",
+					op, ran, want)
+			}
+		})
 	}
 }

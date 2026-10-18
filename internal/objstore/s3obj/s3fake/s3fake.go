@@ -2,9 +2,11 @@
 // store makes — head bucket; put, get (whole or ranged), head and delete an
 // object; delete up to a thousand at once; a paged ListObjectsV2, from a
 // start-after or not; a multipart
-// upload's start, parts, completion and abandonment; and a paged listing of
-// the uploads begun and not finished — over one bucket, path-style, counting
-// the requests of each kind it answers ([Server.RequestsOf]).
+// upload's start, parts, completion and abandonment; a paged listing of
+// the uploads begun and not finished; and S3 Express's CreateSession for a
+// directory bucket (`…--x-s3`), reached path-style — over one bucket,
+// path-style, counting the requests of each kind it answers
+// ([Server.RequestsOf]).
 //
 // It checks no signature and keeps no versions; it exists so the S3 backend
 // runs the object store's conformance suite on a test machine with no network
@@ -139,8 +141,23 @@ type Server struct {
 	// request.
 	Untagged bool
 
+	// SessionLife is how long a session CreateSession hands out lasts; zero
+	// is S3 Express's five minutes; negative hands out one already
+	// expired, so every request a client sends asks for a new one — a
+	// case's way to make a client need a session now. Set it before the
+	// first request.
+	//
+	// The SDK asks for a session only for a DIRECTORY bucket — one whose
+	// name ends in `--x-s3` — and signs that bucket's every request with
+	// it; the fake checks no signature, so the session's credentials are
+	// handed out and never looked at again.
+	SessionLife time.Duration
+
 	// requests is every request the bucket has been sent ([Server.Requests]).
 	requests atomic.Int64
+	// sessions numbers the sessions CreateSession has handed out, so no two
+	// carry the same credentials.
+	sessions atomic.Int64
 
 	// parts is the part uploads the bucket has in hand
 	// ([Server.MostPartsAtOnce]), and gets its object gets
@@ -254,6 +271,11 @@ func newServer(bucket string) *Server {
 		objects: map[string]object{}, uploads: map[string]*upload{}}
 }
 
+// Bucket is the name of the bucket the fake serves, so a case configures a
+// client from the server it started rather than from a second spelling of
+// the name.
+func (s *Server) Bucket() string { return s.bucket }
+
 // Requests is how many requests the bucket has been sent since it started —
 // every verb, a refused one included — which is what a provider's round trip
 // multiplies and what it bills by.
@@ -289,8 +311,9 @@ func (h *inHand) arrive() func() {
 
 // RequestsOf is how many requests of one kind the bucket has answered — the
 // operation's name in the API: "HeadObject", "GetObject", "PutObject",
-// "DeleteObject", "DeleteObjects", "ListObjectsV2", "HeadBucket" and the
-// multipart calls — so a test can count what a pass cost.
+// "DeleteObject", "DeleteObjects", "ListObjectsV2", "HeadBucket",
+// "CreateSession" and the multipart calls — so a test can count what a pass
+// cost.
 func (s *Server) RequestsOf(op string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -497,6 +520,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.listUploads(w, r)
 	case key == "" && r.Method == http.MethodPost && q.Has("delete"):
 		s.deleteObjects(w, r)
+	case key == "" && r.Method == http.MethodGet && q.Has("session"):
+		s.createSession(w)
 	case key == "":
 		s.fail(w, r, http.StatusNotImplemented, "NotImplemented")
 
@@ -611,6 +636,8 @@ func operation(method, key string, q map[string][]string) string {
 		return "ListMultipartUploads"
 	case key == "" && method == http.MethodPost && has("delete"):
 		return "DeleteObjects"
+	case key == "" && method == http.MethodGet && has("session"):
+		return "CreateSession"
 	case key == "":
 		return "ListObjectsV2"
 	case method == http.MethodPost && has("uploads"):
@@ -941,6 +968,38 @@ func (s *Server) abortUpload(w http.ResponseWriter, r *http.Request, id string) 
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// sessionLife is how long a session lasts where [Server.SessionLife] is zero:
+// S3 Express's own five minutes.
+const sessionLife = 5 * time.Minute
+
+type createSessionResult struct {
+	XMLName     xml.Name           `xml:"CreateSessionResult"`
+	Credentials sessionCredentials `xml:"Credentials"`
+}
+
+type sessionCredentials struct {
+	AccessKeyID     string `xml:"AccessKeyId"`
+	SecretAccessKey string `xml:"SecretAccessKey"`
+	SessionToken    string `xml:"SessionToken"`
+	Expiration      string `xml:"Expiration"`
+}
+
+// createSession answers S3 Express's CreateSession: credentials that last
+// [Server.SessionLife] from now, a session nothing here checks again.
+func (s *Server) createSession(w http.ResponseWriter) {
+	life := s.SessionLife
+	if life == 0 {
+		life = sessionLife
+	}
+	id := s.sessions.Add(1)
+	s.writeXML(w, createSessionResult{Credentials: sessionCredentials{
+		AccessKeyID:     fmt.Sprintf("SESSIONKEY%d", id),
+		SecretAccessKey: fmt.Sprintf("session-secret-%d", id),
+		SessionToken:    fmt.Sprintf("session-token-%d", id),
+		Expiration:      time.Now().Add(life).UTC().Format("2006-01-02T15:04:05Z"),
+	}})
 }
 
 // now is the instant an object is dated by: to the second, as S3 keeps it —

@@ -305,7 +305,10 @@ promises, and its size is the provider's problem rather than any node's disk.
   out when the throttle comes back, so a throttle answered to one lone request
   between two git syncs holds the next sync back no more than one answered at
   its start; only a node throttled at the check it makes when it starts, before
-  it has sent anything else, starts from one request at a time. A 503 that names a fault of
+  it has sent anything else, starts from one request at a time. S3 Express's
+  session request — what a directory bucket's requests are signed with — is
+  never held back, so a node whose requests wait their turn never waits for
+  credentials behind itself. A 503 that names a fault of
   the gateway's own — MinIO answering an object it cannot rebuild from its
   drives — is no throttle and slows nothing else; a 503 to a `HEAD` is read as
   one whatever the gateway meant, since its answer has no body to say. A

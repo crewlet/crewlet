@@ -58,11 +58,11 @@ func openFake(t testing.TB, srv *s3fake.Server, prefix string) *s3obj.Backend {
 	return b
 }
 
-// fakeConfig is how a backend reaches srv: path-style, at the region the fake
-// ignores, with credentials it never checks.
+// fakeConfig is how a backend reaches srv: the bucket it serves, path-style,
+// at the region the fake ignores, with credentials it never checks.
 func fakeConfig(srv *s3fake.Server, prefix string) s3obj.Config {
 	return s3obj.Config{
-		Endpoint: srv.URL, Region: "us-east-1", Bucket: "files", Prefix: prefix,
+		Endpoint: srv.URL, Region: "us-east-1", Bucket: srv.Bucket(), Prefix: prefix,
 		PathStyle: true, AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret",
 	}
 }
@@ -708,12 +708,15 @@ func trustBundle(t testing.TB, srv *s3fake.Server) string {
 // an S3 Express One Zone bucket — every one named `…--x-s3` — answers a
 // listing in no order and takes no StartAfter, and a range read from it would
 // have every object past the first stray read as absent. Its caller asks
-// about each object instead.
+// about each object instead. The bucket is a real directory bucket to the
+// SDK, opened through the session it asks the fake for.
 func TestADirectoryBucketsRangesAreUnordered(t *testing.T) {
 	t.Parallel()
-	srv := s3fake.Start(t, "files")
+	srv := s3fake.Start(t, "files--usw2-az1--x-s3")
 	b := open(t, srv, "crewlet/")
-	s3obj.Rebucket(b, "files--usw2-az1--x-s3")
+	if n := srv.RequestsOf("CreateSession"); n < 1 {
+		t.Fatalf("opening a directory bucket asked for %d sessions; the SDK does not take it for one", n)
+	}
 	err := b.ListRange(t.Context(), "", "files/z", func(objstore.Info) error {
 		t.Error("a directory bucket's range listed an object")
 		return nil

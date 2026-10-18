@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go/middleware"
 
 	"github.com/crewlet/crewlet/internal/objstore"
 )
@@ -142,11 +143,18 @@ func SpanOf(contentRange string, from, most, size int64) (n, total int64, err er
 	return spanOf(contentRange, from, most, size)
 }
 
-// Rebucket points b at another bucket of the same endpoint without opening
-// it: the SDK reaches a directory bucket only through S3 Express's
-// CreateSession, which the fake does not speak, so a case refusing one's
-// ranges stands one up this way.
-func Rebucket(b *Backend, name string) { b.bucket = name }
+// GateLetsOut sends one attempt of operation through b's gate under ctx — the
+// operation named in the context as the SDK names it — and reports whether the
+// gate let it out: whether the step after the gate ran before ctx ended.
+func GateLetsOut(ctx context.Context, b *Backend, operation string) (ran bool) {
+	next := middleware.FinalizeHandlerFunc(func(context.Context, middleware.FinalizeInput) (
+		middleware.FinalizeOutput, middleware.Metadata, error) {
+		ran = true
+		return middleware.FinalizeOutput{}, middleware.Metadata{}, nil
+	})
+	_, _, _ = b.gate.HandleFinalize(middleware.WithOperationName(ctx, operation), middleware.FinalizeInput{}, next)
+	return ran
+}
 
 // LateToLetGo makes every answer b reads take d, once its request has been
 // cancelled, to say it has been — as a body whose connection a stalled peer

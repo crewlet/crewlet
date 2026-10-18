@@ -127,7 +127,10 @@
 // contexts, and one more each round the bucket answers. It is lifted once the
 // bucket has gone [throttleQuiet] without a throttle.
 // A 503 naming a gateway's own failure is no throttle ([isThrottle]): it is
-// asked again like any server error and slows nothing else.
+// asked again like any server error and slows nothing else. S3 Express's
+// session request — what a directory bucket's every request is signed with,
+// asked for by the SDK from inside a request already let out — is never held
+// at the gate ([sessionOperation]): held, it would wait behind its own waiter.
 //
 // THERE IS NO CLIENT-WIDE RETRY QUOTA: the SDK's spent five of five hundred
 // tokens a retry, so under a sustained `SlowDown` every request after the

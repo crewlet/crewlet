@@ -258,6 +258,23 @@ const throttleQuiet = time.Minute
 // refuses an expired one as final (`ExpiredToken`), never as worth asking
 // again.
 //
+// EXCEPT S3 EXPRESS'S SESSION REQUEST (`CreateSession`), which the SDK sends
+// through this same client, under the context of a request that already
+// holds a place and waits for it in `GetIdentity`: held here it would wait
+// behind its own waiter, and every request needing the session with it, until
+// their deadlines or the lift. At one place — a node throttled at its check
+// at open starts there — that is every time: a Stat needing a new session
+// ended at its two-second deadline with no CreateSession sent, four runs of
+// four, where with the session request let through it was answered in 0.8 to
+// 1.0 ms (TestTheSessionRequestIsNeverHeldByTheGate against s3fake on
+// loopback, 2026-10-18); wider, it is a matter of how many requests wait
+// ahead of the session request when the session expires, and an asynchronous
+// refresh, which runs under the context of the request that started it, is
+// lost whenever that request finishes first. Known by the operation the SDK names in its own context
+// ([sessionOperation]), never by URL or bucket — a directory bucket's object
+// requests share both and must still wait; it holds no place and tells the
+// gate nothing, and the SDK sends at most one at a time per bucket.
+//
 // FIRST COME, FIRST SERVED: an attempt that has to wait waits in line under
 // its own context, and is let out as a place frees or the limit grows — never
 // overtaken by one that arrived later, so no request starves behind a stream
@@ -383,10 +400,27 @@ func (g *gate) letOutLocked() {
 // ID implements [middleware.FinalizeMiddleware].
 func (g *gate) ID() string { return "crewlet.ThrottleGate" }
 
+// sessionOperation is the operation S3 Express signs a directory bucket's
+// requests with, which the [gate] lets straight through: see
+// [gate.HandleFinalize].
+//
+// THE SDK'S OWN NAME FOR WHAT IT IS RUNNING: invokeOperation clears the stack
+// values of the context it is handed and names the operation in it, so inside
+// the session request's own stack the name is `CreateSession` though it was
+// called from another operation's `GetIdentity`, and inside a directory
+// bucket's object request it is that request's own — a URL (`?session`) or a
+// bucket (`…--x-s3`) would let the object requests through too.
+const sessionOperation = "CreateSession"
+
 // HandleFinalize sends one attempt through the gate: it waits for a place,
-// sends the attempt, and gives the place back with the bucket's answer.
+// sends the attempt, and gives the place back with the bucket's answer — save
+// an attempt of S3 Express's session request ([sessionOperation]), which is
+// sent at once, holds no place and tells the gate nothing.
 func (g *gate) HandleFinalize(ctx context.Context, in middleware.FinalizeInput, next middleware.FinalizeHandler) (
 	middleware.FinalizeOutput, middleware.Metadata, error) {
+	if middleware.GetOperationName(ctx) == sessionOperation {
+		return next.HandleFinalize(ctx, in)
+	}
 	p, err := g.enter(ctx)
 	if err != nil {
 		// CANCELLED, as the SDK spells it, so its retry step reads the

@@ -600,3 +600,74 @@ func TestAPartIsRefusedAsAskedOnceItsHookLetsItGo(t *testing.T) {
 		t.Fatalf("the refused part answered %d, want 403", status)
 	}
 }
+
+// A DIRECTORY BUCKET HANDS OUT SESSIONS: S3 Express's CreateSession — `GET
+// /{bucket}?session`, which the SDK sends before it signs any request to a
+// bucket named `…--x-s3` — is answered with credentials that expire
+// [s3fake.Server.SessionLife] from now, and in the past for a negative life,
+// and counted as a CreateSession; where it was routed as a bucket-level
+// request it fell through to 501 and no directory bucket could be stood up.
+func TestADirectoryBucketHandsOutSessions(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		life time.Duration
+		// want is how long from now the session should expire.
+		want time.Duration
+	}{
+		{name: "S3 Express's own five minutes", want: 5 * time.Minute},
+		{name: "a life of its own", life: time.Hour, want: time.Hour},
+		{name: "already expired", life: -time.Minute, want: -time.Minute},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			const bucket = "files--use1-az4--x-s3"
+			srv := s3fake.Start(t, bucket)
+			srv.SessionLife = c.life
+			if got := srv.Bucket(); got != bucket {
+				t.Fatalf("the fake serves %q, want %q", got, bucket)
+			}
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/"+bucket+"?session", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			asked := time.Now()
+			resp, err := srv.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("CreateSession answered %d, want 200", resp.StatusCode)
+			}
+			var session struct {
+				XMLName     xml.Name `xml:"CreateSessionResult"`
+				Credentials struct {
+					AccessKeyID     string `xml:"AccessKeyId"`
+					SecretAccessKey string `xml:"SecretAccessKey"`
+					SessionToken    string `xml:"SessionToken"`
+					Expiration      string `xml:"Expiration"`
+				} `xml:"Credentials"`
+			}
+			if err := xml.NewDecoder(resp.Body).Decode(&session); err != nil {
+				t.Fatalf("CreateSession's answer does not decode: %v", err)
+			}
+			creds := session.Credentials
+			if creds.AccessKeyID == "" || creds.SecretAccessKey == "" || creds.SessionToken == "" {
+				t.Fatalf("CreateSession answered credentials %+v, want every field set", creds)
+			}
+			expires, err := time.Parse("2006-01-02T15:04:05Z", creds.Expiration)
+			if err != nil {
+				t.Fatalf("the session's expiration %q does not parse: %v", creds.Expiration, err)
+			}
+			// TO THE SECOND, as the answer spells it.
+			if off := expires.Sub(asked.Add(c.want)); off < -2*time.Second || off > 2*time.Second {
+				t.Fatalf("the session expires at %v, want about %v from when it was asked for",
+					expires, c.want)
+			}
+			if n := srv.RequestsOf("CreateSession"); n != 1 {
+				t.Fatalf("one CreateSession counted as %d", n)
+			}
+		})
+	}
+}
