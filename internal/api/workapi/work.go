@@ -356,7 +356,7 @@ func (s *served) patchItemComment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	actor, ok := s.actor(w, r, key)
+	actor, ok := s.actor(w, r)
 	if !ok {
 		return
 	}
@@ -445,7 +445,7 @@ func (s *served) postPurge(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	actor, ok := s.actor(w, r, key)
+	actor, ok := s.actor(w, r)
 	if !ok {
 		return
 	}

@@ -189,6 +189,12 @@ func TestTheWorkActorCarriesTheOperation(t *testing.T) {
 	if plain.WorkKey != "" || plain.OperationSeed() != "" {
 		t.Errorf("a call naming no operation resolved to %+v", plain)
 	}
+	// A KEY THAT CARRIES NO INSTANT fails the call rather than dating every
+	// id it derives at the epoch.
+	if got, err := operator.WorkActor(operator.WithKey(ctx, "not-an-op-id"), nil); err == nil {
+		t.Errorf("a call under a key with no instant resolved to %+v — every id it "+
+			"derived would read as older than any loss the ledger had", got)
+	}
 }
 
 // dialOperator connects an MCP client to the surface as one principal.

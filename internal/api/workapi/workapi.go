@@ -551,10 +551,11 @@ func unavailableFor(w http.ResponseWriter, cause error, detail string) {
 // false once it has refused a key that is not one ([opkey.Key]).
 //
 // Every id a write derives from the key carries the KEY'S instant (Worklet's
-// through [builtin.Actor.WorkSince], Doclet's inside [doclet.Store]), which is
-// what the publisher vouches for a retry by; Doclet refuses a key outside the
-// grammar itself ([doclet.ErrInvalid] on `actor.op_key`), so without the check
-// every page write through this surface was refused.
+// tools' through [builtin.Actor.Keyed] on the operator surface's dispatch, this
+// surface's own gestures' through [keyedOp], Doclet's inside [doclet.Store]),
+// which is what the publisher vouches for a retry by; Doclet refuses a key
+// outside the grammar itself ([doclet.ErrInvalid] on `actor.op_key`), so
+// without the check every page write through this surface was refused.
 //
 // BARE, with no name: the key is a SEED rather than the id of any one write —
 // each write derives its own, named for its verb and its object — so a name
@@ -612,15 +613,13 @@ func keyedOp(w http.ResponseWriter, r *http.Request, key, verb, object string,
 	return opID, true
 }
 
-// seed puts the request's operation key on a work actor, with the instant it
-// was minted at, for a gesture this surface makes without a tool.
-func seed(actor *builtin.Actor, key string) {
-	actor.WorkKey = key
-	actor.WorkSince, _ = statelog.OpMintedAt(key)
-}
-
-// actor is the request's work actor, carrying its operation key.
-func (s *Service) actor(w http.ResponseWriter, r *http.Request, key string) (
+// actor is the request's work actor for a gesture this surface makes without a
+// tool: PROVENANCE ONLY — who is writing, as what, through which credential.
+// It carries no operation key, because such a gesture takes its id from
+// [keyedOp] and the writers it is handed read only who the actor is; a key on
+// it would be a second place the request's instant was read from, and the
+// copy that lived here dated a key with no instant at the epoch.
+func (s *Service) actor(w http.ResponseWriter, r *http.Request) (
 	builtin.Actor, bool) {
 
 	actor, err := builtin.PrincipalActor(r.Context(), nil)
@@ -632,7 +631,6 @@ func (s *Service) actor(w http.ResponseWriter, r *http.Request, key string) (
 		operator.RefuseDecision(w, r, "", authz.Decision{Err: err})
 		return builtin.Actor{}, false
 	}
-	seed(&actor, key)
 	return actor, true
 }
 

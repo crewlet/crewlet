@@ -38,7 +38,8 @@
 //     that names its requests — the act transport and the HTTP write
 //     surface — carries the `Idempotency-Key` a retry repeats, held to the
 //     operation grammar and scoped to the principal by internal/api/opkey,
-//     as [Actor.WorkKey] with its instant as [Actor.WorkSince] (and as
+//     as [Actor.WorkKey], put there by [Actor.Keyed] and dated by the key's
+//     own instant, a key that carries none refused (and as
 //     [doclet.Actor.OpKey] for a page write, [chatlet.Actor.OpKey] for a chat
 //     one), so a request is a unit of work exactly as a turn's trigger is
 //     and every id is derived from it as a turn's are. The operator's
