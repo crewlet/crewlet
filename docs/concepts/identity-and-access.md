@@ -355,8 +355,13 @@ Three answers sit around it:
 
 - **No relation at all is "not found".** Somebody holding no role is answered
   exactly as for an id nothing holds, `404 not_found` with no reason, so a
-  private artifact's existence, id and title are never disclosed. Somebody
-  holding a role below the verb's is refused `403`, naming the role they need.
+  private artifact's existence, id and title are never disclosed. That holds
+  for a bar on the verb as well: a machine token asking a verb that needs
+  somebody present (a transfer, a force publish), or an agent asking a
+  person's verb (trash, restore, pin, transfer), is told `not_found` when it
+  holds no relation, and the bar's own `403` only when the artifact is already
+  disclosed to it. Somebody holding a role below the verb's is refused `403`,
+  naming the role they need.
 - **An administrator may open anything, and it is recorded.** Admin is host
   access, so a refusal would promise a privacy the engine cannot keep. The
   admin path admits every artifact verb, after the administrator's own shares

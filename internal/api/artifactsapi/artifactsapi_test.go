@@ -32,11 +32,16 @@ const (
 func at(id artifacts.ID, rest string) string { return "/artifacts/" + id.String() + rest }
 
 // A CALLER WITH NO RELATION IS TOLD THE ARTIFACT IS NOT FOUND, byte for byte as
-// an id nothing holds, on every route that names one: a read, a write and a
-// frame alike, so no answer says a private artifact exists.
+// an id nothing holds, on every route that names one: a read, a write, a frame
+// and a person's gesture alike, so no answer says a private artifact exists.
+// Asked as a person, through a token and as an agent: a verb a token or an
+// agent may not take is still not found to one with no relation, never the
+// bar that would confirm the artifact exists.
 func TestACallerWithNoRelationIsToldTheArtifactIsNotFound(t *testing.T) {
 	t.Parallel()
 	g := newRig(t, true)
+	agentDana := iam.Principal{Login: "dana", Kind: iam.KindSeat, Seat: "dana",
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantArtifacts}}
 	for _, route := range []struct{ method, rest, body string }{
 		{"POST", "/tickets", ``},
 		{"GET", "/versions/1/files/index.html", ``},
@@ -45,15 +50,21 @@ func TestACallerWithNoRelationIsToldTheArtifactIsNotFound(t *testing.T) {
 		{"POST", "/versions", publishV3},
 		{"PUT", "/shares", `{"audience":{"kind":"seat","id":"dana"},"role":"editor"}`},
 		{"DELETE", "", ``},
+		{"POST", "/restore", ``},
+		{"POST", "/transfer", `{"to":"@dana"}`},
 		{"PUT", "/pin", ``},
 	} {
-		header := append(keyed(), "If-Match", ifMatch2)
-		stranger := g.do(person("dana"), route.method, at(page, route.rest), route.body, header...)
-		nothing := g.do(person("dana"), route.method, at(unknown, route.rest), route.body, header...)
-		if stranger.Code != http.StatusNotFound || stranger.Body.String() != nothing.Body.String() ||
-			nothing.Code != http.StatusNotFound {
-			t.Errorf("%s %s: a stranger is answered %d %s and an unknown id %d %s", route.method,
-				route.rest, stranger.Code, stranger.Body, nothing.Code, nothing.Body)
+		for who, p := range map[string]iam.Principal{"a person": person("dana"),
+			"a token": token("dana"), "an agent": agentDana} {
+			header := append(keyed(), "If-Match", ifMatch2)
+			stranger := g.do(p, route.method, at(page, route.rest), route.body, header...)
+			nothing := g.do(p, route.method, at(unknown, route.rest), route.body, header...)
+			if stranger.Code != http.StatusNotFound || stranger.Body.String() != nothing.Body.String() ||
+				nothing.Code != http.StatusNotFound {
+				t.Errorf("%s %s, %s: a stranger is answered %d %s and an unknown id %d %s",
+					route.method, route.rest, who, stranger.Code, stranger.Body, nothing.Code,
+					nothing.Body)
+			}
 		}
 	}
 	if len(g.writes.all()) != 0 || len(g.pipeline.verbs()) != 0 || g.objects.opens() != 0 ||

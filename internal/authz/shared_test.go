@@ -186,6 +186,66 @@ func TestACallerWithNoRelationIsToldTheArtifactIsNotFound(t *testing.T) {
 	}
 }
 
+// A BAR ON THE VERB IS NO EXISTENCE ORACLE.
+//
+// An agent taking a person's verb and a token taking one that needs somebody
+// present are refused before any class runs, and a surface reads the head
+// first, so a bar rendered for an existing artifact while an unknown id is
+// answered 404 would tell a caller with no relation that the artifact exists.
+// Walked over every shared row a bar covers: a caller with no relation is told
+// it is not found, byte for byte the unknown id's answer; the artifact's
+// audience is still told the bar itself; an administrator is never told an
+// existing artifact is not found; and a relation the chart cannot answer is
+// unknown. Mutation: return the bar before asking the relations and the
+// not-found cases go red; skip the relation check and the audience's do.
+func TestABarOnTheVerbIsNoExistenceOracle(t *testing.T) {
+	t.Parallel()
+	down := chart{err: errors.New("behind")}
+	for _, a := range sharedRows(t) {
+		human, _ := authz.HumanOnlyOf(a)
+		present, _ := authz.PresenceOf(a)
+		var (
+			stranger, audience iam.Principal
+			bar                authz.Reason
+		)
+		switch {
+		case human:
+			stranger, audience = seat("sre", iam.Apps...), seat("sre", iam.Apps...)
+			bar = authz.ReasonSeatRefused
+		case present == authz.PresenceRequired:
+			stranger, audience = throughToken(holding("sre")), throughToken(holding("sre"))
+			bar = authz.ReasonTokenRefused
+		default:
+			continue
+		}
+		if d := authz.Decide(t.Context(), stranger, a, artifact("jane"), nimbus(),
+			decidedAt); !d.NotFound() {
+			t.Errorf("%s: a caller with no relation decided %+v, want not found", a, d)
+		}
+		if d := authz.Decide(t.Context(), audience, a,
+			artifact("jane", seatShare("sre", artifacts.RoleViewer)), nimbus(),
+			decidedAt); d.Allowed || d.Unknown() || d.Reason != bar {
+			t.Errorf("%s: its audience decided %+v, want refused on %s", a, d, bar)
+		}
+		if d := authz.Decide(t.Context(), stranger, a,
+			artifact("jane", unitShare("sre-team", artifacts.RoleViewer)), down,
+			decidedAt); !d.Unknown() {
+			t.Errorf("%s: a unit share the chart cannot answer decided %+v, want unknown",
+				a, d)
+		}
+		admin := person("ops.admin", iam.GrantAdmin)
+		if human {
+			admin = seat("ops.admin", iam.GrantAdmin)
+		} else {
+			admin = throughToken(admin)
+		}
+		if d := authz.Decide(t.Context(), admin, a, artifact("jane"), nimbus(),
+			decidedAt); d.NotFound() || d.Reason != bar {
+			t.Errorf("%s: an administrator decided %+v, want refused on %s", a, d, bar)
+		}
+	}
+}
+
 // THE LEAD ARM OPENS ONLY AN AGENT OWNER'S ARTIFACTS.
 //
 // A lead holds owner-level on the artifacts their agents own, as they already

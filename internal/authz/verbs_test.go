@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/sourcetree"
@@ -75,9 +76,17 @@ func TestSeatOnlyAndHumanOnlyAreCheckedBeforeTheClass(t *testing.T) {
 					"seat naming nothing", a, d)
 			}
 			// A SEAT THE CLASS REFUSES: holding nothing, about somebody else's
-			// record, in a container nobody leads.
-			d = authz.Decide(t.Context(), seat("sam"), a, authz.Object{Kind: authz.KindPerson,
-				Owner: "someone.else", Container: "NOWHERE"}, nimbus(), decidedAt)
+			// record, in a container nobody leads. On an artifact row that
+			// seat holds a viewer share: one with no relation at all is told
+			// the artifact is not found, whatever bar the verb carries
+			// (TestABarOnTheVerbIsNoExistenceOracle).
+			refused := authz.Object{Kind: authz.KindPerson, Owner: "someone.else",
+				Container: "NOWHERE"}
+			if class, _ := authz.ClassOf(a); class == authz.ClassShared {
+				refused = authz.Object{Kind: authz.KindArtifact, Owner: "someone.else",
+					Shares: []artifacts.Share{seatShare("sam", artifacts.RoleViewer)}}
+			}
+			d = authz.Decide(t.Context(), seat("sam"), a, refused, nimbus(), decidedAt)
 			if d.Allowed || d.Reason != authz.ReasonSeatRefused || len(d.Grants) != 0 {
 				t.Errorf("%s: a seat the class refuses decided %+v, want refused as a "+
 					"seat naming nothing", a, d)
