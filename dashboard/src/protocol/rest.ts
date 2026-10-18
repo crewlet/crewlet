@@ -132,8 +132,8 @@ export class RestError extends Error {
    * ONLY `unauthorized` IS A RULE'S REFUSAL. Every 403 used to be read as one,
    * with its code standing in for the rule, so a read refused
    * `seat_unavailable` or `csrf_origin` reached the banner as a refusal naming
-   * no grant — which says "no grant would change that: the rule asks a
-   * relation the org chart does not hold", a claim about neither.
+   * no grant — which says no access would change it, of a rule that never
+   * decided: a claim about neither.
    */
   get refusal(): QueryRefusal | LogRefusal | null {
     if (

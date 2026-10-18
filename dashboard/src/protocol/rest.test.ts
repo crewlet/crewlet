@@ -485,8 +485,8 @@ describe("what a 403 tells a screen", () => {
   });
 
   // NOT A RULE: a seat the chart no longer holds, a write from another site.
-  // Read as one, its banner said no grant would change it because the rule
-  // asks a relation the chart does not hold — true of neither.
+  // Read as one, its banner said no access would change it, of a rule that
+  // never decided — true of neither.
   test("any other 403 is no rule's refusal", () => {
     expect(refusalOf({ error: "seat_unavailable", detail: "ana" })).toBeNull();
     expect(refusalOf({ error: "csrf_origin" })).toBeNull();

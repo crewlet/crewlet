@@ -764,9 +764,9 @@ func (e *Envelope) unavailable(u Unavailable) {
 // Refused is the reason and the grants an `unauthorized` frame carries.
 //
 // GRANTS IS NEVER OMITTED from a refusal that has one, because an EMPTY list is
-// an answer — no capability would admit this caller, and what is missing is a
-// relation the chart does not hold — where an absent key would read as a
-// frame that did not say.
+// an answer — no capability would admit this caller, and what the deciding
+// rule asks is something else, which the reason names — where an absent key
+// would read as a frame that did not say.
 type Refused struct {
 	Reason string   `json:"reason"`
 	Grants []string `json:"grants"`

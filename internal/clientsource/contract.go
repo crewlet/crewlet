@@ -85,6 +85,9 @@ var contract = []Entry{
 	// reasons.ts
 	{"PHRASES", ReadLiteral, "internal/api/queries.TestEveryWakeReasonReadsAsEnglishOnTheClient"},
 
+	// authority.ts
+	{"REFUSAL_SENTENCES", ReadLiteral, "internal/authz.TestTheDashboardSaysEveryReasonTheEngineDecidesBy"},
+
 	// spend.ts
 	{"GROUPS", ReadLiteral, "internal/api/queries.TestEveryCostDimensionTheScreenOffersIsOneTheEngineAccepts"},
 	{"ADMIN_GROUPS", ReadLiteral, "internal/api/queries.TestTheScreenOffersAnAdminsSplitsToAnAdminAlone"},

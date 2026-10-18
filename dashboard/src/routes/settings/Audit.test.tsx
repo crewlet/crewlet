@@ -873,7 +873,7 @@ test("a source refused on authority names its grant, and the other sources stand
   mount();
   await waitFor(() => expect(screen.getByText("took it off the board")).toBeTruthy());
   expect(screen.getByText(/Reading the configuration's revisions needs Admin/)).toBeTruthy();
-  expect(screen.queryByText(/You may not read this/)).toBeNull();
+  expect(screen.queryByText(/no access would change that/)).toBeNull();
 });
 
 // AND A REFUSAL REPLACES WHAT IT REFUSED: rows read before a grant was taken

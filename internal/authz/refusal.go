@@ -16,9 +16,10 @@ const (
 	DetailReason = httpjson.KeyReason
 	// DetailGrants is [Decision.Grants]: the smallest permissions any ONE
 	// of which would have admitted the caller — an app, or admin. Always
-	// present, and an EMPTY list is an answer — no permission would, and
-	// what is missing is a relation the chart does not hold — rather than an
-	// omission.
+	// present, and an EMPTY list is an answer rather than an omission: no
+	// permission would, and what the deciding rule asks is something else —
+	// a relation the chart does not hold, an agent's own seat, a seat to act
+	// as, a person present rather than a token — which [DetailReason] names.
 	DetailGrants = httpjson.KeyGrants
 	// DetailWindow is [Decision.Recency] on a step-up refusal: the window
 	// the verb asks a proof inside, spelled as the `api.auth.session` key
