@@ -25,11 +25,12 @@ func (Domain) Name() string { return "artifactdata" }
 // which is what the framework's own suites provision the stream with.
 //
 // A NODE DOES NOT CREATE THE STREAM AT IT: the engine sizes every log together
-// from Tier A (`stream.artifact_data_log_max_bytes`, unset deriving half of the
-// tracker log's). EIGHT GIBIBYTES is that half of the tracker's own declared
-// default: a datastore write is a click, so this log outgrows the artifacts
-// log by far.
-const ArtifactDataLogMaxBytes = 8 << 30
+// from Tier A (`stream.artifact_data_log_max_bytes`, unset deriving a quarter
+// of the tracker log's). FOUR GIBIBYTES is that quarter of the tracker's own
+// declared default, the artifacts log's figure: the state logs share one pool,
+// and a larger derived share would create the vector changelog below the
+// corpus a model change republishes.
+const ArtifactDataLogMaxBytes = 4 << 30
 
 // ArtifactDataMaxRecordBytes is the largest record this domain publishes.
 //

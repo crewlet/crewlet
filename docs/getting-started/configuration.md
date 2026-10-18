@@ -1166,19 +1166,23 @@ stream:
                                     #   how often people and agents publish
                                     #   rather than with what they publish.
                                     #   Crossing it refuses the append
-  # artifact_data_log_max_bytes: 8589934592
+  # artifact_data_log_max_bytes: 4294967296
                                     #   the artifact datastore's log, the
                                     #   ordered stream every write, undo and
                                     #   schema change of an artifact's
                                     #   datastore goes through (1..512 GiB).
-                                    #   UNSET DERIVES half of the mutation
-                                    #   log's ceiling, set or derived (so
-                                    #   1..32 GiB from a volume alone): its
-                                    #   records carry the rows themselves, so
-                                    #   the log grows with how much pages and
-                                    #   seats write. Crossing it refuses the
-                                    #   append, and the top of it is kept for
-                                    #   gate records as on the tracker's log
+                                    #   UNSET DERIVES a quarter of the
+                                    #   mutation log's ceiling, set or
+                                    #   derived (so 1..16 GiB from a volume
+                                    #   alone). Its records carry the rows
+                                    #   themselves, so the log grows with how
+                                    #   much pages and seats write: a company
+                                    #   whose pages write heavily sets it
+                                    #   higher, which is why it accepts twice
+                                    #   the artifacts log's bound. Crossing it
+                                    #   refuses the append, and the top of it
+                                    #   is kept for gate records as on the
+                                    #   tracker's log
   # tracker_retention:              # when the log may be trimmed. Every term
                                     #   here is a statement about the OPERATOR's
                                     #   estate rather than the company's policy,
