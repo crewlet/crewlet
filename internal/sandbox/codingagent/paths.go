@@ -77,9 +77,9 @@ func (p Paths) CredentialDocument() string { return p.Home + "/" + CredentialDoc
 //
 // Under the artefact directory rather than the CLI's own data directory: no
 // CLI reads this file on its own — the runner imports it into the CLI's
-// database before the run and exports the database back into it after — so it
-// lives with the rest of what the engine keeps in a box, where a `git clean` in
-// the brief cannot reach it.
+// database before the run and exports the database back into it while the run
+// works and once more after — so it lives with the rest of what the engine
+// keeps in a box, where a `git clean` in the brief cannot reach it.
 const CredentialDocument = ".crewlet/exported-credentials"
 
 // Err is where its stderr goes — the transcript's fallback source.

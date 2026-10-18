@@ -542,9 +542,10 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 
 	// THE FINDINGS FILE IS THE RESULT CARRIER OF RECORD. The brief asks the
 	// agent to write its report there before stopping, and it survives both
-	// a finished-but-never-exited run whose streamed message was lost and a
-	// tool-only run that parses to no text — so it wins for the result text,
-	// and its presence is the success signal unless the process crashed.
+	// a run whose process group died before its streamed final message was
+	// written and a tool-only run that parses to no text — so it wins for the
+	// result text, and its presence is the success signal unless the process
+	// crashed.
 	findingsText, refusal, err := readWhole(ctx, box, paths.Findings(), "the report the coding agent wrote")
 	if err != nil {
 		return sandbox.Result{}, err

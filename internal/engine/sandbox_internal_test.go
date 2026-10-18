@@ -137,9 +137,9 @@ roles:
 		t.Errorf("an API entry contributed credential files: %v", credentials)
 	}
 	// AND ITS KEY IN THE RUN ENVIRONMENT, which is the only place a coding
-	// agent reads it: OpenCode's declared provider names
-	// {env:OPENAI_API_KEY}, and nothing set it. Not the endpoint, which
-	// OpenCode is handed in opencode.json and reads nowhere else.
+	// agent reads it: OpenCode's declared provider names OPENAI_API_KEY in
+	// its `env` list, and nothing set it. Not the endpoint, which OpenCode is
+	// handed in opencode.json and reads nowhere else.
 	if env["OPENAI_API_KEY"] != "sk-test" {
 		t.Errorf("the run environment = %v, want the entry's key", env)
 	}
@@ -197,7 +197,8 @@ roles:
 	}
 
 	// OPENCODE IS HANDED ITS ENDPOINT IN opencode.json, so only the key
-	// its declared provider reads through {env:…} travels.
+	// travels, under the variable its declared provider names in its `env`
+	// list.
 	run = runOn(t, c, seat, codingagent.OpenCodeName, nil)
 	if !maps.Equal(run.env, map[string]string{"ANTHROPIC_API_KEY": "sk-ant-first"}) {
 		t.Errorf("OpenCode's run environment = %v, want the key alone", run.env)

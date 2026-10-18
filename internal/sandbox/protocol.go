@@ -423,8 +423,8 @@ type Sandbox interface {
 	OpenFile(ctx context.Context, path string) (io.ReadCloser, error)
 
 	// ReadTail reads at most n bytes from the END of a file, with the
-	// file's whole size — for a question about a stream's end: has the job
-	// printed its terminal event, what is it doing now, what did it say last
+	// file's whole size — for a question about a stream's end: what is the
+	// job doing now, how far has its stream grown, what did it say last
 	// before it failed. A whole read answers each of those at the cost of
 	// the whole stream, every poll, for as long as the run lasts. Empty on
 	// missing, as the others are.
