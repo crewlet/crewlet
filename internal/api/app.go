@@ -468,6 +468,20 @@ type Options struct {
 	// to a question the authority table already answers.
 	Work guardedMounter
 
+	// Artifacts serves /artifacts on this listener, normally an
+	// artifactsapi.Service: uploads, publishes, shares, trash and purge,
+	// view tickets and the raw bytes of a version's files, each route
+	// stating its authority where it is mounted. Nil serves none, which is
+	// what a node built without the artifacts domain has. The artifact
+	// BYTES are never rendered here: they are served by the separate
+	// api.artifacts listener, inside a sandboxed frame.
+	Artifacts guardedMounter
+
+	// ArtifactData serves an artifact's datastore under
+	// /artifacts/{id}/data, normally an artifactdataapi.Service. Nil serves
+	// none.
+	ArtifactData guardedMounter
+
 	// Secrets serves /secrets, normally a secretsapi.Service: the fleet's
 	// credential store.
 	Secrets guardedMounter
@@ -824,6 +838,17 @@ func New(opts Options) (*App, error) {
 	if opts.Work != nil {
 		if err := opts.Work.Routes(mux); err != nil {
 			return nil, fmt.Errorf("api: mount the work surface: %w", err)
+		}
+	}
+	// AND THE ARTIFACTS SURFACES, for the same reason.
+	if opts.Artifacts != nil {
+		if err := opts.Artifacts.Routes(mux); err != nil {
+			return nil, fmt.Errorf("api: mount the artifacts surface: %w", err)
+		}
+	}
+	if opts.ArtifactData != nil {
+		if err := opts.ArtifactData.Routes(mux); err != nil {
+			return nil, fmt.Errorf("api: mount the artifact datastore surface: %w", err)
 		}
 	}
 	// THE BROWSER POSTURE WRAPS THE CREDENTIAL ONE, because a preflight

@@ -1,6 +1,8 @@
 package builtin
 
 import (
+	"slices"
+
 	"github.com/crewlet/crewlet/internal/tools"
 
 	"github.com/crewlet/crewlet/internal/org"
@@ -38,6 +40,11 @@ type OperatorDeps struct {
 	Work      WorkDeps
 	Pages     PageDeps
 	Knowledge KnowledgeSearcher
+
+	// Artifacts and ArtifactData are the artifacts and datastore tools'
+	// dependencies on this surface. Each zero value omits its tools.
+	Artifacts    ArtifactDeps
+	ArtifactData ArtifactDataDeps
 
 	// Org is the company this surface is about, resolved per call because
 	// a config apply replaces it. An operator has no turn and therefore no
@@ -96,10 +103,7 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 	// [WorkDeps.bindOperation] — and this is the only place that says so,
 	// because it is a fact about this surface rather than a setting.
 	work.callerOperations = true
-	candidates := []struct {
-		tool tools.Callable
-		on   bool
-	}{
+	candidates := []candidate{
 		{&listWorkItems{deps: work}, work.Reader != nil},
 		{&getWorkItem{deps: work}, work.Reader != nil},
 		{&createWorkItem{deps: work, pages: pages.Reader}, work.Writer != nil},
@@ -166,6 +170,8 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// of its own — see answerknowledge.go.
 		{newAnswerKnowledge(deps), answerable(deps)},
 	}
+	candidates = slices.Concat(candidates,
+		artifactOperatorCandidates(deps), artifactDataOperatorCandidates(deps))
 	var out []tools.Callable
 	for _, c := range candidates {
 		if c.on {
