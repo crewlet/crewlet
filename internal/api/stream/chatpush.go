@@ -869,7 +869,16 @@ func (h *ChatHub) fan(ctx context.Context, batch []chatlet.Applied) {
 			if _, sent := w.client.admits(kind); !sent {
 				continue
 			}
-			if h.maySee(ctx, rooms.ChannelHere, at, decided, w.viewer, applied.ChannelID) {
+			// THE PEOPLE THIS RECORD TOOK OUT OF THE ROOM are told it
+			// changed, though at the batch's position they may no
+			// longer read it — that position is exactly where they
+			// stopped being able to, so the visibility rule alone left
+			// a private room in their rail until something else made
+			// it read again ([chatlet.Applied.Removed]). The frame names
+			// the room and the record and no member, which is no more
+			// than they knew.
+			if slices.Contains(applied.Removed, w.viewer) ||
+				h.maySee(ctx, rooms.ChannelHere, at, decided, w.viewer, applied.ChannelID) {
 				targets = append(targets, w.client)
 			}
 		}
