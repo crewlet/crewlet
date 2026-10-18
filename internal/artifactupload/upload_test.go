@@ -17,7 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// NO BYTE IS ACCEPTED BEFORE ITS RESERVATION (ADR-0036): a transfer to an
+// NO BYTE IS ACCEPTED BEFORE ITS RESERVATION: a transfer to an
 // upload nobody reserved, or of a file its intent did not declare, stores
 // nothing; an intent the budget refuses answers nothing to transfer and holds
 // nothing; an intent that is answered holds every byte it declared before the
@@ -91,7 +91,7 @@ func TestNoByteIsAcceptedBeforeItsReservation(t *testing.T) {
 	}
 }
 
-// FINALIZE REFUSES BYTES THAT DO NOT MATCH THEIR DIGEST (ADR-0036): a stream
+// FINALIZE REFUSES BYTES THAT DO NOT MATCH THEIR DIGEST: a stream
 // through the engine of other bytes is refused and its object deleted at once,
 // the file left to send again; bytes a client put straight to the bucket are
 // read back through the verifying reader before any record names them.
@@ -159,7 +159,7 @@ func errorsAsMissing(err error) bool {
 	return errors.As(err, &missing)
 }
 
-// UNNAMED BYTES NEVER EXCEED THE RESERVATION BUDGET (ADR-0036): through
+// UNNAMED BYTES NEVER EXCEED THE RESERVATION BUDGET: through
 // uploads, transfers, publishes, a refused publish, an abandoned upload and a
 // window closing, every byte the store holds that no row names is held by a
 // reservation, and an abandoned upload the engine streamed is released, its
