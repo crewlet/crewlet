@@ -27,6 +27,12 @@
  *
  * NULL FOR AN ADMISSION, which no refusal carries: the rule admitted the
  * caller, and there is nothing to say.
+ *
+ * `stage` is an account whose stage may not act — invited, enrolling,
+ * suspended or retired — which an admin activates. It said "set up your second
+ * factor first", which is a different refusal with a code of its own
+ * (`second_factor_enrolment_required`): a person who has yet to enrol a factor
+ * is active, holding a session that may only enrol one.
  */
 export const REFUSAL_SENTENCES: Readonly<Record<string, string | null>> = {
   grant: null,
@@ -39,7 +45,7 @@ export const REFUSAL_SENTENCES: Readonly<Record<string, string | null>> = {
   not_author: "Only whoever wrote this can do that.",
   seat_refused: "Only a person can do this, not an agent.",
   token_refused: "Access tokens can’t do this. Sign in as yourself.",
-  stage: "Your sign-in is not finished: set up your second factor first.",
+  stage: "Your account isn’t active. Ask an admin to activate it.",
   unnamed: "The request didn’t say what it’s about. That’s a bug in this screen.",
   unknown_action:
     "This engine has no rule for that request. It may be running a different version. Reload the page.",
