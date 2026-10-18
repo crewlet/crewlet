@@ -143,3 +143,25 @@ test("a bad_params refusal with the engine's sentence shows the sentence, not th
   render(<QueryState error="bad_params" loading={false} />);
   expect(screen.getByText("The engine refused this request.")).toBeTruthy();
 });
+
+// A REFUSAL NO ACCESS WOULD CLEAR SAYS WHICH RULE DECIDED, in that rule's own
+// sentence (`contract/authority.ts`): a credential bound to no seat is told the
+// binding, a token the person it acts for, somebody else's record that it is
+// somebody else's, and a reader below an artifact's role that its owner can
+// share it higher. One sentence for every empty list told each of them that
+// what they lacked was leading somebody. Mutation: draw one sentence for every
+// empty list and the rows go red; drop the fallback and the last does.
+test.each([
+  ["unseated", /bind it to a human seat/],
+  ["token_refused", /Access tokens can’t do this/],
+  ["not_lead", /Only its lead in the org chart/],
+  ["seat_only", /Only an agent can do this/],
+  ["role", /Its owner can share it with you at a higher one/],
+  ["ceiling", /working for can’t do this, so the agent can’t either/],
+  ["a_reason_from_a_newer_engine", /^You can’t see this, and no access would change that\./],
+])("a refusal by %s that names no access says so in its own sentence", (reason, said) => {
+  render(<QueryState error="unauthorized" refusal={{ reason, grants: [] }} loading={false} />);
+  const callout = screen.getByText(new RegExp(`Refused as`)).closest(".crewlet-callout")!;
+  expect(callout.textContent).toMatch(said);
+  expect(callout.textContent).toContain(reason);
+});
