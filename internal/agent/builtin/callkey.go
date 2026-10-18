@@ -83,11 +83,16 @@ import (
 //   - THE COMMENT'S ID ([commentID]) is a UUIDv5 rather than an operation id,
 //     because a tracker comment's id is the primary key of its row, apart
 //     from the operation that writes it — a comment rides its task's record,
-//     and its apply is an upsert of that row — where a page's comment IS its
-//     operation ([statelog.KeyedObjectOpID]). So it is derived from the key
-//     as the work began, a rebase put aside ([Actor.asBegun]): a rebase
-//     re-mints operations for a ledger that forgot them, and the row has not
-//     forgotten the comment.
+//     and the writer answers a post its row already holds from that row —
+//     where a page's comment IS its operation ([statelog.KeyedObjectOpID]).
+//     So it is derived from the key as the work began, a rebase put aside
+//     ([Actor.asBegun]): a rebase re-mints operations for a ledger that
+//     forgot them, and the row has not forgotten the comment.
+//   - THE IDS A CREATE FILES UNDER ([createdTaskID], [createdViewID]) are
+//     UUIDv5s over the create's operation as the work began, for the
+//     comment's reason: each is the subject its create arbitrates on and the
+//     key of its row, and the tracker answers a create whose row is already
+//     there from that row.
 //
 // Both put the call's digest in beside the key, as the stores bind what a
 // write says: a request's key is its call's key as sent, and names the

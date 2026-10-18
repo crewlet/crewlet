@@ -69,6 +69,17 @@ import (
 // is no longer the one the authority was decided on. That is the pairing
 // [Writer.UpdateTask]'s If-Match makes for a task, stated for the two facts a
 // view's authority turns on.
+//
+// # A zero prior is a create
+//
+// A save that names no stored view is a CREATE, and its id is the one the
+// caller derived from the create's own operation as the work began (the
+// builtin refuses a save naming an id no view holds, and mints the id of a new
+// one). So a view the decide finds already under that id is this create, made
+// before — a rebased re-run, whose operation is new to the ledger (ADR-0029) —
+// and is answered from its row with nothing published. Refused as a view
+// "saved while this one was being decided", the re-run was told to read again
+// and decide again about the view it had itself saved.
 type ViewPrior struct {
 	// Held says a view existed under the id when the caller read it.
 	Held bool
@@ -115,11 +126,6 @@ func (p ViewPrior) matches(id string, current View,
 	held bool) error {
 
 	switch {
-	case held && !p.Held:
-		return fmt.Errorf("worklet: a view with id %s was saved while this one "+
-			"was being decided, so the authority to write it was decided on a "+
-			"view that did not exist — read it again and decide again: %w",
-			id, statelog.ErrConflict)
 	case !held && p.Held:
 		return fmt.Errorf("worklet: view %s is no longer in this node's rows, so "+
 			"the authority to replace it was decided on a view that is gone — "+
@@ -208,10 +214,15 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
+			if held && !prior.Held {
+				// THE CREATE, MADE BEFORE — see [ViewPrior], "A zero
+				// prior is a create" — answered from its row.
+				return statelog.Decision{Version: int64(current.Version)}, nil
+			}
 			// THE VIEW THE AUTHORITY WAS DECIDED ON IS STILL THE ONE
 			// BEING REPLACED — and, because the scope was formed from the
 			// same prior, the scope still names the strip it leaves. A
-			// view that moved, changed hands or appeared under this write
+			// view that moved, changed hands or went away under this write
 			// is refused rather than published: an UNDER-declared scope is
 			// the one thing a record may never carry, and a save decided
 			// on somebody else's view is the takeover the prior exists to

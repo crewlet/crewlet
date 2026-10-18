@@ -295,6 +295,20 @@ type WriteResult struct {
 // is filed on a FRESH mint — leaving the gap the crash residue already
 // describes, and never a second task or a shared key.
 //
+// # A create whose task is already filed
+//
+// THE TASK'S ID NAMES THE CREATE, so a create meeting a task already under it
+// is that create, made before, and is answered with that task from its row:
+// no number minted, nothing published. That is a retry the ledger cannot
+// answer — a rebased re-run (ADR-0029) mints its operations afresh, so its
+// operation is new, while the builtin derives the id as the work began and
+// names the task the first attempt filed. It is asked inside the counter's own
+// snapshot, before the mint, so the re-run spends no number; and the task
+// step answers the same way where the guarding row only appears after the mint
+// (the first attempt landing in between), leaving the gap the crash residue
+// above already describes. It used to be refused `ErrExists` there — after a
+// number was spent — and told a re-run that its own item could not be filed.
+//
 // THE RANK COMES FROM THE COUNTER VALUE and nothing arbitrates it a second
 // time. n is unique and increasing under the counter row's own arbitration, so
 // no two creates collide and every create's key is strictly the new maximum —
@@ -392,6 +406,8 @@ func (w *Writer) createTask(ctx context.Context, opID string, task Task,
 	switch {
 	case errors.Is(err, errMintLanded):
 		return w.resumeCreate(ctx, opID, task, ask, notify)
+	case errors.Is(err, errTaskFiled):
+		return w.filedTask(ctx, opID, task.ID)
 	case minted.Outcome == statelog.OutcomeUnknown && minted.Unvouched:
 		return w.unvouchedCreate(ctx, opID, task, minted)
 	case err != nil:
@@ -500,6 +516,12 @@ func (w *Writer) fileTask(ctx context.Context, opID string, task Task,
 		ask.CreatedAt = at
 	}
 	result, err := w.writeTask(ctx, stepID(opID, "task"), task, ask, notify, at)
+	if errors.Is(err, statelog.ErrExists) {
+		// THE TASK WAS FILED BETWEEN THE MINT AND THIS APPEND, under the
+		// create's own id — see [Writer.CreateTask], "A create whose task
+		// is already filed" — so it is this create's, and n is a gap.
+		return w.filedTask(ctx, opID, task.ID)
+	}
 	if err == nil && result.Collapsed {
 		// THE TASK STEP LANDED UNDER AN EARLIER COPY of this operation —
 		// found once a fresh mint's append met it on the task's subject
@@ -561,10 +583,27 @@ func (w *Writer) resumeCreate(ctx context.Context, opID string, task Task,
 	var settled settledCreate
 	n, minted, err := w.mintFresh(ctx, task.Project, 1,
 		w.settleCreate(ctx, task, &settled))
-	if err != nil {
+	switch {
+	case errors.Is(err, errTaskFiled):
+		return w.filedTask(ctx, opID, task.ID)
+	case err != nil:
 		return WriteResult{Result: minted}, err
 	}
 	return w.fileTask(ctx, opID, task, ask, n, settled, notify)
+}
+
+// errTaskFiled is a create's mint finding the task already filed under the
+// create's own id: the create was made before, and is answered with its task
+// ([Writer.filedTask]) rather than minted again.
+var errTaskFiled = errors.New("worklet: the create's task is already filed")
+
+// filedTask answers a create whose task is already filed under its id — see
+// [Writer.CreateTask], "A create whose task is already filed" — from the
+// task's row: applied, with nothing published, under the key the task holds.
+func (w *Writer) filedTask(ctx context.Context, opID, id string) (WriteResult, error) {
+	return w.landedTask(ctx, statelog.Result{
+		Outcome: statelog.OutcomeApplied, OpID: stepID(opID, "task"),
+	}, id)
 }
 
 // errTaskNotApplied is a resumed create's task step finding no ledger row to
@@ -1000,6 +1039,19 @@ type settledCreate struct {
 func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 	settledCreate, error) {
 
+	// THE TASK ALREADY FILED UNDER THIS CREATE'S ID is the create made
+	// before, asked before anything else — before the project's state is,
+	// since a project archived since the item was filed is no reason to
+	// refuse the create that filed it. See [Writer.CreateTask].
+	var present int
+	if err := tx.QueryRowContext(ctx, taskPresentStatement, task.ID).
+		Scan(&present); err != nil {
+		return settledCreate{}, fmt.Errorf("worklet: read whether task %s is "+
+			"already filed: %w", task.ID, err)
+	}
+	if present > 0 {
+		return settledCreate{}, errTaskFiled
+	}
 	project, held, err := readProject(ctx, tx, task.Project)
 	switch {
 	case err != nil:
