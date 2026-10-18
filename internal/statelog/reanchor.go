@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // ErrReanchorRefused reports a generation transition that was not permitted.
@@ -596,11 +599,64 @@ type GenerationFacts struct {
 	// kind of party that is (a person, a machine, a Tier A token), and
 	// OperatorID the credential they acted through — the three columns
 	// every other write carries, so a generation's audit row says who moved
-	// the log and through what, and never only a name. Writer is this node.
+	// the log and through what, and never only a name — read for every
+	// domain by [GenerationFacts.Author]. Writer is this node.
 	By, ByKind, OperatorID, Writer string
 
 	// At is the authored instant.
 	At time.Time
+}
+
+// Author is the party a generation record names as its author, in the ACTOR
+// vocabulary ([iam.ActorKind]) every domain's audit columns are written in —
+// the name bare, the kind beside it and the credential beside both — and
+// false where the facts name nobody: then the record is the NODE's, under
+// [GenerationFacts.Writer], which each domain records the way its own node
+// writer records itself rather than as an empty author column.
+//
+// ONE MAPPING FOR EVERY DOMAIN'S GENERATION RECORD, because one reanchor names
+// one party and the audit feed reads the histories side by side: written once
+// per domain — the tracker's, the knowledge base's, the identity estate's, the
+// artifacts log's, the artifact datastore's and chat's — it was six copies of
+// one rule, already apart on what counts as nobody (a name of spaces was a
+// party to two of them and the node to the others). A domain only says what
+// the actor kind is in its own columns.
+//
+// THE KIND IS READ IN EITHER VOCABULARY: the one [iam.ActorFor] records a
+// party under, which is what the engine's reanchor passes, or a principal's —
+// a seat is an agent, a person human, a machine an operator and the engine the
+// system. A kind in neither is an OPERATOR, a party acting on the company's
+// behalf that claims to be neither a seat nor a person, which is what a
+// reanchor was always recorded as.
+//
+// AN OPERATOR WITH NO CREDENTIAL BESIDE IT is a credential acting under its
+// own login — the one party whose name [iam.ActorFor] also records as its
+// credential — so the name stands in for the credential there and nowhere
+// else: under any other kind it would put a seat's handle or a person's in the
+// credential column, and the engine acts through no credential at all.
+func (f GenerationFacts) Author() (iam.Actor, bool) {
+	if strings.TrimSpace(f.By) == "" {
+		return iam.Actor{}, false
+	}
+	kind := iam.ActorKind(f.ByKind)
+	switch iam.Kind(f.ByKind) {
+	case iam.KindSeat:
+		kind = iam.ActorAgent
+	case iam.KindPerson:
+		kind = iam.ActorHuman
+	case iam.KindMachine:
+		kind = iam.ActorOperator
+	case iam.KindEngine:
+		kind = iam.ActorSystem
+	}
+	if !kind.Valid() {
+		kind = iam.ActorOperator
+	}
+	operator := f.OperatorID
+	if operator == "" && kind == iam.ActorOperator {
+		operator = f.By
+	}
+	return iam.Actor{Name: f.By, Kind: kind, OperatorID: operator}, true
 }
 
 // GenerationEncoder is the one step of a reanchor only the targeted domain can

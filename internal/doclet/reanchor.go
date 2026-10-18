@@ -3,7 +3,6 @@ package doclet
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -107,51 +106,27 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 
 // generationActor is who a generation record names as its author.
 //
-// THE FACTS' THREE COLUMNS, as every other write here records them: the name
-// BARE, the kind in a column of its own and the credential beside them. It
-// took the name alone and rendered it `"operator:" + name` with no credential,
-// so the one record that says who moved this log named a party no other row
-// in the audit feed calls by that name, and never said through what.
+// [statelog.GenerationFacts.Author]'s party, which every domain's generation
+// record names alike, in this package's words — the actor kinds, but for the
+// one it has no word for. It took the name alone and rendered it
+// `"operator:" + name` with no credential, so the one record that says who
+// moved this log named a party no other row in the audit feed calls by that
+// name, and never said through what.
 //
-// THE KIND IS READ IN EITHER VOCABULARY, as the tracker's generation record
-// and the identity estate's read it: the one [iam.ActorFor] records a party
-// under, which is this package's own, or the principal's (a seat, a person, a
-// machine). Read in this package's alone, a reanchor the engine named by its
-// principal kind recorded a person as an operator on this log and as a person
-// on the tracker's, which is one party as two in the audit feed the two
-// histories are read side by side in.
-//
-// A KIND THIS DOMAIN HAS NO WORD FOR IS AN OPERATOR — the engine's own, or
-// none stated — because it is a party acting on the company's behalf and
-// neither a seat nor a person. An OPERATOR the facts name with no credential
-// beside them is a credential acting under its own login — the one party whose
-// name [iam.ActorFor] also records as its credential — so the name stands in
-// for it there, and nowhere else: under any other kind it would put a seat's
-// handle or a person's in the credential column, and the engine acts through
-// no credential at all. And NOBODY NAMED IS THE NODE, recorded under its own
-// id rather than as an empty author column.
+// THE ENGINE IS AN OPERATOR HERE, because this domain has no word for the
+// system and the engine is a party acting on the company's behalf that is
+// neither a seat nor a person — recorded beside whatever credential the facts
+// name, which for the engine is none. And NOBODY NAMED IS THE NODE, recorded
+// under its own id as that kind of operator, rather than as an empty author
+// column.
 func generationActor(f statelog.GenerationFacts) Actor {
-	if strings.TrimSpace(f.By) == "" {
+	party, named := f.Author()
+	if !named {
 		return Actor{Handle: f.Writer, Kind: AuthorOperator}
 	}
-	operator := f.OperatorID
-	var kind AuthorKind
-	switch {
-	case iam.Kind(f.ByKind) == iam.KindSeat:
-		kind = AuthorAgent
-	case iam.Kind(f.ByKind) == iam.KindPerson:
-		kind = AuthorHuman
-	case iam.Kind(f.ByKind) == iam.KindEngine,
-		iam.ActorKind(f.ByKind) == iam.ActorSystem:
-		return Actor{Handle: f.By, Kind: AuthorOperator, OperatorID: operator}
-	case AuthorKind(f.ByKind).Valid():
-		kind = AuthorKind(f.ByKind)
-	default:
-		// A MACHINE, or a kind nobody stated.
+	kind := AuthorKind(party.Kind)
+	if party.Kind == iam.ActorSystem {
 		kind = AuthorOperator
 	}
-	if kind == AuthorOperator && operator == "" {
-		operator = f.By
-	}
-	return Actor{Handle: f.By, Kind: kind, OperatorID: operator}
+	return Actor{Handle: party.Name, Kind: kind, OperatorID: party.OperatorID}
 }

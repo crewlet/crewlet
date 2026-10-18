@@ -3,9 +3,7 @@ package chatlet
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -110,47 +108,21 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 
 // generationActor is who a generation record names as its author.
 //
-// THE FACTS' THREE COLUMNS, as every other write here records them: the name
-// BARE, the kind in a column of its own and the credential beside them — the
-// wiki's rule (`pages.generationActor`), so the one record that says who moved
-// this log names the party the same way the tracker's and the wiki's do.
+// [statelog.GenerationFacts.Author]'s party, which every domain's generation
+// record names alike, in this package's words — which are the actor kinds
+// themselves ([AuthorKind] is its four words), the engine as the system
+// included. Read in this package's vocabulary alone, a reanchor the engine
+// named by its principal kind would record a person as an operator on this
+// log and as a person on the tracker's, which is one party as two in the audit
+// feed the histories are read side by side in.
 //
-// THE KIND IS READ IN EITHER VOCABULARY: the one [iam.ActorFor] records a
-// party under, which is this package's own ([AuthorKind] is its four words),
-// or the principal's (a seat, a person, a machine, the engine). Read in this
-// package's alone, a reanchor the engine named by its principal kind would
-// record a person as an operator on this log and as a person on the
-// tracker's, which is one party as two in the audit feed the histories are
-// read side by side in.
-//
-// THE ENGINE IS THE SYSTEM, which this domain has a word for and the wiki
-// does not. A MACHINE, or a kind nobody stated, is an operator — a party
-// acting on the company's behalf and neither a seat nor a person — and an
-// operator the facts name with no credential beside them is a credential
-// acting under its own login, so the name stands in for it there and nowhere
-// else. And NOBODY NAMED IS THE NODE, recorded under its own id rather than as
-// an empty author column.
+// NOBODY NAMED IS THE NODE, recorded under its own id and as the system, as
+// this domain's own narration is, rather than as an empty author column.
 func generationActor(f statelog.GenerationFacts) Actor {
-	if strings.TrimSpace(f.By) == "" {
+	party, named := f.Author()
+	if !named {
 		return Actor{Handle: f.Writer, Kind: AuthorSystem}
 	}
-	operator := f.OperatorID
-	var kind AuthorKind
-	switch {
-	case iam.Kind(f.ByKind) == iam.KindSeat:
-		kind = AuthorAgent
-	case iam.Kind(f.ByKind) == iam.KindPerson:
-		kind = AuthorHuman
-	case iam.Kind(f.ByKind) == iam.KindEngine:
-		kind = AuthorSystem
-	case AuthorKind(f.ByKind).Valid():
-		kind = AuthorKind(f.ByKind)
-	default:
-		// A MACHINE, or a kind nobody stated.
-		kind = AuthorOperator
-	}
-	if kind == AuthorOperator && operator == "" {
-		operator = f.By
-	}
-	return Actor{Handle: f.By, Kind: kind, OperatorID: operator}
+	return Actor{Handle: party.Name, Kind: AuthorKind(party.Kind),
+		OperatorID: party.OperatorID}
 }
