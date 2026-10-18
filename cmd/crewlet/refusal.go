@@ -22,6 +22,13 @@ import (
 // alone, so a route that answered with a detail and a hint reached an operator
 // as the bare code, and on the drain's refusal the bare code is the half that
 // does not help.
+//
+// AND IT DRIFTED AGAIN, one field later: the three clients that decode a
+// struct read `detail` and `hint` and never `message`, so a refusal at
+// ADR-0060's floor (no `detail`, its code's own sentence the whole of what it
+// says, which is every refusal nobody has worded for a person) reached an
+// operator as the bare code once more. What a refusal says is decoded into
+// one type ([refusalWords]) and said by one rule ([refusalWords.said]).
 
 // credentialRefusal renders the two refusals that are about the CREDENTIAL
 // rather than the request, and reports whether raw was one of them.
@@ -64,6 +71,17 @@ func credentialRefusal(status int, raw []byte, sentToken bool) (string, bool) {
 			return "this token doesn't have " + strings.Join(grants, " or ") +
 				". Ask an admin for it", true
 		}
+		if reason == string(authz.ReasonUnseated) {
+			// NO GRANT WOULD, AND NO RELATION EITHER: the verb is made AS
+			// A SEAT — said in a room, read as somebody who is in it — and
+			// this credential acts as itself. What changes it is which
+			// credential, or a binding, so that is what is named: the
+			// reason's bare word sent an operator holding admin looking
+			// for a permission they already had.
+			return "this token acts as no seat, and this is done as one. Use " +
+				"your own token (`crewlet iam token -login LOGIN`), or bind " +
+				"this one to a human seat (`crewlet iam bind ID SEAT`)", true
+		}
 		// NO GRANT WOULD: what is missing is a relation — the seat is not
 		// the caller's and they do not lead it — and the reason names it.
 		return "this token isn't allowed to do this (" + reason + ")", true
@@ -71,20 +89,58 @@ func credentialRefusal(status int, raw []byte, sentToken bool) (string, bool) {
 	return "", false
 }
 
-// withRefusalDetail appends a refusal's detail and hint to the message a
-// client has already built, each on its own indented line, skipping whichever
-// the body did not carry.
+// refusalWords are what an engine refusal says to a person beside its code,
+// as every client here decodes them from the envelope: embedded in each
+// client's own body, so none can decode two of them and miss the third.
+type refusalWords struct {
+	// Message is the code's own sentence, written for people
+	// ([httpjson.Code.Message]); the envelope carries it beside every code
+	// the vocabulary words.
+	Message string `json:"message"`
+	// Detail is this refusal in a person's words, where the node worded one.
+	Detail string `json:"detail"`
+	// Hint says what to do about it.
+	Hint string `json:"hint"`
+}
+
+// said is the sentence saying what happened: the detail where the node worded
+// one, and the code's own message where it did not.
+//
+// ONE OR THE OTHER, NEVER BOTH, as the dashboard reads them (ADR-0060): a
+// detail is the same refusal said of this request, so it replaces the code's
+// general sentence rather than standing under it, and a refusal nobody has
+// worded for a person still says what kind of refusal it is.
+func (w refusalWords) said() string {
+	if w.Detail != "" {
+		return w.Detail
+	}
+	return w.Message
+}
+
+// answerWords is [refusalWords] off an answer decoded whole, as the iam
+// clients decode theirs.
+func answerWords(answer map[string]any) refusalWords {
+	var words refusalWords
+	words.Message, _ = answer["message"].(string)
+	words.Detail, _ = answer["detail"].(string)
+	words.Hint, _ = answer["hint"].(string)
+	return words
+}
+
+// withRefusalDetail appends what a refusal says to the message a client has
+// already built, each on its own indented line: [refusalWords.said], then the
+// hint, skipping whichever the body did not carry.
 //
 // THE MESSAGE IS THE CALLER'S, not this function's — each builds it from the
 // engine's `error`, or from [foreignAnswer] when the body carried none. What
-// is shared here is what happens to `detail` and `hint`, which is the part
+// is shared here is what happens to the words beside it, which is the part
 // that was drifting.
 //
 // `error` says WHAT happened and `hint` says WHAT TO DO, which is why dropping
 // the second is worse than it looks: "draining" tells an operator nothing they
 // can act on, while the hint beside it names the peer to retry against.
-func withRefusalDetail(msg, detail, hint string) string {
-	for _, extra := range []string{detail, hint} {
+func withRefusalDetail(msg string, words refusalWords) string {
+	for _, extra := range []string{words.said(), words.Hint} {
 		if extra != "" {
 			msg += "\n  " + extra
 		}

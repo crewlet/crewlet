@@ -155,9 +155,8 @@ const maxConfigResponseBytes = 16 * configapi.MaxBodyBytes
 // refusal turns a status code into something an operator can act on.
 func (c *configClient) refusal(status int, contentType string, raw []byte) error {
 	var body struct {
+		refusalWords
 		Error   string `json:"error"`
-		Detail  string `json:"detail"`
-		Hint    string `json:"hint"`
 		Reason  string `json:"reason"`
 		Current string `json:"current_revision_id"`
 		Stored  string `json:"stored_revision_id"`
@@ -205,7 +204,7 @@ func (c *configClient) refusal(status int, contentType string, raw []byte) error
 		msg = foreignAnswer(contentType, raw)
 	}
 	return fmt.Errorf("%s answered %d for PUT /config: %s", c.base, status,
-		withRefusalDetail(msg, body.Detail, body.Hint))
+		withRefusalDetail(msg, body.refusalWords))
 }
 
 // unansweredImport is an import the node stored and whose activation the

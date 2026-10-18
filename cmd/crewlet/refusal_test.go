@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -43,11 +44,127 @@ func TestANodeRefusalCarriesItsDetailAndHintToTheOperator(t *testing.T) {
 
 func TestARefusalWithNothingBesideTheCodeIsLeftAlone(t *testing.T) {
 	t.Parallel()
-	if got := withRefusalDetail("draining", "", ""); got != "draining" {
+	if got := withRefusalDetail("draining", refusalWords{}); got != "draining" {
 		t.Errorf("withRefusalDetail with no extras = %q, want the message unchanged", got)
 	}
-	if got := withRefusalDetail("draining", "", "retry elsewhere"); got != "draining\n  retry elsewhere" {
+	if got := withRefusalDetail("draining", refusalWords{Hint: "retry elsewhere"}); got !=
+		"draining\n  retry elsewhere" {
 		t.Errorf("withRefusalDetail skipping an absent detail = %q", got)
+	}
+}
+
+// A REFUSAL NOBODY WORDED FOR A PERSON SAYS ITS CODE'S OWN SENTENCE, and one
+// the node did word says that instead: the detail is the same refusal said of
+// this request, so the two never stand one under the other. Mutation: drop the
+// message from [refusalWords.said] and the floor reads the bare code; say both
+// and a worded refusal carries its code's general sentence above its own.
+func TestARefusalSaysItsDetailOrElseItsCodesSentence(t *testing.T) {
+	t.Parallel()
+	conflict := httpjson.CodeConflict.Message()
+	if got, want := withRefusalDetail("conflict", refusalWords{Message: conflict}),
+		"conflict\n  "+conflict; got != want {
+		t.Errorf("a refusal at the floor reads %q, want %q", got, want)
+	}
+	worded := refusalWords{Message: conflict, Detail: "The room is archived.",
+		Hint: "Unarchive it first."}
+	if got, want := withRefusalDetail("conflict", worded),
+		"conflict\n  The room is archived.\n  Unarchive it first."; got != want {
+		t.Errorf("a worded refusal reads %q, want %q", got, want)
+	}
+}
+
+// EVERY CLIENT SAYS THE CODE'S OWN SENTENCE FOR A REFUSAL NOBODY WORDED FOR A
+// PERSON, which is ADR-0060's floor: no `detail`, and the code's `message` the
+// whole of what the refusal says. Three of the four decoded `error`, `detail`
+// and `hint` and never `message`, so `crewlet chatlet post` into an archived
+// room printed "the node answered 409: conflict" and nothing more. The bodies
+// are the node's own envelope rather than a sentence typed here, and each
+// client is asked, so a renderer that skipped the shared rule would have to be
+// left out of this list to escape it. Mutation: drop the message from
+// [refusalWords.said], or decode a client's body without [refusalWords], and
+// that client reads the bare code.
+func TestEveryClientSaysTheCodesSentenceForARefusalNobodyWorded(t *testing.T) {
+	t.Parallel()
+	config := &configClient{base: "http://node"}
+	secrets := &secretsClient{base: "http://node"}
+	decoded := func(raw []byte) map[string]any {
+		var answer map[string]any
+		_ = json.Unmarshal(raw, &answer)
+		return answer
+	}
+	clients := map[string]func(status int, raw []byte) error{
+		"node": func(status int, raw []byte) error { return nodeError(status, raw, true) },
+		"config": func(status int, raw []byte) error {
+			return config.refusal(status, "application/json", raw)
+		},
+		"secrets": func(status int, raw []byte) error {
+			return secrets.refusal(status, "/secrets/X", "application/json", raw)
+		},
+		"iam": func(status int, raw []byte) error {
+			return iamRefusal(status, "application/json", decoded(raw), raw, true)
+		},
+		"iam self": func(status int, raw []byte) error {
+			return selfRefusal(status, decoded(raw), raw)
+		},
+	}
+	for name, refusal := range clients {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			for _, c := range []struct {
+				status int
+				code   httpjson.Code
+			}{
+				{http.StatusConflict, httpjson.CodeConflict},
+				{http.StatusUnprocessableEntity, httpjson.CodeInvalid},
+				{http.StatusForbidden, httpjson.CodeForbidden},
+			} {
+				raw, err := json.Marshal(httpjson.Envelope(c.code, nil))
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = refusal(c.status, raw)
+				if err == nil || !strings.Contains(err.Error(), string(c.code)) ||
+					!strings.Contains(err.Error(), c.code.Message()) {
+					t.Errorf("a %d %s nobody worded reads %v, want the code and its "+
+						"own sentence", c.status, c.code, err)
+				}
+			}
+		})
+	}
+}
+
+// THE NODE CLIENT SAYS THE CODE'S SENTENCE IN EVERY ARM it frames a refusal
+// in: a refusal it relays as the node's answer, a 503 it frames as a node
+// that cannot serve, and a gate's judgement. Mutation: put the bare detail
+// back in any one arm and that arm reads the bare code.
+func TestTheNodeClientSaysTheCodesSentenceInEveryArm(t *testing.T) {
+	t.Parallel()
+	judged := func(err error) string {
+		var refusal *nodeRefusal
+		if !errors.As(err, &refusal) {
+			return err.Error()
+		}
+		return refusal.asJudgement().Error()
+	}
+	for _, c := range []struct {
+		name   string
+		status int
+		code   httpjson.Code
+		read   func(error) string
+	}{
+		{"answered", http.StatusNotFound, httpjson.CodeNotFound, error.Error},
+		{"cannot serve", http.StatusServiceUnavailable, httpjson.CodeUnavailable, error.Error},
+		{"judgement", http.StatusServiceUnavailable, httpjson.CodeUnavailable, judged},
+	} {
+		raw, err := json.Marshal(httpjson.Envelope(c.code, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if said := c.read(nodeError(c.status, raw, true)); !strings.Contains(said,
+			string(c.code)) || !strings.Contains(said, c.code.Message()) {
+			t.Errorf("%s: a %d %s nobody worded reads %q, want the code and its own "+
+				"sentence", c.name, c.status, c.code, said)
+		}
 	}
 }
 
@@ -125,6 +242,25 @@ func TestAForbiddenThatNamesNoGrantIsNotReadAsOne(t *testing.T) {
 		[]byte(`{"error":"unauthorized","reason":"not_lead","grants":[]}`), true)
 	if !ok || !strings.Contains(msg, "not_lead") {
 		t.Errorf("a refusal no grant would lift = %q, %v; want the reason named", msg, ok)
+	}
+}
+
+// A VERB MADE AS A SEAT, REFUSED TO A TOKEN ACTING AS NONE, NAMES THE TWO WAYS
+// PAST IT: no grant would lift it, so its bare reason sent an operator holding
+// admin looking for a permission they already had. Mutation: drop the
+// unseated arm and the refusal reads the bare reason with neither command.
+func TestAnUnseatedRefusalNamesTheTokenAndTheBinding(t *testing.T) {
+	t.Parallel()
+	msg, ok := credentialRefusal(http.StatusForbidden,
+		[]byte(`{"error":"unauthorized","reason":"unseated","grants":[]}`), true)
+	if !ok {
+		t.Fatalf("an unseated refusal was not read as a refusal on authority: %q", msg)
+	}
+	for _, want := range []string{"acts as no seat", "crewlet iam token -login LOGIN",
+		"crewlet iam bind ID SEAT"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("an unseated refusal reads %q, want it to say %q", msg, want)
+		}
 	}
 }
 

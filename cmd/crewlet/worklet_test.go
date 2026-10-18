@@ -319,10 +319,10 @@ func TestAPurgeTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
 		t.Fatalf("the unanswered purge sent the key %q and printed:\n%s\nwant the "+
 			"retry that names it", sent, stderr)
 	}
-	if purgeRequestTimeout <= 3*statelog.DefaultResolveBudget ||
-		purgeRequestTimeout <= nodeRequestTimeout {
+	if logWriteTimeout <= 3*statelog.DefaultResolveBudget ||
+		logWriteTimeout <= nodeRequestTimeout {
 		t.Errorf("worklet purge waits %s, not past the three %s waits a purge can "+
-			"make and the %s a round trip gets", purgeRequestTimeout,
+			"make and the %s a round trip gets", logWriteTimeout,
 			statelog.DefaultResolveBudget, nodeRequestTimeout)
 	}
 }

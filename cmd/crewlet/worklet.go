@@ -129,7 +129,7 @@ func workletPurge(environ config.Source, args []string, stdout, stderr io.Writer
 	// UNDER THE SAME ID, as [keyedWrite.settle] tells the operator: a fresh
 	// one would append a second purge of an item an earlier attempt may
 	// already have destroyed.
-	if err := write.settle(stderr, client.patiently(purgeRequestTimeout).postKeyed(
+	if err := write.settle(stderr, client.patiently(logWriteTimeout).postKeyed(
 		context.Background(), path, operation, nil, &answer)); err != nil {
 		return err
 	}
@@ -137,23 +137,32 @@ func workletPurge(environ config.Source, args []string, stdout, stderr io.Writer
 		return err
 	}
 
-	position := ""
-	if answer.Position != "" {
-		position = " at " + answer.Position
-	}
-	fmt.Fprintf(stdout, "purge %s in %s (%s): %s%s (operation %s)\n", answer.Key,
-		answer.Project, answer.Task, answer.Outcome, position,
+	reportDestruction(stdout, fmt.Sprintf("purge %s in %s (%s)", answer.Key,
+		answer.Project, answer.Task), answer.Outcome, answer.Position,
 		firstNonEmpty(answer.OpID, operation))
-	if answer.Outcome == string(statelog.OutcomePending) {
+	return nil
+}
+
+// reportDestruction prints what a destruction answered — `worklet purge`, `chatlet
+// erase` and `chatlet prune` alike: `what` names the gesture, and `operation` the
+// operation it was made under. Only an applied or a pending one reaches it:
+// [keyedWrite.settle] and [keyedWrite.confirmed] fail every other.
+func reportDestruction(stdout io.Writer, what, outcome, position, operation string) {
+	at := ""
+	if position != "" {
+		at = " at " + position
+	}
+	fmt.Fprintf(stdout, "%s: %s%s (operation %s)\n", what, outcome, at, operation)
+	if outcome == string(statelog.OutcomePending) {
 		// THE THREE-VALUED OUTCOME, said plainly and NOT as a failure.
 		// The record is on the log and every data node applies it as it
 		// reaches it; running the gesture again would append a second
-		// purge of an item the first one already destroyed.
+		// destruction of rows the first one already destroyed.
 		fmt.Fprintln(stdout, "  The record is durable and this node has not "+
 			"applied it yet: the rows go as each data node reaches it. Do not "+
 			"run this again.")
 	}
-	// WHAT A PURGE DOES NOT REACH, every time rather than in the docs
+	// WHAT A DESTRUCTION DOES NOT REACH, every time rather than in the docs
 	// alone. An offline or evicted disk keeps its copy until replay,
 	// adoption, replacement or destruction, and there is no duration to
 	// state — so an operator acting on an erasure request has to be told
@@ -161,18 +170,20 @@ func workletPurge(environ config.Source, args []string, stdout, stderr io.Writer
 	fmt.Fprintln(stdout, "  A node that is offline or evicted keeps its copy "+
 		"until it replays, adopts a snapshot, is replaced or is destroyed. "+
 		"`crewlet retention status` names which nodes those are.")
-	return nil
 }
 
-// purgeRequestTimeout is how long `worklet purge` waits for the node's answer.
+// logWriteTimeout is how long a command waits for the node's answer to a write
+// that is ONE RECORD ON A STATE LOG: a purge, a chat post, an erase, a prune, a
+// room's horizon.
 //
-// SIX RESOLVE BUDGETS. A purge is one record, and what it can legitimately
-// wait on is the write path's own: the wait for this node to reach the
-// caller's previous write, the wait for it to reach a peer's record on the
-// same task, and the resolution of its own append — each bounded at
+// SIX RESOLVE BUDGETS. What such a write can legitimately wait on is the write
+// path's own: the wait for the answering node to reach the caller's previous
+// write, the wait for it to reach a peer's record on the same object, and the
+// resolution of its own append — each bounded at
 // [statelog.DefaultResolveBudget]. Three of those back to back is fifteen
 // seconds, past the ten every other verb waits, which is where a working purge
 // was abandoned and reported with no operation id to retry it under; twice
 // that leaves room for the arbitration rounds between them and the request
-// around them.
-const purgeRequestTimeout = 6 * statelog.DefaultResolveBudget
+// around them. A coordination write — a seat's pause — is a compare-and-set,
+// not a record, and keeps the ordinary ceiling.
+const logWriteTimeout = 6 * statelog.DefaultResolveBudget

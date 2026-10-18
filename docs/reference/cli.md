@@ -96,6 +96,16 @@ subcommand below is served by it.
 > `CREWLET_LOG_COLOR` / `NO_COLOR` everywhere — see
 > [Environment Variables](environment-variables.md#logging).
 
+> **A command that talks to a running node prints a refusal as the node
+> answered it**: its [code](api-endpoints.md#every-refusal-is-one-envelope),
+> what the refusal says, and what to do about it (its `hint`). What it says is
+> the node's `detail` where the node worded one for this refusal, and
+> otherwise the code's own `message`, which is all a refusal nobody has worded
+> for a person carries; the two are never printed one under the other. A
+> `401`, and a `403 unauthorized` naming the rule that refused, are about the
+> token rather than the request, and are said as that: why the node didn't
+> take the token, or what it lacks and what to use instead.
+
 ### Where a command reads the company's values
 
 **Every command that reads the Tier B company document** — `crewlet llm`, every
