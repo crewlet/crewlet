@@ -130,6 +130,9 @@ type Service struct {
 	frames  Framer
 	ready   Beacon
 	pace    func() time.Time
+
+	// decks are the decks this node read for the dashboard, by version.
+	decks *deckCache
 }
 
 // New builds the surface.
@@ -157,7 +160,8 @@ func New(opts Options) (*Service, error) {
 		pace = time.Now
 	}
 	return &Service{gate: opts.Gate, reads: opts.Reads, writes: opts.Writes, uploads: opts.Uploads,
-		objects: opts.Objects, frames: opts.Frames, ready: opts.Ready, pace: pace}, nil
+		objects: opts.Objects, frames: opts.Frames, ready: opts.Ready, pace: pace,
+		decks: newDeckCache(deckCacheBytes)}, nil
 }
 
 // Gate is the surface's admission, which the read questions take too.
@@ -222,6 +226,8 @@ func (s *Service) Routes(mux authz.Mux) error {
 		{"POST /artifacts/{id}/tickets", pre, s.ticket},
 		{patternFiles, pre, s.file},
 		{"GET /artifacts/{id}/versions/{n}/source", pre, s.source},
+		{"GET /artifacts/{id}/versions/{n}/deck", pre, s.deck},
+		{"GET /artifacts/{id}/versions/{n}/outline", pre, s.outline},
 		{"POST /artifacts/ready", ready, s.reportReady},
 	} {
 		if err := router.Handle(route.pattern, route.policy, route.handler); err != nil {
