@@ -2165,8 +2165,10 @@ reference](../reference/cli.md#crewlet-llm).
   shared fleet state. So a `claude-code` entry with no headless token, or an
   `opencode` entry signed in only by `crewlet llm login`, needs a
   [local cell](code-sandbox.md#local-sandboxes) (`providers.sandbox.local`
-  plus `run_in: direct` or `container`), which is seeded with the login and
-  writes a refreshed one back when the box closes. Any other CLI — Codex, Gemini
+  plus `run_in: direct` or `container`), which is seeded with the login and,
+  when the box closes, writes back one its run refreshed — only while the
+  shared login still holds what the box was seeded with, by the same
+  compare-and-swap a seat's refresh takes. Any other CLI — Codex, Gemini
   CLI, Kimi Code, `hermes`, `pi` — points `role.llm_sandbox` at an API
   entry; see [Code Sandbox](code-sandbox.md#failure-modes).
 - **Latency.** Process launch plus model call. Point `llm_auxiliary` at
