@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
@@ -68,6 +69,7 @@ func TestTheDashboardBoundsArtifactTextAtTheEnginesCaps(t *testing.T) {
 		"ARTIFACT_ICON_MAX_BYTES":        artifacts.MaxIconBytes,
 		"ARTIFACT_LABEL_MAX_BYTES":       artifacts.MaxLabelBytes,
 		"PRESENCE_FRAMES_PER_SECOND":     artifacts.PresenceClientRate,
+		"ARTIFACT_TRASH_RETENTION_DAYS":  int(artifacts.TrashRetention / (24 * time.Hour)),
 	} {
 		raw, err := clientsource.Scalar(clientsource.Tree(t), name)
 		if err != nil {

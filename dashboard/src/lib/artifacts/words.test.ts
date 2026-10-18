@@ -11,6 +11,8 @@ import {
   dataRefusalReason,
   dataRefusalText,
   historyWords,
+  purgeAt,
+  purgeSentence,
   roleIncludes,
 } from "./words.ts";
 
@@ -148,5 +150,18 @@ describe("a cell's change in its history", () => {
     expect(cellChangeWords({ f: "gate", b: "a" })).toBe("Cleared “a”");
     expect(cellChangeWords({ f: "tags", b: [], a: ["x", "y"] })).toBe("Set to “x, y”");
     expect(cellChangeWords({ f: "notes", bh: "d1", ah: "d2" })).toBe("Changed the text");
+  });
+});
+
+describe("the trash", () => {
+  test("names the day an artifact is deleted for good, from the engine's retention", () => {
+    expect(purgeAt("2026-10-18T10:00:00Z")).toBe("2026-11-17T10:00:00.000Z");
+    expect(purgeSentence("2026-10-18T10:00:00Z")).toMatch(/^It is deleted for good on .+ unless/);
+    expect(purgeSentence("2026-10-18T10:00:00Z")).not.toMatch(/30 days/);
+  });
+
+  test("an unknown trash time says the retention rather than a wrong date", () => {
+    expect(purgeAt("0001-01-01T00:00:00Z")).toBeNull();
+    expect(purgeSentence(undefined)).toMatch(/30 days after it was trashed/);
   });
 });

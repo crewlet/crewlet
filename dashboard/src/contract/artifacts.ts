@@ -55,6 +55,12 @@ export const ARTIFACT_ICON_MAX_BYTES = 40;
 /** The longest version label, in UTF-8 bytes (`artifacts.MaxLabelBytes`). */
 export const ARTIFACT_LABEL_MAX_BYTES = 60;
 
+/**
+ * How many days a trashed artifact is kept before it is deleted for good
+ * (`artifacts.TrashRetention`): the date every trash sentence names.
+ */
+export const ARTIFACT_TRASH_RETENTION_DAYS = 30;
+
 /** Every column type a datastore validates (`artifacts.ColumnTypes`). */
 export const COLUMN_TYPES = [
   "text",

@@ -11,6 +11,7 @@ import {
   ARTIFACT_CAPABILITIES,
   ARTIFACT_KINDS,
   ARTIFACT_ROLES,
+  ARTIFACT_TRASH_RETENTION_DAYS,
   SHAREABLE_ROLES,
 } from "~/contract/artifacts.ts";
 import type {
@@ -25,7 +26,7 @@ import type {
   DataVerdict,
   ShareableRole,
 } from "~/protocol/index.ts";
-import { plural } from "../format.ts";
+import { fmtDate, parseUTC, plural } from "../format.ts";
 
 /** What each kind is called, in the eyebrow, the gallery's Type column and its filter. */
 export const KIND_WORDS: Readonly<Record<ArtifactKind, string>> = {
@@ -306,4 +307,22 @@ function stripPast(said: string): string {
     if (said.startsWith(`${past} `) || said === past) return base + said.slice(past.length);
   }
   return said;
+}
+
+/** How long the trash keeps an artifact, in words: "30 days". */
+export const TRASH_KEPT = plural(ARTIFACT_TRASH_RETENTION_DAYS, "day");
+
+/** When a trashed artifact is deleted for good, as an instant, or null where the trash time is unknown. */
+export function purgeAt(trashedAt: string | null | undefined): string | null {
+  const at = parseUTC(trashedAt);
+  if (!at || at.getUTCFullYear() < 2000) return null;
+  return new Date(at.getTime() + ARTIFACT_TRASH_RETENTION_DAYS * 86_400_000).toISOString();
+}
+
+/** "Deleted for good on 17 November 2026 unless restored.", or the retention where the date is unknown. */
+export function purgeSentence(trashedAt: string | null | undefined): string {
+  const at = purgeAt(trashedAt);
+  return at
+    ? `It is deleted for good on ${fmtDate(at)} unless its owner restores it.`
+    : `It is deleted for good ${TRASH_KEPT} after it was trashed unless its owner restores it.`;
 }
