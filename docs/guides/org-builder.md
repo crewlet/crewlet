@@ -143,9 +143,11 @@ contact identity, so human leads are created without one, and the only identity
 written is the one you type for your own seat — which is optional too: leave it
 empty if you will work only through the dashboard. A human seat with no contact
 identity is legitimate. On the engine's own chat an agent mentions a person by
-their seat, so nothing is missing; on a company that talks on Mattermost or
-Slack, nothing addressed to the seat there reaches anybody, so the
-configuration warns about it at the seat's `contact` — and the review lists
+their seat's handle — a lead's roster gives each human report as `@handle`, and
+the note on human colleagues says to mention them there — so nothing is missing;
+on a company that talks on Mattermost or Slack, nothing addressed to the seat
+there reaches anybody, so
+the configuration warns about it at the seat's `contact` — and the review lists
 that warning with the others — until an id on that workspace is added.
 
 Everything the template writes is one change: undo takes you back to the form.
