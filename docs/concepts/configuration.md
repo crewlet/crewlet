@@ -821,10 +821,12 @@ A script that only reads what the company is doing now holds **a service
 account's token with no permission at all** — it reads the overview and
 nothing else — listable, revocable without a restart, and present in the audit
 log, none of which a posture flag could be. A file that still
-carries the key is refused, exactly as one carrying any key this build does not
-know is — Tier A is decoded strictly, so an unknown field is an error rather
-than something ignored — which is what keeps it from silently running the
-opposite posture from the one the file asks for.
+carries the key is refused — Tier A is decoded strictly, so a key it does not
+know is an error rather than something ignored, which is what keeps it from
+silently running the opposite posture from the one the file asks for — and the
+refusal names it as removed and says to give a read-only client an
+`api.auth.tokens` entry with only the apps it reads, rather than asking for a
+spelling no spelling of it passes.
 
 `api.auth.disabled` went with it. It authenticated the **empty** credential
 into full operator authority with no check on the bind address anywhere, which
@@ -841,7 +843,8 @@ copied into an image. It grants every app, and `admin` only where
 `api.auth.oidc` is retired too: the engine no longer signs anybody in through
 an identity provider. A person signs in with a login, a password and — unless
 `api.auth.totp` says `optional` — a second factor the engine holds. A file that
-still carries the block is refused like any other unknown key.
+still carries the block is refused, and the refusal says it was removed and
+that people sign in with a password and two-step verification instead.
 
 There is no switch for password sign-in, either: it is always served. A
 deployment nobody has been invited to already signs nobody in, because nobody

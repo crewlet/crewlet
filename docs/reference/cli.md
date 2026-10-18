@@ -170,7 +170,8 @@ look for a switch that turns authentication off. There was one — Tier A's
 operator authority with no check on the bind address anywhere, so one unset
 environment variable was a total bypass of every gate, on any deployment,
 reachable by anyone who could reach the port. It is retired; a file still
-carrying it is refused, as one carrying any key this build does not know is.
+carrying it is refused at that line, and the refusal says the key was removed
+and that local development uses `crewlet run -dev-principal` instead.
 
 `-dev-principal` is the thing somebody actually wanted, with the two guards
 that field never had:
