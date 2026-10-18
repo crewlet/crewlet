@@ -1822,15 +1822,20 @@ func TestTheSubtaskRollupKeepsItsContainer(t *testing.T) {
 //
 // So every statement the reader runs over a rolled-up set — the page, its
 // count, its totals, a board's columns and rows, and where one task sits —
-// seeks the anchor by its key, and reads the anchor no other way. The list
+// seeks the anchor by its key, and reads the anchor no other way: the probe
+// asking which side of the trash it is on reads it by its key too. The list
 // form is refused for every statement by the gate's own [refuseSetWalks].
 // Which queries roll up is spelled here from their parameters rather than
 // asked of [rollsUp], which is part of what is under test.
 func TestARolledUpRowProbesItsAnchorByKey(t *testing.T) {
 	t.Parallel()
 	db := planStore(t)
+	// THE ANCHOR AND ITS SIDE: the probe of the root, and the probe asking
+	// which side of the trash it is on ([anchorOf]) — each one task by its
+	// key, and neither read any other way.
 	probe := regexp.MustCompile(`^SEARCH a USING (INDEX sqlite_autoindex_tracker_tasks_1|PRIMARY KEY) \(id=\?\)$`)
-	anchor := regexp.MustCompile(`^(SEARCH a |SCAN tracker_tasks AS a( |$))`)
+	side := regexp.MustCompile(`^SEARCH s USING (INDEX sqlite_autoindex_tracker_tasks_1|PRIMARY KEY) \(id=\?\)$`)
+	anchor := regexp.MustCompile(`^(SEARCH [as] |SCAN tracker_tasks AS [as]( |$))`)
 	rolled := 0
 	for name, params := range registeredQueries() {
 		_, moded := params["subtasks"]
@@ -1854,6 +1859,7 @@ func TestARolledUpRowProbesItsAnchorByKey(t *testing.T) {
 					switch {
 					case probe.MatchString(line):
 						sought = true
+					case side.MatchString(line):
 					case anchor.MatchString(line):
 						t.Errorf("%s reads each row's root other than by its "+
 							"key:\n%s", what, shown)

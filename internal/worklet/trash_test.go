@@ -81,13 +81,12 @@ func TestATaskCanBeRemovedAndRestored(t *testing.T) {
 	}
 }
 
-// A SUBTREE LEAVES TOGETHER AND COMES BACK TOGETHER — and brings back only
-// what it took.
+// A SUBTREE REMOVED TOGETHER COMES BACK TOGETHER — and brings back only what
+// it took.
 //
-// Removing a parent and leaving its children reachable is the shape that makes
-// orphans somebody then has to find. `removed_with` is what makes the inverse
-// true: a task already in the trash for its own reasons is not restored by
-// somebody restoring its parent.
+// `removed_with` is what makes a subtree gesture's inverse exact: a task
+// already in the trash for its own reasons is not restored by somebody
+// restoring its parent.
 func TestRemovingASubtreeIsReversibleAndBringsBackOnlyWhatItTook(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -670,4 +669,83 @@ func TestTheTrashListsEveryRemovalUnderItsOwnRoot(t *testing.T) {
 func sameSet(got, want []string) bool {
 	return len(got) == len(want) &&
 		!slices.ContainsFunc(want, func(id string) bool { return !slices.Contains(got, id) })
+}
+
+// A TASK WHOSE ANCHOR IS ACROSS THE TRASH IS FILTERED ON ITS OWN.
+//
+// A row rides along with its anchor — its root, or in the trash its removal —
+// and a gesture can move one to the other side of the trash without the
+// other. Two shapes, on the two sides:
+//
+//   - the residue of a restore that stopped after its root: a subtask still
+//     in the trash whose tombstone names a root that is back;
+//   - a parent removed alone, which is all its author may do, over a live
+//     subtask.
+//
+// Probed for the anchor's answer, each was in no default-mode listing — the
+// residue in no trash, the live subtask on no board — and only
+// `subtasks=separate` reached either. Each is the root of what is left, so it
+// is listed, and filtered, on its own.
+func TestATaskWhoseAnchorIsAcrossTheTrashIsFilteredOnItsOwn(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	file := func(id, kind, parent string, tombstone *worklet.Tombstone) {
+		t.Helper()
+		task := newTask(id)
+		task.Key = "ENG-" + id
+		task.Type = kind
+		if parent != "" {
+			task.Parent = &parent
+			task.Depth = 1
+		}
+		task.Removed = tombstone
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, task, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	// THE RESIDUE, seeded with the tombstone the stopped restore left:
+	// what is under test is the predicate that reads it.
+	root := "root-y"
+	file(root, "task", "", nil)
+	file("sub-y", "bug", root, &worklet.Tombstone{
+		By: "ana", Kind: worklet.AuthorHuman, At: wednesday, RemovedWith: &root,
+	})
+	// AND A PARENT REMOVED ALONE OVER A LIVE SUBTASK.
+	file("root-z", "task", "", nil)
+	file("sub-z", "bug", "root-z", nil)
+	if _, err := r.writer.RemoveTask(t.Context(), "op-rm-root-z", "root-z", "ENG",
+		false, nil); err != nil {
+		t.Fatalf("RemoveTask root-z: %v", err)
+	}
+	r.drain()
+
+	for _, container := range []string{"project:ENG", "workspace"} {
+		for _, mode := range []string{"collapsed", "expanded"} {
+			ask := func(extra map[string]any) []string {
+				params := map[string]any{"container": container, "subtasks": mode}
+				for key, value := range extra {
+					params[key] = value
+				}
+				return ids(r.ask(params))
+			}
+			what := container + " " + mode
+			if got := ask(map[string]any{"removed": "true"}); !sameSet(got, []string{"root-z", "sub-y"}) {
+				t.Errorf("%s: the trash lists %v, want the removed parent and "+
+					"the subtask its restore left behind", what, got)
+			}
+			if got := ask(map[string]any{"removed": "true", "type": "bug"}); !sameSet(got, []string{"sub-y"}) {
+				t.Errorf("%s: the trash's bugs are %v, want the subtask filtered "+
+					"on its own", what, got)
+			}
+			if got := ask(nil); !sameSet(got, []string{"root-y", "sub-z"}) {
+				t.Errorf("%s: the board lists %v, want the restored root and the "+
+					"subtask its parent's removal left", what, got)
+			}
+			if got := ask(map[string]any{"type": "bug"}); !sameSet(got, []string{"sub-z"}) {
+				t.Errorf("%s: the board's bugs are %v, want the subtask filtered "+
+					"on its own", what, got)
+			}
+		}
+	}
 }

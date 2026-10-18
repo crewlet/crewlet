@@ -28,13 +28,22 @@ import (
 // being possible. That is the property the tombstone buys and the reason
 // nothing here has a retention horizon.
 //
-// # A SUBTREE LEAVES TOGETHER OR NOT AT ALL
+// # A SUBTREE GESTURE TAKES ITS SUBTREE, AND AN ITEM'S ALONE TAKES THE ITEM
 //
-// Removing a parent and leaving its children reachable is the shape that
-// produces orphans a person then has to find. `RemovedWith` is what makes the
-// inverse true as well: every descendant's tombstone names the root of the
-// gesture that removed it, so a restore brings back exactly what one removal
-// took and never a task that was already in the trash for its own reasons.
+// A removal made on a subtree takes the whole subtree, and `RemovedWith` is
+// what makes its inverse exact: every descendant's tombstone names the root of
+// the gesture that removed it, so a restore brings back exactly what one
+// removal took and never a task that was already in the trash for its own
+// reasons.
+//
+// A removal made on one item ALONE is a gesture too, and the one an author
+// makes: whoever filed an item may put it in the trash, and what hangs from it
+// may be anybody's, so taking that too is the project lead's or an admin's.
+// Its live subtasks stay where they are, and nothing is orphaned out of sight
+// by it: a listing anchors a task whose root is on the other side of the trash
+// on the task itself ([anchorOf]), so each of them is on every board and list
+// it belongs on, as the root of what is left and filtered on its own, until
+// its parent comes back.
 //
 // It is how the trash is LISTED as well. What somebody restores is a removal,
 // so in the default subtask mode the trash lists each one once, under the task
@@ -173,11 +182,13 @@ func (w *Writer) RemoveTask(ctx context.Context, opID, id, project string,
 		}
 	}
 
-	// THE ROOT FIRST. A descendant removed while its parent is still live
-	// is an ordinary state somebody can undo; a live child under a removed
-	// parent is the orphan this order exists to avoid — which is also why
-	// an UNKNOWN root ends the walk: nothing follows a root nobody can say
-	// went.
+	// THE ROOT FIRST, because the root is what the gesture is ABOUT: its
+	// own step is the one the answer reports, and an UNKNOWN root ends the
+	// walk, since nothing follows a root nobody can say went. A walk that
+	// stops part of the way through leaves the rest live under a removed
+	// root, which is the state removing an item alone leaves by design — each
+	// stays on every listing as the root of what is left ([anchorOf]) — and
+	// the same gesture again takes what this one did not reach.
 	result, err := w.tombstone(ctx, opID, id, project, stamp, notify)
 	if err = resolved(fmt.Sprintf("task %s's removal", id), result, err); err != nil {
 		return result, err

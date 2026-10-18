@@ -91,8 +91,9 @@ func (t *removeWorkItem) Description() string {
 		"board, its history is untouched, and it can be restored at any age " +
 		"with restore_work_item — there is no window. Nothing is destroyed: " +
 		"that is `crewlet worklet purge`, which has no inverse. Pass " +
-		"`subtree: true` to take its children with it; leaving them behind " +
-		"makes them orphans somebody has to find."
+		"`subtree: true` to take its children with it; left behind, each " +
+		"stays on every list and board it is on, as the root of what is " +
+		"left, until this item comes back."
 }
 
 func (t *removeWorkItem) Parameters() map[string]any {

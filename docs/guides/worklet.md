@@ -303,7 +303,7 @@ answer is that there is no such work.
 | **reporter** | who filed it. |
 | **unit** | the team the work belongs to, and the team it routes to — see [Which team an item belongs to](#which-team-an-item-belongs-to). |
 | **collaborators**, **watchers** | who is on the thread and who is listening. |
-| **parent**, **subtasks** | a tree, with a depth cap, inside ONE project: a subtask is filed in its parent's project, and a create or a re-parent that would put it anywhere else is refused, because a board draws a project's roots with their subtrees and a subtask filed elsewhere would be on neither board. A parent in the trash takes no new subtask, a purged one is refused as gone for good, and a task is never filed under itself or one of its own subtasks, which would make a cycle with no root to draw it from. Two re-parents made at the same moment on two nodes can still close a loop neither saw; it is applied rather than refused, flagged `cycle` (`flag=cycle` lists it), and a gesture on one of its tasks' subtrees — a move, a removal, a restore — takes the loop's other tasks and everything hanging from them, each once. A query filters ROOTS by default and lets their subtrees ride along; `subtasks=separate` filters every task on its own. In the trash the unit is the removal rather than the tree — see [Views](#views). Rolled up, the question is asked of each row's root by the root's key, so a page or a count costs the rows it reads rather than every task in the company or the project. Asking about the tree — `parent` for one item's subtasks, `has_children` for the items that have some — reads it through an index of the tree, so it costs those subtasks rather than the project's board or the company's tasks. |
+| **parent**, **subtasks** | a tree, with a depth cap, inside ONE project: a subtask is filed in its parent's project, and a create or a re-parent that would put it anywhere else is refused, because a board draws a project's roots with their subtrees and a subtask filed elsewhere would be on neither board. A parent in the trash takes no new subtask, a purged one is refused as gone for good, and a task is never filed under itself or one of its own subtasks, which would make a cycle with no root to draw it from. Two re-parents made at the same moment on two nodes can still close a loop neither saw; it is applied rather than refused, flagged `cycle` (`flag=cycle` lists it), and a gesture on one of its tasks' subtrees — a move, a removal, a restore — takes the loop's other tasks and everything hanging from them, each once. A query filters ROOTS by default and lets their subtrees ride along; `subtasks=separate` filters every task on its own. In the trash the unit is the removal rather than the tree — see [Views](#views) — and a task whose root, or in the trash whose removal, is on the other side of the trash is filtered on its own as the root of what is left. Rolled up, the question is asked of each row's root by the root's key, so a page or a count costs the rows it reads rather than every task in the company or the project. Asking about the tree — `parent` for one item's subtasks, `has_children` for the items that have some — reads it through an index of the tree, so it costs those subtasks rather than the project's board or the company's tasks. |
 | **start / due**, **estimate**, **points** | scheduling and sizing. |
 | **tags** | from a per-project tag set — see [Tags](#tags). A tag the project has not declared is REFUSED at the write. |
 | **custom fields** | declared per project and at the workspace, typed, with option lists — see [the catalogue](#the-catalogue). Filter on one with `f.<slug>`, and see [the operators](#filtering-a-custom-field). |
@@ -894,8 +894,9 @@ holds, and a column you sort it by sorts the trash alone. In the default
 subtask mode it lists each **removal** under the task the removal was made on,
 with what went with it riding along — what a restore of that task brings back —
 so a subtask removed on its own is a removal of its own and is listed as one,
-whatever became of its parent; `subtasks=separate` lists every removed task on
-its own row. What a removal, a deletion and a purge each mean is
+whatever became of its parent, and a task whose removal has been restored
+without it is listed on its own too; `subtasks=separate` lists every removed
+task on its own row. What a removal, a deletion and a purge each mean is
 [below](#removing-deleting-and-purging).
 
 **A view is a set of defaults, never a lock.** Opening one loads its
@@ -1315,7 +1316,10 @@ leaves no trace: the board simply has one fewer item on it. Removing an item
 with `subtree: true` takes its children with it, and each child's tombstone
 names the removal that took it — so restoring the parent brings back exactly
 what that gesture removed, and never a child that was already in the trash for
-its own reasons.
+its own reasons. Removing an item **alone** — all its reporter may do — leaves
+its children where they are: each stays on every list and board it is on,
+standing as the root of what is left and filtered on its own, until its parent
+comes back.
 
 Both are one commit per item, parent first, so a subtree gesture can stop part
 of the way through — a step whose outcome is unknown, or the stream refusing an
