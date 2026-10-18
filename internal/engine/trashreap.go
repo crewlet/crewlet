@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/trashreap"
@@ -131,8 +133,8 @@ func (e *Engine) stopTrashReaper() {
 }
 
 // trashSources is every trash this node can empty, in the order a pass visits
-// them: the knowledge base's where this node writes it. A domain with a trash
-// appends its source here.
+// them: the knowledge base's where this node writes it, then the artifacts'. A
+// domain with a trash appends its source here.
 //
 // FROM [Engine.writeSide], the one gate every surface that publishes the
 // company's records through this node is handed its writer from, so a node in
@@ -142,7 +144,59 @@ func (e *Engine) trashSources() []trashreap.Source {
 	if _, kb := e.writeSide(); kb != nil {
 		out = append(out, pagesTrash{store: kb})
 	}
+	// THE ARTIFACTS', which every data node runs whatever its company keeps:
+	// gated on the node's mode alone, the gate [Engine.writeSide] applies to
+	// the native half's writers.
+	if c := e.core.Load(); c != nil && e.mode.Publishes() &&
+		c.artifactsReader != nil && c.artifactsWriter != nil {
+		out = append(out, artifactsTrash{reader: c.artifactsReader, writer: c.artifactsWriter})
+	}
 	return out
+}
+
+// artifactsTrash is the artifacts' trash, as the reaper reaches it.
+type artifactsTrash struct {
+	reader *artifactsdomain.Reader
+	writer *artifactsdomain.Writer
+}
+
+func (artifactsTrash) Name() string { return artifactsdomain.Domain{}.Name() }
+
+func (a artifactsTrash) TrashedBefore(ctx context.Context, cutoff time.Time,
+	limit int) ([]string, error) {
+
+	ids, err := a.reader.TrashedBefore(ctx, cutoff, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = id.String()
+	}
+	return out, nil
+}
+
+// PurgeTrashed purges one artifact past its term as the engine, dependents
+// first, under the operation the reaper derived, which the writer keys the
+// gesture on ([artifactsdomain.Call.OpKey]) so a retry in the same slot
+// collapses into the first.
+func (a artifactsTrash) PurgeTrashed(ctx context.Context, id string, cutoff time.Time,
+	opID string) error {
+
+	parsed, err := artifacts.ParseID(id)
+	if err != nil {
+		return fmt.Errorf("%w: the trash listed %q: %w", trashreap.ErrNotEligible, id, err)
+	}
+	c := artifactsdomain.Call{
+		Authority: artifacts.Authority{
+			Actor: iam.Actor{Name: trashreap.Name, Kind: iam.ActorSystem},
+			Role:  artifacts.RoleOwner,
+		},
+		OpKey: opID,
+	}
+	written, err := a.writer.PurgeTrashed(ctx, c, parsed, cutoff)
+	return reapAnswer(written.Result, err, artifactsdomain.ErrNotInTrash,
+		artifactsdomain.ErrNotFound, artifactsdomain.ErrPurged)
 }
 
 // pagesTrash is the knowledge base's trash, as the reaper reaches it.

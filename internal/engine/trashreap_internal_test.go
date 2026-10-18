@@ -9,7 +9,10 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/trashreap"
@@ -66,21 +69,7 @@ func TestADataNodeReapsAPageOnlyOnceItsTermHasRunOut(t *testing.T) {
 	fleet := coordmemory.NewFleet()
 	reap := func(at time.Time) trashreap.SourceReport {
 		t.Helper()
-		r, err := trashreap.New(trashreap.Deps{
-			Sources: e.trashSources(), Term: artifacts.TrashRetention,
-			Reports: fleet, Node: e.id, Now: func() time.Time { return at },
-		})
-		if err != nil {
-			t.Fatalf("build the reaper: %v", err)
-		}
-		report, err := r.Pass(t.Context())
-		if err != nil {
-			t.Fatalf("pass at %s: %v", at, err)
-		}
-		if len(report.Sources) != 1 || report.Sources[0].Source != "pages" {
-			t.Fatalf("the pass reaped %+v, want the knowledge base alone", report.Sources)
-		}
-		return report.Sources[0]
+		return reapSource(t, e, fleet, at, "pages")
 	}
 
 	if got := reap(time.Now()); got.Purged != 0 || got.Failed != 0 {
@@ -103,6 +92,100 @@ func TestADataNodeReapsAPageOnlyOnceItsTermHasRunOut(t *testing.T) {
 		last.Node != e.id {
 		t.Errorf("the fleet's report is %+v (found %v, %v), want this node's pass", last,
 			found, err)
+	}
+}
+
+// reapSource runs one pass of the reaper over every source this node arms, at
+// at, and answers the named source's part of the report, failing when the pass
+// did not visit every source the node offers.
+func reapSource(t *testing.T, e *Engine, fleet trashreap.Reports, at time.Time,
+	source string) trashreap.SourceReport {
+
+	t.Helper()
+	sources := e.trashSources()
+	r, err := trashreap.New(trashreap.Deps{
+		Sources: sources, Term: artifacts.TrashRetention,
+		Reports: fleet, Node: e.id, Now: func() time.Time { return at },
+	})
+	if err != nil {
+		t.Fatalf("build the reaper: %v", err)
+	}
+	report, err := r.Pass(t.Context())
+	if err != nil {
+		t.Fatalf("pass at %s: %v", at, err)
+	}
+	var names []string
+	for _, src := range sources {
+		names = append(names, src.Name())
+	}
+	if !slices.Equal(names, []string{"pages", artifactsdomain.Domain{}.Name()}) {
+		t.Fatalf("the node arms the sources %v, want the knowledge base's and the "+
+			"artifacts'", names)
+	}
+	for _, got := range report.Sources {
+		if got.Source == source {
+			return got
+		}
+	}
+	t.Fatalf("the pass reaped %+v and nothing of %s", report.Sources, source)
+	return trashreap.SourceReport{}
+}
+
+// A DATA NODE REAPS AN ARTIFACT ONLY ONCE ITS TERM HAS RUN OUT, through the
+// artifacts domain's own guarded purge, as the engine.
+//
+// Mutation: drop the artifacts source from [Engine.trashSources] and the pass
+// visits no artifact.
+func TestADataNodeReapsAnArtifactOnlyOnceItsTermHasRunOut(t *testing.T) {
+	t.Parallel()
+	e := newSandboxNode(t, parseCompany(t, trashCompanyDoc))
+	w, r := e.ArtifactsWriter(), e.ArtifactsReader()
+	if w == nil || r == nil {
+		t.Fatal("the premise: every data node runs the artifacts estate")
+	}
+	jane := artifactsdomain.Call{Authority: artifacts.Authority{
+		Actor: iam.Actor{Name: "swe", Kind: iam.ActorHuman}, Role: artifacts.RoleOwner,
+		Limits: artifactsLimits(), Origin: artifacts.OriginDashboard,
+	}}
+	content := []byte("# Superseded notes\n")
+	obj := objstore.Object{Key: objstore.KeyAt(time.Now()), Hash: objstore.HashOf(content),
+		Size: int64(len(content))}
+	made, err := w.Create(t.Context(), jane, artifactsdomain.CreateInput{
+		Kind: artifacts.KindMarkdown, Title: "Superseded notes", Owner: "swe",
+		OwnerKind: iam.ActorHuman, First: artifactsdomain.PublishInput{
+			Uploaded: []objstore.Key{obj.Key},
+			Manifest: artifacts.Manifest{Entry: "notes.md", Files: []artifacts.Entry{{
+				Path: "notes.md", ContentType: "text/markdown; charset=utf-8", Object: obj,
+			}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create the artifact: %v", err)
+	}
+	if _, err := w.Trash(t.Context(), jane, made.Artifact); err != nil {
+		t.Fatalf("trash the artifact: %v", err)
+	}
+
+	fleet := coordmemory.NewFleet()
+	if got := reapSource(t, e, fleet, time.Now(), "artifacts"); got.Purged != 0 || got.Failed != 0 {
+		t.Fatalf("a pass inside the term reports %+v", got)
+	}
+	later := time.Now().Add(artifacts.TrashRetention + 2*trashreap.PassInterval)
+	if got := reapSource(t, e, fleet, later, "artifacts"); got.Purged != 1 || got.Failed != 0 {
+		t.Fatalf("a pass past the term reports %+v, want the artifact purged", got)
+	}
+	if _, _, err := r.Artifact(t.Context(), made.Artifact,
+		statelog.Freshness{Level: statelog.ReadSession}); !errors.Is(err, artifactsdomain.ErrPurged) {
+		t.Errorf("the artifact past its term still reads: %v", err)
+	}
+}
+
+// artifactsLimits are the plan quotas a case stamps into an artifacts write.
+func artifactsLimits() artifacts.Limits {
+	return artifacts.Limits{
+		CompanyBytes: artifacts.DefaultCompanyBytes, Artifacts: artifacts.DefaultArtifacts,
+		DataBytes: artifacts.DefaultDataBytes, DataStoreBytes: artifacts.DefaultDataStoreBytes,
+		PendingBytes: artifacts.DefaultPendingBytes,
 	}
 }
 

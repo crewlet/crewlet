@@ -486,15 +486,17 @@ func TestTheVectorChangelogIsCreatedToHoldAModelChange(t *testing.T) {
 // they hold again.
 func TestALogCreatedBesideOnesThatExistFitsTheShare(t *testing.T) {
 	t.Parallel()
-	// 40 GiB free: the tracker and the vector changelog each ask for 10 GiB
-	// and the knowledge base's log for 2.5. The tracker's stream already
-	// holds 16 — more than its ask, so what the other two asked for does not
-	// fit what it leaves of any share below, and a sizing that counted the
-	// tracker at its ask, or added what it holds to free space, would hand
-	// them all of it. (At a volume where the tracker's ask equals what it
-	// holds, counting it at either reads the same, and neither mistake
-	// shows.)
-	const free = 40 * gib
+	// 44 GiB free: the tracker and the vector changelog each ask for 11 GiB,
+	// and the knowledge base's log and the artifacts log 2.75 each. The
+	// tracker's stream already holds 16, more than its ask, so what the
+	// others asked for does not fit what it leaves of any share below, and a
+	// sizing that counted the tracker at its ask, or added what it holds to
+	// free space, would hand them all of it. (At a volume where the tracker's
+	// ask equals what it holds, counting it at either reads the same, and
+	// neither mistake shows.) The share left beside the tracker still holds
+	// every log's floor, so what is measured is the counting and not the
+	// floors, which the division may exceed by design.
+	const free = 44 * gib
 	const trackerHolds = 16 * gib
 	for name, tc := range map[string]struct {
 		budget jetstream.StorageBudget
@@ -503,12 +505,12 @@ func TestALogCreatedBesideOnesThatExistFitsTheShare(t *testing.T) {
 		// nothing, worked out here rather than read back from the code.
 		grantable int64
 	}{
-		// 44 GiB, of which 4 GiB is reserved by other streams and 16 GiB
+		// 48 GiB, of which 4 GiB is reserved by other streams and 16 GiB
 		// by the tracker's.
 		"a broker that states its limit": {
-			budget: jetstream.StorageBudget{Limit: 44 * gib, Committed: 20 * gib,
+			budget: jetstream.StorageBudget{Limit: 48 * gib, Committed: 20 * gib,
 				Source: jetstream.BudgetServerStore},
-			grantable: 40 * gib,
+			grantable: 44 * gib,
 		},
 		"a broker that states no limit": {
 			budget:    jetstream.StorageBudget{Limit: -1, Source: jetstream.BudgetUnstated},
@@ -1017,11 +1019,12 @@ func TestAnUnmeasuredVolumeNamesTheCeilingsItDecides(t *testing.T) {
 		want   []string
 	}{
 		{"nothing set", config.Stream{}, []string{"stream.tracker_log_max_bytes",
-			"stream.tracker_vectors_max_bytes", "stream.pages_log_max_bytes"}},
-		// THE KNOWLEDGE BASE'S LOG FOLLOWS THE MUTATION LOG'S CEILING, set
-		// or derived ([config.Stream.PagesMaxBytes]), so once the mutation
-		// log is set the volume decides it no more than it does the
-		// mutation log's own.
+			"stream.tracker_vectors_max_bytes", "stream.pages_log_max_bytes",
+			"stream.artifacts_log_max_bytes"}},
+		// THE KNOWLEDGE BASE'S LOG AND THE ARTIFACTS LOG FOLLOW THE MUTATION
+		// LOG'S CEILING, set or derived ([config.Stream.PagesMaxBytes],
+		// [config.Stream.ArtifactsMaxBytes]), so once the mutation log is set
+		// the volume decides them no more than it does the mutation log's own.
 		{"the mutation log set", config.Stream{TrackerLogMaxBytes: 8 << 30},
 			[]string{"stream.tracker_vectors_max_bytes"}},
 		{"every volume-derived log set", config.Stream{TrackerLogMaxBytes: 8 << 30,

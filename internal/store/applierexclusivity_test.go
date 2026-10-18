@@ -579,6 +579,15 @@ var allowedReplicatedWriter = []allowance{
 			"by its envelope's shape, so no apply depends on a keyring.",
 	},
 	{
+		Prefix: "internal/artifactsdomain/apply", Kind: mechanism,
+		Why: "The artifacts domain's applier, across the artifact's own " +
+			"records, its assets and a reader's state: every row is a pure " +
+			"function of a committed record and same-log rows, a refusal " +
+			"is a history row rather than an error, and the year-old history " +
+			"it prunes is chosen in one total order from the record's own " +
+			"broker instant, so every delete is a record's rather than a sweep.",
+	},
+	{
 		Prefix: "internal/iamdomain/sweep.go", Kind: mechanism,
 		Why: "The identity estate's retention sweep, which is applier code " +
 			"in a file the apply* prefix does not cover — named rather than " +
