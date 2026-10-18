@@ -10,9 +10,11 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -375,20 +377,36 @@ func TestARekeyDryRunReportsWithoutWriting(t *testing.T) {
 }
 
 // PROVENANCE IS RECORDED, so "where did this credential come from" has an
-// answer months later.
+// answer months later — and it is the command's own, never a word its caller
+// picked. `-source` once stamped whatever it was given, so a row could claim
+// any path; the flag is gone, and a stopped node's table records `cli`.
+// Mutation: stamp another word in setSecret and the row's source fails.
 func TestTheProvenanceOfAWriteIsRecorded(t *testing.T) {
 	cfg := bootstrapWithKeyring(t, "k1")
 	t.Setenv("CREWLET_OPERATOR", "sam")
-	if _, errs, err := secretsCmd(t, cfg, "set", "TOKEN",
-		"-value", "v", "-source", "gitlab-provision"); err != nil {
+	if _, _, err := secretsCmd(t, cfg, "set", "TOKEN",
+		"-value", "v", "-source", "gitlab-provision"); err == nil ||
+		!strings.Contains(err.Error(), "-source") {
+		t.Fatalf("set -source answered %v, want the flag refused as one the "+
+			"command does not take", err)
+	}
+	if _, errs, err := secretsCmd(t, cfg, "set", "TOKEN", "-value", "v"); err != nil {
 		t.Fatalf("set: %v (%s)", err, errs)
 	}
 	list, _, err := secretsCmd(t, cfg, "list")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if !strings.Contains(list, "sam") || !strings.Contains(list, "gitlab-provision") {
-		t.Fatalf("listing = %q, want the operator and the source", list)
+	var row []string
+	for _, line := range strings.Split(list, "\n") {
+		if fields := strings.Fields(line); len(fields) > 0 && fields[0] == "TOKEN" {
+			row = fields
+		}
+	}
+	if len(row) == 0 || !slices.Contains(row, "sam") ||
+		row[len(row)-1] != string(secrets.SourceCLI) {
+		t.Fatalf("listing = %q, want TOKEN's row to name sam and end in the "+
+			"source %q", list, secrets.SourceCLI)
 	}
 }
 

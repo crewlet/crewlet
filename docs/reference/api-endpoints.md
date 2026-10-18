@@ -1886,10 +1886,10 @@ Every `/setup` and `/secrets` write asks for a proof of identity inside
 | `POST` | `/setup/integrations/{kind}/check` | Run the same pass read-only, to see whether something fixed at the third-party app took |
 | `GET` | `/setup/integrations/{kind}/runs` | The passes THIS NODE remembers for one surface, newest first, ten at a time. A pass is executed by whichever node held the surface's lease and is remembered in that node's own process, so the answer carries `scope` saying as much — an empty list on a fleet where another node ran the pass is an honest answer to a question the reader did not mean to ask. It exists because nothing could name a run id: the route below answered one pass and was reachable only by a caller that had just started it |
 | `GET` | `/setup/integrations/{kind}/runs/{id}` | One pass, as the node that executed it remembers it |
-| `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` (the author), `updated_by_kind`, `operator_id` (the credential it was stored through, empty where none made the write) and `source`; `engine_keys` — a count of the engine's own keys, `{"total": N, "by_key": {"<key id>": n}}`, naming none of them; and `identity_values` — the identity estate's sealed values counted the same way, `{"people": {"<key id>": n}, "invitations": {"<key id>": n}}` (a person's name, address and second-factor seed, and the address of every invitation still redeemable), or `null` on a node that runs no identity estate. **Never a value**. A rekey keeps each row's `updated_*` and `source`: it re-seals a value it did not choose, so the row goes on saying who stored it |
+| `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` (the author), `updated_by_kind`, `operator_id` (the credential it was stored through, empty where none made the write) and `source` (the write path that stored it, in that path's own word: `api`, `setup`, `provision` or `migrated` — see [the secret store](../concepts/secret-store.md#the-design)); `engine_keys` — a count of the engine's own keys, `{"total": N, "by_key": {"<key id>": n}}`, naming none of them; and `identity_values` — the identity estate's sealed values counted the same way, `{"people": {"<key id>": n}, "invitations": {"<key id>": n}}` (a person's name, address and second-factor seed, and the address of every invitation still redeemable), or `null` on a node that runs no identity estate. **Never a value**. A rekey keeps each row's `updated_*` and `source`: it re-seals a value it did not choose, so the row goes on saying who stored it |
 | `GET` | `/secrets/{name}` | The same fields for one name. `404 not_found` when it is unset |
 | `GET` | `/secrets/{name}?reveal=true` | **Break-glass.** The decrypted value, `Cache-Control: no-store`, logged by name against the authenticated operator |
-| `PUT` | `/secrets/{name}` | Store or rotate one value. **The request body is the value**, raw bytes, up to 64 KiB. `?source=` records provenance (default `api`). The author is the caller the guard resolved and never anything the request names; the answer carries `updated_by`, `updated_by_kind` and `operator_id` as the row records them, which is the only confirmation a client that could not choose them gets. `400 invalid_name` when the name is not an environment-variable name |
+| `PUT` | `/secrets/{name}` | Store or rotate one value. **The request body is the value**, raw bytes, up to 64 KiB, and it is the only thing the request supplies. The author is the caller the guard resolved and the `source` is this route's own, `api`, whoever calls it — never anything the request names; the answer carries `updated_by`, `updated_by_kind`, `operator_id` and `source` as the row records them, which is the only confirmation a client that could not choose them gets. `400 invalid_name` when the name is not an environment-variable name; `400 invalid_query` when the request carries any query parameter (`?source=` included), with a `detail` naming each and a `hint` saying where the provenance comes from instead — checked after the name and before the body is read |
 | `DELETE` | `/secrets/{name}` | Remove one value. `200` either way, with `{"removed": true\|false}` |
 | `POST` | `/secrets/rekey` | Re-seal every record not already under this node's `secrets.active_key_id` — the engine's own keys included — and every person's sealed values in the identity estate, one record per person, answering the names of yours it moved, `engine_keys_moved`, a count of the engine's, and `identity` — `{"people": n, "values": n}`, or `null` on a node that runs no identity estate. An outstanding invitation's address is not moved (only a re-issue could carry it again) and is counted by the listing instead. A person whose record nobody could confirm, or whose value would not open, is `500 rekey_incomplete` carrying what did move — run it again, which moves only what is still under an old key. `?key_id=` is refused with `409` when it names a different key |
 
@@ -1916,6 +1916,16 @@ secret, so reading one answers `404` and removing one answers
 between the operator and the sequence the vendor compares is a `401` nobody
 can explain.
 
+**Provenance is the node's, and a write that names its own is refused.** Who
+stored a value is the credential the request authenticated with
+(`updated_by`, `updated_by_kind`, `operator_id`), and its `source` is the
+route's own, `api` — so a write cannot make a row claim another path, and a
+client that recognises its own rows does it by the credential that wrote them,
+never by a word. The route takes no query parameter at all: one sent anyway,
+`?source=` included, is `400 invalid_query` naming it, rather than ignored, so
+a client still sending one learns at its first write that the row would not
+record it.
+
 **Reveal is opt-in on the wire**, not merely in the CLI. Without `?reveal=true`
 the route answers what a listing answers for one name, so a browser, a crawl or
 a link preview cannot pull a credential out by accident.
@@ -1927,7 +1937,9 @@ without one.
 
 **Every refusal here is the engine's envelope** — `error`, the sentence
 `message` a screen shows, and the route's own detail beside them:
-`reserved_name`, `invalid_name`, `not_found`, and on a rekey
+`reserved_name`, `invalid_name`, `invalid_query` (on a write carrying any
+query parameter, with a `detail` naming each and a `hint`), `not_found`, and
+on a rekey
 `key_id_mismatch` (with `key_id` and `your_key_id`) and `rekey_incomplete`
 (with the `moved` names and the `engine_keys_moved` count).
 

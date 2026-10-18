@@ -26,7 +26,7 @@ func TestACompanyKeyWithNoGuardIsNotMinted(t *testing.T) {
 	t.Parallel()
 	fleet := coordmem.NewFleet()
 	node := keyNode(t, "node-a", fleet, coordmem.New())
-	if _, err := node.companyKey(t.Context(), racedKey, "test", nil); err == nil {
+	if _, err := node.companyKey(t.Context(), racedKey, secrets.SourceIAM, nil); err == nil {
 		t.Fatal("a company key was minted with no guard")
 	}
 	if _, err := fleetsecrets.New(fleet, node.cipher).Estate().Get(t.Context(),

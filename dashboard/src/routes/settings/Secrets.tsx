@@ -213,28 +213,31 @@ async function readReferences(
 /**
  * What each provenance means, in the words of the path that writes it.
  *
- * `source` IS WHO LAST WROTE THE ROW, never where the value lives: every row
- * `/secrets` lists is sealed in the fleet's store whatever wrote it. Each
- * writer stamps its own word — `PUT /secrets/{name}` defaults to `api`
- * (secretsapi), `crewlet secrets set` to `cli`, an integration's setup to
- * `setup` (internal/setup), a vendor's provision command to `provision`
- * (internal/provision), a rekey to `rekey` and the move off a node's own table
- * to `migrated` (fleetsecrets). `?source=` and `--source` take any word, so a
- * value this table does not know is said as the writer's own rather than
- * guessed at.
+ * `source` IS WHICH PATH LAST WROTE THE ROW, never where the value lives: every
+ * row `/secrets` lists is sealed in the fleet's store whatever wrote it. Each
+ * path stamps its own word and no request can name one (internal/secrets'
+ * `Source`): `PUT /secrets/{name}` stamps `api` whoever calls it — this
+ * screen, `crewlet secrets set` against a running node, any client — an
+ * integration's setup `setup`, an integration's provisioning pass `provision`,
+ * and the move of a stopped node's own rows onto the fleet `migrated`.
+ *
+ * ONLY THOSE FOUR, because they are all this listing can show: the words a
+ * stopped node's own table records (`cli`, `llm-login`) are replaced by
+ * `migrated` when its rows reach the fleet, `iam` marks the engine's own keys,
+ * which the listing never names, and a rekey keeps the word it found. A word
+ * outside the table is a newer engine's, said as one this build does not know
+ * rather than guessed at.
  */
 const PROVENANCE: Record<string, string> = {
-  api: "stored from the console or API",
-  cli: "set with crewlet secrets set",
+  api: "stored through the API: this console, the CLI or another client",
   setup: "written by an integration's setup",
-  provision: "minted by a vendor's provision command",
-  rekey: "sealed again under a new key by a rekey",
+  provision: "minted by an integration's provisioning pass",
   migrated: "moved onto the fleet from a node's own table",
 };
 
 /** What a row's provenance says, as a sentence a reader can act on. */
 export function provenance(source: string): string {
-  return PROVENANCE[source] ?? `its writer named itself “${source}”`;
+  return PROVENANCE[source] ?? `a source this build does not know (“${source}”)`;
 }
 
 /**

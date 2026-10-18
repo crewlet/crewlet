@@ -546,7 +546,7 @@ func TestAPassThatSealedNothingLeavesTheSnapshotAlone(t *testing.T) {
 	}
 
 	// Written behind the resolver's back, so a rebuild is observable.
-	if err := sv.Set(t.Context(), "UNSEEN", "value", testAuthor, "cli", time.Now().UTC()); err != nil {
+	if err := sv.Set(t.Context(), "UNSEEN", "value", testAuthor, secrets.SourceCLI, time.Now().UTC()); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	if err := sink.Flush(t.Context()); err != nil {

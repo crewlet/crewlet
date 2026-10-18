@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // THE SURFACE LEASE IS STILL HELD WHEN THE PASS'S OUTCOME IS WRITTEN.
@@ -32,7 +33,7 @@ func TestTheSurfaceLeaseIsHeldWhenThePassIsRecorded(t *testing.T) {
 	for _, name := range []string{"GL_SIGN", "GL_ADMIN"} {
 		if err := s.vault.Set(t.Context(), name,
 			"whsec_Y3Jld2xldC10ZXN0LXNpZ25pbmcta2V5LTMyYnl0ZXM=",
-			testAuthor, "test", pinned); err != nil {
+			testAuthor, secrets.SourceAPI, pinned); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -84,7 +85,7 @@ func TestThePassesOfOneSurfaceAreListable(t *testing.T) {
 	for _, name := range []string{"GL_SIGN", "GL_ADMIN"} {
 		if err := s.vault.Set(t.Context(), name,
 			"whsec_Y3Jld2xldC10ZXN0LXNpZ25pbmcta2V5LTMyYnl0ZXM=",
-			testAuthor, "test", pinned); err != nil {
+			testAuthor, secrets.SourceAPI, pinned); err != nil {
 			t.Fatal(err)
 		}
 	}

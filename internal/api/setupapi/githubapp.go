@@ -423,12 +423,12 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 	now := s.now()
 	// THE BEGINNER'S, both writes: the key's row and the seat's record name
 	// who began the creation and the credential they began it through.
-	if err := s.secrets.Set(ctx, keyVar, app.PEM, authorOf(by), setup.Source, now); err != nil {
+	if err := s.secrets.Set(ctx, keyVar, app.PEM, authorOf(by), secrets.SourceSetup, now); err != nil {
 		return handle, fmt.Errorf("setupapi: seal the app key for %s: %w", handle, err)
 	}
 	sealedHook := strings.TrimSpace(app.WebhookSecret) != ""
 	if sealedHook {
-		if err := s.secrets.Set(ctx, hookVar, app.WebhookSecret, authorOf(by), setup.Source, now); err != nil {
+		if err := s.secrets.Set(ctx, hookVar, app.WebhookSecret, authorOf(by), secrets.SourceSetup, now); err != nil {
 			return handle, fmt.Errorf("setupapi: seal the webhook secret for %s: %w", handle, err)
 		}
 	}

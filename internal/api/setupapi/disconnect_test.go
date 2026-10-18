@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // A DISCONNECT NAMES WHAT IT LEAVES BEHIND, ON THE PATH THE DASHBOARD USES.
@@ -167,7 +168,7 @@ func TestASeatWhoseCredentialWentWithItsAccountIsNotSatisfied(t *testing.T) {
 		"SRE_ATLASSIAN": "atlassian-token",
 		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
 	} {
-		if err := s.vault.Set(t.Context(), name, value, testAuthor, "test", pinned); err != nil {
+		if err := s.vault.Set(t.Context(), name, value, testAuthor, secrets.SourceAPI, pinned); err != nil {
 			t.Fatalf("seal %s: %v", name, err)
 		}
 	}
@@ -222,7 +223,7 @@ func TestASeatIsNotSatisfiedOnASurfaceTheCompanyDoesNotDeclare(t *testing.T) {
 		"SRE_ATLASSIAN": "atlassian-token",
 		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
 	} {
-		if err := s.vault.Set(t.Context(), name, value, testAuthor, "test", pinned); err != nil {
+		if err := s.vault.Set(t.Context(), name, value, testAuthor, secrets.SourceAPI, pinned); err != nil {
 			t.Fatalf("seal %s: %v", name, err)
 		}
 	}
@@ -269,7 +270,7 @@ func TestASeatTheLoopFoundBrokenIsNotSatisfied(t *testing.T) {
 		"SRE_ATLASSIAN": "atlassian-token",
 		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
 	} {
-		if err := s.vault.Set(t.Context(), name, value, testAuthor, "test", pinned); err != nil {
+		if err := s.vault.Set(t.Context(), name, value, testAuthor, secrets.SourceAPI, pinned); err != nil {
 			t.Fatalf("seal %s: %v", name, err)
 		}
 	}
@@ -310,7 +311,7 @@ func TestAnAdvisoryFindingLeavesASeatSatisfied(t *testing.T) {
 		"SRE_ATLASSIAN": "atlassian-token",
 		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
 	} {
-		if err := s.vault.Set(t.Context(), name, value, testAuthor, "test", pinned); err != nil {
+		if err := s.vault.Set(t.Context(), name, value, testAuthor, secrets.SourceAPI, pinned); err != nil {
 			t.Fatalf("seal %s: %v", name, err)
 		}
 	}

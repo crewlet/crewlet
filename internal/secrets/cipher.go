@@ -15,10 +15,12 @@
 // that walks a YAML document reporting the path of every reference it could
 // not answer. None of that is expressible from behind a bare Lookup.
 //
-// This package shipped a second, unreferenced chain of its own for a while —
-// Source, Chain, MapSource, Snapshot — a complete parallel implementation
-// with no caller, kept alive by its own tests. It is gone; `config.Resolver`
-// is the one answer.
+// This package shipped a second, unreferenced resolution chain of its own
+// for a while — a lookup source type, Chain, MapSource and Snapshot — a
+// complete parallel implementation with no caller, kept alive by its own
+// tests. It is gone; `config.Resolver` is the one answer. The [Source] this
+// package declares now is unrelated to resolving anything: it is the write
+// path a stored secret arrived by.
 //
 // # The envelope
 //

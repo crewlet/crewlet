@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/anthropic"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // `crewlet llm` — the operator's window onto the subscription CLI backends.
@@ -597,14 +598,17 @@ func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentP
 	return nil
 }
 
-// storeLLMSecret writes one value into the encrypted secret store.
+// storeLLMSecret writes one value into the encrypted secret store, as
+// [secrets.SourceLLMLogin] where the store keeps the word — a stopped node's
+// own table — and as the running node's route records it otherwise.
 func storeLLMSecret(ctx context.Context, environ config.Source, bootstrapPath, name, value string) error {
 	sv, closeStore, err := openSecretStore(ctx, environ, bootstrapPath, "")
 	if err != nil {
 		return fmt.Errorf("cannot reach the secret store to save %s: %w", name, err)
 	}
 	defer closeStore()
-	if _, err := sv.Set(ctx, name, value, hostAuthor(), "llm-login", time.Now().UTC()); err != nil {
+	if _, err := sv.Set(ctx, name, value, hostAuthor(), secrets.SourceLLMLogin,
+		time.Now().UTC()); err != nil {
 		return fmt.Errorf("writing %s: %w", name, err)
 	}
 	return nil

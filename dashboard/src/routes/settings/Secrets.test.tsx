@@ -477,18 +477,23 @@ test("a reference check that failed counts nothing as unread", async () => {
 });
 
 // WHICH PATH WROTE A CREDENTIAL, in words: `source` is provenance, and each
-// writer's word is said as what it means. A word no writer in this build
-// stamps is said as the writer's own, never guessed at.
+// word the fleet's listing can carry is said as what it means. No request
+// names its own word any more, so one outside the table is a newer engine's,
+// said as a word this build does not know rather than guessed at — and the
+// words the listing can never carry (`cli` and `llm-login`, which the move
+// onto the fleet replaces, and `rekey`, which no path stamps) have no entry.
 test("a credential's provenance is said as the path that wrote it", async () => {
   stubLoaded();
   render(<CredentialPeek name="DATADOG_WEBHOOK_TOKEN" />);
   expect(await screen.findByText("written by an integration's setup")).toBeDefined();
-  expect(provenance("api")).toBe("stored from the console or API");
-  expect(provenance("cli")).toBe("set with crewlet secrets set");
+  expect(provenance("api")).toBe("stored through the API: this console, the CLI or another client");
+  expect(provenance("provision")).toBe("minted by an integration's provisioning pass");
   expect(provenance("migrated")).toBe("moved onto the fleet from a node's own table");
-  expect(provenance("gitlab-provision")).toBe("its writer named itself “gitlab-provision”");
-  for (const word of ["api", "cli", "setup", "provision", "rekey", "migrated"]) {
-    expect(provenance(word)).not.toMatch(/environment|named itself/);
+  for (const word of ["api", "setup", "provision", "migrated"]) {
+    expect(provenance(word)).not.toMatch(/does not know/);
+  }
+  for (const word of ["cli", "llm-login", "rekey", "gitlab-provision"]) {
+    expect(provenance(word)).toBe(`a source this build does not know (“${word}”)`);
   }
 });
 

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // A company whose agents are at every stage of getting their own GitHub App:
@@ -41,7 +42,7 @@ func (s *surface) seedGitHubApps(t *testing.T) {
 	s.seedDocument(t, githubAppsDoc)
 	if err := s.vault.Set(t.Context(), "REVIEWER_GITHUB_APP_KEY",
 		"-----BEGIN RSA PRIVATE KEY-----\nnot-a-real-key\n-----END RSA PRIVATE KEY-----",
-		testAuthor, "test", pinned); err != nil {
+		testAuthor, secrets.SourceAPI, pinned); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -706,7 +707,7 @@ func TestAGitHubToolWithNoWorkingAgentIsNotSatisfied(t *testing.T) {
 	  },
 	  "roles": [{"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"}]
 	}`)
-	if err := s.vault.Set(t.Context(), "GH_SIGN", "s", testAuthor, "test", pinned); err != nil {
+	if err := s.vault.Set(t.Context(), "GH_SIGN", "s", testAuthor, secrets.SourceAPI, pinned); err != nil {
 		t.Fatal(err)
 	}
 
@@ -736,7 +737,7 @@ func TestAGitHubToolWithOneWorkingAgentIsSatisfied(t *testing.T) {
 	if res.Code != http.StatusCreated {
 		t.Fatalf("connect = %d: %s", res.Code, res.Body)
 	}
-	if err := s.vault.Set(t.Context(), "GH_SIGN", "s", testAuthor, "test", pinned); err != nil {
+	if err := s.vault.Set(t.Context(), "GH_SIGN", "s", testAuthor, secrets.SourceAPI, pinned); err != nil {
 		t.Fatal(err)
 	}
 

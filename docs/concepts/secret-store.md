@@ -41,9 +41,10 @@ _secrets (a coordination KV bucket, no TTL)
   operator_id      the credential it was stored through — `pat:<id>`,
                    `session:<lineage>`, a Tier A token's login — and empty
                    for a write no credential made
-  source      "cli" (or `-source`'s value) | "api" (or `?source=`'s) |
-              "provision" | "setup" | "llm-login" | "migrated",
-              and "iam" on the engine's own keys
+  source      the write path's own word, never the caller's:
+              "api" | "setup" | "provision" | "migrated" on the fleet,
+              "iam" on the engine's own keys, and "cli" | "provision" |
+              "llm-login" on a stopped node's own table
 ```
 
 **Who stored a value is three facts, and a rekey keeps all of them.** The author
@@ -57,13 +58,29 @@ over each row, and after a rotation every credential in the company read as
 set by whoever rotated the keyring.
 
 **`source` is provenance, never location**: every record is sealed in this
-bucket whichever path wrote it. `PUT /secrets/{name}` stamps `api` unless its
-`?source=` names another word, `crewlet secrets set` stamps `cli` unless its
-`-source` does, an integration's setup stamps `setup`, a vendor's `provision`
-command `provision`, `crewlet llm login` `llm-login`, the engine's mint of one of its own
-keys `iam`, and the boot-time move off a node's own table `migrated`. Each write
-replaces the word, so it names the LAST writer — and a rekey, which writes no
-value of its own, leaves it as it found it, like the three facts above.
+bucket whichever path wrote it. **It is the write path's own word, and no
+request names it.** `PUT /secrets/{name}` stamps `api` whoever calls it — the
+dashboard, `crewlet secrets set` and every provisioning command run against a
+running node, any other client — and refuses a write that carries a query
+string at all (`400 invalid_query`). An integration's setup in the dashboard
+stamps `setup`, an integration's provisioning pass `provision`, the engine's
+mint of one of its own keys `iam`, and the boot-time move off a node's own table
+`migrated`. A stopped node's own table records the command's word instead —
+`cli` for `crewlet secrets set`, `provision` for a vendor's `provision
+-secret-store`, `llm-login` for the headless token `crewlet llm login` stores
+and the bundle `crewlet llm export -secret-store` packs — and the move onto the
+fleet replaces it, so the fleet's listing shows only `api`, `setup`, `provision`
+and `migrated`. Each write replaces the word, so it names the LAST writer — and
+a rekey, which writes no value of its own, leaves it as it found it, like the
+three facts above.
+
+**Why the request cannot choose it.** `?source=` and `-source` once stored
+whatever word they were sent, so anybody holding the write could make a row
+claim any path, and a client that recognised its own rows by their word took a
+row somebody else had written over, under that word, for its own. Who wrote a
+row is what the author and the credential say, and both come from the
+credential the write authenticated with; the source only says which path
+carried it, so each path stamps its own and the stores refuse any other word.
 
 **The name is the reference grammar's, and a write that is not one is refused.** A record is keyed by the name a `${VAR}` resolves through, so the two rules are one rule: letters, digits and underscores, starting with a letter or an underscore. A store that accepted `gitlab-token` would seal the value, list it, report the write as done, and resolve it from nowhere: the operator's only evidence a provider failing to authenticate hours later, far from the name they chose. Every write path checks: `PUT /secrets/{name}` answers `400 invalid_name`, and `crewlet secrets set` refuses against a running node and a stopped one alike. Reading and removing take the name as given, so nothing becomes unremovable.
 
@@ -274,7 +291,7 @@ Reading a value back is **break-glass on both sides**. `crewlet secrets get` ref
 | **running** | its `/secrets` API | every node, immediately |
 | **stopped** | this node's own `secret_values` table | this node, until it starts |
 
-A write made while the node was stopped is not stranded: at its next start the engine **migrates** those rows onto the fleet and removes them locally, preserving the original author and the instant it was written, and stamping `source=migrated`. That is the bootstrap path — the equivalent of `crewlet config import` against a stopped node — and the CLI says which of the two it used after every write.
+A write made while the node was stopped is not stranded: at its next start the engine **migrates** those rows onto the fleet and removes them locally, preserving the original author and the instant it was written, and recording the source `migrated` in place of the stopped node's own word. That is the bootstrap path — the equivalent of `crewlet config import` against a stopped node — and the CLI says which of the two it used after every write.
 
 `-api URL` writes through a named node instead, which is how the command works from a machine that is not the node at all. It authenticates with `CREWLET_API_TOKEN`, and with nothing else: `api.auth.tokens` is what a node **accepts**, not a wallet the CLI helps itself from, and a write whose author was whichever credential happened to be listed first landed under a name the operator had not chosen. Export the variable — one of the Tier A values, or a machine token minted with `crewlet iam token`. The credential's own identity is recorded as the author of the write.
 
@@ -322,7 +339,10 @@ Minted PATs and the generated webhook signing secret go straight into the encryp
 `-secret-store` follows the same routing as `crewlet secrets`: against a
 running node it writes through that node's API and the minted credential is on
 every node at once, and it takes the same `-api URL` flag. Against a stopped
-one it writes the local table, which the engine migrates at its next start.
+one it writes the local table, which the engine migrates at its next start. The
+row's `source` follows the route too: the node's `api`, or `provision` in the
+local table until the move onto the fleet makes it `migrated`. Who ran the
+command is what the row's author and credential say, either way.
 
 `crewlet slack provision -secret-store` and
 `crewlet mattermost provision -secret-store` work identically. Slack's own

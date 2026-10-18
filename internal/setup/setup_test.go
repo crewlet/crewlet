@@ -258,7 +258,7 @@ func (r *recorder) Authorize(by iam.Actor) error {
 }
 
 func (r *recorder) Set(_ context.Context, name, value string, by secrets.Author,
-	source string, _ time.Time) error {
+	source secrets.Source, _ time.Time) error {
 
 	if r.failSet != nil {
 		return r.failSet
@@ -268,7 +268,7 @@ func (r *recorder) Set(_ context.Context, name, value string, by secrets.Author,
 	}
 	r.secrets[name] = value
 	r.events = append(r.events, "secret:"+name+" by="+by.Name+"/"+by.Kind+"/"+
-		by.OperatorID+" source="+source)
+		by.OperatorID+" source="+string(source))
 	return nil
 }
 

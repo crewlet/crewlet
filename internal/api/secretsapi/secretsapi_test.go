@@ -359,7 +359,7 @@ func TestTheEnginesOwnKeysAreUnreachableHere(t *testing.T) {
 	fleet := coordmem.NewFleet()
 	if created, err := fleetsecrets.New(fleet, cipherFor(t, "k1", "k2")).Estate().Create(
 		t.Context(), key, "the-engine-key", secrets.Author{Name: "node-a",
-			Kind: string(iam.ActorSystem)}, "iam", clock); err != nil || !created {
+			Kind: string(iam.ActorSystem)}, secrets.SourceIAM, clock); err != nil || !created {
 		t.Fatalf("seed the engine key: (%v, %v)", created, err)
 	}
 	h := mounted(t, secretsapi.Options{
@@ -544,20 +544,78 @@ func TestWithoutAFleetTheSurfaceIsRefused(t *testing.T) {
 	}
 }
 
-// THE AUTHENTICATED OPERATOR IS THE AUTHOR, not anything the caller supplies.
-// Provenance a client chooses answers nothing months later.
+// THE AUTHENTICATED OPERATOR IS THE AUTHOR, AND THE ROUTE IS THE SOURCE — not
+// anything the caller supplies. Provenance a client chooses answers nothing
+// months later: `?source=` once stored any word it was sent, so a row read as
+// having arrived by whatever path its writer claimed. Mutation: stamp any
+// other word on this route and both the answer and the row fail.
 func TestTheAuthenticatedOperatorIsRecordedAsTheAuthor(t *testing.T) {
 	t.Parallel()
 	h, _ := surface(t, cipherFor(t, "k1"), "k1")
-	call(t, h, http.MethodPut, "/secrets/A?source=gitlab-provision", "v")
-
-	_, body := call(t, h, http.MethodGet, "/secrets/A", "")
-	for _, want := range []string{`"updated_by":"token:ops"`,
-		`"updated_by_kind":"operator"`, `"operator_id":"token:ops"`,
-		`"source":"gitlab-provision"`} {
-		if !strings.Contains(body, want) {
-			t.Errorf("the row omits %s: %s", want, body)
+	code, written := call(t, h, http.MethodPut, "/secrets/A", "v")
+	if code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", code, written)
+	}
+	_, row := call(t, h, http.MethodGet, "/secrets/A", "")
+	for name, body := range map[string]string{"the write's answer": written,
+		"the row": row} {
+		for _, want := range []string{`"updated_by":"token:ops"`,
+			`"updated_by_kind":"operator"`, `"operator_id":"token:ops"`,
+			`"source":"api"`} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s omits %s: %s", name, want, body)
+			}
 		}
+	}
+}
+
+// A WRITE THAT NAMES ITS OWN PROVENANCE IS REFUSED, never quietly stamped
+// `api`: a client still sending `?source=` would be told its write landed
+// while the row said otherwise, and one that judged its own rows by that word
+// would read each as overwritten and write it again, for ever. So any
+// parameter is `400 invalid_query`, named, before the body is read — an
+// oversized value is refused for its query, not its size — and nothing is
+// sealed. Mutation: drop the check and every case here stores a row.
+func TestAWriteThatNamesItsProvenanceIsRefused(t *testing.T) {
+	t.Parallel()
+	h, fleet := surface(t, cipherFor(t, "k1"), "k1")
+	for _, tc := range []struct {
+		query, body string
+		names       []string
+	}{
+		{"source=operator", "v", []string{`"source"`}},
+		{"source=api", "v", []string{`"source"`}},
+		{"by=ops&source=cli", "v", []string{`"by"`, `"source"`}},
+		{"source=operator", strings.Repeat("x", secretsapi.MaxValueBytes+1),
+			[]string{`"source"`}},
+	} {
+		code, raw := call(t, h, http.MethodPut, "/secrets/A?"+tc.query, tc.body)
+		var body map[string]any
+		if err := json.Unmarshal([]byte(raw), &body); err != nil {
+			t.Fatalf("?%s: the refusal is not JSON: %s", tc.query, raw)
+		}
+		if code != http.StatusBadRequest || body["error"] != string(httpjson.CodeInvalidQuery) {
+			t.Errorf("?%s = %d %v, want 400 invalid_query", tc.query, code, body["error"])
+		}
+		detail, _ := body["detail"].(string)
+		for _, name := range tc.names {
+			if !strings.Contains(detail, name) {
+				t.Errorf("?%s: the detail %q does not name %s", tc.query, detail, name)
+			}
+		}
+		hint, _ := body["hint"].(string)
+		for _, want := range []string{"updated_by", "operator_id", "api"} {
+			if !strings.Contains(hint, want) {
+				t.Errorf("?%s: the hint %q does not say %s", tc.query, hint, want)
+			}
+		}
+	}
+	rows, err := fleet.SecretValues(t.Context())
+	if err != nil {
+		t.Fatalf("SecretValues: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("a refused write left %d row(s) behind", len(rows))
 	}
 }
 
@@ -588,7 +646,8 @@ func TestAPersonsTokenIsRecordedBesideThePerson(t *testing.T) {
 	for name, body := range map[string]string{"the write's answer": written,
 		"the row": row} {
 		for _, want := range []string{`"updated_by":"jane.doe"`,
-			`"updated_by_kind":"operator"`, `"operator_id":"` + pat + `"`} {
+			`"updated_by_kind":"operator"`, `"operator_id":"` + pat + `"`,
+			`"source":"api"`} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s omits %s: %s", name, want, body)
 			}
@@ -798,6 +857,9 @@ func TestEveryRefusalHereIsTheEnginesEnvelope(t *testing.T) {
 		{"a rekey onto another key", sealed, http.MethodPost,
 			"/secrets/rekey?key_id=k9", "", http.StatusConflict,
 			httpjson.CodeKeyIDMismatch},
+		{"a write that names its provenance", sealed, http.MethodPut,
+			"/secrets/A?source=operator", "v", http.StatusBadRequest,
+			httpjson.CodeInvalidQuery},
 	} {
 		code, raw := call(t, tc.h, tc.method, tc.path, tc.body)
 		var body map[string]any
