@@ -384,14 +384,33 @@ func (a *Applier) applyMembers(ctx context.Context, tx *sql.Tx, at applyContext,
 	// still a change somebody can see: the room answers to another unit,
 	// and its lead fallback with it. Its members' rows are already right.
 	members := 0
+	frame := at.live(room.ID)
 	if moved {
 		members, err = replaceMembers(ctx, tx, at, room, p.Members)
 		if err != nil {
 			return 0, err
 		}
+		frame.Removed = removedFrom(held, p.Members)
 	}
-	a.live.note(at.live(room.ID))
+	a.live.note(frame)
 	return rows + members, nil
+}
+
+// removedFrom is who was in held and is not in members: the people a
+// membership record took out of a room, sorted by handle — the order held is
+// read in.
+func removedFrom(held, members []Member) []string {
+	kept := make(map[string]bool, len(members))
+	for _, m := range members {
+		kept[m.Handle] = true
+	}
+	var out []string
+	for _, m := range held {
+		if !kept[m.Handle] {
+			out = append(out, m.Handle)
+		}
+	}
+	return out
 }
 
 // writeChannel writes a room's changed state, guarded by its own version.

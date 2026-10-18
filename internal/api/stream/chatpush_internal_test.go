@@ -252,6 +252,55 @@ func TestAChatFrameForAPrivateRoomNeverReachesANonMember(t *testing.T) {
 	}
 }
 
+// A PERSON TAKEN OUT OF A PRIVATE ROOM IS TOLD IT CHANGED; NOBODY ELSE OUTSIDE IS.
+//
+// A frame is decided at its batch's own position, and that position is exactly
+// where the removed stopped being able to read the room — so the visibility
+// rule alone sent them nothing, and the room stayed in their rail, openable and
+// badged, until something else made it read again. The record says who it took
+// out ([chatlet.Applied.Removed]); they are sent the change, a frame naming no
+// member, and somebody who was never in the room still is not.
+func TestAPersonTakenOutOfAPrivateRoomIsToldItChanged(t *testing.T) {
+	t.Parallel()
+	rooms := twoRooms()
+	// AT THE BATCH'S POSITION alice is already gone: the room's only member
+	// is carol, who the same record kept.
+	rooms.members["private-1"] = []string{"carol"}
+	h := hubOver(rooms)
+	removed := watcherFor(t, h, chatPerson("alice"))
+	kept := watcherFor(t, h, chatPerson("carol"))
+	stranger := watcherFor(t, h, chatPerson("bob"))
+
+	members := chatlet.Applied{
+		Position:  statelog.Position{Stream: topics.ChatLogStream, Generation: 1, Seq: 12},
+		Subject:   chatlet.ChannelSubject("private-1"),
+		Op:        chatlet.OpMembers,
+		OpID:      "op-members",
+		ChannelID: "private-1",
+		Actor:     "carol",
+		ActorKind: chatlet.AuthorHuman,
+		At:        chatClock,
+		Removed:   []string{"alice"},
+	}
+	h.fan(t.Context(), []chatlet.Applied{members})
+
+	frames := drainClient(removed)
+	if len(frames) != 1 || frames[0].Kind() != KindChatMembershipChanged {
+		t.Fatalf("the person taken out of the room was sent %v, want one %s — "+
+			"their rail keeps the room until something else reads it again",
+			frames, KindChatMembershipChanged)
+	}
+	if got := dataAs[ChatChange](t, frames[0]); got.ChannelID != "private-1" || got.OpID != "op-members" {
+		t.Errorf("the removal frame is %+v, want the room's own membership record", got)
+	}
+	if got := chatKinds(kept); !slices.Equal(got, []Kind{KindChatMembershipChanged}) {
+		t.Errorf("a member the record kept was sent %v", got)
+	}
+	if got := chatKinds(stranger); len(got) != 0 {
+		t.Errorf("somebody never in the private room was sent %v about it", got)
+	}
+}
+
 // A FRAME FROM A PUBLIC ROOM REACHES EVERY SEAT, joined or not, with the
 // sequence that lets a client tell a frame it can apply from a hole it must
 // refetch — and in ONE encode for all of them, since the frame is the same.

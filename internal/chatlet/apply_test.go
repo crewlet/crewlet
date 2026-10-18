@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -759,6 +760,49 @@ func TestTwoEstatesFedOneLogHoldIdenticalRowsAndApplyingTwiceEqualsOnce(t *testi
 		t.Errorf("the room holds %d members after a whole-set replacement, "+
 			"want 2 — a membership that only ever grows is a private room "+
 			"somebody was removed from and can still read", got)
+	}
+}
+
+// A MEMBERSHIP RECORD SAYS WHO IT TOOK OUT.
+//
+// The live surface decides who may see a frame at the batch's own position,
+// and at that position the people a membership record removed may not read the
+// room — so they were the one audience its change never reached. Only the
+// applier holds both sides of the replacement, so it is the one that can say
+// who left: the frame names them, sorted, and a record that removed nobody
+// names nobody.
+func TestAMembershipRecordSaysWhoItTookOut(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	if _, _, err := h.apply(applyCreateRoom("room-1", "launch",
+		chatlet.Member{Handle: "ada"}, chatlet.Member{Handle: "zed"},
+		chatlet.Member{Handle: "grace"})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	set := func(opID string, handles ...string) chatlet.Applied {
+		t.Helper()
+		members := make([]chatlet.Member, 0, len(handles))
+		for _, handle := range handles {
+			members = append(members, chatlet.Member{Handle: handle})
+		}
+		before := len(h.live.frames())
+		if _, _, err := h.apply(applyRecord(chatlet.ChannelSubject("room-1"), chatlet.OpMembers,
+			opID, chatlet.MemberSet{V: chatlet.DocumentVersion, Members: members},
+			chatlet.ScopeSet{Subject: true})); err != nil {
+			t.Fatalf("members %s: %v", opID, err)
+		}
+		frames := h.live.frames()[before:]
+		if len(frames) != 1 {
+			t.Fatalf("membership %s produced %d frames, want one", opID, len(frames))
+		}
+		return frames[0]
+	}
+
+	if got := set("op-remove", "grace").Removed; !slices.Equal(got, []string{"ada", "zed"}) {
+		t.Errorf("a record that kept only grace says it removed %v, want [ada zed]", got)
+	}
+	if got := set("op-add", "grace", "alan").Removed; len(got) != 0 {
+		t.Errorf("a record that only added somebody says it removed %v", got)
 	}
 }
 
