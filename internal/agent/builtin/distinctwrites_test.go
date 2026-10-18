@@ -61,7 +61,7 @@ func TestTwoDifferentWritesInOneTurnAreTwoOperations(t *testing.T) {
 		first, second := commentOf(t, trk.patched[0]), commentOf(t, trk.patched[1])
 		if first.ID == second.ID || trk.opIDs[0] == trk.opIDs[1] {
 			t.Errorf("two different remarks share comment %q / operation %q — "+
-				"the second upserts the first's row, or never lands at all",
+				"the second finds the first's row and never lands",
 				first.ID, trk.opIDs[0])
 		}
 	})
