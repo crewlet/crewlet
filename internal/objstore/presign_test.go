@@ -146,3 +146,64 @@ func TestABackendWithNoReservationReportsNone(t *testing.T) {
 		t.Fatalf("a backend with no reservation answered held %v, %v", held, err)
 	}
 }
+
+// A RESERVED UPLOAD IS STORED UNDER THE KEY ITS RESERVATION MINTED: the object
+// a streamed put answers names that key, and reads back verified, so the key a
+// reservation answers for and the object a row names are one.
+func TestAPutUnderAMintedKeyStoresThatKey(t *testing.T) {
+	t.Parallel()
+	s := newStore(t, memobj.New())
+	k := s.Mint()
+	body := []byte("reserved before it moved")
+	obj, err := s.PutMinted(t.Context(), k, strings.NewReader(string(body)), int64(len(body)),
+		objstore.PutMeta{ContentType: "text/plain"})
+	if err != nil {
+		t.Fatalf("a put under a minted key was refused: %v", err)
+	}
+	if obj.Key != k || obj.Hash != objstore.HashOf(body) || obj.Size != int64(len(body)) {
+		t.Fatalf("the put answered %+v, want key %s and the body's digest and size", obj, k)
+	}
+	if _, err := s.Stat(t.Context(), k); err != nil {
+		t.Fatalf("the object is not under its minted key: %v", err)
+	}
+	if _, err := s.PutMinted(t.Context(), objstore.Key{}, strings.NewReader("x"), 1,
+		objstore.PutMeta{}); err == nil {
+		t.Fatal("a put naming no key was stored")
+	}
+}
+
+// A KEY TOO OLD TO BE NAMED IS REFUSED BEFORE A BYTE IS READ: bytes stored
+// under it could never be recorded and would wait for the collector with
+// nothing reserving them.
+func TestAPutUnderAStaleMintedKeyReadsNothing(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+	backend := memobj.New()
+	s, err := objstore.NewStoreAt(backend, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := objstore.KeyAt(now.Add(-objstore.RecordWithin - time.Minute))
+	body := &countingReader{r: strings.NewReader("late bytes")}
+	if _, err := s.PutMinted(t.Context(), stale, body, 64, objstore.PutMeta{}); err == nil {
+		t.Fatal("a put under a key past its record window was stored")
+	}
+	if body.n != 0 {
+		t.Fatalf("a refused put read %d bytes first", body.n)
+	}
+	if _, err := s.Stat(t.Context(), stale); !errors.Is(err, objstore.ErrNotFound) {
+		t.Fatalf("a refused put left an object behind: %v", err)
+	}
+}
+
+// countingReader counts what a put read.
+type countingReader struct {
+	r interface{ Read([]byte) (int, error) }
+	n int
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += n
+	return n, err
+}

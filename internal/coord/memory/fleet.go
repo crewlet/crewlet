@@ -61,6 +61,11 @@ type Fleet struct {
 	// records one.
 	trashReap []byte
 
+	// uploadLedger is the upload reservations' ledger, version 0 until one
+	// is written, and uploads each upload's record by its id.
+	uploadLedger versioned
+	uploads      map[string]versioned
+
 	pauses      map[uuid.UUID]coord.SeatPause
 	positions   map[string]coord.NodePositions
 	holds       map[string]coord.TrimHold
@@ -126,6 +131,7 @@ func NewFleet() *Fleet {
 		integrations: map[string][]byte{},
 		mailboxes:    map[uuid.UUID]coord.MailboxRecord{},
 		pauses:       map[uuid.UUID]coord.SeatPause{},
+		uploads:      map[string]versioned{},
 	}
 }
 

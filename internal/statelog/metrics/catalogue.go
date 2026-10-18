@@ -649,6 +649,49 @@ func Catalogue() []Instrument {
 				"that created the bucket derived): the ceiling the bucket " +
 				"keeps for its life, whatever a node's Tier A says later.",
 		},
+		// ---- artifact uploads and the publish pipeline -------------------
+		{
+			Name: ArtifactsUploadBytes, Kind: KindCounter, Unit: UnitBytes,
+			Attributes: []string{"transport"},
+			Shows: "Bytes of artifact files that reached the object store, by " +
+				"how they got there: streamed through this node (`engine`, " +
+				"which counts what the pipeline writes itself: a linted page, " +
+				"an edit's result, a copied CDN file) or put straight to an " +
+				"S3 bucket on a presigned URL and read back here (`direct`). " +
+				"A fleet whose engine share stays high on s3 is streaming " +
+				"uploads its bucket could have taken.",
+		},
+		{
+			Name: ArtifactsUploadReservedBytes, Kind: KindGauge, Unit: UnitBytes,
+			Shows: "Bytes the company's upload reservations hold, as this node " +
+				"last wrote the reservation ledger: bytes in the object store, " +
+				"or on their way to it, that no record names yet. Read against " +
+				"`artifacts.limits.pending_bytes` times four, the company's " +
+				"bound: a value that stays near it is clients abandoning " +
+				"uploads, each held until the object collector could have " +
+				"deleted its bytes.",
+		},
+		{
+			Name: ArtifactsPublishDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"outcome"},
+			Shows: "How long one create, publish or asset finalize took through " +
+				"the pipeline (read back, edits, lint, CDN copies, the " +
+				"domain's decide), by `outcome`: `published`, `refused` (the " +
+				"request was judged and turned down) or `failed` (no outcome " +
+				"could be established, which is a store or a broker not " +
+				"answering). The publish latency objective is read from it.",
+		},
+		{
+			Name: ArtifactsPublishRefusals, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"reason"},
+			Shows: "Uploads and publishes refused, by `reason` from a closed set " +
+				"(internal/artifactupload.Refusals): a client sending the " +
+				"wrong bytes (`upload_mismatch`), a page breaking the policy " +
+				"(`policy_refused`), a company out of quota (`quota_exceeded`) " +
+				"or reservations (`uploads_outstanding`), an agent's turn past " +
+				"its guardrails (`turn_quota`), a moved head (`version_moved`) " +
+				"and the rest. Each reason is a different person to call.",
+		},
 	}
 }
 

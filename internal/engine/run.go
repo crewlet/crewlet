@@ -499,6 +499,10 @@ type Engine struct {
 	// collector's duty. See objects.go.
 	objects *objectStore
 
+	// uploads is this node's artifact upload and publish pipeline, built on
+	// first use. See artifactupload.go.
+	uploads artifactUploads
+
 	// boot is the operator's Tier A configuration this engine was built
 	// from. Immutable; kept because the duties an apply or a later loop
 	// arms read Tier A — the trim's retention policy, the identity
