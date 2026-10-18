@@ -184,7 +184,8 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 	// as Go code spells it, so a nested package is named by its last
 	// element.
 	for _, pkg := range []string{"tracker", "pages", "statelog", "estate",
-		"iamdomain", "iam", "iam/session"} {
+		"iamdomain", "iam", "iam/session", "artifactsdomain", "artifacts",
+		"artifacts/manifest", "artifacts/mediatype"} {
 		vars, types := declaredErrors(t, filepath.Join(root, "internal", filepath.FromSlash(pkg)))
 		name := path.Base(pkg)
 		for _, v := range vars {

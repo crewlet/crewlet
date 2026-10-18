@@ -7,6 +7,10 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/manifest"
+	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -131,6 +135,29 @@ var sentinels = []sentinel{
 	{"session.ErrNoCompany", session.ErrNoCompany},
 	{"session.ErrNoKeyring", session.ErrNoKeyring},
 
+	// THE ARTIFACTS ESTATE'S, which every data node answers for a node
+	// holding no data ([Artifacts]), and the vocabulary's beneath it: an
+	// audience, an id or a label a write refused, and the manifest grammar's
+	// and the media table's refusals a publish wraps.
+	{"artifactsdomain.ErrAboveOwnRole", artifactsdomain.ErrAboveOwnRole},
+	{"artifactsdomain.ErrAgentCompanyShare", artifactsdomain.ErrAgentCompanyShare},
+	{"artifactsdomain.ErrBadCursor", artifactsdomain.ErrBadCursor},
+	{"artifactsdomain.ErrConflict", artifactsdomain.ErrConflict},
+	{"artifactsdomain.ErrInvalid", artifactsdomain.ErrInvalid},
+	{"artifactsdomain.ErrLabelTaken", artifactsdomain.ErrLabelTaken},
+	{"artifactsdomain.ErrNotFound", artifactsdomain.ErrNotFound},
+	{"artifactsdomain.ErrPurged", artifactsdomain.ErrPurged},
+	{"artifactsdomain.ErrSourceTaken", artifactsdomain.ErrSourceTaken},
+	{"artifactsdomain.ErrTrashed", artifactsdomain.ErrTrashed},
+	{"artifactsdomain.ErrUploadStale", artifactsdomain.ErrUploadStale},
+
+	{"artifacts.ErrInvalidAudience", artifacts.ErrInvalidAudience},
+	{"artifacts.ErrInvalidID", artifacts.ErrInvalidID},
+	{"artifacts.ErrInvalidLabel", artifacts.ErrInvalidLabel},
+	{"manifest.ErrInvalid", manifest.ErrInvalid},
+	{"manifest.ErrReserved", manifest.ErrReserved},
+	{"mediatype.ErrRefused", mediatype.ErrRefused},
+
 	{"estate.ErrOutcomeUnknown", ErrOutcomeUnknown},
 }
 
@@ -172,6 +199,11 @@ var typedKinds = []typedKind{
 	{"iamdomain.InvitationRedeemed", reflect.TypeFor[*iamdomain.InvitationRedeemed]()},
 
 	{"iam.LookRefused", reflect.TypeFor[*iam.LookRefused]()},
+
+	{"artifactsdomain.CarriedObjectGone", reflect.TypeFor[*artifactsdomain.CarriedObjectGone]()},
+	{"artifactsdomain.ErrFutureVersion", reflect.TypeFor[*artifactsdomain.ErrFutureVersion]()},
+	{"artifactsdomain.QuotaExceeded", reflect.TypeFor[*artifactsdomain.QuotaExceeded]()},
+	{"artifactsdomain.VersionMoved", reflect.TypeFor[*artifactsdomain.VersionMoved]()},
 
 	{"estate.ErrUnserved", reflect.TypeFor[*ErrUnserved]()},
 }

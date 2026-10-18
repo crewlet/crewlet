@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/org"
@@ -48,9 +49,24 @@ func (c *core) openArtifacts(e *Engine, sl *stateLog) error {
 	return nil
 }
 
+// ArtifactsEstate is the artifacts estate as every surface reaches it: the
+// tools, the serving origin and the API, on every node, through the estate
+// router (ADR-0025), and false on an engine built with no router.
+//
+// THE ROUTER'S ON EVERY NODE, for [OperatorWork]'s reason: a data node whose
+// copy is out of service answers from a peer's copy, and a node without `data`
+// reaches a data node's. Its method set is the domain reader's and writer's,
+// so a surface cannot tell which node answered.
+func ArtifactsEstate(e *Engine) (estate.Artifacts, bool) {
+	if e.router == nil {
+		return estate.Artifacts{}, false
+	}
+	return e.router.Artifacts(), true
+}
+
 // ArtifactsReader is this node's artifacts read side, or nil on an engine with
 // no core runtime: a node without `data`, which reads artifacts through a data
-// node.
+// node ([ArtifactsEstate]).
 func (e *Engine) ArtifactsReader() *artifactsdomain.Reader {
 	if c := e.core.Load(); c != nil {
 		return c.artifactsReader
