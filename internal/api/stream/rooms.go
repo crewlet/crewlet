@@ -3,7 +3,6 @@ package stream
 import (
 	"context"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -35,12 +34,25 @@ import (
 // None closes the socket. The join is DECIDED AGAIN on every decision of the
 // socket's credential and on every movement that can narrow who may read the
 // artifact (a share or an unshare, the trash, a transfer, a purge): a refusal
-// withdraws the room with an error frame naming the artifact, an undecidable
-// answer keeps it, and a role that moved is the role later pushes are shaped
-// by. From the moment such a movement lands until its decision does, the room's
-// datastore pushes are withheld from its members, so no document reaches a
-// reader whose share was just withdrawn; a member kept is told to re-read what
-// it missed.
+// withdraws the room with an error frame naming the artifact, and a role that
+// moved is the role later pushes are shaped by. From the moment such a movement
+// lands until its decision does, the room's datastore pushes are withheld from
+// its members, so no document reaches a reader whose share was just withdrawn;
+// a member kept is told to re-read what it missed.
+//
+// # An undecidable answer holds the room, and is asked again
+//
+// A decision this node could not reach (the estate router, an identity or
+// chart copy that cannot vouch, a record it could not read) FAILS CLOSED, as
+// the join itself does on the same answer: the membership stays in the room,
+// so it keeps hearing what moves and who is present, but its datastore pushes
+// are withheld until a decision lands. The room is decided again after a
+// backoff ([roomRedecideFloor] doubling to [roomRedecideCeiling], or the
+// refusal's own wait when it names a longer one) for as long as the answer
+// stays undecidable, and the decision that finally lands resumes the
+// membership at the role it found or withdraws it. Keeping the role the member
+// held before would push documents, judged on a share that may just have been
+// withdrawn, to a reader nobody vouched for.
 //
 // # Every node pushes from its own appliers
 //
@@ -228,10 +240,40 @@ func (p dataPush) ForReader(r Reader) (string, any, bool) {
 	return variant, out, true
 }
 
-// roomWork is the rooms whose memberships wait to be decided again.
+// How soon a room whose decision could not be reached is asked again. The
+// floor is one estate round trip with room to spare, so a transient router or
+// read error clears within a blink of the reader's eye; each further miss
+// doubles it, up to a ceiling that bounds what a node whose identity or chart
+// copy stays behind spends asking (one decision per member per room) while a
+// held reader waits at most that long once the node recovers. A refusal that
+// names its own longer wait is asked again no sooner than that wait.
+const (
+	roomRedecideFloor   = 250 * time.Millisecond
+	roomRedecideCeiling = 30 * time.Second
+)
+
+// roomRedecideDelay is how long after its attempts-th undecidable answer a
+// room is decided again, given the error that answer carried.
+func roomRedecideDelay(attempts int, err error) time.Duration {
+	delay := roomRedecideCeiling
+	if shift := attempts - 1; shift >= 0 && shift < 8 {
+		delay = min(roomRedecideFloor<<shift, roomRedecideCeiling)
+	}
+	if hint := statelog.RetryAfter(err, 0); hint > delay {
+		delay = min(hint, roomRedecideCeiling)
+	}
+	return delay
+}
+
+// roomWork is the rooms whose memberships wait to be decided again: now
+// (pending), or at a due instant after an undecidable answer (due), with the
+// number of undecidable answers in a row each room has had (misses), which
+// is what its next backoff is sized by.
 type roomWork struct {
 	mu      sync.Mutex
 	pending map[artifacts.ID]bool
+	due     map[artifacts.ID]time.Time
+	misses  map[artifacts.ID]int
 	wake    chan struct{}
 
 	stop context.CancelFunc
@@ -243,7 +285,8 @@ type roomWork struct {
 // the service's, ended by [Service.Stop].
 func (s *Service) startRooms() {
 	ctx, cancel := context.WithCancel(context.Background())
-	s.work = &roomWork{pending: map[artifacts.ID]bool{}, wake: make(chan struct{}, 1),
+	s.work = &roomWork{pending: map[artifacts.ID]bool{}, due: map[artifacts.ID]time.Time{},
+		misses: map[artifacts.ID]int{}, wake: make(chan struct{}, 1),
 		stop: cancel, done: make(chan struct{})}
 	s.stopPresence = s.rooms.Presence.OnChange(s.PresenceChanged)
 	go s.decideRooms(ctx)
@@ -533,40 +576,117 @@ func (s *Service) queueDecision(id artifacts.ID) {
 	s.work.mu.Lock()
 	s.work.pending[id] = true
 	s.work.mu.Unlock()
+	s.wakeDecider()
+}
+
+// retryDecision asks the decider to decide id's room again after a backoff,
+// because a decision about one of its members could not be reached (err). A
+// retry already scheduled keeps its instant, so several members missing in one
+// pass, or a credential recheck missing beside it, cost one backoff step and
+// not one each.
+func (s *Service) retryDecision(id artifacts.ID, err error) {
+	s.work.mu.Lock()
+	if _, scheduled := s.work.due[id]; !scheduled {
+		s.work.misses[id]++
+		s.work.due[id] = time.Now().Add(roomRedecideDelay(s.work.misses[id], err))
+	}
+	s.work.mu.Unlock()
+	s.wakeDecider()
+}
+
+// settleDecision records that every member of id's room was decided, so its
+// next undecidable answer starts the backoff from the floor again. A retry
+// scheduled meanwhile is kept: it was scheduled for a member decided after
+// this pass.
+func (s *Service) settleDecision(id artifacts.ID) {
+	s.work.mu.Lock()
+	delete(s.work.misses, id)
+	s.work.mu.Unlock()
+}
+
+// wakeDecider tells the decider its work changed.
+func (s *Service) wakeDecider() {
 	select {
 	case s.work.wake <- struct{}{}:
 	default:
 	}
 }
 
-// decideRooms decides queued rooms again until ctx ends.
+// takeDecisions is every room due to be decided now, sorted, taken off the
+// queue, and how long until the next scheduled one (zero for none).
+func (s *Service) takeDecisions(now time.Time) ([]artifacts.ID, time.Duration) {
+	s.work.mu.Lock()
+	defer s.work.mu.Unlock()
+	ids := make([]artifacts.ID, 0, len(s.work.pending))
+	for id := range s.work.pending {
+		ids = append(ids, id)
+	}
+	clear(s.work.pending)
+	var next time.Duration
+	for id, at := range s.work.due {
+		if wait := at.Sub(now); wait > 0 {
+			if next == 0 || wait < next {
+				next = wait
+			}
+			continue
+		}
+		delete(s.work.due, id)
+		if !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	slices.SortFunc(ids, func(a, b artifacts.ID) int { return strings.Compare(a.String(), b.String()) })
+	return ids, next
+}
+
+// decideRooms decides queued rooms again until ctx ends: each as soon as it is
+// queued, and each whose decision could not be reached again when its backoff
+// is due.
 func (s *Service) decideRooms(ctx context.Context) {
 	defer close(s.work.done)
+	timer := time.NewTimer(time.Hour)
+	timer.Stop()
+	defer timer.Stop()
 	for {
+		ids, next := s.takeDecisions(time.Now())
+		for _, id := range ids {
+			var undecided error
+			for _, m := range s.hub.Members(id) {
+				if err := s.decideMember(ctx, m.Client.Audience().Principal(), id, m); err != nil {
+					undecided = err
+				}
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			if undecided != nil {
+				s.retryDecision(id, undecided)
+			} else {
+				s.settleDecision(id)
+			}
+		}
+		if len(ids) > 0 {
+			// A retry the pass just scheduled is collected by the next
+			// take, which also sizes the timer to it.
+			continue
+		}
+		if next > 0 {
+			timer.Reset(next)
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-s.work.wake:
+		case <-timer.C:
 		}
-		s.work.mu.Lock()
-		ids := make([]artifacts.ID, 0, len(s.work.pending))
-		for id := range s.work.pending {
-			ids = append(ids, id)
-		}
-		clear(s.work.pending)
-		s.work.mu.Unlock()
-		slices.SortFunc(ids, func(a, b artifacts.ID) int { return strings.Compare(a.String(), b.String()) })
-		for _, id := range ids {
-			for _, m := range s.hub.Members(id) {
-				s.decideMember(ctx, m.Client.Audience().Principal(), id, m)
-			}
-		}
+		timer.Stop()
 	}
 }
 
 // recheckRooms decides every room the socket is in again, as whoever the
 // latest decision of its credential resolved: the rooms' half of the watch's
-// own recheck.
+// own recheck. A membership it could not decide is held and its room asked
+// again by the decider after a backoff.
 func (s *Service) recheckRooms(ctx context.Context, client *Client) {
 	if !s.rooms.serves() {
 		return
@@ -576,40 +696,48 @@ func (s *Service) recheckRooms(ctx context.Context, client *Client) {
 		return
 	}
 	for id, m := range s.hub.Artifacts(client) {
-		s.decideMember(ctx, principal, id, m)
+		if err := s.decideMember(ctx, principal, id, m); err != nil {
+			s.retryDecision(id, err)
+		}
 	}
 }
 
 // decideMember decides one membership of id's room again: a refusal withdraws
-// it with an error frame naming the artifact, an undecidable answer keeps it
-// at the role it had, and an admission keeps it at the role found now, telling
-// the member to re-read anything withheld meanwhile.
-func (s *Service) decideMember(ctx context.Context, p iam.Principal, id artifacts.ID, m RoomMember) {
+// it with an error frame naming the artifact, an admission resumes it at the
+// role found now (telling the member to re-read anything withheld meanwhile),
+// and an undecidable answer HOLDS it, withholding its datastore pushes, and is
+// returned so the caller asks again. A membership already gone, or a decision
+// ended by ctx, returns nil: there is nothing left to ask about.
+func (s *Service) decideMember(ctx context.Context, p iam.Principal, id artifacts.ID, m RoomMember) error {
 	role, err := s.rooms.Access.Standing(ctx, p, id)
 	switch {
 	case err != nil:
-		if errors.Is(err, context.Canceled) {
-			return
+		if ctx.Err() != nil {
+			return nil
 		}
 		log.InfoContext(ctx, "stream_room_redecision_undecidable", "login", p.Login,
 			"artifact", id.String(), "error", err.Error())
-		role = m.Role
+		if !s.hub.Hold(m.Client, id, m.Join) {
+			return nil
+		}
+		return err
 	case role == "":
 		session, ok := s.hub.LeaveArtifactIf(m.Client, id, m.Join)
 		if !ok {
-			return
+			return nil
 		}
 		s.rooms.Presence.Leave(id, session)
 		log.InfoContext(ctx, "stream_room_withdrawn", "login", p.Login, "artifact", id.String())
 		m.Client.Reply(Envelope{Kind: KindError, What: artifactJoinWhat, Error: CodeNotFound,
 			Artifact: id.String()})
-		return
+		return nil
 	}
 	missed, ok := s.hub.Resume(m.Client, id, m.Join, role)
 	if ok && missed {
 		m.Client.send(s.encodeFor(m.Client, PushArtifact(KindArtifactData, id,
 			ArtifactData{Artifact: id, Resync: true}, s.now())))
 	}
+	return nil
 }
 
 // encodeFor is one room push encoded for one client, nil when it may not have

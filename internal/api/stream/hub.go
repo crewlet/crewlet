@@ -1348,6 +1348,24 @@ func (h *Hub) Suspend(id artifacts.ID) {
 	}
 }
 
+// Hold suspends c's membership of id's room alone, if it is still the join
+// that was decided: what a decision that could not be reached does to a
+// member, so it receives no push [withheldWhileSuspended] withholds until a
+// later decision resumes or withdraws it. It reports whether the membership
+// was there to hold.
+func (h *Hub) Hold(c *Client, id artifacts.ID, join uint64) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	m := c.rooms[ArtifactRoom(id)]
+	if m == nil || m.join != join {
+		return false
+	}
+	m.suspended = true
+	return true
+}
+
 // Resume lifts a suspension on c's membership of id's room, if it is still
 // the join that was decided, at the role the decision found; missed reports
 // that a push was withheld meanwhile, which the caller follows with a re-read

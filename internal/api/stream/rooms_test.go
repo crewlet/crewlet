@@ -391,6 +391,92 @@ func TestANarrowingHoldsTheDatastoreUntilItIsDecided(t *testing.T) {
 	}
 }
 
+// AN UNDECIDABLE RE-DECISION HOLDS THE ROOM: a narrowing whose decision this
+// node cannot reach (the estate router failing, an identity copy that cannot
+// vouch) keeps the member's datastore pushes withheld rather than resuming it
+// at the role it held before the share was withdrawn, and asks again until a
+// decision lands. The refusal that finally lands withdraws the room; a member
+// that was undecidable only for a while and is admitted is told to re-read.
+func TestAnUndecidableRedecisionHoldsTheRoom(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		then artifacts.Role
+		want stream.Kind
+	}{
+		{"refused once decidable", "", stream.KindError},
+		{"admitted once decidable", artifacts.RoleViewer, stream.KindArtifactData},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			acc := newAccess()
+			acc.set("erin", sheet, artifacts.RoleViewer)
+			svc := buildService(t, stream.Options{Rooms: stream.Rooms{Access: acc,
+				Stores: stores{}, Presence: nopPresence{}}})
+			c := stream.NewClient(roomReader("erin"))
+			svc.Hub().Register(c)
+			if _, _, ok := svc.Hub().JoinArtifact(c, sheet, artifacts.RoleViewer, "s-erin"); !ok {
+				t.Fatal("the client did not join")
+			}
+
+			acc.fail(errors.New("the estate router could not reach a data node"))
+			svc.ArtifactsMoved([]artifactsdomain.Moved{{Artifact: sheet,
+				What: artifactsdomain.MoveShare, AccessEpoch: 2, Head: 3}})
+			// TWO decisions asked means the first finished and the room
+			// was queued again: an undecidable answer that resumed the
+			// member would never be asked about a second time.
+			waitAsked(t, acc, 2)
+
+			svc.ArtifactDataMoved([]artifactdata.Moved{dataBatch(sheet,
+				delta("review", "row-1", artifacts.ReadAll, "dana", `{"status":"done"}`))})
+			if got := kindsIn(drain(c)); slices.Contains(got, stream.KindArtifactData) {
+				t.Fatalf("a member whose access could not be decided received %v", got)
+			}
+
+			acc.mu.Lock()
+			acc.err = nil
+			acc.roles["erin|"+sheet.String()] = tc.then
+			acc.mu.Unlock()
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				got := kindsIn(drain(c))
+				if slices.Contains(got, tc.want) {
+					break
+				}
+				if len(got) > 0 {
+					t.Fatalf("once decidable the member received %v, want %s", got, tc.want)
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("the room was never decided again once decidable")
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			_, in := svc.Hub().Session(c, sheet)
+			if in != (tc.then != "") {
+				t.Fatalf("the member is in the room: %v, want %v", in, tc.then != "")
+			}
+		})
+	}
+}
+
+// waitAsked waits until acc has been asked at least n decisions.
+func waitAsked(t *testing.T, acc *access, n int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		acc.mu.Lock()
+		asked := acc.asked
+		acc.mu.Unlock()
+		if asked >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the room was asked %d decisions, want at least %d", asked, n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // A DATASTORE PUSH IS SHAPED PER READER: an editor sees every row of an
 // `own_rows` collection and nobody's `private` rows but their own; a viewer
 // sees their own rows of both and every row of an open one; a reader in no
