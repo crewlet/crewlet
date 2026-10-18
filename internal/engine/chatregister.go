@@ -22,10 +22,11 @@ func chatRegistrations() []registration {
 	return []registration{{
 		Domain: chatlet.Domain{},
 		NewApplier: func(s *stateLog) (statelog.Applier, error) {
-			// NO LIVE OBSERVER: the applier's committed batches reach
-			// a screen through one, and nothing on a node renders a
-			// room yet ([chatlet.Observer]), so it announces to nobody.
-			return chatlet.NewApplier(s.nodeID, nil), nil
+			// THE ENGINE'S HOOK AS ITS LIVE OBSERVER, whatever is
+			// attached: what it hears goes to the chat hub the
+			// process attached ([Engine.SetChatLive]) and to this
+			// node's relay followers (liverelay.go).
+			return chatlet.NewApplier(s.nodeID, chatObserver(s.chatApplied)), nil
 		},
 		NewSeams: func(s *stateLog, spec statelog.StreamSpec, appendTo *jetstream.DomainLog,
 			runner *statelog.Runner) (writeSeams, error) {

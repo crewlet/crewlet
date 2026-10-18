@@ -231,13 +231,18 @@ type Engine struct {
 	// tells nobody — see [Engine.SetOnInboxGap].
 	onInboxGap atomic.Pointer[func()]
 
-	// inboxRelay is this data node's inbox relay — the batches its applier
+	// chatLive is the chat live half the process attached — where a
+	// committed chat batch is announced to this node's sockets. Nil
+	// announces to nobody — see [Engine.SetChatLive].
+	chatLive atomic.Pointer[ChatLive]
+
+	// liveRelay is this data node's live relay — the batches its appliers
 	// announced, for a peer whose copy is out of service, and the follower
 	// that hears a peer's while this node's own copy is — and
-	// stopInboxRelayFn ends both. Nil on a node without `data`. See
-	// inboxrelay.go.
-	inboxRelay       atomic.Pointer[inboxRelay]
-	stopInboxRelayFn func(context.Context)
+	// stopLiveRelayFn ends both. Nil on a node without `data`. See
+	// liverelay.go.
+	liveRelay       atomic.Pointer[liveRelay]
+	stopLiveRelayFn func(context.Context)
 
 	// onIdentity is told whose credentials each committed identity batch
 	// moved on this node. Nil tells nobody — see
@@ -1571,10 +1576,11 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err = e.armSteer(ctx); err != nil {
 		return nil, fmt.Errorf("engine: serve notes to running turns: %w", err)
 	}
-	// AND FOR ITS INBOX MOVEMENTS, which a peer whose own copy is out of
-	// service relays to its dashboards — and the follower that does the same
-	// for this node's dashboards while its own copy is. See inboxrelay.go.
-	if err = e.armInboxRelay(ctx); err != nil {
+	// AND FOR WHAT ITS APPLIERS ANNOUNCE — whose inbox moved, what landed in
+	// a room — which a peer whose own copy is out of service relays to its
+	// dashboards, and the follower that does the same for this node's
+	// dashboards while its own copy is. See liverelay.go.
+	if err = e.armLiveRelay(ctx); err != nil {
 		return nil, err
 	}
 	// AND FOR WHO IS IN EACH ARTIFACT'S ROOM, which every node holds for its
@@ -2678,9 +2684,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// still there, and the watch the rooms follow.
 	e.stopArtifactWatch()
 	e.stopPresence(ctx)
-	// And the inbox relay's follower and answerer, which ask and answer on
+	// And the live relay's follower and answerer, which ask and answer on
 	// the same broker.
-	e.stopInboxRelay(ctx)
+	e.stopLiveRelay(ctx)
 	// And a seat's memory, read from the store backends.Close is about to
 	// close.
 	e.stopMemoryReads(ctx)

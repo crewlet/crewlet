@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/backoff"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -541,7 +542,7 @@ type applyHooks struct {
 	// requires `data` (ADR-0025) — so every node holding a socket tells its
 	// own, and the apply is the only thing that sees it on each. A node
 	// whose own copy is out of service relays a sound peer's announcements
-	// instead (inboxrelay.go), which this same hook feeds on that peer. It
+	// instead (liverelay.go), which this same hook feeds on that peer. It
 	// must not block.
 	inboxMoved func([]worklet.InboxMovement)
 
@@ -559,17 +560,25 @@ type applyHooks struct {
 	// for artifactsMoved's reason: the socket hub serves only this node's
 	// own sockets. It must not block. See [Engine.OnArtifactDataMoved].
 	artifactDataMoved func([]artifactdata.Moved)
+
+	// chatApplied is what the CHAT APPLIER calls after a committed batch,
+	// with what it wrote ([chatlet.Applied]) — see [Engine.SetChatLive].
+	// Threaded down for inboxMoved's reason, and relayed by the same relay
+	// while this node's copy is out of service: a room open on a node whose
+	// chat applier halted would otherwise go quiet until its socket moved
+	// elsewhere. It must not block.
+	chatApplied func([]chatlet.Applied)
 }
 
 // applyHooks is every post-commit hook this engine hands its appliers.
 func (e *Engine) applyHooks() applyHooks {
 	return applyHooks{
-		nudgeSkills:    e.nudgeSkills,
-		identityMoved:  e.identityMoved,
-		inboxMoved:     e.inboxMoved,
-		artifactsMoved: e.artifactsMoved,
-
+		nudgeSkills:       e.nudgeSkills,
+		identityMoved:     e.identityMoved,
+		inboxMoved:        e.inboxMoved,
+		artifactsMoved:    e.artifactsMoved,
 		artifactDataMoved: e.artifactDataMoved,
+		chatApplied:       e.chatApplied,
 	}
 }
 
