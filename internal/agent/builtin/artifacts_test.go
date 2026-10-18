@@ -796,8 +796,10 @@ func TestALongPageAColleagueWroteIsCondensedUnlessTheSourceIsAsked(t *testing.T)
 	}
 	r := artifactRig{f: f, reg: reg}
 	long := "<!doctype html><p>" + strings.Repeat("row ", int(artifacts.ToolReadPageBytes/2)) + "</p>"
+	data := "[" + strings.Repeat("1,", int(artifacts.ToolReadPageBytes)) + "1]"
 	theirs := f.seed("founder", iam.ActorHuman, founder,
-		[]artifacts.Share{shareWith("agent-cto", artifacts.RoleViewer)}, [2]string{"index.html", long})
+		[]artifacts.Share{shareWith("agent-cto", artifacts.RoleViewer)}, [2]string{"index.html", long},
+		[2]string{"data.json", data})
 	turn, b := readerTurn(t)
 
 	got := r.call(t, turn, builtin.GetArtifactTool, map[string]any{"artifact": theirs.ID.String()})
@@ -812,6 +814,13 @@ func TestALongPageAColleagueWroteIsCondensedUnlessTheSourceIsAsked(t *testing.T)
 	got = r.call(t, turn, builtin.GetArtifactTool, map[string]any{"artifact": theirs.ID.String(), "offset": 0})
 	if file := decode(t, got)["file"].(map[string]any); file["content"] == nil || file["next_offset"] == nil {
 		t.Fatalf("the source asked by offset answered %v", file)
+	}
+
+	// DATA IS NEVER CONDENSED: what it says is exactly its bytes.
+	got = r.call(t, turn, builtin.GetArtifactTool, map[string]any{"artifact": theirs.ID.String(),
+		"path": "data.json"})
+	if file := decode(t, got)["file"].(map[string]any); file["summary"] != nil || file["content"] == nil {
+		t.Fatalf("a long data file was condensed: %v", file)
 	}
 
 	mine := f.seed("agent-cto", iam.ActorAgent, cto, nil, [2]string{"index.html", long})
