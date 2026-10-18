@@ -54,7 +54,7 @@ func (peerRooms) SearchMessages(_ context.Context, q search.ChatQuery) ([]search
 	return []search.ChatHit{{ChannelID: q.Channels[0], Snippet: q.Text}}, nil
 }
 
-func (peerRooms) Ready() bool { return true }
+func (peerRooms) Ready(context.Context) (bool, error) { return true, nil }
 
 // peerRoomsWriter is the peer's chat writes.
 type peerRoomsWriter struct {
