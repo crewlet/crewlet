@@ -281,7 +281,7 @@ A few things worth knowing when deploying Crewlet:
   than silent.
 - **A Tier A token is a real credential and is checked as one.** Each entry
   states its own `grants` — required and non-empty, naming only `admin`,
-  `tracker` and `knowledge`, and refused for `admin` on a node that refuses it
+  `tracker`, `knowledge` and `artifacts`, and refused for `admin` on a node that refuses it
   — and its value must clear
   a 26-character floor on what the `${VAR}` *resolves to*, so a reference
   cannot be the way around the rule. At least one is required on every node
@@ -396,3 +396,24 @@ A few things worth knowing when deploying Crewlet:
   command or serves a file only for a holder of that box's access token,
   which the engine reads from E2B and never stores
   (`docs/concepts/code-sandbox.md#sandbox-backends`).
+- **Artifacts run on an origin of their own, and where that origin lives is
+  your decision.** An artifact is HTML and script written by a person or an
+  agent, so the engine never renders one on the dashboard's origin: the
+  `api.artifacts` listener serves artifact bytes and nothing else, holds no
+  credential, never reads a cookie and never sets one, and a page reaches the
+  engine only through the dashboard, as the viewer. Give the listener a host
+  on a **registrable domain other than the dashboard's** (for example
+  `https://{artifact}.example-usercontent.net` beside
+  `https://crewlet.example.com`): only then does each artifact get a real
+  origin of its own. On the dashboard's own site, on a second port of its
+  host, or with one plain hostname, every artifact is served with an opaque
+  origin instead, which is safe but leaves browser storage unavailable to
+  pages, and `crewlet validate` warns about the same-site case. An origin
+  equal to the dashboard's, the public listener's or any
+  `api.auth.allowed_origins` entry, or a parent domain of the API host, is
+  refused outright. Revoking a share stops the next document request; a node
+  whose copy of the shares is stale asks a peer and answers `503` rather than
+  serve from it. Put TLS in front of the listener exactly as you do for the
+  dashboard, and never front `/t/` paths with a shared cache: only
+  `/_crewlet/runtime/` and `/_crewlet/kit/` are cacheable. See
+  `docs/guides/artifacts-serving.md`.

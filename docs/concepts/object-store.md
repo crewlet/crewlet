@@ -32,10 +32,11 @@ flowchart LR
     R -->|the object| S
 ```
 
-Today the store holds [a project's files](../guides/work-tracker.md#a-projects-files).
-It is built for more than that — chat attachments and anything else a row can
-name by key — and every consumer follows the same rule: the estate names the
-object, and the store keeps its bytes.
+Today the store holds [a project's files](../guides/work-tracker.md#a-projects-files)
+and every file of every [artifact](artifacts.md) version and asset. It is built
+for more than that (chat attachments and anything else a row can name by key)
+and every consumer follows the same rule: the estate names the object, and the
+store keeps its bytes.
 
 ---
 
@@ -405,6 +406,61 @@ every 128 KiB message before it — a few dozen bytes each rather than the bytes
 themselves, but still work that grows with the page's offset. A seat reads
 pages near the start of a file far more often than pages a gibibyte in.
 
+### Artifact uploads are reserved before they move
+
+An artifact's files reach the store in three steps, and the first moves no
+bytes at all:
+
+1. **The intent.** The client declares every file it means to send (path,
+   size, SHA-256). The engine decides everything it can without the bytes:
+   whether the caller may publish, the paths and types, the per-file and
+   per-publish limits, which files the artifact **already holds** (those are
+   carried, below, and never sent), and whether the bytes the company's
+   artifacts already name, plus every reservation still outstanding, plus
+   these new bytes, fit `artifacts.limits.company_bytes`. It mints one key per
+   new file and records a **reservation** in the coordination store that lasts
+   until the collector could have deleted those objects. One principal may hold
+   `artifacts.limits.pending_bytes` reserved, a company four times that; past
+   it the intent is refused `429 uploads_outstanding`, naming when the oldest
+   reservation expires.
+2. **The transfer.** On `nats` every file streams through the engine. On `s3`,
+   when the boot probe proved the bucket honours them, the intent instead hands
+   a browser or the CLI a presigned `PUT` for each file, bound to its exact
+   length, its served type, its SHA-256 as a signed checksum and
+   `if-none-match: *`, so the bytes go straight to the bucket and a second put
+   to the same key is refused. An agent's sandbox is never handed one: the
+   engine reads the box and streams the files itself. Either way the engine
+   minted the key; a client never names one.
+3. **Finalize.** Before the version is recorded, the engine reads **every new
+   object back** through the verifying reader. A file whose bytes are not what
+   was declared is refused `422 upload_mismatch`, one that never arrived `409
+   upload_missing`, and a key older than twelve hours is refused as it is for
+   every write. The reservation is released for every object the recorded
+   version names.
+
+So bytes that no row names never exceed the reservation budget, and the row's
+SHA-256 is always the digest of the stored bytes, established by the engine,
+whichever way they travelled. The decision is
+[ADR-0036](https://github.com/crewlet/crewlet/blob/main/adr/0036-bytes-are-reserved-before-they-move.md).
+
+### An unchanged file is carried, never copied
+
+A publish names every file by its SHA-256, and a file **the same artifact
+already holds** is carried: the new version's row names the existing object,
+and no bytes move. A carry is the one way a key comes to be named by a record
+other than the write that uploaded it, and three rules keep the collector's
+lock-free deletion sound:
+
+- the applier performs a carry only by finding the artifact's own live
+  reference to that object **in its own apply transaction**; finding none, it
+  skips the record identically on every node, and the publisher is told `409
+  carried_object_gone`, naming the files to send again;
+- every record that adds or removes an artifact's object reference is ordered
+  on that artifact's own subject, so no carry can race a removal;
+- **no carry crosses an artifact**, so a publish cannot learn whether any other
+  artifact holds a file with a given digest. A library two artifacts both use
+  is stored twice.
+
 ---
 
 ## Collection and audit
@@ -477,7 +533,10 @@ more, so no write that could still land can name it. The rule holds as long as
 the clocks of the node deciding a write and the node running the collector
 disagree by less than that margin. There is no lock, no second look and no
 coordination round trip, and two collectors running at once are safe —
-deleting an object that is already gone is not an error. The decision is
+deleting an object that is already gone is not an error. An artifact's
+[carried files](#an-unchanged-file-is-carried-never-copied) keep the rule: a
+carry names only an object the same artifact still names, checked where the
+carry is applied. The decision is
 [ADR-0027](https://github.com/crewlet/crewlet/blob/main/adr/0027-a-deletion-from-the-shared-store-needs-no-lock.md).
 
 ---

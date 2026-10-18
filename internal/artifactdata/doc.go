@@ -86,4 +86,11 @@
 // documents it changed, with the facts a push is shaped by), built from the rows
 // it wrote; the engine fans it out to the socket hub. No record wakes a seat in
 // this release, so the domain declares no feed.
+//
+// # The decisions behind it
+//
+// A datastore write is decided where it is applied, from authority stamped at
+// the API: ADR-0037. A cold store will live in object storage and return
+// through the log, and the hot store keeps what that needs from its first
+// release: ADR-0039. This package is the authority for both.
 package artifactdata

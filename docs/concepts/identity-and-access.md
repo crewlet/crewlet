@@ -410,6 +410,9 @@ publish answers with, and a conflicting data write's current rows, are shown
 only where the requester could read them. A turn woken by somebody the company does not know reaches only those
 edits; a turn nobody woke (a schedule, a watch) is bounded by the agent alone.
 
+The decision is
+[ADR-0034](https://github.com/crewlet/crewlet/blob/main/adr/0034-an-artifact-is-shared-and-a-share-is-a-relation.md).
+
 ### What admin runs
 
 `admin` covers every gesture that changes what the company *is* or reads what

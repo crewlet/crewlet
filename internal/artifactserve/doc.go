@@ -83,4 +83,7 @@
 //
 // Markdown and native sheets carry no author code and are rendered by the
 // dashboard, so they never reach this origin.
+//
+// An artifact is served from an origin that holds no credential: ADR-0035,
+// whose authority this package is.
 package artifactserve

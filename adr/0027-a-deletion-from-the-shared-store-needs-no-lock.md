@@ -80,3 +80,21 @@ breaks.
 
 Which objects exist or where they are kept — that is
 [ADR-0026](0026-the-estate-names-an-object-and-a-store-keeps-its-bytes.md).
+
+## Amendment: a carry, and a put the client makes
+
+[ADR-0036](0036-bytes-are-reserved-before-they-move.md) widens the one sentence
+the rule above rests on. A key is named only by the write that uploaded it,
+**or by a record of the same artifact whose apply finds it named**: an artifact
+version may carry an object an earlier version of that artifact already names,
+and the applier performs the carry only by finding that reference, live, in
+its own apply transaction. Every record that adds or removes an artifact's
+object reference is arbitrated on the artifact's own subject, both reference
+tables belong to one domain, and no carry crosses an artifact or a domain, so
+the invariant (once no row names a key at some applied prefix, no later record
+names it) holds as before.
+
+A presigned transfer writes a key the engine minted, under `if-none-match: *`
+and a signed checksum, so a name is still put once when the client makes the
+put. The upload's reservation outlives its object until the collector could
+have deleted it.

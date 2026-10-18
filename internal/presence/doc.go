@@ -72,4 +72,6 @@
 // The socket decides a join (reading the artifact is the rule) and decides it
 // again whenever access to the artifact narrows; the hub keeps who is present
 // and nothing about who may be.
+//
+// Presence is told, never stored: ADR-0038, whose authority this package is.
 package presence
