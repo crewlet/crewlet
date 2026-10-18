@@ -79,7 +79,8 @@ func keyedCommands(base string) map[string][]string {
 			"-confirm", "1", "-api", base},
 		"chatlet prune": {"chatlet", "prune", "c-eng", "-cutoff", "2031-03-24T04:35:00Z",
 			"-confirm", "2031-03-24T04:35:00Z", "-api", base},
-		"chatlet retention": {"chatlet", "retention", "c-eng", "-days", "30", "-api", base},
+		"chatlet retention": {"chatlet", "retention", "c-eng", "-days", "30", "-confirm", "30",
+			"-api", base},
 	}
 }
 

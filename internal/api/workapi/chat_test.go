@@ -118,6 +118,14 @@ func pruneAt(cutoff, confirm string) string {
 // retentionPath is the room's horizon route.
 const retentionPath = "/chatlet/channels/" + theRoom + "/retention"
 
+// retentionAt is the horizon route with its confirmation, "" for none.
+func retentionAt(confirm string) string {
+	if confirm == "" {
+		return retentionPath
+	}
+	return retentionPath + "?confirm=" + url.QueryEscape(confirm)
+}
+
 // A CHAT DESTRUCTION IS A PURGE'S DECISION: admin's, a person's or a
 // credential's — never an agent's, which could erase the evidence of what it
 // said — and a recent proof's, on every one of the three verbs. A colleague
@@ -147,7 +155,7 @@ func TestAChatDestructionIsAdminsAndARecentProofs(t *testing.T) {
 	}{
 		"an erase":    {http.MethodPost, erasePath, eraseBody, authz.ActionChatErase},
 		"a prune":     {http.MethodPost, pruneAt(cutoff, cutoff), nil, authz.ActionChatPrune},
-		"a retention": {http.MethodPut, retentionPath, map[string]any{"retention_days": 30}, authz.ActionChatRetention},
+		"a retention": {http.MethodPut, retentionAt("30"), map[string]any{"retention_days": 30}, authz.ActionChatRetention},
 	}
 	for who, tc := range map[string]struct {
 		principal iam.Principal
@@ -299,7 +307,7 @@ func TestAChatDestructionIsBoundToWhatItDestroys(t *testing.T) {
 
 	// A ROOM'S HORIZON IS BOUND BY THE STORE, which derives its id from the
 	// key and what is asked: the key reaches it on the actor.
-	if got := r.do(as(admin("ana")), http.MethodPut, retentionPath,
+	if got := r.do(as(admin("ana")), http.MethodPut, retentionAt("7"),
 		map[string]any{"retention_days": 7}, opkey.Header, key); got.status != http.StatusOK {
 		t.Fatalf("the retention answered %d %v", got.status, got.body)
 	}
@@ -311,8 +319,9 @@ func TestAChatDestructionIsBoundToWhatItDestroys(t *testing.T) {
 }
 
 // A DESTRUCTION CONFIRMS WHAT IT DESTROYS, with nothing read from the room: an
-// erase repeats how many messages it names, a prune repeats its cutoff, and a
-// request that cannot say is refused before anything is written — a missing
+// erase repeats how many messages it names, a prune repeats its cutoff, a
+// horizon repeats its days or `company`, and a request that cannot say is
+// refused before anything is written — a missing
 // confirmation or cutoff the query's fault, a body that is not the verb's own
 // the body's, and a confirmation that names something else `invalid`.
 func TestAChatDestructionConfirmsWhatItDestroys(t *testing.T) {
@@ -355,11 +364,23 @@ func TestAChatDestructionConfirmsWhatItDestroys(t *testing.T) {
 		"a prune confirming another instant": {http.MethodPost,
 			pruneAt(cutoff.Format(time.RFC3339), cutoff.Add(time.Second).Format(time.RFC3339)),
 			nil, http.StatusUnprocessableEntity, httpjson.CodeInvalid},
-		"a retention stating nothing": {http.MethodPut, retentionPath, map[string]any{},
+		"a retention stating nothing": {http.MethodPut, retentionAt("30"), map[string]any{},
 			http.StatusBadRequest, httpjson.CodeInvalidBody},
-		"a retention of part of a day": {http.MethodPut, retentionPath,
+		"a retention of part of a day": {http.MethodPut, retentionAt("1"),
 			map[string]any{"retention_days": 1.5},
 			http.StatusBadRequest, httpjson.CodeInvalidBody},
+		"a retention with no confirmation": {http.MethodPut, retentionPath,
+			map[string]any{"retention_days": 30},
+			http.StatusBadRequest, httpjson.CodeInvalidQuery},
+		"a retention confirming another horizon": {http.MethodPut, retentionAt("31"),
+			map[string]any{"retention_days": 30},
+			http.StatusUnprocessableEntity, httpjson.CodeInvalid},
+		"the company's horizon confirmed as a number": {http.MethodPut, retentionAt("0"),
+			`{"retention_days": null}`,
+			http.StatusUnprocessableEntity, httpjson.CodeInvalid},
+		"for ever confirmed as the company's": {http.MethodPut, retentionAt("company"),
+			map[string]any{"retention_days": 0},
+			http.StatusUnprocessableEntity, httpjson.CodeInvalid},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -387,8 +408,8 @@ func TestAChatDestructionConfirmsWhatItDestroys(t *testing.T) {
 			map[string]any{"message_ids": []string{"m-1", "m-1", "m-2"}, "reason": "x"}},
 		{http.MethodPost, pruneAt(cutoff.Format(time.RFC3339),
 			cutoff.In(time.FixedZone("UTC-5", -5*3600)).Format(time.RFC3339)), nil},
-		{http.MethodPut, retentionPath, `{"retention_days": null}`},
-		{http.MethodPut, retentionPath, map[string]any{"retention_days": 0}},
+		{http.MethodPut, retentionAt("company"), `{"retention_days": null}`},
+		{http.MethodPut, retentionAt("0"), map[string]any{"retention_days": 0}},
 	} {
 		if got := r.do(as(admin("ana")), req.method, req.path, req.body); got.status != http.StatusOK {
 			t.Errorf("%s %s answered %d %v, want it served", req.method, req.path,

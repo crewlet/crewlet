@@ -3,6 +3,7 @@ package chatlet
 import (
 	"cmp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -178,6 +179,23 @@ func HorizonFor(companyDays int, override *int) (Horizon, bool) {
 		Days: days, Duration: time.Duration(days) * 24 * time.Hour,
 		Source: source,
 	}, true
+}
+
+// HorizonConfirmation is how a room's own setting is repeated to confirm it:
+// its whole days in decimal, [RetentionForever]'s `0` included, or, for none of
+// its own, the word for the setting that then decides — [RetentionCompany].
+//
+// A shorter horizon is a prune on a delay, so whoever sets one types it twice:
+// `?confirm=` on `PUT /chatlet/channels/{channel_id}/retention`, and `-confirm` on
+// `crewlet chatlet retention`, which checks it before it sends anything and then
+// sends the same word. ONE SPELLING FOR BOTH ENDS, because the command's check
+// and the route's are the same comparison and two copies of a word agree only
+// until somebody edits one of them.
+func HorizonConfirmation(override *int) string {
+	if override == nil {
+		return string(RetentionCompany)
+	}
+	return strconv.Itoa(*override)
 }
 
 // Eligible names every room a prune covers, and the horizon each is covered

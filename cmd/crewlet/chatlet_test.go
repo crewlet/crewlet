@@ -337,7 +337,7 @@ func TestAChatletVerbOnANodeServingNoChatNamesTheAxis(t *testing.T) {
 			"-cutoff", "2031-03-24T04:35:00Z", "-confirm", "2031-03-24T04:35:00Z"}},
 		{"erase", "no_route", []string{"erase", "c-eng", "-message", "m-1",
 			"-reason", "a pasted key", "-confirm", "1"}},
-		{"retention", "no_route", []string{"retention", "c-eng", "-days", "30"}},
+		{"retention", "no_route", []string{"retention", "c-eng", "-days", "30", "-confirm", "30"}},
 		{"read", "unknown_query", []string{"read", "c-eng"}},
 		{"channels", "unknown_query", []string{"channels"}},
 		{"search", "unknown_query", []string{"search", "launch"}},
@@ -499,10 +499,15 @@ func TestAChatletRetentionSaysExactlyOneHorizon(t *testing.T) {
 	node := newFakeChatletNode(t, http.StatusOK, `{"channel_id":"c-eng",
 		"outcome":"applied","op_id":"k","position":"CREWLET_CHAT_LOG@1:9"}`)
 	for name, args := range map[string][]string{
-		"neither":     {"retention", "c-eng"},
-		"both":        {"retention", "c-eng", "-days", "30", "-company"},
-		"not a whole": {"retention", "c-eng", "-days", "1.5"},
-		"no room":     {"retention", "-days", "30"},
+		"neither":     {"retention", "c-eng", "-confirm", "30"},
+		"both":        {"retention", "c-eng", "-days", "30", "-company", "-confirm", "30"},
+		"not a whole": {"retention", "c-eng", "-days", "1.5", "-confirm", "1.5"},
+		"no room":     {"retention", "-days", "30", "-confirm", "30"},
+		// THE HORIZON TYPED TWICE: a shorter one is a prune on a delay.
+		"no confirmation":                     {"retention", "c-eng", "-days", "30"},
+		"another number confirmed":            {"retention", "c-eng", "-days", "30", "-confirm", "3"},
+		"the company's confirmed as days":     {"retention", "c-eng", "-company", "-confirm", "0"},
+		"for ever confirmed as the company's": {"retention", "c-eng", "-days", "0", "-confirm", "company"},
 	} {
 		if _, _, err := chatletCLI(t, node.server.URL, args...); err == nil {
 			t.Errorf("a retention with %s was accepted", name)
@@ -512,13 +517,15 @@ func TestAChatletRetentionSaysExactlyOneHorizon(t *testing.T) {
 		t.Errorf("a refused retention still reached the node %d time(s)", calls)
 	}
 	for _, tc := range []struct {
-		args []string
-		want string
-		says string
+		args    []string
+		want    string
+		confirm string
+		says    string
 	}{
-		{[]string{"-days", "30"}, `{"retention_days":30}`, "30 day(s)"},
-		{[]string{"-days", "0"}, `{"retention_days":0}`, "kept for ever"},
-		{[]string{"-company"}, `{"retention_days":null}`, "the company's horizon"},
+		{[]string{"-days", "30", "-confirm", "30"}, `{"retention_days":30}`, "30", "30 day(s)"},
+		{[]string{"-days", "0", "-confirm", "0"}, `{"retention_days":0}`, "0", "kept for ever"},
+		{[]string{"-company", "-confirm", "company"}, `{"retention_days":null}`, "company",
+			"the company's horizon"},
 	} {
 		out, _, err := chatletCLI(t, node.server.URL,
 			append([]string{"retention", "c-eng"}, tc.args...)...)
@@ -527,9 +534,10 @@ func TestAChatletRetentionSaysExactlyOneHorizon(t *testing.T) {
 		}
 		asked := node.asked()
 		if asked.method != http.MethodPut || asked.path != "/chatlet/channels/c-eng/retention" ||
-			string(asked.sent) != tc.want {
-			t.Errorf("retention %v sent %s %s %s, want PUT %s", tc.args, asked.method,
-				asked.path, asked.sent, tc.want)
+			string(asked.sent) != tc.want || asked.query.Get("confirm") != tc.confirm {
+			t.Errorf("retention %v sent %s %s?%s %s, want PUT %s confirming %q", tc.args,
+				asked.method, asked.path, asked.query.Encode(), asked.sent, tc.want,
+				tc.confirm)
 		}
 		if _, minted := statelog.OpMintedAt(asked.key); !minted {
 			t.Errorf("retention %v carried the key %q", tc.args, asked.key)

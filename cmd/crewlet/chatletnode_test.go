@@ -127,9 +127,15 @@ func TestEveryChatletVerbWorksAgainstARealNodeAsAPerson(t *testing.T) {
 		!strings.Contains(read, "No messages") {
 		t.Errorf("the erased message still reads:\n%s", read)
 	}
-	if kept := as("retention", room, "-days", "30"); !strings.Contains(kept,
+	if kept := as("retention", room, "-days", "30", "-confirm", "30"); !strings.Contains(kept,
 		"retention of "+room+": 30 day(s), applied") {
 		t.Errorf("the horizon printed:\n%s", kept)
+	}
+	// THE COMPANY'S HORIZON IS CONFIRMED BY A WORD, which the command and the
+	// route each spell: against the real route, so the two cannot drift.
+	if kept := as("retention", room, "-company", "-confirm", "company"); !strings.Contains(kept,
+		"retention of "+room+": the company's horizon, applied") {
+		t.Errorf("the company's horizon printed:\n%s", kept)
 	}
 	cutoff := time.Now().UTC().Format(time.RFC3339Nano)
 	if pruned := as("prune", room, "-cutoff", cutoff, "-confirm", cutoff); !strings.Contains(

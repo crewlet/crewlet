@@ -217,3 +217,29 @@ func targetIDs(targets []chatlet.PruneTarget) []string {
 	}
 	return out
 }
+
+// A ROOM'S HORIZON IS CONFIRMED IN ONE SPELLING.
+//
+// The route and the command each compare what a person typed twice, and the
+// command sends the word it checked: a horizon of days is the number in
+// decimal, the zero that keeps a room for ever included, and a room returned
+// to the company's horizon is the word for whose setting then decides — which
+// is not `0`, since `0` is a horizon of its own and the one that destroys
+// nothing.
+func TestARoomsHorizonIsConfirmedInOneSpelling(t *testing.T) {
+	t.Parallel()
+	days := func(n int) *int { return &n }
+	for name, tc := range map[string]struct {
+		override *int
+		want     string
+	}{
+		"the company's": {nil, "company"},
+		"for ever":      {days(chatlet.RetentionForever), "0"},
+		"thirty days":   {days(30), "30"},
+		"ten years":     {days(3650), "3650"},
+	} {
+		if got := chatlet.HorizonConfirmation(tc.override); got != tc.want {
+			t.Errorf("the horizon %s is confirmed as %q, want %q", name, got, tc.want)
+		}
+	}
+}

@@ -253,7 +253,14 @@ func pruneArgs(cutoff time.Time) map[string]any {
 // nothing would then destroy the past of a room an administrator had set to
 // keep for ever.
 // A shorter horizon is a prune on a delay — the duty takes whatever it no
-// longer covers on its next pass — which is why this is decided as a prune is.
+// longer covers on its next pass — which is why this is decided as a prune is,
+// and CONFIRMED as one: `?confirm=` repeats the horizon the body states — its
+// number of days, `0` for ever included, or `company` for null, spelled by
+// [chatlet.HorizonConfirmation] as the command spells it — checked before
+// anything is written. Every horizon is confirmed, a longer one too:
+// whether a horizon shortens the room's depends on what the room had, which
+// this route deliberately does not read, and a confirmation asked only of some
+// requests is one a caller learns to send without looking.
 func (s *served) putChatRetention(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "retention_days") {
@@ -269,6 +276,21 @@ func (s *served) putChatRetention(w http.ResponseWriter, r *http.Request) {
 	}
 	days, ok := retentionDays(w, held)
 	if !ok {
+		return
+	}
+	confirm := strings.TrimSpace(r.URL.Query().Get("confirm"))
+	if confirm == "" {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery,
+			map[string]string{"detail": "repeat the horizon in ?confirm= — its " +
+				"number of days, 0 to keep the room for ever, or `company` for the " +
+				"company's own: a shorter one is a prune on a delay, on every data " +
+				"node, and nothing undoes it"})
+		return
+	}
+	if want := chatlet.HorizonConfirmation(days); confirm != want {
+		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeInvalid,
+			map[string]string{"detail": fmt.Sprintf("?confirm= says %q and the "+
+				"body's horizon is %q — nothing was changed", confirm, want)})
 		return
 	}
 	channelID := r.PathValue("channel_id")
