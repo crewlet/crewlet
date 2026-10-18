@@ -132,6 +132,49 @@ func TestACommentKeepsItsRowAcrossARebase(t *testing.T) {
 	}
 }
 
+// A CREATED ITEM AND A CREATED VIEW KEEP THEIR IDS ACROSS A REBASE, as a
+// comment does, while their operations move.
+//
+// Each id is the subject its create arbitrates on and the key of the row it
+// files, so it is derived from the create's operation as the work began. A
+// rebased attempt re-mints the operation for a ledger that forgot it; derived
+// from that, the id moved with it, and every rebased re-run of a turn that had
+// filed an item or saved a view filed a second one beside it.
+//
+// Mutation: derive createdTaskID or createdViewID from the rebased actor and
+// the rebased attempt names a new item or view.
+func TestACreatedItemAndViewKeepTheirIdsAcrossARebase(t *testing.T) {
+	t.Parallel()
+	args := map[string]any{"title": "the follow-up", "project": "ENG"}
+	first := seatInATurn()
+	rebased := seatInATurn()
+	rebased.RebasedTo = first.WorkSince.Add(40 * 24 * time.Hour)
+
+	if opIDFor(first, CreateWorkItemTool, "create", "ENG", args) ==
+		opIDFor(rebased, CreateWorkItemTool, "create", "ENG", args) {
+		t.Fatal("the rebased create's operation is the first one's — the ledger " +
+			"that forgot it would answer it unknown")
+	}
+	task := createdTaskID(first, CreateWorkItemTool, "ENG", args)
+	if got := createdTaskID(rebased, CreateWorkItemTool, "ENG", args); got != task {
+		t.Errorf("the rebased create names task %q, want the first attempt's %q", got, task)
+	}
+	other := map[string]any{"title": "another item", "project": "ENG"}
+	if createdTaskID(rebased, CreateWorkItemTool, "ENG", other) == task {
+		t.Errorf("another create in the rebased attempt names the first one's task %q", task)
+	}
+
+	view := map[string]any{"container": "project:ENG", "name": "Board", "type": "board"}
+	saved := createdViewID(first, "save_work_view", view)
+	if got := createdViewID(rebased, "save_work_view", view); got != saved {
+		t.Errorf("the rebased save names view %q, want the first attempt's %q", got, saved)
+	}
+	if createdViewID(rebased, "save_work_view",
+		map[string]any{"container": "project:ENG", "name": "List", "type": "list"}) == saved {
+		t.Errorf("another new view in the rebased attempt names the first one's view %q", saved)
+	}
+}
+
 // A REQUEST'S KEY IS ITS CALL'S, AS SENT, for the tracker as for the knowledge
 // base and chat: a request's actor carries the key as its work key with no run
 // behind it, and every id its tracker writes derive is derived from that key —

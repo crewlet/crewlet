@@ -20,3 +20,12 @@ func (w *Writer) Hold(ctx context.Context, resource string) (func(), error) {
 	}
 	return func() { h.release(ctx) }, nil
 }
+
+// FileTaskAt runs a create's task step on the number n, as a create whose mint
+// took n does — for the case where the task lands between the mint and the
+// task's own append, which no ordering of whole creates reproduces.
+func (w *Writer) FileTaskAt(ctx context.Context, opID string, task Task,
+	n uint64) (WriteResult, error) {
+
+	return w.fileTask(ctx, opID, task, nil, n, settledCreate{}, nil)
+}
