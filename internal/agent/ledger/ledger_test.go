@@ -306,6 +306,30 @@ func TestRenderedArgumentsAreNotEscapedForHTML(t *testing.T) {
 	}
 }
 
+// AN OBJECT IS WEIGHED BY THE LINE'S OWN JSON, unescaped too. A value that is
+// not a string is judged by its JSON, and that JSON is what a rewrite is handed
+// and what the line shows when none can be had — so judged by `json.Marshal`'s,
+// an object of markup weighed six bytes for every `<`: one the line carries
+// whole in fewer bytes than its budget was fitted, and the rewrite was handed
+// `\u003c` escapes to decode. Mutation: weigh the value with `json.Marshal`
+// and the first half's object becomes a piece, the second half's text escaped.
+func TestAnObjectArgumentIsWeighedByTheLinesOwnJSON(t *testing.T) {
+	t.Parallel()
+	markup := map[string]any{"html": strings.Repeat("<b>", 40)}
+	if p, ok := valuePiece(markup, 150); ok {
+		t.Errorf("an object whose line is %d bytes was fitted to a budget of 150: %q",
+			len(marshal(markup)), p.Text)
+	}
+	p, ok := valuePiece(map[string]any{"html": strings.Repeat("<b>", 100)}, 150)
+	if !ok {
+		t.Fatal("an object past its budget was carried whole")
+	}
+	if strings.Contains(p.Text, `\u003c`) || !strings.Contains(p.Text, "<b><b>") {
+		t.Errorf("the piece a rewrite is handed reads %.80q, want the markup as written",
+			p.Text)
+	}
+}
+
 // A PAYLOAD IS FITTED AND THE DISCRIMINATOR IS NOT. The bug the per-value
 // design prevents is still the one that matters — a line that kept the body
 // but lost `channel` hides which of two posts happened — so the identifier is
