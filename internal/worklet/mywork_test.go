@@ -135,6 +135,47 @@ func TestMyWorkSeparatesTheSevenClaims(t *testing.T) {
 	}
 }
 
+// WATCHING IS WHAT A PERSON WATCHES AND DOES NOT HOLD, MINUS WHAT THEY MUTED.
+//
+// The block is read from the person's own watcher rows, and each of its terms
+// keeps a different task out: one somebody else watches is not theirs, one they
+// hold is in `assigned` instead, and a row they muted is one they asked to stop
+// hearing about. The plan gate holds the read to the person's index; this holds
+// it to the answer.
+func TestMyWorkWatchingIsWhatAPersonWatchesUnmuted(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, seed := range []struct {
+		id, assignee    string
+		watchers, muted []string
+	}{
+		{"watched", "bob", []string{"ana", "bob"}, nil},
+		{"held", "ana", []string{"ana"}, nil},
+		{"muted", "bob", []string{"ana", "bob"}, []string{"ana"}},
+		{"others", "bob", []string{"bob"}, nil},
+	} {
+		task := newTask(seed.id)
+		task.Assignee, task.Watchers, task.Muted = seed.assignee, seed.watchers, seed.muted
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+seed.id, task, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", seed.id, err)
+		}
+		r.drain()
+	}
+	got := r.myWork("ana")
+	watching := make([]string, 0, len(got.WatchingRecent))
+	for _, row := range got.WatchingRecent {
+		watching = append(watching, row.ID)
+	}
+	if len(watching) != 1 || watching[0] != "watched" {
+		t.Errorf("watching is %v, want only the task ana watches, does not "+
+			"hold and has not muted", watching)
+	}
+	if got.Totals.WatchingRecent.Total != 1 {
+		t.Errorf("the watching total is %+v, want the one row the block lists",
+			got.Totals.WatchingRecent)
+	}
+}
+
 // AN ASK CARRIES THE CALL THAT ANSWERS IT.
 //
 // A model handed a comment id still has to compose the answer, and every one
