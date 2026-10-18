@@ -364,6 +364,41 @@ describe("a destination's lock", () => {
     await p.type("chat");
     expect(/· needs Chat access$/.test(p.row(/^Chat$/).textContent ?? "")).toBe(locked);
   });
+
+  // A SECTION IS LOCKED BY ITS WORKSPACE FIRST, as the frame refuses it: a
+  // reader who cannot open Chat cannot open its Mentions, and one who cannot
+  // open Knowledge is told Knowledge before Agent diaries' own Admin. Read
+  // off a section's own list, every section of a workspace that names the
+  // app — Work's, My work's, Chat's — was offered with no lock at all, and
+  // the press opened onto the refusal. Mutation: lock by the section's own
+  // grants alone and the Mentions and Asked of me rows go red.
+  test.each([
+    { term: "mentions", label: /^Mentions$/, viewer: WITHOUT_CHAT, needs: "Chat" },
+    { term: "search chat", label: /^Search chat$/, viewer: WITHOUT_CHAT, needs: "Chat" },
+    {
+      term: "asked of me",
+      label: /^Asked of me$/,
+      viewer: { ...WITHOUT_CHAT, grants: ["knowledge"] },
+      needs: "Tracker",
+    },
+    {
+      term: "diaries",
+      label: /^Agent diaries$/,
+      viewer: { ...WITHOUT_CHAT, grants: ["tracker"] },
+      needs: "Knowledge",
+    },
+    { term: "diaries", label: /^Agent diaries$/, viewer: WITHOUT_CHAT, needs: "Admin" },
+  ])("$term is locked naming $needs access where the reader lacks it", async (c) => {
+    const p = mount({ viewer: c.viewer });
+    await p.type(c.term);
+    expect(p.row(c.label).textContent).toMatch(new RegExp(`· needs ${c.needs} access$`));
+  });
+
+  test("a section whose workspace and own access the reader holds is not locked", async () => {
+    const p = mount({ viewer: { ...WITHOUT_CHAT, grants: ["chat"], chat: true } });
+    await p.type("mentions");
+    expect(p.row(/^Mentions$/).textContent).not.toMatch(/needs/);
+  });
 });
 
 // THE TURNS RUNNING AS IT OPENED SIT UNDER RECENT IN AN EMPTY PALETTE, each
