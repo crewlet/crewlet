@@ -15,7 +15,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/artifactdata"
-	"github.com/crewlet/crewlet/internal/artifactdata/query"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz"
@@ -538,10 +537,7 @@ func readFailed(w http.ResponseWriter, err error) {
 		httpjson.FailWith(w, http.StatusGone, httpjson.CodeDataGone, detail)
 	case errors.Is(err, artifactdata.ErrNotFound):
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound, detail)
-	case errors.Is(err, query.ErrNotIndexed):
-		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodePathNotIndexed, detail)
-	case errors.Is(err, artifactdata.ErrInvalid), errors.Is(err, artifactdata.ErrBadCursor),
-		errors.Is(err, query.ErrInvalid):
+	case errors.Is(err, artifactdata.ErrInvalid), errors.Is(err, artifactdata.ErrBadCursor):
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams, detail)
 	default:
 		unavailable(w, err, "this node could not read the artifact's data")

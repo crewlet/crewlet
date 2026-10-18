@@ -852,9 +852,6 @@ const (
 	// CodeMigrationTooLarge is a schema change that would rewrite more
 	// documents than one change may. 422.
 	CodeMigrationTooLarge Code = "migration_too_large"
-	// CodePathNotIndexed is a query naming a path the collection does not
-	// index. 422, and the detail names the path and the fix.
-	CodePathNotIndexed Code = "path_not_indexed"
 	// CodeWriteBudget is a datastore write this node's cost-weighted
 	// budget refused for now. 429 with a Retry-After; never a lockout.
 	CodeWriteBudget Code = "write_budget"
@@ -1147,8 +1144,6 @@ var codes = map[Code]string{
 	CodeNotUndoable: "That change can't be undone. The detail says why.",
 	CodeMigrationTooLarge: "This schema change rewrites too many rows at once, so " +
 		"nothing changed. Change fewer columns at a time.",
-	CodePathNotIndexed: "That field isn't indexed, so it can't be filtered or " +
-		"sorted on. Add it to the collection's indexed paths first.",
 	CodeWriteBudget: "Too many changes to this data at once. Wait the moment " +
 		"Retry-After names, then send it again.",
 }
