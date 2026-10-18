@@ -467,7 +467,7 @@ flowchart TD
     S5["5. Wait for in-flight handlers"] --> S6
     S6["6. Release every seat"] --> S7
     S7["7. Close the HTTP listener<br/>dashboard · REST · webhooks · probes"] --> S8
-    S8["8. Stop the duties<br/>sandbox waiter · notifications · maintenance · embedding<br/>memory fill · learning · scheduler · last auxiliary-spend flush<br/>custody keeper leaves its group · usage publisher's last flush<br/>integrations · memory sync · credential cooldown"] --> S9
+    S8["8. Stop the duties<br/>sandbox waiter · notifications · maintenance · embedding<br/>memory fill · learning · scheduler · last auxiliary-spend flush<br/>custody keeper leaves its group · usage publisher's last flush<br/>integrations · memory sync · object collector · trash reaper · credential cooldown"] --> S9
     S9["9. Reap shared MCP servers; custody flush (node without data);<br/>close stream + store"]
     SIG -.->|"2nd signal:<br/>immediate exit"| X["Process dies"]
 ```
@@ -537,8 +537,9 @@ flowchart TD
    tick on a budget of five seconds, the state log's own resolve budget — after
    every writer above, so a node stopped this way and never started again
    still leaves that day whole, and before the trim and the logs it publishes
-   into. Then the integration reconcile loop, memory sync and the credential
-   cooldown refresh.
+   into. Then the integration reconcile loop, memory sync, the object store's
+   collector and the trash reaper (every duty loop stops before the node gives
+   its duty leases back), and the credential cooldown refresh.
 9. **Close the backends**: the shared MCP servers are reaped; a node without
    `data` flushes its custody batches; and the stream connection and the store
    file are closed (`engine_stopped`).
