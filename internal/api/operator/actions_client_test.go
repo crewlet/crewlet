@@ -342,6 +342,12 @@ func fullSurface(t *testing.T) *operator.Server {
 				Reader: struct{ builtin.PageReader }{},
 				Writer: struct{ builtin.PageWriter }{},
 			},
+			Chat: builtin.ChatDeps{
+				Reader:  struct{ builtin.ChatReader }{},
+				Writer:  struct{ builtin.ChatWriter }{},
+				Search:  struct{ builtin.ChatSearcher }{},
+				Cursors: struct{ builtin.ChatCursors }{},
+			},
 			Knowledge: struct{ builtin.KnowledgeSearcher }{},
 		}),
 		Org:    func() *org.Organization { return nil },

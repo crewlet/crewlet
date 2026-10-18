@@ -46,6 +46,7 @@ func TestEveryTransportServesTheSameCatalogue(t *testing.T) {
 			Reader: stubWorkReader{}, Writer: stubWorkWriter, Merges: stubWorkMerger,
 		},
 		Pages: builtin.PageDeps{Reader: stubPageReader{}, Writer: stubPageWriter{}},
+		Chat:  (&chatDesk{}).half(),
 	})})
 	ops := machine("token:ops-bot", iam.Apps...)
 	sess := dialOperator(t, s, ops)
