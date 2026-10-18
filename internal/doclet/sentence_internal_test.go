@@ -6,11 +6,11 @@ import (
 	"testing"
 )
 
-// TestARefusalSaysItsFieldToAPerson pins the two readings of [invalid]: the Go
+// TestARefusalSaysItsFieldAsAValue pins the two readings of [invalid]: the Go
 // error keeps the form every log and model has read, and [Sentence] is what a
-// person's write surface prints — the argument as a value and what to do,
-// without "doclet: invalid:" in front of it.
-func TestARefusalSaysItsFieldToAPerson(t *testing.T) {
+// page tool tells a model — the argument as a value and what to do, without
+// "doclet: invalid:" in front of it.
+func TestARefusalSaysItsFieldAsAValue(t *testing.T) {
 	t.Parallel()
 	err := invalid("title", "%d bytes, past the %d-byte cap", 600, 256)
 	if got, want := err.Error(), "doclet: invalid: title: 600 bytes, past the 256-byte cap"; got != want {

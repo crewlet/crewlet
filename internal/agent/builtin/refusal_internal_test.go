@@ -191,15 +191,15 @@ func TestAReusedOperationIsTheCallersToChange(t *testing.T) {
 	}
 }
 
-// A CONTENT REFUSAL READS FOR THE PERSON WHO IS SHOWN IT. The invalid class is
-// the one a person's surface prints as the tool wrote it (`contract/errors.ts`
-// — "the sentence names the argument"), so it must not carry the node-failure
-// wording written for a model, nor anything the person never typed. A title
+// A CONTENT REFUSAL IS THE WRITER'S SENTENCE. The invalid class is the one a
+// caller corrects its call by — "the sentence names the argument" — so it must
+// not carry the node-failure wording written for a failure the call did not
+// meet, nor anything the caller never sent. A title
 // filed from the dashboard at 600 bytes came back as "create_work_item did not
 // land (worklet: the title on task 68c5… is 600 bytes …). The change was NOT
 // made — do not report it as done." — a tool name, a Go error prefix, the id
 // of a task that was never created, and an instruction meant for a model.
-func TestAContentRefusalIsASentenceForAPerson(t *testing.T) {
+func TestAContentRefusalIsTheWritersSentence(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		name  string
@@ -228,12 +228,12 @@ func TestAContentRefusalIsASentenceForAPerson(t *testing.T) {
 				}
 			}
 			// NEITHER THE NODE-FAILURE WORDING NOR THE GO PREFIX: the
-			// class is printed to a person as it stands, and "worklet:" is
-			// a word for a log about where the error came from.
+			// class is told as it stands, and "worklet:" is a word for a
+			// log about where the error came from.
 			for _, never := range []string{"did not land", "do not report it as done",
 				"worklet:"} {
 				if strings.Contains(got.Output, never) {
-					t.Errorf("a content refusal a person reads carries %q: %s",
+					t.Errorf("a content refusal carries %q: %s",
 						never, got.Output)
 				}
 			}

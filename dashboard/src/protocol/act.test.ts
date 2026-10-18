@@ -292,9 +292,10 @@ describe("what a change came to", () => {
     expect(result).toMatchObject({ kind: "refused", code: "unavailable", retryable: false });
   });
 
-  // THE TOOL'S OWN SENTENCE ONLY WHERE IT NAMES THE ARGUMENT; everywhere else
-  // it is written for a model, and a person is shown the dashboard's.
-  test("an invalid argument is shown in the tool's own words", async () => {
+  // AN INVALID ARGUMENT IS SAID BY WHAT REFUSED IT: the dashboard keeps no
+  // sentence for `invalid`, and the engine's detail is the one it wrote for
+  // the person (ADR-0060).
+  test("an invalid argument is shown in the engine's detail", async () => {
     stub(async () =>
       json({ error: "invalid", tool: "update_work_item", detail: "status: no such status" }, 422),
     );

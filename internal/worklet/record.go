@@ -211,8 +211,9 @@ const (
 // shorter one can.
 //
 // TYPED, because the caller has to NAME THE FIELD to a reader who is not
-// reading Go: a person filing from the dashboard is shown the tool's sentence,
-// and a sentence built from this error's own words said "the title on task
+// reading Go: a model filing a task is told the tool's sentence (a person is
+// told the words for the field this error carries, ADR-0060), and a sentence
+// built from this error's own words said "the title on task
 // 68c5…" about a task that was never created — the create's id is minted
 // before the write and refused with it, so it named nothing anybody could
 // look up. The field, the size and the cap are what a caller can act on, and
