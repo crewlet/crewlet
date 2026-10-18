@@ -86,9 +86,15 @@ func TestAReadyReportIsBoundToTheCallersOwnFrame(t *testing.T) {
 		t.Errorf("report %+v", r)
 	}
 
+	// A RECORD THE TICKET DOES NOT NAME, on the ticket's own credential
+	// name: no composed principal looks like this, and the check holds
+	// anyway, as the origin's own re-decision does.
+	impostor := person("bob")
+	impostor.Via = person("jane").Via
 	for name, p := range map[string]iam.Principal{
-		"another person":                  person("bob"),
-		"the same person through a token": token("jane"),
+		"another person":                        person("bob"),
+		"the same person through a token":       token("jane"),
+		"another record on the credential name": impostor,
 	} {
 		w := g.do(p, http.MethodPost, "/artifacts/ready", readyBody(frameURL, "ready", 1200))
 		if w.Code != http.StatusUnprocessableEntity || errorOf(t, w) != "invalid" {
