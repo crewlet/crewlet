@@ -849,7 +849,7 @@ func TestOpeningABucketThatExistsWritesNothing(t *testing.T) {
 	open(t, c)
 
 	w := &bucketJS{JetStream: c}
-	if _, err := natsobj.Open(t.Context(), w, natsobj.Config{Replicas: 1}); err != nil {
+	if _, err := natsobj.Open(t.Context(), w, natsobj.Config{MaxBytes: testCeiling, Replicas: 1}); err != nil {
 		t.Fatalf("open an existing bucket: %v", err)
 	}
 	if sent := w.sent(); len(sent) != 0 {
@@ -871,7 +871,7 @@ func TestANodeThatLosesTheCreateRaceBindsItsPeersBucket(t *testing.T) {
 	c := memberClient(t)
 	peer, err := c.CreateObjectStore(t.Context(), jetstream.ObjectStoreConfig{
 		Bucket: natsobj.Bucket, Description: "a peer's build",
-		Storage: jetstream.FileStorage, Replicas: 1})
+		Storage: jetstream.FileStorage, Replicas: 1, MaxBytes: 2 * testCeiling})
 	if err != nil {
 		t.Fatalf("the peer's create: %v", err)
 	}
@@ -880,7 +880,7 @@ func TestANodeThatLosesTheCreateRaceBindsItsPeersBucket(t *testing.T) {
 	}
 
 	w := &bucketJS{JetStream: c, hidden: 1}
-	b, err := natsobj.Open(t.Context(), w, natsobj.Config{Replicas: 1})
+	b, err := natsobj.Open(t.Context(), w, natsobj.Config{MaxBytes: testCeiling, Replicas: 1})
 	if err != nil {
 		t.Fatalf("a node that lost the create race failed to open: %v", err)
 	}
@@ -916,7 +916,7 @@ func TestALookupNobodyAnswersFallsThroughToTheCreate(t *testing.T) {
 	timing.Lookup, timing.ReAsk = 200*time.Millisecond, 20*time.Millisecond
 
 	w := &bucketJS{JetStream: c, silent: true}
-	if _, err := natsobj.OpenAt(t.Context(), w, natsobj.Config{Replicas: 1}, timing); err != nil {
+	if _, err := natsobj.OpenAt(t.Context(), w, natsobj.Config{MaxBytes: testCeiling, Replicas: 1}, timing); err != nil {
 		t.Fatalf("a bucket whose lookup went unanswered failed to open: %v — a "+
 			"broker that did not reply is not one that said the bucket is absent "+
 			"or present", err)
@@ -968,7 +968,7 @@ func TestABucketCreateTheClusterCannotAnswerYetIsAskedAgain(t *testing.T) {
 
 			const refused = 2
 			w := &bucketJS{JetStream: c, refusals: refused, refusal: refusal}
-			if _, err := natsobj.OpenAt(t.Context(), w, natsobj.Config{Replicas: 1, Clustered: true}, timing); err != nil {
+			if _, err := natsobj.OpenAt(t.Context(), w, natsobj.Config{MaxBytes: testCeiling, Replicas: 1, Clustered: true}, timing); err != nil {
 				t.Fatalf("the bucket did not open once the create was answered: %v — "+
 					"a create the forming cluster had not answered yet was taken "+
 					"as the answer", err)
@@ -1007,7 +1007,7 @@ func TestABucketWithNoApplicableLimitNamesTheClass(t *testing.T) {
 	// THREE COPIES, because the class is what the clause has to name; the
 	// refusal arrives before the member is asked, so its having no peers
 	// never comes into it.
-	b, err := natsobj.Open(t.Context(), w, natsobj.Config{Replicas: 3})
+	b, err := natsobj.Open(t.Context(), w, natsobj.Config{MaxBytes: testCeiling, Replicas: 3})
 	if err == nil {
 		t.Fatal("a bucket the account carries no limit for was reported as opened")
 	}
@@ -1056,7 +1056,7 @@ func TestAFailedCreatesReadBackKeepsBothErrors(t *testing.T) {
 	timing := jsprovision.Clustered(false).Timing()
 	timing.ReadBack = 100 * time.Millisecond
 
-	_, err := natsobj.OpenAt(t.Context(), w, natsobj.Config{Replicas: 1}, timing)
+	_, err := natsobj.OpenAt(t.Context(), w, natsobj.Config{MaxBytes: testCeiling, Replicas: 1}, timing)
 	if err == nil {
 		t.Fatal("a bucket the read-back never found was reported as opened")
 	}
@@ -1094,11 +1094,11 @@ func TestEveryReadOpenMakesIsAskedAtTheReadTerm(t *testing.T) {
 			c := memberClient(t)
 			if _, err := c.CreateObjectStore(t.Context(), jetstream.ObjectStoreConfig{
 				Bucket: natsobj.Bucket, Description: "a peer's build",
-				Storage: jetstream.FileStorage, Replicas: 1}); err != nil {
+				Storage: jetstream.FileStorage, Replicas: 1, MaxBytes: testCeiling}); err != nil {
 				t.Fatalf("the peer's create: %v", err)
 			}
 			w := &bucketJS{JetStream: c, hidden: 1}
-			cfg := natsobj.Config{Replicas: 1, Clustered: clustered}
+			cfg := natsobj.Config{MaxBytes: testCeiling, Replicas: 1, Clustered: clustered}
 			for _, open := range []string{"losing the create race", "finding the bucket"} {
 				if _, err := natsobj.Open(t.Context(), w, cfg); err != nil {
 					t.Fatalf("open the bucket, %s: %v", open, err)
@@ -1145,7 +1145,7 @@ func TestABucketReplicatedBelowThisNodeIsRefused(t *testing.T) {
 	c := memberClient(t)
 	open(t, c)
 
-	_, err := natsobj.Open(t.Context(), c, natsobj.Config{Replicas: 3})
+	_, err := natsobj.Open(t.Context(), c, natsobj.Config{MaxBytes: testCeiling, Replicas: 3})
 	if err == nil || !strings.Contains(err.Error(), "stream.replicas") {
 		t.Fatalf("a node configured for three copies opened a bucket kept at "+
 			"one: %v — want a refusal naming stream.replicas", err)
@@ -1154,7 +1154,7 @@ func TestABucketReplicatedBelowThisNodeIsRefused(t *testing.T) {
 
 func open(t *testing.T, client jetstream.JetStream) *natsobj.Backend {
 	t.Helper()
-	b, err := natsobj.Open(t.Context(), client, natsobj.Config{Replicas: 1})
+	b, err := natsobj.Open(t.Context(), client, natsobj.Config{MaxBytes: testCeiling, Replicas: 1})
 	if err != nil {
 		t.Fatalf("open the bucket: %v", err)
 	}
@@ -1257,7 +1257,7 @@ func TestOpeningOnALeafWaitsOutItsLink(t *testing.T) {
 	}
 	opened := make(chan result, 1)
 	go func() {
-		b, err := natsobj.Open(t.Context(), c, natsobj.Config{Replicas: 1})
+		b, err := natsobj.Open(t.Context(), c, natsobj.Config{MaxBytes: testCeiling, Replicas: 1})
 		opened <- result{b, err}
 	}()
 	select {
@@ -1398,4 +1398,143 @@ func (g *gate) pipe(in net.Conn, target string) {
 	_ = in.Close()
 	_ = out.Close()
 	<-done
+}
+
+// testCeiling is the reservation every case here opens the bucket with: a
+// gibibyte, the smallest store.objects.nats_max_bytes accepts, and far more
+// than any case stores.
+const testCeiling = 1 << 30
+
+// A BUCKET IS CREATED HOLDING ITS RESERVATION, and the ceiling Usage reports
+// is the one the broker enforces.
+func TestABucketIsCreatedHoldingItsReservation(t *testing.T) {
+	t.Parallel()
+	c := memberClient(t)
+	b, err := natsobj.Open(t.Context(), c, natsobj.Config{MaxBytes: 3 << 30, Replicas: 1})
+	if err != nil {
+		t.Fatalf("open the bucket: %v", err)
+	}
+	stream, err := c.Stream(t.Context(), natsobj.Stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stream.CachedInfo().Config.MaxBytes; got != 3<<30 {
+		t.Fatalf("the bucket was created with a ceiling of %d, want the 3 GiB reservation", got)
+	}
+	usage, err := b.Usage(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.MaxBytes != 3<<30 || usage.Bytes != 0 {
+		t.Fatalf("an empty bucket reports %+v, want nothing stored against 3 GiB", usage)
+	}
+}
+
+// NO RESERVATION IS REFUSED, before the broker is asked anything: a node that
+// created the bucket unbounded would hand it the remainder the fleet's
+// coordination records need.
+func TestABucketWithNoReservationIsNeverCreated(t *testing.T) {
+	t.Parallel()
+	c := memberClient(t)
+	w := &bucketJS{JetStream: c}
+	if _, err := natsobj.Open(t.Context(), w, natsobj.Config{Replicas: 1}); err == nil {
+		t.Fatal("a node with no reservation opened the bucket")
+	}
+	if sent := w.sent(); len(sent) != 0 {
+		t.Errorf("a refused open still sent %v", sent)
+	}
+}
+
+// A BUCKET THAT HOLDS NO CEILING IS REFUSED, naming the gesture that bounds
+// it, and nothing here rewrites its configuration to fix it.
+func TestABucketThatHoldsNoCeilingIsRefused(t *testing.T) {
+	t.Parallel()
+	c := memberClient(t)
+	if _, err := c.CreateObjectStore(t.Context(), jetstream.ObjectStoreConfig{
+		Bucket: natsobj.Bucket, Storage: jetstream.FileStorage, Replicas: 1}); err != nil {
+		t.Fatalf("make an unbounded bucket: %v", err)
+	}
+	w := &bucketJS{JetStream: c}
+	_, err := natsobj.Open(t.Context(), w, natsobj.Config{MaxBytes: testCeiling, Replicas: 1})
+	if err == nil {
+		t.Fatal("a bucket holding no ceiling was opened")
+	}
+	for _, want := range []string{"nats stream update " + natsobj.Stream, "--max-bytes=1073741824"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not name %q", err, want)
+		}
+	}
+	if sent := w.sent(); len(sent) != 0 {
+		t.Errorf("the refusal wrote %v to a bucket this node is not the writer of", sent)
+	}
+}
+
+// A BUCKET THAT EXISTS KEEPS THE CEILING IT HOLDS, whatever this node was
+// configured with: the broker granted it once, and only the capacity gesture
+// changes it.
+func TestABucketThatExistsKeepsItsCeiling(t *testing.T) {
+	t.Parallel()
+	c := memberClient(t)
+	if _, err := natsobj.Open(t.Context(), c, natsobj.Config{MaxBytes: 2 << 30, Replicas: 1}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := natsobj.Open(t.Context(), c, natsobj.Config{MaxBytes: 5 << 30, Explicit: true, Replicas: 1})
+	if err != nil {
+		t.Fatalf("a bucket at another ceiling was refused: %v", err)
+	}
+	usage, err := b.Usage(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.MaxBytes != 2<<30 {
+		t.Fatalf("the bucket reports a ceiling of %d, want the 2 GiB it was created with", usage.MaxBytes)
+	}
+}
+
+// A FULL BUCKET LEAVES THE COORDINATION REMAINDER: a put past its reservation
+// is refused as ErrFull and stores nothing, and a coordination bucket on the
+// same broker still takes writes: the outage a ceiling-less bucket filling
+// the broker would have been.
+func TestAFullBucketLeavesTheCoordinationRemainder(t *testing.T) {
+	t.Parallel()
+	c := memberClient(t)
+	const reservation = 4 * natsobj.MessageBytes
+	b, err := natsobj.Open(t.Context(), c, natsobj.Config{MaxBytes: reservation, Replicas: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := objstore.NewStore(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.Repeat([]byte{7}, natsobj.MessageBytes)
+	var refused error
+	for range 8 {
+		if _, err := store.Put(t.Context(), bytes.NewReader(body), int64(len(body)), objstore.PutMeta{}); err != nil {
+			refused = err
+			break
+		}
+	}
+	if !errors.Is(refused, objstore.ErrFull) {
+		t.Fatalf("a put past the reservation answered %v, want ErrFull", refused)
+	}
+	usage, err := b.Usage(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.MaxBytes != reservation || usage.Bytes > reservation {
+		t.Fatalf("the bucket reports %+v against a %d-byte reservation", usage, reservation)
+	}
+	if err := b.Pending(t.Context(), func(p objstore.Pending) error {
+		return fmt.Errorf("the refused put left an unfinished upload %+v", p)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	kv, err := c.CreateKeyValue(t.Context(), jetstream.KeyValueConfig{Bucket: "leases"})
+	if err != nil {
+		t.Fatalf("a coordination bucket could not be made beside a full object bucket: %v", err)
+	}
+	if _, err := kv.Put(t.Context(), "seat", bytes.Repeat([]byte{1}, 4096)); err != nil {
+		t.Fatalf("a coordination write was refused beside a full object bucket: %v", err)
+	}
 }

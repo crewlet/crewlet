@@ -18,6 +18,20 @@
 // company whose files outgrow one member's disk takes the S3 backend
 // (internal/objstore/s3obj) instead.
 //
+// # A byte reservation, and why it is not optional
+//
+// The bucket is created with a byte ceiling ([Config.MaxBytes]) and a bucket
+// without one is refused. The state logs reserve their ceilings against the
+// broker's limit, and everything else on the broker (every seat's mailbox
+// and every coordination bucket, where the leases, ledgers and budget
+// counters live) shares what is left. A bucket with no ceiling grows into
+// that remainder, and the collector does not bound it: it deletes garbage,
+// never the files a company keeps. A full remainder refuses a lease heartbeat,
+// which is a fleet outage rather than a file outage; a full bucket refuses an
+// upload ([objstore.ErrFull]) and nothing else. So the bucket's growth is a
+// RESERVATION of its own, granted once by the broker at create time, and how
+// close it is to full is what [Backend.Usage] answers and an alarm reads.
+//
 // # The bucket's own format, and the library only for the put
 //
 // The bucket is a NATS object store in that store's own documented layout —
@@ -128,6 +142,19 @@ type Config struct {
 	// Clustered says the broker is a cluster, which is what the
 	// provisioning budget branches on (see [jsprovision]).
 	Clustered bool
+
+	// MaxBytes is the byte reservation a bucket this node creates is given
+	// (store.objects.nats_max_bytes, or the share the engine derives),
+	// required, since a bucket with no ceiling is the failure the package
+	// doc describes. A bucket that exists keeps the ceiling it holds: its
+	// configuration has one writer, and a booting node is not it.
+	MaxBytes int64
+
+	// Explicit says MaxBytes is what an operator wrote rather than what the
+	// engine derived, which is when a bucket held at another ceiling is
+	// worth a line: a derived figure follows the broker's free space and
+	// differs from the one a bucket was created at on most boots.
+	Explicit bool
 }
 
 // Backend is the objects in the broker's object store.
@@ -185,6 +212,11 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 		return nil, errors.New("natsobj: the nats object store needs the broker's " +
 			"JetStream, and this node has none")
 	}
+	if cfg.MaxBytes <= 0 {
+		return nil, fmt.Errorf("natsobj: the %s bucket needs a byte reservation, and "+
+			"this node was given %d: a bucket with no ceiling grows into the broker "+
+			"remainder the fleet's coordination records live in", Bucket, cfg.MaxBytes)
+	}
 	replicas := max(cfg.Replicas, 1)
 	// ONE BREADCRUMB OVER THE WHOLE OF IT, because either half can be the
 	// one that stalls and the operator's question is the same: which object
@@ -215,7 +247,7 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 					"so the create below decides it: absent and it is made, "+
 					"present and it comes back as a peer's win and is read back")
 		}
-		if store, err = createBucket(ctx, js, timing, replicas); err != nil {
+		if store, err = createBucket(ctx, js, timing, replicas, cfg.MaxBytes); err != nil {
 			return nil, err
 		}
 	default:
@@ -233,18 +265,58 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 	}); err != nil {
 		return nil, fmt.Errorf("natsobj: bind the %s stream: %w", Stream, err)
 	}
-	if got := stream.CachedInfo().Config.Replicas; got < replicas {
+	held := stream.CachedInfo().Config
+	if got := held.Replicas; got < replicas {
 		return nil, fmt.Errorf("natsobj: the %s bucket is replicated %dx and this "+
 			"node is configured for %dx (stream.replicas): an upload acknowledged "+
 			"there would prove fewer copies than this node promises — raise the "+
 			"bucket's replicas or align stream.replicas on every node",
 			Bucket, got, replicas)
 	}
+	if err := checkCeiling(ctx, held.MaxBytes, cfg); err != nil {
+		return nil, err
+	}
 	leader, err := jsapi.NewLeader(js, Stream)
 	if err != nil {
 		return nil, fmt.Errorf("natsobj: address the %s stream's leader: %w", Stream, err)
 	}
 	return &Backend{store: store, stream: stream, leader: leader}, nil
+}
+
+// checkCeiling judges the ceiling the bucket holds against the one this node
+// was configured with.
+//
+// # No ceiling is refused, and a different one is kept
+//
+// A bucket holding NO ceiling is refused, for the package doc's reason, and
+// the refusal names the one gesture that bounds it (a bucket IS a stream, so
+// the broker's own `nats stream update` sets it) rather than this node
+// rewriting a configuration it is not the writer of. Nothing in this tree
+// creates one; what this guards is a bucket made by hand or by another tool.
+//
+// A bucket holding a DIFFERENT ceiling is kept as it is, as a state log's
+// stream is: the broker granted it once, and the capacity it reserves is the
+// one an operator sized for. Said out loud where the operator wrote the other
+// figure, since an edit to store.objects.nats_max_bytes reaches only a bucket
+// that does not exist yet.
+func checkCeiling(ctx context.Context, held int64, cfg Config) error {
+	switch {
+	case held <= 0:
+		return fmt.Errorf("natsobj: the %s bucket holds no byte ceiling, so its "+
+			"files grow into the broker remainder the fleet's leases and ledgers "+
+			"live in, and a full remainder stops the fleet rather than an upload. "+
+			"Give it one before this node starts: `nats stream update %s "+
+			"--max-bytes=%d` (store.objects.nats_max_bytes, or the share this "+
+			"node derived)", Bucket, Stream, cfg.MaxBytes)
+	case cfg.Explicit && held != cfg.MaxBytes:
+		log.WarnContext(ctx, "natsobj_bucket_ceiling_kept", "bucket", Bucket,
+			"holds", held, "configured", cfg.MaxBytes,
+			"detail", "store.objects.nats_max_bytes sizes a bucket this node "+
+				"creates, and this one exists: it keeps the ceiling the broker "+
+				"granted it. Change a bucket that exists with `nats stream update "+
+				Stream+" --max-bytes=<bytes>`")
+	}
+	return nil
 }
 
 // lookupBucket asks whether the bucket exists, under the lookup ceiling and at
@@ -268,7 +340,7 @@ func lookupBucket(ctx context.Context, js jetstream.JetStream, timing jsprovisio
 // read-back runs precisely when that deadline may have expired — see
 // [jsprovision.Settle].
 func createBucket(ctx context.Context, js jetstream.JetStream, timing jsprovision.Timing,
-	replicas int) (jetstream.ObjectStore, error) {
+	replicas int, maxBytes int64) (jetstream.ObjectStore, error) {
 
 	createCtx, cancel := context.WithTimeout(ctx, timing.Budget)
 	defer cancel()
@@ -277,14 +349,11 @@ func createBucket(ctx context.Context, js jetstream.JetStream, timing jsprovisio
 		var e error
 		// CREATE, NOT CreateOrUpdate — see [Open].
 		//
-		// NO BYTE CEILING (MaxBytes): the engine reserves one for the
-		// state logs alone — the company's own records, whose growth the
-		// trim governs — and every other stream it runs, the mailboxes
-		// and every coordination bucket, declares none and is bounded by
-		// what writes it. This one is bounded by the collector, which
-		// deletes what no row names a day after it was written. A ceiling
-		// here would be a reservation carved out of the budget the logs'
-		// ceilings draw on, for bytes no log is waiting for.
+		// WITH A BYTE CEILING (MaxBytes), which the broker grants in full
+		// as a reservation: see the package doc for why the bucket may not
+		// grow into the remainder the coordination records share. The
+		// library creates the stream to refuse a put past it rather than
+		// discard an old object.
 		store, e = js.CreateObjectStore(ctx, jetstream.ObjectStoreConfig{
 			Bucket: Bucket,
 			// WRITTEN ONCE, by whichever node creates the bucket: nothing
@@ -293,6 +362,7 @@ func createBucket(ctx context.Context, js jetstream.JetStream, timing jsprovisio
 			Description: "Crewlet files, one object per upload",
 			Storage:     jetstream.FileStorage,
 			Replicas:    replicas,
+			MaxBytes:    maxBytes,
 		})
 		return e
 	}, nil)
@@ -310,6 +380,16 @@ func createBucket(ctx context.Context, js jetstream.JetStream, timing jsprovisio
 		// and names neither the class nor the field that picks it.
 		return nil, fmt.Errorf("natsobj: create the %s bucket at %d copies: %w%s",
 			Bucket, replicas, err, jsprovision.NoApplicableLimitDetail(replicas))
+	}
+	if jsprovision.OutOfCapacity(err) {
+		// THE RESERVATION DOES NOT FIT, which the broker says without
+		// naming a number: the figure and the two fields that move it are
+		// what an operator needs, and the broker's own text is neither.
+		return nil, fmt.Errorf("natsobj: create the %s bucket at %d copies with a "+
+			"%d-byte reservation: %w. The broker cannot reserve it beside what it "+
+			"has already granted. Lower store.objects.nats_max_bytes, raise "+
+			"stream.store_max_bytes, or give the broker's volume more room",
+			Bucket, replicas, maxBytes, err)
 	}
 	if jsprovision.Refused(err) {
 		// REFUSED OUTRIGHT, so nothing was made and there is nothing to
@@ -348,9 +428,45 @@ func (b *Backend) Put(ctx context.Context, name string, r io.Reader, m objstore.
 	}
 	body := filler{r: objstore.ContextReader(ctx, r)}
 	if _, err := b.store.Put(context.WithoutCancel(ctx), meta, body); err != nil {
+		if full(err) {
+			// THE RESERVATION IS SPENT. The library purged what it had
+			// stored of this object already, as after any failed put.
+			return fmt.Errorf("natsobj: put %s: %w (%s holds as many bytes as it "+
+				"reserves): %w", name, objstore.ErrFull, Bucket, err)
+		}
 		return fmt.Errorf("natsobj: put %s: %w", name, err)
 	}
 	return nil
+}
+
+// full reports a publish the broker refused because the bucket's stream holds
+// its MaxBytes.
+//
+// BY THE SERVER'S OWN TEXT, [maxBytesExceeded]: a stream created to discard
+// nothing answers a message past its ceiling with its store's ErrMaxBytes,
+// carried back as the generic store failure (10077) every other store error
+// shares, so the code alone cannot tell a full bucket from a failing disk and
+// the description is the one part that does.
+func full(err error) bool { return strings.Contains(err.Error(), maxBytesExceeded) }
+
+// maxBytesExceeded is the pinned nats-server's ErrMaxBytes, verbatim
+// (server/store.go).
+const maxBytesExceeded = "maximum bytes exceeded"
+
+// Usage answers how much of the bucket's reservation its objects take, from
+// the stream's own state and configuration: the ceiling the BROKER enforces,
+// never the figure this node was configured with, since a bucket that exists
+// keeps the ceiling it was created at.
+//
+// Bytes counts every message the stream holds (pieces and metadata, and the
+// pieces of an upload in flight) because that is what the broker holds
+// against MaxBytes and what a put is refused on.
+func (b *Backend) Usage(ctx context.Context) (objstore.Usage, error) {
+	info, err := b.stream.Info(ctx)
+	if err != nil {
+		return objstore.Usage{}, fmt.Errorf("natsobj: read the %s stream's usage: %w", Stream, err)
+	}
+	return objstore.Usage{Bytes: int64(info.State.Bytes), MaxBytes: info.Config.MaxBytes}, nil
 }
 
 // filler hands the library only full messages: every Read answers as many
