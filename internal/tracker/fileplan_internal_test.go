@@ -149,10 +149,12 @@ func fileRow(i int) []any {
 // so its name already says which table is being sought.
 //
 // AN INTERSECTION SEEKS EVERY INDEX IT NAMES (`MULTI-INDEX AND h (a, b)`):
-// each is looked up by its own equality before the row ids are joined.
+// each is looked up by its own equality before the row ids are joined — and so
+// does a union of two (`MULTI-INDEX OR`).
 func seeks(plan []string, index string) bool {
 	for _, line := range plan {
-		if (strings.HasPrefix(line, "SEARCH ") || strings.HasPrefix(line, "MULTI-INDEX AND ")) &&
+		if (strings.HasPrefix(line, "SEARCH ") || strings.HasPrefix(line, "MULTI-INDEX AND ") ||
+			strings.HasPrefix(line, "MULTI-INDEX OR ")) &&
 			slices.Contains(indexesIn([]string{line}), index) {
 			return true
 		}
