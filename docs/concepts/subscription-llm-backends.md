@@ -78,11 +78,13 @@ its own place to run:
 vendor's own relocation variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, …)
 all point inside it — or, for a variable naming configuration a call must
 not share with the seat's other calls (`OPENCODE_CONFIG_DIR`), inside that
-call's own working directory. Nothing in a CLI's state layout is reachable
-across that boundary, and nothing configured may move it: a profile's `env`
-or `passthrough_env`, or an entry's `cli.env`, naming one of those variables
-is refused, because each is layered over the isolation and would replace it
-without a word.
+call's own working directory — and a vendor's own switch that stops it
+reading configuration from anywhere else (`OPENCODE_CONFIG_PROJECT_DISABLE`,
+the profile's `isolation_env`) is set beside them. Nothing in a CLI's state
+layout is reachable across that boundary, and nothing configured may move
+it: a profile's `env` or `passthrough_env`, or an entry's `cli.env`, naming
+one of those variables is refused, because each is layered over the
+isolation and would replace it without a word.
 
 **Between turns.** Each profile declares its `volatile_paths` —
 sessions, transcripts, history, todo state. They are deleted before and
@@ -676,7 +678,7 @@ above the state directory allowing everything — in 2.0's `permissions` shape
 or 1.x's `permission` map, which 2.0 translates — widened the model's tools
 from `webfetch` and `websearch` to `shell`, `read`, `write`, `edit` and
 `execute`, and a plugin there was loaded and ran. So the profile sets
-`OPENCODE_DISABLE_PROJECT_CONFIG=1` on every command it runs, and points
+`OPENCODE_CONFIG_PROJECT_DISABLE=1` on every command it runs, and points
 `OPENCODE_CONFIG_DIR` at `.crewlet-config` inside the call's own directory
 (`work_config_env`), where the policy above is seeded on every call as
 `.crewlet-config/opencode.json` beside the seat's agent file. That variable
@@ -687,11 +689,34 @@ environment, with those ancestor files planted — each shape in each location,
 beside an ancestor agent of the seat's own name, a plugin, skills,
 `AGENTS.md` and `CLAUDE.md`: the seat's agent is found and its body is the
 system message, the model is offered exactly `webfetch` and `websearch`, no
-ancestor file reaches the request, and no plugin loads. A command with no call of its own — the credential store's
-`auth import` and `auth export`, `auth login`, `auth list` — runs with the walk
-off and no `OPENCODE_CONFIG_DIR`, so it reads no configuration at all, and
-each was measured working so; the usage command (`api session.get`) runs as
-part of the call and reads the call's directory.
+ancestor file reaches the request, and no plugin loads. A command with no
+call of its own — the credential store's `auth import` and `auth export`,
+`auth login`, `auth list` — runs with the walk off and no
+`OPENCODE_CONFIG_DIR`, so it reads no configuration at all. `auth import`,
+`auth export` and `auth list` were measured working so, under an ancestor
+holding a plugin and an allow-all `opencode.json`, and loading no plugin;
+`auth login` is OpenCode's own interactive picker, runs in the same
+environment, and was not measured in it. The usage command
+(`api session.get`) runs as part of the call and reads the call's directory.
+One configuration no variable switches off remains: OpenCode's machine-wide
+*managed* configuration (`/etc/opencode` on Linux, read from the 2.0.32
+bundle rather than measured), which only an
+administrator of the host can write. On a host that has one it applies to
+every seat, and nothing in a profile overrides it.
+
+The switch is `OPENCODE_CONFIG_PROJECT_DISABLE` because that is the name
+OpenCode 2 reads *first*: it reads
+`OPENCODE_CONFIG_PROJECT_DISABLE ?? OPENCODE_DISABLE_PROJECT_CONFIG` (in the
+2.0.0 bundle and the 2.0.32 one), so the older spelling is overruled by any
+value of the newer one, an empty value included — and an empty value reads
+as off. And it is part of the isolation (`isolation_env`) rather than an
+ordinary `env` setting, because `cli.env` is layered over `env`: written as
+an ordinary setting, `OPENCODE_CONFIG_PROJECT_DISABLE` set to `0` or to
+nothing in `cli.env` reopened the walk — measured, the model was offered a
+shell, file writes and code execution, an ancestor agent named like the
+seat's replaced its system prompt, and the ancestor's plugins ran. So
+`cli.env` naming it is refused, as `HOME` is, and the older spelling is never
+read, because the newer one is always set.
 
 **A refusal and a removal are not the same guard, and only one of them
 is a denial.** `muse-code` is the profile that makes the difference
@@ -1561,9 +1586,9 @@ through to its metered key.
 
 Every field a profile has, and therefore every key `cli.overrides` accepts.
 A key not in this table is refused by name. Every mapping field
-(`config_env`, `work_config_env`, `env`, `usage`, `stdin_login`,
-`system_prompt_file`, `credential_store`) merges key by key; lists and single
-values replace wholesale.
+(`config_env`, `work_config_env`, `isolation_env`, `env`, `usage`,
+`stdin_login`, `system_prompt_file`, `credential_store`) merges key by key;
+lists and single values replace wholesale.
 
 | Field | What it is |
 |---|---|
@@ -1588,7 +1613,8 @@ values replace wholesale.
 | `usage_args` | A command run after the call that prints its counts, with the same `{session}`; read through `usage`. Exclusive with `usage_file_args`. One that fails, or prints nothing, logs `cli_agent_usage_report_failed`; one this profile cannot read logs `cli_agent_usage_report_unreadable`; either way the counts are what stdout reported. |
 | `config_env` | A vendor's own relocation variable, mapped to a directory under the seat home — relative, and staying inside it. |
 | `work_config_env` | A vendor's relocation variable mapped to a directory under the per-call working directory, for configuration a call must not share with the seat's other calls. Set only for the call and its usage command; never `HOME`, an XDG home, `TMPDIR`, or a `config_env` variable. |
-| `env` | Fixed child environment. Never a credential, never `token_env` or `api_key_env`, and never a variable the engine sets to isolate the call (`HOME`, the XDG homes, `TMPDIR`, a `config_env` or `work_config_env` variable). |
+| `isolation_env` | A vendor's own switch that keeps the CLI from reading configuration outside its seat's home and its call's directory, with the value that turns that reading off — set on every command the profile runs, and refused in `env`, `passthrough_env` and `cli.env`, each of which is layered over it. The name the CLI reads first, never a fallback spelling of it. Never empty (a CLI that reads `1` as on reads an empty value as off), never a credential, `HOME`, an XDG home, `TMPDIR` or a relocated variable. |
+| `env` | Fixed child environment. Never a credential, never `token_env` or `api_key_env`, and never a variable the engine sets to isolate the call (`HOME`, the XDG homes, `TMPDIR`, a `config_env`, `work_config_env` or `isolation_env` variable). |
 | `passthrough_env` | Engine variables forwarded to the child. Never a credential, and never an isolation variable. |
 | `token_env` | The variable a headless subscription token goes in (`cli.auth.token`). |
 | `api_key_env` | The variable a metered key goes in (`api_keys` under `auth.mode: api-key`). |

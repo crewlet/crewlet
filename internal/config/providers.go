@@ -1375,9 +1375,11 @@ func (l *LLMProvider) validateCLICredentials(path Path) error {
 			// cli.env is layered OVER the variables that keep each seat's
 			// CLI inside its own home and its call's working directory, so a
 			// value here would replace them for every seat on the entry —
-			// the engine user's real dotfiles, or a configuration directory
-			// the seat's system prompt is never written to — and nothing
-			// would say so.
+			// the engine user's real dotfiles, a configuration directory the
+			// seat's system prompt is never written to, or a vendor switch
+			// turned back off (OpenCode's project walk, which hands every
+			// seat whatever configuration sits above the state directory) —
+			// and nothing would say so.
 			if slices.Contains(isolation, name) {
 				p.add(entry(at(path, "cli.env"), name), ErrConflict,
 					"%s is a variable the engine sets for every call of this CLI to keep "+

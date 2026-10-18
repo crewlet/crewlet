@@ -67,6 +67,13 @@ func TestAWorkConfigDirIsInsideTheCallAndHoldsWhatTheCLIReads(t *testing.T) {
 // and an ancestor plugin ran its code — and without the second the seat's agent
 // file and tool policy are read from nowhere.
 //
+// The switch is the name OpenCode 2 reads FIRST, OPENCODE_CONFIG_PROJECT_DISABLE:
+// it reads `OPENCODE_CONFIG_PROJECT_DISABLE ?? OPENCODE_DISABLE_PROJECT_CONFIG`,
+// so a child given only the second, beside any value of the first — an empty
+// one included — walked every ancestor again. Which is why the operator's
+// own spelling of the second, handed through cli.env, changes nothing here:
+// the first is set, so the second is never read.
+//
 // And ONLY A CALL gets the directory: a command run in a home — a credential
 // store's import and export, a login — has no working directory, and pointing
 // the variable at the home would put one call's system prompt where every
@@ -83,17 +90,19 @@ func TestTheOpenCodeChildReadsOnlyTheCallsOwnConfiguration(t *testing.T) {
 		Cache: filepath.Join(root, "seats", "s", "cache"),
 		Work:  filepath.Join(root, "seats", "s", "work", "call"),
 	}
-	env := childEnv(p, call, nil, Auth{Mode: AuthSubscription})
-	if got := env["OPENCODE_DISABLE_PROJECT_CONFIG"]; got != "1" {
-		t.Errorf("OPENCODE_DISABLE_PROJECT_CONFIG = %q, want 1", got)
+	operator := map[string]string{"OPENCODE_DISABLE_PROJECT_CONFIG": "0"}
+	env := childEnv(p, call, operator, Auth{Mode: AuthSubscription})
+	if got := env["OPENCODE_CONFIG_PROJECT_DISABLE"]; got != "1" {
+		t.Errorf("OPENCODE_CONFIG_PROJECT_DISABLE = %q, want 1 — the name OpenCode reads "+
+			"first, which any value of overrules the older spelling", got)
 	}
 	if got, want := env["OPENCODE_CONFIG_DIR"], filepath.Join(call.Work, ".crewlet-config"); got != want {
 		t.Errorf("OPENCODE_CONFIG_DIR = %q, want %q", got, want)
 	}
 
-	home := childEnv(p, &Checkout{Home: call.Home, Cache: call.Cache}, nil, Auth{Mode: AuthSubscription})
-	if got := home["OPENCODE_DISABLE_PROJECT_CONFIG"]; got != "1" {
-		t.Errorf("a command in a home: OPENCODE_DISABLE_PROJECT_CONFIG = %q, want 1 — an "+
+	home := childEnv(p, &Checkout{Home: call.Home, Cache: call.Cache}, operator, Auth{Mode: AuthSubscription})
+	if got := home["OPENCODE_CONFIG_PROJECT_DISABLE"]; got != "1" {
+		t.Errorf("a command in a home: OPENCODE_CONFIG_PROJECT_DISABLE = %q, want 1 — an "+
 			"ancestor plugin is code, whichever command loads it", got)
 	}
 	if got, set := home["OPENCODE_CONFIG_DIR"]; set {
@@ -103,10 +112,12 @@ func TestTheOpenCodeChildReadsOnlyTheCallsOwnConfiguration(t *testing.T) {
 }
 
 // EVERY ISOLATION VARIABLE THE PROFILE DECLARES IS ONE THE CHILD IS GIVEN, AND
-// GIVEN INSIDE THE SEAT. [cliprofile.Profile.IsolationVariables] is what config
+// GIVEN INSIDE THE SEAT — or, for a vendor's switch, given exactly the value
+// the profile declares. [cliprofile.Profile.IsolationVariables] is what config
 // and the profile validator refuse an override of; a name it lists that the
-// child is not given would be refused for nothing, and one the child is given
-// outside the seat's directory is no isolation at all.
+// child is not given would be refused for nothing, a directory the child is
+// given outside the seat's is no isolation at all, and a switch the child is
+// given any other value is a switch turned off.
 func TestTheChildIsGivenEveryIsolationVariableInsideTheSeat(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -121,6 +132,12 @@ func TestTheChildIsGivenEveryIsolationVariableInsideTheSeat(t *testing.T) {
 		env := childEnv(p, call, map[string]string{"ANYTHING": "x"}, Auth{Mode: AuthSubscription})
 		for _, variable := range p.IsolationVariables() {
 			value, set := env[variable]
+			if want, isSwitch := p.IsolationEnv[variable]; isSwitch {
+				if value != want {
+					t.Errorf("%s: switch %s = %q (set %v), want %q", name, variable, value, set, want)
+				}
+				continue
+			}
 			if !set || !strings.HasPrefix(value, seat+string(filepath.Separator)) {
 				t.Errorf("%s: %s = %q (set %v), want a path inside %s", name, variable, value, set, seat)
 			}

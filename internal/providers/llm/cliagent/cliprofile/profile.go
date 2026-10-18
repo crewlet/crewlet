@@ -695,11 +695,15 @@ type Profile struct {
 	// above the state directory (the engine user's home, a repository
 	// cli.state_dir was put in) handed every seat a shell, and a plugin there
 	// ran its code in every call (measured on 2.0.32). With that walk switched
-	// off (OPENCODE_DISABLE_PROJECT_CONFIG, in [Profile.Env]) the only
-	// configuration OpenCode reads is the directory OPENCODE_CONFIG_DIR names
-	// — it REPLACES the one under XDG_CONFIG_HOME rather than adding to it —
-	// so that variable points inside the call's own directory, where the
-	// profile's `in: work` seed and its discovered agent file are written.
+	// off (OPENCODE_CONFIG_PROJECT_DISABLE, in [Profile.IsolationEnv]) the
+	// only configuration OpenCode reads from a directory is the one
+	// OPENCODE_CONFIG_DIR names — it REPLACES the one under XDG_CONFIG_HOME
+	// rather than adding to it — so that variable points inside the call's own
+	// directory, where the profile's `in: work` seed and its discovered agent
+	// file are written. The one exception is a machine-wide MANAGED
+	// configuration (`/etc/opencode` on Linux, read from the 2.0.32 bundle),
+	// which only an administrator of the host can write and no variable
+	// switches off; on a host that has one, it configures every seat.
 	//
 	// Set only for a command that runs AS A CALL: the completion, and the
 	// usage command after it. A command with no call of its own — a credential
@@ -707,6 +711,38 @@ type Profile struct {
 	// probe — has no working directory to point inside, and runs without the
 	// variable.
 	WorkConfigEnv map[string]string `yaml:"work_config_env,omitempty"`
+
+	// IsolationEnv is a vendor's own SWITCH that keeps the CLI from reading
+	// configuration outside its seat's home and its call's directory — set,
+	// with its value, on EVERY command this profile runs (a call, its usage
+	// command, a credential store's import and export, a login, the version
+	// probe), at the same layer as HOME and the relocations.
+	//
+	// A FIELD APART FROM [Profile.Env], whose values are settings, because a
+	// switch here is part of the isolation and has to be protected like the
+	// rest of it: the profile's env and passthrough_env, and an entry's
+	// cli.env, are all layered OVER the isolation, and each is refused naming
+	// one of [Profile.IsolationVariables] — which an ordinary env entry is not.
+	// Written in env, OpenCode's project switch was replaced by
+	// `cli.env: {OPENCODE_CONFIG_PROJECT_DISABLE: "0"}` — or by an EMPTY value,
+	// which it reads as off — with nothing to say so, and every ancestor's
+	// `opencode.json`, agents and plugins were configuration for every seat
+	// again: measured on 2.0.32, the model's tools widened to shell, write and
+	// execute, an ancestor agent of the seat's own name replaced the seat's
+	// system prompt, and the ancestor's plugins ran.
+	//
+	// The NAME the vendor reads FIRST, never a fallback spelling: OpenCode 2
+	// reads `OPENCODE_CONFIG_PROJECT_DISABLE ?? OPENCODE_DISABLE_PROJECT_CONFIG`
+	// (read from the 2.0.0 and 2.0.32 bundles), so a profile setting only the
+	// second is overruled by any value of the first, an empty one included.
+	// With the first fixed here and refused everywhere else, the second is
+	// never read, so nothing needs to refuse it.
+	//
+	// Never a credential, never the profile's token_env or api_key_env
+	// ([Profile.ValidateCredentials]), never a variable the engine already
+	// sets ([HomeIsolation], a relocation), and never an empty value, which
+	// every switch these vendors read takes as off.
+	IsolationEnv map[string]string `yaml:"isolation_env,omitempty"`
 
 	// Env is fixed child environment the CLI needs. Never a credential,
 	// and never the profile's own token_env or api_key_env, both refused
@@ -946,19 +982,21 @@ var HomeIsolation = []string{
 
 // IsolationVariables names every variable the engine sets to keep this CLI
 // inside its seat's home and its call's working directory: [HomeIsolation],
-// then the profile's [Profile.ConfigEnv] and [Profile.WorkConfigEnv], each
-// sorted.
+// then the profile's [Profile.ConfigEnv], [Profile.WorkConfigEnv] and
+// [Profile.IsolationEnv], each sorted.
 //
 // One list for the three places that must not set one of them — the profile's
 // own env and passthrough_env ([Profile.Validate]) and an entry's cli.env
 // (config) — because every one of those is layered OVER the isolation when the
 // child's environment is built, so a value there silently replaces the seat's
-// home with whatever it names: the engine user's own dotfiles, or a
-// configuration directory no seat's system prompt is written to.
+// home with whatever it names: the engine user's own dotfiles, a
+// configuration directory no seat's system prompt is written to, or a switch
+// turned back off.
 func (p *Profile) IsolationVariables() []string {
 	names := slices.Clone(HomeIsolation)
 	names = append(names, slices.Sorted(maps.Keys(p.ConfigEnv))...)
-	return append(names, slices.Sorted(maps.Keys(p.WorkConfigEnv))...)
+	names = append(names, slices.Sorted(maps.Keys(p.WorkConfigEnv))...)
+	return append(names, slices.Sorted(maps.Keys(p.IsolationEnv))...)
 }
 
 // HasSystemChannel reports whether this profile carries the system prompt on
@@ -1247,8 +1285,9 @@ func (p *Profile) Validate(name string) error {
 // validateRelocations holds [Profile.ConfigEnv] and [Profile.WorkConfigEnv] to
 // the one shape in which they relocate anything: each variable named once,
 // none the engine already points at the seat's home, and each directory
-// relative and inside its root — and holds env and passthrough_env off every
-// variable either of them, or [HomeIsolation], names.
+// relative and inside its root — holds [Profile.IsolationEnv] to a vendor
+// variable of its own with a value — and holds env and passthrough_env off
+// every variable any of them, or [HomeIsolation], names.
 //
 // The directories were never checked before: `config_env: {CODEX_HOME: ../..}`
 // loaded, and pointed the vendor's whole configuration — sessions and login
@@ -1286,6 +1325,25 @@ func (p *Profile) validateRelocations(add func(string, ...any)) {
 				"working directory", name, rel)
 		}
 	}
+	for _, name := range slices.Sorted(maps.Keys(p.IsolationEnv)) {
+		_, home := p.ConfigEnv[name]
+		_, work := p.WorkConfigEnv[name]
+		switch {
+		case strings.TrimSpace(name) == "":
+			add("isolation_env names an empty variable")
+		case slices.Contains(HomeIsolation, name) || home || work:
+			// Two values for one variable, of which the child would get
+			// whichever layer happened to be applied last.
+			add("isolation_env names %s, which the engine already points at a directory — "+
+				"a switch is a variable of the vendor's own, never a relocated one", name)
+		case strings.TrimSpace(p.IsolationEnv[name]) == "":
+			// Not "unset": a vendor reading `1` or `true` as on reads an
+			// empty value as OFF, so the switch would be declared and do the
+			// opposite of what it says.
+			add("isolation_env.%s is empty — give the value that switches the vendor's "+
+				"behaviour off, e.g. \"1\"; an empty one reads as off", name)
+		}
+	}
 	// LAYERED OVER THE ISOLATION, which is why they are refused here: the
 	// child's environment applies the profile's env and passthrough after
 	// the variables that point it at its own home, so one named here
@@ -1295,7 +1353,8 @@ func (p *Profile) validateRelocations(add func(string, ...any)) {
 		if slices.Contains(isolation, name) {
 			add("env names %s, which the engine sets to keep the CLI inside its seat's "+
 				"home and its call's working directory — a value here would replace that "+
-				"isolation; relocate a vendor directory with config_env or work_config_env", name)
+				"isolation; relocate a vendor directory with config_env or work_config_env, "+
+				"and set a vendor's isolating switch in isolation_env", name)
 		}
 	}
 	for _, name := range p.PassthroughEnv {
@@ -1459,6 +1518,15 @@ func (p *Profile) ValidateCredentials(name string) error {
 				"passthrough is forwarded before auth.mode is consulted, so it would "+
 				"reach every seat whatever the mode says; use auth.mode api-key or "+
 				"inherit-env instead", env)
+		}
+	}
+	for _, env := range slices.Sorted(maps.Keys(p.IsolationEnv)) {
+		// A switch is forwarded on every command whatever auth.mode says,
+		// and is no place for a value anybody would have to keep secret.
+		if env != "" && (env == p.TokenEnv || env == p.APIKeyEnv || IsCredentialName(env)) {
+			add("isolation_env names %q, which is a credential variable — a switch the "+
+				"engine sets on every command is forwarded whatever auth.mode says and is "+
+				"stored unredacted; give the credential through cli.auth or cli.env", env)
 		}
 	}
 	for _, env := range slices.Sorted(maps.Keys(p.Env)) {

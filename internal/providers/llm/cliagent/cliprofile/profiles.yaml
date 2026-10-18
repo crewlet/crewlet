@@ -351,12 +351,13 @@ opencode:
   # model's tools from webfetch and websearch to shell, read, write, edit and
   # execute, and an ancestor plugin was loaded and ran its code.
   #
-  # So the walk is off (OPENCODE_DISABLE_PROJECT_CONFIG, in env below), and
-  # OPENCODE_CONFIG_DIR points at `.crewlet-config` INSIDE THE CALL'S OWN
-  # DIRECTORY (work_config_env). That variable REPLACES the global directory
-  # under XDG_CONFIG_HOME rather than adding to it — measured: a provider
-  # declared only in the seat home's opencode.json was not found — so the
-  # seed below and the seat's agent file are both written there, per call.
+  # So the walk is off (OPENCODE_CONFIG_PROJECT_DISABLE, in isolation_env
+  # below), and OPENCODE_CONFIG_DIR points at `.crewlet-config` INSIDE THE
+  # CALL'S OWN DIRECTORY (work_config_env). That variable REPLACES the global
+  # directory under XDG_CONFIG_HOME rather than adding to it — measured: a
+  # provider declared only in the seat home's opencode.json was not found —
+  # so the seed below and the seat's agent file are both written there, per
+  # call.
   # Per call rather than per seat because the agent file is the call's own
   # system prompt, and a seat runs calls concurrently in one home. Measured
   # on 2.0.32 under exactly this environment, with the ancestor files above
@@ -364,12 +365,15 @@ opencode:
   # ancestor agent of the same name, plugins, skills, AGENTS.md and
   # CLAUDE.md: the seat's agent is found and its body is the system message,
   # the model is offered exactly webfetch and websearch, no ancestor file
-  # reaches the request, and no plugin loads. A command that runs outside a call — the credential
-  # store's import and export, `auth login` and `auth list`, the version
-  # probe — gets the walk switched off and no OPENCODE_CONFIG_DIR, so it
-  # reads no configuration at all: measured, import, export and list all
-  # work so, and `api session.get` (usage_args) runs as a call and reads the
-  # call's directory.
+  # reaches the request, and no plugin loads. A command that runs outside a
+  # call — the credential store's import and export, `auth login` and `auth
+  # list`, the version probe — gets the walk switched off and no
+  # OPENCODE_CONFIG_DIR, so it reads no configuration at all. Measured so,
+  # under an ancestor holding a plugin and an allow-all opencode.json: import,
+  # export and list work and load no plugin, and `api session.get`
+  # (usage_args) runs as a call and reads the call's directory. `auth login`
+  # is the vendor's interactive picker and gets the same environment; it was
+  # not measured under it.
   #
   # The tool policy is 2.0's own permissions format, an ordered list in
   # which the LAST matching rule wins: deny every action, then allow the two
@@ -467,17 +471,30 @@ opencode:
   # as for hermes and pi. A key goes through `cli.env`; `crewlet llm login`
   # (`opencode auth login`) is the other route.
   env_sign_in: true
+  # No project configuration from the working directory or any ancestor of
+  # it — see work_config_env above — on every command this profile runs, the
+  # credential store's and the login's included: an ancestor plugin is code.
+  # In isolation_env rather than env because a switch there is refused in
+  # env, passthrough_env and cli.env, each of which is layered over it: in
+  # env, `cli.env: {OPENCODE_CONFIG_PROJECT_DISABLE: "0"}` — or "" — turned
+  # the walk back on with nothing to say so (measured: shell, write and
+  # execute offered, an ancestor agent named crewlet-seat replacing the
+  # seat's prompt, the ancestor's plugins loaded). The name is the one 2.0
+  # reads FIRST — `OPENCODE_CONFIG_PROJECT_DISABLE ??
+  # OPENCODE_DISABLE_PROJECT_CONFIG` in both the 2.0.0 and the 2.0.32
+  # bundle — so the older spelling is never read while this one is set, and
+  # this one always is.
+  isolation_env:
+    OPENCODE_CONFIG_PROJECT_DISABLE: "1"
   env:
-    # Every call starts a recursive file watcher on its working directory —
-    # fifteen watchers per call, measured — over a directory that is empty
-    # by construction. Off, a call took ~0.5s less on 2.0.32, and a host
-    # running many seats is not spending inotify watches on nothing.
-    OPENCODE_DISABLE_FILEWATCHER: "1"
-    # No project configuration from the working directory or any ancestor
-    # of it — see work_config_env above. On every command this profile
-    # runs, the credential store's and the login's included: an ancestor
-    # plugin is code.
-    OPENCODE_DISABLE_PROJECT_CONFIG: "1"
+    # Every call starts a recursive file watcher on its working directory,
+    # which is empty by construction — five inotify watches per call under
+    # this profile's environment on 2.0.32, none with this set (measured).
+    # Off, a call took ~0.5s less, and a host running many seats is not
+    # spending inotify watches on nothing. The name 2.0 reads first
+    # (`OPENCODE_FILEWATCHER_DISABLE ?? OPENCODE_DISABLE_FILEWATCHER`, in the
+    # 2.0.0 and 2.0.32 bundles), for the reason isolation_env gives above.
+    OPENCODE_FILEWATCHER_DISABLE: "1"
   login_args: ["auth", "login", "--standalone"]
   status_args: ["auth", "list", "--standalone"]
   # NO logout_args. 2.0's `auth logout` removes ONE credential from the

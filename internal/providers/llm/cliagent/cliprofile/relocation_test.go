@@ -109,10 +109,10 @@ func TestTheOpenCodeProfileWritesWhatItReadsIntoTheCallsOwnConfigDir(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Env["OPENCODE_DISABLE_PROJECT_CONFIG"] != "1" {
-		t.Errorf("env OPENCODE_DISABLE_PROJECT_CONFIG = %q, want 1 — without it every "+
-			"ancestor's opencode.json and .opencode/ is configuration for every seat",
-			p.Env["OPENCODE_DISABLE_PROJECT_CONFIG"])
+	if p.IsolationEnv["OPENCODE_CONFIG_PROJECT_DISABLE"] != "1" {
+		t.Errorf("isolation_env OPENCODE_CONFIG_PROJECT_DISABLE = %q, want 1 — without it "+
+			"every ancestor's opencode.json and .opencode/ is configuration for every seat",
+			p.IsolationEnv["OPENCODE_CONFIG_PROJECT_DISABLE"])
 	}
 	dir := p.WorkConfigEnv["OPENCODE_CONFIG_DIR"]
 	if dir == "" {
@@ -142,5 +142,107 @@ func TestTheOpenCodeProfileWritesWhatItReadsIntoTheCallsOwnConfigDir(t *testing.
 	if spf := p.SystemPromptFile; spf == nil || !spf.Discovered ||
 		!under(spf.Name) || filepath.Dir(filepath.Clean(spf.Name)) != filepath.Join(dir, "agents") {
 		t.Errorf("system_prompt_file = %+v, want a discovered file in %s/agents/", spf, dir)
+	}
+}
+
+// AN ISOLATION SWITCH IS A VENDOR VARIABLE OF ITS OWN, WITH A VALUE, AND
+// NOTHING LAYERED OVER IT MAY SET IT. isolation_env exists because OpenCode's
+// project switch, written in env, was turned back off by
+// `cli.env: {OPENCODE_CONFIG_PROJECT_DISABLE: "0"}` — or by an empty value,
+// which OpenCode reads as off — and every ancestor's configuration reached
+// every seat again (measured on 2.0.32). So the switch is an isolation
+// variable: refused in env and passthrough_env here, and in cli.env by config
+// through the same list. An empty value is refused because a vendor that reads
+// `1` as on reads it as off; a name the engine already points at a directory
+// would give the child two values; and a credential has no place in a value
+// forwarded on every command and stored unredacted.
+func TestAnIsolationSwitchIsAVendorVariableWithAValue(t *testing.T) {
+	t.Parallel()
+	switched := map[string]any{"isolation_env": map[string]any{"VENDOR_NO_PROJECT": "1"}}
+	with := func(more map[string]any) map[string]any {
+		out := map[string]any{"isolation_env": switched["isolation_env"]}
+		for k, v := range more {
+			out[k] = v
+		}
+		return out
+	}
+	for name, tc := range map[string]struct {
+		extra map[string]any
+		want  string
+	}{
+		"an empty value": {
+			map[string]any{"isolation_env": map[string]any{"VENDOR_NO_PROJECT": " "}},
+			"isolation_env.VENDOR_NO_PROJECT is empty",
+		},
+		"a home variable": {
+			map[string]any{"isolation_env": map[string]any{"HOME": "1"}},
+			"isolation_env names HOME",
+		},
+		"a relocated variable": {map[string]any{
+			"work_config_env": map[string]any{"VENDOR_CONFIG": ".vendor-config"},
+			"isolation_env":   map[string]any{"VENDOR_CONFIG": "1"},
+		}, "isolation_env names VENDOR_CONFIG"},
+		"the switch in env":             {with(map[string]any{"env": map[string]any{"VENDOR_NO_PROJECT": "0"}}), "env names VENDOR_NO_PROJECT"},
+		"the switch in passthrough_env": {with(map[string]any{"passthrough_env": []any{"VENDOR_NO_PROJECT"}}), "passthrough_env names VENDOR_NO_PROJECT"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			refused(t, tc.extra, tc.want)
+		})
+	}
+
+	p, err := loadCustom(with(map[string]any{
+		"config_env": map[string]any{"VENDOR_HOME": ".vendor"},
+		"env":        map[string]any{"VENDOR_NO_UPDATE": "1"},
+	}))
+	if err != nil {
+		t.Fatalf("a switch beside an ordinary env was refused: %v", err)
+	}
+	if got := p.IsolationVariables(); !slices.Equal(got, append(slices.Clone(HomeIsolation), "VENDOR_HOME", "VENDOR_NO_PROJECT")) {
+		t.Errorf("IsolationVariables = %v, want the switch listed, so cli.env is refused it", got)
+	}
+	if clone := p.Clone(); clone.IsolationEnv["VENDOR_NO_PROJECT"] != "1" {
+		t.Errorf("Clone dropped isolation_env: %v", clone.IsolationEnv)
+	}
+
+	for _, credential := range []string{"VENDOR_API_KEY", "VENDOR_TOKEN"} {
+		p, err := loadCustom(map[string]any{"isolation_env": map[string]any{credential: "1"}})
+		if err != nil {
+			t.Fatalf("%s: %v", credential, err)
+		}
+		if err := p.ValidateCredentials("custom"); err == nil || !strings.Contains(err.Error(), "isolation_env names \""+credential+"\"") {
+			t.Errorf("isolation_env naming %s: ValidateCredentials = %v, want a refusal naming it", credential, err)
+		}
+	}
+}
+
+// THE OPENCODE SWITCHES ARE THE NAMES OPENCODE 2 READS FIRST. It reads
+// `OPENCODE_CONFIG_PROJECT_DISABLE ?? OPENCODE_DISABLE_PROJECT_CONFIG` and
+// `OPENCODE_FILEWATCHER_DISABLE ?? OPENCODE_DISABLE_FILEWATCHER` (2.0.0 and
+// 2.0.32 bundles), so a profile setting the second of either is overruled by
+// any value of the first. The project switch is isolation and lives in
+// isolation_env; the watcher is a setting and lives in env.
+func TestTheOpenCodeSwitchesAreTheNamesItReadsFirst(t *testing.T) {
+	t.Parallel()
+	p, err := Load("opencode", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fallback := range []string{"OPENCODE_DISABLE_PROJECT_CONFIG", "OPENCODE_DISABLE_FILEWATCHER"} {
+		if _, set := p.Env[fallback]; set {
+			t.Errorf("env sets %s, the spelling OpenCode reads only when the first is unset", fallback)
+		}
+		if _, set := p.IsolationEnv[fallback]; set {
+			t.Errorf("isolation_env sets %s, the spelling OpenCode reads only when the first is unset", fallback)
+		}
+	}
+	if _, inEnv := p.Env["OPENCODE_CONFIG_PROJECT_DISABLE"]; inEnv {
+		t.Error("the project switch is in env, where cli.env may replace it")
+	}
+	if p.Env["OPENCODE_FILEWATCHER_DISABLE"] != "1" {
+		t.Errorf("env OPENCODE_FILEWATCHER_DISABLE = %q, want 1", p.Env["OPENCODE_FILEWATCHER_DISABLE"])
+	}
+	if !slices.Contains(p.IsolationVariables(), "OPENCODE_CONFIG_PROJECT_DISABLE") {
+		t.Error("the project switch is not an isolation variable, so cli.env is not refused it")
 	}
 }

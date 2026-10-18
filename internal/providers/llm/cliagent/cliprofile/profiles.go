@@ -92,6 +92,7 @@ func (p Profile) Clone() Profile {
 	out.SeedFiles = append([]SeedFile(nil), p.SeedFiles...)
 	out.ConfigEnv = cloneMap(p.ConfigEnv)
 	out.WorkConfigEnv = cloneMap(p.WorkConfigEnv)
+	out.IsolationEnv = cloneMap(p.IsolationEnv)
 	out.Env = cloneMap(p.Env)
 	if p.SystemPromptFile != nil {
 		spec := *p.SystemPromptFile

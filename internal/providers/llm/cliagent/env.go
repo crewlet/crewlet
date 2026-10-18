@@ -106,6 +106,14 @@ func childEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth A
 			env[name] = filepath.Join(c.Work, rel)
 		}
 	}
+	// ON EVERY COMMAND, a call's or not — see
+	// [cliprofile.Profile.IsolationEnv]. A credential store's import, a login
+	// and the version probe start the same CLI, and a switch that kept a call
+	// from loading an ancestor's plugin but not an import would run that
+	// plugin's code anyway.
+	for name, value := range p.IsolationEnv {
+		env[name] = value
+	}
 
 	for name, value := range p.Env {
 		env[name] = value
