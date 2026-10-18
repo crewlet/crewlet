@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/api/artifactdataapi"
+	"github.com/crewlet/crewlet/internal/api/artifactsapi"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
@@ -51,7 +51,9 @@ func TestARoomIsJoinedByTheDatastoresOwnAdmission(t *testing.T) {
 		trashed: {ID: trashed, Owner: "dana", OwnerKind: iam.ActorHuman, Shares: shares,
 			Status: artifactsdomain.StatusTrashed},
 	}}
-	access := roomAccess{gate: artifactdataapi.Gate{Heads: heads, Chart: authz.NoChart{}}}
+	marks := &roomMarks{}
+	access := roomAccess{gate: artifactsapi.Gate{Heads: heads, Chart: authz.NoChart{}, Marks: marks,
+		Limits: func() artifacts.Limits { return artifacts.Limits{} }}}
 	person := func(seat string) iam.Principal {
 		return iam.Principal{Kind: iam.KindPerson, Login: seat + "@example.com", Seat: seat,
 			Stage: iam.StageActive, Grants: iam.Apps}
@@ -72,11 +74,48 @@ func TestARoomIsJoinedByTheDatastoresOwnAdmission(t *testing.T) {
 			t.Errorf("%s: standing %q, %v; want %q", name, got, err, tc.want)
 		}
 	}
-	broken := roomAccess{gate: artifactdataapi.Gate{Heads: roomHeads{err: errors.New("the copy is behind")},
+	broken := roomAccess{gate: artifactsapi.Gate{Heads: roomHeads{err: errors.New("the copy is behind")},
 		Chart: authz.NoChart{}}}
 	if got, err := broken.Standing(t.Context(), person("erin"), live); err == nil || got != "" {
 		t.Fatalf("a head this node could not read answered %q, %v; want undecidable", got, err)
 	}
+	if len(marks.elevated) != 0 {
+		t.Fatalf("joins by readers a share admits recorded %d elevated reads", len(marks.elevated))
+	}
+
+	// AN ADMINISTRATOR WITH NO RELATION joins by the admin path, and the
+	// join is recorded as an elevated read before it is answered; a record
+	// that could not be written refuses the join as undecidable.
+	admin := iam.Principal{Kind: iam.KindPerson, Login: "gail@example.com", Seat: "gail",
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAdmin}}
+	got, err := access.Standing(t.Context(), admin, live)
+	if err != nil || got != artifacts.RoleOwner || len(marks.elevated) != 1 {
+		t.Fatalf("an administrator's join answered %q, %v, recording %d", got, err, len(marks.elevated))
+	}
+	marks.err = errors.New("the log refused the record")
+	if got, err := access.Standing(t.Context(), admin, live); err == nil || got != "" {
+		t.Fatalf("an unrecorded elevated join answered %q, %v; want undecidable", got, err)
+	}
+}
+
+// roomMarks records the elevated reads a join leaves, and refuses them with err.
+type roomMarks struct {
+	elevated []artifacts.ID
+	err      error
+}
+
+func (m *roomMarks) ReadElevated(_ context.Context, _ artifactsdomain.Call, id artifacts.ID, _ int) (
+	artifactsdomain.Written, error) {
+
+	if m.err != nil {
+		return artifactsdomain.Written{}, m.err
+	}
+	m.elevated = append(m.elevated, id)
+	return artifactsdomain.Written{Result: statelog.Result{Outcome: statelog.OutcomeApplied}}, nil
+}
+
+func (m *roomMarks) Opened(context.Context, artifactsdomain.Call, artifacts.ID) (artifactsdomain.Written, error) {
+	return artifactsdomain.Written{}, nil
 }
 
 // storeCatalogue answers one store's catalogue row.

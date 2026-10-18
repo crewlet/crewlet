@@ -304,7 +304,7 @@ type Options struct {
 
 	// PaceClock is the clock a file upload's and download's pace is
 	// measured on, and every read and write deadline it sets is taken from
-	// ([FilePace]). Nil takes time.Now.
+	// ([paced.Pace]). Nil takes time.Now.
 	//
 	// NOT a clock pinned to one instant, as a suite pins the one that
 	// stamps answers: the pace is a DURATION, the time spent inside a

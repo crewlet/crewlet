@@ -105,7 +105,9 @@ const (
 	PresenceRooms    = "crewlet.presence.rooms"
 	ArtifactsPushLag = "crewlet.artifacts.push.lag"
 
-	// The browser-reported time from a ticket to a ready frame, recorded by
+	// The browser-reported time from a ticket to a ready frame, and every
+	// service objective's good and bad events, recorded by
 	// internal/objectives.
 	ArtifactsReadyDuration = "crewlet.artifacts.ready.duration"
+	ObjectivesEvents       = "crewlet.objectives.events"
 )

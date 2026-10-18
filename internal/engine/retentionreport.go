@@ -472,7 +472,18 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 	r.space(&out)
 	r.maintenance(ctx, now, &out)
 	r.observed(&out)
+	r.burning(&out)
 	return out
+}
+
+// burning fills the service objectives this node is spending the error budget
+// of too fast.
+//
+// THE OBJECTIVES' OWN JUDGEMENT, read whole: the meter owns the targets, the
+// window pairs and their factors, and the alarm restates none of them
+// (ADR-0015). A nil meter judges nothing burning.
+func (r *retention) burning(out *statelog.Reading) {
+	out.ObjectiveBurns = r.objectives.Burning()
 }
 
 // domainHealth is one domain's readiness as the report read it, or why it

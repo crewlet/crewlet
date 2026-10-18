@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/artifactsapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
@@ -52,7 +53,7 @@ type Versions interface {
 type Options struct {
 	// Gate is the one admission every route takes. REQUIRED, with its
 	// Heads, Chart and Limits.
-	Gate Gate
+	Gate artifactsapi.Gate
 
 	// Data is the datastore. REQUIRED.
 	Data Data
@@ -66,7 +67,7 @@ type Options struct {
 
 // Service is the surface.
 type Service struct {
-	gate     Gate
+	gate     artifactsapi.Gate
 	data     Data
 	versions Versions
 	now      func() time.Time
@@ -103,8 +104,8 @@ func New(opts Options) (*Service, error) {
 // is that the caller resolved and may act ([authz.ActionArtifactList]): the
 // verb itself needs the artifact's shares, which only its head can say, so
 // each handler reads the head and decides the verb on it through the one
-// [Gate]. A caller with no relation is answered exactly as an unknown
-// artifact.
+// [artifactsapi.Gate], the artifacts' own. A caller with no relation is
+// answered exactly as an unknown artifact.
 func (s *Service) Routes(mux authz.Mux) error {
 	router := authz.NewRouter(mux, authz.ContextGuard(s.gate.Chart)).Refusing(authz.EnvelopeRefusal)
 	pre := authz.Policy{Action: authz.ActionArtifactList, Object: func(*http.Request) authz.Object {
@@ -131,37 +132,37 @@ func (s *Service) Routes(mux authz.Mux) error {
 // admit decides action on the path's artifact, rendering a refusal itself. It
 // reports whether the handler goes on.
 func (s *Service) admit(w http.ResponseWriter, r *http.Request, action authz.Action) (
-	artifacts.ID, Admission, bool) {
+	artifacts.ID, artifactsapi.Admission, bool) {
 
 	id, err := artifacts.ParseID(r.PathValue("id"))
 	if err != nil {
 		// A PATH NAMING NO ARTIFACT ID is an unknown artifact.
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
-		return artifacts.ID{}, Admission{}, false
+		return artifacts.ID{}, artifactsapi.Admission{}, false
 	}
 	principal, how := iam.From(r.Context())
 	if how != iam.Resolved {
 		operator.RefuseDecision(w, r, action, authz.Decision{Err: iam.Reason(r.Context())})
-		return id, Admission{}, false
+		return id, artifactsapi.Admission{}, false
 	}
 	a, err := s.gate.Admit(r.Context(), principal, action, id)
-	var refused *Refused
+	var refused *artifactsapi.Refused
 	switch {
 	case err == nil:
 		return id, a, true
-	case errors.Is(err, ErrNoSuchArtifact):
+	case errors.Is(err, artifactsapi.ErrNoSuchArtifact):
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
 	case errors.As(err, &refused):
 		operator.RefuseDecision(w, r, action, refused.Decision)
 	default:
 		unavailable(w, err, "this node could not decide who may write this artifact's data")
 	}
-	return id, Admission{}, false
+	return id, artifactsapi.Admission{}, false
 }
 
 // writable refuses a write to an artifact in the trash: its data is not
 // served, so nothing is written to it until it is restored.
-func writable(w http.ResponseWriter, a Admission) bool {
+func writable(w http.ResponseWriter, a artifactsapi.Admission) bool {
 	if a.Head.Status == artifactsdomain.StatusTrashed {
 		httpjson.FailWith(w, http.StatusGone, httpjson.CodeDataGone, map[string]string{
 			"detail": "the artifact is in the trash; restore it to write its data"})
@@ -182,7 +183,7 @@ const (
 
 // origin is the write origin a request is stamped with, and for a page
 // script's write, the capability its version must declare.
-func (s *Service) origin(w http.ResponseWriter, r *http.Request, a Admission, id artifacts.ID,
+func (s *Service) origin(w http.ResponseWriter, r *http.Request, a artifactsapi.Admission, id artifacts.ID,
 	via Via, version int, capability artifacts.Capability) (artifacts.WriteOrigin, bool) {
 
 	if !strings.HasPrefix(a.Principal.Via, iam.SessionPrefix) {
@@ -221,8 +222,8 @@ func (s *Service) origin(w http.ResponseWriter, r *http.Request, a Admission, id
 
 // call is a write's caller context: the admission's stamp and the request's
 // key.
-func (s *Service) call(a Admission, origin artifacts.WriteOrigin, key string) artifactdata.Call {
-	return artifactdata.Call{Authority: a.Authority(origin, s.gate.limits()), OpKey: key}
+func (s *Service) call(a artifactsapi.Admission, origin artifacts.WriteOrigin, key string) artifactdata.Call {
+	return artifactdata.Call{Authority: authority(a, origin, s.gate.Limits()), OpKey: key}
 }
 
 // decode reads a JSON body into out, refusing a field the route does not take:
@@ -409,7 +410,7 @@ func (s *Service) export(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := &csvResponse{w: w, collection: collection}
-	err := artifactdata.Export(r.Context(), s.data, id, a.Reading(statelog.Freshness{
+	err := artifactdata.Export(r.Context(), s.data, id, Reading(a, statelog.Freshness{
 		Level: statelog.DefaultReadLevel(statelog.SurfaceDashboard)}), collection, out)
 	switch {
 	case err == nil && !out.started:

@@ -296,8 +296,8 @@ var subjectOf = map[string]subject{
 	"steer_turn":  {kind: authz.KindPerson, inTool: true},
 	"answer_run":  {kind: authz.KindPerson, inTool: true},
 
-	// AN ARTIFACT IS DECIDED BY ITS STORED ROW — its owner, its shares and
-	// whether an agent owns it — which no argument states, and inside a
+	// AN ARTIFACT IS DECIDED BY ITS STORED ROW (its owner, its shares and
+	// whether an agent owns it), which no argument states, and inside a
 	// turn somebody woke a second time for whoever the turn is acting for.
 	// So each tool reads the row and asks [authz.DecideWithin] itself (see
 	// artifacts.go). The listing and the create are not here: one is a

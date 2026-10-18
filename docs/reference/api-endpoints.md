@@ -6024,6 +6024,208 @@ question. A node in a [capacity window](../guides/retention.md#changing-a-logs-c
 refuses every reanchor `409 reanchor_refused`, naming its mode: the reanchor
 appends a generation record, and the window's mode appends nothing.
 
+## Artifacts
+
+An **artifact** is a page, a Markdown document or a native sheet a person or a
+seat publishes for others to open: immutable numbered versions of its files,
+shared with seats, units or the whole company at a role (`viewer`,
+`commenter`, `contributor`, `editor`; the owner holds every role). Its records
+are the `artifacts` state log's, every data node holds them, and its bytes are
+objects in the [object store](../concepts/object-store.md). The routes below
+are served on `api.port`; the pages themselves are served only on the
+separate artifact origin (`api.artifacts`), inside a sandboxed frame, and
+never here.
+
+### Who may do what
+
+Every route decides one verb of the authority table on the artifact's own
+owner and shares, **before** a version, a file or a byte is read:
+
+- **A caller with no relation to an artifact is answered `404 not_found`**,
+  byte for byte as an id nothing holds, on every route, so nothing says a
+  private artifact exists.
+- **A relation below the verb's role** is `403 unauthorized` with `reason:
+  role` and `role` naming what it needs, which the owner can share.
+- **Authoring asks the artifacts app** beside the role: creating, publishing,
+  renaming, labelling, adding an asset. Reading and sharing ask the relation
+  alone, so a person invited with no app reads what was shared with them.
+- **An agent is kept to `contributor`** on an artifact it does not own unless
+  the company sets `artifacts.agents_manage_others`. **The lead of an agent**
+  holds owner on that agent's artifacts, and nothing on a person's.
+- **Trash, restore and transfer are a person's**; a transfer and a forced
+  publish need a person present, which a machine token never is
+  (`403 token_refused`). **A purge is an administrator's**, with a proof of
+  identity inside the step-up window (`403 step_up_required` otherwise) and a
+  person present.
+- **An administrator may open any artifact.** Every read only the admin path
+  admits writes an elevated-read record first (one per day, administrator,
+  artifact and version), which the artifact's history shows its owner and
+  editors; a read whose record cannot be written is answered `503` and not
+  served. A listing never shows an artifact on the admin path.
+
+What the decision concluded is stamped into the record every write forms: the
+caller's role on the artifact, whether only the admin path admitted them, the
+Tier A quotas in force, the surface the request came through (`dashboard` for
+a browser session, `api` for a bearer token) and the work item it was made
+for. The domain's applier decides from the record alone.
+
+### Writes
+
+| Method and path | Verb | What it does |
+|---|---|---|
+| `POST /artifacts/uploads` | `create_artifact` | An upload intent for a new artifact |
+| `POST /artifacts/{id}/uploads` | `publish_artifact`, or `upload_artifact_asset` with `asset: true` | An upload intent for the next version, or into the asset store |
+| `PUT /artifacts/uploads/{upload}/files/{path}` | the intent's own verb, decided again | One file's bytes, streamed through the engine |
+| `POST /artifacts` | `create_artifact` | A new artifact and its first version, owned by the caller |
+| `POST /artifacts/{id}/versions` | `publish_artifact`; `artifacts.publish.force` beside it when forced | The next version, based on `If-Match: "<n>"` |
+| `POST /artifacts/{id}/versions/{n}/restore` | `publish_artifact` | Version `n` again as a new version, every file carried, based on `If-Match` |
+| `PATCH /artifacts/{id}` | `update_artifact` | The title, the description or the icon |
+| `PATCH /artifacts/{id}/versions/{n}` | `update_artifact` | Version `n`'s label (`{"label": ""}` clears it); a labelled version is kept past the hundred unlabelled ones |
+| `PUT /artifacts/{id}/shares` | `share_artifact` | `{"audience": {"kind": "seat", "id": "bob"}, "role": "editor"}`; never above the sharer's own role, and never the company from an agent |
+| `DELETE /artifacts/{id}/shares/{audience}` | `unshare_artifact` | The audience as `seat:<handle>`, `unit:<key>` or `company` |
+| `POST /artifacts/{id}/transfer` | `artifacts.transfer` | `{"to": "<seat>"}` |
+| `DELETE /artifacts/{id}` | `artifacts.trash` | Into the trash: every frame stops loading at once, and it is purged after thirty days |
+| `POST /artifacts/{id}/restore` | `artifacts.restore` | Out of the trash |
+| `POST /artifacts/{id}/purge` | `artifacts.purge` | Gone for good, its datastore first |
+| `POST /artifacts/{id}/assets` | `upload_artifact_asset` | `{"upload": "<upload>", "name": "<name>"}`: finalize an asset |
+| `DELETE /artifacts/{id}/assets/{asset}` | `upload_artifact_asset` | Remove one |
+| `PUT`, `DELETE /artifacts/{id}/pin` | `artifacts.pin` | The caller's own pin |
+
+Every write but the transfer carries an `Idempotency-Key`, from which every
+record id is derived, so a retry under the same key is the same operation
+(`400 op_id_invalid` without one). A write answers `200` with its `outcome`,
+`202` for one durable and not yet applied on this node, and `503` with
+`outcome: unknown` and the `op_id` for one nobody could account for: send it
+again under the same key, never a fresh one. The transfer needs no key: the
+upload claims each file before a byte is read, and a second put of it is
+refused `409 upload_consumed`.
+
+### Publishing a version
+
+Bytes are **reserved before they move**. An intent declares every file's path,
+SHA-256 and size; the node answers which of them the artifact already holds
+(`carried`, which move no byte) and how each of the rest is sent (`transfers`):
+a presigned `PUT` straight to the bucket where the S3 backend proved it can
+take one, a `PUT` to this API otherwise. Then the publish names the upload and
+every file of the version.
+
+```bash
+# 1. declare the files
+curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  -H "Idempotency-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"entries":[{"path":"index.html","sha256":"<hex>","size":5120}]}' \
+  "http://localhost:8000/artifacts/$ID/uploads"
+
+# 2. send each file the answer lists under transfers
+curl -X PUT -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  --data-binary @index.html \
+  "http://localhost:8000/artifacts/uploads/$UPLOAD/files/index.html"
+
+# 3. publish, based on the head you read
+curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  -H "Idempotency-Key: $KEY2" -H 'If-Match: "3"' -H "Content-Type: application/json" \
+  -d '{"upload":"'$UPLOAD'","files":[{"path":"index.html","upload":true},
+       {"path":"style.css","carry":"<hex>"}],"capabilities":["db"]}' \
+  "http://localhost:8000/artifacts/$ID/versions"
+```
+
+A file is named by `upload: true` (its bytes came through the upload),
+`carry: "<sha256>"` (bytes the artifact holds), or `from: <n>` (version `n`'s
+file at that path); in `mode: patch` a file left out is carried from the base
+and `remove: true` drops one, and `edits` (`old_str`/`new_str`, each matching
+exactly once) change the base version's text. The answer is the new
+version's `number` and the policy linter's `warnings`; `work_item` names the
+tracker item the version is made for, which lists the artifact there
+(`GET /artifacts?work_item=CRW-412`).
+
+**A publish based on a head that has moved** is `412 version_moved`, carrying
+the live `head`, the live version (`live`, its manifest included) and, where
+the entry is text, up to 1 MiB of it (`entry.text`, `entry.truncated` past
+that): merge onto it and publish again with `If-Match` naming the live number.
+`"force": true` publishes over the moved head instead, a person's gesture with
+a person present, and the version is marked forced.
+
+### Reads
+
+| Path | Question | Answers |
+|---|---|---|
+| `GET /artifacts` | `artifacts` | One page of what the caller can see: `scope` (`mine`, `shared`, `company`, `agents`, `all`), `kind`, `q`, `status` (`live`, `trashed`), `pinned`, `work_item`, `sort` (`updated`, `created`, `title`, `opened`), `cursor`, `limit`. Filtered for the caller's relations and decided row by row, never refused |
+| `GET /artifacts/{id}` | `artifact` | The head, the caller's `role`, whether they may publish (`writer`), and the shares to the owner and editors (`share_count` below) |
+| `GET /artifacts/{id}/versions` | `artifact_versions` | The retained versions, newest first |
+| `GET /artifacts/{id}/versions/{n}` | `artifact_version` | One version and its manifest |
+| `GET /artifacts/{id}/history` | `artifact_history` | Every publish, share, trash and elevated read, newest first; below editor, without the elevated reads or who a share named |
+| `GET /artifacts/{id}/assets` | `artifact_assets` | The asset store |
+| `GET /artifacts/{id}/seen-by` | `artifact_seen_by` | Who has opened it, to the owner and editors while the company's `artifacts.seen_by` is `editors` (`shown: false` otherwise) |
+| `GET /artifacts/{id}/access` | `artifact_access` | The share dialog's list: the owner, each share with the seats a unit share reaches today, and an agent owner's leads; to a viewer, the owner and a count |
+| `GET /artifacts/usage` | `artifact_usage` | The company's counters against the Tier A quotas; `artifacts.usage`, an administrator's |
+
+The same questions are asked over the socket by name. Every question about one
+artifact is decided by `get_artifact` and records the admin path's override
+as every read route does.
+
+### Viewing a version
+
+The API origin **never renders an artifact**:
+
+- `POST /artifacts/{id}/tickets` (`{"version": n}`, the head by default) mints
+  the frame the dashboard embeds a page in: `frame_url` on the artifact
+  origin under a one-hour view ticket bound to the caller's own sign-in or
+  token, the `origin` its bridge must hear from, and the `sandbox` and `allow`
+  attributes the dashboard sets verbatim. The page is re-authorized on every
+  document request there, so a withdrawn share, a sign-out or the trash closes
+  it at once. A Markdown document or a sheet is `409 artifact_not_framed`, and
+  a deployment with no `api.artifacts.external_url` is
+  `409 artifact_origin_unset`. Minting a frame records that the caller opened
+  the artifact, at most once in fifteen minutes.
+- `GET /artifacts/{id}/versions/{n}/source` answers a version's entry as JSON
+  (`text`, `content_type`, `size`), read back and checked against its digest:
+  how the dashboard renders a Markdown document, which runs no author code.
+- `GET /artifacts/{id}/versions/{n}/files/{path}` streams one file as an
+  **attachment**, any text and anything a browser could run (HTML, SVG, a
+  script) as `text/plain`, under the API's own `default-src 'none'` policy and
+  `Cache-Control: private, no-store`, with its SHA-256 as a strong `ETag`.
+- `POST /artifacts/ready` (`artifacts.ready`, everybody's) is the dashboard's
+  **ready report** for the [artifact-ready objective](service-objectives.md):
+  `{"frame_url", "outcome": "ready" | "failed", "elapsed_ms"}`, the frame
+  exactly as the ticket route answered it, how it ended (the page's bridge
+  hello, or a frame that failed or never said hello), and the milliseconds
+  since the frame was handed over, by the browser's clock. Answered `204` once
+  counted. The frame must be a live one this deployment minted for the
+  caller's own sign-in or token (`422 invalid` otherwise, the same answer as a
+  URL that is no frame); each frame reports once (`409 conflict`), never a
+  time longer than the frame has existed (`422 invalid`), and one credential
+  sends at most a sustained report a second after a burst of thirty
+  (`429 throttled`, with `Retry-After`). A deployment with no
+  `api.artifacts.external_url` is `409 artifact_origin_unset`.
+
+### Refusals
+
+| Status | `error` | When |
+|---|---|---|
+| `400` | `bad_if_match` | `If-Match` is not `"<n>"` |
+| `400` | `op_id_invalid` | No `Idempotency-Key`, or one outside the operation-id grammar |
+| `403` | `unauthorized` | The authority table refused; `reason: role` names the `role` needed |
+| `403` | `token_refused` / `step_up_required` | A machine token on a verb that needs a person present, or a proof of identity older than the verb's window |
+| `403` | `forbidden` | A share above the sharer's own role, or the company from an agent |
+| `404` | `not_found` | No such artifact for this caller, or no such version, asset or file |
+| `404` | `upload_not_found` | No such upload of this caller's |
+| `409` | `artifact_trashed` | The artifact is in the trash |
+| `409` | `carried_object_gone` / `upload_missing` | A carried file's bytes are gone, or a declared file has not arrived; `paths` names them |
+| `409` | `upload_consumed` / `upload_expired` | The upload is used, or an uploaded object is too old to name; upload again |
+| `409` | `label_taken` / `source_taken` | Another version holds the label, or another of the owner's artifacts the source address |
+| `409` | `artifact_not_framed` / `artifact_origin_unset` | See [Viewing a version](#viewing-a-version) |
+| `409` | `conflict` | A frame whose ready time was already reported; see [Viewing a version](#viewing-a-version) |
+| `410` | `upload_expired` | The upload's window closed before it was finished |
+| `412` | `version_moved` | The head moved past the base; see [Publishing a version](#publishing-a-version) |
+| `413` | `quota_exceeded` | The company's quota; `key` names the Tier A setting an operator raises |
+| `415` | `media_type_refused` | A file type an artifact may not publish |
+| `422` | `upload_mismatch` / `content_refused` | Bytes that are not the declared ones, or not what their type promises |
+| `422` | `edit_refused` / `policy_refused` | An edit that matched zero or several times (`index`, `matches`), or a page the publish policy refuses (`findings`) |
+| `422` | `capability_unknown` / `contract_unknown` / `credential_refused` / `invalid` | A capability or runtime this build does not serve, a credential in what an agent published, or a value the domain refuses |
+| `429` | `uploads_outstanding` | The pending-upload budget is spent; `Retry-After` is when the earliest hold lapses |
+| `429` | `throttled` | Ready reports past one credential's rate; `Retry-After` is when the next is admitted |
+| `503` | `unavailable` | This node could not decide or reach the estate; the `Retry-After` says when to come back |
+
 ## Agent Memory
 
 ### `GET /agents/{id}/memory`

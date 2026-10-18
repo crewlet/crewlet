@@ -801,6 +801,31 @@ func Catalogue() []Instrument {
 				"measured here; its lag is the artifacts applier's own, in the state " +
 				"log's apply instruments.",
 		},
+		// ---- service objectives -------------------------------------------
+		{
+			Name: ArtifactsReadyDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"outcome"},
+			Shows: "How long a frame took from its view ticket being minted to the " +
+				"page's bridge hello, as the viewer's browser reported it through " +
+				"`POST /artifacts/ready`, by `outcome` (`ready`, or `failed` for a frame " +
+				"that never said hello). The only artifacts instrument that sees an " +
+				"outage keeping requests from reaching the engine at all (the artifact " +
+				"domain's DNS or certificate, an edge, a corporate filter): every " +
+				"server-side instrument reads such an outage as a quiet node. The " +
+				"`artifact_ready` objective holds 99.5% of opens within 3 s.",
+		},
+		{
+			Name: ObjectivesEvents, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"objective", "outcome"},
+			Shows: "Every service objective's events, by `objective` (the closed set " +
+				"in docs/reference/service-objectives.md) and `outcome` (`good`: " +
+				"answered without fault on the engine's side within the objective's " +
+				"bound; `bad`: anything else). `bad` over all, per objective, against " +
+				"one minus its target is the error budget's burn rate, which the " +
+				"`objective_burn` alarm judges per node over an hour and five minutes " +
+				"and over six hours and thirty minutes; summed across the fleet it is " +
+				"the company's.",
+		},
 	}
 }
 

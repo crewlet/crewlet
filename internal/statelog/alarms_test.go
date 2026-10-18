@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -168,6 +169,13 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.KindObjectsMissing,
 			statelog.Reading{ObjectsMissing: 2},
 			"2 file(s) are missing from the object store or damaged in it",
+		},
+		"a service objective burning its budget": {
+			statelog.KindObjectiveBurn,
+			statelog.Reading{ObjectiveBurns: burning(objectives.ArtifactReady, 90, 10)},
+			"artifact_ready is spending its error budget 20.0 times as fast as its " +
+				"objective allows over the last 1h and 20.0 times over the last 5m " +
+				"(the fast pair fires at 14.4)",
 		},
 		"an object bucket near its reservation": {
 			statelog.KindObjectsBucketNearCeiling,
@@ -950,6 +958,48 @@ func TestTheBucketAlarmFiresAtTwiceALogsHeadroom(t *testing.T) {
 		}), statelog.KindObjectsBucketNearCeiling)
 		if fired != c.fires {
 			t.Errorf("%d MiB of %d MiB: fired %v, want %v", c.bytes, c.max, fired, c.fires)
+		}
+	}
+}
+
+// burning is what a meter judges after good and bad events of objective n
+// in the current minute: the burns the engine hands the alarm table.
+func burning(n objectives.Name, good, bad int) []objectives.Burn {
+	at := time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)
+	m := objectives.NewMeter(nil, func() time.Time { return at })
+	for range good {
+		m.Record(n, 0, true)
+	}
+	for range bad {
+		m.Record(n, 0, false)
+	}
+	return m.Burning()
+}
+
+// THE BURN ALARM BORROWS THE OBJECTIVES' JUDGEMENT WHOLE: it fires for every
+// objective the meter judged burning, naming each, and for nothing the meter
+// judged inside its budget.
+func TestTheBurnAlarmFiresOnWhatTheObjectivesJudge(t *testing.T) {
+	t.Parallel()
+	inside := burning(objectives.PublishSuccess, 999, 1)
+	if len(inside) != 0 {
+		t.Fatalf("control: one failure in a thousand is inside a 99.9%% budget, and the "+
+			"meter judged %+v", inside)
+	}
+	if _, fired := find(statelog.Evaluate(statelog.Reading{ObjectiveBurns: inside}),
+		statelog.KindObjectiveBurn); fired {
+		t.Error("the alarm fired on objectives inside their budgets")
+	}
+	both := append(burning(objectives.PublishSuccess, 90, 10),
+		burning(objectives.ViewFirstByte, 80, 20)...)
+	alarm, fired := find(statelog.Evaluate(statelog.Reading{ObjectiveBurns: both}),
+		statelog.KindObjectiveBurn)
+	if !fired {
+		t.Fatal("two burning objectives raised nothing")
+	}
+	for _, want := range []string{"publish_success is spending", "view_first_byte is spending"} {
+		if !strings.Contains(alarm.Detail, want) {
+			t.Errorf("detail %q does not name %q", alarm.Detail, want)
 		}
 	}
 }

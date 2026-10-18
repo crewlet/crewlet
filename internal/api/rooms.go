@@ -4,22 +4,22 @@ import (
 	"context"
 	"errors"
 
-	"github.com/crewlet/crewlet/internal/api/artifactdataapi"
+	"github.com/crewlet/crewlet/internal/api/artifactsapi"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
-	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // Rooms is what the socket's artifact rooms are decided by and fed from, as
 // the engine supplies them. See [Options.Rooms].
 type Rooms struct {
-	// Gate is the datastore's own admission, which a join asks with the
-	// read verb: ONE ADMISSION for the routes, the read questions and the
-	// rooms, so the three cannot disagree about who may see an artifact.
-	Gate artifactdataapi.Gate
+	// Gate is the artifacts' own admission, which a join takes as a read:
+	// ONE ADMISSION for the artifacts' and the datastore's routes, their
+	// read questions and the rooms, so none can disagree with another about
+	// who may see an artifact.
+	Gate artifactsapi.Gate
 
 	// Stores says where an artifact's datastore stands, through the estate
 	// router.
@@ -68,24 +68,31 @@ func (r *Rooms) streamRooms() stream.Rooms {
 		Presence: r.Presence}
 }
 
-// roomAccess decides a join by the datastore's own admission with the read
-// verb: the role the artifact's shares and the chart give the reader, empty
-// for one the artifact is answered as absent to (no relation, purged, never
-// created) and for one in the trash, whose data is not served.
-type roomAccess struct{ gate artifactdataapi.Gate }
+// roomAccess decides a join as the artifacts' own read admission does: the
+// role the artifact's shares and the chart give the reader, empty for one the
+// artifact is answered as absent to (no relation, purged, never created) and
+// for one in the trash, whose data is not served.
+//
+// A READ, RECORDED: a room carries the artifact's data to the socket in it, so
+// an administrator admitted only by the admin path is recorded as reading it
+// before the room is joined, exactly as an elevated read of its content is
+// ([artifactsapi.Gate.Read]), and a record that could not be written refuses
+// the join as undecidable rather than letting the override pass unrecorded.
+// Repeats collapse into the day's first record.
+type roomAccess struct{ gate artifactsapi.Gate }
 
 func (a roomAccess) Standing(ctx context.Context, p iam.Principal, id artifacts.ID) (artifacts.Role, error) {
-	admitted, err := a.gate.Admit(ctx, p, authz.ActionArtifactRead, id)
-	var refused *artifactdataapi.Refused
+	admitted, err := a.gate.Read(ctx, p, id, 0)
+	var refused *artifactsapi.Refused
 	switch {
-	case errors.Is(err, artifactdataapi.ErrNoSuchArtifact), errors.As(err, &refused):
+	case errors.Is(err, artifactsapi.ErrNoSuchArtifact), errors.As(err, &refused):
 		return "", nil
 	case err != nil:
 		return "", err
 	case admitted.Head.Status == artifactsdomain.StatusTrashed:
 		return "", nil
 	}
-	return admitted.Role, nil
+	return admitted.Role(), nil
 }
 
 // storeThrough is the catalogue row's version and delete floor.

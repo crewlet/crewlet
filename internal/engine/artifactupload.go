@@ -84,6 +84,7 @@ func (e *Engine) buildArtifactUploads() (*artifactupload.Service, error) {
 	if e.metrics != nil {
 		deps.Meter = e.metrics
 	}
+	deps.Objectives = e.objectives
 	service, err := artifactupload.New(deps)
 	if err != nil {
 		return nil, fmt.Errorf("engine: the artifact upload pipeline: %w", err)

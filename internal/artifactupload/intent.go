@@ -325,14 +325,20 @@ func (s *Service) intentFor(ctx context.Context, r *record) (artifacts.UploadInt
 }
 
 // TransferPath is the API path an engine-streamed file is put to, relative to
-// the API's own origin: `/artifacts/uploads/<upload>/<path>`, each segment
-// escaped. The API mounts the route this names.
+// the API's own origin: `/artifacts/uploads/<upload>/files/<path>`, each
+// segment escaped. The API mounts the route this names
+// (internal/api/artifactsapi).
+//
+// THE `files` SEGMENT IS LOAD BEARING: without it, `uploads` in the place an
+// artifact id takes makes the route overlap every `PUT /artifacts/{id}/a/b`
+// route with no pattern more specific than the other, which net/http refuses
+// at registration (the datastore's `PUT /artifacts/{id}/data/schema` is one).
 func TransferPath(upload, path string) string {
 	segments := strings.Split(path, "/")
 	for i, seg := range segments {
 		segments[i] = url.PathEscape(seg)
 	}
-	return "/artifacts/uploads/" + url.PathEscape(upload) + "/" + strings.Join(segments, "/")
+	return "/artifacts/uploads/" + url.PathEscape(upload) + "/files/" + strings.Join(segments, "/")
 }
 
 // Upload is what an upload is for, as a surface re-decides the caller's

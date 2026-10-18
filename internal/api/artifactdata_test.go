@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/artifactdataapi"
+	"github.com/crewlet/crewlet/internal/api/artifactsapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactdata/query"
@@ -101,7 +102,7 @@ func (dataStore) Configure(context.Context, artifactdata.Call, artifacts.ID, []a
 // every route answers through the API's own guard.
 func TestTheDatastoresRoutesAndQuestionsShareOneMux(t *testing.T) {
 	t.Parallel()
-	gate := artifactdataapi.Gate{Heads: dataHeads{}, Chart: authz.NoChart{},
+	gate := artifactsapi.Gate{Heads: dataHeads{}, Chart: authz.NoChart{},
 		Limits: func() artifacts.Limits { return artifacts.Limits{DataBytes: 1, DataStoreBytes: 1} }}
 	surface, err := artifactdataapi.New(artifactdataapi.Options{Gate: gate, Data: dataStore{}, Versions: dataHeads{}})
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/artifactdataapi"
+	"github.com/crewlet/crewlet/internal/api/artifactsapi"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
@@ -113,7 +114,7 @@ func rig(t *testing.T) (*http.ServeMux, *store) {
 	data := &store{answer: artifactdata.WriteResult{Verdict: artifacts.DataApplied, Seq: 9,
 		Result: statelog.Result{Outcome: statelog.OutcomeApplied}}}
 	svc, err := artifactdataapi.New(artifactdataapi.Options{
-		Gate: artifactdataapi.Gate{Heads: heads{}, Chart: authz.NoChart{},
+		Gate: artifactsapi.Gate{Heads: heads{}, Chart: authz.NoChart{},
 			Limits: func() artifacts.Limits {
 				return artifacts.Limits{DataBytes: 1 << 30, DataStoreBytes: 32 << 20, CompanyBytes: 1, Artifacts: 1}
 			}},

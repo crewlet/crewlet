@@ -43,6 +43,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
@@ -150,6 +151,12 @@ type Engine struct {
 	setupRunner func() *setup.Runner
 	// metrics is the process's one recorder, from [Options.Metrics].
 	metrics *metrics.Recorder
+
+	// objectives is the node's service objective meter, which every
+	// artifacts recording site counts its events into and the alarm table
+	// reads the burn rates from: ONE per process, so a burn is judged over
+	// every event this node measured. Never nil on an engine [New] built.
+	objectives *objectives.Meter
 
 	// searching is how many knowledge scans this node is running right
 	// now — the gauge behind `crewlet.tracker.search.concurrency`. On the
@@ -1169,6 +1176,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		sandboxSeats:        map[string]bool{},
 		bridge:              bridge,
 		metrics:             opts.Metrics,
+		objectives:          newObjectives(opts.Metrics),
 		mode:                mode,
 		incarnation:         incarnation,
 		id:                  nodeID,
@@ -2491,6 +2499,23 @@ func (e *Engine) Cipher() secrets.Cipher { return e.cipher }
 // something the catalogue declares, and a second recorder would be a second
 // set of series for one process. Nil is legal and records nothing.
 func (e *Engine) Recorder() *metrics.Recorder { return e.metrics }
+
+// Objectives is the node's service objective meter: what the API's ready
+// reports are counted into beside the engine's own recording sites. Never nil
+// on an engine [New] built.
+func (e *Engine) Objectives() *objectives.Meter { return e.objectives }
+
+// newObjectives builds the node's objective meter over rec, which may be nil:
+// the events are then counted into the meter's own ledger alone, and the burn
+// alarm still judges them.
+func newObjectives(rec *metrics.Recorder) *objectives.Meter {
+	// A NIL RECORDER STAYS A NIL INTERFACE: one wrapped in it would be a
+	// recorder the meter calls into.
+	if rec == nil {
+		return objectives.NewMeter(nil, nil)
+	}
+	return objectives.NewMeter(rec, nil)
+}
 
 // Dispatch delivers one inbox partition to a seat.
 //
