@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -794,5 +796,56 @@ func TestTheRoomReadCarriesAllThreeRetentionSettingsAndTheRoomsFloor(t *testing.
 		t.Errorf("a room holding no message answered a floor of %s; MIN over no "+
 			"rows is NULL, and reading it as an instant would publish a prune "+
 			"at the Unix epoch every tick for ever", floor)
+	}
+}
+
+// THE ROOM READ SEEKS EACH ROOM'S OLDEST MESSAGE; IT NEVER READS THE CORPUS.
+//
+// The read runs every hour over every room the company ever made, and the
+// answer it needs from `chat_messages` is one row per room — the leading edge
+// of `chat_messages_prune_idx`. The obvious spelling, `MIN(created_at)` in a
+// correlated subquery, is planned here as a scan of that whole index into an
+// ephemeral table of every room's minimum: correct answers, and every message
+// the company has ever kept read once an hour, a cost that grows with its
+// whole history and that no result reveals. So the plan is held, not the rows.
+//
+// NEVER ANALYZEd, because no node is: a plan taken over statistics is a plan
+// no deployment runs.
+func TestTheRoomReadSeeksEachRoomsOldestMessage(t *testing.T) {
+	t.Parallel()
+	db, estate := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
+	t.Cleanup(func() { _ = db.Close() })
+
+	var plan []string
+	err := estate.Reader().Read(t.Context(), func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+chatPruneRoomsSQL)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var id, parent, notUsed int
+			var detail string
+			if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+				return err
+			}
+			plan = append(plan, detail)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		t.Fatalf("explain the room read: %v", err)
+	}
+	const seek = "SEARCH m USING COVERING INDEX chat_messages_prune_idx (channel_id=?)"
+	if !slices.Contains(plan, seek) {
+		t.Errorf("the room read's plan is %q, which never takes %q — each "+
+			"room's oldest message must be one seek of the prune index", plan, seek)
+	}
+	for _, step := range plan {
+		if strings.Contains(step, "SCAN chat_messages") || strings.Contains(step, "SCAN m ") ||
+			strings.Contains(step, "ephemeral") {
+			t.Errorf("the room read's plan takes %q: it reads every message the "+
+				"company holds to find each room's oldest (whole plan %q)", step, plan)
+		}
 	}
 }
