@@ -396,11 +396,17 @@ func TestAnEndsOwnLineIsReadBothWays(t *testing.T) {
 // second pass over redacted text finds nothing the first left. Read as any
 // other line, the marker let an END after the key read back over it, and a
 // BEGIN before it read on through it, to lines no read of the text it came
-// from had reached.
+// from had reached. And a BEGIN written straight after the key's END, on its
+// line, holds no key once the marker stands before it: the first pass read
+// the lines after that BEGIN in the wrapping the END's line gave them — the
+// key's own text before its armour — and the second read them in what the
+// marker left, which took a line the first had read as that wrapping's
+// prefix alone for a line of a body.
 //
 // Mutation: drop the marker from [armoured], or from a BEGIN line's search for
-// the next armour on it, and a case here redacts more than the text it was
-// redacted from does.
+// the next armour on it, or read a BEGIN line holding a marker before its
+// armour, and a case here redacts more than the text it was redacted from
+// does.
 func TestARedactedKeyReadsAsTheArmourItReplaced(t *testing.T) {
 	inner := "-----BEGIN PRIVATE KEY-----\n" + keyLine + "\n-----END PRIVATE KEY-----"
 	oneLine := "-----BEGIN PRIVATE KEY----- " + keyLine + " -----END PRIVATE KEY-----"
@@ -410,6 +416,10 @@ func TestARedactedKeyReadsAsTheArmourItReplaced(t *testing.T) {
 		"a BEGIN before it on its line":                   "-----BEGIN RSA PRIVATE KEY----- " + oneLine + "\n" + keyLine + "\n" + keyLine + "\n",
 		"an END after it on its line":                     oneLine + " " + keyLine + " -----END RSA PRIVATE KEY-----\n",
 		"inside a block read forward":                     "-----BEGIN RSA PRIVATE KEY-----\n" + keyLine + "\n" + inner + "\n" + keyLine + "\n" + keyLine + "\n",
+		"a BEGIN written up to the END of a key read back": mixedCasePath + "-----END RSA PRIVATE KEY----------BEGIN RSA PRIVATE KEY-----\n" +
+			mixedCasePath + " :\n",
+		"a BEGIN written up to the END of a key read forward": "a.pem-3-x -----BEGIN RSA PRIVATE KEY-----\n" + keyLine +
+			"\n-----END RSA PRIVATE KEY----------BEGIN RSA PRIVATE KEY-----\na.pem-3-" + keyLine + "\"\n",
 	} {
 		once := redact.Secrets(text)
 		redacted := strings.Replace(strings.Replace(text, inner, marker, 1), oneLine, marker, 1)
@@ -418,6 +428,58 @@ func TestARedactedKeyReadsAsTheArmourItReplaced(t *testing.T) {
 		}
 		if twice := redact.Secrets(once); twice != once {
 			t.Errorf("%s, redacted twice:\n got %q\nwant %q", name, twice, once)
+		}
+	}
+}
+
+// WHAT A RULE REPLACES CHANGES NO LINE A KEY IS READ ACROSS, so a second pass
+// over redacted text reads no key the first did not. The rules run after the
+// key blocks are read, and each case here is text whose redaction a second
+// pass used to read a key in — the lines above an END that the first pass had
+// read nothing back from, or the lines after a BEGIN, redacted the second
+// time: a password's value taken off the next line with its line break, so
+// two lines were one; one taken with an escaped break in it, past an armour or
+// into a key already redacted; a token taken on into an END written straight
+// after it; tokens a wrapping's prefix or an armour line's suffix held, read
+// apart the first time and alike once they were one marker; and a value
+// written up to a BEGIN, the prefix of a wrapping the line after it repeats —
+// read as that prefix alone the first time, and as a line of a body under the
+// marker the second.
+//
+// Mutation: make the password's rule replace its whole match again, or its
+// value whole, escaped breaks and all, or let the value run on through an
+// armour or a marker, or a token's into an armour; or read an armour line
+// holding a marker, before its armour or after it: each changes its own
+// case's second pass.
+func TestARuleReplacesNothingAKeyIsReadAcross(t *testing.T) {
+	escaped := func(lines ...string) string { return `{"log": "` + strings.Join(lines, `\n`) + `\n"}` + "\n" }
+	for name, text := range map[string]string{
+		"a password's value on the line after its key": strings.Join([]string{
+			mixedCasePath, foreignLine, "  hunter2", "password:", "a.pem-3-", "xyz -----END RSA PRIVATE KEY-----",
+		}, "\n") + "\n",
+		"a password's value in a string, on the line after its key": escaped(
+			"starting", mixedCasePath, foreignLine, "  hunter2", "password:", "a.pem-3-", "xyz -----END RSA PRIVATE KEY-----"),
+		"a password's value written up to an armour": strings.Join([]string{
+			"+" + keyLine, "password:", `-----BEGIN RSA PRIVATE KEY-----" sk-` + strings.Repeat("F", 24),
+			"2026-10-06T09:00:00.121Z -----END RSA PRIVATE KEY-----",
+		}, "\n") + "\n",
+		"a password's value a key on one line": strings.Join([]string{
+			"+" + digitless, "password:", "KEY=-----BEGIN RSA PRIVATE KEY----- " + keyLine + " -----END RSA PRIVATE KEY-----",
+			"sk-" + strings.Repeat("C", 24) + " -----END RSA PRIVATE KEY-----",
+		}, "\n") + "\n",
+		"a token written up to an END": strings.Join([]string{
+			"     8\u2192" + digitless, "sk-abcdefghijklmnopqrstu-----END RSA PRIVATE KEY-----",
+			"2026-10-06T09:00:00.121Z -----END RSA PRIVATE KEY-----",
+		}, "\n") + "\n",
+		"a token the END's prefix": "[R " + keyLine + "\nsk-" + strings.Repeat("C", 24) + " -----END RSA PRIVATE KEY-----\n",
+		"a token after a BEGIN":    "-----BEGIN RSA PRIVATE KEY----- sk-" + strings.Repeat("E", 24) + "\n" + keyLine + "\n",
+		"a token after an END":     mixedCasePath + "\n-----END RSA PRIVATE KEY----- sk-" + strings.Repeat("G", 24) + "\n",
+		"a password's value written up to a BEGIN, the next line repeating it": "pwd:\n" + keyLine +
+			"-----BEGIN RSA PRIVATE KEY-----\n" + keyLine + "\"\n",
+	} {
+		once := redact.Secrets(text)
+		if twice := redact.Secrets(once); twice != once {
+			t.Errorf("%s: a second pass changed\n%q\nto\n%q", name, once, twice)
 		}
 	}
 }
@@ -853,7 +915,12 @@ func keyFixtures() map[string]string {
 		"grep":           "a:-----BEGIN RSA PRIVATE KEY-----\nb: nothing here\nc: more\n",
 		"password":       "login\npassword:\n  hunter2\nnext\n",
 		"password later": "Enter password\n\n= swordfish\nok\n",
-		"tokens":         "token sk-" + strings.Repeat("q", 40) + "\nAKIA" + strings.Repeat("Q", 16) + "\n",
+		// A key whose string goes on to the next line after escaped breaks:
+		// a quoted scalar broken across lines, its breaks kept, and a JSON
+		// string continued onto the next line.
+		"password in a string broken after its key":         "key: \"password:\\n\n  hunter2\\n\"\nnext: 1\n",
+		"password in a string broken after an escaped CRLF": "{\"log\": \"password:\\r\\n\n hunter2\"}\n",
+		"tokens": "token sk-" + strings.Repeat("q", 40) + "\nAKIA" + strings.Repeat("Q", 16) + "\n",
 		"key after a password": "password:\n-----BEGIN RSA PRIVATE KEY-----\n" + pemBody(2) +
 			"-----END RSA PRIVATE KEY-----\ntail\n",
 		"grep of both armours": grepOfBothArmours,

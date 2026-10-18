@@ -75,33 +75,43 @@ type rule struct {
 	// begins. Nil for a rule that opens with one, which RE2 finds by itself.
 	// Set by [keyed.rule] and never by hand, so it is always pattern's own.
 	keyed *keyed
+
+	// value is, for a rule whose match names what it replaces rather than
+	// being it, where that ends: given where a match ends, the end of the
+	// value after it, or that place itself when there is none — and then
+	// the match is none. Nil for a rule that replaces its match. A value is
+	// replaced PIECE BY PIECE ([rule.write]).
+	value func(text string, at int) int
 }
 
-// in reports whether the rule matches anywhere in text, allocating nothing.
+// in reports whether the rule replaces anything in text, allocating nothing
+// where it matches nothing.
 func (r rule) in(text string) bool {
 	if r.keyed != nil {
-		return r.keyed.index(text) >= 0
+		if r.keyed.index(text) < 0 {
+			return false
+		}
+	} else if !r.pattern.MatchString(text) {
+		return false
 	}
-	return r.pattern.MatchString(text)
+	_, _, found := r.next(text, 0)
+	return found
 }
 
-// apply is text with every match of the rule replaced, or text itself —
-// the same string, nothing copied — when there is none.
+// apply is text with everything the rule replaces replaced, or text itself —
+// the same string, nothing copied — when there is nothing.
 //
-// MATCH BEFORE REPLACING, because ReplaceAllLiteralString allocates even when
-// it changes nothing: with no match it still copies the whole input into a
-// fresh buffer and then converts that buffer to a string. Ten rules over a
+// MATCH BEFORE REPLACING, because a replacement allocates even when it changes
+// nothing: ReplaceAllLiteralString with no match still copies the whole input
+// into a fresh buffer and then converts that buffer to a string. Ten rules over a
 // clean transcript would be twenty full copies of it — and a clean transcript
 // is the overwhelming case, since this runs on every sandbox result and every
 // coding-run transcript whether or not a credential is in it.
 func (r rule) apply(text string) string {
-	if r.keyed == nil {
-		if !r.pattern.MatchString(text) {
-			return text
-		}
-		return r.pattern.ReplaceAllLiteralString(text, r.with)
+	if r.keyed == nil && !r.pattern.MatchString(text) {
+		return text
 	}
-	start, end, found := r.keyed.next(text, 0)
+	start, end, found := r.next(text, 0)
 	if !found {
 		return text
 	}
@@ -110,12 +120,139 @@ func (r rule) apply(text string) string {
 	done := 0
 	for found {
 		b.WriteString(text[done:start])
-		b.WriteString(r.with)
+		r.write(&b, text[start:end])
 		done = end
-		start, end, found = r.keyed.next(text, end)
+		start, end, found = r.next(text, end)
 	}
 	b.WriteString(text[done:])
 	return b.String()
+}
+
+// write writes what the rule makes of replaced, one thing it replaces: its
+// marker — or, for a rule with a value, a marker for each PIECE of the value
+// between the escaped line breaks in it, the breaks written as they stand.
+//
+// A value runs on through an escaped break, as `\S+` read it: a password can
+// hold a backslash and an `n`, and whether the two are one is not the text's to
+// say — `export PASSWORD=Xk9\nQ2#vL8` holds one password, `"pwd=hunter2\nnext"`
+// a password and the next line. Replaced whole, the value took the break into
+// its marker, two lines became one, and a second pass read a key across them
+// that the first had read apart; ended at the break, the rest of a password
+// that holds one was published. In pieces, nothing the whole value's marker
+// covered is published and every line stays where it was — what a second pass
+// reads a key across is what the first did. What it costs is the word after an
+// escaped break that is a line's, which is redacted as the whole value took it
+// before.
+func (r rule) write(b *strings.Builder, replaced string) {
+	if r.value == nil {
+		b.WriteString(r.with)
+		return
+	}
+	for replaced != "" {
+		piece, brk := replaced, ""
+		if i, next := escapedBreak(replaced); i >= 0 {
+			piece, brk = replaced[:i], replaced[i:next]
+		}
+		if piece != "" {
+			b.WriteString(r.with)
+		}
+		b.WriteString(brk)
+		replaced = replaced[len(piece)+len(brk):]
+	}
+}
+
+// escapedBreak is where the first escaped line break in s begins and ends, or
+// -1 and -1: the two characters `\` `n`, as [lineAt] reads one, with the `\r`
+// written before them when there is one — CRLF escaped, a break of its own.
+func escapedBreak(s string) (int, int) {
+	i := strings.Index(s, `\n`)
+	if i < 0 {
+		return -1, -1
+	}
+	if i >= 2 && s[i-2:i] == `\r` {
+		return i - 2, i + 2
+	}
+	return i, i + 2
+}
+
+// next is what the rule replaces first at or after from: where it begins and
+// ends, and whether there is any. Taken one after another, each from the end
+// of the one before, these are the pattern's own leftmost, non-overlapping
+// matches — or, for a rule with a value, the value after each.
+//
+// WHAT A RULE REPLACES NEVER TAKES WHAT A KEY IS READ ACROSS — a line break,
+// an armour line's armour, a key already redacted — because the rules run
+// after the key blocks are read, over text a second pass reads them in again.
+// A replacement that took a line break made two lines one, and one that took
+// an armour or a key's marker took the place a read had stopped at; the
+// second pass then read a key across lines the first had read apart, and
+// redacting twice was not redacting once. So a password's rule replaces its
+// value, never the key or the separator before it, which can run across lines
+// ([passwordValue]), and the value around the escaped breaks in it
+// ([rule.write]); and a match that runs into an armour — a token's dashes can
+// run on into a `-----END` written straight after it — is the pattern's match
+// as if the text ended at the armour.
+func (r rule) next(text string, from int) (int, int, bool) {
+	for from <= len(text) {
+		start, end, found := r.find(text, from)
+		if !found {
+			return 0, 0, false
+		}
+		if r.value != nil {
+			if valueEnd := r.value(text, end); valueEnd > end {
+				return end, valueEnd, true
+			}
+			from = beyond(text, start)
+			continue
+		}
+		at := armourIn(text, start, end)
+		if at == end {
+			return start, end, true
+		}
+		// The match as if the text ended at the armour: the pattern's
+		// first match there, which no place before start has, since none
+		// had one in the whole text. None, and the search goes on past it.
+		if loc := r.pattern.FindStringIndex(text[start:at]); loc != nil {
+			return start + loc[0], start + loc[1], true
+		}
+		from = at + pemArmourAt.FindStringIndex(text[at:])[1]
+	}
+	return 0, 0, false
+}
+
+// find is the pattern's first match at or after from.
+func (r rule) find(text string, from int) (int, int, bool) {
+	if r.keyed != nil {
+		return r.keyed.next(text, from)
+	}
+	loc := r.pattern.FindStringIndex(text[from:])
+	if loc == nil {
+		return 0, 0, false
+	}
+	return from + loc[0], from + loc[1], true
+}
+
+// armourIn is where the first armour line's armour ([pemArmour]) beginning in
+// text[start:end] begins, or end. The armour is read from text whole, past
+// end: it holds spaces, which end every match a rule makes, so a match runs at
+// most into its first word.
+func armourIn(text string, start, end int) int {
+	for i := start; i < end; {
+		d := strings.Index(text[i:end], "-----")
+		if d < 0 {
+			return end
+		}
+		if armourAt(text, i+d) {
+			return i + d
+		}
+		i += d + 1
+	}
+	return end
+}
+
+// armourAt reports whether an armour line's armour ([pemArmour]) begins at i.
+func armourAt(text string, i int) bool {
+	return strings.HasPrefix(text[i:], "-----") && pemArmourAt.MatchString(text[i:])
 }
 
 // rules are applied in order, and order matters where one shape is a prefix of
@@ -133,16 +270,22 @@ func (r rule) apply(text string) string {
 // [keyBlocks] — before every rule below, so a token shape that happens to occur
 // inside a key's body is taken with the block rather than leaving it split.
 var rules = []rule{
-	{regexp.MustCompile(`sk-proj-[A-Za-z0-9_-]{20,}`), Marker + "api-key]", nil},
-	{regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{20,}`), Marker + "api-key]", nil},
-	{regexp.MustCompile(`sk-[A-Za-z0-9_-]{20,}`), Marker + "api-key]", nil},
-	{regexp.MustCompile(`xox[bpsare]-[A-Za-z0-9-]{20,}`), Marker + "slack-token]", nil},
-	{regexp.MustCompile(`AKIA[A-Z0-9]{16}`), Marker + "aws-key]", nil},
-	{regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{36,}`), Marker + "github-token]", nil},
-	{regexp.MustCompile(`github_pat_[A-Za-z0-9_]{50,}`), Marker + "github-token]", nil},
-	{regexp.MustCompile(`glpat-[A-Za-z0-9_-]{20,}`), Marker + "gitlab-token]", nil},
-	{regexp.MustCompile(`gl(?:rt|soat|ptt)-[A-Za-z0-9_-]{20,}`), Marker + "gitlab-token]", nil},
-	passwordRule.rule(Marker + "password]"),
+	token(`sk-proj-[A-Za-z0-9_-]{20,}`, "api-key"),
+	token(`sk-ant-[A-Za-z0-9_-]{20,}`, "api-key"),
+	token(`sk-[A-Za-z0-9_-]{20,}`, "api-key"),
+	token(`xox[bpsare]-[A-Za-z0-9-]{20,}`, "slack-token"),
+	token(`AKIA[A-Z0-9]{16}`, "aws-key"),
+	token(`gh[pousr]_[A-Za-z0-9]{36,}`, "github-token"),
+	token(`github_pat_[A-Za-z0-9_]{50,}`, "github-token"),
+	token(`glpat-[A-Za-z0-9_-]{20,}`, "gitlab-token"),
+	token(`gl(?:rt|soat|ptt)-[A-Za-z0-9_-]{20,}`, "gitlab-token"),
+	passwordRule.valued(Marker+"password]", passwordValue),
+}
+
+// token is the rule that replaces each match of pattern with the marker for
+// what it is.
+func token(pattern, what string) rule {
+	return rule{pattern: regexp.MustCompile(pattern), with: Marker + what + "]"}
 }
 
 // passwordKeys are the words a password's assignment opens with, and THE ONE
@@ -152,15 +295,47 @@ var rules = []rule{
 // to drift from it.
 var passwordKeys = []string{"password", "passwd", "pwd"}
 
-// passwordRule is the one rule besides a private key whose match can cross a
-// line break: `\s` is a newline too, so a key on one line and its value on the
-// next is one match — which [Settled] has to hold back for.
-var passwordRule = keyedOn(passwordKeys, `\s*[:=]\s*\S+`)
+// passwordRule is a password's key and the separator after it: what names the
+// value its rule replaces ([passwordValue]). It is the one rule besides a
+// private key whose match can cross a line break: `\s` is a newline too, and
+// so is an escaped one inside a string (`\n`, or `\r` before it), so a key on
+// one line and its value on the next is one match — which [Settled] has to
+// hold back for ([pendingPassword]).
+//
+// THE VALUE IS WHAT IS REPLACED, and the key and the separator are left as
+// they were, line breaks and all. The rule used to replace the whole match,
+// so a value on the next line took the break with it: two lines became one,
+// and a second pass read a key across them that the first had read apart.
+var passwordRule = keyedOn(passwordKeys, `\s*[:=](?:\s|\\[nr])*`)
 
 // pendingPassword is a password key at the very END of a text, with nothing
 // but whitespace or its separator after it: the start of a [passwordRule]
-// match whose value has not been written yet.
-var pendingPassword = keyedOn(passwordKeys, `\s*(?:[:=]\s*)?\z`)
+// match whose value has not been written yet. Its separator ends as the rule's
+// does, in escaped breaks too: a key whose string goes on to the next line
+// after them (`key: "password:\n` and then `  hunter2\n"`) waits for that line,
+// or the live view shows the value the whole text redacts.
+var pendingPassword = keyedOn(passwordKeys, `\s*(?:[:=](?:\s|\\[nr])*)?\z`)
+
+// passwordValue is where the value named by a [passwordRule] match that ends
+// at at ends, or at itself when the match names none: the text from there to
+// the next space, as the rule's `\S+` read it, ENDED EARLY at what no password
+// holds and a key is read across ([rule.next]) — an armour line's armour, and
+// a marker, a key's or a value's already redacted. Taking an armour or a key's
+// marker took the place a read had stopped at, and taking a value's own marker
+// replaced it again on every pass, so the text never stopped holding something
+// the rule would replace ([Contains]). An escaped line break does not end it:
+// the value is replaced around one ([rule.write]).
+func passwordValue(text string, at int) int {
+	for i := at; i < len(text); i++ {
+		switch c := text[i]; {
+		case c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r':
+			return i
+		case c == '-' && armourAt(text, i), c == '[' && strings.HasPrefix(text[i:], Marker):
+			return i
+		}
+	}
+	return len(text)
+}
 
 // keyed is a case-insensitive pattern every match of which opens with one of a
 // fixed list of words, together with the scan that finds where those words
@@ -232,6 +407,14 @@ func keyedOn(words []string, after string) *keyed {
 // rule is k as a rule that replaces each of its matches with with.
 func (k *keyed) rule(with string) rule {
 	return rule{pattern: k.pattern, with: with, keyed: k}
+}
+
+// valued is k as a rule that replaces with with the value after each of its
+// matches, where value says that ends ([rule.value]).
+func (k *keyed) valued(with string, value func(text string, at int) int) rule {
+	r := k.rule(with)
+	r.value = value
+	return r
 }
 
 // begins is the first place at or after from where one of k's words opens, as
@@ -332,6 +515,9 @@ var (
 // key's.
 var pemArmour = regexp.MustCompile(`-----(?:BEGIN|END) [A-Z0-9][A-Z0-9 ]*-----`)
 
+// pemArmourAt is [pemArmour] held to begin where it is tried.
+var pemArmourAt = regexp.MustCompile(`^` + pemArmour.String())
+
 // keyMarker is what a private key's block reads as once it is redacted, and it
 // stands where the block's armour stood: a block never runs across it either,
 // in either direction ([armoured]). Read as any other line, it let a second
@@ -346,6 +532,24 @@ const keyMarker = Marker + "private-key]"
 func armoured(s string) bool {
 	return strings.Contains(s, keyMarker) || strings.Contains(s, "-----") && pemArmour.MatchString(s)
 }
+
+// marked reports whether s, the text before an armour on its line or after
+// it, holds a marker: an ARMOUR LINE HOLDING ONE HOLDS NO KEY.
+//
+// A marker beside an armour is what a pass leaves around an armour it read no
+// key from — had it read one, the armour would be inside the key's marker — and
+// a second pass has to read none there either: redacting twice is redacting
+// once ([Secrets]). Read again, the line is in a wrapping a rule or another
+// key's redaction has rewritten. Where a password's value or a token stood
+// before the armour, or another key's body and END, is now a marker, so the
+// prefix every line of the wrapping is read under is another text: a line the
+// first pass read as that prefix alone — a blank line in the wrapping — the
+// second read as a line of a body, and redacted a key the first had not.
+// Taking the prefix only as far as the marker was not enough, for the same
+// reason: a shorter prefix leaves fewer lines blank in the wrapping, and more
+// of them lines of a body. A text no pass has redacted holds a marker only
+// where it quotes one, so in a text of a key this reads nothing less.
+func marked(s string) bool { return strings.Contains(s, Marker) }
 
 // keyArmour is what every BEGIN and END line above holds, tested before either
 // pattern runs: almost no text carries a key, and a substring test costs
@@ -379,16 +583,13 @@ const minKeyLine = 40
 // Secrets replaces known credential patterns with markers.
 //
 // REDACTING TWICE IS REDACTING ONCE, which matters because this runs at more
-// than one layer and a transcript can pass through both: a marker matches no
-// rule, and a key's marker ends a block where the armour it replaced did
-// ([keyMarker]), so a second pass reads no key the first did not. Not quite
-// everywhere: a rule's replacement can change the lines a key is read across.
-// A password's value taken off the next line takes the line break into its
-// marker, and a value written up to an armour line or a key's marker takes
-// that too; a token redacted in a prefix every line of a wrapping repeats
-// makes two lines' prefixes alike that were not. There an END that read
-// nothing back the first time can read back further the second, and the
-// second pass redacts more than the first — never less.
+// than one layer and a transcript can pass through both — the coordinator
+// redacts what a runner already did. The keys are read before the rules run,
+// so what the rules write has to leave a second pass nothing new to read: no
+// rule replaces a marker; a key's marker ends a block where the armour it
+// replaced did ([keyMarker]); what a rule replaces takes no line break, no
+// armour and no marker ([rule.next]); and an armour line holding a marker,
+// before its armour or after it, holds no key ([marked]).
 func Secrets(text string) string {
 	if text == "" {
 		return text
@@ -639,8 +840,9 @@ func readKey(text string, b []int) keyBlock {
 	// line: now the wrapping's per-line prefix is needed, so it is read here
 	// rather than above, where a line of many armours would pay for one per
 	// BEGIN.
+	gutter := strings.Trim(text[segmentStart(text, b[0]):b[0]], " \t")
 	r := keyReader{
-		wrapping: wrapping{shape: prefixShape(strings.Trim(text[segmentStart(text, b[0]):b[0]], " \t"))},
+		wrapping: wrapping{shape: prefixShape(gutter)},
 		text:     text,
 		from:     b[1],
 	}
@@ -654,9 +856,12 @@ func readKey(text string, b []int) keyBlock {
 			// The enclosing text resumes on the BEGIN line itself.
 			return keyBlock{end: r.end}
 		}
+	case marked(gutter), marked(trimmed):
+		// A line a pass has already redacted around.
+		return keyBlock{}
 	case trimmed == "":
 	case inBase64(trimmed[0]):
-		// The armour line goes on past the armour, with no key.
+		// The armour line goes on past the armour in base64, with no key.
 		return keyBlock{}
 	default:
 		r.suffix = trimmed
@@ -1007,6 +1212,10 @@ func readBack(text string, e []int, prev int) (int, bool) {
 		return 0, false
 	}
 	pre := text[lineS:e[0]]
+	if marked(pre) {
+		// A line a pass has already redacted around.
+		return 0, false
+	}
 	if armoured(pre) {
 		// The line holds another armour: a key on one line is read from
 		// its BEGIN.
@@ -1014,8 +1223,9 @@ func readBack(text string, e []int, prev int) (int, bool) {
 	}
 	restEnd, _ := lineAt(text, e[1])
 	suffix := trimLine(text[e[1]:restEnd])
-	if suffix != "" && inBase64(suffix[0]) {
-		// The armour line goes on past the armour.
+	if marked(suffix) || suffix != "" && inBase64(suffix[0]) {
+		// Redacted around, or going on past the armour in base64, as
+		// [readKey] reads a BEGIN line that does.
 		return 0, false
 	}
 	gutter := strings.Trim(pre, " \t")

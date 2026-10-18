@@ -80,6 +80,62 @@ func TestTwoPrivateKeysDoNotSwallowWhatIsBetweenThem(t *testing.T) {
 	}
 }
 
+// A PASSWORD'S VALUE IS ALL ITS RULE REPLACES: the key and the separator stay
+// as they were, line breaks and all, real or escaped in a string, and the value
+// ends where no password goes on — at an armour line's armour, a marker. An
+// escaped line break in it stays where it is, the value redacted on either
+// side of it, so a password holding a backslash and an `n` or an `r` is not
+// published past them. A token's match that runs into an armour stops at it.
+// Each comes out as given, and redacting it again changes nothing.
+//
+// Mutation: replace the whole match, as the rule did, and the key goes with
+// its value, its line break too; replace the value whole, and the escaped
+// break in it goes with it; end it at an escaped break, and what follows the
+// break is published; through an armour, and the END goes with it; through a
+// marker, and a value already redacted is replaced again; let a token run into
+// an armour, and the END is taken with it.
+func TestAPasswordsValueIsAllItsRuleReplaces(t *testing.T) {
+	m := redact.Marker + "password]"
+	key := "-----BEGIN RSA PRIVATE KEY----- " + strings.Repeat("Ab1", 22) + " -----END RSA PRIVATE KEY-----"
+	for name, c := range map[string]struct{ text, want string }{
+		"on its line":             {"password: hunter2 rest", "password: " + m + " rest"},
+		"on the next line":        {"login\npassword:\n  hunter2\nnext\n", "login\npassword:\n  " + m + "\nnext\n"},
+		"after an escaped break":  {`{"k": "password:\n  hunter2 x"}`, `{"k": "password:\n  ` + m + ` x"}`},
+		"after an escaped CRLF":   {`"pwd=\r\nhunter2 x"`, `"pwd=\r\n` + m + ` x"`},
+		"across an escaped break": {`"pwd=hunter2\nnext" x`, `"pwd=` + m + `\n` + m + ` x`},
+		"across an escaped CRLF":  {`pwd=Xk9\r\nQ2#vL8 x`, `pwd=` + m + `\r\n` + m + ` x`},
+		"holding a backslash-n":   {`export DB_PASSWORD=Xk9\nQ2#vL8pZ`, `export DB_PASSWORD=` + m + `\n` + m},
+		"holding a backslash-r":   {`mysql -u root --password=r00t\rT0ps3cret -e x`, `mysql -u root --password=` + m + ` -e x`},
+		"in a string escaped twice, across its break": {
+			`{"v": "pwd=\\nabc"}`, `{"v": "pwd=` + m + `\n` + m,
+		},
+		"up to a marker":   {"pwd=x" + redact.Marker + "api-key] y", "pwd=" + m + redact.Marker + "api-key] y"},
+		"already redacted": {"password: " + m, "password: " + m},
+		"a key redacted":   {"PASSWORD=" + key, "PASSWORD=" + redact.Marker + "private-key]"},
+		"an armour line":   {"password:\n-----END RSA PRIVATE KEY-----\n", "password:\n-----END RSA PRIVATE KEY-----\n"},
+		"up to an armour":  {"pwd=hunter2-----END RSA PRIVATE KEY-----\n", "pwd=" + m + "-----END RSA PRIVATE KEY-----\n"},
+		"a token written up to an armour": {
+			"sk-" + strings.Repeat("q", 21) + "-----END RSA PRIVATE KEY-----\n",
+			redact.Marker + "api-key]-----END RSA PRIVATE KEY-----\n",
+		},
+		"a token too short without the armour": {
+			"sk-" + strings.Repeat("q", 15) + "-----END RSA PRIVATE KEY-----\n",
+			"sk-" + strings.Repeat("q", 15) + "-----END RSA PRIVATE KEY-----\n",
+		},
+	} {
+		got := redact.Secrets(c.text)
+		if got != c.want {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, c.want)
+		}
+		if again := redact.Secrets(got); again != got {
+			t.Errorf("%s: a second pass changed %q to %q", name, got, again)
+		}
+		if redact.Contains(got) {
+			t.Errorf("%s: %q still holds something to replace", name, got)
+		}
+	}
+}
+
 // This pass runs at more than one layer and a transcript can cross both.
 func TestRedactionIsIdempotent(t *testing.T) {
 	text := "token " + strings.Repeat("k", 40) + " and sk-" + strings.Repeat("q", 40)
