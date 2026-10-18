@@ -1153,6 +1153,19 @@ stream:
                                     #   company. Crossing it refuses the append
                                     #   and the log_headroom alarm names
                                     #   `usage`
+  # artifacts_log_max_bytes: 4294967296
+                                    #   the artifacts log, the ordered stream
+                                    #   every artifact's create, publish,
+                                    #   share, trash and purge goes through
+                                    #   (1..256 GiB). UNSET DERIVES a quarter of
+                                    #   the mutation log's ceiling, set or
+                                    #   derived (so 1..16 GiB from a volume
+                                    #   alone): a record names a version's
+                                    #   files by object, and the object store
+                                    #   keeps their bytes, so the log grows with
+                                    #   how often people and agents publish
+                                    #   rather than with what they publish.
+                                    #   Crossing it refuses the append
   # tracker_retention:              # when the log may be trimmed. Every term
                                     #   here is a statement about the OPERATOR's
                                     #   estate rather than the company's policy,
