@@ -549,6 +549,27 @@ func editDistance(a, b string, max int) int {
 // The declared check is separate and has to read, which is why the two are not
 // one function.
 func normaliseTags(project string, raw []string) ([]string, error) {
+	out, err := tagSlugs(raw)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > MaxTagsPerTask {
+		return nil, invalid("%d tags on one task in %s and at most "+
+			"%d are carried — a task filed under more groupings than that is "+
+			"not grouped", len(out), project, MaxTagsPerTask)
+	}
+	return out, nil
+}
+
+// tagSlugs is every tag a caller named, as the rows hold it ([TagSlug]), each
+// once and in the order first named — or the content refusal ([invalid]) of
+// the first that is not a tag.
+//
+// ONE RULE FOR WHAT A TAG IS, read by a write ([normaliseTags]) and by a
+// filter ([Query.parseTags]) alike: the rows hold what this answers, and a
+// filter that normalised a value another way, or refused one a write would
+// store, would answer about tags no task carries.
+func tagSlugs(raw []string) ([]string, error) {
 	out := make([]string, 0, len(raw))
 	seen := map[string]bool{}
 	for _, r := range raw {
@@ -570,11 +591,6 @@ func normaliseTags(project string, raw []string) ([]string, error) {
 		}
 		seen[slug] = true
 		out = append(out, slug)
-	}
-	if len(out) > MaxTagsPerTask {
-		return nil, invalid("%d tags on one task in %s and at most "+
-			"%d are carried — a task filed under more groupings than that is "+
-			"not grouped", len(out), project, MaxTagsPerTask)
 	}
 	return out, nil
 }

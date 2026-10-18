@@ -777,7 +777,19 @@ func (q *Query) parseTags(p Params) error {
 				"are `any:`, `all:` and `none:`", head)
 		}
 	}
-	q.Tags = TagFilter{Mode: mode, Tags: csv(value)}
+	// EVERY TAG IS NORMALISED AS A WRITE NORMALISES IT ([tagSlugs], the
+	// write's own rule), because the rows hold slugs and a filter compares
+	// them exactly: left as typed, `tag=Regression` — what a model writes
+	// for the label it read — matched nothing, and an empty board reads as
+	// "no work carries this tag" rather than as a spelling the filter never
+	// resolved. A value that normalises to no slug is refused naming it, for
+	// the same reason and with the write's own refusal, and a tag named
+	// twice is named once.
+	tags, err := tagSlugs(csv(value))
+	if err != nil {
+		return err
+	}
+	q.Tags = TagFilter{Mode: mode, Tags: tags}
 	return nil
 }
 
