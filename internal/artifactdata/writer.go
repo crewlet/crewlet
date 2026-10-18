@@ -521,6 +521,13 @@ func (w *Writer) undo(ctx context.Context, c Call, id artifacts.ID, seq int64) (
 	if err != nil {
 		return WriteResult{}, err
 	}
+	// THE INVERSE IS A WRITE, held to every write's bounds before it is
+	// appended: the apply marks a row undoable only when its inverse fits,
+	// and this keeps an undo from ever reaching the log as a record the log
+	// refuses.
+	if err := checkBatch(ops); err != nil {
+		return WriteResult{}, oversizeUndo(seq, err)
+	}
 	if limited := w.limits.take(id.String(), c.Authority.Actor.Name, Cost(ops)); limited != nil {
 		return WriteResult{}, limited
 	}
@@ -574,9 +581,6 @@ func (w *Writer) inverse(ctx context.Context, c Call, id artifacts.ID, seq int64
 			return fmt.Errorf("%w: write %d was refused (%s) and changed nothing", ErrNotUndoable, seq, verdict)
 		case OpKind(op) == OpConfigure:
 			return fmt.Errorf("%w: write %d is a schema change; change the schema back", ErrNotUndoable, seq)
-		case undoable == 0:
-			return fmt.Errorf("%w: write %d holds a value past the history's %d-byte bound",
-				ErrNotUndoable, seq, artifacts.MaxHistoryValueBytes)
 		case actor != c.Authority.Actor.Name && !c.Authority.Role.Includes(artifacts.RoleEditor):
 			return fmt.Errorf("%w: write %d is %s's, and only its author or an editor undoes it",
 				ErrForbidden, seq, actor)
@@ -585,10 +589,45 @@ func (w *Writer) inverse(ctx context.Context, c Call, id artifacts.ID, seq int64
 		if err := json.Unmarshal([]byte(changes), &chs); err != nil {
 			return fmt.Errorf("artifactdata: decode write %d of %s: %w", seq, id, err)
 		}
+		if undoable == 0 {
+			return notUndoable(seq, chs)
+		}
 		ops, err = inverseOps(chs)
 		return err
 	})
 	return ops, err
+}
+
+// notUndoable is why the apply marked write seq not undoable: a value it
+// changed is kept only as its hash, or its inverse is larger than one write
+// carries ([undoFits]).
+func notUndoable(seq int64, chs []Change) error {
+	for _, ch := range chs {
+		for _, f := range ch.Fields {
+			if f.BeforeHash != "" {
+				return fmt.Errorf("%w: write %d changed %s, a value past the history's %d-byte "+
+					"bound that it keeps only as its hash", ErrNotUndoable, seq, f.Field,
+					artifacts.MaxHistoryValueBytes)
+			}
+		}
+	}
+	ops, err := inverseOps(chs)
+	if err != nil {
+		return err
+	}
+	if err := checkBatch(ops); err != nil {
+		return oversizeUndo(seq, err)
+	}
+	return fmt.Errorf("%w: the apply marked write %d not undoable", ErrNotUndoable, seq)
+}
+
+// oversizeUndo refuses an undo whose inverse is larger than one write carries.
+// The bound's own error is quoted, not wrapped: the class is ErrNotUndoable,
+// never the ErrInvalid a caller's own oversized write is.
+func oversizeUndo(seq int64, bound error) error {
+	return fmt.Errorf("%w: undoing write %d restores more than one write carries (%v); "+
+		"restore the rows in smaller writes", ErrNotUndoable, seq,
+		strings.TrimPrefix(bound.Error(), ErrInvalid.Error()+": "))
 }
 
 // inverseOps is the ops that restore what changes changed, each guarded on the

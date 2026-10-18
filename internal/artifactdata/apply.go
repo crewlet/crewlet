@@ -357,7 +357,7 @@ func (a *Applier) writePlan(ctx context.Context, tx *sql.Tx, c applyContext, s *
 		collDelta[d.coll.no] = cd
 		*deltas = append(*deltas, deltaOf(c, d))
 	}
-	h.undoable = undoable
+	h.undoable = undoable && undoFits(h.changes)
 	for _, no := range slices.Sorted(maps.Keys(collDelta)) {
 		cd := collDelta[no]
 		if _, err := tx.ExecContext(ctx, `

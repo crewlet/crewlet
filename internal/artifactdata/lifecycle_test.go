@@ -61,6 +61,55 @@ func TestAnUndoRevertsOnlyWhatNobodyChangedSince(t *testing.T) {
 	}
 }
 
+// A WRITE IS MARKED UNDOABLE ONLY WHEN ITS UNDO FITS ONE WRITE: every value a
+// history row keeps is bounded, but undoing a bulk delete restores every field
+// of every row, so the inverse of deleting a hundred rows of twelve KiB is
+// larger than a write carries. The history says so, and the undo is refused as
+// not undoable before anything reaches the log, never as a record the log
+// refuses.
+func TestAnUndoLargerThanOneWriteIsNotOffered(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	n.clock.stride(time.Minute)
+	jane := person("jane", artifacts.RoleEditor)
+	chunk := `"` + strings.Repeat("n", 3900) + `"`
+	var deletes []artifacts.DataOp
+	for batch := range 4 {
+		var ops []artifacts.DataOp
+		for i := range artifacts.MaxBatchOps / 4 {
+			id := fmt.Sprintf("r%03d", batch*artifacts.MaxBatchOps/4+i)
+			ops = append(ops, set("notes", id, map[string]string{"a": chunk, "b": chunk, "c": chunk}))
+			deletes = append(deletes, artifacts.DataOp{Op: artifacts.DataDelete, Collection: "notes", Doc: id})
+		}
+		n.applied(jane, ops...)
+	}
+	small := n.applied(jane, deletes[0])
+	bulk := n.applied(jane, deletes[1:]...)
+	page, err := n.reader.History(t.Context(), sheet, reading("jane", artifacts.RoleEditor),
+		artifactdata.HistoryFilter{Collection: "notes"}, "", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	undoable := map[int64]bool{}
+	for _, e := range page.Entries {
+		undoable[e.Seq] = e.Undoable
+	}
+	if !undoable[small.Seq] {
+		t.Fatal("deleting one row is not offered as undoable")
+	}
+	if undoable[bulk.Seq] {
+		t.Fatal("deleting 99 rows of twelve KiB is offered as undoable, and its undo cannot fit one write")
+	}
+	_, err = n.writer.Undo(t.Context(), jane, sheet, bulk.Seq)
+	if !errors.Is(err, artifactdata.ErrNotUndoable) || errors.Is(err, artifactdata.ErrInvalid) ||
+		!strings.Contains(err.Error(), "more than one write carries") {
+		t.Fatalf("undoing the bulk delete: %v, want ErrNotUndoable naming the write bound", err)
+	}
+	if res, err := n.writer.Undo(t.Context(), jane, sheet, small.Seq); err != nil || res.Verdict != artifacts.DataApplied {
+		t.Fatalf("undoing the one-row delete: %+v, %v", res, err)
+	}
+}
+
 // A SCHEMA CHANGE MIGRATES WHAT IT RETYPES AND REMOVES, BOUNDED: a removed
 // column's values go, a retyped column's values are coerced (and cleared where
 // they cannot be held), and a change dropping an option or retyping without a

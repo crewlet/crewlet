@@ -92,6 +92,18 @@ func changeOf(d *docState, after int64, op ChangeOp) (Change, bool) {
 	return ch, undoable
 }
 
+// undoFits reports whether the write that made changes can be undone by one
+// write: its inverse, every document it changed put back as it found it, held
+// to the bounds every write is held to ([checkBatch]). Each value a history row
+// keeps is bounded, but their sum is not: undoing a bulk delete of large rows
+// restores every field of every row, which can outgrow [artifacts.MaxBatchBytes]
+// and the record the log accepts. A row marked undoable is one whose undo can
+// be published, so the bound is decided here, once, from the row itself.
+func undoFits(chs []Change) bool {
+	ops, err := inverseOps(chs)
+	return err == nil && checkBatch(ops) == nil
+}
+
 // opOf is the change a document's record made.
 func opOf(d *docState) ChangeOp {
 	switch {
