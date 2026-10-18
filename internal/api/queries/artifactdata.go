@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/artifactdataapi"
+	"github.com/crewlet/crewlet/internal/api/artifactsapi"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactdata/query"
 	"github.com/crewlet/crewlet/internal/artifacts"
@@ -19,8 +20,8 @@ import (
 // query over its field index, its history, its schema (with the store's
 // footprint and state digest) and the caller's own per-viewer state, each
 // DECIDED PER ARTIFACT through the one admission the datastore's write routes
-// take ([artifactdataapi.Gate]), and each shaped by the collection's read rule
-// for the reader the admission names, history included.
+// take ([artifactsapi.Gate], the artifacts' own), and each shaped by the
+// collection's read rule for the reader the admission names, history included.
 
 // ArtifactDataReader is the datastore's read side these questions ask: the
 // estate router's, so a node whose own copy is out of service answers from a
@@ -43,7 +44,7 @@ type ArtifactDataReader interface {
 // ArtifactDataSource is what the datastore's questions read: the admission and
 // the reads.
 type ArtifactDataSource struct {
-	Gate  artifactdataapi.Gate
+	Gate  artifactsapi.Gate
 	Reads ArtifactDataReader
 }
 
@@ -71,21 +72,21 @@ func registerArtifactData(r *Registry, src ArtifactDataSource, now func() time.T
 
 // admit decides one question's verb on the artifact its `id` names.
 func (s artifactData) admit(ctx context.Context, what string, action authz.Action, p Params) (
-	artifacts.ID, artifactdataapi.Admission, error) {
+	artifacts.ID, artifactsapi.Admission, error) {
 
 	id, err := artifacts.ParseID(p.String("id"))
 	if err != nil {
-		return artifacts.ID{}, artifactdataapi.Admission{}, fmt.Errorf("%w: no artifact %q",
+		return artifacts.ID{}, artifactsapi.Admission{}, fmt.Errorf("%w: no artifact %q",
 			ErrNotFound, p.String("id"))
 	}
 	principal, err := caller(ctx, what)
 	if err != nil {
-		return id, artifactdataapi.Admission{}, err
+		return id, artifactsapi.Admission{}, err
 	}
 	a, err := s.Gate.Admit(ctx, principal, action, id)
-	var refusal *artifactdataapi.Refused
+	var refusal *artifactsapi.Refused
 	switch {
-	case errors.Is(err, artifactdataapi.ErrNoSuchArtifact):
+	case errors.Is(err, artifactsapi.ErrNoSuchArtifact):
 		return id, a, fmt.Errorf("%w: no artifact %s", ErrNotFound, id)
 	case errors.As(err, &refusal):
 		return id, a, refused(what, refusal.Decision)
@@ -137,7 +138,7 @@ func (s artifactData) docs(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	page, err := s.Reads.Docs(ctx, id, a.Reading(fresh), p.String("collection"), since,
+	page, err := s.Reads.Docs(ctx, id, artifactdataapi.Reading(a, fresh), p.String("collection"), since,
 		p.String("cursor"), p.Int("limit", 0))
 	return page, dataFailure(err)
 }
@@ -152,7 +153,7 @@ func (s artifactData) doc(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	d, err := s.Reads.Doc(ctx, id, a.Reading(fresh), p.String("collection"), p.String("doc"))
+	d, err := s.Reads.Doc(ctx, id, artifactdataapi.Reading(a, fresh), p.String("collection"), p.String("doc"))
 	return d, dataFailure(err)
 }
 
@@ -173,7 +174,7 @@ func (s artifactData) query(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	page, err := s.Reads.Query(ctx, id, a.Reading(fresh), p.String("collection"), q)
+	page, err := s.Reads.Query(ctx, id, artifactdataapi.Reading(a, fresh), p.String("collection"), q)
 	return page, dataFailure(err)
 }
 
@@ -188,7 +189,7 @@ func (s artifactData) history(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	page, err := s.Reads.History(ctx, id, a.Reading(fresh), artifactdata.HistoryFilter{
+	page, err := s.Reads.History(ctx, id, artifactdataapi.Reading(a, fresh), artifactdata.HistoryFilter{
 		Collection: p.String("collection"), Doc: p.String("doc"), Field: p.String("field"),
 		Actor: p.String("actor"),
 	}, p.String("cursor"), p.Int("limit", 0))
@@ -218,7 +219,7 @@ func (s artifactData) schema(ctx context.Context, p Params) (any, error) {
 	// schema they are shown: its name and columns are the editors' too.
 	visible := make([]artifacts.Collection, 0, len(collections))
 	for _, c := range collections {
-		if c.Read != artifacts.ReadEditors || a.Role.Includes(artifacts.RoleEditor) {
+		if c.Read != artifacts.ReadEditors || a.Role().Includes(artifacts.RoleEditor) {
 			visible = append(visible, c)
 		}
 	}
@@ -226,7 +227,7 @@ func (s artifactData) schema(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, dataFailure(err)
 	}
-	return schemaAnswer{Collections: visible, Store: info, Role: a.Role}, nil
+	return schemaAnswer{Collections: visible, Store: info, Role: a.Role()}, nil
 }
 
 // state answers the caller's own per-viewer state keys.
@@ -239,7 +240,7 @@ func (s artifactData) state(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	entries, err := s.Reads.State(ctx, id, a.Reading(fresh))
+	entries, err := s.Reads.State(ctx, id, artifactdataapi.Reading(a, fresh))
 	return map[string]any{"state": entries}, dataFailure(err)
 }
 

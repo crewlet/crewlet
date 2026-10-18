@@ -1636,10 +1636,9 @@ func companyConfig(e *engine.Engine) (*config.Company, *org.Organization) {
 // questions' source over the engine's estate router, or neither on an engine
 // built with no router (which serves no estate to route).
 //
-// ONE GATE FOR BOTH, so a write route and a read question decide who may touch
-// an artifact's data by one admission: the artifact's shares read through the
-// router, the chart the rest of the API decides by, the company's own artifacts
-// settings read per decision, and the Tier A plan quotas this node stamps.
+// THE ARTIFACTS' OWN GATE ([artifactsGate]), so a datastore route, a datastore
+// question, an artifacts route and an artifacts question decide who may touch
+// one artifact by one admission.
 func artifactDataSurfaces(e *engine.Engine, boot *config.Bootstrap) (
 	*artifactdataapi.Service, *queries.ArtifactDataSource, error) {
 
@@ -1648,16 +1647,7 @@ func artifactDataSurfaces(e *engine.Engine, boot *config.Bootstrap) (
 	if !routed || !headsRouted {
 		return nil, nil, nil
 	}
-	gate := artifactdataapi.Gate{
-		Heads: heads, Chart: engine.ChartAuthorityOf(e),
-		Company: func() config.CompanyArtifacts {
-			if company, _ := companyConfig(e); company != nil {
-				return company.Artifacts
-			}
-			return config.CompanyArtifacts{}
-		},
-		Limits: boot.Artifacts.Stamp,
-	}
+	gate := artifactsGate(e, boot, heads)
 	surface, err := artifactdataapi.New(artifactdataapi.Options{Gate: gate, Data: data, Versions: heads})
 	if err != nil {
 		return nil, nil, err

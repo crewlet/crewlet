@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactserve"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
@@ -30,22 +31,13 @@ import (
 func artifactsSurfaces(e *engine.Engine, boot *config.Bootstrap) (
 	*artifactsapi.Service, *queries.ArtifactsSource, error) {
 
-	estate, routed := engine.ArtifactsEstate(e)
+	arts, routed := engine.ArtifactsEstate(e)
 	if !routed {
 		return nil, nil, nil
 	}
-	gate := artifactsapi.Gate{
-		Heads: estate, Chart: engine.ChartAuthorityOf(e), Marks: estate,
-		Roster: companyRoster{e: e}, Limits: boot.Artifacts.Stamp,
-		Company: func() config.CompanyArtifacts {
-			if company, _ := companyConfig(e); company != nil {
-				return company.Artifacts
-			}
-			return config.CompanyArtifacts{}
-		},
-	}
+	gate := artifactsGate(e, boot, arts)
 	opts := artifactsapi.Options{
-		Gate: gate, Reads: estate, Writes: estate, Objects: engineObjects{e: e},
+		Gate: gate, Reads: arts, Writes: arts, Objects: engineObjects{e: e},
 		// THE PIPELINE IS ASKED FOR PER REQUEST: the engine builds it on
 		// first use, and a node that cannot (no object store, no
 		// coordination store) answers the upload routes with why.
@@ -76,7 +68,26 @@ func artifactsSurfaces(e *engine.Engine, boot *config.Bootstrap) (
 	if err != nil {
 		return nil, nil, err
 	}
-	return surface, &queries.ArtifactsSource{Gate: gate, Reads: estate}, nil
+	return surface, &queries.ArtifactsSource{Gate: gate, Reads: arts}, nil
+}
+
+// artifactsGate is THE admission to one artifact on this node, for every
+// surface that touches one (the artifacts' routes and questions and the
+// datastore's alike): the artifact's head and its reader records through the
+// estate router, the chart the rest of the API decides by, the company's own
+// artifacts settings read per decision, the company's roster, and the Tier A
+// plan quotas this node stamps.
+func artifactsGate(e *engine.Engine, boot *config.Bootstrap, arts estate.Artifacts) artifactsapi.Gate {
+	return artifactsapi.Gate{
+		Heads: arts, Chart: engine.ChartAuthorityOf(e), Marks: arts,
+		Roster: companyRoster{e: e}, Limits: boot.Artifacts.Stamp,
+		Company: func() config.CompanyArtifacts {
+			if company, _ := companyConfig(e); company != nil {
+				return company.Artifacts
+			}
+			return config.CompanyArtifacts{}
+		},
+	}
 }
 
 // engineObjects is the engine's object store as the artifacts surface reads a

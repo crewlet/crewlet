@@ -259,11 +259,17 @@ func (g Gate) Decide(ctx context.Context, p iam.Principal, action authz.Action,
 			return Admission{}, err
 		}
 	}
-	if d.Standing.Role == "" {
+	switch {
+	case d.Standing.Role == "":
 		// A ROW THAT REACHED NO RELATION (the admin row a purge is decided
 		// by): the override is an administrator acting on an artifact they
 		// do not own.
 		elevated = standing.Elevated(artifacts.RoleOwner)
+	case standing.Role == "":
+		// THE VERB ADMITTED AND THE READ DID NOT: only a row looser than
+		// reading would, and no shared row is. Answered as absent rather
+		// than stamped with no role.
+		return Admission{}, ErrNoSuchArtifact
 	}
 	return Admission{Head: head, Decision: d, Principal: p, Standing: standing,
 		elevated: elevated}, nil

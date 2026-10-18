@@ -10,7 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/api/artifactdataapi"
+	"github.com/crewlet/crewlet/internal/api/artifactsapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactdata/query"
@@ -111,7 +111,7 @@ func (d *dataReads) State(_ context.Context, _ artifacts.ID, rd artifactdata.Rea
 func dataRegistry(t *testing.T) (*queries.Registry, *dataReads) {
 	t.Helper()
 	reads := &dataReads{}
-	gate := artifactdataapi.Gate{Heads: dataHeads{}, Chart: authz.NoChart{},
+	gate := artifactsapi.Gate{Heads: dataHeads{}, Chart: authz.NoChart{},
 		Limits: func() artifacts.Limits { return artifacts.Limits{DataBytes: 1 << 30, DataStoreBytes: 32 << 20} }}
 	return registryOver(t, queries.Sources{ArtifactData: &queries.ArtifactDataSource{Gate: gate, Reads: reads}}), reads
 }
