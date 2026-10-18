@@ -1,0 +1,27 @@
+-- A task's subtasks are found through an index of the tree.
+--
+-- # tracker_tasks_parent_idx
+--
+-- Nothing indexed `parent_id`, and seven statements find a task's subtasks by
+-- it. With no index each read the whole task table for every question about
+-- one task: the apply's own read of a removed task's children walked every
+-- task in the company through the primary key; a cross-project move's walk of
+-- a parent's children, batch by batch, sought the project's whole board and
+-- sorted it; the subtree a move, a removal or a restore walks read the table
+-- from the heap once per level of the tree; and a purge's reach read the heap
+-- to find the purged task's children. The query surface was worse:
+-- `has_children=true` probed for a child by walking every task once PER TASK
+-- it filtered, so a project's board asked it read the company once per row, and
+-- `parent=` read a whole project's board — or, at the workspace, every task in
+-- the company newest first — to keep one item's subtasks.
+--
+-- `(parent_id, id)` because every reader is a seek on the parent, and the
+-- move's walk and the apply's read take the children in id order. NOT PARTIAL,
+-- although a root has no parent: this engine's planner does not prove that
+-- `parent_id = ?` implies `parent_id IS NOT NULL`, so an index partial on it is
+-- one no seek reaches (measured — every reader above fell back to its scan).
+-- A query filtered by `parent` names it (`taskSource` in
+-- internal/worklet/read.go), as the walk does, because the planner otherwise
+-- prefers the project's index or the listing's order to the far narrower
+-- parent.
+CREATE INDEX tracker_tasks_parent_idx ON tracker_tasks (parent_id, id);                                      -- parent=, has_children, and every read of a task's subtasks
