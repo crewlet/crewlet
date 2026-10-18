@@ -45,11 +45,15 @@ lead. A person's lead reads nothing of that person's private artifacts.
 
 **A caller with no relation is told the artifact does not exist**, with the
 same answer and the same timing path as an id nothing holds: `404
-not_found`. A caller with a relation below the row's role is told
-`403` naming the role that would change the answer. Admin is never told 404 for
-an artifact that exists: the admin path reads a private artifact, and every
-such read by an administrator with no relation is recorded as an elevated read
-that the artifact's owner and editors see in its history.
+not_found`. A caller with a relation below the row's role is told `403` naming
+the role that would change the answer. Admin is never told 404 for an artifact
+that exists. An administrator a share already admits is decided as that
+sharer, at the share's role; an admission only the admin path made stands at
+owner and is elevated, and every content read it makes writes a
+`read_elevated` record before anything is shown. The artifact's owner and
+editors see it in its history, and every administrator sees it on the company
+trail of artifact history (`artifact_trail`, under `audit.read`), so an
+override is found even when its owner never opens the history.
 
 Four rules bound what an agent seat does with the relations it holds, each
 decided in the artifacts writer or the tool surface rather than in the class:

@@ -2,14 +2,17 @@ package artifactspike
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifacts"
 )
 
@@ -18,13 +21,14 @@ import (
 //
 // Every datastore byte is held on every data node and rides every snapshot and
 // backup, and the quotas (`artifacts.limits.data_bytes`, `data_store_bytes`)
-// bound the footprint the applier meters: canonical bodies, 48 bytes per field
-// index entry, and history. If the metered figure is far from what the file
-// really holds, a quota means something other than what it says. The spike
-// fills one store with ten thousand review rows and a week's worth of edits,
-// then measures the bytes the store added to the replicated file (live, with
-// its write-ahead log) and to a snapshot of it (VACUUM INTO, which is what a
-// backup is), each against the same file before the store existed.
+// bound the footprint the applier meters (internal/artifactdata/meter.go). If
+// the metered figure is far from what the file really holds, a quota means
+// something other than what it says. The spike fills one store with ten
+// thousand review rows and a week's worth of edits, then measures the bytes
+// the store added to the replicated file (live, with its write-ahead log) and
+// to a snapshot of it (VACUUM INTO, which is what a backup is), each against
+// the same file before the store existed. [TestTheFootprintMeterMatchesTheFile]
+// holds the meter to the file on every run, across row shapes.
 //
 // Run: go test -run '^$' -bench DS2 -benchtime 1x ./internal/artifactspike
 
@@ -54,15 +58,15 @@ func BenchmarkDS2Footprint(b *testing.B) {
 		snapBefore := snapshotBytes(b, n, filepath.Join(snapDir, "before.db"))
 
 		b.StartTimer()
-		seedSheet(b, n, id, footprintRows)
+		seedSheetAs(b, n, id, footprintRows, unbounded(owner()))
 		r := rand.New(rand.NewPCG(2, 2))
 		for range footprintCellEdits {
-			res, err := n.writer.Write(b.Context(), editor("member-01"), id,
+			res, err := n.writer.Write(b.Context(), unbounded(editor("member-01")), id,
 				artifacts.DataWrite{Ops: opsOf(r, shapeCell, footprintRows)})
 			mustApply(b, "a cell edit", res, err)
 		}
 		for range footprintRowEdits {
-			res, err := n.writer.Write(b.Context(), editor("member-02"), id,
+			res, err := n.writer.Write(b.Context(), unbounded(editor("member-02")), id,
 				artifacts.DataWrite{Ops: opsOf(r, shapeRow, footprintRows)})
 			mustApply(b, "a row rewrite", res, err)
 		}
@@ -79,6 +83,7 @@ func BenchmarkDS2Footprint(b *testing.B) {
 
 		b.ReportMetric(float64(info.Docs), "docs")
 		b.ReportMetric(float64(info.Footprint)/mib, "metered-MiB")
+		b.ReportMetric(float64(info.DocBytes)/mib, "doc-metered-MiB")
 		b.ReportMetric(float64(info.BodyBytes)/mib, "body-MiB")
 		b.ReportMetric(float64(info.FieldEntries), "field-entries")
 		b.ReportMetric(float64(info.HistoryBytes)/mib, "history-MiB")
@@ -110,10 +115,117 @@ func BenchmarkDS2Footprint(b *testing.B) {
 		if info.HistoryBytes > 0 {
 			b.ReportMetric(float64(history)/float64(info.HistoryBytes), "history-disk/metered")
 		}
-		if info.BodyBytes > 0 {
-			b.ReportMetric(float64(shares["artifact_data_docs"])/float64(info.BodyBytes),
-				"docs-disk/body")
+		if docs := shares["artifact_data_docs"] + shares["artifact_data_fields"]; info.DocBytes > 0 {
+			b.ReportMetric(float64(docs)/float64(info.DocBytes), "docs-disk/metered")
 		}
+	}
+}
+
+// unbounded lifts a call's stamped datastore quotas to their ceilings: a spike
+// that measures what a store costs must not be stopped by the quota that
+// counts it (the default per-store bound holds about the ten thousand rows
+// DS-2 writes, and no more).
+func unbounded(c artifactdata.Call) artifactdata.Call {
+	c.Authority.Limits.DataStoreBytes = artifacts.MaxDataStoreBytes
+	c.Authority.Limits.DataBytes = artifacts.MaxDataBytes
+	return c
+}
+
+// TestTheFootprintMeterMatchesTheFile holds the footprint the applier meters
+// to the bytes a store's rows take in a snapshot of the replicated file
+// (D42, ADR-0039), within DS-2's 10 percent, across the shapes a sheet takes:
+// review rows of a few hundred bytes, rows whose long text fills half a page,
+// long document ids, a week of edits, pasted blocks and deleted rows held as
+// tombstones. A meter that counted bodies alone, or the field index at a
+// flat per-entry figure, is off by a factor of two here.
+func TestTheFootprintMeterMatchesTheFile(t *testing.T) {
+	for _, c := range []struct {
+		name         string
+		rows         int
+		idPad, notes int
+	}{
+		{"review rows", 1500, 0, 0},
+		{"half-page rows with long ids", 600, 40, 1900},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			br := startBrokers(t, topoSolo)
+			br.provisionDataLog(t)
+			n := joinData(t, br.queues[0], "node-0")
+			id := storeIDs("meter "+c.name, 1)[0]
+			dir := t.TempDir()
+			before := snapshotBytes(t, n, filepath.Join(dir, "before.db"))
+
+			res, err := n.writer.Configure(t.Context(), unbounded(owner()), id,
+				[]artifacts.Collection{reviewSheet()})
+			mustApply(t, "configure the sheet", res, err)
+			doc := func(k int) string { return docID(k) + strings.Repeat("x", c.idPad) }
+			r := rand.New(rand.NewPCG(7, 7))
+			row := func(k int) map[string]json.RawMessage {
+				f := rowFields(r, k)
+				if c.notes > 0 {
+					f["notes"] = jsonOf(strings.Repeat("A long review note. ", c.notes/20))
+				}
+				return f
+			}
+			write := func(what string, call artifactdata.Call, ops []artifacts.DataOp) {
+				res, err := n.writer.Write(t.Context(), unbounded(call), id, artifacts.DataWrite{Ops: ops})
+				mustApply(t, what, res, err)
+			}
+			const batch = 40
+			for start := 0; start < c.rows; start += batch {
+				ops := make([]artifacts.DataOp, 0, batch)
+				for k := start; k < min(start+batch, c.rows); k++ {
+					ops = append(ops, artifacts.DataOp{Op: artifacts.DataSet,
+						Collection: sheetCollection, Doc: doc(k), Fields: row(k)})
+				}
+				write("seed", owner(), ops)
+			}
+			for range c.rows / 5 {
+				write("a cell edit", editor("member-01"), []artifacts.DataOp{{Op: artifacts.DataMerge,
+					Collection: sheetCollection, Doc: doc(r.IntN(c.rows)),
+					Fields: map[string]json.RawMessage{"status": jsonOf("done")}}})
+			}
+			for range 5 {
+				start := r.IntN(c.rows - batch)
+				ops := make([]artifacts.DataOp, batch)
+				for i := range ops {
+					ops[i] = artifacts.DataOp{Op: artifacts.DataMerge, Collection: sheetCollection,
+						Doc: doc(start + i), Fields: pasteFields(r, start+i)}
+				}
+				write("a paste", editor("member-02"), ops)
+			}
+			for k := 0; k < c.rows; k += 7 {
+				write("a delete", editor("member-03"), []artifacts.DataOp{{Op: artifacts.DataDelete,
+					Collection: sheetCollection, Doc: doc(k)}})
+			}
+			applied(t, []*dataNode{n})
+
+			info, err := n.reader.Store(t.Context(), id)
+			if err != nil {
+				t.Fatalf("read the store's catalogue row: %v", err)
+			}
+			snap := snapshotBytes(t, n, filepath.Join(dir, "after.db")) - before
+			shares := tableShares(t, n, dir, attributedTables)
+			docs := shares["artifact_data_docs"] + shares["artifact_data_fields"]
+			history := shares["artifact_data_writes"] + shares["artifact_data_touches"]
+			for _, m := range []struct {
+				what          string
+				metered, disk int64
+			}{
+				{"the documents and their field index", info.DocBytes, docs},
+				{"the history and its touches", info.HistoryBytes, history},
+				{"the store as a snapshot carries it", info.Footprint, snap},
+			} {
+				if ratio := float64(m.metered) / float64(m.disk); ratio < 0.9 || ratio > 1.1 {
+					t.Errorf("%s: metered %d bytes against %d on disk (%.2f), outside DS-2's 10 percent",
+						m.what, m.metered, m.disk, ratio)
+				}
+			}
+			if info.Footprint != info.DocBytes+info.HistoryBytes {
+				t.Errorf("the footprint %d is not the documents %d plus the history %d",
+					info.Footprint, info.DocBytes, info.HistoryBytes)
+			}
+		})
 	}
 }
 

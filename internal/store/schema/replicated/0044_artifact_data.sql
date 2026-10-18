@@ -44,11 +44,14 @@ CREATE TABLE artifact_data_stores (
     -- Live documents and the tombstones still held for catch-up.
     docs               INTEGER NOT NULL DEFAULT 0,
     tombstones         INTEGER NOT NULL DEFAULT 0,
-    -- THE FOOTPRINT, in real bytes held on every data node: canonical
-    -- bodies, field-index entries at 48 bytes each, and hot history. It is
-    -- what `artifacts.limits.data_store_bytes` bounds.
+    -- Canonical bodies and field-index entries, as counts a reader reports.
     body_bytes         INTEGER NOT NULL DEFAULT 0,
     field_entries      INTEGER NOT NULL DEFAULT 0,
+    -- THE FOOTPRINT, in the bytes the store's rows cost on every data node
+    -- (internal/artifactdata/meter.go): every document row's metered bytes,
+    -- its field-index entries included, plus hot history and its touches.
+    -- It is what `artifacts.limits.data_store_bytes` bounds.
+    doc_bytes          INTEGER NOT NULL DEFAULT 0,
     history_bytes      INTEGER NOT NULL DEFAULT 0,
     footprint          INTEGER NOT NULL DEFAULT 0,
     -- Every record applied on the store, refused ones included.
@@ -118,6 +121,10 @@ CREATE TABLE artifact_data_docs (
     -- The packed position of the last write that changed the document:
     -- what a write's if_version guard compares.
     version         INTEGER NOT NULL,
+    -- What this row, its index entries and its field-index entries cost on
+    -- disk as last written (internal/artifactdata/meter.go), so a write
+    -- moves the store's doc_bytes by the difference.
+    metered         INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (store_no, collection_no, doc_id)
 );
 CREATE INDEX artifact_data_docs_since_idx ON artifact_data_docs (store_no, version);          -- catch-up by version

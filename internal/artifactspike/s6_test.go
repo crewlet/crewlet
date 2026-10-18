@@ -88,8 +88,8 @@ func (c *countingQueue) Listen(ctx context.Context, pattern string, h queue.List
 	})
 }
 
-func (c *countingQueue) Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error) {
-	return c.q.Ask(ctx, subject, request, want)
+func (c *countingQueue) AskEach(ctx context.Context, subject string, request []byte, each func([]byte) bool) error {
+	return c.q.AskEach(ctx, subject, request, each)
 }
 
 func (c *countingQueue) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error) {

@@ -68,10 +68,12 @@
 // Surrogate integer keys (the store's number is the packed position of its
 // first record) keep the field index compact; the digest and the per-row
 // digests let a later build's checkpoint be verified against the store; and
-// the footprint is metered in real bytes (bodies, field-index entries at 48
-// bytes each, hot history), which is what `artifacts.limits.data_store_bytes`
-// and `artifacts.limits.data_bytes` bound. Moving idle stores to object storage
-// is a later build's; nothing here has to be re-derived for it.
+// the footprint is metered in the bytes the store's rows cost on disk (each
+// document row with its index entries and field-index entries, kept on the
+// row, plus hot history and its touches; meter.go), which is what
+// `artifacts.limits.data_store_bytes` and `artifacts.limits.data_bytes` bound.
+// Moving idle stores to object storage is a later build's; nothing here has to
+// be re-derived for it.
 //
 // # Per-viewer state
 //
@@ -86,6 +88,8 @@
 // documents it changed, with the facts a push is shaped by), built from the rows
 // it wrote; the engine fans it out to the socket hub. No record wakes a seat in
 // this release, so the domain declares no feed.
+//
+// # The decisions behind it
 //
 // A datastore write is decided where it is applied, from authority stamped at
 // the API: ADR-0037. A cold store will live in object storage and return

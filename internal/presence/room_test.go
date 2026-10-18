@@ -2,6 +2,7 @@ package presence
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,5 +88,26 @@ func TestALateFullFrameFillsInAndNeverUndoes(t *testing.T) {
 	if len(r.departed) != 0 {
 		t.Fatalf("the room still remembers %d departure(s) past every frame's validity",
 			len(r.departed))
+	}
+}
+
+// A TURN IS AN AGENT'S: a frame whose person member names one, or whose turn
+// is past its bound, shows nobody.
+func TestOnlyAnAgentsMemberNamesATurn(t *testing.T) {
+	t.Parallel()
+	agent := artifacts.PresenceMember{Session: "s-1", Seat: "agent-cto", Kind: iam.ActorAgent,
+		Activity: artifacts.PresenceEditing, Turn: "run-1"}
+	if err := checkMember(agent); err != nil {
+		t.Fatalf("an agent's member naming its turn was refused: %v", err)
+	}
+	person := agent
+	person.Kind = iam.ActorHuman
+	if checkMember(person) == nil {
+		t.Fatal("a person's member naming a turn was accepted")
+	}
+	long := agent
+	long.Turn = strings.Repeat("r", maxTurnBytes+1)
+	if checkMember(long) == nil {
+		t.Fatal("a turn past its bound was accepted")
 	}
 }

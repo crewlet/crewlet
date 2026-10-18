@@ -23,19 +23,6 @@ import (
 // ships), while a verdict is one refused write. The only errors here are the
 // store's own (a read that failed), which the framework retries.
 
-// fieldEntryBytes is what one field-index entry is counted at in a store's
-// footprint: an approximation of the row and its two index entries on the
-// pinned driver, held constant so the meter is deterministic.
-const fieldEntryBytes = 48
-
-// historyRowOverhead is what one history row is counted at beyond its changes:
-// its fixed columns, its digest and its primary-key and secondary index
-// entries.
-const historyRowOverhead = 160
-
-// touchBytes is what one touch row is counted at.
-const touchBytes = 48
-
 // collState is one collection as the evaluation sees it.
 type collState struct {
 	no       int64
@@ -79,6 +66,7 @@ type docState struct {
 	fields0  map[string]canon.Value
 	body0    []byte
 	entries0 int
+	metered0 int64 // what the row and its index entries cost as found ([meteredDoc])
 
 	createdBy, createdByKind string
 	createdAt                int64
@@ -136,16 +124,14 @@ type view interface {
 
 // storeTotals are a store's counters before the batch.
 type storeTotals struct {
-	docs, bodyBytes, fieldEntries, historyBytes, collections int64
+	docs, docBytes, historyBytes, collections int64
 
 	// companyFootprint is every store's footprint together.
 	companyFootprint int64
 }
 
-// footprint is the store's footprint from its counters.
-func (t storeTotals) footprint() int64 {
-	return t.bodyBytes + fieldEntryBytes*t.fieldEntries + t.historyBytes
-}
+// footprint is the store's footprint from its counters ([storeRow.computeFootprint]).
+func (t storeTotals) footprint() int64 { return t.docBytes + t.historyBytes }
 
 // refusal is a verdict other than applied, and why.
 type refusal struct {
@@ -215,6 +201,10 @@ type plan struct {
 
 	// The store's counters after the plan, before its history row.
 	bodyDelta, entriesDelta, docsDelta, tombstoneDelta int64
+
+	// meteredDelta is how far the plan moves the store's metered document
+	// bytes ([meteredDoc]): what the quotas are decided on.
+	meteredDelta int64
 }
 
 // evaluate decides one batch of ops under authority. A refusal is a plan
@@ -786,6 +776,8 @@ func (b *batch) finish() (plan, error) {
 		p.docs = append(p.docs, d)
 		p.bodyDelta += int64(len(d.body)) - int64(len(d.body0))
 		p.entriesDelta += int64(len(d.entries)) - int64(d.entries0)
+		p.meteredDelta += meteredDoc(d, b.authority.Actor.Name, string(b.authority.Actor.Kind)) -
+			d.metered0
 		switch {
 		case d.live && !d.live0:
 			p.docsDelta++
@@ -842,10 +834,10 @@ func (b *batch) finish() (plan, error) {
 			}
 		}
 	}
-	// THE STAMPED LIMITS, counted in real bytes. Only a write that GROWS the
-	// data is refused: one that shrinks it always lands, so a full store can
-	// always be emptied.
-	if grow := p.bodyDelta + fieldEntryBytes*p.entriesDelta; grow > 0 {
+	// THE STAMPED LIMITS, counted in the bytes the rows cost on disk
+	// (meter.go). Only a write that GROWS the data is refused: one that
+	// shrinks it always lands, so a full store can always be emptied.
+	if grow := p.meteredDelta; grow > 0 {
 		limits := b.authority.Limits
 		after := totals.footprint() + grow
 		if after > limits.DataStoreBytes {

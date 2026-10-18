@@ -10490,3 +10490,122 @@ a.live-row:focus-visible {
   align-items: center;
   gap: var(--spacing-2);
 }
+
+/* The History tab's comparison of two versions: across both columns, the two
+   sides next to each other where the page is wide and one above the other on
+   a phone. */
+.artifact-compare-row {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.artifact-compare {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+.artifact-compare-sides {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-4);
+}
+@container page (width < 860px) {
+  .artifact-compare-sides {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.artifact-compare-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.artifact-compare-heading {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+.artifact-compare-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+
+/* The People rail beside an artifact's body: a column at the right where the
+   page is wide, and above the body on a phone, where a reader follows a
+   presenter from it. */
+.artifact-with-rail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem);
+  gap: var(--spacing-4);
+  align-items: start;
+}
+.artifact-with-rail > .artifact-people {
+  order: 2;
+}
+@container page (width < 860px) {
+  .artifact-with-rail {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .artifact-with-rail > .artifact-people {
+    order: 0;
+  }
+}
+.artifact-people {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
+}
+.artifact-people-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+}
+.artifact-people-title {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+.artifact-people-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.artifact-person {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.artifact-person-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.artifact-person-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact-person-where {
+  overflow-wrap: anywhere;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+.artifact-person-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1);
+  justify-content: flex-end;
+}

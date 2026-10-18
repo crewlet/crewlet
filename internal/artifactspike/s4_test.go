@@ -94,12 +94,13 @@ const (
 	breakBase = "base"
 )
 
-// escapeImportMap is an import map naming a module on another origin: a
-// nonced module's imports are fetched under its nonce, so the module loads in
-// the viewer's browser from wherever the map points. Not a break (the page
-// works) but an ESCAPE from the publish-time copy-in: the linter refuses the
-// same reference written as a literal import (lint.CodeRemoteImport) and
-// publishes it written as a map entry.
+// escapeImportMap is an import map naming a module on another origin in a
+// page the linter published: a nonced module's imports are fetched under its
+// nonce, so the module would load in the viewer's browser from wherever the
+// map points. Not a break (the page works) but an ESCAPE from the publish-time
+// copy-in. The linter copies every remote entry in or refuses the page
+// (lint.CodeRemoteImport), so no published page carries one; the reading stays
+// so a linter change that lets one through fails the corpus.
 const escapeImportMap = "import_map_remote"
 
 // corpusEntry is one page's record.

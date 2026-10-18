@@ -431,10 +431,10 @@ func createStore(ctx context.Context, tx *sql.Tx, c applyContext, s *storeRow) (
 func saveStore(ctx context.Context, tx *sql.Tx, c applyContext, s storeRow) error {
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE artifact_data_stores SET docs = ?, tombstones = ?, body_bytes = ?,
-			field_entries = ?, history_bytes = ?, footprint = ?, writes = ?, state_digest = ?,
-			history_floor = ?, tombstones_floor = ?, next_collection_no = ?, next_path_no = ?,
-			updated_at = ?, version = ?
-		WHERE artifact_id = ?`, s.docs, s.tombstones, s.bodyBytes, s.fieldEntries,
+			field_entries = ?, doc_bytes = ?, history_bytes = ?, footprint = ?, writes = ?,
+			state_digest = ?, history_floor = ?, tombstones_floor = ?, next_collection_no = ?,
+			next_path_no = ?, updated_at = ?, version = ?
+		WHERE artifact_id = ?`, s.docs, s.tombstones, s.bodyBytes, s.fieldEntries, s.docBytes,
 		s.historyBytes, s.footprint, s.writes, s.digest.Bytes(), s.historyFloor,
 		s.tombstoneFloor, s.nextCollection, s.nextPath, c.at(), c.packed, s.artifact); err != nil {
 		return fmt.Errorf("artifactdata: save store %s at %s: %w", s.artifact, c.position, err)
@@ -550,26 +550,32 @@ func writeDoc(ctx context.Context, tx *sql.Tx, c applyContext, s *storeRow, d *d
 	if d.live {
 		body = string(d.body)
 	}
+	// THE ROW'S METERED BYTES, from exactly what this writes, kept on the row
+	// so the next write moves the store's count by the difference.
+	metered := meteredDoc(&docState{id: d.id, live: d.live, body: d.body, entries: d.entries,
+		createdBy: createdBy, createdByKind: createdKind}, actor, kind)
 	var err error
 	if d.row {
 		_, err = tx.ExecContext(ctx, `
 			UPDATE artifact_data_docs SET body = ?, size = ?, created_by = ?, created_by_kind = ?,
-				created_at = ?, updated_by = ?, updated_by_kind = ?, updated_at = ?, version = ?
+				created_at = ?, updated_by = ?, updated_by_kind = ?, updated_at = ?, version = ?,
+				metered = ?
 			WHERE store_no = ? AND collection_no = ? AND doc_id = ?`,
 			body, len(d.body), createdBy, createdKind, createdAt, actor, kind, c.at(), c.packed,
-			s.no, d.coll.no, d.id)
+			metered, s.no, d.coll.no, d.id)
 	} else {
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO artifact_data_docs
 				(store_no, collection_no, doc_id, body, size, created_by, created_by_kind,
-				 created_at, updated_by, updated_by_kind, updated_at, version)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				 created_at, updated_by, updated_by_kind, updated_at, version, metered)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			s.no, d.coll.no, d.id, body, len(d.body), createdBy, createdKind, createdAt, actor,
-			kind, c.at(), c.packed)
+			kind, c.at(), c.packed, metered)
 	}
 	if err != nil {
 		return 0, fmt.Errorf("artifactdata: write document %s/%s at %s: %w", name, d.id, c.position, err)
 	}
+	s.docBytes += metered - d.metered0
 	rows := 1
 	// THE DOCUMENT'S INDEX IS REWRITTEN WHOLE: at most 64 rows, deleted and
 	// inserted in one statement each, which is cheaper than diffing paths

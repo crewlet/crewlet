@@ -24,8 +24,8 @@ type room struct {
 	// departed is the sessions a peer said left, at the instant of the
 	// frame that said so (its Until, which the peer stamps from its own
 	// clock), so a frame sealed before the leave and arriving after it (the
-	// join-time answer, applied once the ask has waited out its budget)
-	// cannot bring the member back.
+	// join-time answer, which travels by another path than the peer's
+	// broadcasts) cannot bring the member back.
 	departed map[remoteKey]time.Time
 
 	// presented is what this node's sockets were last shown, by session:
@@ -34,6 +34,10 @@ type room struct {
 	// the room presents everybody.
 	presented map[string]artifacts.PresenceMember
 	counts    *artifacts.PresenceCounts
+
+	// waiting is when each member whose change the sockets have not been
+	// told yet was first held back ([room.diff]).
+	waiting map[string]time.Time
 
 	// truncated is the hysteresis: a room presents only its most recent
 	// members once it passes [artifacts.PresenceRoomTop], and everybody
@@ -46,8 +50,13 @@ type room struct {
 	outUpsert map[string]struct{}
 	outLeave  map[string]struct{}
 
-	timer   *time.Timer
-	flushed time.Time
+	// timer and flushed are the sockets' fan-out: the one pending and when
+	// the last ran. sendTimer and sent are the same for the frames this
+	// node sends the fleet.
+	timer     *time.Timer
+	flushed   time.Time
+	sendTimer *time.Timer
+	sent      time.Time
 }
 
 // localMember is a member this node holds: a socket's, or an agent's tool
@@ -85,7 +94,7 @@ type remoteMember struct {
 func newRoom(id artifacts.ID) *room {
 	return &room{id: id, local: map[string]*localMember{}, remote: map[remoteKey]*remoteMember{},
 		departed:  map[remoteKey]time.Time{},
-		presented: map[string]artifacts.PresenceMember{},
+		presented: map[string]artifacts.PresenceMember{}, waiting: map[string]time.Time{},
 		outUpsert: map[string]struct{}{}, outLeave: map[string]struct{}{}}
 }
 
@@ -138,8 +147,8 @@ func (r *room) localMembers() []artifacts.PresenceMember {
 //
 // Frames from one node arrive in the order it sent them, with one exception:
 // the answer to this node's join-time ask is sealed when the peer answers and
-// applied only once the ask has waited out its budget, by which time the
-// peer's broadcasts have already said what changed since. Applied as a
+// travels to this node's reply mailbox, not the room's subject, so the peer's
+// broadcasts can overtake it and say what changed since. Applied as a
 // replacement, that answer deleted every member the peer gained in between,
 // and the room showed them again only at the peer's next rebroadcast,
 // [artifacts.PresenceRebroadcast] later: measured (internal/artifactspike,
@@ -291,16 +300,47 @@ func (r *room) roster(p presentation) artifacts.PresenceRoster {
 }
 
 // diff is what this node's sockets must be told to go from what they were
-// shown to p, and whether there is anything to tell; p becomes what they were
-// shown.
-func (r *room) diff(p presentation) (Change, bool) {
+// shown to p, whether there is anything to tell, and whether members were
+// held back for the next fan-out.
+//
+// AT MOST [artifacts.PresenceFrameMembers] MEMBERS ARE RE-PRESENTED, the one
+// whose change has waited longest first (then the most recently active), so
+// every changed member is told within a few fan-outs however many others keep
+// moving: ordered by recency alone, a member who moved once in a room where
+// ten others move all the time would never be told. What the sockets were
+// shown moves only by what was told, so a member held back is told in a
+// fan-out that follows. Every member leaving the presentation is told at
+// once: a leave is a session id, and a socket showing somebody gone is the one
+// error presence must not make.
+func (r *room) diff(p presentation, now time.Time) (Change, bool, bool) {
 	c := Change{Artifact: r.id, Upsert: []artifacts.PresenceMember{}, Leave: []string{},
 		Counts: p.counts, Truncated: p.counts != nil}
 	next := make(map[string]artifacts.PresenceMember, len(p.members))
+	var changed []artifacts.PresenceMember
 	for _, m := range p.members {
-		next[m.Session] = m
-		if held, ok := r.presented[m.Session]; !ok || held != m {
+		if held, ok := r.presented[m.Session]; ok && held == m {
+			next[m.Session] = m
+			continue
+		}
+		changed = append(changed, m)
+		if _, waiting := r.waiting[m.Session]; !waiting {
+			r.waiting[m.Session] = now
+		}
+	}
+	// p's order is most recent first, which a stable sort keeps among
+	// changes that have waited equally long.
+	slices.SortStableFunc(changed, func(a, b artifacts.PresenceMember) int {
+		return r.waiting[a.Session].Compare(r.waiting[b.Session])
+	})
+	for i, m := range changed {
+		if i < artifacts.PresenceFrameMembers {
 			c.Upsert = append(c.Upsert, m)
+			next[m.Session] = m
+			delete(r.waiting, m.Session)
+			continue
+		}
+		if held, ok := r.presented[m.Session]; ok {
+			next[m.Session] = held
 		}
 	}
 	for _, s := range slices.Sorted(maps.Keys(r.presented)) {
@@ -308,17 +348,33 @@ func (r *room) diff(p presentation) (Change, bool) {
 			c.Leave = append(c.Leave, s)
 		}
 	}
+	// A WAIT ENDS WITH ITS MEMBER'S CHANGE: told above, or gone from the
+	// presentation, or moved back to what the sockets were shown.
+	still := make(map[string]bool, len(changed))
+	for _, m := range changed[min(len(changed), artifacts.PresenceFrameMembers):] {
+		still[m.Session] = true
+	}
+	for s := range r.waiting {
+		if !still[s] {
+			delete(r.waiting, s)
+		}
+	}
 	countsMoved := (r.counts == nil) != (p.counts == nil) ||
 		(r.counts != nil && *r.counts != *p.counts)
 	r.presented = next
 	r.counts = p.counts
-	return c, len(c.Upsert)+len(c.Leave) > 0 || countsMoved
+	return c, len(c.Upsert)+len(c.Leave) > 0 || countsMoved,
+		len(changed) > artifacts.PresenceFrameMembers
 }
 
-// stopTimer cancels a pending fan-out.
+// stopTimer cancels a pending fan-out and a pending frame to the fleet.
 func (r *room) stopTimer() {
 	if r.timer != nil {
 		r.timer.Stop()
 		r.timer = nil
+	}
+	if r.sendTimer != nil {
+		r.sendTimer.Stop()
+		r.sendTimer = nil
 	}
 }

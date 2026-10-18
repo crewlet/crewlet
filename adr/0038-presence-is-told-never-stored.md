@@ -21,7 +21,9 @@ storage.
 
 - **A roster lives in the memory of the node holding the sockets.** A browser
   tells its node its focus and activity in a client frame on the socket,
-  throttled at the client and coalesced by the node. The frame changes no
+  throttled at the client and coalesced by the node, each room on two clocks
+  (its sockets' fan-out and its frames to the fleet), so a move crosses nodes
+  in one short window on each side. The frame changes no
   company state, which is why it does not contradict the read-only socket of
   [ADR-0024](0024-the-dashboard-acts-as-the-principal-its-session-resolves-to.md):
   that rule protects writes a lost answer must be able to retry, and a lost
@@ -36,7 +38,7 @@ storage.
   fifteen seconds; an entry expires forty-five seconds after the last frame
   that named it, which is three missed rebroadcasts; and a node gaining its
   first member of a room asks its peers once, within the fleet's read budget,
-  rather than waiting fifteen seconds.
+  and shows each answer as it arrives, rather than waiting fifteen seconds.
 - **A frame names a person, so it is sealed.** Every broadcast frame is sealed
   under the fleet keyring, in a key domain of its own, with a sixty-second
   validity inside the seal, through a one-way form of `internal/signedask`. A

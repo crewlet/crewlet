@@ -5394,10 +5394,12 @@ export interface DataCollection {
 export interface DataStoreInfo {
   artifact: string;
   docs: number;
+  /** `doc_bytes` plus `history_bytes`: what the store's rows cost on every data node. */
   footprint: number;
+  doc_bytes: number;
+  history_bytes: number;
   body_bytes: number;
   field_entries: number;
-  history_bytes: number;
   writes: number;
   digest: string;
   history_floor: number;
@@ -5566,6 +5568,8 @@ export interface ArtifactPresenceMember {
   activity: PresenceActivity;
   focus: PresenceFocus;
   at: string;
+  /** For an agent, the run of the turn whose tool call last put it in the room. */
+  turn?: string;
 }
 
 /** Who is in one artifact's room (`artifacts.PresenceRoster`). */

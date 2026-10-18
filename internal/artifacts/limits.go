@@ -32,7 +32,9 @@ type Limits struct {
 	Artifacts int64 `json:"artifacts"`
 
 	// DataBytes bounds the datastore footprint of every store together:
-	// real bytes held on every data node (bodies, field index, history).
+	// the bytes its rows cost on every data node (document rows and their
+	// field index, and hot history), as internal/artifactdata's meter
+	// counts them.
 	DataBytes int64 `json:"data_bytes"`
 
 	// DataStoreBytes bounds one artifact's datastore footprint.
@@ -67,9 +69,11 @@ const (
 	MinDataBytes     = 64 * miB
 	MaxDataBytes     = 1 * tiB
 
-	// DefaultDataStoreBytes is 32 MiB per store: one sheet a few thousand
-	// rows long with a week of history is a few MiB, so this is an order of
-	// magnitude of headroom before a sheet is really a database.
+	// DefaultDataStoreBytes is 32 MiB per store, in the bytes its rows cost
+	// on disk: spike DS-2 measured a twelve-column review sheet at about
+	// 3.2 KiB a row with a week of history, so a sheet of a few thousand
+	// rows takes a few MiB to ten, and the default holds about ten thousand
+	// before a sheet is really a database.
 	DefaultDataStoreBytes = 32 * miB
 	MinDataStoreBytes     = 1 * miB
 	MaxDataStoreBytes     = 1 * giB
@@ -180,11 +184,27 @@ const (
 	// the default store footprint, so history never crowds out the data.
 	MaxHistoryBytesPerStore = 8 * miB
 
-	// Cost-weighted write limits, per node: they protect this node from one
+	// Cost-weighted write limits, per node, in cost units of sixteen applied
+	// rows (internal/artifactdata's Cost): they protect this node from one
 	// client and are not a fleet quota.
+	//
+	// A PRINCIPAL ON A STORE takes 20 units a second, about ten cell edits on
+	// a twelve-column row (two units each), with bursts of 100: more than a
+	// person clicks, and an agent's pasted block of a hundred rows (about two
+	// hundred units, weighed at a whole bucket) once every five seconds.
 	DataWritesPerPrincipalPerSecond = 20
 	DataWritesBurst                 = 100
-	DataWritesPerStorePerSecond     = 200
+
+	// A STORE takes 40 units a second (about 640 applied rows) with bursts
+	// of 100. Spike DS-1 measured the three-member fleet's ceiling at about
+	// 1,160 applied rows a second on a development machine, and the store
+	// guard sits near half of it, so one store's writers cannot saturate the
+	// one replicated writer every other domain shares; the thirty-person
+	// review at its peak (15 cell edits a second, 30 units, in bursts of 50
+	// edits, 100 units) fits under both bounds. The reference run
+	// (docs/reference/artifact-capacity.md) confirms or moves both.
+	DataWritesPerStorePerSecond = 40
+	DataWritesStoreBurst        = 100
 )
 
 // Serving bounds.
@@ -215,7 +235,28 @@ const (
 	PresenceRebroadcast   = 15 * time.Second
 	PresenceFrameValidity = 60 * time.Second // inside the seal
 	PresenceClientRate    = 10               // client frames a second per socket
-	PresenceCoalesceRate  = 5                // frames a second per artifact a node fans out
 	PresenceRoomTop       = 50               // members a large room presents individually
 	PresenceRoomFull      = 40               // below this a large room returns to full rosters
+
+	// PresenceCoalesceRate is how many times a second a node fans one
+	// room out to its sockets, and PresenceBroadcastRate how many times a
+	// second it tells the fleet what its own members did there. A cursor
+	// crossing nodes waits one broadcast window on its own node and one
+	// fan-out window on the viewer's: at 20 and 10 that is at most 150 ms
+	// beside the broker's transit, the bound presence is held to, where
+	// one window of 200 ms on each side (5 a second for both) measured a
+	// median near 240 ms in spike S6. Ten frames a second is also what a
+	// socket may send ([PresenceClientRate]).
+	PresenceCoalesceRate  = 10
+	PresenceBroadcastRate = 20
+
+	// PresenceFrameMembers bounds the members one fan-out re-presents to a
+	// socket: the most recently active first, the rest in the frames that
+	// follow. A large room presents its fifty most recent members, and
+	// when everybody moves, the fifty change constantly; spike S6 measured
+	// about 50 KiB a second a socket at 200 viewers moving ten times a
+	// second, each frame naming most of the fifty again. Ten members a
+	// frame at ten frames a second bounds that near 20 KiB, and a room
+	// whose members are still settles within a second.
+	PresenceFrameMembers = 10
 )

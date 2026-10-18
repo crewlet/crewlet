@@ -616,6 +616,20 @@ type EventQueue interface {
 	// the payload can answer.
 	Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error)
 
+	// AskEach is [EventQueue.Ask] with each reply handed to each AS IT
+	// ARRIVES rather than collected for the end, until ctx is done or
+	// each answers false. Everything Ask promises holds: nothing is
+	// retained, fewer replies than hoped for is not an error, a broker
+	// this node cannot reach is refused before anything is sent, and the
+	// replies are unordered and carry no sender.
+	//
+	// IT EXISTS FOR A CALLER THAT ACTS ON EACH ANSWER: one that waits for
+	// none in particular (a scatter with no roster) would otherwise wait
+	// out its whole budget before it could act on the fastest reply. each
+	// runs on the asker's goroutine, one reply at a time, and an ask lasts
+	// no longer than each lets it.
+	AskEach(ctx context.Context, subject string, request []byte, each func(reply []byte) bool) error
+
 	// Serve makes this process one of subject's answerers.
 	//
 	// EVERY SERVER OF A SUBJECT SEES EVERY REQUEST — the opposite of

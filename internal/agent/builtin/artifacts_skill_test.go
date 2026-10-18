@@ -54,9 +54,10 @@ func TestTheArtifactSkillsTeachOneContract(t *testing.T) {
 	}
 }
 
-// THE TOOL SKILL IS LOADED BEFORE THE FIRST BYTE IS PUBLISHED: it is enforced,
-// and its trigger covers every tool that writes an artifact's bytes, and no
-// read (a read never waits on the design contract).
+// THE TOOL SKILL IS LOADED BEFORE THE FIRST BYTE IS PUBLISHED OR WRITTEN: it is
+// enforced, and its trigger covers every tool that writes an artifact's bytes
+// or its datastore's schema or rows, and no read (a read never waits on the
+// design contract).
 func TestTheArtifactToolSkillGuardsEveryPublishingTool(t *testing.T) {
 	t.Parallel()
 	s, err := skills.Parse(readRepoFile(t, artifactToolSkill), skills.Source{PageID: "artifacts.md"})
@@ -67,12 +68,13 @@ func TestTheArtifactToolSkillGuardsEveryPublishingTool(t *testing.T) {
 		t.Fatalf("key %q, required %v: want an enforced skill:artifacts", s.Key, s.Required)
 	}
 	for _, name := range []string{builtin.CreateArtifactTool, builtin.PublishArtifactTool,
-		builtin.UploadArtifactAssetTool} {
+		builtin.UploadArtifactAssetTool, builtin.SetArtifactSchemaTool, builtin.WriteArtifactDataTool} {
 		if !s.Trigger.Covers(name, "") {
 			t.Errorf("the trigger does not cover %s", name)
 		}
 	}
-	for _, name := range []string{builtin.ListArtifactsTool, builtin.GetArtifactTool} {
+	for _, name := range []string{builtin.ListArtifactsTool, builtin.GetArtifactTool,
+		builtin.ReadArtifactDataTool, builtin.QueryArtifactDataTool} {
 		if s.Trigger.Covers(name, "") {
 			t.Errorf("the trigger covers the read %s, which would make every read wait", name)
 		}
@@ -86,7 +88,8 @@ func TestTheArtifactSkillsNameOnlyRegisteredTools(t *testing.T) {
 	named := regexp.MustCompile("`([a-z_]*artifacts?[a-z_]*)`")
 	for _, rel := range []string{artifactToolSkill, artifactFounderSkill} {
 		for _, m := range named.FindAllStringSubmatch(readRepoFile(t, rel), -1) {
-			if !slices.Contains(builtin.ArtifactTools(), m[1]) {
+			if !slices.Contains(builtin.ArtifactTools(), m[1]) &&
+				!slices.Contains(builtin.ArtifactDataTools(), m[1]) {
 				t.Errorf("%s names `%s`, which is no artifacts tool", rel, m[1])
 			}
 		}

@@ -149,11 +149,12 @@ type linter struct {
 	hashes map[string]bool
 	warned map[Code]int
 
-	scripts  int
-	inScript bool
-	scriptJS bool
-	inStyle  bool
-	viewport bool
+	scripts   int
+	inScript  bool
+	scriptJS  bool
+	importMap bool
+	inStyle   bool
+	viewport  bool
 }
 
 // warn records a warning, at most [maxWarnings] of one code.
@@ -194,12 +195,15 @@ func (l *linter) rewrite(src []byte) ([]byte, int, error) {
 			switch strings.ToLower(z.Token().Data) {
 			case "script":
 				l.inScript = false
+				l.importMap = false
 			case "style":
 				l.inStyle = false
 			}
 			out.Write(raw)
 		case html.TextToken:
 			switch {
+			case l.inScript && l.importMap:
+				out.Write(l.importMapText(raw, line))
 			case l.inScript:
 				l.scriptText(raw, line)
 				out.Write(raw)
@@ -269,6 +273,7 @@ func (l *linter) startTag(tok html.Token, raw []byte, line int) []byte {
 		typ, _ := get("type")
 		typ = mediaEssence(typ)
 		l.scriptJS = jsType(typ)
+		l.importMap = typ == "importmap"
 		if transformType(typ) {
 			l.policy.UnsafeEval = true
 		}
@@ -284,6 +289,16 @@ func (l *linter) startTag(tok html.Token, raw []byte, line int) []byte {
 		for _, key := range []string{"src", "href", "xlink:href"} {
 			v, ok := get(key)
 			if !ok || strings.TrimSpace(v) == "" || isJavaScriptURL(v) {
+				continue
+			}
+			if l.importMap {
+				// AN IMPORT MAP IS READ INLINE. One fetched from a source
+				// would be a list of module addresses nothing here reads,
+				// so it is refused rather than copied in as a script.
+				if IsRemote(v) {
+					l.fs.add(line, CodeRemoteImport, "<script type=\"importmap\" %s=%q> loads "+
+						"an import map from another origin; write the map inline", key, v)
+				}
 				continue
 			}
 			if !IsRemote(v) {
@@ -427,15 +442,17 @@ func (l *linter) scriptText(text []byte, line int) {
 }
 
 // verify tokenizes a rewritten page again and holds every script element to
-// what the rewrite promised: the placeholder as the nonce a browser reads, and
-// a source on the version's own origin. want is how many scripts the rewrite
-// counted; the placeholder must occur exactly once for each.
+// what the rewrite promised: the placeholder as the nonce a browser reads, a
+// source on the version's own origin, and an import map naming no module on
+// another. want is how many scripts the rewrite counted; the placeholder must
+// occur exactly once for each.
 func verify(out []byte, want int) error {
 	if n := bytes.Count(out, []byte(artifacts.NoncePlaceholder)); n != want {
 		return fmt.Errorf("the placeholder occurs %d times for %d scripts", n, want)
 	}
 	z := html.NewTokenizer(bytes.NewReader(out))
 	got := 0
+	inMap := false
 	for {
 		tt := z.Next()
 		switch tt {
@@ -447,13 +464,28 @@ func verify(out []byte, want int) error {
 				return fmt.Errorf("the page holds %d scripts and the rewrite counted %d", got, want)
 			}
 			return nil
+		case html.EndTagToken:
+			inMap = false
+		case html.TextToken:
+			if !inMap {
+				continue
+			}
+			entries, _, err := importMapEntries(z.Raw())
+			if err != nil {
+				return fmt.Errorf("an import map could not be read: %w", err)
+			}
+			for _, e := range entries {
+				if IsRemote(e.address) {
+					return fmt.Errorf("an import map still maps %q to %q", e.specifier, e.address)
+				}
+			}
 		case html.StartTagToken, html.SelfClosingTagToken:
 			tok := z.Token()
 			if !strings.EqualFold(tok.Data, "script") {
 				continue
 			}
 			got++
-			nonce := ""
+			nonce, typ := "", ""
 			for _, a := range tok.Attr {
 				key := a.Key
 				if a.Namespace != "" {
@@ -464,6 +496,10 @@ func verify(out []byte, want int) error {
 					if nonce == "" {
 						nonce = a.Val
 					}
+				case "type":
+					if typ == "" {
+						typ = mediaEssence(a.Val)
+					}
 				case "src", "href", "xlink:href":
 					if IsRemote(a.Val) || isJavaScriptURL(a.Val) {
 						return fmt.Errorf("a script still loads %q", a.Val)
@@ -473,6 +509,7 @@ func verify(out []byte, want int) error {
 			if nonce != artifacts.NoncePlaceholder {
 				return errors.New("a script does not carry the placeholder as its nonce")
 			}
+			inMap = typ == "importmap"
 		}
 	}
 }
@@ -580,12 +617,14 @@ func Stored(path string, text []byte, opts Options) (artifacts.ScriptPolicy, err
 	return page.Policy, nil
 }
 
-// htmlLocalRefs is every script, stylesheet and style-element reference a
-// page makes, as written.
+// htmlLocalRefs is every script, stylesheet, style-element and import map
+// reference a page makes, as written. An import map's addresses are among
+// them because a copied module is named by the map alone: a carried page
+// whose map points at a copy needs the copy in the version beside it.
 func htmlLocalRefs(text []byte) []string {
 	var out []string
 	z := html.NewTokenizer(bytes.NewReader(text))
-	inStyle := false
+	inStyle, inMap := false, false
 	for {
 		switch z.Next() {
 		case html.ErrorToken:
@@ -594,22 +633,32 @@ func htmlLocalRefs(text []byte) []string {
 			tok := z.Token()
 			name := strings.ToLower(tok.Data)
 			inStyle = name == "style"
+			inMap = false
 			for _, a := range tok.Attr {
 				switch {
 				case name == "script" && (a.Key == "src" || a.Key == "href"):
 					out = append(out, a.Val)
+				case name == "script" && a.Key == "type":
+					inMap = mediaEssence(a.Val) == "importmap"
 				case name == "link" && a.Key == "href":
 					out = append(out, a.Val)
 				}
 			}
 		case html.TextToken:
-			if inStyle {
+			switch {
+			case inStyle:
 				for _, r := range scanCSS(z.Raw()) {
 					out = append(out, r.url)
 				}
+			case inMap:
+				// A map that does not parse names nothing a browser loads.
+				entries, _, _ := importMapEntries(z.Raw())
+				for _, e := range entries {
+					out = append(out, e.address)
+				}
 			}
 		case html.EndTagToken:
-			inStyle = false
+			inStyle, inMap = false, false
 		}
 	}
 }

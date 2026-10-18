@@ -20,6 +20,15 @@
  * versions, what its datastore commits moves the sheet and the page bridge,
  * and a room the engine withdraws (the reader's share was removed while they
  * had it open) turns the page into the card that says so.
+ *
+ * # Who is here, and following them
+ *
+ * The People rail (`rail=people`, opened from the presence stack or its own
+ * control) lists everybody in words with Follow, and an agent's turn. Following
+ * (`follow={handle}`, so a link can start it) moves this reader to the version
+ * and, on a sheet, the collection the followed person is on, under a
+ * `FollowBanner`; the reader's own scroll, wheel, press or navigation key in
+ * the body stops it, as do Escape and the followed person leaving.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -27,14 +36,21 @@ import {
   Button,
   Callout,
   EmptyState,
+  FollowBanner,
   Menu,
   PresenceStack,
   Skeleton,
   useToast,
   type NodeHue,
 } from "@crewlethq/ui";
-import { CopyGlyph, EllipsisGlyph, PinGlyph, TrashGlyph } from "@crewlethq/icons/glyphs";
-import { useParam } from "~/app/router.tsx";
+import {
+  CopyGlyph,
+  EllipsisGlyph,
+  PinGlyph,
+  TrashGlyph,
+  UsersGlyph,
+} from "@crewlethq/icons/glyphs";
+import { useNavigator, useParam } from "~/app/router.tsx";
 import { useOwnStar, usePageLabels, usePageMenu } from "~/app/Shell.tsx";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { ObjectTabs } from "~/app/frame/ObjectTabs.tsx";
@@ -65,6 +81,9 @@ import { HistoryTab } from "./HistoryTab.tsx";
 import { DataTab } from "./DataTab.tsx";
 import { PurgeControl, SettingsTab } from "./SettingsTab.tsx";
 import { useArtifactPresence } from "./presence.ts";
+import { PeopleRail } from "./PeopleRail.tsx";
+import { followMoves, followTarget, moves } from "~/lib/artifacts/follow.ts";
+import { useViewer } from "~/lib/viewer.ts";
 
 /** The head is pushed (`artifact_changed`); this read is the floor under a push the socket missed. */
 const DETAIL_POLL_MS = 60_000;
@@ -238,6 +257,82 @@ function Loaded({
   const newer = version === 0 && detail.head_number > shownHead;
 
   const presence = useArtifactPresence(room, people, showing);
+  const viewer = useViewer();
+  const nav = useNavigator();
+  const [rail, setRail] = useParam("rail", "", "section");
+  const [follow, setFollow] = useParam("follow", "");
+  const [sheetParam] = useParam("sheet", "");
+  // WHO IS FOLLOWED is somebody else in the room: following oneself moves
+  // nothing, and a seat that left is said once and then let go.
+  const followed = follow && follow !== viewer.handle ? follow : "";
+  const target = useMemo(
+    () => (followed ? followTarget(room.others, followed) : null),
+    [room.others, followed],
+  );
+  // WHO STOPPED BEING FOLLOWABLE, and whether they had been here: a seat that
+  // left is said to have left, one a link named who was never here is said
+  // to be away.
+  const [left, setLeft] = useState<{ seat: string; wasHere: boolean } | null>(null);
+  const seenTarget = useRef(false);
+  const stopFollowing = useCallback(() => setFollow(""), [setFollow]);
+  useEffect(() => {
+    if (!followed || room.state.kind !== "joined") return;
+    if (target === null) {
+      setLeft({ seat: followed, wasHere: seenTarget.current });
+      seenTarget.current = false;
+      setFollow("");
+      return;
+    }
+    seenTarget.current = true;
+    const move = followMoves(target, {
+      kind: detail.kind,
+      head: detail.head_number,
+      showing,
+      tab,
+      sheet: sheetParam,
+    });
+    if (!moves(move)) return;
+    // ONE REPLACE FOR THE WHOLE MOVE: following is not a place the reader
+    // went, so Back does not walk through every version they were taken to.
+    nav.filter({
+      ...(move.version !== undefined ? { version: move.version || null } : {}),
+      ...(move.sheet !== undefined ? { sheet: move.sheet } : {}),
+      ...(move.tab !== undefined ? { tab: null } : {}),
+    });
+  }, [
+    followed,
+    target,
+    room.state.kind,
+    detail.kind,
+    detail.head_number,
+    showing,
+    tab,
+    sheetParam,
+    nav,
+    setFollow,
+  ]);
+  // THE READER'S OWN MOVE OF THE VIEW STOPS FOLLOWING: a wheel, a touch
+  // drag, a press or a navigation key inside the artifact's body. Escape is
+  // the banner's own.
+  const body = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = body.current;
+    if (!followed || !el) return undefined;
+    const stop = () => setFollow("");
+    const onKey = (event: KeyboardEvent) => {
+      if (NAVIGATION_KEYS.has(event.key)) stop();
+    };
+    el.addEventListener("wheel", stop, { passive: true });
+    el.addEventListener("touchmove", stop, { passive: true });
+    el.addEventListener("pointerdown", stop);
+    el.addEventListener("keydown", onKey);
+    return () => {
+      el.removeEventListener("wheel", stop);
+      el.removeEventListener("touchmove", stop);
+      el.removeEventListener("pointerdown", stop);
+      el.removeEventListener("keydown", onKey);
+    };
+  }, [followed, setFollow]);
   const held = useRef(new Map<string, NodeHue>());
   const drawn = useMemo(() => {
     const out = presenceMembers(room.others, people, held.current);
@@ -308,8 +403,23 @@ function Loaded({
         actions={
           <span className="artifact-actions">
             {drawn.length > 0 && (
-              <PresenceStack members={drawn} self size="sm" className="artifact-presence" />
+              <PresenceStack
+                members={drawn}
+                self
+                size="sm"
+                className="artifact-presence"
+                onSelect={() => setRail("people")}
+              />
             )}
+            <Button
+              size="small"
+              variant={rail === "people" ? "secondary" : "ghost"}
+              leadingIcon={<UsersGlyph size="sm" />}
+              pressed={rail === "people"}
+              onClick={() => setRail(rail === "people" ? "" : "people")}
+            >
+              People
+            </Button>
             <ShareControl detail={detail} onChanged={refetch} />
             <span className="page-action-folds">
               <Menu
@@ -338,8 +448,8 @@ function Loaded({
       />
       {detail.elevated && (
         <Callout variant="info" title="You can open this because you are an administrator">
-          The engine recorded that you opened it, and its owner and editors can see that in its
-          history.
+          The engine recorded that you opened it: its owner and editors see that in its history, and
+          every administrator sees it on the company's audit trail.
         </Callout>
       )}
       {room.state.kind === "refused" && room.state.code !== "not_found" && (
@@ -377,35 +487,93 @@ function Loaded({
           </Button>
         </div>
       )}
-      <div className="artifact-body">
-        {tab === "view" && (
-          <ViewTab
-            detail={detail}
-            version={showing}
-            versions={versions}
-            store={store}
-            room={room}
-            presence={presence}
-            drawn={drawn}
-            bridgeStores={bridgeStores}
-          />
-        )}
-        {tab === "data" && store && <DataTab detail={detail} store={store} />}
-        {tab === "history" && (
-          <HistoryTab
-            detail={detail}
-            versions={versions}
-            versionsError={versionsError}
-            versionsRefusal={versionsRefusal}
-            showing={showing}
-            onShow={(n: number) => {
-              setVersion(n === detail.head_number ? "" : String(n));
-              setTab("view");
+      {followed && target && (
+        <FollowBanner
+          name={people.seatName(followed)}
+          onStop={stopFollowing}
+          labels={{
+            following: (name) => {
+              const where = target.focus.region ? ` They are in ${target.focus.region}.` : "";
+              return `Following ${name}.${where} Press Esc or scroll to stop.`;
+            },
+          }}
+        />
+      )}
+      {left && !followed && (
+        <FollowBanner
+          name={people.seatName(left.seat)}
+          state="left"
+          onStop={() => setLeft(null)}
+          onDismiss={() => setLeft(null)}
+          {...(left.wasHere
+            ? {}
+            : {
+                labels: {
+                  left: (name: string) => `${name} is not here, so there is nobody to follow.`,
+                },
+              })}
+        />
+      )}
+      <div className={rail === "people" ? "artifact-with-rail" : undefined}>
+        {rail === "people" && (
+          <PeopleRail
+            members={room.others}
+            self={viewer.handle ?? ""}
+            people={people}
+            following={followed}
+            onFollow={(seat) => {
+              setLeft(null);
+              setFollow(seat ?? "");
             }}
+            onClose={() => setRail("")}
           />
         )}
-        {tab === "settings" && <SettingsTab detail={detail} onChanged={refetch} />}
+        <div className="artifact-body" ref={body}>
+          {tab === "view" && (
+            <ViewTab
+              detail={detail}
+              version={showing}
+              versions={versions}
+              store={store}
+              room={room}
+              presence={presence}
+              drawn={drawn}
+              bridgeStores={bridgeStores}
+            />
+          )}
+          {tab === "data" && store && <DataTab detail={detail} store={store} />}
+          {tab === "history" && (
+            <HistoryTab
+              detail={detail}
+              versions={versions}
+              versionsError={versionsError}
+              versionsRefusal={versionsRefusal}
+              showing={showing}
+              onShow={(n: number) => {
+                setVersion(n === detail.head_number ? "" : String(n));
+                setTab("view");
+              }}
+              room={room}
+              presence={presence}
+              bridgeStores={bridgeStores}
+            />
+          )}
+          {tab === "settings" && <SettingsTab detail={detail} onChanged={refetch} />}
+        </div>
       </div>
     </div>
   );
 }
+
+/** The keys that move a reader's view of the body, and so stop a follow. */
+const NAVIGATION_KEYS = new Set([
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "PageUp",
+  "PageDown",
+  "Home",
+  "End",
+  " ",
+]);

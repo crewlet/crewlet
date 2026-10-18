@@ -28,10 +28,14 @@
 //     in that room, so a fleet with an artifact open on two nodes moves its
 //     presence between those two. One goroutine (the reconciler) listens and
 //     withdraws, so the two never race for one room.
-//   - CHANGES COALESCE: a room fans out at most
-//     [artifacts.PresenceCoalesceRate] times a second, to this node's sockets
-//     (the difference between what they were shown and what the room presents
-//     now) and to the fleet (this node's members that changed or left).
+//   - CHANGES COALESCE, on two clocks: a room fans out to this node's
+//     sockets at most [artifacts.PresenceCoalesceRate] times a second (the
+//     difference between what they were shown and what the room presents
+//     now, at most [artifacts.PresenceFrameMembers] members re-presented a
+//     frame, the most recent first), and this node tells the fleet what its
+//     own members did there at most [artifacts.PresenceBroadcastRate] times
+//     a second. Apart, so a cursor crossing nodes waits one short window on
+//     each side rather than two long ones.
 //   - EVERY [artifacts.PresenceRebroadcast] each node broadcasts every member
 //     it holds in every room, in full, and a peer replaces what it held from
 //     that node with it, so a lost leave costs one rebroadcast. A member not
@@ -40,10 +44,12 @@
 //     clean up.
 //   - A NODE GAINING ITS FIRST SOCKET in a room asks its peers once, within the
 //     fleet's read budget, rather than leaving a newcomer to wait a rebroadcast
-//     interval to see who is there. The answers are applied once the budget is
-//     spent, after the peers' broadcasts may already have said more, so a
-//     member changes only on a frame newer than the one that last said it, and
-//     a late answer fills in what the room has not heard since and undoes
+//     interval to see who is there. Each answer is applied as it arrives
+//     (queue.EventQueue.AskEach), so the room shows a peer's members within
+//     that peer's round trip rather than once the whole budget is spent. An
+//     answer can still be overtaken by the peer's broadcasts, so a member
+//     changes only on a frame newer than the one that last said it, and a
+//     late answer fills in what the room has not heard since and undoes
 //     nothing.
 //   - A NODE STOPPING tells the fleet its members left before it goes.
 //

@@ -120,6 +120,14 @@ holds a file.
 **Rolling back is publishing.** Restoring version 7 publishes a new head whose
 manifest is version 7's, every entry carried. History is never rewritten.
 
+**Any two kept versions compare.** The dashboard's History tab compares the
+version picked with another (its address carries `against=` and `lens=`, so a
+link opens the same comparison): by files, every file added, removed or
+changed (by digest, so a carried file is never a change) and a changed text
+file line by line; or side by side, a page in two frames or a document
+rendered twice. Both sides of a page show today's data, which is not versioned
+with it.
+
 **Retention is bounded twice.** An artifact keeps its newest 100 unlabelled
 versions and every labelled one (at most 100 labels); a publish past that
 prunes the oldest unlabelled version in the same record. A trashed artifact is
@@ -224,12 +232,15 @@ A share names an **audience** and a **role**:
 - **The owner holds every role.** The lead of an **agent** owner holds the
   owner's role on that agent's artifacts; the lead of a **person** holds
   nothing of theirs.
-- **An administrator reads anything**, through the admin path, and every read
-  of an artifact the administrator has no share in is recorded as an elevated
-  read that the artifact's owner and editors see in its history.
+- **An administrator reads anything**, through the admin path. An
+  administrator a share already admits acts at the share's role; on an artifact
+  shared with them in no way, every content read is recorded first as an
+  elevated read, which the artifact's owner and editors see in its history and
+  every administrator sees on the company trail of artifact history (the Audit
+  screen, `artifact_trail`).
 - **A caller with no share is told the artifact does not exist**: `404
-  not_found`, identical to an id nothing holds. A share below what a
-  gesture needs is `403`, naming the role that would change the answer.
+  not_found`, identical to an id nothing holds. A share below what a gesture
+  needs is `403`, naming the role that would change the answer.
 - **A share never grants above the sharer's own role**, and every narrowing (an
   unshare, a lower role, a trash, a transfer) stops the next document request
   on the serving origin and withdraws every socket from the room.
@@ -303,9 +314,15 @@ sequenceDiagram
   `allow-popups`: an external link goes through the host, which names the
   destination before it opens it.
 - **No third party at view time.** Script and stylesheet files a page
-  references on the allowed CDNs are copied into the version when it is
-  published, integrity-checked, so viewing works without the CDN and the CDN
-  never sees a viewer.
+  references on the allowed CDNs, as a script or link element, a module import
+  or an import map entry, are copied into the version when it is published,
+  integrity-checked, so viewing works without the CDN and the CDN never sees a
+  viewer. Any other remote script a page states is refused. What the linter
+  cannot read is a script the page's own script builds at run time:
+  `'strict-dynamic'` trusts it from any host, so a page whose author means to
+  can send what a viewer may read to another site. Only an `editor` publishes,
+  and every version names who did; share `editor` accordingly (see
+  `SECURITY.md`).
 
 The raw bytes of a version are also downloadable from the API, always as an
 attachment and text as `text/plain`, never rendered.
@@ -377,11 +394,17 @@ changed since is a conflict naming who changed them.
 
 **Bounds.** At most 64 collections per store, 128 columns per collection,
 50 000 documents per store, 64 KiB per document and 100 ops or 1 MiB per write.
-Writes are rate-limited per node by their cost (ops plus the field rows they
-touch): 20 a second sustained per principal per store with bursts of 100, and
-200 a second per store, answered `429` with `Retry-After`, never a lockout.
-The datastore quotas count real bytes held on every data node: bodies, the
-field index and history.
+Writes are rate-limited per node by their cost: the rows the apply writes,
+which for a changed document are its whole field index deleted and written
+again, in units of sixteen rows (a cell edit on a twelve-column row is two). A
+principal takes 20 units a second on a store with bursts of 100, and a store 40
+a second with bursts of 100, answered `429` with `Retry-After`, never a
+lockout.
+The datastore quotas count the bytes a store's rows really take on every data
+node and in every snapshot: each document row with its index and field-index
+entries, and the hot history, measured within a few percent of the file. A
+twelve-column review sheet costs about 3.2 KiB a row with a week of history,
+so the default 32 MiB per store holds about ten thousand rows.
 
 **Exports.** An editor downloads any collection as CSV.
 
@@ -405,7 +428,10 @@ flowchart LR
 
 - A browser sends its focus (a version, a region, or a collection, document
   and field) and its activity (`viewing`, `editing`, `idle`), throttled to ten
-  frames a second and coalesced by the node to five a second per artifact.
+  frames a second. The node fans a room out to its sockets at most ten times a
+  second, at most ten members a frame (the change that has waited longest
+  first), and tells the other nodes its own members' moves at most twenty
+  times a second, so a cursor crosses nodes within about 150 ms.
 - Each node rebroadcasts its roster every 15 seconds; an entry expires 45
   seconds after the last frame naming it. A node gaining its first member of a
   room asks its peers once, so a newcomer sees the room at once.
@@ -414,7 +440,15 @@ flowchart LR
 - Past 50 members a room shows the 50 most recently active plus counts of
   people and agents, and returns to the full roster below 40.
 - **Agents are present.** An agent reading or writing an artifact appears in
-  its room, so a person sees which agent is editing which row.
+  its room, naming the turn it is working in, so a person sees which agent is
+  editing which row and opens that turn from the room.
+- **The People rail** (opened from the presence stack, `rail=people`) lists
+  everybody here in words, one entry a person however many tabs they have,
+  with what each is doing and where. **Follow** moves the reader to the
+  version, and on a sheet the collection, the followed person has open, under
+  a banner, until the reader scrolls, presses or uses a navigation key in the
+  page, presses Escape, or the followed person leaves; `follow={handle}` in the
+  address starts it, which is how to watch a presenter on a phone.
 - Joining a room is decided like opening the artifact, and decided again on
   every share, unshare, trash, transfer and purge: somebody whose share is
   removed leaves the room at once, on a socket that stays open.
@@ -464,7 +498,7 @@ and the human-only verbs hold whatever a model does.
 |---|---|
 | A page acting as whoever opened it | The artifact origin holds no credential and never reads a cookie; the page talks to the host only through a port, and every call is decided as the viewer |
 | One artifact reading another's storage | An origin per artifact on a site of its own, or an opaque origin; never the dashboard's |
-| A page leaking its data to a third party | `connect-src`, `img-src` and `media-src` reach only the artifact's own origin; no popups; external links are confirmed by the host |
+| A page leaking its data to a third party by accident | `connect-src`, `img-src` and `media-src` reach only the artifact's own origin; no popups; external links are confirmed by the host; every remote script a page states is copied in or refused. A page whose own script loads another site's script on purpose is not stopped: publishing is an `editor`'s, and every version names its publisher |
 | Script injected through a viewer's row | A fresh nonce with `'strict-dynamic'` per document; no `'unsafe-inline'` |
 | A compromised CDN | Third-party files are copied in at publish and served from the artifact's own version |
 | A revoked share that keeps working | Documents re-authorized on every request; a stale node asks a peer or answers `503` |
@@ -485,8 +519,8 @@ stream and ceiling:
 
 | Domain | Stream | Holds | Ceiling (Tier A) |
 |---|---|---|---|
-| `artifacts` | `CREWLET_ARTIFACTS_LOG` | Artifacts, versions and their object references, assets, shares, pins, reads, history | `stream.artifacts_log_max_bytes`; unset derives a quarter of the tracker log's ceiling, 1 GiB to 256 GiB |
-| `artifactdata` | `CREWLET_ARTIFACT_DATA_LOG` | Every store's collections, documents, field index and write history | `stream.artifact_data_log_max_bytes`; unset derives half of the tracker log's ceiling, 1 GiB to 512 GiB |
+| `artifacts` | `CREWLET_ARTIFACTS_LOG` | Artifacts, versions and their object references, assets, shares, pins, reads, history | `stream.artifacts_log_max_bytes`, 1 GiB to 256 GiB; unset derives a quarter of the mutation log's ceiling, 1 GiB to 16 GiB from a volume alone |
+| `artifactdata` | `CREWLET_ARTIFACT_DATA_LOG` | Every store's collections, documents, field index and write history | `stream.artifact_data_log_max_bytes`, 1 GiB to 512 GiB; unset derives a quarter of the mutation log's ceiling, 1 GiB to 16 GiB from a volume alone |
 
 Every record that adds or removes an object reference is arbitrated on its
 artifact's subject, so the broker orders every carry against every removal.

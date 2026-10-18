@@ -9,19 +9,22 @@
 // with its line: a script from another origin that is not an allowlisted CDN
 // file the engine can copy in, a stylesheet from a host outside the allowlist,
 // a package CDN reference without an exact version, a script importing another
-// origin by a literal, a form posting to another origin, an off-origin meta
-// refresh, a javascript: URL, and source text that already carries the
-// placeholder. Credential shapes in what an agent publishes are refused by the
-// publish pipeline, which holds the one credential grammar (internal/redact).
+// origin by a literal, an import map entry naming another origin that cannot
+// be copied in (or a map that cannot be read), a form posting to another
+// origin, an off-origin meta refresh, a javascript: URL, and source text that
+// already carries the placeholder. Credential shapes in what an agent
+// publishes are refused by the publish pipeline, which holds the one
+// credential grammar (internal/redact).
 //
 // It REWRITES every script element to carry the placeholder as the first nonce
-// a browser reads, and every allowlisted reference to the version's own copy of
-// the file (internal/artifactupload/vendor). Under the origin's strict policy (a
+// a browser reads, and every allowlisted reference (an import map's entries
+// among them) to the version's own copy of the file
+// (internal/artifactupload/vendor). Under the origin's strict policy (a
 // fresh nonce with 'strict-dynamic') a nonced script runs from wherever it
 // points, so it is this rewrite, not the policy, that keeps a page's scripts its
 // own: which is why the rewritten page is tokenized again and every script in it
-// verified before it is answered, and a page the linter cannot account for is
-// refused rather than stored.
+// (and every import map entry) verified before it is answered, and a page the
+// linter cannot account for is refused rather than stored.
 //
 // It DERIVES the page's script policy: the digests of the inline event handlers
 // it publishes (admitted by hash and nothing wider), whether an in-browser

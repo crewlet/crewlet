@@ -183,14 +183,28 @@ func answer(ctx context.Context, subject string, h queue.AnswerFunc, request []b
 
 // Ask scatters one request and collects what answers before ctx is done.
 func (q *Queue) Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error) {
+	out := make([][]byte, 0, max(want, 1))
+	err := q.AskEach(ctx, subject, request, func(reply []byte) bool {
+		out = append(out, reply)
+		return want <= 0 || len(out) < want
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AskEach scatters one request and hands each reply to each as it arrives,
+// until ctx is done or each answers false.
+func (q *Queue) AskEach(ctx context.Context, subject string, request []byte, each func(reply []byte) bool) error {
 	if subject == "" {
-		return nil, fmt.Errorf("%w: empty subject", ErrSubject)
+		return fmt.Errorf("%w: empty subject", ErrSubject)
 	}
 	if q.isClosed() {
-		return nil, ErrClosed
+		return ErrClosed
 	}
 	if len(request) > queue.MaxPayloadBytes {
-		return nil, fmt.Errorf("ask %s: %d bytes exceeds the %d-byte limit: %w",
+		return fmt.Errorf("ask %s: %d bytes exceeds the %d-byte limit: %w",
 			subject, len(request), queue.MaxPayloadBytes, queue.ErrTooLarge)
 	}
 	// NOT INTO A CONNECTION THAT IS DOWN. The client would take the request
@@ -200,7 +214,7 @@ func (q *Queue) Ask(ctx context.Context, subject string, request []byte, want in
 	// ask failed. A scatter retains nothing, its requests included; see
 	// [queue.EventQueue.Ask].
 	if err := q.reachable(); err != nil {
-		return nil, fmt.Errorf("ask %s: %w", subject, err)
+		return fmt.Errorf("ask %s: %w", subject, err)
 	}
 
 	// ONE REPLY MAILBOX, SUBSCRIBED BEFORE THE REQUEST GOES OUT. A server
@@ -210,7 +224,7 @@ func (q *Queue) Ask(ctx context.Context, subject string, request []byte, want in
 	inbox := nats.NewInbox()
 	replies, err := q.nc.SubscribeSync(inbox)
 	if err != nil {
-		return nil, fmt.Errorf("ask %s: open a reply mailbox: %w", subject,
+		return fmt.Errorf("ask %s: open a reply mailbox: %w", subject,
 			q.brokerFailed(ctx, err))
 	}
 	defer func() { _ = replies.Unsubscribe() }()
@@ -223,30 +237,30 @@ func (q *Queue) Ask(ctx context.Context, subject string, request []byte, want in
 		// refuses. It is the same permanent refusal, so it answers the
 		// contract's error.
 		if errors.Is(err, nats.ErrMaxPayload) {
-			return nil, fmt.Errorf("%s: %w: %w", tooLarge(q.nc, "ask", subject,
+			return fmt.Errorf("%s: %w: %w", tooLarge(q.nc, "ask", subject,
 				len(request)), queue.ErrTooLarge, err)
 		}
-		return nil, fmt.Errorf("ask %s: %w", subject, q.brokerFailed(ctx, err))
+		return fmt.Errorf("ask %s: %w", subject, q.brokerFailed(ctx, err))
 	}
 	// BOUNDED BY THE ASK'S OWN DEADLINE, which the client's Flush() was
 	// not: it waits ten seconds whatever its caller has, so an ask given
 	// two seconds against a connection that dropped after the check above
 	// took ten — the one thing this verb promises not to do.
 	if err := q.flush(ctx); err != nil {
-		return nil, fmt.Errorf("ask %s: flush: %w", subject, q.brokerFailed(ctx, err))
+		return fmt.Errorf("ask %s: flush: %w", subject, q.brokerFailed(ctx, err))
 	}
 
-	out := make([][]byte, 0, max(want, 1))
-	for want <= 0 || len(out) < want {
+	for {
 		msg, err := replies.NextMsgWithContext(ctx)
 		if err != nil {
 			// WHAT ARRIVED, NOT AN ERROR. A deadline reached
 			// mid-scatter is the ordinary outcome this verb is
 			// written for, and only the caller knows what a
 			// missing answer costs it.
-			return out, nil
+			return nil
 		}
-		out = append(out, msg.Data)
+		if !each(msg.Data) {
+			return nil
+		}
 	}
-	return out, nil
 }

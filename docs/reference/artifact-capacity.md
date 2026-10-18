@@ -48,8 +48,9 @@ instrument (see [Metrics](metrics.md)).
   small records a second whatever their size; past that, rows cost CPU.
 - **Every datastore byte is held on every data node** and rides every snapshot
   and backup, which is why `artifacts.limits.data_bytes` defaults to 1 GiB and
-  the footprint quota counts real bytes. Measured (DS-2), the file holds about
-  twice what the applier meters today; see the findings below.
+  the footprint quota counts real bytes. Measured (DS-2), a review sheet costs
+  about 3.2 KiB a row with a week of history, ten times its canonical bodies,
+  and the applier's meter is within one percent of the snapshot.
 - **On the `nats` object store every broker member holds every object**, and a
   replaced member re-replicates them all, which is why the bucket has a
   reservation and why large estates belong on `s3`. Measured (S7), each object
@@ -57,7 +58,7 @@ instrument (see [Metrics](metrics.md)).
   publish slows the write-ahead log it shares disks with.
 - **Presence costs memory and frames, never storage**: a map per room on each
   node holding its sockets, and a few hundred bytes per broadcast. Measured
-  (S6), a room of 200 viewers costs the fleet under a tenth of one core.
+  (S6), a room of 200 viewers costs the fleet under a sixth of one core.
 
 ---
 
@@ -87,7 +88,7 @@ citing it, by the change that owns it; the spikes never change a decision.
 
 | | |
 |---|---|
-| Commit | `feat/artifacts-p15` at `2033e8132` (S6 rerun at `21f6024a0`, after the presence fix below; S7 memory at `beb07f219`) |
+| Commit | `feat/artifacts-p15` at `2033e8132` (S6 rerun at `21f6024a0`, after the presence fix below; S7 memory at `beb07f219`). DS-2, S3, S4 and S6 rerun at `feat/artifacts-conformance` after findings 2, 6, 7, 9 and 10 were fixed, as each section says |
 | Machine | Apple M1 Pro, 8 cores, 16 GiB, macOS 27.0.1, internal SSD |
 | Fsync | `sync: always`; on darwin every fsync is a full flush to the medium (`F_FULLFSYNC`), several milliseconds each |
 | Topology | `solo`: one embedded broker and one data node. `fleet3`: a three-member embedded cluster, every stream at three replicas, a data node on each member, all in one process on one disk |
@@ -181,14 +182,14 @@ conflicted; guarded writes on ten rows written by thirty people conflicted on
 and the reason a sheet's cell edit is blind and a long text is guarded.
 
 **Target**: a thirty-person review at its peak applied with headroom on the
-smallest supported fleet, and the per-node rate limits (20 writes a second per
-principal per store, bursts of 100, 200 a second per store) set below the
-measured ceiling; blind writes never conflict, guarded writes conflict only
-when the document moved, and the datastore op objective holds under
-contention. **On this machine**: headroom holds, blind writes hold, the
-objective does not, and the per-store limit (200 cost units a second, a
-one-cell edit being one unit) is above the measured ceiling for small records
-(140 to 160 a second on one node, 55 on the fleet). See the findings.
+smallest supported fleet, and the per-node rate limits set below the measured
+ceiling; blind writes never conflict, guarded writes conflict only when the
+document moved, and the datastore op objective holds under contention. **On
+this machine**: headroom holds, blind writes hold, and the objective does not
+(finding 5). The rate limits were above the ceiling when this record was
+taken (200 units a second per store, a one-cell edit weighed as one unit) and
+are now weighed by the rows an apply writes and set near half the fleet's
+measured 1,160 rows a second (finding 4).
 
 ### DS-2: datastore footprint
 
@@ -205,27 +206,37 @@ tables one at a time.
 | Documents | 10,000 |
 | Canonical bodies | 3.16 MiB |
 | Field index entries | 130,000 |
-| History (metered) | 6.21 MiB |
-| Metered footprint | 15.32 MiB |
-| Snapshot bytes | 31.62 MiB (3,315 bytes a document) |
-| Live file and log | 32.68 MiB |
-| Snapshot / metered | 2.06 |
+| Documents (metered) | 24.07 MiB |
+| History (metered) | 7.38 MiB |
+| Metered footprint | 31.46 MiB |
+| Snapshot bytes | 31.63 MiB (3,317 bytes a document) |
+| Live file and log | 32.72 MiB |
+| Snapshot / metered | 1.006 |
 | Snapshot bytes per MiB of canonical bodies | 10.0 MiB |
 
 | Table | Snapshot share | Against what is metered |
 |---|---|---|
-| `artifact_data_fields` | 18.89 MiB | 152 bytes an entry, metered at 48 |
-| `artifact_data_writes` and `artifact_data_touches` | 7.21 MiB | 1.16 times the metered history |
-| `artifact_data_docs` | 4.97 MiB | 1.57 times the bodies |
+| `artifact_data_fields` and `artifact_data_docs` | 23.87 MiB | 0.99 times the metered documents (152 bytes a field entry) |
+| `artifact_data_writes` and `artifact_data_touches` | 7.21 MiB | 0.98 times the metered history |
+
+The figures are from the meter that replaced the first one (finding 2), at
+`feat/artifacts-conformance`; the snapshot and its table shares are unchanged
+by it, since the meter writes one integer per document row. Under the first
+meter, which counted bodies, 48 bytes a field entry and history at its
+payload, the same store metered 15.32 MiB: a snapshot of 2.06 times that.
 
 **Reading.** The field index is the store's largest cost: every entry is a row
 keyed by five columns (stored twice, since the estate's tables carry a rowid)
 and appears again in the numeric and text indexes. A store therefore holds
-about 10 bytes on disk for every byte of document, and the metered footprint
-is half the real one.
+about 10 bytes on disk for every byte of document. The meter
+(`internal/artifactdata/meter.go`) charges each row its share of the 4 KiB
+page it sits in, slack included, or its overflow pages, and each index entry
+its key; `TestTheFootprintMeterMatchesTheFile` holds it within 10 percent of a
+snapshot on review rows, half-page rows with long ids, edits, pastes and
+tombstones (within 3 percent on every shape measured).
 
 **Target**: the metered footprint within 10 percent of the measured bytes.
-**Missed** by a factor of two; see the findings.
+**Holds**: 0.6 percent.
 
 ### S3: streaming from a sandbox
 
@@ -247,6 +258,11 @@ The heap is the process's, and the embedded broker runs in it as it does in a
 node: the fleet row is three members' worth. The transfer leg itself never
 holds a file whole (the bucket is filled 128 KiB a message); the rise is the
 broker's message block cache and its replication buffers, which expire.
+
+After finding 6's fix (a put holds a mebibyte in flight rather than a whole
+object), a rerun at `feat/artifacts-conformance` streamed the same publish at
+29.2 MiB/s solo and 14.7 MiB/s on the fleet, with a heap rise of 32 and
+155 MiB settling to 8 and 48 MiB: no slower, and a smaller peak.
 
 **Target**: the transfer finishes far inside the twelve hours a key may wait
 for its record, and memory on the node stays flat (nothing buffered whole).
@@ -274,17 +290,17 @@ what the browser half below measures on captured pages.
 
 | Outcome | Pages | Share |
 |---|---|---|
-| Refused by the linter | 12 | 21.8 percent |
-| Published, and nothing the policy stops | 26 | 47.3 percent |
+| Refused by the linter | 13 | 23.6 percent |
+| Published, and nothing the policy stops | 25 | 45.5 percent |
 | Published, and something the policy stops | 17 | 30.9 percent |
 | Published with browser storage (breaks in shared mode only) | 5 | 9.1 percent |
-| Published with an import map naming another origin (an escape, below) | 2 | 3.6 percent |
+| Published with an import map naming another origin | 0 | 0 percent (two pages did before finding 7's fix) |
 
 | Refusal | Pages | A typical source |
 |---|---|---|
 | `remote_script` | 4 | `d3js.org`, `cdn.plot.ly`, an unlisted CDN, a CDN over `http` |
 | `unpinned_version` | 3 | `cdn.jsdelivr.net/npm/chart.js`, Tailwind's Play CDN with no version |
-| `remote_import` | 2 | `import mermaid from "https://cdn.jsdelivr.net/..."` |
+| `remote_import` | 3 | `import mermaid from "https://cdn.jsdelivr.net/..."`, an import map entry on `esm.sh` |
 | `form_off_origin` | 1 | a form posting to a form service |
 | `javascript_url` | 1 | `<a href="javascript:void(0)">` |
 | `refresh_off_origin` | 1 | a meta refresh to another site |
@@ -301,15 +317,17 @@ what the browser half below measures on captured pages.
 | A worker started from a URL | 1 | `worker-src blob:` |
 | A base element | 1 | `base-uri 'none'` |
 
-The linter takes 120 to 170 microseconds a page.
+The linter takes 120 to 170 microseconds a page. The three.js page's import
+map entry on jsDelivr is copied in and rewritten to the version's copy, as a
+module script's source is.
 
 **Reading.** The CDN rules refuse what models most often write (an unpinned
-jsDelivr reference, `d3js.org`, Plotly's own CDN, an ES module import), and
-each refusal names the fix. What breaks after publishing is mostly what the
-origin is for: a page cannot call another site's API or hotlink its images.
-Three shapes break silently and the linter could name them: string evaluation
-in the page's own script, handlers written by script, and import maps (which
-escape the copy-in rather than break).
+jsDelivr reference, `d3js.org`, Plotly's own CDN, an ES module import, an
+import map entry on an unlisted host), and each refusal names the fix. What
+breaks after publishing is mostly what the origin is for: a page cannot call
+another site's API or hotlink its images. Two shapes break silently and the
+linter could name them: string evaluation in the page's own script, and
+handlers written by script.
 
 **Target**: the share of pages that break under the strict policy reported per
 cause, each cause either fixed in the linter or stated in the authoring guide.
@@ -358,35 +376,53 @@ second and is timed to the moment the last node's sockets are shown it.
 
 | Viewers | Moves/s each | Frames/s per socket | Busiest node to its sockets | Broker per node, sent / heard | Fleet CPU | Join shown everywhere | Cursor across nodes p50 / p95 |
 |---|---|---|---|---|---|---|---|
-| 30 | 1 | 4.8 | 69 KiB/s | 2.7 / 8.1 KiB/s | 0.030 cores | 0.4 s | 274 / 400 ms |
-| 30 | 10 | 4.9 | 306 KiB/s | 10.4 / 31.1 KiB/s | 0.039 cores | 2.0 s | 279 / 402 ms |
-| 50 | 1 | 4.8 | 183 KiB/s | 4.0 / 12.1 KiB/s | 0.036 cores | 2.2 s | 86 / 248 ms |
-| 50 | 10 | 4.9 | 826 KiB/s | 16.7 / 50.2 KiB/s | 0.043 cores | 2.0 s | 258 / 301 ms (7 of 19 probes never shown) |
-| 200 | 1 | 4.9 | 2,587 KiB/s | 13.5 / 40.6 KiB/s | 0.054 cores | 2.2 s | 233 / 288 ms |
-| 200 | 10 | 4.9 | 3,339 KiB/s | 64.2 / 192.6 KiB/s | 0.077 cores | 2.0 s | 19 of 19 probes never shown |
+| 30 | 1 | 9.4 | 78 KiB/s | 3.6 / 10.8 KiB/s | 0.052 cores | 0.3 s | 68 / 118 ms |
+| 30 | 10 | 9.8 | 222 KiB/s | 22.2 / 66.5 KiB/s | 0.082 cores | 0.3 s | 370 / 450 ms |
+| 50 | 1 | 9.4 | 201 KiB/s | 5.5 / 16.4 KiB/s | 0.063 cores | 0.5 s | 70 / 123 ms |
+| 50 | 10 | 9.8 | 371 KiB/s | 34.6 / 103.8 KiB/s | 0.087 cores | 0.5 s | 19 of 19 probes never shown |
+| 200 | 1 | 9.6 | 1,552 KiB/s | 15.9 / 47.5 KiB/s | 0.113 cores | 0.5 s | 201 / 287 ms (8 of 19 probes never shown) |
+| 200 | 10 | 9.8 | 1,509 KiB/s | 128 / 384 KiB/s | 0.145 cores | 0.5 s | 18 of 19 probes never shown |
 
-Before the presence fix below, four of the six runs took 15 seconds (one
+This run is at `feat/artifacts-conformance`, after findings 9 and 10 were
+fixed: a socket's fan-out at ten a second and a node's frames to the fleet at
+twenty, at most ten members re-presented a frame, and each join-time answer
+applied as it arrives. The run recorded before those fixes, at five fan-outs a
+second with no bound on a frame:
+
+| Viewers | Moves/s each | Frames/s per socket | Busiest node to its sockets | Join shown everywhere | Cursor across nodes p50 / p95 |
+|---|---|---|---|---|---|
+| 30 | 1 | 4.8 | 69 KiB/s | 0.4 s | 274 / 400 ms |
+| 30 | 10 | 4.9 | 306 KiB/s | 2.0 s | 279 / 402 ms |
+| 50 | 1 | 4.8 | 183 KiB/s | 2.2 s | 86 / 248 ms |
+| 50 | 10 | 4.9 | 826 KiB/s | 2.0 s | 258 / 301 ms (7 of 19 probes never shown) |
+| 200 | 1 | 4.9 | 2,587 KiB/s | 2.2 s | 233 / 288 ms |
+| 200 | 10 | 4.9 | 3,339 KiB/s | 2.0 s | 19 of 19 probes never shown |
+
+Before the first presence fix below, four of the six runs took 15 seconds (one
 rebroadcast) to show a join on every node.
 
-**Reading.** Coalescing holds every socket to five frames a second whatever
-the room does, and the broker carries tens of KiB a second a node, so
-presence's CPU and broker cost is negligible. What grows with the room is the
-frame: a room past fifty presents its fifty most recent members, and when
-everyone moves, the fifty change constantly, so each frame names most of them
-again (about 10 KiB a frame, 50 KiB a second a socket at 200 viewers), and one
-viewer's move is shown only for the moment it is among the most recent (every
-probe move in the busiest room, and 7 of 19 in a room of 51, were displaced
-before the other node's next frame). A join is
-shown everywhere once the join-time ask has waited out its budget (2 seconds,
-`eventfan.FleetReadBudget`), and a cursor crosses nodes in two coalescing
-windows, one on each node (200 ms each), so its p50 lands anywhere between a
-few tens of ms and 400 ms by where in each window the move falls.
+**Reading.** Presence's CPU and broker cost stays negligible. A join is shown
+everywhere within half a second, each peer's answer applied as it lands. A
+member's move crosses nodes in one broadcast window on its own node (50 ms)
+and one fan-out window on the viewer's (100 ms), so in rooms of active readers
+(one move a second) the cursor's median is near 70 ms and its 95th percentile
+near 120 ms. What a socket receives is bounded by a frame's members: at ten
+frames of at most ten members a second, a socket in the 200-viewer rooms takes
+about 23 KiB a second, against 39 to 50 KiB before. The price of that bound is
+fidelity where everybody moves at once: a room of 30 each moving ten times a
+second needs 300 member updates a second and a socket takes 100, so each
+member is shown every few frames (a median near 370 ms), and in a room past
+fifty, a viewer who moves once a second is often displaced from the fifty most
+recent before its turn comes. Both are what a best-effort signal should give
+up first: the frames and bytes stay bounded, and a still member, or one in an
+ordinary room, is shown at once.
 
-**Target**: the per-artifact coalescing (5 frames a second) and the client
-throttle (10 a second) keep the busiest node's socket traffic bounded, and the
-change visibility objective holds while presence runs. **Holds** for frames;
-the best-effort presence bounds (join within 1 second, cursor within 150 ms)
-are missed by construction, which the findings say how to close.
+**Target**: the per-artifact coalescing and the client throttle keep the
+busiest node's socket traffic bounded, and the change visibility objective
+holds while presence runs. **Holds**, with the best-effort bounds (join within
+1 second, cursor within 150 ms) met in rooms of active readers and the
+cursor's traded for bounded traffic where every member moves ten times a
+second.
 
 ### S7: the object store under a publish
 
@@ -456,58 +492,81 @@ it.
    once on three nodes. A frame older than one already heard from its node now
    fills in and never undoes (`TestALateFullFrameFillsInAndNeverUndoes`); the
    same rooms show everybody in 2 seconds.
-2. **The metered footprint is half the real one (`internal/artifactdata`).** A
-   field index entry costs 152 bytes on disk and is metered at 48
-   (`fieldEntryBytes`); document rows cost 1.57 times their bodies and history
-   1.16 times what is metered. Either meter the measured costs, or state the
-   quotas as metered units; `data_bytes` of 1 GiB holds about 2 GiB today.
-3. **A changed document rewrites its whole field index (`internal/artifactdata`).**
-   A one-cell edit of a twelve-column row writes 21 rows, against the review's
-   15 with changed paths re-exploded (review 02, DT-03 and DT-05), and the
-   writer's cost weighs it as one unit (`rowsPerUnit` 16), from the op's
-   fields rather than the document's. Re-exploding only changed paths, or
-   weighing a write by the document's indexed fields, brings the cost model
-   and the rows together.
-4. **The per-store write limit is above the measured ceiling on this machine
-   (`internal/artifacts`, `DataWritesPerStorePerSecond` 200).** One node took
-   140 to 160 one-cell records a second and the three-member fleet 55, so the
-   guard does not protect the node here. The constant stays until the
-   reference run; if that run's ceiling is under twice the guard, the guard
-   comes down.
+2. **The metered footprint was half the real one (fixed, `internal/artifactdata`).**
+   A field index entry cost 152 bytes on disk and was metered at 48, document
+   rows cost 1.57 times their bodies and history 1.16 times what was metered,
+   so `data_bytes` of 1 GiB held about 2 GiB. The applier now meters what each
+   row costs in the file's pages (each document row with its index and
+   field-index entries, kept on the row; each history row with its touches),
+   and the snapshot is 1.006 times the metered footprint. The default
+   `data_store_bytes` of 32 MiB now holds about ten thousand review rows with
+   a week of history, rather than about twenty thousand.
+3. **The write cost weighed the op, not the rows (fixed, `internal/artifactdata`).**
+   A changed document rewrites its whole field index, so a one-cell edit of a
+   twelve-column row writes 21 rows, and the writer weighed it as one unit
+   from the op's fields. The writer now reads how many index entries each
+   named document holds and weighs each op by the rows its apply writes (the
+   row, its index deleted and written again, its touch, and the batch's
+   history row), so a cell edit on that row is two units and a delete of a
+   sixty-field row four (`TestAWriteIsWeighedByTheRowsItsApplyWrites`).
+   Re-exploding only changed paths (review 02, DT-03 and DT-05) would cut the
+   rows themselves, and is a change to the applier's index maintenance that
+   this release does not make.
+4. **The per-store write limit was above the measured ceiling (fixed,
+   `internal/artifacts`).** One node took 140 to 160 one-cell records a second
+   and the three-member fleet 55 (about 1,160 applied rows a second), under a
+   guard of 200 units a second that weighed each as one. The guard is now 40
+   units a second (about 640 rows) with bursts of 100, near half the fleet's
+   ceiling and above the review's peak of 30 units a second in bursts of 100;
+   the reference run confirms or moves it.
 5. **The datastore op objective fails on a development machine
    (`internal/objectives`, `DataRoundTripWithin` 250 ms).** The review's peak
    on the three-member fleet answered 18 to 20 percent of writes within
    250 ms (p95 near 950 ms). Whether it holds is the reference run's to say.
-6. **A large put can fail under load (`internal/objstore/natsobj`).** The
-   library's object put sends every 128 KiB chunk of an object at once (128
-   for a 16 MiB file) and gives each acknowledgement the client's default five
+6. **A large put could fail under load (fixed, `internal/objstore/natsobj`).**
+   The library's object put sent every 128 KiB chunk of an object at once (128
+   for a 16 MiB file) and gave each acknowledgement the client's default five
    seconds, with no flow control; on slow flushes with the log busy, the last
-   acknowledgement came later and the put failed. Bounding the chunks in
-   flight, or giving the put a deadline from its pace allowance, makes a put's
-   success independent of the disk's flush time.
-7. **An import map escapes the copy-in (`internal/artifactupload/lint`).** A
-   page whose import map names a module on another origin is published, and
-   the module loads in the viewer's browser from wherever the map points
-   (under the nonce of the module that imports it); the same reference written
-   as a literal import is refused `remote_import`. The linter should read
-   `<script type="importmap">` and hold every remote entry to the same rule.
+   acknowledgement came later and the put failed. The backend now writes the
+   bucket's layout itself: at most a mebibyte in flight, each mebibyte given
+   the object store's pace (30 seconds) for its acknowledgements, and a failed
+   put waits for what it has in flight before it purges its pieces
+   (`TestAPutWhoseAcknowledgementsComeLateStillLands`, with every
+   acknowledgement six seconds late).
+7. **An import map escaped the copy-in (fixed, `internal/artifactupload/lint`).**
+   A page whose import map named a module on another origin was published, and
+   the module loaded in the viewer's browser from wherever the map pointed
+   (under the nonce of the module that imports it). The linter now reads every
+   `<script type="importmap">`: each remote entry in `imports` and `scopes` is
+   held to the module rule (an allowlisted CDN file at an exact version,
+   copied in and the entry rewritten to the copy) or refused `remote_import`,
+   a map it cannot parse is refused, and the rewritten page's maps are
+   verified before it is stored (`TestAnImportMapEntryOnAnotherOriginIsCopiedIn`,
+   `TestTheVerificationRefusesAnImportMapNamingAnotherOrigin`).
 8. **Three silent breaks the linter could name (`internal/artifactupload/lint`).**
    String evaluation in the page's own script (`eval`, `new Function`, a
    string timer, a template compiler), handlers written by script, and a form
    that submits by navigating are published and stop working; a warning for
    each, or a sentence in the authoring guide, closes them.
-9. **Presence's best-effort bounds are missed by construction
-   (`internal/presence`, `internal/objectives`).** A join is shown everywhere
-   only when the ask's budget ends (2 seconds), because replies are applied
-   together; applying each as it arrives meets the 1-second bound. A cursor
-   crosses two coalescing windows (one on each node, 200 ms each, so a p50
-   near 240 ms); the 150 ms bound needs remote frames fanned out without a
-   second window, or the coalescing rate (`PresenceCoalesceRate` 5) raised to
-   10.
-10. **A busy large room sends large frames (`internal/presence`).** At 200
-    viewers moving ten times a second, each socket receives about 50 KiB a
-    second; capping how many members one frame may re-present, or presenting
-    a large room's top fifty by join order rather than recency, bounds it.
+9. **Presence's best-effort bounds were missed by construction (fixed,
+   `internal/presence`, `internal/queue`, `internal/artifacts`).** A join was
+   shown everywhere only when the ask's budget ended (2 seconds), because
+   replies were applied together, and a cursor crossed two coalescing windows
+   of 200 ms. The queue gained `AskEach`, which hands each reply over as it
+   arrives, and the hub applies each answer then
+   (`TestAJoinShowsThePeersMembersAsTheyAnswer`); a room's fan-out to its
+   sockets runs at ten a second and its frames to the fleet at twenty, on
+   timers of their own (`PresenceCoalesceRate`, `PresenceBroadcastRate`;
+   `TestAMoveCrossesNodesInOneShortWindowOnEachSide`). Joins now show within
+   half a second and cursors in ordinary rooms within 150 ms.
+10. **A busy large room sent large frames (fixed, `internal/presence`).** At
+    200 viewers moving ten times a second, each socket received about 50 KiB a
+    second, because each frame re-presented most of the fifty. A fan-out now
+    re-presents at most ten members (`PresenceFrameMembers`), the change that
+    has waited longest first so nobody starves
+    (`TestAFanOutRePresentsAtMostItsBoundOfMembers`,
+    `TestAHeldBackMemberIsToldWithinAFewFanOuts`): about 23 KiB a second a
+    socket in the same rooms, at the fidelity cost the S6 reading states.
 
 ---
 

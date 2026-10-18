@@ -58,8 +58,19 @@ handlers are admitted by hash; `object-src`, `base-uri`, `form-action` and
 `frame-src` are `'none'`; `connect-src`, `img-src` and `media-src` reach only
 the artifact's own origin. The frame never holds `allow-popups`: an external
 link goes through the bridge, and the dashboard names the destination before it
-opens it. Third-party script is copied into the version at publish, so nothing
-is fetched from a CDN when somebody views a page.
+opens it. Every third-party script a page declares (a script element's source,
+a stylesheet, a module import, an import map entry) is copied into the version
+at publish or refused, so a page fetches nothing from a CDN when somebody views
+it unless its own script builds the request at run time.
+
+That last clause is the residual this policy accepts. `'strict-dynamic'`
+trusts every script a page's own scripts create, and a page can read its own
+nonce, so a page whose author means to can load script from another site and
+put in its URL whatever the viewer may read. The policy bounds what a viewer's
+row can run, not what the page's author can send; what bounds the author is
+that only an `editor` publishes, every version names who published it, and
+the linter refuses every remote script a page states. `internal/api/pagepolicy`
+says why a nonce-based policy cannot close the channel.
 
 ## Why the obvious alternatives are wrong
 
@@ -92,10 +103,13 @@ and nothing an attacker writes into the page's data.
 ## What the spikes confirm
 
 Spike S1 records, per browser, that the two origin modes isolate as stated (a
-manual procedure, recorded in
+manual procedure in
 [`docs/reference/artifact-capacity.md`](../docs/reference/artifact-capacity.md)).
 Spike S4 measures the linter and the strict policy over a committed corpus of
-model-shaped pages and reports the breakage rate. A measurement that
+model-shaped pages and reports the breakage rate per cause. The capacity page
+records what has run and what has not: S1 and the browser half of S4 are
+procedures not yet run against this release, and the committed corpus holds 55
+hand-written pages rather than 200 captured ones. A measurement that
 contradicts a bound changes the bound in `internal/artifacts`, not this
 decision.
 
