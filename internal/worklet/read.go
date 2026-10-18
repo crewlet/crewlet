@@ -431,7 +431,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 				return err
 			}
 		}
-		where, args, err := compile(q, now, fields)
+		set, err := compile(q, now, fields)
 		if err != nil {
 			return err
 		}
@@ -453,7 +453,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 				return err
 			}
 		}
-		rowWhere, rowArgs := andPage(where, args, page, pageArgs)
+		rowSet := andPage(set, page, pageArgs)
 		// The whole list-ordered set, in its drawn order, kept for the
 		// one other reader of that order — [readAround].
 		var listedRows []TaskRow
@@ -466,7 +466,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 			// predicate, which is also what its per-column counts
 			// are over.
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-			groups, err := readGroups(ctx, tx, q, fields, where, args, terms)
+			groups, err := readGroups(ctx, tx, q, fields, set, terms)
 			if err != nil {
 				return err
 			}
@@ -475,7 +475,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 			answer.GroupsOverlap = groups.Overlap
 		case listed:
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-			all, _, err := readTasks(ctx, tx, where, args, terms,
+			all, _, err := readTasks(ctx, tx, set, terms,
 				MaxPriorities, q.DayStart)
 			if err != nil {
 				return err
@@ -488,7 +488,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 			}
 		default:
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-			rows, cursor, err := readTasks(ctx, tx, rowWhere, rowArgs, terms,
+			rows, cursor, err := readTasks(ctx, tx, rowSet, terms,
 				limit, q.DayStart)
 			if err != nil {
 				return err
@@ -503,7 +503,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 			return err
 		}
 
-		hint, capped, err := countHint(ctx, tx, where, args)
+		hint, capped, err := countHint(ctx, tx, set)
 		if err != nil {
 			return err
 		}
@@ -512,7 +512,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 		// WHERE ONE TASK SITS, after the count its own total reads and in
 		// the same transaction as the rows it is placed among.
 		if q.Around != "" {
-			answer.Around, err = readAround(ctx, tx, q, fields, where, args,
+			answer.Around, err = readAround(ctx, tx, q, fields, set,
 				terms, &answer, listedRows)
 			if err != nil {
 				return err
@@ -525,7 +525,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 		if err != nil {
 			return err
 		}
-		answer.Totals, err = readTotals(ctx, tx, where, args, totals, exprs, totalArgs)
+		answer.Totals, err = readTotals(ctx, tx, set, totals, exprs, totalArgs)
 		if err != nil {
 			return err
 		}
@@ -565,14 +565,63 @@ func incompleteFrom(in *statelog.Incomplete) *Incomplete {
 	}
 }
 
-// compile turns a parsed query into a predicate and its arguments.
+// compile turns a parsed query into the set of tasks it reads: where they are
+// read from, the predicate that keeps them, and its arguments.
 //
 // EVERY VALUE IS BOUND, never interpolated: the only thing this function
 // composes into SQL is its own column and operator names, from closed sets
 // declared in the grammar. A filter's value reaching a statement as text is
 // how a saved view becomes a way to run a query nobody wrote.
-func compile(q Query, now time.Time, fields map[string]resolvedField) (string, []any, error) {
-	return compileWhere(q, now, fields, false)
+func compile(q Query, now time.Time, fields map[string]resolvedField) (taskSet, error) {
+	where, args, err := compileWhere(q, now, fields, false)
+	if err != nil {
+		return taskSet{}, err
+	}
+	return taskSet{from: taskTable, where: where, args: args}, nil
+}
+
+// taskSet is a compiled query's tasks: the source every statement over them
+// reads from and the predicate that keeps them.
+//
+// ONE VALUE RATHER THAN A PREDICATE AND A TABLE NAME BESIDE IT, because the
+// two are one decision and every statement over an answer is a statement over
+// the same set — its page, the count it carries, its totals, its board's
+// columns and where one task sits in it. A statement that spelled its own
+// `FROM tracker_tasks t` is one that could read a different source from the
+// page it sits beside.
+type taskSet struct {
+	// from is the FROM clause's source: the task table under the alias `t`
+	// every predicate here is written against.
+	from string
+	// where and args are the predicate and its arguments, in statement
+	// order.
+	where string
+	args  []any
+}
+
+// taskTable is the plain source: the task table under the alias every
+// predicate in this package is written against, read through whatever index
+// the planner chooses.
+const taskTable = "tracker_tasks t"
+
+// tasksWhere is a set read from the plain table — what a statement whose
+// predicate this package writes itself, rather than compiles from a query,
+// reads over.
+func tasksWhere(where string, args []any) taskSet {
+	return taskSet{from: taskTable, where: where, args: args}
+}
+
+// and is the set narrowed by one more clause, whose arguments bind after the
+// set's own because the clause is written after them.
+//
+// THE PREDICATE IS PARENTHESISED, so a clause appended to it narrows the
+// whole of it rather than the last term of a top-level disjunction.
+func (s taskSet) and(clause string, values []any) taskSet {
+	return taskSet{
+		from:  s.from,
+		where: "(" + s.where + ") AND " + clause,
+		args:  append(append([]any{}, s.args...), values...),
+	}
 }
 
 // compileWhere is [compile], with `branch` telling it whether it is compiling
@@ -1046,12 +1095,12 @@ func pageClause(q Query, fields map[string]resolvedField) (string, []any, error)
 	return cursorClause(q, fields)
 }
 
-// andPage folds the page boundary into a predicate for the ROW read alone.
-func andPage(where string, args []any, clause string, values []any) (string, []any) {
+// andPage folds the page boundary into a set for the ROW read alone.
+func andPage(set taskSet, clause string, values []any) taskSet {
 	if clause == "" {
-		return where, args
+		return set
 	}
-	return where + " AND " + clause, append(append([]any{}, args...), values...)
+	return set.and(clause, values)
 }
 
 // handleClause builds a handle filter, with `none` as a real value.
@@ -1240,12 +1289,6 @@ var AttentionFlags = []string{
 	"one_sided", "one_sided_final",
 }
 
-// orderBy compiles the sort, always ending in the id.
-//
-// THE TRAILING ID IS WHAT MAKES TWO NODES RENDER ONE BOARD IN ONE ORDER even
-// if a duplicate rank ever occurs — and it is free, because the three
-// rank-bearing indexes carry it as a trailing column and still serve the range
-// scan with no sort step.
 // sortTerm is one column of the order, with the direction it is read in.
 //
 // THE ORDER IS A VALUE, not a string, because the page cursor is derived from
@@ -1348,7 +1391,11 @@ var sortColumns = map[string]sortColumn{
 // The id is the tiebreak that makes a page stable: two tasks with one rank, or
 // one update instant, would otherwise come back in whatever order the storage
 // felt like, and a page boundary between them would drop one and repeat the
-// other on every poll.
+// other on every poll. It is also what makes two nodes render one board in one
+// order even if a duplicate rank ever occurs — and it is free wherever an
+// order has an index, because each such index carries it as its trailing
+// column (the board's, the recent listing's, the workspace's, spend's,
+// estimate's and points') and still serves the range with no sort step.
 func sortTerms(q Query, fields map[string]resolvedField) []sortTerm {
 	var terms []sortTerm
 	for i, sort := range q.Sort {
@@ -1416,11 +1463,6 @@ func sortTerms(q Query, fields map[string]resolvedField) []sortTerm {
 	// The primary key, which the schema declares NOT NULL — so it takes no
 	// NULL clause, and the order stays one an index can serve.
 	return append(terms, sortTerm{Column: "t.id", NeverNull: true})
-}
-
-// orderBy renders a query's sort as SQL.
-func orderBy(q Query, fields map[string]resolvedField) string {
-	return renderOrder(sortTerms(q, fields))
 }
 
 // sortJoins is the join clause and arguments a compiled order needs.
@@ -1626,10 +1668,10 @@ func mintCursor(keys []any, order string) string {
 	return base64.RawURLEncoding.EncodeToString(body)
 }
 
-func readTasks(ctx context.Context, tx *sql.Tx, where string, args []any,
+func readTasks(ctx context.Context, tx *sql.Tx, set taskSet,
 	terms []sortTerm, limit int, dayStart time.Time) ([]TaskRow, string, error) {
 
-	return readTasksJoined(ctx, tx, "", nil, where, args, terms, limit, dayStart)
+	return readTasksJoined(ctx, tx, "", nil, set, terms, limit, dayStart)
 }
 
 // readTasksJoined is the same with one more join in front.
@@ -1639,43 +1681,12 @@ func readTasks(ctx context.Context, tx *sql.Tx, where string, args []any,
 // with the grouping axis's own join, which the predicate that selects the
 // column refers to.
 func readTasksJoined(ctx context.Context, tx *sql.Tx, extraJoin string,
-	extraArgs []any, where string, args []any, terms []sortTerm, limit int,
+	extraArgs []any, set taskSet, terms []sortTerm, limit int,
 	dayStart time.Time) ([]TaskRow, string, error) {
-
-	// THE SORT COLUMNS ARE SELECTED TOO, because the page cursor is their
-	// values: a keyset resume compares exactly the columns the order sorts
-	// by, and a row whose sort value was never read cannot be resumed
-	// after. They are scanned as opaque values — nothing here needs to
-	// know what a rank or an instant IS, only what the next page must be
-	// strictly after.
-	keys := make([]string, 0, len(terms))
-	for _, term := range terms {
-		keys = append(keys, term.Column)
-	}
 
 	// ONE MORE THAN THE PAGE, which is how the answer knows whether there
 	// is another page without a second count.
-	// THE JOINS COME FIRST IN THE STATEMENT AND SO DO THEIR ARGUMENTS: a
-	// custom-field sort is a LEFT JOIN written before the WHERE, and a
-	// placeholder is bound in statement order rather than by name.
-	joins, joinArgs := sortJoins(terms)
-	// THE EXTRA JOIN COMES FIRST, with its arguments, because the
-	// predicate below may refer to it and a placeholder binds in
-	// statement order.
-	joins = extraJoin + joins
-	joinArgs = append(append([]any{}, extraArgs...), joinArgs...)
-	query := `SELECT t.id, t.key, t.key_collision, t.title, t.type, t.status, t.status_group, t.priority,
-	                 t.assignee, t.project_key, t.parent_id,
-	                 t.depth, t.start_at, t.due_at, t.estimate_min, t.points,
-	                 t.archived, t.rank, t.updated_at, t.version,
-	                 EXISTS (SELECT 1 FROM tracker_task_deps d
-	                         WHERE d.task_id = t.id AND d.blocker_open = 1), ` +
-		strings.Join(keys, ", ") + `
-	          FROM tracker_tasks t` + joins + `
-	          WHERE ` + where + `
-	          ORDER BY ` + renderOrder(terms) + `
-	          LIMIT ?`
-	bound := append(append([]any{}, joinArgs...), args...)
+	query, bound := taskRowsStatement(extraJoin, extraArgs, set, terms)
 	rows, err := tx.QueryContext(ctx, query, append(bound, limit+1)...)
 	if err != nil {
 		return nil, "", fmt.Errorf("worklet: read tasks: %w", err)
@@ -1763,6 +1774,46 @@ func readTasksJoined(ctx context.Context, tx *sql.Tx, extraJoin string,
 	return out, cursor, nil
 }
 
+// taskRowsStatement is the statement [readTasksJoined] reads a page with, and
+// its arguments up to the LIMIT it ends in — named for the plan test, which
+// takes the plan of this statement rather than of a copy of it.
+func taskRowsStatement(extraJoin string, extraArgs []any, set taskSet,
+	terms []sortTerm) (string, []any) {
+
+	// THE SORT COLUMNS ARE SELECTED TOO, because the page cursor is their
+	// values: a keyset resume compares exactly the columns the order sorts
+	// by, and a row whose sort value was never read cannot be resumed
+	// after. They are scanned as opaque values — nothing here needs to
+	// know what a rank or an instant IS, only what the next page must be
+	// strictly after.
+	keys := make([]string, 0, len(terms))
+	for _, term := range terms {
+		keys = append(keys, term.Column)
+	}
+
+	// THE JOINS COME FIRST IN THE STATEMENT AND SO DO THEIR ARGUMENTS: a
+	// custom-field sort is a LEFT JOIN written before the WHERE, and a
+	// placeholder is bound in statement order rather than by name.
+	joins, joinArgs := sortJoins(terms)
+	// THE EXTRA JOIN COMES FIRST, with its arguments, because the
+	// predicate below may refer to it and a placeholder binds in
+	// statement order.
+	joins = extraJoin + joins
+	joinArgs = append(append([]any{}, extraArgs...), joinArgs...)
+	query := `SELECT t.id, t.key, t.key_collision, t.title, t.type, t.status, t.status_group, t.priority,
+	                 t.assignee, t.project_key, t.parent_id,
+	                 t.depth, t.start_at, t.due_at, t.estimate_min, t.points,
+	                 t.archived, t.rank, t.updated_at, t.version,
+	                 EXISTS (SELECT 1 FROM tracker_task_deps d
+	                         WHERE d.task_id = t.id AND d.blocker_open = 1), ` +
+		strings.Join(keys, ", ") + `
+	          FROM ` + set.from + joins + `
+	          WHERE ` + set.where + `
+	          ORDER BY ` + renderOrder(terms) + `
+	          LIMIT ?`
+	return query, append(joinArgs, set.args...)
+}
+
 // loadBlockers fills [TaskRow.WaitingOn] for one page, in one statement.
 //
 // TWO TABLES, because the edge's two halves live apart and neither alone is
@@ -1827,10 +1878,8 @@ func loadBlockers(ctx context.Context, tx *sql.Tx, rows []TaskRow) error {
 // value a fact rather than a guess: a set of exactly [TotalHintCeiling] is
 // EXACT, and one of ceiling+1 is the smallest set that is not — the only way
 // to tell them apart is to look for the extra row.
-func countHint(ctx context.Context, tx *sql.Tx, where string,
-	args []any) (int, bool, error) {
-
-	counted, capped, err := countCapped(ctx, tx, "tracker_tasks t", where, args)
+func countHint(ctx context.Context, tx *sql.Tx, set taskSet) (int, bool, error) {
+	counted, capped, err := countCapped(ctx, tx, set.from, set.where, set.args)
 	if err != nil {
 		return 0, false, fmt.Errorf("worklet: count the answer: %w", err)
 	}
@@ -1845,8 +1894,7 @@ func countHint(ctx context.Context, tx *sql.Tx, where string,
 func countCapped(ctx context.Context, tx *sql.Tx, from, where string,
 	args []any) (int, bool, error) {
 
-	query := `SELECT COUNT(*) FROM (SELECT 1 FROM ` + from + ` WHERE ` +
-		where + ` LIMIT ?)`
+	query := cappedCountStatement(from, where)
 	var n int
 	if err := tx.QueryRowContext(ctx, query,
 		append(append([]any{}, args...), TotalHintCeiling+1)...).Scan(&n); err != nil {
@@ -1854,6 +1902,14 @@ func countCapped(ctx context.Context, tx *sql.Tx, from, where string,
 	}
 	counted, capped := capHint(n)
 	return counted, capped, nil
+}
+
+// cappedCountStatement counts the rows `from` joins and `where` selects up to
+// the bound its one trailing placeholder takes — the statement [countCapped]
+// and the group-breadth gate count with, named for the plan test.
+func cappedCountStatement(from, where string) string {
+	return `SELECT COUNT(*) FROM (SELECT 1 FROM ` + from + ` WHERE ` + where +
+		` LIMIT ?)`
 }
 
 // capHint clamps a count taken one past the ceiling, and says whether it was

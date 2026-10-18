@@ -364,13 +364,13 @@ func countView(ctx context.Context, tx *sql.Tx,
 			return 0, false, err
 		}
 	}
-	where, args, err := compile(parsed, q.Now, fields)
+	set, err := compile(parsed, q.Now, fields)
 	if err != nil {
 		// COMPILING IS PURE — it reads nothing — so a failure here is
 		// about the view and never about the store.
 		return 0, false, fmt.Errorf("%w: %w", errUncountable, err)
 	}
-	return countHint(ctx, tx, where, args)
+	return countHint(ctx, tx, set)
 }
 
 // viewScope is the read's closure: the container the strip belongs to.

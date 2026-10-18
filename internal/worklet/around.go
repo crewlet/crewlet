@@ -90,12 +90,11 @@ type segment struct {
 
 // readAround answers [Query.Around] over the rows an answer describes.
 //
-// `where` and `args` are the answer's UNPAGED predicate — a cursor says where
-// one page starts and says nothing about where a task sits in the whole — and
-// `listed` is the whole list-ordered set when a priority list decided the
-// order.
+// `set` is the answer's UNPAGED set — a cursor says where one page starts and
+// says nothing about where a task sits in the whole — and `listed` is the
+// whole list-ordered set when a priority list decided the order.
 func readAround(ctx context.Context, tx *sql.Tx, q Query,
-	fields map[string]resolvedField, where string, args []any,
+	fields map[string]resolvedField, set taskSet,
 	terms []sortTerm, answer *Answer, listed []TaskRow) (*Around, error) {
 
 	id, err := resolveTaskID(ctx, tx, q.Around)
@@ -126,7 +125,7 @@ func readAround(ctx context.Context, tx *sql.Tx, q Query,
 
 	at, ahead := -1, 0
 	for i, seg := range segments {
-		held, holdErr := segmentHolds(ctx, tx, seg, where, args, id)
+		held, holdErr := segmentHolds(ctx, tx, seg, set, id)
 		if holdErr != nil {
 			return nil, holdErr
 		}
@@ -159,7 +158,7 @@ func readAround(ctx context.Context, tx *sql.Tx, q Query,
 	before := "NOT " + after + " AND t.id <> ?"
 	beforeArgs := append(append([]any{}, afterArgs...), id)
 
-	counted, err := segmentCount(ctx, tx, seg, terms, where, args, before,
+	counted, err := segmentCount(ctx, tx, seg, terms, set, before,
 		beforeArgs)
 	if err != nil {
 		return nil, err
@@ -170,23 +169,23 @@ func readAround(ctx context.Context, tx *sql.Tx, q Query,
 	}
 
 	forward, reverse := renderOrder(terms), renderReverse(terms)
-	if out.Next, err = segmentFirst(ctx, tx, seg, terms, where, args, after,
+	if out.Next, err = segmentFirst(ctx, tx, seg, terms, set, after,
 		afterArgs, forward); err != nil {
 		return nil, err
 	}
 	for j := at + 1; out.Next == nil && j < len(segments); j++ {
-		if out.Next, err = segmentFirst(ctx, tx, segments[j], terms, where,
-			args, "", nil, forward); err != nil {
+		if out.Next, err = segmentFirst(ctx, tx, segments[j], terms, set,
+			"", nil, forward); err != nil {
 			return nil, err
 		}
 	}
-	if out.Prev, err = segmentFirst(ctx, tx, seg, terms, where, args, before,
+	if out.Prev, err = segmentFirst(ctx, tx, seg, terms, set, before,
 		beforeArgs, reverse); err != nil {
 		return nil, err
 	}
 	for j := at - 1; out.Prev == nil && j >= 0; j-- {
-		if out.Prev, err = segmentFirst(ctx, tx, segments[j], terms, where,
-			args, "", nil, reverse); err != nil {
+		if out.Prev, err = segmentFirst(ctx, tx, segments[j], terms, set,
+			"", nil, reverse); err != nil {
 			return nil, err
 		}
 	}
@@ -274,11 +273,11 @@ func drawingOrder(q Query, fields map[string]resolvedField,
 // order's own joins so a keyset over a custom-field sort can name its alias,
 // and the arguments in statement order: the joins' first, then the answer's
 // predicate, then the run's narrowing, then the caller's own clause.
-func segmentFrom(seg segment, terms []sortTerm, where string, args []any,
+func segmentFrom(seg segment, terms []sortTerm, set taskSet,
 	extra string, extraArgs []any) (string, []any) {
 
 	joins, joinArgs := sortJoins(terms)
-	clause := "(" + where + ")"
+	clause := "(" + set.where + ")"
 	if seg.Clause != "" {
 		clause += " AND " + seg.Clause
 	}
@@ -286,17 +285,17 @@ func segmentFrom(seg segment, terms []sortTerm, where string, args []any,
 		clause += " AND " + extra
 	}
 	bound := append(append([]any{}, seg.JoinArgs...), joinArgs...)
-	bound = append(bound, args...)
+	bound = append(bound, set.args...)
 	bound = append(bound, seg.Args...)
 	bound = append(bound, extraArgs...)
-	return " FROM tracker_tasks t" + seg.Join + joins + " WHERE " + clause, bound
+	return " FROM " + set.from + seg.Join + joins + " WHERE " + clause, bound
 }
 
 // segmentHolds reports whether one run holds the task.
-func segmentHolds(ctx context.Context, tx *sql.Tx, seg segment, where string,
-	args []any, id string) (bool, error) {
+func segmentHolds(ctx context.Context, tx *sql.Tx, seg segment, set taskSet,
+	id string) (bool, error) {
 
-	from, bound := segmentFrom(seg, nil, where, args, "t.id = ?", []any{id})
+	from, bound := segmentFrom(seg, nil, set, "t.id = ?", []any{id})
 	var one int
 	err := tx.QueryRowContext(ctx, "SELECT 1"+from+" LIMIT 1", bound...).Scan(&one)
 	switch {
@@ -311,10 +310,10 @@ func segmentHolds(ctx context.Context, tx *sql.Tx, seg segment, where string,
 // segmentCount counts one run's rows matching a clause, stopping one past the
 // ceiling exactly as [countHint] does.
 func segmentCount(ctx context.Context, tx *sql.Tx, seg segment,
-	terms []sortTerm, where string, args []any, extra string,
+	terms []sortTerm, set taskSet, extra string,
 	extraArgs []any) (int, error) {
 
-	from, bound := segmentFrom(seg, terms, where, args, extra, extraArgs)
+	from, bound := segmentFrom(seg, terms, set, extra, extraArgs)
 	var n int
 	if err := tx.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM (SELECT 1"+from+" LIMIT ?)",
@@ -328,10 +327,10 @@ func segmentCount(ctx context.Context, tx *sql.Tx, seg segment,
 // segmentFirst is the address ([ItemAddress]) of the first row of one run in
 // an order, narrowed by a clause, or nil when there is none.
 func segmentFirst(ctx context.Context, tx *sql.Tx, seg segment,
-	terms []sortTerm, where string, args []any, extra string, extraArgs []any,
+	terms []sortTerm, set taskSet, extra string, extraArgs []any,
 	order string) (*string, error) {
 
-	from, bound := segmentFrom(seg, terms, where, args, extra, extraArgs)
+	from, bound := segmentFrom(seg, terms, set, extra, extraArgs)
 	var id, key string
 	var collision int
 	err := tx.QueryRowContext(ctx,
