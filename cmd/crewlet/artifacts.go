@@ -692,8 +692,9 @@ func artifactsPublish(environ config.Source, args []string, stdout, stderr io.Wr
 	if err != nil {
 		return err
 	}
-	var target, title, kind, entry, label, contract, capabilities, item, opID *string
+	var target, title, kind, entry, label, contract, item, opID *string
 	var force *bool
+	var caps capabilitiesFlag
 	client, err := nodeClientFor(environ, rest, "artifacts publish", stderr, func(fs *flag.FlagSet) {
 		target = fs.String("artifact", "", "publish a new version of this artifact; empty creates one")
 		title = fs.String("title", "", "the title of a new artifact (default: the entry's name)")
@@ -701,8 +702,8 @@ func artifactsPublish(environ config.Source, args []string, stdout, stderr io.Wr
 		entry = fs.String("entry", "", "the file the artifact opens on (default: index.html, index.md)")
 		label = fs.String("label", "", "a label for the version")
 		contract = fs.String("contract", "", "the runtime contract the page pins: latest or an exact version")
-		capabilities = fs.String("capabilities", "", "what the page uses, comma-separated: "+
-			"assets, db, state, identity, presence")
+		fs.Var(&caps, "capabilities", "what the page uses, comma-separated: "+
+			capabilityNames()+"; none declares none (default: the head's, none for a new artifact)")
 		item = fs.String("work-item", "", "the work item this is made for, which lists it there")
 		force = fs.Bool("force", false, "publish over a head that moved since it was read")
 		opID = operationFlag(fs)
@@ -722,17 +723,56 @@ func artifactsPublish(environ config.Source, args []string, stdout, stderr io.Wr
 	if err != nil {
 		return err
 	}
-	caps := []artifacts.Capability{}
-	for _, c := range strings.Split(*capabilities, ",") {
-		if c = strings.TrimSpace(c); c != "" {
-			caps = append(caps, artifacts.Capability(c))
-		}
-	}
 	p := publishing{client: client, files: files, key: key, stdout: stdout}
-	if err := p.run(*target, entryPath, *title, *kind, *label, *contract, *item, *force, caps); err != nil {
+	if err := p.run(*target, entryPath, *title, *kind, *label, *contract, *item, *force, caps.list); err != nil {
 		return unknownOutcome(err, "publish", key)
 	}
 	return nil
+}
+
+// capabilitiesFlag is `-capabilities`. It remembers whether it was named at
+// all, because the node reads an absent set as "keep the head's" and an empty
+// one as "declare none": a republish that does not name the flag must send
+// nothing, or it strips a page of the datastore it reads.
+type capabilitiesFlag struct {
+	list []artifacts.Capability // nil until the flag is named
+}
+
+func (f *capabilitiesFlag) String() string {
+	names := make([]string, len(f.list))
+	for i, c := range f.list {
+		names[i] = string(c)
+	}
+	return strings.Join(names, ",")
+}
+
+// Set parses a comma-separated set. `none`, or an empty value, declares none;
+// a name this build does not serve is refused before any byte moves.
+func (f *capabilitiesFlag) Set(value string) error {
+	list := []artifacts.Capability{}
+	if v := strings.TrimSpace(value); v != "" && v != "none" {
+		for _, name := range strings.Split(v, ",") {
+			c := artifacts.Capability(strings.TrimSpace(name))
+			if !c.Valid() {
+				return fmt.Errorf("%q is not a capability; name some of %s, or none", name, capabilityNames())
+			}
+			if !slices.Contains(list, c) {
+				list = append(list, c)
+			}
+		}
+	}
+	f.list = list
+	return nil
+}
+
+// capabilityNames lists every capability this build serves, for the flag's
+// help and its refusal.
+func capabilityNames() string {
+	names := make([]string, len(artifacts.Capabilities))
+	for i, c := range artifacts.Capabilities {
+		names[i] = string(c)
+	}
+	return strings.Join(names, ", ")
 }
 
 // publishing is one publish in flight.
@@ -799,7 +839,11 @@ func (p publishing) run(target, entry, title, kind, label, contract, item string
 		} `json:"warnings"`
 	}
 	body := map[string]any{"upload": intent.Upload, "files": specs, "entry": entry,
-		"label": label, "contract": contract, "capabilities": caps, "work_item": item}
+		"label": label, "contract": contract, "work_item": item}
+	if caps != nil {
+		// Absent keeps the head's capabilities; see [capabilitiesFlag].
+		body["capabilities"] = caps
+	}
 	if target == "" {
 		if title == "" {
 			title = strings.TrimSuffix(path.Base(entry), path.Ext(entry))

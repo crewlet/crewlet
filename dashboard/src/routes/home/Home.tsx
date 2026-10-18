@@ -1,25 +1,33 @@
 /**
- * Home — the landing screen: how the company is, what waits on the person
- * reading, and what the company did.
+ * Home: how the company is, what waits on the person reading, and what the
+ * company did, laid out as the reader's own board.
  *
  * # The first fold is the company, then the reader
  *
  * A queue-shaped home renders a healthy company as a blank page, and a reader
- * cannot tell that from a broken one. So the screen opens with five figures
- * that are true whatever the queue holds — who is working, what waits on you,
- * the work in progress, the work finished, the tokens spent — and under them
- * the decisions only this reader can make, answered IN PLACE: an option of a
- * structured ask is a button that sends the choice, a parked coding run is
- * answered by its turn. An empty decisions card then means something: nothing
+ * cannot tell that from a broken one. So Home opens, until its reader says
+ * otherwise, with five figures that are true whatever the queue holds (who is
+ * working, what waits on you, the work in progress, the work finished, the
+ * tokens spent) and under them the decisions only this reader can make,
+ * answered IN PLACE. An empty decisions card then means something: nothing
  * needs you, on a company that is visibly running.
  *
- * # Four questions, and the rest is pushes
+ * # The reader arranges it
  *
- * `work_flow` (the tracker's history replayed backward from today's census,
- * asked only with Tracker),
- * `token_series` (the spend over the window, by team), `company_feed` (one merged feed with one cursor) and `decisions` (what
- * waits on this person). Who is working, the budget meter and the fleet are
- * the pushes every screen already holds, so nothing here polls for them.
+ * Edit Home turns the page into a board (`board/`): widgets are moved by
+ * dragging, sized from their corner, grouped under coloured headings, and
+ * added from a tray that offers Home's own cards, the reader's notes,
+ * headings, dividers and links, and the widgets every section of the
+ * dashboard offers (`board/registry.tsx`). The board is kept per reader in
+ * this browser (`board/model.ts`), as stars are.
+ *
+ * A DRAFT, KEPT ON DONE. Arranging takes many moves and the page in between
+ * is one nobody chose, so nothing is stored until Done. Every move is undoable
+ * while editing (Undo, Redo, and the platform's keys), and Cancel with
+ * changes asks before throwing them away.
+ *
+ * GROUPS FOLD OUTSIDE EDITING TOO, and that is kept at once: folding "Spend"
+ * on a Monday is a choice about the page, not a layout change to confirm.
  *
  * # Every sentence is the engine's, and none prints a zero
  *
@@ -28,224 +36,557 @@
  * `model.ts` for how each clause reads for none, one and many.
  */
 
-import { useMemo } from "react";
-import { SegmentedControl } from "@crewlethq/ui";
-import { PageActions } from "~/app/frame/PageActions.tsx";
-import { useWorkingNow } from "~/app/Shell.tsx";
-import { NewTaskButton } from "~/components/NewTaskButton.tsx";
-import { href, useParam } from "~/app/router.tsx";
-import { useQuery } from "~/lib/useQuery.ts";
-import { useFrameSession } from "~/lib/frameSession.ts";
-import { ownName, useViewer } from "~/lib/viewer.ts";
-import { managedBlock, mayChangeConfig } from "~/lib/useWriteAccess.ts";
-import { useNow } from "~/lib/clock.ts";
-import { toWall } from "~/lib/format.ts";
-import { useAttention } from "~/lib/useAttention.ts";
-import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
-import { Kpis } from "./Kpis.tsx";
-import { Decisions } from "./Decisions.tsx";
-import { seatConditionsOf, seatDecisionsFor } from "~/components/DecisionRow.tsx";
-import { useLeadScope } from "~/lib/leadScope.ts";
-import { conditionKey, conditionsToDecide } from "~/lib/attention.ts";
-import { LiveNow } from "./LiveNow.tsx";
-import { CompletedChart } from "./CompletedChart.tsx";
-import { TokensByTeam } from "./TokensByTeam.tsx";
-import { Projects } from "./Projects.tsx";
-import { Feed } from "./Feed.tsx";
 import {
-  DEFAULT_RANGE,
-  HOME_RANGES,
-  crewOf,
-  flowPoints,
-  rangeOf,
-  statusSentence,
-  waitingOf,
-} from "./model.ts";
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import {
+  ArrangeBoard,
+  ArrangeFrame,
+  ArrangeGroup,
+  Button,
+  ConfirmModal,
+  EmptyState,
+  IconButton,
+  VisuallyHidden,
+  useReorderLists,
+  useToast,
+} from "@crewlethq/ui";
+import {
+  CopyGlyph,
+  FoldVerticalGlyph,
+  LayoutDashboardGlyph,
+  LayoutGridGlyph,
+  PencilGlyph,
+  UngroupGlyph,
+} from "@crewlethq/icons/glyphs";
+import { useLeaveGuard, useUnloadGuard } from "~/app/router.tsx";
+import { useUndoKeys } from "~/lib/useUndoKeys.ts";
+import { HomeDataProvider, useHomeData } from "./useHomeData.ts";
+import { HomeHead } from "./sections.tsx";
+import { shippedBoard } from "./board/catalog.tsx";
+import {
+  COLUMNS,
+  PAGE,
+  ROW,
+  addWidget,
+  boardStore,
+  duplicate,
+  findWidget,
+  fromLists,
+  groupList,
+  isOnce,
+  listsOf,
+  removeWidget,
+  sameBoard,
+  sizingOf,
+  ungroup,
+  updateWidget,
+  type Board,
+  type GroupWidget,
+  type Widget,
+} from "./board/model.ts";
+import { LeafView } from "./board/widgets.tsx";
+import { WidgetSettings, configurable, widgetName } from "./board/settings.tsx";
+import { WidgetTray } from "./board/tray.tsx";
+import { openLinksInNewTab } from "./board/newTab.ts";
+import { EditBar } from "./board/EditBar.tsx";
 
-/** How often the decisions are asked again: a person answers one and another
- *  lands, and the push carries neither. */
-const DECISIONS_POLL_MS = 30_000;
-
-/** The series and the spend move on the scale of minutes. */
-const SLOW_POLL_MS = 60_000;
-
-/** The leads a managed document honours: none, since it refuses a lead's write too. */
-const NO_LEADS: ReadonlySet<string> = new Set();
-
-export function Home() {
-  // WHO IS WORKING, at the head of this page and no other (`useWorkingNow`).
-  useWorkingNow();
-  const now = useNow();
-  const org = useOrg();
-  const viewer = useViewer();
-  // THE READER IS GREETED BY THEIR OWN NAME, which their directory row holds
-  // and the frame's `GET /auth/session` answered (`ownName`) — never the
-  // seat's, which is the chart's name for a place and often a role: a person
-  // with no name was greeted "Good afternoon, Founder". No name, no name.
-  const own = ownName(useFrameSession().answer);
-  const agents = useAgents();
-  const engine = useEngineHealth();
-  const { connected, authRejected } = useConnection();
-  const attention = useAttention();
-  const [rangeValue, setRange] = useParam("range", DEFAULT_RANGE);
-  const range = rangeOf(rangeValue);
-
-  const decisions = useQuery("decisions", undefined, {
-    enabled: viewer.owner !== "",
-    pollMs: DECISIONS_POLL_MS,
-  });
-  // THE TRACKER'S HISTORY, asked only of a reader holding Tracker: the
-  // engine refuses it to anybody else, and the tiles and chart it feeds say
-  // what would open them rather than drawing a refusal as a broken read.
-  const flow = useQuery(
-    "work_flow",
-    { bucket: "day", points: flowPoints(range) },
-    { pollMs: SLOW_POLL_MS, enabled: viewer.tracker },
-  );
-  const spend = useQuery(
-    "token_series",
-    { days: range.days, group: "unit", bucket: "day" },
-    { pollMs: SLOW_POLL_MS },
-  );
-
-  const crew = useMemo(() => crewOf(agents), [agents]);
-  // THE STOPPED SEATS, SPLIT BY WHO CAN ACT: the ones this reader can raise
-  // or hand on are decisions waiting on them; the rest are conditions they
-  // can see and nothing more. See `seatDecisionsFor`.
-  // A LEAD raises a seat they lead whose OWN window refused — never the
-  // company's ceiling — and on a MANAGED document nobody outside its writers
-  // raises anything, a lead included: the engine refuses their `/config` write
-  // `config_managed` exactly as it refuses anybody's (ADR-0030).
-  const leads = useLeadScope().seats;
-  const managed = managedBlock(viewer) !== null;
-  const seats = useMemo(
-    () =>
-      seatDecisionsFor(
-        seatConditionsOf(agents),
-        { configWrite: mayChangeConfig(viewer), acts: viewer.acts },
-        managed ? NO_LEADS : leads,
-      ),
-    [agents, viewer, leads, managed],
-  );
-  // WHAT WAITS ON THE READER: the engine's count of their asks and parked
-  // runs, and the stopped seats they can act on. Unknown — nobody signed in,
-  // or not answered yet — is null, never zero.
-  const waiting = viewer.owner ? waitingOf(decisions.data, seats.mine) : null;
-  // THE OTHER CONDITIONS: what the engine raised that a person decides and
-  // that is not one of this reader's own decisions — a seat stopped for
-  // another reason, a budget near its ceiling. Exactly the Inbox's condition
-  // rows (`conditionsToDecide`): the engine's own rows are the sentence's
-  // precedence and the engine row's, a stalled round and the parked runs are
-  // Live's, and a budget-stopped seat is one of the decisions.
-  const raised = conditionsToDecide(attention);
-  // A stopped seat counts here exactly when it is not counted as one of the
-  // reader's decisions: every one while nothing waits is known, else the ones
-  // they cannot act on.
-  const conditions =
-    raised.length + (waiting ? seats.others.length : seats.mine.length + seats.others.length);
-  // WHERE THEY ARE LISTED: the Inbox's "Needs you" group, opened on the
-  // one condition when there is exactly one.
-  const conditionsHref =
-    conditions === 1 && raised.length === 1
-      ? href(["inbox"], { row: conditionKey(raised[0]!.id) })
-      : href(["inbox"]);
-
-  const sentence = statusSentence({
-    company: org?.name ?? "",
-    connected,
-    authRejected,
-    configured: engine?.configured,
-    posture: engine?.posture,
-    draining: engine?.shutting_down ?? false,
-    nodes: engine?.nodes,
-    waiting,
-    conditions,
-    conditionsHref,
-    working: crew.working,
-  });
-
-  return (
-    <div className="home">
-      <PageActions>
-        {/* THE ONE SHEET every "New task" opens — see `app/newTask.ts`. It
-            stood in as the palette's "Create task" until the sheet landed. */}
-        <NewTaskButton />
-      </PageActions>
-
-      <header className="home-head">
-        <div className="home-head-text">
-          <h2 className="home-greeting">{greeting(now, own)}</h2>
-          <p className="home-status">
-            {sentence.map((run, i) =>
-              run.strong ? (
-                <strong key={i} className="home-status-figure">
-                  {run.text}
-                </strong>
-              ) : run.href ? (
-                <a key={i} className="prose-link" href={run.href}>
-                  {run.text}
-                </a>
-              ) : (
-                <span key={i}>{run.text}</span>
-              ),
-            )}
-          </p>
-        </div>
-        <SegmentedControl
-          label="Time range"
-          semantics="radio"
-          options={HOME_RANGES.map((r) => ({ value: r.value, label: r.label }))}
-          value={range.value}
-          onValueChange={(v) => setRange(v)}
-        />
-      </header>
-
-      <Kpis
-        range={range}
-        crew={crew}
-        viewer={viewer}
-        waiting={waiting}
-        waitingError={decisions.error}
-        flow={flow}
-        spend={spend}
-        now={now}
-      />
-
-      <div className="home-row home-row-main">
-        <Decisions
-          viewer={viewer}
-          answer={decisions.data}
-          error={decisions.error}
-          refusal={decisions.refusal}
-          loading={decisions.loading}
-          seatConditions={seats.mine}
-          now={now}
-        />
-        <LiveNow agents={agents} now={now} />
-      </div>
-
-      <div className="home-row home-row-three">
-        <CompletedChart flow={flow} locked={!viewer.loading && !viewer.tracker} />
-        <TokensByTeam spend={spend} range={range} />
-        <Projects />
-      </div>
-
-      <Feed now={now} />
-    </div>
-  );
-}
+const store = boardStore(shippedBoard());
 
 /**
- * "Good morning, Jane" — in the READER's clock, which is whose morning it is,
- * and with the first word of their name. A reader nobody named is greeted
- * without one rather than as "there" or as a token id.
- *
- * THE READER'S CLOCK IS THE BROWSER'S ZONE (`toWall`), the same one every
- * timestamp on the page is drawn in.
+ * Below this width the page is one column: Home's figures fold and every block
+ * on the board spans the page, since the decisions card's buttons need the
+ * width a column beside it would take. The same width `screens.css` folds the
+ * figures at.
  */
-export function greeting(now: number, name: string): string {
-  const hour = Number(toWall(now).slice(11, 13));
-  const part = hour < 5 ? "evening" : hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
-  const first = name.trim().split(/\s+/)[0] ?? "";
-  return first ? `Good ${part}, ${first}` : `Good ${part}`;
+const STACKS_BELOW = 928;
+
+/**
+ * Whether the page is narrower than `STACKS_BELOW`, from its own width: the
+ * page is a container whose width the sidebar and the peek decide, so the
+ * window's says nothing. A block's span is its frame's `columns`, so a stacked
+ * page passes every block all twelve rather than overriding the span it set.
+ */
+function useStacked(node: RefObject<HTMLElement | null>): boolean {
+  const [stacked, setStacked] = useState(false);
+  useLayoutEffect(() => {
+    const el = node.current;
+    if (!el) return;
+    const measure = () => setStacked(el.clientWidth > 0 && el.clientWidth < STACKS_BELOW);
+    measure();
+    const watch = new ResizeObserver(measure);
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [node]);
+  return stacked;
+}
+const HISTORY = 50;
+/** Keystrokes in one settings field within this long are one step of Undo. */
+const COALESCE_MS = 1000;
+
+export function Home() {
+  const data = useHomeData();
+  const saved = store.use();
+  const toast = useToast();
+  const [draft, setDraft] = useState<Board | null>(null);
+  const [past, setPast] = useState<Board[]>([]);
+  const [future, setFuture] = useState<Board[]>([]);
+  const [settingsId, setSettingsId] = useState<string | null>(null);
+  // A widget chosen in the tray that has a choice to make first (which page,
+  // which saved view): held here, off the page, until Add to Home.
+  const [pending, setPending] = useState<Widget | null>(null);
+  // The board and the Undo depth when a widget's settings opened, so Cancel
+  // can put both back.
+  const opened = useRef<{ board: Board; steps: number } | null>(null);
+  const [trayOpen, setTrayOpen] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [fresh, setFresh] = useState<string | null>(null);
+  const [leaving, setLeaving] = useState<{ leave: () => void } | null>(null);
+  const last = useRef<{ key: string; at: number } | null>(null);
+  const editing = draft !== null;
+  const root = useRef<HTMLDivElement>(null);
+  const stacked = useStacked(root);
+  const board = draft ?? saved;
+  const changed = draft !== null && !sameBoard(draft, saved);
+
+  // UNSAVED ARRANGING IS NOT LOST TO A CLICK ELSEWHERE: the sidebar, the
+  // palette or a link in a card asks first, and so does closing the tab.
+  useUnloadGuard(changed);
+  useLeaveGuard(
+    changed
+      ? (_to, leave) => {
+          setLeaving({ leave });
+          return true;
+        }
+      : null,
+  );
+
+  // What is being edited, read by `apply` so a step needs no updater with
+  // side effects (an updater may run twice).
+  const current = useRef<Board | null>(null);
+  current.current = draft;
+
+  /** One step of editing, which Undo takes back; `key` folds a run of keystrokes into one. */
+  const apply = useCallback((next: Board, key?: string) => {
+    const was = current.current;
+    if (was === null) return;
+    const now = Date.now();
+    const folds =
+      key !== undefined && last.current?.key === key && now - last.current.at < COALESCE_MS;
+    last.current = key === undefined ? null : { key, at: now };
+    if (!folds) {
+      setPast((p) => [...p.slice(-(HISTORY - 1)), was]);
+      setFuture([]);
+    }
+    // Held at once, so a second step before the next render (two quick
+    // presses in the tray) builds on this one rather than on the board both
+    // presses saw.
+    current.current = next;
+    setDraft(next);
+  }, []);
+  const undo = useCallback(() => {
+    if (!draft || past.length === 0) return;
+    setFuture((f) => [draft, ...f]);
+    setDraft(past[past.length - 1]!);
+    setPast((p) => p.slice(0, -1));
+    last.current = null;
+  }, [draft, past]);
+  const redo = useCallback(() => {
+    if (!draft || future.length === 0) return;
+    setPast((p) => [...p, draft]);
+    setDraft(future[0]!);
+    setFuture((f) => f.slice(1));
+    last.current = null;
+  }, [draft, future]);
+
+  // ⌘Z and ⇧⌘Z (Ctrl on other platforms) while editing, read from the key
+  // table, except in a field, where the keys belong to the text being typed.
+  useUndoKeys({
+    container: root,
+    enabled: editing,
+    onUndo: undo,
+    onRedo: redo,
+  });
+
+  // The widget whose settings open is brought into view beside the sheet.
+  useEffect(() => {
+    if (!settingsId) return;
+    const node = document.querySelector(`[data-widget="${settingsId}"]`);
+    const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    node?.scrollIntoView({ block: "nearest", behavior: still ? "auto" : "smooth" });
+  }, [settingsId]);
+
+  // A widget just added is brought into view and pulses once.
+  useEffect(() => {
+    if (!fresh) return;
+    const node = document.querySelector(`[data-widget="${fresh}"]`);
+    const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    node?.scrollIntoView({ block: "nearest", behavior: still ? "auto" : "smooth" });
+    const t = window.setTimeout(() => setFresh(null), 1300);
+    return () => window.clearTimeout(t);
+  }, [fresh]);
+
+  const start = () => {
+    setDraft(saved);
+    setPast([]);
+    setFuture([]);
+  };
+  const finish = () => {
+    if (draft) store.write(draft);
+    setDraft(null);
+    setSettingsId(null);
+    setPending(null);
+    setTrayOpen(false);
+    if (changed) toast.ok("Home saved");
+  };
+  const discard = () => {
+    setDraft(null);
+    setSettingsId(null);
+    setPending(null);
+    setTrayOpen(false);
+    setConfirmCancel(false);
+  };
+
+  const lists = useMemo(() => listsOf(board), [board]);
+  const reorder = useReorderLists({
+    lists,
+    onReorder: (next) => apply(fromLists(board, next)),
+    nameOf: (id) => {
+      const w = findWidget(board, id);
+      return w ? widgetName(w) : id;
+    },
+    accepts: (id, list) => list === PAGE || findWidget(board, id)?.kind !== "group",
+    axis: "grid",
+  });
+
+  const fold = (group: GroupWidget, collapsed: boolean) => {
+    const edit = (b: Board) => updateWidget(b, group.id, (w) => ({ ...w, collapsed }) as Widget);
+    if (editing) apply(edit(board));
+    else store.update(edit);
+  };
+
+  const settingsWidget = settingsId && editing ? findWidget(board, settingsId) : undefined;
+
+  const openSettings = (id: string) => {
+    opened.current = current.current ? { board: current.current, steps: past.length } : null;
+    setSettingsId(id);
+  };
+  /** Every change made in the settings sheet, taken back, Undo history included. */
+  const cancelSettings = () => {
+    const was = opened.current;
+    if (was) {
+      current.current = was.board;
+      setDraft(was.board);
+      setPast((p) => p.slice(0, was.steps));
+      setFuture([]);
+      last.current = null;
+    }
+    opened.current = null;
+    setSettingsId(null);
+  };
+
+  /** A widget's toolbar: its settings, and a menu of what else can be done to it. */
+  // Every action a block has is a button of its own: there are few enough
+  // that a menu would only hide them.
+  const toolbarFor = (w: Widget) => {
+    const name = widgetName(w);
+    const tool = (label: string, icon: ReactNode, onClick: () => void) => (
+      <IconButton size="sm" variant="ghost" label={label} icon={icon} onClick={onClick} />
+    );
+    return (
+      <>
+        {configurable(w) &&
+          tool(`Edit ${name}`, <PencilGlyph size="sm" />, () => openSettings(w.id))}
+        {!isOnce(w) &&
+          tool(`Duplicate ${name}`, <CopyGlyph size="sm" />, () => {
+            const made = duplicate(board, w.id);
+            if (made) {
+              apply(made.board);
+              setFresh(made.id);
+            }
+          })}
+        {w.kind === "group" &&
+          tool(`Ungroup ${name}`, <UngroupGlyph size="sm" />, () => apply(ungroup(board, w.id)))}
+        {w.h !== null &&
+          tool(`Fit ${name} to its content`, <FoldVerticalGlyph size="sm" />, () =>
+            apply(updateWidget(board, w.id, (x) => ({ ...x, h: null }) as Widget)),
+          )}
+      </>
+    );
+  };
+
+  const renderLeaf = (id: string) => {
+    const w = findWidget(board, id);
+    if (!w || w.kind === "group") return null;
+    const sizing = sizingOf(w);
+    // WORDS WITH NO CARD OF THEIR OWN (a heading, a divider) are drawn bare,
+    // centred in the cell they are given.
+    const bare = w.kind === "heading" || w.kind === "divider";
+    return (
+      <ArrangeFrame
+        key={id}
+        {...(editing ? reorder.itemProps(id) : {})}
+        data-widget={id}
+        className={bare ? "home-board-cell home-board-cell--bare" : "home-board-cell"}
+        name={widgetName(w)}
+        editing={editing}
+        bare={bare}
+        selected={settingsId === id}
+        columns={stacked ? COLUMNS : w.w}
+        rows={w.h}
+        rowHeight={ROW}
+        fresh={fresh === id}
+        handle={reorder.handleProps(id)}
+        resize={
+          stacked
+            ? undefined
+            : {
+                minColumns: sizing.minW,
+                minRows: sizing.minH,
+                vertical: sizing.vertical,
+                onResize: ({ columns, rows }) =>
+                  apply(updateWidget(board, id, (x) => ({ ...x, w: columns, h: rows }) as Widget)),
+              }
+        }
+        actions={toolbarFor(w)}
+        onRemove={() => {
+          apply(removeWidget(board, id));
+          setSettingsId((s) => (s === id ? null : s));
+        }}
+      >
+        <LeafView widget={w} />
+      </ArrangeFrame>
+    );
+  };
+
+  const renderGroup = (g: GroupWidget) => {
+    const children = reorder.lists[groupList(g.id)] ?? [];
+    return (
+      <ArrangeFrame
+        key={g.id}
+        {...(editing ? reorder.itemProps(g.id) : {})}
+        data-widget={g.id}
+        className="home-board-cell"
+        name={widgetName(g)}
+        editing={editing}
+        container
+        selected={settingsId === g.id}
+        columns={stacked ? COLUMNS : g.w}
+        rows={null}
+        rowHeight={ROW}
+        fresh={fresh === g.id}
+        handle={reorder.handleProps(g.id)}
+        resize={
+          stacked
+            ? undefined
+            : {
+                minColumns: sizingOf(g).minW,
+                vertical: false,
+                onResize: ({ columns }) =>
+                  apply(updateWidget(board, g.id, (x) => ({ ...x, w: columns }) as Widget)),
+              }
+        }
+        actions={toolbarFor(g)}
+        onRemove={() => apply(removeWidget(board, g.id))}
+      >
+        <ArrangeGroup
+          title={g.title}
+          tone={g.tone}
+          collapsed={g.collapsed}
+          onCollapsedChange={(c) => fold(g, c)}
+          count={children.length}
+          columns={COLUMNS}
+          onTitleChange={
+            editing
+              ? (title) =>
+                  apply(
+                    updateWidget(board, g.id, (x) => ({ ...x, title }) as Widget),
+                    `title:${g.id}`,
+                  )
+              : undefined
+          }
+          bodyProps={
+            editing
+              ? { ...reorder.listProps(groupList(g.id)), className: "home-group-body" }
+              : undefined
+          }
+          empty={editing ? "Drag widgets here, or add them from the tray." : "This group is empty."}
+        >
+          {children.map((id) => renderLeaf(id))}
+        </ArrangeGroup>
+      </ArrangeFrame>
+    );
+  };
+
+  const page = reorder.lists[PAGE] ?? [];
+  // THE WHOLE PAGE IS THE PAGE'S LIST, not only the grid on the board: a
+  // widget carried out of a group can be let go anywhere outside one (the
+  // strip above the first block, the hatch, the space below the last) and
+  // lands where the pointer falls among the page's blocks. The widgets on it
+  // share the page's one HomeData.
+  return (
+    <HomeDataProvider value={data}>
+      <div
+        ref={root}
+        className={editing ? "home home-board is-editing" : "home home-board"}
+        data-stacked={stacked ? "" : undefined}
+        {...(editing ? reorder.listProps(PAGE) : {})}
+        // Links open in a new tab while arranging, the add sheet's preview
+        // included (its portal's events reach this root), so following one
+        // never leaves the draft.
+        onClickCapture={editing ? openLinksInNewTab : undefined}
+      >
+        <HomeHead
+          data={data}
+          editing={editing}
+          actions={
+            editing ? (
+              <EditBar
+                changed={changed}
+                steps={past.length}
+                canRedo={future.length > 0}
+                onUndo={undo}
+                onRedo={redo}
+                onAdd={() => setTrayOpen(true)}
+                onCancel={() => (changed ? setConfirmCancel(true) : discard())}
+                onDone={finish}
+              />
+            ) : (
+              <Button
+                variant="secondary"
+                size="small"
+                leadingIcon={<LayoutDashboardGlyph size="sm" />}
+                onClick={start}
+              >
+                Edit Home
+              </Button>
+            )
+          }
+        />
+        <VisuallyHidden id={reorder.hintId}>{reorder.hint}</VisuallyHidden>
+        {page.length === 0 ? (
+          <EmptyState
+            icon={<LayoutGridGlyph size="md" />}
+            title="Your Home is empty"
+            description="Add widgets, or start from a template."
+            action={
+              <Button
+                variant="primary"
+                leadingIcon={<LayoutGridGlyph size="sm" />}
+                onClick={() => {
+                  if (!editing) start();
+                  setTrayOpen(true);
+                }}
+              >
+                Add widgets
+              </Button>
+            }
+          />
+        ) : (
+          <ArrangeBoard editing={editing} columns={stacked ? 1 : COLUMNS}>
+            <div className="home-board-grid">
+              {page.map((id) => {
+                const w = findWidget(board, id);
+                if (!w) return null;
+                return w.kind === "group" ? renderGroup(w) : renderLeaf(id);
+              })}
+            </div>
+          </ArrangeBoard>
+        )}
+        {settingsWidget && (
+          <WidgetSettings
+            mode="edit"
+            widget={settingsWidget}
+            onChange={(next) =>
+              apply(
+                updateWidget(board, next.id, () => next),
+                `settings:${next.id}`,
+              )
+            }
+            onDone={() => {
+              opened.current = null;
+              setSettingsId(null);
+            }}
+            onCancel={cancelSettings}
+          />
+        )}
+        {pending && editing && (
+          <WidgetSettings
+            mode="add"
+            widget={pending}
+            onChange={setPending}
+            onAdd={() => {
+              apply(addWidget(current.current ?? board, pending));
+              setFresh(pending.id);
+              setPending(null);
+              setTrayOpen(true);
+            }}
+            onBack={() => {
+              setPending(null);
+              setTrayOpen(true);
+            }}
+            onClose={() => setPending(null)}
+          />
+        )}
+        {trayOpen && editing && (
+          <WidgetTray
+            board={board}
+            onAdd={(widget) => {
+              // A widget with a choice to make (which page, which saved view)
+              // is chosen in a sheet of its own first, with Back to widgets
+              // beside Add to Home; it has nothing to show until then.
+              if (widget.kind === "widget" && configurable(widget)) {
+                setTrayOpen(false);
+                setPending(widget);
+                return;
+              }
+              apply(addWidget(current.current ?? board, widget));
+              setFresh(widget.id);
+            }}
+            onTemplate={(next, name) => {
+              apply(next);
+              toast.show({
+                variant: "info",
+                title: `${name} applied`,
+                message: "Undo restores your previous layout.",
+              });
+            }}
+            onClose={() => setTrayOpen(false)}
+          />
+        )}
+        <ConfirmModal
+          open={leaving !== null}
+          onClose={() => setLeaving(null)}
+          onConfirm={() => {
+            const go = leaving;
+            discard();
+            setLeaving(null);
+            go?.leave();
+          }}
+          title="Leave without saving?"
+          message="Your unsaved changes to Home will be lost."
+          confirmLabel="Discard and leave"
+          cancelLabel="Keep editing"
+          destructive
+        />
+        <ConfirmModal
+          open={confirmCancel}
+          onClose={() => setConfirmCancel(false)}
+          onConfirm={discard}
+          title="Discard your changes?"
+          message="Home returns to how it was before you started editing."
+          confirmLabel="Discard changes"
+          cancelLabel="Keep editing"
+          destructive
+        />
+      </div>
+    </HomeDataProvider>
+  );
 }

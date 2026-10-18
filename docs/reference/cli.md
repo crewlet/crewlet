@@ -1307,7 +1307,11 @@ another; its title defaults to the entry's name and its kind to `markdown`
 for a `.md` entry and `html` otherwise. A new version of `-artifact` names the
 head it read as its base, so a version somebody else published meanwhile is
 refused rather than overwritten; `-force` publishes over it, a person's
-gesture. The publish policy's warnings are printed beneath the result.
+gesture. A new version keeps the head's runtime contract and capabilities
+unless `-contract` or `-capabilities` names others: `-capabilities db,state`
+declares exactly that set, `-capabilities none` declares none, and a name this
+build does not serve is refused before any byte moves. The publish policy's
+warnings are printed beneath the result.
 
 Every write sends an operation id as the request's `Idempotency-Key`: `-op-id`
 takes one in the engine's operation-id grammar, and without it the command
