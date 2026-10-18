@@ -17,6 +17,10 @@ const keyLine = "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gu
 // sshLine is one line at OpenSSH's width, seventy characters.
 const sshLine = "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABlwAAAAdzc2gtcn"
 
+// mimeLine is one line at MIME's width, seventy-six characters: what Java's
+// MIME encoder and Python's base64.encodebytes wrap a body at.
+const mimeLine = keyLine + "Q8vN2xRk7TpZ"
+
 func pemBody(lines int) string { return strings.Repeat(keyLine+"\n", lines) }
 
 // A KEY WHOSE END WAS NEVER WRITTEN — a run that crashed mid-print — is still
@@ -181,9 +185,10 @@ func TestAnEndClosesOnlyABlockOfKey(t *testing.T) {
 }
 
 // A KEY IS READ BACK FROM ITS END where no BEGIN's block reached it: a body cut
-// off from its BEGIN by two lines another process wrote, by prose straight
-// after the armour, or whose BEGIN is not in the text at all — a stream's end
-// read from inside the key. Its body used to be published whole once the
+// off from its BEGIN by lines another process wrote — two, which the read
+// crosses back to the part the BEGIN's block holds, or three, which no read
+// crosses — by prose straight after the armour, or whose BEGIN is not in the
+// text at all, a stream's end read from inside the key. Its body used to be published whole once the
 // structure stopped a forward read short of it, because nothing read back.
 //
 // Mutation: read a key only forward from its BEGIN, and every one of these
@@ -210,15 +215,23 @@ func TestAKeyIsReadBackFromItsEnd(t *testing.T) {
 			"-----BEGIN RSA PRIVATE KEY-----\nsee below\n" + keyLine + "\n-----END RSA PRIVATE KEY-----\n",
 			"-----BEGIN RSA PRIVATE KEY-----\nsee below\n" + m + "\n",
 		},
+		// Two lines in a row end the block read forward, and the END reads
+		// back across them to the key's line above: one key, one marker.
 		"broken by two lines in a row": {
 			"-----BEGIN RSA PRIVATE KEY-----\n" + pemBody(2) + "[worker 3] connected\n[worker 4] connected\n" +
 				pemBody(2) + "u1SU1Lf=\n-----END RSA PRIVATE KEY-----\nnext\n",
-			m + "\n[worker 3] connected\n[worker 4] connected\n" + m + "\nnext\n",
+			m + "\nnext\n",
 		},
 		"broken twice, read from both ends": {
 			"-----BEGIN RSA PRIVATE KEY-----\n" + pemBody(2) + "[worker 3] connected\n[worker 4] connected\n" +
 				pemBody(2) + "[worker 5] connected\n" + pemBody(2) + "-----END RSA PRIVATE KEY-----\n",
-			m + "\n[worker 3] connected\n[worker 4] connected\n" + m + "\n",
+			m + "\n",
+		},
+		// Three no read crosses: each part is read from its own armour.
+		"broken by three lines in a row": {
+			"-----BEGIN RSA PRIVATE KEY-----\n" + pemBody(2) + "[worker 3] connected\n[worker 4] connected\n" +
+				"[worker 5] connected\n" + pemBody(2) + "u1SU1Lf=\n-----END RSA PRIVATE KEY-----\nnext\n",
+			m + "\n[worker 3] connected\n[worker 4] connected\n[worker 5] connected\n" + m + "\nnext\n",
 		},
 		"escaped in a string, its BEGIN not in the text": {
 			`"` + keyLine + `\n` + keyLine + `\nu1SU1Lf=\n-----END PRIVATE KEY-----\n"}` + "\n",
@@ -251,6 +264,134 @@ func TestAKeyIsReadBackFromItsEnd(t *testing.T) {
 		if got != c.want {
 			t.Errorf("%s:\n got %q\nwant %q", name, got, c.want)
 		}
+	}
+}
+
+// A KEY READ FROM INSIDE IS READ BACK ACROSS TWO LINES. With its BEGIN not in
+// the text — a stream's end, a window of a log — a key another process broke
+// with two lines in a row was published above them: two lines end every
+// reading of a block, and the part above had no armour of its own. Its END now
+// reads back across exactly two lines to a line of the key at its encoder's
+// width, wherever the two fell: between two full lines, before the short last
+// line — with a line or a word below it too — before the END, with a line
+// between the body's last line and the full one above it too, between an EC
+// key's only two full lines, between a body of one line and its END, at
+// MIME's width, and under a diff's `+` or a reader's line numbers. OpenPGP's
+// checksum line is read back as its END is, so its key is read whole broken
+// by two lines on either side of the checksum, and by one between the
+// checksum and the body's last line. Each is one marker, and is shown so as it
+// arrives.
+//
+// What a read does not cross is held here too: three lines in a row, two below
+// a line at no encoder's width — a Go test's name, a path one character wider
+// than a key's line but with no diff's `+` to make it so — two below a full
+// line that lie under one at the other width, and two breaks of two lines with
+// nothing but the body's last line between them: each leaves the lines above
+// as they were.
+//
+// Mutation: start no bridge at the END, and the cases broken just before their
+// END publish the lines above; none at a line that may be the body's last, and
+// the one broken before its short last line does, and none after a line or a
+// word below it, and those two do; let the END's bridge take no line between
+// the body's last line and the line it lands on, and the case with one there
+// does; read OpenPGP's checksum as a short line alone, and its cases do; leave
+// MIME's width out, and its case does; cross three lines, land at any width,
+// take one wider for no `+`, or chain a bridge from the END into one from the
+// body's last line, and a case that should be left is redacted; land from a
+// full line at the other width, and its case is; hold nothing a bridge lands
+// on in [redact.Settled], and the cases are shown before their END redacts
+// them.
+func TestAKeyReadFromInsideIsReadBackAcrossTwoLines(t *testing.T) {
+	const testName = "TestAKeyReadFromInsideIsReadBackAcrossTwoLinesWhenItsBroken"
+	m := marker
+	end := "-----END RSA PRIVATE KEY-----"
+	w3, w4, w5, w6 := foreignLine, "[worker 4] connected", "[worker 5] connected", "[worker 6] connected"
+	pgpEnd := "-----END PGP PRIVATE KEY BLOCK-----"
+	lines := func(l ...string) string { return strings.Join(l, "\n") + "\n" }
+	numbered := func(from int, lines ...string) string {
+		var b strings.Builder
+		for i, line := range lines {
+			fmt.Fprintf(&b, "%6d\u2192%s\n", from+i, line)
+		}
+		return b.String()
+	}
+	for name, c := range map[string]keyForm{
+		"broken between two of its full lines": {
+			lines(keyLine, keyLine, w3, w4, keyLine, keyLine, "u1SU1Lf=", end, "next"), m + "\nnext\n",
+		},
+		"broken just before its short last line": {
+			lines(keyLine, keyLine, w3, w4, "u1SU1Lf=", end, "next"), m + "\nnext\n",
+		},
+		"broken just before its END, its last line of forty-four": {
+			lines(keyLine, digitless[:44], w3, w4, end, "next"), m + "\nnext\n",
+		},
+		"an EC key's two full lines, broken between them": {
+			lines(keyLine, w3, w4, digitless, "u1SU1Lf=", "-----END EC PRIVATE KEY-----", "next"), m + "\nnext\n",
+		},
+		"a body of one line, broken from its END": {
+			lines(keyLine, w3, w4, "-----END PRIVATE KEY-----", "next"), m + "\nnext\n",
+		},
+		"an OpenSSH key's lines, at seventy": {
+			lines(sshLine, sshLine, w3, w4, sshLine, "AAAEBm9uZQ==", "-----END OPENSSH PRIVATE KEY-----", "next"), m + "\nnext\n",
+		},
+		"in a diff, a line wider by its +": {
+			lines("+"+keyLine, "+"+keyLine, "+"+w3, "+"+w4, "+"+keyLine, "+u1SU1Lf=", "+"+end, " context"), m + "\n context\n",
+		},
+		"under a reader's line numbers": {
+			numbered(10, keyLine, keyLine, w3, w4, keyLine, "u1SU1Lf=", end, "next"), "    10\u2192" + m + "\n    17\u2192next\n",
+		},
+		"broken before its short last line, and by a line below it": {
+			lines(keyLine, keyLine, w3, w4, "u1SU1Lf=", w5, end, "next"), m + "\nnext\n",
+		},
+		"broken before its short last line, and by a word below it": {
+			lines(keyLine, keyLine, w3, w4, "u1SU1Lf=", "Done", end, "next"), m + "\nnext\n",
+		},
+		"broken just before its END, and by a line above its short last line": {
+			lines(keyLine, keyLine, w5, "u1SU1Lf=", w3, w4, end, "next"), m + "\nnext\n",
+		},
+		"at MIME's width": {
+			lines(mimeLine, mimeLine, w3, w4, mimeLine, "u1SU1Lf=", end, "next"), m + "\nnext\n",
+		},
+		"OpenPGP's, broken just before its END": {
+			lines(keyLine, keyLine, "u1SU1Lf=", "=nE4V", w3, w4, pgpEnd, "next"), m + "\nnext\n",
+		},
+		"OpenPGP's, broken just before its checksum": {
+			lines(keyLine, keyLine, "u1SU1Lf=", w3, w4, "=nE4V", pgpEnd, "next"), m + "\nnext\n",
+		},
+		"OpenPGP's, broken by one line before its checksum": {
+			lines(keyLine, keyLine, "u1SU1Lf=", w3, "=nE4V", pgpEnd, "next"), m + "\nnext\n",
+		},
+		"OpenPGP's, broken just before its END and by one line before its checksum": {
+			lines(keyLine, keyLine, "u1SU1Lf=", w5, "=nE4V", w3, w4, pgpEnd, "next"), m + "\nnext\n",
+		},
+		"OpenPGP's, broken just before its checksum and by one line before its END": {
+			lines(keyLine, keyLine, "u1SU1Lf=", w3, w4, "=nE4V", w5, pgpEnd, "next"), m + "\nnext\n",
+		},
+		"OpenPGP's, broken just before its checksum and by a word before its END": {
+			lines(keyLine, keyLine, "u1SU1Lf=", w3, w4, "=nE4V", "Done", pgpEnd, "next"), m + "\nnext\n",
+		},
+	} {
+		redactsWhole(t, name, c, keyLine, sshLine, mimeLine, digitless[:44], "u1SU1Lf=")
+	}
+	for name, c := range map[string]keyForm{
+		"three lines in a row": {
+			lines(keyLine, w3, w4, w5, keyLine, "u1SU1Lf=", end, "next"),
+			lines(keyLine, w3, w4, w5, m, "next"),
+		},
+		"two, below a Go test's name at no encoder's width": {
+			lines(testName, w3, w4, end, "next"), lines(testName, w3, w4, end, "next"),
+		},
+		"two, below a path one wider than a key's line, with no diff's +": {
+			lines(mixedCasePath, w3, w4, end, "next"), lines(mixedCasePath, w3, w4, end, "next"),
+		},
+		"two below a full line, under one at the other width": {
+			lines(sshLine, w3, w4, keyLine, keyLine, "u1SU1Lf=", end, "next"), lines(sshLine, w3, w4, m, "next"),
+		},
+		"two and two, only its short last line between them": {
+			lines(keyLine, w3, w4, "u1SU1Lf=", w5, w6, end, "next"), lines(keyLine, w3, w4, "u1SU1Lf=", w5, w6, end, "next"),
+		},
+	} {
+		redactsWhole(t, name, c)
 	}
 }
 
@@ -297,7 +438,7 @@ func TestAKeysLineWithNoDigitIsReadBackAsALineOfIt(t *testing.T) {
 		"broken by two lines in a row, the line after them": {
 			"-----BEGIN RSA PRIVATE KEY-----\n" + pemBody(2) + "[worker 3] connected\n[worker 4] connected\n" +
 				digitless + "\n" + keyLine + "\nu1SU1Lf=\n" + end + "\nnext\n",
-			m + "\n[worker 3] connected\n[worker 4] connected\n" + m + "\nnext\n",
+			m + "\nnext\n",
 		},
 		"read from inside it, broken by one line beside it": {
 			keyLine + "\n" + foreignLine + "\n" + digitless + "\n" + keyLine + "\nu1SU1Lf=\n" + end + "\nnext\n",
@@ -324,7 +465,7 @@ func TestAKeysLineWithNoDigitIsReadBackAsALineOfIt(t *testing.T) {
 		"broken by two lines after its first, an EC key's": {
 			"-----BEGIN EC PRIVATE KEY-----\n" + keyLine + "\n[worker 3] connected\n[worker 4] connected\n" +
 				digitless + "\nu1SU1Lf=\n-----END EC PRIVATE KEY-----\nnext\n",
-			m + "\n[worker 3] connected\n[worker 4] connected\n" + m + "\nnext\n",
+			m + "\nnext\n",
 		},
 		// A line that reads like a key's may as well be one another
 		// process wrote: here, one on each side of the short last line,
@@ -1104,7 +1245,7 @@ func TestNoSecretIsShownBeforeItsShapeIsSettled(t *testing.T) {
 // any distance, and the line after the header is never shown.
 func TestAHeaderIsHeldOnlyWhileAKeyCouldFollowIt(t *testing.T) {
 	header := "x:-----BEGIN RSA PRIVATE KEY-----\n"
-	over := header + pemBody(2) + "the run went on\nand on\nand on\nand on\n"
+	over := header + pemBody(2) + "the run went on\nand on\nand on\nand on\nand on\n"
 	for name, c := range map[string]struct {
 		text string
 		want int
@@ -1116,8 +1257,11 @@ func TestAHeaderIsHeldOnlyWhileAKeyCouldFollowIt(t *testing.T) {
 		// may still follow.
 		"a header, a body and a word": {header + pemBody(2) + "line\n", 0},
 		// Three lines after it could still be an interruption, the short
-		// last line and another before an END.
+		// last line and another before an END; four, an interruption and
+		// the short last line below two an END reads back across to a
+		// line as wide as the body's.
 		"a header, a body and three lines": {header + pemBody(2) + "the run went on\nand on\nand on\n", 0},
+		"a header, a body and four lines":  {header + pemBody(2) + "the run went on\nand on\nand on\nand on\n", 0},
 		"a header and a body that is over": {over, len(over)},
 		"a header and a closed block": {header + pemBody(2) + "-----END RSA PRIVATE KEY-----\nnext\n",
 			len(header + pemBody(2) + "-----END RSA PRIVATE KEY-----\nnext\n")},
@@ -1175,7 +1319,7 @@ func TestAStreamOfKeyShapedLinesIsHeldOnlyAsFarAsAnEndCouldRead(t *testing.T) {
 	if got == 0 || len(stream)-got > redact.MaxKeyBlockBytes {
 		t.Errorf("Settled = %d of %d; want all but the last %d bytes settled", got, len(stream), redact.MaxKeyBlockBytes)
 	}
-	over := stream + "the run\nwent\non\nand on\n"
+	over := stream + "the run\nwent\non\nand on\nand on\n"
 	if got := redact.Settled(over); got != len(over) {
 		t.Errorf("Settled = %d of %d; want all of it once no key could still be read", got, len(over))
 	}
@@ -1188,7 +1332,12 @@ func TestAStreamOfKeyShapedLinesIsHeldOnlyAsFarAsAnEndCouldRead(t *testing.T) {
 // are in one case, and a live view shows them the moment they are whole. What
 // releases a line that waits is two lines in a row that are no key's with two
 // more after them, whatever those are: a key's line among the last two may yet
-// be read as one interrupting the key, and holds the line before it.
+// be read as one interrupting the key, and holds the line before it. A line
+// exactly as wide as a key's waits for one more, and so does one two lines
+// above another of its width that waits, since an END can read back across two
+// lines to it; and a line that may be OpenPGP's checksum, with no more than two
+// lines after it, starts the count again above it, since an END reads back from
+// one as from itself.
 //
 // Mutation: read any run at a body's width as a key's line back from an END,
 // and the path and the hash wait for four more lines; ask it for a digit as
@@ -1196,7 +1345,11 @@ func TestAStreamOfKeyShapedLinesIsHeldOnlyAsFarAsAnEndCouldRead(t *testing.T) {
 // read a held key's line only as a full one, never as one interrupting a key,
 // and the line two lines before it is shown although an END can still reach it;
 // read on past a key's marker, and the line before it waits for an END that
-// could never reach it.
+// could never reach it; hold nothing a read could cross two lines to, and a
+// key's line is shown after four although an END could still reach it; cross
+// to a line at any width, and the ones at no key's width wait for five; leave
+// MIME's width out, and its line is shown after four; hold nothing a checksum
+// starts a read again from, and the line above one is shown after five.
 func TestOnlyALineThatReadsLikeAKeysBodyWaitsForAnEnd(t *testing.T) {
 	for name, line := range map[string]string{
 		"a long path":     "[tool] Read: /home/user/crewlet/internal/sandbox/codingagent/claudestream.go",
@@ -1207,28 +1360,49 @@ func TestOnlyALineThatReadsLikeAKeysBodyWaitsForAnEnd(t *testing.T) {
 			t.Errorf("%s: Settled = %d of %d; want it shown at once", name, got, len(line)+1)
 		}
 	}
-	for name, line := range map[string]string{"a key's line": keyLine, "a key's line with no digit": digitless} {
-		text := "start\n" + line + "\n"
-		for i, more := range []string{"one\n", "two\n", "three\n"} {
-			text += more
+	for name, c := range map[string]struct {
+		line string
+		wait int
+	}{
+		"a key's line":               {keyLine, 5},
+		"a key's line with no digit": {digitless, 5},
+		"an OpenSSH key's line":      {sshLine, 5},
+		"a line at MIME's width":     {mimeLine, 5},
+		"a path in mixed case":       {mixedCasePath, 4},
+		"a key's last line":          {keyLine[:56], 4},
+	} {
+		text := "start\n" + c.line + "\n"
+		for i := range c.wait {
 			if got := redact.Settled(text); got != len("start\n") {
-				t.Errorf("%s, after %d lines: Settled = %d; want it held", name, i+1, got)
+				t.Errorf("%s, after %d lines: Settled = %d; want it held", name, i, got)
 			}
+			text += fmt.Sprintf("line %d\n", i)
 		}
-		if text += "four\n"; redact.Settled(text) != len(text) {
-			t.Errorf("%s: Settled = %d of %d; want it shown once four lines no key's could follow it", name, redact.Settled(text), len(text))
+		if got := redact.Settled(text); got != len(text) {
+			t.Errorf("%s: Settled = %d of %d; want it shown once %d lines no key's follow it", name, got, len(text), c.wait)
 		}
 	}
 	for name, c := range map[string]struct {
 		after []string
 		held  bool
 	}{
-		"two lines, then a key's line":             {[]string{"one", "two", keyLine}, true},
-		"two lines, a key's line, then a line":     {[]string{"one", "two", keyLine, "three"}, false},
-		"a line, a key's line, then three lines":   {[]string{"one", keyLine, "two", "three", "four"}, true},
-		"a line, a key's line, then four lines":    {[]string{"one", keyLine, "two", "three", "four", "five"}, false},
-		"two lines, then a blank and a glue line":  {[]string{"one", "two", "", `" +`}, true},
-		"two lines, then two blank ones, then two": {[]string{"one", "two", "", "", "three", "four"}, false},
+		"two lines, then a key's line":                         {[]string{"one", "two", keyLine}, true},
+		"two lines, a key's line, then a line":                 {[]string{"one", "two", keyLine, "three"}, true},
+		"two lines, a line at no key's width, then two lines":  {[]string{"one", "two", keyLine[:56], "three", "four"}, false},
+		"three lines, a key's line, then a line":               {[]string{"one", "two", "three", keyLine, "four"}, false},
+		"a line, a key's line, then four lines":                {[]string{"one", keyLine, "two", "three", "four", "five"}, true},
+		"a line, a key's line, then five lines":                {[]string{"one", keyLine, "two", "three", "four", "five", "six"}, false},
+		"two lines, then a blank and a glue line":              {[]string{"one", "two", "", `" +`}, true},
+		"two lines, then two blank ones, then three":           {[]string{"one", "two", "", "", "three", "four", "five"}, false},
+		"two lines, then two blank ones, then two":             {[]string{"one", "two", "", "", "three", "four"}, true},
+		"two lines, a checksum, then two":                      {[]string{"one", "two", "=nE4V", "three", "four"}, true},
+		"two lines, a checksum, then three":                    {[]string{"one", "two", "=nE4V", "three", "four", "five"}, false},
+		"a key's line cut short, then four lines":              {[]string{keyLine[:56], "one", "two", "three", "four"}, false},
+		"two lines, a line at the other width, then two lines": {[]string{"one", "two", sshLine, "three", "four"}, false},
+		// Read as the body's last line, with a line between it and an END
+		// written next, a line at any width is one a read crosses two
+		// lines from.
+		"two lines, a line at the other width, then a line": {[]string{"one", "two", sshLine, "three"}, true},
 		// No END after another block's armour, or a key already redacted
 		// in its place, reads back past it.
 		"a certificate's END":  {[]string{"-----END CERTIFICATE-----"}, false},
