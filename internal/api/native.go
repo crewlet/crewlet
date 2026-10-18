@@ -416,6 +416,7 @@ func NativeOperatorHalves(e *engine.Engine) func() (operator.Halves, bool) {
 		if e.Knowledge() != nil {
 			halves.Knowledge = operatorKnowledge{engine: e}
 		}
+		halves.Artifacts = engine.ArtifactToolDeps(e)
 		if c := e.Company(); c != nil && c.Config != nil {
 			halves.Company = c.Config.Name
 		}

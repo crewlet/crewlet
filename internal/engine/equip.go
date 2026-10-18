@@ -99,6 +99,10 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	deps.Authorize = builtin.Decide(ChartAuthorityOf(e))
 	deps.Work = e.workDeps(c)
 	deps.Pages = e.pageDeps(c)
+	// THE ARTIFACTS TOOLS, over the same deps the operator catalogue is
+	// handed: every data node runs the artifacts domain, so these depend on
+	// the node taking uploads rather than on the company's native halves.
+	deps.Artifacts = ArtifactToolDeps(e)
 	if _, err := builtin.Register(c.Tools, deps); err != nil {
 		return err
 	}
