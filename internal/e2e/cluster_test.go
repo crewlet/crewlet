@@ -269,9 +269,10 @@ func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Rela
 }
 
 // teardown is one member's undo, in the three phases [stopAll] runs a fleet's
-// in: the API in front of the engine, the engine, and what the engine runs on
-// — its broker and store ([engine.Backends]) and its model server. Each
-// phase's pieces are in the order they came up.
+// in: the API in front of the engine, the engine with the chat hub beside it
+// ([newEngine]), and what the engine runs on — its broker and store
+// ([engine.Backends]) and its model server. Each phase's pieces are in the
+// order they came up.
 type teardown struct {
 	api, engine, backends []func()
 }
@@ -495,15 +496,18 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 		return fail(err)
 	}
 	stops.api = append(stops.api, func() { _ = ln.Close() })
-	e, err := engine.New(ctx, engine.Options{
+	// THE ENGINE AND ITS CHAT HUB, as on every node ([newEngine]) — the hub
+	// stopped in the engine's own phase and before it, since the hub answers
+	// on the broker the engine stops with.
+	e, chatLive, engineStops, err := newEngine(ctx, engine.Options{
 		Bootstrap: boot, Company: cfg, ActivatedAt: harnessActivation,
 		Environment: nodeEnvironment(nil), Backends: backends,
 		SandboxPollInterval: runPollInterval, BoxHostURL: listenerURL(ln),
 	})
+	stops.engine = append(stops.engine, engineStops...)
 	if err != nil {
 		return fail(refusal("engine.New", err))
 	}
-	stops.engine = append(stops.engine, func() { e.Stop(context.WithoutCancel(ctx)) })
 	if err := e.Start(ctx); err != nil {
 		return fail(fmt.Errorf("engine.Start: %w", err))
 	}
@@ -524,7 +528,7 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 	//
 	// AT THE PRODUCTION TICK, not the single-node cases' 25 ms — see
 	// [tickInterval] for what that costs a fleet.
-	app, srv, apiStops, err := wireAPI(t.Context(), e, boot, ln, //nolint:contextcheck // see above
+	app, srv, apiStops, err := wireAPI(t.Context(), e, boot, chatLive.Hub(), ln, //nolint:contextcheck // see above
 		func(opts *api.Options) { opts.HealthInterval = stream.HealthInterval })
 	stops.api = append(stops.api, apiStops...)
 	if err != nil {
@@ -535,6 +539,7 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 		engine: e, app: app, server: srv, model: model,
 		id:          e.Node().ID(),
 		snapshotDir: boot.Store.SnapshotDirFor(),
+		chat:        chatLive,
 	}, stops, nil
 }
 

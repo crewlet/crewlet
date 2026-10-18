@@ -265,6 +265,12 @@ type node struct {
 	// has to read the directory, and deriving it a second time from the
 	// bootstrap would be a second place to decide where they go.
 	snapshotDir string
+
+	// chat is the node's chat hub, attached to its engine as `crewlet run`
+	// attaches one ([newEngine]) — on every node, an API or none, because a
+	// seat raises its working indicator wherever its turn runs and every
+	// node answers the fleet's presence probe for the seats it runs.
+	chat *api.EngineChatLive
 }
 
 // start stands one up.
@@ -339,22 +345,67 @@ func startNode(t *testing.T, spec nodeSpec) *node {
 	seedStore(t, &boot)
 
 	ln := bridgeListener(t, "")
-	e, err := engine.New(t.Context(), engine.Options{
+	e, chatLive := bootEngine(t, engine.Options{
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
 		Environment: nodeEnvironment(spec.env), SandboxPollInterval: runPollInterval,
 		BoxHostURL: listenerURL(ln),
 	})
-	if err != nil {
-		t.Fatalf("engine.New: %v", err)
-	}
-	t.Cleanup(func() { e.Stop(context.Background()) })
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("engine.Start: %v", err)
 	}
 
-	app, srv := serveAPI(t, e, &boot, ln, nil)
+	app, srv := serveAPI(t, e, &boot, chatLive.Hub(), ln, nil)
 
-	return &node{engine: e, app: app, server: srv, model: model, id: e.Node().ID()}
+	return &node{engine: e, app: app, server: srv, model: model, id: e.Node().ID(),
+		chat: chatLive}
+}
+
+// newEngine builds a node's engine as `crewlet run` builds it: [engine.New],
+// and straight after it the process's chat hub ([api.NewEngineChatLive]) —
+// started, and attached to the engine whether or not the node will serve an
+// API. A node that serves one mounts its socket over the same hub
+// ([serveAPI]); a node that serves none still answers the fleet's presence
+// probe for the indicators its seats raise, which is what the hub exists on
+// such a node for.
+//
+// NEVER a sequence written out at each boot path. The hub used to be built by
+// the API's wiring here ([wireAPI]), which is exactly where `crewlet run` must
+// not build it (TestRunBuildsTheChatHubOnEveryNode): a node the harness stood
+// up with no API — the stateless pair's seats-only member — attached none, and
+// an indicator its seat raised was answered for by nobody.
+//
+// THE TEARDOWN IS RETURNED in the order the two came up, for the caller to run
+// in reverse ([stopInReverse]) — the hub before the engine, in `crewlet run`'s
+// shutdown order: the engine's appliers announce into the hub until it stops,
+// and its teardown closes the broker the hub's answerer is subscribed on. Both
+// on [context.WithoutCancel], because the context a boot runs under has often
+// ended by the time its teardown runs. Returned on failure too, holding
+// whatever did come up. The caller starts the engine.
+func newEngine(ctx context.Context, opts engine.Options) (
+	*engine.Engine, *api.EngineChatLive, []func(), error) {
+
+	e, err := engine.New(ctx, opts)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	stops := []func(){func() { e.Stop(context.WithoutCancel(ctx)) }}
+	chatLive := api.NewEngineChatLive(ctx, e)
+	stops = append(stops, func() { chatLive.Stop(context.WithoutCancel(ctx)) })
+	return e, chatLive, stops, nil
+}
+
+// bootEngine is [newEngine] for a node that lives as long as its test, on the
+// test's goroutine: torn down when the test ends — registered before anything
+// can fail, so an engine that never started is stopped too — and failing the
+// test when the engine is refused.
+func bootEngine(t *testing.T, opts engine.Options) (*engine.Engine, *api.EngineChatLive) {
+	t.Helper()
+	e, chatLive, stops, err := newEngine(t.Context(), opts)
+	t.Cleanup(func() { stopInReverse(stops) })
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+	return e, chatLive
 }
 
 // seedStore writes the migrated store image where boot's store will open, so a
