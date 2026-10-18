@@ -8,7 +8,6 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 )
 
-
 // THE BUCKET'S RESERVATION IS A QUARTER OF THE BROKER, AND NEVER EATS THE
 // COORDINATION REMAINDER: the logs' half and a gibibyte are always left, and
 // the field's own bounds hold whatever the broker says.
