@@ -150,6 +150,20 @@ export const STATE_COLLECTION = "_state";
 export const PRESENCE_FRAMES_PER_SECOND = 10;
 
 /**
+ * The agent tools whose answer is a version that landed (`create_artifact`
+ * and `publish_artifact`, internal/agent/builtin), which a turn's transcript
+ * links to the artifact they wrote. Held, with the answer's two fields, by
+ * running the tools.
+ */
+export const ARTIFACT_PUBLISH_TOOLS = ["create_artifact", "publish_artifact"] as const;
+
+/** The field of a publishing tool's answer that names the artifact it wrote. */
+export const ARTIFACT_ANSWER_ID = "artifact";
+
+/** The field of a publishing tool's answer that numbers the version that landed. */
+export const ARTIFACT_ANSWER_VERSION = "version";
+
+/**
  * The page runtime contract this build serves, `major.minor.patch`: the
  * directory the runtime is built into (`static/artifacts/runtime/<contract>/`)
  * and what the bridge tells a page first. A runtime change a page could tell

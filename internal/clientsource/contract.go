@@ -309,6 +309,9 @@ var contract = []Entry{
 	{"COLLECTION_NAME_PATTERN", ReadScalar, "internal/api/artifactdataapi.TestTheDashboardNamesCollectionsAndFieldsByTheEnginesGrammar"},
 	{"RESERVED_COLLECTIONS", ReadLiteral, "internal/api/artifactdataapi.TestTheDashboardNamesCollectionsAndFieldsByTheEnginesGrammar"},
 	{"FIELD_NAME_PATTERN", ReadScalar, "internal/api/artifactdataapi.TestTheDashboardNamesCollectionsAndFieldsByTheEnginesGrammar"},
+	{"ARTIFACT_PUBLISH_TOOLS", ReadLiteral, "internal/agent/builtin.TestATranscriptLinksTheArtifactAPublishWrote"},
+	{"ARTIFACT_ANSWER_ID", ReadScalar, "internal/agent/builtin.TestATranscriptLinksTheArtifactAPublishWrote"},
+	{"ARTIFACT_ANSWER_VERSION", ReadScalar, "internal/agent/builtin.TestATranscriptLinksTheArtifactAPublishWrote"},
 	{"RUNTIME_CONTRACT", ReadScalar, "internal/artifactupload.TestTheEmbeddedArtifactTreeServesWhatTheDashboardBuilds"},
 }
 
