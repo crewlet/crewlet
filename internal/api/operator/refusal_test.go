@@ -16,9 +16,11 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -153,6 +155,46 @@ func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 			after := rec.Header().Get("Retry-After")
 			if seconds, err := strconv.Atoi(after); tc.retry != (err == nil && seconds > 0) {
 				t.Errorf("Retry-After = %q, want one only for a condition", after)
+			}
+		})
+	}
+}
+
+// A REFUSAL A DOMAIN WROTE IS TOLD IN ITS OWN WORDS on a verb with no tool,
+// exactly as that domain's tools tell it: the writer's sentence, without the
+// package prefix its Go error opens with. The human write surface's purge,
+// rename and destructions answered the error's own text, so a person read
+// "chat: invalid: `reason`: …" — where the error came from, before what to
+// change — while the same refusal through a tool read as the sentence alone.
+//
+// Mutation: answer err.Error() for a classified refusal again and every row
+// goes red.
+func TestADomainsRefusalIsToldInItsOwnWords(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		err    error
+		status int
+		says   string
+	}{
+		"the tracker's": {&tracker.Refusal{Mark: tracker.ErrForbidden,
+			Err: errors.New("only its author may rewrite a remark")},
+			http.StatusForbidden, "Only its author may rewrite a remark."},
+		"the knowledge base's": {&pages.InvalidError{Field: "title",
+			Why: "a title is at most 200 bytes"},
+			http.StatusUnprocessableEntity, "`title`: a title is at most 200 bytes."},
+		"chat's": {&chat.InvalidError{Field: "reason",
+			Why: "an erase's reason is 700 bytes against a 600 cap"},
+			http.StatusUnprocessableEntity,
+			"`reason`: an erase's reason is 700 bytes against a 600 cap."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rec := httptest.NewRecorder()
+			operator.FailWrite(t.Context(), rec, tc.err, newKey(), nil)
+			body := decode(t, rec)
+			if rec.Code != tc.status || body["detail"] != tc.says {
+				t.Errorf("answered %d with detail %q, want %d with %q", rec.Code,
+					body["detail"], tc.status, tc.says)
 			}
 		})
 	}
