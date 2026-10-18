@@ -187,14 +187,16 @@ func (e *Engine) migrateTo(ctx context.Context, final bool, objects config.Store
 
 // migrationReferences is every declared table this node's estate holds, as a
 // migration walks them: only a data node running the native runtime holds
-// the rows that name objects.
+// the rows that name objects, the tracker's files and the artifacts' versions
+// and assets alike ([objectEstatesFor]), so a migration copies every object
+// the collector keeps alive.
 func (e *Engine) migrationReferences() (collect.References, error) {
 	n := e.native.Load()
 	if n == nil {
 		return nil, migrationRefused("this node holds no copy of the company's records; run the " +
 			"migration against a data node")
 	}
-	estates := n.objectEstates()
+	estates := objectEstatesFor(n, e.ArtifactsReader())
 	if len(estates) == 0 {
 		return nil, migrationRefused("this node holds no copy of the company's records; run the " +
 			"migration against a data node")
