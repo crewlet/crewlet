@@ -8706,11 +8706,18 @@ to.
     the client declares no price field at all, because a field
     `protocol/types.ts` declares is one a component is a single line away from
     drawing. The engine's price stays on its API for anyone who asks for it
-    ([API endpoints](api-endpoints.md#token-spend-breakdown)). The one place it
-    can be read on a screen is a record shown **verbatim**, as the engine
+    ([API endpoints](api-endpoints.md#token-spend-breakdown)). One of the two
+    places it can be read on a screen is a record shown **verbatim**, as the engine
     stored it — an event's own payload — because a verbatim view that dropped
     a field would misreport the record, and nothing there is drawn as a
-    figure. Three gates hold the rule, each over a different artefact: the
+    figure. The other is an artifact sheet's own cells: a number column whose
+    schema declares a currency is the author's data, drawn by the design
+    system's sheet model in the format the author chose, and never a figure the
+    engine recorded, so the sheet draws it as declared. The bundle gate admits
+    exactly that construct and the currency signs the sheet strips from typed
+    input before parsing a number, each written as the whole construct, so a
+    currency format or a sign anywhere else is still refused. Three gates hold
+    the rule, each over a different artefact: the
     SOURCE, where `src/money.test.tsx` parses every shipped module — comments
     excluded, so a note explaining the rule can name what it forbids; the
     SCREENS, where the same suite renders the landing screen, Spend, a task, a
