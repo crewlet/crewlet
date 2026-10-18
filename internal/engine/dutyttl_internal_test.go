@@ -41,6 +41,7 @@ var dutyTTLs = map[string]struct {
 	"retentionDutyTTL":   {retentionDutyTTL, true},
 	"embedDutyTTL":       {embedDutyTTL, true},
 	"collectorDutyTTL":   {collectorDutyTTL, true},
+	"chatPruneDutyTTL":   {chatPruneDutyTTL, true},
 	"integrationDutyTTL": {integrationDutyTTL, true},
 	"learningDutyTTL":    {learningDutyTTL, true},
 	// THE IDENTITY DUTIES' LEASE is three of a duty's interval, and the longest

@@ -220,9 +220,10 @@ type liveRelay struct {
 	faulted func(context.Context) bool
 
 	// listening reports whether anything on this node hears what its
-	// appliers announce at all — a data node with nothing attached has
-	// nobody to relay to, and a follower that relayed to nobody would be a
-	// loop reported as work. deliver hands one batch to its domain's
+	// appliers announce at all — a data node with nothing attached, or only
+	// a chat hub that serves no socket here, has nobody to relay to, and a
+	// follower that relayed to nobody would be a loop reported as work.
+	// deliver hands one batch to its domain's
 	// listener, and gap tells every screen to read again — the engine's
 	// registered listeners, read per call ([Engine.liveListening],
 	// [Engine.deliverLive], [Engine.liveGap]).
@@ -598,7 +599,9 @@ func (e *Engine) liveGap() {
 }
 
 // liveListening reports whether anything on this node hears what any of its
-// appliers announce.
+// appliers announce: the API's inbox listener, registered wherever it serves,
+// or a chat hub that serves sockets here — never a hub attached only for the
+// working indicator ([ChatLive.ServesSockets]).
 func (e *Engine) liveListening() bool {
 	return e.inboxListening() || e.chatListening()
 }

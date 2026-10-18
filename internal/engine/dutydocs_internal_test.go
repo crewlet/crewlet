@@ -33,6 +33,7 @@ var dutyNames = map[string][]string{
 	"retentionDutyName":   {retentionDutyName},
 	"embedDutyName":       {embedDutyName},
 	"objectCollectorDuty": {objectCollectorDuty},
+	"chatPruneDutyName":   {chatPruneDutyName},
 	"name":                identityDutyNames(),
 }
 

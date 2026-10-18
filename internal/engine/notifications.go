@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/datadog"
@@ -124,6 +125,22 @@ type notifications struct {
 	// migrating from one to the other runs both for a while — so this is
 	// a second field rather than a choice between two.
 	slack *slack.Transport
+
+	// nativeStatus is the engine's own chat's working-indicator driver,
+	// over the live hub the process attached ([Engine.SetChatLive]);
+	// nativeStatusMode is the `chat.native.typing_status` it was built for
+	// and nativeStatusOn the attachment it was built over. Nil where the
+	// company does not run native chat or no hub is attached. See
+	// [Engine.applyChatStatus].
+	//
+	// NAMED FOR THE SURFACE AND THE HALF, never `chat`: that is the
+	// package, and the two vendor fields above are transports holding both
+	// halves, so a field called `chat` beside them read as a third
+	// transport — exactly the wrong-backend mix-up [Engine.Status] and
+	// [Engine.ChatThreads] exist to prevent.
+	nativeStatus     *notify.StatusDriver
+	nativeStatusMode notify.StatusMode
+	nativeStatusOn   *ChatLive
 
 	// confluence is the knowledge base's contribution: a parser, a
 	// searcher and the skills-space reader. No lifecycle, for the same
@@ -244,7 +261,79 @@ func (e *Engine) Status() *notify.Statuses {
 	if e.notify.slack != nil {
 		drivers = append(drivers, e.notify.slack.Status())
 	}
+	if e.notify.nativeStatus != nil {
+		drivers = append(drivers, e.notify.nativeStatus)
+	}
 	return notify.NewStatuses(drivers...)
+}
+
+// applyChatStatus brings the engine's own chat's working indicator in line
+// with c: a driver over the attached live hub, in the mode
+// `chat.native.typing_status` names, wherever the company runs native chat.
+//
+// # The bug this fixes
+//
+// THE INDICATOR WAS NEVER DRIVEN. The hub implemented [notify.StatusPoster]
+// completely and its tests passed, and the config field had a validator, a
+// default, a schema entry and a documented meaning — but nothing built a
+// [notify.StatusDriver] over the hub, so [Engine.Status] fanned a native
+// turn's raise across the vendor drivers alone, each refused a trigger whose
+// transport was not its own, and no native seat ever showed it was working.
+// `chat.native.typing_status` had no reader at all.
+//
+// # Every node a seat runs on, not only a data node
+//
+// Built from the company's chat axis rather than from this node's own copy:
+// the raise is made by the turn's node, and a node that holds no data runs
+// seats on a native company exactly as a data node does (see remote.go). The
+// hub on that node is what records the indicator; its presence answer is what
+// peers read it through — and that answerer runs on every node, serving an
+// API or not, because the process attaches its hub to every engine it builds
+// and stops it after the drain.
+//
+// # Rebuilt only when what it reads changes
+//
+// Called at boot from [Engine.startNotifications], on every apply, and when a
+// hub is attached — the last because [New] runs [Engine.startNotifications]
+// before the process can attach one, so the boot company would otherwise have
+// no driver until its first apply. A driver owns the live sessions of turns
+// that are running, so replacing one takes its indicators down — which is
+// right when the mode changed, the company left native chat or the hub was
+// replaced, and pointless otherwise, so a call that changes none of the three
+// keeps the driver it has. Same rule [Engine.reconcileMattermost] applies to a
+// transport, for the same reason.
+func (e *Engine) applyChatStatus(ctx context.Context, c *Company) {
+	e.notify.mu.Lock()
+	// THE ATTACHMENT IS READ UNDER THE LOCK, so of an apply and an
+	// attachment racing the last to take it is the one that decides — and
+	// it sees the latest hub, whichever of the two it is.
+	on := e.chatLive.Load()
+	want := notify.StatusOff
+	if on != nil && *on != nil && c != nil && c.Config != nil &&
+		c.Config.ChatBackendFor() == config.ChatNative {
+		want = notify.StatusMode(c.Config.Chat.Native.Status())
+	}
+	old := e.notify.nativeStatus
+	if (old == nil && want == notify.StatusOff) ||
+		(old != nil && e.notify.nativeStatusMode == want && e.notify.nativeStatusOn == on) {
+		e.notify.mu.Unlock()
+		return
+	}
+	var next *notify.StatusDriver
+	if want != notify.StatusOff {
+		next = notify.NewStatusDriver(notify.StatusOptions{
+			Poster: *on, Mode: want,
+		})
+	}
+	e.notify.nativeStatus, e.notify.nativeStatusMode = next, want
+	e.notify.nativeStatusOn = on
+	e.notify.mu.Unlock()
+	// OUTSIDE THE LOCK: a stop clears every live indicator, which is a
+	// request per session, and [Engine.Status] takes this same lock on
+	// every turn's raise.
+	if old != nil {
+		old.Stop(ctx)
+	}
 }
 
 // ChatThreads is the read half of every chat surface this node runs, as one.
@@ -259,7 +348,18 @@ func (e *Engine) Status() *notify.Statuses {
 // that is the honest answer rather than a wiring question the prefetch has to
 // ask, because a maintenance-mode node runs no transport at all and a node
 // whose instance was unreachable at boot runs none either.
+//
+// # And the engine's own chat
+//
+// Which has no transport to hold a reader, and had none at all: every native
+// thread reply was told its thread "could not be read from this node" and
+// sent to fetch it with its tools. Its reader reads through the estate's
+// router — this node's own copy where it serves, a data node's otherwise — as
+// the woken seat, so a node that holds no data hands its seats their thread
+// exactly as a data node does. It is the only thread context a native wake
+// gets: the record carries none ([chat.ThreadReader]).
 func (e *Engine) ChatThreads() *notify.ThreadReaders {
+	native := e.nativeThreads()
 	e.notify.mu.Lock()
 	defer e.notify.mu.Unlock()
 	var readers []notify.ThreadReader
@@ -269,7 +369,33 @@ func (e *Engine) ChatThreads() *notify.ThreadReaders {
 	if e.notify.slack != nil {
 		readers = append(readers, e.notify.slack)
 	}
+	if native != nil {
+		readers = append(readers, native)
+	}
 	return notify.NewThreadReaders(readers...)
+}
+
+// nativeThreads is the engine's own chat's thread reader, or nil where this
+// company's chat is not the engine's own here — [OperatorChat]'s rule, since
+// it is the same read the operator surfaces make: a READ, so a data node in a
+// maintenance mode, which hands its seats no chat writer, is no reason to
+// withhold one.
+func (e *Engine) nativeThreads() notify.ThreadReader {
+	rooms, ok := OperatorChat(e)
+	if !ok {
+		return nil
+	}
+	return chat.NewThreadReader(rooms, e.liveParties)
+}
+
+// liveParties is the party registry current when a read renders, as
+// [notify.Parties] — nil rather than a typed nil, so a reader checking for
+// none gets the answer it asked for.
+func (e *Engine) liveParties() notify.Parties {
+	if reg := e.Registry(); reg != nil {
+		return reg
+	}
+	return nil
 }
 
 // refreshParties rebuilds the registry for a newly applied epoch.
@@ -333,7 +459,7 @@ func (e *Engine) rebuildPartiesLocked(c *Company, standing notify.Standing) {
 	}
 
 	e.notify.mu.Lock()
-	chat := e.notify.mattermost
+	selfHosted := e.notify.mattermost
 	hosted := e.notify.slack
 	// AN APPLY STATES THE COMPANY AGAIN; a directory rebuild does not. The
 	// one is a registry for a company the live one was not built from, the
@@ -356,7 +482,7 @@ func (e *Engine) rebuildPartiesLocked(c *Company, standing notify.Standing) {
 	// transport repointed at a registry nobody reads yet loses nothing —
 	// a seat it connects meanwhile registers into the one about to be
 	// published.
-	if chat != nil {
+	if selfHosted != nil {
 		// WITH THE ORG'S PEOPLE, which the transport resolves to the
 		// account ids their posts carry: a person is declared by name
 		// there, and only the transport can ask the server what it names.
@@ -364,7 +490,7 @@ func (e *Engine) rebuildPartiesLocked(c *Company, standing notify.Standing) {
 		// directory, judged by the transport against the registry it
 		// writes into rather than filtered here. Their names resolve
 		// through the one snapshot above, as every other contact id does.
-		chat.Reregister(reg, mattermost.PeopleFrom(c.Org, lookup), restated)
+		selfHosted.Reregister(reg, mattermost.PeopleFrom(c.Org, lookup), restated)
 	}
 	if hosted != nil {
 		hosted.Reregister(reg)
@@ -502,6 +628,11 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 			prompts = append(prompts, confluencePrompt())
 		}
 	}
+
+	// AND THE ENGINE'S OWN CHAT'S WORKING INDICATOR, which no transport
+	// carries: it is raised on the process's hub. See
+	// [Engine.applyChatStatus].
+	e.applyChatStatus(ctx, c)
 
 	// THE NATIVE BACKENDS' OWN EDGE, last so a company running both a
 	// vendor tracker and the native one keeps the vendor's parser first —
@@ -979,12 +1110,19 @@ func chatFingerprint(url, team, status string, seats []mattermost.SeatConfig) st
 // stopNotifications takes the inbound edge down.
 func (e *Engine) stopNotifications(ctx context.Context) {
 	e.notify.mu.Lock()
-	chat := e.notify.mattermost
+	selfHosted := e.notify.mattermost
 	hosted := e.notify.slack
-	e.notify.mattermost, e.notify.slack = nil, nil
+	native := e.notify.nativeStatus
+	e.notify.mattermost, e.notify.slack, e.notify.nativeStatus = nil, nil, nil
 	e.notify.mu.Unlock()
-	if chat != nil {
-		chat.Stop(ctx)
+	if native != nil {
+		// THE SAME REASON AS THE HOSTED SURFACE BELOW: the hub would go on
+		// answering every presence probe with a seat working on a turn
+		// this process is about to stop running.
+		native.Stop(ctx)
+	}
+	if selfHosted != nil {
+		selfHosted.Stop(ctx)
 	}
 	if hosted != nil {
 		// Nothing to disconnect — the inbound half is the API edge — but

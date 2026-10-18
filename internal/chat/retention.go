@@ -45,11 +45,13 @@ import (
 // Because a cap needs an order, and the only order available here is the
 // rooms' own ids: a sweep that took the first N alphabetically would prune the
 // same rooms every tick and never reach the tail, which is a company whose
-// last rooms are kept for ever while a screen says they are not. The set is
-// already bounded — [MaxChannels] rooms per company — and a prune for a room
-// with nothing below its cutoff is one record that deletes nothing, which is
-// cheaper than the bookkeeping that would remember where a capped sweep had
-// got to.
+// last rooms are kept for ever while a screen says they are not. Nothing caps
+// the set — not [MaxChannels] either, which counts LIVE rooms while an
+// archived room keeps its horizon — so it is every room the company ever made.
+// What keeps that cheap is the duty's own read beside this selection: one
+// index seek per room for its oldest message, and a record only for a room
+// with something below its cutoff — cheaper than the bookkeeping that would
+// remember where a capped sweep had got to.
 
 // RetentionSource says whose setting decided a room's horizon.
 //
