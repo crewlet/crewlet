@@ -305,7 +305,9 @@ Three narrow rules sit beside the apps, each the owner's own decision:
   checks again is yours; a plain comment, a new ask and a decision are still
   Worklet's. A missing item and one you were not asked on are one
   refusal, so the arm says nothing about which items exist, and once you have
-  answered the item is Worklet's again. The dashboard opens a work item's
+  answered the item is Worklet's again, except to send that same answer once
+  more: the call made again after it landed is admitted and answered from the
+  answer that landed, and writes nothing. The dashboard opens a work item's
   own page (`#/worklet/{KEY}-{n}`) to somebody it was put to for exactly this.
 - **Authors tidy their own work.** Whoever created a page may rename, trash
   and restore it, and whoever reported a work item may remove and restore it —

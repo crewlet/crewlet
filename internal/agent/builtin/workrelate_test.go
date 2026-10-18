@@ -237,6 +237,66 @@ func TestACommentThatAsksNobodyWarnsAboutTheAssignee(t *testing.T) {
 	}
 }
 
+// A COMMENT MADE AGAIN REPORTS WHAT ITS POST DID, never what this attempt
+// resolved.
+//
+// A call made again after its first attempt landed — a retry after an unknown,
+// a redelivered turn, an approval retried — is answered from the remark's row
+// with nothing published, and the writer says what that row asked and answered
+// ([worklet.WriteResult.Posted]). The attempt's own read can disagree with it
+// where the first attempt landed after that read, or where the read could not
+// be made at all: it inferred a question asked since, or none. Reported from
+// the read, the receipt named a question the write never closed, and an answer
+// in words was warned that nobody was asked to reply. The control is a remark
+// that answered nothing, which is warned as its first attempt was.
+//
+// Mutation: report from the read rather than from Posted and every case goes
+// red.
+func TestACommentMadeAgainReportsWhatItsPostDid(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		read     worklet.ResolvedThread
+		posted   worklet.PostedRemark
+		answered string
+		warned   bool
+	}{
+		"read as answering a question asked since": {
+			worklet.ResolvedThread{Answers: "c-ask-2"},
+			worklet.PostedRemark{Answers: "c-ask"}, "c-ask", false},
+		"read as answering nothing": {
+			worklet.ResolvedThread{},
+			worklet.PostedRemark{Answers: "c-ask"}, "c-ask", false},
+		"a remark that answered nothing": {
+			worklet.ResolvedThread{Answers: "c-ask-2"},
+			worklet.PostedRemark{}, "", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			detail := trk.tasks["ENG-1"]
+			detail.Task.Assignee = "pm"
+			trk.tasks["ENG-1"] = detail
+			trk.thread = c.read
+			trk.posted = &c.posted
+			reg := workRegistry(t, builtin.WorkDeps{
+				Reader: trk, Writer: trk.as, Seats: askable,
+			})
+			got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{
+				"item": "ENG-1", "body": "after the audit",
+			})
+			answer := decodeAnswer(t, got)
+			if answered, _ := answer["answered"].(string); answered != c.answered {
+				t.Errorf("the receipt says it answered %q, want %q — what the "+
+					"remark's row answers", answered, c.answered)
+			}
+			if _, warned := answer["warnings"]; warned != c.warned ||
+				(len(got.Caveats) > 0) != c.warned {
+				t.Errorf("warned %v (caveats %+v), want %v", warned, got.Caveats, c.warned)
+			}
+		})
+	}
+}
+
 // askable is the roster an `ask` resolves against: a tool refuses a handle the
 // company does not have, because an ask addressed to a spelling wakes nobody
 // and leaves a question open on the board for ever.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -202,8 +203,11 @@ func TestAChoiceMustNameAnOptionOfTheAskItAnswers(t *testing.T) {
 }
 
 // A DECISION IS SET ONLY WHEN THE QUESTION IS ASKED — never on a remark, and
-// never changed by an edit, because an answer names an option by id and
-// options edited under it would make that answer mean something else.
+// never changed after, because an answer names an option by id and options
+// edited under it would make that answer mean something else. A decision is
+// written only on the row its post creates: an edit carries the stored one
+// whole, and a post naming a remark already on the thread is answered from
+// that row with nothing published, whatever decision it carries.
 func TestADecisionRidesOnlyTheAskAndNeverChanges(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -215,6 +219,15 @@ func TestADecisionRidesOnlyTheAskAndNeverChanges(t *testing.T) {
 		r.drain()
 		return err
 	}
+	stored := func(id string) *decision.Decision {
+		t.Helper()
+		detail, err := r.reader.Task(t.Context(), "fixed", worklet.DetailWants{Comment: id},
+			statelog.Freshness{Level: statelog.ReadStale})
+		if err != nil || len(detail.Comments) != 1 {
+			t.Fatalf("read comment %s: %v (%d)", id, err, len(detail.Comments))
+		}
+		return detail.Comments[0].Decision
+	}
 	if err := write("op-remark", worklet.Comment{ID: "c-r", Body: "fyi",
 		Decision: decisionFixture()}); !errors.Is(err, worklet.ErrInvalid) {
 		t.Fatalf("a decision on a comment that asks nobody: %v", err)
@@ -223,18 +236,31 @@ func TestADecisionRidesOnlyTheAskAndNeverChanges(t *testing.T) {
 		Decision: decisionFixture()}); err != nil {
 		t.Fatalf("ask: %v", err)
 	}
-	// AN EDIT THAT KEEPS IT LANDS — a body can be corrected —
-	if err := write("op-edit", worklet.Comment{ID: "c-a", Body: "Friday, then?",
-		Ask: "ana", Decision: decisionFixture()}); err != nil {
-		t.Fatalf("an edit keeping the decision was refused: %v", err)
+	// AN EDIT CORRECTS THE WORDS and keeps the decision as asked.
+	dev := r.writer.As("dev", worklet.AuthorAgent, worklet.Provenance{})
+	if _, err := dev.EditComment(t.Context(), "op-edit", "fixed", "ENG", "c-a",
+		"Friday, then?", nil); err != nil {
+		t.Fatalf("an edit of the question was refused: %v", err)
 	}
-	// — and one that changes it, or drops it, does not.
+	r.drain()
+	if got := stored("c-a"); !reflect.DeepEqual(got, decisionFixture()) {
+		t.Errorf("after an edit of its words the decision is %+v", got)
+	}
+	// A POST OF THE QUESTION AGAIN, with the decision changed or dropped, is
+	// answered by the row it names and changes nothing.
 	changed := decisionFixture()
 	changed.Options[1].Label = "Ship Monday"
 	for name, d := range map[string]*decision.Decision{"changed": changed, "dropped": nil} {
+		end := r.logEnd(t)
 		if err := write("op-"+name, worklet.Comment{ID: "c-a", Body: "Friday?",
-			Ask: "ana", Decision: d}); !errors.Is(err, worklet.ErrInvalid) {
-			t.Errorf("an edit that %s the decision: %v", name, err)
+			Ask: "ana", Decision: d}); err != nil {
+			t.Errorf("a re-post that %s the decision: %v, want it answered by the row", name, err)
+		}
+		if now := r.logEnd(t); now != end {
+			t.Errorf("a re-post that %s the decision published", name)
+		}
+		if got := stored("c-a"); !reflect.DeepEqual(got, decisionFixture()) {
+			t.Errorf("a re-post that %s the decision left it %+v", name, got)
 		}
 	}
 	// Nor can a remark acquire one after the fact.
@@ -242,8 +268,11 @@ func TestADecisionRidesOnlyTheAskAndNeverChanges(t *testing.T) {
 		t.Fatalf("plain ask: %v", err)
 	}
 	if err := write("op-late", worklet.Comment{ID: "c-p", Body: "which?", Ask: "ana",
-		Decision: decisionFixture()}); !errors.Is(err, worklet.ErrInvalid) {
-		t.Errorf("a decision added to an existing ask: %v", err)
+		Decision: decisionFixture()}); err != nil {
+		t.Errorf("a re-post of an existing ask carrying a decision: %v", err)
+	}
+	if got := stored("c-p"); got != nil {
+		t.Errorf("an existing ask acquired the decision %+v", got)
 	}
 }
 

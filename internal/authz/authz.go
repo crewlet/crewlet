@@ -400,7 +400,10 @@ type Object struct {
 	// person the item's thread is waiting on an answer from — for the one
 	// class where being asked is an authority ([ClassAppOrAsked]): somebody
 	// a colleague put a question to reads the item and answers it without
-	// the tracker app.
+	// the tracker app. An ask the very remark the caller is posting again
+	// already answered counts as open to that remark: the post landed, so
+	// the call made again writes nothing, and it is the answer the arm
+	// admitted.
 	//
 	// SET ONLY BY A CALLER THAT HAS READ THE ITEM and resolved its asks
 	// (internal/worklet's AskedOn), never from an argument: an asked arm a

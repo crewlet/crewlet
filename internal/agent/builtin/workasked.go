@@ -75,10 +75,16 @@ func (d WorkDeps) itemGate(ctx context.Context, action authz.Action) (bool, *too
 // outright: read the item ref names, ask whether an open ask on it names
 // handle, and decide again on what the row says.
 //
+// self derives, from the item's id, the id the caller's own comment will carry
+// on it ([commentID]) — nil for a read, which posts nothing. It is what admits
+// the caller's answer made again once it has landed and closed the ask that
+// admitted it ([worklet.AskedOn]): that call writes nothing, and refusing it
+// told somebody their answer needed the tracker after it had been given.
+//
 // It answers the item — read with no parts, which is what the probe and the
 // decision need — or the refusal to return.
 func (d WorkDeps) askedOn(ctx context.Context, action authz.Action, ref,
-	handle string) (worklet.TaskDetail, *tools.Result) {
+	handle string, self func(task string) string) (worklet.TaskDetail, *tools.Result) {
 
 	item, err := d.Reader.Task(ctx, ref, worklet.DetailWants{}, seatRead)
 	switch {
@@ -87,7 +93,12 @@ func (d WorkDeps) askedOn(ctx context.Context, action authz.Action, ref,
 	case err != nil:
 		return worklet.TaskDetail{}, refusalOf(readFailure(ctx, string(action), err))
 	}
-	asked, err := worklet.AskedOn(ctx, d.Reader, item.Task.ID, handle, seatRead)
+	comment := ""
+	if self != nil {
+		comment = self(item.Task.ID)
+	}
+	asked, err := worklet.AskedOn(ctx, d.Reader, item.Task.ID, handle, comment,
+		seatRead)
 	if err != nil {
 		// A PROBE THAT COULD NOT READ HAS NOT FOUND AN ASK, and has not
 		// found that there is none either: this node cannot tell, and

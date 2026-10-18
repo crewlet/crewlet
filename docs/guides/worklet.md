@@ -1720,7 +1720,9 @@ the caller, and admits only that answer, which Worklet's writer checks
 again is theirs; a plain comment, a new ask and a decision of their own stay
 Worklet's, and a task that does not exist is refused exactly as one they
 were not asked on is. Once they have answered, the task is Worklet's
-again. Your own asks are always listed among your decisions, with or without
+again, except to send that same answer once more: the call made again after
+it landed is admitted and answered from the answer that landed, and writes
+nothing. Your own asks are always listed among your decisions, with or without
 the app.
 
 **A node that cannot read its chart does not say no.** Every relation above is
@@ -1838,7 +1840,15 @@ Its author may correct a question's wording afterwards
 (`PATCH /worklet/items/{key}/comments/{cid}`), and that changes its words and
 nothing else: an answered question stays answered and nobody is asked it
 again, and the person it asks, the answer it closed and the decision it carries
-stay what its post made them.
+stay what its post made them. A remark is posted once: a re-run of the call
+that posted it finds it on the thread and changes nothing — not its words, not
+its answer, not who follows the item — whatever has happened to it since, the
+item having been trashed included. And it is answered as that remark: the
+question it answered, with its choice, is the one its post closed, never one
+asked since, and a remark that answered nothing still answers nothing — so an
+answer sent again after it landed (a retry, or an approval retried once its
+outcome was unknown) is neither refused for a question it closed itself nor
+told it closed another.
 
 `my_work` reads both sides: `asked_of_me` is the questions waiting on this
 seat, and the `has_open_asks` filter finds the items carrying any. The board
