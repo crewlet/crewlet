@@ -5,7 +5,13 @@
 
 import { expect, test } from "vitest";
 
-import { artifactPeople, memberTurn, presenceMembers } from "./people.ts";
+import {
+  artifactPeople,
+  memberTurn,
+  presenceMembers,
+  selfWords,
+  splitOwnSessions,
+} from "./people.ts";
 import type { ArtifactPresenceMember } from "~/protocol/index.ts";
 
 function member(over: Partial<ArtifactPresenceMember>): ArtifactPresenceMember {
@@ -42,10 +48,32 @@ const room = [
 test("a member's location says what they are doing and where", () => {
   const { members } = presenceMembers(room, artifactPeople(null), new Map());
   expect(members.map((m) => m.location)).toEqual([
-    "Editing on r1, score",
-    "Reading on version 3",
+    "Editing a row, a column",
+    "Reading version 3",
     undefined,
   ]);
+});
+
+// A RAW KEY IS NEVER SAID: a row by its number as drawn, a column by its label.
+test("a member on a cell is placed by the row's number and the column's label", () => {
+  const { members } = presenceMembers(room, artifactPeople(null), new Map(), {
+    row: (_, doc) => (doc === "r1" ? "row 4" : null),
+    field: (_, field) => (field === "score" ? "Gate" : null),
+  });
+  expect(members[0]?.location).toBe("Editing row 4, Gate");
+});
+
+test("the reader's own other tab is counted beside You, never drawn as somebody else", () => {
+  const { others, ownTabs } = splitOwnSessions(
+    [
+      { seat: "miles", session: "1" },
+      { seat: "maya", session: "2" },
+    ],
+    "miles",
+  );
+  expect(others.map((m) => m.seat)).toEqual(["maya"]);
+  expect(selfWords(ownTabs)).toBe("You, 2 tabs");
+  expect(selfWords(0)).toBe("You");
 });
 
 test("only an agent at work offers its turn", () => {

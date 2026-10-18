@@ -42,7 +42,12 @@ import {
 } from "~/lib/artifacts/api.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
-import { CAPABILITY_WORDS, roleIncludes } from "~/lib/artifacts/words.ts";
+import {
+  CAPABILITY_WORDS,
+  TRASH_KEPT,
+  purgeSentence,
+  roleIncludes,
+} from "~/lib/artifacts/words.ts";
 
 /** A text field's bytes against its bound, as the sentence under it says. */
 function overBy(text: string, max: number): string | undefined {
@@ -63,11 +68,14 @@ export function SettingsTab({
       <Capabilities detail={detail} />
       <Ownership detail={detail} onChanged={onChanged} />
       {roleIncludes(detail.role, "editor") && <SeenBy detail={detail} />}
-      <Section
-        title="Trash"
-        hint="A trashed artifact stops opening for everybody, and is deleted for good after 30 days unless its owner restores it."
-      >
-        <TrashControl detail={detail} />
+      <Section title="Trash" hint="A trashed artifact stops opening for everyone">
+        <p className="artifact-note">
+          Its owner can restore it for {TRASH_KEPT}. After that it is deleted for good, with every
+          version and its data.
+        </p>
+        <div className="artifact-form-actions">
+          <TrashControl detail={detail} />
+        </div>
       </Section>
     </div>
   );
@@ -109,10 +117,7 @@ function Details({ detail, onChanged }: { detail: ArtifactDetail; onChanged: () 
   };
   const held = access.can ? null : access.reason;
   return (
-    <Section
-      title="Details"
-      hint="What the artifact is called in the gallery, in a tab and in a link"
-    >
+    <Section title="Details" hint="Its name in the gallery, a tab and a link">
       <div className="artifact-form">
         <FormField label="Title" error={titleWrong}>
           {(field) => (
@@ -193,10 +198,10 @@ function Details({ detail, onChanged }: { detail: ArtifactDetail; onChanged: () 
 function Capabilities({ detail }: { detail: ArtifactDetail }) {
   const declared = detail.capabilities ?? [];
   return (
-    <Section
-      title="What it can do"
-      hint="What the latest version declared, which its page cannot exceed and the engine checks on every call"
-    >
+    <Section title="What it can do" hint="What its latest version declared">
+      <p className="artifact-note">
+        Its page cannot do more than this, and the engine checks every call it makes.
+      </p>
       {declared.length === 0 ? (
         <p className="artifact-note">Nothing beyond showing itself.</p>
       ) : (
@@ -235,16 +240,18 @@ function Ownership({ detail, onChanged }: { detail: ArtifactDetail; onChanged: (
     }
   };
   return (
-    <Section title="Owner" hint="The owner shares it, trashes it and gives it to somebody else">
+    <Section title="Owner" hint="Who shares it, trashes it and gives it away">
       <p className="artifact-note">{people.seatName(detail.owner)} owns it.</p>
-      <Button
-        size="small"
-        variant="secondary"
-        disabledReason={access.can ? undefined : access.reason}
-        onClick={() => setOpen(true)}
-      >
-        Give it to another seat
-      </Button>
+      <div className="artifact-form-actions">
+        <Button
+          size="small"
+          variant="secondary"
+          disabledReason={access.can ? undefined : access.reason}
+          onClick={() => setOpen(true)}
+        >
+          Give it to another seat
+        </Button>
+      </div>
       <Modal
         open={open}
         onClose={() => setOpen(false)}
@@ -367,8 +374,8 @@ export function TrashControl({ detail }: { detail: ArtifactDetail }) {
         }
       >
         <p>
-          It stops opening for everybody it is shared with, at once. Its owner can restore it for 30
-          days; after that it is deleted for good, with every version and its data.
+          It stops opening for everybody it is shared with, at once.{" "}
+          {purgeSentence(new Date().toISOString())} After that every version and its data are gone.
         </p>
         {gesture.answer && gesture.answer.kind !== "done" && (
           <p className="artifact-refusal">{gesture.answer.text}</p>

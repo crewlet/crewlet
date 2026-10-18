@@ -61,18 +61,25 @@ import { ObjectTabs } from "~/app/frame/ObjectTabs.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { relTime } from "~/lib/format.ts";
+import { fmtDate, relTime } from "~/lib/format.ts";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { untrashArtifact } from "~/lib/artifacts/api.ts";
 import { usePinToggle, usePins } from "~/lib/artifacts/pins.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
-import { memberTurn, presenceMembers, useArtifactPeople } from "~/lib/artifacts/people.ts";
+import {
+  memberTurn,
+  presenceMembers,
+  selfWords,
+  splitOwnSessions,
+  useArtifactPeople,
+  type PresencePlace,
+} from "~/lib/artifacts/people.ts";
 import { useArtifactRoom } from "~/lib/artifacts/room.ts";
 import { useDataStore } from "~/lib/artifacts/useDataStore.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
-import { KIND_WORDS, ROLE_WORDS } from "~/lib/artifacts/words.ts";
+import { KIND_WORDS, ROLE_WORDS, purgeAt, purgeSentence } from "~/lib/artifacts/words.ts";
 import type {
   ArtifactDetail,
   ArtifactVersionSummary,
@@ -184,13 +191,33 @@ function Trashed({ detail, onChanged }: { detail: ArtifactDetail; onChanged: () 
   const restore = useArtifactAccess({ role: "owner", held: detail.role, person: true });
   const gesture = useKeyedGesture();
   const toast = useToast();
+  const trashedBy = people.seatName(detail.trashed_by.name);
+  const deleteOn = purgeAt(detail.trashed_at);
   return (
     <>
-      <ObjectHeader kind={KIND_WORDS[detail.kind]} icon="layers" title={detail.title} />
+      <ObjectHeader
+        kind={KIND_WORDS[detail.kind]}
+        icon="layers"
+        title={detail.title}
+        facts={[
+          { label: "Trashed by", value: trashedBy },
+          { label: "Trashed on", value: fmtDate(detail.trashed_at) },
+          ...(deleteOn ? [{ label: "Deleted on", value: fmtDate(deleteOn) }] : []),
+        ]}
+        actions={
+          <ButtonLink
+            size="small"
+            variant="secondary"
+            href={href(["artifacts", "mine"], { status: "trashed" })}
+          >
+            Back to the trash
+          </ButtonLink>
+        }
+      />
       <EmptyState
         icon={<TrashGlyph size="xl" />}
         title="This artifact is in the trash"
-        description={`${people.seatName(detail.trashed_by.name)} moved it to the trash. It is deleted for good 30 days after that unless its owner restores it.`}
+        description={`${trashedBy} moved it to the trash. ${purgeSentence(detail.trashed_at)}`}
         action={
           <span className="artifact-actions">
             <Button
@@ -339,11 +366,33 @@ function Loaded({
     };
   }, [followed, setFollow]);
   const held = useRef(new Map<string, NodeHue>());
+  // THE READER'S OWN OTHER TABS are counted beside "You", never drawn as a
+  // collaborator with a Follow that would move nothing.
+  const { others, ownTabs } = useMemo(
+    () => splitOwnSessions(room.others, viewer.handle),
+    [room.others, viewer.handle],
+  );
+  // WHERE SOMEBODY IS, as the reader sees it: a row by its number in the
+  // sheet's own order, a column by its label.
+  const schema = store?.schema ?? null;
+  const place = useMemo<PresencePlace>(
+    () => ({
+      row: (collection, doc) => {
+        const at = store?.docsOf(collection).findIndex((d) => d.doc.id === doc) ?? -1;
+        return at >= 0 ? `row ${at + 1}` : null;
+      },
+      field: (collection, field) =>
+        schema?.collections
+          .find((c) => c.name === collection)
+          ?.columns?.find((c) => c.key === field)?.label ?? null,
+    }),
+    [store, schema],
+  );
   const drawn = useMemo(() => {
-    const out = presenceMembers(room.others, people, held.current);
+    const out = presenceMembers(others, people, held.current, place);
     held.current = out.hues;
     return out.members;
-  }, [room.others, people]);
+  }, [others, people, place]);
   // The reader, first on the People rail as "You", drawn as their own seat.
   const selfFace = useMemo<PeopleRailSelf | undefined>(() => {
     if (!viewer.handle) return undefined;
@@ -398,7 +447,11 @@ function Loaded({
             label: "Updated",
             value: `${relTime(detail.updated_at, now)} by ${updater}`,
           },
-          ...(detail.head_number > 0 ? [{ label: "Version", value: `${detail.head_number}` }] : []),
+          // A SHEET'S CONTENT IS ITS LIVE DATA: its version number names
+          // nothing a reader sees change, so it is not a fact of its header.
+          ...(detail.head_number > 0 && detail.kind !== "sheet"
+            ? [{ label: "Version", value: `${detail.head_number}` }]
+            : []),
           {
             label: "Your role",
             value: detail.elevated ? "Administrator" : ROLE_WORDS[detail.role],
@@ -530,6 +583,7 @@ function Loaded({
               setFollow(member ? peopleRailKey(member) : "");
             }}
             onClose={() => setRail("")}
+            labels={{ you: selfWords(ownTabs) }}
             actions={(member) => {
               const turn = memberTurn(room.roster.members, member);
               return turn ? (

@@ -57,7 +57,13 @@ import { artifactPath } from "~/lib/artifacts/api.ts";
 import { usePinToggle, usePinsChanged } from "~/lib/artifacts/pins.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useArtifactPeople, type ArtifactPeople } from "~/lib/artifacts/people.ts";
-import { KIND_WORDS, KINDS, ROLE_WORDS, isArtifactKind } from "~/lib/artifacts/words.ts";
+import {
+  KIND_WORDS,
+  KINDS,
+  ROLE_WORDS,
+  TRASH_KEPT,
+  isArtifactKind,
+} from "~/lib/artifacts/words.ts";
 import { ListedArtifactCard, copyAddress } from "./parts.tsx";
 import { ARTIFACT_LIST_SORTS } from "~/contract/artifacts.ts";
 import {
@@ -276,7 +282,7 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
             ? trashed
               ? {
                   title: "Nothing in the trash",
-                  hint: "An artifact you trash stays here for 30 days, then is deleted.",
+                  hint: `An artifact you trash stays here for ${TRASH_KEPT}, then is deleted.`,
                 }
               : q || kind
                 ? { title: "Nothing matches", hint: "Change the phrase or the type to see more." }

@@ -134,20 +134,55 @@ export function principalAudience(principal: Principal): ArtifactAudience {
 }
 
 /**
- * Where a member is, in words: what the presence rail and a badge's name say.
- * An agent reading is "Reading", as a turn reads; a person viewing is
- * "Viewing".
+ * How a place in an artifact is named to a reader: a row by its number as the
+ * sheet draws it, a column by its label. A raw document id or field key is
+ * never said; a place the caller cannot name is "a row" or "a column".
+ */
+export interface PresencePlace {
+  /** "row 4". */
+  row: (collection: string, doc: string) => string | null;
+  /** "Gate". */
+  field: (collection: string, field: string) => string | null;
+}
+
+const NO_PLACE: PresencePlace = { row: () => null, field: () => null };
+
+/**
+ * Where a member is, in words, after the verb: "row 4, Gate", "version 3".
+ * What the presence rail and a badge's name say.
  */
 export function memberLocation(
   member: ArtifactPresenceMember,
-  title: (doc: string) => string,
+  place: PresencePlace = NO_PLACE,
 ): string {
   const f = member.focus;
-  if (f.collection && f.doc && f.field) return `on ${title(f.doc)}, ${f.field}`;
-  if (f.collection && f.doc) return `on ${title(f.doc)}`;
+  if (f.collection && f.doc) {
+    const row = place.row(f.collection, f.doc) ?? "a row";
+    if (!f.field) return row;
+    return `${row}, ${place.field(f.collection, f.field) ?? "a column"}`;
+  }
   if (f.region) return `in ${f.region}`;
-  if (f.version) return `on version ${f.version}`;
+  if (f.version) return `version ${f.version}`;
   return "";
+}
+
+/**
+ * The reader's own other tabs, apart from everybody else: a second tab of the
+ * reader's own seat is not another person, and following it moves nothing, so
+ * it is counted beside "You" rather than drawn as a collaborator.
+ */
+export function splitOwnSessions<M extends { seat: string }>(
+  members: readonly M[],
+  handle: string,
+): { others: M[]; ownTabs: number } {
+  if (!handle) return { others: [...members], ownTabs: 0 };
+  const others = members.filter((m) => m.seat !== handle);
+  return { others, ownTabs: members.length - others.length };
+}
+
+/** The reader's own row on the People rail: "You", or "You, 2 tabs" with another tab open. */
+export function selfWords(ownTabs: number): string {
+  return ownTabs > 0 ? `You, ${ownTabs + 1} tabs` : "You";
 }
 
 /**
@@ -162,7 +197,7 @@ export function presenceMembers(
   members: readonly ArtifactPresenceMember[],
   people: ArtifactPeople,
   held: ReadonlyMap<string, NodeHue>,
-  title: (doc: string) => string = (doc) => doc,
+  place: PresencePlace = NO_PLACE,
 ): { members: PresenceMember[]; hues: Map<string, NodeHue> } {
   const drawn: PresenceMember[] = members.map((m) => {
     const seat = people.index.byHandle.get(m.seat);
@@ -181,7 +216,7 @@ export function presenceMembers(
     // THE WHOLE PHRASE, VERB FIRST, which is what uilet's `PresenceMember.location`
     // means: the People rail prints it in place of the activity, and the
     // presence stack reads it out in place of the activity too.
-    const where = memberLocation(m, title);
+    const where = memberLocation(m, place);
     if (where) out.location = `${PRESENCE_LABELS.activity(m.activity, kind)} ${where}`;
     return out;
   });
