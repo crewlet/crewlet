@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload/lint"
 	"github.com/crewlet/crewlet/internal/artifactupload/vendor"
+	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -65,6 +66,12 @@ type Meter interface {
 	Set(name string, v float64, attrs metrics.Attrs)
 }
 
+// Objectives is where the pipeline's service objective events go: the node's
+// objective meter ([objectives.Meter]), which judges each against its bound.
+type Objectives interface {
+	Record(n objectives.Name, elapsed time.Duration, answered bool)
+}
+
 // Deps is what a [Service] is built from.
 type Deps struct {
 	// Objects is the fleet's object store, the one every byte lands in.
@@ -98,6 +105,11 @@ type Deps struct {
 	// Meter records the pipeline's measurements; nil records none.
 	Meter Meter
 
+	// Objectives counts every create and publish into the publish
+	// objectives ([objectives.PublishSuccess], [objectives.PublishApplied]);
+	// nil counts none.
+	Objectives Objectives
+
 	// Now is the clock every reservation and key is judged by; nil is the
 	// wall clock.
 	Now func() time.Time
@@ -115,6 +127,7 @@ type Service struct {
 	hosts    lint.Allowlist
 	runtimes Runtimes
 	meter    Meter
+	judged   Objectives
 	now      func() time.Time
 	turns    *turnGuard
 }
@@ -144,7 +157,7 @@ func New(deps Deps) (*Service, error) {
 	s := &Service{
 		objects: deps.Objects, res: deps.Reservations, writes: deps.Writes, reads: deps.Reads,
 		presign: deps.Presign, limits: deps.Limits, vendor: deps.Vendor, hosts: deps.Hosts,
-		runtimes: deps.Runtimes, meter: deps.Meter, now: deps.Now,
+		runtimes: deps.Runtimes, meter: deps.Meter, judged: deps.Objectives, now: deps.Now,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }

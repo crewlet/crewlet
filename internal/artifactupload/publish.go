@@ -128,6 +128,7 @@ func (s *Service) Create(ctx context.Context, c artifactsdomain.Call, req Create
 	start := s.now()
 	out, report, err := s.create(ctx, c, req)
 	s.observePublish(start, err)
+	s.judgePublish(start, err)
 	return out, report, err
 }
 
@@ -191,6 +192,7 @@ func (s *Service) Publish(ctx context.Context, c artifactsdomain.Call, req Publi
 	start := s.now()
 	out, report, err := s.publish(ctx, c, req)
 	s.observePublish(start, err)
+	s.judgePublish(start, err)
 	return out, report, err
 }
 
@@ -252,7 +254,11 @@ func (s *Service) publish(ctx context.Context, c artifactsdomain.Call, req Publi
 		return artifactsdomain.Published{}, Report{}, r.fail(ctx, err)
 	}
 	in.Artifact, in.Base, in.Force, in.Label = req.Artifact, req.Base, req.Force, req.Label
+	decided := s.now()
 	published, err := s.writes.Publish(ctx, c, in)
+	if bytesFree(req) {
+		s.judgeApplied(decided, err)
+	}
 	if err != nil {
 		return published, Report{}, r.fail(ctx, err)
 	}
@@ -312,8 +318,13 @@ func (s *Service) restore(ctx context.Context, c artifactsdomain.Call, req Publi
 
 // writeOnly is a publish whose bytes are all carried, handed straight to the
 // domain.
+//
+// EVERY BYTE IS CARRIED, so it is a bytes-free publish the latency objective
+// counts.
 func (s *Service) writeOnly(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.PublishInput) (artifactsdomain.Published, Report, error) {
+	decided := s.now()
 	published, err := s.writes.Publish(ctx, c, in)
+	s.judgeApplied(decided, err)
 	return published, Report{}, err
 }
 

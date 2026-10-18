@@ -109,6 +109,7 @@ type harness struct {
 	domain  *domainNode
 	cdn     *fakeCDN
 	meter   *meter
+	judged  *judged
 	svc     *artifactupload.Service
 
 	mu     sync.Mutex
@@ -128,7 +129,7 @@ func newHarness(t *testing.T, o options) *harness {
 	t.Helper()
 	h := &harness{t: t, clock: &clock{t: start}, fleet: memory.NewFleet(),
 		meter:  &meter{counts: map[string]uint64{}, gauges: map[string]float64{}},
-		limits: defaultLimits()}
+		judged: &judged{}, limits: defaultLimits()}
 	h.backend = memobj.NewAt(h.clock.Now)
 	var backend objstore.Backend = h.backend
 	if o.presign {
@@ -152,7 +153,8 @@ func newHarness(t *testing.T, o options) *harness {
 			defer h.mu.Unlock()
 			return h.limits
 		},
-		Hosts: lint.DefaultAllowlist(), Runtimes: runtimes, Meter: h.meter, Now: h.clock.Now,
+		Hosts: lint.DefaultAllowlist(), Runtimes: runtimes, Meter: h.meter, Objectives: h.judged,
+		Now: h.clock.Now,
 	}
 	if o.presign {
 		deps.Presign = store
