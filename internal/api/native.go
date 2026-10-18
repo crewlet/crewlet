@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -60,28 +61,60 @@ import (
 // [httpjson.NativeHalvesNotUp] as its words.
 var errNoCompanyYet = fmt.Errorf("%w: %w", queries.ErrUnavailable, stream.ErrNoCompany)
 
-// NativeSources are the read surface's five native sources — the board, the
-// knowledge base, the links between its pages, ranked item search and a
-// project's file listing — each resolved per question.
+// NativeReads are the read surface's native sources — the board, the knowledge
+// base, the links between its pages, ranked item search, a project's file
+// listing, the company's chat and its search, and a person's chat read state —
+// each resolved per question. Built by [NativeSources] and handed to the
+// read surface by [NativeReads.Into].
+//
+// THROUGH THIS NODE'S ESTATE ROUTER, as a seat's tools reach the same rows
+// ([engine.OperatorWork], [engine.OperatorPages], [engine.OperatorChat],
+// [engine.WorkSearcher]), so an operator and an agent looking at one item see
+// one item: answered from this node's copy while it serves and from another
+// data node's while it does not. Read off this node's copy directly, a data
+// node whose copy was out of service — wrong rather than behind, or its file
+// shut — went on drawing its operator's board from rows it would not vouch for
+// to its own seats. The links between pages are the exception, and
+// deliberately: they are this node's own lexical index, which no peer answers
+// for. And a person's read cursors are the fleet's coordination record, which
+// every node reads directly.
+type NativeReads struct {
+	Work       queries.WorkReader
+	Pages      queries.PageReader
+	Backlinks  queries.PageBacklinks
+	WorkSearch queries.WorkSearcher
+	Files      queries.FileReader
+	Chat       queries.ChatReader
+	ChatSearch queries.ChatSearcher
+	ChatReads  queries.ChatReads
+}
+
+// NativeSources are this engine's native read sources.
 //
 // ONE CONSTRUCTOR for `crewlet run` and the end-to-end suite, for
 // [NewHumanSurfaces]' reason: a copy of the rule in either would be a harness
 // agreeing with itself.
-//
-// THROUGH THIS NODE'S ESTATE ROUTER, as a seat's tools reach the same rows
-// ([engine.OperatorWork], [engine.OperatorPages], [engine.WorkSearcher]), so an
-// operator and an agent looking at one item see one item: answered from this
-// node's copy while it serves and from another data node's while it does not.
-// Read off this node's copy directly, a data node whose copy was out of
-// service — wrong rather than behind, or its file shut — went on drawing its
-// operator's board from rows it would not vouch for to its own seats. The
-// links between pages are the exception, and deliberately: they are this
-// node's own lexical index, which no peer answers for.
-func NativeSources(e *engine.Engine) (queries.WorkReader, queries.PageReader,
-	queries.PageBacklinks, queries.WorkSearcher, queries.FileReader) {
+func NativeSources(e *engine.Engine) NativeReads {
+	return NativeReads{
+		Work: liveWork{engine: e}, Pages: livePages{engine: e},
+		Backlinks: liveBacklinks{engine: e}, WorkSearch: liveWorkSearch{engine: e},
+		Files: liveFiles{engine: e},
+		Chat:  liveChat{engine: e}, ChatSearch: liveChatSearch{engine: e},
+		// THE FLEET'S OWN RECORD, which every node reaches whatever its
+		// company runs, and which a chat question reads only after it has
+		// read rooms — a company with no native chat never asks it.
+		ChatReads: e.Backends().Fleet,
+	}
+}
 
-	return liveWork{engine: e}, livePages{engine: e}, liveBacklinks{engine: e},
-		liveWorkSearch{engine: e}, liveFiles{engine: e}
+// Into sets every native source on s — ALL OF THEM, so a caller cannot wire
+// the board and forget the rooms beside it. A field set before the call is
+// overwritten: these are the native sources, and there is one answer to what
+// they are.
+func (n NativeReads) Into(s *queries.Sources) {
+	s.Work, s.Pages, s.Backlinks, s.WorkSearch, s.Files =
+		n.Work, n.Pages, n.Backlinks, n.WorkSearch, n.Files
+	s.Chat, s.ChatSearch, s.ChatReads = n.Chat, n.ChatSearch, n.ChatReads
 }
 
 // nativeAbsent is why a half is not here: the node has not met its company
@@ -377,6 +410,78 @@ func (l liveWorkSearch) Search(ctx context.Context, q tracker.SearchQuery) (
 	s := engine.WorkSearcher(l.engine)
 	if s == nil {
 		return tracker.SearchAnswer{}, nativeAbsent(started, "tracker")
+	}
+	return s.Search(ctx, q)
+}
+
+// liveChat is chat's read side, resolved per question, from the router's rooms
+// for [liveWork]'s reason.
+type liveChat struct{ engine *engine.Engine }
+
+func (l liveChat) reader() (estate.Chat, error) {
+	started := l.engine.NativeStarted()
+	if r, ok := engine.OperatorChat(l.engine); ok {
+		return r, nil
+	}
+	return estate.Chat{}, nativeAbsent(started, "chat")
+}
+
+func (l liveChat) Channels(ctx context.Context, viewer string, q chat.ChannelsQuery,
+	fresh statelog.Freshness) (chat.ChannelListing, error) {
+	r, err := l.reader()
+	if err != nil {
+		return chat.ChannelListing{}, err
+	}
+	return r.Channels(ctx, viewer, q, fresh)
+}
+
+func (l liveChat) Channel(ctx context.Context, viewer, channelID string,
+	fresh statelog.Freshness) (chat.ChannelDetail, error) {
+	r, err := l.reader()
+	if err != nil {
+		return chat.ChannelDetail{}, err
+	}
+	return r.Channel(ctx, viewer, channelID, fresh)
+}
+
+func (l liveChat) Messages(ctx context.Context, viewer string, q chat.TranscriptQuery,
+	fresh statelog.Freshness) (chat.Transcript, error) {
+	r, err := l.reader()
+	if err != nil {
+		return chat.Transcript{}, err
+	}
+	return r.Messages(ctx, viewer, q, fresh)
+}
+
+func (l liveChat) Thread(ctx context.Context, viewer string, q chat.ThreadQuery,
+	fresh statelog.Freshness) (chat.Thread, error) {
+	r, err := l.reader()
+	if err != nil {
+		return chat.Thread{}, err
+	}
+	return r.Thread(ctx, viewer, q, fresh)
+}
+
+func (l liveChat) Mentions(ctx context.Context, viewer string, q chat.MentionQuery,
+	fresh statelog.Freshness) (chat.MentionFeed, error) {
+	r, err := l.reader()
+	if err != nil {
+		return chat.MentionFeed{}, err
+	}
+	return r.Mentions(ctx, viewer, q, fresh)
+}
+
+// liveChatSearch is chat's ranked search, resolved per question: the router's,
+// whose serving data node resolves the viewer's rooms beside the index it
+// reads.
+type liveChatSearch struct{ engine *engine.Engine }
+
+func (l liveChatSearch) Search(ctx context.Context, q estate.ChatQuery) (
+	estate.ChatSearchAnswer, error) {
+	started := l.engine.NativeStarted()
+	s, ok := engine.OperatorChatSearch(l.engine)
+	if !ok {
+		return estate.ChatSearchAnswer{}, nativeAbsent(started, "chat")
 	}
 	return s.Search(ctx, q)
 }
