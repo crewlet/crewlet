@@ -416,7 +416,7 @@ func implicitViews(container Container) []ViewRow {
 		//
 		// NO `sort`, deliberately, unlike the timeline: [sortTerms]
 		// already orders a removed listing by `removed_at DESC`, which is
-		// the one order this tab wants and the only index over these rows.
+		// the one order this tab wants and the order its indexes hold.
 		// Naming it here would be a second copy of that decision, and the
 		// two would drift.
 		{Key: ViewKeyTrash, Name: "Trash", Type: ViewTable,
