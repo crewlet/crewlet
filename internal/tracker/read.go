@@ -765,25 +765,27 @@ func taskSource(q Query) string {
 // query's own ([compilePredicate]), the subtask rollup when the query rolls
 // its subtasks up, and a board column's narrowing.
 func compileWhere(q Query, now time.Time, fields map[string]resolvedField) (string, []any, error) {
-	// THE SUBTASK MODE, and it is a predicate on the ROOT rather than on
-	// the row.
+	// THE SUBTASK MODE, and it is a predicate on the row's ANCHOR rather
+	// than on the row.
 	//
 	// `collapsed` and `expanded` filter ROOT tasks and let their subtrees
 	// ride along unfiltered; `separate` filters every task on its own.
 	// That is [SubtaskMode]'s own contract, and the difference between the
 	// first two is a RENDER hint — both answer the same set, and the
-	// caller folds or does not.
+	// caller folds or does not. What a row rides along WITH is its anchor
+	// ([anchorOf]): on the live side its tree's root, and in the trash the
+	// removal that took it.
 	//
 	// AND IT DOES NOT APPLY WHEN THE CALLER ASKED FOR A SUBTREE: `parent`
 	// and `root` are questions ABOUT subtasks, so filtering their roots
 	// would answer the parent's siblings instead.
 	//
-	// # Why each row probes its own root, by the root's key
+	// # Why each row probes its anchor, by the anchor's key
 	//
-	// The question is asked of ONE row the row names — its `root_id` — so
-	// it is written as a probe of that row: the query's own predicate,
+	// The question is asked of ONE row the row names — its anchor — so it
+	// is written as a probe of that row: the query's own predicate,
 	// compiled for the anchor's alias ([anchorAlias]), inside an EXISTS
-	// that reads the root by the table's key ([anchorProbe]). The outer
+	// that reads the anchor by the table's key ([anchorProbe]). The outer
 	// statement reads the listing in its own order through the scope's
 	// source and stops after a page, and a count costs the rows it counts.
 	//
@@ -834,7 +836,7 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField) (stri
 			where = append(where, scope)
 			args = append(args, scopeArgs...)
 		}
-		where = append(where, anchorProbe(rowAlias.col("root_id"),
+		where = append(where, anchorProbe(anchorOf(q),
 			strings.Join(flat, " AND ")))
 		args = append(args, flatArgs...)
 		return groupNarrowed(q, fields, where, args)
@@ -869,6 +871,36 @@ func groupNarrowed(q Query, fields map[string]resolvedField, where []string,
 		args = append(args, values...)
 	}
 	return strings.Join(where, " AND "), args, nil
+}
+
+// anchorOf is the task a row rides along with under the subtask rollup: what
+// its question is asked of, as an expression over the row.
+//
+// # On the live side, the root of its tree
+//
+// A board draws a project's roots with their subtrees, so a subtask is shown
+// where its root is and filtered by its root's answer.
+//
+// # In the trash, the removal that took it
+//
+// What a person restores is a REMOVAL — the task a gesture named, and what
+// that gesture took with it, which is exactly what a restore of that task
+// brings back ([Writer.RestoreTask]). So the trash is listed by removal, and
+// its unit is not the tree: every task a subtree removal took names the task
+// the gesture was made on (`removed_with`), and a task removed by a gesture of
+// its own names none and is its own anchor — a subtask removed while its
+// parent stayed live is a removal of its own, and so is a task already in the
+// trash when its root went. Anchored on the tree's root instead, the trash's
+// default listing asked whether the ROOT was removed, so a subtask removed on
+// its own under a live parent — which an author removing their own item does
+// — was in no default-mode trash at either scope, and the only thing that
+// reached it was `subtasks=separate`.
+func anchorOf(q Query) string {
+	if q.Removed != nil && *q.Removed {
+		return "IFNULL(" + rowAlias.col("removed_with") + ", " +
+			rowAlias.col("id") + ")"
+	}
+	return rowAlias.col("root_id")
 }
 
 // anchorProbe is "the task ref names matches this predicate", as a probe of
