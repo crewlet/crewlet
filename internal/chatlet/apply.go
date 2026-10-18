@@ -63,8 +63,7 @@ type Applier struct {
 	NodeID string
 
 	// live is the post-commit accumulator. Never nil; a nil OBSERVER
-	// inside it is the no-op every test and every node without a
-	// dashboard attached runs.
+	// inside it is the no-op a test that renders no room runs.
 	live *accumulator
 }
 
