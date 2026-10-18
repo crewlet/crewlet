@@ -62,4 +62,8 @@
 // retry under the same operation key continues the same reservation, reuses the
 // objects its first attempt stored, and is answered with what the first one
 // landed, so a retried publish never makes a second version.
+//
+// Bytes are reserved before they move, and a carried object is named again
+// only by a record that finds it named: ADR-0036, whose authority this package
+// is.
 package artifactupload

@@ -85,3 +85,17 @@ It does not make every verb durable. `Ask` and `Serve` are an ephemeral
 scatter — core NATS request/reply, no stream, no consumer, no ack, no retention
 — because a query is not an event, and a search fan-out on the durable verbs
 would write two records and an audit row per keystroke.
+
+## Amendment: a second ephemeral pair, `Broadcast` and `Listen`
+
+The queue gains two more ephemeral verbs beside `Ask` and `Serve`, for
+artifact presence ([ADR-0038](0038-presence-is-told-never-stored.md)).
+`Broadcast` publishes one payload on a subject and `Listen` subscribes a
+handler to a pattern: core NATS, at most once, unordered, no stream, no
+consumer, no acknowledgement and no retention, and refused with
+`queue.ErrUnavailable` when the broker cannot be reached rather than buffered
+into a reconnect. They are certified on both backends by `queuetest`, the
+in-memory twin delivering in process, and the rule above holds for them
+unchanged: nothing above `internal/queue` branches on which backend carries a
+broadcast. Their subjects are built in `internal/queue/topics` like every
+other.
