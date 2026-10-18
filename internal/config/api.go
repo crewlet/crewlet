@@ -925,7 +925,7 @@ type APIToken struct {
 	// STRICT, unlike a replicated row: a name this build does not know is
 	// refused here, naming the set, because a file an operator wrote is a
 	// typo rather than a newer peer's record.
-	Grants []iam.Grant `yaml:"grants,omitempty" json:"grants,omitempty" desc:"What this credential may do: admin, tracker, knowledge. Required and non-empty."`
+	Grants []iam.Grant `yaml:"grants,omitempty" json:"grants,omitempty" desc:"What this credential may do: admin, tracker, knowledge, artifacts. Required and non-empty."`
 }
 
 // validate checks the auth block; serving is [Bootstrap.ServesAPI].
