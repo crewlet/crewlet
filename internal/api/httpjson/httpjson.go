@@ -781,15 +781,20 @@ const (
 	// under — an empty segment, a dot segment, too long. 400, the detail
 	// naming what is wrong with it.
 	CodeBadPath Code = "bad_path"
-	// CodeBadIfMatch is an If-Match header that is not a file's version as
-	// its ETag carries it. 400.
+	// CodeBadIfMatch is an If-Match header that is not a version as its
+	// ETag carries it: a project file's, or an artifact's head (`"<n>"`).
+	// 400.
 	CodeBadIfMatch Code = "bad_if_match"
-	// CodeVersionMoved is a file write whose If-Match names a version the
-	// file has moved past. 412: read it again and decide again.
+	// CodeVersionMoved is a write whose If-Match names a version the thing
+	// it writes has moved past: a project file, or an artifact whose head
+	// is past the version a publish was based on. 412: read it again and
+	// decide again. An artifact's carries the live head and its entry's
+	// text to merge onto.
 	CodeVersionMoved Code = "version_moved"
-	// CodeUploadExpired is an upload whose bytes were stored and took
-	// longer to arrive than a write may name its object after. 409: sending
-	// it again is the one thing that lands.
+	// CodeUploadExpired is an upload whose bytes cannot be recorded any
+	// more: stored, and older than a write may name its object after (409),
+	// or an artifact upload whose window closed before it was finished
+	// (410). Sending the bytes again is the one thing that lands.
 	CodeUploadExpired Code = "upload_expired"
 	// CodeContentCorrupt is a file whose object the store answered with
 	// content that is not what the file records. 500: a retry reads the
@@ -831,6 +836,80 @@ const (
 	// a delivery — under its own code because the fix is not: an operator
 	// told no secret is set goes looking for one they can see.
 	CodeUnusableWebhookSecret Code = "unusable_webhook_secret"
+)
+
+// THE ARTIFACTS SURFACE'S OWN (`/artifacts`): the refusals of an upload, a
+// publish and the pipeline between them that no other surface answers. A
+// publish based on a moved head is [CodeVersionMoved], an upload past its
+// window [CodeUploadExpired], a role below the verb's `unauthorized` naming
+// the role, and a value the domain refuses `invalid`, the codes every write
+// surface already answers with.
+const (
+	// CodeArtifactTrashed is a write to, or an open of, an artifact in the
+	// trash. 409: its owner restores it first.
+	CodeArtifactTrashed Code = "artifact_trashed"
+	// CodeQuotaExceeded is a write the company's plan quota refuses. 413,
+	// the detail naming the limit, the usage and the Tier A key an operator
+	// raises.
+	CodeQuotaExceeded Code = "quota_exceeded"
+	// CodeCarriedObjectGone is a publish carrying files the artifact no
+	// longer holds the bytes of. 409, the detail naming the paths to upload
+	// again.
+	CodeCarriedObjectGone Code = "carried_object_gone"
+	// CodeUploadMismatch is a file whose stored bytes are not the ones its
+	// upload declared. 422: upload that path again in a new upload.
+	CodeUploadMismatch Code = "upload_mismatch"
+	// CodeUploadMissing is a publish naming files whose bytes have not
+	// arrived. 409: transfer them, then publish again.
+	CodeUploadMissing Code = "upload_missing"
+	// CodeUploadsOutstanding is an upload the reservation budget refuses.
+	// 429, the detail naming whose budget, the figure and when the
+	// earliest hold lapses.
+	CodeUploadsOutstanding Code = "uploads_outstanding"
+	// CodeUploadNotFound is an upload this caller never began, or one whose
+	// record is gone; another caller's answers exactly this. 404.
+	CodeUploadNotFound Code = "upload_not_found"
+	// CodeUploadConsumed is an upload a publish has used or is using, or a
+	// file already transferred. 409.
+	CodeUploadConsumed Code = "upload_consumed"
+	// CodeMediaTypeRefused is a file whose type an artifact may not publish.
+	// 415, the detail naming the path.
+	CodeMediaTypeRefused Code = "media_type_refused"
+	// CodeCapabilityUnknown is a publish declaring a capability this build
+	// does not serve. 422.
+	CodeCapabilityUnknown Code = "capability_unknown"
+	// CodeContractUnknown is a publish pinning a runtime contract this
+	// build does not serve. 422.
+	CodeContractUnknown Code = "contract_unknown"
+	// CodeCredentialRefused is content an agent published that carries a
+	// credential's shape. 422: never redacted, which would ship a broken
+	// page.
+	CodeCredentialRefused Code = "credential_refused"
+	// CodeContentRefused is a file whose bytes are not what its type
+	// promises: text that is not UTF-8, binary bytes that do not begin as
+	// their type's do. 422.
+	CodeContentRefused Code = "content_refused"
+	// CodeEditRefused is an edit that could not be applied exactly once.
+	// 422, the detail naming the edit and how often its text matched.
+	CodeEditRefused Code = "edit_refused"
+	// CodePolicyRefused is a page the publish policy refuses: a script or a
+	// stylesheet from a host it does not allow, an unpinned version, a form
+	// posting off the page. 422, the detail listing every finding.
+	CodePolicyRefused Code = "policy_refused"
+	// CodeSourceTaken is a create naming a source address another artifact
+	// of the same owner holds. 409.
+	CodeSourceTaken Code = "source_taken"
+	// CodeLabelTaken is a label another version of the artifact holds, or
+	// one past the labelled versions an artifact keeps. 409.
+	CodeLabelTaken Code = "label_taken"
+	// CodeArtifactOriginUnset is a frame asked of a deployment that serves
+	// no artifact origin (`api.artifacts.external_url` unset). 409: an
+	// operator sets one; no retry here changes it.
+	CodeArtifactOriginUnset Code = "artifact_origin_unset"
+	// CodeArtifactNotFramed is a frame asked for an artifact the dashboard
+	// renders itself (a Markdown document, a native sheet), which runs no
+	// author code and so is never opened on the artifact origin. 409.
+	CodeArtifactNotFramed Code = "artifact_not_framed"
 )
 
 // codes is THE TABLE: every code this engine answers with, each with the one
@@ -1026,11 +1105,11 @@ var codes = map[Code]string{
 	CodeNoFile:    "That project keeps no file at that path.",
 	CodeBadPath: "That is not a path a project keeps a file under. The detail " +
 		"says what is wrong with it.",
-	CodeBadIfMatch: "If-Match must carry the file's version, as its ETag does.",
-	CodeVersionMoved: "The file changed after you read it, so nothing was " +
+	CodeBadIfMatch: "If-Match must carry the version you read, as its ETag does.",
+	CodeVersionMoved: "This changed after you read it, so nothing was " +
 		"written. Read it again and decide again.",
-	CodeUploadExpired: "The upload took too long to arrive to be recorded, so " +
-		"the file was not written. Send it again.",
+	CodeUploadExpired: "The upload took too long to be recorded, so nothing " +
+		"was written. Send the files again.",
 	CodeContentCorrupt: "The object store holds content for this file that is " +
 		"not what the file records, so it was not sent. The reason is in this " +
 		"node's log.",
@@ -1111,6 +1190,46 @@ var codes = map[Code]string{
 		"is back.",
 	CodeReservedName: "That name is reserved for the engine. The detail " +
 		"names the command that can change it.",
+
+	CodeArtifactTrashed: "This artifact is in the trash. Its owner can " +
+		"restore it, then try again.",
+	CodeQuotaExceeded: "This would take the company past its artifacts quota, " +
+		"so nothing was saved. Remove artifacts, or ask an operator to raise " +
+		"the limit the detail names.",
+	CodeCarriedObjectGone: "Some files this version keeps are no longer stored, " +
+		"so nothing was published. Upload the files the detail names again.",
+	CodeUploadMismatch: "A file that arrived is not the one the upload " +
+		"declared, so it was not used. Upload the file the detail names again.",
+	CodeUploadMissing: "Some files have not arrived yet, so nothing was " +
+		"published. Send the files the detail names, then publish again.",
+	CodeUploadsOutstanding: "Too many uploads are still unfinished. Finish or " +
+		"abandon them, or wait for the time the detail names.",
+	CodeUploadNotFound: "There is no such upload. Begin a new one.",
+	CodeUploadConsumed: "That upload or file has already been used. Begin a " +
+		"new upload for any change.",
+	CodeMediaTypeRefused: "An artifact can't publish a file of that type. The " +
+		"detail names the file.",
+	CodeCapabilityUnknown: "This engine doesn't offer a capability the page " +
+		"declares. The detail names it.",
+	CodeContractUnknown: "This engine doesn't serve the runtime version the " +
+		"page asks for. The detail names it.",
+	CodeCredentialRefused: "The content carries what looks like a credential, " +
+		"so nothing was published. Remove it and publish again.",
+	CodeContentRefused: "A file's content is not what its type says it is, so " +
+		"nothing was published. The detail names the file.",
+	CodeEditRefused: "An edit could not be applied exactly once, so nothing " +
+		"was published. The detail names the edit and what to change.",
+	CodePolicyRefused: "The page breaks the artifact policy, so nothing was " +
+		"published. The detail lists every problem to fix.",
+	CodeSourceTaken: "Another of your artifacts already uses that source " +
+		"address. Publish to that artifact, or choose another address.",
+	CodeLabelTaken: "Another version already has that label, or this " +
+		"artifact keeps no more labels. Choose another label.",
+	CodeArtifactOriginUnset: "This engine has no address to open pages on, so " +
+		"this artifact can't be viewed yet. An operator sets " +
+		"`api.artifacts.external_url`.",
+	CodeArtifactNotFramed: "This artifact is shown here directly rather than " +
+		"opened as a page.",
 }
 
 // Codes is every code in the vocabulary, sorted.
