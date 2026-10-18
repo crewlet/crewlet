@@ -503,8 +503,10 @@ func TestTheDesignSystemCascadesInOrder(t *testing.T) {
 		// and the `:focus-visible` copy that answered it drew a second ring
 		// on the field inside every kit Input and a clipped one on the command
 		// palette's field, which the kit draws with none.
-		for _, late := range bareFocus.FindAllIndex(sheet[first[0]:], -1) {
-			at := first[0] + late[0]
+		for _, at := range bareFocusRules(sheet) {
+			if at < first[0] {
+				continue
+			}
 			t.Errorf("%s declares a bare focus rule at %d, after the first component "+
 				"rule (%d): %q. It wins every one-class tie against a component's "+
 				"own focus treatment; leave the ring to @crewlethq/tokens/css/base, "+
@@ -566,13 +568,99 @@ var (
 	// baselineFocus matches the baseline's own focus rule: `:focus-visible` as
 	// a complete selector, which is how it is told from a component's.
 	baselineFocus = regexp.MustCompile(`(?:^|[{}])\s*:focus-visible\s*\{`)
-	// bareFocus matches any focus rule with no subject of its own — `:focus`
-	// or `:focus-visible` as a complete selector, alone or in a list, which
-	// is the one-class shape that ties with a component.
-	bareFocus = regexp.MustCompile(`(?:^|[{},])\s*:focus(?:-visible)?\s*[{,]`)
 	// componentRule matches the first rule of any design system component.
 	componentRule = regexp.MustCompile(`\.crewlet-[a-z]`)
 )
+
+// bareFocusRules returns where each focus rule with no subject of its own
+// starts: `:focus` or `:focus-visible` as a complete selector, alone or in a
+// list, which is the one-class shape that ties with a component.
+//
+// READ FROM THE SELECTOR LIST, NOT FROM A PATTERN OVER THE TEXT. A comma inside
+// a functional pseudo-class separates that function's arguments, not the
+// rule's selectors: `.crewlet-arrange-frame:is(:hover,:focus-visible)` has
+// one subject, the frame, and a pattern that took the comma for a selector
+// boundary read its `:focus-visible` as a bare rule. So a prelude is split at
+// the commas outside every parenthesis, and an at-rule's prelude (`@media`)
+// is never a selector list at all.
+func bareFocusRules(sheet []byte) []int {
+	var found []int
+	start, depth := 0, 0
+	var quote byte
+	for i := 0; i < len(sheet); i++ {
+		c := sheet[i]
+		switch {
+		case quote != 0:
+			switch c {
+			case '\\':
+				i++
+			case quote:
+				quote = 0
+			}
+		case c == '/' && i+1 < len(sheet) && sheet[i+1] == '*':
+			end := bytes.Index(sheet[i+2:], []byte("*/"))
+			if end < 0 {
+				return found
+			}
+			i += end + 3
+		case c == '"' || c == '\'':
+			quote = c
+		case c == '(':
+			depth++
+		case c == ')':
+			depth--
+		case depth > 0:
+		case c == '{':
+			if prelude := sheet[start:i]; !bytes.HasPrefix(bytes.TrimSpace(prelude), []byte("@")) {
+				part := start
+				for j := start; j <= i; j++ {
+					if j < i && sheet[j] == '(' {
+						depth++
+					} else if j < i && sheet[j] == ')' {
+						depth--
+					}
+					if j == i || (depth == 0 && sheet[j] == ',') {
+						if sel := strings.TrimSpace(string(sheet[part:j])); sel == ":focus" || sel == ":focus-visible" {
+							found = append(found, part+strings.Index(string(sheet[part:j]), ":"))
+						}
+						part = j + 1
+					}
+				}
+				depth = 0
+			}
+			start = i + 1
+		case c == '}' || c == ';':
+			start = i + 1
+		}
+	}
+	return found
+}
+
+// TestBareFocusRulesReadTheSelectorList holds the reading the cascade check
+// depends on: a bare rule is found alone, in a list and inside an at-rule,
+// and a component's own focus treatment is never one, whatever its
+// functional pseudo-classes hold.
+func TestBareFocusRulesReadTheSelectorList(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		css  string
+		want int
+	}{
+		{":focus-visible{outline:2px solid}", 1},
+		{"a,:focus{outline:none}", 1},
+		{":focus , :focus-visible{outline:none}", 2},
+		{"@media (min-width:1px){:focus-visible{outline:0}}", 1},
+		{".crewlet-arrange-frame.is-editing:is(:hover,:focus-visible,:has(:focus-visible)):after{outline:0}", 0},
+		{".crewlet-btn:focus-visible{outline:0}", 0},
+		{".x:not(:focus),.y{color:red}", 0},
+		{".x{content:\":focus-visible{\"}", 0},
+		{"/* :focus{ */.x{color:red}", 0},
+	} {
+		if got := len(bareFocusRules([]byte(tc.css))); got != tc.want {
+			t.Errorf("bareFocusRules(%q) found %d, want %d", tc.css, got, tc.want)
+		}
+	}
+}
 
 // protocolModule is the second build target: the socket client alone, which
 // internal/e2e replays captured frames through. No page imports it, so the
