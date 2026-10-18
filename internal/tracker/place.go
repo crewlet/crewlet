@@ -287,6 +287,32 @@ func decidePlace(ctx context.Context, tx *sql.Tx, place Place,
 	return placements, nil
 }
 
+// gapSideStatement is [gapSide]'s read of one side, named for the plan test.
+//
+// THE PIVOT'S RANK BOUNDS THE SEEK. "Past the pivot in (rank, id) order" is
+// `rank < p OR (rank = p AND id < t)` on the side below, and written that way
+// the disjunction leaves the planner nothing to seek but the project: it read
+// the project's rank index from the far end of the board towards the pivot,
+// keeping nothing until it got there, so a drop near the bottom of a long
+// board read the whole board to take a dozen neighbours. Stated as the range
+// it is — `rank <= p` and then the tie broken on the id — the same rows are a
+// seek on the project and the rank, read nearest first.
+func gapSideStatement(above, inclusive bool) string {
+	cmp, dir := "<", "DESC"
+	if above {
+		cmp, dir = ">", "ASC"
+	}
+	tie := cmp
+	if inclusive {
+		tie += "="
+	}
+	return `
+		SELECT id, rank FROM tracker_tasks
+		WHERE project_key = ? AND id <> ?
+		  AND rank ` + cmp + `= ? AND (rank ` + cmp + ` ? OR id ` + tie + ` ?)
+		ORDER BY rank ` + dir + `, id ` + dir + ` LIMIT ?`
+}
+
 // gapSide reads one side of the gap a drop opened, nearest first: the rows
 // below the pivot (descending) or above it (ascending), the pivot itself
 // included when the drop put it on this side.
@@ -298,19 +324,7 @@ func decidePlace(ctx context.Context, tx *sql.Tx, place Place,
 func gapSide(ctx context.Context, tx *sql.Tx, place Place, pivot Placement,
 	above, inclusive bool) ([]Placement, error) {
 
-	cmp, dir := "<", "DESC"
-	if above {
-		cmp, dir = ">", "ASC"
-	}
-	tie := cmp
-	if inclusive {
-		tie += "="
-	}
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id, rank FROM tracker_tasks
-		WHERE project_key = ? AND id <> ?
-		  AND (rank `+cmp+` ? OR (rank = ? AND id `+tie+` ?))
-		ORDER BY rank `+dir+`, id `+dir+` LIMIT ?`,
+	rows, err := tx.QueryContext(ctx, gapSideStatement(above, inclusive),
 		place.Project, place.Task, string(pivot.Rank), string(pivot.Rank),
 		pivot.Task, RankRespreadInline/2+1)
 	if err != nil {
