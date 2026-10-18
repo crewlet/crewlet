@@ -38,6 +38,16 @@ var ErrNoLineage = errors.New("artifactserve: the frame names no credential its 
 var ErrCredentialEnding = errors.New("artifactserve: the viewer's credential ends now; " +
 	"sign in again")
 
+// ErrNotAFrame reports a URL that is not a live frame this deployment minted:
+// one on an origin that is not its artifact's, one naming no ticket, or one
+// whose ticket is forged or has ended. Which of them is not said.
+var ErrNotAFrame = errors.New("artifactserve: that is not a live frame this deployment minted")
+
+// ticketPath opens every ticketed URL on the artifact origin
+// (`/t/<ticket>/<file>`): ONE SPELLING for the frame that mints such a URL,
+// the handler that routes on it and the reader of a minted frame.
+const ticketPath = "/t/"
+
 // FrameRequest is one viewer asking for one version in a frame.
 type FrameRequest struct {
 	// Principal is the signed-in viewer, as the API's guard resolved them.
@@ -148,7 +158,7 @@ func (f *Frames) For(r FrameRequest) (artifacts.Frame, error) {
 	}
 	origin := f.origins.Origin(head.ID)
 	return artifacts.Frame{
-		URL:       origin + "/t/" + token + "/" + escapePath(v.Entry) + "#n=" + nonce,
+		URL:       origin + ticketPath + token + "/" + escapePath(v.Entry) + "#n=" + nonce,
 		Origin:    origin,
 		Version:   v.Number,
 		ExpiresAt: expires,
@@ -159,6 +169,34 @@ func (f *Frames) For(r FrameRequest) (artifacts.Frame, error) {
 		Mode:  f.origins.Mode(),
 		Nonce: nonce,
 	}, nil
+}
+
+// Claims reads back the ticket of a live frame this deployment minted, from the
+// frame's URL as [Frames.For] answered it: what a viewer's report about that
+// frame is bound to (internal/api/artifactsapi's ready report). The ticket is
+// verified exactly as the origin verifies it, and the URL must be on the origin
+// its artifact is served from.
+func (f *Frames) Claims(frameURL string) (artifacts.TicketClaims, error) {
+	u, err := url.Parse(strings.TrimSpace(frameURL))
+	if err != nil {
+		return artifacts.TicketClaims{}, fmt.Errorf("%w: %v", ErrNotAFrame, err)
+	}
+	rest, ok := strings.CutPrefix(u.Path, ticketPath)
+	token, _, named := strings.Cut(rest, "/")
+	if !ok || !named || token == "" {
+		return artifacts.TicketClaims{}, fmt.Errorf("%w: it names no ticket", ErrNotAFrame)
+	}
+	claims, verdict, err := f.tickets.Open(token)
+	switch {
+	case verdict == ticket.Expired:
+		return artifacts.TicketClaims{}, fmt.Errorf("%w: its ticket has ended", ErrNotAFrame)
+	case verdict != ticket.Valid:
+		return artifacts.TicketClaims{}, fmt.Errorf("%w: %v", ErrNotAFrame, err)
+	case !strings.EqualFold(u.Scheme+"://"+u.Host, f.origins.Origin(claims.Artifact)):
+		return artifacts.TicketClaims{}, fmt.Errorf("%w: it is not on its artifact's origin",
+			ErrNotAFrame)
+	}
+	return claims, nil
 }
 
 // randomToken is 128 random bits in unpadded base64url: a bridge nonce, or a

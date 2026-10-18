@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactserve"
 	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
@@ -70,9 +71,17 @@ type Objects interface {
 }
 
 // Framer mints the frame the dashboard embeds a version in, on the artifact
-// origin ([artifactserve.Frames]).
+// origin ([artifactserve.Frames]), and reads a minted frame's ticket back from
+// its URL for the viewer's ready report.
 type Framer interface {
 	For(r artifactserve.FrameRequest) (artifacts.Frame, error)
+	Claims(frameURL string) (artifacts.TicketClaims, error)
+}
+
+// Beacon admits the viewers' ready reports into the node's service objectives
+// ([objectives.Beacon]).
+type Beacon interface {
+	Accept(r objectives.ReadyReport) error
 }
 
 // Options configure the surface.
@@ -100,6 +109,12 @@ type Options struct {
 	// key an operator sets, and everything else is served.
 	Frames Framer
 
+	// Ready admits the frames' ready reports (`POST /artifacts/ready`) into
+	// the node's service objectives. REQUIRED: a report this node could not
+	// count would be an outage the one indicator that sees it never heard
+	// of.
+	Ready Beacon
+
 	// PaceClock is the clock a streamed body's pace is measured on; nil is
 	// the wall clock. See internal/api/paced.
 	PaceClock func() time.Time
@@ -113,6 +128,7 @@ type Service struct {
 	uploads func() (Pipeline, error)
 	objects Objects
 	frames  Framer
+	ready   Beacon
 	pace    func() time.Time
 }
 
@@ -132,13 +148,16 @@ func New(opts Options) (*Service, error) {
 	case opts.Objects == nil:
 		return nil, errors.New("artifactsapi: no object store: a version's files are " +
 			"read back through it")
+	case opts.Ready == nil:
+		return nil, errors.New("artifactsapi: no ready beacon: a frame's ready report is " +
+			"counted into the node's service objectives through it")
 	}
 	pace := opts.PaceClock
 	if pace == nil {
 		pace = time.Now
 	}
 	return &Service{gate: opts.Gate, reads: opts.Reads, writes: opts.Writes, uploads: opts.Uploads,
-		objects: opts.Objects, frames: opts.Frames, pace: pace}, nil
+		objects: opts.Objects, frames: opts.Frames, ready: opts.Ready, pace: pace}, nil
 }
 
 // Gate is the surface's admission, which the read questions take too.
@@ -173,6 +192,9 @@ func (s *Service) Routes(mux authz.Mux) error {
 	purge := authz.Policy{Action: authz.ActionArtifactPurge, Object: func(*http.Request) authz.Object {
 		return authz.Object{Kind: authz.KindArtifact}
 	}}
+	ready := authz.Policy{Action: authz.ActionArtifactReady, Object: func(*http.Request) authz.Object {
+		return authz.Object{Kind: authz.KindArtifact}
+	}}
 	var failures []error
 	for _, route := range []struct {
 		pattern string
@@ -200,6 +222,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 		{"POST /artifacts/{id}/tickets", pre, s.ticket},
 		{patternFiles, pre, s.file},
 		{"GET /artifacts/{id}/versions/{n}/source", pre, s.source},
+		{"POST /artifacts/ready", ready, s.reportReady},
 	} {
 		if err := router.Handle(route.pattern, route.policy, route.handler); err != nil {
 			failures = append(failures, err)

@@ -261,6 +261,7 @@ func (c *core) openArtifactData(e *Engine, sl *stateLog) error {
 	if e.metrics != nil {
 		deps.Metrics = e.metrics
 	}
+	deps.Objectives = e.objectives
 	writer, err := artifactdata.NewWriter(deps)
 	if err != nil {
 		return fmt.Errorf("engine: artifact datastore writer: %w", err)

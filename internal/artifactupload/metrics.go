@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactupload/edits"
 	"github.com/crewlet/crewlet/internal/artifactupload/lint"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -120,6 +121,42 @@ func (s *Service) observePublish(start time.Time, err error) {
 	if outcome == "refused" {
 		s.countRefusal(err)
 	}
+}
+
+// judgePublish counts one create or publish, from its request to its answer,
+// as a [objectives.PublishSuccess] event: answered when it published or was
+// refused for the client's own reason (a definite refusal: a moved head, a
+// quota, a policy, a bad request), and not when nobody could establish its
+// outcome.
+func (s *Service) judgePublish(start time.Time, err error) {
+	if s.judged != nil {
+		s.judged.Record(objectives.PublishSuccess, s.now().Sub(start), err == nil || refused(err))
+	}
+}
+
+// judgeApplied counts one bytes-free publish ([bytesFree]), from the domain's
+// decision to its record applied, as a [objectives.PublishApplied] event. A
+// refusal is no latency event: it was answered, and never applied.
+func (s *Service) judgeApplied(decided time.Time, err error) {
+	if s.judged != nil && !refused(err) {
+		s.judged.Record(objectives.PublishApplied, s.now().Sub(decided), err == nil)
+	}
+}
+
+// bytesFree reports a publish that moves no new bytes into the store: every
+// file it names is carried, restored or removed, or an edit of the base. Its
+// latency is the log's and the applier's alone, never its content's, which is
+// what the publish latency objective is held to.
+func bytesFree(req PublishRequest) bool {
+	if req.Upload != "" {
+		return false
+	}
+	for _, f := range req.Files {
+		if f.Upload || f.Inline != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // countRefusal records one refusal by its reason.

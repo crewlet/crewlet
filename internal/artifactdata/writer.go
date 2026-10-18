@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
@@ -77,6 +78,12 @@ type Metrics interface {
 	Set(name string, v float64, attrs metrics.Attrs)
 }
 
+// Objectives is where the writer's service objective events go: the node's
+// objective meter ([objectives.Meter]), which judges each against its bound.
+type Objectives interface {
+	Record(n objectives.Name, elapsed time.Duration, answered bool)
+}
+
 // WriterDeps is what a writer is built from.
 type WriterDeps struct {
 	// Publisher is the domain's write authority, and DB the replicated
@@ -96,6 +103,11 @@ type WriterDeps struct {
 	// Metrics records each write's outcome and the company's footprint;
 	// nil records nothing.
 	Metrics Metrics
+
+	// Objectives counts every write and undo into the datastore objectives
+	// ([objectives.DataRoundTrip], [objectives.DataResolved]); nil counts
+	// none.
+	Objectives Objectives
 }
 
 // Writer is the datastore write path.
@@ -105,6 +117,7 @@ type Writer struct {
 	seatExists func(ctx context.Context, handle string) (bool, error)
 	now        func() time.Time
 	metrics    Metrics
+	judged     Objectives
 	limits     *limiter
 }
 
@@ -122,7 +135,7 @@ func NewWriter(deps WriterDeps) (*Writer, error) {
 			"names a seat of the running organisation")
 	}
 	w := &Writer{publisher: deps.Publisher, db: deps.DB, seatExists: deps.SeatExists,
-		now: deps.Now, metrics: deps.Metrics}
+		now: deps.Now, metrics: deps.Metrics, judged: deps.Objectives}
 	if w.now == nil {
 		w.now = func() time.Time { return time.Now().UTC() }
 	}
@@ -443,8 +456,15 @@ func (w *Writer) current(ctx context.Context, c Call, id artifacts.ID, refs []do
 	return out, err
 }
 
-// record reports one write's outcome and how long it took.
+// record reports one write's outcome and how long it took: into the
+// instruments, and as one event of each datastore objective.
 func (w *Writer) record(started time.Time, res WriteResult, err error) {
+	elapsed := time.Since(started)
+	if w.judged != nil {
+		answered := decided(res, err)
+		w.judged.Record(objectives.DataRoundTrip, elapsed, answered)
+		w.judged.Record(objectives.DataResolved, elapsed, answered)
+	}
 	if w.metrics == nil {
 		return
 	}
@@ -460,8 +480,24 @@ func (w *Writer) record(started time.Time, res WriteResult, err error) {
 		outcome = string(res.Result.Outcome)
 	}
 	attrs := metrics.Attrs{"verdict": outcome}
-	w.metrics.Observe(metrics.ArtifactsDataWriteDuration, time.Since(started), attrs)
+	w.metrics.Observe(metrics.ArtifactsDataWriteDuration, elapsed, attrs)
 	w.metrics.Add(metrics.ArtifactsDataWrites, 1, attrs)
+}
+
+// decided reports whether a write or an undo answered its caller with a
+// verdict: the applier's, read back from this node's rows, or a refusal before
+// anything was appended (input the domain refuses, a caller's own standing, a
+// store or a write that does not exist, a purged store, a write the history
+// cannot undo, this node's write budget). A write pending on this node, or one
+// whose outcome nobody could establish, delivered no verdict, which is the
+// failure the datastore objectives count.
+func decided(res WriteResult, err error) bool {
+	if err == nil {
+		return res.Verdict != ""
+	}
+	var limited *RateLimited
+	return errors.As(err, &limited) || errors.Is(err, ErrNotFound) || errors.Is(err, ErrInvalid) ||
+		errors.Is(err, ErrForbidden) || errors.Is(err, ErrGone) || errors.Is(err, ErrNotUndoable)
 }
 
 // Undo publishes the inverse of one earlier write, each document conditioned on

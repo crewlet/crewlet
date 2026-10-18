@@ -142,7 +142,8 @@ func trashed(w http.ResponseWriter) {
 
 // prefixes are the package names a refusal's text begins with, which the
 // person reading the detail has no use for.
-var prefixes = []string{"artifactsdomain: ", "artifactupload: ", "artifactsapi: ", "artifactserve: "}
+var prefixes = []string{"artifactsdomain: ", "artifactupload: ", "artifactsapi: ", "artifactserve: ",
+	"objectives: "}
 
 // say is err's text as a detail a person reads.
 func say(err error) string {

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/objectives"
 )
 
 // The thresholds an alarm fires at.
@@ -286,6 +287,7 @@ const (
 	KindObjectsMissing      Kind = "objects_missing"
 
 	KindObjectsBucketNearCeiling Kind = "objects_bucket_near_ceiling"
+	KindObjectiveBurn            Kind = "objective_burn"
 )
 
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
@@ -523,6 +525,17 @@ type Reading struct {
 	// node, and on a fleet whose files are in an S3 bucket, which reserves
 	// nothing. A zero MaxBytes is "not measured", never "full".
 	ObjectsBucketBytes, ObjectsBucketMaxBytes int64
+
+	// ObjectiveBurns is every service objective this node is spending the
+	// error budget of too fast, each over the fastest pair of windows that
+	// fires ([objectives.Meter.Burning]): empty on a node whose objectives
+	// are inside their budgets, and on one that measured none.
+	//
+	// JUDGED BY internal/objectives, which owns the targets, the window
+	// pairs and their factors, and carried here already judged: the alarm
+	// borrows the decision whole (ADR-0015) rather than restating a factor
+	// beside the one the objectives declare.
+	ObjectiveBurns []objectives.Burn
 }
 
 // Alarm is one condition currently true on this node.
@@ -1095,6 +1108,34 @@ var table = []rule{
 			"(`nats stream update OBJ_crewlet_files --max-bytes=<bytes>`, within what the " +
 			"broker can grant), or move the files to an S3-compatible bucket with " +
 			"`crewlet objects migrate --to s3` (see docs/concepts/object-store.md).",
+	},
+	{
+		// ONE ALARM FOR EVERY BURNING OBJECTIVE, the detail naming each:
+		// the kind is the alarm's identity on the gauge and the screen, and
+		// a burn is one cause (this node failing what it promised) whichever
+		// objective shows it first.
+		kind: KindObjectiveBurn,
+		fires: func(r Reading) (string, bool) {
+			if len(r.ObjectiveBurns) == 0 {
+				return "", false
+			}
+			parts := make([]string, 0, len(r.ObjectiveBurns))
+			for _, b := range r.ObjectiveBurns {
+				parts = append(parts, fmt.Sprintf("%s is spending its error budget %.1f "+
+					"times as fast as its objective allows over the last %s and %.1f "+
+					"times over the last %s (the %s pair fires at %g)", b.Objective,
+					b.LongRate, spoken(b.Window.Long), b.ShortRate, spoken(b.Window.Short),
+					b.Window.Pace, b.Window.Factor))
+			}
+			return strings.Join(parts, "; "), true
+		},
+		remedy: "Find the failing events where the objective is measured " +
+			"(docs/reference/service-objectives.md names each one's source and its own " +
+			"instrument), starting from `crewlet.objectives.events` by `objective` and " +
+			"`outcome`. A fast burn spends a fiftieth of the month's error budget every " +
+			"hour and needs attention now; a slow burn spends a twentieth every six hours. " +
+			"The alarm clears within minutes of the fault ending, once the short window " +
+			"is healthy again.",
 	},
 }
 

@@ -6162,6 +6162,19 @@ The API origin **never renders an artifact**:
   **attachment**, any text and anything a browser could run (HTML, SVG, a
   script) as `text/plain`, under the API's own `default-src 'none'` policy and
   `Cache-Control: private, no-store`, with its SHA-256 as a strong `ETag`.
+- `POST /artifacts/ready` (`artifacts.ready`, everybody's) is the dashboard's
+  **ready report** for the [artifact-ready objective](service-objectives.md):
+  `{"frame_url", "outcome": "ready" | "failed", "elapsed_ms"}`, the frame
+  exactly as the ticket route answered it, how it ended (the page's bridge
+  hello, or a frame that failed or never said hello), and the milliseconds
+  since the frame was handed over, by the browser's clock. Answered `204` once
+  counted. The frame must be a live one this deployment minted for the
+  caller's own sign-in or token (`422 invalid` otherwise, the same answer as a
+  URL that is no frame); each frame reports once (`409 conflict`), never a
+  time longer than the frame has existed (`422 invalid`), and one credential
+  sends at most a sustained report a second after a burst of thirty
+  (`429 throttled`, with `Retry-After`). A deployment with no
+  `api.artifacts.external_url` is `409 artifact_origin_unset`.
 
 ### Refusals
 
@@ -6179,6 +6192,7 @@ The API origin **never renders an artifact**:
 | `409` | `upload_consumed` / `upload_expired` | The upload is used, or an uploaded object is too old to name; upload again |
 | `409` | `label_taken` / `source_taken` | Another version holds the label, or another of the owner's artifacts the source address |
 | `409` | `artifact_not_framed` / `artifact_origin_unset` | See [Viewing a version](#viewing-a-version) |
+| `409` | `conflict` | A frame whose ready time was already reported; see [Viewing a version](#viewing-a-version) |
 | `410` | `upload_expired` | The upload's window closed before it was finished |
 | `412` | `version_moved` | The head moved past the base; see [Publishing a version](#publishing-a-version) |
 | `413` | `quota_exceeded` | The company's quota; `key` names the Tier A setting an operator raises |
@@ -6187,6 +6201,7 @@ The API origin **never renders an artifact**:
 | `422` | `edit_refused` / `policy_refused` | An edit that matched zero or several times (`index`, `matches`), or a page the publish policy refuses (`findings`) |
 | `422` | `capability_unknown` / `contract_unknown` / `credential_refused` / `invalid` | A capability or runtime this build does not serve, a credential in what an agent published, or a value the domain refuses |
 | `429` | `uploads_outstanding` | The pending-upload budget is spent; `Retry-After` is when the earliest hold lapses |
+| `429` | `throttled` | Ready reports past one credential's rate; `Retry-After` is when the next is admitted |
 | `503` | `unavailable` | This node could not decide or reach the estate; the `Retry-After` says when to come back |
 
 ## Agent Memory
