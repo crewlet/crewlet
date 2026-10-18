@@ -184,11 +184,27 @@ const (
 	// the default store footprint, so history never crowds out the data.
 	MaxHistoryBytesPerStore = 8 * miB
 
-	// Cost-weighted write limits, per node: they protect this node from one
+	// Cost-weighted write limits, per node, in cost units of sixteen applied
+	// rows (internal/artifactdata's Cost): they protect this node from one
 	// client and are not a fleet quota.
+	//
+	// A PRINCIPAL ON A STORE takes 20 units a second, about ten cell edits on
+	// a twelve-column row (two units each), with bursts of 100: more than a
+	// person clicks, and an agent's pasted block of a hundred rows (about two
+	// hundred units, weighed at a whole bucket) once every five seconds.
 	DataWritesPerPrincipalPerSecond = 20
 	DataWritesBurst                 = 100
-	DataWritesPerStorePerSecond     = 200
+
+	// A STORE takes 40 units a second (about 640 applied rows) with bursts
+	// of 100. Spike DS-1 measured the three-member fleet's ceiling at about
+	// 1,160 applied rows a second on a development machine, and the store
+	// guard sits near half of it, so one store's writers cannot saturate the
+	// one replicated writer every other domain shares; the thirty-person
+	// review at its peak (15 cell edits a second, 30 units, in bursts of 50
+	// edits, 100 units) fits under both bounds. The reference run
+	// (docs/reference/artifact-capacity.md) confirms or moves both.
+	DataWritesPerStorePerSecond = 40
+	DataWritesStoreBurst        = 100
 )
 
 // Serving bounds.

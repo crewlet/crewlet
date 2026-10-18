@@ -460,7 +460,70 @@ func TestTheWriteBudgetIsWeighedAndSaysWhenToComeBack(t *testing.T) {
 		artifacts.DataWrite{Ops: []artifacts.DataOp{set("wide", "s", map[string]string{"a": `1`})}}); err != nil {
 		t.Fatalf("another principal's write: %v", err)
 	}
-	if got := artifactdata.Cost([]artifacts.DataOp{set("wide", "w", wide)}); got != 3 {
-		t.Fatalf("a 40-field set costs %d, want 3 units of 16 rows", got)
+	none := func(string, string) int { return 0 }
+	if got := artifactdata.Cost([]artifacts.DataOp{set("wide", "w", wide)}, none); got != 3 {
+		t.Fatalf("a 40-field set of a new document costs %d, want 3 units of 16 rows", got)
+	}
+}
+
+// A WRITE IS WEIGHED BY THE ROWS ITS APPLY WRITES (D28), which are the
+// document's: the apply rewrites a changed document's whole field index, so
+// one cell of a sixty-field row and the delete of that row each cost what the
+// row's index costs, never one unit for "one field". The writer reads each
+// named document's entries from this node's copy.
+//
+// Mutation: weigh a merge by its own fields again (or make the writer's held
+// count answer zero), and the one-cell merges below land a hundred times
+// before the budget refuses one.
+func TestAWriteIsWeighedByTheRowsItsApplyWrites(t *testing.T) {
+	t.Parallel()
+	held := func(n int) func(string, string) int { return func(string, string) int { return n } }
+	cell := merge("wide", "w", map[string]string{"fa": `2`})
+	for _, c := range []struct {
+		what string
+		op   artifacts.DataOp
+		held int
+		want int
+	}{
+		{"one cell of a new document", cell, 0, 1},
+		{"one cell of a sixty-entry row", cell, 60, 8},
+		{"the delete of a sixty-entry row", artifacts.DataOp{Op: artifacts.DataDelete,
+			Collection: "wide", Doc: "w"}, 60, 4},
+		{"an increment on a sixty-entry row", field(artifacts.DataIncrement, "wide", "w", "fa", `1`), 60, 8},
+		{"a list of five chips", set("wide", "w", map[string]string{"tags": `["a","b","c","d","e"]`}), 0, 1},
+	} {
+		if got := artifactdata.Cost([]artifacts.DataOp{c.op}, held(c.held)); got != c.want {
+			t.Errorf("%s costs %d units, want %d", c.what, got, c.want)
+		}
+	}
+
+	n := newHarness(t)
+	n.clock.freeze()
+	jane := person("jane", artifacts.RoleEditor)
+	wide := map[string]string{}
+	for i := range 60 {
+		wide[fmt.Sprintf("f%02d", i)] = `1`
+	}
+	n.applied(jane, set("wide", "w", wide))
+	var limited *artifactdata.RateLimited
+	landed := 0
+	for range 100 {
+		_, err := n.writer.Write(t.Context(), jane, sheet, artifacts.DataWrite{Ops: []artifacts.DataOp{
+			merge("wide", "w", map[string]string{"f00": `2`})}})
+		if errors.As(err, &limited) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		landed++
+	}
+	if limited == nil || landed > 12 {
+		t.Fatalf("%d one-cell merges of a sixty-entry row landed at one instant before a "+
+			"refusal (%v): the writer weighed them by the op, not the row", landed, limited)
+	}
+	if limited.Cost != 8 {
+		t.Fatalf("the refused merge weighed %d, want 8 units: the row and its sixty entries "+
+			"deleted and written again", limited.Cost)
 	}
 }

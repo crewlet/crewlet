@@ -384,9 +384,12 @@ changed since is a conflict naming who changed them.
 
 **Bounds.** At most 64 collections per store, 128 columns per collection,
 50 000 documents per store, 64 KiB per document and 100 ops or 1 MiB per write.
-Writes are rate-limited per node by their cost (ops plus the field rows they
-touch): 20 a second sustained per principal per store with bursts of 100, and
-200 a second per store, answered `429` with `Retry-After`, never a lockout.
+Writes are rate-limited per node by their cost: the rows the apply writes,
+which for a changed document are its whole field index deleted and written
+again, in units of sixteen rows (a cell edit on a twelve-column row is two). A
+principal takes 20 units a second on a store with bursts of 100, and a store 40
+a second with bursts of 100, answered `429` with `Retry-After`, never a
+lockout.
 The datastore quotas count the bytes a store's rows really take on every data
 node and in every snapshot: each document row with its index and field-index
 entries, and the hot history, measured within a few percent of the file. A

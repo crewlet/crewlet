@@ -2227,7 +2227,7 @@ has applied the record:
 | `403` | `forbidden` | The caller's role, or the column's rule, does not let them write it |
 | `413` | `data_quota` | The write would take the store or the company past its footprint quota. A write that shrinks the store is never refused for it |
 | `410` | `data_gone` | The store was purged |
-| `429` | `write_budget` | This node's write budget for the caller on this store, or for the store, is spent. Weighed by the rows a batch writes rather than by requests (20 a second, a burst of 100, per caller and store; 200 a second per store), with `Retry-After`, `scope` and `retry_after_ms` saying when it holds the cost again. Per node, never a lockout |
+| `429` | `write_budget` | This node's write budget for the caller on this store, or for the store, is spent. Weighed by the rows a batch's apply writes, which are each named document's whole field index rather than the fields the batch names, in units of sixteen rows (20 units a second with a burst of 100 per caller and store; 40 a second with a burst of 100 per store), with `Retry-After`, `scope` and `retry_after_ms` saying when it holds the cost again. Per node, never a lockout |
 
 Every refused write is still on the log and in the store's history with its
 reason, applied identically on every data node, so `GET .../history` answers

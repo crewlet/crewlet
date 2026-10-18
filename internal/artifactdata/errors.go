@@ -53,8 +53,9 @@ type RateLimited struct {
 	// store) or `store` (everybody on this store).
 	Scope string
 
-	// Cost is what the write weighed: its ops plus the field-index rows
-	// they are estimated to touch.
+	// Cost is what the write weighed: the rows its apply writes (each named
+	// document's row, touch and field index, deleted and written again),
+	// in units of sixteen ([Cost]).
 	Cost int
 
 	// RetryAfter is when the bucket holds the cost again.

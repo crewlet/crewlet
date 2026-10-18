@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -279,7 +281,11 @@ func (w *Writer) write(ctx context.Context, c Call, id artifacts.ID, in artifact
 		return WriteResult{}, fmt.Errorf("%w: a client id is at most %d bytes", ErrInvalid,
 			artifacts.MaxDocIDBytes)
 	}
-	if limited := w.limits.take(id.String(), c.Authority.Actor.Name, Cost(in.Ops)); limited != nil {
+	cost, err := w.cost(ctx, id, in.Ops)
+	if err != nil {
+		return WriteResult{}, err
+	}
+	if limited := w.limits.take(id.String(), c.Authority.Actor.Name, cost); limited != nil {
 		return WriteResult{}, limited
 	}
 	opID, err := w.operation(c, string(OpWrite), id.String(), in)
@@ -298,6 +304,70 @@ func (w *Writer) write(ctx context.Context, c Call, id artifacts.ID, in artifact
 		return WriteResult{Result: res}, err
 	}
 	return w.verdict(ctx, c, id, opID, res)
+}
+
+// cost is what a batch weighs against this node's write budgets ([Cost]),
+// from the field-index entries each document it names holds in this node's
+// copy: one read, one indexed count per collection the batch names.
+func (w *Writer) cost(ctx context.Context, id artifacts.ID, ops []artifacts.DataOp) (int, error) {
+	held := map[docRef]int{}
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
+		s, present, err := readStore(ctx, tx, id.String())
+		if err != nil || !present {
+			return err
+		}
+		byColl := map[string][]string{}
+		for _, op := range ops {
+			if !slices.Contains(byColl[op.Collection], op.Doc) {
+				byColl[op.Collection] = append(byColl[op.Collection], op.Doc)
+			}
+		}
+		for _, name := range slices.Sorted(maps.Keys(byColl)) {
+			var no int64
+			err := tx.QueryRowContext(ctx, `
+				SELECT collection_no FROM artifact_data_collections WHERE store_no = ? AND name = ?`,
+				s.no, name).Scan(&no)
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf("artifactdata: read collection %s of store %s: %w", name, id, err)
+			}
+			docs := byColl[name]
+			args := []any{s.no, no}
+			for _, d := range docs {
+				args = append(args, d)
+			}
+			rows, err := tx.QueryContext(ctx, `
+				SELECT doc_id, COUNT(*) FROM artifact_data_fields
+				WHERE store_no = ? AND collection_no = ? AND doc_id IN (?`+
+				strings.Repeat(`, ?`, len(docs)-1)+`) GROUP BY doc_id`, args...)
+			if err != nil {
+				return fmt.Errorf("artifactdata: count the index entries of %s: %w", name, err)
+			}
+			for rows.Next() {
+				var (
+					doc string
+					n   int
+				)
+				if err := rows.Scan(&doc, &n); err != nil {
+					_ = rows.Close()
+					return fmt.Errorf("artifactdata: count the index entries of %s: %w", name, err)
+				}
+				held[docRef{Collection: name, Doc: doc}] = n
+			}
+			if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+				return fmt.Errorf("artifactdata: count the index entries of %s: %w", name, err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return Cost(ops, func(collection, doc string) int {
+		return held[docRef{Collection: collection, Doc: doc}]
+	}), nil
 }
 
 // early is what a write is refused on before it is appended, read in the
@@ -528,7 +598,11 @@ func (w *Writer) undo(ctx context.Context, c Call, id artifacts.ID, seq int64) (
 	if err := checkBatch(ops); err != nil {
 		return WriteResult{}, oversizeUndo(seq, err)
 	}
-	if limited := w.limits.take(id.String(), c.Authority.Actor.Name, Cost(ops)); limited != nil {
+	cost, err := w.cost(ctx, id, ops)
+	if err != nil {
+		return WriteResult{}, err
+	}
+	if limited := w.limits.take(id.String(), c.Authority.Actor.Name, cost); limited != nil {
 		return WriteResult{}, limited
 	}
 	opID, err := w.operation(c, string(OpUndo), id.String(), seq)

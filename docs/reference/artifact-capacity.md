@@ -182,14 +182,14 @@ conflicted; guarded writes on ten rows written by thirty people conflicted on
 and the reason a sheet's cell edit is blind and a long text is guarded.
 
 **Target**: a thirty-person review at its peak applied with headroom on the
-smallest supported fleet, and the per-node rate limits (20 writes a second per
-principal per store, bursts of 100, 200 a second per store) set below the
-measured ceiling; blind writes never conflict, guarded writes conflict only
-when the document moved, and the datastore op objective holds under
-contention. **On this machine**: headroom holds, blind writes hold, the
-objective does not, and the per-store limit (200 cost units a second, a
-one-cell edit being one unit) is above the measured ceiling for small records
-(140 to 160 a second on one node, 55 on the fleet). See the findings.
+smallest supported fleet, and the per-node rate limits set below the measured
+ceiling; blind writes never conflict, guarded writes conflict only when the
+document moved, and the datastore op objective holds under contention. **On
+this machine**: headroom holds, blind writes hold, and the objective does not
+(finding 5). The rate limits were above the ceiling when this record was
+taken (200 units a second per store, a one-cell edit weighed as one unit) and
+are now weighed by the rows an apply writes and set near half the fleet's
+measured 1,160 rows a second (finding 4).
 
 ### DS-2: datastore footprint
 
@@ -478,19 +478,24 @@ it.
    and the snapshot is 1.006 times the metered footprint. The default
    `data_store_bytes` of 32 MiB now holds about ten thousand review rows with
    a week of history, rather than about twenty thousand.
-3. **A changed document rewrites its whole field index (`internal/artifactdata`).**
-   A one-cell edit of a twelve-column row writes 21 rows, against the review's
-   15 with changed paths re-exploded (review 02, DT-03 and DT-05), and the
-   writer's cost weighs it as one unit (`rowsPerUnit` 16), from the op's
-   fields rather than the document's. Re-exploding only changed paths, or
-   weighing a write by the document's indexed fields, brings the cost model
-   and the rows together.
-4. **The per-store write limit is above the measured ceiling on this machine
-   (`internal/artifacts`, `DataWritesPerStorePerSecond` 200).** One node took
-   140 to 160 one-cell records a second and the three-member fleet 55, so the
-   guard does not protect the node here. The constant stays until the
-   reference run; if that run's ceiling is under twice the guard, the guard
-   comes down.
+3. **The write cost weighed the op, not the rows (fixed, `internal/artifactdata`).**
+   A changed document rewrites its whole field index, so a one-cell edit of a
+   twelve-column row writes 21 rows, and the writer weighed it as one unit
+   from the op's fields. The writer now reads how many index entries each
+   named document holds and weighs each op by the rows its apply writes (the
+   row, its index deleted and written again, its touch, and the batch's
+   history row), so a cell edit on that row is two units and a delete of a
+   sixty-field row four (`TestAWriteIsWeighedByTheRowsItsApplyWrites`).
+   Re-exploding only changed paths (review 02, DT-03 and DT-05) would cut the
+   rows themselves, and is a change to the applier's index maintenance that
+   this release does not make.
+4. **The per-store write limit was above the measured ceiling (fixed,
+   `internal/artifacts`).** One node took 140 to 160 one-cell records a second
+   and the three-member fleet 55 (about 1,160 applied rows a second), under a
+   guard of 200 units a second that weighed each as one. The guard is now 40
+   units a second (about 640 rows) with bursts of 100, near half the fleet's
+   ceiling and above the review's peak of 30 units a second in bursts of 100;
+   the reference run confirms or moves it.
 5. **The datastore op objective fails on a development machine
    (`internal/objectives`, `DataRoundTripWithin` 250 ms).** The review's peak
    on the three-member fleet answered 18 to 20 percent of writes within
