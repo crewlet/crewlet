@@ -875,8 +875,12 @@ without it the one tab whose job is "what did my assistant delete" would hide
 every deletion of anything already done. It is ordered by **when work was
 removed**, newest first, and `sort=removed` asks for the other end of it — a
 removed task's rank is its position on a board it has left, so ordering the
-trash by rank orders it by a stale number. What a removal, a deletion and a
-purge each mean is [below](#removing-deleting-and-purging).
+trash by rank orders it by a stale number. Every read of it — the page, the
+count beside it, its totals, a board drawn over it — goes through an index that
+holds only removed work, one for the whole workspace and one inside each
+project, so opening the trash costs what is in it rather than what the company
+holds, and a column you sort it by sorts the trash alone. What a removal, a
+deletion and a purge each mean is [below](#removing-deleting-and-purging).
 
 **A view is a set of defaults, never a lock.** Opening one loads its
 parameters and every key you then set overrides them, so picking a different

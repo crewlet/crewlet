@@ -320,8 +320,9 @@ type Query struct {
 	// and `false` is the same exclusion said out loud.
 	//
 	// Without it there is no way to list what a removal hid, so nothing
-	// could reach [OpRestore] — `tracker_tasks_removed_idx` names
-	// `work_trash` as its reader and the reader did not exist.
+	// could reach [OpRestore] — `tracker_tasks_removed_idx` was declared
+	// for a `work_trash` reader that did not exist. A listing of the trash
+	// is read through the trash's own indexes ([taskSource]).
 	Removed *bool
 
 	// Dates are keyed by the column they filter, so a compiler walks them
