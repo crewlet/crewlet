@@ -24,7 +24,10 @@ import (
 // to name it, and the file may be sent again. A put the store failed leaves
 // nothing behind, and the claim is given back. A file already stored is
 // refused ([ErrUploadConsumed]), so no second put of its key ever runs, and a
-// file the intent sends straight to the bucket is not taken here.
+// file the intent sends straight to the bucket is not taken here. A node that
+// dies mid-stream leaves its file claimed, since nothing can say how much of
+// the put landed: the upload's other files go on, that one is sent in a new
+// upload, and the old one's hold covers whatever the dead put stored.
 //
 // size is the length the caller was told the body has, or -1 where it was
 // not: a known size that is not the declared one is refused before a byte is
