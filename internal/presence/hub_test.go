@@ -487,6 +487,19 @@ func TestAPresenceFrameIsHeldToItsSessionAndBounds(t *testing.T) {
 		artifacts.Focus{Region: strings.Repeat("r", maxRegionBytes+1)}); err == nil {
 		t.Fatal("a focus region past its bound was taken")
 	}
+	// A FRAME SAYING WHAT THE ROOM ALREADY SHOWS fans nothing out.
+	a.seen.waitFor(t, "node-a", room1, "dana:viewing")
+	settle()
+	before := a.seen.pushCount()
+	for range 5 {
+		if err := a.hub.Update(room1, session, artifacts.PresenceViewing, artifacts.Focus{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settle()
+	if got := a.seen.pushCount(); got != before {
+		t.Fatalf("frames that changed nothing fanned the room out %d more times", got-before)
+	}
 	a.hub.Leave(room1, session)
 	a.hub.Leave(room1, session)
 	if err := a.hub.Update(room1, session, artifacts.PresenceViewing, artifacts.Focus{}); !errors.Is(err, ErrNotJoined) {

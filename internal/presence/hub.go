@@ -322,8 +322,15 @@ func (h *Hub) Update(id artifacts.ID, session string, activity artifacts.Presenc
 		return ErrNotJoined
 	}
 	now := h.now()
-	m.member.Activity, m.member.Focus, m.member.At = activity, focus, now
 	m.touched = now
+	if m.member.Activity == activity && m.member.Focus == focus {
+		// NOTHING MOVED: a frame saying what the room already shows
+		// changes no member's recency and fans nothing out.
+		h.mu.Unlock()
+		h.count("client")
+		return nil
+	}
+	m.member.Activity, m.member.Focus, m.member.At = activity, focus, now
 	r.changed(session)
 	h.scheduleLocked(r)
 	h.mu.Unlock()
