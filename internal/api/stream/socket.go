@@ -214,6 +214,14 @@ type request struct {
 	// holder's notices are kept under — and empty clears the
 	// subscription. See [watching] and [Hub.Watch].
 	Seat string `json:"seat"`
+
+	// ChannelID and Typing belong to [ChatFocusKind], which says which room
+	// this tab is looking at and whether its person is composing there.
+	// Fields on the shared request rather than a second decoder, because a
+	// frame is decoded before its kind is known; every other kind leaves
+	// both at their zero value and nothing reads them there.
+	ChannelID string `json:"channel_id"`
+	Typing    bool   `json:"typing"`
 }
 
 // THE PER-FRAME CREDENTIAL IS GONE, and it went with `allow_anonymous_read`.
@@ -247,7 +255,16 @@ type request struct {
 // REST route beside it served them. The guard resolves both shapes, the
 // middleware has already run it for this path, and the handler reads the
 // result from the context like every other surface does.
-func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query) http.Handler {
+//
+// # The company's own chat rides the same socket
+//
+// chat is the arm that pushes it ([ChatHub]), and a NIL ONE IS A NODE THAT
+// SERVES NO NATIVE CHAT: every method on it is a no-op, so the socket needs no
+// branch. A parameter rather than something the service builds, because the
+// hub is the process's — the engine is attached to it on every node, whether
+// or not that node serves this socket — and this handler is one of its users.
+func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query,
+	chat *ChatHub) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r, refusal := resolved(guard, w, r)
 		// THE RESOLVED REQUEST'S CONTEXT IS THIS HANDLER'S OWN, carrying
@@ -349,7 +366,7 @@ func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query) ht
 			return
 		}
 		//nolint:contextcheck // the resolved request's; see where it is resolved
-		serveSocket(r.Context(), conn, svc, query, cred)
+		serveSocket(r.Context(), conn, svc, query, chat, cred)
 	})
 }
 
@@ -389,7 +406,7 @@ func resolved(guard *auth.Guard, w http.ResponseWriter,
 
 // serveSocket runs one connection until it closes.
 func serveSocket(ctx context.Context, conn *websocket.Conn,
-	svc *Service, query Query, cred credential,
+	svc *Service, query Query, chat *ChatHub, cred credential,
 ) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -409,6 +426,15 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	// be served live for the rest of the interval. See [Service.Join].
 	svc.Join(client)
 	defer svc.Hub().Unregister(client)
+	// AND JOINED TO CHAT, as the seat this socket's principal acts as and
+	// holds the chat app through ([chatViewerOf]) — the SAME principal the
+	// audience above was built from, decided once: a principal that moves
+	// closes this socket (lifetime.go), so the seat is never resolved
+	// again. A principal that may not be shown chat is not joined at all.
+	// Left before the queue closes, so the socket is out of every room's
+	// presence first.
+	chat.join(client, chatViewerOf(who.current()))
+	defer chat.leave(client)
 	seats := &watching{hub: svc.Hub(), client: client, chart: svc.chart,
 		holders: svc.holders, now: svc.now}
 
@@ -439,7 +465,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	})
 	defer deciding.Wait()
 
-	code, reason := readLoop(ctx, conn, seats, client, query, who, svc.interval)
+	code, reason := readLoop(ctx, conn, seats, client, query, chat, who, svc.interval)
 
 	// Unregister closes the client's queue, which is what ends the writer.
 	svc.Hub().Unregister(client)
@@ -505,7 +531,7 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 // healthEvery is the shared tick's cadence, which is when a degraded posture
 // can next change — the hint a query refused on one carries.
 func readLoop(ctx context.Context, conn *websocket.Conn,
-	seats *watching, client *Client, query Query, who *asking,
+	seats *watching, client *Client, query Query, chat *ChatHub, who *asking,
 	healthEvery time.Duration,
 ) (websocket.StatusCode, string) {
 	// THIS SOCKET'S CONCURRENCY BOUND — see [MaxInFlightQueries] for why
@@ -539,6 +565,14 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 			if code, reason := seats.watch(who.context(ctx), req); code != 0 {
 				return code, reason
 			}
+		case ChatFocusKind:
+			// WHERE THIS TAB IS LOOKING, which is what bounds the
+			// fleet-wide presence probe to the rooms somebody actually
+			// has open. On the reader's own goroutine because it is a map
+			// write and nothing else: a goroutine per keystroke would be
+			// the cost this frame exists to avoid. A socket not joined to
+			// chat changes nothing.
+			chat.focus(client, req.ChannelID, req.Typing)
 		case "query":
 			// A DEGRADED NODE REFUSES rather than answers. Its copy of
 			// the company is wrong rather than behind, and an answer

@@ -70,7 +70,7 @@ func newSocketWith(t *testing.T, authOpts func(*config.APIAuth), query stream.Qu
 	guard := auth.New(&b)
 	svc := buildService(t, opts)
 
-	srv := httptest.NewServer(stream.Handler(guard, auth.NewCSRF(&b), svc, query))
+	srv := httptest.NewServer(stream.Handler(guard, auth.NewCSRF(&b), svc, query, nil))
 	t.Cleanup(srv.Close)
 	return &socketFixture{
 		server: srv, svc: svc,
@@ -972,7 +972,7 @@ func TestAPrincipalWhoseStageMayNotActIsRefusedTheSocket(t *testing.T) {
 	b.API.Auth.Admin = iam.AdminServe
 	b.API.ExternalURL = fixtureOrigin
 	handler := stream.Handler(auth.New(&b), auth.NewCSRF(&b),
-		buildService(t, stream.Options{}), nil)
+		buildService(t, stream.Options{}), nil, nil)
 
 	for _, stage := range []iam.Stage{iam.StageActive, iam.StageSuspended,
 		iam.StageRetired} {

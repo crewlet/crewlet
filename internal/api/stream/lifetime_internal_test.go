@@ -69,6 +69,9 @@ type socketCase struct {
 	ends      time.Time
 	decide    answer
 	query     Query
+
+	// chat is the chat hub the socket joins, nil for none.
+	chat *ChatHub
 }
 
 // served is one socket, through the same serveSocket the handler uses.
@@ -149,7 +152,7 @@ func dial(t *testing.T, svc *Service, c socketCase) *served {
 		if err != nil {
 			return
 		}
-		serveSocket(r.Context(), conn, svc, c.query, credential{
+		serveSocket(r.Context(), conn, svc, c.query, c.chat, credential{
 			who:    &asking{principal: c.principal},
 			opened: c.opened,
 			ends:   c.ends,
