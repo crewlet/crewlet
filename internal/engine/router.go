@@ -387,6 +387,10 @@ func (e *Engine) estateBackend(c *core, n *native) estate.Backend {
 	if c.artifactsReader != nil && c.artifactsWriter != nil {
 		b.Artifacts = estate.ArtifactsHalf{Reader: c.artifactsReader, Writer: c.artifactsWriter}
 	}
+	// AND ITS DATASTORE, run beside it on every data node.
+	if c.artifactDataReader != nil && c.artifactDataWriter != nil {
+		b.ArtifactData = estate.ArtifactDataHalf{Reader: c.artifactDataReader, Writer: c.artifactDataWriter}
+	}
 	if n == nil {
 		return b
 	}

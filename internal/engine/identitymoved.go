@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
@@ -72,12 +73,16 @@ func (e *Engine) identityMoved(moved iamdomain.Moved) {
 // AND THE ARTIFACTS ESTATE'S LISTENERS, for the same reason: every share,
 // trash and purge the donor applied arrived here without an apply, so an
 // authorization verdict or a room decided from the old rows is told that
-// everything moved ([artifactsdomain.MoveReset]).
+// everything moved ([artifactsdomain.MoveReset]), and the datastore's for the
+// same reason ([artifactdata.Moved.Reset]).
 func (s *stateLog) estateReplaced() {
 	if s.identityMoved != nil {
 		s.identityMoved(iamdomain.Moved{Seats: true, Everyone: true})
 	}
 	if s.artifactsMoved != nil {
 		s.artifactsMoved([]artifactsdomain.Moved{artifactsdomain.Reset()})
+	}
+	if s.artifactDataMoved != nil {
+		s.artifactDataMoved([]artifactdata.Moved{artifactdata.ResetMove()})
 	}
 }

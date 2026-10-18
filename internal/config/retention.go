@@ -101,7 +101,10 @@ const (
 
 	// ArtifactDataLogMaxBytesFloor and ArtifactDataLogMaxBytesCeiling bound
 	// the datastore's log: the corpus floor, and half the largest mutation
-	// log an operator may write ([DerivedArtifactDataLogDivisor]).
+	// log an operator may write, twice the artifacts log's bound, because a
+	// datastore write is a click rather than a publish and a company whose
+	// pages write heavily outgrows the derived quarter
+	// ([DerivedArtifactDataLogDivisor]).
 	ArtifactDataLogMaxBytesFloor   int64 = 1 << 30
 	ArtifactDataLogMaxBytesCeiling int64 = 512 << 30
 
@@ -216,10 +219,15 @@ const (
 	DerivedArtifactsLogDivisor = 4
 
 	// DerivedArtifactDataLogDivisor is how much smaller an unset
-	// ArtifactDataLogMaxBytes is than the mutation log's ceiling: TWO,
-	// because a datastore write is a click rather than a save, and a day of
-	// review meetings writes about as many records as a busy tracker week.
-	DerivedArtifactDataLogDivisor = 2
+	// ArtifactDataLogMaxBytes is than the mutation log's ceiling: FOUR, the
+	// knowledge base's and the artifacts log's ratio, and the largest share
+	// the state logs' one pool can give it on the volume most deployments
+	// have. Every unset ceiling is scaled down together when the asks exceed
+	// the pool, and at HALF the mutation log's on a 64 GiB volume the
+	// vector changelog would be created below the corpus a model change
+	// republishes. A company whose pages write heavily sets the field: the
+	// bound it accepts is twice the artifacts log's for that reason.
+	DerivedArtifactDataLogDivisor = 4
 
 	// DerivedLogMaxBytesFraction is the share of a volume's free space an
 	// unset TrackerLogMaxBytes takes, and DerivedLogMaxBytesFloor /
@@ -458,8 +466,8 @@ func (s Stream) ArtifactsMaxBytes(free int64) (int64, bool) {
 }
 
 // ArtifactDataMaxBytes is the datastore log's ceiling, and whether it was
-// derived: half the mutation log's, set or derived, held inside the bounds
-// Tier A accepts for the field.
+// derived: a quarter of the mutation log's, set or derived, held inside the
+// bounds Tier A accepts for the field.
 func (s Stream) ArtifactDataMaxBytes(free int64) (int64, bool) {
 	if s.ArtifactDataLogMaxBytes > 0 {
 		return s.ArtifactDataLogMaxBytes, false

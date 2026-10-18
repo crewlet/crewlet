@@ -706,13 +706,20 @@ func sizeAndProvision(t *testing.T, q *jetstream.Queue, stream config.Stream, fr
 // The broker's cap there is three quarters of the volume, 5.7 GiB. The tracker
 // and vector logs were scaled into half of the free space, 1.9 GiB each, and
 // the pages log then reserved its fixed 4 GiB on top: 7.8 GiB against 5.7.
-// Every log is sized inside one budget now, and all five fit — the identity
-// estate's and the usage log at their fixed defaults beside the three that
-// failed.
+// Every log is sized inside one budget now, and all of them fit, the identity
+// estate's and the usage log at their fixed defaults beside the ones scaled to
+// their floors.
+//
+// THE HOST IS THE SMALLEST THE LOGS' FLOORS FIT, which is the figure the
+// deployment guide states: seven logs hold 6.5 GiB at their smallest, so the
+// 7.6 GiB host that was measured no longer boots by its logs alone (it is
+// refused naming the log it could not reserve), and 8.7 GiB, whose broker
+// grants three quarters of it, is where the same single budget has to fit
+// them. A log added later moves this figure, and the guide's, with it.
 func TestTheStateLogsFitTheBrokerTheyBootOn(t *testing.T) {
 	t.Parallel()
-	// 7.6 GiB, in tenths so the arithmetic stays in integers.
-	free := 76 * gib / 10
+	// 8.7 GiB, in tenths so the arithmetic stays in integers.
+	free := 87 * gib / 10
 	brokerCap := free / 4 * 3
 	q := brokerWithHeadroom(t, brokerCap)
 	if err := sizeAndProvision(t, q, config.Stream{}, free); err != nil {
@@ -1020,11 +1027,13 @@ func TestAnUnmeasuredVolumeNamesTheCeilingsItDecides(t *testing.T) {
 	}{
 		{"nothing set", config.Stream{}, []string{"stream.tracker_log_max_bytes",
 			"stream.tracker_vectors_max_bytes", "stream.pages_log_max_bytes",
-			"stream.artifacts_log_max_bytes"}},
-		// THE KNOWLEDGE BASE'S LOG AND THE ARTIFACTS LOG FOLLOW THE MUTATION
-		// LOG'S CEILING, set or derived ([config.Stream.PagesMaxBytes],
-		// [config.Stream.ArtifactsMaxBytes]), so once the mutation log is set
-		// the volume decides them no more than it does the mutation log's own.
+			"stream.artifacts_log_max_bytes", "stream.artifact_data_log_max_bytes"}},
+		// THE KNOWLEDGE BASE'S LOG, THE ARTIFACTS LOG AND THE DATASTORE LOG
+		// FOLLOW THE MUTATION LOG'S CEILING, set or derived
+		// ([config.Stream.PagesMaxBytes], [config.Stream.ArtifactsMaxBytes],
+		// [config.Stream.ArtifactDataMaxBytes]), so once the mutation log is
+		// set the volume decides them no more than it does the mutation
+		// log's own.
 		{"the mutation log set", config.Stream{TrackerLogMaxBytes: 8 << 30},
 			[]string{"stream.tracker_vectors_max_bytes"}},
 		{"every volume-derived log set", config.Stream{TrackerLogMaxBytes: 8 << 30,

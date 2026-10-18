@@ -15,6 +15,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/config"
@@ -515,6 +516,12 @@ type applyHooks struct {
 	// the only thing that sees every record on every data node. It must not
 	// block. See [Engine.OnArtifactsMoved].
 	artifactsMoved func([]artifactsdomain.Moved)
+
+	// artifactDataMoved is what the DATASTORE APPLIER calls after a
+	// committed batch, with the documents it moved ([artifactdata.Moved]),
+	// for artifactsMoved's reason: the socket hub serves only this node's
+	// own sockets. It must not block. See [Engine.OnArtifactDataMoved].
+	artifactDataMoved func([]artifactdata.Moved)
 }
 
 // applyHooks is every post-commit hook this engine hands its appliers.
@@ -524,6 +531,8 @@ func (e *Engine) applyHooks() applyHooks {
 		identityMoved:  e.identityMoved,
 		inboxMoved:     e.inboxMoved,
 		artifactsMoved: e.artifactsMoved,
+
+		artifactDataMoved: e.artifactDataMoved,
 	}
 }
 

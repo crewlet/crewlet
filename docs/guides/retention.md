@@ -1003,7 +1003,7 @@ for the reserve and is not a node's eviction or readmission — a purge included
 — is refused before anything is sent, and passes none of the fences an
 eviction is excused.
 
-| | the three identity logs | vector changelog, usage log |
+| | the logs that claim identity | vector changelog, usage log |
 |---|---|---|
 | ordinary writes and barriers refused at | the ceiling less the reserve | the ceiling |
 | gate records refused at | the ceiling | — (they carry none) |
@@ -1026,6 +1026,7 @@ So the reserve is the larger of two terms:
 |---|---|---|---|---|
 | tracker, knowledge base | 8 MiB less 4 KiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
 | identity estate | 128 KiB | 64 MiB | 4 MiB (a sixteenth) | 60 MiB |
+| artifact datastore | 1 MiB plus 64 KiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
 
 While a rolling upgrade runs, a node on an older build keeps no reserve, so
 the reserve holds once every node counts its own.

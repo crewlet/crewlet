@@ -833,6 +833,30 @@ const (
 	CodeUnusableWebhookSecret Code = "unusable_webhook_secret"
 )
 
+// THE ARTIFACT DATASTORE'S OWN (`/artifacts/{id}/data`): the verdicts its
+// applier writes that no other surface's refusal names, and the write budget a
+// node keeps per principal and per store. A guarded write that lost is
+// `stale_version`, a rule that refused is `forbidden` and a value that failed
+// is `invalid`, the codes every write surface already answers with.
+const (
+	// CodeDataQuota is a datastore write the stamped plan quota refused:
+	// the store's or the company's footprint would pass its limit. 413,
+	// and the detail names the Tier A key an operator raises.
+	CodeDataQuota Code = "data_quota"
+	// CodeDataGone is a datastore whose artifact was purged, or is in the
+	// trash, so nothing is written to it. 410.
+	CodeDataGone Code = "data_gone"
+	// CodeNotUndoable is an undo of a write the history cannot undo. 409,
+	// and the detail says why.
+	CodeNotUndoable Code = "not_undoable"
+	// CodeMigrationTooLarge is a schema change that would rewrite more
+	// documents than one change may. 422.
+	CodeMigrationTooLarge Code = "migration_too_large"
+	// CodeWriteBudget is a datastore write this node's cost-weighted
+	// budget refused for now. 429 with a Retry-After; never a lockout.
+	CodeWriteBudget Code = "write_budget"
+)
+
 // codes is THE TABLE: every code this engine answers with, each with the one
 // sentence a person is shown for it.
 //
@@ -1111,6 +1135,17 @@ var codes = map[Code]string{
 		"is back.",
 	CodeReservedName: "That name is reserved for the engine. The detail " +
 		"names the command that can change it.",
+
+	CodeDataQuota: "This would take the data past its size limit, so nothing " +
+		"was written. Delete rows, or ask an operator to raise the limit the " +
+		"detail names.",
+	CodeDataGone: "This artifact's data is gone: the artifact was deleted or is " +
+		"in the trash, so nothing was written.",
+	CodeNotUndoable: "That change can't be undone. The detail says why.",
+	CodeMigrationTooLarge: "This schema change rewrites too many rows at once, so " +
+		"nothing changed. Change fewer columns at a time.",
+	CodeWriteBudget: "Too many changes to this data at once. Wait the moment " +
+		"Retry-After names, then send it again.",
 }
 
 // Codes is every code in the vocabulary, sorted.
@@ -1462,8 +1497,16 @@ func RetrySeconds(hint time.Duration) int {
 // admitted it — and zero here would read as "do not retry", which is never
 // what a curve means.
 func Throttled(w http.ResponseWriter, retryAfter time.Duration) {
+	ThrottledWith(w, CodeThrottled, retryAfter, nil)
+}
+
+// ThrottledWith is [Throttled] for a limit of a surface's own, under its own
+// code and carrying a detail: the artifact datastore's write budget, which is
+// no sign-in's failed attempts. THE SAME ONE WRITER of a 429 underneath, so
+// the Retry-After every client waits on is carried by every 429 there is.
+func ThrottledWith(w http.ResponseWriter, code Code, retryAfter time.Duration, detail Detail) {
 	w.Header().Set("Retry-After", strconv.Itoa(max(RetrySeconds(retryAfter), 1)))
-	Fail(w, http.StatusTooManyRequests, CodeThrottled)
+	FailWithFields(w, http.StatusTooManyRequests, code, detail)
 }
 
 // UnavailableWith is [Unavailable] carrying a detail: what could not be read,
