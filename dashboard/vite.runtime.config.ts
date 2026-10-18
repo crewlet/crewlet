@@ -22,7 +22,11 @@
 //
 // THE OUTPUT IS NOT EMPTIED WHOLE: a contract any published version pins is
 // served for as long as one does, so an older contract directory a later
-// build no longer writes stays committed. What this build writes it owns
+// build no longer writes stays committed. The same holds for the kit: a page
+// links it by an exact version and a published version never changes, so
+// every kit version the engine has shipped stays committed and served after
+// the dashboard moves to a newer one (`static/kit_test.go` keeps the ledger
+// of them). What this build writes it owns
 // outright: its own contract directory and its own kit version directory are
 // emptied first, so a file renamed between builds leaves nothing behind.
 //
