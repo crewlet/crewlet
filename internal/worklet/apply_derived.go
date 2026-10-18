@@ -14,7 +14,7 @@ import (
 // The derived columns: values the applier COMPUTES from the rows it already
 // holds rather than copies out of a record.
 //
-// Four today, and the rule all follow is [statelog.Deriver]'s: maintained
+// Five today, and the rule all follow is [statelog.Deriver]'s: maintained
 // INCREMENTALLY by the apply, and REDERIVED by [Applier.Rederive] whenever the
 // checkpoint's rule set differs from this build's — a cursor a reanchor created
 // (derivation 0), or rows adopted from a build whose rules differ — in this Go,
@@ -33,6 +33,9 @@ import (
 //   - A task's `updated_at`, the effective instant of the newest record that
 //     changed it — the `effective_at` of its newest history row — written by
 //     [Applier.applyTask] and recomputed by [restampUpdated].
+//   - A question's `answered_by`, the first answer the log carries after it,
+//     stamped by the answering remark's apply ([writeComment]) and walked
+//     again by [rederiveAnswers] — see apply_answers.go.
 
 // DerivationVersion is the rule set this build derives its columns at.
 //
@@ -95,8 +98,8 @@ func countReopen(ctx context.Context, tx *sql.Tx, subject Subject, fields string
 
 // Rederive implements [statelog.Deriver]: every derived column recomputed from
 // the rows this transaction holds — a task's `reopens`, a project's
-// `active_count`, each task history row's hand-off count and a task's
-// `updated_at`.
+// `active_count`, each task history row's hand-off count, a task's
+// `updated_at` and a question's `answered_by`.
 func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx, _ statelog.ApplyOptions) (int, error) {
 	reopens, err := rederiveReopens(ctx, tx)
 	if err != nil {
@@ -114,7 +117,11 @@ func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx, _ statelog.ApplyOpti
 	if err != nil {
 		return 0, err
 	}
-	return reopens + active + handOffs + updated, nil
+	answers, err := rederiveAnswers(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	return reopens + active + handOffs + updated + answers, nil
 }
 
 // restampStatement is [restampUpdated]'s read for one task, or for every task

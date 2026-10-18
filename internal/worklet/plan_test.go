@@ -1141,6 +1141,7 @@ func historyPasses() map[string]plannedRead {
 	every, args := restampStatement("")
 	return map[string]plannedRead{
 		"the hand-off re-derivation": {rederiveHandOffsStatement, []any{string(KindTask)}},
+		"the answer re-derivation":   {answersStatement, nil},
 		"the reopen re-derivation":   {reopensStatement, []any{string(KindTask)}},
 		"every task's last change":   {every, args},
 	}
