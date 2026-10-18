@@ -22,14 +22,17 @@
 // message's own — comes from ONE identity per call, chosen by one rule:
 //
 //   - IN A TURN, the turn: its work key (or its run, for a turn with no
-//     ledgerable trigger), the instant that unit of work began, a digest of
-//     the call's own arguments and how many different calls the run made
-//     first to the same tool, or to a tool that undoes it — its FAMILY,
-//     which the domain owning the pair declares (chatlet.CallFamily: joining a
-//     room and leaving it) ([opIDFor], [callOpKey], [Actor.OperationSince],
-//     turnctx.CallLog.OrdinalAmong). A re-run makes the same calls and
-//     derives the same ids; a different call, or the same one after a
-//     different one — a leave between two joins included — is a new
+//     ledgerable trigger), the instant that unit of work began, the tool, a
+//     digest of the call's own arguments and how many different calls the
+//     run made first to the same tool, or to a tool that undoes it — its
+//     FAMILY, which the domain owning the pair declares (chatlet.CallFamily:
+//     joining a room and leaving it) — derived ONCE, as the call's key
+//     ([callOpKey], [Actor.callKey], [Actor.OperationSince],
+//     turnctx.CallLog.OrdinalAmong), and every id the call's writes carry is
+//     derived from that key: by the knowledge base's and chat's stores, and by
+//     these tools for the tracker ([opIDFor], [commentID]). A re-run makes the
+//     same calls and derives the same ids; a different call, or the same one
+//     after a different one — a leave between two joins included — is a new
 //     operation.
 //   - OUTSIDE A TURN, the request's or the call's own operation. A transport
 //     that names its requests — the act transport and the HTTP write

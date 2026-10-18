@@ -18,13 +18,13 @@ import (
 // # Why a run needs it
 //
 // A write a turn makes derives its operation id from the unit of work, the
-// verb, the object and a digest of the call's own arguments, so a re-run —
-// which makes the same call again — collapses onto the first copy instead of
-// writing twice. That identity names WHAT a call asks for and not WHEN, so a
-// run that moved an item to `in_progress`, then to `done`, then back to
-// `in_progress` derived one id for the first and the third: the third was
-// answered as the first's retry, `applied` at the first's position, and the
-// item stayed `done` while the tool reported otherwise.
+// tool, the verb, the object and a digest of the call's own arguments, so a
+// re-run — which makes the same call again — collapses onto the first copy
+// instead of writing twice. That identity names WHAT a call asks for and not
+// WHEN, so a run that moved an item to `in_progress`, then to `done`, then
+// back to `in_progress` derived one id for the first and the third: the third
+// was answered as the first's retry, `applied` at the first's position, and
+// the item stayed `done` while the tool reported otherwise.
 //
 // So an id also carries [CallLog.Ordinal]: how many earlier calls to the same
 // tool in this run asked for something ELSE. The first and third calls above
