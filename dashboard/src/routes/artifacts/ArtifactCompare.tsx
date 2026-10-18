@@ -92,6 +92,7 @@ export function ArtifactCompare({
         room={room}
         presence={presence}
         bridgeStores={bridgeStores}
+        dataNote={false}
       />
     ) : (
       <MarkdownView detail={detail} version={n} />
