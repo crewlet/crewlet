@@ -1,0 +1,1 @@
+var e=[`purple`,`cyan`,`green`,`amber`,`rose`,`blue`],t={purple:`Purple`,cyan:`Cyan`,green:`Green`,amber:`Amber`,rose:`Rose`,blue:`Blue`},n=t=>typeof t==`string`&&e.includes(t);export{t as n,n as r,e as t};
