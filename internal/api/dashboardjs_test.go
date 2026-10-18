@@ -1041,8 +1041,12 @@ const (
 	// TestNoLazyStylesheetCarriesTheDesignSystem), so the editor's 1.8 KiB of
 	// rules ride the first paint, and the Markdown grammar the reader's
 	// renderer and the editor share became a chunk of its own. It moved to
-	// 310 KiB then, still under two seconds on that link.
-	initialBudget = 310 << 10
+	// 310 KiB then, still under two seconds on that link. The company's own
+	// chat adds about 4.5 KiB more: its pushes and rooms in the socket client,
+	// its routes and its rail are the frame's, because a reader is told of a
+	// mention on whatever screen they are on. It moved to 316 KiB then, about
+	// 1.7 seconds on that link.
+	initialBudget = 316 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch

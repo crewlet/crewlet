@@ -1001,9 +1001,9 @@ it; on this screen the company is the subject, and the product is in the mark
 and the tab.
 
 `g` then a letter jumps to a workspace (`g h`, `g i`, `g m`, `g w`, `g a`,
-`g l`, `g k`, `g f` for Artifacts, `g t`, `g s`, and `g u` for your Account). A chord rather than a
-modifier, because every single-modifier combination worth having is already
-the browser's. `g r` is the one `g` sequence that is not a workspace: it
+`g c`, `g l`, `g k`, `g f` for Artifacts, `g t`, `g s`, and `g u` for your
+Account). A chord rather than a modifier, because every single-modifier
+combination worth having is already the browser's. `g r` is the one `g` sequence that is not a workspace: it
 watches the running turn when exactly one seat is working, and opens Live ›
 Now running — every running turn — when several are, or none. Every key the
 dashboard answers is in [one table](#the-keys), and `?` shows it.
@@ -1099,6 +1099,10 @@ a screen, and every workspace and section the code declares is below.
 | `#/agents/schedules` · `#/agents/schedules/{scope_type}/{scope_id}/{name}` | **Schedules** — recurring work; one schedule | |
 | `#/agents/edit` | **Edit org**: the builder, opened from the chart's button *(saves as an admin, or as a unit's lead inside the units they lead)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) · `project=` (with `unit=` or `seat=`: Work's New project, which opens that node's editor on its Project field holding the key, then leaves the address) |
 | `#/agents/seats/{handle}` | **Seat** — an agent's or a person's profile; a person's says what holds the seat — its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Add person** — the gestures drawn for an admin. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
+| `#/chat` | **Chat** — the company's own rooms, with the rail of what you are in *(the whole of Chat needs Chat access)*. Every chat page is read as the seat your session holds: a credential acting as no seat — a deployment's own token, or a service account bound to nobody — reads nothing here, not even a public room | `dm=` (a seat's handle, from its page or peek: opens New direct message with that seat chosen, once, then leaves the address) |
+| `#/chat/mentions` | **Mentions** — every message that named you, across every room. The whole away story: the engine sends no email, no push and no SMS | |
+| `#/chat/search` | **Search chat** — ranked over every room you may READ, which is wider than your rail | `q=` · `in=` (narrowed to one room) |
+| `#/chat/{id}` | **Room** — the transcript, who is here, and the composer | `thread=` (which thread is open beside it, one level deep) |
 | `#/live` | **Live › Now running** — the running turns, the coding runs waiting on a person and the rest in a box, the activity strip and the recent phases | `window=15m\|1h\|6h` (the activity strip) · `seat=` (a handle) · `phase=` · `failed=true` (the same spelling Turns uses) |
 | `#/live/turns` · `#/live/turns/{id}` | **Turns** — the turns that ended over the window, counted by the engine, then every turn one row each; one turn *(needs Admin access)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `seat=` (a handle) · `failed=true\|false` · `sort=-started\|-tokens` (the engine's order) |
 | `#/live/runs` · `#/live/runs/{turn_id}` | **Coding runs** — live and durable; a run's own page draws the run alone, answered in place, and a collected run's page reads its turn | |
@@ -3196,9 +3200,12 @@ vacant seat, **Cancel invitation** on an invited one), which on a phone are
 the only place they are; Message opens the New task sheet with
 the seat as assignee and `ask` set — on the project filed under the seat's own
 unit, or the nearest unit above it that has one — so the question is filed as
-work the seat owes an answer on and the answer lands in the Inbox — there is no
-person-to-seat chat. **The peek of your own seat is your own seat's page in
-small**: Message is held, saying it is your own seat — held by the button
+work the seat owes an answer on and the answer lands in the Inbox. Where the
+company runs the engine's own chat and you hold Chat, **Direct message** sits
+beside it and opens a conversation with the seat instead
+(`#/chat?dm={handle}`), a remark that obliges nothing; it never replaces
+Message. **The peek of your own seat is your own seat's page in
+small**: Message and Direct message are held, saying it is your own seat — held by the button
 itself (`useMessageSeatAccess`), never by the screen drawing it, because the
 page held it while the peek drew it bare and offered a person who found
 themselves on the chart an enabled Message to themselves — and under the state
@@ -3279,7 +3286,10 @@ for a reader who cannot make it:
 
 - **Message** opens the New task sheet with the seat as assignee and `ask` set:
   the question is filed as work the seat owes an answer on, and the answer
-  lands in the asker's Inbox. There is no person-to-seat chat.
+  lands in the asker's Inbox. Where the company runs the engine's own chat and
+  the reader holds Chat, **Direct message** beside it opens chat's New direct
+  message with the seat chosen — a conversation rather than an ask, so neither
+  stands in for the other; it folds into "More" on a phone.
 - **Assign task** finds an existing task by search and hands it over against
   the version a read of it returned (`update_work_item{assignee, if_match}`),
   so a task somebody moved in between is refused rather than taken from
@@ -4019,6 +4029,7 @@ a tool arrives in it with the control that sends it. The controls
 | + (a sub-task) | A task's sub-tasks | `create_work_item{title, project, parent}` |
 | Create task (the New task sheet) | A work screen's New task, a board lane's `+` | `create_work_item{title, project, body?, type?, status?, assignee?, priority?, due?, labels?}`, only what was set |
 | Message (the same sheet, titled "Ask {seat}") | A seat's peek | `create_work_item{title, project, assignee, ask, …}` — the answer lands in your Inbox |
+| Direct message (chat's New direct message, the seat chosen) | A seat's page and peek, on the engine's own chat | `open_dm{to}` — opening one that exists is that conversation |
 | Edit project (the target date) | A project's page bar | `write_project{project, target_date}` — `null` clears it; a company write, whose authority the engine decides |
 | Comment · Reply · Ask… | A task's composer | `comment_on_work_item{item, body}`, `{item, body, reply_to}`, `{item, body, ask, decision?}` |
 | Restore (named "Restore ENG-42" to a screen reader, so a grid of them can be told apart) | A task in the trash, on its page and in the trash grid | `restore_work_item` |
@@ -7913,7 +7924,7 @@ and fails a build over any of four numbers:
 
 | What | Budget | Measured as | Why this number |
 |---|---|---|---|
-| The initial load: the entry, its static imports and the linked stylesheet | 310 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own |
+| The initial load: the entry, its static imports and the linked stylesheet | 316 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own. It was 310 KiB until the company's own chat, whose pushes and rooms in the socket client, routes and rail are the frame's, since a mention is told on whatever screen the reader is on: about 4.5 KiB |
 | Each chunk fetched later: a workspace, the org builder, a lazy stylesheet | 150 KiB | the same | Half the initial load, for the first click into a screen the idle prefetch has not reached |
 | Every font face the build embeds | 90 KB | as served — woff2 is never recompressed | The four Geist faces (83,736 bytes) and room to re-cut them, never a fifth |
 | The whole of `static/dashboard`, which every binary and image carries | 4 MiB | raw | Every binary carries it, opened or not. 3 MiB, then 3.5 MiB for the artifacts workspace, then 4 MiB for the rich editor, whose chunk is about 276 KB raw (ProseMirror 228 KB of it) plus 15 KB of its packages' notices: it measured 3.54 MiB after it. A doubled 2.3 MB baseline is still refused |

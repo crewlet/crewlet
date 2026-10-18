@@ -57,6 +57,7 @@ const LOADERS = {
   work: () => import("~/routes/work/index.ts"),
   agents: () => import("~/routes/agents/index.ts"),
   org: () => import("~/routes/org/index.ts"),
+  chat: () => import("~/routes/chat/index.ts"),
   live: () => import("~/routes/live/index.ts"),
   knowledge: () => import("~/routes/knowledge/index.ts"),
   artifacts: () => import("~/routes/artifacts/index.ts"),

@@ -71,6 +71,7 @@ import {
 import {
   ACCESS_WORDS,
   ADMIN,
+  CHAT,
   TRACKER,
   accessLabel,
   accessLine,
@@ -83,6 +84,7 @@ import { useNow } from "~/lib/clock.ts";
 import { loginProblem } from "~/lib/login.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { useIamGesture, type IamAnswer, type IamGesture } from "~/lib/iamWrite.ts";
 import { useWaiting } from "~/lib/waiting.ts";
 import { useRest, type RestOptions, type RestResult } from "~/lib/useRest.ts";
@@ -307,7 +309,17 @@ export function AccessPicker({
  *   - WITHOUT TRACKER, the work the company's agents send to people never
  *     reaches them: an agent asks a person, assigns them a task or waits on
  *     their answer through the tracker, and their inbox and My work are its.
- *     They can still open and answer a work item an agent asks them about.
+ *     They can still open and answer a work item an agent asks them about;
+ *   - WITHOUT CHAT, on a company running the engine's own chat, what the
+ *     agents SAY to them never reaches them: an agent names a person in a
+ *     room or writes to them directly, and both are read only in Chat. Said
+ *     only where the viewer names the company's chat as the engine's own
+ *     (`chat_backend` — told to a reader holding Chat, which every admin
+ *     granting access does): on a vendor's, that conversation is the
+ *     vendor's and this permission reaches none of it.
+ *
+ * The tracker's first when both are missing: it is where agents send WORK,
+ * and a person who cannot see it cannot be asked for anything at all.
  *
  * Only for a person: a service account is a credential somebody scripts, and
  * what it needs is the script's business.
@@ -320,6 +332,7 @@ export function AppReachNote({
   /** The access is the reader's own, and the note speaks to them. */
   you?: boolean;
 }) {
+  const nativeChat = useViewer().chatBackend === "native";
   const have = expand(grants);
   if (!APPS.some((app) => have.includes(app)) && !have.includes(ADMIN)) {
     return <Callout variant="warning">Overview only: no tasks, pages or chat.</Callout>;
@@ -328,6 +341,15 @@ export function AppReachNote({
     return (
       <Callout variant="warning">
         Without {accessLabel(TRACKER)}, agents can’t send {you ? "you" : "them"} work.
+      </Callout>
+    );
+  }
+  if (nativeChat && !have.includes(CHAT)) {
+    return (
+      <Callout variant="warning">
+        Without {accessLabel(CHAT)}, what agents say to {you ? "you" : "them"} in the
+        company&rsquo;s chat never reaches {you ? "you" : "them"}: a room that names{" "}
+        {you ? "you" : "them"} and a direct message are both read there.
       </Callout>
     );
   }
@@ -411,13 +433,13 @@ export function pressLabel(
  * ONLY A CREDENTIAL IS EVER UNBOUND — a service account or a Tier A token's
  * session acting as itself, which is ordinary — since a person holds a human
  * seat for as long as they exist (ADR-0032). Binding its row to a human seat
- * is what would add the seat's work.
+ * is what would add the seat's work, and on Chat the seat's rooms — so `to`
+ * says what the binding opens on the screen that draws it.
  */
-export function UnboundRemedy() {
+export function UnboundRemedy({ to = "get work here" }: { to?: string }) {
   return (
     <>
-      To get work here, bind this account to an open seat:{" "}
-      <InlineCode>crewlet iam bind ID SEAT</InlineCode>.
+      To {to}, bind this account to an open seat: <InlineCode>crewlet iam bind ID SEAT</InlineCode>.
     </>
   );
 }

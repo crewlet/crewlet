@@ -10,10 +10,12 @@ import {
   WRITE_REASONS,
   configGuardedReason,
   configWriteAccess,
+  directSeatAccess,
   linkOf,
   mayChangeConfig,
   messageSeatAccess,
   orgWriteAccess,
+  OWN_SEAT_DIRECT,
   OWN_SEAT_MESSAGE,
   writeAccess,
 } from "./useWriteAccess.ts";
@@ -29,7 +31,7 @@ const BOUND: ViewerState = {
   admin: false,
   tracker: true,
   knowledge: true,
-  chat: true,
+  chat: false,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -42,6 +44,8 @@ const BOUND: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  chatBackend: "",
+  chatVendors: [],
 };
 
 /** Signed in, and the directory binds them to no seat. */
@@ -98,6 +102,19 @@ test("a change in an app the reader lacks names that app", () => {
       "open",
     ),
   ).toMatchObject({ block: "no_access", reason: expect.stringContaining("Knowledge access") });
+  // AND CHAT'S, whose every gesture is the chat app's — a person's read
+  // cursor included, which lands in no log and is held by its app all the
+  // same.
+  for (const tool of ["post_message", "mark_chat_read"] as const) {
+    expect(writeAccess(tool, { ...BOUND, acts: [] }, "open"), tool).toEqual({
+      can: false,
+      block: "no_access",
+      reason: "This change needs Chat access. An admin can give it to you.",
+    });
+  }
+  expect(
+    writeAccess("post_message", { ...BOUND, grants: ["chat"], chat: true, acts: [] }, "open"),
+  ).toMatchObject({ block: "not_served" });
 });
 
 // A CHANGE THAT NEEDS AN APP AND LANDS IN NO LOG. `answer_knowledge` spends a
@@ -197,6 +214,40 @@ test("messaging your own seat is held after everything a person can clear", () =
   expect(messageSeatAccess(can, UNBOUND, "")).toBe(can);
   const offline = writeAccess("create_work_item", BOUND, "offline");
   expect(messageSeatAccess(offline, BOUND, "jane")).toBe(offline);
+});
+
+// A DIRECT MESSAGE IS OFFERED ONLY WHERE A ROOM CAN BE, and held as Message
+// is otherwise. The company has to run the engine's own chat and the reader
+// hold Chat — the viewer names the backend to nobody else, so to anybody
+// else "" is not said rather than "not native" — and then it is open_dm's own
+// access, held last on the reader's own seat. Mutation: offer it on a vendor
+// company, or to a reader without Chat, and a null row goes red; drop the
+// own-seat hold and the held row does.
+test("a direct message is offered only on the engine's own chat, and held on your own seat", () => {
+  const reader: ViewerState = {
+    ...BOUND,
+    grants: ["chat"],
+    chat: true,
+    chatBackend: "native",
+    acts: ["open_dm"],
+  };
+  const can = writeAccess("open_dm", reader, "open");
+  expect(can.can).toBe(true);
+  expect(directSeatAccess(can, reader, "swe")).toBe(can);
+  expect(directSeatAccess(can, reader, "jane")).toEqual({
+    can: false,
+    block: "held",
+    reason: OWN_SEAT_DIRECT,
+  });
+  const offline = writeAccess("open_dm", reader, "offline");
+  expect(directSeatAccess(offline, reader, "jane")).toBe(offline);
+  for (const elsewhere of ["vendor", "none", ""] as const) {
+    expect(
+      directSeatAccess(can, { ...reader, chatBackend: elsewhere }, "swe"),
+      elsewhere,
+    ).toBeNull();
+  }
+  expect(directSeatAccess(can, { ...reader, chat: false }, "swe")).toBeNull();
 });
 
 // A SCREEN SHOWING SOMEBODY ELSE'S RECORD HOLDS EVERY CHANGE ON IT, with its
