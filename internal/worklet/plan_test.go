@@ -622,26 +622,109 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 		"a wall-clock window": {ActivityQuery{Workspace: true, From: window, To: planNow}, seq, true},
 	}
 	for name, c := range activity {
-		if err := activityFilters(c.q); err != nil {
-			t.Fatalf("%s: the reader refuses this case: %v", name, err)
-		}
-		if err := gateActivityQuery(c.q, planNow); err != nil {
-			t.Fatalf("%s: the reader refuses this case: %v", name, err)
-		}
-		if err := db.Read(t.Context(), func(tx *sql.Tx) error {
-			where, args, err := compileActivity(t.Context(), tx, c.q)
-			if err != nil {
-				return err
-			}
-			reads["the activity feed: "+name] = indexedRead{plannedRead{
-				activityStatement(where), append(args, MaxActivityRows+1)},
-				c.index, c.walk}
-			return nil
-		}); err != nil {
-			t.Fatalf("%s: compile: %v", name, err)
-		}
+		statement, args := activityRead(t, db, c.q)
+		reads["the activity feed: "+name] = indexedRead{plannedRead{statement, args},
+			c.index, c.walk}
 	}
 	return reads
+}
+
+// activityRead is the statement and arguments the feed's reader issues for q,
+// compiled by its own compiler inside a read — the way [readActivity] resolves
+// a task before it has a statement — after the reader's own checks, since a
+// query the reader would refuse is not a reader.
+func activityRead(t *testing.T, db store.ReplicatedHandle, q ActivityQuery) (string, []any) {
+	t.Helper()
+	if err := activityFilters(q); err != nil {
+		t.Fatalf("the reader refuses %+v: %v", q, err)
+	}
+	if err := gateActivityQuery(q, planNow); err != nil {
+		t.Fatalf("the reader refuses %+v: %v", q, err)
+	}
+	var statement string
+	var args []any
+	if err := db.Read(t.Context(), func(tx *sql.Tx) error {
+		predicate, err := compileActivity(t.Context(), tx, q)
+		if err != nil {
+			return err
+		}
+		statement, args = activityStatement(predicate, MaxActivityRows+1)
+		return nil
+	}); err != nil {
+		t.Fatalf("compile %+v: %v", q, err)
+	}
+	return statement, args
+}
+
+// THE AUDIT READS ONE PAGE OF EACH AUTHOR KIND, AND SORTS NOTHING ELSE.
+//
+// `actor_kind IN (…)` sought each kind and then sorted every commit the seeks
+// found — for the audit screen's `operator,human`, every commit any person or
+// token had ever made, on every load — while the comment above it claimed the
+// order came out of the index. One kind seeks `(actor_kind, log_seq DESC)` in
+// the feed's own order and needs no sort at all; several are one such arm each
+// ([activityStatement]), and the one sort left is the merge of the arms, at the
+// top of the statement, over at most one page per kind. So each case here is
+// held to one seek of the index per DISTINCT kind and to no sort below the top
+// — a sort inside an arm, or an arm that is not a seek, is the old plan back.
+func TestTheAuditReadsOnePageOfEachKind(t *testing.T) {
+	t.Parallel()
+	db := historyPlanStore(t)
+	const writers = "tracker_history_actor_kind_seq_idx"
+	window := planNow.AddDate(0, 0, -7)
+	position := statelog.Position{Stream: historyStream, Generation: 1, Seq: 9_000}
+	people := []AuthorKind{AuthorOperator, AuthorHuman}
+	for name, q := range map[string]ActivityQuery{
+		"the audit screen":          {Workspace: true, ActorKinds: people},
+		"the audit over a week":     {Workspace: true, ActorKinds: people, From: window, To: planNow},
+		"a later page of the audit": {Workspace: true, ActorKinds: people, Cursor: position.String()},
+		"every author kind":         {Workspace: true, ActorKinds: AuthorKinds},
+		"one author kind":           {Workspace: true, ActorKinds: []AuthorKind{AuthorAgent}},
+		"one kind named twice": {Workspace: true,
+			ActorKinds: []AuthorKind{AuthorOperator, AuthorOperator}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			statement, args := activityRead(t, db, q)
+			plan := explainTree(t, db, statement, args)
+			details := make([]string, len(plan))
+			for i, line := range plan {
+				details[i] = line.detail
+			}
+			shown := strings.Join(details, "\n")
+			kinds := len(slices.Compact(slices.Sorted(slices.Values(q.ActorKinds))))
+			sought := 0
+			for _, line := range plan {
+				if seeks([]string{line.detail}, writers) {
+					sought++
+				}
+				if !strings.Contains(line.detail, "FOR ORDER BY") {
+					continue
+				}
+				switch {
+				case kinds == 1:
+					t.Errorf("one author kind sorts what it read, where the "+
+						"index is in the feed's order:\n%s", shown)
+				case line.parent != 0:
+					t.Errorf("an arm sorts what it read rather than reading "+
+						"one kind's range in its order:\n%s", shown)
+				}
+			}
+			if sought != kinds {
+				t.Errorf("the audit of %d author kind(s) seeks %s %d times, "+
+					"want once per kind:\n%s", kinds, writers, sought, shown)
+			}
+			// AND EVERY ARM STOPS AT A PAGE, which no plan says: this
+			// engine's plan names no LIMIT, so an arm that lost its own is
+			// the same seek in the same order, read to the end of its kind
+			// before the merge keeps a page — every commit of those kinds
+			// again, and every check above still passes. Measured. So the
+			// statement carries a LIMIT for each arm beside the merge's.
+			if limits := strings.Count(statement, "LIMIT ?"); kinds > 1 && limits != kinds+1 {
+				t.Errorf("the audit of %d author kinds carries %d LIMITs, want one "+
+					"per arm and the merge's:\n%s", kinds, limits, statement)
+			}
+		})
+	}
 }
 
 // historyPasses is every statement that reads the WHOLE task history: the
@@ -906,12 +989,33 @@ func seedTaskCorpus(ctx context.Context, tx *sql.Tx, maxVariables int) error {
 // either way.
 func explain(t *testing.T, db store.ReplicatedHandle, statement string, args []any) []string {
 	t.Helper()
+	tree := explainTree(t, db, statement, args)
+	plan := make([]string, len(tree))
+	for i, line := range tree {
+		plan[i] = line.detail
+	}
+	return plan
+}
+
+// planLine is one line of a plan and the line it sits under — 0 for the
+// statement's own top level — which is what tells a sort of a whole statement
+// from a sort inside one of its subqueries.
+type planLine struct {
+	id, parent int
+	detail     string
+}
+
+// explainTree is [explain] with each line's place in the plan's tree.
+func explainTree(t *testing.T, db store.ReplicatedHandle, statement string,
+	args []any) []planLine {
+
+	t.Helper()
 	in := db.Read
 	if words := strings.Fields(statement); len(words) > 0 &&
 		(strings.EqualFold(words[0], "UPDATE") || strings.EqualFold(words[0], "DELETE")) {
 		in = db.Tx
 	}
-	var plan []string
+	var plan []planLine
 	if err := in(t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(t.Context(),
 			"EXPLAIN QUERY PLAN "+statement, args...)
@@ -920,12 +1024,12 @@ func explain(t *testing.T, db store.ReplicatedHandle, statement string, args []a
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var id, parent, notUsed int
-			var detail string
-			if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+			var line planLine
+			var notUsed int
+			if err := rows.Scan(&line.id, &line.parent, &notUsed, &line.detail); err != nil {
 				return err
 			}
-			plan = append(plan, detail)
+			plan = append(plan, line)
 		}
 		return rows.Err()
 	}); err != nil {
