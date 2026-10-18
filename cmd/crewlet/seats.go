@@ -6,13 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // `crewlet seats` — pausing and resuming a seat from a shell.
@@ -86,17 +83,15 @@ func seatsAct(environ config.Source, args []string, tool string, pausing bool, s
 		return errors.New("name the seat: its handle, as the org chart spells it")
 	}
 
-	// THE OPERATION ID IS MINTED HERE, BEFORE THE REQUEST, as `worklet purge`
-	// mints one and for its reason: a gesture whose answer never came may
+	// THE OPERATION IS MINTED HERE, BEFORE THE REQUEST, as every keyed write
+	// mints its own ([operationFor]): a gesture whose answer never came may
 	// well have landed, and the key it was sent under is the only handle on
-	// it. One the operator brought is held to the rule the node holds it to
-	// before anything is sent, so the refusal names the flag.
-	operation := strings.TrimSpace(*opID)
-	if operation == "" {
-		operation = statelog.NewOpID(time.Now(), gesture)
-	} else if err = statelog.CheckCallerOpID(operation); err != nil {
-		return fmt.Errorf("-op-id: %w", err)
+	// it.
+	operation, err := operationFor(gesture, *opID)
+	if err != nil {
+		return err
 	}
+	write := keyedWrite{gesture: gesture, operation: operation, check: "the seat"}
 
 	gestureArgs := map[string]any{"handle": handle}
 	if pausing {
@@ -121,37 +116,17 @@ func seatsAct(environ config.Source, args []string, tool string, pausing bool, s
 	// THE ORDINARY CEILING: a pause is a read and a compare-and-set on the
 	// coordination store — the "handful of writes" [nodeRequestTimeout] is
 	// sized for — and a stop rides the record rather than a call of its own.
-	err = client.postKeyed(context.Background(),
+	if err := write.settle(stderr, client.postKeyed(context.Background(),
 		"/operator/act/"+url.PathEscape(tool), operation,
-		map[string]any{"args": gestureArgs}, &answer)
-	retry := fmt.Sprintf("run the same command again with -op-id %s, so the "+
-		"retry is this operation rather than a second one", operation)
-	var lost noAnswer
-	if errors.As(err, &lost) {
-		fmt.Fprintf(stderr, "The node did not answer, so whether the %s landed is "+
-			"unknown: %s.\n", gesture, retry)
-		return err
-	}
-	var refused *nodeRefusal
-	if errors.As(err, &refused) && refused.Status == http.StatusServiceUnavailable &&
-		(refused.Unsettled || refused.OpID != "") {
-		if refused.Unvouched {
-			return fmt.Errorf("%w\n\nThis node cannot tell whether it landed and "+
-				"will answer the same way until it can: check the seat, or run it "+
-				"through another node with -api <that node> -op-id %s — never a "+
-				"fresh id", err, operation)
-		}
-		return fmt.Errorf("%w\n\nTo find out, %s", err, retry)
-	}
-	if err != nil {
+		map[string]any{"args": gestureArgs}, &answer)); err != nil {
 		return err
 	}
 
+	if err := write.confirmed(gesture+" "+handle, answer.Outcome); err != nil {
+		return err
+	}
 	by := describeAuthor(answer.Receipt.PausedBy, answer.Receipt.OperatorID)
 	switch {
-	case answer.Outcome == string(statelog.OutcomeUnknown):
-		fmt.Fprintf(stdout, "%s %s: unknown — the node could not confirm the write. "+
-			"To find out, %s\n", gesture, handle, retry)
 	case pausing && answer.Receipt.Changed:
 		fmt.Fprintf(stdout, "paused %s (by %s at %s)\n", handle, by, answer.Receipt.PausedAt)
 		if answer.Receipt.StopRunning {

@@ -2,14 +2,11 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -105,25 +102,16 @@ func workletPurge(environ config.Source, args []string, stdout, stderr io.Writer
 			"the marker's reason is the only account of them that survives")
 	}
 
-	// THE OPERATION ID IS MINTED HERE, BEFORE THE REQUEST, when the operator
-	// brought none — the gate verbs' rule, for their reason. A purge whose
-	// request timed out or dropped may well have landed, and the key it was
-	// sent under is the only handle on it: minted by the node, it was lost
-	// with the answer, and the only way on was a second purge under a fresh
-	// one. It is minted as the node would mint it ([statelog.NewOpID]),
-	// carrying the instant a node judges the retry by.
-	//
-	// AND ONE THE OPERATOR BROUGHT IS HELD TO THE RULE EVERY SURFACE HOLDS
-	// IT TO ([statelog.CheckCallerOpID]) before anything is sent, and sent
-	// as given: the node refuses an id it did not mint or one altered on the
-	// way back `400 op_id_invalid`, and refused here the error names the
-	// flag rather than a header this command composed.
-	operation := *opID
-	if operation == "" {
-		operation = statelog.NewOpID(time.Now(), "purge")
-	} else if err = statelog.CheckCallerOpID(operation); err != nil {
-		return fmt.Errorf("-op-id: %w", err)
+	// THE OPERATION IS MINTED HERE, BEFORE THE REQUEST, when the operator
+	// brought none — see [operationFor]. A purge whose request timed out or
+	// dropped may well have landed, and the key it was sent under is the
+	// only handle on it.
+	operation, err := operationFor("purge", *opID)
+	if err != nil {
+		return err
 	}
+	write := keyedWrite{gesture: "purge", operation: operation,
+		check: "whether " + item + " is gone"}
 
 	var answer struct {
 		Task     string `json:"task"`
@@ -137,46 +125,15 @@ func workletPurge(environ config.Source, args []string, stdout, stderr io.Writer
 		url.PathEscape(item), url.QueryEscape(strings.TrimSpace(*confirm)),
 		url.QueryEscape(strings.TrimSpace(*reason)))
 	// PATIENTLY, for the reason [nodeClient.patiently] names: a purge waits on
-	// the write path's own waits, not on the network.
-	err = client.patiently(purgeRequestTimeout).postKeyed(context.Background(), path,
-		operation, nil, &answer)
-	var lost noAnswer
-	if errors.As(err, &lost) {
-		fmt.Fprintf(stderr, "The node did not answer, so whether the purge "+
-			"landed is unknown. Run the same command again with -op-id %s — "+
-			"if the record landed, the retry answers from it rather than "+
-			"appending a second purge.\n", operation)
+	// the write path's own waits, not on the network. And EVERY RETRY IS
+	// UNDER THE SAME ID, as [keyedWrite.settle] tells the operator: a fresh
+	// one would append a second purge of an item an earlier attempt may
+	// already have destroyed.
+	if err := write.settle(stderr, client.patiently(purgeRequestTimeout).postKeyed(
+		context.Background(), path, operation, nil, &answer)); err != nil {
 		return err
 	}
-	var refused *nodeRefusal
-	if errors.As(err, &refused) && refused.OpID != "" &&
-		refused.Status == http.StatusServiceUnavailable {
-		// EVERY RETRY IS UNDER THE SAME ID, and the answer says which
-		// one: a fresh one would append a second purge of an item an
-		// earlier attempt may already have destroyed. The id is the
-		// node's answer, which is the one this command sent.
-		switch {
-		case refused.Unvouched:
-			// NOT THROUGH THIS NODE: its operation ledger cannot
-			// vouch for the operation, so it answers the same way
-			// until the record reaches it.
-			return fmt.Errorf("%w\n\nThis node cannot tell whether it landed "+
-				"and will answer the same way until it can: check whether %s "+
-				"is gone, or run it through another node with -api <that node> "+
-				"-op-id %s — never a fresh id", err, item, refused.OpID)
-		case refused.Unsettled:
-			return fmt.Errorf("%w\n\nNo acknowledgement — this is the one "+
-				"outcome to retry, and retrying with the same operation id is "+
-				"what stops a second record: -op-id %s", err, refused.OpID)
-		default:
-			// A REFUSAL, which wrote nothing: what the node names above
-			// is what clears it, and waiting may.
-			return fmt.Errorf("%w\n\nThis attempt wrote nothing. Once the "+
-				"node can take it, run it again with -op-id %s, so every "+
-				"attempt stays the one operation", err, refused.OpID)
-		}
-	}
-	if err != nil {
+	if err := write.confirmed("purge "+item, answer.Outcome); err != nil {
 		return err
 	}
 

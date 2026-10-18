@@ -766,14 +766,11 @@ func retentionGate(environ config.Source, args []string, stdout, stderr io.Write
 	// reads in the ledger exactly as a node-minted one would.
 	//
 	// AND ONE THE OPERATOR BROUGHT IS HELD TO THE RULE EVERY SURFACE HOLDS
-	// IT TO ([statelog.CheckCallerOpID]) before anything is asked: the node
-	// refuses it `400 op_id_invalid` anyway, and refused here the error
-	// names the flag rather than a query parameter this command composed.
-	gesture := *opID
-	if gesture == "" {
-		gesture = statelog.NewOpID(time.Now(), verb+"-"+node)
-	} else if err := statelog.CheckCallerOpID(gesture); err != nil {
-		return fmt.Errorf("-op-id: %w", err)
+	// IT TO before anything is asked — [operationFor], which every keyed
+	// write here mints and checks its id through.
+	gesture, err := operationFor(verb+"-"+node, *opID)
+	if err != nil {
+		return err
 	}
 	forced := force != nil && *force
 	// THE COMMAND THAT FINISHES THIS GESTURE, with the flags that decide it:
