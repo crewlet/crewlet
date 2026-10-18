@@ -111,7 +111,7 @@ type Verification struct {
 	// the copy holds), counted from the pass's start. Zero while it brings
 	// the copy to the rows it is checked against first, or rebuilds it for
 	// a repair — whose reads of the object store are bounded each on its
-	// own (objstore.ReadBudget, objstore.ReadStall), as every sync's are —
+	// own (objstore.ReadBudget, objstore.Stall), as every sync's are —
 	// and once it has ended.
 	Deadline time.Time
 

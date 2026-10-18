@@ -263,7 +263,7 @@ func (v *Verification) Release() {
 // checks holds, counted from the pass's start and told to how.Checking as it
 // begins: a pass past it is ended, ErrPastBound. The sync before it and a
 // repair's rebuild are not under it — each read of the object store they
-// make is bounded on its own (objstore.ReadBudget, objstore.ReadStall), as
+// make is bounded on its own (objstore.ReadBudget, objstore.Stall), as
 // every sync's is — and how.Checking is told zero as a rebuild begins.
 //
 // EVERY ANSWER CARRIES THE REPORT SO FAR beside its error — what the check

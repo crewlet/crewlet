@@ -119,7 +119,7 @@ var refusedCertificate = retry.IsErrorRetryableFunc(func(err error) aws.Ternary 
 //
 // NO COUNT OF ATTEMPTS: every request's attempts end at its own DEADLINE —
 // [callBudget], [sendBudget], [partBudget], [completeBudget], or a read's
-// caller's, whose open the store holds to [objstore.ReadStall] too — or
+// caller's, whose open the store holds to [objstore.Stall] too — or
 // inside a minute of nothing but failures ([judge]), and the SDK's three
 // attempts failed a request a bucket would have answered a few seconds later.
 // MaxAttempts answers zero, which the SDK reads as no count, and [Open] sets
@@ -571,7 +571,7 @@ func (g *gate) HandleFinalize(ctx context.Context, in middleware.FinalizeInput, 
 // one answering 500, and both are the bucket failing rather than slowing the
 // node down.
 //
-// A MINUTE, and one minute three ways: it is [objstore.ReadStall], the minute
+// A MINUTE, and one minute three ways: it is [objstore.Stall], the minute
 // a READ already waits on its backend before it ends as stalled — "a bucket
 // that keeps failing the request it asks again" is in its own doc — so a read
 // and a write the bucket keeps failing end at the same point, and a person
@@ -582,7 +582,7 @@ func (g *gate) HandleFinalize(ctx context.Context, in middleware.FinalizeInput, 
 // would give up inside the ceiling's first two waits and on a gateway's
 // ordinary failover; longer buys a person nothing. A constant, never
 // configuration: no honest reason makes two deployments differ, and the one
-// value that might, ReadStall, it follows.
+// value that might, Stall, it follows.
 //
 // EACH SPAN'S OWN BOUND, drawn evenly from the minute's last third at the
 // span's first failure ([judge.bound]), is where its last attempt is sent
@@ -612,13 +612,13 @@ func (g *gate) HandleFinalize(ctx context.Context, in middleware.FinalizeInput, 
 //
 // WHAT IT CHANGES, caller by caller: a READ — a person's download, a git sync,
 // the backup — whose open the bucket keeps failing ends at its span's bound,
-// forty seconds to a minute in, where [objstore.ReadStall] ended it a minute
+// forty seconds to a minute in, where [objstore.Stall] ended it a minute
 // after the open; a request on [callBudget] — the collector, the check at
 // open, an upload's start and abandonment — nothing, its thirty seconds come
 // first; a WRITE — a put of up to a part (four and a half minutes to a minute
 // at the most), a part ([partBudget]'s sixteen and a half to one), a
 // completion (five to one). Every writer is somebody waiting.
-const giveUpAfter = objstore.ReadStall
+const giveUpAfter = objstore.Stall
 
 // gaveUp reads a request its [judge] gave up ([givenUp]) as final, ahead of
 // every other rule: whatever the bucket's last answer was, the request is not

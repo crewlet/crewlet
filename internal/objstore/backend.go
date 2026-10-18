@@ -34,6 +34,16 @@ var ErrNotFound = errors.New("objstore: no such object")
 // it as lost.
 var ErrCorrupt = errors.New("objstore: an object's bytes are not the ones it was stored with")
 
+// ErrStalled is a transfer its backend stopped moving for [Stall]: a read
+// handed nothing — no stream begun, or no piece of it — for that long. The
+// store failing, never a refusal: asking again may succeed.
+//
+// THE BARE WORD, because it is spliced into the sentences that already said
+// it ("stalled: the backend began no stream for 1m0s: …"), so a caller can
+// branch on the kind with errors.Is while a person reads the sentence they
+// always read.
+var ErrStalled = errors.New("stalled")
+
 // ErrNoDeadline is a read asked for under a context with no deadline.
 var ErrNoDeadline = errors.New("objstore: a read must carry a deadline")
 
@@ -429,7 +439,7 @@ func PaceFor(n int64) time.Duration {
 // healthy backend, and a minute is room for the leader election or the
 // reconnect that makes one of them slow — while a read that cannot even begin
 // in a minute is not going to, which [Store] holds it to: the backend's open
-// of the stream is watched by [ReadStall], a minute too, and a read that has
+// of the stream is watched by [Stall], a minute too, and a read that has
 // begun no stream by then is ended as stalled however long its budget, and
 // however often its backend would have asked again.
 const ReadBase = time.Minute
@@ -443,14 +453,14 @@ const ReadBase = time.Minute
 // the floor would spend the whole budget on its own pace and leave the
 // backend a minute for a gibibyte.
 //
-// A BOUND, not a pace: [ReadStall] is what ends a read that stops moving.
+// A BOUND, not a pace: [Stall] is what ends a read that stops moving.
 // This is what ends one that trickles a byte a minute, which no stall
 // watchdog ever sees.
 func ReadBudget(size int64) time.Duration { return ReadBase + 2*PaceFor(size) }
 
-// ReadStall is the longest one read of an object may wait on its backend
-// before the read is ended as stalled — for the stream to begin, and for each
-// piece of it after.
+// Stall is the longest one transfer of an object may wait on its backend
+// before it is ended as stalled ([ErrStalled]): for a read, the stream to
+// begin and each piece of it after.
 //
 // A MINUTE — two of [MiBPace], the time a mebibyte is given: no backend
 // streaming hands over its next piece more than a mebibyte apart, the largest
@@ -465,4 +475,4 @@ func ReadBudget(size int64) time.Duration { return ReadBase + 2*PaceFor(size) }
 // peer which accepts the request and never answers it, would otherwise make
 // of an open it cannot get answered a wait as long as the read's whole
 // budget.
-const ReadStall = 2 * MiBPace
+const Stall = 2 * MiBPace

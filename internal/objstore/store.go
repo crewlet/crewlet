@@ -23,7 +23,7 @@ type Store struct {
 	backend Backend
 	now     func() time.Time
 
-	// stall is [ReadStall], a field so a test can watch a stall end a read
+	// stall is [Stall], a field so a test can watch a stall end a read
 	// without waiting a minute for it.
 	stall time.Duration
 }
@@ -38,7 +38,7 @@ func NewStoreAt(backend Backend, now func() time.Time) (*Store, error) {
 	if backend == nil || now == nil {
 		return nil, errors.New("objstore: a store needs a backend and a clock")
 	}
-	return &Store{backend: backend, now: now, stall: ReadStall}, nil
+	return &Store{backend: backend, now: now, stall: Stall}, nil
 }
 
 // Backend is the store's backend, for the collector and the backup.
@@ -143,7 +143,7 @@ func (m *metered) Read(p []byte) (int, error) {
 // # Every read is bounded twice
 //
 // The whole read runs under [ReadBudget] — or ctx's own deadline, where that
-// is sooner — and every wait on the backend under [ReadStall]: the backend's
+// is sooner — and every wait on the backend under [Stall]: the backend's
 // open of the stream ([Store.begin]) and each Read of it after. A wait that
 // lasts longer cancels the read, so a broker that lost the object's pieces, a
 // connection that went away or a bucket that keeps failing the request a read
@@ -258,8 +258,9 @@ func (v *verifier) Close() error { return v.body.Close() }
 
 // begin asks the backend for n bytes of o from off — to the end where n is
 // negative — under the stall watchdog: a backend that has handed back no
-// stream within [ReadStall] has the read's context cancelled (cancel), and the
-// read fails as stalled, as a Read that waits as long does ([watched]).
+// stream within [Stall] has the read's context cancelled (cancel), and the
+// read fails as stalled ([ErrStalled]), as a Read that waits as long does
+// ([watched]).
 //
 // THE OPEN IS A WAIT ON THE BACKEND LIKE ANY READ, and the longest one: a
 // backend looks the object up and asks for its first bytes before it hands a
@@ -286,12 +287,12 @@ func (s *Store) begin(ctx context.Context, cancel context.CancelFunc, o Object, 
 		_ = body.Close()
 		err = context.Cause(ctx)
 	}
-	return nil, fmt.Errorf("stalled: the backend began no stream for %v: %w", s.stall, err)
+	return nil, fmt.Errorf("%w: the backend began no stream for %v: %w", ErrStalled, s.stall, err)
 }
 
 // watched is a backend's stream under the stall watchdog: a Read that waits
-// longer than [ReadStall] cancels ctx — which every backend's stream answers
-// by ending ([Backend.Get]) — and fails as stalled.
+// longer than [Stall] cancels ctx — which every backend's stream answers
+// by ending ([Backend.Get]) — and fails as stalled ([ErrStalled]).
 type watched struct {
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -320,8 +321,8 @@ func (w *watched) Read(p []byte) (int, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	if stalled && err != nil && err != io.EOF {
-		return n, fmt.Errorf("objstore: %s stalled: the backend handed over nothing "+
-			"for %v: %w", w.what, w.stall, err)
+		return n, fmt.Errorf("objstore: %s %w: the backend handed over nothing "+
+			"for %v: %w", w.what, ErrStalled, w.stall, err)
 	}
 	return n, err
 }

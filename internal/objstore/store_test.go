@@ -437,6 +437,61 @@ func TestAStalledReadIsEndedAndAClosedOneStops(t *testing.T) {
 	}
 }
 
+// A STALLED READ IS ErrStalled, AND SAYS SO IN THE SENTENCE IT ALWAYS DID: a
+// caller tells a backend that stopped moving from one that answered by the
+// kind (errors.Is), whichever wait stalled — the open of the stream or a
+// piece of it after the first — while a person reads the words they always
+// read.
+func TestAStalledReadIsErrStalled(t *testing.T) {
+	t.Parallel()
+	const stall = 50 * time.Millisecond
+	for _, read := range []struct {
+		name  string
+		words string
+		do    func(t *testing.T, backend *watching, s *objstore.Store, o objstore.Object) error
+	}{
+		{"an open that begins no stream", "stalled: the backend began no stream for 50ms",
+			func(t *testing.T, backend *watching, s *objstore.Store, o objstore.Object) error {
+				backend.openAfter = time.Hour
+				r, err := s.Open(t.Context(), o)
+				if err == nil {
+					_ = r.Close()
+				}
+				return err
+			}},
+		{"a stream that stops between two pieces", "stalled: the backend handed over nothing for 50ms",
+			func(t *testing.T, backend *watching, s *objstore.Store, o objstore.Object) error {
+				r, err := s.Open(t.Context(), o)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = r.Close() }()
+				if _, err := io.ReadFull(r, make([]byte, 10)); err != nil {
+					t.Fatalf("the first piece = %v", err)
+				}
+				// Read on this goroutine, so no Read is in flight to race.
+				backend.block = true
+				_, err = io.ReadAll(r)
+				return err
+			}},
+	} {
+		t.Run(read.name, func(t *testing.T) {
+			t.Parallel()
+			backend := &watching{Backend: memobj.New()}
+			s := newStore(t, backend)
+			o := put(t, s, patterned(1000, 1))
+			objstore.SetStall(s, stall)
+			err := read.do(t, backend, s, o)
+			if !errors.Is(err, objstore.ErrStalled) {
+				t.Fatalf("%s = %v; want objstore.ErrStalled", read.name, err)
+			}
+			if !strings.Contains(err.Error(), read.words) {
+				t.Fatalf("%s = %q; want the words it always said, %q", read.name, err, read.words)
+			}
+		})
+	}
+}
+
 // A READ THAT BEGINS NOTHING IS ENDED AT THE STALL, the open of a whole read
 // and of a page alike: a backend that has handed back no stream for as long
 // as the watchdog lets a read hear nothing has its read cancelled — a bucket

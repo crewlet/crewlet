@@ -29,7 +29,7 @@ import (
 // a part, eight mebibytes, and a read keeps up to [partsInFlight] of them
 // crossing one link together; handed over only whole, the range the reader
 // waits on would cross at a quarter of the link with nothing handed out — over
-// four minutes at [objstore.MiBPace], where [objstore.ReadStall] ends a read
+// four minutes at [objstore.MiBPace], where [objstore.Stall] ends a read
 // that hears nothing for one. A piece at a quarter of the floor's 35 KB/s
 // lands every fifteen seconds; at the 80–90 MB/s one S3 connection carries,
 // every millisecond and a half — a mutex and a wake each, which the reader's

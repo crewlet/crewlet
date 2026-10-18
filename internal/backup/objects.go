@@ -793,7 +793,7 @@ func (p *objectPass) carry(ctx context.Context, ref reference) (bool, error) {
 // a GET from a bucket ends in now and then. What these attempts answer is a
 // read that ENDED: the bucket's own client asks a request it was refused again
 // until the request's deadline — which for a read is the store's stall on its
-// open ([objstore.ReadStall], a minute) — and a stall or a reset part way
+// open ([objstore.Stall], a minute) — and a stall or a reset part way
 // through a body is final, so each attempt here is a read begun again, from
 // the object's first byte. And it is worth retrying at a backup's scale where
 // it would not be at a request's: a first copy is two million reads over

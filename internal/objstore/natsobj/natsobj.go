@@ -52,7 +52,7 @@
 //     object lost, and a delete would be told the object was already gone
 //     and leave it there.
 //   - A GET IS AN ORDERED CONSUMER OF THE OBJECT'S OWN MESSAGES, read one
-//     message at a time under [objstore.ReadStall] and ended by its
+//     message at a time under [objstore.Stall] and ended by its
 //     context. The library's own reader cannot be stopped once a read
 //     blocks — the read holds the lock its close needs — so a download
 //     whose pieces stopped arriving held its caller for the whole of its
@@ -497,7 +497,7 @@ func (b *Backend) live(ctx context.Context, name string) (jetstream.ObjectInfo, 
 //
 // FOUR, not the eight it was: a hand of a mebibyte takes thirty seconds at the
 // floor, and no heartbeat could both outlast that and leave a replaced
-// consumer's first hand time to arrive inside [objstore.ReadStall]'s minute.
+// consumer's first hand time to arrive inside [objstore.Stall]'s minute.
 const readAhead = 4
 
 // walkAhead is how many messages a WALK holds in hand — a listing over the
@@ -544,7 +544,7 @@ const walkAhead = 500
 //
 // DERIVED rather than stated, so it moves with the hand and the floor: two
 // heartbeats are thirty seconds, twice the longest a healthy read hears
-// nothing at the floor — the room [objstore.ReadStall] gives a mebibyte — and
+// nothing at the floor — the room [objstore.Stall] gives a mebibyte — and
 // a consumer lost under a read costs its quiet second ([quietWait]), those
 // thirty seconds and then its replacement's first hand, forty-six in all,
 // inside the stall's minute (TestAReadsHeartbeatOutlastsItsHandAtTheFloor
@@ -713,7 +713,7 @@ func (b *Backend) consume(ctx context.Context, filter string, cfg jetstream.Orde
 // replica behind the leader, and is dropped and made again — at once the
 // first time, since the broker places a new consumer afresh and one replica
 // behind is one of three, then a [quietWait] apart, while the replica catches
-// up — until the read has been behind for [objstore.ReadStall], the longest it
+// up — until the read has been behind for [objstore.Stall], the longest it
 // may wait for any one message, when it fails ([errBehind]).
 func (r *reading) open(ctx context.Context) (jetstream.Msg, error) {
 	var behind time.Time
@@ -762,14 +762,14 @@ func (r *reading) open(ctx context.Context) (jetstream.Msg, error) {
 // lagging is the pause before a consumer is made again after one was made on
 // a replica behind the stream's leader, since behind: none the first time,
 // [quietWait] after that, and [errBehind] once the read has been behind for
-// [objstore.ReadStall].
+// [objstore.Stall].
 func lagging(ctx context.Context, behind *time.Time) error {
 	if behind.IsZero() {
 		*behind = time.Now()
 		return nil
 	}
-	if time.Since(*behind) >= objstore.ReadStall {
-		return fmt.Errorf("%w for %v", errBehind, objstore.ReadStall)
+	if time.Since(*behind) >= objstore.Stall {
+		return fmt.Errorf("%w for %v", errBehind, objstore.Stall)
 	}
 	pause := time.NewTimer(quietWait)
 	defer pause.Stop()
@@ -902,7 +902,7 @@ func (r *reading) stop(ctx context.Context) {
 //
 // AN ORDERED CONSUMER OF THE OBJECT'S OWN MESSAGES, never the library's get —
 // see the package doc. Each message is waited for under
-// [objstore.ReadStall] and under ctx, so a read whose pieces have stopped
+// [objstore.Stall] and under ctx, so a read whose pieces have stopped
 // arriving ends rather than waits out its caller's whole budget, and a reader
 // that is closed or whose caller gave up stops at once. The FIRST is waited
 // for here, before the reader is handed back, so a consumer a cluster dropped
@@ -948,7 +948,7 @@ func (b *Backend) Get(ctx context.Context, name string, off, n int64) (io.ReadCl
 		}
 		cfg.DeliverPolicy, cfg.OptStartSeq, skip = jetstream.DeliverByStartSequencePolicy, start, before
 	}
-	r, first, err := b.consume(ctx, subject, cfg, readAhead, objstore.ReadStall, everything)
+	r, first, err := b.consume(ctx, subject, cfg, readAhead, objstore.Stall, everything)
 	switch {
 	case err != nil:
 		return nil, fmt.Errorf("natsobj: get %s: %w", name, err)
@@ -988,7 +988,7 @@ func (b *Backend) seek(ctx context.Context, subject string, off int64) (uint64, 
 	r, msg, err := b.consume(ctx, subject, jetstream.OrderedConsumerConfig{
 		HeadersOnly:      true,
 		MaxResetAttempts: listResets,
-	}, walkAhead, objstore.ReadStall, everything)
+	}, walkAhead, objstore.Stall, everything)
 	if err != nil || r == nil {
 		return 0, 0, false, err
 	}

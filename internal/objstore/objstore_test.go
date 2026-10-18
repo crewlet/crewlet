@@ -397,8 +397,8 @@ func TestAReadIsBudgetedBothLegsAtTheFloor(t *testing.T) {
 			t.Errorf("ReadBudget(%d) = %v, want %v", size, got, want)
 		}
 	}
-	if ReadStall != 2*MiBPace {
-		t.Errorf("ReadStall = %v, want two paces", ReadStall)
+	if Stall != 2*MiBPace {
+		t.Errorf("Stall = %v, want two paces", Stall)
 	}
 }
 

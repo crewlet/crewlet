@@ -64,11 +64,11 @@ const SlotWait = 10 * time.Second
 const KillGrace = 5 * time.Second
 
 // TransferStall ends a transfer that has read and written nothing for a
-// minute — objstore.ReadStall, the bound every object transfer is held to.
+// minute — objstore.Stall, the bound every object transfer is held to.
 // uploadpack.keepAlive and receive.keepAlive are five seconds, so a healthy
 // transfer moves at least that often; twelve keepalives of silence is a
 // process that stopped.
-const TransferStall = objstore.ReadStall
+const TransferStall = objstore.Stall
 
 // PackWorkPerMiB is the time local git work is given per mebibyte of the pack
 // or repository it works over.

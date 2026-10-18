@@ -657,7 +657,7 @@ const lostConsumerBound = natsobj.QuietWait + 2*natsobj.PullHeartbeat + 5*time.S
 // a healthy read can hear nothing for as long as its hand takes to cross, and
 // two heartbeats must outlast that or the reader is replaced before its hand
 // arrives, and again before its replacement's, and fails a minute later at
-// [objstore.ReadStall] having read nothing. Twice over, the room the stall
+// [objstore.Stall] having read nothing. Twice over, the room the stall
 // gives a mebibyte.
 //
 // And a consumer the broker loses under a read costs a quiet second, two
@@ -673,10 +673,10 @@ func TestAReadsHeartbeatOutlastsItsHandAtTheFloor(t *testing.T) {
 			"cross a link at the floor: a read at the floor is replaced before its hand arrives",
 			natsobj.PullHeartbeat, hand, natsobj.ReadAhead)
 	}
-	if lost := natsobj.QuietWait + 2*natsobj.PullHeartbeat + hand; lost > objstore.ReadStall {
+	if lost := natsobj.QuietWait + 2*natsobj.PullHeartbeat + hand; lost > objstore.Stall {
 		t.Errorf("a consumer lost under a read at the floor costs a quiet wait, two heartbeats "+
 			"and a hand, %v, past the %v a read waits before it is ended as stalled",
-			lost, objstore.ReadStall)
+			lost, objstore.Stall)
 	}
 }
 

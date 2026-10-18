@@ -122,7 +122,7 @@
 // whole budget, hours for a large object — so what ends a read whose first
 // request the bucket keeps failing is that request's bound, forty seconds to
 // a minute in, or the store's stall watchdog, which watches the open of a
-// read as it watches each piece after ([objstore.ReadStall]) and would end it
+// read as it watches each piece after ([objstore.Stall]) and would end it
 // at the minute measured from the open — whichever comes first, the bucket's
 // last answer named either way.
 //

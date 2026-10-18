@@ -50,8 +50,8 @@ func TestTheDeadlinesAreTheirFormulas(t *testing.T) {
 			t.Errorf("HistoryWalk(%d) = %v, want %v", objects, got, want)
 		}
 	}
-	if gitproc.TransferStall != objstore.ReadStall {
-		t.Errorf("TransferStall = %v, want objstore.ReadStall %v", gitproc.TransferStall, objstore.ReadStall)
+	if gitproc.TransferStall != objstore.Stall {
+		t.Errorf("TransferStall = %v, want objstore.Stall %v", gitproc.TransferStall, objstore.Stall)
 	}
 	if gitproc.ReadDeadline != gitproc.SlotWait {
 		t.Errorf("ReadDeadline %v and SlotWait %v are both one read attempt", gitproc.ReadDeadline, gitproc.SlotWait)

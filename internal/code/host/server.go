@@ -74,7 +74,7 @@ type Timing struct {
 //     default, the interval git chose for the same balancer problem.
 //   - Handshake is 5 s: the hook dials a socket on the same host, so a
 //     connection that has not named its session in five seconds is not a hook.
-//   - Stall is gitproc.TransferStall (a minute, objstore.ReadStall): git's
+//   - Stall is gitproc.TransferStall (a minute, objstore.Stall): git's
 //     keepalives are five seconds apart, so twelve of them missed is a process
 //     that stopped — and a case that holds a stand-in git still need not wait
 //     a minute to see it ended.
