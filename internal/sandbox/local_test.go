@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/procgroup"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 )
@@ -634,14 +635,13 @@ func TestAReconnectedBoxStillWritesARefreshedLoginBack(t *testing.T) {
 	}
 }
 
-// A torn-down box must never CREATE a login the operator has since removed.
+// A torn-down box must never CREATE a login the operator has since removed —
+// not even one its run refreshed.
 func TestARemovedLoginIsNotRecreatedByATeardown(t *testing.T) {
 	t.Parallel()
 	store := t.TempDir()
 	shared := filepath.Join(store, "credentials.json")
-	if err := os.WriteFile(shared, []byte(`{"token":"first"}`), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	writeFile(t, shared, `{"token":"first"}`)
 	local := newDirect(t)
 	box, err := local.Create(t.Context(), Spec{
 		CredentialFiles: map[string]string{".claude/.credentials.json": shared},
@@ -649,6 +649,7 @@ func TestARemovedLoginIsNotRecreatedByATeardown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	writeFile(t, filepath.Join(box.Home(), ".claude", ".credentials.json"), `{"token":"rotated"}`)
 	if err := os.Remove(shared); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
@@ -657,6 +658,175 @@ func TestARemovedLoginIsNotRecreatedByATeardown(t *testing.T) {
 	}
 	if _, err := os.Stat(shared); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("teardown recreated a login the operator had removed")
+	}
+}
+
+// Nor one the shared directory did not hold when the box was seeded: a login
+// that appeared since is somebody else's, and whatever the box holds at that
+// path is no refresh of it.
+func TestALoginTheBoxWasNotSeededWithIsNeverWrittenBack(t *testing.T) {
+	t.Parallel()
+	shared := filepath.Join(t.TempDir(), "credentials.json")
+	local := newDirect(t)
+	box, err := local.Create(t.Context(), Spec{
+		CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	writeFile(t, shared, `{"token":"an operator's new login"}`)
+	writeFile(t, filepath.Join(box.Home(), ".claude", ".credentials.json"), `{"token":"the box's own"}`)
+	if err := box.Close(t.Context()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := readFile(t, shared); got != `{"token":"an operator's new login"}` {
+		t.Fatalf("shared login = %q; a box wrote over a login it was never given", got)
+	}
+}
+
+// AN IDLE BOX NEVER WRITES ITS SEED BACK. A run that refreshed nothing holds
+// exactly what it was seeded with — an OpenCode box always does, its export
+// reproducing its import byte for byte — while the host may have refreshed
+// the shared login meanwhile, rotating the seed's refresh token away. Written
+// back, that seed logs every seat out at the next expiry. Every teardown path
+// is held to it: the box Create returned, a kill by id and the orphan reaper,
+// which read the seed from the box's record.
+//
+// Mutation: compare the box's copy with the shared login as it is now, and
+// the host's refresh is reverted.
+func TestAnIdleBoxNeverWritesItsSeedBackOverALoginTheHostRefreshed(t *testing.T) {
+	t.Parallel()
+	for path, teardown := range map[string]func(t *testing.T, local *Local, box Sandbox){
+		"Close": func(t *testing.T, _ *Local, box Sandbox) {
+			if err := box.Close(t.Context()); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+		},
+		"Kill": func(t *testing.T, local *Local, box Sandbox) {
+			if err := local.Kill(t.Context(), box.ID()); err != nil {
+				t.Fatalf("Kill: %v", err)
+			}
+		},
+		"the orphan reaper": func(t *testing.T, local *Local, box Sandbox) {
+			ageBox(t, box, 2*time.Hour)
+			local.reapOrphans(t.Context(), time.Minute)
+		},
+	} {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+			shared := filepath.Join(t.TempDir(), "credentials.json")
+			writeFile(t, shared, `{"refresh":"v1"}`)
+			local := newDirect(t)
+			box, err := local.Create(t.Context(), Spec{
+				CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+			})
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			// The host refreshes while the box runs; the box does not.
+			writeFile(t, shared, `{"refresh":"v2"}`)
+			teardown(t, local, box)
+			if got := readFile(t, shared); got != `{"refresh":"v2"}` {
+				t.Fatalf("shared login = %q; an idle box put its seed back over the host's refresh", got)
+			}
+		})
+	}
+}
+
+// A REFRESH IS WRITTEN BACK ONLY OVER THE LOGIN IT DESCENDS FROM. A run that
+// refreshed while the host also did holds the older of the two — the host's
+// refresh rotated the token the box's copy came from — so the shared login is
+// kept, and the dropped refresh is said, by file and path and never by value.
+//
+// Not parallel: it captures the process-wide logger ([captureLogs]).
+//
+// Mutation: write back whenever the box's copy changed, and the host's
+// refresh is replaced.
+func TestARefreshIsDroppedWhereTheSharedLoginMovedPastItsSeed(t *testing.T) {
+	logs := captureLogs(t)
+	shared := filepath.Join(t.TempDir(), "credentials.json")
+	writeFile(t, shared, `{"refresh":"v1"}`)
+	local := newDirect(t)
+
+	// An idle box drops nothing, so says nothing: it refreshed no login, and
+	// a warning for it would bury the one that matters.
+	idle, err := local.Create(t.Context(), Spec{
+		CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	writeFile(t, shared, `{"refresh":"v1-host"}`)
+	if err := local.Kill(t.Context(), idle.ID()); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	if out := logs.String(); strings.Contains(out, "local_sandbox_credential_superseded") {
+		t.Errorf("an idle box reported a refresh it never made:\n%s", out)
+	}
+
+	writeFile(t, shared, `{"refresh":"v1"}`)
+	box, err := local.Create(t.Context(), Spec{
+		CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	writeFile(t, filepath.Join(box.Home(), ".claude", ".credentials.json"), `{"refresh":"box-refreshed"}`)
+	writeFile(t, shared, `{"refresh":"host-refreshed"}`)
+	if err := local.Kill(t.Context(), box.ID()); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	if got := readFile(t, shared); got != `{"refresh":"host-refreshed"}` {
+		t.Fatalf("shared login = %q; want the host's refresh kept", got)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "local_sandbox_credential_superseded") ||
+		!strings.Contains(out, shared) || !strings.Contains(out, "shared=changed") {
+		t.Errorf("the dropped refresh was not said, naming the path:\n%s", out)
+	}
+	if strings.Contains(out, "refreshed\"}") || strings.Contains(out, "box-refreshed") {
+		t.Errorf("the log carries a login's value:\n%s", out)
+	}
+}
+
+// THE COMPARISON AND THE WRITE ARE ONE STEP against every other writer of the
+// shared directory: a write-back takes the directory's lock, which the CLI
+// backend's seats and `crewlet llm` commands take for theirs, so it waits for
+// a writer that holds it rather than comparing against a login being replaced.
+//
+// Mutation: compare and write without the lock, and the write lands while
+// another writer holds it.
+func TestAWriteBackWaitsForTheSharedLoginsLock(t *testing.T) {
+	t.Parallel()
+	store := t.TempDir()
+	shared := filepath.Join(store, "credentials.json")
+	writeFile(t, shared, `{"token":"first"}`)
+	local := newDirect(t)
+	box, err := local.Create(t.Context(), Spec{
+		CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	writeFile(t, filepath.Join(box.Home(), ".claude", ".credentials.json"), `{"token":"rotated"}`)
+
+	release, err := hostbox.LockCredentials(t.Context(), store)
+	if err != nil {
+		t.Fatalf("taking the shared login's lock: %v", err)
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- box.Close(t.Context()) }()
+	time.Sleep(200 * time.Millisecond)
+	if got := readFile(t, shared); got != `{"token":"first"}` {
+		release()
+		t.Fatalf("shared login = %q while another writer held its lock", got)
+	}
+	release()
+	if err := <-closed; err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := readFile(t, shared); got != `{"token":"rotated"}` {
+		t.Fatalf("shared login = %q; want the refresh written once the lock was free", got)
 	}
 }
 
@@ -1603,7 +1773,9 @@ func TestAnUnwritableCredentialMapIsReported(t *testing.T) {
 	if err := os.WriteFile(layout.records(), []byte("in the way"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := recordCredentialMap(layout, map[string]string{".claude/.credentials.json": "/host/creds"})
+	err := recordCredentialMap(layout, map[string]seededCredential{
+		".claude/.credentials.json": {Source: "/host/creds", Seed: "0a1b"},
+	})
 	if err == nil {
 		t.Fatal("an unwritable credential map was reported as recorded")
 	}
@@ -1616,13 +1788,12 @@ func TestAnUnwritableCredentialMapIsReported(t *testing.T) {
 func TestTheCredentialMapRoundTrips(t *testing.T) {
 	t.Parallel()
 	layout := boxLayout{id: "box-2", root: t.TempDir()}
-	files := map[string]string{".claude/.credentials.json": "/host/creds.json"}
-	if err := recordCredentialMap(layout, files); err != nil {
+	want := seededCredential{Source: "/host/creds.json", Seed: "0a1b"}
+	if err := recordCredentialMap(layout, map[string]seededCredential{".claude/.credentials.json": want}); err != nil {
 		t.Fatalf("recordCredentialMap: %v", err)
 	}
-	got := readCredentialMap(layout)
-	if got[".claude/.credentials.json"] != "/host/creds.json" {
-		t.Errorf("the map did not round-trip: %v", got)
+	if got := readCredentialMap(layout); got[".claude/.credentials.json"] != want {
+		t.Errorf("the map did not round-trip, with the seed a write-back is judged against: %v", got)
 	}
 }
 

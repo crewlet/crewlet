@@ -155,7 +155,7 @@ func (c containerCLI) command(timeout time.Duration, args ...string) hostCommand
 type directBox struct {
 	layout      boxLayout
 	env         map[string]string
-	credentials map[string]string
+	credentials map[string]seededCredential
 	// readCap is the whole-read cap the suite gave the box, zero — every
 	// box in production — for [MaxFileBytes]: see [readLimit].
 	readCap int
@@ -468,7 +468,7 @@ func (b *directBox) Close(ctx context.Context) error {
 			awaitJobExit(ctx, b.layout)
 		}
 	}
-	collectCredentials(b.layout, b.credentials)
+	collectCredentials(ctx, b.layout, b.credentials)
 	removeBox(b.layout)
 	localLog.Debug("local_sandbox_closed", "sandbox_id", b.layout.id)
 	return nil
@@ -489,7 +489,7 @@ type containerBox struct {
 	cli         containerCLI
 	container   string
 	env         map[string]string
-	credentials map[string]string
+	credentials map[string]seededCredential
 	// readCap is as [directBox]'s.
 	readCap int
 }
@@ -856,7 +856,7 @@ func (b *containerBox) Close(ctx context.Context) error {
 			"container", b.container, "exit", res.ExitCode,
 			"stderr", strings.TrimSpace(res.Stderr))
 	}
-	collectCredentials(b.layout, b.credentials)
+	collectCredentials(ctx, b.layout, b.credentials)
 	removeBox(b.layout)
 	localLog.Debug("local_sandbox_closed", "sandbox_id", b.layout.id)
 	return nil

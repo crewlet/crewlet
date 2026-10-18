@@ -193,8 +193,10 @@ type Spec struct {
 	// box home mapped to an absolute path on the ENGINE HOST.
 	//
 	// Each provider decides what to do with it, and they decide differently
-	// on purpose. A local box seeds the files in and writes a refreshed one
-	// back; a REMOTE one ignores them, because they carry a refresh token
+	// on purpose. A local box seeds the files in and writes one its run
+	// refreshed back — only over the very login it was seeded from, so an
+	// idle box or a stale refresh never reverts a newer one; a REMOTE one
+	// ignores them, because they carry a refresh token
 	// whose rotation is shared fleet state, and pushing that onto somebody
 	// else's VM is a materially larger trust step than the scoped headless
 	// token the run env already exports.
