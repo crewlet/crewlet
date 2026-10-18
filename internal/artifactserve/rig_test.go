@@ -313,6 +313,7 @@ func newRigWith(t *testing.T, mode artifacts.OriginMode, external string) *rig {
 	}
 	r.reads.versions[2] = artifactsdomain.Version{
 		VersionSummary: artifactsdomain.VersionSummary{Artifact: id, Number: 2, Entry: "index.html",
+			Contract:     "1.0.0",
 			Capabilities: []artifacts.Capability{artifacts.CapabilityAssets, artifacts.CapabilityDB}},
 		Manifest: artifacts.Manifest{Entry: "index.html", Files: entries},
 	}

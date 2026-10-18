@@ -51,8 +51,12 @@
 //
 // # The script policy is strict and costs nothing at serve time
 //
-// Every document gets a fresh nonce by a byte substitution of the placeholder
-// the publish-time linter wrote into every script element, so the policy
+// An author never includes the page runtime: every HTML page of a version is
+// served with the runtime of the contract the version pins placed before
+// everything it runs, past its doctype (a bounded scan of the page's opening,
+// never a parse), under the same placeholder. Every document gets a fresh
+// nonce by a byte substitution of the placeholder the publish-time linter
+// wrote into every script element, so the policy
 // (internal/api/pagepolicy's ArtifactDocument) admits the page's own scripts
 // and the scripts they create under 'strict-dynamic', its published inline
 // handlers by digest, and nothing an attacker writes into the page through a

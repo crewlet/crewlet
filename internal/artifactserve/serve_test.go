@@ -439,3 +439,73 @@ func TestAHandlerWithNoRecorderRecordsNothingAndServes(t *testing.T) {
 		}
 	}
 }
+
+// TestThePinnedRuntimeRunsBeforeEveryScriptOfThePage: an author never includes
+// the runtime, so every HTML page of a version pinning a contract is served
+// with that contract's runtime first (past a byte order mark, comments and the
+// doctype, so the page keeps its mode), under the response's own nonce; a page
+// of a version pinning none, a scriptable document that is not HTML and an
+// asset get none. Mutation: place the runtime at byte zero and a page with a
+// doctype falls into quirks mode; leave out the placeholder and the runtime is
+// refused by the page's own policy.
+func TestThePinnedRuntimeRunsBeforeEveryScriptOfThePage(t *testing.T) {
+	t.Parallel()
+	tag := func(nonce string) string {
+		return `<script src="/_crewlet/runtime/1.0.0/runtime.js" nonce="` + nonce + `"></script>`
+	}
+	for name, tc := range map[string]struct{ page, before string }{
+		"a page with a doctype":        {"<!doctype html><html><body>x</body></html>", "<!doctype html>"},
+		"an upper-case doctype":        {"<!DOCTYPE HTML>\n<html></html>", "<!DOCTYPE HTML>"},
+		"a comment before the doctype": {"<!-- built --> <!doctype html><p>x", "<!-- built --> <!doctype html>"},
+		"a byte order mark":            {"\xef\xbb\xbf<!doctype html><p>x", "\xef\xbb\xbf<!doctype html>"},
+		"no doctype at all":            {"<p>x</p>", ""},
+		"leading whitespace":           {"\n  <html><p>x", "\n  "},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			obj := r.put([]byte(tc.page))
+			r.reads.set(func(rd *reads) {
+				v := rd.versions[2]
+				files := append([]artifacts.Entry{}, v.Manifest.Files...)
+				for i := range files {
+					if files[i].Path == "index.html" {
+						files[i].Object = obj
+					}
+				}
+				v.Manifest.Files = files
+				rd.versions[2] = v
+			})
+			res := r.document(r.frame())
+			nonce := nonceOf(t, res.Header.Get("Content-Security-Policy"))
+			got := string(body(t, res))
+			if !strings.HasPrefix(got, tc.before+tag(nonce)) || !strings.HasSuffix(got, tc.page[len(tc.before):]) {
+				t.Fatalf("served %q, want %q then the runtime then the rest", got, tc.before)
+			}
+		})
+	}
+
+	none := newRig(t)
+	none.reads.set(func(rd *reads) {
+		v := rd.versions[2]
+		v.Contract = ""
+		rd.versions[2] = v
+	})
+	if got := string(body(t, none.document(none.frame()))); strings.Contains(got, "/_crewlet/runtime/") {
+		t.Errorf("a version pinning no contract was served a runtime: %s", got)
+	}
+	odd := newRig(t)
+	odd.reads.set(func(rd *reads) {
+		v := rd.versions[2]
+		v.Contract = `1.0.0"><script>alert(1)</script>`
+		rd.versions[2] = v
+	})
+	if got := string(body(t, odd.document(odd.frame()))); strings.Contains(got, "/_crewlet/runtime/") {
+		t.Errorf("a contract that is no exact version was written into the page: %s", got)
+	}
+	r := newRig(t)
+	f := r.frame()
+	if got := string(body(t, r.do(request{url: base(f) + "diagram.svg", dest: "iframe"}))); strings.Contains(got, "/_crewlet/runtime/") {
+		t.Errorf("an SVG document was served the runtime: %s", got)
+	}
+}

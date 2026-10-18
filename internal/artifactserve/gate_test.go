@@ -252,8 +252,9 @@ func TestEveryServedDocumentCarriesAFreshNonce(t *testing.T) {
 		if strings.Contains(got, artifacts.NoncePlaceholder) {
 			t.Fatalf("the placeholder reached the browser: %s", got)
 		}
-		if strings.Count(got, `nonce="`+nonce+`"`) != 2 {
-			t.Fatalf("the body does not carry the response's nonce on both scripts: %s", got)
+		if strings.Count(got, `nonce="`+nonce+`"`) != 3 {
+			t.Fatalf("the body does not carry the response's nonce on the runtime and "+
+				"both of the page's scripts: %s", got)
 		}
 		script := directive(policy, "script-src")
 		want := "script-src 'nonce-" + nonce + "' 'strict-dynamic' 'unsafe-hashes' 'sha256-" +

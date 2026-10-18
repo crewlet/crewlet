@@ -115,7 +115,7 @@ func (h *Handler) ticketed(w http.ResponseWriter, r *http.Request, token, file s
 				return ""
 			}
 		}
-		h.serveDocument(w, r, claims, entry.Object, entry.ContentType, entry.Script)
+		h.serveDocument(w, r, claims, entry.Object, entry.ContentType, entry.Script, v.Contract)
 		return destDocument
 	}
 	h.serveFile(w, r, claims, entry.Object, entry.ContentType)
@@ -157,9 +157,10 @@ func (h *Handler) asset(w http.ResponseWriter, r *http.Request, claims artifacts
 				return ""
 			}
 		}
-		// AN ASSET CARRIES NO SCRIPT FACTS: the linter reads a version's
-		// files, never the asset store, so a document there runs no script.
-		h.serveDocument(w, r, claims, a.Object, a.ContentType, nil)
+		// AN ASSET CARRIES NO SCRIPT FACTS AND NO RUNTIME: the linter reads
+		// a version's files, never the asset store, so a document there runs
+		// no script and is no page of the version's.
+		h.serveDocument(w, r, claims, a.Object, a.ContentType, nil, "")
 		return destDocument
 	}
 	h.serveFile(w, r, claims, a.Object, a.ContentType)
@@ -176,15 +177,19 @@ func (h *Handler) ticketRefused(w http.ResponseWriter, ref *refusal) {
 
 // serveDocument answers a document: its stored bytes with a fresh nonce
 // substituted for the placeholder the linter wrote into every script element,
-// under the document policy built for that nonce.
+// under the document policy built for that nonce, and an HTML page of a
+// version pinning a runtime contract with that runtime placed first.
 //
 // NO PARSE, NO ETAG, NO RANGE. The substitution is a byte replacement on a
 // template read and checked once per node; the body differs per response, so
 // no validator could name it, and the response is never stored anywhere.
 func (h *Handler) serveDocument(w http.ResponseWriter, r *http.Request, c artifacts.TicketClaims,
-	obj objstore.Object, contentType string, script *artifacts.ScriptPolicy) {
+	obj objstore.Object, contentType string, script *artifacts.ScriptPolicy, contract string) {
 
-	template, err := h.template(r.Context(), obj)
+	if essenceOf(contentType) != "text/html" {
+		contract = ""
+	}
+	template, err := h.template(r.Context(), obj, contract)
 	if err != nil {
 		h.contentFailed(w, r, c, obj, err)
 		return
@@ -220,9 +225,10 @@ func (h *Handler) serveDocument(w http.ResponseWriter, r *http.Request, c artifa
 	}
 }
 
-// template is a document's stored bytes, read and checked once and kept.
-func (h *Handler) template(ctx context.Context, obj objstore.Object) ([]byte, error) {
-	key := "t:" + string(obj.Hash)
+// template is a document's stored bytes, read and checked once and kept, with
+// the runtime of contract placed first where one is named.
+func (h *Handler) template(ctx context.Context, obj objstore.Object, contract string) ([]byte, error) {
+	key := "t:" + string(obj.Hash) + "|" + contract
 	if body, ok := h.bodies.get(key); ok {
 		return body, nil
 	}
@@ -230,8 +236,70 @@ func (h *Handler) template(ctx context.Context, obj objstore.Object) ([]byte, er
 	if err != nil {
 		return nil, err
 	}
+	if contract != "" {
+		body = withRuntime(body, contract)
+	}
 	h.bodies.put(key, body)
 	return body, nil
+}
+
+// withRuntime is a page with the script element that installs `window.crewlet`
+// placed before everything the page runs: an author never includes the runtime
+// (the page contract says so), so the origin places the one the version pins,
+// under the same nonce placeholder every other script element of the page
+// carries, so it runs under the response's nonce and before any script of the
+// page's own. A contract that is not an exact version places nothing: the
+// publish resolved every pin to one, and a value of any other shape would be
+// markup written into a page by whatever wrote the version.
+//
+// A BOUNDED SCAN OF THE PAGE'S OPENING, never a parse: past a byte order mark,
+// whitespace and comments, and past a doctype where the page opens with one,
+// since an element before the doctype would put the page in quirks mode. An
+// element there, before the html start tag, is one the parser places in the
+// head it implies, which is where a script that must run first belongs.
+func withRuntime(page []byte, contract string) []byte {
+	if !versionPattern.MatchString(contract) {
+		log.Warn("artifacts_serve_contract_unreadable", "contract", contract)
+		return page
+	}
+	tag := `<script src="` + RuntimePath(contract) + `" nonce="` +
+		artifacts.NoncePlaceholder + `"></script>`
+	at := documentStart(page)
+	out := make([]byte, 0, len(page)+len(tag))
+	out = append(out, page[:at]...)
+	out = append(out, tag...)
+	return append(out, page[at:]...)
+}
+
+// documentStart is the first offset of a page an element may be placed at
+// without changing how a browser reads the page.
+func documentStart(page []byte) int {
+	i := 0
+	if bytes.HasPrefix(page, []byte("\xef\xbb\xbf")) {
+		i = 3
+	}
+	for {
+		for i < len(page) && strings.IndexByte(" \t\n\f\r", page[i]) >= 0 {
+			i++
+		}
+		rest := page[i:]
+		switch {
+		case bytes.HasPrefix(rest, []byte("<!--")):
+			end := bytes.Index(rest[4:], []byte("-->"))
+			if end < 0 {
+				return i
+			}
+			i += 4 + end + 3
+		case len(rest) >= 9 && strings.EqualFold(string(rest[:9]), "<!doctype"):
+			end := bytes.IndexByte(rest, '>')
+			if end < 0 {
+				return i
+			}
+			return i + end + 1
+		default:
+			return i
+		}
+	}
 }
 
 // gzipped is a small compressible file's gzip, computed once and kept: nil,
