@@ -1539,6 +1539,7 @@ func sortTerms(q Query, fields map[string]resolvedField) []sortTerm {
 				Column:     alias + "." + FieldValueColumn(field.Type),
 				Descending: sort.Descending,
 				Join: " LEFT JOIN tracker_field_values " + alias +
+					" INDEXED BY " + fieldValuesKey +
 					" ON " + alias + ".task_id = t.id AND " + alias +
 					".field_id = ? AND " + alias + ".hidden = 0 AND " +
 					alias + ".kind <> '" + FieldValueForeign + "' AND " +
