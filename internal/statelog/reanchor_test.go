@@ -18,6 +18,7 @@ import (
 
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -2606,5 +2607,92 @@ func TestARestoredCheckpointsRuleTravelsInASnapshot(t *testing.T) {
 	}
 	if staleAfter != 4_201 {
 		t.Fatalf("the adopted checkpoint voids old-generation records after %d, want the donor's 4201", staleAfter)
+	}
+}
+
+// A GENERATION'S AUTHOR IS READ ONE WAY FOR EVERY DOMAIN.
+//
+// The six generation records — the tracker's, the knowledge base's, the
+// identity estate's, the artifacts log's, the artifact datastore's and chat's —
+// name the party a reanchor's facts name, and the audit feed reads those
+// histories side by side, so the facts are read by one rule
+// ([statelog.GenerationFacts.Author]) rather than six copies of it.
+// The kind is read in either vocabulary — the actor's, which the engine's
+// reanchor passes, or the principal's — and a kind in neither is an operator;
+// an operator with no credential beside it is a credential acting under its
+// own login, so its name is its credential and nobody else's is; and a name of
+// nothing but spaces names nobody, which is the node, as an empty one does.
+// The copies disagreed on that last: two read spaces as a party.
+//
+// Mutations: drop the principal vocabulary and a person named by their kind
+// is an operator; give every kind the name as its credential and a person's
+// handle lands in the credential column; test the name untrimmed and the
+// spaces are a party.
+func TestAGenerationsAuthorIsReadOneWayForEveryDomain(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		facts statelog.GenerationFacts
+		want  iam.Actor
+		named bool
+	}{
+		"a person acting as their seat, through a token": {
+			facts: statelog.GenerationFacts{By: "eng", ByKind: "human",
+				OperatorID: "pat:founder"},
+			want:  iam.Actor{Name: "eng", Kind: iam.ActorHuman, OperatorID: "pat:founder"},
+			named: true,
+		},
+		"a person named by their principal kind": {
+			facts: statelog.GenerationFacts{By: "eng", ByKind: "person"},
+			want:  iam.Actor{Name: "eng", Kind: iam.ActorHuman},
+			named: true,
+		},
+		"a seat named by its principal kind": {
+			facts: statelog.GenerationFacts{By: "eng", ByKind: "seat"},
+			want:  iam.Actor{Name: "eng", Kind: iam.ActorAgent},
+			named: true,
+		},
+		"the engine named by its principal kind": {
+			facts: statelog.GenerationFacts{By: "engine", ByKind: "engine"},
+			want:  iam.Actor{Name: "engine", Kind: iam.ActorSystem},
+			named: true,
+		},
+		"a service account acting as itself": {
+			facts: statelog.GenerationFacts{By: "ci:release", ByKind: "machine"},
+			want: iam.Actor{Name: "ci:release", Kind: iam.ActorOperator,
+				OperatorID: "ci:release"},
+			named: true,
+		},
+		"a Tier A token, recorded as the operator it is": {
+			facts: statelog.GenerationFacts{By: "token:ops", ByKind: "operator"},
+			want: iam.Actor{Name: "token:ops", Kind: iam.ActorOperator,
+				OperatorID: "token:ops"},
+			named: true,
+		},
+		"an operator beside the credential it acted through": {
+			facts: statelog.GenerationFacts{By: "jane.doe", ByKind: "operator",
+				OperatorID: "session:abc"},
+			want: iam.Actor{Name: "jane.doe", Kind: iam.ActorOperator,
+				OperatorID: "session:abc"},
+			named: true,
+		},
+		"a kind in neither vocabulary": {
+			facts: statelog.GenerationFacts{By: "jane.doe", ByKind: "daemon"},
+			want: iam.Actor{Name: "jane.doe", Kind: iam.ActorOperator,
+				OperatorID: "jane.doe"},
+			named: true,
+		},
+		"nobody named":             {facts: statelog.GenerationFacts{}},
+		"a name of spaces":         {facts: statelog.GenerationFacts{By: "  ", ByKind: "human"}},
+		"nobody named, but a kind": {facts: statelog.GenerationFacts{ByKind: "operator"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			tc.facts.Writer = "node-a"
+			got, named := tc.facts.Author()
+			if named != tc.named || got != tc.want {
+				t.Errorf("Author() = (%+v, %v), want (%+v, %v)", got, named,
+					tc.want, tc.named)
+			}
+		})
 	}
 }
