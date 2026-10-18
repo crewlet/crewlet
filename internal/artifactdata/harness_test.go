@@ -128,7 +128,7 @@ func openLog(t *testing.T) *js.DomainLog {
 }
 
 // openStore opens one node's replicated estate.
-func openStore(t *testing.T, name string) store.ReplicatedHandle {
+func openStore(t testing.TB, name string) store.ReplicatedHandle {
 	t.Helper()
 	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), name), store.Options{}, 1)
 	t.Cleanup(func() {

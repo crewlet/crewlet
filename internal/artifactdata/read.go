@@ -700,6 +700,19 @@ func (r *Reader) History(ctx context.Context, id artifacts.ID, rd Reading, filte
 					continue
 				}
 				c := byName[ch.Collection]
+				if ch.Doc == "" {
+					// A SCHEMA CHANGE is shown to whoever may read the
+					// collection's rows at all; one of a collection since
+					// dropped, to editors.
+					if c == nil && !rd.Role.Includes(artifacts.RoleEditor) {
+						continue
+					}
+					if c != nil {
+						if _, none := restriction(c.spec.Read, rd); none {
+							continue
+						}
+					}
+				}
 				if ch.Doc != "" {
 					// A ROW OF A COLLECTION SINCE DROPPED, or one the
 					// reader may not see, is not shown.
