@@ -84,11 +84,28 @@ const (
 	//
 	// ITS OWN, and deliberately NOT [AuxTimeout]: thirty seconds is
 	// justified for an LLM round trip and is nowhere near justified here.
-	// Five seconds is under the self-hosted client's own 10s retry budget,
-	// so that client's automatic 429 retry cannot turn a prefetch into a
-	// ten-second stall at the start of every chat turn — and the
-	// prefetch's wall clock is its SLOWEST block, which is latency a
-	// person is sitting through.
+	// The prefetch's wall clock is its SLOWEST block, which is latency a
+	// person is sitting through, so five seconds is decided against what
+	// each backend's read can cost:
+	//
+	//   - A VENDOR read is one HTTP call, and five seconds is under the
+	//     self-hosted client's own 10s retry budget, so that client's
+	//     automatic 429 retry cannot turn a prefetch into a ten-second
+	//     stall at the start of every chat turn.
+	//   - The ENGINE'S OWN chat is a linearizable estate read, routed to a
+	//     data node where this one holds none. The serving node may wait a
+	//     statelog.ReadBudget (2s) for the floor and another for the level,
+	//     then runs one indexed query — so a holder that is answering at
+	//     all answers inside four seconds, and the second that remains is
+	//     the query and the round trip. A test holds the two together.
+	//     What it does NOT cover is a FAILOVER: the router gives one node
+	//     ten seconds (estate.ReadAttempt) before asking the next, so a
+	//     first holder that is gone renders the unreadable hint — which
+	//     sends the seat to read the thread with its own tools — rather
+	//     than holding the turn a person is waiting on for the ten-plus
+	//     seconds a failover takes. Every other read the turn makes goes
+	//     through the same router with its own budget, so the thread is
+	//     still one tool call away.
 	ThreadTimeout = 5 * time.Second
 )
 

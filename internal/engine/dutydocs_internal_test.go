@@ -35,6 +35,7 @@ var dutyNames = map[string][]string{
 	"trashreap.Name":      {trashreap.Name},
 	"embedDutyName":       {embedDutyName},
 	"objectCollectorDuty": {objectCollectorDuty},
+	"chatPruneDutyName":   {chatPruneDutyName},
 	"name":                identityDutyNames(),
 }
 
