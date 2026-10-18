@@ -6099,7 +6099,7 @@ route.
 | `POST` | `/doclet/pages/{id}/purge` | Destroy it: `?confirm=` repeats its **title**, `?reason=` is required | `admin`, a recent proof (`step_up`), and **never a seat** |
 | `POST` | `/chatlet/channels/{channel_id}/erase` | Destroy named messages of a room: `{"message_ids": […], "reason": "…"}`, with `?confirm=` repeating how many — see [below](#a-chat-erase-prune-or-horizon) | `admin`, a recent proof (`step_up`), and **never a seat** — a credential acting as itself included |
 | `POST` | `/chatlet/channels/{channel_id}/prune` | Destroy everything a room said before `?cutoff=` (RFC 3339), with `?confirm=` repeating it | the same |
-| `PUT` | `/chatlet/channels/{channel_id}/retention` | Set a room's own horizon: `{"retention_days": n}`, `0` keeping it for ever, or `null` for the company's | the same |
+| `PUT` | `/chatlet/channels/{channel_id}/retention` | Set a room's own horizon: `{"retention_days": n}`, `0` keeping it for ever, or `null` for the company's, with `?confirm=` repeating it — the days, or `company` | the same |
 
 **A page in the tool-skills container asks one question more.** Creating,
 saving, renaming, trashing, restoring or purging one is decided as
@@ -6229,21 +6229,28 @@ blunt tool, and the one the retention duty runs on its own. `?confirm=`
 repeats the cutoff (the same instant, in any zone), and a cutoff in the future
 is refused, since that would empty the room rather than enforce a horizon.
 
-`PUT /chatlet/channels/{channel_id}/retention` sets how long one room keeps what
-it says — `{"retention_days": 90}`, `{"retention_days": 0}` to keep it for
-ever, `{"retention_days": null}` to return it to the company's
-`chat.chatlet.message_retention_days`. The field is required: an absent one would read
-as the company's horizon, and a request that said nothing would then destroy
-the past of a room somebody had set to keep for ever. A shorter horizon is a
-prune on a delay — the retention duty takes what it no longer covers on its
-next pass — which is why it is decided as one.
+`PUT /chatlet/channels/{channel_id}/retention?confirm=<days|company>` sets how
+long one room keeps what it says — `{"retention_days": 90}`,
+`{"retention_days": 0}` to keep it for ever, `{"retention_days": null}` to
+return it to the company's `chat.chatlet.message_retention_days`. The field is
+required: an absent one would read as the company's horizon, and a request
+that said nothing would then destroy the past of a room somebody had set to
+keep for ever. A shorter horizon is a prune on a delay — the retention duty
+takes what it no longer covers on its next pass — which is why it is decided as
+one, and confirmed as one: `?confirm=` repeats the horizon, the number of days
+in decimal (`0` included) or `company` for `null`; a missing one is
+`400 invalid_query` and one naming another horizon `422 invalid`, both before
+anything is written. Every horizon is confirmed, a longer one too, since
+whether it shortens the room's depends on what the room had, which the route
+does not read.
 
 **None of the three reads the room first.** The purges confirm against the row
 — the item's key, the page's title — and an administrator who could do that
 here would have to be shown a private room they are not in, or a direct
 conversation between two other people, to take a pasted credential out of it.
-So the confirmation is what the request itself destroys, repeated, and a room
-the store does not hold is the store's own answer.
+So the confirmation is what the request itself destroys, repeated — a count,
+an instant, a horizon — and a room the store does not hold is the store's own
+answer.
 
 **A retry is the same destruction.** Each is bound to the request's
 `Idempotency-Key` and to what it destroys, in one canonical form — an erase's
