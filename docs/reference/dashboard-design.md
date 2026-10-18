@@ -4136,7 +4136,22 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   and `closed` — as a sentence saying which.
   `bad_params` is the one that names the SCREEN as the fault: the engine
   understood the question and refused it, so retrying sends the same bad
-  request again. `unavailable` is the opposite: the node will answer in a
+  request again. `unauthorized` says the rule that refused — the access the
+  refusal names where access is a way past it, the rule's own sentence
+  (`contract/authority.ts`, keyed by the engine's reasons) where it is not —
+  and offers the ONE control that clears that rule (`lib/authorityRemedy.ts`):
+  **Sign in** for a reader short of access or an agent's seat on a verb only a
+  person makes, **Confirm it’s you** for a proof gone stale (the step-up
+  ceremony, after which the screen asks again on the socket's reconnect),
+  **Sign in as yourself** for a credential acting as no seat or a token on a
+  gesture that needs the person, **Try again** once an admin has activated an
+  account that is not active or an artifact's owner has shared it at the role
+  the verb needs, **Reload** for a request this engine's build has no rule
+  for, and nothing where no reader can clear it from here (a verb only an
+  agent's seat makes, a request that named no record, an agent acting for
+  somebody who could not take the verb). A stale proof's `grants` are what
+  admitted the reader, and an artifact refusal's `admin` is the override beside
+  the share its owner makes, so neither is drawn as access to ask for. `unavailable` is the opposite: the node will answer in a
   moment, so `useQuery` asks again on its own rather than leaving a person to
   reload — WHEN the engine's frame says (`retry_after`, read through
   `protocol/retry.ts`), never after a constant of the client's. A hint is
