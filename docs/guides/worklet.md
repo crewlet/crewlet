@@ -489,7 +489,12 @@ catalogue tools take them:
 
 Beside them on the declaration itself, `applies_to` names the **type slugs**
 that carry the field; empty means every type. A task of a type a field does not
-apply to cannot hold a value for it, and cannot be required to.
+apply to cannot hold a value for it, and cannot be required to. Changing
+`applies_to`, or archiving the field, settles the values tasks already hold —
+out of every filter, total and board where the field no longer applies, back in
+where it does — and that reads only what can move: a field restricted to some
+types re-reads its own values, an archived or unrestricted one only those still
+on the side it moves them from, and never the values of any other field.
 
 **A field records who declared it.** `created_by` and `created_at` are the
 *write's*, never the document's — the same two columns a tag carries — so a
