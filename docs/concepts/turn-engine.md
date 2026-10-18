@@ -1068,11 +1068,13 @@ far more than one attempt's rounds. What the rebase costs is the collapse
 across the line: an attempt judged just short of it and a retry judged just past
 it write under two instants, so a write the first made and the second repeats
 is written twice — the cheaper failure by far against every write lost. A
-comment on a work item is spared that: its id is the key of its own row rather
-than an operation, and is derived as the work began even in a rebased attempt,
-so a remark the first attempt posted is found by its id and answered from its
-row rather than posted again beside it: an answer, an edit or an unwatch since
-then stands, and nobody is woken twice. The ordinary turn pays nothing for any of this: the
+comment on a work item, an item `create_work_item` files and a view
+`save_work_view` creates are spared that: each one's id is the key of its own
+row rather than an operation, and is derived as the work began even in a
+rebased attempt, so what the first attempt posted, filed or saved is found by
+its id and answered from its row rather than made again beside it — an answer,
+an edit or an unwatch since then stands, nobody is woken twice, and no second
+item takes a second key. The ordinary turn pays nothing for any of this: the
 coordination store is read only by an attempt whose start is past the line,
 since no earlier attempt can have rebased before it. An attempt that needs the
 store and cannot read it does not run; its delivery is handed back and retried.

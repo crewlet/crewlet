@@ -527,10 +527,9 @@ func TestAViewReadRefusesTheSpellingsTheWriteRefuses(t *testing.T) {
 // A save replaces a view whole, by id, so its authority is decided on the view
 // it overwrites as well as on the one it writes — and a decision taken on a
 // read is only worth something if the write refuses when the read no longer
-// holds. Here the view changes hands between the read and the save, and in the
-// second case appears under an id the caller read as free. Both are refused
-// with a conflict the caller re-reads on; the control is the same save against
-// a fresh read.
+// holds. Here the view changes hands between the read and the save, which is
+// refused with a conflict the caller re-reads on; the control is the same save
+// against a fresh read.
 func TestASaveDecidedOnAViewThatChangedIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -556,12 +555,6 @@ func TestASaveDecidedOnAViewThatChangedIsRefused(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "bob") {
 		t.Errorf("the refusal does not say whose it is now: %v", err)
-	}
-
-	// AN ID READ AS FREE THAT WAS TAKEN in between is the same refusal.
-	if _, err := r.writer.WriteView(t.Context(), "op-free",
-		aView("v-1", nil), worklet.ViewPrior{}); !errors.Is(err, statelog.ErrConflict) {
-		t.Fatalf("a save decided on no view replaced one (err %v)", err)
 	}
 
 	// THE CONTROL: decided on what is there now, it lands.
@@ -1092,5 +1085,51 @@ func TestEveryViewListsAPinnedProjectViewAndCountsItInItsProject(t *testing.T) {
 	}
 	if listing.Views[1].Count != nil {
 		t.Error("a view that is not pinned was counted")
+	}
+}
+
+// A VIEW'S CREATE MADE AGAIN IS ANSWERED BY THE VIEW IT SAVED.
+//
+// A save decided on no stored view is a create, and its id is the one the
+// caller derived from the create as the work began — so a rebased re-run, whose
+// operation the ledger does not hold, names the view its first attempt saved.
+// It is answered from that row, with nothing published and nothing about the
+// view changed, whatever has happened to it since: refused as a view "saved
+// while this one was being decided", the re-run was told to decide again about
+// its own view.
+func TestAViewsCreateMadeAgainIsAnsweredByItsView(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := save(t, r.writer, "op-create", aView("v-1", nil)); err != nil {
+		t.Fatalf("create the view: %v", err)
+	}
+	r.drain()
+	// RENAMED SINCE, by a save that read it.
+	if _, err := save(t, r.writer, "op-rename",
+		aView("v-1", func(v *worklet.View) { v.Name = "Renamed" })); err != nil {
+		t.Fatalf("rename the view: %v", err)
+	}
+	r.drain()
+	end := r.logEnd(t)
+
+	// THE CREATE AGAIN, under the operation a rebased attempt mints.
+	got, err := r.writer.WriteView(t.Context(), "op-create-rebased",
+		aView("v-1", nil), worklet.ViewPrior{})
+	if err != nil || got.Outcome != statelog.OutcomeApplied || got.Position.Seq != 0 {
+		t.Fatalf("the create made again = (%s at %v, %v), want applied with "+
+			"nothing published", got.Outcome, got.Position, err)
+	}
+	if now := r.logEnd(t); now != end {
+		t.Errorf("the create made again published: the log moved from %d to %d", end, now)
+	}
+	named := ""
+	for _, row := range r.strip(worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}, "").Views {
+		if row.Key == "v-1" {
+			named = row.Name
+		}
+	}
+	if named != "Renamed" {
+		t.Errorf("the create made again left the view named %q, want its "+
+			"rename to stand", named)
 	}
 }

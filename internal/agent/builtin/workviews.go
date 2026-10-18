@@ -266,7 +266,7 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	opID := opIDFor(actor, t.Name(), "view", viewObjectKey(id), args)
 	var prior worklet.ViewPrior
 	if id == "" {
-		id = createdViewID(opID)
+		id = createdViewID(actor, t.Name(), args)
 	} else {
 		// A SAVE UNDER AN ID IT DID NOT MINT MAY REPLACE SOMEBODY ELSE'S
 		// VIEW, so the view it would overwrite is decided on as well as
@@ -337,11 +337,12 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 }
 
 // createdViewID is the id a new view is saved under: a UUIDv5 over the
-// operation that saves it, for [createdTaskID]'s reason — the same operation
-// made again (a brought-back `op_id`, an `Idempotency-Key` retried, a re-run
-// turn) addresses the view its first attempt saved, and where the operation is
-// fresh, so is the view.
-func createdViewID(opID string) string {
+// operation that saves it as the work began, for [createdTaskID]'s reasons —
+// the same operation made again (a brought-back `op_id`, an `Idempotency-Key`
+// retried, a re-run turn, a rebased one included) addresses the view its first
+// attempt saved, and where the operation is fresh, so is the view.
+func createdViewID(actor Actor, tool string, args map[string]any) string {
+	opID := opIDFor(actor.asBegun(), tool, "view", viewObjectKey(""), args)
 	return uuid.NewSHA1(createdViewNamespace, []byte(opID)).String()
 }
 

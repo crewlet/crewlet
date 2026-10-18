@@ -548,8 +548,10 @@ func (a Actor) OperationSince() time.Time {
 // asBegun is this actor as its unit of work began: the rebase put aside
 // ([Actor.RebasedTo]), so a key derived from it ([Actor.callKey]) carries the
 // instant the work started whichever attempt derives it. For an id that is
-// not an operation — a comment's, which keys its row ([commentID]) — because a
-// rebase is about the operation ledger alone.
+// not an operation but the key of a row — a comment's ([commentID]), a created
+// item's ([createdTaskID]) and a created view's ([createdViewID]) — because a
+// rebase is about the operation ledger alone, and the rows remember what the
+// ledger forgot.
 func (a Actor) asBegun() Actor {
 	a.RebasedTo = time.Time{}
 	return a
@@ -1688,7 +1690,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// new item apart, as they do a new view's ([viewObjectKey]).
 	opID := opIDFor(actor, t.Name(), "create",
 		createObjectKey(argString(args, "project")), args)
-	task.ID = createdTaskID(opID)
+	task.ID = createdTaskID(actor, t.Name(), argString(args, "project"), args)
 	// A UNIT THE CALLER NAMED, checked against the chart and open to every
 	// seat — deliberately unlike `update_work_item`'s re-route, which is
 	// the lead's of the project the item is in. `FiledUnit` is the
@@ -2329,8 +2331,8 @@ func createObjectKey(project string) string {
 	return "new"
 }
 
-// createdTaskID is the id of the task a create operation files: a UUIDv5 over
-// the operation id.
+// createdTaskID is the id of the task a `create_work_item` call files: a UUIDv5
+// over the create's operation id as the work began.
 //
 // A FUNCTION OF THE OPERATION, because a task's id is the subject its create
 // arbitrates on and the row it is guarded by. A fresh id per call made every
@@ -2341,9 +2343,19 @@ func createObjectKey(project string) string {
 // operation's name. Derived from the operation, a re-run addresses the task
 // the first run filed, and the tracker answers it with that task.
 //
+// AS THE WORK BEGAN ([Actor.asBegun]), for [commentID]'s reason: a rebased
+// attempt ([Actor.RebasedTo], ADR-0029) re-mints its OPERATIONS so a ledger
+// that forgot them decides them again, and that is all a rebase is about.
+// Derived from the rebased operation, the id moved with it, and every rebased
+// re-run of a turn that had filed an item filed a second one beside it under a
+// second key. The task's row has not forgotten the item, so the rebased
+// attempt names the task the first filed and the tracker answers it from that
+// row ([worklet.Writer.CreateTask]).
+//
 // Where the operation is fresh — a call with no turn identity to re-derive —
 // so is the id, which is the same promise: one operation, one task.
-func createdTaskID(opID string) string {
+func createdTaskID(actor Actor, tool, project string, args map[string]any) string {
+	opID := opIDFor(actor.asBegun(), tool, "create", createObjectKey(project), args)
 	return uuid.NewSHA1(createdTaskNamespace, []byte(opID)).String()
 }
 
