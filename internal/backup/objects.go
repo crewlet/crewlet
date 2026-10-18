@@ -185,8 +185,10 @@ var ErrObjectsUnreachable = errors.New("backup: the backup owes objects it could
 // own downloads, the git nodes' syncs and the collector on the same prefix.
 //
 // AT httpx.MaxIdleConnsPerHost (32), which a test holds, so every GET rides a
-// connection the shared transport keeps warm rather than paying a TLS
-// handshake of its own; past it, a GET opens a connection the pool then closes.
+// connection the bucket's own transport keeps warm — s3obj's clone of httpx's,
+// over HTTP/1.1 alone, which keeps httpx's pool of that many to a host —
+// rather than paying a TLS handshake of its own; past it, a GET opens a
+// connection the pool then closes.
 // Each worker streams one object through io.Copy's buffer rather than holding
 // it: thirty-two buffers, never thirty-two objects.
 //

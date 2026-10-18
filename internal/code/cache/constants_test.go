@@ -13,8 +13,9 @@ import (
 // half of what the node reads at once, so a second repository's sync — a
 // person's clone, a push's own step — starts with half the node's slots free
 // rather than waiting behind the first's longest downloads. And the node's
-// bound is the shared transport's warm connections to a host, so every GET
-// of a burst of single-part bundles rides one.
+// bound is the warm connections to a host the bucket's transport keeps
+// (s3obj's clone of httpx's, over HTTP/1.1, httpx.MaxIdleConnsPerHost of
+// them), so every GET of a burst of single-part bundles rides one.
 func TestASyncLeavesHalfTheNodesFetches(t *testing.T) {
 	t.Parallel()
 	if 2*cache.FetchConcurrency != cache.NodeFetches {
@@ -23,7 +24,7 @@ func TestASyncLeavesHalfTheNodesFetches(t *testing.T) {
 	}
 	if cache.NodeFetches != httpx.MaxIdleConnsPerHost {
 		t.Errorf("NodeFetches %d is not httpx.MaxIdleConnsPerHost %d: the node's reads at once are "+
-			"what the shared transport keeps warm connections for", cache.NodeFetches, httpx.MaxIdleConnsPerHost)
+			"what the bucket's transport keeps warm connections for", cache.NodeFetches, httpx.MaxIdleConnsPerHost)
 	}
 }
 

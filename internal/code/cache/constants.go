@@ -29,19 +29,20 @@ const EvictInterval = time.Minute
 // NodeFetches is how many pack bundles this node reads from the object store
 // at once, across every repository's sync.
 //
-// httpx.MaxIdleConnsPerHost (32), the one outbound transport's warm
-// connections to a host, and an ALIAS rather than a number of its own:
-// retuning the transport retunes it. Every GET of a cold-sync burst of
-// bundles of one part — most of them: the median push's is near 150 KB, and
-// s3obj reads up to PartBytes (8 MiB) as one request — rides a connection the
-// transport keeps open, rather than paying a TCP and TLS handshake for one it
-// then closes. And it is what a node joining a fleet asks of the store at
-// once: S3 answers in about 100 to 200 ms to the first byte (AWS's
-// performance guidelines), and 32 small reads in flight there are about 150
-// to 290 GETs a second — the S3 fake answering 100 and 200 ms late gave 285
-// and 150 bundles a second (BenchmarkColdSync's firstbyte arms; Measured in
-// doc.go). The node's own side of a bundle, about 900 a second, is what bounds
-// it only at a first byte under about 35 ms, the fake's 30 ms arm among them.
+// httpx.MaxIdleConnsPerHost (32), the warm connections to a host the bucket's
+// own transport keeps — s3obj's clone of httpx's, over HTTP/1.1 alone, which
+// keeps httpx's pool settings — and an ALIAS rather than a number of its own:
+// retuning the transport retunes it. Every GET of a cold-sync burst of bundles
+// of one part — most of them: the median push's is near 150 KB, and s3obj reads
+// up to PartBytes (8 MiB) as one request — rides a connection that transport
+// keeps open, rather than paying a TCP and TLS handshake for one it then
+// closes. And it is what a node joining a fleet asks of the store at once: S3
+// answers in about 100 to 200 ms to the first byte (AWS's performance
+// guidelines), and 32 small reads in flight there are about 150 to 290 GETs a
+// second — the S3 fake answering 100 and 200 ms late gave 285 and 150 bundles a
+// second (BenchmarkColdSync's firstbyte arms; Measured in doc.go). The node's
+// own side of a bundle, about 900 a second, is what bounds it only at a first
+// byte under about 35 ms, the fake's 30 ms arm among them.
 //
 // A NODE'S BOUND, NEVER THE FLEET'S. Every object is named under one `files/`
 // prefix (objstore.Key.Name, ADR-0026), and every git node that syncs a
@@ -90,7 +91,7 @@ const NodeFetches = httpx.MaxIdleConnsPerHost
 // second against 285 and 150 at thirty-two, so 10 000 pushes' packs take
 // about 67 to 131 seconds rather than 35 to 67. A cold sync's length is its
 // pack count, and fewer packs is what shortens it — not a share wider than
-// the shared transport's warm connections allow the node. Sixteen is bound by
+// the bucket's transport's warm connections allow the node. Sixteen is bound by
 // its GETs: sixteen of the 33 ms each took allow
 // 484 a second, while this node's own side of a bundle — its files created,
 // written, synced and renamed — ran at 878 a second from a store in memory.

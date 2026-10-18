@@ -20,7 +20,14 @@
 // few requests whatever they are ([Server.FailNext]), or every request for a
 // span of time ([Server.FailFor]) — a bucket that throttles or fails for a
 // while and recovers — every upload of one part ([Server.FailPart]), or every
-// session a directory bucket's client asks for ([Server.RefuseSessions]).
+// session a directory bucket's client asks for ([Server.RefuseSessions]). And
+// it STOPS what a case asks it to: every request of one kind taking only so
+// much of its body and then nothing, with no answer ([Server.Hang]), or
+// answering its headers and nothing after ([Server.HangAnswer]) — a bucket
+// that hung — or reading a request's body at a pace of its own
+// ([Server.BodyBytesPerSecond]), fast at first if a case says so
+// ([Server.BodyFastBytes]): a bucket whose software reads slower than its
+// kernel took the bytes.
 //
 // It does its OWN WORK AT MEMORY SPEED — a body read into one buffer of its
 // declared length, an entity tag computed once per object or part by a
@@ -154,6 +161,40 @@ type Server struct {
 	// handed out and never looked at again.
 	SessionLife time.Duration
 
+	// BodyBytesPerSecond is the most bytes a second the bucket reads a
+	// request's body at, once its first [Server.BodyFastBytes] are read —
+	// each request's on its own, or every request's together where
+	// [Server.BodyRateShared] is set. Zero or less reads at loopback's rate.
+	// Set it before the first request.
+	//
+	// THE BUCKET'S SOFTWARE'S PACE, not the link's: the bytes it has not
+	// read wait in its kernel's receive buffer and the node's send buffer,
+	// which take far more than the software reads while it reads slowly —
+	// so the node's socket sees them taken at once and the rest
+	// acknowledged as the software reads, which is the case a write's watch
+	// has to tell from a bucket that stopped.
+	BodyBytesPerSecond int64
+	// BodyFastBytes is how many of each request's body bytes the bucket reads
+	// at once, before [Server.BodyBytesPerSecond] paces the rest: a bucket
+	// that read fast at first and then slowed, the kernel having grown its
+	// receive buffer while it read fast. Set it before the first request.
+	BodyFastBytes int64
+	// BodyRateShared paces every request's body together at
+	// [Server.BodyBytesPerSecond] rather than each at its own: one link's
+	// worth of the bucket's reading, shared by the parts of an upload. Set
+	// it before the first request.
+	BodyRateShared bool
+
+	// closing is closed as the case ends, before the server is closed: what
+	// every request the bucket holds ([Server.Hang], [Server.HangAnswer])
+	// waits for at the latest, since httptest.Server's Close waits for every
+	// handler to return.
+	closing chan struct{}
+	// bodyDue is when the bucket may next read a body's byte under a shared
+	// pace ([Server.BodyRateShared]).
+	bodyMu  sync.Mutex
+	bodyDue time.Time
+
 	// requests is every request the bucket has been sent ([Server.Requests]).
 	requests atomic.Int64
 	// sessions numbers the sessions CreateSession has handed out, so no two
@@ -205,6 +246,22 @@ type Server struct {
 	// refuses each key it names with ([Server.RefuseDelete]).
 	batchRefusal refusal
 	refusedKeys  map[string]string
+	// hangs is the hold [Server.Hang] puts on each kind of request, and
+	// answerHangs the kinds [Server.HangAnswer] answers headers alone to.
+	hangs       map[string]*hang
+	answerHangs map[string]bool
+	// protocols counts the requests the bucket was sent in each protocol
+	// ([Server.Protocols]).
+	protocols map[string]int
+}
+
+// hang is one kind of request [Server.Hang] holds: how much of each body it
+// takes, how much it has taken in all, and the news that the case let it go.
+type hang struct {
+	after    int64
+	took     atomic.Int64
+	released chan struct{}
+	once     sync.Once
 }
 
 // refusal is an error answer: a status and the code it carries.
@@ -254,7 +311,7 @@ func Start(t testing.TB, bucket string) *Server {
 	t.Helper()
 	s := newServer(bucket)
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
-	t.Cleanup(s.Close)
+	s.untilTheEnd(t)
 	return s
 }
 
@@ -270,13 +327,176 @@ func StartTLS(t testing.TB, bucket string) *Server {
 	t.Helper()
 	s := newServer(bucket)
 	s.Server = httptest.NewTLSServer(http.HandlerFunc(s.serve))
-	t.Cleanup(s.Close)
+	s.untilTheEnd(t)
 	return s
 }
 
+// StartH2 serves bucket over https OFFERING HTTP/2, as a gateway served by
+// Go's own net/http over TLS does by default — for the case that a client
+// which must speak HTTP/1.1 to its bucket does so where it is offered more
+// ([Server.Protocols] says what it was spoken to in).
+func StartH2(t testing.TB, bucket string) *Server {
+	t.Helper()
+	s := newServer(bucket)
+	s.Server = httptest.NewUnstartedServer(http.HandlerFunc(s.serve))
+	s.EnableHTTP2 = true
+	s.StartTLS()
+	s.untilTheEnd(t)
+	return s
+}
+
+// untilTheEnd closes the server as the case ends — every request it holds let
+// go first, since closing waits for every handler to return.
+func (s *Server) untilTheEnd(t testing.TB) {
+	t.Cleanup(s.Close)
+	t.Cleanup(func() { close(s.closing) })
+}
+
 func newServer(bucket string) *Server {
-	return &Server{bucket: bucket, PageSize: defaultPageSize,
+	return &Server{bucket: bucket, PageSize: defaultPageSize, closing: make(chan struct{}),
 		objects: map[string]object{}, uploads: map[string]*upload{}}
+}
+
+// Protocols is every protocol the bucket was sent a request in — "HTTP/1.1",
+// "HTTP/2.0" — sorted.
+func (s *Server) Protocols() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Sorted(maps.Keys(s.protocols))
+}
+
+// Hang makes every request of op from now on take at most after bytes of its
+// body — all of it where after is negative — and then neither read nor answer
+// until released, or the case ends: a bucket that took a write and stopped,
+// whose kernel still takes what its buffers hold. It answers the release, and
+// how many body bytes the held requests took in all.
+//
+// A HELD REQUEST IS LET GO BY THE CASE, NEVER BY ITS CLIENT: net/http notices a
+// client going away only once a handler has read the request to its end
+// ([Server.HoldPart]), which one holding part of a body never does. Let go, it
+// is cut without an answer, and the requests of op after the release are
+// answered as ever.
+func (s *Server) Hang(op string, after int64) (release func(), took func() int64) {
+	h := &hang{after: after, released: make(chan struct{})}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.hangs == nil {
+		s.hangs = map[string]*hang{}
+	}
+	s.hangs[op] = h
+	return func() {
+		h.once.Do(func() { close(h.released) })
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.hangs[op] == h {
+			delete(s.hangs, op)
+		}
+	}, h.took.Load
+}
+
+// HangAnswer makes every request of op from now on be read whole and answered
+// its headers — `200 OK` — and then nothing more until its client gives up or
+// the case ends: a bucket that began an answer and stopped, as a completion
+// assembling for minutes would look without the keep-alive whitespace Amazon
+// sends. The request does nothing else: a completion held so assembles no
+// object.
+func (s *Server) HangAnswer(op string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.answerHangs == nil {
+		s.answerHangs = map[string]bool{}
+	}
+	s.answerHangs[op] = true
+}
+
+// hold holds a request of op that [Server.Hang] or [Server.HangAnswer] holds
+// and then cuts it, with no answer past what it was held with — never
+// returning — and returns at once for any other request.
+func (s *Server) hold(w http.ResponseWriter, r *http.Request, op string) {
+	s.mu.Lock()
+	h, answer := s.hangs[op], s.answerHangs[op]
+	s.mu.Unlock()
+	switch {
+	case h != nil:
+		body := io.Reader(r.Body)
+		if h.after >= 0 {
+			body = io.LimitReader(r.Body, h.after)
+		}
+		n, _ := io.Copy(io.Discard, body)
+		h.took.Add(n)
+		select {
+		case <-h.released:
+		case <-s.closing:
+		case <-r.Context().Done():
+		}
+	case answer:
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		select {
+		case <-s.closing:
+		case <-r.Context().Done():
+		}
+	default:
+		return
+	}
+	panic(http.ErrAbortHandler)
+}
+
+// pacedBody is a request's body as a bucket reading it at
+// [Server.BodyBytesPerSecond] reads it: its first [Server.BodyFastBytes] at
+// once, the rest a small piece at a time, each read only once the pace allows.
+type pacedBody struct {
+	io.ReadCloser
+	s    *Server
+	read int64
+	due  time.Time
+}
+
+func (b *pacedBody) Read(p []byte) (int, error) {
+	s := b.s
+	if b.read < s.BodyFastBytes {
+		n, err := b.ReadCloser.Read(p[:min(int64(len(p)), s.BodyFastBytes-b.read)])
+		b.read += int64(n)
+		return n, err
+	}
+	// A FIFTIETH OF A SECOND'S WORTH AT A TIME, a kibibyte at the least,
+	// so the pace is even whatever rate a case sets.
+	piece := min(int64(len(p)), max(s.BodyBytesPerSecond/50, 1<<10))
+	n, err := b.ReadCloser.Read(p[:piece])
+	b.read += int64(n)
+	if n == 0 {
+		return n, err
+	}
+	took := time.Duration(float64(n) / float64(s.BodyBytesPerSecond) * float64(time.Second))
+	var due time.Time
+	if s.BodyRateShared {
+		s.bodyMu.Lock()
+		s.bodyDue = later(s.bodyDue, time.Now()).Add(took)
+		due = s.bodyDue
+		s.bodyMu.Unlock()
+	} else {
+		b.due = later(b.due, time.Now()).Add(took)
+		due = b.due
+	}
+	t := time.NewTimer(time.Until(due))
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-s.closing:
+	}
+	return n, err
+}
+
+// later is the later of a and b.
+func later(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 
 // Bucket is the name of the bucket the fake serves, so a case configures a
@@ -544,6 +764,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.count(op)
+	s.mu.Lock()
+	if s.protocols == nil {
+		s.protocols = map[string]int{}
+	}
+	s.protocols[r.Proto]++
+	s.mu.Unlock()
+	if s.BodyBytesPerSecond > 0 {
+		r.Body = &pacedBody{ReadCloser: r.Body, s: s}
+	}
+	s.hold(w, r, op)
 	if s.refuseNext(w, r) {
 		return
 	}

@@ -201,7 +201,7 @@ func TestEveryAttemptIsCountedByOperationAndOutcome(t *testing.T) {
 	// A HEAD THE BUCKET FAILS FOR ITS WHOLE SPAN is given up, and observed
 	// so — at every attempt it made, each counted a failure.
 	failedBefore := countsOf(rec, metrics.ObjectsS3Attempts, "HeadObject")["failed"]
-	s3obj.GiveUpAfter(b, 100*time.Millisecond)
+	s3obj.SetStall(b, 100*time.Millisecond)
 	srv.FailFor(time.Hour, http.StatusInternalServerError, "InternalError")
 	guard, cancelGuard := context.WithTimeout(ctx, 30*time.Second)
 	defer cancelGuard()
@@ -412,6 +412,12 @@ func TestEveryAnswerIsExactlyOneOutcome(t *testing.T) {
 		{"a connection refused", live, refused, "unreached"},
 		{"a certificate not trusted", live, untrusted, "unreached"},
 		{"a session that could not be had", live, noSession, "unreached"},
+		{"a body the bucket stopped taking", live,
+			&smithyhttp.RequestSendError{Err: s3obj.Stalled(4<<20, 8<<20, false, time.Minute)}, "stalled"},
+		{"an answer that went silent", live, &smithyhttp.ResponseError{
+			Response: &smithyhttp.Response{Response: &http.Response{StatusCode: http.StatusOK}},
+			Err:      s3obj.Stalled(8<<20, 8<<20, true, time.Minute)}, "stalled"},
+		{"a stall as its context ended", gone, s3obj.Stalled(0, 0, false, time.Minute), "ended"},
 		{"a throttle as its context ended", gone, slowDown, "ended"},
 		{"a missing key as its context ended", gone, answer(http.StatusNotFound, "NoSuchKey"), "ended"},
 		{"a connection refused as its context ended", gone, refused, "ended"},

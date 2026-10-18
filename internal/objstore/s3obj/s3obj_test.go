@@ -104,7 +104,7 @@ func TestContract(t *testing.T) {
 		b := open(t, srv, "crewlet/")
 		servers.Store(objstore.Backend(b), srv)
 		return b
-	}, objstoretest.Options{Piece: part, Ranged: true, BatchDeletes: true,
+	}, objstoretest.Options{Piece: part, Ranged: true, BatchDeletes: true, Stalling: stallingBackend,
 		// A MULTIPART UPLOAD BEGUN AND NEVER COMPLETED, under the
 		// prefix: what a process killed mid-upload leaves, named by
 		// what follows the prefix.

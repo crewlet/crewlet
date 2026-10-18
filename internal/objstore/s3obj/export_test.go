@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"slices"
 	"time"
@@ -52,20 +53,67 @@ func OpenRetrying(ctx context.Context, cfg Config, backoff retry.BackoffDelayer,
 	return open(ctx, cfg, backoff, kept)
 }
 
-// GiveUpAfter makes b give up a request the bucket answers with nothing but
-// failures within d rather than [giveUpAfter] — each span's bound drawn from
-// d's last third, as the minute's is — so a case runs the rule in real time at
-// a span it can afford: see [Backend.judge].
-func GiveUpAfter(b *Backend, d time.Duration) { b.judge.giveUpAfter = d }
+// SetStall makes d b's one stall bound ([stallBound]) in place of
+// [objstore.Stall], and its socket sample d / 12: a request the bucket answers
+// with nothing but failures is given up within d — each span's bound drawn
+// from d's last third, as the minute's is — and an attempt the bucket stops
+// moving is ended d after it last moved, so a case runs both rules in real
+// time at a bound it can afford. Set before the case's first request: a watch
+// takes the bound as its attempt begins.
+func SetStall(b *Backend, d time.Duration) { b.stall = newStallBound(d) }
+
+// Watches is how many attempts of b's are being watched now: none once every
+// request has ended, whatever became of it ([watchedClient]).
+func Watches(b *Backend) int { return int(b.watched.live.Load()) }
+
+// WatchedClient is [watchedClient], for the cases that drive a watch with a
+// transport of their own.
+type WatchedClient = watchedClient
+
+// Watching is next with every attempt watched under the stall bound stall.
+func Watching(next s3.HTTPClient, stall time.Duration) *WatchedClient {
+	bound := newStallBound(stall)
+	return watching(next, &bound)
+}
+
+// Live is how many of c's attempts are being watched now.
+func (c *WatchedClient) Live() int { return int(c.live.Load()) }
+
+// Unacked is [unacked]: c's bytes its far end has not acknowledged, and
+// whether they could be read.
+func Unacked(c net.Conn) (int, bool) {
+	n, err := unacked(c)
+	return n, err == nil
+}
+
+// BucketProtocols is what the client [bucketClient] builds for bundle speaks:
+// HTTP/1.1, and whether HTTP/2 too.
+func BucketProtocols(bundle string) (http1, http2 bool, err error) {
+	c, err := bucketClient(bundle)
+	if err != nil {
+		return false, false, err
+	}
+	t, ok := c.Transport.(*http.Transport)
+	if !ok {
+		return false, false, fmt.Errorf("the bucket's transport is a %T", c.Transport)
+	}
+	if t.Protocols == nil {
+		return true, t.ForceAttemptHTTP2, nil
+	}
+	return t.Protocols.HTTP1(), t.Protocols.HTTP2(), nil
+}
+
+// Stalled is an attempt the bucket stopped moving ([stalled]): took of its
+// body's of bytes taken, its answer begun or not, quiet for d.
+func Stalled(took, of int64, answered bool, d time.Duration) error {
+	return &stalled{took: took, of: of, answered: answered, quiet: d}
+}
 
 // SeedBounds makes b draw each span's bound ([judge.bound]) from a source
 // seeded with seed, so a case that derives a figure from the bounds derives
 // the same figure on every run. Not safe for concurrent use: a case drives one
 // request at a time through it.
 func SeedBounds(b *Backend, seed uint64) { b.judge.draw = seeded(seed) }
-
-// GiveUpAfterBound is [giveUpAfter], for the cases that hold the rule to it.
-const GiveUpAfterBound = giveUpAfter
 
 // GivenUp is [givenUp], for the cases that find a request given up.
 type GivenUp = givenUp
@@ -220,7 +268,7 @@ var (
 // GiveUp is err as the last failure of a request given up after attempts
 // attempts ([givenUp]).
 func GiveUp(err error, attempts int) error {
-	return &givenUp{err: err, span: giveUpAfter, most: giveUpAfter, attempts: attempts}
+	return &givenUp{err: err, span: objstore.Stall, most: objstore.Stall, attempts: attempts}
 }
 
 // GateLetsOut sends one attempt of operation through b's gate under ctx — the

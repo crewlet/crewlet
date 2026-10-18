@@ -35,8 +35,9 @@ var ErrNotFound = errors.New("objstore: no such object")
 var ErrCorrupt = errors.New("objstore: an object's bytes are not the ones it was stored with")
 
 // ErrStalled is a transfer its backend stopped moving for [Stall]: a read
-// handed nothing — no stream begun, or no piece of it — for that long. The
-// store failing, never a refusal: asking again may succeed.
+// handed nothing — no stream begun, or no piece of it — for that long, or a
+// write taken no further and not answered. The store failing, never a
+// refusal: asking again may succeed.
 //
 // THE BARE WORD, because it is spliced into the sentences that already said
 // it ("stalled: the backend began no stream for 1m0s: …"), so a caller can
@@ -206,6 +207,12 @@ type Backend interface {
 	// name a listing or a stat could find, and the put fails with the
 	// read's own error. The end is io.EOF ITSELF and nothing else — see
 	// [Fill], which every backend reading in pieces reads through.
+	//
+	// A put the backend STOPS TAKING — nothing of it accepted or answered
+	// for [Stall] — fails with [ErrStalled], whatever ctx's deadline, and
+	// leaves nothing, as any failed put: a write's deadline is sized for
+	// its bytes at the floor, minutes for a large one, and a person
+	// waiting on a store that stopped is owed the minute a read is.
 	Put(ctx context.Context, name string, r io.Reader, m PutMeta) error
 
 	// Get streams n bytes of name from offset off — to the end when n is
@@ -460,7 +467,8 @@ func ReadBudget(size int64) time.Duration { return ReadBase + 2*PaceFor(size) }
 
 // Stall is the longest one transfer of an object may wait on its backend
 // before it is ended as stalled ([ErrStalled]): for a read, the stream to
-// begin and each piece of it after.
+// begin and each piece of it after; for a write, the backend to take more of
+// it or answer.
 //
 // A MINUTE — two of [MiBPace], the time a mebibyte is given: no backend
 // streaming hands over its next piece more than a mebibyte apart, the largest
@@ -475,4 +483,15 @@ func ReadBudget(size int64) time.Duration { return ReadBase + 2*PaceFor(size) }
 // peer which accepts the request and never answers it, would otherwise make
 // of an open it cannot get answered a wait as long as the read's whole
 // budget.
+//
+// THE SAME MINUTE FOR A WRITE, which each backend watches for itself because
+// only the backend can see a write move: the S3 backend at its socket — the
+// body taken, the bytes the bucket's side acknowledged, its answer — and the
+// broker's by its acknowledgements. A write moving at the floor moves a
+// mebibyte a half-minute, so a minute with nothing moving is a backend that
+// stopped, which a deadline sized for the write's bytes would hold for up to
+// sixteen and a half minutes; and a person reads one figure for every way the
+// store can fail a transfer — a read, a write, and a request the bucket keeps
+// failing, which the S3 backend gives up at the same minute. A constant,
+// never configuration: nothing honest differs by deployment.
 const Stall = 2 * MiBPace

@@ -909,7 +909,7 @@ func statusOf(err error) int {
 // A REQUEST FAILED FOR A MINUTE IS GIVEN UP. With nothing counting attempts, a
 // request the bucket answered with nothing but failures was asked again until
 // its deadline — sixteen and a half minutes for a full part. Now one whose
-// failures span its own bound inside [s3obj.GiveUpAfterBound] is not asked
+// failures span its own bound inside [objstore.Stall] is not asked
 // again: on a clock the backoff moves twenty seconds an attempt, failures at
 // 0, 20, 40 and 60 seconds, given up at the fourth whatever bound its span
 // drew, since every bound lies past forty seconds and by the minute — its
@@ -984,7 +984,7 @@ func TestARequestFailedForAMinuteIsGivenUp(t *testing.T) {
 			if !ok {
 				t.Fatalf("a request the bucket kept failing = %v; want it given up", err)
 			}
-			for _, want := range []string{"failed every attempt", s3obj.GiveUpAfterBound.String()} {
+			for _, want := range []string{"failed every attempt", objstore.Stall.String()} {
 				if !strings.Contains(err.Error(), want) {
 					t.Fatalf("the give-up %q does not name %q", err, want)
 				}
@@ -1045,7 +1045,7 @@ func TestAThrottleBetweenFailuresStartsTheMinuteAgain(t *testing.T) {
 	if !ok {
 		t.Fatalf("a head failed, throttled and failed again = %v; want it given up", err)
 	}
-	if !strings.Contains(err.Error(), s3obj.GiveUpAfterBound.String()) {
+	if !strings.Contains(err.Error(), objstore.Stall.String()) {
 		t.Fatalf("the give-up %q does not name the minute", err)
 	}
 	if n := given.Attempts(); n != 7 {
@@ -1084,7 +1084,7 @@ func TestABriefFailureIsRiddenThrough(t *testing.T) {
 		t.Parallel()
 		srv := s3fake.Start(t, "files")
 		b := openRetrying(t, srv, "", s3obj.Clock{})
-		s3obj.GiveUpAfter(b, bound)
+		s3obj.SetStall(b, bound)
 		for _, c := range []struct {
 			name string
 			data []byte
@@ -1128,7 +1128,7 @@ func TestABriefFailureIsRiddenThrough(t *testing.T) {
 			}
 		}
 		b := openRetrying(t, srv, "", s3obj.Clock{})
-		s3obj.GiveUpAfter(b, bound)
+		s3obj.SetStall(b, bound)
 		for _, c := range []struct {
 			name string
 			data []byte
@@ -1204,9 +1204,9 @@ func TestTheLastAttemptIsSentAtTheBound(t *testing.T) {
 // is given up forty seconds to a minute after its first failure (and its last
 // attempt's first byte), no tenth of a second holding more than one in fifty
 // of their last attempts; and their attempts run to a median of nine, twelve
-// at the 95th percentile and fourteen at the most — the figures giveUpAfter's
-// doc, newRetryer's and docs/concepts/object-store.md quote, so a change to
-// the backoff or the rule that moves them fails here.
+// at the 95th percentile and fourteen at the most — the figures
+// judge.giveUpAfter's doc, newRetryer's and docs/concepts/object-store.md
+// quote, so a change to the backoff or the rule that moves them fails here.
 func TestAFailingRequestsLastAttemptsAreSpreadOverTheirBounds(t *testing.T) {
 	t.Parallel()
 	const (
@@ -1221,7 +1221,7 @@ func TestAFailingRequestsLastAttemptsAreSpreadOverTheirBounds(t *testing.T) {
 		clock.Clock())
 	s3obj.SeedBounds(b, 2)
 	srv.FailFor(time.Hour, http.StatusInternalServerError, "InternalError")
-	least := s3obj.GiveUpAfterBound - s3obj.GiveUpAfterBound/3
+	least := objstore.Stall - objstore.Stall/3
 	var (
 		lasts    []time.Duration
 		attempts []int
@@ -1241,10 +1241,10 @@ func TestAFailingRequestsLastAttemptsAreSpreadOverTheirBounds(t *testing.T) {
 		// before it. The first failure is the first attempt's answer, which
 		// the clock read as the head began.
 		took := clock.Now().Sub(began)
-		if took < least || took > s3obj.GiveUpAfterBound+firstByte {
+		if took < least || took > objstore.Stall+firstByte {
 			t.Fatalf("a head the bucket kept failing was given up %v after its first failure (%d attempts); "+
 				"want it inside [%v, %v], its own bound and its last attempt's first byte", took,
-				given.Attempts(), least, s3obj.GiveUpAfterBound+firstByte)
+				given.Attempts(), least, objstore.Stall+firstByte)
 		}
 		lasts, attempts = append(lasts, took-firstByte), append(attempts, given.Attempts())
 	}

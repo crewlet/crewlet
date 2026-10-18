@@ -56,6 +56,11 @@ const (
 	// attemptEnded: the attempt's own context — the request's deadline or
 	// its caller — ended it in flight; it says nothing of the bucket.
 	attemptEnded = "ended"
+	// attemptStalled: the bucket stopped moving it for the stall bound —
+	// took no more of its body, acknowledged none of it at the node's
+	// socket and sent none of its answer ([stalled]) — and its request was
+	// given up.
+	attemptStalled = "stalled"
 	// attemptAnswered: served — a success, or a refusal such as a missing
 	// key ([answered]). What grows the gate.
 	attemptAnswered = "answered"
@@ -74,17 +79,27 @@ const (
 
 // attemptOutcomes is every outcome of an attempt, in the order
 // [attemptOutcome] decides them.
-var attemptOutcomes = []string{attemptEnded, attemptAnswered, attemptThrottled, attemptFailed, attemptUnreached}
+var attemptOutcomes = []string{attemptEnded, attemptStalled, attemptAnswered, attemptThrottled, attemptFailed,
+	attemptUnreached}
 
 // attemptOutcome is what the bucket made of one attempt that ended with err
 // under ctx: exactly one of [attemptOutcomes], decided in that order, so an
 // answer that is a throttle is never also a failure and every error lands
 // somewhere — a status that is neither served nor a throttle is a failure, no
 // status at all is unreached.
+//
+// A STALL BEFORE EVERY READING OF A STATUS: one whose body stopped reads no
+// status at all, and would be counted `unreached` — the bucket never reached,
+// when it took megabytes of the body — and one whose answer went silent
+// reads its 200, and would be counted `failed`. Its own outcome, after
+// `ended`, because the attempt's own context ending is the caller's, which
+// the watch's cancellation never is.
 func attemptOutcome(ctx context.Context, err error) string {
 	switch {
 	case err != nil && ctx.Err() != nil:
 		return attemptEnded
+	case isStalled(err):
+		return attemptStalled
 	case answered(err):
 		return attemptAnswered
 	case isThrottle(err):
@@ -100,7 +115,8 @@ const (
 	// requestAnswered: the bucket's final answer, a success or a refusal.
 	requestAnswered = "answered"
 	// requestGivenUp: the bucket answered nothing but failures to the end of
-	// the request's span's bound, inside a minute ([givenUp]).
+	// the request's span's bound, inside a minute, or stopped moving one of
+	// its attempts for the stall bound ([givenUp]).
 	requestGivenUp = "given_up"
 	// requestEnded: its deadline or its caller ended it after at least one
 	// attempt.

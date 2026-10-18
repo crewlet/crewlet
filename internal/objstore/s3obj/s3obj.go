@@ -90,8 +90,8 @@
 //
 // # Every request is bounded
 //
-// The bucket is reached through the engine's shared transport with no
-// client-wide timeout (internal/httpx), which is right only where every
+// The bucket is reached through a clone of the engine's shared transport with
+// no client-wide timeout (internal/httpx), which is right only where every
 // request is bounded some other way — so every request is: a request that
 // moves no body gets [callBudget]; a body sent as one put gets that plus its
 // size at [objstore.MiBPace]; a part of an upload gets that plus its size at
@@ -107,24 +107,75 @@
 // `AWS_MAX_ATTEMPTS` cannot put back — and a request its deadline ends names
 // the bucket's last answer beside it. But one the bucket answers with nothing
 // but FAILURES — server errors that are no throttle, or no answer at all — is
-// given up within [giveUpAfter], a minute from the first ([judge]): at a bound
-// drawn for its span of failures between forty seconds and the minute, its
-// last attempt sent at that bound, so the requests that began failing
+// given up within [judge.giveUpAfter], a minute from the first ([judge]): at a
+// bound drawn for its span of failures between forty seconds and the minute,
+// its last attempt sent at that bound, so the requests that began failing
 // together do not all ask again in one instant at the minute; and its caller
 // is told how long the bucket failed every attempt and what it last answered.
 // A throttle answered to the request starts the span again, since a bucket
 // asking the node to slow down is up. An upload in parts whose part is given
-// up is answered up to [callBudget] later, once its unfinished upload has
-// been abandoned — asked once instead, a bucket that recovered inside those
-// seconds would hold the parts, billed, for the collector's day of grace. Only
-// a refusal asking again cannot change is final at once: a client error, a
+// up is answered up to [callBudget] later, once its unfinished upload has been
+// abandoned — asked once instead, a bucket that recovered inside those seconds
+// would hold the parts, billed, for the collector's day of grace. Only a
+// refusal asking again cannot change is final at once: a client error, a
 // certificate the node does not trust. A READ'S deadline is the longest — its
 // whole budget, hours for a large object — so what ends a read whose first
-// request the bucket keeps failing is that request's bound, forty seconds to
-// a minute in, or the store's stall watchdog, which watches the open of a
-// read as it watches each piece after ([objstore.Stall]) and would end it
-// at the minute measured from the open — whichever comes first, the bucket's
-// last answer named either way.
+// request the bucket keeps failing is that request's bound, forty seconds to a
+// minute in, or the store's stall watchdog, which watches the open of a read
+// as it watches each piece after ([objstore.Stall]) and would end it at the
+// minute measured from the open — whichever comes first, the bucket's last
+// answer named either way.
+//
+// # A write that stops moving
+//
+// AN ATTEMPT THAT HAS NOT MOVED FOR [objstore.Stall] — the minute a read
+// already waits on its backend, and the minute a request the bucket keeps
+// failing is given up within — IS ENDED, whatever its deadline
+// ([watchedClient]): a deadline sized for a write's bytes at the floor is
+// minutes long — four and a half for a put of up to a part, sixteen and a half
+// for a part, five for a completion — and a bucket that stops taking a write
+// held the person who sent it for all of them. Each attempt is watched from
+// where the SDK hands it to the HTTP client — after the throttle gate and the
+// signature, so no wait in line at the gate counts — and a request whose
+// attempt was ended is given up at once, by the KIND of its failure, its
+// caller told the bucket stopped moving it: it has gone a whole minute with
+// nothing moving, which the minute of nothing but failures already meets, and
+// asked again it would hold the person another minute.
+//
+// MOVED IS COUNTED AT THE TRANSPORT, never estimated from a rate: the
+// transport taking bytes of the body, the socket's count of bytes the far end
+// has not acknowledged changing between two samples five seconds apart, a
+// `100 Continue`, the answer's headers, and every byte of an answer the SDK
+// reads itself — so a write moving at any pace the node's socket can see is
+// never ended, however slow. The body alone is not enough: the kernel's send
+// buffer and the bucket's receive buffer hold megabytes, so a write moving at
+// the floor across a slow link went minutes between two reads of its body
+// while they drained, and a watch on the body alone ended every such write.
+// And the socket alone misses an answer, and a body still being copied into
+// an empty buffer. Time spent inside a read of the body is the body's source's
+// and is never counted against the bucket.
+//
+// THE ONE STOP IT CANNOT SEE is a bucket whose SOFTWARE reads a write slower
+// than its kernel took it — fast at first, then about the floor — or a proxy
+// in front of it that buffers an upload before passing it on (nginx's
+// default): what they took and have not read is acknowledged already, so
+// nothing the node can see moves while it drains, and a write of which they
+// hold more than a minute's reading is ended a minute after the node last saw
+// it move, where it would have landed (the fake's figures are in the
+// object-store concepts page). From the node's side it is a bucket that
+// stopped, so no rule the node can apply keeps it and still ends a hung one; a
+// slow NETWORK in front of a healthy bucket — the realistic slow case — is
+// never ended.
+//
+// THE BUCKET IS SPOKEN TO OVER HTTP/1.1 ALONE ([bucketClient]), so a socket
+// is one request's: over HTTP/2 a socket carries many, and another request's
+// acknowledgements would read as this one's movement. S3's API is specified
+// over HTTP/1.1 and every S3-compatible gateway serves it. A connection whose
+// count cannot be read is never ended by the watch — its deadline still ends
+// it — which on the two platforms the engine builds for never happens, and
+// where the process's default transport is one internal/httpx cannot clone (a
+// test harness or an instrumented build, never the engine's own run) the
+// bucket is spoken to in whatever that transport speaks.
 //
 // # A throttle slows the whole client
 //
@@ -165,14 +216,18 @@
 //
 //   - `crewlet.objects.s3.attempts` counts every attempt the bucket was sent,
 //     by what it made of it: `answered`, `throttled`, `failed` (any other
-//     answer), `unreached` (none at all) or `ended` (its own context ended it
-//     in flight). The session request S3 Express signs with is counted too,
-//     and so is an attempt whose session could not be had, as `unreached`.
+//     answer), `unreached` (none at all), `stalled` (the bucket stopped
+//     moving it for a minute: took no more of its body, acknowledged none of
+//     it at the node's socket and sent none of its answer; the request is
+//     given up) or `ended` (its own context ended it in flight). The session
+//     request S3 Express signs with is counted too, and so is an attempt
+//     whose session could not be had, as `unreached`.
 //   - `crewlet.objects.s3.request.attempts` observes every request once as it
 //     ends, at how many attempts it took, by how it ended: `answered`,
-//     `given_up` (nothing but failures, for up to a minute), `ended` (its
-//     deadline or caller, after an attempt), `unsent` (before its first,
-//     observed at zero) or `failed` (a failure asking again cannot change).
+//     `given_up` (nothing but failures, for up to a minute, or an attempt
+//     stalled for one), `ended` (its deadline or caller, after an attempt),
+//     `unsent` (before its first, observed at zero) or `failed` (a failure
+//     asking again cannot change).
 //   - `crewlet.objects.s3.gate.limit` is how many attempts the gate lets out
 //     at once while a throttle holds the node back, and zero while nothing
 //     does; it is set only when it changes.
@@ -478,15 +533,21 @@ func sendBudget(n int64) time.Duration { return callBudget + objstore.PaceFor(n)
 //
 // EVERY PART AN UPLOAD MAY KEEP IN FLIGHT, not the parts in flight when it is
 // sent: an upload sends parts behind one already on its way — its first goes
-// alone and three more join it as fast as the body arrives — and each one
-// that joins slows the parts before it for the rest of their way. A part's
-// share is at worst one in [partsInFlight] while the link divides fairly
-// between the connections carrying them, which is what it is given. What it
-// costs is the notice a part that has stopped moving gets: sixteen and a half
-// minutes for a full part, where the link to itself was four and a half — a
-// part the bucket keeps failing is given up within a minute of its first
-// failure ([giveUpAfter]); what this budget still bounds is a part the bucket
-// has stopped answering.
+// alone and three more join it as fast as the body arrives — and each one that
+// joins slows the parts before it for the rest of their way. A part's share is
+// at worst one in [partsInFlight] while the link divides fairly between the
+// connections carrying them, which is what it is given: sixteen and a half
+// minutes for a full part, where the link to itself was four and a half.
+//
+// WHAT THE BUDGET STILL BOUNDS is narrow, since neither way a bucket fails a
+// part waits for it: one it keeps failing is given up within a minute of its
+// first failure ([judge.giveUpAfter]), and one it stops moving is ended a
+// minute after it last moved ([watchedClient], [objstore.Stall]). What is left
+// to the budget is a part that keeps MOVING below its share of the floor, one
+// the bucket keeps THROTTLING (a throttle is never given up: the gate slows
+// the node instead), and one whose connection's unacknowledged count cannot
+// be read, which its watch never ends ([errUncountable]; no connection on the
+// platforms the engine builds for).
 func partBudget(size int64) time.Duration { return sendBudget(size * partsInFlight) }
 
 // Backend is the objects in a bucket.
@@ -526,11 +587,22 @@ type Backend struct {
 	gate *gate
 
 	// judge reads every attempt's answer, and gives up a request the bucket
-	// keeps failing within [giveUpAfter] ([judge]) — that bound and the draw
-	// of each span's own FIELDS, which nothing in the engine changes, so this
-	// package's cases run the rule at a span they can afford, and seeded, as
-	// [Backend.partBytes] is for the part.
+	// keeps failing within [judge.giveUpAfter] ([judge]) — that bound and the
+	// draw of each span's own FIELDS, which nothing in the engine changes, so
+	// this package's cases run the rule at a span they can afford, and seeded,
+	// as [Backend.partBytes] is for the part.
 	judge *judge
+
+	// stall is the client's one stall bound ([stallBound]): how long the
+	// judge asks a failing request again, and how long every attempt's
+	// watch lets it go without moving ([watchedClient]) — [objstore.Stall],
+	// which Open sets and nothing in the engine changes, and a FIELD, read
+	// by both through one pointer, so this package's cases shorten both at
+	// once (export_test.go) as [Backend.partBytes] is for the part.
+	stall stallBound
+
+	// watched is the bucket's HTTP client, every attempt watched.
+	watched *watchedClient
 }
 
 // cutParts sizes every part but the last at n bytes, and the buffers that
@@ -623,17 +695,21 @@ func open(ctx context.Context, cfg Config, backoff retry.BackoffDelayer, c clock
 	if err != nil {
 		return nil, err
 	}
+	b := &Backend{bucket: cfg.Bucket, prefix: cfg.Prefix, stall: newStallBound(objstore.Stall)}
 	count := counted{rec: cfg.Metrics}
-	g := newGate(c, count)
+	b.gate = newGate(c, count)
 	// ONE RETRYER, read by the SDK's retry step and by the judge alike, so
 	// what the judge counts as a failure is exactly an answer the retry step
 	// would ask again.
 	retryer := newRetryer(backoff)
-	j := &judge{now: c.now, retryer: retryer, giveUpAfter: giveUpAfter, count: count}
-	client := s3.NewFromConfig(base, func(o *s3.Options) {
+	b.judge = &judge{now: c.now, retryer: retryer, stall: &b.stall, count: count}
+	b.watched = watching(httpClient, &b.stall)
+	b.client = s3.NewFromConfig(base, func(o *s3.Options) {
 		// THE BUCKET IS REACHED THROUGH THE ENGINE'S OWN TRANSPORT
-		// (internal/httpx), never a pool of the SDK's.
-		o.HTTPClient = httpClient
+		// (internal/httpx), never a pool of the SDK's — every attempt
+		// WATCHED, so one the bucket stops moving ends a stall after it
+		// last moved ([watchedClient]).
+		o.HTTPClient = b.watched
 		if cfg.Endpoint != "" {
 			o.BaseEndpoint = aws.String(cfg.Endpoint)
 		}
@@ -659,13 +735,12 @@ func open(ctx context.Context, cfg Config, backoff retry.BackoffDelayer, c clock
 		// keeps failing is given up within a minute ([judge]), and a
 		// request its deadline ends names the bucket's last answer — each
 		// counted into the node's recorder as it happens.
-		o.APIOptions = append(o.APIOptions, paced(follows(count), g, j))
+		o.APIOptions = append(o.APIOptions, paced(follows(count, &b.stall), b.gate, b.judge))
 	})
-	b := &Backend{client: client, bucket: cfg.Bucket, prefix: cfg.Prefix, gate: g, judge: j}
 	b.cutParts(PartBytes)
 	headCtx, cancel := context.WithTimeout(ctx, callBudget)
 	defer cancel()
-	if _, err := client.HeadBucket(headCtx, &s3.HeadBucketInput{Bucket: aws.String(cfg.Bucket)}); err != nil {
+	if _, err := b.client.HeadBucket(headCtx, &s3.HeadBucketInput{Bucket: aws.String(cfg.Bucket)}); err != nil {
 		return nil, fmt.Errorf("s3obj: reach bucket %q: %w", cfg.Bucket, err)
 	}
 	return b, nil
@@ -1259,31 +1334,66 @@ func (b *Backend) Abandon(ctx context.Context, p objstore.Pending) error {
 	return nil
 }
 
-// bucketClient is the client the bucket is reached through: the engine's
-// shared one, or — where the operator set AWS_CA_BUNDLE, the SDK's own setting
-// for a bucket behind a private certificate authority — a clone of its
-// transport that also trusts that bundle. The system roots (SSL_CERT_FILE,
-// SSL_CERT_DIR) are trusted either way.
+// bucketClient is the client the bucket is reached through: a clone of the
+// engine's shared transport (internal/httpx) that speaks HTTP/1.1 ALONE and —
+// where the operator set AWS_CA_BUNDLE, the SDK's own setting for a bucket
+// behind a private certificate authority — also trusts that bundle. The
+// system roots (SSL_CERT_FILE, SSL_CERT_DIR) are trusted either way.
+//
+// HTTP/1.1, SO A SOCKET IS ONE REQUEST'S: every attempt is watched at its own
+// socket ([watchedClient]), and over HTTP/2 one socket carries many requests,
+// so another request's acknowledgements would read as this one's movement and
+// a request whose stream the bucket stopped reading would never be ended
+// while its siblings moved. S3's API is specified over HTTP/1.1 and every
+// S3-compatible gateway serves it; the shared transport would offer HTTP/2
+// (it is a clone of http.DefaultTransport, ForceAttemptHTTP2 included), which
+// a gateway served by Go's net/http over TLS takes by default. What it costs
+// a gateway that would have taken HTTP/2 is multiplexing: four parts of an
+// upload on four connections rather than four streams on one, which a bucket
+// spoken to over HTTP/1.1 has always had — and a pool of the bucket's own,
+// which no other client shares anyway. The pool keeps httpx's settings:
+// httpx.MaxIdleConnsPerHost (32) warm connections to the host, the width the
+// git cache's NodeFetches, the backup's reads and the collector's questions
+// are each held to, so their requests ride connections already open. A
+// request past that width opens a connection the pool then closes — a TLS
+// handshake a gateway that would have multiplexed it over HTTP/2 did not
+// charge.
+//
+// WHERE THE PROCESS'S DEFAULT TRANSPORT IS NOT ONE httpx CAN CLONE — a test
+// harness or an instrumented build, never the engine's own run — the client
+// is the shared one, and the bucket is spoken to in whatever that transport
+// speaks: a multiplexed socket is then watched as one, and a stall that
+// shares it with a moving request is ended only by its deadline.
 func bucketClient(bundle string) (*http.Client, error) {
-	if bundle == "" {
-		return httpx.Client(0), nil
-	}
-	pem, err := os.ReadFile(bundle)
-	if err != nil {
-		return nil, fmt.Errorf("s3obj: read AWS_CA_BUNDLE %s: %w", bundle, err)
-	}
-	roots, err := x509.SystemCertPool()
-	if err != nil || roots == nil {
-		roots = x509.NewCertPool()
-	}
-	if !roots.AppendCertsFromPEM(pem) {
-		return nil, fmt.Errorf("s3obj: AWS_CA_BUNDLE %s holds no PEM certificate", bundle)
+	var roots *x509.CertPool
+	if bundle != "" {
+		pem, err := os.ReadFile(bundle)
+		if err != nil {
+			return nil, fmt.Errorf("s3obj: read AWS_CA_BUNDLE %s: %w", bundle, err)
+		}
+		if roots, err = x509.SystemCertPool(); err != nil || roots == nil {
+			roots = x509.NewCertPool()
+		}
+		if !roots.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("s3obj: AWS_CA_BUNDLE %s holds no PEM certificate", bundle)
+		}
 	}
 	return httpx.Customized(0, func(t *http.Transport) {
+		t.Protocols = new(http.Protocols)
+		t.Protocols.SetHTTP1(true)
 		if t.TLSClientConfig == nil {
 			t.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 		}
-		t.TLSClientConfig.RootCAs = roots
+		// AND OFFERS HTTP/1.1 ALONE in the TLS handshake: the clone carries
+		// the shared transport's own TLS configuration, whose protocols
+		// list names `h2` once that transport has spoken HTTP/2 anywhere,
+		// and a transport set to HTTP/1.1 that still offers `h2` is answered
+		// in HTTP/2 by a gateway that takes it — every request then reads
+		// the gateway's frames as a malformed HTTP/1.1 answer.
+		t.TLSClientConfig.NextProtos = []string{"http/1.1"}
+		if roots != nil {
+			t.TLSClientConfig.RootCAs = roots
+		}
 	}), nil
 }
 

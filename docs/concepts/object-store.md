@@ -327,9 +327,21 @@ promises, and its size is the provider's problem rather than any node's disk.
 - **Every request carries a deadline of its own**, so a bucket that stops
   answering fails the request rather than holding it: thirty seconds for one
   that moves no body, the same plus thirty seconds a mebibyte for one that
-  carries bytes up, and five minutes for completing an upload made in parts. A
-  read is bounded by the reader's own deadline (see
-  [Writing and reading](#writing-and-reading)).
+  carries bytes up, and five minutes for completing an upload made in parts —
+  and **a write the bucket stops taking ends a minute after it last moved**,
+  whatever its deadline: a minute after the bucket last took a byte of it,
+  acknowledged one, or sent one of its answer. The node counts that at its own
+  socket, so a write crossing a slow link — the floor of thirty seconds a
+  mebibyte included — is never ended for being slow. A request whose attempt
+  was ended that way is not asked again: a person's upload is answered `503`,
+  and a push's commands `unavailable`, a minute after the bucket last moved
+  it, give or take the five seconds between two looks at the socket — a
+  minute and a half for an upload in parts whose unfinished upload the bucket
+  will not let it abandon either — where a part used to wait sixteen and a
+  half minutes. A read is bounded by the reader's own deadline (see
+  [Writing and reading](#writing-and-reading)). The node speaks HTTP/1.1 to
+  the bucket, the protocol S3's API is defined over, so each request has a
+  connection of its own to watch.
 - **A throttle slows the node down rather than failing its requests.** One
   client on each node carries every upload, download, git sync, collection and
   backup copy, and the moment the bucket answers one of them with a throttle —
@@ -389,6 +401,23 @@ promises, and its size is the provider's problem rather than any node's disk.
   seconds was ridden through by one upload in eight, of 8 MiB and of 100 KiB
   alike — the requests whose bound fell past it. These figures are the
   fake's.
+
+  Measured against the same fake, the bucket stopping at once: an 8 MiB
+  upload answered at 65.0 s, where its deadline was 4 min 30 s; a 16 MiB
+  upload in parts at 65.2 s, or at 95.1 s when the bucket would not let it
+  abandon the upload either, where a part's deadline was 16 min 30 s; a
+  completion the bucket never answered at 60.4 s, and one whose answer it
+  began and never finished at 65.4 s, where either waited 5 min. A 3 MiB
+  upload across a link at the floor landed, at 91.6 s. A bucket that read the
+  first 4 MiB of each 8 MiB part at once and the rest at the floor ended a
+  16 MiB upload at 80.3 s with each part read at a floor of its own, and at
+  85.3 s with the two sharing one, where it would have landed at about two
+  and four minutes: past its fast start its software was reading slower than
+  its kernel had taken the bytes, which no sender can tell from a bucket that
+  stopped — and a proxy that buffers an upload before passing it on hides a
+  slow bucket behind it the same way. One that read only the first 2 MiB of
+  an 8 MiB upload at once kept less than a minute of it unread and was not
+  ended: it landed at 185.8 s. These figures are the fake's.
 - **What the client counts.** Every attempt the node sends its bucket is
   counted by S3 operation and what the bucket made of it
   (`crewlet.objects.s3.attempts`), and every request by how many attempts it
@@ -481,11 +510,13 @@ A read is bounded twice: by a deadline that grows with the file's size — a
 minute, plus thirty seconds a mebibyte on each of the two legs its bytes
 cross, from the store to the node and from the node to whoever is reading —
 and by a **stall** limit, which ends a read whose store has handed over
-nothing for a minute — before its first byte as well as between two. A store
-that stops answering part way through a download therefore cuts it within a
-minute rather than holding it for hours, and so does one that keeps failing
-the request a download begins with: a file the store cannot begin to hand over
-in a minute is a failed read, not a wait as long as its whole budget.
+nothing for a minute — before its first byte as well as between two. A write
+has the same minute: one the store has taken no more of and not answered for
+a minute is ended, on either backend. A store that stops answering part way
+through a download or an upload therefore cuts it within a minute rather than
+holding it for hours, and so does one that keeps failing the request a
+download begins with: a file the store cannot begin to hand over in a minute
+is a failed read, not a wait as long as its whole budget.
 
 **A seat reads a file a page at a time** (`read_project_file`). A page is
 checked for its length only — a part of a file cannot be held to the whole

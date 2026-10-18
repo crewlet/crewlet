@@ -597,8 +597,12 @@ func Catalogue() []Instrument {
 				"redirect to another region; `unreached` — no answer at all: a " +
 				"connection refused or reset, a name that did not resolve, a TLS " +
 				"failure, or an attempt never sent because its S3 Express " +
-				"session could not be had; `ended` — the attempt's own deadline " +
-				"or its caller ended it in flight. An operation's RETRIES are " +
+				"session could not be had; `stalled` — the bucket stopped " +
+				"moving the attempt for a minute: took no more of its body, " +
+				"acknowledged none of it at the node's socket and sent none of " +
+				"its answer, so the request was given up; `ended` — the " +
+				"attempt's own deadline or its caller ended it in flight. An " +
+				"operation's RETRIES are " +
 				"this counter's total for it, less the count of " +
 				"`crewlet.objects.s3.request.attempts` for it, plus that " +
 				"histogram's `unsent` count for it. `throttled` rising is the " +
@@ -634,8 +638,10 @@ func Catalogue() []Instrument {
 				"success or a refusal; `given_up` — the bucket answered nothing " +
 				"but failures (server errors that are no throttle, or no answer " +
 				"at all) from the first to a bound drawn for it between forty " +
-				"seconds and a minute after it, so the request was not asked " +
-				"again and its caller was told the bucket's last answer; " +
+				"seconds and a minute after it, or stopped moving one of its " +
+				"attempts for a minute (`stalled` on the attempts counter), so " +
+				"the request was not asked again and its caller was told the " +
+				"bucket's last answer; " +
 				"`ended` — its deadline or its caller ended it after at least " +
 				"one attempt, one still throttled among them; `unsent` — it " +
 				"ended before its first attempt, observed at zero: its deadline " +
@@ -648,7 +654,7 @@ func Catalogue() []Instrument {
 				"tail is how long the bucket made requests wait: a p95 above " +
 				"one is a bucket throttling or failing, and `given_up` above " +
 				"zero is a bucket that failed every attempt for most of a " +
-				"minute.",
+				"minute, or held one for a whole minute without moving it.",
 		},
 		// ---- code -----------------------------------------------------
 		{

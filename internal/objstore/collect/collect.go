@@ -194,9 +194,10 @@
 // store's [failedInARow]th failed question with none answered between — and
 // the pass returns only once every request it made has ended. Neither is
 // configurable: a closed loop already adapts to a store that answers slowly,
-// and an operator has no better number than the one the shared transport
-// keeps warm connections for (httpx.MaxIdleConnsPerHost, which the audit's
-// bound is held to by a test).
+// and an operator has no better number than the one the bucket's transport
+// keeps warm connections for (httpx.MaxIdleConnsPerHost — s3obj's clone of
+// httpx's, over HTTP/1.1, keeps httpx's pool — which the audit's bound is
+// held to by a test).
 //
 // ONLY THE STORE'S REQUESTS ARE PARALLEL. The estate is read by one goroutine
 // — the walk, and each batch the collection judges — because a read holds one
@@ -343,9 +344,10 @@ const judgeBatch = 500
 //     about 610 with thirty-two out, which is what a directory bucket, asked
 //     by HEAD, costs — 23–24 minutes and 55 for two million objects, rather
 //     than twelve hours and twenty-nine.
-//   - It is the shared transport's warm connections to one host
-//     (httpx.MaxIdleConnsPerHost), so every question rides a connection
-//     already open rather than paying a TLS handshake of its own.
+//   - It is the bucket's transport's warm connections to one host
+//     (httpx.MaxIdleConnsPerHost: s3obj's clone of httpx's, over HTTP/1.1,
+//     keeps httpx's pool), so every question rides a connection already open
+//     rather than paying a TLS handshake of its own.
 //   - On `nats` a question is one read from the bucket stream's leader. The
 //     backend's benchmark answered a stat across ten thousand objects
 //     4,800–8,600 times a second one at a time on a member's own client and
