@@ -1831,7 +1831,10 @@ Its author may correct a question's wording afterwards
 (`PATCH /work/items/{key}/comments/{cid}`), and that changes its words and
 nothing else: an answered question stays answered and nobody is asked it
 again, and the person it asks, the answer it closed and the decision it carries
-stay what its post made them.
+stay what its post made them. A remark is posted once: a re-run of the call
+that posted it finds it on the thread and changes nothing — not its words, not
+its answer, not who follows the item — whatever has happened to it since, the
+item having been trashed included.
 
 `my_work` reads both sides: `asked_of_me` is the questions waiting on this
 seat, and the `has_open_asks` filter finds the items carrying any. The board
