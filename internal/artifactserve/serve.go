@@ -158,8 +158,9 @@ func (h *Handler) asset(w http.ResponseWriter, r *http.Request, claims artifacts
 			}
 		}
 		// AN ASSET CARRIES NO SCRIPT FACTS AND NO RUNTIME: the linter reads
-		// a version's files, never the asset store, so a document there runs
-		// no script and is no page of the version's.
+		// a version's files, never the asset store, so its bytes are served
+		// as stored, with no nonce substituted into them, and no script in
+		// one can carry the response's nonce: a document there runs none.
 		h.serveDocument(w, r, claims, a.Object, a.ContentType, nil, "")
 		return destDocument
 	}
@@ -180,13 +181,22 @@ func (h *Handler) ticketRefused(w http.ResponseWriter, ref *refusal) {
 // under the document policy built for that nonce, and an HTML page of a
 // version pinning a runtime contract with that runtime placed first.
 //
+// THE NONCE IS SUBSTITUTED ONLY WHERE THE LINTER PUT THE PLACEHOLDER: a page
+// whose script facts say every script element carries it ([nonceTemplate]).
+// Every other document (an SVG or XML file of a version, any asset, a page
+// the linter recorded nothing for) is served byte for byte as stored, so a
+// placeholder its author wrote into it (the constant is public) is inert text
+// and never the nonce the policy admits, and none of its script runs.
+//
 // NO PARSE, NO ETAG, NO RANGE. The substitution is a byte replacement on a
 // template read and checked once per node; the body differs per response, so
 // no validator could name it, and the response is never stored anywhere.
 func (h *Handler) serveDocument(w http.ResponseWriter, r *http.Request, c artifacts.TicketClaims,
 	obj objstore.Object, contentType string, script *artifacts.ScriptPolicy, contract string) {
 
-	if essenceOf(contentType) != "text/html" {
+	if essenceOf(contentType) != "text/html" || !nonceTemplate(script) {
+		// A RUNTIME ONLY WHERE IT CAN RUN: one placed into a document whose
+		// placeholders are left inert would carry no nonce either.
 		contract = ""
 	}
 	template, err := h.template(r.Context(), obj, contract)
@@ -200,7 +210,10 @@ func (h *Handler) serveDocument(w http.ResponseWriter, r *http.Request, c artifa
 		h.refuse(w, http.StatusInternalServerError, 0)
 		return
 	}
-	body := bytes.ReplaceAll(template, []byte(artifacts.NoncePlaceholder), []byte(nonce))
+	body := template
+	if nonceTemplate(script) {
+		body = bytes.ReplaceAll(template, []byte(artifacts.NoncePlaceholder), []byte(nonce))
+	}
 	header := w.Header()
 	header.Set("Content-Type", contentType)
 	pagepolicy.ArtifactDocument(header, h.origins.Policy(c.Artifact), nonce, script)
@@ -223,6 +236,13 @@ func (h *Handler) serveDocument(w http.ResponseWriter, r *http.Request, c artifa
 			"error", err)
 		panic(http.ErrAbortHandler)
 	}
+}
+
+// nonceTemplate reports a document whose placeholders the linter wrote: an
+// HTML page whose script facts say every script element carries one, and
+// whose source the linter refused if it already carried one itself.
+func nonceTemplate(script *artifacts.ScriptPolicy) bool {
+	return script != nil && script.Nonced
 }
 
 // template is a document's stored bytes, read and checked once and kept, with

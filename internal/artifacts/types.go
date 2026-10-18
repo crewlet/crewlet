@@ -246,5 +246,8 @@ type Manifest struct {
 // a published HTML file, and the serving path replaces with a fresh nonce per
 // response: a byte substitution on a cached template rather than a parse per
 // request. The linter refuses a source file that already contains it, so an
-// author cannot place it themselves.
+// author cannot place it themselves, and the serving path substitutes it only
+// in a page whose script facts the linter wrote ([ScriptPolicy.Nonced]): in
+// any other document (an SVG or XML file, an asset) it is inert text, since
+// the constant is public.
 const NoncePlaceholder = "__CREWLET_NONCE_03252d69b9fa46508ca1f9ade71be8ee__"

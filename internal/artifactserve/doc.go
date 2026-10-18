@@ -55,8 +55,10 @@
 // served with the runtime of the contract the version pins placed before
 // everything it runs, past its doctype (a bounded scan of the page's opening,
 // never a parse), under the same placeholder. Every document gets a fresh
-// nonce by a byte substitution of the placeholder the publish-time linter
-// wrote into every script element, so the policy
+// nonce in its policy, and a page the publish-time linter read gets it in its
+// bytes too, by a byte substitution of the placeholder the linter wrote into
+// every script element; any other document (an SVG or XML file, an asset) is
+// served as stored, so a placeholder its author wrote is inert. The policy
 // (internal/api/pagepolicy's ArtifactDocument) admits the page's own scripts
 // and the scripts they create under 'strict-dynamic', its published inline
 // handlers by digest, and nothing an attacker writes into the page through a

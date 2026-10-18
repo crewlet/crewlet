@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactserve"
@@ -400,4 +402,61 @@ func TestAStaleServingNodeAnswersUnavailableRatherThanServe(t *testing.T) {
 	uf := undecided.frame()
 	undecided.chart.err = statelog.ErrUnavailable
 	unavailable(t, undecided, uf)
+}
+
+// TestOnlyALintedPageHasItsPlaceholderReplaced: the placeholder is a public
+// constant, and the linter reads only a version's HTML files, so an SVG or XML
+// file of a version, an asset of any type, and a page whose script facts were
+// never written can each carry it unread. Served as a document (the frame
+// navigating to it), each is answered byte for byte as stored, the placeholder
+// left inert and no runtime placed, so the remote script it names never
+// carries the response's nonce. Mutation: substitute the nonce whatever the
+// script facts and every case below carries the nonce its policy admits.
+func TestOnlyALintedPageHasItsPlaceholderReplaced(t *testing.T) {
+	t.Parallel()
+	smuggled := `<script nonce="` + artifacts.NoncePlaceholder +
+		`" href="https://cdn.example.net/x.js"/>`
+	svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg">` + smuggled + `</svg>`)
+	page := []byte(`<!doctype html><script nonce="` + artifacts.NoncePlaceholder +
+		`" src="https://cdn.example.net/x.js"></script>`)
+
+	r := newRig(t)
+	svgObj, pageObj, assetObj := r.put(svg), r.put(page), r.put(page)
+	assetID := uuid.MustParse("0192f00d-0000-7000-8000-0000000000b6")
+	r.reads.set(func(rd *reads) {
+		v := rd.versions[2]
+		files := append([]artifacts.Entry{}, v.Manifest.Files...)
+		for i := range files {
+			if files[i].Path == "diagram.svg" {
+				files[i].Object = svgObj
+			}
+		}
+		files = append(files, artifacts.Entry{Path: "unread.html",
+			ContentType: "text/html; charset=utf-8", Object: pageObj})
+		slices.SortFunc(files, func(a, b artifacts.Entry) int { return strings.Compare(a.Path, b.Path) })
+		v.Manifest.Files = files
+		rd.versions[2] = v
+		rd.assets = append(append([]artifactsdomain.Asset{}, rd.assets...), artifactsdomain.Asset{
+			Artifact: rd.head.ID, ID: assetID, Name: "x.html",
+			ContentType: "text/html; charset=utf-8", Object: assetObj})
+	})
+	f := r.frame()
+	for name, url := range map[string]string{
+		"an SVG file of the version":          base(f) + "diagram.svg",
+		"a page with no script facts":         base(f) + "unread.html",
+		"an HTML asset of the artifact store": base(f) + "_assets/" + assetID.String(),
+	} {
+		res := r.do(request{url: url, dest: "iframe"})
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("%s answered %d", name, res.StatusCode)
+		}
+		nonce := nonceOf(t, res.Header.Get("Content-Security-Policy"))
+		got := string(body(t, res))
+		if strings.Contains(got, nonce) {
+			t.Errorf("%s carries the response's nonce: %s", name, got)
+		}
+		if !strings.Contains(got, artifacts.NoncePlaceholder) || strings.Contains(got, "/_crewlet/runtime/") {
+			t.Errorf("%s was not served as stored: %s", name, got)
+		}
+	}
 }
