@@ -236,6 +236,7 @@ type rig struct {
 	chart    *chart
 	local    *local
 	rec      *recorder
+	judged   *judged
 	embedded fstest.MapFS
 	handler  *artifactserve.Handler
 	frames   *artifactserve.Frames
@@ -264,11 +265,12 @@ func newRigWith(t *testing.T, mode artifacts.OriginMode, external string) *rig {
 	r := &rig{
 		t: t, clock: c, keyring: runtoken.OneKey("k1", "the-fleet-key"), mode: mode,
 		external: external, backend: backend, store: store,
-		reads: &reads{versions: map[int]artifactsdomain.Version{}},
-		creds: &creds{by: map[string]iam.Principal{}, how: map[string]iam.Resolution{}},
-		chart: &chart{members: map[string]bool{}, leads: map[string]bool{}},
-		local: &local{serves: true},
-		rec:   &recorder{counts: map[string]uint64{}},
+		reads:  &reads{versions: map[int]artifactsdomain.Version{}},
+		creds:  &creds{by: map[string]iam.Principal{}, how: map[string]iam.Resolution{}},
+		chart:  &chart{members: map[string]bool{}, leads: map[string]bool{}},
+		local:  &local{serves: true},
+		rec:    &recorder{counts: map[string]uint64{}},
+		judged: &judged{},
 		embedded: fstest.MapFS{
 			"runtime/1.0.0/runtime.js": {Data: []byte("window.crewlet = {version: '1.0.0'};" +
 				strings.Repeat(" ", 4096))},
@@ -366,7 +368,7 @@ func (r *rig) build() {
 	r.handler, err = artifactserve.New(artifactserve.Deps{
 		Tickets: r.tickets, Origins: r.origins, Artifacts: r.reads, Objects: r.store,
 		Credentials: r.creds, Chart: r.chart, Local: r.local, Metrics: r.rec,
-		Embedded: r.embedded, Now: r.clock.now,
+		Objectives: r.judged, Embedded: r.embedded, Now: r.clock.now,
 	})
 	if err != nil {
 		r.t.Fatalf("New: %v", err)

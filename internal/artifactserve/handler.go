@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -88,6 +89,17 @@ type unrecorded struct{}
 func (unrecorded) Add(string, uint64, metrics.Attrs)            {}
 func (unrecorded) Observe(string, time.Duration, metrics.Attrs) {}
 
+// Objectives is where the origin's service objective events go: the node's
+// objective meter ([objectives.Meter]), which judges each against its bound.
+type Objectives interface {
+	Record(n objectives.Name, elapsed time.Duration, answered bool)
+}
+
+// unjudged is the objectives of a handler handed none, which count nothing.
+type unjudged struct{}
+
+func (unjudged) Record(objectives.Name, time.Duration, bool) {}
+
 // Deps are the handler's dependencies, every one required but the recorder.
 type Deps struct {
 	Tickets     *ticket.Codec
@@ -101,6 +113,11 @@ type Deps struct {
 	// Metrics is the engine's recorder. Nil records nothing, the engine's
 	// own reading of a node built without one.
 	Metrics Recorder
+
+	// Objectives is the node's objective meter, which every document's
+	// first byte is counted into ([objectives.ViewFirstByte]). Nil counts
+	// nothing, for the recorder's reason.
+	Objectives Objectives
 
 	// Embedded is the binary's artifact tree: `runtime/<contract>/` and
 	// `kit/<version>/`. A tree with neither directory serves both routes
@@ -121,6 +138,7 @@ type Handler struct {
 	chart    authz.Chart
 	local    LocalCopy
 	metrics  Recorder
+	judged   Objectives
 	now      func() time.Time
 	verdicts *verdicts
 	versions *lru[versionKey, artifactsdomain.Version]
@@ -157,9 +175,13 @@ func New(d Deps) (*Handler, error) {
 	if d.Metrics == nil {
 		d.Metrics = unrecorded{}
 	}
+	if d.Objectives == nil {
+		d.Objectives = unjudged{}
+	}
 	return &Handler{
 		tickets: d.Tickets, origins: d.Origins, reads: d.Artifacts, objects: d.Objects,
-		creds: d.Credentials, chart: d.Chart, local: d.Local, metrics: d.Metrics, now: now,
+		creds: d.Credentials, chart: d.Chart, local: d.Local, metrics: d.Metrics,
+		judged: d.Objectives, now: now,
 		verdicts: newVerdicts(now),
 		versions: newLRU[versionKey, artifactsdomain.Version](versionCacheBytes, versionSize),
 		bodies:   newLRU[string, []byte](bodyCacheBytes, func(b []byte) int64 { return int64(len(b)) }),
@@ -184,11 +206,23 @@ const (
 // one carrying none.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := h.now()
-	rec := &recording{ResponseWriter: w}
+	rec := &recording{ResponseWriter: w, now: h.now}
 	dest := h.route(rec, r)
 	status := rec.status
 	if status == 0 {
 		status = http.StatusOK
+	}
+	if dest == destDocument {
+		// A DOCUMENT'S FIRST BYTE IS THE VIEW OBJECTIVE'S EVENT, under
+		// every status but a 5xx: a refusal the viewer caused (an expired
+		// ticket, a revoked share) is an answer, and a stale node's 503 is
+		// the failure the objective exists to count. A handler that wrote
+		// nothing answered at its return.
+		first := rec.first
+		if first.IsZero() {
+			first = h.now()
+		}
+		h.judged.Record(objectives.ViewFirstByte, first.Sub(start), status < http.StatusInternalServerError)
 	}
 	h.metrics.Add(metrics.ArtifactsServeRequests, 1, metrics.Attrs{
 		"dest": dest, "status": strconv.Itoa(status/100) + "xx"})
@@ -223,7 +257,7 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) string {
 		}
 		return dest
 	}
-	rest, ok := strings.CutPrefix(p, "/t/")
+	rest, ok := strings.CutPrefix(p, ticketPath)
 	if !ok {
 		h.refuse(w, http.StatusNotFound, 0)
 		return dest
@@ -270,24 +304,30 @@ func (h *Handler) refuse(w http.ResponseWriter, status int, retry time.Duration)
 }
 
 // recording is the response writer the handler writes through: it remembers
-// the status and counts the body for the instruments, and passes deadlines and
-// flushes through to the connection.
+// the status, when the response was committed to and the body's size for the
+// instruments, and passes deadlines and flushes through to the connection.
 type recording struct {
 	http.ResponseWriter
+	now    func() time.Time
 	status int
 	bytes  int64
+
+	// first is when the status was set (a WriteHeader, or the first Write
+	// that implies one): the instant the handler committed to its answer,
+	// which is the first byte as this process can see it.
+	first time.Time
 }
 
 func (r *recording) WriteHeader(status int) {
 	if r.status == 0 {
-		r.status = status
+		r.status, r.first = status, r.now()
 	}
 	r.ResponseWriter.WriteHeader(status)
 }
 
 func (r *recording) Write(b []byte) (int, error) {
 	if r.status == 0 {
-		r.status = http.StatusOK
+		r.status, r.first = http.StatusOK, r.now()
 	}
 	n, err := r.ResponseWriter.Write(b)
 	r.bytes += int64(n)

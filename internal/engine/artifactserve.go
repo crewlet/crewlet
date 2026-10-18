@@ -76,6 +76,7 @@ func ArtifactOrigin(e *Engine, boot *config.Bootstrap, creds artifactserve.Crede
 		Chart:       ChartAuthorityOf(e),
 		Local:       e,
 		Embedded:    tree,
+		Objectives:  e.objectives,
 	}
 	// A NIL RECORDER RECORDS NOTHING, and is handed on as no recorder at all:
 	// a nil pointer inside the interface would be a recorder that panics.
