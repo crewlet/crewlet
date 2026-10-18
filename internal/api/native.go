@@ -434,6 +434,7 @@ func NativeOperatorHalves(e *engine.Engine) func() (operator.Halves, bool) {
 		}
 		var halves operator.Halves
 		halves.Work, halves.Pages = NativeToolDeps(e)
+		halves.Chat = NativeChatDeps(e)
 		if e.Knowledge() != nil {
 			halves.Knowledge = operatorKnowledge{engine: e}
 		}
