@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/auth"
@@ -135,7 +137,13 @@ func (r artifactRequesters) Requester(ctx context.Context, handle string) (iam.P
 			p.Stage = iam.StageRetired
 			return p, nil
 		}
-		p.Login, p.Stage = h.Person, h.Stage
+		// THE PERSON BY THEIR ID AND SEAT: every artifact relation of a
+		// person is decided on the seat they hold (a person's artifacts
+		// are owned under it), so no login is needed for the ceiling.
+		if id, err := uuid.Parse(h.Person); err == nil {
+			p.ID = id
+		}
+		p.Stage = h.Stage
 		return p, nil
 	}
 	// A SEAT NOBODY HOLDS IN THE DIRECTORY is a person the chart knows by

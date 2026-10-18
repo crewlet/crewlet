@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -75,7 +76,7 @@ func (t *shareArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	audience, refusal := t.deps.audienceArg(turn, t.Name(), argString(args, "to"))
+	audience, refusal := t.deps.audienceArg(t.deps.orgFor(turn), t.Name(), argString(args, "to"))
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -148,6 +149,8 @@ func (t *unshareArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
+	// A WITHDRAWAL NAMES WHATEVER A STORED SHARE NAMES, which may outlive
+	// the seat or the unit it was made to, so the chart is not asked.
 	audience, refusal := t.deps.audienceArg(nil, t.Name(), argString(args, "from"))
 	if refusal != nil {
 		return *refusal, nil
@@ -167,10 +170,9 @@ func (t *unshareArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 }
 
 // audienceArg reads an audience as a tool names it: a bare seat handle,
-// `seat:<handle>`, `unit:<key>` or `company`. With a turn (a share being
-// GRANTED) the seat or unit must be one the company chart holds; a withdrawal
-// names whatever a stored share names, which may outlive the seat.
-func (d ArtifactDeps) audienceArg(turn *turnctx.Turn, tool, raw string) (artifacts.Audience, *tools.Result) {
+// `seat:<handle>`, `unit:<key>` or `company`. With a chart (a share being
+// GRANTED) the seat or unit must be one the company holds.
+func (d ArtifactDeps) audienceArg(o *org.Organization, tool, raw string) (artifacts.Audience, *tools.Result) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
 		r := failed(tool + " needs an audience: a seat handle, `unit:<key>` or `company`.")
@@ -185,8 +187,7 @@ func (d ArtifactDeps) audienceArg(turn *turnctx.Turn, tool, raw string) (artifac
 			"name a seat handle, `unit:<key>` or `company`.", tool, clip(raw)))
 		return artifacts.Audience{}, &r
 	}
-	o := d.orgFor(turn)
-	if turn == nil || o == nil {
+	if o == nil {
 		return a, nil
 	}
 	switch a.Kind {

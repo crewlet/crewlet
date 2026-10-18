@@ -755,3 +755,27 @@ func TestAnAdministratorsListingShowsNoOverride(t *testing.T) {
 		t.Fatalf("an administrator's listing = %v, want only their own", rows)
 	}
 }
+
+// AN AGENT DOES NOT MANAGE SOMEBODY ELSE'S ARTIFACT (D36): shared with it as an
+// editor, it is held to contributor and may not publish over the work, unless
+// the company lets agents manage others' artifacts.
+func TestAnAgentDoesNotPublishOverSomebodyElsesWork(t *testing.T) {
+	t.Parallel()
+	for _, manage := range []bool{false, true} {
+		r := newArtifactRig(t, artifactChart{}, requesters{}, func(d *builtin.ArtifactDeps) {
+			d.ManageOthers = func() bool { return manage }
+		})
+		h := r.f.seed("founder", iam.ActorHuman, founder,
+			[]artifacts.Share{shareWith("agent-cto", artifacts.RoleEditor)},
+			[2]string{"index.html", "<p>x</p>"})
+		got := r.call(t, turnFor(t, "agent-cto"), builtin.PublishArtifactTool, map[string]any{
+			"artifact": h.ID.String(), "base_version": 1, "content": "<p>y</p>"})
+		if got.Failed == manage {
+			t.Errorf("agents_manage_others %v: a publish over the founder's work answered "+
+				"failed=%v %q", manage, got.Failed, got.Output)
+		}
+		if !manage && !strings.Contains(got.Output, "does not own") {
+			t.Errorf("the refusal does not say why: %q", got.Output)
+		}
+	}
+}
