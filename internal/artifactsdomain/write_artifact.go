@@ -186,7 +186,10 @@ func checkVersionInput(kind artifacts.Kind, in PublishInput) error {
 	if err := checkCapabilities(in.Capabilities); err != nil {
 		return err
 	}
-	return manifest.Validate(kind, manifest.Canonical(in.Manifest))
+	if err := manifest.Validate(kind, manifest.Canonical(in.Manifest)); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	return nil
 }
 
 // checkShare refuses a share the domain never writes: an audience this build

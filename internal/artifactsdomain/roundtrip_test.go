@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -635,4 +636,36 @@ func compareIDs(a, b artifacts.ID) int {
 		return 1
 	}
 	return 0
+}
+
+// A NATIVE SHEET HOLDS NO FILE (D03): its content is its datastore, so its
+// versions' manifests are empty and it holds no bytes, while an HTML artifact
+// with no entry is refused before anything is published.
+func TestANativeSheetHoldsNoFile(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	jane := person("jane", artifacts.RoleOwner)
+	sheet, err := n.writer.Create(t.Context(), jane, artifactsdomain.CreateInput{
+		Kind: artifacts.KindSheet, Title: "Review sheet", Owner: "jane", OwnerKind: iam.ActorHuman,
+		First: artifactsdomain.PublishInput{Capabilities: []artifacts.Capability{artifacts.CapabilityDB}},
+	})
+	if err != nil {
+		t.Fatalf("create a sheet: %v", err)
+	}
+	head := n.head(sheet.Artifact)
+	if head.Kind != artifacts.KindSheet || head.BytesHeld != 0 ||
+		!slices.Equal(head.Capabilities, []artifacts.Capability{artifacts.CapabilityDB}) {
+		t.Errorf("the sheet reads %+v", head)
+	}
+	v, err := n.reader.Version(t.Context(), sheet.Artifact, 1)
+	if err != nil || len(v.Manifest.Files) != 0 || v.Manifest.Entry != "" {
+		t.Errorf("the sheet's first version is %+v (%v)", v, err)
+	}
+	_, err = n.writer.Create(t.Context(), jane, artifactsdomain.CreateInput{
+		Kind: artifacts.KindHTML, Title: "Empty page", Owner: "jane", OwnerKind: iam.ActorHuman,
+	})
+	if !errors.Is(err, artifactsdomain.ErrInvalid) || !errors.Is(err, manifest.ErrInvalid) {
+		t.Errorf("an HTML artifact with no entry answered %v, want the manifest's refusal "+
+			"as the domain's", err)
+	}
 }
