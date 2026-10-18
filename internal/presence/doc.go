@@ -41,9 +41,10 @@
 //   - A NODE GAINING ITS FIRST SOCKET in a room asks its peers once, within the
 //     fleet's read budget, rather than leaving a newcomer to wait a rebroadcast
 //     interval to see who is there. The answers are applied once the budget is
-//     spent, after the peers' broadcasts may already have said more, so a full
-//     frame older than one already heard from its node fills in what the room
-//     has not heard since and undoes nothing.
+//     spent, after the peers' broadcasts may already have said more, so a
+//     member changes only on a frame newer than the one that last said it, and
+//     a late answer fills in what the room has not heard since and undoes
+//     nothing.
 //   - A NODE STOPPING tells the fleet its members left before it goes.
 //
 // # Large rooms present the most recent fifty

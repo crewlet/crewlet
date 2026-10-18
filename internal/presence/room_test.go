@@ -13,15 +13,16 @@ import (
 //
 // The join-time answer is sealed when the peer answers and applied once the
 // ask has waited out its budget, after the peer's broadcasts have already said
-// what changed since. Here the room hears node-a's answer (sealed first,
-// naming one member) only after node-a's newer frames: a second member that
-// joined, and a third that joined and left. The answer must not delete the
-// member a newer frame added, must not bring back the one a newer frame said
-// left, and must still fill in a member the room had never heard of. A
-// rebroadcast newer than everything then replaces node-a's members as before.
+// what changed since. Here the room hears node-a's answer only after node-a's
+// newer frames: members that joined, and one that joined and left. The answer
+// must not delete a member a newer frame added, must not set a member back to
+// what it was before a newer frame, must not bring back the one a newer frame
+// said left, and must still fill in a member the room had never heard of and
+// update one whose last frame was older. A rebroadcast newer than everything
+// then replaces node-a's members as before.
 //
-// Mutation: apply every full frame as a replacement, and the second member
-// vanishes until node-a's next rebroadcast (fifteen seconds; S6 measured it).
+// Mutation: apply every frame whatever instant it carries, and ida vanishes
+// until node-a's next rebroadcast (fifteen seconds; S6 measured it).
 func TestALateFullFrameFillsInAndNeverUndoes(t *testing.T) {
 	t.Parallel()
 	start := time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)
@@ -45,17 +46,32 @@ func TestALateFullFrameFillsInAndNeverUndoes(t *testing.T) {
 		return out
 	}
 
-	// THE NEWER FRAMES ARRIVE FIRST: dana joins, sam joins and leaves.
+	// AN OLDER FRAME FIRST: bob was viewing, half a second in.
+	r.hear(frame(500*time.Millisecond, false, []artifacts.PresenceMember{member("bob")}), start)
+
+	// THE NEWER FRAMES: dana joins, ida joins, sam joins and leaves.
 	r.hear(frame(2*time.Second, false, []artifacts.PresenceMember{member("dana")}), start)
+	r.hear(frame(2500*time.Millisecond, false, []artifacts.PresenceMember{member("ida")}), start)
 	r.hear(frame(3*time.Second, false, []artifacts.PresenceMember{member("sam")}), start)
 	r.hear(frame(4*time.Second, false, nil, "sam"), start)
 
-	// THE ANSWER, sealed at one second, names jane (whom nothing newer
-	// mentioned) and sam (who left after it was sealed), and not dana.
-	r.hear(frame(time.Second, true, []artifacts.PresenceMember{member("jane"), member("sam")}), start)
-	if got, want := held(), []string{"dana", "jane"}; !slices.Equal(got, want) {
+	// THE ANSWER, sealed at one second, names bob (editing since, which is
+	// newer than what the room holds of him), dana (idle, which is older
+	// than the frame that said she joined viewing), jane (whom nothing
+	// newer mentioned) and sam (who left after it was sealed), and not ida.
+	editing, idle := member("bob"), member("dana")
+	editing.Activity, idle.Activity = artifacts.PresenceEditing, artifacts.PresenceIdle
+	r.hear(frame(time.Second, true, []artifacts.PresenceMember{editing, idle, member("jane"),
+		member("sam")}), start)
+	if got, want := held(), []string{"bob", "dana", "ida", "jane"}; !slices.Equal(got, want) {
 		t.Fatalf("after the late answer the room holds %v from node-a, want %v: a frame older "+
 			"than what the room heard since fills in and never undoes", got, want)
+	}
+	if got := r.remote[remoteKey{node: "node-a", session: "bob"}].member.Activity; got != artifacts.PresenceEditing {
+		t.Fatalf("bob shows %s after a frame newer than the one that last said him, want editing", got)
+	}
+	if got := r.remote[remoteKey{node: "node-a", session: "dana"}].member.Activity; got != artifacts.PresenceViewing {
+		t.Fatalf("dana shows %s after a frame older than the one that last said her, want viewing", got)
 	}
 
 	// A REBROADCAST NEWER THAN EVERYTHING still replaces node-a's members.
@@ -64,12 +80,12 @@ func TestALateFullFrameFillsInAndNeverUndoes(t *testing.T) {
 		t.Fatalf("after a newer rebroadcast the room holds %v from node-a, want %v", got, want)
 	}
 
-	// AND THE MEMORY OF IT ENDS WITH THE FRAMES IT GUARDS AGAINST: once the
-	// newest frame's validity has passed, nothing sealed before it can be
-	// opened, and the room keeps no record of the node.
+	// AND THE MEMORY OF A DEPARTURE ENDS WITH THE FRAMES IT GUARDS AGAINST:
+	// once the leave's validity has passed, nothing sealed before it can be
+	// opened.
 	r.expire(at(6 * time.Second))
-	if len(r.told) != 0 || len(r.departed) != 0 {
-		t.Fatalf("the room still remembers %d node(s) and %d departure(s) past every frame's "+
-			"validity", len(r.told), len(r.departed))
+	if len(r.departed) != 0 {
+		t.Fatalf("the room still remembers %d departure(s) past every frame's validity",
+			len(r.departed))
 	}
 }
