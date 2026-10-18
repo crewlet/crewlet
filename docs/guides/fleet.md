@@ -190,7 +190,8 @@ the engine's own tracker at scale. No stream keeps more than five copies
 (`stream.replicas` stops at five, JetStream's own ceiling), so a sixth member
 holds no copy anybody asked for and only adds a voter every election and
 every create waits on — `crewlet validate` warns about a peer list naming more
-than four other members. **Beyond five, a fleet grows by adding leaves, not
+than four other members, and so does every start of such a member, as
+`config_advisory`. **Beyond five, a fleet grows by adding leaves, not
 members.**
 
 **A member of a fleet persists.** A member that names a cluster, lists peers or

@@ -374,9 +374,11 @@ func TestTheFileLevelIsConvertedAtTheEdge(t *testing.T) {
 }
 
 // AN UNSET FILE LEVEL IS "FOLLOW THE PROCESS", carried as nil rather than as
-// a guess at what the process level happens to be right now — the flags are
-// layered on afterwards, so a value resolved here would be the file's, not
-// the invocation's.
+// a copy of the process level. The process level can still move after the
+// file is open — [logging.SetVerbosity] re-installs every destination, and a
+// file sink with no level of its own follows each change — so a level resolved
+// here would freeze the one the document held at the moment the file opened,
+// and state in a second layer the rule internal/logging already applies.
 func TestAnUnsetFileLevelStaysUnset(t *testing.T) {
 	t.Parallel()
 	boot, err := ParseRunnableBootstrap([]byte(

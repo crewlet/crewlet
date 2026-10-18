@@ -657,10 +657,13 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 		}
 		res.Valid = true
 		// TIER A HAS WARNINGS OF ITS OWN: a declined fsync, a trim that
-		// will never advance on its own, a broker member with nowhere to
-		// persist. Every one of them describes a correct deployment
-		// for somebody, so none is a refusal, and `crewlet validate` is
-		// the one moment the consequence can still change the decision.
+		// will never advance on its own, a peer entry no rule counts.
+		// Every one of them describes a correct deployment for somebody,
+		// so none is a refusal, and here is where the consequence can
+		// still change the decision: before the file is deployed. They are
+		// not said only here — `crewlet run` logs the same list on every
+		// start ([logBootstrapAdvisories]), for every deployment nobody
+		// ran this command for.
 		//
 		// APPENDED TO THE EMPTY LIST rather than assigned over it:
 		// [config.Bootstrap.Warnings] answers nil when a document has
@@ -1009,13 +1012,22 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 		// log file and nothing to open. stderr is the whole record.
 		return loadErr
 	}
+	// THE LOGGING FLAGS FOLD INTO THE DOCUMENT, as -roles and the API flags
+	// do below ([overrideNode]), so everything that reads Tier A's
+	// `logging:` block from here on reads the one this run applies: the
+	// verbosity, the log file, and the advisory about a verbose broker
+	// nothing records, which a `-debug` run would otherwise be warned about
+	// by the line that tells it to pass `-debug`.
+	if err = overrideLogging(boot, fs, *logLevel, *logFormat, *debug, *logFile); err != nil {
+		return err
+	}
 	// AND NOW THE FILE, which is what makes Tier A's `logging:` block mean
 	// anything: a declared setting nothing reads is one an operator writes
 	// and that does nothing at all, so this line is what makes
 	// `logging.level` take effect. Lines emitted BEFORE this point came out
 	// under the flags alone, which is the best a process can do about a
 	// file it has not opened yet.
-	logging.SetVerbosity(logSettings(boot, fs, *logLevel, *logFormat, *debug))
+	logging.SetVerbosity(boot.LogSettings())
 	// AND THE LOG FILE, the moment the document that names it has been
 	// read. Everything that can still fail below — a keyring that will not
 	// build, a store that will not open, a company that will not
@@ -1027,11 +1039,8 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// The trace flush below and the engine drain further down both log,
 	// and a file closed ahead of them would lose the shutdown it was
 	// opened to record.
-	logFileSet, logToStderr, err := logFileSettings(boot, fs, *logFile)
-	if err != nil {
-		return err
-	}
-	detachLogFile, err := attachLogFile(logFileSet, logToStderr, os.Stderr)
+	logFileSet, _ := boot.Logging.File.LogFileSettings()
+	detachLogFile, err := attachLogFile(logFileSet, boot.Logging.StderrEnabled(), os.Stderr)
 	if err != nil {
 		return err
 	}
@@ -1063,6 +1072,12 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// given: an unset -api-port is not "port 0", which would serve no
 	// HTTP at all and make every integration go deaf.
 	if err = overrideNode(boot, fs, *roles, *apiHost, *apiPort); err != nil {
+		return err
+	}
+	// AND EVERY OTHER TIER A RULE, over the document the flags left, once all
+	// of them are in — see [validateFolded] for why the engine's own check is
+	// too late for this command.
+	if err = validateFolded(boot, fs); err != nil {
 		return err
 	}
 	// AFTER THE OVERRIDES, because -api-host is one of them and the
@@ -1099,6 +1114,19 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 			"start no publisher, so a typo here would be a node that boots, "+
 			"reports healthy and runs nothing", *mode, statelog.MaintenanceModes)
 	}
+	// WHAT IS VALID ABOUT TIER A AND WORTH KNOWING, said on every start (see
+	// [logBootstrapAdvisories] for why). At this point and no other: after
+	// every refusal Tier A's rules can draw from the file and the flags
+	// ([validateFolded]), and this command's own about the bind and the
+	// mode, because a warning printed beside a refusal is noise at the
+	// moment somebody is reading carefully; after the log file is attached,
+	// so the lines reach the durable record; and after every flag has been
+	// folded into the document, so they describe the node this run starts
+	// rather than the file it was started from. What can still fail after
+	// them is not Tier A's to refuse: the environment's node id, a company
+	// file the seed writes into the store and holds to the admission rules
+	// then, a store or a broker that will not open.
+	logBootstrapAdvisories(log, boot)
 
 	// The engine owns the process signals exclusively — one handler per
 	// signal — because a graceful drain is the difference between a
@@ -1318,7 +1346,7 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	//
 	// WHAT THE PROBES SAY IS CONDITIONAL on there being a listener to say it
 	// on. A node with api.port 0 is a real posture (see [serveAPI]'s
-	// api_disabled warning), and promising such an operator a /health that
+	// api_disabled line), and promising such an operator a /health that
 	// stays 200 sends them to a refused connection, which is exactly what a
 	// node that died mid-drain looks like — the confusion the rest of this
 	// change exists to remove.
@@ -1666,25 +1694,35 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// orchestrator's probe to answer, should learn it here rather than
 		// from a webhook that never arrives or a restart loop.
 		//
-		// A WARNING ONLY WHERE SOMETHING WAS PROMISED. A node with the
-		// ingress role is the one integrations and a dashboard expect to
-		// find, so without a port every integration is deaf here. A node
-		// without it serves only its probes and its tool bridge, and a
-		// satellite with nothing inbound is a shape an operator chooses;
-		// it is told what it gave up, at info. The roles are read off Tier A,
-		// whose answer is the presence lease's: the profile's id is the one
-		// field it does not need.
+		// WHAT IT GAVE UP DEPENDS ON ITS ROLES. A node with the ingress role
+		// is the one integrations and a dashboard expect to find, so
+		// without a port every integration is deaf here. A node without it
+		// serves only its probes and its tool bridge, and a satellite with
+		// nothing inbound is a shape an operator chooses. The roles are read
+		// off Tier A, whose answer is the presence lease's: the profile's id
+		// is the one field it does not need.
+		hint := "api.port is 0, so this node binds no listener: no " +
+			"orchestrator can probe it (/health, /ready) and an agent-mode " +
+			"seat's box finds no tool bridge here"
 		if boot.Profile("").RunsIngress() {
-			log.WarnContext(ctx, "api_disabled",
-				"hint", "api.port is 0, so this node serves no dashboard, no REST "+
-					"API, no webhook endpoint, no probe and no agent-mode tool "+
-					"bridge; every integration is deaf here")
-		} else {
-			log.InfoContext(ctx, "api_disabled",
-				"hint", "api.port is 0, so this node binds no listener: no "+
-					"orchestrator can probe it (/health, /ready) and an agent-mode "+
-					"seat's box finds no tool bridge here")
+			hint = "api.port is 0, so this node serves no dashboard, no REST " +
+				"API, no webhook endpoint, no probe and no agent-mode tool " +
+				"bridge; every integration is deaf here"
 		}
+		// A WARNING ONLY WHERE NOTHING ELSE WARNED. An ingress node whose
+		// DECLARED roles name ingress was told this at WARN already, by the
+		// `api.port` advisory at the start ([logBootstrapAdvisories]), and
+		// one fact warned about twice is a log that teaches its reader to
+		// skim. That advisory leaves an UNDECLARED node.roles out on
+		// purpose — every role, which is also the single-process shape
+		// before anybody chose a port — so that node, which serves nothing
+		// any integration can reach, is warned here instead. Every other
+		// node is told what it gave up, at info.
+		level := slog.LevelInfo
+		if boot.Node.Roles == nil {
+			level = slog.LevelWarn
+		}
+		log.Log(ctx, level, "api_disabled", "hint", hint)
 		return nil, nil
 	}
 
@@ -2308,19 +2346,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// same-origin only, which is what the dashboard this process
 		// serves needs and what every other site gets.
 		"cross_origin_sites", app.CORS().Origins())
-	// THE ACKNOWLEDGED INSECURE POSTURE IS RESTATED ON EVERY START, for
-	// the life of the deployment. `accept_insecure` is what lets a second
-	// factor stay optional, or an `http://` external URL stand, on an
-	// address a browser reaches over the network — which is a decision
-	// somebody made once and everybody after them inherits. A warning that
-	// only fired the first time would be a decision nobody can see.
-	if boot.API.Auth.AcceptInsecure {
-		log.WarnContext(ctx, "api_insecure_posture_accepted",
-			"external_url", boot.API.ExternalBase(),
-			"totp", boot.API.Auth.SecondFactor(),
-			"hint", "`api.auth.accept_insecure` is on. Remove it once you "+
-				"use https and two-step verification")
-	}
 	// THE COMPANY-DERIVED SURFACES, re-sent whenever a published company
 	// changes them.
 	//
@@ -2646,75 +2671,99 @@ func formatNames() []string {
 	return out
 }
 
-// logSettings resolves how loud `crewlet run` is, and in what shape, from
-// the two places that get to say: the Tier A file and this command line.
+// overrideLogging folds the run flags that override Tier A's `logging:` block
+// into the document, so the verbosity, the log file and the advisories all
+// read one answer: the block this run applies.
+//
+// # Folded, rather than layered on top where each reader looks
+//
+// It used to be two readers — one for the level and the shape, one for the
+// file — each taking the document and the flags and deciding between them,
+// and a third reader, [config.Bootstrap.Warnings], that saw the document
+// alone. The third is the one that showed the cost: a run with `-debug` and
+// `stream.debug: true` was told the broker's debug output had nowhere to go
+// and to pass `-debug`. A rule judged on a document the run does not apply is
+// a second answer to one question, so the flags are written into the
+// document once, here, the way [overrideNode] writes `-roles` and the API's
+// bind, and every reader after this line reads the result. The run holds the
+// result to Tier A's rules ([validateFolded]) and engine.New does again, so
+// what is written here has to be a document the validator accepts.
 //
 // # The command line wins, but only where it actually spoke
 //
 // A flag carries its default whether or not anyone typed it, so applying
-// `*logLevel` unconditionally would pin every node at info and make
+// `-log-level` unconditionally would pin every node at info and make
 // `logging.level: warn` in the file dead on arrival: a setting declared in
-// Tier A and read by nothing. isFlagSet is what separates "the
-// operator asked for info" from "nobody said anything", and it is the same
-// idiom [overrideNode] uses for the three node overrides.
+// Tier A and read by nothing. [isFlagSet] is what separates "the operator
+// asked for info" from "nobody said anything", and it matters in both
+// directions for `-log-file`, whose default is the empty string: an EXPLICIT
+// `-log-file ""` is how a node with a file in its document is asked to write
+// none for one invocation.
 //
 // `-debug` only ever RAISES: it is the shorthand for asking for debug, not a
 // switch that turns the file's own setting off. An operator who wants a
 // `logging.level: debug` file quieter for one run says so with
 // `-log-level info`.
-func logSettings(boot *config.Bootstrap, fs *flag.FlagSet,
-	logLevel, logFormat string, debug bool,
-) (slog.Level, logging.Format) {
-	level, format := boot.LogSettings()
+//
+// `-log-file` moves the PATH. The file's shape, its level and its rotation
+// caps stay the document's: they describe the disk this deployment runs on
+// rather than this invocation, the line `-roles` and `-api-host` are drawn
+// along too. Except that a run writing NO file keeps none of them, because
+// a shape, a level or a cap with no path is a block the validator refuses —
+// it reads as a node that logs to a file — and none of them describes
+// anything this run writes.
+//
+// The path is TRIMMED, as Tier A trims every string it holds: validation
+// normalizes the document it checks, so a path folded in untrimmed would be
+// one file opened here and another named by the document the engine runs —
+// and `-log-file " "` is the empty path, asking for no file.
+//
+// # The one combination neither half can see alone
+//
+// `logging.stderr: false` is checked against the file THE DOCUMENT names, so
+// a `-log-file ""` that takes the file away afterwards would leave the node
+// writing its log nowhere. That is refused here, where both halves are
+// finally known, naming both.
+func overrideLogging(boot *config.Bootstrap, fs *flag.FlagSet,
+	logLevel, logFormat string, debug bool, logFile string,
+) error {
 	if isFlagSet(fs, "log-level") {
-		level = logging.ParseLevel(logLevel)
+		boot.Logging.Level = flagLevel(logLevel)
 	}
 	if isFlagSet(fs, "log-format") {
-		format = logging.ParseFormat(logFormat)
+		boot.Logging.Format = logging.ParseFormat(logFormat)
 	}
 	if isFlagSet(fs, "debug") && debug {
-		level = slog.LevelDebug
+		boot.Logging.Level = logging.LevelDebug
 	}
-	return level, format
-}
-
-// logFileSettings resolves WHICH file this run writes, and in what shape,
-// from the two places that get to say.
-//
-// # The same rule as logSettings: the flag wins only where it spoke
-//
-// `-log-file` carries its own default — the empty string — whether or not
-// anyone typed it, so applying it unconditionally would make
-// `logging.file.path` in a deployment's own document dead on arrival behind
-// it. [isFlagSet] is what separates "the operator asked for no file" from
-// "nobody said anything", which matters in both directions here: an
-// EXPLICIT `-log-file ""` is how a node with a file in its Tier A document
-// is asked to write none for one invocation.
-//
-// The rotation caps stay the file's. They describe the disk this deployment
-// runs on rather than this invocation, which is the same line `-roles` and
-// `-api-host` are drawn along — see [overrideNode].
-// It also settles the one combination NEITHER the validator nor the flags can
-// see on their own: `logging.stderr: false` is checked against the file THIS
-// DOCUMENT names, so a `-log-file ""` that takes the file away afterwards
-// would leave the node writing its log nowhere. That is refused here, where
-// both halves are finally known.
-func logFileSettings(boot *config.Bootstrap, fs *flag.FlagSet, logFile string,
-) (config.LogFileSettings, bool, error) {
-	file := boot.Logging.File
-	if isFlagSet(fs, "log-file") {
-		file.Path = logFile
+	if !isFlagSet(fs, "log-file") {
+		return nil
 	}
-	settings, ok := file.LogFileSettings()
-	stderr := boot.Logging.StderrEnabled()
-	if !ok && !stderr {
-		return config.LogFileSettings{}, false, errors.New(
+	if logFile = strings.TrimSpace(logFile); logFile != "" {
+		boot.Logging.File.Path = logFile
+		return nil
+	}
+	if !boot.Logging.StderrEnabled() {
+		return errors.New(
 			"-log-file \"\" removes the only destination this node has: " +
 				"logging.stderr is false in the Tier A document, so there " +
 				"would be nowhere left to write. Name a file, or set " +
 				"logging.stderr back to true")
 	}
-	return settings, stderr, nil
+	boot.Logging.File = config.LogFile{}
+	return nil
+}
+
+// flagLevel is a `-log-level` value as Tier A spells a level.
+//
+// The flag resolves LENIENTLY ([logging.ParseLevel]: a typo is info and
+// `warning` is warn), because a flag may not fail a run; what it folds into
+// the document is the level it resolved TO, so the document holds one of
+// [logging.Levels] — a value its own validator accepts — rather than the
+// operator's spelling. slog names its four levels DEBUG, INFO, WARN and
+// ERROR, which lowered are exactly that set.
+func flagLevel(name string) logging.Level {
+	return logging.Level(strings.ToLower(logging.ParseLevel(name).String()))
 }
 
 // attachLogFile installs the log file beside stderr and returns the teardown
@@ -2749,9 +2798,9 @@ func logFileSettings(boot *config.Bootstrap, fs *flag.FlagSet, logFile string,
 // [logging.Configure] exists to prevent.
 func attachLogFile(settings config.LogFileSettings, stderr bool, report io.Writer) (func(), error) {
 	if settings.Open.Path == "" {
-		// Nothing to attach, and nothing to silence — logFileSettings has
-		// already refused the one document where that combination could
-		// leave this node writing nowhere.
+		// Nothing to attach, and nothing to silence — the validator and
+		// [overrideLogging] have already refused the two documents where
+		// that combination could leave this node writing nowhere.
 		return func() {}, nil
 	}
 	f, err := logging.OpenFile(settings.Open, report)
@@ -2856,6 +2905,69 @@ func overrideNode(boot *config.Bootstrap, fs *flag.FlagSet,
 		}
 	}
 	return nil
+}
+
+// validateFolded holds the document the run flags were folded into to every
+// Tier A rule, refusing it naming the flags given.
+//
+// # Why here, when engine.New asks the same question
+//
+// The file passed these rules as it loaded, and [overrideNode] re-runs the
+// two a node flag most often breaks — what the roles require of the file, and
+// what its listeners require of each other. But a flag reaches every rule that
+// reads what it moved: `-api-port 8080` on a document with no `api:` block
+// turns the API on, and a node serving the API must name
+// `api.external_url`. engine.New refuses that too, but only after this command
+// has logged the document's advisories as though it were the one this node
+// runs — a warning beside the refusal it should have come after — and without
+// naming the flag that made the document wrong. Asked here, the refusal names
+// the flags given and comes first.
+//
+// IT NORMALIZES in place, as [config.Bootstrap.Validate] always does, so what
+// reads the document after it — the dev principal's bind check, the node id,
+// the advisories — reads what the engine will run.
+//
+// Only when a flag that writes into the document was given: without one, the
+// document is the file, which passed these rules as it loaded.
+func validateFolded(boot *config.Bootstrap, fs *flag.FlagSet) error {
+	given := givenFlags(fs, "roles", "api-host", "api-port",
+		"log-level", "log-format", "debug", "log-file")
+	if len(given) == 0 {
+		return nil
+	}
+	if err := boot.Validate(); err != nil {
+		return fmt.Errorf("%s: %w", strings.Join(given, " "), err)
+	}
+	return nil
+}
+
+// logBootstrapAdvisories logs every advisory Tier A raises
+// ([config.Bootstrap.Warnings]), one `config_advisory` line at WARN each, in
+// the order the document raises them.
+//
+// # Why every start, and not only `crewlet validate`
+//
+// validate is the moment before a deployment where the consequence can still
+// change the decision, and it is a moment most deployments never have: a
+// container image, a Helm chart or an operator renders the document and
+// starts the process, and nobody runs a command against the file on the way.
+// The log of the node running it is the one place every deployment has, and
+// every advisory is about what this node does — a declined fsync, a trim
+// nobody acknowledges, a member nobody counts — for as long as it runs, so a
+// line written once at a validate nobody ran is one nobody read. Tier A
+// changes only on a restart, so once per start is the complete record.
+//
+// # Its fields are the ones a person acts on
+//
+// `config` says which tier, the key `config_reference_unresolved` uses for
+// the same question, so one query finds both; `path` is where the remedy is
+// written; `detail` is the whole message, consequence first and remedy
+// second, because a field cut from it would name a problem without its fix.
+// No `kind`: every Tier A warning is an advisory.
+func logBootstrapAdvisories(log *slog.Logger, boot *config.Bootstrap) {
+	for _, w := range boot.Warnings() {
+		log.Warn("config_advisory", "config", "bootstrap", "path", w.Path, "detail", w.Message)
+	}
 }
 
 // givenFlags names, as `-name`, the flags among names the command line set.

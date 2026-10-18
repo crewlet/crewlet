@@ -230,6 +230,104 @@ func TestAVerboseBrokerIsQuietOnceSomethingRecordsIt(t *testing.T) {
 	}
 }
 
+// AND IT NAMES THE CAUSE IT FOUND, AND ONLY THE REMEDIES THAT WOULD WORK. The
+// obvious one, raising the level, is wrong where `logging.stderr: false` hands
+// the stream to a file with a level of its own: that file does not follow
+// `logging.level`, so a node told to pass `-debug` — one that may have been
+// started with it — would stay exactly as silent.
+func TestAVerboseBrokerIsToldOnlyTheRemediesThatWork(t *testing.T) {
+	t.Parallel()
+	const path = "/var/log/crewlet/node.log"
+	for _, tc := range []struct {
+		name   string
+		mutate func(*config.Bootstrap)
+		says   []string
+		never  []string
+	}{
+		{"no log file",
+			func(b *config.Bootstrap) {},
+			[]string{"`logging.level`", "`info` (unset)", "no log file is configured",
+				"Pass `-debug`"},
+			[]string{"`logging.file.level`", "`logging.stderr`"}},
+		{"a log file that follows the level",
+			func(b *config.Bootstrap) {
+				b.Logging.Level = logging.LevelWarn
+				b.Logging.File.Path = path
+			},
+			[]string{"is `warn`", "the log file follows it", "Pass `-debug`",
+				"or `logging.file.level` to `debug`"},
+			[]string{"`logging.stderr`"}},
+		{"a log file with a quieter level of its own",
+			func(b *config.Bootstrap) {
+				b.Logging.File.Path = path
+				b.Logging.File.Level = logging.LevelError
+			},
+			[]string{"`logging.file.level` is `error`", "Pass `-debug`",
+				"or `logging.file.level` to `debug`"},
+			[]string{"`logging.stderr`"}},
+		{"the console off, and the file follows the level",
+			func(b *config.Bootstrap) {
+				b.Logging.Stderr = new(bool)
+				b.Logging.File.Path = path
+			},
+			[]string{"`logging.stderr` is false", "which follows it, is the only destination",
+				"Pass `-debug`"},
+			nil},
+		// THE SHAPE A `-debug` RUN REACHES: the level is debug already,
+		// so the line says why that is not enough.
+		{"the console off, and the file keeps a level below the console's debug",
+			func(b *config.Bootstrap) {
+				b.Logging.Level = logging.LevelDebug
+				b.Logging.Stderr = new(bool)
+				b.Logging.File.Path = path
+				b.Logging.File.Level = logging.LevelWarn
+			},
+			[]string{"`logging.stderr` is false", "`logging.file.level` is `warn`",
+				"Set that to `debug`", "`logging.stderr` back to true"},
+			[]string{"-debug", "set `logging.level`"}},
+		{"the console off, and the file keeps a level of its own",
+			func(b *config.Bootstrap) {
+				b.Logging.Stderr = new(bool)
+				b.Logging.File.Path = path
+				b.Logging.File.Level = logging.LevelWarn
+			},
+			[]string{"`logging.file.level` is `warn`", "Set that to `debug`"},
+			[]string{"-debug", "set `logging.level`", "`logging.stderr` back to true"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b := config.RunnableBootstrap()
+			b.Stream.StoreDir = "/var/lib/crewlet/stream"
+			b.Retention.BackupOwner = "platform-oncall"
+			b.Stream.Debug = true
+			tc.mutate(&b)
+			if err := b.Validate(); err != nil {
+				t.Fatalf("the fixture does not validate: %v", err)
+			}
+			var message string
+			for _, w := range b.Warnings() {
+				if w.Path == "stream.debug" {
+					message = w.Message
+				}
+			}
+			if message == "" {
+				t.Fatalf("no stream.debug warning: %v", b.Warnings())
+			}
+			for _, want := range tc.says {
+				if !strings.Contains(message, want) {
+					t.Errorf("warning = %q, want it to say %q", message, want)
+				}
+			}
+			for _, wrong := range tc.never {
+				if strings.Contains(message, wrong) {
+					t.Errorf("warning = %q, offers %q, which would change nothing here",
+						message, wrong)
+				}
+			}
+		})
+	}
+}
+
 // A UNIT WITH NO ID IS REFUSED ON A WRITE AND WARNED ABOUT ON A STORED
 // REVISION, which is what an ADMISSION rule is: a unit is referenced by its
 // key, so a new document may not leave a team keyed on prose, while a company
