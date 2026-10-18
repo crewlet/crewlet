@@ -418,6 +418,9 @@ func TestTheTagModesAreThreeDifferentQuestions(t *testing.T) {
 		"all matches only both":       {"all:api,v2", []string{"both"}},
 		"none matches neither":        {"none:api,v2", []string{"none"}},
 		"a bare list defaults to any": {"api,v2", []string{"both", "one"}},
+		// THE SPELLING A PERSON OR A MODEL TYPES — a label, not the slug
+		// the rows hold — finds the same work.
+		"a label finds its slug": {"all:API,V2", []string{"both"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := ids(h.ask(map[string]any{
