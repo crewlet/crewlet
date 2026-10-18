@@ -354,7 +354,10 @@ append-only mode, immutability after creation, and **`humans_only`**: the
 approval column a model must never tick. An agent may add `humans_only` and
 never remove it, and may tighten a rule and never loosen one. Read rules
 (`all`, `own_rows`, `editors`, `private`) apply on **every** read path: the
-list, a single document, a query, the history and the live pushes.
+list, a single document, a query, the history and the live pushes. The history
+judges each change by the row's creator when it was made, so a row deleted and
+created again under the same id by somebody else is theirs from that create on,
+and what its previous creator wrote stays with them.
 
 **A write is a batch of ops**, all applied or none: `set` (replace a
 document's fields, creating it), `merge` (set named fields), `delete`

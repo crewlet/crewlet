@@ -41,7 +41,9 @@
 // or grown by an append, so a concurrent edit is a conflict the writer is told
 // about rather than a paragraph silently lost. An agent tightens a schema and
 // never loosens one. The read rules apply on every read path: the listing, a
-// query, a document, the history and the export.
+// query, a document, the history and the export. The history judges each
+// change by the creator recorded on it ([Change]), so a row that changes hands
+// never shows its new creator what the previous one wrote.
 //
 // # Field-level last writer wins, by log position
 //
