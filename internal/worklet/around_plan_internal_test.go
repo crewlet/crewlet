@@ -18,9 +18,10 @@ import (
 // index leads with the removal rather than the id, so asking where one
 // removed task sat walked every removal in scope once per run of the answer.
 //
-// So the probe's own read of the task is a seek of the key, and every other
-// read of the task table in its plan — the subtree rollup's subquery, which is
-// the set's own — is still through the scope's index.
+// So the probe's own read of the task is a seek of the key, and so is the
+// subtree rollup's probe of that task's root, which reads the root under an
+// alias of its own ([anchorProbe]) and which [tasksReadOtherwise], reading only
+// the rows' own alias, does not count.
 func TestWhereATaskSitsIsAskedByItsKey(t *testing.T) {
 	t.Parallel()
 	db := planStore(t)

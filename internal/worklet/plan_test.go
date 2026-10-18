@@ -118,15 +118,13 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 			page := statements["the page"]
 			plan := explain(t, db, page.sql, page.args)
 			for what, statement := range statements {
-				other := plan
-				if what != "the page" {
-					other = explain(t, db, statement.sql, statement.args)
-				}
+				tree := explainTree(t, db, statement.sql, statement.args)
+				other := planDetails(tree)
 				for _, index := range indexesIn(other) {
 					used[index] = true
 				}
 				refuseHeapScans(t, other)
-				refuseSetWalks(t, what, other)
+				refuseSetWalks(t, what, tree)
 			}
 			// A CUSTOM-FIELD FILTER SEEKS ITS OWN COLUMN'S INDEX,
 			// which the inventory below cannot see: the four lead
@@ -317,7 +315,8 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 }
 
 // refuseSetWalks fails a plan over a compiled task set that walks a task's
-// child table, or the task table under any alias but the answer's own.
+// child table, reads the task table under any alias but the answer's own
+// other than by a probe, or reads it into a list.
 //
 // A WALK OF THE TASK TABLE in an order a LIMIT stops is a plan; a walk of a
 // task's tags, dependencies or field values is every such row in the company
@@ -328,32 +327,97 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 // once per row, so a walk there is the company read once per task. Measured:
 // `has_children` walked every task through the primary key for each task it
 // filtered, and passed.
-func refuseSetWalks(t *testing.T, what string, plan []string) {
+//
+// AND NO READ OF THE TASK TABLE SITS BENEATH A LIST SUBQUERY. This engine plans
+// an `IN (SELECT …)` whose subquery stands alone as a LIST SUBQUERY: evaluated
+// once, and held whole before the first outer row is read. Over a child table
+// that is a filter's own matches — a field's values, a person's rows, a tag's —
+// and is the plan those filters are written for; over the task table it is
+// every task the subquery selects, however few rows the page then returns.
+// Measured: the subtask rollup, written as `root_id IN (SELECT t.id …)`, held
+// every live task in the company for the workspace's default listing, a
+// project's whole board for a board and the whole trash at either scope, and
+// passed every other check here, because its subquery reused the alias `t`.
+func refuseSetWalks(t *testing.T, what string, tree []planLine) {
 	t.Helper()
-	for _, line := range plan {
+	plan := planDetails(tree)
+	listed := underList(tree)
+	for _, line := range tree {
 		for _, table := range []string{"tracker_task_tags", "tracker_task_deps",
 			"tracker_field_values"} {
-			if strings.HasPrefix(line, "SCAN "+table+" ") || line == "SCAN "+table {
+			if strings.HasPrefix(line.detail, "SCAN "+table+" ") ||
+				line.detail == "SCAN "+table {
 				t.Errorf("%s walks every row of %s:\n%s", what, table,
 					strings.Join(plan, "\n"))
 			}
 		}
-		if strings.HasPrefix(line, "SCAN tracker_tasks AS ") &&
-			!strings.HasPrefix(line, "SCAN tracker_tasks AS t ") {
+		if strings.HasPrefix(line.detail, "SCAN tracker_tasks AS ") &&
+			!strings.HasPrefix(line.detail, "SCAN tracker_tasks AS t ") {
 			t.Errorf("%s walks the task table once per row it filters:\n%s",
 				what, strings.Join(plan, "\n"))
+		}
+		if readsTaskTable(line.detail) && listed(line) {
+			t.Errorf("%s reads the task table into a list it holds whole "+
+				"before the first row:\n%s", what, strings.Join(plan, "\n"))
 		}
 	}
 }
 
+// readsTaskTable reports a plan line that reads `tracker_tasks`: a scan names
+// the table, and a seek names only its alias, so a seek is the table's when
+// the index it seeks is one of the table's.
+func readsTaskTable(detail string) bool {
+	if strings.HasPrefix(detail, "SCAN tracker_tasks ") || detail == "SCAN tracker_tasks" {
+		return true
+	}
+	if !strings.HasPrefix(detail, "SEARCH ") {
+		return false
+	}
+	for _, index := range indexesIn([]string{detail}) {
+		if strings.HasPrefix(index, "tracker_tasks_") ||
+			index == "sqlite_autoindex_tracker_tasks_1" {
+			return true
+		}
+	}
+	return false
+}
+
+// underList reports, for each line of a plan, whether it sits inside an IN
+// list's subquery — which this engine plans once for the statement rather
+// than once per row, and holds whole.
+func underList(tree []planLine) func(planLine) bool {
+	byID := map[int]planLine{}
+	for _, line := range tree {
+		byID[line.id] = line
+	}
+	return func(line planLine) bool {
+		for at := line.parent; at != 0; at = byID[at].parent {
+			if strings.HasPrefix(byID[at].detail, "LIST SUBQUERY") {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// planDetails is a plan tree's lines, in order.
+func planDetails(tree []planLine) []string {
+	details := make([]string, len(tree))
+	for i, line := range tree {
+		details[i] = line.detail
+	}
+	return details
+}
+
 // registeredQueries is the grammar's own coverage set: one entry per filter
-// family §6 declares, spelled as a caller spells it.
+// family §6 declares, spelled as a caller spells it — and each one that leaves
+// the subtask mode to the grammar planned IN BOTH MODES ([inBothModes]).
 //
 // It is a MAP RATHER THAN A LIST because each case names what it is for, and
 // the failure this test reports is "this index has no reader" — which is only
 // actionable when the reader set has names.
 func registeredQueries() map[string]map[string]any {
-	return map[string]map[string]any{
+	return inBothModes(map[string]map[string]any{
 		"the board":         {"container": "project:P01", "sort": "rank"},
 		"recently updated":  {"container": "project:P01", "sort": "-updated"},
 		"the workspace":     {"sort": "-updated"},
@@ -417,9 +481,6 @@ func registeredQueries() map[string]map[string]any {
 			"tag": "none:tag-1,tag-2"},
 		"tagged everywhere":           {"tag": "tag-1"},
 		"tagged with both everywhere": {"tag": "all:tag-1,tag-2"},
-		"tagged with either, flat": {"container": "project:P01",
-			"tag": "any:tag-1,tag-2", "subtasks": "separate"},
-		"tagged everywhere, flat": {"tag": "tag-1", "subtasks": "separate"},
 
 		// A PERSON'S WORK, each held by [holdPeopleFilter] to the person's
 		// own rows — at the workspace read flat, which is how
@@ -443,20 +504,50 @@ func registeredQueries() map[string]map[string]any {
 		"totals of fields": {"container": "project:P01",
 			"totals": "f.effort:sum,f.effort:count,f.effort:median,f.ship:max"},
 
-		// THE TRASH AS ITS TAB ASKS FOR IT ([ViewKeyTrash]), and with every
-		// row filtered on its own, which is how the dashboard and
-		// `list_work_items` run any view — at both scopes, because each is
-		// read through an index of its own ([taskSource]). Every statement
-		// over it, not only its page, is held to that index by
-		// [TestTheTrashIsReadThroughItsOwnIndex].
+		// THE TRASH AS ITS TAB ASKS FOR IT ([ViewKeyTrash]) — at both
+		// scopes, because each is read through an index of its own
+		// ([taskSource]). Every statement over it, not only its page, is held
+		// to that index by [TestTheTrashIsReadThroughItsOwnIndex].
 		"the trash": {"container": "project:P01", "removed": "true",
 			"show_closed": "true"},
-		"the trash, flat": {"container": "project:P01", "removed": "true",
-			"show_closed": "true", "subtasks": "separate"},
 		"the trash everywhere": {"removed": "true", "show_closed": "true"},
-		"the trash everywhere, flat": {"removed": "true", "show_closed": "true",
-			"subtasks": "separate"},
+	})
+}
+
+// inBothModes is a set of queries with every one that names no subtask mode,
+// and is not about one tree, planned a second time with every row filtered on
+// its own (`subtasks=separate`), as `<name>, flat`.
+//
+// BOTH, because the two modes are two different statements and each is a
+// reader somebody runs. The grammar's default rolls subtasks up onto their
+// root ([compileWhere]) — what a caller of `work_items` that sends no mode
+// gets — while every first-party surface overrules it: the dashboard's
+// listings and counts, `list_work_items` and a pinned view's count all send
+// `separate`. Planned in the default alone, a filter's own index was read only
+// through the rollup's probe of each row's root, so the statement every screen
+// issues was certified by nothing; measured, with the rollup's root read by
+// its key the queue, the unit filing, the routing, the key, the estimate and
+// the points indexes had no other reader here. A query about one tree —
+// `parent=` or `root=` — is the same statement in either mode, since the
+// rollup does not apply to it.
+func inBothModes(queries map[string]map[string]any) map[string]map[string]any {
+	out := make(map[string]map[string]any, 2*len(queries))
+	for name, params := range queries {
+		out[name] = params
+		_, moded := params["subtasks"]
+		_, parent := params["parent"]
+		_, root := params["root"]
+		if moded || parent || root {
+			continue
+		}
+		flat := make(map[string]any, len(params)+1)
+		for key, value := range params {
+			flat[key] = value
+		}
+		flat["subtasks"] = "separate"
+		out[name+", flat"] = flat
 	}
+	return out
 }
 
 // taskReads is every statement outside the query grammar that reads a covered
@@ -633,7 +724,7 @@ func taskReads() map[string]indexedRead {
 		"unblocked":     {unblockedBlock(person), queue},
 	} {
 		set := tasksWhere(block.query.where, block.query.args)
-		page, args := taskRowsStatement("", nil, set, block.query.terms)
+		page, args := taskRowsStatement(set, block.query.terms)
 		reads["my work's "+name+" block"] = seek(block.index, page, append(args, 21)...)
 		reads["my work's "+name+" count"] = seek(block.index,
 			cappedCountStatement(set.from, set.where),
@@ -770,11 +861,10 @@ func holdTagFilter(t *testing.T, plan []string, q Query) {
 // THE TASK TABLE'S RULE HOLDS A FLAT LISTING AT THE WORKSPACE, which is where
 // the probe it replaced read every live task in the company. Inside a project
 // the planner may page the project's board in its own order and keep the
-// person's tasks, which is bounded by the board; and collapsed, the filter
-// becomes the subtree rollup's inner set and the outer statement reads the
-// rows whose root is in it in the listing's own order ([compileWhere]) — a
-// read of the rollup's rather than of the filter's. The person's index is
-// sought in all of them.
+// person's tasks, which is bounded by the board; and rolled up, the filter is
+// asked of each row's root by the root's key while the outer statement reads
+// the listing in its own order ([compileWhere]) — a read of the rollup's
+// rather than of the filter's. The person's index is sought in all of them.
 func holdPeopleFilter(t *testing.T, plan []string, q Query) {
 	t.Helper()
 	shown := strings.Join(plan, "\n")
@@ -1656,12 +1746,13 @@ func planFields(q Query) map[string]resolvedField {
 // THE CONTAINER SURVIVES THE SUBTASK ROLLUP, and it is the only predicate the
 // outer row has to enter on.
 //
-// The rollup replaces the whole predicate with `root_id IN (<the predicate>)`,
-// and it used to drop the container with it — so every container-scoped query
-// in the default subtask mode, which is every board, read the outer row with
-// nothing but a tombstone every task shares. This asserts the compiled SQL
-// rather than the plan because it is the CLAUSE that was missing: a planner
-// that happened to pick some other index would hide it.
+// The rollup asks the query's predicate of each row's ROOT, inside a probe of
+// that root ([anchorProbe]), and it used to leave the row with nothing of its
+// own but a tombstone every task shares — so every container-scoped query in
+// the default subtask mode, which is every board, read every task in the
+// company to probe each one's root. This asserts the compiled SQL rather than
+// the plan because it is the CLAUSE that was missing: a planner that happened
+// to pick some other index would hide it.
 func TestTheSubtaskRollupKeepsItsContainer(t *testing.T) {
 	t.Parallel()
 	for name, params := range map[string]map[string]any{
@@ -1680,36 +1771,103 @@ func TestTheSubtaskRollupKeepsItsContainer(t *testing.T) {
 				t.Fatalf("compile: %v", err)
 			}
 			where, args := set.where, set.args
-			outer, _, found := strings.Cut(where, "t.root_id IN (")
+			// THE PROBE OF THE ROOT, spelled rather than taken from
+			// [anchorProbe], which is what is under test.
+			outer, _, found := strings.Cut(where, "EXISTS (SELECT 1 FROM tracker_tasks a ")
 			if !found {
 				t.Fatalf("this query did not roll subtasks up at all:\n%s", where)
 			}
 			if !strings.Contains(outer, "t.project_key = ?") {
 				t.Errorf("the rollup's OUTER predicate is %q and names no "+
 					"container — the row itself is then every task in the "+
-					"company, filtered afterwards by the subquery", outer)
+					"company, each probing its root", outer)
 			}
 			// AND EVERY ARGUMENT IS WHERE ITS PLACEHOLDER IS.
 			//
-			// Placeholders bind in TEXTUAL order, so a clause added
-			// before the subquery whose argument was appended after
-			// every other binds the wrong value silently — and a
-			// clause-only assertion cannot see it. The outer carries
-			// exactly one placeholder, the container's; the subquery's
-			// own first placeholder is its copy of the same clause. So
-			// the container has to be the first TWO arguments, and a
-			// single-argument case would bind correctly whichever end
-			// it was added at.
+			// Placeholders bind in TEXTUAL order, so a clause written
+			// before the probe whose argument was appended after every
+			// other binds the wrong value silently — and a clause-only
+			// assertion cannot see it. The outer carries exactly one
+			// placeholder, the container's; the probe's own first
+			// placeholder is the root's copy of the same clause. So the
+			// container has to be the first TWO arguments, and a
+			// single-argument case would bind correctly whichever end it
+			// was added at.
 			if outers := strings.Count(outer, "?"); outers != 1 {
 				t.Fatalf("the rollup's outer predicate %q carries %d "+
 					"placeholders, want the container's one", outer, outers)
 			}
 			if len(args) < 2 || args[0] != "P01" || args[1] != "P01" {
 				t.Errorf("the compiled arguments are %v, want the container "+
-					"bound twice at the front — once out here and once inside "+
-					"the subquery every other argument moved into", args)
+					"bound twice at the front — once for the row and once for "+
+					"the root its probe reads", args)
 			}
 		})
+	}
+}
+
+// A ROLLED-UP ROW PROBES ITS ANCHOR BY ITS KEY.
+//
+// The subtask rollup asks a query's predicate of each row's root, and the root
+// is one row the row names, so the read is one seek of the table's key per row
+// the statement visits ([anchorProbe]) — never a list of every root in scope,
+// and never another index of the table entered on whatever the predicate
+// offers. Both were measured. As a list (`root_id IN (SELECT t.id …)`) the
+// planner held every live task in the company before the workspace's first
+// row, a project's whole board before a board's, and the whole trash; and as
+// a probe the key does not name, it stole the probe for the predicate's own
+// equalities — `my queue` sought `tracker_tasks_queue_idx (assignee=?)` once
+// per row, and a type, a unit, a lead's routing and a key filter each sought
+// their own index the same way.
+//
+// So every statement the reader runs over a rolled-up set — the page, its
+// count, its totals, a board's columns and rows, and where one task sits —
+// seeks the anchor by its key, and reads the anchor no other way. The list
+// form is refused for every statement by the gate's own [refuseSetWalks].
+// Which queries roll up is spelled here from their parameters rather than
+// asked of [rollsUp], which is part of what is under test.
+func TestARolledUpRowProbesItsAnchorByKey(t *testing.T) {
+	t.Parallel()
+	db := planStore(t)
+	probe := regexp.MustCompile(`^SEARCH a USING (INDEX sqlite_autoindex_tracker_tasks_1|PRIMARY KEY) \(id=\?\)$`)
+	anchor := regexp.MustCompile(`^(SEARCH a |SCAN tracker_tasks AS a( |$))`)
+	rolled := 0
+	for name, params := range registeredQueries() {
+		_, moded := params["subtasks"]
+		_, parent := params["parent"]
+		_, root := params["root"]
+		if moded || parent || root {
+			continue
+		}
+		rolled++
+		t.Run(name, func(t *testing.T) {
+			for what, statement := range queryStatements(t, planQuery(t, params)) {
+				// ONE TASK'S OWN VALUES, read by its id with no
+				// predicate to roll up.
+				if what == "the around task's sort values" {
+					continue
+				}
+				plan := explain(t, db, statement.sql, statement.args)
+				shown := strings.Join(plan, "\n")
+				sought := false
+				for _, line := range plan {
+					switch {
+					case probe.MatchString(line):
+						sought = true
+					case anchor.MatchString(line):
+						t.Errorf("%s reads each row's root other than by its "+
+							"key:\n%s", what, shown)
+					}
+				}
+				if !sought {
+					t.Errorf("%s does not probe each row's root by its key:\n%s",
+						what, shown)
+				}
+			}
+		})
+	}
+	if rolled == 0 {
+		t.Fatal("no registered query rolls its subtasks up, so this measures nothing")
 	}
 }
 
@@ -1720,21 +1878,23 @@ func TestTheSubtaskRollupKeepsItsContainer(t *testing.T) {
 // about every statement an answer over the trash issues, not only about its
 // page: measured before [taskSource] named the index, the workspace trash's
 // page walked the old index but its count, its totals, a board's column counts
-// and the subtree rollup's own subquery each read every task in the company
-// from the heap (this engine's planner reaches a partial index only for an
-// order it provides or a seek on its leading column, and the tombstone is
-// neither), a project's trash sought the project's whole board through
+// and the subtree rollup's own list of roots each read every task in the
+// company from the heap (this engine's planner reaches a partial index only
+// for an order it provides or a seek on its leading column, and the tombstone
+// is neither), a project's trash sought the project's whole board through
 // `tracker_tasks_rank_idx` at every level and sorted it, and a click on the
 // Title column sorted the company.
 //
 // So each statement here is the reader's own ([taskRowsStatement],
 // [cappedCountStatement], [totalsStatement], [groupCountsStatement]) over the
 // set [compile] produces, at both scopes and in both subtask modes, and every
-// line of its plan that reads the task table reads the scope's index — at
-// every level, the rollup's subquery included. The page in the trash's own
-// order is held to it unsorted as well, because that order is the index's and
-// a LIMIT stops it after a page; a page ordered by something else may sort,
-// and sorts the trash.
+// line of its plan that reads the task table's rows reads the scope's index.
+// The rollup's probe of each row's root reads that one root by its key, under
+// an alias of its own, and is held to the key by
+// [TestARolledUpRowProbesItsAnchorByKey]. The page in the trash's own order is
+// held to it unsorted as well, because that order is the index's and a LIMIT
+// stops it after a page; a page ordered by something else may sort, and sorts
+// the trash.
 func TestTheTrashIsReadThroughItsOwnIndex(t *testing.T) {
 	t.Parallel()
 	db := planStore(t)
@@ -2103,31 +2263,84 @@ func TestAFieldValueIsReadByItsTaskOrByItsFilter(t *testing.T) {
 	}
 }
 
+// ONE COLUMN OF A BOARD IS THE ANSWER NARROWED BY A PROBE OF EACH TASK'S ROWS.
+//
+// A statement that reads one column or lane rather than counting them — the
+// column's rows, and where one task sits in it — narrows the answer by the
+// axis's join-free predicate ([columnSet]): a probe of each task's own tag or
+// field rows by their key. Narrowed through the axis's join instead it was an
+// inner join onto the child table, which the planner is free to drive from the
+// child's side, and with no statistics did so as soon as anything moved the
+// task side's estimate — measured at the workspace, a field column walked
+// every value of the field in the company before the first task, and a tag
+// column sought every task carrying the tag and walked the task table once for
+// each. So in every such statement, at both scopes and in both subtask modes, a
+// read of the axis's child table outside a filter's own IN list seeks it on a
+// task.
+func TestOneColumnIsTheAnswerNarrowedByAProbe(t *testing.T) {
+	t.Parallel()
+	db := planStore(t)
+	for name, params := range inBothModes(map[string]map[string]any{
+		"a tag column":                 {"container": "project:P01", "group_by": "tag"},
+		"a tag column everywhere":      {"group_by": "tag"},
+		"a field column":               {"container": "project:P01", "group_by": "f.impact"},
+		"a field column everywhere":    {"group_by": "f.impact"},
+		"a field's lanes everywhere":   {"group_by": "assignee", "group_by2": "f.impact"},
+		"a tag's lanes in a project":   {"container": "project:P01", "group_by": "status", "group_by2": "tag"},
+		"a filtered column everywhere": {"f.impact": "o-high", "group_by": "f.impact"},
+	}) {
+		t.Run(name, func(t *testing.T) {
+			for what, statement := range queryStatements(t, planQuery(t, params)) {
+				if !strings.HasPrefix(what, "the rows of column") &&
+					!strings.HasPrefix(what, "the around task's") &&
+					what != "the rows ahead of the around task" {
+					continue
+				}
+				tree := explainTree(t, db, statement.sql, statement.args)
+				listed := underList(tree)
+				shown := strings.Join(planDetails(tree), "\n")
+				for _, line := range tree {
+					if listed(line) || !readsChildOfTask(line.detail) {
+						continue
+					}
+					if !strings.HasPrefix(line.detail, "SEARCH ") ||
+						!strings.Contains(line.detail, "(task_id=?") {
+						t.Errorf("%s reads a task's child table other than by "+
+							"the task:\n%s", what, shown)
+					}
+				}
+			}
+		})
+	}
+}
+
+// readsChildOfTask reports a plan line that reads a task's tags or field
+// values: a scan names the table, and a seek its index, which is the table's.
+func readsChildOfTask(detail string) bool {
+	for _, table := range []string{"tracker_task_tags", "tracker_field_values"} {
+		if strings.HasPrefix(detail, "SCAN "+table) {
+			return true
+		}
+		for _, index := range indexesIn([]string{detail}) {
+			if strings.HasPrefix(index, table+"_") ||
+				index == "sqlite_autoindex_"+table+"_1" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // holdFieldReads fails a plan that reads `tracker_field_values` through the
 // key on anything but a task, or through a value index anywhere but inside a
 // filter's own subquery on a field the query filters by.
 func holdFieldReads(t *testing.T, what string, plan []planLine, filters map[string]bool) {
 	t.Helper()
 	const key = "sqlite_autoindex_tracker_field_values_1"
-	byID := map[int]planLine{}
-	for _, line := range plan {
-		byID[line.id] = line
-	}
 	// INSIDE AN IN LIST'S SUBQUERY, which this engine plans once for the
 	// statement rather than once per row.
-	inList := func(line planLine) bool {
-		for at := line.parent; at != 0; at = byID[at].parent {
-			if strings.HasPrefix(byID[at].detail, "LIST SUBQUERY") {
-				return true
-			}
-		}
-		return false
-	}
-	details := make([]string, len(plan))
-	for i, line := range plan {
-		details[i] = line.detail
-	}
-	shown := strings.Join(details, "\n")
+	inList := underList(plan)
+	shown := strings.Join(planDetails(plan), "\n")
 	for _, line := range plan {
 		for _, index := range indexesIn([]string{line.detail}) {
 			switch {
@@ -2169,7 +2382,7 @@ func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 		t.Fatalf("compile: %v", err)
 	}
 	terms := sortTerms(q, fields)
-	page, pageArgs := taskRowsStatement("", nil, set, terms)
+	page, pageArgs := taskRowsStatement(set, terms)
 	values, valueArgs := sortValuesStatement(terms, "t-00001")
 	out := map[string]plannedRead{
 		"the page": {page, append(pageArgs, 51)},
@@ -2230,9 +2443,7 @@ func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 		columns, columnArgs := groupCountsStatement(axis, set)
 		out["a board's columns"] = plannedRead{columns, append(columnArgs, MaxGroups+1)}
 		for _, key := range []string{"o-high", ""} {
-			clause, bound := axis.joinedFilter(key)
-			rows, rowArgs := taskRowsStatement(axis.Join, axis.JoinArgs,
-				set.and(clause, bound), terms)
+			rows, rowArgs := taskRowsStatement(columnSet(axis, key, set), terms)
 			out[fmt.Sprintf("the rows of column %q", key)] = plannedRead{rows,
 				append(rowArgs, 21)}
 		}

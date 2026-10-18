@@ -215,12 +215,14 @@ type groupAxis struct {
 	// the stored value and a caller's value is that value.
 	Canonical func(key string) string
 
-	// Exists is the JOIN-FREE form of this axis as a predicate, used when
-	// `group=<value>` narrows the whole query. It has to be join-free
-	// because the narrowed predicate is shared with the count hint and
-	// the totals, and neither of those carries a join — so an axis
-	// expressed only as one would leave a header adding up the whole
-	// board while the rows showed one column of it.
+	// Exists is the JOIN-FREE form of this axis as a predicate: a probe of
+	// each task's own rows by their key ([groupAxis.filter]). It narrows
+	// the whole query when `group=<value>` asks for one column, because
+	// that predicate is shared with the count hint and the totals and
+	// neither carries a join — an axis expressed only as one would leave a
+	// header adding up the whole board while the rows showed one column
+	// of it. And it narrows every statement that reads ONE column or lane
+	// rather than counting them ([columnSet]).
 	Exists func(key string) (string, []any)
 }
 
@@ -259,28 +261,17 @@ func (a groupAxis) canonical(key string) string {
 // `window` is the query's own calendar, which only the relative due bands
 // read — see [dayWindow]; `units` is the chart the two unit axes label their
 // columns from, and nil leaves each column reading as the key the rows hold.
+//
+// ONE ALIAS FOR A FIELD'S JOIN on both axes of a lane board, because no
+// statement carries two: a lane is counted with its own join inside a column
+// that narrows it by the column's join-free predicate ([groupAxis.filter]),
+// and a run's rows are narrowed by both axes' join-free predicates. A lane
+// board on two custom fields — `group_by=f.team&group_by2=f.risk` — once
+// joined `tracker_field_values` as `gv` twice in one statement, which the
+// engine refuses; [TestTwoFieldAxesDrawASwimlaneBoard] is what holds it.
 func compileGroup(key string, fields map[string]resolvedField,
 	window dayWindow, units Units) (groupAxis, error) {
-	return compileAxis(key, "gv", fields, window, units)
-}
-
-// compileLane is [compileGroup] for the SECOND axis, the swimlanes.
-//
-// ITS OWN ALIAS, because a lane is read with the column's join in the same
-// statement: two custom-field axes — `group_by=f.team&group_by2=f.risk` —
-// each joined `tracker_field_values` as `gv`, and a statement carrying the
-// alias twice is refused by the engine, so that board failed its read on
-// every poll. Only the field axis names a join alias a second axis could
-// repeat: `tag` is one axis and cannot be both, and every other axis reads a
-// column of the task itself.
-func compileLane(key string, fields map[string]resolvedField,
-	window dayWindow, units Units) (groupAxis, error) {
-	return compileAxis(key, "gl", fields, window, units)
-}
-
-// compileAxis is one axis with its field join under `alias`.
-func compileAxis(key, alias string, fields map[string]resolvedField,
-	window dayWindow, units Units) (groupAxis, error) {
+	const alias = "gv"
 	if ref, ok := strings.CutPrefix(key, FieldKeyPrefix); ok && ref != "" {
 		field, held := fields[ref]
 		if !held {
@@ -364,9 +355,14 @@ func compileAxis(key, alias string, fields map[string]resolvedField,
 			Expr:  "gt.slug",
 			Join:  " LEFT JOIN tracker_task_tags gt ON gt.task_id = t.id",
 			Multi: true, Unset: "(untagged)",
+			// THE PROBE NAMES THE TAG TABLE'S KEY, for the reason
+			// [anchorProbe] names the task table's: with no statistics
+			// the planner took `slug = ?` for its seek and read every task
+			// carrying the tag once per row it narrowed — measured, at
+			// both scopes, on the reads that step through one column.
 			Exists: func(key string) (string, []any) {
-				inner := "SELECT 1 FROM tracker_task_tags g " +
-					"WHERE g.task_id = t.id"
+				inner := "SELECT 1 FROM tracker_task_tags g INDEXED BY " +
+					tagsKey + " WHERE g.task_id = t.id"
 				if key == "" {
 					return "NOT EXISTS (" + inner + ")", nil
 				}
@@ -642,22 +638,46 @@ func groupCountsStatement(axis groupAxis, set taskSet) (string, []any) {
 // groupRows reads one group's own page.
 //
 // THE AXIS BECOMES A PREDICATE, which is what makes this the ordinary flat
-// statement: a column's rows are the answer's rows narrowed to one value, so
-// the same sort, the same joins and the same row shape serve both.
+// statement: a column's rows are the answer's rows narrowed to one value
+// ([columnSet]), so the same sort and the same row shape serve both.
 func groupRows(ctx context.Context, tx *sql.Tx, axis groupAxis, key string,
 	set taskSet, terms []sortTerm, limit int,
 	dayStart time.Time) ([]TaskRow, error) {
 
-	// THE JOINED FORM HERE, not the join-free one: this statement already
-	// carries the axis's join for the GROUP BY's sake, so comparing the
-	// joined column is one predicate rather than a second subquery.
-	clause, values := axis.joinedFilter(key)
-	rows, _, err := readTasksJoined(ctx, tx, axis.Join, axis.JoinArgs,
-		set.and(clause, values), terms, limit, dayStart)
+	rows, _, err := readTasks(ctx, tx, columnSet(axis, key, set), terms,
+		limit, dayStart)
 	return rows, err
 }
 
-// joinedFilter is the axis as a predicate on the column its own join reached.
+// columnSet is a set narrowed to one column of an axis — what a column's or a
+// lane's rows are read from, and what a run of the drawing order counts and
+// steps through ([groupAxis.run]).
+//
+// # Why the column is the JOIN-FREE predicate
+//
+// [groupAxis.filter] is a probe of each task's own rows by their key, the one
+// `group=` narrows the whole query with. The axis's JOIN compared on its joined
+// column answers the same rows, and it is what the statements narrowing one
+// column used — but for a field or a tag axis a narrowed join is an INNER join
+// onto a child table whose key leads with the task, so the planner may drive
+// the statement from either side, and with no statistics it chooses by
+// estimates any other clause moves. Measured at the workspace, once the
+// subtask rollup's probe of each row's root changed the task side's estimate:
+// a field column walked every value of the field in the company in key order
+// before the first task, and a tag column sought every task carrying the tag
+// and then walked the whole task table once for each. A probe cannot be turned
+// round: it is one seek of the child's key per task the statement reads,
+// whichever way the rest of the predicate leans. Only a statement that COUNTS
+// the axis's values keeps the join ([groupCountsStatement]), because the
+// values are what it groups.
+func columnSet(axis groupAxis, key string, set taskSet) taskSet {
+	clause, values := axis.filter(key)
+	return set.and(clause, values)
+}
+
+// joinedFilter is the axis as a predicate on the column its own join reached —
+// the narrowing of a statement that carries the join to count the axis's own
+// values ([readSubgroups]).
 //
 // The expression's own bindings ride with it for the reason [groupAxis.filter]
 // gives, and the empty key writes it twice there too.
@@ -916,39 +936,33 @@ func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 	fields map[string]resolvedField, outer groupAxis, key string,
 	set taskSet, terms []sortTerm, rowsPer int) ([]Group, int, error) {
 
-	inner, err := compileLane(q.GroupBy2, fields, q.dayWindow(), q.Units)
+	inner, err := compileGroup(q.GroupBy2, fields, q.dayWindow(), q.Units)
 	if err != nil {
 		return nil, 0, err
 	}
-	// THE OUTER COLUMN NARROWS THE INNER QUERY, and the outer axis's own
-	// join rides with it — a subgroup of a tag column is still inside that
-	// tag.
-	outerClause, outerArgs := outer.joinedFilter(key)
-	scoped := set.and(outerClause, outerArgs)
-	// THE INNER AXIS WHOLE, with the outer join added in front of its own.
-	// Rebuilt field by field it lost its declared order, so a lane board on
-	// a closed set — statuses, priorities, the due bands — came back largest
-	// lane first and reshuffled whenever work moved, which is exactly what
-	// [groupAxis.Order] exists to stop for a column.
-	joined := inner
-	joined.Join = outer.Join + inner.Join
-	joined.JoinArgs = append(append([]any{}, outer.JoinArgs...), inner.JoinArgs...)
-	// BOTH JOINS' ARGUMENTS RIDE ON THE AXIS, in statement order: the
-	// count statement writes its joins before its WHERE, so the outer
-	// join's binding comes first, then the inner's, then the predicate's.
+	// THE OUTER COLUMN NARROWS THE INNER QUERY, by its own join-free
+	// predicate ([columnSet]) — a subgroup of a tag column is still inside
+	// that tag — so the lanes are counted over the inner axis alone, with
+	// its declared order: a lane board on a closed set is drawn in the set's
+	// order, as its columns are.
+	scoped := columnSet(outer, key, set)
 	// A NAMED SUBGROUP NARROWS THE INNER AXIS, exactly as `group` narrows
-	// the outer one — which is how a board loads one swimlane further.
+	// the outer one — which is how a board loads one swimlane further. On
+	// the counting statement it is the JOINED form, because that statement
+	// groups by the joined value: narrowed by the join-free probe instead, a
+	// label lane would count every other label of the tasks carrying it.
+	counted := scoped
 	if q.Subgroup != nil {
 		innerClause, innerArgs := inner.joinedFilter(*q.Subgroup)
-		scoped = scoped.and(innerClause, innerArgs)
+		counted = scoped.and(innerClause, innerArgs)
 	}
-	counts, dropped, err := groupCounts(ctx, tx, joined, scoped, MaxSubgroups)
+	counts, dropped, err := groupCounts(ctx, tx, inner, counted, MaxSubgroups)
 	if err != nil {
 		return nil, 0, err
 	}
 	groupLabels(counts, inner)
 	for i := range counts {
-		rows, err := groupRows(ctx, tx, joined, counts[i].Key, scoped,
+		rows, err := groupRows(ctx, tx, inner, counts[i].Key, scoped,
 			terms, rowsPer, q.DayStart)
 		if err != nil {
 			return nil, 0, err
