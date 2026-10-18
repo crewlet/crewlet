@@ -78,7 +78,10 @@ func (s artifactData) admit(ctx context.Context, what string, action authz.Actio
 		return artifacts.ID{}, artifactdataapi.Admission{}, fmt.Errorf("%w: no artifact %q",
 			ErrNotFound, p.String("id"))
 	}
-	principal, _ := iam.From(ctx)
+	principal, err := caller(ctx, what)
+	if err != nil {
+		return id, artifactdataapi.Admission{}, err
+	}
 	a, err := s.Gate.Admit(ctx, principal, action, id)
 	var refusal *artifactdataapi.Refused
 	switch {
@@ -88,6 +91,22 @@ func (s artifactData) admit(ctx context.Context, what string, action authz.Actio
 		return id, a, refused(what, refusal.Decision)
 	}
 	return id, a, err
+}
+
+// caller is the principal a datastore question is decided for.
+//
+// A CALLER THIS NODE COULD NOT CHECK IS UNAVAILABLE, never a stranger: decided
+// as the zero principal it would be refused as one, and a person holding a
+// good credential would be told an artifact shared with them is not there for
+// as long as the identity estate is unreachable. The registry answers such a
+// context before a question runs; this holds the same rule for any path that
+// reaches an answer without it.
+func caller(ctx context.Context, what string) (iam.Principal, error) {
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return iam.Principal{}, unresolved(ctx, what)
+	}
+	return principal, nil
 }
 
 // dataFailure is a datastore read's failure in this surface's vocabulary.
@@ -226,7 +245,10 @@ func (s artifactData) state(ctx context.Context, p Params) (any, error) {
 
 // usage answers the company's datastore counters against the plan quota.
 func (s artifactData) usage(ctx context.Context, _ Params) (any, error) {
-	principal, _ := iam.From(ctx)
+	principal, err := caller(ctx, "artifact_data_usage")
+	if err != nil {
+		return nil, err
+	}
 	d := authz.Decide(ctx, principal, authz.ActionArtifactUsage, authz.Object{Kind: authz.KindArtifact},
 		s.Gate.Chart, s.now())
 	switch {
