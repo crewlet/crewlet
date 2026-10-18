@@ -1900,8 +1900,11 @@ func TestARolledUpRowProbesItsAnchorByKey(t *testing.T) {
 // [TestARolledUpRowProbesItsAnchorByKey]. The page in the trash's own order is
 // held to it unsorted as well, because that order is the index's and a LIMIT
 // stops it after a page — and so is every arm of the next page of the trash as
-// a list, which resumes the same walk (a board takes no cursor); a page ordered
-// by something else may sort, and sorts the trash.
+// a list, which resumes the same walk (a board takes no cursor), and every read
+// of a task's neighbour, which walks it forwards or back: the trash's removal
+// is never NULL inside the trash, so the order reversed is the index read
+// backwards rather than an order that leads with whether the removal is NULL.
+// A page ordered by something else may sort, and sorts the trash.
 func TestTheTrashIsReadThroughItsOwnIndex(t *testing.T) {
 	t.Parallel()
 	db := planStore(t)
@@ -1967,11 +1970,14 @@ func TestTheTrashIsReadThroughItsOwnIndex(t *testing.T) {
 								"project, to find the removed ones:\n%s",
 								what, c.index, shown)
 						}
-						// THE PAGE AND EVERY ARM OF THE NEXT ONE, which
-						// resume the same walk.
-						page := what == "the page" ||
-							strings.HasPrefix(what, nextPage)
-						if page && sort == "" && sorts(plan) {
+						// THE PAGE, EVERY ARM OF THE NEXT ONE AND EVERY
+						// READ OF A NEIGHBOUR, which walk the same index
+						// forwards or back.
+						walk := what == "the page" || what == runFirst ||
+							what == runLast || strings.HasPrefix(what, nextPage) ||
+							strings.HasPrefix(what, nextRow) ||
+							strings.HasPrefix(what, previousRow)
+						if walk && sort == "" && sorts(plan) {
 							t.Errorf("%s in the trash's own order sorts what "+
 								"it read, so it is the whole trash rather than a "+
 								"page:\n%s", what, shown)
@@ -2444,7 +2450,8 @@ func TestOneColumnIsTheAnswerNarrowedByAProbe(t *testing.T) {
 			for what, statement := range queryStatements(t, planQuery(t, params)) {
 				if !strings.HasPrefix(what, "the rows of column") &&
 					!strings.HasPrefix(what, "the around task's") &&
-					what != "the rows ahead of the around task" {
+					!strings.HasPrefix(what, rowsAhead) &&
+					what != runFirst && what != runLast {
 					continue
 				}
 				tree := explainTree(t, db, statement.sql, statement.args)
@@ -2580,17 +2587,29 @@ func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 		}
 		run = axis.run("o-high", 1)
 	}
-	after, afterArgs, before, beforeArgs := aroundSides(terms, keys, "t-00001")
+	after, before := aroundSides(terms, keys)
 	holds, holdsArgs := segmentHoldsStatement(run, set, "t-00001")
-	ahead, aheadArgs := segmentCountStatement(run, terms, set, before, beforeArgs)
-	next, nextArgs := segmentFirstStatement(run, terms, set, after, afterArgs,
-		renderOrder(terms))
-	previous, previousArgs := segmentFirstStatement(run, terms, set, before,
-		beforeArgs, renderReverse(terms))
 	out["the around task's run"] = plannedRead{holds, holdsArgs}
-	out["the rows ahead of the around task"] = plannedRead{ahead, aheadArgs}
-	out["the around task's next"] = plannedRead{next, nextArgs}
-	out["the around task's previous"] = plannedRead{previous, previousArgs}
+	forward, reverse := renderOrder(terms), renderReverse(terms)
+	for i, arm := range before {
+		ahead, aheadArgs := segmentCountStatement(run, terms, set, arm.clause,
+			arm.args)
+		out[aroundArm(rowsAhead, i)] = plannedRead{ahead, aheadArgs}
+		previous, previousArgs := segmentFirstStatement(run, terms, set,
+			arm.clause, arm.args, reverse)
+		out[aroundArm(previousRow, i)] = plannedRead{previous, previousArgs}
+	}
+	for i, arm := range after {
+		next, nextArgs := segmentFirstStatement(run, terms, set, arm.clause,
+			arm.args, forward)
+		out[aroundArm(nextRow, i)] = plannedRead{next, nextArgs}
+	}
+	// AND THE TWO UNBOUNDED READS beside them: a neighbour in the run
+	// before or after the task's own is that run's last or first row.
+	first, firstArgs := segmentFirstStatement(run, terms, set, "", nil, forward)
+	out[runFirst] = plannedRead{first, firstArgs}
+	last, lastArgs := segmentFirstStatement(run, terms, set, "", nil, reverse)
+	out[runLast] = plannedRead{last, lastArgs}
 	if len(q.Totals) > 0 {
 		totals, exprs, totalArgs, err := compileTotals(q.Totals, fields)
 		if err != nil {
@@ -2630,6 +2649,21 @@ func nextPageArm(i int) string {
 
 // nextPage is what every arm of a later page is named by.
 const nextPage = "the next page, arm "
+
+// What the around read's statements are named by: each side's arms, and the
+// two unbounded reads of a run.
+const (
+	rowsAhead   = "the rows ahead of the around task"
+	previousRow = "the around task's previous"
+	nextRow     = "the around task's next"
+	runFirst    = "the first row of a run"
+	runLast     = "the last row of a run"
+)
+
+// aroundArm names the statement the around read reads one arm of a side with.
+func aroundArm(side string, i int) string {
+	return side + ", arm " + strconv.Itoa(i)
+}
 
 // A DROP READS THE GAP IT OPENED, NOT THE BOARD BETWEEN IT AND ONE END.
 //

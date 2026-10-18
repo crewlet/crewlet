@@ -290,7 +290,8 @@ internal/
 ├── keyset/               # A row's place in an order as the arms the rows
 │                         #   after or before it are read through — one seek
 │                         #   of the order's index each — so a later page
-│                         #   costs what the first page does
+│                         #   and a task's neighbours cost what the first
+│                         #   page does
 ├── api/                  # REST + dashboard: webhooks/, stream/, queries/,
 │                         #   livestate/, configapi/, setupapi/, secretsapi/,
 │                         #   auth/, httpjson/, mcpbridge/, operator/ (ONE

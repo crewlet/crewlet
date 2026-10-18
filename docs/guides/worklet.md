@@ -742,8 +742,12 @@ question it asks:
   the order counts **cards** and a task is placed at the first column it is
   on. A task the answer does not hold — filtered out, finished, or in a column
   the board did not draw — is `around: null`, never a refusal, and `position`
-  is null past the 10 000 the total stops counting at. A saved view cannot
-  carry `around`: which task somebody is standing on is theirs.
+  is null past the 10 000 the total stops counting at. Both neighbours are
+  found by seeking the order outwards from the task — through the order's
+  index wherever one serves it — so stepping through a long board reads the
+  cards beside the one open rather than the board, and the position counts
+  the rows ahead of it the same way. A saved view cannot carry `around`:
+  which task somebody is standing on is theirs.
 - **`fields=tags,dependents_count,open_asks,spend`** puts facts a board CARD
   draws on each row, and only on an answer that asked: its labels; how many
   live tasks wait on it (the authored `waiting_on` edges `blocking=` reads);

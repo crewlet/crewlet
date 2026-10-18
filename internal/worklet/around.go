@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/keyset"
 )
 
 // Where one task sits in an answer: `around=<key>`.
@@ -146,21 +148,36 @@ func readAround(ctx context.Context, tx *sql.Tx, q Query,
 	if err != nil {
 		return nil, err
 	}
-	after, afterArgs, before, beforeArgs := aroundSides(terms, keys, id)
+	after, before := aroundSides(terms, keys)
 
-	counted, err := segmentCount(ctx, tx, seg, terms, set, before,
-		beforeArgs)
-	if err != nil {
-		return nil, err
+	// THE ROWS AHEAD ARE THE BEFORE ARMS' COUNTS SUMMED, the arms being
+	// disjoint, and each stops one past the ceiling — so the sum does too.
+	counted := 0
+	for _, arm := range before {
+		n, countErr := segmentCount(ctx, tx, seg, terms, set, arm.clause,
+			arm.args)
+		if countErr != nil {
+			return nil, countErr
+		}
+		if counted += n; counted > TotalHintCeiling {
+			break
+		}
 	}
 	if position := ahead + counted + 1; counted <= TotalHintCeiling &&
 		position <= TotalHintCeiling {
 		out.Position = &position
 	}
 
+	// EACH NEIGHBOUR IS THE FIRST ROW OF THE NEAREST ARM THAT HOLDS ONE, read
+	// in the order for the next and the order reversed for the previous.
 	forward, reverse := renderOrder(terms), renderReverse(terms)
-	if out.Next, err = segmentFirst(ctx, tx, seg, terms, set, after,
-		afterArgs, forward); err != nil {
+	for _, arm := range after {
+		if out.Next, err = segmentFirst(ctx, tx, seg, terms, set, arm.clause,
+			arm.args, forward); err != nil || out.Next != nil {
+			break
+		}
+	}
+	if err != nil {
 		return nil, err
 	}
 	for j := at + 1; out.Next == nil && j < len(segments); j++ {
@@ -169,8 +186,13 @@ func readAround(ctx context.Context, tx *sql.Tx, q Query,
 			return nil, err
 		}
 	}
-	if out.Prev, err = segmentFirst(ctx, tx, seg, terms, set, before,
-		beforeArgs, reverse); err != nil {
+	for _, arm := range before {
+		if out.Prev, err = segmentFirst(ctx, tx, seg, terms, set, arm.clause,
+			arm.args, reverse); err != nil || out.Prev != nil {
+			break
+		}
+	}
+	if err != nil {
 		return nil, err
 	}
 	for j := at - 1; out.Prev == nil && j >= 0; j-- {
@@ -261,21 +283,24 @@ func (a groupAxis) run(key string, count int) segment {
 }
 
 // aroundSides is the two sides of one task in an order, given its own sort
-// values: the rows after it — the keyset a cursor minted on it resumes at —
-// and the rows before it, each with its arguments.
+// values, as the reads each is taken through ([armReads]): the rows after it,
+// nearest first — the arms a cursor minted on it resumes through — and the
+// rows before it, nearest first with the order reversed ([keyset.Before]).
 //
-// BEFORE IS "NOT AFTER AND NOT THIS ROW". The order is TOTAL — every one ends
-// in the id — so a row that is neither after this one nor this one is before
-// it; and the after predicate is never NULL (see [keysetAfter], whose every
-// leg is spelled NULL-safely), so its negation is exact rather than dropping
-// the rows a NULL comparison would.
-func aroundSides(terms []sortTerm, keys []any, id string) (after string,
-	afterArgs []any, before string, beforeArgs []any) {
-
-	after, afterArgs = keysetAfter(terms, keys)
-	before = "NOT " + after + " AND t.id <> ?"
-	beforeArgs = append(append([]any{}, afterArgs...), id)
-	return after, afterArgs, before, beforeArgs
+// BEFORE IS ITS OWN ARMS, the mirror of after's: the row's values with an
+// earlier id, then an earlier last column, out to an earlier first one —
+// every NULL being after a value, the rows before a NULL are every value and
+// the NULLs with an earlier id. It was "not after and not this row", which is
+// exact and which no planner can seek: the negation of a bound bounds
+// nothing, so the rows ahead of a task were counted by walking the run from
+// its start, and its previous neighbour was found by walking the run from its
+// far end to it. Arm by arm, the next and the previous are each one seek of
+// the index the run is read in, from the task outwards, and the count is the
+// arms' counts summed.
+func aroundSides(terms []sortTerm, keys []any) (after, before []armRead) {
+	order := keysetTerms(terms)
+	return armReads(terms, keyset.After(order, keys)),
+		armReads(terms, keyset.Before(order, keys))
 }
 
 // segmentFrom renders a statement's FROM and WHERE over one run, with the
@@ -422,7 +447,10 @@ func sortValuesStatement(terms []sortTerm, id string) (string, []any) {
 // last descending, which is right for exactly one of the two. The leading
 // `IS NULL` term states it rather than relying on either default, and it is
 // written only on a column that can be NULL, for the planner reason
-// [renderOrder] gives.
+// [renderOrder] gives — which is why the trash's removal, never NULL inside a
+// removed listing ([sortTerms]), reads backwards as its index does, where
+// written NULL-able it led the reversed order with a term no index holds and
+// a task's previous neighbour in the trash sorted the whole trash.
 func renderReverse(terms []sortTerm) string {
 	rendered := make([]string, 0, len(terms))
 	for _, term := range terms {
