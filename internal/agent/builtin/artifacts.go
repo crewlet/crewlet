@@ -577,6 +577,65 @@ func (d ArtifactDeps) call(c artifactCaller, role artifacts.Role, elevated bool)
 	return out
 }
 
+// ---- what a call may show of an artifact -------------------------------- //
+
+// readElevated writes the elevated-read record an administrator's read owes
+// when only the admin path admitted it (dec.Elevated), before anything of
+// version is shown: the owner and the editors see "read by an administrator"
+// in the artifact's own history (D09). An error is a record that did not land
+// (or whose landing is unknown), and the content is then not shown.
+func (d ArtifactDeps) readElevated(ctx context.Context, c artifactCaller, dec authz.Decision,
+	h artifactsdomain.Head, version int) error {
+
+	written, err := d.Writer.ReadElevated(ctx, d.call(c, dec.Standing.Role, true), h.ID, version)
+	if err == nil && written.Result.Outcome == statelog.OutcomeUnknown {
+		err = fmt.Errorf("%w: the elevated read's record", ErrOutcomeUnknown)
+	}
+	return err
+}
+
+// elevatedUnrecorded is the refusal of a read only the admin path admitted
+// whose record could not be written: nothing is shown.
+func elevatedUnrecorded(tool string, err error) tools.Result {
+	return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s did not open this "+
+		"artifact: you are reading it as an administrator, it is not shared with you, "+
+		"and that override is recorded in the artifact's own history before anything "+
+		"is shown. The record could not be written just now. Try again shortly.", tool))
+}
+
+// discloses reports whether this call may hand back what version of h holds,
+// as a refusal's context (the live files a stale publish answers with, the rows
+// a conflicting data write answers with): exactly when reading it would be
+// admitted, for the caller and for whoever the turn is acting for
+// ([authz.DecideWithin] over the read row, which no steerable exception
+// reaches), with an administrator's override recorded first.
+//
+// A WRITE ADMITTED WITHOUT THE CEILING IS NOT A READ: an agent's edit to its
+// own work skips the requester, and a refusal that inlined the work's content
+// would hand a requester who could not open it exactly what reading it is
+// ceilinged against (D11). So the answer is false for a requester who could
+// not read it, for a turn a stranger woke, for a decision this node could not
+// take, and for an override whose record could not be written; the refusal is
+// then answered with numbers, authors and paths alone.
+func (d ArtifactDeps) discloses(ctx context.Context, c artifactCaller, h artifactsdomain.Head,
+	version int) bool {
+
+	dec := authz.DecideWithin(ctx, c.principal, c.ceiling, authz.ActionArtifactRead,
+		d.objectOf(h), d.Chart, d.now())
+	if dec.Unknown() || !dec.Allowed {
+		return false
+	}
+	if dec.Elevated {
+		if err := d.readElevated(ctx, c, dec, h, version); err != nil {
+			log.WarnContext(ctx, "artifact_elevated_read_unrecorded", "artifact", h.ID.String(),
+				"version", version, "error", err.Error(),
+				"detail", "the refusal is answered without the artifact's content")
+			return false
+		}
+	}
+	return true
+}
+
 // settle hands a write's position to [ArtifactDeps.Await], best effort, as
 // [PageDeps.settle] does.
 func (d ArtifactDeps) settle(ctx context.Context, at statelog.Position) {
@@ -645,6 +704,15 @@ func artifactNotFound(tool, ref string) tools.Result {
 	return refusedBy(tools.RefusalNotFound, artifactsdomain.ErrNotFound,
 		fmt.Sprintf("%s: there is no artifact %q you can open. Check the id, or "+
 			"find it with list_artifacts.", tool, clip(ref)))
+}
+
+// artifactTrashed is the answer for a read of an artifact in the trash, to a
+// caller it is disclosed to: its content is not served until a person
+// restores it, so nothing of it is read.
+func artifactTrashed(tool string, h artifactsdomain.Head) tools.Result {
+	return refusedBy(tools.RefusalNotFound, artifactsdomain.ErrTrashed, fmt.Sprintf("%s: "+
+		"artifact %s is in the trash, and its content is not served until its owner (%s) "+
+		"restores it. Nothing was read.", tool, h.ID, h.Owner))
 }
 
 // artifactReadFailure explains a read of the artifacts domain that did not

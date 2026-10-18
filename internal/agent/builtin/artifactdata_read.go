@@ -272,17 +272,29 @@ func (a dataAdmission) visible(schema []artifacts.Collection, collection string,
 	if a.requester == nil {
 		return docs
 	}
-	rule, ok := collectionRule(schema, collection)
-	if collection == artifactdata.StateCollection {
-		rule, ok = artifacts.ReadPrivate, true
-	}
 	out := make([]artifactdata.Doc, 0, len(docs))
 	for _, d := range docs {
-		if ok && artifactdata.Readable(rule, *a.requester, d.CreatedBy.Name) {
+		if a.shows(schema, collection, d) {
 			out = append(out, d)
 		}
 	}
 	return out
+}
+
+// shows reports whether the requester's reading admits doc of collection, by
+// the collection's own rule: the one answer [dataAdmission.visible] and a
+// conflict's rows ask. True where the turn acts for nobody.
+func (a dataAdmission) shows(schema []artifacts.Collection, collection string,
+	doc artifactdata.Doc) bool {
+
+	if a.requester == nil {
+		return true
+	}
+	rule, ok := collectionRule(schema, collection)
+	if collection == artifactdata.StateCollection {
+		rule, ok = artifacts.ReadPrivate, true
+	}
+	return ok && artifactdata.Readable(rule, *a.requester, doc.CreatedBy.Name)
 }
 
 // rowsThatFit is how many of docs, from the first, fit one answer: their

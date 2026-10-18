@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
@@ -73,24 +74,24 @@ func (r *Rooms) streamRooms() stream.Rooms {
 // artifact is answered as absent to (no relation, purged, never created) and
 // for one in the trash, whose data is not served.
 //
-// A READ, RECORDED: a room carries the artifact's data to the socket in it, so
-// an administrator admitted only by the admin path is recorded as reading it
-// before the room is joined, exactly as an elevated read of its content is
-// ([artifactsapi.Gate.Read]), and a record that could not be written refuses
-// the join as undecidable rather than letting the override pass unrecorded.
-// Repeats collapse into the day's first record.
+// A READ OF ITS CONTENT, RECORDED: a room carries the artifact's data to the
+// socket in it, so the join is the content read every other surface takes
+// ([artifactsapi.Gate.Content]): an artifact in the trash is refused before
+// anything is recorded, and an administrator admitted only by the admin path
+// is recorded as reading it before the room is joined, with a record that
+// could not be written refusing the join as undecidable rather than letting
+// the override pass unrecorded. Repeats collapse into the day's first record.
 type roomAccess struct{ gate artifactsapi.Gate }
 
 func (a roomAccess) Standing(ctx context.Context, p iam.Principal, id artifacts.ID) (artifacts.Role, error) {
-	admitted, err := a.gate.Read(ctx, p, id, 0)
+	admitted, err := a.gate.Content(ctx, p, authz.ActionArtifactRead, id, 0)
 	var refused *artifactsapi.Refused
 	switch {
-	case errors.Is(err, artifactsapi.ErrNoSuchArtifact), errors.As(err, &refused):
+	case errors.Is(err, artifactsapi.ErrNoSuchArtifact), errors.Is(err, artifactsdomain.ErrTrashed),
+		errors.As(err, &refused):
 		return "", nil
 	case err != nil:
 		return "", err
-	case admitted.Head.Status == artifactsdomain.StatusTrashed:
-		return "", nil
 	}
 	return admitted.Role(), nil
 }

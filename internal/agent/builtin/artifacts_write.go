@@ -729,6 +729,12 @@ func editsArg(args map[string]any) ([]edits.Edit, string) {
 // and when, the paths that changed since the caller's base, and the first page
 // of each changed text file, fenced as text the live version's author wrote,
 // so the model merges and publishes again on the live number.
+//
+// THE TEXT IS A READ OF THE LIVE VERSION, shown only where reading it would be
+// ([ArtifactDeps.discloses]): a publish to the agent's own artifact is
+// admitted without the requester, and an administrator's on the admin path is
+// recorded first. Where it may not be shown, the answer carries the numbers,
+// the author and the paths alone.
 func (t *publishArtifact) stale(ctx context.Context, turn *turnctx.Turn, c artifactCaller,
 	moved *artifactsdomain.VersionMoved, base int, cause error) tools.Result {
 
@@ -752,7 +758,14 @@ func (t *publishArtifact) stale(ctx context.Context, turn *turnctx.Turn, c artif
 	var inlined []map[string]any
 	var omitted []string
 	budget := staleTextBudget
-	for _, p := range changed {
+	inline := changed
+	if !t.deps.discloses(ctx, c, moved.Head, moved.Head.HeadNumber) {
+		inline = nil
+		out["live_files_withheld"] = "The live version's text is not shown in this answer: " +
+			"this turn may not read the artifact's content. Merge from what you published " +
+			"and what `changed_paths` names."
+	}
+	for _, p := range inline {
 		e, ok := manifest.EntryAt(live.Manifest, p)
 		if !ok {
 			continue

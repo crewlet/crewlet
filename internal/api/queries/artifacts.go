@@ -78,6 +78,10 @@ func artifactFailure(what string, err error) error {
 		return fmt.Errorf("%w: no such artifact", ErrNotFound)
 	case errors.As(err, &refusal):
 		return refused(what, refusal.Decision)
+	case errors.Is(err, artifactsdomain.ErrTrashed):
+		// IN THE TRASH, ITS CONTENT IS NOT SERVED: the record is not one
+		// this question answers until the owner restores the artifact.
+		return fmt.Errorf("%w: %w", ErrNotFound, err)
 	case errors.Is(err, artifactsapi.ErrRecordUnwritten), errors.Is(err, artifactsapi.ErrNoRoster):
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	case errors.Is(err, artifactsdomain.ErrNotFound), errors.Is(err, artifactsdomain.ErrPurged):

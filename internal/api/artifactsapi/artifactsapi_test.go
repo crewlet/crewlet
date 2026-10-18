@@ -340,6 +340,68 @@ func TestAnAdministratorsReadIsRecordedBeforeItIsAnswered(t *testing.T) {
 	}
 }
 
+// AN ADMINISTRATOR'S PUBLISH ON A MOVED HEAD IS A RECORDED READ (D09): the 412
+// hands back the live entry's text, so a publisher only the admin path
+// admitted is recorded as reading the live version before it is sent, and is
+// answered 503 with nothing of it when the record cannot be written. An
+// editor's 412 records nothing. Mutation: drop the record from versionMoved
+// and the administrator reads the live page with no trace.
+func TestAnAdministratorsPublishOnAMovedHeadIsARecordedRead(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	live, _ := g.estate.Version(t.Context(), page, 2)
+	g.pipeline.err = &artifactsdomain.VersionMoved{Head: heads()[page], Live: live}
+	ada := person("ada", iam.GrantAdmin)
+	w := g.do(ada, "POST", at(page, "/versions"), publishV3, append(keyed(), "If-Match", `"1"`)...)
+	if w.Code != http.StatusPreconditionFailed || !strings.Contains(w.Body.String(), `"entry"`) {
+		t.Fatalf("an administrator's publish on a moved head: %d %s", w.Code, w.Body)
+	}
+	if len(g.marks.elevated) != 1 || !g.marks.elevated[0].Authority.Elevated || g.marks.versions[0] != 2 {
+		t.Fatalf("the live version's read was recorded %+v at %v", g.marks.elevated, g.marks.versions)
+	}
+	if w := g.do(person("sam"), "POST", at(page, "/versions"), publishV3,
+		append(keyed(), "If-Match", `"1"`)...); w.Code != http.StatusPreconditionFailed ||
+		len(g.marks.elevated) != 1 {
+		t.Errorf("an editor's 412 was recorded as elevated (%d %d records)", w.Code, len(g.marks.elevated))
+	}
+
+	failing := newRig(t, true)
+	failing.marks.err = errBoom
+	failing.pipeline.err = &artifactsdomain.VersionMoved{Head: heads()[page], Live: live}
+	w = failing.do(ada, "POST", at(page, "/versions"), publishV3, append(keyed(), "If-Match", `"1"`)...)
+	if w.Code != http.StatusServiceUnavailable || strings.Contains(w.Body.String(), "alert(1)") ||
+		strings.Contains(w.Body.String(), `"live"`) {
+		t.Errorf("an unrecorded elevated 412: %d %s", w.Code, w.Body)
+	}
+}
+
+// THE TRASH STOPS SERVING CONTENT AT ONCE: a trashed page's file, source and
+// frame are refused artifact_trashed to its owner, and an administrator's read
+// of it is refused before anything is recorded or read. Mutation: drop the
+// status check from Gate.Content and the file is served.
+func TestTheTrashStopsServingContent(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	opens := g.objects.opens()
+	for _, who := range []iam.Principal{person("jane"), person("ada", iam.GrantAdmin)} {
+		for _, route := range []struct{ method, rest string }{
+			{"GET", "/versions/1/files/index.html"},
+			{"GET", "/versions/1/source"},
+			{"POST", "/tickets"},
+		} {
+			if w := g.do(who, route.method, at(binned, route.rest), ``); w.Code != http.StatusConflict ||
+				errorOf(t, w) != "artifact_trashed" {
+				t.Errorf("%s %s on a trashed page as %s: %d %s", route.method, route.rest,
+					who.Seat, w.Code, w.Body)
+			}
+		}
+	}
+	if len(g.marks.elevated) != 0 || g.objects.opens() != opens || g.estate.versionReads() != 0 {
+		t.Errorf("a trashed page's refused reads left %d records, %d opens and %d version reads",
+			len(g.marks.elevated), g.objects.opens()-opens, g.estate.versionReads())
+	}
+}
+
 // A PURGE IS AN ADMINISTRATOR'S, WITH A FRESH PROOF: the owner may not purge,
 // an administrator whose proof of identity is old is asked to step up, and an
 // administrator's purge of somebody else's artifact is stamped elevated.

@@ -2201,11 +2201,15 @@ as one that does not exist.
 | `POST` | `/artifacts/{id}/data/undo` | `{"seq": N}`: reverts one write of the last seven days, as a write of the caller's own under the same rules, conditioned on every document it changed being where it left them, so a document changed since is `409` `stale_version` naming it. A write older than the history, one that was refused, a schema change and one holding a value the history kept only as its hash are `409` `not_undoable`, and the detail says which |
 | `POST` | `/artifacts/{id}/data/state` | `{"key", "value"}` or `{"key", "delete": true}`: sets or removes one of the caller's own per-viewer state keys, the backing of the page runtime's state API |
 | `PUT` | `/artifacts/{id}/data/schema` | `{"collections": [...]}`, every collection the store keeps after the change *(editor and above)*. Decided against every write before it; a change that would rewrite more documents than one record carries is `422` `migration_too_large` |
-| `GET` | `/artifacts/{id}/data/export.csv` | `collection=` one collection as CSV, streamed a page at a time *(editor and above)*, under the collection's read rule, with any cell a spreadsheet would run as a formula written as text |
+| `GET` | `/artifacts/{id}/data/export.csv` | `collection=` one collection as CSV, streamed a page at a time *(editor and above)*, under the collection's read rule, with any cell a spreadsheet would run as a formula written as text. An artifact in the trash is `410` `data_gone` |
 
-Every write route takes an `Idempotency-Key`, refuses a field it does not
-declare, and refuses a write to an artifact in the trash (`410` `data_gone`)
-until it is restored. A write from a browser session states the surface it
+Every read here is a read of the artifact's content: an artifact in the trash
+answers none of them (the questions `404` `not_found`), and an administrator
+only the admin path admits is recorded as reading it before a row is sent, or
+answered `503` with nothing when that record cannot be written. Every write
+route takes an `Idempotency-Key`, refuses a field it does not declare, and
+refuses a write to an artifact in the trash (`410` `data_gone`) until it is
+restored. A write from a browser session states the surface it
 came through as `via`: `dashboard`, or `bridge` with the `version` of the page
 whose script made it, which must declare `db` (or `state`, for a state key) or
 the write is `403`. A bearer credential's write is stamped as the API's
@@ -6061,7 +6065,17 @@ owner and shares, **before** a version, a file or a byte is read:
   admits writes an elevated-read record first (one per day, administrator,
   artifact and version), which the artifact's history shows its owner and
   editors; a read whose record cannot be written is answered `503` and not
-  served. A listing never shows an artifact on the admin path.
+  served. That covers every read of content: a version's files, source and
+  frame, every datastore question and the CSV export, a room's join, and the
+  live entry a `412 version_moved` hands back. An administrator who holds a
+  share is admitted as that share, at its role, and the admin path (owner,
+  recorded) opens only for a verb their relations do not reach. A listing
+  never shows an artifact on the admin path.
+- **The trash stops serving content at once.** A trashed artifact's head, its
+  versions and its history stay readable to its audience for the trash view;
+  its files, source and frames are `409 artifact_trashed`, its datastore
+  questions `404 not_found`, its export `410 data_gone`, and a room's join is
+  refused, before anything is read or recorded.
 
 What the decision concluded is stamped into the record every write forms: the
 caller's role on the artifact, whether only the admin path admitted them, the

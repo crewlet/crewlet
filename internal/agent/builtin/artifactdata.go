@@ -42,7 +42,8 @@ import (
 // that edits a sheet never writes a cell for somebody that the somebody could
 // not write. An agent's own artifact is steered by anybody who can message it,
 // as every other piece of its own work is, so on its own artifact its writes
-// are its own.
+// are its own; what such a write hands back (a conflict's current rows) is
+// still only what the requester could read.
 //
 // # An agent in the room
 //
@@ -109,9 +110,11 @@ type dataTools struct {
 
 // serves reports whether everything the tools act through is wired.
 func (d dataTools) serves() bool {
+	// THE WRITER TOO, for the reads: an administrator's override is
+	// recorded through it before a row is shown.
 	a := d.art
-	return a.Reader != nil && a.Chart != nil && a.Requesters != nil && a.Limits != nil &&
-		d.data.Store != nil && d.data.Turns != nil
+	return a.Reader != nil && a.Writer != nil && a.Chart != nil && a.Requesters != nil &&
+		a.Limits != nil && d.data.Store != nil && d.data.Turns != nil
 }
 
 // artifactDataCandidates are the datastore tools a seat's registry may offer.
@@ -185,8 +188,9 @@ type dataAdmission struct {
 	stamp artifacts.Role
 
 	// requester is the reading of the person the turn acts for, nil where
-	// it acts for nobody (or on the agent's own artifact): a row is answered
-	// only when it reads too.
+	// it acts for nobody: a row is answered only when it reads too. A
+	// stranger's, or a requester's this node could not settle on an edit to
+	// the agent's own work, is the zero reading, which reads no row.
 	requester *artifactdata.Reading
 }
 
@@ -213,6 +217,13 @@ func (d dataTools) admit(ctx context.Context, turn *turnctx.Turn, tool string,
 	if refusal != nil {
 		return dataAdmission{}, refusal
 	}
+	// A READ IN THE TRASH IS NO READ: the datastore is the artifact's
+	// content (D03), which stops being served the moment it is trashed.
+	// A write is refused on the same status by the tool, naming the write.
+	if !writes && h.Status == artifactsdomain.StatusTrashed {
+		r := artifactTrashed(tool, h)
+		return dataAdmission{}, &r
+	}
 	a := dataAdmission{head: h, ref: ref, c: c, dec: dec}
 	object := d.art.objectOf(h)
 	// THE ROLE ITSELF, exact: a role the chart could not settle stamped
@@ -236,18 +247,45 @@ func (d dataTools) admit(ctx context.Context, turn *turnctx.Turn, tool string,
 		return dataAdmission{}, &r
 	}
 	a.role, a.stamp = standing.Role, standing.Role
-	if c.ceiling.Kind != authz.CeilingRequester || ownedSteer(action, c, h) {
+	// AN ADMINISTRATOR'S OVERRIDE IS RECORDED BEFORE A ROW IS SHOWN (D09):
+	// a read only the admin path admitted writes the elevated-read record
+	// first, and is not made when the record cannot be written.
+	if !writes && dec.Elevated {
+		if err := d.art.readElevated(ctx, c, dec, h, h.HeadNumber); err != nil {
+			r := elevatedUnrecorded(tool, err)
+			return dataAdmission{}, &r
+		}
+	}
+	switch c.ceiling.Kind {
+	case authz.CeilingStranger:
+		// A STRANGER READS NO ROW. Only an edit to the agent's own work is
+		// admitted for one, and a refusal of it hands back nothing.
+		a.requester = &artifactdata.Reading{}
+		return a, nil
+	case authz.CeilingRequester:
+	default:
 		return a, nil
 	}
+	// AN EDIT TO THE AGENT'S OWN WORK is the agent's: its stamp is not
+	// lowered to the requester's. The requester's reading still bounds every
+	// row the call hands back (a conflict's current rows), so a write they
+	// may steer never shows them a row they could not read.
+	owned := ownedSteer(action, c, h)
 	theirs, err := authz.StandingOn(ctx, c.ceiling.Principal, object, d.art.Chart, d.art.now())
-	if err != nil {
+	switch {
+	case err != nil && owned:
+		// THE WRITE DOES NOT WAIT ON THE REQUESTER, whom it is not bounded
+		// by; what it hands back is bounded to nothing instead.
+		a.requester = &artifactdata.Reading{}
+		return a, nil
+	case err != nil:
 		r := refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", ErrUndecidable, err),
 			fmt.Sprintf("%s could not settle the role of the person this turn is working "+
 				"for on the artifact right now. Nothing was read or changed. Try again "+
 				"shortly.", tool))
 		return dataAdmission{}, &r
 	}
-	if theirs.Role.Rank() < a.stamp.Rank() {
+	if !owned && theirs.Role.Rank() < a.stamp.Rank() {
 		a.stamp = theirs.Role
 	}
 	reading := artifactdata.Reading{Record: requesterRecord(c), Role: theirs.Role}

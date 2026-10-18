@@ -50,14 +50,11 @@ func (s *Service) ticket(w http.ResponseWriter, r *http.Request) {
 		invalid(w, "version is a version number, or absent for the head")
 		return
 	}
-	a, ok := s.admitRead(w, r, body.Version)
+	a, ok := s.admitContent(w, r, body.Version)
 	if !ok {
 		return
 	}
 	switch {
-	case a.Head.Status == artifactsdomain.StatusTrashed:
-		trashed(w)
-		return
 	case a.Head.Kind != artifacts.KindHTML:
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeArtifactNotFramed, map[string]string{
 			"detail": "a " + string(a.Head.Kind) + " artifact is rendered by the dashboard: read " +
@@ -118,10 +115,6 @@ func (s *Service) ticket(w http.ResponseWriter, r *http.Request) {
 func (s *Service) versionOf(w http.ResponseWriter, r *http.Request, a Admission, n int) (
 	artifactsdomain.Version, bool) {
 
-	if a.Head.Status == artifactsdomain.StatusTrashed {
-		trashed(w)
-		return artifactsdomain.Version{}, false
-	}
 	v, err := s.reads.Version(r.Context(), a.Head.ID, n)
 	if err != nil {
 		readFailed(w, r, err, "version "+strconv.Itoa(n))
@@ -148,7 +141,7 @@ func (s *Service) file(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	a, ok := s.admitRead(w, r, n)
+	a, ok := s.admitContent(w, r, n)
 	if !ok {
 		return
 	}
@@ -268,7 +261,7 @@ func (s *Service) source(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	a, ok := s.admitRead(w, r, n)
+	a, ok := s.admitContent(w, r, n)
 	if !ok {
 		return
 	}

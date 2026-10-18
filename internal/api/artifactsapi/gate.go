@@ -32,10 +32,21 @@ import (
 //
 // An administrator may open any artifact (admin is host access, and a refusal
 // would promise a privacy the engine cannot keep), and the override is made
-// visible: [Gate.Read] writes an elevated-read record for every read the admin
-// path alone admitted, before the read is answered, and REFUSES the read when
-// the record cannot be written. An override nobody can see afterwards is the
-// thing the record exists to prevent.
+// visible: [Gate.Read] and [Gate.Content] write an elevated-read record for
+// every read the admin path alone admitted, before the read is answered, and
+// REFUSE the read when the record cannot be written. An override nobody can
+// see afterwards is the thing the record exists to prevent. Every read of an
+// artifact takes one of the two: its metadata through [Gate.Read], its content
+// (a version's files, its datastore) through [Gate.Content], whatever verb
+// decides it.
+//
+// # The trash stops serving content at once
+//
+// An artifact in the trash keeps its head, its versions list and its history
+// for the owner's trash view, and serves no content: [Gate.Content] refuses it
+// ([artifactsdomain.ErrTrashed]) before anything is read or recorded, so the file routes, the
+// datastore's reads and its export, and the room that pushes its data all
+// stop together.
 
 // Heads is the artifacts estate's read of one artifact's head: what the shares
 // and the owner a decision reads come from. The estate router's, so a node
@@ -294,13 +305,37 @@ func (g Gate) Read(ctx context.Context, p iam.Principal, id artifacts.ID, versio
 	return a, g.recordElevated(ctx, a, version)
 }
 
+// Content admits a read of artifact id's CONTENT through action: a version's
+// files at version ([authz.ActionArtifactRead]), or its datastore (the data
+// read, query and export verbs, at zero, the head's). It refuses an artifact
+// in the trash ([artifactsdomain.ErrTrashed]) before anything is read, and
+// records the admin
+// path's override before the content is answered, refusing the read when the
+// record cannot be written ([ErrRecordUnwritten]).
+func (g Gate) Content(ctx context.Context, p iam.Principal, action authz.Action, id artifacts.ID,
+	version int) (Admission, error) {
+
+	a, err := g.Admit(ctx, p, action, id)
+	if err != nil {
+		return Admission{}, err
+	}
+	if a.Head.Status == artifactsdomain.StatusTrashed {
+		return Admission{}, fmt.Errorf("%w: %s", artifactsdomain.ErrTrashed, id)
+	}
+	return a, g.recordElevated(ctx, a, version)
+}
+
 // recordElevated writes the elevated-read record a read only the admin path
 // admitted owes, one per (day, administrator, artifact, version): the writer
 // derives the operation from them, so every repeat that day collapses into
-// the first.
+// the first. A gate with no marks records nothing and so admits nothing on
+// the admin path.
 func (g Gate) recordElevated(ctx context.Context, a Admission, version int) error {
 	if !a.Elevated() {
 		return nil
+	}
+	if g.Marks == nil {
+		return fmt.Errorf("%w: this surface has no reader marks", ErrRecordUnwritten)
 	}
 	if version <= 0 {
 		version = a.Head.HeadNumber

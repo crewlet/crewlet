@@ -124,7 +124,10 @@ func TestEveryArtifactToolResultIsFenced(t *testing.T) {
 		r := newArtifactRig(t, chart, req, nil)
 		turn := asked(t)
 		b := turn.Boundary
-		h := r.f.seed("agent-cto", iam.ActorAgent, cto, nil,
+		// SHARED WITH THE REQUESTER, who may read the live text the
+		// refusal hands back (TestAStaleOwnPublishHandsBackNoTextTheRequesterCouldNotRead).
+		h := r.f.seed("agent-cto", iam.ActorAgent, cto,
+			[]artifacts.Share{shareWith("founder", artifacts.RoleViewer)},
 			[2]string{"index.html", "<p>mine</p>"})
 		r.f.republish(h.ID, founder, [2]string{"index.html", attack(b, "live")})
 		got := r.call(t, turn, builtin.PublishArtifactTool, map[string]any{

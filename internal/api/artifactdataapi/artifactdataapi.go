@@ -20,8 +20,11 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
+
+var log = logging.Get("artifactdataapi")
 
 // MaxBodyBytes bounds one request body: a batch's ops at their bound
 // ([artifacts.MaxBatchBytes]) and 64 KiB for the rest of the envelope. A body
@@ -52,7 +55,8 @@ type Versions interface {
 // Options configure the surface.
 type Options struct {
 	// Gate is the one admission every route takes. REQUIRED, with its
-	// Heads, Chart and Limits.
+	// Heads, Chart, Limits and Marks (an export only the admin path admits
+	// is recorded before a row is sent).
 	Gate artifactsapi.Gate
 
 	// Data is the datastore. REQUIRED.
@@ -85,6 +89,9 @@ func New(opts Options) (*Service, error) {
 	case opts.Gate.Limits == nil:
 		return nil, errors.New("artifactdataapi: no plan quotas: every write is stamped " +
 			"with the limits in force")
+	case opts.Gate.Marks == nil:
+		return nil, errors.New("artifactdataapi: no reader marks: an export only the admin " +
+			"path admits is recorded before a row is sent")
 	case opts.Data == nil:
 		return nil, errors.New("artifactdataapi: no datastore")
 	case opts.Versions == nil:
@@ -129,9 +136,30 @@ func (s *Service) Routes(mux authz.Mux) error {
 	return errors.Join(failures...)
 }
 
-// admit decides action on the path's artifact, rendering a refusal itself. It
-// reports whether the handler goes on.
+// admit decides action on the path's artifact for a write, rendering a
+// refusal itself. It reports whether the handler goes on.
 func (s *Service) admit(w http.ResponseWriter, r *http.Request, action authz.Action) (
+	artifacts.ID, artifactsapi.Admission, bool) {
+
+	return s.admitWith(w, r, action, s.gate.Admit)
+}
+
+// admitRead decides action on the path's artifact as a read of its data
+// ([artifactsapi.Gate.Content]): an artifact in the trash is refused, and an
+// administrator only the admin path admits is recorded before a row is sent.
+func (s *Service) admitRead(w http.ResponseWriter, r *http.Request, action authz.Action) (
+	artifacts.ID, artifactsapi.Admission, bool) {
+
+	return s.admitWith(w, r, action, func(ctx context.Context, p iam.Principal, action authz.Action,
+		id artifacts.ID) (artifactsapi.Admission, error) {
+		return s.gate.Content(ctx, p, action, id, 0)
+	})
+}
+
+// admitWith resolves the caller and the path's artifact and admits them
+// through one of the gate's admissions, rendering a refusal itself.
+func (s *Service) admitWith(w http.ResponseWriter, r *http.Request, action authz.Action,
+	admit func(context.Context, iam.Principal, authz.Action, artifacts.ID) (artifactsapi.Admission, error)) (
 	artifacts.ID, artifactsapi.Admission, bool) {
 
 	id, err := artifacts.ParseID(r.PathValue("id"))
@@ -145,7 +173,7 @@ func (s *Service) admit(w http.ResponseWriter, r *http.Request, action authz.Act
 		operator.RefuseDecision(w, r, action, authz.Decision{Err: iam.Reason(r.Context())})
 		return id, artifactsapi.Admission{}, false
 	}
-	a, err := s.gate.Admit(r.Context(), principal, action, id)
+	a, err := admit(r.Context(), principal, action, id)
 	var refused *artifactsapi.Refused
 	switch {
 	case err == nil:
@@ -154,8 +182,15 @@ func (s *Service) admit(w http.ResponseWriter, r *http.Request, action authz.Act
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
 	case errors.As(err, &refused):
 		operator.RefuseDecision(w, r, action, refused.Decision)
+	case errors.Is(err, artifactsdomain.ErrTrashed):
+		dataGone(w, "the artifact is in the trash; its data is not served until it is restored")
+	case errors.Is(err, artifactsapi.ErrRecordUnwritten):
+		log.WarnContext(r.Context(), "artifacts_elevated_read_unrecorded", "artifact", id.String(),
+			"error", err.Error())
+		unavailable(w, err, "this read is admitted only as an administrator's, and the record "+
+			"of it could not be written, so it was not answered")
 	default:
-		unavailable(w, err, "this node could not decide who may write this artifact's data")
+		unavailable(w, err, "this node could not decide who may act on this artifact's data")
 	}
 	return id, artifactsapi.Admission{}, false
 }
@@ -164,11 +199,15 @@ func (s *Service) admit(w http.ResponseWriter, r *http.Request, action authz.Act
 // served, so nothing is written to it until it is restored.
 func writable(w http.ResponseWriter, a artifactsapi.Admission) bool {
 	if a.Head.Status == artifactsdomain.StatusTrashed {
-		httpjson.FailWith(w, http.StatusGone, httpjson.CodeDataGone, map[string]string{
-			"detail": "the artifact is in the trash; restore it to write its data"})
+		dataGone(w, "the artifact is in the trash; restore it to write its data")
 		return false
 	}
 	return true
+}
+
+// dataGone is `410 data_gone`: an artifact whose data is not served.
+func dataGone(w http.ResponseWriter, detail string) {
+	httpjson.FailWith(w, http.StatusGone, httpjson.CodeDataGone, map[string]string{"detail": detail})
 }
 
 // Via is the surface a write declares it came through. A browser session
@@ -397,9 +436,11 @@ func (s *Service) schema(w http.ResponseWriter, r *http.Request) {
 // export answers one collection as CSV (`GET
 // /artifacts/{id}/data/export.csv?collection=`), under the collection's read
 // rule, to an editor: an export is every row at once, which is the reason the
-// row admits editors and above only.
+// row admits editors and above only. A read of the artifact's content: never
+// of one in the trash, and recorded first for an administrator only the admin
+// path admits.
 func (s *Service) export(w http.ResponseWriter, r *http.Request) {
-	id, a, ok := s.admit(w, r, authz.ActionArtifactExport)
+	id, a, ok := s.admitRead(w, r, authz.ActionArtifactExport)
 	if !ok {
 		return
 	}

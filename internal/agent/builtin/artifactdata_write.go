@@ -114,14 +114,45 @@ func (t *writeArtifactData) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return dataFailure(ctx, t.Name(), err), nil
 	}
-	return dataVerdict(ctx, turn, t.Name(), a, res, "Read the rows with read_artifact_data: "+
+	return t.d.verdict(ctx, turn, t.Name(), a, res, "Read the rows with read_artifact_data: "+
 		"they say whether the write landed.")
 }
 
-// dataVerdict answers a datastore write by what the applier decided: applied,
-// or the refusal it wrote (a conflict handing back the rows as they are now,
-// fenced, since others wrote them), or the outcome nobody can vouch for.
-func dataVerdict(ctx context.Context, turn *turnctx.Turn, tool string, a dataAdmission,
+// conflictRows is the part of a conflict's current rows this call may hand
+// back, and whether any was withheld: every row where the turn acts for
+// nobody, and otherwise only the rows the requester's reading admits by their
+// collection's own rule, exactly as a read is filtered. The store read them at
+// the agent's record, so without this an agent's own rows in an `own_rows` or
+// `private` collection would reach a requester the read path keeps them from.
+// A schema this node could not read withholds every row: the closed end.
+func (d dataTools) conflictRows(ctx context.Context, a dataAdmission,
+	docs []artifactdata.Doc) ([]artifactdata.Doc, bool) {
+
+	if a.requester == nil {
+		return docs, false
+	}
+	schema, err := d.data.Store.Schema(ctx, a.head.ID)
+	if err != nil {
+		log.WarnContext(ctx, "artifact_data_conflict_rows_withheld", "artifact",
+			a.head.ID.String(), "error", err.Error(),
+			"detail", "the schema could not be read, so no row could be checked against "+
+				"what the requester may read")
+		return nil, len(docs) > 0
+	}
+	out := make([]artifactdata.Doc, 0, len(docs))
+	for _, doc := range docs {
+		if a.shows(schema, doc.Collection, doc) {
+			out = append(out, doc)
+		}
+	}
+	return out, len(out) < len(docs)
+}
+
+// verdict answers a datastore write by what the applier decided: applied, or
+// the refusal it wrote (a conflict handing back the rows as they are now,
+// fenced, since others wrote them, and only those the requester could read),
+// or the outcome nobody can vouch for.
+func (d dataTools) verdict(ctx context.Context, turn *turnctx.Turn, tool string, a dataAdmission,
 	res artifactdata.WriteResult, look string) (tools.Result, error) {
 
 	if res.Result.Outcome == statelog.OutcomeUnknown {
@@ -141,19 +172,20 @@ func dataVerdict(ctx context.Context, turn *turnctx.Turn, tool string, a dataAdm
 		return jsonResult(withArtifactOperation(out, a.c))
 	case artifacts.DataConflict:
 		read := newForeignRead(turn, a.c.self())
-		rows := make([]map[string]any, 0, len(res.Conflict))
-		for i, d := range res.Conflict {
-			row := map[string]any{"collection": d.Collection, "doc": d.ID, "version": d.Version,
-				"written_by": actorJSON(d.UpdatedBy)}
-			if d.Deleted {
+		shown, withheld := d.conflictRows(ctx, a, res.Conflict)
+		rows := make([]map[string]any, 0, len(shown))
+		for i, doc := range shown {
+			row := map[string]any{"collection": doc.Collection, "doc": doc.ID, "version": doc.Version,
+				"written_by": actorJSON(doc.UpdatedBy)}
+			if doc.Deleted {
 				row["deleted"] = true
 			}
-			if len(d.Fields) > 0 {
-				row["fields"] = string(d.Fields)
+			if len(doc.Fields) > 0 {
+				row["fields"] = string(doc.Fields)
 				read.fence(fieldPath{}.key("current").index(i).key("fields"),
 					provenance.SourceArtifactRow,
-					[]provenance.Author{read.writer(d.UpdatedBy.Name, d.UpdatedBy.Kind)}, true,
-					string(d.Fields))
+					[]provenance.Author{read.writer(doc.UpdatedBy.Name, doc.UpdatedBy.Kind)}, true,
+					string(doc.Fields))
 			}
 			rows = append(rows, row)
 		}
@@ -162,6 +194,12 @@ func dataVerdict(ctx context.Context, turn *turnctx.Turn, tool string, a dataAdm
 		out["note"] = "Nothing was written: a row moved past the `if_version` you sent. " +
 			"`current` is each such row as it is now; merge onto it and write again with " +
 			"its `version`."
+		if withheld {
+			out["note"] = "Nothing was written: a row moved past the `if_version` you sent. " +
+				"`current` is each such row the person this turn is working for may read, " +
+				"as it is now; the others are not shown. Merge onto what is shown and write " +
+				"again with its `version`."
+		}
 		r, err := read.answer(ctx, tool, withArtifactOperation(out, a.c),
 			"Write fewer rows at once.")
 		if err == nil {
@@ -285,7 +323,7 @@ func (t *setArtifactSchema) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return dataFailure(ctx, t.Name(), err), nil
 	}
-	return dataVerdict(ctx, turn, t.Name(), a, res, "Read the schema with read_artifact_data: "+
+	return t.d.verdict(ctx, turn, t.Name(), a, res, "Read the schema with read_artifact_data: "+
 		"it says whether the change landed.")
 }
 

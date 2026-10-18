@@ -44,9 +44,10 @@ func (s *Service) admit(w http.ResponseWriter, r *http.Request, action authz.Act
 	return a, true
 }
 
-// admitRead is [Service.admit] for a read of the path's artifact at version
-// (zero for none): [Gate.Read], which records the admin path's override first.
-func (s *Service) admitRead(w http.ResponseWriter, r *http.Request, version int) (Admission, bool) {
+// admitContent is [Service.admit] for a read of the path's artifact's content
+// at version (zero for the head): [Gate.Content], which refuses an artifact in
+// the trash and records the admin path's override first.
+func (s *Service) admitContent(w http.ResponseWriter, r *http.Request, version int) (Admission, bool) {
 	id, ok := pathID(w, r)
 	if !ok {
 		return Admission{}, false
@@ -55,7 +56,7 @@ func (s *Service) admitRead(w http.ResponseWriter, r *http.Request, version int)
 	if !ok {
 		return Admission{}, false
 	}
-	a, err := s.gate.Read(r.Context(), p, id, version)
+	a, err := s.gate.Content(r.Context(), p, authz.ActionArtifactRead, id, version)
 	if err != nil {
 		refuseAdmission(w, r, authz.ActionArtifactRead, err)
 		return Admission{}, false
@@ -82,6 +83,8 @@ func refuseAdmission(w http.ResponseWriter, r *http.Request, action authz.Action
 		notFound(w)
 	case errors.As(err, &refused):
 		refuseDecision(w, r, action, refused.Decision)
+	case errors.Is(err, artifactsdomain.ErrTrashed):
+		trashed(w)
 	case errors.Is(err, ErrRecordUnwritten):
 		log.WarnContext(r.Context(), "artifacts_elevated_read_unrecorded", "error", err.Error())
 		unavailable(w, err, "this read is admitted only as an administrator's, and the "+

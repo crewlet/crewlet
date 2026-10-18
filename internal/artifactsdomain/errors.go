@@ -13,8 +13,9 @@ var (
 	// exist (or never did, which a caller with no relation is told too).
 	ErrNotFound = errors.New("artifactsdomain: no such artifact")
 
-	// ErrTrashed reports a write to an artifact in the trash: restore it
-	// first.
+	// ErrTrashed reports a write to an artifact in the trash, or a read of
+	// its content (its files, its datastore), which stops being served the
+	// moment it is trashed: restore it first.
 	ErrTrashed = errors.New("artifactsdomain: the artifact is in the trash")
 
 	// ErrPurged reports an artifact a purge destroyed for good.

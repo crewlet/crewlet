@@ -365,11 +365,21 @@ Three answers sit around it:
 - **An administrator may open anything, and it is recorded.** Admin is host
   access, so a refusal would promise a privacy the engine cannot keep. The
   admin path admits every artifact verb, after the administrator's own shares
-  are counted: an administrator a share already admits is admitted as a
-  sharer, and an admission only the admin path made is marked as **elevated**,
-  which the artifact's own history shows its owner and editors. On a node that
+  are counted: an administrator a share already admits is admitted as the
+  sharer they are, **at the share's role**, so what they read is shaped and
+  what they write is stamped by that role and nothing beyond it reaches them
+  unrecorded. An admission only the admin path made stands at owner and is
+  marked as **elevated**: every read of the artifact's content it makes (a
+  version's files, its datastore, the export, a room's join, the live version
+  a stale publish answers with) writes an elevated-read record before anything
+  is shown, which the artifact's own history shows its owner and editors, and
+  a read whose record cannot be written is not answered. On a node that
   [refuses admin](#access-admin-and-one-permission-per-app) the path does not
   exist, and an administrator there opens only what is shared with them.
+- **The trash stops serving at once.** A trashed artifact keeps its head, its
+  versions list and its history for the trash view, and serves no content to
+  anybody: its files, its datastore and its rooms are refused until its owner
+  restores it, and an agent's read tools refuse it alike.
 - **A node behind its org chart says so.** A unit share or a lead the node
   cannot read is "cannot tell", `503` with a `Retry-After`, only where it could
   have changed the answer; an administrator is never told it.
@@ -392,7 +402,9 @@ their behalf what they could not write. The one exception is the agent's
 reshaping or filling in its data, and creating a new one): anybody who can
 message an agent may have it change work it owns, as with every other piece of
 work an agent owns. Reading its own artifact back, and sharing it, are never
-exempt. A turn woken by somebody the company does not know reaches only those
+exempt, and neither is what such an edit hands back: the live files a stale
+publish answers with, and a conflicting data write's current rows, are shown
+only where the requester could read them. A turn woken by somebody the company does not know reaches only those
 edits; a turn nobody woke (a schedule, a watch) is bounded by the agent alone.
 
 ### What admin runs

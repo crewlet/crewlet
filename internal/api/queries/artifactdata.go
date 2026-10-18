@@ -22,6 +22,11 @@ import (
 // DECIDED PER ARTIFACT through the one admission the datastore's write routes
 // take ([artifactsapi.Gate], the artifacts' own), and each shaped by the
 // collection's read rule for the reader the admission names, history included.
+//
+// EACH IS A READ OF THE ARTIFACT'S CONTENT ([artifactsapi.Gate.Content]): a
+// native artifact's datastore is what it holds (D03), so an artifact in the
+// trash answers none of them, and an administrator only the admin path admits
+// is recorded as reading it before a row is answered (D09).
 
 // ArtifactDataReader is the datastore's read side these questions ask: the
 // estate router's, so a node whose own copy is out of service answers from a
@@ -70,7 +75,8 @@ func registerArtifactData(r *Registry, src ArtifactDataSource, now func() time.T
 	r.Register("artifact_data_usage", DecidedBy(authz.ActionArtifactUsage), s.usage)
 }
 
-// admit decides one question's verb on the artifact its `id` names.
+// admit decides one question's verb on the artifact its `id` names, as a read
+// of its content.
 func (s artifactData) admit(ctx context.Context, what string, action authz.Action, p Params) (
 	artifacts.ID, artifactsapi.Admission, error) {
 
@@ -83,15 +89,8 @@ func (s artifactData) admit(ctx context.Context, what string, action authz.Actio
 	if err != nil {
 		return id, artifactsapi.Admission{}, err
 	}
-	a, err := s.Gate.Admit(ctx, principal, action, id)
-	var refusal *artifactsapi.Refused
-	switch {
-	case errors.Is(err, artifactsapi.ErrNoSuchArtifact):
-		return id, a, fmt.Errorf("%w: no artifact %s", ErrNotFound, id)
-	case errors.As(err, &refusal):
-		return id, a, refused(what, refusal.Decision)
-	}
-	return id, a, err
+	a, err := s.Gate.Content(ctx, principal, action, id, 0)
+	return id, a, artifactFailure(what, err)
 }
 
 // caller is the principal a datastore question is decided for.

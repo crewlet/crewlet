@@ -214,11 +214,27 @@ person the turn is acting for could read it as well, by the collection's own
 read rule over their role and their record, and a datastore write is stamped
 with the lower of the agent's role and theirs, so the applier's column rules
 refuse for them exactly what they could not write themselves (an agent's own
-artifact excepted, as above, for writes; never for reads). Every row a data
-tool answers is fenced as text its writers wrote (`artifact_row`, naming the
-row's creator and last writer), a conflict's current rows included. A turn
-writes at most **1,000** datastore ops; a retry of a call it lost the answer to
-is not counted again.
+artifact excepted, as above, for writes; never for reads). What a write hands
+back is a read, and is bounded like one even where the write itself was not: a
+conflict's current rows are only those the requester could read, so an edit to
+the agent's own artifact asked by somebody it is not shared with answers the
+conflict with no rows at all. Every row a data tool answers is fenced as text
+its writers wrote (`artifact_row`, naming the row's creator and last writer), a
+conflict's current rows included. A turn writes at most **1,000** datastore
+ops; a retry of a call it lost the answer to is not counted again.
+
+**An artifact in the trash serves no content.** `get_artifact`,
+`read_artifact_data` and `query_artifact_data` refuse it, naming the trash and
+its owner, and read nothing, exactly as the dashboard's file and data routes
+do; a write to it is refused until a person restores it.
+
+**An administrator's override is recorded before anything is shown.** On the
+operator surface, a person holding `admin` reads any artifact through the admin
+path, and every such read (`get_artifact`, `read_artifact_data`,
+`query_artifact_data`, and the live files a stale publish answers with) writes
+the elevated-read record first, which the artifact's history shows its owner
+and editors. A read whose record cannot be written shows nothing. An
+administrator who holds a share reads and writes as that share.
 
 **An agent working on an artifact is in its room.** A seat that reads an
 artifact or its data (`get_artifact`, `read_artifact_data`,
@@ -232,7 +248,12 @@ looking at the artifact see which agent is working on which row.
 **A publish names its base.** One over a version somebody published since is
 refused `stale_version` and handed the live version, who published it and
 when, the paths that changed since the caller's base and the first page of each
-changed text file, fenced as text that author wrote. No tool takes `force`:
+changed text file, fenced as text that author wrote. The text is a read of the
+live version: where this turn could not read the artifact (a publish to the
+agent's own work asked by somebody it is not shared with, or an
+administrator's read whose record could not be written), the refusal carries
+the numbers, the author and the paths alone, and says so in
+`live_files_withheld`. No tool takes `force`:
 discarding a colleague's newer version is a present person's decision in the
 dashboard. Trash, restore, purge, transfer and pins are not tools either.
 

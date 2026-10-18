@@ -517,9 +517,22 @@ type movedEntry struct {
 // carrying the live head (as the caller is shown it), the live version's
 // manifest and, where the entry is text, up to
 // [artifacts.MaxConflictEntryText] of it.
+//
+// THE ANSWER IS A READ OF THE LIVE VERSION, so a publisher only the admin path
+// admitted is recorded as reading it before anything of it is sent, exactly
+// as a read through [Gate.Content] is; a record that cannot be written answers
+// 503 with nothing of the version, and nothing was published either way.
 func (s *Service) versionMoved(w http.ResponseWriter, r *http.Request, key string, a Admission,
 	moved *artifactsdomain.VersionMoved) {
 
+	if err := s.gate.recordElevated(r.Context(), a, moved.Live.Number); err != nil {
+		log.WarnContext(r.Context(), "artifacts_elevated_read_unrecorded", "artifact",
+			moved.Head.ID.String(), "version", moved.Live.Number, "error", err.Error())
+		unavailable(w, err, "nothing was published: the artifact moved past your base, and "+
+			"its live version is shown to you only as an administrator's read, whose record "+
+			"could not be written")
+		return
+	}
 	detail := httpjson.Detail{
 		"detail": say(moved), "op_id": key,
 		"head": shapeHead(moved.Head, a.Role(), a.Elevated()),

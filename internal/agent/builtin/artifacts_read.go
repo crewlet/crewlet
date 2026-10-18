@@ -19,7 +19,6 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/provenance"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -347,6 +346,9 @@ func (t *getArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
+	if h.Status == artifactsdomain.StatusTrashed {
+		return artifactTrashed(t.Name(), h), nil
+	}
 	number := argInt(args, "version", h.HeadNumber)
 	if number < 1 || number > h.HeadNumber {
 		return failed(fmt.Sprintf("get_artifact: artifact %s has versions 1..%d.",
@@ -366,8 +368,8 @@ func (t *getArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// owner and the editors see "read by an administrator" in the artifact's
 	// own history, and a read whose record could not be written is not made.
 	if dec.Elevated {
-		if refusal := t.recordElevated(ctx, c, dec, h, number); refusal != nil {
-			return *refusal, nil
+		if err := t.deps.readElevated(ctx, c, dec, h, number); err != nil {
+			return elevatedUnrecorded(t.Name(), err), nil
 		}
 	}
 	versions, err := t.deps.Reader.Versions(ctx, h.ID, "", artifactsdomain.MaxListLimit)
@@ -450,25 +452,6 @@ func (t *getArtifact) headAnswer(h artifactsdomain.Head, v artifactsdomain.Versi
 		out["shares"] = shares
 	}
 	return out
-}
-
-// recordElevated writes the administrator's elevated read, answering the
-// refusal when it could not be recorded.
-func (t *getArtifact) recordElevated(ctx context.Context, c artifactCaller,
-	dec authz.Decision, h artifactsdomain.Head, number int) *tools.Result {
-
-	written, err := t.deps.Writer.ReadElevated(ctx, t.deps.call(c, dec.Standing.Role, true), h.ID, number)
-	if err == nil && written.Result.Outcome != statelog.OutcomeUnknown {
-		return nil
-	}
-	if err == nil {
-		err = fmt.Errorf("%w: the elevated read's record", ErrOutcomeUnknown)
-	}
-	r := refusedBy(tools.RefusalUnavailable, err, "get_artifact did not open this "+
-		"artifact: you are reading it as an administrator, it is not shared with you, "+
-		"and that override is recorded in the artifact's own history before anything "+
-		"is shown. The record could not be written just now. Try again shortly.")
-	return &r
 }
 
 // readFile is one page of a version's file, fenced under its writers, or a
