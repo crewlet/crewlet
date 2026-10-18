@@ -131,14 +131,15 @@ func TestCapitalizeMatchesPythonSemantics(t *testing.T) {
 	}
 }
 
-// A PERSON WITH NO CHAT ACCOUNT HAS NOBODY TO @-MENTION.
+// A PERSON WITH NO CHAT ACCOUNT HAS NOBODY TO @-MENTION — ON A VENDOR'S CHAT.
 //
 // A human seat can be in the chart with no contact identity at all — somebody
-// who signs in to the dashboard and never joined the company's chat — and a
+// who signs in to the dashboard and never joined the company's Slack — and a
 // roster that told an agent to mention them would produce a message addressed
 // to a handle resolving to nobody, which reads to everyone else as work handed
 // over. The company below is VALIDATED first, because a roster case over a
 // chart validation refuses would be certifying a state no company can be in.
+// The engine's own chat is the other case, below.
 func TestRosterOffersNoMentionForAPersonWithNoChatAccount(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{
@@ -173,6 +174,58 @@ func TestRosterOffersNoMentionForAPersonWithNoChatAccount(t *testing.T) {
 	o.Normalize()
 	with := BuildExecutor(seatIn(o, "lead"), ExecutorInput{}).Text
 	contains(t, with, "Slack ID: U0FOUNDER", "@-mention them on their team's chat")
+	excludes(t, with, "nobody to @-mention")
+}
+
+// ON THE ENGINE'S OWN CHAT, A PERSON ANSWERS TO THEIR SEAT'S HANDLE.
+//
+// Native chat reads a handle: `@jane-founder` in a room reaches the person
+// holding that seat, and `send_dm` opens a conversation with them, with no
+// vendor account behind either. So the person with no contact identity above
+// is somebody to address there — and a roster that decided reachability from
+// contact identities alone told their lead there was nobody to @-mention, so
+// the lead routed everything through the PM tool and never asked them anything
+// in the room where they read. A person who also has a code-host account keeps
+// it listed beside the handle.
+func TestRosterOffersAPersonsHandleOnNativeChat(t *testing.T) {
+	t.Parallel()
+	o := &org.Organization{
+		Name: "Acme",
+		Units: []*org.Unit{{
+			Name: "Eng Team",
+			Type: org.UnitTypeTeam,
+			Lead: "lead",
+			Roles: []*org.Role{
+				{Name: "Lead", DeclaredHandle: "lead"},
+				{
+					Name:    "Jane Founder",
+					Kind:    org.KindHuman,
+					Contact: &org.HumanContact{},
+				},
+			},
+		}},
+	}
+	o.Normalize()
+	if err := o.Validate(); err != nil {
+		t.Fatalf("a chart holding a person with no chat account is refused: %v", err)
+	}
+	seat := seatIn(o, "lead")
+	seat.NativeChat = true
+	p := BuildExecutor(seat, ExecutorInput{}).Text
+
+	contains(t, p, "**Jane Founder** (jane-founder) — **human teammate**",
+		"  - Chat: @jane-founder", "@-mention them as @jane-founder in the company's chat",
+		"`send_dm`")
+	excludes(t, p, "nobody to @-mention", "@-mention them on their team's chat")
+
+	// AND A CODE-HOST ACCOUNT IS STILL LISTED, beside the handle.
+	o.Units[0].Roles[1].Contact.GitHubLogin = "jane"
+	o.Normalize()
+	seat = seatIn(o, "lead")
+	seat.NativeChat = true
+	with := BuildExecutor(seat, ExecutorInput{}).Text
+	contains(t, with, "Github ID: jane", "  - Chat: @jane-founder",
+		"@-mention them as @jane-founder in the company's chat")
 	excludes(t, with, "nobody to @-mention")
 }
 

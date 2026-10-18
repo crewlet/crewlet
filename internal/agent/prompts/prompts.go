@@ -118,6 +118,18 @@ type Seat struct {
 	// agent DMing somebody the company has off-boarded. Nil withholds
 	// nothing.
 	Withheld func(handle string) bool
+
+	// NativeChat says the company runs the engine's own chat
+	// (`chat.backend: native`), where every seat — a person's included —
+	// answers to its HANDLE: `@jane` in a room reaches the person holding
+	// that seat, and `send_dm` opens a conversation with them, with no
+	// vendor account behind either. So on native chat a human report with
+	// no contact identity at all is still somebody to @-mention, and a
+	// roster deciding reachability from contact identities alone told a
+	// lead they had nobody to address. A bool rather than the company's
+	// backend, because reachability by handle is the one thing this
+	// package asks of it.
+	NativeChat bool
 }
 
 // withholds is [Seat.Withheld], nil-safe.

@@ -338,7 +338,8 @@ func rosterHead(report *org.Role) string {
 // verbatim, since a literal "${SLACK_ID}" in a prompt is a mention that can
 // never match an account), so this renderer is tied to no one platform. A seat
 // whose contact identities the identity directory withholds renders none of
-// them ([Seat.Withheld]).
+// them ([Seat.Withheld]). On the engine's own chat a person is ALSO reachable
+// by their seat's handle, with or without any of those ([Seat.NativeChat]).
 func rosterProfile(s Seat, report *org.Role) []string {
 	parts := []string{rosterHead(report)}
 	if report.Backstory != "" {
@@ -371,6 +372,13 @@ func rosterProfile(s Seat, report *org.Role) []string {
 				"find it — don't expect a reply in the meantime.")
 	}
 	addressable := false
+	if s.NativeChat {
+		// THE ENGINE'S OWN CHAT READS A HANDLE, so a person is
+		// addressable there whatever accounts they hold elsewhere —
+		// their mentions and conversations wait in their own chat,
+		// and the dashboard is where they read it.
+		parts = append(parts, "  - Chat: @"+report.Handle())
+	}
 	if report.Contact != nil {
 		seen := make(map[string]bool)
 		for _, id := range report.Contact.ResolvedIdentities(s.Env) {
@@ -396,6 +404,15 @@ func rosterProfile(s Seat, report *org.Role) []string {
 	if report.Availability != "" {
 		parts = append(parts, "  - Availability: "+report.Availability)
 	}
+	if s.NativeChat {
+		parts = append(parts,
+			"  - Working with them: hand work over in the PM tool "+
+				"and @-mention them as @"+report.Handle()+" in the "+
+				"company's chat (or message them with `send_dm`); they "+
+				"reply asynchronously — don't expect an engine turn from "+
+				"them.")
+		return parts
+	}
 	if addressable {
 		parts = append(parts,
 			"  - Working with them: hand work over in the PM tool "+
@@ -404,11 +421,12 @@ func rosterProfile(s Seat, report *org.Role) []string {
 				"engine turn from them.")
 		return parts
 	}
-	// NOBODY TO @-MENTION. A person may hold an operator credential and
-	// no chat account at all — they read their dashboard inbox — and
-	// telling an agent to mention them anyway produces a message
-	// addressed to a handle that resolves to nobody, which reads to
-	// everyone else as work handed over.
+	// NOBODY TO @-MENTION, on a company whose chat is a vendor's or
+	// nobody's. A person may hold an operator credential and no chat
+	// account at all — they read their dashboard inbox — and telling an
+	// agent to mention them anyway produces a message addressed to a
+	// handle that resolves to nobody, which reads to everyone else as
+	// work handed over.
 	parts = append(parts,
 		"  - Working with them: hand work over in the PM tool and "+
 			"assign it to them; they have no chat or code-host account "+
