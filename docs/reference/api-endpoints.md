@@ -4583,8 +4583,9 @@ The **same tools a seat holds**, not a parallel implementation: `list_work_items
 `list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`,
 `search_knowledge`, and, wherever the node takes artifact uploads,
 `list_artifacts`, `get_artifact`, `create_artifact`, `publish_artifact`,
-`update_artifact`, `share_artifact`, `unshare_artifact` and
-`upload_artifact_asset` (see
+`update_artifact`, `share_artifact`, `unshare_artifact`,
+`upload_artifact_asset`, `read_artifact_data`, `query_artifact_data`,
+`write_artifact_data` and `set_artifact_schema` (see
 [Artifacts](../guides/tools-and-mcp.md#artifacts)); each artifact write answers
 its `op_id` here as the tracker's do. A schema, a default, a trimmed field and the wording of a
 refusal are each written once — two copies of "file an item" drift on exactly

@@ -301,6 +301,13 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.ShareArtifactTool:       true,
 		builtin.UnshareArtifactTool:     true,
 		builtin.UploadArtifactAssetTool: true,
+
+		// THE DATASTORE: its two reads are reads, and a row or a schema
+		// written is what everybody the sheet is shared with sees.
+		builtin.ReadArtifactDataTool:  false,
+		builtin.QueryArtifactDataTool: false,
+		builtin.WriteArtifactDataTool: true,
+		builtin.SetArtifactSchemaTool: true,
 	}
 
 	reg := tools.NewRegistry()
@@ -1014,6 +1021,9 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// AND THE ARTIFACTS, all eight of whose tools register only with
 		// every half wired.
 		Artifacts: artifactDeps(newFakeArtifacts(), artifactChart{}, requesters{}),
+		// AND THE DATASTORE BESIDE IT, which the four data tools take
+		// with the artifacts half.
+		ArtifactData: artifactDataDeps(newFakeData()),
 	}
 }
 
