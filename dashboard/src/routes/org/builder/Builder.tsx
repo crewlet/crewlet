@@ -116,7 +116,6 @@ import {
 import type { DraftStorage } from "./model/persistence.ts";
 import { clearDraft, keptScope } from "./model/persistence.ts";
 import { deriveChanges } from "./model/changes.ts";
-import { seatsWithoutContact } from "./model/templates.ts";
 import type { KeySource } from "./model/keys.ts";
 import { ReviewSaveDialog } from "./ReviewSaveDialog.tsx";
 import { AfterSaveStrip } from "./AfterSaveStrip.tsx";
@@ -2121,11 +2120,6 @@ function ReviewPanel({
     [state, current],
   );
   const outcome = current ? state.check.outcome : null;
-  const withoutContact = useMemo(
-    () =>
-      seatsWithoutContact(state.draft).map((key) => locate(state.draft, key)?.node.data.name ?? ""),
-    [state.draft],
-  );
   return (
     <ReviewSaveDialog
       mode={state.mode}
@@ -2135,7 +2129,6 @@ function ReviewPanel({
       warnings={outcome?.status === "clean" ? outcome.warnings : []}
       problemCount={current ? state.check.problems.problemCount : 0}
       documentProblems={current ? state.check.problems.document : []}
-      withoutContact={withoutContact}
       writeId={writeId}
       phase={phase}
       onSave={onSave}
