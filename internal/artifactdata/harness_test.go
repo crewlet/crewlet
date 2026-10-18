@@ -41,6 +41,7 @@ type node struct {
 	applier   *artifactdata.Applier
 	waiter    *testWaiter
 	verifier  *statelog.Verifier
+	judged    *judged
 
 	mu       sync.Mutex
 	consumed uint64
@@ -189,8 +190,10 @@ func newNode(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle, nodeID 
 		t.Fatalf("build the publisher: %v", err)
 	}
 	clock := &harnessClock{at: monday}
+	judge := &judged{}
 	writer, err := artifactdata.NewWriter(artifactdata.WriterDeps{
 		Publisher: publisher, DB: db.Reader(), SeatExists: seatExists, Now: clock.now,
+		Objectives: judge,
 	})
 	if err != nil {
 		t.Fatalf("build the writer: %v", err)
@@ -204,7 +207,7 @@ func newNode(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle, nodeID 
 		t.Fatalf("build the reader: %v", err)
 	}
 	n := &node{t: t, id: nodeID, db: db, log: log, writer: writer, publisher: publisher,
-		reader: reader, waiter: waiter, verifier: verifier, clock: clock}
+		reader: reader, waiter: waiter, verifier: verifier, judged: judge, clock: clock}
 	n.applier = artifactdata.NewApplier(nodeID, func(moved []artifactdata.Moved) {
 		n.moved = append(n.moved, moved...)
 	})
