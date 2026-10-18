@@ -182,7 +182,10 @@ var routes = map[Kind]Route{
 // asks no permission at all: the overview — the roster, what each seat is
 // doing, the org chart, spend, schedules, the tools, health — is everybody's
 // (ADR-0033). What a need says is whether the kind is everybody's, admin's,
-// or one app's.
+// or one app's — and an app's need IS the app's own name ([NeedFor]), so the
+// set of needs is derived from [iam.Apps] rather than kept beside it: an app
+// declared there is a need here, and an audience meets it, with no edit to
+// this package.
 type Need string
 
 const (
@@ -199,11 +202,30 @@ const (
 	// NeedTracker is the tracker's: an `inbox_changed` frame says whose
 	// inbox moved, which is what the `work_inbox` question it tells a
 	// screen to ask again answers.
-	NeedTracker Need = "tracker"
+	NeedTracker = Need(iam.GrantTracker)
 )
 
-// Needs is the closed set.
-var Needs = []Need{NeedEverybody, NeedAdmin, NeedTracker}
+// NeedFor is the need of a kind one app's holders may read.
+func NeedFor(app iam.Grant) Need { return Need(app) }
+
+// Needs is the closed set: the two that are not an app's, then one per app in
+// [iam.Apps]' order.
+var Needs = append([]Need{NeedEverybody, NeedAdmin}, appNeeds()...)
+
+// appNeeds is one need per app.
+func appNeeds() []Need {
+	out := make([]Need, 0, len(iam.Apps))
+	for _, app := range iam.Apps {
+		out = append(out, NeedFor(app))
+	}
+	return out
+}
+
+// app is the app this need is, or false for one that is not an app's.
+func (n Need) app() (iam.Grant, bool) {
+	app := iam.Grant(n)
+	return app, app.IsApp()
+}
 
 // Valid reports whether n is a need this build knows.
 func (n Need) Valid() bool { return slices.Contains(Needs, n) }
@@ -248,11 +270,11 @@ func NeedOf(kind Kind) (Need, bool) {
 // this need — what a refusal names. The overview names none, since nothing
 // the reader could be given would change an answer they already have.
 func (n Need) Grants() []iam.Grant {
-	switch n {
-	case NeedAdmin:
+	if n == NeedAdmin {
 		return []iam.Grant{iam.GrantAdmin}
-	case NeedTracker:
-		return []iam.Grant{iam.GrantTracker}
+	}
+	if app, ok := n.app(); ok {
+		return []iam.Grant{app}
 	}
 	return nil
 }
@@ -280,11 +302,17 @@ var answers = map[Kind]bool{
 // the audience it was opened with and a published company that would give it
 // another closes it for the reconnect to build the new one.
 type Audience struct {
-	resolved  bool
-	admin     bool
-	tracker   bool
-	knowledge bool
-	record    string
+	resolved bool
+	admin    bool
+
+	// apps are the apps this reader uses, in [iam.Apps]' order — every one
+	// for an administrator. A SET DERIVED FROM THE APPS rather than a field
+	// per app, so the next app is one line in internal/iam and not five
+	// edits here, any one of which forgotten is an audience that silently
+	// never receives that app's frames or never compares unequal.
+	apps []iam.Grant
+
+	record string
 
 	// body is the agent ids of the seats whose body this reader may read,
 	// sorted. Unread for an admin, who reads every body whatever it holds.
@@ -300,8 +328,12 @@ type Audience struct {
 // a caller that already holds the decision.
 func NewAudience(p iam.Principal, body []string) Audience {
 	a := Audience{resolved: true, admin: p.Can(iam.GrantAdmin),
-		tracker: p.Can(iam.GrantTracker), knowledge: p.Can(iam.GrantKnowledge),
 		record: iam.RecordOwner(p)}
+	for _, app := range iam.Apps {
+		if p.Can(app) {
+			a.apps = append(a.apps, app)
+		}
+	}
 	if !a.admin {
 		a.body = slices.Compact(slices.Sorted(slices.Values(body)))
 	}
@@ -316,13 +348,17 @@ func (a Audience) Receives(kind Kind) bool {
 	if !a.resolved {
 		return false
 	}
-	switch needs[kind] {
-	case NeedEverybody:
+	need, declared := needs[kind]
+	switch {
+	case !declared:
+		return false
+	case need == NeedEverybody:
 		return true
-	case NeedAdmin:
+	case need == NeedAdmin:
 		return a.admin
-	case NeedTracker:
-		return a.tracker
+	}
+	if app, ok := need.app(); ok {
+		return a.Has(app)
 	}
 	return false
 }
@@ -334,17 +370,11 @@ func (a Audience) Admin() bool { return a.resolved && a.admin }
 // Has reports whether this audience may use app — an administrator through
 // every app.
 func (a Audience) Has(app iam.Grant) bool {
-	switch {
-	case !a.resolved:
-		return false
-	case a.admin:
-		return true
-	case app == iam.GrantTracker:
-		return a.tracker
-	case app == iam.GrantKnowledge:
-		return a.knowledge
-	}
-	return false
+	// THE ADMINISTRATOR'S APPS ARE ALREADY IN THE SET — [NewAudience] asks
+	// [iam.Principal.Can], which expands admin to every app — so an
+	// administrator is not a case here, and a name that is no app is no
+	// audience's, theirs included.
+	return a.resolved && app.IsApp() && slices.Contains(a.apps, app)
 }
 
 // Body reports whether this audience may read the body of the seat with
@@ -373,7 +403,7 @@ func (a Audience) Reach(agentID string) livestate.Reach {
 // Equal reports whether two audiences receive exactly the same.
 func (a Audience) Equal(b Audience) bool {
 	return a.resolved == b.resolved && a.admin == b.admin &&
-		a.tracker == b.tracker && a.knowledge == b.knowledge &&
+		slices.Equal(a.apps, b.apps) &&
 		a.record == b.record && (a.admin || slices.Equal(a.body, b.body))
 }
 
@@ -395,8 +425,12 @@ func (a Audience) variant(withRecord bool) string {
 		return "admin"
 	}
 	sum := sha256.Sum256([]byte(strings.Join(a.body, "\x00")))
-	name := fmt.Sprintf("tracker=%t;knowledge=%t;body=%s", a.tracker,
-		a.knowledge, hex.EncodeToString(sum[:]))
+	apps := make([]string, 0, len(a.apps))
+	for _, app := range a.apps {
+		apps = append(apps, string(app))
+	}
+	name := fmt.Sprintf("apps=%s;body=%s", strings.Join(apps, ","),
+		hex.EncodeToString(sum[:]))
 	if withRecord {
 		name += ";record=" + a.record
 	}
