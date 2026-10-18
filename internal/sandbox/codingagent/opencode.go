@@ -154,17 +154,19 @@ func (OpenCode) Name() string { return OpenCodeName }
 // ([openCodeUsageEvent]) once the run has ended.
 func (OpenCode) Command(req sandbox.RunRequest, paths Paths, _ string) string {
 	return "sh -c " + shellQuote(openCodeScript(req, paths, newOpenCodeSession(), openCodeTimes{
-		listen: openCodeListenWait, mcp: openCodeMCPWait, sync: openCodeLoginSync,
+		listen: openCodeListenWait, mcp: openCodeMCPWait, sync: openCodeLoginSync, stop: openCodeStopWait,
 	}))
 }
 
 // openCodeTimes is how long a run's script waits for its server to listen
 // ([openCodeListenWait]) and for its MCP servers to connect
-// ([openCodeMCPWait]), and how often it exports a login ([openCodeLoginSync]):
-// a value rather than the constants read inline, so a case about a wait
-// running out runs it out at a length a test can afford.
+// ([openCodeMCPWait]), how often it exports a login ([openCodeLoginSync]), and
+// how long it gives a process of its own to go ([openCodeStopWait]): a value
+// rather than the constants read inline, so a case about a wait runs it at a
+// length that case can tell apart — a bound run out at one a test can afford,
+// or a stop stretched to one no prompt end could be mistaken for.
 type openCodeTimes struct {
-	listen, mcp, sync time.Duration
+	listen, mcp, sync, stop time.Duration
 }
 
 // newOpenCodeSession mints the id a run's session is created under: 32 lowercase
@@ -225,8 +227,16 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	line(`imported= spid= xpid=`)
 	// end: stop one process of the script's own, bounded ([openCodeStopWait]),
 	// killing it only if it is still there at the end of the wait.
-	line(`end() { kill "$1" 2> /dev/null || return 0; i=0; while kill -0 "$1" 2> /dev/null && [ "$i" -lt %d ]; do sleep 0.1; i=$((i+1)); done; kill -0 "$1" 2> /dev/null && kill -9 "$1" 2> /dev/null; return 0; }`,
-		int(openCodeStopWait/(100*time.Millisecond)))
+	//
+	// NO PROCESS IS NOTHING TO STOP, and it is TESTED rather than left to
+	// `kill` refusing an empty operand: dash and bash refuse it, but busybox
+	// ash — the sh of an Alpine image, which OpenCode 2's musl builds are for
+	// — answers both `kill ""` and `kill -0 ""` with success and signals
+	// nothing, so an end with no process waited out the whole bound: five
+	// seconds at the end of every run given no login, where the exporter
+	// never started, and ten after a signal.
+	line(`end() { [ -n "$1" ] || return 0; kill "$1" 2> /dev/null || return 0; i=0; while kill -0 "$1" 2> /dev/null && [ "$i" -lt %d ]; do sleep 0.1; i=$((i+1)); done; kill -0 "$1" 2> /dev/null && kill -9 "$1" 2> /dev/null; return 0; }`,
+		int(times.stop/(100*time.Millisecond)))
 	line(`stop() { end "$spid"; spid=; }`)
 	line(`unsync() { end "$xpid"; xpid=; }`)
 	// holds: the file is a whole, non-empty JSON array.
@@ -236,7 +246,11 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	line(`keep() { f=$1; shift; if opencode auth export "$@" < /dev/null > "$f" 2> /dev/null && holds "$f" && [ "$(cat "$f")" != "$(cat %s)" ]; then mv -f "$f" %s; else rm -f "$f"; fi; }`, doc, doc)
 	// quit: a signal's end — the loop stopped, the login exported once more
 	// beside a server that is going with the group, then the server stopped.
-	line(`quit() { trap - TERM INT HUP; unsync; [ -z "$imported" ] || keep %s --standalone; stop; exit "$1"; }`, next)
+	// The EXIT trap goes with the others, because quit has done everything it
+	// would: left set, the `exit` ran its stops a second time, over processes
+	// quit had already stopped — under busybox ash, before end tested for an
+	// empty pid, ten seconds of waiting for nothing.
+	line(`quit() { trap - EXIT TERM INT HUP; unsync; [ -z "$imported" ] || keep %s --standalone; stop; exit "$1"; }`, next)
 	line(`trap 'unsync; stop' EXIT`)
 	line(`trap 'quit 143' TERM; trap 'quit 130' INT; trap 'quit 129' HUP`)
 	line(`if [ -s %s ]; then`, doc)
@@ -263,9 +277,12 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	// script's traps: a SIGTERM there ends its sleep at once, and an export
 	// it is in once that export has finished — see the serialisation above.
 	// The sleep is reaped before it goes, so a stopped loop leaves nothing in
-	// the job's group.
+	// the job's group. And its pid is FORGOTTEN once the sleep is reaped: a
+	// SIGTERM that arrives during an export, up to an interval later, would
+	// otherwise signal a pid the system is free to have handed to another
+	// process by then — and a `direct` box shares the host's pids.
 	line(`if [ -n "$imported" ]; then`)
-	line(`  ( z=; trap 'kill "$z" 2> /dev/null; wait "$z"; exit 0' TERM; while :; do sleep %s & z=$!; wait "$z"; keep %s --server "$url"; done ) < /dev/null > /dev/null 2>&1 &`,
+	line(`  ( z=; trap '[ -z "$z" ] || { kill "$z" 2> /dev/null; wait "$z"; }; exit 0' TERM; while :; do sleep %s & z=$!; wait "$z"; z=; keep %s --server "$url"; done ) < /dev/null > /dev/null 2>&1 &`,
 		strconv.FormatFloat(times.sync.Seconds(), 'f', -1, 64), loop)
 	line(`  xpid=$!`)
 	line(`fi`)

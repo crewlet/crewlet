@@ -1,6 +1,7 @@
 package codingagent
 
 import (
+	"cmp"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -38,21 +39,24 @@ const (
 	LiveBacklog = liveBacklog
 )
 
-// OpenCodeCommandTimed is [OpenCode.Command] with the script waiting listen
-// for its server and mcp for its MCP servers, and exporting a login it was
-// given every sync — for the cases about a wait running out or a sync coming
-// round, at lengths a test can afford.
-func OpenCodeCommandTimed(req sandbox.RunRequest, paths Paths, listen, mcp, sync time.Duration) string {
-	return "sh -c " + shellQuote(openCodeScript(req, paths, newOpenCodeSession(),
-		openCodeTimes{listen: listen, mcp: mcp, sync: sync}))
+// OpenCodeTimes is the waits a timed case runs a run's script at
+// ([OpenCodeCommandTimed]); a field left zero is [OpenCode.Command]'s own.
+type OpenCodeTimes struct {
+	// Listen is how long the script waits for its server to listen, MCP for
+	// its MCP servers to connect, Sync how often it exports a login it was
+	// given, and Stop how long it gives a process of its own to go.
+	Listen, MCP, Sync, Stop time.Duration
 }
 
-// OpenCodeListenWait and OpenCodeMCPWait are the waits [OpenCode.Command] runs
-// its script at, for a timed case whose subject is another of them.
-const (
-	OpenCodeListenWait = openCodeListenWait
-	OpenCodeMCPWait    = openCodeMCPWait
-)
+// OpenCodeCommandTimed is [OpenCode.Command] with the script run at times —
+// for the cases about a wait running out, a sync coming round or a stop that
+// must not wait, at lengths a test can tell apart.
+func OpenCodeCommandTimed(req sandbox.RunRequest, paths Paths, times OpenCodeTimes) string {
+	return "sh -c " + shellQuote(openCodeScript(req, paths, newOpenCodeSession(), openCodeTimes{
+		listen: cmp.Or(times.Listen, openCodeListenWait), mcp: cmp.Or(times.MCP, openCodeMCPWait),
+		sync: cmp.Or(times.Sync, openCodeLoginSync), stop: cmp.Or(times.Stop, openCodeStopWait),
+	}))
+}
 
 // JSONStringify is how a run's script spells a server name it looks for in an
 // OpenCode answer.
