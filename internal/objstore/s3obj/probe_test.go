@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/s3obj"
 	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
@@ -100,7 +101,9 @@ func putSigned(t *testing.T, p objstore.Presigned, body []byte) int {
 			req.Header.Set(k, v)
 		}
 	}
-	resp, err := http.DefaultClient.Do(req)
+	// A POOL OF THIS TEST'S OWN, for [httpxtest]'s reason: every
+	// httptest.Server.Close in the binary sweeps the process-global pool.
+	resp, err := httpxtest.Pool(t).Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
