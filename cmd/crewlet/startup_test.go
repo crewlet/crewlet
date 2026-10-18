@@ -202,6 +202,11 @@ roles:
 // got no answer — the child still starting its process, on a loaded machine —
 // and [refused] one whose connection was refused, as [probe] reports them, so
 // a wait retries either and an assertion fails on it by its status.
+//
+// The body is returned only when it is a JSON object, which is every answer
+// an assertion here reads a field of. A listing such as /agents answers a
+// JSON array, which is JSON all the same, and its caller asks only for its
+// status; a body that is not JSON at all fails the test.
 func askNode(t *testing.T, client *http.Client, method, url, token string,
 ) (int, http.Header, map[string]any) {
 	t.Helper()
@@ -225,12 +230,13 @@ func askNode(t *testing.T, client *http.Client, method, url, token string,
 	if err != nil {
 		return 0, http.Header{}, nil
 	}
-	var body map[string]any
+	var decoded any
 	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &body); err != nil {
+		if err := json.Unmarshal(raw, &decoded); err != nil {
 			t.Fatalf("%s %s answered %d with a body that is not JSON: %q",
 				method, url, res.StatusCode, raw)
 		}
 	}
+	body, _ := decoded.(map[string]any)
 	return res.StatusCode, res.Header, body
 }
