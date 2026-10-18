@@ -59,9 +59,9 @@ func seatInATurn() Actor {
 // first call with the same arguments both counted zero, and a write one made
 // and a write the other made of the same verb on the same object were one
 // operation and one comment: the second answered `applied` from the ledger
-// with nothing of it written, or upserted onto the first one's comment row. A
-// declaration of a project's tags is made by write_project and, through
-// `labels_create_missing`, by every write that files a label.
+// with nothing of it written, or met the first one's comment row and never
+// landed. A declaration of a project's tags is made by write_project and,
+// through `labels_create_missing`, by every write that files a label.
 //
 // Mutation: drop the tool from callKey's identity and both ids are one.
 func TestTwoToolsMakingOneWriteAreTwoOperations(t *testing.T) {
@@ -86,10 +86,10 @@ func TestTwoToolsMakingOneWriteAreTwoOperations(t *testing.T) {
 // REBASED: every operation it derives carries the attempt's own instant
 // ([turnctx.Turn.RebasedTo], ADR-0029), so the ledger decides them again
 // rather than answer every one `unknown`. A tracker comment's id is not an
-// operation but the key of its row, which the apply upserts — so derived as
-// the work began, the rebased attempt's comment lands on the row the attempt
-// before it wrote, and a remark already posted is not posted a second time
-// beside it. Derived from the rebased key, it moved with the operation, and
+// operation but the key of its row, which the apply posts only once — so
+// derived as the work began, the rebased attempt's comment names the row the
+// attempt before it wrote, and a remark already posted is not posted a second
+// time beside it. Derived from the rebased key, it moved with the operation, and
 // every rebased re-run of a turn that had commented said it twice.
 //
 // Mutation: derive commentID from the rebased call key and the rebased

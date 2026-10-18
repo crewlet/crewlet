@@ -900,3 +900,125 @@ func TestAKindNobodyDeclaredFaults(t *testing.T) {
 		t.Errorf("the estate holds %d task(s) after a record that faulted", got)
 	}
 }
+
+// A REMARK'S RECORDS WRITE ONLY WHAT EACH OWNS: a post creates the row, an edit
+// rewrites its words, and neither reaches the column an answer put there.
+//
+// The apply was one upsert of everything the record carried, and a comment
+// record carries no `answered_by` — so it wrote NULL there every time. An
+// author correcting the wording of a question somebody had already answered
+// reopened it on every board, in `asked_of=` and in the answerer's own queue;
+// a post re-sent under an id that already held a row rewrote that row whole,
+// edit and answer included.
+func TestAnEditOfAQuestionKeepsTheAnswerThatClosedIt(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	at := time.Unix(1_700_000_100, 0).UTC()
+	if _, err := h.apply(taskRecord("t-1", tracker.OpCreate, newTask("t-1"), nil), at); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	remark := func(op string, kind tracker.ChangeKind, comment tracker.Comment) {
+		t.Helper()
+		rec := taskRecord("t-1", tracker.OpPatch, tracker.TaskPatch{Comment: &comment}, nil)
+		rec.Kind, rec.OpID = kind, op
+		if _, err := h.apply(rec, at); err != nil {
+			t.Fatalf("%s: %v", op, err)
+		}
+	}
+	question := tracker.Comment{
+		ID: "cm-1", Task: "t-1", Author: "ana", AuthorKind: tracker.AuthorHuman,
+		Body: "who owns the rollback?", Ask: "bob", CreatedAt: at,
+	}
+	remark("op-ask", tracker.ChangeComment, question)
+	answers := "cm-1"
+	remark("op-answer", tracker.ChangeComment, tracker.Comment{
+		ID: "cm-2", Task: "t-1", Author: "bob", AuthorKind: tracker.AuthorHuman,
+		Body: "platform does", Answers: &answers, CreatedAt: at,
+	})
+
+	open := func() int64 {
+		t.Helper()
+		return h.value(`SELECT COUNT(*) FROM tracker_comments
+			WHERE ask <> '' AND resolved = 0 AND answered_by IS NULL AND removed = 0`)
+	}
+	answeredBy := func() string {
+		t.Helper()
+		var by sql.NullString
+		if err := h.db.Read(t.Context(), func(tx *sql.Tx) error {
+			return tx.QueryRowContext(t.Context(),
+				`SELECT answered_by FROM tracker_comments WHERE id = 'cm-1'`).Scan(&by)
+		}); err != nil {
+			t.Fatalf("read answered_by: %v", err)
+		}
+		return by.String
+	}
+	stored := func() tracker.Comment {
+		t.Helper()
+		var document []byte
+		if err := h.db.Read(t.Context(), func(tx *sql.Tx) error {
+			return tx.QueryRowContext(t.Context(),
+				`SELECT document FROM tracker_comments WHERE id = 'cm-1'`).Scan(&document)
+		}); err != nil {
+			t.Fatalf("read the question: %v", err)
+		}
+		var c tracker.Comment
+		if err := json.Unmarshal(document, &c); err != nil {
+			t.Fatalf("decode the question: %v", err)
+		}
+		return c
+	}
+	if got := answeredBy(); got != "cm-2" || open() != 0 {
+		t.Fatalf("after the answer the question is answered by %q with %d open, "+
+			"want cm-2 and none", got, open())
+	}
+
+	// THE AUTHOR CORRECTS THE QUESTION'S WORDS — the record carrying the
+	// whole stored remark with its body replaced, as the writer forms it.
+	edited := question
+	edited.Body, edited.UpdatedAt = "who owns the rollback now?", at.Add(time.Minute)
+	remark("op-edit", tracker.ChangeCommentEdited, edited)
+	if got := answeredBy(); got != "cm-2" {
+		t.Errorf("after an edit of its words the question is answered by %q, "+
+			"want cm-2 — an edit reopened a question somebody had answered", got)
+	}
+	if n := open(); n != 0 {
+		t.Errorf("after an edit %d question(s) read as open", n)
+	}
+	if got := stored(); got.Body != edited.Body || !got.UpdatedAt.Equal(edited.UpdatedAt) {
+		t.Errorf("the edited question reads %q at %v, want %q at %v",
+			got.Body, got.UpdatedAt, edited.Body, edited.UpdatedAt)
+	}
+
+	// AN EDIT IS THE WORDS AND NOTHING ELSE, whatever its record carries
+	// beside them: an edit naming another person asked leaves the question
+	// asking the person it asked.
+	widened := edited
+	widened.Body, widened.Ask = "who owns the rollback, really?", "cy"
+	remark("op-edit-widened", tracker.ChangeCommentEdited, widened)
+	if got := h.value(`SELECT COUNT(*) FROM tracker_comments
+		WHERE id = 'cm-1' AND ask = 'bob'`); got != 1 {
+		t.Errorf("an edit record naming another person asked moved the ask column")
+	}
+	if got := stored(); got.Ask != "bob" || got.Body != widened.Body {
+		t.Errorf("the edited document asks %q and reads %q, want bob and %q — "+
+			"an edit moved what the remark asked", got.Ask, got.Body, widened.Body)
+	}
+
+	// A POST OF A ROW ALREADY THERE CHANGES NOTHING: not its words, not
+	// its answer, not when it was written.
+	before := stored()
+	reposted := question
+	reposted.Body, reposted.CreatedAt = "a different remark entirely", at.Add(time.Hour)
+	remark("op-ask-again", tracker.ChangeComment, reposted)
+	if got := stored(); got.Body != before.Body || !got.CreatedAt.Equal(before.CreatedAt) {
+		t.Errorf("a post of an existing remark rewrote it to %q at %v, want %q at %v",
+			got.Body, got.CreatedAt, before.Body, before.CreatedAt)
+	}
+	if got := answeredBy(); got != "cm-2" || open() != 0 {
+		t.Errorf("a post of an existing remark left it answered by %q with %d "+
+			"open, want cm-2 and none", got, open())
+	}
+	if got := h.count("tracker_comments"); got != 2 {
+		t.Errorf("the thread holds %d rows, want the question and its answer", got)
+	}
+}
