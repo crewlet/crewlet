@@ -41,9 +41,12 @@
 // Every order this is used for puts an absent value LAST in both directions,
 // so after a value come the greater (or, descending, the lesser) values and
 // then the NULLs, as two arms of one depth; after a NULL comes nothing at that
-// depth; and the equality leg of a NULL is `IS NULL`. A column the caller says
-// can never be NULL gets no NULL arm, which is what keeps its order one an
-// index serves.
+// depth; before a value come only the values short of it, and before a NULL
+// every value; and the equality leg of a NULL is `IS NULL`. Spelled with bare
+// comparisons alone, every one of those is NULL for a row with no value, so a
+// page ending on such a row would end the listing and a descending order could
+// never reach its undated rows at all. A column the caller says can never be
+// NULL gets no NULL arm, which is what keeps its order one an index serves.
 //
 // # Pure over values
 //
