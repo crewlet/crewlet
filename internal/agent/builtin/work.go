@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -429,9 +428,9 @@ type Actor struct {
 	// [turnctx.Turn.RebasedTo], which is the only place it comes from.
 	RebasedTo time.Time
 
-	// Calls is the run's call log, which a derived operation id reads its
-	// repeat count from — see [opIDFor] and [turnctx.CallLog]. Nil outside
-	// a turn, where no id is derived from a run.
+	// Calls is the run's call log, which a call's key reads its repeat
+	// count from — see [Actor.callKey] and [turnctx.CallLog]. Nil outside
+	// a turn, where no key is derived from a run.
 	Calls *turnctx.CallLog
 
 	// Operation is the id of the operation this CALL is, on a surface
@@ -501,9 +500,11 @@ func (a Actor) OperationSeed() string {
 // them: a turn's actor always names its run ([Actor.TurnID]) and a request
 // runs in no turn, so a work key with no run behind it is a request's and
 // nobody else's. A field saying the same thing would be one more value every
-// constructor of an actor has to set alike. What it decides is only what a
-// caller is TOLD — how to make its call again ([sameCall]), and what to do
-// when its key already wrote something else ([reusedOperation]) — never an id.
+// constructor of an actor has to set alike. It decides what a caller is TOLD —
+// how to make its call again ([sameCall]), and what to do when its key already
+// wrote something else ([reusedOperation]) — and that the key is the call's
+// own, as sent, rather than a seed a call's key is derived from
+// ([Actor.callKey]): the same key the knowledge base and chat are handed.
 func (a Actor) keyedRequest() bool { return a.WorkKey != "" && a.TurnID == "" }
 
 // OperationSince is the instant an operation id derived from
@@ -542,6 +543,16 @@ func (a Actor) OperationSince() time.Time {
 	}
 	at, _ := statelog.OpMintedAt(a.TurnID)
 	return at
+}
+
+// asBegun is this actor as its unit of work began: the rebase put aside
+// ([Actor.RebasedTo]), so a key derived from it ([Actor.callKey]) carries the
+// instant the work started whichever attempt derives it. For an id that is
+// not an operation — a comment's, which keys its row ([commentID]) — because a
+// rebase is about the operation ledger alone.
+func (a Actor) asBegun() Actor {
+	a.RebasedTo = time.Time{}
+	return a
 }
 
 // settle hands a write's position to [WorkDeps.Await], so the next read sees
@@ -666,25 +677,17 @@ func turnKey(turn *turnctx.Turn) string {
 	return turnIdentity(turn).OperationSeed()
 }
 
-// turnSince is the instant an id derived from [turnKey] carries — see
-// [Actor.OperationSince] — and the zero instant outside a turn, where nothing
-// is derived.
-func turnSince(turn *turnctx.Turn) time.Time {
-	if turn == nil {
-		return time.Time{}
-	}
-	return turnIdentity(turn).OperationSince()
-}
-
 // turnIdentity is the part of a turn a derived id is built from, as an
-// [Actor], so the seed and its instant are chosen by the one rule the actor
-// states rather than by a second copy of it here.
+// [Actor] — its seed, the instant it carries and its call log — so the seed
+// and its instant are chosen by the one rule the actor states, and a call's
+// key by the one derivation over it ([Actor.callKey]), rather than by a
+// second copy of either here.
 func turnIdentity(turn *turnctx.Turn) Actor {
 	if turn == nil {
 		return Actor{}
 	}
 	return Actor{TurnID: turn.RunID, WorkKey: turn.WorkKey, WorkSince: turn.WorkSince,
-		RebasedTo: turn.RebasedTo}
+		RebasedTo: turn.RebasedTo, Calls: turn.CallLog()}
 }
 
 // notInATurn is the refusal every one of these tools gives outside a turn.
@@ -2263,51 +2266,22 @@ func handles(all ...string) []string {
 // [commentID] has always had this right, and is where the shape comes from:
 // the caller's identity where there is one, a fresh id where there is not.
 //
-// # And it carries the instant the unit of work began
+// # Derived from the call's key
 //
-// Every branch mints through [statelog], whose ids carry their own mint
-// instant: a fresh id the instant of this call, which is the instant it was
-// minted; a derived one [Actor.OperationSince] — the start of the work it is
-// derived from, which is what a re-run reproduces; and a step of a caller's
-// operation that operation's own. The state log refuses to decide a second
-// time an operation its ledger cannot vouch for, and "cannot vouch" is
-// "minted before this node's ledger may have lost rows"; an id that carried
-// this CALL's instant instead read every re-run after a loss as minted after
-// it, and published the operation again.
+// Where the caller has a turn, or a request's key, the id is derived from the
+// key every write the call makes derives from ([Actor.callKey]) — the same one
+// a page or a chat write the call makes is handed — which carries the instant
+// the unit of work began, a digest of what the call asks for, the tool and how
+// many different calls came before it, each for a failure it states. The id
+// adds the verb and the object, so the records one call writes are as many
+// operations as they are, and the call's digest again, because a request's key
+// names the request rather than what it asked. It is NAMED `<verb>-<object>`
+// under a namespace of its own ([opIDNamespace]) rather than derived by the
+// stores' rule, for the reason [callOpKey] states once for every id the
+// tracker's tools derive.
 //
-// # And what the call ASKS FOR is part of it
-//
-// The unit of work, the verb and the object say which write this is — and
-// not which of two writes. A turn that moved a task to `in_progress` and later
-// to `done`, commented on it twice, or set a queue and then corrected it,
-// derived ONE id for both calls, and the second was the operation's
-// retry as far as anything downstream could tell: inside the log's duplicate
-// window the broker acknowledged it as the first record, the ledger answered
-// `applied` at the first position, and the change the model had just asked
-// for was dropped with a success. So the id also covers a digest of the
-// call's own arguments ([turnctx.ArgsDigest]): the same call repeated — a
-// re-run, or an executor that asks twice — is still one operation, and two
-// different calls are two. That is as true of a verb that writes one SHARED
-// object — a project's tags or policy, the workspace catalogue, a label
-// declaration — as of a task: keyed on the object alone, a turn that declared
-// a tag and then archived another was answered `applied` for the second
-// without it landing.
-//
-// # And how many different calls to the tool came before it
-//
-// What a call asks for says which write it is and not WHEN, so a run that
-// moved an item to `in_progress`, then to `done`, then back to `in_progress`
-// derived one id for the first and third calls, and the third was answered as
-// the first's retry — `applied`, with the item still `done`. So the id also
-// carries the call's repeat count in this run ([turnctx.CallLog.Ordinal]): the
-// third call follows a different one and is a new operation, while a call
-// repeated with nothing different in between keeps its count and its id. A
-// re-run that makes the same calls in the same order reproduces every count.
-//
-// A COUNT OF ZERO ADDS NOTHING to the identity, so a run's first call of each
-// kind derives the id of the call alone.
-//
-// tool is the calling tool's own name, which is what the count is kept by.
+// tool is the calling tool's own name, which is what the call's repeat count
+// is kept by.
 //
 // # And a caller with no turn names it outright
 //
@@ -2318,25 +2292,30 @@ func handles(all ...string) []string {
 // the step, because the operation is already bound to them: an operation
 // names the one call it was answered for, and brought back with any other
 // arguments it is refused before anything here runs ([WorkDeps.bindOperation]).
+//
+// # And every arm carries the instant it is owed
+//
+// Every arm mints through [statelog], whose ids carry their own mint instant:
+// a fresh id the instant of this call, which is the instant it was minted; a
+// derived one the instant its key carries, [Actor.OperationSince]; and a step
+// of a caller's operation that operation's own.
 func opIDFor(actor Actor, tool, verb, object string, args map[string]any) string {
+	name := verb + "-" + object
 	if actor.Operation != "" {
-		return statelog.StepOpID(actor.Operation, verb+"-"+object)
+		return statelog.StepOpID(actor.Operation, name)
 	}
-	seed := actor.OperationSeed()
-	if seed == "" {
-		return statelog.NewOpID(time.Now(), verb+"-"+object)
+	key := actor.callKey(tool, nil, args, "")
+	if key == "" {
+		return statelog.NewOpID(time.Now(), name)
 	}
-	identity := []string{opIDNamespace, seed, verb, object, turnctx.ArgsDigest(args)}
-	if repeat := actor.Calls.Ordinal(tool, args); repeat > 0 {
-		identity = append(identity, "repeat:"+strconv.Itoa(repeat))
-	}
-	return statelog.DeriveOpID(actor.OperationSince(), verb+"-"+object, identity...)
+	return statelog.DeriveOpID(actor.OperationSince(), name, opIDNamespace, key, verb,
+		object, turnctx.ArgsDigest(args))
 }
 
-// opIDNamespace keeps a derived operation id from colliding with one another
-// package derives from the same turn — a page comment is seeded from the same
-// work key. FIXED for the life of the format: changing it makes every re-run
-// straddling the change write twice.
+// opIDNamespace scopes [opIDFor]'s derivation from a call's key — see
+// [callOpKey], "What the tracker's tools derive from it". FIXED for the life
+// of the format: changing it makes every re-run straddling the change write
+// twice.
 const opIDNamespace = "crewlet.builtin.work"
 
 // createObjectKey is the object a create's operation is named for: the project
@@ -2598,7 +2577,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		patch.Body = &body
 	}
 	// ONE OPERATION PER DISTINCT CALL, keyed on what was sent — see
-	// [opIDFor]: a turn that set the status and then assigned the item, or
+	// [Actor.callKey]: a turn that set the status and then assigned the item, or
 	// ticked two checklist items, is two operations, and a retry sends the
 	// same arguments and is still the same one. Derived HERE, before the
 	// patch is built, because a checklist gesture mints the ids of the lists
@@ -3600,19 +3579,27 @@ func unaddressedCaveat(task worklet.Task, actor Actor, comment *worklet.Comment)
 
 // commentID is the comment's own id, derived so a re-run turn posts once.
 //
-// A UUIDv5 over the operation and the task, because the id is a PRIMARY KEY on
+// A UUIDv5 over the call and the task, because the id is a PRIMARY KEY on
 // every node: two nodes applying one record must write one row, so an id
 // generated at apply time would produce two.
 //
-// AND OVER THE CALL'S OWN ARGUMENTS, for the reason [opIDFor] gives: without
-// them a seat's second remark on a task in one turn was the first one's id,
-// so it upserted the first comment's row — or, inside the log's duplicate
-// window, never landed at all while the tool answered that it had.
+// FROM THE CALL'S KEY ([Actor.callKey]), the one its operation id is derived
+// from ([opIDFor]), so every different call is a different comment: the
+// apply is an upsert of the row the id keys, and an id that stayed put across
+// two calls — a seat's second remark on a task in one turn, a remark made again
+// after another — was the first one's, so the second upserted that comment's
+// row, or never landed inside the log's duplicate window while the tool
+// answered that it had. And over the call's digest beside it, for [opIDFor]'s
+// reason: a request's key names the request rather than what it asked.
 //
-// AND ITS REPEAT COUNT, exactly as [opIDFor] carries it and for the same
-// call: the comment's id is the subject its create arbitrates on, so an id
-// that stayed put while the operation moved would be refused as a comment that
-// already exists.
+// BUT THE KEY AS THE WORK BEGAN ([Actor.asBegun]), never as a rebase re-minted
+// it. A rebased attempt ([Actor.RebasedTo], ADR-0029) mints its operations
+// afresh so the ledger decides them again, and that is all a rebase is about:
+// the ledger, which forgets. The comment's row does not, so a remark the
+// attempt before it posted is found by its id and rewritten in place rather
+// than posted a second time beside it — the one write of a rebased attempt
+// that still lands once. Why a UUIDv5 here and an operation id for a page's
+// comment is [callOpKey]'s, "What the tracker's tools derive from it".
 //
 // A CALLER WITH NO TURN derives it from the call's operation instead
 // ([Actor.Operation]), and without the arguments — for the reason [opIDFor]
@@ -3624,19 +3611,17 @@ func commentID(actor Actor, tool, taskID string, args map[string]any) string {
 		return uuid.NewSHA1(commentNamespace, []byte(actor.Operation+"\x00"+
 			taskID+"\x00"+actor.Handle)).String()
 	}
-	seed := actor.OperationSeed()
-	if seed == "" {
-		seed = uuid.NewString()
+	key := actor.asBegun().callKey(tool, nil, args, "")
+	if key == "" {
+		key = uuid.NewString()
 	}
-	name := seed + "\x00" + taskID + "\x00" + actor.Handle + "\x00" + turnctx.ArgsDigest(args)
-	if repeat := actor.Calls.Ordinal(tool, args); repeat > 0 {
-		name += "\x00repeat:" + strconv.Itoa(repeat)
-	}
-	return uuid.NewSHA1(commentNamespace, []byte(name)).String()
+	return uuid.NewSHA1(commentNamespace, []byte(key+"\x00"+taskID+"\x00"+
+		actor.Handle+"\x00"+turnctx.ArgsDigest(args))).String()
 }
 
-// commentNamespace is the uuid namespace comment ids are derived under. Fixed
-// for the life of the format: it is durable in every comment row.
+// commentNamespace is the uuid namespace comment ids are derived under — see
+// [callOpKey], "What the tracker's tools derive from it". Fixed for the life
+// of the format: it is durable in every comment row.
 var commentNamespace = uuid.MustParse("6f9619ff-8b86-d011-b42d-00c04fc964ff")
 
 // ---- shared rendering -------------------------------------------------- //
@@ -3985,15 +3970,15 @@ func reusedOperation(actor Actor, tool string, err error) string {
 //
 // ONE PLACE, because it is four different answers and every failure that
 // says "call again" has to give the right one. A SEAT's ids are derived from
-// its turn, the call's own arguments and how many different calls to the tool
-// came first ([opIDFor]), so the same arguments before any different call to
-// it are the same operation, and reworded they are a new one. A REQUEST's are
-// derived from the key its transport carries ([Actor.keyedRequest]), so the
-// same request sent again under that key is the same operation — and it has
-// no `op_id` to bring back and no run to call anything else in. An
-// OPERATOR's call is the operation it brings back as `op_id`. A caller with
-// none of these mints afresh on every call, and a repeat it is told to make
-// is a second write.
+// its turn, the tool, the call's own arguments and how many different calls to
+// the tool came first ([Actor.callKey]), so the same arguments before any
+// different call to it are the same operation, and reworded they are a new
+// one. A REQUEST's are derived from the key its transport carries
+// ([Actor.keyedRequest]), so the same request sent again under that key is
+// the same operation — and it has no `op_id` to bring back and no run to call
+// anything else in. An OPERATOR's call is the operation it brings back as
+// `op_id`. A caller with none of these mints afresh on every call, and a
+// repeat it is told to make is a second write.
 func sameCall(actor Actor, tool string) string {
 	switch {
 	case actor.Operation != "":

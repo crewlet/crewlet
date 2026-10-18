@@ -928,17 +928,19 @@ describes **one execution** keys on the run: the phase records, the live view,
 a [detached sandbox run](code-sandbox.md) and its MCP bridge session.
 
 Those derived ids name the **call** as well as the work: the unit of work, the
-verb, the item, and a digest of the tool call's own arguments. So a re-run that
-makes the same call writes once, while two different calls in one turn — an
-item moved to `in_progress` and later to `done`, two comments on one item —
-are two writes. The knowledge base's and chat's writes are derived the same
-way, digest included, so one object named two ways — a page by its id and by
-`ENG/Runbook`, a room by its id and by its name — is two different calls, to
-the digest and to the count below alike. Each id also carries **how many
-different calls to the same tool the run made before it**, so a call made
-again after a different one is a new write: an item moved to `in_progress`,
-then `done`, then back to `in_progress` ends `in_progress`, where the third
-move used to be answered as the first one's retry and the item stayed `done`.
+tool, the verb, the item, and a digest of the tool call's own arguments. So a
+re-run that makes the same call writes once, while two different calls in one
+turn — an item moved to `in_progress` and later to `done`, two comments on one
+item, one write two tools each make with the same arguments — are two writes.
+Every id a call's writes carry is derived from **one key per call**, the same
+for the tracker, the knowledge base and chat, digest included, so one object
+named two ways — a page by its id and by `ENG/Runbook`, a room by its id and by
+its name — is two different calls, to the digest and to the count below
+alike. Each id also carries **how many different calls to the same tool the
+run made before it**, so a call made again after a different one is a new
+write: an item moved to `in_progress`, then `done`, then back to `in_progress`
+ends `in_progress`, where the third move used to be answered as the first
+one's retry and the item stayed `done`.
 Where two tools write one state in opposite directions — `join_channel` and
 `leave_channel` on a chat room's membership — the count is kept across the
 pair, so a join after a leave is a new write rather than the first join's
@@ -980,15 +982,18 @@ judged when it starts and goes on deciding writes while it runs, and a day is
 far more than one attempt's rounds. What the rebase costs is the collapse
 across the line: an attempt judged just short of it and a retry judged just past
 it write under two instants, so a write the first made and the second repeats
-is written twice — the cheaper failure by far against every write lost. The
-ordinary turn pays nothing for any of this: the coordination store is read only
-by an attempt whose start is past the line, since no earlier attempt can have
-rebased before it. An attempt that needs the store and cannot read it does not
-run; its delivery is handed back and retried.
+is written twice — the cheaper failure by far against every write lost. A
+comment on a work item is spared that: its id is the key of its own row rather
+than an operation, and is derived as the work began even in a rebased attempt,
+so a remark the first attempt posted is rewritten in place rather than posted
+again beside it. The ordinary turn pays nothing for any of this: the
+coordination store is read only by an attempt whose start is past the line,
+since no earlier attempt can have rebased before it. An attempt that needs the
+store and cannot read it does not run; its delivery is handed back and retried.
 
 **A re-run is recognised call for call, and only when its calls are the same.**
-Everything a derived id is made of — the work, the verb, the item, the
-arguments, the count — is something a re-run reproduces only by making the
+Everything a derived id is made of — the work, the tool, the verb, the item,
+the arguments, the count — is something a re-run reproduces only by making the
 same calls, with the same arguments, in the same order. The model behind a
 re-run is sampled again, and where it words a title or a comment differently,
 that call is a different write: the re-run files a second item or posts a

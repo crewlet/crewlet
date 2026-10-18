@@ -150,11 +150,11 @@ is still in the trash — and a step named by position would carry another task'
 operation id.
 
 What "under that id" means depends on who is asking. A **seat** derives its
-ids from its turn, the call's arguments and how many different calls to the
-same tool it made first, so it runs a gesture again by repeating the call with
-exactly the same arguments — before calling that tool with anything else, or
-the tool that undoes it (`leave_channel` for `join_channel`), which counts
-with it. The
+ids from its turn, the tool, the call's arguments and how many different calls
+to the same tool it made first, so it runs a gesture again by repeating the
+call with exactly the same arguments — before calling that tool with anything
+else, or the tool that undoes it (`leave_channel` for `join_channel`), which
+counts with it. The
 **operator's MCP** has no turn, so every write's answer carries its `op_id` and
 a call that brings it back is that operation again
 ([`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant))
@@ -192,9 +192,9 @@ its task is finished on a fresh number, which leaves a gap in the project's
 numbering (ENG-8 is skipped) rather than two items sharing a key.
 
 That holds for a re-run's calls only where they are the same calls. A turn's
-operation ids are derived from its unit of work, the verb, the object, the
-call's arguments and how many different calls to the same tool the run made
-before it (see
+operation ids are derived from its unit of work, the tool, the verb, the
+object, the call's arguments and how many different calls to the same tool the
+run made before it (see
 [the turn engine](../concepts/turn-engine.md#a-turns-two-identities)), and the
 model behind a re-run is sampled again: a title or a comment it words
 differently is a different operation, so that re-run files a second item or
