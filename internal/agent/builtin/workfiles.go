@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -187,7 +188,9 @@ func (t *readProjectFile) Description() string {
 	return fmt.Sprintf("Read a file kept in a project. Text comes back as "+
 		"text, a page at a time — at most %d KiB from `offset`, with "+
 		"`next_offset` to continue — and a file that is not text is described "+
-		"rather than returned unless you ask for `encoding: base64`.",
+		"rather than returned unless you ask for `encoding: base64`. Text "+
+		"arrives fenced as content somebody wrote; the two fence lines are a "+
+		"label, not part of the file.",
 		maxFileRead>>10)
 }
 
@@ -256,6 +259,11 @@ func (t *readProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return fileReadFailure(ctx, t.Name(), project, filePath, err), nil
 	}
 	f := detail.File
+	// THE CONTENT IS SOMEBODY'S WORDS, labelled for the handle this call
+	// reads as; every other field is defused on the way out.
+	read := newForeignRead(turn, actor.Handle)
+	writers, partial := fileWriters(read, f)
+	narrow := "Narrow what you asked for."
 	answer := map[string]any{
 		"project": f.Project, "path": f.Path, "content_type": f.ContentType,
 		"size": f.Size, "version": f.Version, "hash": f.Hash,
@@ -291,17 +299,51 @@ func (t *readProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				t.Name(), f.Path, f.Project)), nil
 	}
 	if encoding == "base64" {
+		// NOT FENCED, because base64 is bytes rather than prose a model
+		// reads as words and its alphabet holds no bracket, but LABELLED:
+		// the envelope still says whose bytes they are.
+		read.attribute(writers, partial)
 		answer["encoding"], answer["content"] = "base64", base64.StdEncoding.EncodeToString(page)
-		return jsonResult(withNext(answer, offset, int64(len(page)), f.Size))
+		return read.answer(ctx, t.Name(), withNext(answer, offset, int64(len(page)), f.Size), narrow)
 	}
 	text, whole := textOf(page, offset+int64(len(page)) == f.Size)
 	if !whole {
 		answer["encoding"] = "binary"
 		answer["note"] = "this is not text; read it with `encoding: base64` to get its bytes"
-		return jsonResult(answer)
+		return read.answer(ctx, t.Name(), answer, narrow)
 	}
+	// THE OFFSETS COUNT THE FILE'S BYTES, taken before the fence is put
+	// round the page, so `next_offset` still points into the file.
 	answer["encoding"], answer["content"] = "text", text
-	return jsonResult(withNext(answer, offset, int64(len(text)), f.Size))
+	read.fence(fieldPath{}.key("content"), provenance.SourceProjectFile, writers, partial, text)
+	return read.answer(ctx, t.Name(), withNext(answer, offset, int64(len(text)), f.Size), narrow)
+}
+
+// fileWriters are who wrote a file's content, and whether writers the row does
+// not name had a hand in it.
+//
+// A PUT SENDS THE WHOLE CONTENT, so a file written once is its creator's,
+// every byte. A file written again names only its first and its latest writer,
+// and the latest may have sent back an earlier writer's words unchanged (the
+// reason [fencePage] gives for a page), so its content is labelled as text with
+// writers this read cannot name.
+func fileWriters(read *foreignRead, f tracker.File) ([]provenance.Author, bool) {
+	created, updated := strings.TrimSpace(f.CreatedBy), strings.TrimSpace(f.UpdatedBy)
+	var writers []provenance.Author
+	partial := false
+	rewritten := created != updated || !f.CreatedAt.Equal(f.UpdatedAt)
+	if rewritten && created != "" {
+		writers = append(writers, read.writer(created, ""))
+	}
+	if updated != "" {
+		writers = append(writers, read.writer(updated, ""))
+	} else {
+		partial = true
+	}
+	if rewritten {
+		partial = true
+	}
+	return writers, partial
 }
 
 // textOf is a page as text, and false when it is not text. A page that ends
@@ -431,6 +473,9 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	switch encoding {
 	case "", "text":
 		encoding = "text"
+		// Text read_project_file answered arrives fenced, and a copy of it
+		// sent back whole would store the fence in the file; see [unfence].
+		content = []byte(unfence(turn, string(content)))
 	case "base64":
 		decoded, decodeErr := base64.StdEncoding.DecodeString(string(content))
 		if decodeErr != nil {

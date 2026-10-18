@@ -205,7 +205,7 @@ func TestASeatWritesReadsListsAndRemovesAFile(t *testing.T) {
 	if got.Failed {
 		t.Fatalf("read: %s", got.Output)
 	}
-	if read := fileAnswer(t, got.Output); read["content"] != "# Q3\n\nIt went well." ||
+	if read := fileAnswer(t, got.Output); unfenced(t, read["content"]) != "# Q3\n\nIt went well." ||
 		read["encoding"] != "text" || read["next_offset"] != nil {
 		t.Fatalf("read answered %v", read)
 	}
@@ -251,7 +251,7 @@ func TestALargeFileIsReadInPagesOnWholeCharacters(t *testing.T) {
 			t.Fatalf("page %d came back as %v — a page cut inside a character "+
 				"reads as binary", pages, page["encoding"])
 		}
-		sb.WriteString(page["content"].(string))
+		sb.WriteString(unfenced(t, page["content"]))
 		next, more := page["next_offset"].(float64)
 		if !more {
 			break

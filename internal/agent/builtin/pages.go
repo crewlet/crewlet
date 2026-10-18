@@ -11,7 +11,9 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -374,7 +376,9 @@ func (t *getPage) Description() string {
 	return "Read one page in full: its body, its comments, its revision " +
 		"history and its place in the tree. Take the `version` from the " +
 		"result and pass it back as `base_version` on save_page — an edit " +
-		"that does not say which version it changed is refused."
+		"that does not say which version it changed is refused. The body " +
+		"and each comment arrive fenced as text somebody wrote; the two " +
+		"fence lines are a label, not part of the page."
 }
 
 func (t *getPage) Parameters() map[string]any {
@@ -397,7 +401,8 @@ func (t *getPage) Call(ctx context.Context, args map[string]any) (tools.Result, 
 
 func (t *getPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	// [PageDeps.actor] rather than the turn — see [listPages.CallForTurn].
-	if _, err := t.deps.actor(ctx, turn); err != nil {
+	actor, err := t.deps.actor(ctx, turn)
+	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
 		return notInATurn(GetPageTool), nil
 	}
@@ -421,7 +426,54 @@ func (t *getPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[
 		[]types.KnowledgeReadPage{{
 			ID: detail.Page.ID, Container: detail.Page.Container, Title: detail.Page.Title,
 		}}))
-	return jsonResult(detail)
+	// EVERYTHING ON A PAGE IS SOMEBODY'S WORDS, and the reader is the
+	// handle this call reads as: its own revisions are the one text that
+	// can come back `own`.
+	read := newForeignRead(turn, actor.Handle)
+	fencePage(read, nil, detail)
+	return read.answer(ctx, GetPageTool, detail, "Narrow what you asked for.")
+}
+
+// fencePage fences what a page read holds that somebody wrote: the body under
+// every writer its kept revisions name, and each comment under its author.
+//
+// THE BODY IS EVERY REVISION'S, not its last saver's. A save replaces the
+// whole body, so the last saver did send every byte, but a seat that appends
+// one line to a colleague's page has sent the colleague's words back
+// unchanged, and labelling the result `own` would launder whatever the colleague
+// wrote into the one trust a seat relies on most. A page keeps its last
+// [pages.RevisionsKept] revisions, each written at the version it produced
+// and the first by the page's author, so a page with more versions than that
+// has writers this read cannot name, and its body is labelled as such
+// ([provenance.TrustForPartial]).
+func fencePage(read *foreignRead, at fieldPath, d pages.Detail) {
+	var writers []provenance.Author
+	partial := false
+	name := func(handle string) {
+		if strings.TrimSpace(handle) == "" {
+			partial = true
+			return
+		}
+		writers = append(writers, read.writer(handle, ""))
+	}
+	name(d.Page.Author)
+	named := 0
+	for _, h := range d.History {
+		name(h.Author)
+		if h.Version >= 2 && h.Version <= d.Page.Version {
+			named++
+		}
+	}
+	if named < d.Page.Version-1 {
+		partial = true
+	}
+	read.fence(at.key("page").key("body"), provenance.SourcePageBody, writers, partial,
+		d.Page.Body)
+	for i, c := range d.Comments {
+		read.fence(at.key("comments").index(i).key("body"), provenance.SourcePageComment,
+			[]provenance.Author{read.writer(c.Author, iam.ActorKind(c.AuthorKind))}, false,
+			c.Body)
+	}
 }
 
 // ---- write_page -------------------------------------------------------- //
@@ -505,9 +557,12 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	if refusal != "" {
 		return failed(refusal), nil
 	}
+	// WITHOUT THE FENCE a body copied from a read still wears: those two
+	// lines are this turn's label, never the page's text.
+	body := unfence(turn, argString(args, "body"))
 	in := pages.NewPage{
 		Title:     strings.TrimSpace(argString(args, "title")),
-		Body:      argString(args, "body"),
+		Body:      body,
 		Container: strings.ToUpper(strings.TrimSpace(argString(args, "container"))),
 		ParentID:  strings.TrimSpace(argString(args, "parent")),
 		Labels:    argStrings(args, "labels"),
@@ -706,7 +761,9 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	}
 	save := pages.Save{BaseVersion: base, Message: strings.TrimSpace(argString(args, "message"))}
 	if _, ok := args["body"]; ok {
-		body := argString(args, "body")
+		// The body get_page answered arrives fenced, and the likeliest edit
+		// sends the fence back with it; see [unfence].
+		body := unfence(turn, argString(args, "body"))
 		save.Body = &body
 	}
 	if _, ok := args["parent"]; ok {

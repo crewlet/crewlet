@@ -56,6 +56,15 @@ eighteen in full.
 | `save_page` | Edit one, stating the version you read: there is no per-field merge that makes overwriting prose safe. A `parent` moves it, and may not be the page itself or one beneath it; an empty one moves it to the container's top. `watch` is `true` to follow the page or `false` to stop, and anything else is refused rather than read as no change |
 | `comment_on_page` | Remark on a page, or replace one of your own with `edit` |
 
+What `get_page`, `get_work_item` and `read_project_file` hand back that
+somebody wrote (a page body and its comments, a description and its thread,
+a file's text) arrives **fenced** and labelled with its writers and how far
+the reader may rely on them, beside a `provenance` envelope that labels the
+whole answer; see
+[text somebody else wrote](../concepts/agent-runtime.md#text-somebody-else-wrote).
+A body sent back to a write still wrapped in the fence it was read in is
+stored without it.
+
 The writes on each side count as a **delivery** for the turn's own
 did-this-reach-anybody gate, and each waits for its own write to reach this
 node's projection before answering — so a turn that files an item and then

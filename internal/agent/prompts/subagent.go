@@ -1,6 +1,10 @@
 package prompts
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/crewlet/crewlet/internal/provenance"
+)
 
 // SubagentPreamble is the mandated runtime contract every sub-agent carries,
 // appended after the parent's task prompt.
@@ -94,6 +98,10 @@ func BuildSubagent(seat Seat, in SubagentInput) Prompt {
 		ending = SubagentSubmitRule
 	}
 	b.Add("")
-	b.Lead("worker_rules", "Worker rules", SubagentPreamble+" "+ending)
+	// THE STANDING SENTENCE ABOUT FENCED TEXT rides the rules, because a
+	// worker reads pages, items and files with the parent's read tools and
+	// meets the same fences the seat does; see [provenance.StandingInstruction].
+	b.Lead("worker_rules", "Worker rules", SubagentPreamble+" "+
+		provenance.StandingInstruction+" "+ending)
 	return b.Build()
 }
