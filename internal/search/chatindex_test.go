@@ -466,12 +466,12 @@ func TestARebuildDropsWhatAReplacedEstateNoLongerHolds(t *testing.T) {
 	db := openStore(t)
 	ctx := t.Context()
 	indexer := search.NewChatIndexer(db, db.Replicated().Reader())
-	if indexer.Ready() {
-		t.Fatal("an index that has never swept says it is caught up")
-	}
 	writeMessages(t, db, 0, 5, "c1", "the original copy")
+	if ready(t, indexer) {
+		t.Fatal("an index that has never swept its transcript says it is caught up")
+	}
 	sweepAll(ctx, t, indexer)
-	if !indexer.Ready() {
+	if !ready(t, indexer) {
 		t.Fatal("an index whose walk found nothing past its watermark says it " +
 			"is still behind")
 	}
@@ -486,7 +486,7 @@ func TestARebuildDropsWhatAReplacedEstateNoLongerHolds(t *testing.T) {
 	}
 
 	indexer.RequestRebuild()
-	if indexer.Ready() {
+	if ready(t, indexer) {
 		t.Fatal("an index asked to rebuild still says it is caught up — a search " +
 			"answered before the next sweep takes the request is answered over " +
 			"the index of the estate that was replaced")
@@ -494,11 +494,11 @@ func TestARebuildDropsWhatAReplacedEstateNoLongerHolds(t *testing.T) {
 	if _, err := indexer.Sweep(ctx, time.Now()); err != nil {
 		t.Fatalf("Sweep: %v", err)
 	}
-	if indexer.Ready() {
+	if ready(t, indexer) {
 		t.Fatal("an index that has just dropped everything says it is caught up")
 	}
 	sweepAll(ctx, t, indexer)
-	if !indexer.Ready() {
+	if !ready(t, indexer) {
 		t.Fatal("a rebuilt index that caught up says it is still behind")
 	}
 	assertIndexed(ctx, t, indexer, 3)
@@ -554,7 +554,7 @@ func TestARebuildIsDroppedInStepsAndARestartFinishesIt(t *testing.T) {
 
 	restarted := search.NewChatIndexer(db, db.Replicated().Reader())
 	sweepAll(ctx, t, restarted)
-	if !restarted.Ready() {
+	if !ready(t, restarted) {
 		t.Fatal("a restarted index that finished the drop and caught up says it is behind")
 	}
 	assertIndexed(ctx, t, restarted, total-1)
@@ -609,7 +609,7 @@ func TestAReplacementARestartHidFromTheIndexStillRebuildsIt(t *testing.T) {
 	execReplicated(t, db, `UPDATE statelog_estate SET instance = ?`, "the-donors-copy")
 	restarted := search.NewChatIndexer(db, db.Replicated().Reader())
 	sweepAll(ctx, t, restarted)
-	if !restarted.Ready() {
+	if !ready(t, restarted) {
 		t.Fatal("a rebuilt index that caught up says it is still behind")
 	}
 	assertIndexed(ctx, t, restarted, 3)
@@ -647,6 +647,104 @@ func TestAFreshIndexOnAnAdoptedEstateWalksItAndRebuildsNothing(t *testing.T) {
 		t.Fatalf("the index records it was built from %q, want the copy it walked", got)
 	}
 	assertIndexed(ctx, t, indexer, 7)
+}
+
+// A CHAT INDEX THAT TRAILS ITS TRANSCRIPT SAYS SO, whenever it trails it.
+//
+// Readiness was a flag set the first time the walk reached the end, so a node
+// whose walk had once caught up answered every later search as caught up —
+// through a backlog of messages posted since, an edit it had not re-read and
+// an erasure it had not followed — until a rebuild. It is measured now: the
+// index's own watermarks against the transcript's newest positions, and the
+// copy it was built from against the one beside it.
+func TestAChatIndexThatTrailsItsTranscriptSaysSo(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	ctx := t.Context()
+	indexer := search.NewChatIndexer(db, db.Replicated().Reader())
+	if !ready(t, indexer) {
+		t.Fatal("an index over an empty transcript says it is behind it")
+	}
+	writeMessages(t, db, 0, 4, "c1", "the first words")
+	sweepAll(ctx, t, indexer)
+	if !ready(t, indexer) {
+		t.Fatal("the premise: an index that walked its whole transcript says it is behind")
+	}
+
+	for _, step := range []struct {
+		name  string
+		write func()
+	}{
+		{"messages posted since", func() { writeMessages(t, db, 4, 3, "c1", "later words") }},
+		{"an edit it has not re-read", func() {
+			execReplicated(t, db, `UPDATE chat_messages SET body = ?, version = ? WHERE id = ?`,
+				"rewritten", 8000, "m1")
+		}},
+		{"an erasure it has not followed", func() { eraseMessages(t, db, 9000, "m2") }},
+		{"another copy of the estate", func() {
+			execReplicated(t, db, `UPDATE statelog_estate SET instance = ?`, "another-copy")
+		}},
+	} {
+		step.write()
+		if ready(t, indexer) {
+			t.Fatalf("after %s the index still says it covers its transcript — a "+
+				"search over it would answer as complete", step.name)
+		}
+		sweepAll(ctx, t, indexer)
+		if !ready(t, indexer) {
+			t.Fatalf("an index that swept %s says it is still behind", step.name)
+		}
+	}
+}
+
+// AN INDEX BEING DROPPED IS NOT READY, WHATEVER THE TRANSCRIPT HOLDS.
+//
+// A rebuild resets both watermarks, so over a transcript with messages in it a
+// drop under way also reads as rows past the watermark — and over one with
+// none, nothing does. That is a real state: a rebuild asked for over the same
+// copy whose rows have all gone, here every message the index held. The index
+// still holds what it is dropping, so it is behind until the drop ends, and
+// only the durable mark can say so.
+func TestAnIndexBeingDroppedIsNotReady(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	ctx := t.Context()
+	indexer := search.NewChatIndexer(db, db.Replicated().Reader())
+	total := search.ChatIndexBatch + 10
+	writeMessages(t, db, 0, total, "c1", "said once")
+	sweepAll(ctx, t, indexer)
+	execReplicated(t, db, `DELETE FROM chat_messages`)
+
+	indexer.RequestRebuild()
+	if _, err := indexer.Sweep(ctx, time.Now()); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	held, err := indexer.Corpus(ctx)
+	if err != nil {
+		t.Fatalf("Corpus: %v", err)
+	}
+	if held.Docs == 0 {
+		t.Fatal("the premise: one sweep dropped the whole index, so no drop is under way")
+	}
+	if ready(t, indexer) {
+		t.Fatalf("an index still dropping %d documents says it covers its "+
+			"transcript", held.Docs)
+	}
+	sweepAll(ctx, t, indexer)
+	if !ready(t, indexer) {
+		t.Fatal("an index whose drop ended over an empty transcript says it is behind")
+	}
+}
+
+// ready is the index's own answer to whether it covers its transcript, with a
+// read that failed failing the case.
+func ready(t *testing.T, indexer *search.ChatIndexer) bool {
+	t.Helper()
+	ok, err := indexer.Ready(t.Context())
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	return ok
 }
 
 // builtFrom is the estate instance the chat index records it was built from.
@@ -693,7 +791,7 @@ func TestAStretchOfTombstonesIsWalkedWithoutAPause(t *testing.T) {
 	writeMessages(t, db, stretch, 1, "c1", "the one that survived")
 	sweepAll(ctx, t, indexer)
 	assertIndexed(ctx, t, indexer, 1)
-	if !indexer.Ready() {
+	if !ready(t, indexer) {
 		t.Fatal("an index whose walk reached the transcript's end says it is behind")
 	}
 }
