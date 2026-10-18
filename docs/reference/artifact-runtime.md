@@ -112,22 +112,29 @@ it missed would have changed.
 ### Identity
 
 ```ts
-interface Viewer {
-  seat: string;                              // the viewer's seat handle
+interface Person {
+  seat: string;                              // the seat handle: the value a person column stores
   kind: "human" | "agent";
   displayName: string;
+  avatar?: { character: string; hue: string };   // an agent's face: its character and node hue
+}
+
+interface Viewer extends Person {
   role: "viewer" | "commenter" | "contributor" | "editor" | "owner";
 }
 
 interface IdentityApi {
   me(): Promise<Viewer>;
+  people(): Promise<Person[]>;               // every seat of the company, for a person picker
   subscribe(cb: (me: Viewer) => void): Unsubscribe;   // the viewer's role changed
 }
 ```
 
-Never a token, a login or an email address. When the viewer's share is removed
-while the page is open, the host withdraws the page's room and every later
-call rejects with `forbidden`.
+Never a token, a login or an email address. `people` answers from the chart
+the viewer's dashboard already holds, so a page learns no one the viewer could
+not see there, and a seat it does not list (one that has left) is drawn by its
+handle. When the viewer's share is removed while the page is open, the host
+withdraws the page's room and every later call rejects with `forbidden`.
 
 ### Data
 
@@ -201,8 +208,28 @@ interface DataApi {
   collection<T = Record<string, Json>>(name: string): Collection<T>;
   batch(): Batch;
   schema(): Promise<CollectionSchema[]>;     // the collections and their columns, as declared
+  undo(): Promise<WriteOutcome | null>;      // the page's own last write on this tab; null when there is none
+  redo(): Promise<WriteOutcome | null>;      // the page's last undo, undone; null when there is none
+}
+
+interface CollectionSchema {
+  name: string;
+  title?: string;
+  columns?: Column[];                        // absent for a schemaless collection
+}
+
+interface Column {
+  key: string;
+  type: string;                              // text, longtext, number, checkbox, select, multiselect, status, person, date, url, rating
+  label?: string;
+  required?: boolean; primary?: boolean; hidden?: boolean;
+  min?: number; max?: number; max_length?: number; max_items?: number;
+  options?: { id: string; label: string; color?: string; category?: string; archived?: boolean }[];
 }
 ```
+
+A schema is answered as the engine holds it, so a column carries more than
+these fields (its write rule, its default); an unknown field is preserved.
 
 Each method is one op of the engine's write:
 
@@ -238,6 +265,10 @@ spent; the message says how long to wait, and the same write may be sent
 again), `capability_not_declared` (refused by the host before the engine) and
 `unavailable` (the engine could not be reached; nothing was written unless a
 later read shows it).
+
+`undo` and `redo` step through the writes this page made on this tab, never a
+collaborator's, and answer like a write: `conflict` when somebody has changed
+a field since, `invalid` when the history no longer holds the write.
 
 Reads honour the collection's read rule on every path, the subscription
 included: a page reading an `own_rows` collection receives the viewer's rows
@@ -284,10 +315,8 @@ synchronous `localStorage` emulation.
 ```ts
 interface Focus { version?: number; region?: string; collection?: string; doc?: string; field?: string }
 
-interface Member {
+interface Member extends Person {           // the person the chart says holds the session
   session: string;                           // one per tab
-  seat: string;
-  kind: "human" | "agent";
   activity: "viewing" | "editing" | "idle";
   focus: Focus;
   at: string;
@@ -367,7 +396,7 @@ rejection is a `CrewletError`, an `Error` carrying `{ code, message }`, with
 | `rate_limited` | Too many writes; the message says how long to wait |
 | `unavailable` | The host could not reach the engine |
 
-Data writes resolve with a `WriteOutcome` for every verdict the engine
-decided, so a page handles `conflict`, `invalid` and `forbidden` as answers,
-not exceptions; they reject only with `rate_limited`,
+Data writes, `undo` and `redo` resolve with a `WriteOutcome` for every verdict
+the engine decided, so a page handles `conflict`, `invalid` and `forbidden` as
+answers, not exceptions; they reject only with `rate_limited`,
 `capability_not_declared` or `unavailable`.

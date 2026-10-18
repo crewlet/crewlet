@@ -9,6 +9,7 @@ import { describe, expect, test, vi } from "vitest";
 import { QueryError, type LiveSocket } from "~/protocol/index.ts";
 import { BRIDGE_MESSAGE, type RuntimeCapability } from "~/runtime/bridge.ts";
 import type { KeyedAnswer } from "~/lib/keyedWrite.ts";
+import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
 import { PageHost, bridgeOutcome, engineQuery } from "./host.ts";
 
 describe("a page's query", () => {
@@ -107,6 +108,7 @@ function host(
     write?: () => Promise<KeyedAnswer>;
     openLink?: (url: URL) => Promise<boolean>;
     setPresence?: (...args: unknown[]) => void;
+    store?: ArtifactDataStore;
   } = {},
 ) {
   const query = vi.fn(over.query ?? (async () => ({})));
@@ -115,7 +117,7 @@ function host(
     version: 3,
     capabilities,
     socket: { query } as unknown as LiveSocket,
-    store: null,
+    store: over.store ?? null,
     clientID: "client-1",
     newKey: () => "key-1",
     openLink: over.openLink ?? (async () => true),
@@ -239,6 +241,41 @@ describe("the host", () => {
       });
     }
     expect(openLink).not.toHaveBeenCalled();
+  });
+
+  test("names the people of the chart it was given, to a page that declared identity", async () => {
+    const { h } = host(["identity"]);
+    const people = [
+      { seat: "maya", kind: "human" as const, displayName: "Maya Ortiz" },
+      {
+        seat: "ada",
+        kind: "agent" as const,
+        displayName: "Ada",
+        avatar: { character: "otter", hue: "cyan" },
+      },
+    ];
+    h.setPeople(people);
+    expect(await call(h, "identity.people")).toMatchObject({ ok: true, value: people });
+    const undeclared = host([]);
+    expect(await call(undeclared.h, "identity.people")).toMatchObject({
+      ok: false,
+      error: { code: "capability_not_declared" },
+    });
+  });
+
+  test("steps the page's own writes back through its store, and answers null with none", async () => {
+    const undo = vi.fn(async () => ({ verdict: "applied" as const, seq: 8, position: 8 }));
+    const redo = vi.fn(async () => null);
+    const { h } = host(["db"], {
+      store: { undo, redo, subscribe: () => () => {} } as unknown as ArtifactDataStore,
+    });
+    expect(await call(h, "data.undo")).toMatchObject({
+      ok: true,
+      value: { verdict: "applied", seq: 8 },
+    });
+    expect(await call(h, "data.redo")).toMatchObject({ ok: true, value: null });
+    expect(undo).toHaveBeenCalledTimes(1);
+    expect(redo).toHaveBeenCalledTimes(1);
   });
 
   test("pins presence to the page's version and bounds what it says", async () => {

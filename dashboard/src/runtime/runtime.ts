@@ -40,6 +40,7 @@ import {
   type BridgeEvent,
   type BridgeInit,
   type BridgeMethod,
+  type BridgePerson,
   type BridgeRoster,
   type BridgeViewer,
   type BridgeWriteOutcome,
@@ -544,6 +545,7 @@ const crewlet = Object.freeze({
   }),
   identity: Object.freeze({
     me: () => bridge.call<BridgeViewer>("identity.me"),
+    people: () => bridge.call<BridgePerson[]>("identity.people"),
     subscribe(cb: (me: BridgeViewer) => void): Unsubscribe {
       identityListeners.add(cb);
       return () => void identityListeners.delete(cb);
@@ -553,6 +555,8 @@ const crewlet = Object.freeze({
     collection,
     batch,
     schema: () => bridge.call<unknown[]>("data.schema"),
+    undo: () => bridge.call<BridgeWriteOutcome | null>("data.undo"),
+    redo: () => bridge.call<BridgeWriteOutcome | null>("data.redo"),
   }),
   state: Object.freeze(state),
   presence: Object.freeze({

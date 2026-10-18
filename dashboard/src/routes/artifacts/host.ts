@@ -26,6 +26,7 @@ import {
   type BridgeConnection,
   type BridgeDoc,
   type BridgeErrorCode,
+  type BridgePerson,
   type BridgeRoster,
   type BridgeViewer,
   type BridgeWriteOutcome,
@@ -216,6 +217,7 @@ export class PageHost {
   private viewer: BridgeViewer | null = null;
   private connection: BridgeConnection = "live";
   private roster: BridgeRoster = { members: [], truncated: false };
+  private people: readonly BridgePerson[] = [];
   private nextSubscription = 1;
   private readonly subscriptions = new Map<
     number,
@@ -267,6 +269,11 @@ export class PageHost {
     if (state === this.connection) return;
     this.connection = state;
     this.event({ topic: "connection", state });
+  }
+
+  /** The chart moved: the people a page that declared `identity` may name. */
+  setPeople(people: readonly BridgePerson[]): void {
+    this.people = people;
   }
 
   /** The room moved. */
@@ -327,6 +334,10 @@ export class PageHost {
       case "identity.me":
         if (!this.viewer) throw new Refusal("unavailable", "who is viewing is not known yet");
         return this.viewer;
+      case "identity.people":
+        // FROM THE CHART THIS TAB HOLDS, as every screen draws a seat: the
+        // people the viewer already sees, in display facts only.
+        return [...this.people];
       case "data.schema": {
         const held = needStore();
         if (!held.schema) await held.loadSchema();
@@ -413,6 +424,15 @@ export class PageHost {
         // rules and this version's declared capabilities; what is checked
         // here is only that none reaches the per-viewer state collection.
         return bridgeOutcome(await needStore().write(ops as DataOp[]));
+      }
+      case "data.undo":
+      case "data.redo": {
+        // THE PAGE'S OWN WRITES, on this tab: the store the page writes
+        // through keeps them, so an undo never reaches a collaborator's
+        // write, and null says there is nothing to step.
+        const held = needStore();
+        const result = call.method === "data.undo" ? await held.undo() : await held.redo();
+        return result === null ? null : bridgeOutcome(result);
       }
       case "state.get": {
         const key = str(p["key"], "key");

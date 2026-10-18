@@ -37,6 +37,7 @@ import { useViewer } from "~/lib/viewer.ts";
 import { mintFrame, reportReady } from "~/lib/artifacts/api.ts";
 import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import { useDataStore } from "~/lib/artifacts/useDataStore.ts";
+import { useArtifactPeople } from "~/lib/artifacts/people.ts";
 import { rowID, type ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
 import type { BridgeRoster, BridgeViewer, RuntimeCapability } from "~/runtime/bridge.ts";
 import { PageHost } from "./host.ts";
@@ -108,6 +109,7 @@ export function FrameView({
   const { socket } = useClient();
   const connection = useConnection();
   const viewer = useViewer();
+  const people = useArtifactPeople();
   const [clientID] = useState(() => `page-${rowID()}`);
   const host = useMemo(() => {
     if (!store && needsData) return null;
@@ -130,20 +132,22 @@ export function FrameView({
   }, [detail.id, version, capabilities, socket, store, needsData, clientID]);
   useEffect(() => () => host?.stop(), [host]);
 
-  // WHO IS VIEWING, to a page that declared it may know: display facts only.
+  // WHO IS VIEWING, and the people a page may name, to a page that declared
+  // it may know: display facts only, from the chart this tab holds.
+  const knows = capabilities.includes("identity");
   const bridgeViewer = useMemo<BridgeViewer | null>(
     () =>
-      capabilities.includes("identity") && viewer.handle
+      knows && viewer.handle
         ? {
-            seat: viewer.handle,
-            kind: viewer.kind === "agent" ? "agent" : "human",
-            displayName: viewer.name || viewer.handle,
+            ...people.pagePerson(viewer.handle, viewer.kind === "agent" ? "agent" : "human"),
+            displayName: viewer.name || people.seatName(viewer.handle),
             role: detail.role,
           }
         : null,
-    [capabilities, viewer.handle, viewer.kind, viewer.name, detail.role],
+    [knows, people, viewer.handle, viewer.kind, viewer.name, detail.role],
   );
   useEffect(() => host?.setViewer(bridgeViewer), [host, bridgeViewer]);
+  useEffect(() => host?.setPeople(knows ? people.pagePeople : []), [host, knows, people]);
   useEffect(
     () => host?.setConnection(connection.connected ? "live" : "reconnecting"),
     [host, connection.connected],
@@ -151,9 +155,8 @@ export function FrameView({
   const roster = useMemo<BridgeRoster>(
     () => ({
       members: [...room.roster.members.values()].map((m) => ({
+        ...people.pagePerson(m.seat, m.kind === "agent" ? "agent" : "human"),
         session: m.session,
-        seat: m.seat,
-        kind: m.kind === "agent" ? "agent" : "human",
         activity: m.activity,
         focus: m.focus,
         at: m.at,
@@ -161,7 +164,7 @@ export function FrameView({
       ...(room.roster.counts ? { counts: room.roster.counts } : {}),
       truncated: room.roster.truncated,
     }),
-    [room.roster],
+    [room.roster, people],
   );
   useEffect(() => host?.setRoster(roster), [host, roster]);
 
