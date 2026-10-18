@@ -436,7 +436,7 @@ func dutyReads() map[string]indexedRead {
 		// and a restore walk — every level of it — and a purge's reach.
 		"a task's children":           seek(tree, childrenStatement, "t-00001"),
 		"a walk's batch of children":  seek(tree, childBatchStatement, "t-00001", "P01", "", WalkBatch),
-		"a subtree, level by level":   seek(tree, subtreeStatement, "t-00001"),
+		"a subtree, level by level":   seek(tree, subtreeStatement, "t-00001", "t-00001", "t-00001"),
 		"what a purge writes, by kin": seek(tree, purgeReachStatement, "t-00001", "t-00001", "t-00001", "t-00001", "t-00001", "t-00001", "t-00001"),
 		"key resolution":              seek(keys, resolveTaskStatement, "ENG-1", "ENG-1", "ENG-1"),
 		"a point read's scope":        seek(keys, taskReadScopeStatement, "ENG-1", "ENG-1", "ENG-1"),
