@@ -725,3 +725,33 @@ func TestAWorkerReadsArtifactsAndWritesNone(t *testing.T) {
 		}
 	}
 }
+
+// AN ADMINISTRATOR'S LISTING SHOWS NO OVERRIDE: they may open any artifact, and
+// that opening is recorded where it happens, so a listing that surfaced every
+// private artifact by the same override would disclose what nobody recorded.
+func TestAnAdministratorsListingShowsNoOverride(t *testing.T) {
+	t.Parallel()
+	f := newFakeArtifacts()
+	chart := artifactChart{}
+	deps := artifactDeps(f, chart, requesters{})
+	company := organization(t)
+	deps.Org = func() *org.Organization { return company }
+	var list tools.Callable
+	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{Artifacts: deps,
+		Authorize: builtin.Decide(chart)}) {
+		if tool.Name() == builtin.ListArtifactsTool {
+			list = tool
+		}
+	}
+	mine := f.seed("founder", iam.ActorHuman, founder, nil, [2]string{"index.html", "a"})
+	f.seed("agent-ceo", iam.ActorAgent, ceo, nil, [2]string{"index.html", "private"})
+	admin := founderPrincipal(iam.AllGrants...)
+	got, err := list.Call(iam.WithPrincipal(context.Background(), admin), map[string]any{})
+	if err != nil || got.Failed {
+		t.Fatalf("list: %v %s", err, got.Output)
+	}
+	rows, _ := decode(t, got)["artifacts"].([]any)
+	if len(rows) != 1 || rows[0].(map[string]any)["artifact"] != mine.ID.String() {
+		t.Fatalf("an administrator's listing = %v, want only their own", rows)
+	}
+}
