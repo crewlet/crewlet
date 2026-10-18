@@ -2044,14 +2044,20 @@ func TestASearchOfAnIndexStillBeingBuiltSaysSo(t *testing.T) {
 // — every snippet cut at its bound, both marks on it, the longest handle and
 // quotes throughout, each of which the answer's JSON writes as two bytes.
 //
-// AND A PAGE OF MARKUP IS REFUSED NAMING `limit`, never cut: the answer's JSON
-// writes `<` as six bytes, so fifty snippets of it are four times the page
-// above, which is the case the ceiling is for. Held so the limit's doc stays
-// true in both directions — an answer that stopped escaping it, or a limit
-// small enough to carry it, turns this half red and the doc is re-read.
+// A PAGE OF MARKUP IS ONE ANSWER TOO, AND READS AS WRITTEN: a tool answer
+// carries `<`, `>` and `&` as the bytes they are, not as the six-byte escapes
+// an HTML-safe encoder writes, which made fifty snippets of them four times
+// the page above and refused a room of pasted code as "ask for fewer".
 //
-// Mutation: raise MaxChatSearchLimit to 100 and the first half goes red; drop
-// the narrowing advice from the search's answer and the second does.
+// AND A PAGE THE ANSWER'S JSON STILL WIDENS IS REFUSED NAMING `limit`, never
+// cut: a control character — a terminal's escape, pasted with its colours —
+// is written as six bytes, so fifty snippets of them are the case the ceiling
+// is for. Held so the limit's doc stays true in both directions — a limit
+// small enough to carry that page turns this half red and the doc is re-read.
+//
+// Mutation: raise MaxChatSearchLimit to 100 and the first half goes red; put
+// the HTML escaping back and the markup half does; drop the narrowing advice
+// from the search's answer and the last one does.
 func TestAFullChatSearchPageIsOneToolAnswer(t *testing.T) {
 	t.Parallel()
 	page := func(body string) tools.Result {
@@ -2071,10 +2077,18 @@ func TestAFullChatSearchPageIsOneToolAnswer(t *testing.T) {
 	if got := page(quoted); got.Failed {
 		t.Fatalf("a full page of hits was refused as one answer: %s", got.Output)
 	}
-	got := page(strings.Repeat("<", search.ChatSnippetBytes))
+	markup := page(strings.Repeat("<", search.ChatSnippetBytes))
+	if markup.Failed {
+		t.Fatalf("a full page of markup was refused as one answer: %.200q", markup.Output)
+	}
+	if !strings.Contains(markup.Output, strings.Repeat("<", 64)) ||
+		strings.Contains(markup.Output, `\u003c`) {
+		t.Errorf("a page of markup reads %.200q, want the snippets' own `<`", markup.Output)
+	}
+	got := page(strings.Repeat("\x1b", search.ChatSnippetBytes))
 	if !got.Failed || !strings.Contains(got.Output, "`limit`") {
-		t.Errorf("a full page of markup answered %.200q, want refused naming `limit`",
-			got.Output)
+		t.Errorf("a full page of control characters answered %.200q, want refused "+
+			"naming `limit`", got.Output)
 	}
 }
 

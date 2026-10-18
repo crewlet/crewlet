@@ -1,7 +1,6 @@
 package builtin
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/tools"
@@ -39,7 +38,7 @@ const ToolAnswerBytes = 64 << 10
 // what would make its own answer smaller — `include` on a detail read, a
 // filter on a listing, a page size on a catalogue.
 func jsonAnswer(v any, narrowWith string) (tools.Result, error) {
-	data, err := json.MarshalIndent(v, "", "  ")
+	data, err := encodeAnswer(v)
 	if err != nil {
 		// A tool failure is a RESULT the model reads: the surface's Go
 		// error aborts the whole tool loop (see internal/agent/toolloop),
@@ -66,3 +65,10 @@ func jsonAnswer(v any, narrowWith string) (tools.Result, error) {
 // KiB", which reads as a refusal of something AT its limit and tells the
 // reader nothing about how much to cut.
 func kib(n int) int { return (n + 1<<10 - 1) >> 10 }
+
+// encodeAnswer is a tool answer as its reader is handed it: indented JSON,
+// with what a person wrote left as they wrote it — [tools.PlainJSON], whose
+// doc says why that is not [json.MarshalIndent] — and these are the bytes
+// [ToolAnswerBytes] weighs, so a page of markup weighs what the page of prose
+// beside it does rather than four times it.
+func encodeAnswer(v any) ([]byte, error) { return tools.PlainJSON(v, "  ") }
