@@ -236,8 +236,8 @@ func BenchmarkS4Corpus(b *testing.B) {
 	var (
 		refused, broken, storage, escaped int
 		causes                            = map[string]int{}
-		refusals                 = map[string]int{}
-		linting                  time.Duration
+		refusals                          = map[string]int{}
+		linting                           time.Duration
 	)
 	b.ResetTimer()
 	for range b.N {
