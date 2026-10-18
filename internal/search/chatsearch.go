@@ -89,10 +89,12 @@ var ErrNoViewer = errors.New("search: a chat search needs the viewer's visible c
 // million hits was ranked and returned whole, and the surface that asked
 // refused to hand it over.
 //
-// AS PROSE, and the qualifier is the ceiling's to keep: a snippet dense with
-// what a tool answer's JSON writes as six bytes (`<`, `>`, `&`) is four times
-// that, and a page of them is refused by that ceiling naming `limit` — its
-// job, since a smaller page is the remedy — rather than handed over cut.
+// AS PROSE, and the qualifier is the ceiling's to keep: a tool answer writes
+// markup as it was written, but a snippet dense with what its JSON still
+// writes as six bytes — a control character, a terminal's escape pasted with
+// its colours — is four times that, and a page of them is refused by that
+// ceiling naming `limit` — its job, since a smaller page is the remedy —
+// rather than handed over cut.
 const (
 	ChatSearchLimit    = 20
 	MaxChatSearchLimit = 50
