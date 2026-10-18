@@ -798,7 +798,7 @@ func TestABatchTheBucketRefusesAsARequestIsNoBatch(t *testing.T) {
 		t.Run(c.code, func(t *testing.T) {
 			t.Parallel()
 			srv := s3fake.Start(t, "files")
-			b := openRetrying(t, srv, "crewlet/", nil)
+			b := openRetrying(t, srv, "crewlet/", s3obj.Clock{})
 			if err := b.Put(t.Context(), "files/a", bytes.NewReader([]byte("a")), objstore.PutMeta{}); err != nil {
 				t.Fatal(err)
 			}
@@ -835,7 +835,7 @@ func TestABatchTheBucketRefusesAsARequestIsNoBatch(t *testing.T) {
 			// the refusals above engaged.
 			srv.RefuseBatches(0, "")
 			srv.FailNext(1, c.status, c.code)
-			if err := openRetrying(t, srv, "crewlet/", nil).DeleteBatch(t.Context(), []string{"files/a"}); err != nil {
+			if err := openRetrying(t, srv, "crewlet/", s3obj.Clock{}).DeleteBatch(t.Context(), []string{"files/a"}); err != nil {
 				t.Fatalf("a batch the bucket slowed once with %d %s = %v; want it deleted",
 					c.status, c.code, err)
 			}

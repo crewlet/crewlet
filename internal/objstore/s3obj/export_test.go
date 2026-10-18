@@ -21,20 +21,33 @@ import (
 // [Backend.partBytes].
 func CutParts(b *Backend, n int) { b.cutParts(n) }
 
+// Clock is the time a client's gate keeps ([clock]): Now, the instant it
+// measures its quiet minute ([throttleQuiet]) from, and After, the timer that
+// lifts it when the minute ends. A nil field is the production one —
+// time.Now, and time.AfterFunc.
+type Clock struct {
+	Now   func() time.Time
+	After func(d time.Duration, f func())
+}
+
 // OpenRetrying is [Open] with the client's attempts paced by backoff — nil is
-// the production [fullJitter] — and its gate's quiet minute ([throttleQuiet])
-// measured on now — nil is time.Now — so a case asks a bucket again in
-// milliseconds rather than seconds, and moves a clock past a quiet minute
-// rather than waiting one out. Everything else about the client is Open's
-// own: the environment it reads included.
-func OpenRetrying(ctx context.Context, cfg Config, backoff retry.BackoffDelayer, now func() time.Time) (*Backend, error) {
+// the production [fullJitter] — and its gate's time kept by c, so a case asks
+// a bucket again in milliseconds rather than seconds, and moves a clock past a
+// quiet minute — and fires the timer that ends it — rather than waiting one
+// out. Everything else about the client is Open's own: the environment it
+// reads included.
+func OpenRetrying(ctx context.Context, cfg Config, backoff retry.BackoffDelayer, c Clock) (*Backend, error) {
 	if backoff == nil {
 		backoff = fullJitter{}
 	}
-	if now == nil {
-		now = time.Now
+	kept := systemClock
+	if c.Now != nil {
+		kept.now = c.Now
 	}
-	return open(ctx, cfg, backoff, now)
+	if c.After != nil {
+		kept.after = c.After
+	}
+	return open(ctx, cfg, backoff, kept)
 }
 
 // ClientRetryer is the retryer b's client retries every request with, read off

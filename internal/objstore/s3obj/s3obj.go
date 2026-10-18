@@ -125,7 +125,8 @@
 // answered to a lone HEAD between two syncs holds the next sync back no more
 // than one answered at its start — the rest waiting in line under their own
 // contexts, and one more each round the bucket answers. It is lifted once the
-// bucket has gone [throttleQuiet] without a throttle.
+// bucket has gone [throttleQuiet] without a throttle, by a timer the throttle
+// sets, whether or not the node sends anything meanwhile.
 // A 503 naming a gateway's own failure is no throttle ([isThrottle]): it is
 // asked again like any server error and slows nothing else. S3 Express's
 // session request — what a directory bucket's every request is signed with,
@@ -515,14 +516,30 @@ func (b *Backend) returnSpares(n int) {
 // fails it at once; one that throttles, fails or does not answer is asked
 // again for [callBudget], as every request is ([newRetryer]).
 func Open(ctx context.Context, cfg Config) (*Backend, error) {
-	return open(ctx, cfg, fullJitter{}, time.Now)
+	return open(ctx, cfg, fullJitter{}, systemClock)
 }
 
-// open is [Open] with the client's backoff and the clock its [gate] measures
-// its quiet minute on given, so this package's cases can ask a bucket again
-// in milliseconds and move a clock past a quiet minute rather than wait one
-// out (export_test.go).
-func open(ctx context.Context, cfg Config, backoff retry.BackoffDelayer, now func() time.Time) (*Backend, error) {
+// clock is the time the client's [gate] keeps: the instant it measures its
+// quiet minute from ([throttleQuiet]), and the timer that lifts it when the
+// minute ends.
+type clock struct {
+	now   func() time.Time
+	after func(d time.Duration, f func())
+}
+
+// systemClock is the wall clock and its timers. The timer is discarded once
+// armed: a Backend has no Close, and a lift timer exists only while its gate
+// is engaged — at most a minute after the bucket's last throttle — so there is
+// nothing to stop.
+var systemClock = clock{
+	now:   time.Now,
+	after: func(d time.Duration, f func()) { time.AfterFunc(d, f) },
+}
+
+// open is [Open] with the client's backoff and the clock its [gate] keeps
+// given, so this package's cases can ask a bucket again in milliseconds and
+// move a clock past a quiet minute rather than wait one out (export_test.go).
+func open(ctx context.Context, cfg Config, backoff retry.BackoffDelayer, c clock) (*Backend, error) {
 	if cfg.Bucket == "" || cfg.Region == "" {
 		return nil, errors.New("s3obj: an S3 store needs a bucket and a region")
 	}
@@ -547,7 +564,7 @@ func open(ctx context.Context, cfg Config, backoff retry.BackoffDelayer, now fun
 	if err != nil {
 		return nil, err
 	}
-	g := newGate(now)
+	g := newGate(c)
 	client := s3.NewFromConfig(base, func(o *s3.Options) {
 		// THE BUCKET IS REACHED THROUGH THE ENGINE'S OWN TRANSPORT
 		// (internal/httpx), never a pool of the SDK's.

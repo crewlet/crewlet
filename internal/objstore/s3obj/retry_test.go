@@ -33,16 +33,65 @@ var soonAfter = retry.BackoffDelayerFunc(func(int, error) (time.Duration, error)
 
 // openRetrying is the backend over srv as [s3obj.Open] builds it — the
 // environment it reads included — at the parts every case here runs at, but
-// asking again a millisecond after a failure, and measuring its gate's quiet
-// minute on now (nil is time.Now).
-func openRetrying(t *testing.T, srv *s3fake.Server, prefix string, now func() time.Time) *s3obj.Backend {
+// asking again a millisecond after a failure, and its gate's time kept by c
+// (the zero Clock is the wall clock's).
+func openRetrying(t *testing.T, srv *s3fake.Server, prefix string, c s3obj.Clock) *s3obj.Backend {
 	t.Helper()
-	b, err := s3obj.OpenRetrying(t.Context(), fakeConfig(srv, prefix), soonAfter, now)
+	b, err := s3obj.OpenRetrying(t.Context(), fakeConfig(srv, prefix), soonAfter, c)
 	if err != nil {
 		t.Fatalf("open the bucket: %v", err)
 	}
 	s3obj.CutParts(b, part)
 	return b
+}
+
+// stoppedClock is a gate's time a case moves by hand: its instant moves only
+// when the case advances it, and a timer the gate sets is recorded rather
+// than set, to be fired when the case chooses.
+type stoppedClock struct {
+	mu     sync.Mutex
+	now    time.Time
+	timers []stoppedTimer
+}
+
+// stoppedTimer is one timer a gate set on a [stoppedClock]: how long it was set
+// for, and what it runs when fired.
+type stoppedTimer struct {
+	d    time.Duration
+	fire func()
+}
+
+func newStoppedClock() *stoppedClock {
+	return &stoppedClock{now: time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)}
+}
+
+// Clock is c as a gate keeps time.
+func (c *stoppedClock) Clock() s3obj.Clock { return s3obj.Clock{Now: c.Now, After: c.After} }
+
+func (c *stoppedClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *stoppedClock) After(d time.Duration, f func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.timers = append(c.timers, stoppedTimer{d: d, fire: f})
+}
+
+// Advance moves c's instant on by d, firing nothing.
+func (c *stoppedClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+// Timers is every timer set on c so far, in the order they were set.
+func (c *stoppedClock) Timers() []stoppedTimer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.timers)
 }
 
 // answer is the error the client is handed for an attempt the bucket answered
@@ -67,7 +116,7 @@ var slowDown = answer(http.StatusServiceUnavailable, "SlowDown")
 func TestAFailedRequestPastThreeAttemptsStillSucceeds(t *testing.T) {
 	t.Parallel()
 	srv := s3fake.Start(t, "files")
-	b := openRetrying(t, srv, "", nil)
+	b := openRetrying(t, srv, "", s3obj.Clock{})
 	const refusals = 5
 	data := []byte("stored on the sixth attempt")
 	for _, step := range []struct {
@@ -122,7 +171,7 @@ func TestTheEnvironmentCannotCapTheBucketsAttempts(t *testing.T) {
 	t.Setenv("AWS_MAX_ATTEMPTS", "3")
 	srv := s3fake.Start(t, "files")
 	srv.Put("k", []byte("stored before the bucket failed"))
-	b := openRetrying(t, srv, "", nil)
+	b := openRetrying(t, srv, "", s3obj.Clock{})
 	srv.FailNext(5, http.StatusInternalServerError, "InternalError")
 	if _, err := b.Stat(t.Context(), "k"); err != nil {
 		t.Fatalf("under AWS_MAX_ATTEMPTS=3 a head the bucket failed five times = %v; "+
@@ -147,7 +196,7 @@ func TestTheEnvironmentCannotChangeHowTheGateCounts(t *testing.T) {
 	t.Setenv("AWS_NEW_RETRIES_2026", "true")
 	srv := s3fake.Start(t, "files")
 	srv.Put("k", []byte("an object"))
-	b := openRetrying(t, srv, "", nil)
+	b := openRetrying(t, srv, "", s3obj.Clock{})
 	srv.FailNext(3, http.StatusServiceUnavailable, "SlowDown")
 	before := srv.Requests()
 	if _, err := b.Stat(t.Context(), "k"); err != nil {
@@ -176,7 +225,7 @@ func TestTheEnvironmentCannotChangeHowTheGateCounts(t *testing.T) {
 func TestTheBucketClientsRetriesNeverRunOut(t *testing.T) {
 	t.Parallel()
 	srv := s3fake.Start(t, "files")
-	rt := s3obj.ClientRetryer(openRetrying(t, srv, "", nil))
+	rt := s3obj.ClientRetryer(openRetrying(t, srv, "", s3obj.Clock{}))
 	for i := range 10_000 {
 		release, err := rt.GetRetryToken(t.Context(), slowDown)
 		if err != nil {
@@ -227,7 +276,7 @@ func TestAThrottleSlowsTheWholeClient(t *testing.T) {
 			// PUT FROM OUTSIDE, so nothing but the check at open has
 			// gone through the client before the throttle.
 			srv.Put("k", []byte("an object"))
-			b := openRetrying(t, srv, "", nil)
+			b := openRetrying(t, srv, "", s3obj.Clock{})
 			if out := s3obj.LetOut(b, 10); out != 10 {
 				t.Fatalf("before any throttle the client let out %d of ten attempts at once", out)
 			}
@@ -359,7 +408,7 @@ func TestAThrottleKeepsSevenTenthsOfTheNodesWidth(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			b := openRetrying(t, s3fake.Start(t, "files"), "", nil)
+			b := openRetrying(t, s3fake.Start(t, "files"), "", s3obj.Clock{})
 			c.do(t, b)
 			// TWICE THE WIDEST BURST ASKED FOR, so a gate the throttle
 			// left wider than the node ran cannot pass.
@@ -379,7 +428,7 @@ func TestAThrottleKeepsSevenTenthsOfTheNodesWidth(t *testing.T) {
 // again.
 func TestOneRoundOfThrottlesIsOneCut(t *testing.T) {
 	t.Parallel()
-	b := openRetrying(t, s3fake.Start(t, "files"), "", nil)
+	b := openRetrying(t, s3fake.Start(t, "files"), "", s3obj.Clock{})
 	enter := func(n int) []s3obj.Attempt {
 		t.Helper()
 		held := make([]s3obj.Attempt, n)
@@ -418,7 +467,7 @@ func TestOneRoundOfThrottlesIsOneCut(t *testing.T) {
 // starves behind a stream of newer ones until its deadline.
 func TestTheGateLetsItsWaitersOutFirstComeFirstServed(t *testing.T) {
 	t.Parallel()
-	b := openRetrying(t, s3fake.Start(t, "files"), "", nil)
+	b := openRetrying(t, s3fake.Start(t, "files"), "", s3obj.Clock{})
 	held, err := s3obj.Enter(t.Context(), b)
 	if err != nil {
 		t.Fatal(err)
@@ -475,25 +524,16 @@ func TestTheGateLetsItsWaitersOutFirstComeFirstServed(t *testing.T) {
 // [s3obj.ThrottleQuiet] without a throttle the gate is lifted — and not a
 // moment before — a request sent then is sent freely, and a throttle heard
 // after that engages the gate again at once.
+//
+// THE LAZY LIFT, which every attempt entering or leaving asks: the clock's
+// lift timer is never fired here, so the gate is lifted by an attempt alone.
 func TestAThrottledClientIsLetGoOnceTheBucketIsQuiet(t *testing.T) {
 	t.Parallel()
 	srv := s3fake.Start(t, "files")
 	srv.Put("k", []byte("an object"))
-	var (
-		mu  sync.Mutex
-		now = time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)
-	)
-	clock := func() time.Time {
-		mu.Lock()
-		defer mu.Unlock()
-		return now
-	}
-	advance := func(d time.Duration) {
-		mu.Lock()
-		defer mu.Unlock()
-		now = now.Add(d)
-	}
-	b := openRetrying(t, srv, "", clock)
+	clock := newStoppedClock()
+	advance := clock.Advance
+	b := openRetrying(t, srv, "", clock.Clock())
 	head := func(what string, sent int64) {
 		t.Helper()
 		before := srv.Requests()
@@ -529,6 +569,111 @@ func TestAThrottledClientIsLetGoOnceTheBucketIsQuiet(t *testing.T) {
 	if out := s3obj.LetOut(b, 10); out == 10 {
 		t.Fatal("a throttle heard after the gate was lifted did not slow the client again")
 	}
+}
+
+// A THROTTLED GATE LIFTS WHEN ITS MINUTE ENDS, WITH NOTHING SENT. A gate lifted
+// only as an attempt entered or left it stayed engaged past
+// [s3obj.ThrottleQuiet] whenever every place it had was held by attempts that
+// had stopped answering — a part a bucket took the connection of and stopped
+// reading, a read whose headers never came — and its waiters, the node's
+// closed loops, waited until their own deadlines for a lift nothing triggered.
+// The first throttle sets ONE timer for the minute, which lifts the gate with
+// its one place still held and lets its waiter out; and a throttle heard while
+// that timer runs moves the minute on, so the timer, firing, finds the bucket
+// not yet quiet, sets itself again for what is left, and only then lifts.
+func TestAThrottledGateLiftsWhenItsMinuteEndsWithNothingSent(t *testing.T) {
+	t.Parallel()
+	// cut is a gate of one place, cut by one throttle: the node has had only
+	// its check at open out.
+	cut := func(t *testing.T) (*s3obj.Backend, *stoppedClock) {
+		t.Helper()
+		clock := newStoppedClock()
+		b := openRetrying(t, s3fake.Start(t, "files"), "", clock.Clock())
+		a, err := s3obj.Enter(t.Context(), b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.Leave(slowDown)
+		if out := s3obj.LetOut(b, 10); out != 1 {
+			t.Fatalf("one throttle left the gate letting out %d at once, want 1", out)
+		}
+		return b, clock
+	}
+
+	t.Run("its places held", func(t *testing.T) {
+		t.Parallel()
+		b, clock := cut(t)
+		timers := clock.Timers()
+		if len(timers) != 1 || timers[0].d != s3obj.ThrottleQuiet {
+			t.Fatalf("a throttle set timers %v; want one, for %v", timers, s3obj.ThrottleQuiet)
+		}
+		held, err := s3obj.Enter(t.Context(), b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer held.Leave(nil)
+		let := make(chan s3obj.Attempt, 1)
+		go func() {
+			a, err := s3obj.Enter(t.Context(), b)
+			if err == nil {
+				let <- a
+			}
+		}()
+		for deadline := time.Now().Add(10 * time.Second); s3obj.Waiting(b) != 1; time.Sleep(time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatal("an attempt at a gate whose one place is held never waited in line")
+			}
+		}
+		clock.Advance(s3obj.ThrottleQuiet)
+		timers[0].fire()
+		select {
+		case a := <-let:
+			defer a.Leave(nil)
+		case <-time.After(10 * time.Second):
+			t.Fatalf("the minute after the throttle ended and its timer fired, with the gate's one place "+
+				"held and nothing entering or leaving, and the waiter is still waiting (%d in line)",
+				s3obj.Waiting(b))
+		}
+		if n := s3obj.Waiting(b); n != 0 {
+			t.Fatalf("%d attempts still wait at a lifted gate", n)
+		}
+		if n := len(clock.Timers()); n != 1 {
+			t.Fatalf("a lifted gate set %d timers, want the one", n)
+		}
+	})
+
+	t.Run("a later throttle moves the minute on", func(t *testing.T) {
+		t.Parallel()
+		b, clock := cut(t)
+		clock.Advance(30 * time.Second)
+		a, err := s3obj.Enter(t.Context(), b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.Leave(slowDown)
+		timers := clock.Timers()
+		if len(timers) != 1 {
+			t.Fatalf("a second throttle while the first one's timer runs left %d timers set, want "+
+				"the one: a storm of throttles sets nothing new", len(timers))
+		}
+		clock.Advance(30 * time.Second)
+		timers[0].fire()
+		if out := s3obj.LetOut(b, 10); out == 10 {
+			t.Fatal("the timer lifted the gate a minute after the first throttle, thirty seconds " +
+				"after the second")
+		}
+		timers = clock.Timers()
+		if len(timers) != 2 || timers[1].d != 30*time.Second {
+			t.Fatalf("the timer, firing before the bucket went a minute quiet, set timers %v; want a "+
+				"second, for the thirty seconds left", timers)
+		}
+		clock.Advance(30 * time.Second)
+		timers[1].fire()
+		if out := s3obj.LetOut(b, 10); out != 10 {
+			t.Fatalf("a minute after the last throttle, its timer fired, the gate lets out %d of ten "+
+				"at once; want it lifted", out)
+		}
+	})
 }
 
 // THE BACKOFF IS JITTERED AT ITS CEILING, as below it: a retry waits a random
@@ -572,7 +717,7 @@ func TestARequestItsDeadlineEndsNamesTheBucketsLastAnswer(t *testing.T) {
 	t.Parallel()
 	srv := s3fake.Start(t, "files")
 	srv.Put("k", []byte("an object"))
-	b := openRetrying(t, srv, "", nil)
+	b := openRetrying(t, srv, "", s3obj.Clock{})
 	srv.FailNext(1_000_000, http.StatusInternalServerError, "InternalError")
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
@@ -604,7 +749,7 @@ func TestTheSessionRequestIsNeverHeldByTheGate(t *testing.T) {
 	// EVERY SESSION ALREADY EXPIRED, so every request needs a new one.
 	srv.SessionLife = -time.Minute
 	srv.Put("k", []byte("an object"))
-	b := openRetrying(t, srv, "", nil)
+	b := openRetrying(t, srv, "", s3obj.Clock{})
 	if n := srv.RequestsOf("CreateSession"); n < 1 {
 		t.Fatalf("opening the bucket asked for %d sessions; the SDK does not take it for a directory bucket", n)
 	}
@@ -694,7 +839,7 @@ var sends = []string{"HeadBucket", "HeadObject", "GetObject", "PutObject", "Crea
 // through beside it.
 func TestOnlyTheSessionRequestPassesTheGate(t *testing.T) {
 	t.Parallel()
-	b := openRetrying(t, s3fake.Start(t, "files"), "", nil)
+	b := openRetrying(t, s3fake.Start(t, "files"), "", s3obj.Clock{})
 	cut, err := s3obj.Enter(t.Context(), b)
 	if err != nil {
 		t.Fatal(err)

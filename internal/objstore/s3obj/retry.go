@@ -191,6 +191,13 @@ const throttleShare = 0.7
 // since its last cut, which a lift leaves as it was — and never to less,
 // whether the throttle answers the round's first attempt or the node's one
 // lone HEAD between two bursts.
+//
+// LIFTED BY A TIMER the first throttle arms ([gate.armLocked]), so a gate
+// whose places are all held by attempts that have stopped answering — a part
+// on a bucket that took its connection and stopped reading, a read whose
+// headers never come — is still lifted on time: lifted only when an attempt
+// next entered or left it, it held its waiters until their own deadlines, past
+// the minute this promises.
 const throttleQuiet = time.Minute
 
 // gate is the client's answer to a throttle: how many attempts it lets the
@@ -245,7 +252,11 @@ const throttleQuiet = time.Minute
 // limit, one more attempt for every limit's worth of them — TCP's additive
 // increase, so a fleet sharing one prefix converges on shares of its rate
 // rather than taking turns at it. A server error or a failure to send moves
-// it neither way. LIFTED after [throttleQuiet] without a throttle.
+// it neither way. LIFTED after [throttleQuiet] without a throttle, by a timer
+// the first throttle arms, so a gate whose places are all held by attempts
+// that have stopped answering is still lifted on time — lifted only when an
+// attempt next entered or left, it held its waiters until their own
+// deadlines.
 //
 // A MIDDLEWARE ROUND EACH ATTEMPT, never the retryer's attempt token: the
 // SDK asks the retryer for a token at every attempt and, under
@@ -280,9 +291,10 @@ const throttleQuiet = time.Minute
 // overtaken by one that arrived later, so no request starves behind a stream
 // of newer ones until its deadline.
 type gate struct {
-	// now is the clock the quiet minute is measured on: time.Now, or a
-	// case's own.
-	now func() time.Time
+	// now is the clock the quiet minute is measured on, and after the timer
+	// that ends it ([clock]): the wall clock's, or a case's own.
+	now   func() time.Time
+	after func(d time.Duration, f func())
 
 	mu sync.Mutex
 	// limit is how many attempts are let out at once — its whole part,
@@ -303,6 +315,10 @@ type gate struct {
 	cuts uint64
 	// heard is when the bucket last throttled an attempt.
 	heard time.Time
+	// armed is whether the timer that lifts the gate is set: ONE at a time,
+	// set by the throttle that engages the gate and set again only by its
+	// own firing ([gate.wake]), so a storm of throttles arms nothing new.
+	armed bool
 	// queue is the attempts waiting for a place, first come first.
 	queue []chan pass
 }
@@ -311,7 +327,7 @@ type gate struct {
 // under.
 type pass struct{ cuts uint64 }
 
-func newGate(now func() time.Time) *gate { return &gate{now: now} }
+func newGate(c clock) *gate { return &gate{now: c.now, after: c.after} }
 
 // enter waits, under ctx, for the gate to let an attempt out.
 func (g *gate) enter(ctx context.Context) (pass, error) {
@@ -359,6 +375,7 @@ func (g *gate) leave(p pass, err error) {
 			g.width = g.limit
 			g.cuts++
 		}
+		g.armLocked()
 	case answered(err) && g.limit > 0:
 		g.limit += 1 / g.limit
 	}
@@ -379,11 +396,37 @@ func (g *gate) takeLocked() pass {
 
 // liftLocked lifts a limit the bucket has gone [throttleQuiet] without
 // throttling, letting out everyone waiting.
+//
+// IDEMPOTENT, and asked whenever an attempt enters or leaves as well as when
+// the lift timer fires: the timer is what guarantees the minute, never the
+// only path to it.
 func (g *gate) liftLocked() {
 	if g.limit > 0 && g.now().Sub(g.heard) >= throttleQuiet {
 		g.limit = 0
 		g.letOutLocked()
 	}
+}
+
+// armLocked sets the timer that lifts an engaged gate when the minute after
+// the bucket's last throttle ends — unless one is already set, which will
+// find a later throttle and set itself again for what is left ([gate.wake]).
+func (g *gate) armLocked() {
+	if g.armed || g.limit == 0 {
+		return
+	}
+	g.armed = true
+	g.after(throttleQuiet-g.now().Sub(g.heard), g.wake)
+}
+
+// wake is the lift timer firing: it lifts the gate if the bucket has gone the
+// minute without a throttle, and otherwise — a later throttle moved the
+// minute on — sets itself again for what is left of it.
+func (g *gate) wake() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.armed = false
+	g.liftLocked()
+	g.armLocked()
 }
 
 // letOutLocked lets the attempts waiting out, first come first, for as many
