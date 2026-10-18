@@ -4,6 +4,13 @@
 // completion and abandonment; and a paged listing of the uploads begun and
 // not finished — over one bucket, path-style.
 //
+// It enforces what S3 itself enforces on a put and what the boot probe and a
+// presigned upload rely on: an `x-amz-checksum-sha256` the body does not hash
+// to is refused BadDigest, and `If-None-Match: *` on a key it holds is refused
+// 412. [Server.IgnoreChecksums] and [Server.IgnoreConditionalPuts] make it a
+// provider that silently does neither, and [Server.AllowOnly] a credential
+// scoped to one prefix, which may not ask about the bucket itself.
+//
 // It checks no signature and keeps no versions; it exists so the S3 backend
 // runs the object store's conformance suite on a test machine with no network
 // and no credentials, against the wire format the SDK actually speaks.
@@ -18,6 +25,8 @@
 package s3fake
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -51,6 +60,16 @@ type Server struct {
 	failPart int32
 	// undated is the keys whose listings leave the date out.
 	undated map[string]bool
+
+	// ignoreChecksums and ignoreConditional make the bucket a provider that
+	// stores whatever it is sent, whatever the checksum or the condition
+	// says; allowOnly, when set, is the one prefix the credential reaches.
+	ignoreChecksums   bool
+	ignoreConditional bool
+	allowOnly         string
+
+	// putHeaders is the headers of the last plain put of each key.
+	putHeaders map[string]http.Header
 }
 
 type object struct {
@@ -60,6 +79,9 @@ type object struct {
 	// parts is how many parts the object was assembled from, zero for one
 	// stored by a single put.
 	parts int
+	// checksum is the base64 SHA-256 the put carried and the bucket
+	// checked, empty where it carried none.
+	checksum string
 }
 
 type upload struct {
@@ -134,6 +156,67 @@ func (s *Server) stamp(key string, t time.Time) string {
 	return t.Format("2006-01-02T15:04:05.000Z")
 }
 
+// IgnoreChecksums makes the bucket store a put whatever its
+// x-amz-checksum-sha256 says, as a provider that does not check one does.
+func (s *Server) IgnoreChecksums() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ignoreChecksums = true
+}
+
+// IgnoreConditionalPuts makes the bucket overwrite a key whatever the put's
+// If-None-Match says, as a provider without conditional writes does.
+func (s *Server) IgnoreConditionalPuts() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ignoreConditional = true
+}
+
+// AllowOnly makes the credential reach only keys under prefix: every request
+// for another key, and every request about the bucket itself (a HeadBucket, a
+// listing outside the prefix), is refused AccessDenied, as an identity scoped
+// to one company's prefix is.
+func (s *Server) AllowOnly(prefix string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.allowOnly = prefix
+}
+
+// PutHeaders is the headers of the last single put of key, nil for one never
+// put that way.
+func (s *Server) PutHeaders(key string) http.Header {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.putHeaders[key].Clone()
+}
+
+// Checksum is the base64 SHA-256 the bucket checked key's put against, empty
+// where the put carried none.
+func (s *Server) Checksum(key string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.objects[key].checksum
+}
+
+// denied reports a request the credential does not reach. The caller does
+// not hold mu.
+func (s *Server) denied(key string, q map[string][]string) bool {
+	s.mu.Lock()
+	prefix := s.allowOnly
+	s.mu.Unlock()
+	if prefix == "" {
+		return false
+	}
+	if key != "" {
+		return !strings.HasPrefix(key, prefix)
+	}
+	// A BUCKET-LEVEL REQUEST: a listing confined to the prefix is a
+	// right such a credential has; anything else about the bucket is not.
+	listed := first(q["prefix"])
+	return !(first(q["list-type"]) == "2" || len(q["uploads"]) > 0) ||
+		!strings.HasPrefix(listed, prefix)
+}
+
 // Parts is how many parts key was assembled from: zero for an object stored
 // by one put, or one the bucket does not hold.
 func (s *Server) Parts(key string) int {
@@ -158,6 +241,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
+	if s.denied(key, q) {
+		s.fail(w, r, http.StatusForbidden, "AccessDenied")
+		return
+	}
 	switch {
 	case key == "" && r.Method == http.MethodHead:
 		w.WriteHeader(http.StatusOK)
@@ -179,17 +266,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.abortUpload(w, r, q.Get("uploadId"))
 
 	case r.Method == http.MethodPut:
-		data, err := io.ReadAll(r.Body)
-		if err != nil {
-			s.fail(w, r, http.StatusBadRequest, "IncompleteBody")
-			return
-		}
-		s.mu.Lock()
-		s.objects[key] = object{data: data, modified: now(),
-			contentType: r.Header.Get("Content-Type")}
-		s.mu.Unlock()
-		w.Header().Set("ETag", etag(data))
-		w.WriteHeader(http.StatusOK)
+		s.put(w, r, key)
 	case r.Method == http.MethodGet || r.Method == http.MethodHead:
 		s.get(w, r, key)
 	case r.Method == http.MethodDelete:
@@ -200,6 +277,41 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.fail(w, r, http.StatusNotImplemented, "NotImplemented")
 	}
+}
+
+// put stores a single put's body, refusing it as S3 does where its checksum
+// does not match the body or its If-None-Match condition finds the key held.
+func (s *Server) put(w http.ResponseWriter, r *http.Request, key string) {
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		s.fail(w, r, http.StatusBadRequest, "IncompleteBody")
+		return
+	}
+	declared := r.Header.Get("X-Amz-Checksum-Sha256")
+	sum := sha256.Sum256(data)
+	actual := base64.StdEncoding.EncodeToString(sum[:])
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if declared != "" && declared != actual && !s.ignoreChecksums {
+		s.fail(w, r, http.StatusBadRequest, "BadDigest")
+		return
+	}
+	if _, held := s.objects[key]; held && r.Header.Get("If-None-Match") == "*" && !s.ignoreConditional {
+		s.fail(w, r, http.StatusPreconditionFailed, "PreconditionFailed")
+		return
+	}
+	checked := ""
+	if declared != "" && !s.ignoreChecksums {
+		checked = declared
+	}
+	s.objects[key] = object{data: data, modified: now(),
+		contentType: r.Header.Get("Content-Type"), checksum: checked}
+	if s.putHeaders == nil {
+		s.putHeaders = map[string]http.Header{}
+	}
+	s.putHeaders[key] = r.Header.Clone()
+	w.Header().Set("ETag", etag(data))
+	w.WriteHeader(http.StatusOK)
 }
 
 // get answers an object, or the range of it a Range header asks for — and
@@ -222,6 +334,10 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request, key string) {
 		}
 		body, status = obj.data[start:end], http.StatusPartialContent
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end-1, len(obj.data)))
+	}
+	if obj.checksum != "" && r.Header.Get("X-Amz-Checksum-Mode") == "ENABLED" && status == http.StatusOK {
+		w.Header().Set("X-Amz-Checksum-Sha256", obj.checksum)
+		w.Header().Set("X-Amz-Checksum-Type", "FULL_OBJECT")
 	}
 	w.Header().Set("Last-Modified", obj.modified.Format(http.TimeFormat))
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
