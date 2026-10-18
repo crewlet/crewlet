@@ -1400,17 +1400,21 @@ func (g *gate) pipe(in net.Conn, target string) {
 	<-done
 }
 
-// testCeiling is the reservation every case here opens the bucket with: a
-// gibibyte, the smallest store.objects.nats_max_bytes accepts, and far more
-// than any case stores.
-const testCeiling = 1 << 30
+// testCeiling is the reservation every case here opens the bucket with:
+// eight mebibytes, thirty times the largest object any case stores (the
+// suite's two pieces and a tail), and small enough that a test machine's
+// brokers, which reserve against three quarters of its free disk, grant one
+// to every case running at once. The engine never derives one this small
+// (store.objects.nats_max_bytes takes a gibibyte at least); the package
+// itself takes any positive reservation.
+const testCeiling = 8 << 20
 
 // A BUCKET IS CREATED HOLDING ITS RESERVATION, and the ceiling Usage reports
 // is the one the broker enforces.
 func TestABucketIsCreatedHoldingItsReservation(t *testing.T) {
 	t.Parallel()
 	c := memberClient(t)
-	b, err := natsobj.Open(t.Context(), c, natsobj.Config{MaxBytes: 3 << 30, Replicas: 1})
+	b, err := natsobj.Open(t.Context(), c, natsobj.Config{MaxBytes: 3 * testCeiling, Replicas: 1})
 	if err != nil {
 		t.Fatalf("open the bucket: %v", err)
 	}
@@ -1418,15 +1422,15 @@ func TestABucketIsCreatedHoldingItsReservation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := stream.CachedInfo().Config.MaxBytes; got != 3<<30 {
-		t.Fatalf("the bucket was created with a ceiling of %d, want the 3 GiB reservation", got)
+	if got := stream.CachedInfo().Config.MaxBytes; got != 3*testCeiling {
+		t.Fatalf("the bucket was created with a ceiling of %d, want the %d reservation", got, 3*testCeiling)
 	}
 	usage, err := b.Usage(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if usage.MaxBytes != 3<<30 || usage.Bytes != 0 {
-		t.Fatalf("an empty bucket reports %+v, want nothing stored against 3 GiB", usage)
+	if usage.MaxBytes != 3*testCeiling || usage.Bytes != 0 {
+		t.Fatalf("an empty bucket reports %+v, want nothing stored against its reservation", usage)
 	}
 }
 
@@ -1459,7 +1463,7 @@ func TestABucketThatHoldsNoCeilingIsRefused(t *testing.T) {
 	if err == nil {
 		t.Fatal("a bucket holding no ceiling was opened")
 	}
-	for _, want := range []string{"nats stream update " + natsobj.Stream, "--max-bytes=1073741824"} {
+	for _, want := range []string{"nats stream update " + natsobj.Stream, fmt.Sprintf("--max-bytes=%d", testCeiling)} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal %q does not name %q", err, want)
 		}
@@ -1475,10 +1479,10 @@ func TestABucketThatHoldsNoCeilingIsRefused(t *testing.T) {
 func TestABucketThatExistsKeepsItsCeiling(t *testing.T) {
 	t.Parallel()
 	c := memberClient(t)
-	if _, err := natsobj.Open(t.Context(), c, natsobj.Config{MaxBytes: 2 << 30, Replicas: 1}); err != nil {
+	if _, err := natsobj.Open(t.Context(), c, natsobj.Config{MaxBytes: 2 * testCeiling, Replicas: 1}); err != nil {
 		t.Fatal(err)
 	}
-	b, err := natsobj.Open(t.Context(), c, natsobj.Config{MaxBytes: 5 << 30, Explicit: true, Replicas: 1})
+	b, err := natsobj.Open(t.Context(), c, natsobj.Config{MaxBytes: 5 * testCeiling, Explicit: true, Replicas: 1})
 	if err != nil {
 		t.Fatalf("a bucket at another ceiling was refused: %v", err)
 	}
@@ -1486,8 +1490,8 @@ func TestABucketThatExistsKeepsItsCeiling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if usage.MaxBytes != 2<<30 {
-		t.Fatalf("the bucket reports a ceiling of %d, want the 2 GiB it was created with", usage.MaxBytes)
+	if usage.MaxBytes != 2*testCeiling {
+		t.Fatalf("the bucket reports a ceiling of %d, want the %d it was created with", usage.MaxBytes, 2*testCeiling)
 	}
 }
 
