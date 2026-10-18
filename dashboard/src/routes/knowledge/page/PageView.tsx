@@ -467,7 +467,6 @@ export function PageView({ id }: { id: string }) {
                     pageID={page.id}
                     title={page.title}
                     comments={data.comments ?? []}
-                    who={who}
                     now={now}
                   />
                   <Connections

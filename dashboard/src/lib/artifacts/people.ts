@@ -20,7 +20,7 @@ import {
   type SheetPerson,
 } from "@crewlethq/ui";
 import type { ArtifactAudience, ArtifactPresenceMember, OrgProjection } from "~/protocol/index.ts";
-import { indexOrg, type OrgIndex, type Seat, type Unit } from "../seats.ts";
+import { indexOrg, principalOfSeat, type OrgIndex, type Unit } from "../seats.ts";
 import { useOrg } from "../store-hooks.ts";
 import { plural } from "../format.ts";
 
@@ -39,22 +39,6 @@ export interface ArtifactPeople {
   unitPrincipal: (key: string) => Principal;
   /** Every seat as a person cell offers it. */
   sheetPeople: SheetPerson[];
-}
-
-/** A seat as a principal. A seat the chart does not hold keeps its handle and is drawn as an agent, the kit's default. */
-export function principalOfSeat(seat: Seat | undefined, handle: string): Principal {
-  if (!seat) return { id: handle, kind: "agent", name: handle, detail: handle };
-  const out: Principal = {
-    id: seat.handle,
-    kind: seat.kind === "human" ? "person" : "agent",
-    name: seat.name,
-    detail: seat.unit ? seat.unit.name : seat.handle,
-  };
-  if (seat.kind === "agent" && seat.avatar) {
-    out.character = seat.avatar.character as Principal["character"];
-    if (isNodeHue(seat.avatar.color)) out.hue = seat.avatar.color;
-  }
-  return out;
 }
 
 /** A unit as a principal: everybody in it and below it. */

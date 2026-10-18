@@ -45,7 +45,7 @@
  */
 
 import { useMemo } from "react";
-import type { AvatarStatus } from "@crewlethq/ui";
+import { isNodeHue, type AvatarStatus, type Principal } from "@crewlethq/ui";
 import { avatarOf, type AgentAvatar } from "./avatar.ts";
 import { parseUTC, plural } from "./format.ts";
 import { useLeadScope } from "./leadScope.ts";
@@ -195,6 +195,22 @@ export interface OrgIndex {
   byHandle: Map<string, Seat>;
   /** The FIRST seat with each name. */
   byName: Map<string, Seat>;
+}
+
+/** A seat as a principal. A seat the chart does not hold keeps its handle and is drawn as an agent, the kit's default. */
+export function principalOfSeat(seat: Seat | undefined, handle: string): Principal {
+  if (!seat) return { id: handle, kind: "agent", name: handle, detail: handle };
+  const out: Principal = {
+    id: seat.handle,
+    kind: seat.kind === "human" ? "person" : "agent",
+    name: seat.name,
+    detail: seat.unit ? seat.unit.name : seat.handle,
+  };
+  if (seat.kind === "agent" && seat.avatar) {
+    out.character = seat.avatar.character as Principal["character"];
+    if (isNodeHue(seat.avatar.color)) out.hue = seat.avatar.color;
+  }
+  return out;
 }
 
 /**
