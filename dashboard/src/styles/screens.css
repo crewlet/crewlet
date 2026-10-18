@@ -10490,3 +10490,44 @@ a.live-row:focus-visible {
   align-items: center;
   gap: var(--spacing-2);
 }
+
+/* The History tab's comparison of two versions: across both columns, the two
+   sides next to each other where the page is wide and one above the other on
+   a phone. */
+.artifact-compare-row {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.artifact-compare {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+.artifact-compare-sides {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-4);
+}
+@container page (width < 860px) {
+  .artifact-compare-sides {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.artifact-compare-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.artifact-compare-heading {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+.artifact-compare-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}

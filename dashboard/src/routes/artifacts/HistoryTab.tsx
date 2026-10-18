@@ -10,9 +10,14 @@
  *
  * DATA IS LIVE AND IS NOT VERSIONED WITH THE PAGE: every version shows
  * today's data, which the Data tab's history records cell by cell.
+ *
+ * COMPARING IS ADDRESSED: the version a reader compares the picked one with is
+ * `against=` and the way they compare is `lens=`, so a link to a comparison
+ * opens it ([VersionCompare]).
  */
 
 import { useMemo, useState } from "react";
+import { useParam } from "~/app/router.tsx";
 import {
   Button,
   FormField,
@@ -38,6 +43,15 @@ import { labelVersion, restoreVersion } from "~/lib/artifacts/api.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
 import { CAPABILITY_WORDS, actorName, historyWords } from "~/lib/artifacts/words.ts";
+import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
+import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
+import type { PresenceReport } from "./presence.ts";
+import {
+  COMPARE_LENSES,
+  VersionCompare,
+  drawnSideBySide,
+  type CompareLens,
+} from "./VersionCompare.tsx";
 
 export function HistoryTab({
   detail,
@@ -46,6 +60,9 @@ export function HistoryTab({
   versionsRefusal,
   showing,
   onShow,
+  room,
+  presence,
+  bridgeStores,
 }: {
   detail: ArtifactDetail;
   versions: ArtifactVersionSummary[];
@@ -53,6 +70,9 @@ export function HistoryTab({
   versionsRefusal: QueryRefusal | LogRefusal | null;
   showing: number;
   onShow: (version: number) => void;
+  room: ArtifactRoom;
+  presence: PresenceReport;
+  bridgeStores: Set<ArtifactDataStore>;
 }) {
   const people = useArtifactPeople();
   const now = useNow();
@@ -62,6 +82,20 @@ export function HistoryTab({
   const publish = useArtifactAccess({ app: true, role: "editor", held: detail.role });
   const update = useArtifactAccess({ role: "editor", held: detail.role });
   const restore = useKeyedGesture();
+  const [againstParam, setAgainst] = useParam("against", "");
+  const [lensParam, setLens] = useParam("lens", "source", "section");
+  const lens: CompareLens = (COMPARE_LENSES as readonly string[]).includes(lensParam)
+    ? (lensParam as CompareLens)
+    : "source";
+  // A VERSION TO COMPARE WITH is one this artifact still keeps and not the one
+  // picked; anything else in the address compares nothing.
+  const againstAsked = Number(againstParam);
+  const against =
+    Number.isInteger(againstAsked) &&
+    againstAsked !== picked &&
+    versions.some((v) => v.number === againstAsked)
+      ? againstAsked
+      : undefined;
 
   const items: VersionItem[] = useMemo(
     () =>
@@ -102,6 +136,8 @@ export function HistoryTab({
           latest={detail.head_number}
           selected={picked}
           onSelect={setPicked}
+          {...(against !== undefined ? { against } : {})}
+          onCompare={(n: number | null) => setAgainst(n === null ? "" : String(n))}
           oldestKept={Number.isFinite(oldest) ? oldest : undefined}
           now={now}
           {...(publish.can
@@ -144,6 +180,21 @@ export function HistoryTab({
         {!publish.can && <p className="artifact-note">{publish.reason}</p>}
         <ChangeRecord detail={detail} />
       </div>
+      {against !== undefined && (
+        <div className="artifact-compare-row">
+          <VersionCompare
+            detail={detail}
+            picked={picked}
+            against={against}
+            lens={drawnSideBySide(detail.kind) ? lens : "source"}
+            onLens={setLens}
+            versions={versions}
+            room={room}
+            presence={presence}
+            bridgeStores={bridgeStores}
+          />
+        </div>
+      )}
       <LabelDialog
         detail={detail}
         version={labelling}

@@ -120,6 +120,14 @@ holds a file.
 **Rolling back is publishing.** Restoring version 7 publishes a new head whose
 manifest is version 7's, every entry carried. History is never rewritten.
 
+**Any two kept versions compare.** The dashboard's History tab compares the
+version picked with another (its address carries `against=` and `lens=`, so a
+link opens the same comparison): by files, every file added, removed or
+changed (by digest, so a carried file is never a change) and a changed text
+file line by line; or side by side, a page in two frames or a document
+rendered twice. Both sides of a page show today's data, which is not versioned
+with it.
+
 **Retention is bounded twice.** An artifact keeps its newest 100 unlabelled
 versions and every labelled one (at most 100 labels); a publish past that
 prunes the oldest unlabelled version in the same record. A trashed artifact is

@@ -338,8 +338,8 @@ function Loaded({
       />
       {detail.elevated && (
         <Callout variant="info" title="You can open this because you are an administrator">
-          The engine recorded that you opened it, and its owner and editors can see that in its
-          history.
+          The engine recorded that you opened it: its owner and editors see that in its history, and
+          every administrator sees it on the company's audit trail.
         </Callout>
       )}
       {room.state.kind === "refused" && room.state.code !== "not_found" && (
@@ -402,6 +402,9 @@ function Loaded({
               setVersion(n === detail.head_number ? "" : String(n));
               setTab("view");
             }}
+            room={room}
+            presence={presence}
+            bridgeStores={bridgeStores}
           />
         )}
         {tab === "settings" && <SettingsTab detail={detail} onChanged={refetch} />}
