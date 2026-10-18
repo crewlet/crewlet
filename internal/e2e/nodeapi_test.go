@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
@@ -31,10 +32,11 @@ import (
 // goroutine. A fleet member is built on a goroutine of its own and may have to
 // be torn down before the test ends, so it calls [wireAPI] directly.
 func serveAPI(
-	t *testing.T, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options),
+	t *testing.T, e *engine.Engine, boot *config.Bootstrap, chatLive *stream.ChatHub,
+	amend func(*api.Options),
 ) (*api.App, *httptest.Server) {
 	t.Helper()
-	app, srv, stops, err := wireAPI(t.Context(), e, boot, amend)
+	app, srv, stops, err := wireAPI(t.Context(), e, boot, chatLive, amend)
 	// REGISTERED BEFORE THE ERROR IS RAISED, so a wiring that failed halfway
 	// still stops the half that came up.
 	t.Cleanup(func() { stopInReverse(stops) })
@@ -101,8 +103,15 @@ func serveAPI(
 // file byte routes are IN too, served by the human write surface, because a
 // file's bytes crossing between members is something only a fleet here can
 // exercise.
+//
+// chatLive IS THE HUB THE NODE'S BOOT ATTACHED to its engine ([newEngine]),
+// and the socket is mounted over it, as `crewlet run` hands its own to
+// serveAPI. It is the process's rather than this surface's — built beside the
+// engine on a node that serves no API as well — so it is neither built nor
+// stopped here: its teardown is the engine's half, after this one.
 func wireAPI(
-	ctx context.Context, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options),
+	ctx context.Context, e *engine.Engine, boot *config.Bootstrap,
+	chatLive *stream.ChatHub, amend func(*api.Options),
 ) (*api.App, *httptest.Server, []func(), error) {
 	var stops []func()
 	fail := func(what string, err error) (*api.App, *httptest.Server, []func(), error) {
@@ -218,20 +227,13 @@ func wireAPI(
 		stops = append(stops, func() { humans.SignIn.Stop(context.WithoutCancel(ctx)) })
 	}
 
-	// THE PROCESS'S CHAT HUB, through the constructor `crewlet run` attaches
-	// it with — started, attached to the engine, and stopped after the app
-	// and its listener, which the reversed teardown does: it is the first
-	// entry below the human surfaces' and so stops after every later one.
-	chatLive := api.NewEngineChatLive(ctx, e)
-	stops = append(stops, func() { chatLive.Stop(context.WithoutCancel(ctx)) })
-
 	opts := api.Options{
 		Bootstrap:    boot,
 		SeatBindings: auth.SeatBindings{Directory: e, Chart: engine.SeatViewOf(e)},
 		Runtime:      runtime,
 		Inbox:        e,
 		Credentials:  e,
-		ChatLive:     chatLive.Hub(),
+		ChatLive:     chatLive,
 		QueueBackend: backends.Queue.Backend(),
 		Sources: queries.Sources{
 			// THE ENGINE'S OWN fleet reader, as cmd/crewlet wires it, so
