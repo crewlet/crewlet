@@ -164,7 +164,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
@@ -560,45 +559,53 @@ func operationKey(w http.ResponseWriter, r *http.Request) (string, bool) {
 }
 
 // keyedOp is the operation id of one write this surface makes ITSELF — a
-// remark's edit, a purge — derived from the request's key, its verb,
-// the object it is about and WHAT THE REQUEST ASKS of it.
+// remark's edit, a purge, a file's bytes, a room's erase or prune — derived
+// from the request's key, its verb, the object it is about and WHAT THE
+// REQUEST ASKS of it. It answers false once it has written the failure.
 //
-// The verb and the object are in the identity, so the one key covers every
-// record a request writes without two of them collapsing into one; the verb is
-// the id's name, so a reader of the ledger finds it by what it did; and the id
-// carries the KEY'S OWN INSTANT, so the ledger vouches for a retry of it
-// exactly as long as it vouches for the key. It was `rank-<task>-<key>` and the
-// like, which carried no instant at all — see [operationKey] for what that
-// answered once the ledger had swept.
+// THROUGH [statelog.KeyedOpID], the one rule every write made under a
+// caller's key derives by — the knowledge base's and chat's stores derive
+// theirs through it from the same `Idempotency-Key` — which states why each
+// part is in it: the verb and the object, so the one key covers every record
+// a request writes without two of them collapsing into one; the arguments, so
+// the same key sent with another request — a remark rewritten again, a purge
+// for another reason — is an operation of its own, never the first one's
+// answered `applied` from the ledger with nothing of it written; and the
+// KEY'S OWN INSTANT, so the ledger vouches for a retry exactly as long as it
+// vouches for the key. This surface spelled that rule a second time once,
+// under a namespace of its own, and read the instant without asking whether
+// the key carried one — so a key that carried none derived an id minted at the
+// epoch, which a ledger that ever swept a row answers `unknown` on every
+// attempt. Nothing needs the namespace: the verb is in the identity, and an id
+// is answered only by the operation ledger of the log it is published on
+// ([statelog.Domain]'s OpsTable) — the tracker's or chat's, where nothing else
+// derives by this rule under any of these verbs: the tracker's tools derive
+// under a namespace of their own, and chat's store names its gestures
+// otherwise. The knowledge base's store derives under `comment-edit` too, for
+// a page's remark, on a log and a ledger of its own.
 //
-// # The request's arguments are in the operation
+// # The error is a FAULT
 //
-// Because the ledger answers an operation it already holds BEFORE the write is
-// decided ([statelog.Result.Collapsed]), an id named by the verb and the object
-// alone made the same key sent with another request — a remark rewritten
-// again, a purge for another reason — the FIRST request's operation:
-// answered `applied` from the ledger, with nothing of the second written. That
-// is a change reported as made and silently dropped, the one answer a retry
-// key must never produce. With the arguments in the identity the same request
-// is the same operation, which is what a retry is, and any other request under
-// the key is an operation of its own that lands as asked — the rule the tools
-// behind the other routes already derive by ([builtin] puts a digest of a
-// call's arguments in every id it derives from a key), so the two halves of
-// this surface cannot answer one key two ways.
-//
-// The verb is a NAME, so it never holds a dot, which in the grammar begins a
-// gesture's step ([statelog.StepOpID]).
-func keyedOp(key, verb, object string, args map[string]any) string {
-	at, _ := statelog.OpMintedAt(key)
-	return statelog.DeriveOpID(at, verb, keyedOpNamespace, key, verb, object,
-		turnctx.ArgsDigest(args))
-}
+// [statelog.KeyedOpID] refuses a key that carries no instant, a verb that is
+// not a name and arguments that will not encode — and none of the three is the
+// caller's to fix: [operationKey] admits or mints only a key the grammar
+// minted, the verbs are constants here, and the arguments are what a body
+// decoded to or a value this surface built. So it is `500 internal_error` with
+// its words to the log, as every fault here is ([readFailed]), and it is
+// answered BEFORE the write: an id the ledger could never vouch for is never
+// published.
+func keyedOp(w http.ResponseWriter, r *http.Request, key, verb, object string,
+	asks map[string]any) (string, bool) {
 
-// keyedOpNamespace keeps [keyedOp]'s ids apart from every other derivation
-// over the same key — builtin's for the tool-backed routes, the knowledge
-// base's own inside it. FIXED for the life of the format: a new one would make
-// a retry that straddles the change a second write.
-const keyedOpNamespace = "crewlet.workapi"
+	opID, err := statelog.KeyedOpID(key, verb, object, asks)
+	if err != nil {
+		log.ErrorContext(r.Context(), "api_work_operation_underivable",
+			"verb", verb, "object", object, "error", err.Error())
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+		return "", false
+	}
+	return opID, true
+}
 
 // seed puts the request's operation key on a work actor, with the instant it
 // was minted at, for a gesture this surface makes without a tool.

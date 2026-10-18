@@ -366,10 +366,12 @@ func (s *served) patchItemComment(w http.ResponseWriter, r *http.Request) {
 		Kind: worklet.ChangeCommentEdited, Before: detail.Task, After: detail.Task,
 		Comment: &edited, Mentions: edited.Mentions,
 	}.Notify(s.Work.Leads)
-	result, err := s.Tracker(actor).EditComment(r.Context(),
-		keyedOp(key, "comment-edit", cid, args), detail.Task.ID, detail.Task.Project,
-		cid,
-		body, notify)
+	opID, ok := keyedOp(w, r, key, "comment-edit", cid, args)
+	if !ok {
+		return
+	}
+	result, err := s.Tracker(actor).EditComment(r.Context(), opID, detail.Task.ID,
+		detail.Task.Project, cid, body, notify)
 	operator.AuditGesture(r.Context(), s.audit, types.TransportWork,
 		string(authz.ActionWorkCommentEdit), key, result.Outcome, result.Position, err)
 	if err != nil {
@@ -447,9 +449,12 @@ func (s *served) postPurge(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	result, err := s.Tracker(actor).PurgeTask(r.Context(),
-		keyedOp(key, "purge", detail.Task.ID, purgeArgs(confirm, reason)),
-		detail.Task.ID, detail.Task.Project, reason)
+	opID, ok := keyedOp(w, r, key, "purge", detail.Task.ID, purgeArgs(confirm, reason))
+	if !ok {
+		return
+	}
+	result, err := s.Tracker(actor).PurgeTask(r.Context(), opID, detail.Task.ID,
+		detail.Task.Project, reason)
 	operator.AuditGesture(r.Context(), s.audit, types.TransportWork,
 		string(authz.ActionWorkPurge), key, result.Outcome, result.Position, err)
 	if err != nil {
