@@ -301,10 +301,11 @@ type ChatWriter interface {
 // query and refuses a query naming none ([search.ErrNoViewer]). Which rooms
 // those are is resolved from the viewer by [opChatSearch], beside it, on the
 // same node — and so is whether the index has caught up with the transcript
-// ([search.ChatIndexer.Ready]), which is a fact about that node's walk.
+// ([search.ChatIndexer.Ready]), which is a fact about that node's index and
+// that node's copy.
 type ChatSearcher interface {
 	SearchMessages(ctx context.Context, q search.ChatQuery) ([]search.ChatHit, error)
-	Ready() bool
+	Ready(ctx context.Context) (bool, error)
 }
 
 // Backend is one data node's answer to every operation, over its copy of the
@@ -1899,13 +1900,18 @@ type ChatSearchAnswer struct {
 // caught up meanwhile leaves hits drawn from the part it had reached, which
 // only the ask before can see. Either one alone answers "caught up" for a
 // list that was not.
+//
+// A READINESS THIS NODE COULD NOT READ IS BUILDING. The field promises "these
+// hits may not cover every message"; a node that could not tell cannot make
+// the opposite promise, and failing the search over it would answer a seat
+// with a broken tool where hits it can show exist.
 var opChatSearch = define("chat.search", opRead, chatDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q ChatQuery) (ChatSearchAnswer, error) {
 		if b.Chat == nil || b.ChatSearch == nil {
 			return ChatSearchAnswer{}, errNoHalf
 		}
 		at := b.Chat.At()
-		ready := b.ChatSearch.Ready()
+		ready := chatIndexReady(ctx, b.ChatSearch)
 		readable, err := b.Chat.Readable(ctx, q.Viewer, q.Fresh)
 		if err != nil {
 			return ChatSearchAnswer{}, err
@@ -1929,7 +1935,7 @@ var opChatSearch = define("chat.search", opRead, chatDomain, false,
 		if err != nil {
 			return ChatSearchAnswer{}, err
 		}
-		out.Building = !ready || !b.ChatSearch.Ready()
+		out.Building = !ready || !chatIndexReady(ctx, b.ChatSearch)
 		if hits != nil {
 			out.Hits = hits
 		}
@@ -1941,6 +1947,20 @@ var opChatSearch = define("chat.search", opRead, chatDomain, false,
 		}
 		return out, nil
 	})
+
+// chatIndexReady is whether this node's chat index holds its whole transcript,
+// with a read that failed taken as not — see [opChatSearch] — and said in the
+// log, since the answer then carries no reason of its own.
+func chatIndexReady(ctx context.Context, index ChatSearcher) bool {
+	ready, err := index.Ready(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "chat_index_readiness_unread", "error", err.Error(),
+			"detail", "a chat search was answered as building because this node "+
+				"could not tell whether its index covers the transcript")
+		return false
+	}
+	return ready
+}
 
 type chatCreateChannelArgs struct {
 	Actor   chatlet.Actor

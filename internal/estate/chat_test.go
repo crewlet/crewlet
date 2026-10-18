@@ -58,8 +58,9 @@ type chatDesk struct {
 
 	// building is an index whose walk has not caught up; flips turns it
 	// over while a search runs, as a rebuild asked for or a walk catching
-	// up would.
+	// up would; readyErr is a readiness the node could not read.
 	building, flips bool
+	readyErr        error
 
 	// at is the copy's applied position, written the position every write
 	// reports, and unvouched answers every write `unknown`, unvouched by
@@ -164,10 +165,10 @@ func (d *chatDesk) SearchMessages(_ context.Context, q search.ChatQuery) ([]sear
 	return hits, nil
 }
 
-func (d *chatDesk) Ready() bool {
+func (d *chatDesk) Ready(context.Context) (bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return !d.building
+	return !d.building, d.readyErr
 }
 
 // wrote records one write and answers it.
@@ -812,6 +813,30 @@ func TestAChatSearchIsBuildingUnlessItsIndexWasReadyThroughout(t *testing.T) {
 					"want its hits marked as drawn from a building index", got)
 			}
 		})
+	}
+}
+
+// A READINESS THE NODE COULD NOT READ IS BUILDING, never caught up and never a
+// failed search.
+//
+// The flag promises "these hits may not cover every message", and a node that
+// could not tell cannot promise the opposite — while failing the search over it
+// would answer a seat with a broken tool where there are hits it can show.
+func TestAChatSearchWhoseReadinessIsUnreadIsBuilding(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a")
+	desk := withRooms(f)["data-a"]
+	desk.mu.Lock()
+	desk.readable["jane"] = []chatlet.ReadableRoom{{ID: "room-1", Kind: chatlet.KindPublic}}
+	desk.readyErr = errors.New("the node estate is not open")
+	desk.mu.Unlock()
+	got, err := f.client.ChatSearch().Search(t.Context(), ChatQuery{Viewer: "jane", Text: "deploy"})
+	if err != nil {
+		t.Fatalf("a search whose index's readiness could not be read failed: %v", err)
+	}
+	if !got.Building || len(got.Hits) != 1 {
+		t.Errorf("a search whose index's readiness could not be read answered %+v, "+
+			"want its hits marked as drawn from a building index", got)
 	}
 }
 
