@@ -333,6 +333,29 @@ func TestArtifactsPublishInfersTheKindFromTheEntry(t *testing.T) {
 	}
 }
 
+// A DECK IS TOLD APART BY ITS INDEX'S PATH, not its type: a directory holding
+// `deck.json` and its slides creates slides opening on the index, while a
+// JSON file anywhere else infers no kind at all.
+func TestArtifactsPublishInfersADeckFromItsIndex(t *testing.T) {
+	t.Parallel()
+	node := newFakeArtifactsNode(t)
+	dir := writeTree(t, map[string]string{
+		"deck.json":         `{"title":"Plan","order":["cover"]}`,
+		"slides/cover.html": `<section id="cover" style="background:#ffffff"><h1>Plan</h1></section>`,
+	})
+	if _, stderr, err := cli(t, "artifacts", "publish", dir, bootstrapForURL(t, node.server.URL)); err != nil {
+		t.Fatalf("publish: %v\n%s", err, stderr)
+	}
+	if create := node.creates[0]; create["kind"] != string(artifacts.KindSlides) || create["entry"] != "deck.json" {
+		t.Errorf("created %v", create)
+	}
+	other := writeTree(t, map[string]string{"data.json": `{}`})
+	if _, _, err := cli(t, "artifacts", "publish", other, bootstrapForURL(t, node.server.URL)); err == nil ||
+		!strings.Contains(err.Error(), "-kind") {
+		t.Errorf("a lone JSON file answered %v", err)
+	}
+}
+
 // TWO DEFAULT ENTRIES ARE THE AUTHOR'S TO CHOOSE BETWEEN: a directory holding
 // both is refused before a byte moves, and -kind settles it.
 func TestArtifactsPublishRefusesTwoCandidateEntries(t *testing.T) {

@@ -705,7 +705,7 @@ func kindFor(asked artifacts.Kind, entry string) (artifacts.Kind, error) {
 	}
 	typ, ok := mediatype.For(entry)
 	if ok {
-		if kind, ok := artifacts.KindFor(typ.Essence()); ok {
+		if kind, ok := artifacts.KindFor(entry, typ.Essence()); ok {
 			return kind, nil
 		}
 	}
