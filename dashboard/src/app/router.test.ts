@@ -406,7 +406,9 @@ describe("the navigation grammar", () => {
       expect(link.label, link.key).toBe(target!.label);
       expect(link.icon, link.key).toBe(target!.icon);
       expect(link.hint, link.key).toBe(target!.hint);
-      expect(link.grants ?? [], link.key).toEqual(target!.grants ?? []);
+      // AND WHAT OPENS IT: the place's own section, or its workspace's row.
+      const owner = sectionOf(link.path) ?? workspaceRow(workspaceOf(link.path));
+      expect(link.grants ?? [], link.key).toEqual(owner?.grants ?? []);
     }
   });
 

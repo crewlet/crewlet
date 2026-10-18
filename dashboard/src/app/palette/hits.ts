@@ -11,8 +11,8 @@
  */
 
 import type { GlyphName } from "@crewlethq/icons/glyphs";
-import { DESTINATIONS, WORKSPACES } from "../nav.ts";
-import { accessNames, holdsAny, type Grant } from "~/lib/access.ts";
+import { DESTINATIONS, WORKSPACES, closedBy, guardedPath, type Destination } from "../nav.ts";
+import { accessNames } from "~/lib/access.ts";
 import type { Navigator } from "../router.tsx";
 import { resolve } from "../routes.ts";
 import type { Recent } from "~/lib/recents.ts";
@@ -307,20 +307,23 @@ export function destinationHits(
     id: `nav-${d.key}`,
     icon: d.icon,
     label: d.label,
-    hint: lockedHint(d.hint, d.grants, standing),
+    hint: lockedHint(d, standing),
     go: () => nav.to(d.path),
   }));
 }
 
-/** A destination's hint, and what it needs where the reader lacks it. */
-function lockedHint(
-  hint: string,
-  grants: readonly Grant[] | undefined,
-  standing: Standing,
-): string {
-  if (standing === null || !grants || grants.length === 0) return hint;
-  if (standing.anonymous) return `${hint} · needs sign-in`;
-  return holdsAny(standing.grants, grants) ? hint : `${hint} · needs ${accessNames(grants)} access`;
+/**
+ * A destination's hint, and what it needs where the reader lacks it — read
+ * off its ADDRESS by the navigation's own rule ([closedBy]): the workspace's
+ * permissions first, since a reader who cannot open Chat cannot open its
+ * Mentions, then the section's. The lock a press here would meet is the one
+ * the frame draws, in the same words.
+ */
+function lockedHint(d: Destination, standing: Standing): string {
+  if (standing === null || !guardedPath(d.path)) return d.hint;
+  if (standing.anonymous) return `${d.hint} · needs sign-in`;
+  const closed = closedBy(d.path, standing.grants);
+  return closed ? `${d.hint} · needs ${accessNames(closed.needs)} access` : d.hint;
 }
 
 /**

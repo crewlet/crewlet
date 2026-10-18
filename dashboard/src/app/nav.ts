@@ -998,6 +998,13 @@ export const RESERVED_SEGMENTS: string[] = [
  * section moves. A section whose path IS its workspace's landing page is one
  * destination under the workspace's name, and a cross-link (Settings' Budgets
  * row) is the destination of the workspace that owns the address.
+ *
+ * IT CARRIES NO GRANTS: what closes one is its ADDRESS's, decided by
+ * [closedBy] — the workspace's permissions first, then the section's — the
+ * rule the frame's refusal and the sidebar's locks read. A section's own
+ * list said nothing of the workspace around it, so every section of Work,
+ * My work and Chat was offered with no lock to a reader its workspace was
+ * closed to, and the press opened onto the refusal.
  */
 export interface Destination {
   key: string;
@@ -1011,8 +1018,6 @@ export interface Destination {
    * own for its landing, the section's for a section ([Section.keywords]).
    */
   keywords?: readonly string[];
-  /** What opens it, as [Section.grants]. */
-  grants?: readonly Grant[];
 }
 
 export const DESTINATIONS: Destination[] = WORKSPACES.flatMap((row) => {
@@ -1025,10 +1030,8 @@ export const DESTINATIONS: Destination[] = WORKSPACES.flatMap((row) => {
     path: row.path,
     hint: row.hint,
     // A LANDING PAGE IS ALSO ITS LANDING SECTION, so it is found by that
-    // section's words as well as the workspace's, and locked by that
-    // section's grants where the workspace names none of its own.
+    // section's words as well as the workspace's.
     ...keywordsOf([...(row.keywords ?? []), ...(own?.keywords ?? [])]),
-    ...grantsOf(row.grants ?? own?.grants),
   };
   const sections = row.sections
     .filter((s) => !s.elsewhere && !samePath(s.path, row.path))
@@ -1040,7 +1043,6 @@ export const DESTINATIONS: Destination[] = WORKSPACES.flatMap((row) => {
       path: s.path,
       hint: s.hint,
       ...keywordsOf(s.keywords),
-      ...grantsOf(s.grants),
     }));
   return [landing, ...sections];
 });
