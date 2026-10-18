@@ -254,6 +254,196 @@ func TestAKeyIsReadBackFromItsEnd(t *testing.T) {
 	}
 }
 
+// digitless is a line of a key's body at PEM's width with no digit in it, as
+// about one line of random bytes in fifty thousand is, and a key's last line of
+// forty-odd characters far more often.
+const digitless = "MIIEowIBAAKCAQEAuqSUqLfVLPHCozMxHxMoalgOEePzNmatRgeLezVaffAtagun"
+
+// A LINE OF A KEY'S BODY WITH NO DIGIT IN IT IS READ BACK AS A LINE OF IT, a
+// full line like the rest. Read back, a full line had to carry a digit, and one
+// without was a line interrupting the key — which the one interruption a block
+// may carry between two of its lines was meant to pay for. But printed
+// double-spaced under a reader's line numbers, a grep's context marks or a
+// log's timestamps, every blank line between two lines of the key is already
+// that interruption, and so is a line another process wrote. The line with no
+// digit made a second, the read stopped there, and every line above it was
+// published — a random 1298-byte PKCS#8 body did this in CI — and where no
+// other line of the body was read back, the whole of it was.
+//
+// Mutation: ask a line read back for a digit as well, and each of these but the
+// last publishes a line of the key, two of them all of it; take a line that
+// reads like a key's only as a full line, never as one interrupting it, and
+// the last does.
+func TestAKeysLineWithNoDigitIsReadBackAsALineOfIt(t *testing.T) {
+	m := marker
+	end := "-----END RSA PRIVATE KEY-----"
+	numbered := func(from int, lines ...string) string {
+		var b strings.Builder
+		for i, line := range lines {
+			fmt.Fprintf(&b, "%6d\u2192%s\n", from+i, line)
+		}
+		return b.String()
+	}
+	for name, c := range map[string]keyForm{
+		"read from inside it, double-spaced under line numbers": {
+			numbered(10, keyLine, "", digitless, "", keyLine, "", "u1SU1Lf=", "", end, "next"),
+			"    10\u2192" + m + "\n    19\u2192next\n",
+		},
+		"read from inside it, double-spaced under a grep's context lines": {
+			"a.pem-10-" + keyLine + "\na.pem-11-\na.pem-12-" + digitless + "\na.pem-13-\na.pem-14-" + keyLine +
+				"\na.pem-15-\na.pem-16-u1SU1Lf=\na.pem-17-\na.pem-18-" + end + "\nb.pem:9:other\n",
+			"a.pem-10-" + m + "\nb.pem:9:other\n",
+		},
+		"broken by two lines in a row, the line after them": {
+			"-----BEGIN RSA PRIVATE KEY-----\n" + pemBody(2) + "[worker 3] connected\n[worker 4] connected\n" +
+				digitless + "\n" + keyLine + "\nu1SU1Lf=\n" + end + "\nnext\n",
+			m + "\n[worker 3] connected\n[worker 4] connected\n" + m + "\nnext\n",
+		},
+		"read from inside it, broken by one line beside it": {
+			keyLine + "\n" + foreignLine + "\n" + digitless + "\n" + keyLine + "\nu1SU1Lf=\n" + end + "\nnext\n",
+			m + "\nnext\n",
+		},
+		"read from inside it, its first line": {
+			digitless + "\n" + keyLine + "\n" + keyLine + "\nu1SU1Lf=\n" + end + "\nnext\n",
+			m + "\nnext\n",
+		},
+		// The tail before the END is already full: the line number on
+		// each side of the short last line.
+		"its last full line, double-spaced under line numbers": {
+			numbered(10, keyLine, "", keyLine, "", digitless, "", "u1SU1Lf=", "", end, "next"),
+			"    10\u2192" + m + "\n    19\u2192next\n",
+		},
+		// RSA's traditional encrypted body: 1232 bytes end on a line of 44.
+		"its last line of forty-four, double-spaced under line numbers": {
+			numbered(10, keyLine, "", keyLine, "", digitless[:44], "", end, "next"),
+			"    10\u2192" + m + "\n    17\u2192next\n",
+		},
+		// An EC key's second line opens with twelve characters of its
+		// encoding and no digit, and broken after its first line, its
+		// second and its short last line are all the read back has.
+		"broken by two lines after its first, an EC key's": {
+			"-----BEGIN EC PRIVATE KEY-----\n" + keyLine + "\n[worker 3] connected\n[worker 4] connected\n" +
+				digitless + "\nu1SU1Lf=\n-----END EC PRIVATE KEY-----\nnext\n",
+			m + "\n[worker 3] connected\n[worker 4] connected\n" + m + "\nnext\n",
+		},
+		// A line that reads like a key's may as well be one another
+		// process wrote: here, one on each side of the short last line,
+		// the second at a body's width.
+		"broken on each side of its last line, once at a body's width": {
+			keyLine + "\n" + foreignLine + "\nu1SU1Lf=\n" + digitless + "\n" + end + "\nnext\n",
+			m + "\nnext\n",
+		},
+	} {
+		redactsWhole(t, name, c, keyLine, digitless[:44], "u1SU1Lf=")
+	}
+	// What a key's line has is both cases: base64 at a body's width in one
+	// case before an END is no key.
+	for name, text := range map[string]string{
+		"lines in upper case before an END":  strings.ToUpper(keyLine) + "\n" + strings.ToUpper(keyLine) + "\n" + end + "\n",
+		"lines in lower case, double-spaced": numbered(10, strings.ToLower(keyLine), "", strings.ToLower(keyLine), "", end),
+	} {
+		if got := redact.Secrets(text); got != text {
+			t.Errorf("%s: Secrets =\n%s\nwant it unchanged", name, got)
+		}
+	}
+}
+
+// mixedCasePath is a path as wide as a key's line, in upper and lower case and
+// with no digit: base64's alphabet throughout, and so, read back, a line that
+// reads like a key's.
+const mixedCasePath = "/Users/ExampleUser/Library/Application/Support/Code/User/settings"
+
+// AN END'S OWN LINE IS READ BOTH WAYS, and the block reaches as far back as
+// either reading does. What comes before an END's armour may be the body's last
+// line written up to it, or the wrapping's prefix — a diff's `+` is a line of
+// base64 and a prefix both — and the line does not say which. Read as the short
+// last line, the `+` spends the tail on the END's own line, so a line that
+// reads like a key's written between the key's real last line and its END is
+// taken for the block's one full line and the read stops just above it. Taking
+// whichever reading found a body first published every line above that, which
+// the other reading — the `+` as the diff's prefix — redacts.
+//
+// Mutation: read the END's line as the body's last line first and keep that
+// reading whenever it finds a body, and each case publishes the lines of the
+// key above its last.
+func TestAnEndsOwnLineIsReadBothWays(t *testing.T) {
+	m := marker
+	end := "-----END RSA PRIVATE KEY-----"
+	diff := func(lines ...string) string { return "+" + strings.Join(lines, "\n+") + "\n context\n" }
+	for name, c := range map[string]keyForm{
+		"a diff read from inside a key, a path in mixed case before its END": {
+			diff(keyLine, keyLine, foreignLine, "u1SU1Lf=", mixedCasePath, end),
+			m + "\n context\n",
+		},
+		"a diff read from inside a key, a line of another key's before its END": {
+			diff(keyLine, keyLine, foreignLine, "u1SU1Lf=", sshLine, end),
+			m + "\n context\n",
+		},
+		// A run of base64 before the armour, which may be the body's last
+		// line or a prefix, and a line that reads like a key's above it.
+		"base64 before the armour, a path in mixed case above it": {
+			keyLine + "\n" + keyLine + "\n" + foreignLine + "\nDone\n" + mixedCasePath + "\nu1SU1Lf=" + end + "\nnext\n",
+			m + "\nnext\n",
+		},
+	} {
+		redactsWhole(t, name, c, keyLine)
+	}
+}
+
+// A KEY ALREADY REDACTED READS AS THE ARMOUR IT REPLACED: its marker ends a
+// block read forward or back where the key's own BEGIN or END line did, so a
+// text holding one redacts as the text it was redacted from does — and a
+// second pass over redacted text finds nothing the first left. Read as any
+// other line, the marker let an END after the key read back over it, and a
+// BEGIN before it read on through it, to lines no read of the text it came
+// from had reached.
+//
+// Mutation: drop the marker from [armoured], or from a BEGIN line's search for
+// the next armour on it, and a case here redacts more than the text it was
+// redacted from does.
+func TestARedactedKeyReadsAsTheArmourItReplaced(t *testing.T) {
+	inner := "-----BEGIN PRIVATE KEY-----\n" + keyLine + "\n-----END PRIVATE KEY-----"
+	oneLine := "-----BEGIN PRIVATE KEY----- " + keyLine + " -----END PRIVATE KEY-----"
+	for name, text := range map[string]string{
+		"a path in mixed case before it, an END after it": mixedCasePath + "\n" + inner + "\nu1SU1Lf=-----END RSA PRIVATE KEY-----\n",
+		"a key's line before it, an END after it":         keyLine + "\n" + inner + "\nu1SU1Lf=-----END RSA PRIVATE KEY-----\n",
+		"a BEGIN before it on its line":                   "-----BEGIN RSA PRIVATE KEY----- " + oneLine + "\n" + keyLine + "\n" + keyLine + "\n",
+		"an END after it on its line":                     oneLine + " " + keyLine + " -----END RSA PRIVATE KEY-----\n",
+		"inside a block read forward":                     "-----BEGIN RSA PRIVATE KEY-----\n" + keyLine + "\n" + inner + "\n" + keyLine + "\n" + keyLine + "\n",
+	} {
+		once := redact.Secrets(text)
+		redacted := strings.Replace(strings.Replace(text, inner, marker, 1), oneLine, marker, 1)
+		if got := redact.Secrets(redacted); got != once {
+			t.Errorf("%s, the key redacted beforehand:\n got %q\nwant %q", name, got, once)
+		}
+		if twice := redact.Secrets(once); twice != once {
+			t.Errorf("%s, redacted twice:\n got %q\nwant %q", name, twice, once)
+		}
+	}
+}
+
+// redactsWhole checks that c's text redacts to c's want, with none of pieces
+// left in it, and is shown exactly so when it arrives a byte at a time and in
+// pieces of 9 and 70 bytes ([redact.Settled]).
+func redactsWhole(t *testing.T, name string, c keyForm, pieces ...string) {
+	t.Helper()
+	got := redact.Secrets(c.text)
+	for _, piece := range pieces {
+		if strings.Contains(got, piece) {
+			t.Errorf("%s: key material survived:\n%s", name, got)
+			return
+		}
+	}
+	if got != c.want {
+		t.Errorf("%s:\n got %q\nwant %q", name, got, c.want)
+	}
+	for _, sizes := range [][]int{{1}, {9, 70}} {
+		if shown, _ := settle(c.text, sizes); shown != got {
+			t.Errorf("%s in pieces of %v: shown as it settled\n%q\nwant\n%q", name, sizes, shown, got)
+		}
+	}
+}
+
 // keyForm is one wrapping a key reaches text in, and what the text redacts to.
 type keyForm struct{ text, want string }
 
@@ -926,13 +1116,20 @@ func TestAStreamOfKeyShapedLinesIsHeldOnlyAsFarAsAnEndCouldRead(t *testing.T) {
 
 // A LINE THAT READS LIKE A KEY'S BODY WAITS, because an END written next could
 // read it back — and nothing else does. Read back, base64 at a body's width
-// counts only when it carries upper and lower case letters and digits, as the
-// encoding of random bytes does; the long base64-alphabet runs a coding run
-// prints — an absolute path, a commit's hash — carry no case or no digits, and
-// a live view shows them the moment they are whole.
+// counts only when it carries upper and lower case letters, as the encoding of
+// random bytes does, digit or none; a path in lower case and a commit's hash
+// are in one case, and a live view shows them the moment they are whole. What
+// releases a line that waits is two lines in a row that are no key's with two
+// more after them, whatever those are: a key's line among the last two may yet
+// be read as one interrupting the key, and holds the line before it.
 //
 // Mutation: read any run at a body's width as a key's line back from an END,
-// and the path and the hash wait for four more lines.
+// and the path and the hash wait for four more lines; ask it for a digit as
+// well, and the line with none is shown before an END could still read it back;
+// read a held key's line only as a full one, never as one interrupting a key,
+// and the line two lines before it is shown although an END can still reach it;
+// read on past a key's marker, and the line before it waits for an END that
+// could never reach it.
 func TestOnlyALineThatReadsLikeAKeysBodyWaitsForAnEnd(t *testing.T) {
 	for name, line := range map[string]string{
 		"a long path":     "[tool] Read: /home/user/crewlet/internal/sandbox/codingagent/claudestream.go",
@@ -943,15 +1140,37 @@ func TestOnlyALineThatReadsLikeAKeysBodyWaitsForAnEnd(t *testing.T) {
 			t.Errorf("%s: Settled = %d of %d; want it shown at once", name, got, len(line)+1)
 		}
 	}
-	text := "start\n" + keyLine + "\n"
-	for i, more := range []string{"one\n", "two\n", "three\n"} {
-		text += more
-		if got := redact.Settled(text); got != len("start\n") {
-			t.Errorf("after %d lines: Settled = %d; want the key-shaped line held", i+1, got)
+	for name, line := range map[string]string{"a key's line": keyLine, "a key's line with no digit": digitless} {
+		text := "start\n" + line + "\n"
+		for i, more := range []string{"one\n", "two\n", "three\n"} {
+			text += more
+			if got := redact.Settled(text); got != len("start\n") {
+				t.Errorf("%s, after %d lines: Settled = %d; want it held", name, i+1, got)
+			}
+		}
+		if text += "four\n"; redact.Settled(text) != len(text) {
+			t.Errorf("%s: Settled = %d of %d; want it shown once four lines no key's could follow it", name, redact.Settled(text), len(text))
 		}
 	}
-	if text += "four\n"; redact.Settled(text) != len(text) {
-		t.Errorf("Settled = %d of %d; want it shown once four lines no key's could follow it", redact.Settled(text), len(text))
+	for name, c := range map[string]struct {
+		after []string
+		held  bool
+	}{
+		"two lines, then a key's line":             {[]string{"one", "two", keyLine}, true},
+		"two lines, a key's line, then a line":     {[]string{"one", "two", keyLine, "three"}, false},
+		"a line, a key's line, then three lines":   {[]string{"one", keyLine, "two", "three", "four"}, true},
+		"a line, a key's line, then four lines":    {[]string{"one", keyLine, "two", "three", "four", "five"}, false},
+		"two lines, then a blank and a glue line":  {[]string{"one", "two", "", `" +`}, true},
+		"two lines, then two blank ones, then two": {[]string{"one", "two", "", "", "three", "four"}, false},
+		// No END after another block's armour, or a key already redacted
+		// in its place, reads back past it.
+		"a certificate's END":  {[]string{"-----END CERTIFICATE-----"}, false},
+		"a key redacted after": {[]string{marker}, false},
+	} {
+		text := "start\n" + keyLine + "\n" + strings.Join(c.after, "\n") + "\n"
+		if got := redact.Settled(text); (got == len("start\n")) != c.held {
+			t.Errorf("%s: Settled = %d; want the first key's line held: %v", name, got, c.held)
+		}
 	}
 }
 
