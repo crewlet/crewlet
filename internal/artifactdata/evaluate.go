@@ -477,18 +477,22 @@ func (b *batch) setFields(c *collState, d *docState, op artifacts.DataOp) error 
 		}
 		next[name] = v
 	}
-	// EVERY FIELD WHOSE VALUE THE OP CHANGES IS WRITTEN, a removal
-	// included, and each is held to its column's rules.
+	// EVERY FIELD THE OP NAMES OR REMOVES IS WRITTEN, and each is held to
+	// its column's rules: a write the rules refuse is refused even where it
+	// would leave the value as it is, so whether a write is admitted never
+	// depends on which of two racing writers got there first.
 	for _, name := range unionKeys(d.fields, next) {
 		old, had := d.fields[name]
 		val, has := next[name]
-		if had && has && sameValue(old, val) {
+		changed := !(had && has && sameValue(old, val))
+		_, named := op.Fields[name]
+		if !changed && !named {
 			continue
 		}
-		if err := b.mayWrite(c, d, name, op, creating, had, has); err != nil {
+		if err := b.mayWrite(c, d, name, op, creating, had, has, changed); err != nil {
 			return err
 		}
-		if has {
+		if has && changed {
 			if err := b.checkField(c, name, val); err != nil {
 				return err
 			}
@@ -594,11 +598,12 @@ func (b *batch) fieldOp(c *collState, d *docState, op artifacts.DataOp) error {
 			}
 		}
 	}
-	if had && sameValue(old, next) {
-		return nil
-	}
-	if err := b.mayWrite(c, d, op.Field, op, creating, had, true); err != nil {
+	changed := !had || !sameValue(old, next)
+	if err := b.mayWrite(c, d, op.Field, op, creating, had, true, changed); err != nil {
 		return err
+	}
+	if !changed {
+		return nil
 	}
 	if err := b.checkField(c, op.Field, next); err != nil {
 		return err
@@ -631,10 +636,13 @@ func withElement(field string, old canon.Value, had bool, elem canon.Value, uniq
 	return out, nil
 }
 
-// mayWrite holds one field change to the collection's and the column's rules.
-// had and has say whether the field held a value before and holds one after.
+// mayWrite holds one field write to the collection's and the column's rules.
+// had and has say whether the field held a value before and holds one after,
+// and changed whether the write moves it: who may write a field is asked of
+// every write naming it, and what a value may become only of one that moves
+// it.
 func (b *batch) mayWrite(c *collState, d *docState, field string, op artifacts.DataOp,
-	creating, had, has bool) error {
+	creating, had, has, changed bool) error {
 
 	col, declared := c.columns[field]
 	if !c.schemaless() && !declared {
@@ -672,6 +680,9 @@ func (b *batch) mayWrite(c *collState, d *docState, field string, op artifacts.D
 					"the writer in %s", field, col.AssignedField)
 			}
 		}
+	}
+	if !changed {
+		return nil
 	}
 	if declared && !creating && col.Immutable && had {
 		return refuse(artifacts.DataForbidden, "%s is set when a row is created and never changed", field)
