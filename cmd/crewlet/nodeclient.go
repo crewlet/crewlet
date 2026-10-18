@@ -149,6 +149,19 @@ func (c *nodeClient) post(ctx context.Context, path string, into any) error {
 // takes a gesture's arguments as `{"args": …}` and refuses any other
 // Content-Type.
 func (c *nodeClient) postKeyed(ctx context.Context, path, key string, body, into any) error {
+	return c.sendKeyed(ctx, http.MethodPost, path, key, body, into)
+}
+
+// putKeyed is [nodeClient.postKeyed] for a route that REPLACES a value rather
+// than making a change of its own — a room's horizon.
+func (c *nodeClient) putKeyed(ctx context.Context, path, key string, body, into any) error {
+	return c.sendKeyed(ctx, http.MethodPut, path, key, body, into)
+}
+
+// sendKeyed is one write under an operation key, by method.
+func (c *nodeClient) sendKeyed(ctx context.Context, method, path, key string,
+	body, into any) error {
+
 	header := http.Header{}
 	if key = strings.TrimSpace(key); key != "" {
 		header.Set(opkey.Header, key)
@@ -161,7 +174,7 @@ func (c *nodeClient) postKeyed(ctx context.Context, path, key string, body, into
 		}
 		payload = raw
 	}
-	return c.send(ctx, http.MethodPost, path, header, payload, into)
+	return c.send(ctx, method, path, header, payload, into)
 }
 
 // maxNodeResponseBytes bounds one answer read back from a node.

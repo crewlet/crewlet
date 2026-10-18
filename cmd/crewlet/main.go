@@ -207,6 +207,8 @@ func runIn(environ config.Source, args []string, stdout, stderr io.Writer) error
 		return runFleet(environ, rest, stdout, stderr)
 	case "seats":
 		return runSeats(environ, rest, stdout, stderr)
+	case "chat":
+		return runChat(environ, rest, stdout, stderr)
 	case "llm":
 		return runLLM(environ, rest, os.Stdin, stdout, stderr)
 	case "search":
@@ -244,6 +246,9 @@ Usage:
                               remove a member that is gone for good
   crewlet seats <cmd>         Pause a seat (-stop also ends the turn it is on)
                               or resume it: its holder, its lead, or an admin
+  crewlet chat <cmd>          The company's own chat, as the seat your credential
+                              acts as: list and read rooms, say something, search;
+                              and an admin's erase, prune and room horizon
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet iam <cmd>           People, seats, invitations, permissions,

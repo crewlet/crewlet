@@ -128,6 +128,25 @@ func TestAForbiddenThatNamesNoGrantIsNotReadAsOne(t *testing.T) {
 	}
 }
 
+// A VERB MADE AS A SEAT, REFUSED TO A TOKEN ACTING AS NONE, NAMES THE TWO WAYS
+// PAST IT: no grant would lift it, so its bare reason sent an operator holding
+// admin looking for a permission they already had. Mutation: drop the
+// unseated arm and the refusal reads the bare reason with neither command.
+func TestAnUnseatedRefusalNamesTheTokenAndTheBinding(t *testing.T) {
+	t.Parallel()
+	msg, ok := credentialRefusal(http.StatusForbidden,
+		[]byte(`{"error":"unauthorized","reason":"unseated","grants":[]}`), true)
+	if !ok {
+		t.Fatalf("an unseated refusal was not read as a refusal on authority: %q", msg)
+	}
+	for _, want := range []string{"acts as no seat", "crewlet iam token -login LOGIN",
+		"crewlet iam bind ID SEAT"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("an unseated refusal reads %q, want it to say %q", msg, want)
+		}
+	}
+}
+
 // A 403 IS THE NODE JUDGING A VALID CALLER, NOT A BAD TOKEN. Only a 401 is the
 // credential: a gesture the node refuses for a reason that is not a grant — a
 // seat the chart no longer holds, a tool that forbids the act — answers 403
