@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/schedule"
@@ -106,6 +107,11 @@ type retention struct {
 	// percentiles rather than states. Nil records nothing, which every
 	// condition reads as "nothing to report".
 	metrics *metrics.Recorder
+
+	// objectives is the node's service objective meter, whose burning
+	// objectives the `objective_burn` alarm reads. Nil (a test's retention)
+	// reads as nothing burning.
+	objectives *objectives.Meter
 
 	// volumes identifies the volume a directory is on and measures what it
 	// has free ([measureVolume], nil); a parameter for the tests.
@@ -233,6 +239,7 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		cfg:         boot.Stream.TrackerRetention,
 		backupOwner: boot.Retention.BackupOwner,
 		metrics:     e.metrics,
+		objectives:  e.objectives,
 		claim:       e.workerDuty(retentionDutyName, retentionDutyTTL),
 		nodeID:      s.nodeID,
 		alarms:      statelog.NewTracker(e.metrics, nil),
