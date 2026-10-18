@@ -148,3 +148,12 @@ export const STATE_COLLECTION = "_state";
  * The engine drops the rest, so the viewer coalesces what it says to this.
  */
 export const PRESENCE_FRAMES_PER_SECOND = 10;
+
+/**
+ * The page runtime contract this build serves, `major.minor.patch`: the
+ * directory the runtime is built into (`static/artifacts/runtime/<contract>/`)
+ * and what the bridge tells a page first. A runtime change a page could tell
+ * apart is a new contract, and every older contract a published version pins
+ * stays embedded. Held against the embedded tree by `internal/artifactupload`.
+ */
+export const RUNTIME_CONTRACT = "1.0.0";

@@ -7,7 +7,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && vite build --config vite.protocol.config.ts",
+    "build": "vite build && vite build --config vite.protocol.config.ts && vite build --config vite.runtime.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/owned-tmpdir.mjs vitest run",
     "test:watch": "node scripts/owned-tmpdir.mjs vitest",
@@ -15,9 +15,10 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
-    "@crewlethq/icons": "0.17.0",
-    "@crewlethq/tokens": "0.17.0",
-    "@crewlethq/ui": "0.17.0",
+    "@crewlethq/artifact-kit": "0.18.0",
+    "@crewlethq/icons": "0.18.0",
+    "@crewlethq/tokens": "0.18.0",
+    "@crewlethq/ui": "0.18.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "uqr": "0.1.3"

@@ -309,6 +309,7 @@ var contract = []Entry{
 	{"COLLECTION_NAME_PATTERN", ReadScalar, "internal/api/artifactdataapi.TestTheDashboardNamesCollectionsAndFieldsByTheEnginesGrammar"},
 	{"RESERVED_COLLECTIONS", ReadLiteral, "internal/api/artifactdataapi.TestTheDashboardNamesCollectionsAndFieldsByTheEnginesGrammar"},
 	{"FIELD_NAME_PATTERN", ReadScalar, "internal/api/artifactdataapi.TestTheDashboardNamesCollectionsAndFieldsByTheEnginesGrammar"},
+	{"RUNTIME_CONTRACT", ReadScalar, "internal/artifactupload.TestTheEmbeddedArtifactTreeServesWhatTheDashboardBuilds"},
 }
 
 // Contract is every declaration the engine's gates read out of the
