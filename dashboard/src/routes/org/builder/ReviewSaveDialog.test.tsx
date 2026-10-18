@@ -603,3 +603,63 @@ describe("the review", () => {
     ).toBe(true);
   });
 });
+
+// A SEAT WITH NO CONTACT IDENTITY IS THE ENGINE'S TO WARN ABOUT, and only
+// where it costs something: on a company talking on Mattermost or Slack the
+// check warns at the seat's `contact`, and the review lists that with every
+// other warning. The review used to name every such seat itself, on every
+// company, as one "no agent can mention" — which the engine's own chat makes
+// false, since an agent there mentions a person by their seat. Mutation:
+// draw the old notice again and the first half goes red; drop the warnings
+// section and the second does.
+describe("a human seat with no contact identity", () => {
+  const withPerson = () => {
+    const doc = company();
+    doc.roles!.push({ name: "Founder", handle: "founder", kind: "human", goal: "Run it" });
+    return doc;
+  };
+
+  test("is not called unreachable by the review on its own", async () => {
+    const engine = new Engine(withPerson());
+    const dialog = await reviewEdit(engine);
+    expect(dialog.textContent).not.toMatch(/contact identity|can mention/);
+  });
+
+  test("is listed in the engine's own words where the check warns about it", async () => {
+    const engine = new Engine(withPerson());
+    const advisory =
+      "founder is a human seat with no account on Slack, so nothing addressed to it there reaches anybody.";
+    engine.script = (r, e) =>
+      r.query.get("dry_run") !== "true" ? null : withAdvisory(e.answer(r));
+    const withAdvisory = async (answered: Response) => {
+      const checked = (await answered.json()) as Record<string, unknown>;
+      return json({
+        ...checked,
+        warnings: [
+          {
+            kind: "advisory",
+            ref: "",
+            path: "roles[2].contact",
+            segments: ["roles", 2, "contact"],
+            seat: "founder",
+            unit: "",
+            from: "",
+            to: "",
+            message: advisory,
+          },
+        ],
+      });
+    };
+    mountBuilder({ engine });
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await waitFor(() => expect(engine.checks()).toHaveLength(2));
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
+    const dialog = await screen.findByRole("dialog", { name: "Review and save" });
+    const warnings = within(dialog).getByRole("region", { name: "Warnings" });
+    // IN THE ENGINE'S WORDS, AS THE REVIEW DRAWS EVERY ONE: in sentence
+    // case (`EngineSentence.tsx`), its first word raised.
+    expect(warnings.textContent).toContain(advisory.charAt(0).toUpperCase() + advisory.slice(1));
+  });
+});
