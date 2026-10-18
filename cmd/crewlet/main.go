@@ -264,6 +264,8 @@ func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) 
 		return runSeats(environ, rest, stdout, stderr)
 	case "artifacts":
 		return runArtifacts(environ, rest, stdout, stderr)
+	case "chatlet":
+		return runChatlet(environ, rest, stdout, stderr)
 	case "llm":
 		return runLLM(environ, rest, os.Stdin, stdout, stderr)
 	case "search":
@@ -313,6 +315,9 @@ Usage:
                               or resume it: its holder, its lead, or an admin
   crewlet artifacts <cmd>     List, publish, version, share, trash and purge the
                               company's artifacts, as the token's principal
+  crewlet chatlet <cmd>       The company's own chat, as the seat your credential
+                              acts as: list and read rooms, say something, search;
+                              and an admin's erase, prune and room horizon
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet iam <cmd>           People, seats, invitations, permissions,

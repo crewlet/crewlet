@@ -149,6 +149,19 @@ func (c *nodeClient) post(ctx context.Context, path string, into any) error {
 // takes a gesture's arguments as `{"args": …}` and refuses any other
 // Content-Type.
 func (c *nodeClient) postKeyed(ctx context.Context, path, key string, body, into any) error {
+	return c.sendKeyed(ctx, http.MethodPost, path, key, body, into)
+}
+
+// putKeyed is [nodeClient.postKeyed] for a route that REPLACES a value rather
+// than making a change of its own — a room's horizon.
+func (c *nodeClient) putKeyed(ctx context.Context, path, key string, body, into any) error {
+	return c.sendKeyed(ctx, http.MethodPut, path, key, body, into)
+}
+
+// sendKeyed is one write under an operation key, by method.
+func (c *nodeClient) sendKeyed(ctx context.Context, method, path, key string,
+	body, into any) error {
+
 	header := http.Header{}
 	if key = strings.TrimSpace(key); key != "" {
 		header.Set(opkey.Header, key)
@@ -161,7 +174,7 @@ func (c *nodeClient) postKeyed(ctx context.Context, path, key string, body, into
 		}
 		payload = raw
 	}
-	return c.send(ctx, http.MethodPost, path, header, payload, into)
+	return c.send(ctx, method, path, header, payload, into)
 }
 
 // maxNodeResponseBytes bounds one answer read back from a node.
@@ -368,9 +381,9 @@ type nodeRefusal struct {
 	// through another node (-api), under the same id.
 	Unvouched bool
 
-	// detail and hint are the refusal's own sentences, which the message
-	// carries beneath its first line.
-	detail, hint string
+	// words are the refusal's own sentences, which the message carries
+	// beneath its first line.
+	words refusalWords
 
 	msg string
 }
@@ -378,10 +391,10 @@ type nodeRefusal struct {
 func (e *nodeRefusal) Error() string { return e.msg }
 
 // answered is the refusal as the node's own answer, whatever its status: the
-// status and the code, then the detail and the hint.
+// status and the code, then what the refusal says and the hint.
 func (e *nodeRefusal) answered() string {
 	return fmt.Sprintf("the node answered %d: %s", e.Status,
-		withRefusalDetail(e.Code, e.detail, e.hint))
+		withRefusalDetail(e.Code, e.words))
 }
 
 // asJudgement is the refusal framed as the node's JUDGEMENT of a request — a
@@ -407,9 +420,8 @@ func (e *nodeRefusal) asJudgement() *nodeRefusal {
 // carries none is [notTheNode]'s.
 func nodeError(status int, body []byte, sentToken bool) error {
 	var payload struct {
+		refusalWords
 		Error     string   `json:"error"`
-		Detail    string   `json:"detail"`
-		Hint      string   `json:"hint"`
 		Actions   []string `json:"actions"`
 		OpID      string   `json:"op_id"`
 		Outcome   string   `json:"outcome"`
@@ -422,7 +434,7 @@ func nodeError(status int, body []byte, sentToken bool) error {
 	refusal := &nodeRefusal{Status: status, Code: payload.Error, Actions: payload.Actions,
 		OpID: payload.OpID, Unvouched: payload.Unvouched,
 		Unsettled: payload.Outcome == string(statelog.OutcomeUnknown),
-		detail:    payload.Detail, hint: payload.Hint}
+		words:     payload.refusalWords}
 	switch {
 	case refusal.Unsettled:
 		// NOT A REFUSAL: a write the node could not account for, which
@@ -430,7 +442,7 @@ func nodeError(status int, body []byte, sentToken bool) error {
 		// happened", and the ordinary next move was the same gesture
 		// under a fresh operation id.
 		refusal.msg = "the node could not establish whether this landed: " +
-			withRefusalDetail(payload.Error, payload.Detail, payload.Hint)
+			withRefusalDetail(payload.Error, payload.refusalWords)
 	case status == http.StatusServiceUnavailable:
 		// TWO DIFFERENT FACTS on this surface: a node built without the
 		// backend a route needs, and a node DRAINING for a shutdown. The
@@ -439,7 +451,7 @@ func nodeError(status int, body []byte, sentToken bool) error {
 		// and not what to do about it. (A gate's 503 is neither, and its
 		// command reads it as the judgement it is: [nodeRefusal.asJudgement].)
 		refusal.msg = "this node cannot serve that: " + withRefusalDetail(
-			payload.Error, payload.Detail, payload.Hint)
+			payload.Error, payload.refusalWords)
 	default:
 		refusal.msg = refusal.answered()
 	}

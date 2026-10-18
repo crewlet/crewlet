@@ -224,10 +224,7 @@ func (m selfMint) send(ctx context.Context, method, path string,
 // which this path never sent.
 func selfRefusal(status int, answer map[string]any, raw []byte) error {
 	code, _ := answer["error"].(string)
-	detail, _ := answer["detail"].(string)
-	if detail == "" {
-		detail, _ = answer["message"].(string)
-	}
+	detail := answerWords(answer).said()
 	switch {
 	case code != "" && detail != "":
 		return fmt.Errorf("%s: %s", code, detail)

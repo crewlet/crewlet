@@ -963,10 +963,7 @@ func iamRefusal(status int, contentType string, answer map[string]any, raw []byt
 		return errors.New(msg)
 	}
 	code, _ := answer["error"].(string)
-	detail, _ := answer["detail"].(string)
-	if detail == "" {
-		detail, _ = answer["message"].(string)
-	}
+	detail := answerWords(answer).said()
 	var said string
 	switch {
 	case code != "" && detail != "":
