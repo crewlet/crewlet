@@ -438,7 +438,15 @@ flowchart LR
 - Past 50 members a room shows the 50 most recently active plus counts of
   people and agents, and returns to the full roster below 40.
 - **Agents are present.** An agent reading or writing an artifact appears in
-  its room, so a person sees which agent is editing which row.
+  its room, naming the turn it is working in, so a person sees which agent is
+  editing which row and opens that turn from the room.
+- **The People rail** (opened from the presence stack, `rail=people`) lists
+  everybody here in words, one entry a person however many tabs they have,
+  with what each is doing and where. **Follow** moves the reader to the
+  version, and on a sheet the collection, the followed person has open, under
+  a banner, until the reader scrolls, presses or uses a navigation key in the
+  page, presses Escape, or the followed person leaves; `follow={handle}` in the
+  address starts it, which is how to watch a presenter on a phone.
 - Joining a room is decided like opening the artifact, and decided again on
   every share, unshare, trash, transfer and purge: somebody whose share is
   removed leaves the room at once, on a socket that stays open.

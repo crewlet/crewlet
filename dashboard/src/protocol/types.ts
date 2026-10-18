@@ -5560,6 +5560,8 @@ export interface ArtifactPresenceMember {
   activity: PresenceActivity;
   focus: PresenceFocus;
   at: string;
+  /** For an agent, the run of the turn whose tool call last put it in the room. */
+  turn?: string;
 }
 
 /** Who is in one artifact's room (`artifacts.PresenceRoster`). */
