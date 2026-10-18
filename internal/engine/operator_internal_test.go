@@ -43,8 +43,9 @@ func (peerRooms) Channels(_ context.Context, viewer string, _ chatlet.ChannelsQu
 		Channel: chatlet.Channel{ID: "room-of-" + viewer}}}}, nil
 }
 
-func (peerRooms) Readable(_ context.Context, viewer string, _ statelog.Freshness) ([]string, error) {
-	return []string{"room-of-" + viewer}, nil
+func (peerRooms) Readable(_ context.Context, viewer string,
+	_ statelog.Freshness) ([]chatlet.ReadableRoom, error) {
+	return []chatlet.ReadableRoom{{ID: "room-of-" + viewer, Kind: chatlet.KindPublic}}, nil
 }
 
 func (peerRooms) At() statelog.Position { return statelog.Position{} }

@@ -35,7 +35,8 @@ import (
 //     create adds what its body states, and a call on the act route, a
 //     rewrite, a destruction or a question shows its body and its query as
 //     sent, since what it does to what is there is its route's or its
-//     tool's, titled by its action ([describe]).
+//     tool's, titled by its action ([describe]); a call a curated write
+//     makes is that write's to propose ([curatedCall]).
 //  4. The rows are the fields that move and nothing else: a structural diff,
 //     a list of records matched by the identity each carries (a seat's
 //     handle, a unit's id) so one new seat is one added member with its
@@ -156,7 +157,7 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 	// call's to correct whether or not the route would take the body.
 	address, _ := pathValues(args["path"])
 	removals, removalErr := removalCheck(route, req.Method, before, changed, address,
-		Args(args).Strings("removes"), lowerFirst(callTitle(Args(args))))
+		Args(args).Strings(RemovesArgument), lowerFirst(callTitle(Args(args))))
 	if removalErr != nil {
 		return proposal.Preview{}, removalErr
 	}

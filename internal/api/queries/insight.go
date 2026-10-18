@@ -517,8 +517,8 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 }
 
 // searchTextRefusal is the `bad_params` refusal of a phrase past
-// [knowledge.MaxQueryBytes], the bound both ranked searches share on every
-// surface, or nil.
+// [knowledge.MaxQueryBytes], the bound every ranked search shares on every
+// surface — `knowledge`, `work_search` and `chat_search` — or nil.
 //
 // REFUSED, NOT CUT, and refused HERE rather than left to the search: the
 // fan-out refuses it too, but the knowledge search is best effort and would

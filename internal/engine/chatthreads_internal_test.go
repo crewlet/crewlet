@@ -61,7 +61,8 @@ func (*threadAnswerer) Mentions(context.Context, string, chatlet.MentionQuery,
 	return chatlet.MentionFeed{}, errors.New("only the thread is read here")
 }
 
-func (*threadAnswerer) Readable(context.Context, string, statelog.Freshness) ([]string, error) {
+func (*threadAnswerer) Readable(context.Context, string,
+	statelog.Freshness) ([]chatlet.ReadableRoom, error) {
 	return nil, errors.New("only the thread is read here")
 }
 

@@ -54,24 +54,26 @@ says what the change does in plain words, read from the resource as it is now
 and what the change makes of it: "Add seat Technical Writer", "Remove seat QA
 Engineer", "Adopt version 4 of the brand kit", with one row per field that
 moves, each named by the seat or unit it belongs to ("Technical Writer ›
-Goal"). A route that acts rather than writes a resource (a purge, a restore,
-a move) is titled by what it does, as the route itself declares it: "Purge
-item ENG-4", "Restore page Runbook", with everything the request sends as its
-rows, a prune's cutoff included. A record is named by what people call it, read
-with the person's own access where its address says nothing a person reads (a
-page by its title), and in plain words ("the page") where that read is not
-theirs, never by an internal id. A change that deletes something, destroys it
-for good, removes a member such as a seat, or removes fields is marked
-destructive: the card says what goes and whether the configuration history can
-revert it. Nothing undoes a purge, erasing or pruning a chat room's messages,
-or a room's horizon, so each of their cards leads with what goes, read from
-what the change sends (how many messages an erase takes, the instant a prune
-cuts at, how long the room keeps what it holds), and says it cannot be undone;
-keeping a room's messages for ever loses nothing, and is not marked
-destructive. A change that calls
-one of the tools the dashboard's own controls send (a reaction in chat, say)
-is shown as that call: titled by the tool ("React to message"), with the
-arguments it sends. The exact request, its body with secrets
+Goal"). A route that acts rather than writes a resource (a purge, a restore, a
+move) is titled by what it does, as the route itself declares it: "Purge item
+ENG-4", "Restore page Runbook", with everything the request sends as its rows,
+a prune's cutoff included. A record is named by what people call it, read with
+the person's own access where its address says nothing a person reads (a page
+by its title, a chat room by its name), and in plain words ("the page") where
+that read is not theirs, never by an internal id. A change that deletes
+something, destroys it for good, removes a member such as a seat, or removes
+fields is marked destructive: the card says what goes and whether the
+configuration history can revert it. Nothing undoes a purge, erasing or pruning
+a chat room's messages, or a room's horizon, so each of their cards leads with
+what goes, read from what the change sends, and says it cannot be undone:
+"Erase 2 messages from #general", "Delete what #general said before 1 January
+2031", "Keep #general's messages for 7 days". Keeping a room's messages for
+ever loses nothing, and is not marked destructive. A change that calls one of
+the tools the dashboard's own controls send (a reaction in chat, say) is shown
+as that call: titled by the tool ("React to message"), with the arguments it
+sends. A call one of the dedicated tools below makes is prepared with that tool
+instead, whose card reads what it changes. The exact request,
+its body with secrets
 masked, is under **Technical details** for an administrator; everybody else
 reviews the rows, which are built from the same request. A change prepared against
 a resource that has moved since is refused rather than overwritten. Before any
@@ -103,6 +105,7 @@ offered only to a person who could make the same change on its screen:
 | Write a page, edit a page | People holding Doclet | Doclet's own write |
 | Share an artifact, withdraw a share | The artifact's owner | The artifact's sharing, with the audience named on the card; a share to the whole company asks the person to confirm it is them |
 | Pause or resume an agent, steer a running turn, answer a coding run | Whoever may do it on the seat's screen | The operator control the screen sends |
+| Post in a chat room, reply in a thread, send a direct message, edit or delete a message, change a room's topic, purpose or archive, change who is in a room, leave a room | People holding Chatlet | Chat's own write, as the person: the card names the room and who will read it, a membership change shows who joins and who leaves and takes out only the people the assistant names, deleting a message or taking somebody out of a room (yourself included) is marked destructive with what goes at the top, and a change made meanwhile to the room's settings or members, or to the message, makes the proposal stale (**Prepare it again**); a message said in the room does not |
 | Change the company's mission, vision or standing policies | Administrators | `PUT /config/charter`, the route Company › Principles saves through: the card shows a word diff of the mission and vision and one row per policy, the approval asks the administrator to confirm it is them when their sign-in is not recent, and a change made to the principles meanwhile makes the proposal stale (**Prepare it again**) |
 | Set or remove one token ceiling: a seat's or the company's, for a day, a week or a month | Administrators | The write Company › Budgets saves: the seat as read with only that window's ceiling changed (`PUT /config/roles/{handle}`), or a merge patch of the company's one window (`PATCH /config`). The card shows one row, the ceiling now and the new one, the history line and the route's warnings; the approval asks the administrator to confirm it is them when their sign-in is not recent, and a change to the configuration meanwhile makes the proposal stale. A lead changing a seat they lead goes through the generic change or Budgets itself |
 

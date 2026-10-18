@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -231,8 +230,9 @@ type ChatReader interface {
 	// rooms it is in. It is no operation of its own: it is the
 	// authorization half of a search ([opChatSearch]), resolved on the node
 	// that holds the index the search reads, so the set and the hits are
-	// one copy's answer.
-	Readable(ctx context.Context, viewer string, fresh statelog.Freshness) ([]string, error)
+	// one copy's answer, and so are the names the hits are shown under.
+	Readable(ctx context.Context, viewer string,
+		fresh statelog.Freshness) ([]chatlet.ReadableRoom, error)
 
 	// At is this copy's applied position on the chat log.
 	At() statelog.Position
@@ -1827,6 +1827,16 @@ type ChatSearchAnswer struct {
 	// Hits is what matched, best first. Never nil.
 	Hits []search.ChatHit
 
+	// Rooms are the rooms the hits were said in, by id, each with the name
+	// and kind a hit in it is shown under ([chatlet.ReadableRoom]), as a
+	// mention carries its room's ([chatlet.Mention]): "#launch" rather than an
+	// id nobody reads, and a direct conversation, which has no name, by its
+	// kind. FROM THE SEARCH'S OWN VISIBLE SET ([ChatReader.Readable]), read
+	// in the transaction that admitted each room, never from a read beside
+	// it, so a hit is shown under the name of the room the search was
+	// allowed to read.
+	Rooms map[string]chatlet.ReadableRoom
+
 	// Searched is how many rooms the search covered — zero for a viewer
 	// who may read none, which is an answer rather than a refusal.
 	Searched int
@@ -1878,15 +1888,16 @@ var opChatSearch = define("chat.search", opRead, chatDomain, false,
 		}
 		at := b.Chat.At()
 		ready := b.ChatSearch.Ready()
-		visible, err := b.Chat.Readable(ctx, q.Viewer, q.Fresh)
+		readable, err := b.Chat.Readable(ctx, q.Viewer, q.Fresh)
 		if err != nil {
 			return ChatSearchAnswer{}, err
 		}
-		if q.Channel != "" {
-			if slices.Contains(visible, q.Channel) {
-				visible = []string{q.Channel}
-			} else {
-				visible = nil
+		rooms := make(map[string]chatlet.ReadableRoom, len(readable))
+		visible := make([]string, 0, len(readable))
+		for _, room := range readable {
+			if q.Channel == "" || room.ID == q.Channel {
+				rooms[room.ID] = room
+				visible = append(visible, room.ID)
 			}
 		}
 		out := ChatSearchAnswer{Hits: []search.ChatHit{}, Searched: len(visible),
@@ -1903,6 +1914,12 @@ var opChatSearch = define("chat.search", opRead, chatDomain, false,
 		out.Building = !ready || !b.ChatSearch.Ready()
 		if hits != nil {
 			out.Hits = hits
+		}
+		for _, hit := range hits {
+			if out.Rooms == nil {
+				out.Rooms = make(map[string]chatlet.ReadableRoom)
+			}
+			out.Rooms[hit.ChannelID] = rooms[hit.ChannelID]
 		}
 		return out, nil
 	})

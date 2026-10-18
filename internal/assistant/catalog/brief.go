@@ -216,13 +216,19 @@ func ParseBrief(args map[string]any) (BriefDraft, error) {
 	return d, nil
 }
 
-// refusedFor is one refusal naming every fault found, in the order found.
-func refusedFor(found []error) error {
+// refusedFor is one refusal naming every fault found, in the order found, and
+// after them, once each, the sentences that say how to fix them (a
+// directory's choices, which several of its faults may share).
+func refusedFor(found []error, notes ...string) error {
 	reasons := make([]string, 0, len(found))
 	for _, err := range found {
 		reasons = append(reasons, err.Error())
 	}
-	return fmt.Errorf("%w: %s", ErrInvalidArguments, strings.Join(reasons, "; "))
+	refusal := strings.Join(reasons, "; ")
+	if len(notes) > 0 {
+		refusal += ". " + strings.Join(notes, " ")
+	}
+	return fmt.Errorf("%w: %s", ErrInvalidArguments, refusal)
 }
 
 // briefLine holds one of a brief's lines, as written, to one plain line, and

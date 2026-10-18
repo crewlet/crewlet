@@ -2237,7 +2237,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, err
 	}
-	workSource, pageSource, backlinkSource, searchSource, fileSource := api.NativeSources(e)
 	// THE ARTIFACTS: their routes and their read questions, each deciding
 	// through the one admission they share, over the estate router so a
 	// node whose own copy is out of service answers through a peer's.
@@ -2428,38 +2427,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// it registered on every node is the other half of the same
 			// protocol, and a node serving no API may be the owner.
 			SandboxTail: sandboxTails(e),
-			// WORKLET AND DOCLET through the
-			// estate router, exactly as a seat's tools reach them
-			// (engine.OperatorWork), so an operator and an agent looking
-			// at one item see one item: answered from this node's copy
-			// while it serves and from another data node's while it does
-			// not.
-			//
-			// RESOLVED PER QUESTION, never captured here: the native
-			// halves come up with the node's first company — at an
-			// apply, on a node that booted with none — and a value read
-			// once here was nothing for the life of such a process. A
-			// question on a node that has not met its company answers
-			// `503 no_active_revision`, and one about a half the company
-			// keeps elsewhere (Jira, Confluence) is the question this
-			// node does not have. See [api.NativeSources].
-			Work:  workSource,
-			Pages: pageSource,
-			// A PROJECT'S FILES, the rows only — resolved per question
-			// for the same reason: the bytes stream from the human write
-			// surface's routes, which read them through this node's
-			// object client.
-			Files: fileSource,
-			// WHO LINKS TO A PAGE, from this node's lexical index, which
-			// derives the links from the bodies it already reads —
-			// resolved per question for the same reason, since the
-			// index is the native half's.
-			Backlinks: backlinkSource,
-			// RANKED SEARCH, gated on its own index rather than on
-			// the tracker: the rows are the fleet's and the lexical
-			// index is this node's own, so a node still building one
-			// answers every board question and cannot rank a word.
-			WorkSearch: searchSource,
 			// WHAT THIS NODE CAN SAY ABOUT THE LOG'S OWN HISTORY —
 			// how far each domain may be trimmed, what is stopping
 			// it, and what this node costs to replace. Assembled per
@@ -2602,6 +2569,16 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// AND THE SOCKET'S ARTIFACT ROOMS, decided by that same admission and
 	// fed by this engine's appliers and presence hub.
 	opts.Rooms = artifactRooms
+	// WORKLET, DOCLET AND CHATLET through the
+	// estate router, exactly as a seat's tools reach them, and RESOLVED
+	// PER QUESTION: the native halves come up with the node's first
+	// company — at an apply, on a node that booted with none — so a value
+	// read once here was nothing for the life of such a process. A question
+	// on a node that has not met its company answers `503
+	// no_active_revision`, and one about a half the company keeps
+	// elsewhere is the question this node does not have. See
+	// [api.NativeSources], which sets every one of them or none.
+	api.NativeSources(e).Into(&opts.Sources)
 	app, err := api.New(opts) //nolint:contextcheck // see the paragraph above the options
 	if err == nil {
 		err = assistantSvc.bindRoutes(app)

@@ -152,6 +152,32 @@ func TestAChannelNameAndItsTokenAgreeAcrossSpelling(t *testing.T) {
 	}
 }
 
+// A ROOM IS NAMED AS PEOPLE WRITE IT, OR BY ITS ID.
+//
+// Every surface that takes a room as typed reads it by one rule
+// ([chatlet.RoomRef]): an id is the id, and anything else is the room's name, its
+// '#' and its capitals not part of it, so "#Launch" and "launch" address one
+// room. A reference naming nothing is neither. Mutation: keep the '#', keep
+// the capitals, or read an id as a name, and a case here fails.
+func TestARoomIsNamedAsPeopleWriteItOrByItsID(t *testing.T) {
+	t.Parallel()
+	id := uuid.NewString()
+	for _, c := range []struct{ ref, id, name string }{
+		{id, id, ""},
+		{" " + strings.ToUpper(id) + " ", id, ""},
+		{"#launch", "", "launch"},
+		{"  #Launch ", "", "launch"},
+		{"launch", "", "launch"},
+		{"#", "", ""},
+		{"   ", "", ""},
+	} {
+		if gotID, gotName := chatlet.RoomRef(c.ref); gotID != c.id || gotName != c.name {
+			t.Errorf("RoomRef(%q) = (%q, %q), want (%q, %q)", c.ref, gotID, gotName,
+				c.id, c.name)
+		}
+	}
+}
+
 // PROSE IS NOT A BROKER PATH, AND THE SUBJECT REFUSES IT.
 //
 // A subject is a path the broker parses: a dot separates the kind from the id,

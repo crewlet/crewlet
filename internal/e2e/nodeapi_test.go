@@ -270,7 +270,6 @@ func wireAPI(
 		stops = append(stops, func() { humans.SignIn.Stop(context.WithoutCancel(ctx)) })
 	}
 
-	workSource, pageSource, backlinkSource, searchSource, fileSource := api.NativeSources(e)
 	opts := api.Options{
 		Bootstrap:    boot,
 		SeatBindings: auth.SeatBindings{Directory: e, Chart: engine.SeatViewOf(e)},
@@ -311,10 +310,6 @@ func wireAPI(
 			// THE FLEET'S TOKEN COUNTERS, which the `budgets` question
 			// and every seat's live meter read.
 			Budget: backends.Fleet,
-			// AND THE NATIVE HALVES, per question, as cmd/crewlet hands
-			// them.
-			Work: workSource, Pages: pageSource, Backlinks: backlinkSource,
-			WorkSearch: searchSource, Files: fileSource,
 		},
 		Config:    configSurface,
 		Secrets:   secretSurface,
@@ -358,6 +353,9 @@ func wireAPI(
 	// THE SAME HAND-OVER cmd/crewlet makes, which is the one place an
 	// absent surface stays absent rather than being mounted over a nil.
 	humans.Mount(&opts)
+	// AND THE NATIVE HALVES, per question, as cmd/crewlet hands them —
+	// through the one constructor, which sets every one or none.
+	api.NativeSources(e).Into(&opts.Sources)
 	if amend != nil {
 		amend(&opts)
 	}

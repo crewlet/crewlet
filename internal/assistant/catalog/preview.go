@@ -101,6 +101,14 @@ var previews = map[string]func(t Tool) proposal.Previewer{
 	"update_company_principles": principlesPreview,
 	"unshare_artifact":          sharePreview(false),
 	"propose_page_change":       pageActionPreview,
+	"post_chat_message":         chatPostPreview,
+	"reply_in_chat_thread":      chatReplyPreview,
+	"send_direct_message":       chatDirectPreview,
+	"edit_chat_message":         chatEditPreview,
+	"delete_chat_message":       chatDeletePreview,
+	"update_chat_room":          chatRoomPreview,
+	"set_chat_room_members":     chatMembersPreview,
+	"leave_chat_room":           chatLeavePreview,
 }
 
 // withHome is args with arg named: as the call names it, else the person's own
@@ -342,6 +350,16 @@ func (c company) seatName(handle string) string {
 		return seat.name
 	}
 	return seat.name + " (" + handle + ")"
+}
+
+// entries are the chart's seats as a refusal lists them ([choices]), in handle
+// order.
+func (c company) entries() []Entry {
+	out := make([]Entry, 0, len(c.seats))
+	for _, handle := range slices.Sorted(maps.Keys(c.seats)) {
+		out = append(out, Entry{Key: handle, Name: c.seats[handle].name})
+	}
+	return out
 }
 
 // handover is the note a task handed to handle carries: what happens to the
@@ -599,17 +617,19 @@ func inboxPreview(t Tool) proposal.Previewer {
 }
 
 const (
-	// inboxNamed is how many notices of one list a mark_inbox card names
-	// one by one before it says how many more: enough to see what a short
-	// list clears, short enough that a card stays readable.
-	inboxNamed = 10
+	// listNamed is how many members of one list a card names one by one
+	// before it says how many more (the notices a mark_inbox card clears,
+	// the people who read a chat room): enough to see what a short list
+	// holds, short enough that a card stays readable.
+	listNamed = 10
 	// inboxPage and inboxPages bound the reads a mark_inbox preview makes
 	// to find the notices it names: the inbox route's own largest page, at
 	// most five times, which covers the two hundred ids a list may carry.
 	inboxPage  = 200
 	inboxPages = 5
-	// noticeNameBytes bounds one notice's name on the card.
-	noticeNameBytes = 160
+	// cardLineBytes bounds one line a card quotes from what somebody wrote:
+	// a notice's name, the chat message a reply answers.
+	cardLineBytes = 160
 )
 
 // noticeNames reads the person's inbox through the grant until every id in
@@ -656,16 +676,16 @@ func noticeName(n any) string {
 	case says == "":
 		name = about
 	}
-	return textcut.Within(orDefault(name, "A notice"), noticeNameBytes)
+	return textcut.Within(orDefault(name, "A notice"), cardLineBytes)
 }
 
 // notices adds one row per notice of ids, named where the inbox read found it
 // and said to be missing where it did not, then how many more past
-// [inboxNamed].
+// [listNamed].
 func (c *changes) notices(field, label string, ids []string, names map[string]string) {
 	for i, id := range ids {
-		if i == inboxNamed {
-			c.fact(field+".more", label, fmt.Sprintf("And %d more", len(ids)-inboxNamed))
+		if i == listNamed {
+			c.fact(field+".more", label, fmt.Sprintf("And %d more", len(ids)-listNamed))
 			return
 		}
 		name, found := names[id]
@@ -931,9 +951,10 @@ func orDefault(v, fallback string) string {
 
 // Revision re-reads, through the turn's grant, the revision a preview recorded
 // for the object it read: a task's version, a page's, an artifact's head, a
-// person's tracker record's and the principles' entity tag. An approval
-// compares what it answers with the recorded revision, and an answer that
-// differs is a stale proposal.
+// person's tracker record's, a chat room's settings and members, a chat
+// message's position and the principles' entity tag. An approval compares what
+// it answers with the recorded revision, and an answer that differs is a stale
+// proposal.
 var Revision proposal.Revisions = func(ctx context.Context, read proposal.Read, source string) (string, error) {
 	r, err := proposal.ParseRevision(source)
 	if err != nil {
@@ -946,6 +967,9 @@ var Revision proposal.Revisions = func(ctx context.Context, read proposal.Read, 
 	case proposal.RevisionEntity, proposal.RevisionResource, proposal.RevisionCreate:
 		// A GENERIC CHANGE'S RESOURCE, re-read at the path it was read at.
 		return apiRevision(ctx, read, r)
+	case proposal.RevisionRoom, proposal.RevisionMessage:
+		// A CHAT ROOM OR MESSAGE, re-read through the route its preview read.
+		return chatRevision(ctx, read, r)
 	}
 	var req exec.Request
 	path, versionAt, idAt := "", "", ""

@@ -472,7 +472,9 @@ func (r *Reader) Channels(ctx context.Context, viewer string, q ChannelsQuery,
 	return out, nil
 }
 
-// Readable is every room this viewer may READ, as channel ids.
+// Readable is every room this viewer may READ, each as a search needs it
+// ([ReadableRoom]): its id to scope the index by, and the name and kind a hit
+// in it is shown under.
 //
 // # The rail is not this set
 //
@@ -508,7 +510,7 @@ func (r *Reader) Channels(ctx context.Context, viewer string, q ChannelsQuery,
 // real state, and the caller's to tell apart from a viewer it failed to
 // resolve, which is refused here by name.
 func (r *Reader) Readable(ctx context.Context, viewer string,
-	fresh statelog.Freshness) ([]string, error) {
+	fresh statelog.Freshness) ([]ReadableRoom, error) {
 
 	who, err := viewerOf(viewer)
 	if err != nil {
@@ -517,7 +519,7 @@ func (r *Reader) Readable(ctx context.Context, viewer string,
 	if fresh.Level == "" {
 		return nil, errNoLevel("a readable channel set")
 	}
-	var out []string
+	var out []ReadableRoom
 	if _, err := r.log.Read(ctx, fresh.Query(ReadScope(""), true),
 		func(tx *sql.Tx) error {
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
@@ -530,6 +532,23 @@ func (r *Reader) Readable(ctx context.Context, viewer string,
 	return out, nil
 }
 
+// ReadableRoom is one room a viewer may read, as a search over everything
+// they may read needs it: its id, which scopes the index, and the name and
+// kind a hit in it is shown under, as a mention carries its room's
+// ([Mention.ChannelName]).
+//
+// READ WITH THE SET, in its transaction, rather than looked up for the hits
+// afterwards: the set is the authorization the index is handed, and a second
+// read beside it could name a hit's room from another snapshot than the one
+// that admitted it.
+type ReadableRoom struct {
+	ID   string `json:"id"`
+	Kind Kind   `json:"kind"`
+	// Name is the room's displayed name, empty for a direct conversation,
+	// which has none.
+	Name string `json:"name,omitempty"`
+}
+
 // readableChannels is [Reader.Readable] inside one transaction.
 //
 // THE SQL NARROWS AND GO DECIDES, which is [visibleWhere]'s own contract: the
@@ -537,28 +556,30 @@ func (r *Reader) Readable(ctx context.Context, viewer string,
 // row it admits is still put through [Visible] — so a kind a newer peer wrote
 // is left out here exactly as it is left out of a rail, rather than being
 // served on the guess that it resembles a public room.
-func readableChannels(ctx context.Context, tx *sql.Tx, who string) ([]string, error) {
+func readableChannels(ctx context.Context, tx *sql.Tx, who string) ([]ReadableRoom, error) {
 	rows, err := tx.QueryContext(ctx,
-		`SELECT c.id, c.kind FROM chat_channels c
+		`SELECT c.id, c.kind, c.name FROM chat_channels c
 		  WHERE `+visibleWhere+`
 		  ORDER BY c.id`, who)
 	if err != nil {
 		return nil, fmt.Errorf("chatlet: read the rooms %q may search: %w", who, err)
 	}
 	defer func() { _ = rows.Close() }()
-	out := make([]string, 0, 16)
+	out := make([]ReadableRoom, 0, 16)
 	for rows.Next() {
-		var id, kind string
-		if err := rows.Scan(&id, &kind); err != nil {
+		var room ReadableRoom
+		var kind string
+		if err := rows.Scan(&room.ID, &kind, &room.Name); err != nil {
 			return nil, fmt.Errorf("chatlet: scan a readable room: %w", err)
 		}
+		room.Kind = Kind(kind)
 		// MEMBER IS TRUE because the predicate above already
 		// established it for every private row it admitted, and the
 		// flag is ignored for every row it did not have to.
-		if !Visible(who, Channel{Kind: Kind(kind)}, true) {
+		if !Visible(who, Channel{Kind: room.Kind}, true) {
 			continue
 		}
-		out = append(out, id)
+		out = append(out, room)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("chatlet: read the rooms %q may search: %w", who, err)

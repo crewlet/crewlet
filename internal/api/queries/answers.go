@@ -370,6 +370,32 @@ type Sources struct {
 	// in order to offer the board's filters instead of an empty ranking.
 	WorkSearch WorkSearcher
 
+	// Chat is the company's own conversation through the estate router,
+	// the third native backend beside the tracker and the wiki and resolved
+	// per question the same way: a company talking on Slack has each chat
+	// question answered unknown. Nil leaves them unregistered.
+	//
+	// EVERY QUESTION IT SERVES IS ABOUT THE CALLER, as the seat the
+	// request's principal acts as — see chat.go's file doc. There is no
+	// handle parameter anywhere on this family and no arm that reads
+	// somebody else's rooms.
+	Chat ChatReader
+
+	// ChatSearch is the ranked search over that conversation, through the
+	// router: the data node that answers resolves the viewer's rooms beside
+	// the index it reads. A seam of its own rather than a method of
+	// [Sources.Chat] because it is a search FOR A VIEWER rather than a read
+	// of rooms — see [ChatSearcher]. Nil leaves `chat_search`
+	// unregistered.
+	ChatSearch ChatSearcher
+
+	// ChatReads is where each person's eye has reached, which rooms they
+	// muted and whether they are in do-not-disturb: the ONE piece of chat
+	// state that is not on the log, kept in coordination. Nil is "this
+	// process cannot say", which the rail reports rather than badging
+	// every room with its whole history.
+	ChatReads ChatReads
+
 	// WebhookBase is where a THIRD-PARTY APP reaches this deployment —
 	// `config.API.WebhookBase`: the public listener's
 	// `api.public.external_url` where `api.public` is set, and
@@ -833,6 +859,25 @@ func Register(r *Registry, s Sources) {
 		// could say existed and never show.
 		r.Register("page_activity", Requires(iam.GrantDoclet), s.pageActivity)
 		r.Register("page_revision", Requires(iam.GrantDoclet), s.pageRevision)
+	}
+	if s.Chat != nil {
+		// CHATLET, and then the SEAT: the registry asks for `chatlet`
+		// as it asks every app's questions, and each answer decides its
+		// own verb on the authority table before it reads a thing, so a
+		// credential acting as itself is refused as the table refuses it
+		// (`unseated`) — a room is read as a seat, and such a caller has
+		// none to be shown it as. See chat.go.
+		r.Register("chat_channels", Requires(iam.GrantChatlet), s.chatChannels)
+		r.Register("chat_channel", Requires(iam.GrantChatlet), s.chatChannel)
+		r.Register("chat_messages", Requires(iam.GrantChatlet), s.chatMessages)
+		// A THREAD IS ITS OWN QUESTION, not a filter on the room: it is
+		// opened beside the transcript and paged the other way, because a
+		// conversation is read forwards.
+		r.Register("chat_thread", Requires(iam.GrantChatlet), s.chatThread)
+		r.Register("chat_mentions", Requires(iam.GrantChatlet), s.chatMentions)
+		if s.ChatSearch != nil {
+			r.Register("chat_search", Requires(iam.GrantChatlet), s.chatSearch)
+		}
 	}
 	if s.Memory != nil {
 		// A SEAT'S TRAIL — what it remembers and what it said — ANSWERED

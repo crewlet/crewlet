@@ -84,6 +84,14 @@ var toolExposures = []Exposure{
 	proposed("steer_turn", "steer_turn"),
 	proposed("share_artifact", "share_artifact"),
 	proposed("unshare_artifact", "unshare_artifact"),
+	proposed("post_message", "post_chat_message"),
+	proposed("reply_in_thread", "reply_in_chat_thread"),
+	proposed("send_dm", "send_direct_message"),
+	proposed("edit_message", "edit_chat_message"),
+	proposed("delete_message", "delete_chat_message"),
+	proposed("update_channel", "update_chat_room"),
+	proposed("set_channel_members", "set_chat_room_members"),
+	proposed("leave_channel", "leave_chat_room"),
 }
 
 // routeExposures are the routes a curated tool reads or proposes on directly,

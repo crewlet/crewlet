@@ -24,6 +24,19 @@ import (
 // not in may not appear here, because this slice IS the authorization the
 // index is handed.
 
+// readableIDs is a readable set's room ids, in its order, beside the read's
+// error: nil for a set that was refused.
+func readableIDs(rooms []chatlet.ReadableRoom, err error) ([]string, error) {
+	if rooms == nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(rooms))
+	for _, r := range rooms {
+		ids = append(ids, r.ID)
+	}
+	return ids, err
+}
+
 // A PUBLIC ROOM IS SEARCHABLE BY SOMEBODY WHO NEVER JOINED IT.
 func TestTheReadableSetIsWiderThanTheRail(t *testing.T) {
 	h := newReadHarness(t)
@@ -34,7 +47,7 @@ func TestTheReadableSetIsWiderThanTheRail(t *testing.T) {
 	h.apply(readCreateRoom("room-shut", "shut", chatlet.KindPrivate, "ada"))
 	reader := h.reader()
 
-	got, err := reader.Readable(t.Context(), "car", h.session())
+	got, err := readableIDs(reader.Readable(t.Context(), "car", h.session()))
 	if err != nil {
 		t.Fatalf("read the set car may search: %v", err)
 	}
@@ -55,7 +68,7 @@ func TestTheReadableSetIsWiderThanTheRail(t *testing.T) {
 	// THE CONTROL: ada is in the private room, so she may search it.
 	// Without this the assertion above is satisfied by a reader that
 	// resolves nothing at all.
-	ada, err := reader.Readable(t.Context(), "ada", h.session())
+	ada, err := readableIDs(reader.Readable(t.Context(), "ada", h.session()))
 	if err != nil {
 		t.Fatalf("read the set ada may search: %v", err)
 	}
@@ -83,7 +96,7 @@ func TestAnArchivedRoomIsStillSearchable(t *testing.T) {
 		}, chatlet.ScopeSet{Subject: true}, "ada"))
 	reader := h.reader()
 
-	got, err := reader.Readable(t.Context(), "ada", h.session())
+	got, err := readableIDs(reader.Readable(t.Context(), "ada", h.session()))
 	if err != nil {
 		t.Fatalf("read the set ada may search: %v", err)
 	}
@@ -126,7 +139,7 @@ func TestTheReadableSetIsWholePastTheLiveRoomCap(t *testing.T) {
 	h.apply(readCreateRoom("room-zz-live", "today", chatlet.KindPublic, "ada"))
 	reader := h.reader()
 
-	got, err := reader.Readable(t.Context(), "car", h.session())
+	got, err := readableIDs(reader.Readable(t.Context(), "car", h.session()))
 	if err != nil {
 		t.Fatalf("read the set car may search: %v", err)
 	}
@@ -148,7 +161,7 @@ func TestAReadableSetRefusesAnUnboundViewer(t *testing.T) {
 	h.apply(readCreateRoom("room-open", "open", chatlet.KindPublic, "ada"))
 	reader := h.reader()
 
-	got, err := reader.Readable(t.Context(), "  ", h.session())
+	got, err := readableIDs(reader.Readable(t.Context(), "  ", h.session()))
 	if !errors.Is(err, chatlet.ErrForbidden) {
 		t.Errorf("an empty viewer answered (%v, %v), want %v — an unbound "+
 			"credential reads nothing in chat, and an empty slice would be "+
@@ -176,5 +189,32 @@ func TestAReadableSetRefusesAnAbsentFreshness(t *testing.T) {
 		t.Error("a readable set with no freshness level was served — the " +
 			"level is the surface's to resolve, and a default chosen here " +
 			"would be chosen for all four surfaces at once")
+	}
+}
+
+// A READABLE ROOM CARRIES WHAT A HIT IN IT IS SHOWN UNDER.
+//
+// A search hit names the room it was said in as the rail does, "#launch", and
+// never by an id nobody reads, so each room of the set carries its name and
+// its kind beside its id, read with the set itself: a direct conversation,
+// which has no name, says what it is by its kind. Mutation: read the set
+// without the room's name, or drop its kind, and this fails.
+func TestAReadableRoomCarriesWhatAHitIsShownUnder(t *testing.T) {
+	h := newReadHarness(t)
+	h.apply(readCreateRoom("room-open", "launch", chatlet.KindPublic, "ada"))
+	h.apply(readCreateRoom("room-unit", "eng", chatlet.KindUnit, "ada"))
+	reader := h.reader()
+
+	got, err := reader.Readable(t.Context(), "ada", h.session())
+	if err != nil {
+		t.Fatalf("read the set ada may search: %v", err)
+	}
+	want := []chatlet.ReadableRoom{
+		{ID: "room-open", Kind: chatlet.KindPublic, Name: "launch"},
+		{ID: "room-unit", Kind: chatlet.KindUnit, Name: "eng"},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("ada's readable set is %+v, want %+v: a hit is shown under its "+
+			"room's name and kind", got, want)
 	}
 }

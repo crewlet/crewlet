@@ -61,7 +61,9 @@ type surface struct {
 	defs   []llm.ToolDef
 	// names resolves the arguments a tool declares as naming a seat, a
 	// unit, a project or a space ([catalog.Tool.Names]), through the turn's
-	// own grant, before a read is sent or a write is previewed.
+	// own grant, before a read is sent or a write is previewed, and holds
+	// the call to its schema in the same pass, every fault of both in one
+	// refusal ([catalog.Resolver.Prepare]).
 	names *catalog.Resolver
 
 	mu sync.Mutex
@@ -201,11 +203,11 @@ func (s *surface) recordRefusal(ctx context.Context, tool catalog.Tool, args map
 
 // read sends one read tool's request and shapes its answer.
 func (s *surface) read(ctx context.Context, tool catalog.Tool, args map[string]any) (toolloop.ToolResult, error) {
-	resolved, err := s.names.Resolve(ctx, tool, args)
+	prepared, err := s.names.Prepare(ctx, tool, args)
 	if err != nil {
 		return s.refuseBefore(ctx, tool, args, "Not sent", err), nil
 	}
-	args = resolved
+	args = prepared
 	req, err := tool.Request(args)
 	if err != nil {
 		return s.refuseBefore(ctx, tool, args, "Not sent", err), nil
@@ -360,14 +362,11 @@ func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[strin
 		}
 		immediate = action.Confirm == wire.ConfirmNone
 	}
-	resolved, err := s.names.Resolve(ctx, tool, args)
+	prepared, err := s.names.Prepare(ctx, tool, args)
 	if err != nil {
 		return s.refuseBefore(ctx, tool, args, "Not proposed", err), nil
 	}
-	args = resolved
-	if err = tool.Check(args); err != nil {
-		return s.refuseBefore(ctx, tool, args, "Not proposed", err), nil
-	}
+	args = prepared
 	step := s.t.stepStart(tool, args, nil, "")
 	// A PREVIEW'S READ is decoded and diffed, never handed to the model, so
 	// it reads to the preview's bound rather than a step's.
@@ -515,14 +514,11 @@ func (t *turn) draft(tool catalog.Tool, scope wire.ProposalScope, preview propos
 // and a refusal and an absence are both "not permitted", never told apart), or
 // by their grants for a screen that names no record.
 func (s *surface) navigate(ctx context.Context, tool catalog.Tool, args map[string]any) (toolloop.ToolResult, error) {
-	resolved, err := s.names.Resolve(ctx, tool, args)
+	prepared, err := s.names.Prepare(ctx, tool, args)
 	if err != nil {
 		return s.refuseBefore(ctx, tool, args, "Not opened", err), nil
 	}
-	args = resolved
-	if err = tool.Check(args); err != nil {
-		return s.refuseBefore(ctx, tool, args, "Not opened", err), nil
-	}
+	args = prepared
 	link, probe, err := catalog.Open(args)
 	if err != nil {
 		return s.refuseBefore(ctx, tool, args, "Not opened", err), nil

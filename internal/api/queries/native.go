@@ -65,8 +65,8 @@ import (
 // a seat's own tools, and a second reading of these keys would be the one
 // place a freshness key meant something slightly different. The FRAMEWORK'S
 // rather than a domain's, because this function serves every domain: read
-// through the tracker's, a bad `read_level` on a wiki question was refused as
-// "tracker: …", naming a domain the caller never asked about.
+// through the tracker's, a bad `read_level` on a chat or a wiki question was
+// refused as "worklet: …", naming a domain the caller never asked about.
 //
 // WHAT THIS ADDS is the SURFACE, which the grammar cannot know: an absent or
 // unpermitted level resolves to this surface's default through

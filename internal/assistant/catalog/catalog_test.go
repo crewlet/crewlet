@@ -39,8 +39,10 @@ func TestTheCatalogueHoldsTogether(t *testing.T) {
 		"get_fleet_health", "list_config_changes", "create_task", "update_task",
 		"comment_on_task", "answer_decision", "set_my_priorities", "mark_inbox",
 		"pause_agent", "resume_agent", "steer_turn", "answer_coding_run", "create_page",
-		"edit_page", "share_artifact", "unshare_artifact", "propose_page_change",
-		"open_in_app"} {
+		"edit_page", "share_artifact", "unshare_artifact", "post_chat_message",
+		"reply_in_chat_thread", "send_direct_message", "edit_chat_message",
+		"delete_chat_message", "update_chat_room", "set_chat_room_members",
+		"leave_chat_room", "propose_page_change", "open_in_app"} {
 		if !names[want] {
 			t.Errorf("the catalogue has no %s", want)
 		}
