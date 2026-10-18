@@ -11,11 +11,19 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { Button, SheetGrid, Select, Skeleton, downloadText, useToast } from "@crewlethq/ui";
+import {
+  Button,
+  SegmentedControl,
+  SheetGrid,
+  Select,
+  Skeleton,
+  Tag,
+  downloadText,
+  useToast,
+} from "@crewlethq/ui";
 import { ArrowDownToLineGlyph } from "@crewlethq/icons/glyphs";
 import { useParam } from "~/app/router.tsx";
 import { QueryState, Section } from "~/components/common.tsx";
-import { Segmented } from "~/ui/primitives.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtBytes, plural, relTime } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -29,11 +37,17 @@ import {
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
 import { exportCSV, undoData } from "~/lib/artifacts/api.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
-import { inferredColumns, sheetColumns, sheetRows } from "~/lib/artifacts/sheet.ts";
+import { csvFileName, inferredColumns, sheetColumns, sheetRows } from "~/lib/artifacts/sheet.ts";
 import { useStoreVersion } from "~/lib/artifacts/useDataStore.ts";
-import { actorName, roleIncludes } from "~/lib/artifacts/words.ts";
+import {
+  actorName,
+  dataChangeWords,
+  dataRefusalReason,
+  roleIncludes,
+} from "~/lib/artifacts/words.ts";
 import { SchemaEditor } from "./SchemaEditor.tsx";
-import { sheetCollections } from "./SheetView.tsx";
+import { sheetCollections, useSheetParam } from "./SheetView.tsx";
+import { useRowDelete } from "./RowDelete.tsx";
 
 const VIEWS = ["rows", "schema", "history"] as const;
 type View = (typeof VIEWS)[number];
@@ -49,6 +63,9 @@ export function DataTab({ detail, store }: { detail: ArtifactDetail; store: Arti
     : "rows";
   const schema = store.schema;
   const collections = useMemo(() => sheetCollections(schema?.collections ?? []), [schema]);
+  // THE COLLECTION IS IN THE ADDRESS (`sheet=`), the same one the View tab
+  // draws, so a link or a reload keeps it.
+  const [collection, setCollection] = useSheetParam(collections);
   const role = schema?.role ?? detail.role;
   if (!schema) {
     return store.schemaFailure ? (
@@ -64,10 +81,13 @@ export function DataTab({ detail, store }: { detail: ArtifactDetail; store: Arti
   return (
     <div className="artifact-data">
       <div className="artifact-data-bar">
-        <Segmented
+        <SegmentedControl
+          semantics="radio"
+          activate="manual"
+          size="sm"
+          label="What to show"
           value={view}
-          onChange={(next) => setView(next)}
-          ariaLabel="What to show"
+          onValueChange={(next) => setView(next)}
           options={[
             { value: "rows", label: "Rows" },
             { value: "schema", label: "Schema" },
@@ -75,11 +95,20 @@ export function DataTab({ detail, store }: { detail: ArtifactDetail; store: Arti
           ]}
         />
         <span className="artifact-note">
-          {plural(schema.store.docs, "row")}, {fmtBytes(schema.store.footprint)} held
+          {plural(schema.store.docs, "row")} · {fmtBytes(schema.store.footprint)}
         </span>
+        {view === "rows" && collection && (
+          <ExportButton detail={detail} collection={collection} role={role} />
+        )}
       </div>
       {view === "rows" && (
-        <Rows detail={detail} store={store} collections={collections} role={role} />
+        <Rows
+          store={store}
+          collections={collections}
+          collection={collection}
+          onCollection={setCollection}
+          role={role}
+        />
       )}
       {view === "schema" && (
         <SchemaEditor
@@ -89,27 +118,75 @@ export function DataTab({ detail, store }: { detail: ArtifactDetail; store: Arti
           onSaved={() => void store.loadSchema()}
         />
       )}
-      {view === "history" && <StoreHistory detail={detail} role={role} />}
+      {view === "history" && <StoreHistory detail={detail} role={role} collections={collections} />}
     </div>
   );
 }
 
-/** One collection whole, with its export. */
-function Rows({
+/** A collection's every row as CSV, named by the artifact's and the collection's titles. */
+function ExportButton({
   detail,
-  store,
-  collections,
+  collection,
   role,
 }: {
   detail: ArtifactDetail;
+  collection: DataCollection;
+  role: ArtifactDetail["role"];
+}) {
+  const toast = useToast();
+  const [exporting, setExporting] = useState(false);
+  const canExport = roleIncludes(role, "editor");
+  const exportCollection = async () => {
+    setExporting(true);
+    try {
+      const { started } = downloadText(
+        await exportCSV(detail.id, collection.name),
+        csvFileName(detail.title, collection.title || collection.name),
+        "text/csv",
+      );
+      if (!started)
+        toast.show({ variant: "warning", title: "The browser did not take the download" });
+    } catch (err) {
+      toast.show({
+        variant: "danger",
+        title: "Could not export it",
+        message: err instanceof Error ? err.message : "The engine did not answer.",
+      });
+    } finally {
+      setExporting(false);
+    }
+  };
+  return (
+    <span className="artifact-data-bar-end">
+      <Button
+        size="small"
+        variant="secondary"
+        leadingIcon={<ArrowDownToLineGlyph size="sm" />}
+        loading={exporting}
+        disabledReason={canExport ? undefined : "Exporting every row needs the “Can edit” role."}
+        onClick={() => void exportCollection()}
+      >
+        Export CSV
+      </Button>
+    </span>
+  );
+}
+
+/** One collection whole, every field. */
+function Rows({
+  store,
+  collections,
+  collection,
+  onCollection,
+  role,
+}: {
   store: ArtifactDataStore;
   collections: DataCollection[];
+  collection: DataCollection | undefined;
+  onCollection: (name: string) => void;
   role: ArtifactDetail["role"];
 }) {
   const people = useArtifactPeople();
-  const toast = useToast();
-  const [picked, setPicked] = useState(collections[0]?.name ?? "");
-  const collection = collections.find((c) => c.name === picked) ?? collections[0];
   const name = collection?.name ?? "";
   useEffect(() => {
     if (name) void store.load(name);
@@ -128,94 +205,82 @@ function Rows({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collection, role, docs]);
   const rows = useMemo(() => store.pending.decorate(sheetRows(docs)), [docs, store.pending]);
-  const [exporting, setExporting] = useState(false);
-  const canExport = roleIncludes(role, "editor");
-  const exportCollection = async () => {
-    if (!name) return;
-    setExporting(true);
-    try {
-      const { started } = downloadText(await exportCSV(detail.id, name), `${name}.csv`, "text/csv");
-      if (!started)
-        toast.show({ variant: "warning", title: "The browser did not take the download" });
-    } catch (err) {
-      toast.show({
-        variant: "danger",
-        title: "Could not export it",
-        message: err instanceof Error ? err.message : "The engine did not answer.",
-      });
-    } finally {
-      setExporting(false);
-    }
-  };
+  const remove = useRowDelete(
+    store,
+    name,
+    collection ? roleIncludes(role, collection.delete) : false,
+  );
   if (!collection)
     return <p className="artifact-note">No collections yet. Add one on the Schema view.</p>;
   return (
     <>
-      <div className="artifact-sheet-bar">
-        {collections.length > 1 && (
+      {collections.length > 1 && (
+        <div className="artifact-sheet-bar">
           <Select
             width="auto"
             value={name}
-            onChange={(value) => setPicked(String(value))}
+            onChange={(value) => onCollection(String(value))}
             options={collections.map((c) => ({ value: c.name, label: c.title || c.name }))}
             ariaLabel="Collection"
           />
-        )}
-        <Button
-          size="small"
-          variant="secondary"
-          leadingIcon={<ArrowDownToLineGlyph size="sm" />}
-          loading={exporting}
-          disabledReason={canExport ? undefined : "Exporting every row needs the “Can edit” role."}
-          onClick={() => void exportCollection()}
-        >
-          Export CSV
-        </Button>
-      </div>
+        </div>
+      )}
       <SheetGrid
         className="artifact-grid"
+        fit="content"
         label={`${collection.title || collection.name}, every field`}
         columns={columns}
         rows={rows}
         people={people.sheetPeople}
         mode={roleIncludes(role, "contributor") ? "edit" : "read"}
         onEdit={(edits) => void store.edit(name, edits)}
+        onDeleteRow={
+          remove.onDeleteRow
+            ? (rowId) =>
+                remove.onDeleteRow?.({
+                  id: rowId,
+                  name: `row ${rows.findIndex((r) => r.id === rowId) + 1}`,
+                })
+            : undefined
+        }
         sync={{ ...store.pending.sync(false), failed: store.unsettledCount }}
         onRetry={() => void store.retry()}
+        onDismissRefused={() => store.pending.dismissAll()}
       />
+      {remove.dialog}
     </>
   );
 }
 
 /** The store's own record: every write, newest first, with Undo where it can still be undone. */
-function StoreHistory({ detail, role }: { detail: ArtifactDetail; role: ArtifactDetail["role"] }) {
+function StoreHistory({
+  detail,
+  role,
+  collections,
+}: {
+  detail: ArtifactDetail;
+  role: ArtifactDetail["role"];
+  collections: DataCollection[];
+}) {
   const people = useArtifactPeople();
   const now = useNow();
-  const toast = useToast();
   const answer = useQuery(
     "artifact_data_history",
     { id: detail.id, limit: 100 },
     { pollMs: 30_000 },
   );
-  const gesture = useKeyedGesture();
   const canUndo = roleIncludes(role, "contributor");
-  const undo = async (entry: DataHistoryEntry) => {
-    const result = await gesture.run(
-      undoData(detail.id, entry.seq, `dash-${newActOpID()}`, { via: "dashboard" }),
+  const labelOf = useMemo(() => {
+    const labels = new Map(
+      collections.flatMap((c) =>
+        (c.columns ?? []).map((col) => [`${c.name}/${col.key}`, col.label]),
+      ),
     );
-    if (result?.kind === "done") {
-      toast.ok("Undone");
-      answer.refetch();
-    } else if (result) {
-      toast.show({ variant: "danger", title: "Could not undo it", message: result.text });
-    }
-  };
+    return (collection: string, field: string) => labels.get(`${collection}/${field}`) || field;
+  }, [collections]);
   const entries = answer.data?.entries ?? [];
   return (
-    <Section
-      title="Every change"
-      hint="Kept for seven days. Who made each one, and what it changed."
-    >
+    <Section title="Every change" hint="Who made each one, kept for seven days">
       <QueryState
         error={answer.error}
         refusal={answer.refusal}
@@ -228,26 +293,40 @@ function StoreHistory({ detail, role }: { detail: ArtifactDetail; role: Artifact
       >
         <ol className="artifact-history" role="list">
           {entries.map((entry) => (
-            <li key={entry.seq} className="artifact-history-row">
+            <li
+              key={entry.seq}
+              className={
+                canUndo
+                  ? "artifact-history-row artifact-history-row--action"
+                  : "artifact-history-row"
+              }
+            >
               <span className="artifact-history-who">
                 {actorName(entry.actor, people.seatName)}
               </span>
               <span className="artifact-history-what">
-                {changeWords(entry)}
-                {entry.verdict !== "applied" ? `, refused (${entry.reason || entry.verdict})` : ""}
+                {dataChangeWords(entry, labelOf)}
+                {entry.verdict !== "applied" && (
+                  <>
+                    {" "}
+                    <Tag variant="neutral" appearance="outline">
+                      Not saved
+                    </Tag>{" "}
+                    <span className="artifact-history-reason">
+                      {dataRefusalReason(entry.verdict)}
+                    </span>
+                  </>
+                )}
               </span>
               <time className="artifact-history-when" dateTime={entry.at} title={entry.at}>
                 {relTime(entry.at, now)}
               </time>
-              {entry.undoable && canUndo && (
-                <Button
-                  size="small"
-                  variant="ghost"
-                  loading={gesture.busy}
-                  onClick={() => void undo(entry)}
-                >
-                  Undo
-                </Button>
+              {canUndo && (
+                <span className="artifact-history-action">
+                  {entry.undoable && (
+                    <UndoButton detail={detail} entry={entry} onDone={answer.refetch} />
+                  )}
+                </span>
               )}
             </li>
           ))}
@@ -257,14 +336,32 @@ function StoreHistory({ detail, role }: { detail: ArtifactDetail; role: Artifact
   );
 }
 
-/** One write in words: how many rows and cells it changed, or the schema. */
-function changeWords(entry: DataHistoryEntry): string {
-  if (entry.op === "configure") return "changed the schema";
-  if (entry.op === "purge") return "deleted the data";
-  const docs = new Set(entry.changes.map((c) => `${c.c}/${c.d ?? ""}`)).size;
-  const cells = entry.changes.reduce((n, c) => n + (c.f?.length ?? 0), 0);
-  const removed = entry.changes.filter((c) => c.op === "delete").length;
-  const verb = entry.op === "undo" ? "undid a change to" : "changed";
-  if (removed > 0 && removed === entry.changes.length) return `deleted ${plural(removed, "row")}`;
-  return `${verb} ${plural(cells, "cell")} in ${plural(docs, "row")}`;
+/** One row's Undo, with its own pending state: pressing one never spins the others. */
+function UndoButton({
+  detail,
+  entry,
+  onDone,
+}: {
+  detail: ArtifactDetail;
+  entry: DataHistoryEntry;
+  onDone: () => void;
+}) {
+  const toast = useToast();
+  const gesture = useKeyedGesture();
+  const undo = async () => {
+    const result = await gesture.run(
+      undoData(detail.id, entry.seq, `dash-${newActOpID()}`, { via: "dashboard" }),
+    );
+    if (result?.kind === "done") {
+      toast.ok("Undone");
+      onDone();
+    } else if (result) {
+      toast.show({ variant: "danger", title: "Could not undo it", message: result.text });
+    }
+  };
+  return (
+    <Button size="small" variant="ghost" loading={gesture.busy} onClick={() => void undo()}>
+      Undo
+    </Button>
+  );
 }

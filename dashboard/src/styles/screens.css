@@ -10590,8 +10590,15 @@ a.live-row:focus-visible {
   align-items: center;
   gap: var(--spacing-2) var(--spacing-3);
 }
+/* Export closes the data bar, on the bar's own line. */
+.artifact-data-bar-end {
+  margin-inline-start: auto;
+}
+/* A GRID IS AS TALL AS ITS ROWS (fit="content") up to what the view holds
+   below the header and the tabs, so twelve rows draw no empty slab under
+   them and Add row sits under the last row on a phone too. */
 .artifact-grid {
-  height: max(24rem, calc(100cqb - var(--sticky-top) - 16rem));
+  --crewlet-sheet-max-height: max(24rem, calc(100cqb - var(--sticky-top) - 16rem));
 }
 
 /* A HISTORY IS ONE LINE PER CHANGE: who, what, when, and its one action. */
@@ -10604,7 +10611,7 @@ a.live-row:focus-visible {
 }
 .artifact-history-row {
   display: grid;
-  grid-template-columns: minmax(6rem, 10rem) minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(6rem, 10rem) minmax(0, 1fr) auto;
   align-items: baseline;
   gap: var(--spacing-3);
   padding-block: var(--spacing-2);
@@ -10627,14 +10634,28 @@ a.live-row:focus-visible {
   font-size: var(--font-size-xs);
   white-space: nowrap;
 }
-.artifact-history-foot {
+/* A ROW WITH AN ACTION reserves its track whether or not this row has one,
+   so the time column holds one edge down the list and every row keeps the
+   button's height. A list without actions draws three tracks, so no empty
+   fourth track and its gap pull the times short of the list's edge. */
+.artifact-history-row--action {
+  grid-template-columns: minmax(6rem, 10rem) minmax(0, 1fr) auto 4.5rem;
+  align-items: center;
+  min-height: var(--size-control-sm);
+}
+.artifact-history-action {
   display: flex;
   justify-content: flex-end;
-  margin-top: var(--spacing-3);
+}
+.artifact-history-reason {
+  color: var(--color-text-tertiary);
 }
 @container page (width < 640px) {
   .artifact-history-row {
     grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .artifact-history-row--action {
+    grid-template-columns: minmax(0, 1fr) auto 4.5rem;
   }
   .artifact-history-what {
     grid-column: 1 / -1;
@@ -10647,7 +10668,9 @@ a.live-row:focus-visible {
   gap: var(--spacing-5);
   align-items: start;
 }
-@container page (width < 860px) {
+/* TWO COLUMNS DOWN TO A SMALL LAPTOP: one column below 720 px, where a
+   version item would otherwise run 700 px wide at 1024. */
+@container page (width < 720px) {
   .artifact-history-tab {
     grid-template-columns: minmax(0, 1fr);
   }
