@@ -441,6 +441,14 @@ func dutyReads() map[string]indexedRead {
 		"key resolution":              seek(keys, resolveTaskStatement, "ENG-1", "ENG-1", "ENG-1"),
 		"a point read's scope":        seek(keys, taskReadScopeStatement, "ENG-1", "ENG-1", "ENG-1"),
 	}
+	// A DROP'S TWO SIDES, every way a drop reads them ([gapSideStatement]).
+	for _, above := range []bool{false, true} {
+		for _, inclusive := range []bool{false, true} {
+			reads[fmt.Sprintf("a drop's gap, above=%t inclusive=%t", above,
+				inclusive)] = seek(ranks, gapSideStatement(above, inclusive),
+				"P01", "t-00002", "a000100", "a000100", "t-00001", RankRespreadInline/2+1)
+		}
+	}
 	// THE CATALOGUE'S SETTLE, for each shape of declaration: each side of
 	// the column through the index that holds that side — the field's own
 	// value index for the rows it hides, the hidden rows' for the rows it
@@ -1851,4 +1859,39 @@ func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 		}
 	}
 	return out
+}
+
+// A DROP READS THE GAP IT OPENED, NOT THE BOARD BETWEEN IT AND ONE END.
+//
+// A drop reads a dozen neighbours on each side of the pivot, nearest first,
+// so its plan is a seek on the project AND the pivot's rank in the rank
+// index's order. The comparison it makes — past the pivot in (rank, id)
+// order — written as a disjunction left the planner the project alone to
+// seek, and the plan read the project's rank index from the far end of the
+// board towards the pivot, filtering every card on the way: a drop near the
+// bottom of a long board read the whole board. That plan SEEKS the index the
+// gate's dutyReads names for it, so it passed there; the claim this holds is
+// that the rank is part of the seek.
+func TestADropReadsTheGapItOpened(t *testing.T) {
+	t.Parallel()
+	db := planStore(t)
+	for _, above := range []bool{false, true} {
+		for _, inclusive := range []bool{false, true} {
+			plan := explain(t, db, gapSideStatement(above, inclusive), []any{"P01",
+				"t-00002", "a000100", "a000100", "t-00001", RankRespreadInline/2 + 1})
+			shown := strings.Join(plan, "\n")
+			sought := false
+			for _, line := range plan {
+				if seeks([]string{line}, "tracker_tasks_rank_idx") &&
+					strings.Contains(line, "(project_key=? AND rank") {
+					sought = true
+				}
+			}
+			if !sought || sorts(plan) {
+				t.Errorf("above=%t inclusive=%t: the gap is not a seek on the "+
+					"project and the pivot's rank in the index's order:\n%s",
+					above, inclusive, shown)
+			}
+		}
+	}
 }
