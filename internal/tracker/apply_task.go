@@ -654,6 +654,12 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 				task.Collaborators, func(h string) []any { return []any{task.ID, h} })
 		}},
 		{"tracker_task_tags", func() (int, error) {
+			// UNDER THE TASK'S CURRENT PROJECT, rewritten with the
+			// task on every apply: a project's tag filter seeks the
+			// slug and the project together ([tagClause]), so a row
+			// left under the project a task moved out of would hide
+			// it from its new project's filter and show it in its old
+			// one's.
 			return insertMany(ctx, tx, c.maxVariables,
 				`INSERT INTO tracker_task_tags (task_id, project_key, slug) VALUES`,
 				`(?,?,?)`,
