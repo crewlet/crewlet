@@ -1509,8 +1509,9 @@ func TestABucketWithNoReservationIsNeverCreated(t *testing.T) {
 	}
 }
 
-// A BUCKET THAT HOLDS NO CEILING IS REFUSED, naming the gesture that bounds
-// it, and nothing here rewrites its configuration to fix it.
+// A BUCKET THAT HOLDS NO CEILING IS REFUSED to a node whose figure is derived,
+// naming both gestures that bound it, and nothing here rewrites its
+// configuration to fix it.
 func TestABucketThatHoldsNoCeilingIsRefused(t *testing.T) {
 	t.Parallel()
 	c := memberClient(t)
@@ -1523,13 +1524,61 @@ func TestABucketThatHoldsNoCeilingIsRefused(t *testing.T) {
 	if err == nil {
 		t.Fatal("a bucket holding no ceiling was opened")
 	}
-	for _, want := range []string{"nats stream update " + natsobj.Stream, fmt.Sprintf("--max-bytes=%d", testCeiling)} {
+	for _, want := range []string{"store.objects.nats_max_bytes", "nats stream update " + natsobj.Stream, fmt.Sprintf("--max-bytes=%d", testCeiling)} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal %q does not name %q", err, want)
 		}
 	}
 	if sent := w.sent(); len(sent) != 0 {
 		t.Errorf("the refusal wrote %v to a bucket this node is not the writer of", sent)
+	}
+}
+
+// A BUCKET THAT HOLDS NO CEILING TAKES THE ONE AN OPERATOR WROTE, at boot: the
+// bucket every build before the reservation created, on an embedded broker
+// nothing outside the engine can update. Only the ceiling changes, and what
+// the bucket held before reads back through it.
+func TestABucketThatHoldsNoCeilingTakesAnExplicitReservation(t *testing.T) {
+	t.Parallel()
+	c := memberClient(t)
+	unbounded, err := c.CreateObjectStore(t.Context(), jetstream.ObjectStoreConfig{
+		Bucket: natsobj.Bucket, Description: "an older build's", Storage: jetstream.FileStorage, Replicas: 1})
+	if err != nil {
+		t.Fatalf("make an unbounded bucket: %v", err)
+	}
+	if _, err := unbounded.PutBytes(t.Context(), "kept", []byte("before the bound")); err != nil {
+		t.Fatalf("store through the unbounded bucket: %v", err)
+	}
+	w := &bucketJS{JetStream: c}
+	b, err := natsobj.Open(t.Context(), w, natsobj.Config{MaxBytes: testCeiling, Explicit: true, Replicas: 1})
+	if err != nil {
+		t.Fatalf("an explicit reservation did not bound the bucket: %v", err)
+	}
+	if sent := w.sent(); !slices.Equal(sent, []string{"update stream"}) {
+		t.Errorf("bounding the bucket sent %v; want the one stream update", sent)
+	}
+	usage, err := b.Usage(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.MaxBytes != testCeiling {
+		t.Fatalf("the bucket holds a ceiling of %d, want the %d the operator wrote", usage.MaxBytes, testCeiling)
+	}
+	info, err := c.Stream(t.Context(), natsobj.Stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.CachedInfo().Config.Description; got != "an older build's" {
+		t.Errorf("the bucket's description is %q: bounding it rewrote more than its ceiling", got)
+	}
+	rc, err := b.Get(deadline(t), "kept", 0, -1)
+	if err != nil {
+		t.Fatalf("an object stored before the bound is gone: %v", err)
+	}
+	got, err := io.ReadAll(rc)
+	_ = rc.Close()
+	if err != nil || string(got) != "before the bound" {
+		t.Fatalf("read back %q, %v; want what was stored before the bound", got, err)
 	}
 }
 

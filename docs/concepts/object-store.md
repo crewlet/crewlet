@@ -184,9 +184,14 @@ store:
   `natsobj_bucket_ceiling_kept`. Change an existing bucket's reservation with
   `nats stream update OBJ_crewlet_files --max-bytes=<bytes>`, within what the
   broker can grant.
-- **A bucket with no ceiling is refused.** A node that finds one (made by
-  hand, or by another tool) does not start, and says which `nats stream
-  update` bounds it.
+- **A bucket with no ceiling is bounded by the figure you write, or refused.**
+  Every bucket an engine built before the reservation created holds none, as
+  does one made by hand or by another tool. A node configured with
+  `store.objects.nats_max_bytes` gives such a bucket that reservation at boot
+  and logs `natsobj_bucket_bounded`; it is the one way to bound the bucket on
+  an embedded broker, which nothing outside the engine reaches. A node whose
+  figure is derived does not start, and names both that setting and the
+  `nats stream update` that bounds the bucket from outside.
 - **A full bucket refuses the upload** with the store's reservation named; the
   [`objects_bucket_near_ceiling`](#alarms) alarm fires once less than a fifth
   of the reservation is left, and the `crewlet.objects.bucket.bytes` and
