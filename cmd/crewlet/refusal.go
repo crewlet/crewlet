@@ -64,6 +64,17 @@ func credentialRefusal(status int, raw []byte, sentToken bool) (string, bool) {
 			return "this token doesn't have " + strings.Join(grants, " or ") +
 				". Ask an admin for it", true
 		}
+		if reason == string(authz.ReasonUnseated) {
+			// NO GRANT WOULD, AND NO RELATION EITHER: the verb is made AS
+			// A SEAT — said in a room, read as somebody who is in it — and
+			// this credential acts as itself. What changes it is which
+			// credential, or a binding, so that is what is named: the
+			// reason's bare word sent an operator holding admin looking
+			// for a permission they already had.
+			return "this token acts as no seat, and this is done as one. Use " +
+				"your own token (`crewlet iam token -login LOGIN`), or bind " +
+				"this one to a human seat (`crewlet iam bind ID SEAT`)", true
+		}
 		// NO GRANT WOULD: what is missing is a relation — the seat is not
 		// the caller's and they do not lead it — and the reason names it.
 		return "this token isn't allowed to do this (" + reason + ")", true
