@@ -438,6 +438,11 @@ const writeFault = "the write failed on a fault in this node itself — not " +
 // A WRITE NOBODY ANSWERED FOR is told in fixed words too ([builtin.Unanswered]),
 // for a condition's reason: the router's own name every node it asked, and the
 // words a person reads are what to do, which the unknown's own answer carries.
+//
+// A REFUSAL A DOMAIN DECIDED is told in that domain's own words
+// ([builtin.WriterSentence]), as its tools tell it: the error's own text opens
+// with the package it came from ("chat: invalid: …"), which says nothing about
+// what to change.
 func writeSentence(ctx context.Context, cause, err error) string {
 	switch {
 	case classOf(cause) == crewletmcp.RefusalInternalError:
@@ -445,6 +450,9 @@ func writeSentence(ctx context.Context, cause, err error) string {
 		return writeFault
 	case errors.Is(err, estate.ErrOutcomeUnknown):
 		return builtin.Unanswered
+	}
+	if said, ok := builtin.WriterSentence(err); ok {
+		return said
 	}
 	if why, ok := builtin.Condition(err); ok {
 		return why

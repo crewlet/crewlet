@@ -48,8 +48,9 @@ func TestEveryRoutedDomainIsDeclaredToTheSurfaces(t *testing.T) {
 			"arguments, and nothing it does not route", declared, routed)
 	}
 	for name, d := range nativeDomains {
-		if d.class == nil || len(d.objects) == 0 {
-			t.Errorf("%s is declared with no class function or no object argument", name)
+		if d.class == nil || d.sentence == nil || len(d.objects) == 0 {
+			t.Errorf("%s is declared with no class function, no sentence or no "+
+				"object argument", name)
 		}
 	}
 }
