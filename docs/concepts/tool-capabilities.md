@@ -71,8 +71,8 @@ flowchart TD
 ```
 
 **The outbound half is not optional.** Both MCP surfaces this engine serves —
-`/operator/mcp`, which hands a company's tracker and knowledge base to an
-operator's own assistant, and the sandbox bridge, which hands a seat's tools to
+`/operator/mcp`, which hands a company's tracker, knowledge base and chat to
+an operator's own assistant, and the sandbox bridge, which hands a seat's tools to
 a coding agent — advertise each tool's hints alongside its schema. A surface
 that published only names and schemas would give those clients no way to tell
 `search_work_items` from `remove_work_item`: a client that asks a person before
