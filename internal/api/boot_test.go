@@ -463,3 +463,83 @@ func TestWhichNodesBindAPublicListener(t *testing.T) {
 		}
 	}
 }
+
+// ONLY AN INGRESS NODE BINDS THE ARTIFACT ORIGIN, where its file sets a port
+// for it, and api.port 0 switches it off with every other listener: the rule
+// `crewlet run` binds by before the boot and serves by after it.
+func TestWhichNodesBindAnArtifactListener(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		roles     []string
+		port      int
+		artifacts int
+		want      bool
+	}{
+		{"an ingress node with api.artifacts", nil, 8080, 8090, true},
+		{"an ingress node without it", nil, 8080, 0, false},
+		{"a node without ingress", []string{"data", "seats", "workers"}, 8080, 8090, false},
+		{"api.port 0 is the hard off switch", nil, 0, 8090, false},
+	} {
+		b := closedPosture()
+		b.Node.Roles = tc.roles
+		b.API.Port = tc.port
+		b.API.ExternalURL = "https://crewlet.example.test"
+		b.API.Artifacts = config.APIArtifacts{Port: tc.artifacts,
+			ExternalURL: "https://artifacts.example.test"}
+		if got := api.ArtifactsListener(&b, "core-1"); got != tc.want {
+			t.Errorf("%s: ArtifactsListener = %t, want %t", tc.name, got, tc.want)
+		}
+		if got := bootFor(t, b).Artifacts() != nil; got != tc.want {
+			t.Errorf("%s: the boot surface has an artifact origin: %t, want %t", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A STARTING ARTIFACT ORIGIN ANSWERS AS THE ORIGIN DOES: an empty refusal under
+// its inert headers, never this surface's JSON, which would be a document an
+// artifact page could read. A route it will serve is told to come back, with a
+// starting node's Retry-After and then a drain's; a path or a method it never
+// serves meets the 404 or the 405 it meets once the node serves.
+func TestAStartingArtifactOriginAnswersAsTheOrigin(t *testing.T) {
+	t.Parallel()
+	b := closedPosture()
+	b.API.Port, b.API.ExternalURL = 8080, "https://crewlet.example.test"
+	b.API.Artifacts = config.APIArtifacts{Port: 8090, ExternalURL: "https://artifacts.example.test"}
+	boot := bootFor(t, b)
+	origin := boot.Artifacts()
+	if origin == nil {
+		t.Fatal("an ingress node with api.artifacts has no starting artifact origin")
+	}
+	retry := func(d time.Duration) string { return strconv.Itoa(int(d / time.Second)) }
+	for _, tc := range []struct {
+		method, path string
+		status       int
+		retryAfter   string
+		allow        string
+	}{
+		{http.MethodGet, "/t/ticket/index.html", http.StatusServiceUnavailable, retry(api.BootRetryAfter), ""},
+		{http.MethodHead, "/t/ticket/_assets/logo.png", http.StatusServiceUnavailable, retry(api.BootRetryAfter), ""},
+		{http.MethodGet, "/_crewlet/runtime/1/runtime.js", http.StatusServiceUnavailable, retry(api.BootRetryAfter), ""},
+		{http.MethodGet, "/_crewlet/kit/1/kit.css", http.StatusServiceUnavailable, retry(api.BootRetryAfter), ""},
+		{http.MethodGet, "/health", http.StatusNotFound, "", ""},
+		{http.MethodGet, "/t//index.html", http.StatusNotFound, "", ""},
+		{http.MethodPost, "/t/ticket/index.html", http.StatusMethodNotAllowed, "", "GET, HEAD"},
+	} {
+		rec := sendTo(t, origin, tc.method, tc.path)
+		h := rec.Header()
+		if rec.Code != tc.status || rec.Body.Len() != 0 || h.Get("Retry-After") != tc.retryAfter ||
+			h.Get("Allow") != tc.allow || h.Get("Cache-Control") != "no-store" ||
+			h.Get("Content-Security-Policy") == "" || h.Get("Content-Type") != "" {
+			t.Errorf("%s %s = %d %q, headers %v; want an empty %d (Retry-After %q, Allow %q) "+
+				"under the origin's refusal headers", tc.method, tc.path, rec.Code, rec.Body.String(),
+				h, tc.status, tc.retryAfter, tc.allow)
+		}
+	}
+	boot.Stopping()
+	if rec := sendTo(t, origin, http.MethodGet, "/t/ticket/index.html"); rec.Code != http.StatusServiceUnavailable ||
+		rec.Header().Get("Retry-After") != retry(api.DrainRetryAfter) {
+		t.Errorf("a stopping origin = %d (Retry-After %q), want 503 with the drain's %q",
+			rec.Code, rec.Header().Get("Retry-After"), retry(api.DrainRetryAfter))
+	}
+}

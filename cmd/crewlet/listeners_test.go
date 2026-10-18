@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -170,6 +171,59 @@ func TestAnUnbindableArtifactPortFailsTheNode(t *testing.T) {
 	}
 	if bound(boot.API.Port) {
 		t.Error("api.port is still listening although the node failed to start")
+	}
+}
+
+// THE ARTIFACT ORIGIN IS BOUND BEFORE THE BOOT, with api.port, by the rule the
+// origin is later served by ([api.ArtifactsListener]): an ingress node binds it
+// and answers it as a starting origin answers (an empty 503 for a route it will
+// serve, never the boot surface's JSON) and says where in `api_bound`; a node
+// without ingress binds nothing there, whatever its file sets.
+func TestTheArtifactListenerIsBoundBeforeTheBoot(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		roles []string
+		want  bool
+	}{
+		{"an ingress node", nil, true},
+		{"a node without ingress", []string{"data", "seats", "workers"}, false},
+	} {
+		var logged bytes.Buffer
+		log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		boot := bootstrapFor(t, reservePort(t))
+		boot.Node.Roles = tc.roles
+		port := reservePort(t)
+		addr := "127.0.0.1:" + strconv.Itoa(port)
+		boot.API.Artifacts = config.APIArtifacts{Host: "127.0.0.1", Port: port, ExternalURL: "http://" + addr}
+		var asked []string
+		bind := func(ctx context.Context, a string) (net.Listener, error) {
+			asked = append(asked, a)
+			return bindReserved(ctx, a)
+		}
+		listeners, err := bindListeners(t.Context(), boot, "node-0", false, bind, log)
+		if err != nil {
+			t.Fatalf("%s: bindListeners: %v", tc.name, err)
+		}
+		if got := listeners.artifacts != nil; got != tc.want || slices.Contains(asked, addr) != tc.want {
+			listeners.close(context.Background(), log)
+			t.Fatalf("%s: bound the artifact listener: %t (binds asked %v), want %t",
+				tc.name, got, asked, tc.want)
+		}
+		if tc.want {
+			if status, code := answer(t, http.MethodGet, "http://"+addr+"/t/ticket/index.html"); status != http.StatusServiceUnavailable || code != "" {
+				t.Errorf("%s: a frame while the node starts = %d %q, want the origin's empty 503",
+					tc.name, status, code)
+			}
+			if !strings.Contains(logged.String(), "artifacts_addr="+addr) {
+				t.Errorf("%s: api_bound did not say where the artifact origin is bound:\n%s",
+					tc.name, logged.String())
+			}
+		}
+		listeners.close(context.Background(), log)
+		if tc.want && bound(port) {
+			t.Errorf("%s: api.artifacts.port is still listening after a failed boot closed it", tc.name)
+		}
 	}
 }
 
