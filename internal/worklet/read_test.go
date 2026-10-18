@@ -1,9 +1,11 @@
 package worklet_test
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -598,6 +600,25 @@ func TestACursorFromAnotherOrderIsRefused(t *testing.T) {
 	}
 }
 
+// A CURSOR WHOSE ROW HAS NO ID NAMES NO ROW, and is refused rather than
+// resumed.
+//
+// Every order ends in the task's id, which is never NULL, so the cursor's last
+// key is what makes it a place at all. Without one there is no arm past it —
+// "after nothing" is the empty set of arms — and resumed, a page would answer
+// nothing with no cursor and no error, which reads as the listing's end.
+func TestACursorThatNamesNoRowIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	cursor := base64.RawURLEncoding.EncodeToString(
+		[]byte(`{"k":["a0",null],"o":"t.rank, t.id"}`))
+	if err := r.askErr(map[string]any{"container": "project:ENG",
+		"cursor": cursor}); err == nil || !strings.Contains(err.Error(), "names no row") {
+		t.Fatalf("a cursor with no id was answered (err %v), want a refusal "+
+			"saying it names no row", err)
+	}
+}
+
 // AND A CURSOR FROM ANOTHER ORDER OF THE SAME LENGTH IS REFUSED TOO.
 //
 // The arity check above passes for any two orders of equal width, and the
@@ -674,23 +695,11 @@ func TestPagingANullableOrderReturnsEveryRowExactlyOnce(t *testing.T) {
 	}
 
 	for _, sort := range []string{"due", "-due", "f.effort", "-f.effort"} {
+		params := map[string]any{"container": "project:ENG", "sort": sort}
+		paged := pageThrough(t, r, params, 2)
 		seen := map[string]int{}
-		cursor := ""
-		for page := 0; page < total+2; page++ {
-			params := map[string]any{
-				"container": "project:ENG", "sort": sort, "limit": "2",
-			}
-			if cursor != "" {
-				params["cursor"] = cursor
-			}
-			answer := r.ask(params)
-			for _, row := range answer.Rows {
-				seen[row.ID]++
-			}
-			if answer.NextCursor == "" {
-				break
-			}
-			cursor = answer.NextCursor
+		for _, id := range paged {
+			seen[id]++
 		}
 		if len(seen) != total {
 			t.Errorf("paging by %s returned %d distinct tasks of %d — a "+
@@ -702,7 +711,144 @@ func TestPagingANullableOrderReturnsEveryRowExactlyOnce(t *testing.T) {
 				t.Errorf("paging by %s returned %s %d times", sort, id, times)
 			}
 		}
+		// AND IN THE ORDER ONE READ DRAWS: a resume that read the NULL tail
+		// before the values beyond the cursor returns every row once and
+		// puts the undated ones in the middle of the list.
+		if whole := ids(r.ask(withKey(params, "limit", "100"))); !slices.Equal(paged, whole) {
+			t.Errorf("paging by %s answers\n%v\nwhere one read answers\n%v",
+				sort, paged, whole)
+		}
 	}
+}
+
+// PAGING AN ORDER RETURNS EVERY ROW ONCE, IN THE ORDER ONE READ DRAWS.
+//
+// A later page resumes after the last row of the one before it, as the arms
+// of the order read in turn ([keyset]): the rows tied with that row on every
+// column and later by id, then those tied on all but the last, and so on out
+// to the rows past it on the first column. A tie arm that dropped its id bound
+// repeats the rows the page before already returned, one that was left out
+// skips the rest of the tie, and arms read out of turn put a page's rows out
+// of order — each only for a caller who pages, and only where a boundary falls
+// INSIDE a tie, which a fixture of distinct values never reaches.
+//
+// So the fixture is ties: one instant every write is stamped with (the
+// harness's clock does not move), spend that is zero for all but two tasks, a
+// handful of priorities, due dates with repeats and no date at all, and titles
+// with repeats — and in the trash, a subtree removed at one instant beside a
+// task removed alone. Every order is paged two and three rows at a time, so a
+// boundary falls inside a tie and at its end, and the pages concatenated must
+// be one read's answer exactly.
+func TestPagingAnOrderReturnsEveryRowOnceInItsOrder(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	priorities := []worklet.Priority{worklet.PriorityHigh, worklet.PriorityNormal,
+		worklet.PriorityNormal, worklet.PriorityLow}
+	for i := range 9 {
+		task := newTask(fmt.Sprintf("t-%d", i))
+		task.Key = ""
+		task.Priority = priorities[i%len(priorities)]
+		task.Title = []string{"alpha", "beta", "alpha"}[i%3]
+		if i%3 != 0 {
+			due := wednesday.Add(time.Duration(i%2) * 24 * time.Hour)
+			task.DueAt = &due
+		}
+		if _, err := r.writer.CreateTask(t.Context(), fmt.Sprintf("op-%d", i),
+			task, nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+	for i, id := range []string{"t-3", "t-6"} {
+		if _, err := r.writer.RecordTurn(t.Context(), fmt.Sprintf("turn/run-%d/dispatch", i),
+			worklet.TurnRecord{
+				Task: id, Seat: "dev", TurnID: fmt.Sprintf("run-%d", i),
+				Trigger: "work_item", Outcome: "done", Phases: []string{"execute"},
+				Spend: worklet.TurnSpend{Turns: 1, Input: 900, Output: 100},
+			}); err != nil {
+			t.Fatalf("RecordTurn: %v", err)
+		}
+		r.drain()
+	}
+	// THE TRASH: a subtree removed together, at one instant, and a task
+	// removed alone.
+	seedTree(t, r, "t-root", "t-kid", worklet.StatusTodo, worklet.StatusTodo)
+	kid := newTask("t-kid2")
+	kid.Key = ""
+	root := "t-root"
+	kid.Parent, kid.Depth = &root, 1
+	if _, err := r.writer.CreateTask(t.Context(), "op-kid2", kid, nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	lone := newTask("t-lone")
+	lone.Key = ""
+	if _, err := r.writer.CreateTask(t.Context(), "op-lone", lone, nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	if _, err := r.writer.RemoveTask(t.Context(), "op-out", "t-root", "ENG",
+		true, nil); err != nil {
+		t.Fatalf("RemoveTask: %v", err)
+	}
+	r.drain()
+	if _, err := r.writer.RemoveTask(t.Context(), "op-lone-out", "t-lone", "ENG",
+		false, nil); err != nil {
+		t.Fatalf("RemoveTask: %v", err)
+	}
+	r.drain()
+
+	cases := map[string]map[string]any{
+		"the board":               {"container": "project:ENG"},
+		"recently updated":        {"container": "project:ENG", "sort": "-updated"},
+		"by spend":                {"container": "project:ENG", "sort": "-spend_tokens"},
+		"by priority then update": {"container": "project:ENG", "sort": "priority,-updated"},
+		"by due then title":       {"container": "project:ENG", "sort": "-due,title"},
+		"by title":                {"container": "project:ENG", "sort": "title"},
+		"the workspace":           {},
+		"by spend everywhere":     {"sort": "-spend_tokens"},
+		"the trash":               {"container": "project:ENG", "removed": "true"},
+		"the trash, flat":         {"container": "project:ENG", "removed": "true", "subtasks": "separate"},
+		"the trash everywhere":    {"removed": "true", "subtasks": "separate"},
+		"the trash by removal":    {"removed": "true", "sort": "removed", "subtasks": "separate"},
+	}
+	for name, params := range cases {
+		t.Run(name, func(t *testing.T) {
+			whole := ids(r.ask(withKey(params, "limit", "100")))
+			if len(whole) < 4 {
+				t.Fatalf("one read answers %v, too few rows for a page "+
+					"boundary to fall inside anything", whole)
+			}
+			for _, size := range []int{2, 3} {
+				if paged := pageThrough(t, r, params, size); !slices.Equal(paged, whole) {
+					t.Errorf("paging %d at a time answers\n%v\nwhere one read "+
+						"answers\n%v", size, paged, whole)
+				}
+			}
+		})
+	}
+}
+
+// pageThrough reads a query to its end a page of size rows at a time and
+// answers every row in the order the pages returned them.
+func pageThrough(t *testing.T, r *roundTrip, params map[string]any, size int) []string {
+	t.Helper()
+	var out []string
+	cursor := ""
+	for range 100 {
+		page := withKey(params, "limit", strconv.Itoa(size))
+		if cursor != "" {
+			page = withKey(page, "cursor", cursor)
+		}
+		answer := r.ask(page)
+		out = append(out, ids(answer)...)
+		if answer.NextCursor == "" {
+			return out
+		}
+		cursor = answer.NextCursor
+	}
+	t.Fatalf("a hundred pages of %d and still a cursor: %v", size, out)
+	return nil
 }
 
 // A DISJUNCTION ANSWERS WHAT THE SAME PREDICATE ANSWERS WRITTEN FLAT.

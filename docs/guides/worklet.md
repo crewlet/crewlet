@@ -760,6 +760,19 @@ the tasks on somebody's list in the order they arranged, and a page smaller
 than the list now carries on in that order: the whole list (at most 32 tasks)
 is read on every page and the cursor is a place in it.
 
+**Every other answer resumes where its last page stopped.** `next_cursor`,
+handed back as `cursor=`, names the last row's place in the order, and the next
+page is read from that place onwards: the tasks tied with that row on every
+sort column and later by id, then those tied on all but the last column, and
+so on out to the tasks past it on the first — each read as a seek of the index
+the order is served by. So page fifty of a board, of the workspace, of a
+project by its last update, of the company by spend or of the trash costs what
+page one does, and paging through a tie — every task at zero spend, or updated
+in the same instant — returns each task once, in the order one read draws. An
+order no index serves reads its scope for every page, as its first page does.
+A cursor belongs to the order that minted it, and re-sorting starts again from
+the first page.
+
 ### What a board groups on
 
 Any of these, as `group_by=` — and a second one as `group_by2=`, which splits
