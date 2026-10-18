@@ -1,9 +1,13 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"log/slog"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -12,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -63,6 +68,10 @@ type fakePruner struct {
 	// path: a kind this build cannot classify refuses every gesture in that
 	// room and none anywhere else.
 	refuse map[string]error
+
+	// after, when set, is called with the number of records published so
+	// far after each one — where a case lands the tick's deadline.
+	after func(calls int)
 }
 
 func (p *fakePruner) Prune(_ context.Context, actor chatlet.Actor, opID, channelID string,
@@ -80,6 +89,9 @@ func (p *fakePruner) Prune(_ context.Context, actor chatlet.Actor, opID, channel
 	}
 	if outcome == statelog.OutcomeApplied && p.rooms != nil {
 		p.rooms.advance(channelID, cutoff)
+	}
+	if p.after != nil {
+		p.after(len(p.calls))
 	}
 	return chatlet.Written{Outcome: statelog.Result{Outcome: outcome}}, nil
 }
@@ -107,19 +119,42 @@ func (p *fakePruner) channels() []string {
 	return out
 }
 
-// fakeRooms is the company's rooms as the duty reads them.
+// fakeRooms is the company's rooms as the duty reads them: a page at a time,
+// in room-id order, strictly after the room named — which is the keyset the
+// real statement seeks.
 type fakeRooms struct {
 	rooms []chatRoom
 	err   error
 	reads int
+
+	// afters is where each read began, in order.
+	afters []string
+
+	// fail, when set, is asked before each read with the read's ordinal
+	// (1 for the first) and the read's own context; an error fails it.
+	fail func(ctx context.Context, read int) error
 }
 
-func (f *fakeRooms) PruneRooms(context.Context) ([]chatRoom, error) {
+func (f *fakeRooms) PruneRooms(ctx context.Context, after string, limit int) ([]chatRoom, error) {
 	f.reads++
+	f.afters = append(f.afters, after)
 	if f.err != nil {
 		return nil, f.err
 	}
-	return append([]chatRoom(nil), f.rooms...), nil
+	if f.fail != nil {
+		if err := f.fail(ctx, f.reads); err != nil {
+			return nil, err
+		}
+	}
+	sorted := append([]chatRoom(nil), f.rooms...)
+	slices.SortFunc(sorted, func(a, b chatRoom) int { return cmp.Compare(a.ID, b.ID) })
+	var out []chatRoom
+	for _, room := range sorted {
+		if room.ID > after && len(out) < limit {
+			out = append(out, room)
+		}
+	}
+	return out, nil
 }
 
 // advance moves a room's floor to where a prune left it.
@@ -142,10 +177,16 @@ func override(n int) *int { return &n }
 
 // pruneHarness wires a duty over stubs, holding the duty this node already
 // won so every case is about the sweep rather than about the lease.
+//
+// THE FAKE KEEPS A COPY OF THE ROOMS IT IS HANDED, because an applied prune
+// moves a floor in place ([fakeRooms.advance]) and a case that spreads its own
+// slice (`all...`) hands over that slice's backing array, not its elements:
+// two parallel subtests built over one slice would each move the other's
+// floors — a data race, and a room the other's first page no longer needs.
 func pruneHarness(policy chatRetentionPolicy, now time.Time,
 	rooms ...chatRoom) (*chatPrune, *fakePruner, *fakeRooms) {
 
-	source := &fakeRooms{rooms: rooms}
+	source := &fakeRooms{rooms: slices.Clone(rooms)}
 	pruner := &fakePruner{rooms: source}
 	clock := &fakeClock{at: now}
 	return &chatPrune{
@@ -484,6 +525,251 @@ func TestThePruneSweepCoversEveryRoomAndSurvivesOnesRefusal(t *testing.T) {
 	}
 }
 
+// THE SWEEP PAGES THROUGH EVERY ROOM THE COMPANY EVER MADE.
+//
+// Nothing bounds that set — an archive releases [chatlet.MaxChannels]' slot, a
+// direct conversation is never refused by it, and no room is ever deleted — so a read
+// of all of it is a snapshot and a slice that grow for the life of the
+// deployment. Each read is one page, the next begins after the last room the
+// previous returned, and every room on every page is swept.
+func TestThePruneSweepPagesThroughEveryRoom(t *testing.T) {
+	t.Parallel()
+	floor := anchor.Add(-2 * 365 * 24 * time.Hour)
+	// Two whole pages and a short one, so a sweep that read once, or that
+	// stopped at the first full page, leaves rooms unpruned.
+	const total = 2*chatPruneRoomsPage + 7
+	var all []chatRoom
+	for i := range total {
+		all = append(all, room(fmt.Sprintf("room-%05d", i), nil, floor))
+	}
+	d, pruner, rooms := pruneHarness(
+		chatRetentionPolicy{Chatlet: true, CompanyDays: config.MinMessageRetentionDays},
+		anchor, all...)
+
+	d.tick(t.Context())
+
+	if got := len(pruner.channels()); got != total {
+		t.Fatalf("records were published for %d rooms, want all %d — the "+
+			"sweep must page past the first %d", got, total, chatPruneRoomsPage)
+	}
+	want := []string{"", all[chatPruneRoomsPage-1].ID, all[2*chatPruneRoomsPage-1].ID}
+	if !slices.Equal(rooms.afters, want) {
+		t.Errorf("the reads began after %q, want %q — one page each, each "+
+			"beginning after the last room the one before returned", rooms.afters, want)
+	}
+	if d.resume != "" {
+		t.Errorf("a lap that came round left the next one to begin after %q", d.resume)
+	}
+}
+
+// A LAP THE DEADLINE CUT IS CONTINUED, NOT RESTARTED.
+//
+// A tick may not outlive its interval, so on a company with enough backlog a
+// lap ends early. Begun at the first room id every time, the lap would spend
+// every tick on the same low ids while the backlog lasted, and the rooms at
+// the tail would keep their messages past the horizon a screen says they are
+// pruned at. So the next tick begins after the last room the cut one
+// finished, reaches the end, comes round from the first room and stops where
+// it began — and a room whose ladder the deadline cut is taken again rather
+// than skipped.
+func TestALapTheDeadlineCutResumesWhereItStopped(t *testing.T) {
+	t.Parallel()
+	floor := anchor.Add(-2 * 365 * 24 * time.Hour)
+	ids := []string{"alpha", "bravo", "charlie", "delta", "echo"}
+	var all []chatRoom
+	for _, id := range ids {
+		all = append(all, room(id, nil, floor))
+	}
+	d, pruner, rooms := pruneHarness(
+		chatRetentionPolicy{Chatlet: true, CompanyDays: config.MinMessageRetentionDays},
+		anchor, all...)
+
+	// THE DEADLINE LANDS IN THE MIDDLE OF CHARLIE'S LADDER: two whole
+	// rooms and part of a third.
+	ctx, cancel := context.WithCancel(t.Context())
+	pruner.after = func(calls int) {
+		if calls == 2*chatPruneRecordsPerRoom+3 {
+			cancel()
+		}
+	}
+	d.tick(ctx)
+	if got := pruner.channels(); !slices.Equal(got, []string{"alpha", "bravo", "charlie"}) {
+		t.Fatalf("the cut tick published for %v", got)
+	}
+	if d.resume != "bravo" {
+		t.Fatalf("the cut lap resumes after %q, want %q — charlie's ladder was "+
+			"cut, so it is not finished", d.resume, "bravo")
+	}
+
+	pruner.after, pruner.calls = nil, nil
+	reads := rooms.reads
+	d.tick(t.Context())
+	if got := pruner.channels(); !slices.Equal(got, []string{"charlie", "delta", "echo", "alpha", "bravo"}) {
+		t.Fatalf("the next tick published for %v, want the lap continued from "+
+			"charlie and come round to bravo", got)
+	}
+	if want := []string{"bravo", ""}; !slices.Equal(rooms.afters[reads:], want) {
+		t.Errorf("the next tick's reads began after %q, want %q", rooms.afters[reads:], want)
+	}
+	if d.resume != "" {
+		t.Errorf("a lap that came round left the next one to begin after %q", d.resume)
+	}
+}
+
+// A LAP CUT BETWEEN PAGES IS CONTINUED AFTER THE LAST PAGE IT FINISHED.
+//
+// The other half of the case above: the deadline, the stop or a failed read
+// lands while the next PAGE is being taken rather than inside a room's ladder.
+// That read is most of the time between two pages, so it is where a deadline
+// usually lands, and a lap that answered it by starting again at the first
+// room would be the starvation the resume point exists to end. Every one of
+// the three resumes after the last room of the page the lap finished.
+func TestALapCutBetweenPagesResumesAfterTheLastPageItFinished(t *testing.T) {
+	t.Parallel()
+	floor := anchor.Add(-2 * 365 * 24 * time.Hour)
+	const total = chatPruneRoomsPage + 3
+	var all []chatRoom
+	for i := range total {
+		all = append(all, room(fmt.Sprintf("room-%05d", i), nil, floor))
+	}
+	finished := all[chatPruneRoomsPage-1].ID
+	refused := errors.New("the estate did not answer")
+
+	for _, tc := range []struct {
+		name string
+		// cut ends the second read: by cancelling the tick's context
+		// inside it, or by failing it outright.
+		cut func(cancel context.CancelFunc) func(context.Context, int) error
+	}{
+		{"the deadline lands inside the read", func(cancel context.CancelFunc) func(context.Context, int) error {
+			return func(ctx context.Context, read int) error {
+				if read == 2 {
+					cancel()
+					return ctx.Err()
+				}
+				return nil
+			}
+		}},
+		{"the read fails", func(context.CancelFunc) func(context.Context, int) error {
+			return func(_ context.Context, read int) error {
+				if read == 2 {
+					return refused
+				}
+				return nil
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d, pruner, rooms := pruneHarness(
+				chatRetentionPolicy{Chatlet: true, CompanyDays: config.MinMessageRetentionDays},
+				anchor, all...)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			rooms.fail = tc.cut(cancel)
+
+			d.tick(ctx)
+
+			if got := len(pruner.channels()); got != chatPruneRoomsPage {
+				t.Fatalf("the cut tick published for %d rooms, want the first "+
+					"page's %d", got, chatPruneRoomsPage)
+			}
+			if d.resume != finished {
+				t.Fatalf("the lap cut on its second read resumes after %q, want "+
+					"%q — the last room of the page it finished", d.resume, finished)
+			}
+
+			rooms.fail = nil
+			pruner.calls = nil
+			reads := rooms.reads
+			d.tick(t.Context())
+			if want := []string{finished, ""}; !slices.Equal(rooms.afters[reads:], want) {
+				t.Errorf("the next tick's reads began after %q, want %q — the "+
+					"rest of the lap, then round from the first room",
+					rooms.afters[reads:], want)
+			}
+			if got := pruner.channels(); len(got) == 0 || got[0] != all[chatPruneRoomsPage].ID {
+				t.Errorf("the next tick began its lap at %v, want %q", got, all[chatPruneRoomsPage].ID)
+			}
+		})
+	}
+}
+
+// A CUT IS NOT A FAILURE, AND ONLY A FAILED READ IS WARNED ABOUT.
+//
+// `chat_prune_rooms_unread` tells an operator that rooms were left past their
+// horizon because the estate did not answer. A deadline landing inside the
+// read is the tick ending on time, which the next tick continues, and warning
+// about it would put that line in the log of every company with a backlog,
+// once an hour, where it reads as a store that keeps failing.
+//
+// NOT PARALLEL: it swaps the process-wide logger, which this package otherwise
+// leaves at its boot default, and a parallel case's lines would be counted.
+func TestOnlyAReadThatFailedIsWarnedAbout(t *testing.T) {
+	logs := &stopLineBuffer{}
+	logging.Configure(slog.LevelInfo, logging.FormatJSON, logs)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
+	warned := func() int {
+		n := 0
+		for _, record := range logs.records(t) {
+			if record["msg"] == "chat_prune_rooms_unread" {
+				n++
+			}
+		}
+		return n
+	}
+	floor := anchor.Add(-2 * 365 * 24 * time.Hour)
+	policy := chatRetentionPolicy{Chatlet: true, CompanyDays: config.MinMessageRetentionDays}
+
+	d, _, rooms := pruneHarness(policy, anchor, room("alpha", nil, floor))
+	ctx, cancel := context.WithCancel(t.Context())
+	rooms.fail = func(ctx context.Context, _ int) error {
+		cancel()
+		return ctx.Err()
+	}
+	d.tick(ctx)
+	cancel()
+	if n := warned(); n != 0 {
+		t.Errorf("a deadline inside the read was warned about %d time(s) as a "+
+			"read the estate did not answer", n)
+	}
+
+	d, _, rooms = pruneHarness(policy, anchor, room("alpha", nil, floor))
+	rooms.fail = func(context.Context, int) error { return errors.New("the estate did not answer") }
+	d.tick(t.Context())
+	if n := warned(); n != 1 {
+		t.Errorf("a read the estate refused was warned about %d time(s), want once", n)
+	}
+}
+
+// A TICK THAT ENDS BEFORE ITS FIRST READ KEEPS THE LAP WHERE IT WAS.
+//
+// A claim that took the tick's whole budget, or a stop that arrived with it,
+// leaves nothing read and nothing swept — so the lap the previous tick cut is
+// still the lap to continue, and forgetting it here would restart it at the
+// first room.
+func TestATickEndedBeforeItsFirstReadKeepsTheLap(t *testing.T) {
+	t.Parallel()
+	floor := anchor.Add(-2 * 365 * 24 * time.Hour)
+	d, pruner, rooms := pruneHarness(
+		chatRetentionPolicy{Chatlet: true, CompanyDays: config.MinMessageRetentionDays},
+		anchor, room("alpha", nil, floor), room("bravo", nil, floor))
+	d.resume = "alpha"
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	d.tick(ctx)
+
+	if rooms.reads != 0 || len(pruner.calls) != 0 {
+		t.Fatalf("a tick ended before it began read %d pages and published %d "+
+			"records", rooms.reads, len(pruner.calls))
+	}
+	if d.resume != "alpha" {
+		t.Errorf("a tick ended before its first read left the lap to resume "+
+			"after %q, want %q", d.resume, "alpha")
+	}
+}
+
 // AN UNSETTLED WRITE ENDS THAT ROOM'S LADDER AND NOBODY ELSE'S.
 //
 // `pending` and `unknown` are not failures — they are the framework's other
@@ -764,9 +1050,31 @@ func TestTheRoomReadCarriesAllThreeRetentionSettingsAndTheRoomsFloor(t *testing.
 		t.Fatalf("seed the rooms: %v", err)
 	}
 
-	rooms, err := chatRoomRows{db: estate.Reader()}.PruneRooms(t.Context())
+	reader := chatRoomRows{db: estate.Reader()}
+	rooms, err := reader.PruneRooms(t.Context(), "", chatPruneRoomsPage)
 	if err != nil {
 		t.Fatalf("PruneRooms: %v", err)
+	}
+
+	// A PAGE IS THE NEXT ROOMS IN ID ORDER, STRICTLY AFTER THE ONE NAMED:
+	// two pages of two cover the four rooms once each, and the second
+	// begins after the first's last.
+	var paged []string
+	for after := ""; ; {
+		page, pageErr := reader.PruneRooms(t.Context(), after, 2)
+		if pageErr != nil {
+			t.Fatalf("PruneRooms after %q: %v", after, pageErr)
+		}
+		for _, room := range page {
+			paged = append(paged, room.ID)
+		}
+		if len(page) < 2 {
+			break
+		}
+		after = page[len(page)-1].ID
+	}
+	if want := []string{"empty", "forever", "inherits", "ninety"}; !slices.Equal(paged, want) {
+		t.Errorf("paging two rooms at a time read %v, want %v", paged, want)
 	}
 	got := map[string]chatRoom{}
 	for _, room := range rooms {
@@ -819,7 +1127,8 @@ func TestTheRoomReadSeeksEachRoomsOldestMessage(t *testing.T) {
 
 	var plan []string
 	err := estate.Reader().Read(t.Context(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+chatPruneRoomsSQL)
+		rows, err := tx.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+chatPruneRoomsSQL,
+			"room-0500", chatPruneRoomsPage)
 		if err != nil {
 			return err
 		}
@@ -842,11 +1151,24 @@ func TestTheRoomReadSeeksEachRoomsOldestMessage(t *testing.T) {
 		t.Errorf("the room read's plan is %q, which never takes %q — each "+
 			"room's oldest message must be one seek of the prune index", plan, seek)
 	}
+	// AND THE PAGE IS A KEYSET SEEK of the rooms' own key, walked in the
+	// order it is stored: a scan, or a sorter, would read every room the
+	// company ever made to answer one page of them.
+	const page = "SEARCH c USING INDEX sqlite_autoindex_chat_channels_1 (id>?)"
+	if !slices.Contains(plan, page) {
+		t.Errorf("the room read's plan is %q, which never takes %q — a page "+
+			"must seek to where the last one stopped", plan, page)
+	}
 	for _, step := range plan {
 		if strings.Contains(step, "SCAN chat_messages") || strings.Contains(step, "SCAN m ") ||
 			strings.Contains(step, "ephemeral") {
 			t.Errorf("the room read's plan takes %q: it reads every message the "+
 				"company holds to find each room's oldest (whole plan %q)", step, plan)
+		}
+		if strings.Contains(step, "SCAN chat_channels") || strings.Contains(step, "SCAN c") ||
+			strings.Contains(step, "TEMP B-TREE") {
+			t.Errorf("the room read's plan takes %q: it reads every room the "+
+				"company ever made to answer one page (whole plan %q)", step, plan)
 		}
 	}
 }
