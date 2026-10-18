@@ -629,6 +629,9 @@ const (
 	// anchorAlias is the task a row's subtree hangs from, read by the
 	// rollup's probe ([compileWhere]).
 	anchorAlias alias = "a"
+	// sideAlias is that task again, read only to ask which side of the
+	// trash it is on ([anchorOf]).
+	sideAlias alias = "s"
 )
 
 // col is one column of the task this alias names.
@@ -895,12 +898,31 @@ func groupNarrowed(q Query, fields map[string]resolvedField, where []string,
 // its own under a live parent — which an author removing their own item does
 // — was in no default-mode trash at either scope, and the only thing that
 // reached it was `subtasks=separate`.
+//
+// # And itself, when that is across the trash
+//
+// A row's anchor is on the other side of the trash from the row whenever a
+// gesture moved one and not the other, and then the anchor's answer is about
+// a task the listing does not hold. An author may remove their own item
+// alone, and its live subtasks stay where they are, under a root that is in
+// the trash; a restore that stopped after its root leaves the rest still in
+// the trash, naming a root that is back. Probed for the anchor's answer, each
+// was in no default-mode listing on either side — the live subtasks under
+// the removed root were on no board, and the residue of the restore in no
+// trash — and nothing but `subtasks=separate` reached them. So an anchor
+// across the trash is no anchor: the row is filtered on its own, as the root
+// of what is left. A second probe of the anchor by its key asks which side it
+// is on, and the anchor is the row itself when it is not on the listing's.
 func anchorOf(q Query) string {
+	ref := rowAlias.col("root_id")
 	if q.Removed != nil && *q.Removed {
-		return "IFNULL(" + rowAlias.col("removed_with") + ", " +
+		ref = "IFNULL(" + rowAlias.col("removed_with") + ", " +
 			rowAlias.col("id") + ")"
 	}
-	return rowAlias.col("root_id")
+	return "COALESCE((SELECT " + sideAlias.col("id") + " FROM tracker_tasks " +
+		string(sideAlias) + " INDEXED BY " + tasksKey + " WHERE " +
+		sideAlias.col("id") + " = " + ref + " AND " + tombClause(q, sideAlias) +
+		"), " + rowAlias.col("id") + ")"
 }
 
 // anchorProbe is "the task ref names matches this predicate", as a probe of
