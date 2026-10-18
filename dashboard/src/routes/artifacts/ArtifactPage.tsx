@@ -33,6 +33,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArtifactIcon,
   Button,
   ButtonLink,
   Callout,
@@ -197,7 +198,7 @@ function Trashed({ detail, onChanged }: { detail: ArtifactDetail; onChanged: () 
     <>
       <ObjectHeader
         kind={KIND_WORDS[detail.kind]}
-        icon="layers"
+        icon={<ArtifactIcon icon={detail.icon} kind={detail.kind} size="xs" />}
         title={detail.title}
         facts={[
           { label: "Trashed by", value: trashedBy },
@@ -435,8 +436,9 @@ function Loaded({
     <div className="artifact-page">
       <ObjectHeader
         kind={KIND_WORDS[detail.kind]}
-        icon="layers"
+        icon={<ArtifactIcon icon={detail.icon} kind={detail.kind} size="xs" />}
         title={detail.title}
+        description={detail.description || undefined}
         facts={[
           {
             label: "Owner",

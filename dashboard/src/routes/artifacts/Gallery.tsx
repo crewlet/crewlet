@@ -303,7 +303,9 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
           />
         )}
       </QueryState>
-      {viewer.admin && <Usage />}
+      {/* THE COMPANY'S STORAGE IS AN ADMINISTRATOR'S OVERVIEW, said once on
+          For you rather than under every section, the trash and a search. */}
+      {viewer.admin && section === "for-you" && !trashed && !q && !kind && <Usage />}
     </>
   );
 }
