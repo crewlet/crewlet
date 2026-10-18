@@ -999,6 +999,11 @@ personal view, and overwrite it with their own. The write then refuses, as a
 conflict to re-read on, a save whose stored view moved or changed hands after
 that decision was taken.
 
+**An `id` names a view that exists** — one `list_work_views` lists, or that a
+save answered — and a save naming an id no view holds is refused `not_found`
+rather than creating a view under whatever was typed. A new view is saved with
+no `id`: its id is minted from the call and answered back.
+
 `default: true` takes the container's landing tab from whichever view held it,
 which is why a shared view is its container's decision rather than whoever
 happened to write it first. **Only a shared view can be the default**: the
