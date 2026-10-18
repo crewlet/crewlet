@@ -1,1 +1,0 @@
-import{_r as e}from"./waiting-BusOxzoe.js";import{G as t}from"./common-CXZB1nsd.js";function n(n,r,i=`section`,a=r[0]){let[o,s]=e(n,a,i),c=r.includes(o)?o:a;return t({tab:{run:(e,t)=>s(r[t]),when:e=>i===`section`&&e<r.length}}),[c,s]}export{n as t};
