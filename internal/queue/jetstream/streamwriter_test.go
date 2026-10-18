@@ -32,8 +32,12 @@ import (
 // a shared stream at every boot — and the fix was to remove the writer rather
 // than to guard it. [DomainLog.SetMaxBytes] is what remains, and it is safe
 // only because the capacity procedure stops every publisher on every node
-// first. A second call site would inherit none of that and nothing would say
-// so, which is what this test is for.
+// first. The object bucket's seal (natsobj's Backend.Seal) is the one other
+// writer, and it sits behind the same exclusion: `crewlet objects migrate
+// -final` seals only on a node in maintenance mode, with no node holding an
+// admission, and nothing else ever writes the objects stream's configuration.
+// A third call site would inherit none of that and nothing would say so,
+// which is what this test is for.
 //
 // # What it walks, and what it cannot see
 //
@@ -64,15 +68,24 @@ func TestOnlyOnePlaceWritesARunningStreamsConfiguration(t *testing.T) {
 		}
 	}
 	// AND THE ALLOWANCE, on paths whose verdict is known. The walk only
-	// ever reaches it with the one real site, so an allowance that has
+	// ever reaches it with the real sites, so an allowance that has
 	// widened to cover everything reports a clean tree whatever it finds.
 	if allowedStreamWriter("internal/engine/capacity.go:67 UpdateStream") {
-		t.Error("control: a second site is being allowed, so this guard would " +
-			"pass with any number of writers in the tree")
+		t.Error("control: an unexcluded site is being allowed, so this guard " +
+			"would pass with any number of writers in the tree")
 	}
-	if !allowedStreamWriter("internal/queue/jetstream/domainlog.go:310 UpdateStream") {
-		t.Error("control: the one legitimate writer is not allowed, so this " +
-			"guard fails on a tree that is correct")
+	if allowedStreamWriter("internal/objstore/natsobj/natsobj.go:120 CreateOrUpdateStream") {
+		t.Error("control: the allowance names a file rather than its one " +
+			"writer, so a second write in that file would pass unseen")
+	}
+	for _, legitimate := range []string{
+		"internal/queue/jetstream/domainlog.go:310 UpdateStream",
+		"internal/objstore/natsobj/natsobj.go:496 UpdateStream",
+	} {
+		if !allowedStreamWriter(legitimate) {
+			t.Errorf("control: the legitimate writer %q is not allowed, so "+
+				"this guard fails on a tree that is correct", legitimate)
+		}
 	}
 
 	for _, negative := range []string{
@@ -111,8 +124,8 @@ func TestOnlyOnePlaceWritesARunningStreamsConfiguration(t *testing.T) {
 			"internal/engine/capacity.go establishes.", site)
 	}
 	if len(found) == 0 {
-		t.Fatal("found no stream-configuration writes at all — the one legitimate " +
-			"caller is gone, so this guard is watching for a call nobody makes " +
+		t.Fatal("found no stream-configuration writes at all. The legitimate " +
+			"callers are gone, so this guard is watching for a call nobody makes " +
 			"and would pass whatever the tree did. Delete it, or fix the walk")
 	}
 	t.Logf("read %d files, parsed the %d that name a writer; stream-configuration "+
@@ -231,10 +244,25 @@ func streamConfigWrite(name string) bool {
 	return slices.Contains(streamConfigWriters, name)
 }
 
-// allowedStreamWriter is the one site, named by file and function rather than
-// by line so an edit above it does not have to be reflected here.
+// allowedStreamWriter reports whether site is one of the excluded writers,
+// named by file and call rather than by line so an edit above one does not
+// have to be reflected here.
+//
+//   - internal/queue/jetstream/domainlog.go: [DomainLog.SetMaxBytes], run only
+//     by the capacity procedure once every publisher on every node is stopped.
+//   - internal/objstore/natsobj/natsobj.go UpdateStream: the bucket's seal,
+//     run only by the final pass of `crewlet objects migrate`, which refuses
+//     unless this node is in maintenance mode and no node holds an admission.
+//     The file's CreateOrUpdateStream (were one added) is not allowed: the
+//     bucket is created with CreateStream and its reservation is never
+//     rewritten.
 func allowedStreamWriter(site string) bool {
-	return strings.HasPrefix(site, "internal/queue/jetstream/domainlog.go:")
+	if strings.HasPrefix(site, "internal/queue/jetstream/domainlog.go:") {
+		return true
+	}
+	file, call, ok := strings.Cut(site, " ")
+	return ok && call == "UpdateStream" &&
+		strings.HasPrefix(file, "internal/objstore/natsobj/natsobj.go:")
 }
 
 // writesStreamConfig parses one expression and reports whether the matcher
