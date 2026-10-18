@@ -35,7 +35,7 @@ subcommand below is served by it.
 | `crewlet chat search <text> [-channel ROOM-ID] [-author HANDLE] [-limit N]` | Rank every room your seat may read, each hit with the message's id |
 | `crewlet chat erase <room-id> -message ID... -reason TEXT -confirm N [-op-id ID]` | Destroy the messages named, on every data node — what a credential pasted into one message needs. No inverse: `admin`, a recent proof, never a seat |
 | `crewlet chat prune <room-id> -cutoff TIME -confirm TIME [-op-id ID]` | Destroy everything a room said before an instant, on every data node, now rather than at its [retention](../concepts/chat.md#retention) horizon. The same authority as `erase` |
-| `crewlet chat retention <room-id> -days N \| -company [-op-id ID]` | Set how long one room keeps what is said in it (`0` for ever), or return it to the company's `chat.native.message_retention_days`. A shorter horizon is a prune on a delay, so the same authority as `erase` |
+| `crewlet chat retention <room-id> -days N \| -company -confirm N\|company [-op-id ID]` | Set how long one room keeps what is said in it (`0` for ever), or return it to the company's `chat.native.message_retention_days`, with `-confirm` repeating the horizon. A shorter horizon is a prune on a delay, so the same authority as `erase` |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load a company file as a new active `company_config` revision — through a running node's `PUT /config`, which activates it fleet-wide, or offline into this node's store, which the node publishes at its next start; the line it prints says which it did |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -1393,7 +1393,7 @@ since that would empty the room rather than enforce a horizon.
 ### `crewlet chat retention`
 
 ```
-crewlet chat retention <room-id> -days N | -company [-op-id ID]
+crewlet chat retention <room-id> -days N | -company -confirm N|company [-op-id ID]
 ```
 
 Sets how long one room keeps what is said in it — `-days N`, `0` keeping it
@@ -1401,7 +1401,11 @@ for ever — or, with `-company`, returns it to the company's own
 `chat.native.message_retention_days`. Exactly one of the two. Nothing is
 destroyed by the change itself; the retention duty prunes what the new
 horizon no longer covers on its next pass, on every data node, with no
-inverse — which is why a shorter horizon is decided as a prune is.
+inverse — which is why a shorter horizon is decided as a prune is, and
+confirmed as one: `-confirm` repeats the horizon, the same number of days
+(`0` included) or `company`, and a command whose two disagree sends nothing.
+Every horizon takes it, a longer one too, because whether it shortens the
+room's depends on what the room had, which the command does not read.
 
 ## `crewlet retention`
 
