@@ -527,9 +527,6 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 	t.Helper()
 	const (
 		subject = "tracker_history_subject_idx"
-		project = "tracker_history_project_idx"
-		seq     = "tracker_history_seq_idx"
-		writers = "tracker_history_actor_kind_seq_idx"
 		status  = "tracker_history_status_seq_idx"
 		moves   = "tracker_history_moves_idx"
 	)
@@ -539,7 +536,6 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 	at := func(n uint64) int64 {
 		return statelog.Position{Stream: historyStream, Generation: 1, Seq: n}.Packed()
 	}
-	position := statelog.Position{Stream: historyStream, Generation: 1, Seq: 9_000}
 	instant := store.EncodeTime(planNow)
 	const task, purged, record = "t-0007", "t-0050", "h-00007"
 	kind := string(KindTask)
@@ -584,19 +580,42 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 		reads[name] = indexedRead{read.plannedRead, moves, !read.bounded}
 	}
 
-	// THE ACTIVITY FEED, one case per filter family the reader accepts,
-	// spelled as its surfaces spell an [ActivityQuery] and compiled by its
-	// own compiler. A CASE THE READER WOULD REFUSE IS NOT A READER, so each
-	// passes the reader's own checks first. A filter no history index leads
-	// with — a change kind, a writer, an assignee, the announcement flag, a
-	// wall-clock window — is a residual on the walk of the feed's own order.
+	// THE ACTIVITY FEED ([activityCases]), compiled by its own compiler. A
+	// CASE THE READER WOULD REFUSE IS NOT A READER, so each passes the
+	// reader's own checks first ([activityRead]).
+	activity := activityCases()
+	for name, c := range activity {
+		statement, args := activityRead(t, db, c.q)
+		reads["the activity feed: "+name] = indexedRead{plannedRead{statement, args},
+			c.index, c.walk}
+	}
+	return reads
+}
+
+// activityCase is one family of the activity feed's filters, spelled as its
+// surfaces spell an [ActivityQuery], and the index its plan must reach.
+type activityCase struct {
+	q     ActivityQuery
+	index string
+	walk  bool
+}
+
+// activityCases is the activity feed, one case per filter family the reader
+// accepts. A filter no history index leads with — a change kind, a writer, an
+// assignee, the announcement flag, a wall-clock window — is a residual on the
+// walk of the feed's own order.
+func activityCases() map[string]activityCase {
+	const (
+		subject = "tracker_history_subject_idx"
+		project = "tracker_history_project_idx"
+		seq     = "tracker_history_seq_idx"
+		writers = "tracker_history_actor_kind_seq_idx"
+	)
+	const task = "t-0007"
+	position := statelog.Position{Stream: historyStream, Generation: 1, Seq: 9_000}
 	yes := true
 	window := planNow.AddDate(0, 0, -7)
-	activity := map[string]struct {
-		q     ActivityQuery
-		index string
-		walk  bool
-	}{
+	return map[string]activityCase{
 		"one task's activity":                {ActivityQuery{Task: task}, subject, false},
 		"one task's activity in its project": {ActivityQuery{Task: task, Project: "P07"}, subject, false},
 		"a project's activity":               {ActivityQuery{Project: "P01"}, project, false},
@@ -621,12 +640,43 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 		"what was announced":  {ActivityQuery{Workspace: true, Notified: &yes}, seq, true},
 		"a wall-clock window": {ActivityQuery{Workspace: true, From: window, To: planNow}, seq, true},
 	}
-	for name, c := range activity {
-		statement, args := activityRead(t, db, c.q)
-		reads["the activity feed: "+name] = indexedRead{plannedRead{statement, args},
-			c.index, c.walk}
+}
+
+// A FEED READ IS ITS INDEX IN THE FEED'S OWN ORDER: no sort, no intersection.
+//
+// The feed is newest first and paged by a LIMIT, so a read whose index is in
+// that order stops after a page and one that sorts reads everything it selects
+// before the first row. [TestEveryIndexServesARegisteredQuery] holds each case
+// to the index it names, which an INTERSECTION satisfies too — this engine
+// plans two equalities on two indexes as `MULTI-INDEX AND`, a seek on each —
+// so it passed the task-plus-project feed while that read the container's
+// whole history to intersect with the task's, sorted the result, and hid the
+// task's rows from before it moved. Every case here is planned as the reader
+// issues it and held to neither; the audit's several kinds, whose one sort is
+// the merge of a page per kind, are [TestTheAuditReadsOnePageOfEachKind]'s.
+func TestAFeedReadIsItsIndexInTheFeedsOrder(t *testing.T) {
+	t.Parallel()
+	db := historyPlanStore(t)
+	for name, c := range activityCases() {
+		if len(slices.Compact(slices.Sorted(slices.Values(c.q.ActorKinds)))) > 1 {
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			statement, args := activityRead(t, db, c.q)
+			plan := explain(t, db, statement, args)
+			shown := strings.Join(plan, "\n")
+			if sorts(plan) {
+				t.Errorf("this feed read sorts what it selected rather than "+
+					"reading %s in the feed's order:\n%s", c.index, shown)
+			}
+			for _, line := range plan {
+				if strings.HasPrefix(line, "MULTI-INDEX AND ") {
+					t.Errorf("this feed read intersects two indexes' rows "+
+						"rather than reading one:\n%s", shown)
+				}
+			}
+		})
 	}
-	return reads
 }
 
 // activityRead is the statement and arguments the feed's reader issues for q,

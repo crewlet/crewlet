@@ -681,6 +681,22 @@ func taskReadScope(ctx context.Context, tx *sql.Tx, idOrKey string) (statelog.Sc
 	return statelog.ScopeSet{Paths: paths}.Normalised(), nil
 }
 
+// resolveTaskIn is [resolveTaskID] with the project the task is filed in,
+// resolved in the same order by the one statement [taskReadScope] resolves a
+// reference with.
+func resolveTaskIn(ctx context.Context, tx *sql.Tx, idOrKey string) (id, project string, err error) {
+	key := strings.ToUpper(idOrKey)
+	err = tx.QueryRowContext(ctx, taskReadScopeStatement, idOrKey, key, key).
+		Scan(&id, &project)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", "", fmt.Errorf("%w: %s", ErrNoTask, idOrKey)
+	case err != nil:
+		return "", "", fmt.Errorf("worklet: resolve %q: %w", idOrKey, err)
+	}
+	return id, project, nil
+}
+
 // resolveTaskStatement is [resolveTaskID]'s one statement, named for the plan
 // test.
 const resolveTaskStatement = `
