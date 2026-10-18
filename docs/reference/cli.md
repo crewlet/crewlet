@@ -1980,12 +1980,15 @@ others. `openai` entries are not examined.
 The brokered and `-username` shapes **fail when the CLI left no login** where
 the entry reads one — exiting 0 having stored nothing, as backing out of the
 vendor's sign-in does — rather than printing that a login was written. `login`,
-`status` and a vendor's own `logout` run the CLI one at a time per entry: a
-second started while the first is running is refused, saying so. Only the
-commands that make a login create the shared one; `status` and a seat's call
-write back only a refresh of the very login they started from, so neither
-reverts a newer login nor brings back one `logout` removed — see [token
-refresh across
+`status` and a vendor's own `logout` run the CLI one at a time per state
+directory (entries sharing a `cli.state_dir` share one login home): a second
+started while the first is running is refused, saying so. Only the commands
+that make a login create the shared one; `status` and a seat's call write back
+only a refresh of the very login they started from, so neither reverts a newer
+login nor brings back one `logout` removed. A login whose export failed after
+you signed in is kept and written by the next command — unless you replaced
+the login since with `-from-host`, `import` or `logout`; a `login` that cannot
+carry such a kept login out replaces it, saying so — see [token refresh across
 seats](../concepts/subscription-llm-backends.md#token-refresh-across-seats).
 
 **`export`** packs a login into one portable blob so another host can come up

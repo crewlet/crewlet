@@ -37,7 +37,9 @@ import (
 // And three ways to fail or to race: FAKE_STORE_IMPORT_REJECT refuses every
 // document, quoting it; FAKE_STORE_EXPORT_FAIL fails every export after
 // printing its logins (FAKE_STORE_EXPORT_FAIL_ONCE only the first, marking
-// the file it names), quoting them on stderr too under FAKE_STORE_EXPORT_QUOTE;
+// the file it names; FAKE_STORE_EXPORT_FAIL_KEY every one made while the
+// database holds a login with that key), quoting them on stderr too under
+// FAKE_STORE_EXPORT_QUOTE;
 // and FAKE_MIDRUN_VERB names a verb during which FAKE_MIDRUN_BODY is written
 // to FAKE_MIDRUN_PATH — another writer's login landing while this command is
 // running.
@@ -85,6 +87,10 @@ func fakeStore() {
 				_ = os.WriteFile(failOnce, nil, 0o600)
 				failing = true
 			}
+		}
+		if key := os.Getenv("FAKE_STORE_EXPORT_FAIL_KEY"); key != "" &&
+			slices.ContainsFunc(read(), func(c map[string]string) bool { return c["key"] == key }) {
+			failing = true
 		}
 		if failing {
 			// A CLI that printed its logins and THEN failed: the half

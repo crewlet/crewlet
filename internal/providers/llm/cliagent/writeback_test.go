@@ -476,6 +476,9 @@ func TestAGenerationLeftOpenByAnEarlierProcessIsCarriedOut(t *testing.T) {
 	refreshFile(t, co, `{"token":"R1"}`)
 
 	// The process ends here, with no release; the next one starts afresh.
+	// What its ending does to the seat's generation lock — the kernel drops
+	// an flock with the process that held it — is done here by hand.
+	endProcess(co)
 	forgetWorkspace(dir)
 	next, err := open().Acquire(t.Context(), "dev", "call-after", nil)
 	if err != nil {
@@ -560,7 +563,7 @@ func TestASecondCommandIsRefusedTheLoginHomeWhileOneHoldsIt(t *testing.T) {
 func TestTheSharedLoginsLockExcludesAnotherHolder(t *testing.T) {
 	t.Parallel()
 	ws := newWorkspace(t)
-	release, held, err := flockFile(t.Context(), filepath.Join(ws.Root(), sharedLockFile), 0)
+	release, held, err := flockFile(t.Context(), ws.sharedLock(), 0)
 	if err != nil || !held {
 		t.Fatalf("flockFile = %v, %v", held, err)
 	}
@@ -618,4 +621,16 @@ func readCreds(t *testing.T, p *Provider) string {
 		t.Fatal(err)
 	}
 	return string(raw)
+}
+
+// endProcess does to a checkout's generation what its process ending would:
+// the kernel drops the generation lock with the process, and nothing runs the
+// release.
+func endProcess(co *Checkout) {
+	co.seat.mu.Lock()
+	defer co.seat.mu.Unlock()
+	if co.seat.held != nil {
+		co.seat.held()
+		co.seat.held = nil
+	}
 }

@@ -1032,12 +1032,14 @@ CLI exited without leaving one and writes nothing, rather than printing
 `Login written to …` over an empty directory. Backing out of the vendor's
 sign-in is the usual way to get there; run the login again.
 
-**One `crewlet llm` command at a time per entry.** `login`, `status` and a
-vendor's own `logout` all run the CLI in the same login home, rebuilt from the
-shared login for each command and emptied after it, so a second one started
-while the first is running — a `status` in another terminal while a login
-waits on its browser flow — is refused at once with a message saying so,
-rather than pruning the database the sign-in is about to store its login in.
+**One `crewlet llm` command at a time per state directory.** `login`,
+`status` and a vendor's own `logout` all run the CLI in the same login home,
+rebuilt from the shared login for each command and emptied after it, so a
+second one started while the first is running — a `status` in another terminal
+while a login waits on its browser flow — is refused at once with a message
+saying so, rather than pruning the database the sign-in is about to store its
+login in. Entries that share a `cli.state_dir` share one login home, so a
+command for one refuses a command for the other.
 
 **`pi` is the one CLI where the REPL *is* the login**, and its profile says
 so rather than pretending otherwise: `/login` there is a slash command and
@@ -1099,10 +1101,12 @@ ever *refresh* the login they started from: each writes back only over that
 very login, so a call or a `status` running while `crewlet llm logout` ran
 cannot put the login back — for a credential file as much as a document — and
 an export holding no login never replaces one. `crewlet llm logout` also
-empties the login home, so a login a failed export left there for the next
-command (below) is discarded with the rest. Every write to the shared login
-replaces the file whole rather than rewriting it in place, so a seat starting
-its generation never reads half of one.
+discards a login a failed export left in the login home for the next command
+([below](#token-refresh-across-seats)) — unless another command is using the
+login home at that moment, which is a login still in progress in another
+terminal: that one is left to finish, and its result is written when it does.
+Every write to the shared login replaces the file whole rather than rewriting
+it in place, so a seat starting its generation never reads half of one.
 
 ### 2. Capture a headless token (best where it exists)
 
@@ -1275,28 +1279,54 @@ only while the shared login is still exactly what that seat started from. If
 anything else wrote in between — another seat's refresh, your `crewlet llm
 login` or `-from-host` while seats were mid-call, a `crewlet llm logout` — the
 newer login is kept and the seat's is dropped, with a `cli_agent_login_superseded`
-warning naming the provider and the file (never what either holds). The check
-and the write are one step under a lock in the state directory, which the
-engine's seats and every `crewlet llm` command — each a process of its own —
-take alike. `crewlet llm status` follows the same rule, so it can neither
-revert a refresh that landed while it ran nor bring back a removed login. The
-commands that *make* a login are the one exception: what your sign-in stored
-is written whenever it differs from what the command started with, over a
-refresh a seat made during a browser flow that took minutes, because your new
-login is the one you asked for.
+warning naming the provider and the file (never what either holds) and how the
+shared login moved (`changed` or `removed`). The check and the write are one
+step under a lock beside the credentials directory (`credentials.lock`), which
+the engine's seats, every `crewlet llm` command — each a process of its own —
+and a [local coding box](code-sandbox.md)'s teardown, writing back what its run
+refreshed, take alike. `crewlet llm status` follows the same rule, so it can
+neither revert a refresh that landed while it ran nor bring back a removed
+login. The commands that *make* a login are the one exception: what your
+sign-in stored is written whenever it differs from what the command started
+with, over whatever landed while it ran — a refresh a seat made during a
+browser flow that took minutes, or even your own `-from-host` in another
+terminal — because the later of two sign-ins is the one you asked for.
 
 **A refreshed login that cannot be carried out is kept, not pruned.** If the
 export fails — a host too busy to finish it inside its 30-second bound, a CLI
 killed mid-export — the home is left exactly as it is, with its generation
-recorded beside it, and the seat's next call carries the login out before it
-prunes anything; a call that cannot carry it out either is refused with a
-retryable error naming the export (the fallback chain moves on), rather than
-run on the stale database or discard it. The record is on disk, so an engine
-that stopped mid-call is covered too: the next process's first call into that
-seat finishes the generation first. The login home works the same way — a
-`crewlet llm login` whose export failed after you finished the browser flow
-keeps the login there, and the next `crewlet llm` command that runs the CLI
-for that entry carries it out before anything else.
+recorded beside it (`seats/<seat>/generation.json`), and the next generation
+to open in that state directory carries the login out before it seeds
+anything: the seat's own next call, or **any other seat's** first call,
+whichever comes first, so every seat starting meanwhile is not seeded with the
+refresh token the vendor has just rotated away. A home a call is running in is
+never touched — each generation holds a lock in its seat directory from its
+first call to its last, which an engine in another process sees too — and a
+seat whose export keeps failing is tried by the other seats again after a
+minute, doubling to half an hour, with a `cli_agent_carry_out_failed` warning
+each time. The seat's own next call tries every time, and a call that cannot
+carry its own login out is refused with a retryable error naming the export
+(the fallback chain moves on), rather than run on the stale database or
+discard it. The record is on disk, so an engine that stopped mid-call is
+covered too: the next process's first call into any seat finishes the
+generation first. If an export can never succeed — a CLI upgrade that broke
+it — the refusal names the record: removing it discards the kept login, and
+the seat's next call starts from the shared one.
+
+The login home works the same way. A `crewlet llm login` whose export failed
+after you finished the browser flow keeps the login there
+(`login-generation.json` beside it), and the next `crewlet llm` command that
+runs the CLI for that state directory carries it out before anything else —
+over a refresh a seat made meanwhile, since it is your sign-in, but never over
+a login of record you replaced after it finished: a `-from-host`, a `crewlet
+llm import` or a `crewlet llm logout` since then wins, and the kept login is
+dropped with `cli_agent_login_superseded` (`shared=replaced`). A bundle the
+engine restores at boot into the empty directory the failed login left is not
+one of those, so your sign-in still lands over it. A `status` or a vendor's
+own logout that cannot carry the kept login out is refused, naming the way
+out: `crewlet llm login` itself replaces a kept login it cannot carry out and
+says so on your terminal (`cli_agent_login_discarded`), and `crewlet llm
+logout` discards it before anything else.
 
 Two seats refreshing at the same instant still race for the vendor's next
 token, exactly as two terminals running the vendor's CLI would; the one that

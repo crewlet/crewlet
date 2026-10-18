@@ -233,19 +233,28 @@ func (p *Provider) CredentialLogin(ctx context.Context, username, password strin
 // command that failed must not leave a working login on disk that an operator
 // believes they removed.
 //
+// A login a failed export left pending in the login home is DISCARDED FIRST
+// ([Provider.discardLoginHome]), before the vendor's command runs: that command
+// would otherwise begin by carrying the pending login out — over the very login
+// it is about to revoke — and a carry that failed again failed the logout over
+// a login the logout was discarding anyway.
+//
 // The vendor's command makes no login, so what it leaves is carried out as a
 // refresh ([syncRefresh]) — which a login the CLI has just revoked never is:
 // it can only write over the very login it was seeded from, and a home whose
 // login is gone writes nothing. The removal takes the shared login's lock, so
 // a seat carrying a refresh out at the same moment either lands before it,
-// and is removed with the rest, or finds the login gone and keeps it gone.
+// and is removed with the rest, or finds the login gone and keeps it gone; and
+// it moves the operator epoch on ([Workspace.bumpLoginEpoch]), so a pending
+// login the discard could not reach — another command held the login home —
+// is never carried out over the logout later.
 func (p *Provider) Logout(ctx context.Context, out, errOut io.Writer) error {
+	if err := p.discardLoginHome(ctx); err != nil {
+		return fmt.Errorf("cliagent: the login was NOT removed: %w", err)
+	}
 	var vendorErr error
 	if len(p.profile.LogoutArgs) > 0 {
 		_, vendorErr = p.runInCredentialHome(ctx, syncRefresh, p.profile.LogoutArgs, nil, out, errOut)
-	}
-	if err := p.discardLoginHome(ctx); err != nil {
-		return errors.Join(fmt.Errorf("cliagent: the login was NOT removed: %w", err), vendorErr)
 	}
 	unlock, err := p.ws.lockShared(ctx)
 	if err != nil {
@@ -255,13 +264,21 @@ func (p *Provider) Logout(ctx context.Context, out, errOut io.Writer) error {
 	var removeErr error
 	for _, path := range p.ws.LoginFiles() {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			removeErr = fmt.Errorf("cliagent: removing %q: %w", path, err)
+			removeErr = errors.Join(removeErr, fmt.Errorf("cliagent: removing %q: %w", path, err))
 		}
 	}
-	if removeErr != nil {
-		return removeErr
+	if err := p.ws.bumpLoginEpoch(); err != nil {
+		removeErr = errors.Join(removeErr, err)
 	}
-	return vendorErr
+	if removeErr != nil {
+		return errors.Join(removeErr, vendorErr)
+	}
+	if vendorErr != nil {
+		return fmt.Errorf("cliagent: the login was removed from %s, but %q's own logout, "+
+			"which revokes it with the vendor, did not finish: %w",
+			p.ws.CredentialsDir(), p.agent, vendorErr)
+	}
+	return nil
 }
 
 // discardLoginHome empties the login home of a login a command left there and
@@ -271,7 +288,8 @@ func (p *Provider) Logout(ctx context.Context, out, errOut io.Writer) error {
 //
 // A home another command is using is left to it: that command is a login in
 // progress, an operator's own new sign-in, which a logout that came first does
-// not undo.
+// not undo — its result is written when it finishes. Whatever it began by
+// carrying out loses to the logout's epoch ([Workspace.bumpLoginEpoch]).
 func (p *Provider) discardLoginHome(ctx context.Context) error {
 	unlock, err := p.ws.lockLoginHome(ctx)
 	var busy *loginHomeBusyError
@@ -282,11 +300,7 @@ func (p *Provider) discardLoginHome(ctx context.Context) error {
 		return err
 	}
 	defer unlock()
-	home := p.ws.loginHome()
-	return errors.Join(
-		p.ws.dropCopies(home),
-		p.ws.prune(home),
-		clearGeneration(filepath.Join(p.ws.Root(), loginGenerationFile)))
+	return p.ws.emptyLoginHome()
 }
 
 // Status asks the CLI who it is logged in as.
@@ -324,7 +338,10 @@ func (p *Provider) Status(ctx context.Context, out, errOut io.Writer) error {
 // It is the operator's own new login, so it is written over whatever the
 // shared directory holds, under the shared login's lock: a seat carrying out a
 // refresh of the old login at the same moment then finds the login moved and
-// keeps this one ([syncRefresh]).
+// keeps this one ([syncRefresh]). And it moves the operator epoch on
+// ([Workspace.bumpLoginEpoch]), so a login an earlier `crewlet llm login` left
+// pending in the login home — its export failed — is never carried out over
+// this one by the next command.
 func (p *Provider) AdoptHostLogin(ctx context.Context, home string) ([]string, error) {
 	if home == "" {
 		var err error
@@ -383,6 +400,9 @@ func (p *Provider) AdoptHostLogin(ctx context.Context, home string) ([]string, e
 	if len(taken) == 0 {
 		return nil, fmt.Errorf("cliagent: no %q login found under %q — log in with the "+
 			"vendor's CLI first, or name a different home with --home", p.agent, home)
+	}
+	if err := p.ws.bumpLoginEpoch(); err != nil {
+		return nil, err
 	}
 	return taken, nil
 }
@@ -492,10 +512,16 @@ func (p *Provider) ExportBundle() (string, error) {
 // the fresher refresh token, and restoring a boot-time blob over it is how a
 // fleet logs itself out. At boot that is the ordinary case and not an error;
 // [Provider.ImportBundle] is the operator's form, which says so.
+//
+// NOT AN OPERATOR'S WRITE, unlike the import: it fills an empty directory with
+// the login the deployment was configured with, so it leaves the operator
+// epoch where it is ([Workspace.bumpLoginEpoch]) — and a login an operator made
+// on this node whose export failed, which is why the directory is empty, is
+// still carried out over it by the next command, being the newer of the two.
 func (p *Provider) RestoreBundle(blob string) error {
 	// Called from [New], at boot, which has no context of its own to hand on;
 	// the one wait inside is bounded by sharedLockWait.
-	if err := p.ImportBundle(context.Background(), blob); err != nil && !errors.Is(err, ErrLoginPresent) {
+	if err := p.restoreBundle(context.Background(), blob, false); err != nil && !errors.Is(err, ErrLoginPresent) {
 		return err
 	}
 	return nil
@@ -512,7 +538,18 @@ var ErrLoginPresent = errors.New("cliagent: the entry already has a login, so th
 // DECIDED UNDER THE SHARED LOGIN'S LOCK, with the writes: a caller that looked
 // for a login first and then restored was told "restored" whenever a login
 // landed between the two, about a bundle that had written nothing.
+//
+// An operator's write of the login of record, so it moves the operator epoch
+// on ([Workspace.bumpLoginEpoch]): a login an earlier `crewlet llm login` left
+// pending in the login home is never carried out over the bundle afterwards.
 func (p *Provider) ImportBundle(ctx context.Context, blob string) error {
+	return p.restoreBundle(ctx, blob, true)
+}
+
+// restoreBundle is [Provider.RestoreBundle] and [Provider.ImportBundle], which
+// differ only in whether the restore is the operator's own write of the login
+// of record.
+func (p *Provider) restoreBundle(ctx context.Context, blob string, operator bool) error {
 	dest := p.ws.CredentialsDir()
 	if p.ws.HasLogin() {
 		return ErrLoginPresent
@@ -608,6 +645,9 @@ func (p *Provider) ImportBundle(ctx context.Context, blob string) error {
 			return fmt.Errorf("cliagent: writing %q: %w", name, err)
 		}
 	}
+	if operator {
+		return p.ws.bumpLoginEpoch()
+	}
 	return nil
 }
 
@@ -629,6 +669,13 @@ func (p *Provider) ImportBundle(ctx context.Context, blob string) error {
 // prunes the home on the way in and out, and a second command doing that under
 // a first's browser flow deleted the database the first was about to store
 // its login in.
+//
+// It sweeps NO SEAT'S HOME, though a seat's generation can be left open just
+// as this home's can ([Workspace.sweep]): the engine sweeps those at every
+// seat's first call, and a command doing it too would pay a CLI export per
+// kept seat home — for a home kept because its export keeps failing, up to
+// [auxiliaryTimeout] each, on every `crewlet llm status` — for a seed whose only
+// readers are a login, which replaces it, and a status, which reads it.
 func (p *Provider) runInCredentialHome(
 	ctx context.Context, mode syncMode, args []string,
 	in io.Reader, out, errOut io.Writer, extra ...map[string]string,
@@ -652,8 +699,26 @@ func (p *Provider) runInCredentialHome(
 	// whose process was killed before its export ran, is still in this home's
 	// database and nowhere else. Its record is on disk because this command
 	// is a process of its own, and the one that left it is gone.
-	if err := p.ws.carryOut(ctx, home, cache, p, record); err != nil {
-		return false, err
+	if _, err := p.ws.carryOut(ctx, home, cache, p, record, loginHomeRemedy(record)); err != nil {
+		if mode != syncLogin {
+			return false, err
+		}
+		// A LOGIN REPLACES WHAT IT CANNOT CARRY OUT. Whatever is kept here
+		// — an earlier sign-in, a status's refresh — this command is about to
+		// write a newer login over, so refusing it would leave the one
+		// command that repairs a broken carry unable to run: an export that
+		// fails for good wedged `crewlet llm login` behind its own leftovers.
+		// It is said, on the operator's terminal and in the log, because the
+		// kept login is gone with it.
+		log.WarnContext(ctx, "cli_agent_login_discarded", "provider", p.key, "agent", p.agent,
+			"error", err)
+		if errOut != nil {
+			_, _ = fmt.Fprintf(errOut, "crewlet: discarding the login an earlier command left "+
+				"in %s, which could not be carried out (%v); signing in afresh replaces it\n", home, err)
+		}
+		if err := p.ws.emptyLoginHome(); err != nil {
+			return false, err
+		}
 	}
 	// The login home is seeded from and carried back to the shared
 	// directory exactly like a seat's, so re-running a login updates the
@@ -669,6 +734,16 @@ func (p *Provider) runInCredentialHome(
 		return false, err
 	}
 	gen := generation{Mode: mode, Seeded: seeded}
+	if mode == syncLogin {
+		// The epoch this login is ordered after, should it be carried out by
+		// a later command rather than by this one ([generation.After]) — as
+		// of now, and moved to when it finished should its carry fail below.
+		epoch, err := p.ws.loginEpoch()
+		if err != nil {
+			return false, err
+		}
+		gen.After = &epoch
+	}
 	if err := writeGeneration(record, gen); err != nil {
 		return false, err
 	}
@@ -710,24 +785,44 @@ func (p *Provider) runInCredentialHome(
 	// failed a later step still wrote a credential worth keeping — and on an
 	// operator's Ctrl+C too, which is why the export does not inherit the
 	// cancellation that ended the command.
-	holds, syncErr := p.ws.syncCredentialsOut(context.WithoutCancel(ctx), home, cache, p, gen)
+	//
+	// WITHOUT THE EPOCH, which orders only a login carried out LATER: the one
+	// carried out now is the operator's sign-in finishing, and it is written
+	// over whatever landed while it ran, an operator's other write included —
+	// the later of two sign-ins wins. The record on disk keeps it, for the
+	// next command should this carry fail.
+	now := gen
+	now.After = nil
+	holds, syncErr := p.ws.syncCredentialsOut(context.WithoutCancel(ctx), home, cache, p, now)
 	if syncErr != nil {
 		// NOT PRUNED, and the record stays: the home is now the only place
 		// the login this command made may exist, and the next `crewlet llm`
 		// command carries it out before it prunes anything.
+		var recordErr error
+		if mode == syncLogin {
+			// ORDERED BY WHEN THE SIGN-IN FINISHED, as the carry that just
+			// failed would have been: an operator's write that landed while
+			// the browser flow was open is one this login, finishing later,
+			// would have been written over, and only a write made from here
+			// on outranks it. Where the epoch cannot be read now, the one
+			// read when the command began stays on the record — which errs
+			// towards the operator's other write, never towards this one.
+			if epoch, err := p.ws.loginEpoch(); err == nil {
+				gen.After = &epoch
+				recordErr = writeGeneration(record, gen)
+			}
+		}
 		return holds, errors.Join(fmt.Errorf("cliagent: the login in %q could not be carried "+
 			"back to %s, so it was kept there, and the next `crewlet llm` command that runs "+
 			"the CLI for %q carries it out before anything else: %w",
-			home, p.ws.CredentialsDir(), p.key, syncErr), runErr)
+			home, p.ws.CredentialsDir(), p.key, syncErr), recordErr, runErr)
 	}
 	// Emptied after as well, so the login home keeps NO second copy of the
 	// login — a credential file or a database: the shared directory is the
 	// login of record, and the next command here starts afresh from it. A
 	// copy left behind is one a later command would carry back, which is how
 	// a login `crewlet llm logout` removed came back on the next `status`.
-	dropErr := p.ws.dropCopies(home)
-	pruneErr := p.ws.prune(home)
-	if err := errors.Join(dropErr, pruneErr, clearGeneration(record)); err != nil {
+	if err := p.ws.emptyLoginHome(); err != nil {
 		return holds, err
 	}
 	return holds, runErr
