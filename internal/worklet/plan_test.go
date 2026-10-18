@@ -1899,8 +1899,9 @@ func TestARolledUpRowProbesItsAnchorByKey(t *testing.T) {
 // an alias of its own, and is held to the key by
 // [TestARolledUpRowProbesItsAnchorByKey]. The page in the trash's own order is
 // held to it unsorted as well, because that order is the index's and a LIMIT
-// stops it after a page; a page ordered by something else may sort, and sorts
-// the trash.
+// stops it after a page — and so is every arm of the next page of the trash as
+// a list, which resumes the same walk (a board takes no cursor); a page ordered
+// by something else may sort, and sorts the trash.
 func TestTheTrashIsReadThroughItsOwnIndex(t *testing.T) {
 	t.Parallel()
 	db := planStore(t)
@@ -1918,45 +1919,187 @@ func TestTheTrashIsReadThroughItsOwnIndex(t *testing.T) {
 	}
 	for name, c := range cases {
 		for _, sort := range []string{"", "title"} {
-			t.Run(name+" sorted by "+cmpOr(sort, "its removal"), func(t *testing.T) {
-				params := map[string]any{"removed": "true", "show_closed": "true",
-					"totals": "tasks:count,points:sum", "group_by": "status"}
-				for key, value := range c.params {
-					params[key] = value
+			for _, group := range []string{"status", ""} {
+				shape := ", as a board"
+				if group == "" {
+					shape = ", as a list"
 				}
-				if sort != "" {
-					params["sort"] = sort
-				}
-				// EVERY STATEMENT THE READER RUNS FOR IT but the around
-				// read's two of one task, which read it by its key — the
-				// probe of which run holds it is held to that by
-				// [TestWhereATaskSitsIsAskedByItsKey].
-				statements := queryStatements(t, planQuery(t, params))
-				delete(statements, "the around task's sort values")
-				delete(statements, "the around task's run")
-				for what, statement := range statements {
-					plan := explain(t, db, statement.sql, statement.args)
-					shown := strings.Join(plan, "\n")
-					others, read := tasksReadOtherwise(plan, c.index)
-					switch {
-					case !read:
-						t.Errorf("%s reads no task at all, so this case "+
-							"measures nothing:\n%s", what, shown)
-					case len(others) > 0:
-						t.Errorf("%s reads the task table other than through "+
-							"%s — every task of the company, or of the "+
-							"project, to find the removed ones:\n%s",
-							what, c.index, shown)
+				t.Run(name+" sorted by "+cmpOr(sort, "its removal")+shape, func(t *testing.T) {
+					params := map[string]any{"removed": "true", "show_closed": "true",
+						"totals": "tasks:count,points:sum"}
+					if group != "" {
+						params["group_by"] = group
 					}
-					if what == "the page" && sort == "" && sorts(plan) {
-						t.Errorf("the page in the trash's own order sorts what "+
-							"it read, so it is the whole trash rather than a "+
-							"page:\n%s", shown)
+					for key, value := range c.params {
+						params[key] = value
 					}
-				}
-			})
+					if sort != "" {
+						params["sort"] = sort
+					}
+					// EVERY STATEMENT THE READER RUNS FOR IT but the around
+					// read's two of one task, which read it by its key — the
+					// probe of which run holds it is held to that by
+					// [TestWhereATaskSitsIsAskedByItsKey].
+					statements := queryStatements(t, planQuery(t, params))
+					delete(statements, "the around task's sort values")
+					delete(statements, "the around task's run")
+					if _, paged := statements[nextPageArm(0)]; group == "" && !paged {
+						t.Fatalf("the trash as a list has no next page to plan")
+					}
+					// TWO ARMS IN ITS OWN ORDER — the removal's ties, then
+					// past it — and never a third for a NULL removal, which
+					// the listing's own predicate excludes ([sortTerms]).
+					if _, third := statements[nextPageArm(2)]; group == "" && sort == "" && third {
+						t.Errorf("the trash's next page reads an arm for the tasks " +
+							"with no removal, which no trash listing holds")
+					}
+					for what, statement := range statements {
+						plan := explain(t, db, statement.sql, statement.args)
+						shown := strings.Join(plan, "\n")
+						others, read := tasksReadOtherwise(plan, c.index)
+						switch {
+						case !read:
+							t.Errorf("%s reads no task at all, so this case "+
+								"measures nothing:\n%s", what, shown)
+						case len(others) > 0:
+							t.Errorf("%s reads the task table other than through "+
+								"%s — every task of the company, or of the "+
+								"project, to find the removed ones:\n%s",
+								what, c.index, shown)
+						}
+						// THE PAGE AND EVERY ARM OF THE NEXT ONE, which
+						// resume the same walk.
+						page := what == "the page" ||
+							strings.HasPrefix(what, nextPage)
+						if page && sort == "" && sorts(plan) {
+							t.Errorf("%s in the trash's own order sorts what "+
+								"it read, so it is the whole trash rather than a "+
+								"page:\n%s", what, shown)
+						}
+					}
+				})
+			}
 		}
 	}
+}
+
+// A LATER PAGE SEEKS THE ORDER ITS FIRST PAGE WALKS.
+//
+// A listing an index serves — a board by its manual order, the workspace by
+// its last update, a project by the same, the company by its spend, the trash
+// by its removal — reads its first page as a walk of that index stopped by a
+// LIMIT. Its later pages resume from a cursor, and a resume the planner cannot
+// seek re-walks the index from its start to the cursor and filters every row
+// on the way: page fifty reads fifty pages' worth, and paging to the end of a
+// listing costs the square of its length. That was the cursor's shape, one
+// lexicographic disjunction, and the gate could not see it, because it planned
+// the first page alone.
+//
+// So for every registered query whose first page walks an index without
+// sorting, every arm of its next page ([readPage], through a cursor
+// [mintCursor] minted and [pageClause] read back, so the arithmetic under test
+// is the reader's own) must read the task table through THAT index, SEEK it
+// with a bound on the order's leading column, and not sort. A first page that
+// sorts is exempt: no index serves its order in its scope, so every page reads
+// the scope, and its arms are held to what every read is held to.
+//
+// The day an index leads with a NULL-able column, a resume past a value is two
+// arms — the values beyond it and the NULL tail — and each must seek: that is
+// [keyset]'s NULL rule, and this test is where an order breaking it shows.
+//
+// NOT VACUOUS: the indexes the checked first pages walk must include every one
+// named below, so a fixture or a planner change that left this test checking
+// nothing fails here instead of passing.
+func TestALaterPageSeeksTheOrderItsFirstPageWalks(t *testing.T) {
+	t.Parallel()
+	db := planStore(t)
+	walked := map[string]bool{}
+	for name, params := range registeredQueries() {
+		q := planQuery(t, params)
+		statements := queryStatements(t, q)
+		if _, paged := statements[nextPageArm(0)]; !paged {
+			continue
+		}
+		first := explainTree(t, db, statements["the page"].sql,
+			statements["the page"].args)
+		top, read := topTaskRead(first)
+		if !read || sortsAtTop(first) {
+			continue
+		}
+		indexes := indexesIn([]string{top.detail})
+		if len(indexes) != 1 {
+			continue
+		}
+		index := indexes[0]
+		walked[index] = true
+		terms := sortTerms(q, planFields(q))
+		leading := strings.TrimPrefix(terms[0].Column, rowAlias.col(""))
+		bound := regexp.MustCompile(`\(.*\b` + regexp.QuoteMeta(leading) + `[=<>]`)
+		t.Run(name, func(t *testing.T) {
+			for i := 0; ; i++ {
+				arm, ok := statements[nextPageArm(i)]
+				if !ok {
+					break
+				}
+				tree := explainTree(t, db, arm.sql, arm.args)
+				shown := strings.Join(planDetails(tree), "\n")
+				line, read := topTaskRead(tree)
+				switch {
+				case !read:
+					t.Errorf("%s reads no task at all:\n%s", nextPageArm(i), shown)
+				case !strings.HasPrefix(line.detail, "SEARCH ") ||
+					!slices.Contains(indexesIn([]string{line.detail}), index) ||
+					!bound.MatchString(line.detail):
+					t.Errorf("%s does not SEEK %s on %s, the index and the "+
+						"column the first page walks — so it walks the order "+
+						"from its start to the cursor:\n%s", nextPageArm(i),
+						index, leading, shown)
+				case sortsAtTop(tree):
+					t.Errorf("%s sorts what it read, so it is everything after "+
+						"the cursor rather than a page:\n%s", nextPageArm(i),
+						shown)
+				}
+			}
+		})
+	}
+	// SPELLED rather than taken from the constants, which name what is under
+	// test.
+	for _, index := range []string{"tracker_tasks_board_idx",
+		"tracker_tasks_updated_idx", "tracker_tasks_recent_idx",
+		"tracker_tasks_spend_idx", "tracker_tasks_removed_idx",
+		"tracker_tasks_project_removed_idx"} {
+		if !walked[index] {
+			t.Errorf("no registered query's first page walks %s unsorted, so "+
+				"this test never checks a later page of a listing in its "+
+				"order", index)
+		}
+	}
+}
+
+// topTaskRead is the statement's own read of its rows — the line at the top
+// of the plan that reads the task table under the row's alias.
+func topTaskRead(tree []planLine) (planLine, bool) {
+	for _, line := range tree {
+		if line.parent != 0 {
+			continue
+		}
+		if strings.HasPrefix(line.detail, "SCAN tracker_tasks AS "+string(rowAlias)+" ") ||
+			strings.HasPrefix(line.detail, "SEARCH "+string(rowAlias)+" ") {
+			return line, true
+		}
+	}
+	return planLine{}, false
+}
+
+// sortsAtTop reports a plan that sorts the statement's own rows, as opposed to
+// one of its subqueries' ([sorts] reads every line).
+func sortsAtTop(tree []planLine) bool {
+	for _, line := range tree {
+		if line.parent == 0 && strings.Contains(line.detail, "FOR ORDER BY") {
+			return true
+		}
+	}
+	return false
 }
 
 // cmpOr is value, or otherwise when value is empty.
@@ -2225,8 +2368,10 @@ func historyRow(i int) []any {
 // by one and in that board's column counts; one column's rows read the
 // field's values and then the project's board once per value; and a total
 // over a number field read the field's every value through the choice
-// column's index. Every one of those plans passed the inventory, which only
-// asks that some plan reach each index.
+// column's index; and a later page sorted by a field, read arm by arm, bounded
+// the joined value, made its LEFT JOIN an inner one and walked every value in
+// the company before a task ([pageArmSets]). Every one of those plans passed
+// the inventory, which only asks that some plan reach each index.
 //
 // So a line seeking the key must seek it on a task, and a line reading a
 // value index must be a filter's — the index of a field the query filters on,
@@ -2376,10 +2521,11 @@ func planQuery(t *testing.T, params map[string]any) Query {
 
 // queryStatements is every statement the reader runs for one query, each
 // built by the reader's own builder over the query's own compiled set: the
-// page and the count it carries, the totals and each order statistic's read
-// of one value, a board's columns and one column's rows, and the around read's
-// sort values of one task and its four reads of where that task sits — so a
-// plan of each is a plan of what a caller's request issues, never of a copy.
+// page, every arm of the page after it, and the count it carries, the totals
+// and each order statistic's read of one value, a board's columns and one
+// column's rows, and the around read's sort values of one task and its four
+// reads of where that task sits — so a plan of each is a plan of what a
+// caller's request issues, never of a copy.
 func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 	t.Helper()
 	fields := planFields(q)
@@ -2396,6 +2542,29 @@ func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 			append(append([]any{}, set.args...), TotalHintCeiling+1)},
 		"the around task's sort values": {values, valueArgs},
 	}
+	// THE ROW EVERY BOUNDED READ BELOW IS AFTER OR BEFORE: a value for each
+	// term of the order. They bind as values, and plan alike whatever they
+	// are.
+	keys := make([]any, len(terms))
+	for i := range keys {
+		keys[i] = "a000100"
+	}
+	// THE NEXT PAGE of a flat answer, arm by arm ([readPage]), resumed from
+	// a cursor [mintCursor] minted on that row and read back by
+	// [pageClause] — a grouped answer takes no cursor, and a list-ordered
+	// one pages the list itself.
+	if q.GroupBy == "" && !listOrdered(q) {
+		next := q
+		next.Cursor = mintCursor(keys, renderOrder(terms))
+		resume, err := pageClause(next, fields)
+		if err != nil {
+			t.Fatalf("pageClause: %v", err)
+		}
+		for i, arm := range pageArmSets(set, resume, terms) {
+			statement, args := taskRowsStatement(arm, terms)
+			out[nextPageArm(i)] = plannedRead{statement, append(args, 51)}
+		}
+	}
 	// WHERE ONE TASK SITS ([readAround]), over the run that holds it — the
 	// whole answer, or one column of a board ([groupAxis.run]): which run it
 	// is, how many of the run's rows are ahead of it, and its neighbour on
@@ -2410,10 +2579,6 @@ func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 			t.Fatalf("compileGroup: %v", err)
 		}
 		run = axis.run("o-high", 1)
-	}
-	keys := make([]any, len(terms))
-	for i := range keys {
-		keys[i] = "a000100"
 	}
 	after, afterArgs, before, beforeArgs := aroundSides(terms, keys, "t-00001")
 	holds, holdsArgs := segmentHoldsStatement(run, set, "t-00001")
@@ -2456,6 +2621,15 @@ func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 	}
 	return out
 }
+
+// nextPageArm names the statement [readPage] reads the i-th arm of a later
+// page with.
+func nextPageArm(i int) string {
+	return nextPage + strconv.Itoa(i)
+}
+
+// nextPage is what every arm of a later page is named by.
+const nextPage = "the next page, arm "
 
 // A DROP READS THE GAP IT OPENED, NOT THE BOARD BETWEEN IT AND ONE END.
 //

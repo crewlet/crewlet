@@ -287,6 +287,10 @@ internal/
 ├── plainjson/            # JSON read as text: `<`, `>` and `&` as themselves,
 │                         #   for every record and answer a person or a model
 │                         #   reads
+├── keyset/               # A row's place in an order as the arms the rows
+│                         #   after or before it are read through — one seek
+│                         #   of the order's index each — so a later page
+│                         #   costs what the first page does
 ├── api/                  # REST + dashboard: webhooks/, stream/, queries/,
 │                         #   livestate/, configapi/, setupapi/, secretsapi/,
 │                         #   auth/, httpjson/, mcpbridge/, operator/ (ONE

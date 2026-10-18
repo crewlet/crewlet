@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/keyset"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -446,14 +447,13 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 		// EXCEPT UNDER A PRIORITY LIST, whose order is not one SQL can
 		// resume — see [readListOrdered], which pages it itself.
 		listed := listOrdered(q)
-		page, pageArgs := "", []any(nil)
+		var resume []keyset.Arm
 		if !listed {
-			page, pageArgs, err = pageClause(q, fields)
+			resume, err = pageClause(q, fields)
 			if err != nil {
 				return err
 			}
 		}
-		rowSet := andPage(set, page, pageArgs)
 		// The whole list-ordered set, in its drawn order, kept for the
 		// one other reader of that order — [readAround].
 		var listedRows []TaskRow
@@ -488,7 +488,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 			}
 		default:
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-			rows, cursor, err := readTasks(ctx, tx, rowSet, terms,
+			rows, cursor, err := readPage(ctx, tx, set, resume, terms,
 				limit, q.DayStart)
 			if err != nil {
 				return err
@@ -1335,8 +1335,9 @@ func compilePredicate(q Query, now time.Time, fields map[string]resolvedField,
 	return where, args, nil
 }
 
-// pageClause is the keyset resume, and it is DELIBERATELY NOT PART OF
-// [compile].
+// pageClause is the keyset resume — the arms the rows after the cursor are
+// read through ([cursorArms]), none for a first page — and it is DELIBERATELY
+// NOT PART OF [compile].
 //
 // A cursor says where this PAGE starts. The count hint and the totals are
 // about the whole matched set, and they share the compiled predicate — so a
@@ -1349,19 +1350,11 @@ func compilePredicate(q Query, now time.Time, fields map[string]resolvedField,
 // `sort=f.<slug>` cursor compares `fs0.num`, and the hint and the totals carry
 // no join at all — so a cursor in the shared predicate made page two of every
 // custom-field-sorted query a hard error.
-func pageClause(q Query, fields map[string]resolvedField) (string, []any, error) {
+func pageClause(q Query, fields map[string]resolvedField) ([]keyset.Arm, error) {
 	if q.Cursor == "" {
-		return "", nil, nil
+		return nil, nil
 	}
-	return cursorClause(q, fields)
-}
-
-// andPage folds the page boundary into a set for the ROW read alone.
-func andPage(set taskSet, clause string, values []any) taskSet {
-	if clause == "" {
-		return set
-	}
-	return set.and(clause, values)
+	return cursorArms(q, fields)
 }
 
 // handleClause builds a handle filter, with `none` as a real value.
@@ -1668,6 +1661,10 @@ var sortColumns = map[string]sortColumn{
 	// "not removed" IS: on every listing but the trash this orders one
 	// value, so the id tiebreak decides and the answer is the default
 	// order — which is honest, since a live task has no removal to sort by.
+	// IN THE TRASH IT HAS NO NULL to place, because the listing's own
+	// predicate is `removed_at IS NOT NULL`, so [sortTerms] marks it never
+	// NULL there — which is what lets the trash's indexes serve it in
+	// either direction, and its resume and its neighbours seek them.
 	"removed": {Column: "t.removed_at", Nullable: true},
 }
 
@@ -1697,6 +1694,7 @@ var sortColumns = map[string]sortColumn{
 // estimate's, points' and the trash's) and still serves the range with no
 // sort step.
 func sortTerms(q Query, fields map[string]resolvedField) []sortTerm {
+	trash := q.Removed != nil && *q.Removed
 	var terms []sortTerm
 	for i, sort := range q.Sort {
 		if ref, ok := strings.CutPrefix(sort.Key, FieldKeyPrefix); ok && ref != "" {
@@ -1732,22 +1730,24 @@ func sortTerms(q Query, fields map[string]resolvedField) []sortTerm {
 		}
 		terms = append(terms, sortTerm{
 			Column: column.Column, Descending: sort.Descending,
-			NeverNull: !column.Nullable,
+			NeverNull: !column.Nullable || (sort.Key == "removed" && trash),
 		})
 	}
 	if len(terms) == 0 {
 		switch {
-		case q.Removed != nil && *q.Removed:
+		case trash:
 			// THE TRASH IS ORDERED BY WHEN IT WAS REMOVED, never by
 			// rank: a removed task's rank is its position on a board
 			// it is no longer on, so ordering a trash listing by it
 			// is ordering by a stale number — and the indexes a trash
 			// is read through ([taskSource]) are in this order, so it
 			// is the one a page of the trash reads without a sort.
-			// NULLABLE — it is what "removed" MEANS — and descending, so
-			// the clause is SQLite's own default either way.
+			// NEVER NULL HERE, for the reason [sortColumns] gives
+			// `removed` — the listing states `removed_at IS NOT NULL` —
+			// so its resume reads no NULL tail and the order reversed is
+			// a plain walk of the index backwards.
 			terms = append(terms, sortTerm{
-				Column: "t.removed_at", Descending: true,
+				Column: "t.removed_at", Descending: true, NeverNull: true,
 			})
 		case q.Scope.Project != "":
 			// The default is the manual order inside a project and
@@ -1804,10 +1804,11 @@ func sortJoins(terms []sortTerm) (string, []any) {
 // its LEFT JOIN makes every field's value nullable for a task that does not
 // carry the field.
 //
-// [keysetAfterOne] is the other half and the two may never disagree: a cursor
-// compares exactly the columns the order sorts by, so an order that moved its
-// NULLs while the comparison did not would resume a page in the middle of
-// them — silently, and only for callers who paged.
+// [keyset]'s arms are the other half and the two may never disagree: a cursor
+// resumes on exactly the columns the order sorts by, putting the NULLs last as
+// this does, so an order that moved its NULLs while the arms did not would
+// resume a page in the middle of them — silently, and only for callers who
+// paged.
 func renderOrder(terms []sortTerm) string {
 	rendered := make([]string, 0, len(terms))
 	for _, term := range terms {
@@ -1843,7 +1844,8 @@ type page struct {
 	Order string `json:"o,omitempty"`
 }
 
-// cursorClause turns an opaque page cursor back into a predicate.
+// cursorArms turns an opaque page cursor back into the arms the rows after it
+// are read through ([keyset.After]).
 //
 // KEYSET RATHER THAN OFFSET, because an offset re-reads and re-sorts every row
 // it skips: page fifty of a board costs fifty times page one, and a row
@@ -1851,32 +1853,45 @@ type page struct {
 //
 // # Why it compares the WHOLE order and not just the id
 //
-// The predicate has to be "after the last row IN THIS ORDER", and for any
-// order but by-id that is not `id > last`. On a board ordered by rank, every
-// task with a later rank and a smaller id is SKIPPED — it sorts after the page
-// boundary and fails the predicate — while every task with an earlier rank and
-// a larger id is REPEATED on every subsequent page. Both at once, silently: a
-// caller paging a board would see some of its tasks twice and never see
-// others, and nothing in the answer would say so.
+// The rows have to be "after the last row IN THIS ORDER", and for any order
+// but by-id that is not `id > last`. On a board ordered by rank, every task
+// with a later rank and a smaller id is SKIPPED, while every task with an
+// earlier rank and a larger id is REPEATED on every subsequent page. Both at
+// once, silently: a caller paging a board would see some of its tasks twice
+// and never see others, and nothing in the answer would say so.
 //
-// So the comparison is lexicographic over the sort terms, expanded rather than
-// written as a row value because the directions differ: for `a ASC, b DESC,
-// id ASC` it is `a > ? OR (a = ? AND (b < ? OR (b = ? AND id > ?)))`. The
-// nesting is the definition of "later in this order" and nothing shorter is
-// correct for a mixed-direction sort.
-func cursorClause(q Query, fields map[string]resolvedField) (string, []any, error) {
+// # Why it is ARMS and not one predicate
+//
+// "After this row" over `a, b, id` is three disjoint ranges read in turn —
+// the row's `a` and `b` with a later id, then its `a` with a later `b`, then a
+// later `a` — and each is one seek of the index the order is served by, where
+// the lexicographic disjunction it replaced was a predicate the planner could
+// not seek on: measured, a board's next page walked the project's board from
+// its first card, the workspace's walked every live task in the company from
+// the newest, and the trash's walked the trash from its top, so paging to the
+// end of a listing cost the square of its length. The arithmetic, its NULL
+// rule and why neither a range nor a union of the arms will do are
+// [keyset]'s; [readPage] reads the arms in turn until the page is full.
+func cursorArms(q Query, fields map[string]resolvedField) ([]keyset.Arm, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(q.Cursor)
 	if err != nil {
-		return "", nil, fmt.Errorf("worklet: the cursor is not one this surface "+
+		return nil, fmt.Errorf("worklet: the cursor is not one this surface "+
 			"minted: %w", err)
 	}
 	var resume page
 	if err := json.Unmarshal(raw, &resume); err != nil {
-		return "", nil, fmt.Errorf("worklet: the cursor names no row to resume " +
+		return nil, fmt.Errorf("worklet: the cursor names no row to resume " +
 			"after")
 	}
 	terms := sortTerms(q, fields)
 	order := renderOrder(terms)
+	if len(resume.Keys) == 0 || resume.Keys[len(resume.Keys)-1] == nil {
+		// THE LAST KEY IS THE ROW'S ID, which is never NULL: a cursor
+		// without one names no row, and resumed it would be read as the
+		// rows after nothing — none at all.
+		return nil, fmt.Errorf("worklet: the cursor names no row to resume " +
+			"after")
+	}
 	if len(resume.Keys) != len(terms) || resume.Order != order {
 		// A CURSOR FROM A DIFFERENT ORDER IS REFUSED, never applied to
 		// this one: resuming a rank-ordered page inside an
@@ -1884,16 +1899,69 @@ func cursorClause(q Query, fields map[string]resolvedField) (string, []any, erro
 		// column the query does not sort by, which drops rows without
 		// saying so. The ORDER is what decides that, not the key count —
 		// see [page].
-		return "", nil, fmt.Errorf("worklet: this cursor was minted for the "+
+		return nil, fmt.Errorf("worklet: this cursor was minted for the "+
 			"order %q and this query sorts by %q — a cursor belongs to the "+
 			"order that minted it, and re-sorting starts a new page",
 			resume.Order, order)
 	}
-	clause, args := keysetAfter(terms, resume.Keys)
-	return clause, args, nil
+	return keyset.After(keysetTerms(terms), resume.Keys), nil
 }
 
-// keysetAfter builds the lexicographic "strictly after" predicate.
+// keysetTerms is an order as [keyset] reads one.
+func keysetTerms(terms []sortTerm) []keyset.Term {
+	out := make([]keyset.Term, len(terms))
+	for i, term := range terms {
+		out[i] = keyset.Term{Column: term.Column, Descending: term.Descending,
+			NeverNull: term.NeverNull}
+	}
+	return out
+}
+
+// pageArmSets is the set narrowed to each arm of a resume, in the order the
+// arms are read — or the set alone for a first page — named for the plan
+// test.
+//
+// AN ORDER ON A JOINED COLUMN IS ONE READ OF ALL ITS ARMS. A custom field's
+// value is its sort's LEFT JOIN's ([sortTerm.Join]), which no index of the
+// task table holds, so no arm of such an order is a seek and reading them in
+// turn would read the scope once per arm. And an arm alone bounds the joined
+// column, which makes the LEFT JOIN an inner one the planner is free to drive
+// from the value table's side — measured, every arm of `sort=-f.effort` at the
+// workspace walked every value of every field in the company through the value
+// table's key before it reached a task. Their disjunction holds the NULL arm
+// that the join is LEFT for, so the join stays a left one driven from the
+// task, and the page is the one read of the scope it always cost.
+func pageArmSets(set taskSet, resume []keyset.Arm, terms []sortTerm) []taskSet {
+	if len(resume) == 0 {
+		return []taskSet{set}
+	}
+	order := keysetTerms(terms)
+	if joinsColumn(terms) {
+		clause, args := keyset.Disjunction(order, resume)
+		return []taskSet{set.and(clause, args)}
+	}
+	out := make([]taskSet, len(resume))
+	for i, arm := range resume {
+		clause, args := arm.SQL(order)
+		out[i] = set.and(clause, args)
+	}
+	return out
+}
+
+// joinsColumn reports an order with a term on a joined column rather than on
+// the task row's own.
+func joinsColumn(terms []sortTerm) bool {
+	for _, term := range terms {
+		if term.Join != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// keysetAfter builds the lexicographic "strictly after" predicate, as one
+// expression — what the around read's two sides are written with
+// ([aroundSides]); a page resumes through [keyset]'s arms instead.
 //
 // # NULL IS A POSITION IN THE ORDER, not a missing value
 //
@@ -1977,14 +2045,28 @@ func mintCursor(keys []any, order string) string {
 func readTasks(ctx context.Context, tx *sql.Tx, set taskSet,
 	terms []sortTerm, limit int, dayStart time.Time) ([]TaskRow, string, error) {
 
-	// ONE MORE THAN THE PAGE, which is how the answer knows whether there
-	// is another page without a second count.
-	query, bound := taskRowsStatement(set, terms)
-	rows, err := tx.QueryContext(ctx, query, append(bound, limit+1)...)
-	if err != nil {
-		return nil, "", fmt.Errorf("worklet: read tasks: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
+	return readPage(ctx, tx, set, nil, terms, limit, dayStart)
+}
+
+// readPage reads one page of a set in an order, resuming after a cursor's row
+// when resume holds its arms ([cursorArms]).
+//
+// ARM BY ARM, IN ONE TRANSACTION, until the page is full: each arm's rows come
+// after every row of the arm before it, so the arms read in turn are the order
+// read from the cursor onwards, and each is a seek of the index the order is
+// served by that its LIMIT stops — see [keyset]. ONE MORE THAN THE PAGE, across
+// the arms, which is how the answer knows whether there is another page
+// without a second count.
+//
+// AN ORDER NO INDEX SERVES IN ITS SCOPE reads the scope for each arm it
+// reaches, where the one predicate read it once: as many reads as the order
+// has columns at most, and usually two, since the tie arms hold few rows and
+// the arm past them fills the page. That is bounded by the order and never by
+// how far the caller has paged, and it is the price of every order an index
+// does serve seeking its later pages rather than walking to them.
+func readPage(ctx context.Context, tx *sql.Tx, set taskSet,
+	resume []keyset.Arm, terms []sortTerm, limit int,
+	dayStart time.Time) ([]TaskRow, string, error) {
 
 	// ALLOCATED RATHER THAN NIL, and this is the one reader in the tree
 	// where that is a wire contract rather than a style: a nil slice
@@ -1996,46 +2078,16 @@ func readTasks(ctx context.Context, tx *sql.Tx, set taskSet,
 	// mean this and only this.
 	out := []TaskRow{}
 	var pageKeys [][]any
-	for rows.Next() {
-		var row TaskRow
-		var parent, start, due sql.NullInt64
-		var parentID sql.NullString
-		var archived, blocked, collision int
-		var updated int64
-		var version int64
-		sortValues := make([]any, len(terms))
-		targets := []any{&row.ID, &row.Key, &collision, &row.Title, &row.Type, &row.Status,
-			&row.StatusGroup, &row.Priority, &row.Assignee, &row.Project,
-			&parentID, &row.Depth, &start, &due, &row.EstimateMinutes,
-			&row.Points, &archived, &row.Rank, &updated, &version, &blocked}
-		for i := range sortValues {
-			targets = append(targets, &sortValues[i])
+	for _, arm := range pageArmSets(set, resume, terms) {
+		rows, keys, err := scanTaskRows(ctx, tx, arm, terms, limit+1-len(out))
+		if err != nil {
+			return nil, "", err
 		}
-		if err := rows.Scan(targets...); err != nil {
-			return nil, "", fmt.Errorf("worklet: read a task row: %w", err)
+		out = append(out, rows...)
+		pageKeys = append(pageKeys, keys...)
+		if len(out) > limit {
+			break
 		}
-		pageKeys = append(pageKeys, sortValues)
-		_ = parent
-		if parentID.Valid {
-			row.Parent = parentID.String
-		}
-		if start.Valid {
-			at := store.DecodeTime(start.Int64)
-			row.Start = &at
-		}
-		if due.Valid {
-			at := store.DecodeTime(due.Int64)
-			row.Due = &at
-		}
-		row.Archived = archived == 1
-		row.Blocked = blocked == 1
-		row.KeyCollision = collision == 1
-		row.Updated = store.DecodeTime(updated)
-		row.Version = uint64(version)
-		out = append(out, row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, "", fmt.Errorf("worklet: walk the task rows: %w", err)
 	}
 	cursor := ""
 	if len(out) > limit {
@@ -2065,6 +2117,63 @@ func readTasks(ctx context.Context, tx *sql.Tx, set taskSet,
 		return nil, "", err
 	}
 	return out, cursor, nil
+}
+
+// scanTaskRows reads up to n rows of a set in an order, each with its value
+// for every column the order sorts by.
+func scanTaskRows(ctx context.Context, tx *sql.Tx, set taskSet,
+	terms []sortTerm, n int) ([]TaskRow, [][]any, error) {
+
+	query, bound := taskRowsStatement(set, terms)
+	rows, err := tx.QueryContext(ctx, query, append(bound, n)...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("worklet: read tasks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []TaskRow
+	var pageKeys [][]any
+	for rows.Next() {
+		var row TaskRow
+		var start, due sql.NullInt64
+		var parentID sql.NullString
+		var archived, blocked, collision int
+		var updated int64
+		var version int64
+		sortValues := make([]any, len(terms))
+		targets := []any{&row.ID, &row.Key, &collision, &row.Title, &row.Type, &row.Status,
+			&row.StatusGroup, &row.Priority, &row.Assignee, &row.Project,
+			&parentID, &row.Depth, &start, &due, &row.EstimateMinutes,
+			&row.Points, &archived, &row.Rank, &updated, &version, &blocked}
+		for i := range sortValues {
+			targets = append(targets, &sortValues[i])
+		}
+		if err := rows.Scan(targets...); err != nil {
+			return nil, nil, fmt.Errorf("worklet: read a task row: %w", err)
+		}
+		pageKeys = append(pageKeys, sortValues)
+		if parentID.Valid {
+			row.Parent = parentID.String
+		}
+		if start.Valid {
+			at := store.DecodeTime(start.Int64)
+			row.Start = &at
+		}
+		if due.Valid {
+			at := store.DecodeTime(due.Int64)
+			row.Due = &at
+		}
+		row.Archived = archived == 1
+		row.Blocked = blocked == 1
+		row.KeyCollision = collision == 1
+		row.Updated = store.DecodeTime(updated)
+		row.Version = uint64(version)
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("worklet: walk the task rows: %w", err)
+	}
+	return out, pageKeys, nil
 }
 
 // taskRowsStatement is the statement [readTasks] reads a page with, and its
