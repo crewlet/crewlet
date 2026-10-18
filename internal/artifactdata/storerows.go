@@ -17,17 +17,24 @@ import (
 
 // storeRow is one store's catalogue row.
 type storeRow struct {
-	artifact                     string
-	no                           int64
-	docs, tombstones             int64
-	bodyBytes, fieldEntries      int64
-	historyBytes, footprint      int64
-	writes                       int64
-	digest                       canon.Digest
-	historyFloor, tombstoneFloor int64
-	nextCollection, nextPath     int64
-	createdAt                    int64
-	version                      int64
+	artifact                string
+	no                      int64
+	docs, tombstones        int64
+	bodyBytes, fieldEntries int64
+	historyBytes, footprint int64
+	writes                  int64
+	digest                  canon.Digest
+	historyFloor            int64
+
+	// tombstoneFloor is the position below which a catch-up by version
+	// cannot account for every change a reader's view needs, so a client
+	// whose `since` is below it reads the store whole: a delete the prune
+	// forgot, a collection dropped with its deletes, a read rule changed, or
+	// a row that changed hands in a collection scoped to each row's creator.
+	tombstoneFloor           int64
+	nextCollection, nextPath int64
+	createdAt                int64
+	version                  int64
 }
 
 // computeFootprint is the store's footprint from its counters.

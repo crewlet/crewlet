@@ -5434,7 +5434,11 @@ export interface DataDocPage {
   after?: string;
   /** The `since` asked is below what the store still accounts for: read the collection whole. */
   resync?: boolean;
-  /** The store's version when read: the next catch-up's `since`. */
+  /**
+   * The next catch-up's `since`, adopted once the read's LAST page is in: a
+   * whole read's pages answer the version its first page saw, and a catch-up's
+   * the version every change at or below which it has returned.
+   */
   through: number;
   position: LogPosition;
   complete: boolean;
@@ -5455,6 +5459,8 @@ export interface DataChange {
   d?: string;
   /** `create`, `update`, `delete`, `migrate`, `conflict` or `schema`. */
   op: string;
+  /** The row's creator at this change: a row deleted and created again by somebody else changes hands. */
+  cb?: string;
   bv?: number;
   av?: number;
   f?: DataFieldChange[];

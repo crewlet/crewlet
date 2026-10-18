@@ -282,7 +282,10 @@ export class ArtifactDataStore {
     const docs = new Map<string, DataDoc>();
     const versions = new Map<string, number>();
     let cursor = "";
-    let through = 0;
+    // THE LOWEST `through` ANY PAGE ANSWERED: a page read later can carry a
+    // newer version than the documents an earlier page already passed, and
+    // the catch-up from it would skip what changed under them.
+    let through = Number.POSITIVE_INFINITY;
     try {
       for (;;) {
         const page = await this.socket.query("artifact_data", {
@@ -296,7 +299,7 @@ export class ArtifactDataStore {
           versions.set(doc.id, doc.version);
           if (!doc.deleted) docs.set(doc.id, doc);
         }
-        through = Math.max(through, page.through);
+        through = Math.min(through, page.through);
         if (!page.after) break;
         cursor = page.after;
       }
@@ -318,7 +321,10 @@ export class ArtifactDataStore {
     }
     c.docs = docs;
     c.versions = versions;
-    c.through = Math.max(c.through, through);
+    // A WHOLE READ REPLACES WHAT WAS HELD, so its `through` replaces the
+    // held one too, never ratchets it: a higher one kept from before would
+    // skip what this read did not see.
+    c.through = through;
     c.status = "loaded";
     c.error = null;
     this.settleOverlay();
@@ -329,23 +335,28 @@ export class ArtifactDataStore {
   async catchUp(collection: string): Promise<void> {
     const c = this.collections.get(collection);
     if (!c || c.status !== "loaded" || c.through <= 0) return this.load(collection);
+    const since = c.through;
     let cursor = "";
     try {
+      let through = since;
       for (;;) {
         const page = await this.socket.query("artifact_data", {
           id: this.artifact,
           collection,
-          since: c.through,
+          since,
           limit: 500,
           ...(cursor ? { cursor } : {}),
         });
         if (this.stopped) return;
         if (page.resync) return this.load(collection);
         for (const doc of page.docs) this.applyDoc(collection, doc);
-        c.through = Math.max(c.through, page.through);
+        through = page.through;
         if (!page.after) break;
         cursor = page.after;
       }
+      // ADOPTED ONLY ONCE THE LAST PAGE IS IN: a catch-up that fails part
+      // way asks again from where it started, never past rows it never read.
+      c.through = Math.max(c.through, through);
     } catch (err) {
       if (this.stopped) return;
       c.error = err instanceof QueryError ? err : new QueryError("query_failed");

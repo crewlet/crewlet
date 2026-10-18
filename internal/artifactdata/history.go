@@ -34,10 +34,17 @@ const (
 )
 
 // Change is one document's part of a history row.
+//
+// CREATOR IS THE ROW'S CREATOR AT THIS CHANGE, kept on the change because a
+// row can change hands: once its creator deletes it, a create by somebody
+// else takes the tombstone and becomes the creator. A history read judges
+// each change of an `own_rows` or `private` row by the creator it was made
+// under, so the new creator never reads the values the previous one wrote.
 type Change struct {
 	Collection string        `json:"c"`
 	Doc        string        `json:"d,omitempty"`
 	Op         ChangeOp      `json:"op"`
+	Creator    string        `json:"cb,omitempty"`
 	Before     int64         `json:"bv,omitempty"`
 	After      int64         `json:"av,omitempty"`
 	Fields     []FieldChange `json:"f,omitempty"`
@@ -69,7 +76,8 @@ func bounded(v canon.Value) (json.RawMessage, string) {
 // changeOf is what d's record did to it, and whether every value it needs to
 // be undone is held whole.
 func changeOf(d *docState, after int64, op ChangeOp) (Change, bool) {
-	ch := Change{Collection: d.coll.spec.Name, Doc: d.id, Op: op, Before: d.version0, After: after}
+	ch := Change{Collection: d.coll.spec.Name, Doc: d.id, Op: op, Creator: d.createdBy,
+		Before: d.version0, After: after}
 	undoable := true
 	for _, name := range unionKeys(d.fields0, d.fields) {
 		old, had := d.fields0[name]

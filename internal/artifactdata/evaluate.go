@@ -91,6 +91,12 @@ type docState struct {
 	listed  bool // the batch has this document in its order
 	reindex bool // a schema change re-indexes it whatever its body
 
+	// takeover marks a create over another principal's tombstone in a
+	// collection whose read rule scopes rows to their creator: the row
+	// changes hands, so whoever held it before stops seeing it by version
+	// and must read the store whole ([storeRow.tombstoneFloor]).
+	takeover bool
+
 	// The canonical body and field entries of the result, computed once.
 	body    []byte
 	entries []fieldEntry
@@ -146,6 +152,10 @@ type refusal struct {
 	verdict   artifacts.DataVerdict
 	reason    string
 	conflicts []docRef
+
+	// creators is each conflicting document's creator as the record found
+	// it, which its history row is shown under.
+	creators map[docRef]string
 
 	// class is the sentinel a decide-time refusal answers its caller with,
 	// where the verdict alone does not say which.
@@ -231,6 +241,7 @@ func evaluate(v view, authority artifacts.Authority, ops []artifacts.DataOp, und
 	// them: a conflict names every document that moved, so the writer can
 	// merge them all at once.
 	var conflicts []docRef
+	creators := map[docRef]string{}
 	for _, op := range ops {
 		if op.IfVersion == nil {
 			continue
@@ -250,13 +261,15 @@ func evaluate(v view, authority artifacts.Authority, ops []artifacts.DataOp, und
 			return plan{}, err
 		}
 		if d.version0 != *op.IfVersion {
-			conflicts = appendRef(conflicts, docRef{op.Collection, op.Doc})
+			ref := docRef{op.Collection, op.Doc}
+			conflicts = appendRef(conflicts, ref)
+			creators[ref] = d.createdBy
 		}
 	}
 	if len(conflicts) > 0 {
 		return plan{refusal: &refusal{verdict: artifacts.DataConflict,
 			reason: fmt.Sprintf("%d document(s) moved since the version the write named",
-				len(conflicts)), conflicts: conflicts}}, nil
+				len(conflicts)), conflicts: conflicts, creators: creators}}, nil
 	}
 	for i, op := range ops {
 		if err := b.apply(op); err != nil {
@@ -430,8 +443,16 @@ func (b *batch) create(c *collState, d *docState) error {
 	if b.undo && d.row && d.createdBy != "" {
 		return nil
 	}
+	d.takeover = d.row && d.createdBy != "" && d.createdBy != b.authority.Actor.Name &&
+		scopedRead(c.spec.Read)
 	d.createdBy, d.createdByKind, d.createdAt = b.authority.Actor.Name, string(b.authority.Actor.Kind), 0
 	return nil
+}
+
+// scopedRead reports a read rule that shows a reader below editor only the
+// rows they created, so a row's creator decides who sees it.
+func scopedRead(rule artifacts.ReadRule) bool {
+	return rule == artifacts.ReadOwnRows || rule == artifacts.ReadPrivate
 }
 
 // delete tombstones d.

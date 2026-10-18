@@ -170,6 +170,138 @@ func TestARowHiddenFromAReaderIsHiddenFromEveryReadPath(t *testing.T) {
 	}
 }
 
+// A PAGED READ ANSWERS A THROUGH THAT COVERS ONLY WHAT IT RETURNED: a whole
+// read's pages each run in their own snapshot, so a document whose id sorts
+// before the cursor and changes between two pages is in neither, and the
+// later page's own version would carry the next catch-up past it. Every page
+// of a whole read answers the version its first page saw; a catch-up's pages
+// that have more to come answer the version below their last document.
+func TestAPagedReadsThroughCoversOnlyWhatItReturned(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	ctx := t.Context()
+	jane := person("jane", artifacts.RoleEditor)
+	rd := reading("jane", artifacts.RoleEditor)
+	n.applied(jane, set("tasks", "a", map[string]string{"x": `1`}), set("tasks", "b", map[string]string{"x": `1`}),
+		set("tasks", "c", map[string]string{"x": `1`}))
+	first, err := n.reader.Docs(ctx, sheet, rd, "tasks", 0, "", 2)
+	if err != nil || len(first.Docs) != 2 || first.After == "" {
+		t.Fatalf("the first page: %+v, %v", first, err)
+	}
+	moved := n.applied(jane, merge("tasks", "a", map[string]string{"x": `2`}))
+	last, err := n.reader.Docs(ctx, sheet, rd, "tasks", 0, first.After, 2)
+	if err != nil || len(last.Docs) != 1 || last.After != "" {
+		t.Fatalf("the last page: %+v, %v", last, err)
+	}
+	if last.Through != first.Through || last.Through >= moved.Seq {
+		t.Fatalf("the whole read's last page answers through %d (first page %d), past the change "+
+			"to a at %d that no page returned", last.Through, first.Through, moved.Seq)
+	}
+	caught, err := n.reader.Docs(ctx, sheet, rd, "tasks", last.Through, "", 0)
+	if err != nil || len(caught.Docs) != 1 || caught.Docs[0].ID != "a" || caught.Docs[0].Version != moved.Seq {
+		t.Fatalf("the catch-up from the whole read's through: %+v, %v; want a at %d", caught.Docs, err, moved.Seq)
+	}
+	// A CATCH-UP PAGE WITH MORE TO COME answers the version below its last
+	// document; its last page, the store's.
+	n.applied(jane, merge("tasks", "b", map[string]string{"x": `3`}))
+	n.applied(jane, merge("tasks", "c", map[string]string{"x": `3`}))
+	part, err := n.reader.Docs(ctx, sheet, rd, "tasks", caught.Through, "", 1)
+	if err != nil || len(part.Docs) != 1 || part.After == "" {
+		t.Fatalf("a catch-up's first page: %+v, %v", part, err)
+	}
+	if part.Through != part.Docs[0].Version-1 {
+		t.Fatalf("a catch-up page with more to come answers through %d, want %d", part.Through,
+			part.Docs[0].Version-1)
+	}
+}
+
+// A ROW THAT CHANGES HANDS KEEPS ITS PAST WITH WHOEVER WROTE IT: in a private
+// collection, once dana deletes her row, bob may create one under the same id,
+// and from then on the row is his. The history judges each change by the
+// creator it was made under, so bob never reads dana's answer; and dana's tab,
+// which caught up by version narrowed to her own rows, would never see the
+// delete it missed, so its catch-up from before the takeover reads whole. A
+// changed read rule reshapes every reader's view, and reads whole the same way.
+func TestARowThatChangesHandsKeepsItsPastWithItsPreviousCreator(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	ctx := t.Context()
+	jane := person("jane", artifacts.RoleOwner)
+	n.configure(jane, artifacts.Collection{Name: "votes", Preset: artifacts.PresetPrivate})
+	dana, bob := person("dana", artifacts.RoleViewer), person("bob", artifacts.RoleViewer)
+	danaReads, bobReads := reading("dana", artifacts.RoleViewer), reading("bob", artifacts.RoleViewer)
+	n.applied(dana, set("votes", "response", map[string]string{"answer": `"dana's secret"`}))
+	held, err := n.reader.Docs(ctx, sheet, danaReads, "votes", 0, "", 0)
+	if err != nil || len(held.Docs) != 1 {
+		t.Fatalf("dana's listing: %+v, %v", held.Docs, err)
+	}
+	n.applied(dana, artifacts.DataOp{Op: artifacts.DataDelete, Collection: "votes", Doc: "response"})
+	n.applied(bob, set("votes", "response", map[string]string{"answer": `"bob's"`}))
+
+	for _, filter := range []artifactdata.HistoryFilter{{}, {Collection: "votes", Doc: "response"},
+		{Collection: "votes", Doc: "response", Field: "answer"}} {
+		page, err := n.reader.History(ctx, sheet, bobReads, filter, "", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mine := 0
+		for _, e := range page.Entries {
+			for _, ch := range e.Changes {
+				if ch.Doc == "" {
+					// A SCHEMA CHANGE carries no row's values, and is
+					// shown to whoever may read the collection at all.
+					continue
+				}
+				if ch.Creator != "bob" {
+					t.Fatalf("bob's history (%+v) shows a change made under %q: %+v", filter, ch.Creator, ch)
+				}
+				for _, f := range ch.Fields {
+					if strings.Contains(string(f.Before)+string(f.After), "secret") {
+						t.Fatalf("bob's history (%+v) carries dana's answer: %+v", filter, f)
+					}
+				}
+				mine++
+			}
+		}
+		if mine != 1 {
+			t.Fatalf("bob's history (%+v) shows %d changes, want his one create", filter, mine)
+		}
+	}
+	page, err := n.reader.History(ctx, sheet, danaReads, artifactdata.HistoryFilter{Collection: "votes",
+		Doc: "response"}, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Entries) != 2 || page.Entries[0].Changes[0].Op != artifactdata.ChangeDelete {
+		t.Fatalf("dana's history of the row: %+v, want her create and her delete only", page.Entries)
+	}
+
+	catchup, err := n.reader.Docs(ctx, sheet, danaReads, "votes", held.Through, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !catchup.Resync {
+		t.Fatalf("dana's catch-up from before the row changed hands answered %+v; it cannot "+
+			"carry the delete she missed, so it must read whole", catchup.Docs)
+	}
+	whole, err := n.reader.Docs(ctx, sheet, danaReads, "votes", 0, "", 0)
+	if err != nil || len(whole.Docs) != 0 {
+		t.Fatalf("dana's whole read after the takeover: %+v, %v", whole.Docs, err)
+	}
+
+	// A CHANGED READ RULE reads whole too: bob may now see rows that were
+	// never pushed to him and have not changed since.
+	before, err := n.reader.Docs(ctx, sheet, bobReads, "votes", 0, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.configure(jane, artifacts.Collection{Name: "votes", Read: artifacts.ReadAll,
+		Create: artifacts.RoleViewer, Delete: artifacts.RoleViewer})
+	if after, err := n.reader.Docs(ctx, sheet, bobReads, "votes", before.Through, "", 0); err != nil || !after.Resync {
+		t.Fatalf("bob's catch-up across a read rule change: %+v, %v; want resync", after, err)
+	}
+}
+
 // A DOCUMENT'S AND A CELL'S HISTORY ARE ONE INDEXED READ, newest first, with
 // the values before and after each change.
 func TestACellsHistoryNamesEachChangeAndItsAuthor(t *testing.T) {

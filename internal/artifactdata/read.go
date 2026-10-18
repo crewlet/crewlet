@@ -162,8 +162,15 @@ type DocPage struct {
 	// collection whole.
 	Resync bool `json:"resync,omitempty"`
 
-	// Through is the store's version when it was read: the `since` the
-	// next catch-up names.
+	// Through is the `since` the next catch-up names once this page and
+	// every page before it of the same read are held: every change at or
+	// below it is reflected in them. On the LAST page of a whole read it is
+	// the version the read's first page was read at (lower where a later
+	// page was read from a node further behind), so a document that changed
+	// under a page already read is caught up rather than skipped; on a page
+	// of a catch-up that has more to come it is the version below the page's
+	// last document, and on its last page the store's version. A client
+	// adopts it after the read's last page, never part way.
 	Through int64 `json:"through"`
 
 	Position statelog.Position `json:"position"`
@@ -236,6 +243,19 @@ func (r *Reader) Docs(ctx context.Context, id artifacts.ID, rd Reading, collecti
 			return err
 		}
 		page = DocPage{Docs: []Doc{}, Through: s.version}
+		var after docCursor
+		if cursor != "" {
+			if after, err = decodeDocCursor(cursor); err != nil {
+				return err
+			}
+			if since == 0 && after.Through > 0 {
+				// A WHOLE READ ANSWERS THE VERSION ITS FIRST PAGE SAW:
+				// a document whose id sorts below the cursor and changed
+				// since is in no page, so this page's own version would
+				// carry the next catch-up past it.
+				page.Through = min(after.Through, s.version)
+			}
+		}
 		if !c.stored {
 			return nil
 		}
@@ -256,10 +276,6 @@ func (r *Reader) Docs(ctx context.Context, id artifacts.ID, rd Reading, collecti
 			q += ` AND version > ?`
 			args = append(args, since)
 			if cursor != "" {
-				after, err := decodeDocCursor(cursor)
-				if err != nil {
-					return err
-				}
 				q += ` AND (version > ? OR (version = ? AND doc_id > ?))`
 				args = append(args, after.Version, after.Version, after.Doc)
 			}
@@ -267,10 +283,6 @@ func (r *Reader) Docs(ctx context.Context, id artifacts.ID, rd Reading, collecti
 		} else {
 			q += ` AND body IS NOT NULL`
 			if cursor != "" {
-				after, err := decodeDocCursor(cursor)
-				if err != nil {
-					return err
-				}
 				q += ` AND doc_id > ?`
 				args = append(args, after.Doc)
 			}
@@ -284,7 +296,16 @@ func (r *Reader) Docs(ctx context.Context, id artifacts.ID, rd Reading, collecti
 		if len(docs) > limit {
 			docs = docs[:limit]
 			last := docs[limit-1]
-			page.After = encodeDocCursor(docCursor{Version: last.Version, Doc: last.ID})
+			next := docCursor{Version: last.Version, Doc: last.ID}
+			if since > 0 {
+				// A CATCH-UP READS IN VERSION ORDER, so every change
+				// below this page's last version has been returned; one
+				// at that version may still sort after its document.
+				page.Through = last.Version - 1
+			} else {
+				next.Through = page.Through
+			}
+			page.After = encodeDocCursor(next)
 		}
 		page.Docs = docs
 		return nil
@@ -512,10 +533,12 @@ func renderDoc(c *collState, d docRow) Doc {
 	return out
 }
 
-// docCursor is where a document page stopped.
+// docCursor is where a document page stopped, and, on a whole read, the
+// version its first page was read at.
 type docCursor struct {
 	Version int64  `json:"v,omitempty"`
 	Doc     string `json:"d"`
+	Through int64  `json:"t,omitempty"`
 }
 
 func encodeDocCursor(c docCursor) string {
@@ -532,7 +555,7 @@ func decodeDocCursor(s string) (docCursor, error) {
 		return docCursor{}, ErrBadCursor
 	}
 	var c docCursor
-	if err := json.Unmarshal(raw, &c); err != nil || c.Doc == "" || c.Version < 0 {
+	if err := json.Unmarshal(raw, &c); err != nil || c.Doc == "" || c.Version < 0 || c.Through < 0 {
 		return docCursor{}, ErrBadCursor
 	}
 	return c, nil
@@ -610,7 +633,6 @@ func (r *Reader) History(ctx context.Context, id artifacts.ID, rd Reading, filte
 		if !present {
 			return nil
 		}
-		v := &txView{ctx: ctx, tx: tx, store: s, present: present}
 		colls, err := readCollections(ctx, tx, s.no)
 		if err != nil {
 			return err
@@ -673,19 +695,6 @@ func (r *Reader) History(ctx context.Context, id artifacts.ID, rd Reading, filte
 		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 			return fmt.Errorf("artifactdata: read %s's history: %w", id, err)
 		}
-		creators := map[docRef]string{}
-		creatorOf := func(c *collState, doc string) (string, error) {
-			ref := docRef{c.spec.Name, doc}
-			if who, ok := creators[ref]; ok {
-				return who, nil
-			}
-			d, err := v.doc(c, doc)
-			if err != nil {
-				return "", err
-			}
-			creators[ref] = d.createdBy
-			return d.createdBy, nil
-		}
 		for _, x := range scanned {
 			var changes []Change
 			if err := json.Unmarshal([]byte(x.changes), &changes); err != nil {
@@ -715,17 +724,12 @@ func (r *Reader) History(ctx context.Context, id artifacts.ID, rd Reading, filte
 				}
 				if ch.Doc != "" {
 					// A ROW OF A COLLECTION SINCE DROPPED, or one the
-					// reader may not see, is not shown.
-					if c == nil {
-						continue
-					}
-					who := ""
-					if c.spec.Read == artifacts.ReadOwnRows || c.spec.Read == artifacts.ReadPrivate {
-						if who, err = creatorOf(c, ch.Doc); err != nil {
-							return err
-						}
-					}
-					if !Readable(c.spec.Read, rd, who) {
+					// reader may not see, is not shown. Each change is
+					// judged by the creator it was made under, never the
+					// row's creator now: a row deleted and created again
+					// by somebody else is theirs from that create on,
+					// and what its previous creator wrote stays theirs.
+					if c == nil || !Readable(c.spec.Read, rd, ch.Creator) {
 						continue
 					}
 				}

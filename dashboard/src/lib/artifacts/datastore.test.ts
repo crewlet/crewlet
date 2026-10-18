@@ -141,6 +141,42 @@ describe("reading", () => {
     expect(fieldsOf(s, "r2")).toBeUndefined();
   });
 
+  test("a paged read adopts its through only once the last page is in, and the lowest one", async () => {
+    const answers: (DataDocPage | Error)[] = [
+      // A WHOLE READ OF TWO PAGES: the second was read later, at 12.
+      { ...page([doc("r1", 3, { name: "One" })], 10), after: "p2" },
+      page([doc("r2", 11, { name: "Two" })], 12),
+      // A CATCH-UP FROM 10 whose second page fails.
+      { ...page([doc("r3", 13, { name: "Three" })], 13), after: "p2" },
+      new Error("the socket dropped"),
+      // AND THE NEXT ONE.
+      page([], 15),
+    ];
+    const asked: Record<string, unknown>[] = [];
+    const query = vi.fn(async (kind: string, params: Record<string, unknown>) => {
+      if (kind !== "artifact_data") return {};
+      asked.push(params);
+      const next = answers.shift();
+      if (!next || next instanceof Error) throw next ?? new Error("not scripted");
+      return next;
+    });
+    const s = new ArtifactDataStore({
+      artifact: "a1",
+      socket: { query } as unknown as LiveSocket,
+      via: { via: "dashboard" },
+      clientID: "client-1",
+      newKey: () => "key",
+      write: async () => applied(1, 1),
+    });
+    await s.load("rows");
+    await s.catchUp("rows");
+    expect(asked[2]).toMatchObject({ since: 10 });
+    await s.catchUp("rows");
+    expect(asked[4]).toMatchObject({ since: 10 });
+    expect(asked[4]).not.toHaveProperty("cursor");
+    expect(fieldsOf(s, "r3")?.fields).toEqual({ name: "Three" });
+  });
+
   test("the packed position is the generation above the sequence", () => {
     expect(packedPosition({ stream: "data", generation: 2, seq: 7 })).toBe(2 * 2 ** 40 + 7);
     expect(packedPosition(undefined)).toBe(0);

@@ -444,6 +444,11 @@ func (a *Applier) writeConfigure(ctx context.Context, tx *sql.Tx, c applyContext
 			rows += int(n)
 		}
 		s.tombstones -= tombstones
+		if tombstones > 0 {
+			// THE DELETES GO WITH THE COLLECTION: a client that missed one
+			// can no longer catch it up by version, so it reads whole.
+			s.tombstoneFloor = max(s.tombstoneFloor, c.packed)
+		}
 		s.digest = s.digest.Sub(canon.CollectionTerm(cur.spec.Name, spec))
 		h.changes = append(h.changes, Change{Collection: cur.spec.Name, Op: ChangeSchema})
 	}
@@ -476,6 +481,13 @@ func (a *Applier) writeConfigure(ctx context.Context, tx *sql.Tx, c applyContext
 			return 0, 0, fmt.Errorf("artifactdata: change collection %s: %w", next.Name, err)
 		}
 		rows++
+		if cur.spec.Read != next.Read {
+			// A NEW READ RULE RESHAPES EVERY READER'S VIEW: rows a reader
+			// may now see were never pushed to them, and a catch-up by
+			// version returns only what changed since, so every catch-up
+			// from before the change reads the store whole.
+			s.tombstoneFloor = max(s.tombstoneFloor, c.packed)
+		}
 		s.digest = s.digest.Sub(canon.CollectionTerm(cur.spec.Name, old)).
 			Add(canon.CollectionTerm(next.Name, spec))
 		h.changes = append(h.changes, Change{Collection: next.Name, Op: ChangeSchema})

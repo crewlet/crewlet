@@ -60,8 +60,8 @@ func (t *readArtifactData) Parameters() map[string]any {
 			"doc":        map[string]any{"type": "string", "description": "One row's id, to read just that row."},
 			"since": map[string]any{
 				"type": "integer",
-				"description": "Only rows changed after this `through` from an earlier answer, " +
-					"deleted ones included.",
+				"description": "Only rows changed after this `through`, deleted ones included. " +
+					"Take it from the last page of an earlier read (the one with no `next`).",
 			},
 			"after": map[string]any{"type": "string", "description": "The `next` of the previous page, unchanged."},
 			"limit": map[string]any{

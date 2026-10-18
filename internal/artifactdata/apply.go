@@ -276,7 +276,7 @@ func (a *Applier) commitRows(ctx context.Context, tx *sql.Tx, c applyContext, s 
 		h.verdict, h.reason = refused.verdict, refused.reason
 		for _, ref := range refused.conflicts {
 			h.changes = append(h.changes, Change{Collection: ref.Collection, Doc: ref.Doc,
-				Op: ChangeConflict})
+				Op: ChangeConflict, Creator: refused.creators[ref]})
 		}
 		schema = false
 	} else {
@@ -345,6 +345,12 @@ func (a *Applier) writePlan(ctx context.Context, tx *sql.Tx, c applyContext, s *
 		h.touches = append(h.touches, docTouch{collection: d.coll.no, doc: d.id})
 		if !whole {
 			undoable = false
+		}
+		if d.takeover {
+			// THE ROW CHANGED HANDS: its previous creator's catch-up,
+			// narrowed to their own rows, would never see the delete it
+			// missed, so every catch-up from before now reads whole.
+			s.tombstoneFloor = max(s.tombstoneFloor, c.packed)
 		}
 		cd := collDelta[d.coll.no]
 		switch {
