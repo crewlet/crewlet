@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/redact"
 )
@@ -213,7 +214,7 @@ func TestAcquireFailuresAreClassifiedByWhatFailed(t *testing.T) {
 		"the auxiliary bound":      {&auxiliaryTimeoutError{command: "cli import"}, llm.KindTimeout},
 		"the call's own deadline":  {fmt.Errorf("x: %w", context.DeadlineExceeded), llm.KindTimeout},
 		"the call cancelled":       {fmt.Errorf("x: %w", context.Canceled), llm.KindTimeout},
-		"a lock held too long":     {&lockWaitError{path: "credentials.lock", wait: time.Second}, llm.KindTimeout},
+		"a lock held too long":     {&hostbox.LockWaitError{Path: "credentials.lock", Wait: time.Second}, llm.KindTimeout},
 		"an import refused":        {&loginRefusedError{path: "doc", err: exit}, llm.KindAuth},
 		"an export that failed":    {fmt.Errorf("carrying out: %w", exit), llm.KindServer},
 		"the filesystem":           {os.ErrPermission, llm.KindFatal},

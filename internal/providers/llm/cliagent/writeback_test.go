@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
@@ -563,9 +564,9 @@ func TestASecondCommandIsRefusedTheLoginHomeWhileOneHoldsIt(t *testing.T) {
 func TestTheSharedLoginsLockExcludesAnotherHolder(t *testing.T) {
 	t.Parallel()
 	ws := newWorkspace(t)
-	release, held, err := flockFile(t.Context(), ws.sharedLock(), 0)
-	if err != nil || !held {
-		t.Fatalf("flockFile = %v, %v", held, err)
+	release, err := hostbox.LockFile(t.Context(), ws.sharedLock(), 0, "the test")
+	if err != nil {
+		t.Fatalf("LockFile = %v", err)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()

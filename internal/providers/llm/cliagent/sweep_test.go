@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -136,9 +137,9 @@ func TestASweepNeverCarriesOutAHomeACallIsRunningIn(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		release, held, err := flockFile(t.Context(), filepath.Join(other, seatLockFile), 0)
-		if err != nil || !held {
-			t.Fatalf("flockFile = %v, %v", held, err)
+		release, err := hostbox.LockFile(t.Context(), filepath.Join(other, seatLockFile), 0, "the test")
+		if err != nil {
+			t.Fatalf("LockFile = %v", err)
 		}
 		b, err := ws.Acquire(t.Context(), "seat-b", "call", nil)
 		if err != nil {
@@ -174,9 +175,9 @@ func TestASeatsFirstCallWaitsForAnotherProcessesGeneration(t *testing.T) {
 	dir := ws.SeatDir("dev")
 	running := filepath.Join(dir, "home", ".fake", "sessions", "live.jsonl")
 	writeFile(t, running, "a call in progress")
-	release, held, err := flockFile(t.Context(), filepath.Join(dir, seatLockFile), 0)
-	if err != nil || !held {
-		t.Fatalf("flockFile = %v, %v", held, err)
+	release, err := hostbox.LockFile(t.Context(), filepath.Join(dir, seatLockFile), 0, "the test")
+	if err != nil {
+		t.Fatalf("LockFile = %v", err)
 	}
 	defer release()
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)

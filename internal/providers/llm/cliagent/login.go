@@ -520,7 +520,7 @@ func (p *Provider) ExportBundle() (string, error) {
 // still carried out over it by the next command, being the newer of the two.
 func (p *Provider) RestoreBundle(blob string) error {
 	// Called from [New], at boot, which has no context of its own to hand on;
-	// the one wait inside is bounded by sharedLockWait.
+	// the one wait inside is bounded by hostbox.CredentialLockWait.
 	if err := p.restoreBundle(context.Background(), blob, false); err != nil && !errors.Is(err, ErrLoginPresent) {
 		return err
 	}

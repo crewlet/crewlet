@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/hostbox"
@@ -168,9 +167,10 @@ const (
 // credentials directory's own path plus ".lock", beside it rather than in it so
 // that nothing copying the directory carries the lock along. ONE NAME FOR EVERY
 // WRITER of that directory — a local sandbox's teardown, writing back a login
-// its box refreshed, derives the same file (hostbox.CredentialLock) — because
-// a compare-and-swap is one only against writers that agree on the lock.
-func (w *Workspace) sharedLock() string { return w.CredentialsDir() + ".lock" }
+// its box refreshed, takes the same file through [hostbox.CredentialLock], and
+// so does every lock here, through [hostbox.LockFile] — because a
+// compare-and-swap is one only against writers that agree on the lock.
+func (w *Workspace) sharedLock() string { return hostbox.CredentialLock(w.CredentialsDir()) }
 
 // slugReadable is how much of a handle a directory name shows before the
 // disambiguating digest. Long enough to recognise a seat at a glance, short
@@ -974,8 +974,12 @@ func (w *Workspace) sweep(ctx context.Context, store loginStore, own string) {
 // sweepOne carries out one idle seat's open generation under its lock, and
 // reports false where the seat was busy or had nothing open.
 func (w *Workspace) sweepOne(ctx context.Context, store loginStore, dir, record string) (bool, error) {
-	release, held, err := flockFile(ctx, filepath.Join(dir, seatLockFile), 0)
-	if err != nil || !held {
+	release, err := hostbox.LockFile(ctx, filepath.Join(dir, seatLockFile), 0, seatHolder)
+	var busy *hostbox.LockWaitError
+	if errors.As(err, &busy) {
+		return false, nil
+	}
+	if err != nil {
 		return false, err
 	}
 	defer release()
@@ -1153,24 +1157,6 @@ func (w *Workspace) superseded(ctx context.Context, who, dst, how string) {
 		"path", dst, "shared", how)
 }
 
-// sharedLockWait bounds how long a writer of the shared login waits for
-// another to finish with it.
-//
-// What the lock guards is a read and a rename of a file under a mebibyte
-// ([maxBundle] bounds a whole login), a few milliseconds even on a loaded
-// disk, so ten seconds is three orders of magnitude of headroom: only a holder
-// that has STOPPED RUNNING — a `crewlet llm` command suspended at a terminal
-// mid-write — reaches it, and then the honest answer is an error naming the
-// lock rather than a seat's release that never returns. A holder that crashed
-// holds nothing: the lock is the open descriptor's, and the kernel drops it
-// with the process.
-const sharedLockWait = 10 * time.Second
-
-// lockPoll is how often a writer waiting on another's lock asks again. A lock
-// held for milliseconds is free within one or two polls, and a waiter
-// sleeping between them costs nothing.
-const lockPoll = 10 * time.Millisecond
-
 // lockShared takes the shared login's lock for one compare-and-swap, and hands
 // back its release.
 //
@@ -1178,19 +1164,14 @@ const lockPoll = 10 * time.Millisecond
 // queued on [Workspace.sharedMu], and everything that writes the same directory
 // from elsewhere — a `crewlet llm` command, each a process of its own, and a
 // local sandbox's teardown — which only an flock on a file every one of them
-// opens reaches ([Workspace.sharedLock]). Every write to the shared directory
-// takes it — a seat's carry, a login's, `-from-host`, a bundle, a logout's
-// removal and the operator epoch beside them — because a compare-and-swap is
-// only one against writers that agree to the same lock.
+// opens reaches ([hostbox.LockCredentials], whose file is
+// [Workspace.sharedLock]). Every write to the shared directory takes it — a
+// seat's carry, a login's, `-from-host`, a bundle, a logout's removal and the
+// operator epoch beside them — because a compare-and-swap is only one against
+// writers that agree to the same lock.
 func (w *Workspace) lockShared(ctx context.Context) (func(), error) {
 	w.sharedMu.Lock()
-	path := w.sharedLock()
-	release, held, err := flockFile(ctx, path, sharedLockWait)
-	if err == nil && !held {
-		err = &lockWaitError{path: path, wait: sharedLockWait, holder: "another writer of the " +
-			"shared login — a `crewlet llm` command stopped part way through (a suspended " +
-			"terminal) holds it until it exits"}
-	}
+	release, err := hostbox.LockCredentials(ctx, w.CredentialsDir())
 	if err != nil {
 		w.sharedMu.Unlock()
 		return nil, err
@@ -1206,14 +1187,14 @@ func (w *Workspace) lockShared(ctx context.Context) (func(), error) {
 //
 // Held by somebody else only for a SWEEP's carry-out of this seat — one export,
 // bounded by [auxiliaryTimeout]; one wait for the shared login's lock, bounded
-// by [sharedLockWait]; and replacing files under a mebibyte, for which a second
+// by [hostbox.CredentialLockWait]; and replacing files under a mebibyte, for which a second
 // is three orders of magnitude of headroom — or by ANOTHER PROCESS running this
 // seat's generation, an engine that lost the seat's lease and is still
 // finishing a call in its home, which no wait this call can afford outlasts.
 // So the bound is the sweep's, and the second case is refused as a timeout the
 // fallback chain moves past rather than run in a home somebody else's CLI is
 // using.
-const seatLockWait = auxiliaryTimeout + sharedLockWait + time.Second
+const seatLockWait = auxiliaryTimeout + hostbox.CredentialLockWait + time.Second
 
 // lockSeat takes a seat's GENERATION LOCK, and hands back its release.
 //
@@ -1225,18 +1206,14 @@ const seatLockWait = auxiliaryTimeout + sharedLockWait + time.Second
 // a sweep in this process and one in another exclude a running generation
 // alike, and a generation whose process died holds nothing.
 func (w *Workspace) lockSeat(ctx context.Context, dir string) (func(), error) {
-	path := filepath.Join(dir, seatLockFile)
-	release, held, err := flockFile(ctx, path, seatLockWait)
-	if err != nil {
-		return nil, err
-	}
-	if !held {
-		return nil, &lockWaitError{path: path, wait: seatLockWait, holder: "another process " +
-			"running a call in this seat's home — an engine still finishing a call after its " +
-			"lease on the seat moved"}
-	}
-	return release, nil
+	return hostbox.LockFile(ctx, filepath.Join(dir, seatLockFile), seatLockWait, seatHolder)
 }
+
+// seatHolder is who keeps a seat's generation lock past [seatLockWait]: a
+// sweep's carry-out is bounded by it, so only another process running a call in
+// the seat's home.
+const seatHolder = "another process running a call in this seat's home — an engine still " +
+	"finishing a call after its lease on the seat moved"
 
 // lockLoginHome takes the login home's lock for the whole of one auth command,
 // or reports that another command holds it.
@@ -1254,14 +1231,12 @@ func (w *Workspace) lockSeat(ctx context.Context, dir string) (func(), error) {
 // a wedged command; saying so at once is the answer an operator can act on.
 func (w *Workspace) lockLoginHome(ctx context.Context) (func(), error) {
 	path := filepath.Join(w.root, loginHomeLockFile)
-	release, held, err := flockFile(ctx, path, 0)
-	if err != nil {
-		return nil, err
-	}
-	if !held {
+	release, err := hostbox.LockFile(ctx, path, 0, "another `crewlet llm` command")
+	var busy *hostbox.LockWaitError
+	if errors.As(err, &busy) {
 		return nil, &loginHomeBusyError{agent: w.agent, root: w.root, lock: path}
 	}
-	return release, nil
+	return release, err
 }
 
 // loginHomeBusyError is the login home's lock held by another command.
@@ -1272,23 +1247,6 @@ func (e *loginHomeBusyError) Error() string {
 		"under %q (its lock %s is held) — wait for it to finish, then run this again",
 		e.agent, e.root, e.lock)
 }
-
-// lockWaitError is a lock another holder kept for longer than the wait: a
-// TIMEOUT, so a seat refused over it is one the fallback chain may move past.
-type lockWaitError struct {
-	path string
-	wait time.Duration
-	// holder says who keeps a lock that long, which is what the reader has
-	// to go and find.
-	holder string
-}
-
-func (e *lockWaitError) Error() string {
-	return fmt.Sprintf("cli-agent: the lock %s was held for longer than %s by %s",
-		e.path, e.wait, e.holder)
-}
-
-func (e *lockWaitError) Unwrap() error { return context.DeadlineExceeded }
 
 // loginEpoch reads the shared login's OPERATOR EPOCH, zero where none has been
 // written — see [Workspace.bumpLoginEpoch].
@@ -1338,50 +1296,6 @@ func (w *Workspace) bumpLoginEpoch() error {
 		return fmt.Errorf("cli-agent: recording the login's epoch in %q: %w", path, err)
 	}
 	return nil
-}
-
-// flockFile takes an exclusive flock on path, creating it, waiting up to wait
-// for another holder to let go — not at all for zero — and reports false
-// where it is still held at the end.
-//
-// flock rather than fcntl for the reason internal/store gives: an fcntl lock
-// is dropped when ANY descriptor for the file is closed in the process. And a
-// fresh descriptor per call, because flock locks belong to the open file
-// description — two opens in one process exclude each other exactly as two
-// processes do, which is what the login home's lock relies on.
-func flockFile(ctx context.Context, path string, wait time.Duration) (func(), bool, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, false, fmt.Errorf("cli-agent: preparing %q: %w", filepath.Dir(path), err)
-	}
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600) //nolint:gosec // path is inside the state dir
-	if err != nil {
-		return nil, false, fmt.Errorf("cli-agent: opening the lock %q: %w", path, err)
-	}
-	fd := int(f.Fd())
-	deadline := time.Now().Add(wait)
-	for {
-		err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB)
-		if err == nil {
-			return func() {
-				_ = syscall.Flock(fd, syscall.LOCK_UN)
-				_ = f.Close()
-			}, true, nil
-		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EINTR) {
-			_ = f.Close()
-			return nil, false, fmt.Errorf("cli-agent: locking %q: %w", path, err)
-		}
-		if !time.Now().Before(deadline) {
-			_ = f.Close()
-			return nil, false, nil
-		}
-		select {
-		case <-ctx.Done():
-			_ = f.Close()
-			return nil, false, fmt.Errorf("cli-agent: waiting for the lock %q: %w", path, ctx.Err())
-		case <-time.After(lockPoll):
-		}
-	}
 }
 
 // readShared reads one shared login file, reporting false where there is none.
