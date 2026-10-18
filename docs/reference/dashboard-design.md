@@ -2690,6 +2690,28 @@ the keepalive in under ten minutes, two keepalive intervals rather than one: a
 tick passes over a tab the engine answered less than five minutes before, and
 that answer may have come just before the sign-in.
 
+**A tab learns who it is read by before it is served anything.** The check
+above covers what a tab asks once it has recorded its reader, and a tab opened
+with a session already in the browser records nobody until a read of the
+session answers. The frame's own `GET /auth/session` records it before the
+socket is dialled, and the socket holds every dial it makes for a tab that has
+still recorded nobody — the frame's when that read FAILED, a reconnect, a
+signed-out tab coming back into view — behind a session read of its own
+(`protocol/socket.ts`'s `learnReader`): it records whoever answers and dials
+naming them, a `401` is the sign-in, and any other failure dials nothing and
+asks again on the backoff, since a dial naming nobody is served as whoever
+holds the cookie. A dial made blind was the tab's first sight of the company,
+and a sign-in in another tab before its next session read was then ADOPTED as
+its reader by a tab drawing what it had been served for the last one. What
+stays outside the check is exact. A browser that refuses the tab's storage
+records nobody however often it reads the session (`lib/reader.ts` keeps the
+reader nowhere else), so its requests name nobody and a cookie moved under it
+is served rather than refused — the setting that blocks a site's storage
+usually blocks its cookie as well, and with it the session. And a screen's own
+REST read sent before any session read has answered names nobody; none is sent
+today, because every screen's REST read waits for the frame's session answer or
+for the viewer, which the socket answers only after a session read has.
+
 **A thing worth linking to gets an address, not a scroll position.** The
 previous dashboard revealed a unit by scrolling the org screen to it
 (an `org` address carrying `?unit=Backend`, with a router-level reveal hook); this tree gives a unit
