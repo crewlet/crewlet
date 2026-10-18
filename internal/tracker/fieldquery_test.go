@@ -23,7 +23,7 @@ func TestTheAllOperatorCountsDistinctMembers(t *testing.T) {
 		Options: map[string]string{"api": "o-api", "ui": "o-ui"},
 	}
 	clause, args, err := fieldClause(
-		FieldFilter{Op: FieldOpAll, Value: "api,ui"}, field)
+		FieldFilter{Op: FieldOpAll, Value: "api,ui"}, field, rowAlias)
 	if err != nil {
 		t.Fatalf("all: %v", err)
 	}
@@ -77,12 +77,12 @@ func TestNotAllNegatesTheWholeMembership(t *testing.T) {
 		Options: map[string]string{"api": "o-api", "ui": "o-ui"},
 	}
 	all, _, err := fieldClause(
-		FieldFilter{Op: FieldOpAll, Value: "api,ui"}, field)
+		FieldFilter{Op: FieldOpAll, Value: "api,ui"}, field, rowAlias)
 	if err != nil {
 		t.Fatalf("all: %v", err)
 	}
 	not, _, err := fieldClause(
-		FieldFilter{Op: FieldOpNotAll, Value: "api,ui"}, field)
+		FieldFilter{Op: FieldOpNotAll, Value: "api,ui"}, field, rowAlias)
 	if err != nil {
 		t.Fatalf("not_all: %v", err)
 	}
