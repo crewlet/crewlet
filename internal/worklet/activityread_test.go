@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -463,6 +464,56 @@ func TestAnAuditOfSeveralKindsIsOneFeedInTheLogsOrder(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("the audit paged as %v, want %v — every operator and human "+
 			"commit once, newest first, as the log made them", got, want)
+	}
+}
+
+// A TASK'S ACTIVITY IS ITS WHOLE HISTORY, AND THE CONTAINER BESIDE IT A CHECK.
+//
+// Every history row carries the project it was WRITTEN in, so a container read
+// as a row filter beside a task hid every change the task had before it moved
+// — its creation among them — from anybody asking about it in the project it
+// is in now. A tracker holder reads the whole tracker, so the container keeps
+// no row out that the reader is not owed; it is a check that the task is filed
+// there, and one it is not filed in is refused naming the one it is, rather
+// than answered with nothing, which reads as a task nothing ever happened to.
+func TestATasksActivityIsItsWholeHistoryInItsContainer(t *testing.T) {
+	t.Parallel()
+	r := moveFixture(t)
+	title := "before the move"
+	if _, err := r.writer.UpdateTask(t.Context(), "op-before", "m-root", "ENG",
+		worklet.NoIfMatch, worklet.TaskPatch{Title: &title}, worklet.ChangeFields,
+		nil); err != nil {
+		t.Fatalf("edit before the move: %v", err)
+	}
+	r.drain()
+	if _, err := r.writer.MoveTaskToProject(t.Context(),
+		statelog.NewOpID(time.Now(), "move"), "m-root", "OPS", nil); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	r.drain()
+
+	whole := r.activity(worklet.ActivityQuery{Task: "m-root"})
+	inOPS := r.activity(worklet.ActivityQuery{Task: "m-root", Project: "OPS"})
+	var before bool
+	for _, record := range whole.Records {
+		before = before || record.Project == "ENG"
+	}
+	if !before {
+		t.Fatalf("the task's own feed holds no row written in ENG, so this case "+
+			"tests nothing: %+v", whole.Records)
+	}
+	if len(inOPS.Records) != len(whole.Records) {
+		t.Errorf("the task's activity in OPS answers %d of its %d records — the "+
+			"ones written before it moved are missing", len(inOPS.Records),
+			len(whole.Records))
+	}
+
+	_, err := r.reader.Activity(t.Context(), worklet.ActivityQuery{
+		Task: "m-root", Project: "ENG", Level: statelog.ReadStale,
+	}, wednesday)
+	if !errors.Is(err, worklet.ErrBadQuery) || !strings.Contains(err.Error(), "OPS") {
+		t.Errorf("the task's activity in ENG, which it left, = %v, want a bad "+
+			"query naming OPS, the project it is filed in", err)
 	}
 }
 
