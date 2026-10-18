@@ -86,10 +86,10 @@ func TestTwoToolsMakingOneWriteAreTwoOperations(t *testing.T) {
 // REBASED: every operation it derives carries the attempt's own instant
 // ([turnctx.Turn.RebasedTo], ADR-0029), so the ledger decides them again
 // rather than answer every one `unknown`. A tracker comment's id is not an
-// operation but the key of its row, which the apply posts only once — so
-// derived as the work began, the rebased attempt's comment names the row the
-// attempt before it wrote, and a remark already posted is not posted a second
-// time beside it. Derived from the rebased key, it moved with the operation, and
+// operation but the key of its row — so derived as the work began, the
+// rebased attempt's comment names the row the attempt before it wrote, the
+// writer answers it from that row and publishes nothing, and a remark already
+// posted is not posted a second time beside it. Derived from the rebased key, it moved with the operation, and
 // every rebased re-run of a turn that had commented said it twice.
 //
 // Mutation: derive commentID from the rebased call key and the rebased
