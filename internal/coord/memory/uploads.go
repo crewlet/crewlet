@@ -32,18 +32,18 @@ func (f *Fleet) UploadLedger(context.Context) ([]byte, uint64, error) {
 }
 
 // SwapUploadLedger writes the ledger while it is still at revision.
-func (f *Fleet) SwapUploadLedger(_ context.Context, value []byte, revision uint64) (bool, error) {
+func (f *Fleet) SwapUploadLedger(_ context.Context, value []byte, revision uint64) (uint64, error) {
 	if len(value) == 0 {
-		return false, errors.New("coord/memory: an upload ledger needs a value")
+		return 0, errors.New("coord/memory: an upload ledger needs a value")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.uploadLedger.version != revision {
-		return false, nil
+		return 0, nil
 	}
 	f.version++
 	f.uploadLedger = versioned{value: slices.Clone(value), version: f.version}
-	return true, nil
+	return f.version, nil
 }
 
 // UploadRecord reads one upload's record and its version.
@@ -62,21 +62,21 @@ func (f *Fleet) UploadRecord(_ context.Context, upload string) ([]byte, uint64, 
 
 // SwapUploadRecord writes one upload's record while it is still at revision,
 // 0 creating it.
-func (f *Fleet) SwapUploadRecord(_ context.Context, upload string, value []byte, revision uint64) (bool, error) {
+func (f *Fleet) SwapUploadRecord(_ context.Context, upload string, value []byte, revision uint64) (uint64, error) {
 	switch {
 	case upload == "":
-		return false, errors.New("coord/memory: an upload record needs an upload")
+		return 0, errors.New("coord/memory: an upload record needs an upload")
 	case len(value) == 0:
-		return false, errors.New("coord/memory: an upload record needs a value")
+		return 0, errors.New("coord/memory: an upload record needs a value")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.uploads[upload].version != revision {
-		return false, nil
+		return 0, nil
 	}
 	f.version++
 	f.uploads[upload] = versioned{value: slices.Clone(value), version: f.version}
-	return true, nil
+	return f.version, nil
 }
 
 // DeleteUploadRecord removes one upload's record while it is still at

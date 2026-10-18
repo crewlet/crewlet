@@ -18,11 +18,16 @@ func (h *fleetHarness) uploadLedger() (string, uint64) {
 
 func (h *fleetHarness) swapLedger(value string, rev uint64) bool {
 	h.t.Helper()
-	ok, err := h.f.SwapUploadLedger(h.ctx, []byte(value), rev)
+	wrote, err := h.f.SwapUploadLedger(h.ctx, []byte(value), rev)
 	if err != nil {
 		h.t.Fatalf("SwapUploadLedger(%s at %d): %v", value, rev, err)
 	}
-	return ok
+	if wrote != 0 {
+		if _, now := h.uploadLedger(); now != wrote {
+			h.t.Fatalf("SwapUploadLedger answered revision %d and the ledger is at %d", wrote, now)
+		}
+	}
+	return wrote != 0
 }
 
 func (h *fleetHarness) uploadRecord(upload string) (string, uint64) {
@@ -36,11 +41,16 @@ func (h *fleetHarness) uploadRecord(upload string) (string, uint64) {
 
 func (h *fleetHarness) swapRecord(upload, value string, rev uint64) bool {
 	h.t.Helper()
-	ok, err := h.f.SwapUploadRecord(h.ctx, upload, []byte(value), rev)
+	wrote, err := h.f.SwapUploadRecord(h.ctx, upload, []byte(value), rev)
 	if err != nil {
 		h.t.Fatalf("SwapUploadRecord(%s at %d): %v", upload, rev, err)
 	}
-	return ok
+	if wrote != 0 {
+		if _, now := h.uploadRecord(upload); now != wrote {
+			h.t.Fatalf("SwapUploadRecord answered revision %d and the record is at %d", wrote, now)
+		}
+	}
+	return wrote != 0
 }
 
 func (h *fleetHarness) deleteRecord(upload string, rev uint64) bool {
@@ -114,12 +124,12 @@ var uploadReservationCases = []fleetCase{{
 		for i := range writers {
 			node := nodes[i%len(nodes)]
 			wg.Go(func() {
-				ok, err := node.SwapUploadLedger(h.ctx, fmt.Appendf(nil, `{"holds":%d}`, i), rev)
+				wrote, err := node.SwapUploadLedger(h.ctx, fmt.Appendf(nil, `{"holds":%d}`, i), rev)
 				if err != nil {
 					h.t.Errorf("SwapUploadLedger: %v", err)
 					return
 				}
-				if ok {
+				if wrote != 0 {
 					mu.Lock()
 					landed++
 					mu.Unlock()
@@ -224,14 +234,14 @@ var uploadReservationCases = []fleetCase{{
 }, {
 	name: "an empty value or upload id is an error, not a write",
 	fn: func(h *fleetHarness) {
-		if ok, err := h.f.SwapUploadLedger(h.ctx, nil, 0); err == nil || ok {
-			h.t.Errorf("an empty ledger answered (%v, %v), want an error", ok, err)
+		if wrote, err := h.f.SwapUploadLedger(h.ctx, nil, 0); err == nil || wrote != 0 {
+			h.t.Errorf("an empty ledger answered (%d, %v), want an error", wrote, err)
 		}
-		if ok, err := h.f.SwapUploadRecord(h.ctx, "", []byte("x"), 0); err == nil || ok {
-			h.t.Errorf("an unnamed record answered (%v, %v), want an error", ok, err)
+		if wrote, err := h.f.SwapUploadRecord(h.ctx, "", []byte("x"), 0); err == nil || wrote != 0 {
+			h.t.Errorf("an unnamed record answered (%d, %v), want an error", wrote, err)
 		}
-		if ok, err := h.f.SwapUploadRecord(h.ctx, "u-5", nil, 0); err == nil || ok {
-			h.t.Errorf("an empty record answered (%v, %v), want an error", ok, err)
+		if wrote, err := h.f.SwapUploadRecord(h.ctx, "u-5", nil, 0); err == nil || wrote != 0 {
+			h.t.Errorf("an empty record answered (%d, %v), want an error", wrote, err)
 		}
 		if _, _, err := h.f.UploadRecord(h.ctx, ""); err == nil {
 			h.t.Error("a read of an unnamed record answered no error")

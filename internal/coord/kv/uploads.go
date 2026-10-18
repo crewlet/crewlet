@@ -29,9 +29,9 @@ func (f *FleetStore) UploadLedger(ctx context.Context) ([]byte, uint64, error) {
 
 // SwapUploadLedger writes the ledger while it is still at revision
 // ([coord.UploadReservations]).
-func (f *FleetStore) SwapUploadLedger(ctx context.Context, value []byte, revision uint64) (bool, error) {
+func (f *FleetStore) SwapUploadLedger(ctx context.Context, value []byte, revision uint64) (uint64, error) {
 	if len(value) == 0 {
-		return false, errors.New("coord/kv: an upload ledger needs a value")
+		return 0, errors.New("coord/kv: an upload ledger needs a value")
 	}
 	return f.swapUpload(ctx, uploadLedgerKey, value, revision, "write the upload ledger")
 }
@@ -46,12 +46,12 @@ func (f *FleetStore) UploadRecord(ctx context.Context, upload string) ([]byte, u
 
 // SwapUploadRecord writes one upload's record while it is still at revision,
 // 0 creating it.
-func (f *FleetStore) SwapUploadRecord(ctx context.Context, upload string, value []byte, revision uint64) (bool, error) {
+func (f *FleetStore) SwapUploadRecord(ctx context.Context, upload string, value []byte, revision uint64) (uint64, error) {
 	switch {
 	case upload == "":
-		return false, errors.New("coord/kv: an upload record needs an upload")
+		return 0, errors.New("coord/kv: an upload record needs an upload")
 	case len(value) == 0:
-		return false, errors.New("coord/kv: an upload record needs a value")
+		return 0, errors.New("coord/kv: an upload record needs a value")
 	}
 	return f.swapUpload(ctx, uploadRecordKey(upload), value, revision, "write the upload record")
 }
@@ -98,25 +98,25 @@ func (f *FleetStore) uploadValue(ctx context.Context, key, what string) ([]byte,
 // swapUpload writes one key of the uploads bucket conditionally: a create
 // through [createKey] at revision 0, so a key whose last message is a delete
 // marker is created over it, and an update at the revision otherwise.
-func (f *FleetStore) swapUpload(ctx context.Context, key string, value []byte, revision uint64, what string) (bool, error) {
+func (f *FleetStore) swapUpload(ctx context.Context, key string, value []byte, revision uint64, what string) (uint64, error) {
 	if revision == 0 {
-		_, err := f.create(ctx, f.uploads, key, value)
+		wrote, err := f.create(ctx, f.uploads, key, value)
 		switch {
 		case err == nil:
-			return true, nil
+			return wrote, nil
 		case errors.Is(err, jetstream.ErrKeyExists):
-			return false, nil
+			return 0, nil
 		default:
-			return false, unavailable(what, err)
+			return 0, unavailable(what, err)
 		}
 	}
-	_, err := f.uploads.Update(ctx, key, value, revision)
+	wrote, err := f.uploads.Update(ctx, key, value, revision)
 	switch {
 	case err == nil:
-		return true, nil
+		return wrote, nil
 	case lostUpdateRace(err):
-		return false, nil
+		return 0, nil
 	default:
-		return false, unavailable(what, err)
+		return 0, unavailable(what, err)
 	}
 }

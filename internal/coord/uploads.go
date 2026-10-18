@@ -49,21 +49,21 @@ type UploadReservations interface {
 	UploadLedger(ctx context.Context) ([]byte, uint64, error)
 
 	// SwapUploadLedger writes value as the ledger only while the ledger is
-	// still at revision — 0 naming a ledger that is not there — and reports
-	// whether it did. False with no error is a LOST RACE: another write
-	// moved the ledger since it was read, and the caller reads it again and
-	// decides again. An empty value is refused.
-	SwapUploadLedger(ctx context.Context, value []byte, revision uint64) (bool, error)
+	// still at revision (0 naming a ledger that is not there), answering
+	// the revision it wrote. Zero with no error is a LOST RACE: another
+	// write moved the ledger since it was read, and the caller reads it
+	// again and decides again. An empty value is refused.
+	SwapUploadLedger(ctx context.Context, value []byte, revision uint64) (uint64, error)
 
 	// UploadRecord reads one upload's record and the revision it was read
 	// at: nil and 0 where there is none.
 	UploadRecord(ctx context.Context, upload string) ([]byte, uint64, error)
 
 	// SwapUploadRecord writes one upload's record only while it is still at
-	// revision — 0 creating it, refused where a record is there — and
-	// reports whether it did, false with no error being a lost race. An
-	// empty upload id or value is refused.
-	SwapUploadRecord(ctx context.Context, upload string, value []byte, revision uint64) (bool, error)
+	// revision (0 creating it, refused where a record is there), answering
+	// the revision it wrote, zero with no error being a lost race. An empty
+	// upload id or value is refused.
+	SwapUploadRecord(ctx context.Context, upload string, value []byte, revision uint64) (uint64, error)
 
 	// DeleteUploadRecord removes one upload's record only while it is still
 	// at revision, and reports whether it did: false with no error where the
