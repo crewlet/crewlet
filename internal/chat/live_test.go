@@ -40,6 +40,7 @@ func TestACommittedEffectCrossesTheWireWhole(t *testing.T) {
 			Recipients:     []chat.Recipient{{Handle: "bo", Reason: chat.ReasonMention}},
 			WakesTruncated: true,
 		},
+		Removed: []string{"dee"},
 	}
 	everyFieldSet(t, "Applied", reflect.ValueOf(applied))
 	everyFieldSet(t, "Notify", reflect.ValueOf(*applied.Notify))

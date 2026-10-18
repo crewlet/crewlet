@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -237,7 +238,7 @@ func TestAnOutOfServiceNodeHearsAPeersAppliers(t *testing.T) {
 	if m := messages(got.chat); len(m) != 1 || m[0] != "m-1" {
 		t.Fatalf("b's chat heard %v, want a's post m-1 alone", m)
 	}
-	if want := posted("m-1")[0]; got.chat[0] != want {
+	if want := posted("m-1")[0]; !reflect.DeepEqual(got.chat[0], want) {
 		t.Errorf("the relayed chat effect lost its fields:\n got %+v\nwant %+v",
 			got.chat[0], want)
 	}

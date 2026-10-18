@@ -109,6 +109,19 @@ type Applied struct {
 	// viewer is in the recipient set is a question about that viewer, and
 	// this package has no idea who is watching.
 	Notify *Notify `json:"notify,omitempty"`
+
+	// Removed is who a membership record took OUT of the room, sorted, and
+	// empty for every other record.
+	//
+	// A LIVE SURFACE CANNOT DERIVE IT, which is why the applier carries it.
+	// A frame is filtered by whether its viewer may read the room at the
+	// batch's own position, and at that position the people this record
+	// removed may not — so they were the one audience a membership change
+	// never reached, and a private room stayed in their rail, openable and
+	// unread-badged, until something made it read again. They are told the
+	// room changed and nothing else: [Applied] carries no member list, and
+	// what they already knew is that they were in it.
+	Removed []string `json:"removed,omitempty"`
 }
 
 // accumulator gathers a transaction's effects and drains them once.
