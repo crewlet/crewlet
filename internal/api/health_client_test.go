@@ -39,6 +39,7 @@ func TestTheDashboardDeclaresExactlyTheHealthTheEngineReports(t *testing.T) {
 	}{
 		{"EngineHealth", reflect.TypeFor[api.Health](), 10},
 		{"HealthAlarms", reflect.TypeFor[api.HealthAlarms](), 2},
+		{"HealthObjects", reflect.TypeFor[api.HealthObjects](), 1},
 	} {
 		t.Run(pair.declaration, func(t *testing.T) {
 			t.Parallel()

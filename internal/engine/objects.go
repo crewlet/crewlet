@@ -440,6 +440,21 @@ func (e *Engine) Objects() *objstore.Store {
 	return e.objects.store
 }
 
+// DirectUploadStatus is what health reports as `objects.direct_upload`:
+// "available" where the object store can hand a client a presigned put,
+// "unavailable (<reason>)" where it cannot, and "" on a node running no
+// object store. Fixed at boot: the s3 backend's probe decides it once
+// (internal/objstore/s3obj), and the broker's own bucket never offers one.
+func (e *Engine) DirectUploadStatus() string {
+	if e.objects == nil {
+		return ""
+	}
+	if ok, why := e.objects.store.DirectUpload(); !ok {
+		return "unavailable (" + why + ")"
+	}
+	return "available"
+}
+
 // ObjectsStream is the broker stream the company's objects live in, for the
 // backup — empty where they live outside the broker (an S3 bucket), which the
 // backup then copies object by object.

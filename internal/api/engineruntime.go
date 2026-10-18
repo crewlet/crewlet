@@ -215,6 +215,9 @@ func (r engineRuntime) Snapshot(ctx context.Context) RuntimeState {
 		// The watchdog's own reading, so a node degrading towards its
 		// self-terminate threshold is visible before it hits it.
 		StallLag: r.engine.StallLag(),
+		// Whether uploads may go straight to the bucket, as the object
+		// store's boot probe found it.
+		DirectUpload: r.engine.DirectUploadStatus(),
 		// Read live, on every probe, rather than cached: a cached posture
 		// is a node that reports healthy through the whole window in which
 		// it stopped being so. This is the ONLY place an operator can see
