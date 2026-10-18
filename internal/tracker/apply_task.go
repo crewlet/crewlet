@@ -2315,8 +2315,10 @@ func (a *Applier) writeThread(ctx context.Context, tx *sql.Tx, task Task,
 // document carries for them, are written by nothing — every comment holds the
 // row's defaults — so neither kind writes them.
 //
-// `record_id` is the record that POSTED the remark, which an edit leaves as it
-// is: the row is that record's, and its words are all an edit changes.
+// `record_id` is the record that POSTED the remark — the id of the history row
+// it wrote ([historyID]), which is what places the remark in the log for
+// [rederiveAnswers] — and an edit leaves it as it is: the row is that record's,
+// and its words are all an edit changes.
 func writeComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 	c applyContext) (int, error) {
 
@@ -2347,7 +2349,7 @@ func writeComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 		ON CONFLICT (id) DO NOTHING`,
 		comment.ID, task.ID, comment.Author, string(comment.AuthorKind),
 		comment.Body, comment.ReplyTo, comment.Ask, comment.Answers,
-		c.record.OpID, store.EncodeTime(comment.CreatedAt),
+		historyID(c), store.EncodeTime(comment.CreatedAt),
 		store.EncodeTime(commentUpdatedAt(comment)), document)
 	if err != nil {
 		return 0, fmt.Errorf("tracker: write comment %s at %s: %w",
