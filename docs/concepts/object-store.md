@@ -511,6 +511,15 @@ Take **`s3`** when:
 - the fleet's broker is an external NATS cluster whose operators would rather
   not hold files.
 
+**To try `s3` on one machine**, the repository's `docker-compose.yml` carries
+a SeaweedFS service behind the `s3` profile: `docker compose --profile s3 up
+-d --wait`, create a bucket on it (`aws --endpoint-url http://127.0.0.1:8333
+s3 mb s3://crewlet-files`), and name it in `store.objects` with
+`endpoint: http://127.0.0.1:8333`, `region: us-east-1` and `path_style: true`.
+It runs with no identities, so it accepts any key pair and listens on the
+loopback address only; a store other people reach needs identities, and one
+key per company scoped to that company's prefix.
+
 **A versioned bucket keeps every object the collector deletes**, as a
 noncurrent version, for as long as the bucket's own rules say — and every
 upload is an object of its own, so a file rewritten daily leaves a noncurrent
