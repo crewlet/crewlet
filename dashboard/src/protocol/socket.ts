@@ -1115,7 +1115,10 @@ export class LiveSocket {
       //
       // Every one of these was already filtered by the engine against whether
       // this viewer may read the room, failing closed, so nothing below this
-      // line decides who may see what.
+      // line decides who may see what. The one frame sent past that rule is
+      // the membership change that took this viewer OUT of a room: it names
+      // the room and the record and no member, and the rail's re-read on it
+      // is how the room leaves the rail.
       case "chat_posted":
       case "chat_edited":
       case "chat_deleted":
