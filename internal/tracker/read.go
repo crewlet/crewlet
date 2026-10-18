@@ -646,6 +646,28 @@ const (
 	parentIndex         = "tracker_tasks_parent_idx"
 )
 
+// peopleClause is a filter on the tasks a person is on — as a collaborator,
+// a watcher or the owner of a checklist item — given the subquery that finds
+// them by the person.
+//
+// # Why it is read from the person's rows
+//
+// Written as `EXISTS (… WHERE x.task_id = t.id AND x.handle IN (…))` the
+// filter was a probe of every task in scope, and the probe sought the person's
+// index on the person alone, because this engine's planner stops seeking at an
+// IN list — so `watcher=ana` at the workspace read every live task in the
+// company and, for each, every task Ana watches. Driven from the subquery it
+// is the person's own rows, one seek, and then each of their tasks by its key.
+//
+// THE CHECKLIST'S SUBQUERY STATES ITS INDEX'S PREDICATE. The index the
+// filter's comment names holds only the items that have an owner, and the
+// planner does not prove `assignee IN (…)` implies an owner, so the subquery
+// says so — a value the filter is given is never empty — and without it read
+// every checklist item in the company from the heap.
+func peopleClause(subquery string) string {
+	return "t.id IN (" + subquery + ")"
+}
+
 // taskSource is where a query's tasks are read from: the task table, for a
 // listing of ONE TASK'S SUBTASKS the index of the tree, and for a listing of
 // the TRASH the index that holds it.
@@ -817,6 +839,9 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		clause, values := handleClause("t.reporter", q.Reporter)
 		add(clause, values...)
 	}
+	// A PERSON'S WORK IS READ FROM THEIR OWN ROWS: the tasks a
+	// collaborator, a watcher or a checklist item's owner is on, found by
+	// the person ([peopleClause]).
 	for _, join := range []struct {
 		handles []string
 		table   string
@@ -824,17 +849,16 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		{q.Collaborator, "tracker_collaborators"},
 		{q.Watcher, "tracker_watchers"},
 	} {
-		if len(join.handles) == 0 {
-			continue
+		if len(join.handles) > 0 {
+			add(peopleClause("SELECT x.task_id FROM "+join.table+
+				" x WHERE x.handle IN ("+placeholders(len(join.handles))+")"),
+				anyOf(join.handles)...)
 		}
-		add("EXISTS (SELECT 1 FROM "+join.table+" x WHERE x.task_id = t.id "+
-			"AND x.handle IN ("+placeholders(len(join.handles))+"))",
-			anyOf(join.handles)...)
 	}
 	if len(q.ChecklistAssignee) > 0 {
-		add("EXISTS (SELECT 1 FROM tracker_checklist_items x "+
-			"WHERE x.task_id = t.id AND x.assignee IN ("+
-			placeholders(len(q.ChecklistAssignee))+"))", anyOf(q.ChecklistAssignee)...)
+		add(peopleClause("SELECT x.task_id FROM tracker_checklist_items x "+
+			"WHERE x.assignee IN ("+placeholders(len(q.ChecklistAssignee))+
+			") AND x.assignee <> ''"), anyOf(q.ChecklistAssignee)...)
 	}
 	if len(q.Tags.Tags) > 0 {
 		clause, values := tagClause(q.Tags, q.Scope.Project)
