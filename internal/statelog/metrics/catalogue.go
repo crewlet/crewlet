@@ -649,6 +649,61 @@ func Catalogue() []Instrument {
 				"that created the bucket derived): the ceiling the bucket " +
 				"keeps for its life, whatever a node's Tier A says later.",
 		},
+		// ---- the artifact origin ----------------------------------------
+		{
+			Name: ArtifactsServeRequests, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"dest", "status"},
+			Shows: "Every request the artifact origin (the api.artifacts " +
+				"listener) answered, by what it was (`dest`: `document`, a " +
+				"page decided again on every request; `subresource`, a file " +
+				"a page loads; `runtime` and `kit`, the embedded public " +
+				"files) and by status class (`status`: `2xx` to `5xx`). A " +
+				"rise in `document` `5xx` is viewers whose frames this node " +
+				"would not serve: a copy of the artifacts or identity log it " +
+				"could not vouch for, or an object store that did not answer. " +
+				"The artifact id is never an attribute; per-artifact detail " +
+				"is in the log lines.",
+		},
+		{
+			Name: ArtifactsServeDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"dest"},
+			Shows: "How long the artifact origin took to answer, by `dest`, " +
+				"the whole response included. A document's tail is the time " +
+				"to first byte a viewer waits on before a frame can render, " +
+				"which the service objective for viewing reads; a slow " +
+				"subresource tail with fast documents is the object store.",
+		},
+		{
+			Name: ArtifactsServeBytes, Kind: KindCounter, Unit: UnitBytes,
+			Shows: "Body bytes the artifact origin sent, compressed where " +
+				"they were sent compressed: what artifact viewing costs this " +
+				"node in egress, per node and never per artifact.",
+		},
+		{
+			Name: ArtifactsTicketRefusals, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"reason"},
+			Shows: "View tickets the artifact origin refused, by `reason`: " +
+				"`invalid` (forged, malformed, or signed under a key this " +
+				"node does not hold), `expired` (a frame past its hour, " +
+				"which the dashboard re-mints), `host` (a ticket presented " +
+				"on a host other than its artifact's), `navigation` (a " +
+				"ticket URL opened in a tab of its own), `revoked` (the " +
+				"share, the credential, the artifact or the version is " +
+				"gone) and `stale` (this node could not vouch for what it " +
+				"would decide from, and answered 503). `invalid` above zero " +
+				"sustained is somebody presenting tickets this fleet never " +
+				"minted, or a keyring rotated past a key still in use.",
+		},
+		{
+			Name: ArtifactsAuthzPeerChecks, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Authorizations the artifact origin decided through " +
+				"another data node because its own artifacts copy was out of " +
+				"service or lagging, by `outcome` (`served`, `refused`, " +
+				"`unavailable`). Any at all is a node whose copy is not " +
+				"answering; `unavailable` is a viewer refused because no " +
+				"data node could decide for them.",
+		},
 	}
 }
 
