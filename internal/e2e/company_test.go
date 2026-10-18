@@ -273,7 +273,7 @@ type nodeSpec struct {
 	// company amends the golden company document.
 	company func(doc string) string
 	// boot amends the operator's half of the configuration, for the cases
-	// that need it — a bearer token a person writes with.
+	// that need it — the sign-in a person's browser uses ([withSignIn]).
 	boot func(*config.Bootstrap)
 	// env is what the node's `${VAR}` references resolve to beyond the
 	// harness's own ([nodeEnvironment]).
@@ -318,6 +318,10 @@ func startNode(t *testing.T, spec nodeSpec) *node {
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
 	withServingTierA(t, &boot)
+	// AFTER THE HARNESS'S OWN SETTINGS AND BEFORE THE SEED AND THE ENGINE, so
+	// an amendment can override a path or the credential as well as add to
+	// them — the seed then lands where the amended store opens — and nothing
+	// it sets is quietly overwritten by a default applied afterwards.
 	if spec.boot != nil {
 		spec.boot(&boot)
 	}
@@ -480,6 +484,14 @@ type scriptedModel struct {
 	// submits — the scripted half of a turn whose subject is what a tool
 	// did rather than what the model said.
 	scripted []scriptedCall
+
+	// chat scripts an executor that was woken in a room: which chat tool
+	// it reaches for, in what order, and how it answers the engine's own
+	// refusal of a delivery claim. Nil for every case whose subject is not
+	// the company's own chat. It lives in chat_test.go, beside the cases
+	// it serves — this field and the one branch below are all the shared
+	// endpoint has to know about it.
+	chat *chatScript
 }
 
 // scriptedCall is one tool call the executor makes.
@@ -618,6 +630,26 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 			reply = toolUse(call.tool, call.input)
 			break
 		}
+		if answer, hold, ok := m.chatAnswer(req); ok {
+			// A SEAT WOKEN IN A ROOM. Recorded as execute like every
+			// other request of this phase — what differs is that the
+			// script reads what the request hands back, because the
+			// request it has to get right is the one after the engine
+			// refused a delivery claim. See [chatScript].
+			saw("execute")
+			// HELD, if the case asked, until it has seen the seat at
+			// work — or until the engine stops waiting for this answer,
+			// so a case that failed first cannot leave a request open
+			// for the server's close to wait on.
+			if hold != nil {
+				select {
+				case <-hold:
+				case <-r.Context().Done():
+				}
+			}
+			reply = answer
+			break
+		}
 		if query, ok := m.shouldSearch(); ok {
 			saw("execute")
 			reply = toolUse("search_knowledge", map[string]any{"query": query})
@@ -640,9 +672,9 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 			// the artifact and the engine demands a citation only where a
 			// tool was the way to deliver. A turn somebody IS waiting on —
 			// a task assignment, a message addressed to the seat — is
-			// scripted by its case ([scriptedModel.callOnExecute]), because
-			// this claim is refused there until the rounds run out and the
-			// engine writes the outcome itself.
+			// scripted by its case ([scriptedModel.callOnExecute],
+			// [chatScript]), because this claim is refused there until the
+			// rounds run out and the engine writes the outcome itself.
 			"outcome": "delivered",
 			"summary": "Three PRs merged, one incident, zero regressions.",
 		})
@@ -891,10 +923,10 @@ func hydrated(t *testing.T, e *engine.Engine) func() bool {
 // while it holds none.
 //
 // WHAT SAYS THE TURN DELIVERED rather than only acted. A script that served
-// its citing submission (the last call a capture queued with
-// [scriptedModel.callOnExecute]) knows what it SENT, and the engine may still
-// have refused it — after which the turn ends on the rescue path, with an
-// outcome the engine wrote rather than one the model chose
+// its citing submission ([chatScript.submitted], or the last call a capture
+// queued with [scriptedModel.callOnExecute]) knows what it SENT, and the
+// engine may still have refused it — after which the turn ends on the rescue
+// path, with an outcome the engine wrote rather than one the model chose
 // ([types.AgentPhaseCompleted.RescueFired]). Only the phase record says which.
 //
 // n IS THE NODE WHOSE STORE HOLDS THE TURN'S RECORDS: the node that ran it,
