@@ -80,6 +80,15 @@
 //     deadline, its deadline had passed when it arrived, or this node has
 //     already taken its id. Runs nothing.
 //
+// # And one way, for a frame that names a person
+//
+// One channel carries no instruction and expects no reply, and is signed all
+// the same: a PRESENCE frame (internal/presence) is broadcast to every node
+// listening, and what a node does with it is show a person in a room. A forged
+// one would put a colleague somewhere they are not, so it is sealed one way
+// ([OneWay]): the same frame, a key domain of its own, and an expiry inside the
+// signed body in place of the id and deadline a reply would be bound to.
+//
 // # What it does not cover
 //
 // The scatters that only READ — the fleet's history, a search slice, a held

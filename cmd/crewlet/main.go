@@ -1632,27 +1632,38 @@ func companyConfig(e *engine.Engine) (*config.Company, *org.Organization) {
 	return nil, nil
 }
 
-// artifactDataSurfaces builds the datastore's HTTP surface and its read
-// questions' source over the engine's estate router, or neither on an engine
-// built with no router (which serves no estate to route).
+// artifactDataSurfaces builds the datastore's HTTP surface, its read
+// questions' source and the socket's artifact rooms over the engine's estate
+// router, or none of them on an engine built with no router (which serves no
+// estate to route).
 //
 // THE ARTIFACTS' OWN GATE ([artifactsGate]), so a datastore route, a datastore
-// question, an artifacts route and an artifacts question decide who may touch
-// one artifact by one admission.
+// question, an artifacts route, an artifacts question and a room's join decide
+// who may touch one artifact by one admission.
 func artifactDataSurfaces(e *engine.Engine, boot *config.Bootstrap) (
-	*artifactdataapi.Service, *queries.ArtifactDataSource, error) {
+	*artifactdataapi.Service, *queries.ArtifactDataSource, *api.Rooms, error) {
 
 	data, routed := engine.ArtifactDataEstate(e)
 	heads, headsRouted := engine.ArtifactsEstate(e)
 	if !routed || !headsRouted {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	gate := artifactsGate(e, boot, heads)
 	surface, err := artifactdataapi.New(artifactdataapi.Options{Gate: gate, Data: data, Versions: heads})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return surface, &queries.ArtifactDataSource{Gate: gate, Reads: data}, nil
+	var rooms *api.Rooms
+	// THE ROOMS NEED THE PRESENCE HUB, which every node with a broker
+	// runs: a node with none serves no room rather than rooms that never
+	// say who is there.
+	if hub := e.Presence(); hub != nil {
+		rooms = &api.Rooms{Gate: gate, Stores: data, Presence: hub, Feed: e}
+		if m := e.Recorder(); m != nil {
+			rooms.Metrics = m
+		}
+	}
+	return surface, &queries.ArtifactDataSource{Gate: gate, Reads: data}, rooms, nil
 }
 
 // companySecrets reads the verification material out of the engine's CURRENT
@@ -1932,7 +1943,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// each deciding through the one admission they share, over the estate
 	// router's datastore and artifacts so a node whose own copy is out of
 	// service answers through a peer's.
-	artifactDataSurface, artifactDataSource, err := artifactDataSurfaces(e, boot)
+	artifactDataSurface, artifactDataSource, artifactRooms, err := artifactDataSurfaces(e, boot)
 	if err != nil {
 		return nil, err
 	}
@@ -2271,6 +2282,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if artifactDataSurface != nil {
 		opts.ArtifactData = artifactDataSurface
 	}
+	// AND THE SOCKET'S ARTIFACT ROOMS, decided by that same admission and
+	// fed by this engine's appliers and presence hub.
+	opts.Rooms = artifactRooms
 	app, err := api.New(opts) //nolint:contextcheck // see the paragraph above the options
 	if err != nil {
 		return nil, err

@@ -60,6 +60,12 @@ func ArtifactToolDeps(e *Engine) builtin.ArtifactDeps {
 	if e.sandbox.Load() != nil {
 		deps.Boxes = artifactBoxes{engine: e}
 	}
+	// THE PRESENCE HUB, so a seat reading or writing an artifact (or its
+	// datastore, whose tools share this half) appears in the artifact's
+	// room. A nil hub stays a nil interface, which tells nobody.
+	if e.presence != nil {
+		deps.Presence = e.presence
+	}
 	return deps
 }
 

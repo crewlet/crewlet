@@ -2,6 +2,7 @@ package stream
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -122,6 +123,20 @@ type Service struct {
 	// here: an identity move, a published company.
 	listeners listeners
 
+	// rooms decides and feeds artifact rooms; work decides them again off
+	// the applier's goroutine, and stopPresence stops hearing the presence
+	// hub. See rooms.go.
+	rooms        Rooms
+	work         *roomWork
+	stopPresence func()
+
+	// withholding is this node's artifact copies out of service: its
+	// appliers' pushes are withheld until they return ([Service.ArtifactsCopy]).
+	withholding atomic.Bool
+
+	// metrics records the socket's push lag; nil records nothing.
+	metrics Metrics
+
 	// tokensDirty means a phase completed since the last rollup went out.
 	// Set on the publish path and cleared on the tick — see flushTokens.
 	tokensDirty atomic.Bool
@@ -236,6 +251,16 @@ type Options struct {
 	// lifetime.go). REQUIRED for [Options.Chart]'s reason: a service built
 	// without it could never say a seat is gone.
 	SeatOf SeatOfFunc
+
+	// Rooms decides and feeds artifact rooms. Optional, and every half or
+	// none: the zero value serves no room, which is a node with no
+	// artifacts domain, and a join there is `unknown_query`. A partial one
+	// is refused by name, because a room that could be joined and never
+	// told who is present is a room that lies.
+	Rooms Rooms
+
+	// Metrics records the socket's push lag; nil records nothing.
+	Metrics Metrics
 }
 
 // NewService builds the fan-out over a projection, or refuses a missing
@@ -267,6 +292,11 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 			"beside the engine, which answers every one of them",
 			strings.Join(missing, ", "))
 	}
+	if r := opts.Rooms; (r.Access != nil || r.Stores != nil || r.Presence != nil) && !r.serves() {
+		return nil, errors.New("stream: Options.Rooms needs Access, Stores and Presence " +
+			"together: a room that could be joined and never told who is present, or " +
+			"where its datastore stands, is a room that lies")
+	}
 	s := &Service{
 		hub:       NewHub(),
 		state:     state,
@@ -284,12 +314,17 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		now:       opts.Now,
 		interval:  opts.HealthInterval,
 		pushed:    map[string]pushedCall{},
+		rooms:     opts.Rooms,
+		metrics:   opts.Metrics,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
 	}
 	if s.interval <= 0 {
 		s.interval = HealthInterval
+	}
+	if s.rooms.serves() {
+		s.startRooms()
 	}
 	return s, nil
 }
@@ -829,5 +864,6 @@ func (s *Service) Stop() {
 		close(stop)
 		<-done
 	}
+	s.stopRooms()
 	s.hub.Close()
 }

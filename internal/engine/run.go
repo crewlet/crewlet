@@ -10,6 +10,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerfit"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
@@ -44,6 +45,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/observe"
+	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -761,6 +763,21 @@ type Engine struct {
 	steers         *steerDesk
 	stopSteerServe queue.Unsubscribe
 
+	// presenceWire seals this node's presence frames and opens its peers',
+	// and presence is the hub that holds its rooms. See presence.go.
+	presenceWire *presence.Wire
+	presence     *presence.Hub
+
+	// dataTurns is this node's tally of each turn segment's datastore ops,
+	// shared by every registry it builds ([builtin.DataTurns]).
+	dataTurns *builtin.DataTurns
+
+	// onArtifactsServing is told whenever this node's artifact copies leave
+	// or return to service, and stopArtifactWatchFn ends the watcher that
+	// tells it. See presence.go.
+	onArtifactsServing  atomic.Pointer[func(bool)]
+	stopArtifactWatchFn func()
+
 	// memoryReads answers a seat's memory from the node holding it, and
 	// stopMemoryServe withdraws this node as one of its answerers. See
 	// memoryread.go.
@@ -1021,6 +1038,12 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err != nil {
 		return nil, err
 	}
+	// AND THE PRESENCE CHANNEL, which carries no instruction and is sealed
+	// all the same: a frame names a person (presence.go).
+	presenceWire, err := newPresenceWire(recordKeyring(opts.Bootstrap))
+	if err != nil {
+		return nil, err
+	}
 	// THE COMPLETION POLL'S CADENCE, whether or not this node will ever run a
 	// sandbox: an apply can bring it its first, and the poll starts there.
 	// See [checkSandboxPollInterval].
@@ -1144,6 +1167,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// auxiliary spend reaches the history like its phases do.
 		auxSpend:            auxspend.NewLedger(backends.Queue),
 		steers:              steers,
+		presenceWire:        presenceWire,
+		dataTurns:           builtin.NewDataTurns(nil),
 		mcpRetryBase:        opts.mcpRetryBase,
 		sandboxOtel:         otel,
 		sandboxPollInterval: opts.SandboxPollInterval,
@@ -1321,6 +1346,13 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err = e.armInboxRelay(ctx); err != nil {
 		return nil, err
 	}
+	// AND FOR WHO IS IN EACH ARTIFACT'S ROOM, which every node holds for its
+	// own sockets and agents and tells its peers (see presence.go), and the
+	// watch on its artifact copies' service that the rooms follow.
+	if err = e.armPresence(ctx); err != nil {
+		return nil, err
+	}
+	e.armArtifactWatch(ctx)
 
 	// THE ADMISSION HANDSHAKE, BEFORE ANY PUBLISHER — and this is the
 	// earliest point at which it can run, because it needs the
@@ -2364,6 +2396,10 @@ func (e *Engine) teardown(ctx context.Context) {
 	// With it, and for the same reason: a note answered `accepted` by a
 	// node that is tearing down is a note no round will read.
 	e.stopSteer(ctx)
+	// And presence, whose leaves must reach the fleet while the broker is
+	// still there, and the watch the rooms follow.
+	e.stopArtifactWatch()
+	e.stopPresence(ctx)
 	// And the inbox relay's follower and answerer, which ask and answer on
 	// the same broker.
 	e.stopInboxRelay(ctx)

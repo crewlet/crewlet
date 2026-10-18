@@ -310,6 +310,14 @@ var subjectOf = map[string]subject{
 	ShareArtifactTool:       {kind: authz.KindArtifact, inTool: true},
 	UnshareArtifactTool:     {kind: authz.KindArtifact, inTool: true},
 	UploadArtifactAssetTool: {kind: authz.KindArtifact, inTool: true},
+
+	// AND ITS DATASTORE, decided by the same stored row and then by each
+	// collection's own rules, which the tool settles once it has read the
+	// row (see artifactdata.go).
+	ReadArtifactDataTool:  {kind: authz.KindArtifact, inTool: true},
+	QueryArtifactDataTool: {kind: authz.KindArtifact, inTool: true},
+	WriteArtifactDataTool: {kind: authz.KindArtifact, inTool: true},
+	SetArtifactSchemaTool: {kind: authz.KindArtifact, inTool: true},
 }
 
 // subject is what one tool is about, as the names of its own arguments.

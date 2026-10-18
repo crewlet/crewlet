@@ -103,6 +103,10 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// handed: every data node runs the artifacts domain, so these depend on
 	// the node taking uploads rather than on the company's native halves.
 	deps.Artifacts = ArtifactToolDeps(e)
+	// AND THE DATASTORE'S, beside them: the data tools act through the
+	// artifacts half and add only the datastore, the turn guardrail and
+	// the presence hub.
+	deps.ArtifactData = ArtifactDataToolDeps(e)
 	if _, err := builtin.Register(c.Tools, deps); err != nil {
 		return err
 	}

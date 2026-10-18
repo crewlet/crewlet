@@ -1,0 +1,656 @@
+package stream_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/coder/websocket"
+
+	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/artifactdata"
+	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/presence"
+	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/signedask"
+	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// sheet is the artifact every room case is about.
+var sheet = artifacts.IDFor("stream-rooms-suite-sheet")
+
+// access decides who may be in which room: each reader's role on each
+// artifact, by their record, settable mid-case, and an error that makes every
+// decision unknown.
+type access struct {
+	mu    sync.Mutex
+	roles map[string]artifacts.Role
+	err   error
+	asked int
+}
+
+func newAccess() *access { return &access{roles: map[string]artifacts.Role{}} }
+
+func (a *access) set(record string, id artifacts.ID, role artifacts.Role) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.roles[record+"|"+id.String()] = role
+}
+
+func (a *access) fail(err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.err = err
+}
+
+func (a *access) Standing(_ context.Context, p iam.Principal, id artifacts.ID) (artifacts.Role, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.asked++
+	if a.err != nil {
+		return "", a.err
+	}
+	return a.roles[iam.RecordOwner(p)+"|"+id.String()], nil
+}
+
+// stores answers every datastore at version 40 with its delete floor at 10.
+type stores struct{}
+
+func (stores) Through(context.Context, artifacts.ID) (int64, int64, error) { return 40, 10, nil }
+
+// roomNode is one node serving the socket: its service, its presence hub on a
+// broker the case's nodes share, and the address its sockets dial.
+type roomNode struct {
+	svc    *stream.Service
+	hub    *presence.Hub
+	access *access
+	url    string
+}
+
+// roomRing is the keyring every room node's presence frames are sealed under.
+var roomRing = statelog.OneKey("k1", "the stream rooms suite's fleet key material")
+
+// newRoomNode serves a socket whose Tier A tokens are bound to seats, as the
+// watch suite's are (`<name>-token-long-enough-to-pass`), with artifact rooms
+// decided by acc and presence crossing broker.
+func newRoomNode(t *testing.T, broker *memory.Broker, name string, acc *access,
+	bound map[string]string) *roomNode {
+
+	t.Helper()
+	q := broker.Client()
+	if err := q.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.Background()) })
+	wire, err := signedask.NewOneWay[presence.Frame](presence.Channel, roomRing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub, err := presence.New(presence.Options{Queue: q, Wire: wire, Node: name,
+		AskBudget: 300 * time.Millisecond, Coalesce: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { hub.Stop(context.Background()) })
+
+	b := config.DefaultBootstrap()
+	b.API.Auth.Admin = iam.AdminServe
+	for login := range bound {
+		id := strings.TrimPrefix(login, "token:")
+		b.API.Auth.Tokens = append(b.API.Auth.Tokens, config.APIToken{
+			ID: id, Token: id + "-token-long-enough-to-pass", Grants: []iam.Grant{iam.GrantTracker},
+		})
+	}
+	guard := auth.New(&b).BindSeats(auth.SeatBindings{
+		Directory: watchBindings(bound), Chart: watchSeats(bound)})
+	svc := buildService(t, stream.Options{Rooms: stream.Rooms{Access: acc, Stores: stores{},
+		Presence: hub}})
+	srv := httptest.NewServer(stream.Handler(guard, auth.NewCSRF(&b), svc, nil))
+	t.Cleanup(srv.Close)
+	return &roomNode{svc: svc, hub: hub, access: acc,
+		url: "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/stream"}
+}
+
+// people is the two readers every room case seats: dana and erin, each a
+// token bound to their own seat.
+var people = map[string]string{"token:dana": "dana", "token:erin": "erin"}
+
+// open dials as one person and reads past the snapshot.
+func (n *roomNode) open(t *testing.T, who string) *websocket.Conn {
+	t.Helper()
+	conn, _, err := websocket.Dial(t.Context(), n.url,
+		&websocket.DialOptions{HTTPHeader: bearer(who + "-token-long-enough-to-pass")})
+	if err != nil {
+		t.Fatalf("dial as %s: %v", who, err)
+	}
+	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
+	if first := next(t, conn); kindOf(first) != stream.KindSnapshot {
+		t.Fatalf("first frame = %v, want the snapshot", first["kind"])
+	}
+	return conn
+}
+
+// join asks for a room and answers the frame it was answered with.
+func join(t *testing.T, conn *websocket.Conn, id artifacts.ID, since int64) map[string]any {
+	t.Helper()
+	write(t, conn, map[string]any{"kind": "artifact_join", "id": 7, "artifact": id.String(),
+		"since": since})
+	return nextOf(t, conn, stream.KindResult, stream.KindError)
+}
+
+// nextOf reads frames until one of the given kinds, skipping the rest: a
+// room's pushes interleave with the answer a case waits for.
+func nextOf(t *testing.T, conn *websocket.Conn, kinds ...stream.Kind) map[string]any {
+	t.Helper()
+	for {
+		frame := next(t, conn)
+		if slices.Contains(kinds, kindOf(frame)) {
+			return frame
+		}
+	}
+}
+
+// presentIn reads presence pushes until the room shows exactly want (seats),
+// as a dashboard applying them in order would.
+func presentIn(t *testing.T, conn *websocket.Conn, roster map[string]string, want ...string) {
+	t.Helper()
+	slices.Sort(want)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var got []string
+		for _, seat := range roster {
+			got = append(got, seat)
+		}
+		slices.Sort(got)
+		if slices.Equal(got, want) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the room shows %v, want %v", got, want)
+		}
+		frame := nextOf(t, conn, stream.KindArtifactPresence)
+		data, _ := frame["data"].(map[string]any)
+		for _, raw := range asList(data["upsert"]) {
+			m, _ := raw.(map[string]any)
+			session, _ := m["session"].(string)
+			seat, _ := m["seat"].(string)
+			roster[session] = seat
+		}
+		for _, raw := range asList(data["leave"]) {
+			session, _ := raw.(string)
+			delete(roster, session)
+		}
+	}
+}
+
+func asList(v any) []any {
+	list, _ := v.([]any)
+	return list
+}
+
+// rosterOf is a join answer's roster, by session.
+func rosterOf(t *testing.T, answer map[string]any) map[string]string {
+	t.Helper()
+	data, _ := answer["data"].(map[string]any)
+	roster, _ := data["roster"].(map[string]any)
+	out := map[string]string{}
+	for _, raw := range asList(roster["members"]) {
+		m, _ := raw.(map[string]any)
+		session, _ := m["session"].(string)
+		seat, _ := m["seat"].(string)
+		out[session] = seat
+	}
+	return out
+}
+
+// A JOIN IS DECIDED LIKE READING THE ARTIFACT, three-valued, and none of its
+// answers closes the socket: allowed answers the session, the role, the room
+// with the joiner in it and where the datastore stands; a reader with no
+// relation is told the artifact does not exist; a node that cannot decide
+// says when to ask again.
+func TestAJoinIsDecidedLikeReadingTheArtifact(t *testing.T) {
+	t.Parallel()
+	acc := newAccess()
+	acc.set("dana", sheet, artifacts.RoleEditor)
+	n := newRoomNode(t, memory.NewBroker(), "node-a", acc, people)
+
+	dana := n.open(t, "dana")
+	answer := join(t, dana, sheet, 25)
+	data, _ := answer["data"].(map[string]any)
+	if kindOf(answer) != stream.KindResult || answer["what"] != "artifact_join" ||
+		data["role"] != "editor" || data["through"] != float64(40) || data["resync"] != false ||
+		data["session"] == "" {
+		t.Fatalf("an allowed join answered %v", answer)
+	}
+	if roster := rosterOf(t, answer); len(roster) != 1 || roster[data["session"].(string)] != "dana" {
+		t.Fatalf("the joiner was handed the room %v, want one holding itself", roster)
+	}
+	// A CATCH-UP BELOW THE DELETE FLOOR, and none at all, are whole reads.
+	for _, since := range []int64{5, 0} {
+		again := join(t, dana, sheet, since)
+		if d, _ := again["data"].(map[string]any); d["resync"] != true {
+			t.Fatalf("a join since %d answered resync %v, want a whole read", since, d["resync"])
+		}
+	}
+
+	erin := n.open(t, "erin")
+	refused := join(t, erin, sheet, 0)
+	if kindOf(refused) != stream.KindError || refused["error"] != stream.CodeNotFound ||
+		refused["artifact"] != sheet.String() {
+		t.Fatalf("a reader with no relation was answered %v, want not_found naming the artifact",
+			refused)
+	}
+	acc.fail(errors.New("the chart is behind"))
+	unknown := join(t, erin, sheet, 0)
+	if kindOf(unknown) != stream.KindError || unknown["error"] != stream.CodeUnavailable {
+		t.Fatalf("an undecidable join was answered %v, want unavailable", unknown)
+	}
+	if _, ok := unknown["retry_after"]; !ok {
+		t.Fatal("an undecidable join does not say when to ask again")
+	}
+	for _, conn := range []*websocket.Conn{dana, erin} {
+		write(t, conn, map[string]any{"kind": "ping"})
+		if got := nextOf(t, conn, stream.KindPong); kindOf(got) != stream.KindPong {
+			t.Fatalf("a join's answer closed the socket: %v", got)
+		}
+	}
+}
+
+// A ROOM CROSSES THE FLEET ON THE SOCKET: a person on each of two nodes joins
+// one artifact's room, and each socket comes to show both, what each is doing,
+// and the one who left when their socket closed. Nothing is forwarded between
+// the nodes: each node's hub hears the other's sealed broadcast.
+func TestARoomCrossesTheFleetOnTheSocket(t *testing.T) {
+	t.Parallel()
+	broker, acc := memory.NewBroker(), newAccess()
+	acc.set("dana", sheet, artifacts.RoleEditor)
+	acc.set("erin", sheet, artifacts.RoleViewer)
+	a := newRoomNode(t, broker, "node-a", acc, people)
+	b := newRoomNode(t, broker, "node-b", acc, people)
+
+	dana := a.open(t, "dana")
+	danaRoom := rosterOf(t, join(t, dana, sheet, 0))
+	erin := b.open(t, "erin")
+	erinRoom := rosterOf(t, join(t, erin, sheet, 0))
+	presentIn(t, erin, erinRoom, "dana", "erin")
+	presentIn(t, dana, danaRoom, "dana", "erin")
+
+	write(t, dana, map[string]any{"kind": "presence", "artifact": sheet.String(),
+		"activity": "editing", "focus": map[string]any{"collection": "review", "doc": "row-12"}})
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		frame := nextOf(t, erin, stream.KindArtifactPresence)
+		data, _ := frame["data"].(map[string]any)
+		found := false
+		for _, raw := range asList(data["upsert"]) {
+			m, _ := raw.(map[string]any)
+			focus, _ := m["focus"].(map[string]any)
+			if m["seat"] == "dana" && m["activity"] == "editing" && focus["doc"] == "row-12" {
+				found = true
+			}
+		}
+		if found {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("node-b never showed dana editing row-12")
+		}
+	}
+
+	_ = dana.Close(websocket.StatusNormalClosure, "")
+	presentIn(t, erin, erinRoom, "erin")
+	waitFor(t, func() bool { return len(a.svc.Hub().Members(sheet)) == 0 },
+		"a closed socket stayed in the room on its node")
+}
+
+// A REVOKED SHARE DROPS FROM THE ROOM: the movement that withdrew it is
+// pushed, the room is withdrawn with an error frame naming the artifact on a
+// socket that stays open, the room's presence loses the reader, and nothing
+// the datastore commits afterwards reaches them. A reader whose access did not
+// narrow stays.
+func TestARevokedShareDropsFromTheRoom(t *testing.T) {
+	t.Parallel()
+	acc := newAccess()
+	acc.set("dana", sheet, artifacts.RoleEditor)
+	acc.set("erin", sheet, artifacts.RoleViewer)
+	n := newRoomNode(t, memory.NewBroker(), "node-a", acc, people)
+	dana, erin := n.open(t, "dana"), n.open(t, "erin")
+	danaRoom := rosterOf(t, join(t, dana, sheet, 0))
+	join(t, erin, sheet, 0)
+	presentIn(t, dana, danaRoom, "dana", "erin")
+
+	acc.set("erin", sheet, "")
+	n.svc.ArtifactsMoved([]artifactsdomain.Moved{{Artifact: sheet,
+		What: artifactsdomain.MoveShare, AccessEpoch: 2, Head: 3}})
+
+	changed := nextOf(t, erin, stream.KindArtifactChanged)
+	if data, _ := changed["data"].(map[string]any); data["what"] != "share" || data["head"] != float64(3) {
+		t.Fatalf("the movement was pushed as %v", changed)
+	}
+	withdrawn := nextOf(t, erin, stream.KindError)
+	if withdrawn["error"] != stream.CodeNotFound || withdrawn["artifact"] != sheet.String() ||
+		withdrawn["what"] != "artifact_join" {
+		t.Fatalf("the revoked reader was told %v, want the room withdrawn as not found", withdrawn)
+	}
+	presentIn(t, dana, danaRoom, "dana")
+
+	n.svc.ArtifactDataMoved([]artifactdata.Moved{dataBatch(sheet,
+		delta("review", "row-1", artifacts.ReadAll, "dana", `{"status":"done"}`))})
+	if got := nextOf(t, dana, stream.KindArtifactData); got["data"] == nil {
+		t.Fatalf("the reader who kept access received %v", got)
+	}
+	write(t, erin, map[string]any{"kind": "ping"})
+	if got := nextOf(t, erin, stream.KindPong, stream.KindArtifactData); kindOf(got) != stream.KindPong {
+		t.Fatalf("a reader whose share was withdrawn received %v after it", got)
+	}
+}
+
+// A NARROWING HOLDS THE DATASTORE'S PUSHES until its decision lands: a member
+// suspended receives no document, and the decision that keeps it tells it to
+// read again what it missed.
+func TestANarrowingHoldsTheDatastoreUntilItIsDecided(t *testing.T) {
+	t.Parallel()
+	svc := buildService(t, stream.Options{Rooms: stream.Rooms{Access: newAccess(),
+		Stores: stores{}, Presence: nopPresence{}}})
+	c := stream.NewClient(roomReader("erin"))
+	svc.Hub().Register(c)
+	join, _, ok := svc.Hub().JoinArtifact(c, sheet, artifacts.RoleViewer, "s-erin")
+	if !ok {
+		t.Fatal("the client did not join")
+	}
+	svc.Hub().Suspend(sheet)
+	svc.Hub().Broadcast(stream.PushArtifact(stream.KindArtifactData, sheet,
+		stream.ArtifactData{Artifact: sheet, Through: 41}, clock))
+	svc.Hub().Broadcast(stream.PushArtifact(stream.KindArtifactChanged, sheet,
+		stream.ArtifactChange{Artifact: sheet, What: artifactsdomain.MoveShare}, clock))
+	if got := kindsIn(drain(c)); !slices.Equal(got, []stream.Kind{stream.KindArtifactChanged}) {
+		t.Fatalf("a suspended member received %v, want only the movement", got)
+	}
+	missed, ok := svc.Hub().Resume(c, sheet, join, artifacts.RoleViewer)
+	if !ok || !missed {
+		t.Fatalf("the decision that kept the member found missed=%v ok=%v", missed, ok)
+	}
+	svc.Hub().Broadcast(stream.PushArtifact(stream.KindArtifactData, sheet,
+		stream.ArtifactData{Artifact: sheet, Through: 42}, clock))
+	if got := drain(c); len(got) != 1 || got[0].Kind() != stream.KindArtifactData {
+		t.Fatalf("a resumed member received %v", kindsIn(got))
+	}
+}
+
+// A DATASTORE PUSH IS SHAPED PER READER: an editor sees every row of an
+// `own_rows` collection and nobody's `private` rows but their own; a viewer
+// sees their own rows of both and every row of an open one; a reader in no
+// such room sees nothing. One encode serves readers who see the same rows.
+func TestADatastorePushIsShapedPerReader(t *testing.T) {
+	t.Parallel()
+	svc := buildService(t, stream.Options{Rooms: stream.Rooms{Access: newAccess(),
+		Stores: stores{}, Presence: nopPresence{}}})
+	members := map[string]*stream.Client{}
+	for record, role := range map[string]artifacts.Role{"dana": artifacts.RoleEditor,
+		"erin": artifacts.RoleViewer, "fred": artifacts.RoleViewer} {
+		c := stream.NewClient(roomReader(record))
+		svc.Hub().Register(c)
+		if _, _, ok := svc.Hub().JoinArtifact(c, sheet, role, "s-"+record); !ok {
+			t.Fatal("the client did not join")
+		}
+		members[record] = c
+	}
+	outside := stream.NewClient(roomReader("gail"))
+	svc.Hub().Register(outside)
+
+	svc.ArtifactDataMoved([]artifactdata.Moved{dataBatch(sheet,
+		delta("notes", "open", artifacts.ReadAll, "dana", `{"t":"open"}`),
+		delta("votes", "dana-vote", artifacts.ReadOwnRows, "dana", `{"v":1}`),
+		delta("votes", "erin-vote", artifacts.ReadOwnRows, "erin", `{"v":2}`),
+		delta("drafts", "erin-draft", artifacts.ReadPrivate, "erin", `{"d":"mine"}`),
+	)})
+
+	for record, want := range map[string][]string{
+		"dana": {"notes/open", "votes/dana-vote", "votes/erin-vote"},
+		"erin": {"notes/open", "votes/erin-vote", "drafts/erin-draft"},
+		"fred": {"notes/open"},
+	} {
+		got := drain(members[record])
+		if len(got) != 1 {
+			t.Fatalf("%s received %d frames, want one", record, len(got))
+		}
+		var data stream.ArtifactData
+		decodeData(t, got[0], &data)
+		var docs []string
+		for _, d := range data.Deltas {
+			docs = append(docs, d.Collection+"/"+d.Doc)
+		}
+		if !slices.Equal(docs, want) || data.Through != 42 {
+			t.Errorf("%s was pushed %v through %d, want %v through 42", record, docs, data.Through, want)
+		}
+	}
+	if got := drain(outside); len(got) != 0 {
+		t.Fatalf("a socket in no room received %v", kindsIn(got))
+	}
+
+	// AND A BATCH A READER MAY SEE NONE OF IS NOT PUSHED TO THEM AT ALL.
+	svc.ArtifactDataMoved([]artifactdata.Moved{dataBatch(sheet,
+		delta("drafts", "dana-draft", artifacts.ReadPrivate, "dana", `{"d":"hers"}`))})
+	if got := drain(members["fred"]); len(got) != 0 {
+		t.Fatalf("a batch fred may see none of reached him as %v", kindsIn(got))
+	}
+	if got := drain(members["dana"]); len(got) != 1 {
+		t.Fatalf("the writer of a private row received %d frames for it", len(got))
+	}
+}
+
+// A PUSH TOO LARGE TO CARRY NAMES ITS DOCUMENTS INSTEAD, and asks for a
+// re-read: the frame stays inside [artifacts.PushFrameMaxBytes].
+func TestALargeDatastorePushNamesItsDocuments(t *testing.T) {
+	t.Parallel()
+	svc := buildService(t, stream.Options{Rooms: stream.Rooms{Access: newAccess(),
+		Stores: stores{}, Presence: nopPresence{}}})
+	c := stream.NewClient(roomReader("dana"))
+	svc.Hub().Register(c)
+	if _, _, ok := svc.Hub().JoinArtifact(c, sheet, artifacts.RoleEditor, "s"); !ok {
+		t.Fatal("the client did not join")
+	}
+	big := `{"text":"` + strings.Repeat("x", int(artifacts.PushFrameMaxBytes/2)) + `"}`
+	svc.ArtifactDataMoved([]artifactdata.Moved{dataBatch(sheet,
+		delta("notes", "a", artifacts.ReadAll, "dana", big),
+		delta("notes", "b", artifacts.ReadAll, "dana", big),
+		delta("notes", "c", artifacts.ReadAll, "dana", big))})
+	got := drain(c)
+	if len(got) != 1 {
+		t.Fatalf("received %d frames", len(got))
+	}
+	if n := int64(len(got[0].Raw())); n > artifacts.PushFrameMaxBytes {
+		t.Fatalf("the frame is %d bytes, over the %d a push may carry", n, artifacts.PushFrameMaxBytes)
+	}
+	var data stream.ArtifactData
+	decodeData(t, got[0], &data)
+	if !data.Reread || len(data.Deltas) != 0 || len(data.Keys) != 3 || data.Keys[1].Doc != "b" {
+		t.Fatalf("a large push was sent as %+v", data)
+	}
+}
+
+// A NODE WHOSE COPY LEAVES SERVICE withholds its appliers' pushes and tells
+// every room to read again, and does so again when the copy returns.
+func TestACopyOutOfServiceWithholdsAndTellsRoomsToReread(t *testing.T) {
+	t.Parallel()
+	svc := buildService(t, stream.Options{Rooms: stream.Rooms{Access: newAccess(),
+		Stores: stores{}, Presence: nopPresence{}}})
+	c := stream.NewClient(roomReader("dana"))
+	svc.Hub().Register(c)
+	if _, _, ok := svc.Hub().JoinArtifact(c, sheet, artifacts.RoleEditor, "s"); !ok {
+		t.Fatal("the client did not join")
+	}
+	rereadOnce := func(why string) {
+		t.Helper()
+		got := drain(c)
+		if kinds := kindsIn(got); !slices.Equal(kinds, []stream.Kind{stream.KindArtifactChanged,
+			stream.KindArtifactData}) {
+			t.Fatalf("%s: the room was sent %v, want a reset and a resync", why, kinds)
+		}
+		var data stream.ArtifactData
+		decodeData(t, got[1], &data)
+		if !data.Resync {
+			t.Fatalf("%s: the datastore hint is %+v, want resync", why, data)
+		}
+	}
+	svc.ArtifactsCopy(false)
+	rereadOnce("leaving service")
+	svc.ArtifactsCopy(false)
+	svc.ArtifactDataMoved([]artifactdata.Moved{dataBatch(sheet,
+		delta("notes", "a", artifacts.ReadAll, "dana", `{}`))})
+	svc.ArtifactsMoved([]artifactsdomain.Moved{{Artifact: sheet, What: artifactsdomain.MoveVersion}})
+	if got := drain(c); len(got) != 0 {
+		t.Fatalf("an out-of-service copy pushed %v", kindsIn(got))
+	}
+	svc.ArtifactsCopy(true)
+	rereadOnce("returning to service")
+}
+
+// A SOCKET IS IN A BOUNDED NUMBER OF ROOMS: past [stream.MaxRoomsPerSocket] a
+// join is refused, naming the bound, and the socket stays open.
+func TestASocketIsInABoundedNumberOfRooms(t *testing.T) {
+	t.Parallel()
+	acc := newAccess()
+	var ids []artifacts.ID
+	for i := range stream.MaxRoomsPerSocket + 1 {
+		id := artifacts.IDFor(fmt.Sprintf("room-%d", i))
+		acc.set("dana", id, artifacts.RoleViewer)
+		ids = append(ids, id)
+	}
+	n := newRoomNode(t, memory.NewBroker(), "node-a", acc, people)
+	dana := n.open(t, "dana")
+	for _, id := range ids[:stream.MaxRoomsPerSocket] {
+		if got := join(t, dana, id, 0); kindOf(got) != stream.KindResult {
+			t.Fatalf("join %s answered %v", id, got)
+		}
+	}
+	over := join(t, dana, ids[stream.MaxRoomsPerSocket], 0)
+	if over["error"] != stream.CodeBadParams || !strings.Contains(fmt.Sprint(over["detail"]), "at most") {
+		t.Fatalf("a join past the bound answered %v", over)
+	}
+	// REJOINING A ROOM IT IS IN is not another room.
+	if got := join(t, dana, ids[0], 0); kindOf(got) != stream.KindResult {
+		t.Fatalf("a rejoin answered %v", got)
+	}
+}
+
+// A DATASTORE CHANGE REACHES THE SOCKET WELL WITHIN A SECOND of its applier's
+// commit: the push is built on the applier's goroutine and handed to the
+// socket's queue, with nothing between.
+func TestADatastoreChangeReachesTheSocketWithinASecond(t *testing.T) {
+	t.Parallel()
+	acc := newAccess()
+	acc.set("dana", sheet, artifacts.RoleEditor)
+	n := newRoomNode(t, memory.NewBroker(), "node-a", acc, people)
+	dana := n.open(t, "dana")
+	join(t, dana, sheet, 0)
+	committed := time.Now()
+	n.svc.ArtifactDataMoved([]artifactdata.Moved{dataBatch(sheet,
+		delta("notes", "a", artifacts.ReadAll, "dana", `{"x":1}`))})
+	nextOf(t, dana, stream.KindArtifactData)
+	if took := time.Since(committed); took > time.Second {
+		t.Fatalf("a committed change reached the socket after %s, over a second", took)
+	}
+}
+
+// A SOCKET'S PRESENCE FRAMES ARE HELD TO ITS ALLOWANCE: a burst past it is
+// dropped before it reaches the hub.
+func TestPresenceFramesAreHeldToTheirAllowance(t *testing.T) {
+	t.Parallel()
+	counting := &countingPresence{}
+	acc := newAccess()
+	acc.set("dana", sheet, artifacts.RoleViewer)
+	svc := buildService(t, stream.Options{Rooms: stream.Rooms{Access: acc, Stores: stores{},
+		Presence: counting}})
+	b := config.DefaultBootstrap()
+	b.API.Auth.Admin = iam.AdminServe
+	b.API.Auth.Tokens = []config.APIToken{{ID: "dana", Token: "dana-token-long-enough-to-pass",
+		Grants: []iam.Grant{iam.GrantTracker}}}
+	guard := auth.New(&b).BindSeats(auth.SeatBindings{
+		Directory: watchBindings(people), Chart: watchSeats(people)})
+	srv := httptest.NewServer(stream.Handler(guard, auth.NewCSRF(&b), svc, nil))
+	t.Cleanup(srv.Close)
+	n := &roomNode{svc: svc, url: "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/stream"}
+	dana := n.open(t, "dana")
+	join(t, dana, sheet, 0)
+	for range 5 * artifacts.PresenceClientRate {
+		write(t, dana, map[string]any{"kind": "presence", "artifact": sheet.String(),
+			"activity": "editing"})
+	}
+	write(t, dana, map[string]any{"kind": "ping"})
+	nextOf(t, dana, stream.KindPong)
+	time.Sleep(50 * time.Millisecond)
+	if got := counting.updates(); got > artifacts.PresenceClientRate+1 {
+		t.Fatalf("a burst of %d presence frames reached the hub %d times, over the "+
+			"allowance of %d", 5*artifacts.PresenceClientRate, got, artifacts.PresenceClientRate)
+	}
+	if counting.updates() == 0 {
+		t.Fatal("no presence frame reached the hub, so the allowance was never asked")
+	}
+}
+
+// roomReader is an audience for one person's record.
+func roomReader(record string) stream.Audience {
+	return stream.NewAudience(iam.Principal{Kind: iam.KindPerson, Login: record + "@example.com",
+		Seat: record, Stage: iam.StageActive}, nil)
+}
+
+// delta is one changed document as an applier reports it.
+func delta(collection, doc string, read artifacts.ReadRule, createdBy, body string) artifactdata.DocDelta {
+	return artifactdata.DocDelta{Collection: collection, Doc: doc, Version: 42,
+		Body: json.RawMessage(body), Read: read, CreatedBy: createdBy,
+		UpdatedBy: iam.Actor{Name: createdBy, Kind: iam.ActorHuman}, UpdatedAt: clock}
+}
+
+// dataBatch is one store's committed batch through version 42.
+func dataBatch(id artifacts.ID, docs ...artifactdata.DocDelta) artifactdata.Moved {
+	return artifactdata.Moved{Artifact: id, Docs: docs,
+		Writes:  []artifactdata.WriteSummary{{Seq: 42, At: time.Now()}},
+		Through: statelog.Position{Stream: "CREWLET_ARTIFACT_DATA_LOG", Seq: 42}}
+}
+
+// nopPresence is a hub that holds nobody, for a case about the datastore.
+type nopPresence struct{}
+
+func (nopPresence) Join(id artifacts.ID, who presence.Local) (string, artifacts.PresenceRoster, error) {
+	return "s", artifacts.PresenceRoster{Artifact: id}, nil
+}
+func (nopPresence) Update(artifacts.ID, string, artifacts.PresenceActivity, artifacts.Focus) error {
+	return nil
+}
+func (nopPresence) Leave(artifacts.ID, string)                   {}
+func (nopPresence) OnChange(func(presence.Change)) (stop func()) { return func() {} }
+
+// countingPresence counts the presence frames that reached it.
+type countingPresence struct {
+	nopPresence
+	mu sync.Mutex
+	n  int
+}
+
+func (c *countingPresence) Update(artifacts.ID, string, artifacts.PresenceActivity, artifacts.Focus) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n++
+	return nil
+}
+
+func (c *countingPresence) updates() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
+}

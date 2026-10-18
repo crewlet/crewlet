@@ -176,6 +176,7 @@ type Broker struct {
 	subs        map[subKey]*subscription
 	streams     []*streamSub
 	servers     []*serveSub
+	listeners   []*listenSub
 	deadLetters map[string][]*events.Event
 
 	history    []*events.Event
@@ -226,9 +227,9 @@ func (b *Broker) Client(opts ...Option) *Queue {
 //
 // From then on every verb that has to REACH the broker answers [ErrBrokerDown]
 // on every client: Publish, Subscribe, SubscribeBatch, EnsureSubscription,
-// DeleteSubscription, ListSubscriptions, SubscribeStream, Serve and Ask. The
-// verbs about a client's OWN attachments — Quiesce, Unquiesce, Detach,
-// PauseTopic, ResumeTopic — still answer, because on the broker this twin
+// DeleteSubscription, ListSubscriptions, SubscribeStream, Serve, Ask, Broadcast
+// and Listen. The verbs about a client's OWN attachments (Quiesce, Unquiesce,
+// Detach, PauseTopic, ResumeTopic) still answer, because on the broker this twin
 // stands for they are the client's own state and touch no server, and a node
 // that cannot prove it owns a seat quiesces it on exactly the outage this
 // models. Nothing is delivered, and no client is stopped by it: a queue whose
@@ -471,7 +472,7 @@ func (q *Queue) Start(context.Context) error {
 // Attachments, pause holds and quiesce flags are process state; the
 // subscriptions and their retained mail are not. Clearing the holds matters: a
 // hold that outlived a stop left a reused queue silently deaf.
-func (q *Queue) Stop(context.Context) error {
+func (q *Queue) Stop(ctx context.Context) error {
 	q.broker.mu.Lock()
 	if !q.running {
 		q.broker.mu.Unlock()
@@ -486,9 +487,29 @@ func (q *Queue) Stop(context.Context) error {
 	q.broker.streams = slices.DeleteFunc(q.broker.streams, func(s *streamSub) bool {
 		return s.owner == q
 	})
+	// THIS CLIENT'S LISTENERS END WITH ITS CONNECTION, as a core
+	// subscription ends when the connection that made it closes; a peer's
+	// listeners live on.
+	var listening []*listenSub
+	q.broker.listeners = slices.DeleteFunc(q.broker.listeners, func(l *listenSub) bool {
+		if l.owner == q {
+			listening = append(listening, l)
+			return true
+		}
+		return false
+	})
 	q.broker.mu.Unlock()
 
+	var unfinished error
+	for _, l := range listening {
+		if err := l.close(ctx); err != nil {
+			unfinished = errors.Join(unfinished, fmt.Errorf("listener on %s: %w", l.pattern, err))
+		}
+	}
 	log.Info("memory_event_queue_stopped")
+	if unfinished != nil {
+		return fmt.Errorf("memory: stop: %w", unfinished)
+	}
 	return nil
 }
 

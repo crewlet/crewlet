@@ -176,11 +176,12 @@ the engine mirrors no state it would have to keep in step. See
 
 ### Artifacts
 
-Eight more, registered on every node that takes artifact uploads (one with an
+Twelve more, registered on every node that takes artifact uploads (one with an
 object store, a coordination store and a data node to reach), whatever tracker
-or knowledge base the company runs.
-Each tool is named for its authority row, and the operator catalogue serves the
-same eight, so an operator's own assistant publishes exactly as a seat does.
+or knowledge base the company runs: eight for the artifact and four for its
+datastore. Each tool is named for its authority row, and the operator catalogue
+serves the same twelve, so an operator's own assistant publishes and writes
+rows exactly as a seat does.
 
 | Tool | Description |
 |------|-------------|
@@ -191,6 +192,10 @@ same eight, so an operator's own assistant publishes exactly as a seat does.
 | `update_artifact` | The title, description, icon or one version's label |
 | `share_artifact` / `unshare_artifact` | Grant a seat, a unit (`unit:<key>`) or the company (`company`) one role up to editor, or withdraw it. The owner's |
 | `upload_artifact_asset` | Add an image, data file or font to the asset store of an artifact that declares the `assets` capability; the answer's `reference` is the path the page uses |
+| `read_artifact_data` | An artifact's datastore: with no `collection`, its schema (every collection, its columns and who may read and write it); with one, a page of rows (`since` for what changed after an earlier `through`) or one row by `doc` |
+| `query_artifact_data` | Rows of one collection whose indexed fields match every filter in `where`, ordered by `order_by` and paged |
+| `write_artifact_data` | A batch of 1 to 100 ops (`set`, `merge`, `delete`, `increment`, `append`, `add`, `remove`), all or none, each decided by its collection's rules; `if_version` writes a row only if nobody changed it since, and a conflict hands back the rows as they are now |
+| `set_artifact_schema` | Every collection the datastore keeps after a change, with its columns and rules. An agent may tighten a collection's rules and never loosen them |
 
 **Every verb is decided twice inside a turn somebody woke.** The tool reads the
 stored artifact and asks the authority table for the seat, then for whoever the
@@ -203,6 +208,26 @@ company does not know opens no artifact at all. A caller with no relation to an
 artifact is told it does not exist, in exactly the words an id nothing holds is
 answered with. An agent is held to `contributor` on artifacts it does not own
 unless `artifacts.agents_manage_others` lifts it.
+
+**The datastore's rows are the ceiling too.** A row is answered only when the
+person the turn is acting for could read it as well, by the collection's own
+read rule over their role and their record, and a datastore write is stamped
+with the lower of the agent's role and theirs, so the applier's column rules
+refuse for them exactly what they could not write themselves (an agent's own
+artifact excepted, as above, for writes; never for reads). Every row a data
+tool answers is fenced as text its writers wrote (`artifact_row`, naming the
+row's creator and last writer), a conflict's current rows included. A turn
+writes at most **1,000** datastore ops; a retry of a call it lost the answer to
+is not counted again.
+
+**An agent working on an artifact is in its room.** A seat that reads an
+artifact or its data (`get_artifact`, `read_artifact_data`,
+`query_artifact_data`) appears in the artifact's room as an agent, viewing, and
+one that writes it (`publish_artifact`, `update_artifact`,
+`upload_artifact_asset`, `write_artifact_data`, `set_artifact_schema`) as
+editing, focused on the version, collection or row the call named, for 45
+seconds after its last call, and only once the call was allowed. The people
+looking at the artifact see which agent is working on which row.
 
 **A publish names its base.** One over a version somebody published since is
 refused `stale_version` and handed the live version, who published it and

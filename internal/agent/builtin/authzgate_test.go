@@ -229,10 +229,11 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
 			},
 		},
-		Pages:     full.Pages,
-		Knowledge: full.Knowledge,
-		Artifacts: full.Artifacts,
-		Org:       orgOf,
+		Pages:        full.Pages,
+		Knowledge:    full.Knowledge,
+		Artifacts:    full.Artifacts,
+		ArtifactData: full.ArtifactData,
+		Org:          orgOf,
 		// The operator-only verbs: a parked run's answer, a seat's pause
 		// and resume, a note to a running turn and an answer from the
 		// company's knowledge. Each is a seam of its own, and each left

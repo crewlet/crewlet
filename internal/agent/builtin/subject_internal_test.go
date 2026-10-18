@@ -182,5 +182,6 @@ func toolsWithArguments() []tools.Callable {
 		&answerRun{}, &removeProjectFile{},
 		&getArtifact{}, &publishArtifact{}, &updateArtifact{},
 		&shareArtifact{}, &unshareArtifact{}, &uploadArtifactAsset{},
+		&readArtifactData{}, &queryArtifactData{}, &writeArtifactData{}, &setArtifactSchema{},
 	}
 }

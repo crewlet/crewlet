@@ -53,9 +53,11 @@ package queue
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"runtime/debug"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -336,6 +338,44 @@ type StreamHandler func(ctx context.Context, topic string, ev *events.Event)
 // asker's deadline is enforced by the asker, because only the asker knows it.
 type AnswerFunc func(ctx context.Context, request []byte) ([]byte, error)
 
+// ListenFunc handles one broadcast message: the literal subject it was
+// published on and its bytes, exactly as sent.
+//
+// NO CONTEXT AND NO RESULT, because there is nobody to answer: the publisher
+// has moved on, and a broadcast is never redelivered. A handler that cannot use
+// a message drops it, which is what at most once already means.
+type ListenFunc func(subject string, payload []byte)
+
+// LiteralSubject reports why subject cannot be broadcast on, or nil when it can:
+// a non-empty dotted name whose every token is non-empty and none is a pattern
+// token (`*` or `>`).
+//
+// THE CONTRACT'S RULE, SHARED BY BOTH BACKENDS: the broker refuses a publish to
+// a pattern with a protocol error the client reports on its own goroutine, long
+// after the call returned success, so a backend that passed one through would
+// answer "sent" for a message nobody could ever hear, and the twin would match
+// it against every listener's pattern instead. Both refuse it here, before
+// anything is sent.
+func LiteralSubject(subject string) error {
+	if subject == "" {
+		return errors.New("queue: an empty subject names nobody to broadcast to")
+	}
+	for token := range strings.SplitSeq(subject, ".") {
+		switch token {
+		case "":
+			return fmt.Errorf("queue: subject %q has an empty token", subject)
+		case "*", ">":
+			return fmt.Errorf("queue: subject %q is a pattern; a broadcast names one "+
+				"literal subject and a listener names the pattern", subject)
+		}
+		if strings.ContainsAny(token, " \t\r\n") {
+			return fmt.Errorf("queue: subject %q holds whitespace, which ends a "+
+				"subject on the wire", subject)
+		}
+	}
+	return nil
+}
+
 // Unsubscribe cancels a stream subscription and releases backend resources.
 type Unsubscribe func(ctx context.Context) error
 
@@ -609,6 +649,53 @@ type EventQueue interface {
 	// may assume it from Serve's return; it asks, and reads who answered.
 	Serve(ctx context.Context, subject string, h AnswerFunc) (Unsubscribe, error)
 
+	// Broadcast hands payload to every process listening on a pattern
+	// that matches subject, and returns.
+	//
+	// EPHEMERAL, the fan-out counterpart of Ask: no stream, no consumer,
+	// no ack, no retention, no publish listener, no event-store row. A
+	// message nobody is listening for never existed, and a listener that
+	// starts a moment later never hears it. It exists for what is worth
+	// nothing once superseded, presence above all: a cursor or a
+	// heartbeat on a durable verb would be a replicated write per
+	// movement, kept for a retention window nobody reads back.
+	//
+	// AT MOST ONCE AND UNORDERED ACROSS PUBLISHERS. A listener that falls
+	// behind loses messages rather than holding the publisher, and two
+	// processes broadcasting on one subject are heard in whatever order
+	// the broker delivered them. What a message means, and whether a later
+	// one supersedes it, is inside its own bytes.
+	//
+	// A BROKER THIS NODE CANNOT REACH IS REFUSED BEFORE ANYTHING IS SENT,
+	// with ErrUnavailable, for Ask's reason: a message written into a
+	// reconnect buffer is a retained one, delivered after its moment. The
+	// subject is a LITERAL (see [LiteralSubject]): a pattern is what a
+	// listener names, and a broker refuses a publish to one.
+	Broadcast(ctx context.Context, subject string, payload []byte) error
+
+	// Listen makes this process a listener on pattern (`*` one token,
+	// `>` the trailing tokens) until the returned Unsubscribe runs.
+	//
+	// EVERY LISTENER HEARS EVERY MATCHING MESSAGE, Serve's rule rather
+	// than Subscribe's: a broadcast is addressed to whoever is present, so
+	// a group that handed each message to one member would show each room
+	// to a fraction of the fleet.
+	//
+	// ONE MESSAGE AT A TIME PER LISTENER, in the order this process
+	// received them, on a goroutine of the backend's own: a handler never
+	// races itself, and never runs on the publisher's goroutine. A handler
+	// that panics loses that message and keeps its registration.
+	//
+	// The returned Unsubscribe stops delivery and then WAITS for a handler
+	// already running, bounded by the context it is given, so a caller
+	// that withdraws and then tears down what the handler reads never
+	// tears it down under a message still being handled. A handler must
+	// therefore never withdraw its own registration.
+	//
+	// RETURNING MEANS THIS PROCESS'S OWN SERVER HOLDS THE REGISTRATION,
+	// and no more, exactly as for Serve.
+	Listen(ctx context.Context, pattern string, h ListenFunc) (Unsubscribe, error)
+
 	// Start connects the backend and begins consuming.
 	//
 	// WHETHER A BACKEND REQUIRES IT IS ITS OWN ANSWER, and both shipped
@@ -618,13 +705,14 @@ type EventQueue interface {
 	// client live.
 	//
 	// What a backend may NOT do is answer DIFFERENTLY PER VERB. Before
-	// Start, all twelve of the publish, subscription and attachment verbs
-	// must give the same answer — Publish, Subscribe, SubscribeBatch,
-	// Quiesce, Unquiesce, Detach, EnsureSubscription, DeleteSubscription,
-	// ListSubscriptions, SubscribeStream, PauseTopic and ResumeTopic.
-	// Either they all refuse, or none of them require it.
-	// Capabilities.RequiresStart says which, and queuetest sends all
-	// twelve to hold a backend to one answer.
+	// Start, all sixteen of the publish, subscription, attachment and
+	// ephemeral verbs must give the same answer: Publish, Subscribe,
+	// SubscribeBatch, Quiesce, Unquiesce, Detach, EnsureSubscription,
+	// DeleteSubscription, ListSubscriptions, SubscribeStream, PauseTopic,
+	// ResumeTopic, Serve, Ask, Broadcast and Listen. Either they all
+	// refuse, or none of them require it. Capabilities.RequiresStart says
+	// which, and queuetest sends all sixteen to hold a backend to one
+	// answer.
 	//
 	// A caller cannot reason about a lifecycle whose rules change per
 	// method, and this is not hypothetical: a twin that refused Publish
@@ -680,7 +768,7 @@ type EventQueue interface {
 
 	// Stop closes the connection.
 	//
-	// AFTERWARDS EVERY ONE OF THE TWELVE VERBS REFUSES. A requirement
+	// AFTERWARDS EVERY ONE OF THE SIXTEEN VERBS REFUSES. A requirement
 	// rather than a capability, and the asymmetry with the pre-Start rule
 	// is the point: "not connected yet" is a state a backend may
 	// legitimately not have — JetStream's Open connects, so there is

@@ -178,6 +178,11 @@ type ArtifactDeps struct {
 	// sandbox, which is a node with no sandbox runtime.
 	Boxes ArtifactBoxes
 
+	// Presence puts a seat that reads or writes an artifact in the
+	// artifact's room, as an agent, viewing or editing. Nil tells nobody,
+	// which is a node with no presence hub.
+	Presence ArtifactPresence
+
 	// Link is the dashboard's address of an artifact, built on
 	// `api.external_url`, or empty where the deployment names none. Every
 	// answer that names an artifact carries it, so an agent composes no
@@ -228,6 +233,19 @@ func (d ArtifactDeps) link(id artifacts.ID) string {
 		return ""
 	}
 	return d.Link(id)
+}
+
+// present puts a seat's call on artifact id in the artifact's room, after the
+// call was decided: an agent reading it is viewing and one writing it editing,
+// focused where the call named. A person's call (an operator's assistant) is
+// not presence: their own tab is.
+func (d ArtifactDeps) present(c artifactCaller, id artifacts.ID,
+	activity artifacts.PresenceActivity, focus artifacts.Focus) {
+
+	if d.Presence == nil || !c.agent() || c.principal.Seat == "" {
+		return
+	}
+	d.Presence.Touch(id, c.principal.Seat, activity, focus)
 }
 
 // orgFor is the chart a call reads: the turn's, or the surface's own.
