@@ -927,38 +927,37 @@ seat's own initials wearing a key on its corner (the kit's `Avatar` `mark`), so
 the face says who and the corner says how; a credential bound to no seat keeps
 the key as its whole face. Which credential it is comes from the login's
 grammar (`lib/login.ts`), never the session's `kind`, which the engine answers
-`person` for a token acting as a seat. The name of anybody resolved
-**opens their own [Account](#account-the-readers-own-page)**, where the
-password, the second factor and the sessions are. It linked to the seat, which
-is the company's page about a place in the chart and has none of them: a
-person clicking their own name to find their account met a profile with no
-security on it, and concluded the dashboard had no two-step verification. The
-seat is one click on, from Account's Profile. **The link says where it goes**:
-its accessible name ends ", your account", its title is the Account row's own
-hint (the one description the palette, the popover and Settings show), and at
-rest it wears the rail's pressable mark, a chevron in quiet ink — it was
-titled with the reader's access and drew no mark until hovered, so nothing on
-the page said it was the way to a password. The reader's access is said in the
-popover, under the login, as the one line People & access uses for it
-("Admin", "Tracker · Knowledge", "Overview only"). **And it is the Account's row**: the Account has no
+`person` for a token acting as a seat. **Pressing the name opens the reader's own menu.** For anybody resolved, the
+row is a menu button (the kit's `AccountRow` `menu`), named by the reader and
+", your menu", ending in the up-and-down chevron a menu's trigger draws. **The
+menu says only what the row does not**: its header is the reader's access, the
+one line People & access uses for it ("Admin", "Tracker · Knowledge",
+"Overview only"), and under it come **Account** (the one workspace with no
+sidebar row of its own, `place: "menu"` in `app/nav.ts`, where the password,
+the second factor and the sessions are), then **Sign out** and **Sign out
+everywhere**, the latter in the danger ink and saying what it ends. The name
+used to link straight to the Account while the session's gestures sat in a
+second popover beside it, mixed with the preferences and opening on "Signed in
+as" over the very login the row had just said. The sign-outs stay in this
+menu because it is reached even by a person the socket refuses; see
+[Signing in](#signing-in-is-a-screen-outside-the-frame). It linked to the seat
+once, which is the company's page about a place in the chart and has none of
+what a person looks for: a person clicking their own name to find their
+account met a profile with no security on it, and concluded the dashboard had
+no two-step verification. **And it is the Account's row**: the Account has no
 sidebar row, so on `#/account` the block is marked current exactly as a row is
-on its own page — raised, with the hairline, no hue. **A session read that
+on its own page, raised, with the hairline, no hue. **A session read that
 failed is not nobody**: where `GET /auth/session` failed (a 503, the network)
 rather than being refused, the browser may hold a session, so the block says
-it could not tell who this is and still offers the Account — whose page says
-what its own read finds — and the sign-out of this browser. It sits beside one
-control, the **preferences** (the row had a one-press mode flip too, which with
-the link's chevron left a name already cut short by the rail's width two glyph
-buttons to share it with): the mode (light, match the system, dark), the density and
-the theme. The two switchers draw one box of three equal cells each, so a row
-of glyphs and a row of letters read as the same control; the theme is a select
-whose options carry each theme's two halves as a chip, its name and its tag,
-and whose list previews (see [Mode and theme](#mode-and-theme)). Its popover
-also holds the session's own gestures — a link to the reader's
-[Account](#account-the-readers-own-page), the one workspace with no sidebar row
-of its own (`place: "menu"` in `app/nav.ts`), and both sign-outs, which stay in
-the popover because it is reached even by a person the socket refuses; see
-[Signing in](#signing-in-is-a-screen-outside-the-frame). The preferences are
+it could not tell who this is and its menu still offers the Account (whose
+page says what its own read finds) and the sign-out of this browser; nobody is
+offered **Sign in**. Beside the row sits one control, **Preferences**, drawn
+with a palette and holding nothing else: the mode (light, match the system,
+dark), the density and the theme. The two switchers draw one box of three
+equal cells each, so a row of glyphs and a row of letters read as the same
+control; the theme is a select whose options carry each theme's two halves as
+a chip, its name and its tag, and whose list previews (see
+[Mode and theme](#mode-and-theme)). The preferences are
 per browser and none is the company's: every key the
 dashboard keeps in browser storage is declared in one table
 (`lib/storage.ts`), and a key no build reads any more is listed there as
@@ -1830,7 +1829,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | Piece | What it is |
 |---|---|
 | `sidebar/` | the one sidebar ([The sidebar](#the-sidebar)), with the engine panel and the user block |
-| `sidebar/UserBlock` | who is signed in, at the sidebar's foot, called by their OWN name and never their seat's (`readerName`: their directory row's name as `GET /auth/session` answers it, else their login): bound (that name, the login where it is not the name, and the seat — its name off the chart, or `@handle` where the chart is unread — the seat's kind never captioned, since every binding is to a human seat), a credential acting as a seat (a Tier A token or a service account bound to a human seat: the seat's name, "via API token review" under it, and the seat's initials with a key on the corner), unbound (the same name and login, and *No seat* — a Tier A token's session or a service account acting as itself, which is ordinary; never a person, who holds a human seat for as long as they are here ([ADR-0032](../../adr/0032-every-person-holds-a-human-seat.md))) or nobody (a **Sign in** button back to the screen they are on); a session read that FAILED says it could not tell who this is and still offers the Account and the sign-out. The name of anybody resolved is a link to the reader's own [Account](#account-the-readers-own-page) — never the seat, which holds none of what a person looks for there — named ", your account", titled with the Account row's hint, wearing a chevron at rest, and marked current on `#/account`, where it stands in for the row the Account does not have. Its popover holds the same link (`place: "menu"` in `app/nav.ts`) — where the password, the second factor and recovery codes, the sessions and the personal access tokens are — and both sign-outs, which need only `GET /auth/session` to answer — the frame's one read of it (`lib/frameSession.ts`), never one of the block's own: while the socket's `viewer` question has not (it never does for a person the socket refuses, or never dials for), a session is offered the two sign-outs under its own login. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
+| `sidebar/UserBlock` | who is signed in, at the sidebar's foot, called by their OWN name and never their seat's (`readerName`: their directory row's name as `GET /auth/session` answers it, else their login): bound (that name, the login where it is not the name, and the seat — its name off the chart, or `@handle` where the chart is unread — the seat's kind never captioned, since every binding is to a human seat), a credential acting as a seat (a Tier A token or a service account bound to a human seat: the seat's name, "via API token review" under it, and the seat's initials with a key on the corner), unbound (the same name and login, and *No seat* — a Tier A token's session or a service account acting as itself, which is ordinary; never a person, who holds a human seat for as long as they are here ([ADR-0032](../../adr/0032-every-person-holds-a-human-seat.md))) or nobody (a **Sign in** button back to the screen they are on); a session read that FAILED says it could not tell who this is and still offers the Account and the sign-out. Pressing the name of anybody resolved opens the reader's own menu (the kit's `AccountRow` `menu`, named ", your menu", marked current on `#/account`, where it stands in for the row the Account does not have): their access as its header, then the reader's own [Account](#account-the-readers-own-page) (`place: "menu"` in `app/nav.ts`; never the seat, which holds none of what a person looks for there), where the password, the second factor and recovery codes, the sessions and the personal access tokens are, and both sign-outs, which need only `GET /auth/session` to answer — the frame's one read of it (`lib/frameSession.ts`), never one of the block's own: while the socket's `viewer` question has not (it never does for a person the socket refuses, or never dials for), a session is offered the two sign-outs under its own login. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
 | `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav`), with a lock naming what a section closed to the reader lacks (`sectionOpen`; drawn only once somebody has said what the reader holds), each row's hint as its title, and an arrow on a cross-link. A screen whose design keeps the star in a menu rather than in the bar gets no star from the frame (`useOwnStar`): a knowledge page, whose More carries it, and Knowledge's landing, whose pages are each starred from their own More |
 | `routes.ts` + `crumbs.ts` | the route table as a pure resolver, and the trail derived from it |
 | `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the one width the dashboard derives itself — where the peek becomes a column |
@@ -6865,8 +6864,8 @@ when it resets.
 
 ## Account: the reader's own page
 
-`#/account` is the signed-in reader's own page, opened from **their own name**
-in the user block at the sidebar's foot, from that block's menu, from
+`#/account` is the signed-in reader's own page, opened from **the menu their
+own name opens** in the user block at the sidebar's foot, from
 Settings' **You** group, from the **Your account** card on their own seat's
 page and on its peek, from the palette or with `g u`. It has **no sidebar row**: the user
 block already is the reader, and a row beside it would be the same person
