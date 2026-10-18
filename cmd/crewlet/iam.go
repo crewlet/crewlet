@@ -1352,6 +1352,13 @@ func (p *iamPrinter) audit(asked url.Values, answer map[string]any, err error) e
 
 // invite prints the link ONCE, which is the only time it exists — and none for
 // an invitation nobody can confirm ([iamPrinter.settled]).
+//
+// AND WHERE THE ISSUE STANDS, as every write here says ([iamPrinter.outcome]):
+// it printed the link alone, so an invitation this node had made durable and
+// NOT applied — a 202, whose link opens only where the record has been applied
+// — read exactly like one the next read here shows. The link is printed on
+// `pending` too, for a create's reason: the record is durable, and the link
+// opens on every node that has applied it.
 func (p *iamPrinter) invite(answer map[string]any, err error) error {
 	if err != nil {
 		return err
@@ -1362,8 +1369,9 @@ func (p *iamPrinter) invite(answer map[string]any, err error) error {
 	if p.raw {
 		return p.dump(answer)
 	}
-	fmt.Fprintf(p.w, "invitation %s\n%s\n\n", str(answer["id"]),
-		str(answer["url"]))
+	fmt.Fprintf(p.w, "invitation %s\n", str(answer["id"]))
+	p.outcome(answer)
+	fmt.Fprintf(p.w, "%s\n\n", str(answer["url"]))
 	fmt.Fprintf(p.w, "expires %s\n", stamp(answer["expires_at"]))
 	fmt.Fprintln(p.w, "This link is shown once. Send it to them "+
 		"yourself; Crewlet doesn't send email.")

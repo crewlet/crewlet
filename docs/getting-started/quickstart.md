@@ -547,9 +547,10 @@ spend and schedules — just not its tracker, its knowledge base or its chat.
 
 **From a shell instead**, `crewlet iam invite` issues the same invitation
 through the running node, authenticating with `CREWLET_API_TOKEN` like every
-command that talks to one, and prints its link once. `-seat` is required —
-every invitation names the seat its redemption binds — and `crewlet iam seats
--unheld` lists the human seats nothing holds yet:
+command that talks to one, and prints where the issue stands and its link
+once. `-seat` is required — every invitation names the seat its redemption
+binds — and `crewlet iam seats -unheld` lists the human seats nothing holds
+yet:
 
 ```bash
 export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
@@ -562,6 +563,7 @@ on an invitation it sends every app and not admin.
 
 ```
 invitation 0192f4c8-…
+applied at CREWLET_IAM_LOG@0:3 (op 0192f4c7-…)
 http://localhost:8000/dashboard#/invite/0192f4c8-….kR3…
 
 expires 2026-06-21 12:00

@@ -739,13 +739,24 @@ func TestTheTrailPrintsATokensGestureAsOne(t *testing.T) {
 	}
 }
 
-// A WRITE SAYS WHETHER IT LANDED HERE, read off the answer's outcome.
+// EVERY KEYED WRITE SAYS WHETHER IT LANDED HERE, read off the answer's outcome
+// — an invitation's issue among them.
 //
 // The printer said "applied at" for every 2xx, so a write the node had made
 // durable and not yet applied — a 202, which a read there does not show yet —
-// was reported as applied. Mutation: print "applied" for every success again
-// and the pending case reads as applied.
+// was reported as applied. And `invite` printed its link and nothing else, so
+// an issue this node had not applied read exactly like one the next read here
+// shows, though the usage and cli.md say every write prints its outcome. A
+// link is printed on `pending` too: the record is durable, and it opens on
+// every node that has applied it. Every row of [iamKeyedArgs] is asked, so a
+// keyed write that stops saying where it stands is a row that fails.
+// Mutation: print "applied" for every success again and the pending rows read
+// as applied; drop the line from the invitation's printer and its rows fail;
+// print an invitation's link only on applied and its pending row fails.
 func TestAnIamWriteSaysWhetherItLandedHere(t *testing.T) {
+	t.Parallel()
+	const link = "https://crewlet.example.com/dashboard#/invite/x-1.s3cr3t"
+	cfg := bootstrapWithKeyring(t, "k1")
 	for _, tc := range []struct {
 		status  int
 		outcome string
@@ -753,30 +764,35 @@ func TestAnIamWriteSaysWhetherItLandedHere(t *testing.T) {
 		{http.StatusOK, "applied"},
 		{http.StatusAccepted, "pending"},
 	} {
-		node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(tc.status)
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": "p-1",
-				"outcome": tc.outcome, "position": "CREWLET_IAM_LOG@0:9",
-				"op_id": "people:update:p-1:k"})
-		}))
-		t.Setenv(apiTokenEnv, "a-tier-a-token")
-		cfg := bootstrapWithKeyring(t, "k1")
-		var out, errs bytes.Buffer
-		err := run([]string{"iam", "suspend", "p-1", "-config", cfg, "-api",
-			node.URL}, &out, &errs)
-		node.Close()
-		if err != nil {
-			t.Fatalf("a %s suspension failed: %v", tc.outcome, err)
-		}
-		want := tc.outcome + " at CREWLET_IAM_LOG@0:9 (op people:update:p-1:k)"
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("a %s write printed %q, want it to say %q", tc.outcome,
-				out.String(), want)
-		}
-		if tc.outcome == "pending" && strings.Contains(out.String(), "applied") {
-			t.Errorf("a pending write was reported as applied: %q", out.String())
-		}
+		t.Run(tc.outcome, func(t *testing.T) {
+			t.Parallel()
+			node := newFakeKeyedNode(t)
+			node.status = tc.status
+			node.body = map[string]any{"id": "x-1", "outcome": tc.outcome,
+				"position": "CREWLET_IAM_LOG@0:9", "op_id": "people:update:p-1:k",
+				"url": link}
+			for sub, args := range iamKeyedArgs {
+				var out, errs bytes.Buffer
+				err := runIAM(tokenEnviron("a-tier-a-token"), append(slices.Clone(args),
+					"-config", cfg, "-api", node.server.URL), nil, &out, &errs)
+				if err != nil {
+					t.Errorf("iam %s: a %s write failed: %v", sub, tc.outcome, err)
+					continue
+				}
+				printed := out.String()
+				want := tc.outcome + " at CREWLET_IAM_LOG@0:9 (op people:update:p-1:k)"
+				if !strings.Contains(printed, want) {
+					t.Errorf("a %s iam %s printed %q, want it to say %q", tc.outcome,
+						sub, printed, want)
+				}
+				if tc.outcome == "pending" && strings.Contains(printed, "applied") {
+					t.Errorf("a pending iam %s was reported as applied: %q", sub, printed)
+				}
+				if (sub == "invite" || sub == "create") && !strings.Contains(printed, link) {
+					t.Errorf("a %s iam %s printed no link:\n%s", tc.outcome, sub, printed)
+				}
+			}
+		})
 	}
 }
 
