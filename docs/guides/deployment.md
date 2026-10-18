@@ -89,10 +89,10 @@ from the disk that would be scaled below 1 GiB is **held at 1 GiB** instead,
 and a log whose own default is smaller than that is held at what it asked
 for — so:
 
-- **A first boot needs at least 7.5 GiB free on that volume.** Three
-  quarters of it, 5.6 GiB, holds the 5.5 GiB the six logs reserve at their
+- **A first boot needs at least 8.7 GiB free on that volume.** Three
+  quarters of it, 6.5 GiB, holds the 6.5 GiB the seven logs reserve at their
   smallest: 1 GiB each for the mutation log, the vector changelog, the
-  knowledge base's log and the artifacts log, the usage log's flat 1 GiB
+  knowledge base's log, the artifacts log and the artifact datastore's log, the usage log's flat 1 GiB
   default, and the identity estate's flat 512 MiB default. Below that the node refuses
   to boot with an error naming the log it could not reserve, the bytes it
   needed, the bytes the broker had left, and the Tier A field that sets the
@@ -106,18 +106,19 @@ for — so:
 - **More room buys longer logs, up to a point.** Unset, the mutation log and
   the vector changelog each ask for a quarter of the free space (4..64 GiB),
   the knowledge base's log and the artifacts log each for a quarter of the
-  mutation log's, the identity
+  mutation log's, the artifact datastore's log for half of it, the identity
   estate's log for a flat 512 MiB and the usage log for a flat 1 GiB — neither
   of the last two is derived from the disk at all, because the identity log
   grows with headcount and the usage log's size is a count of node-days rather
   than a rate, so more disk buys either nothing. They are scaled down together
   whenever they ask for more than half the free space, which on a first boot
-  is every volume with less than about 323 GiB free (at their clamps the six
-  ask for about 161 GiB); from there up each log gets what it asked for.
+  is every volume with less than about 387 GiB free (at their clamps the seven
+  ask for about 193 GiB); from there up each log gets what it asked for.
 - **The ceilings are fixed when the streams are created.** Moving the node to
   a bigger volume, or setting `stream.tracker_log_max_bytes`,
   `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
-  `stream.artifacts_log_max_bytes`, `stream.iam_log_max_bytes` or
+  `stream.artifacts_log_max_bytes`, `stream.artifact_data_log_max_bytes`,
+  `stream.iam_log_max_bytes` or
   `stream.usage_log_max_bytes` later, changes nothing about streams that
   already exist; `crewlet retention set-capacity` is what changes a running
   log's ceiling. A log derived from the disk that is created later — one a new
@@ -548,9 +549,10 @@ node — the donor [dials again](retention.md) by itself.
 **The account needs more than publish and subscribe.** A node creates what it
 uses, on every start and idempotently: the seven engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the six state-log
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the seven state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
-`CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_USAGE_LOG`, `CREWLET_ARTIFACTS_LOG`), a stream per extra subject namespace a company
+`CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_USAGE_LOG`, `CREWLET_ARTIFACTS_LOG`,
+`CREWLET_ARTIFACT_DATA_LOG`), a stream per extra subject namespace a company
 publishes under, one durable consumer per seat mailbox (an ordinary API
 call, measured at 1.7 ms), the twenty-one `crewlet_*` KV buckets:
 three in the lease store, holding the seat and presence leases, the duty
