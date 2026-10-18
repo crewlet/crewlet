@@ -135,38 +135,6 @@ func artifactID(raw string) (artifacts.ID, error) {
 const artifactsOpIDUsage = "retry an `unknown` outcome with the id it printed, so the " +
 	"retry is the same operation; empty starts a new one"
 
-// operation is the id a write is sent under: the one the operator brought,
-// held to the node's rule before anything is sent, or a fresh one.
-func operation(given, name string) (string, error) {
-	if given = strings.TrimSpace(given); given == "" {
-		return statelog.NewOpID(time.Now(), name), nil
-	}
-	if err := statelog.CheckCallerOpID(given); err != nil {
-		return "", fmt.Errorf("-op-id: %w", err)
-	}
-	return given, nil
-}
-
-// unknownOutcome turns an answer that never came, or one that could not be
-// accounted for, into the sentence that says how to retry it.
-func unknownOutcome(err error, gesture, op string) error {
-	retry := fmt.Sprintf("run the same command again with -op-id %s, so the retry is this "+
-		"operation rather than a second one", op)
-	var lost noAnswer
-	if errors.As(err, &lost) {
-		return fmt.Errorf("%w\n\nWhether the %s landed is unknown: %s", err, gesture, retry)
-	}
-	var refused *nodeRefusal
-	if errors.As(err, &refused) && refused.Unsettled {
-		if refused.Unvouched {
-			return fmt.Errorf("%w\n\nThis node cannot tell whether it landed: run it through "+
-				"another node with -api <that node> -op-id %s, never a fresh id", err, op)
-		}
-		return fmt.Errorf("%w\n\nTo find out, %s", err, retry)
-	}
-	return err
-}
-
 // write sends one keyed JSON write and decodes its answer.
 func (c *nodeClient) write(ctx context.Context, method, path, key string, header http.Header,
 	body, into any) error {
@@ -193,9 +161,12 @@ type writtenAnswer struct {
 	OpID    string `json:"op_id"`
 }
 
-// gesture runs one keyed write on an artifact and prints what landed.
+// gesture runs one keyed write on an artifact and prints what landed: send
+// returns what it did and the answer, and an answer that leaves the outcome
+// open is finished by the one rule every keyed write follows ([keyedWrite]).
 func gesture(environ config.Source, args []string, stdout, stderr io.Writer, name string,
-	need int, what string, send func(c *nodeClient, pos []string, key string) (string, error),
+	need int, what string,
+	send func(c *nodeClient, pos []string, key string) (string, writtenAnswer, error),
 	extra func(*flag.FlagSet)) error {
 
 	pos, rest, err := positionals(args, need, what)
@@ -212,15 +183,20 @@ func gesture(environ config.Source, args []string, stdout, stderr io.Writer, nam
 	if err != nil {
 		return err
 	}
-	key, err := operation(*opID, name)
+	key, err := operationFor(name, *opID)
 	if err != nil {
 		return err
 	}
-	done, err := send(client, pos, key)
+	write := keyedWrite{gesture: name, operation: key,
+		check: "the artifact (`crewlet artifacts get " + pos[0] + "`)"}
+	done, answer, err := send(client, pos, key)
 	if err != nil {
-		return unknownOutcome(err, name, key)
+		return write.settle(stderr, err)
 	}
-	fmt.Fprintln(stdout, done)
+	if err := write.confirmed(name+" "+pos[0], answer.Outcome); err != nil {
+		return err
+	}
+	fmt.Fprintln(stdout, outcomeLine(done, answer))
 	return nil
 }
 
@@ -544,18 +520,18 @@ func ifMatchHeader(n int) http.Header {
 func artifactsRestore(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	var label *string
 	return gesture(environ, args, stdout, stderr, "restore", 2, "the artifact and the version to restore",
-		func(c *nodeClient, pos []string, key string) (string, error) {
+		func(c *nodeClient, pos []string, key string) (string, writtenAnswer, error) {
 			id, err := artifactID(pos[0])
 			if err != nil {
-				return "", err
+				return "", writtenAnswer{}, err
 			}
 			n, err := strconv.Atoi(pos[1])
 			if err != nil || n < 1 {
-				return "", fmt.Errorf("%q is not a version number", pos[1])
+				return "", writtenAnswer{}, fmt.Errorf("%q is not a version number", pos[1])
 			}
 			base, err := headOf(c, id)
 			if err != nil {
-				return "", err
+				return "", writtenAnswer{}, err
 			}
 			var answer struct {
 				writtenAnswer
@@ -564,30 +540,30 @@ func artifactsRestore(environ config.Source, args []string, stdout, stderr io.Wr
 			if err := c.write(context.Background(), http.MethodPost,
 				"/artifacts/"+id.String()+"/versions/"+strconv.Itoa(n)+"/restore", key,
 				ifMatchHeader(base), map[string]string{"label": *label}, &answer); err != nil {
-				return "", err
+				return "", writtenAnswer{}, err
 			}
-			return outcomeLine(fmt.Sprintf("restored version %d of %s as version %d", n, id,
-				answer.Number), answer.writtenAnswer), nil
+			return fmt.Sprintf("restored version %d of %s as version %d", n, id,
+				answer.Number), answer.writtenAnswer, nil
 		}, func(fs *flag.FlagSet) { label = fs.String("label", "", "a label for the new version") })
 }
 
 func artifactsLabel(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	return gesture(environ, args, stdout, stderr, "label", 3, "the artifact, the version and the label",
-		func(c *nodeClient, pos []string, key string) (string, error) {
+		func(c *nodeClient, pos []string, key string) (string, writtenAnswer, error) {
 			id, err := artifactID(pos[0])
 			if err != nil {
-				return "", err
+				return "", writtenAnswer{}, err
 			}
 			if _, err := strconv.Atoi(pos[1]); err != nil {
-				return "", fmt.Errorf("%q is not a version number", pos[1])
+				return "", writtenAnswer{}, fmt.Errorf("%q is not a version number", pos[1])
 			}
 			var answer writtenAnswer
 			if err := c.write(context.Background(), http.MethodPatch,
 				"/artifacts/"+id.String()+"/versions/"+pos[1], key, nil,
 				map[string]string{"label": pos[2]}, &answer); err != nil {
-				return "", err
+				return "", writtenAnswer{}, err
 			}
-			return outcomeLine(fmt.Sprintf("labelled version %s of %s %q", pos[1], id, pos[2]), answer), nil
+			return fmt.Sprintf("labelled version %s of %s %q", pos[1], id, pos[2]), answer, nil
 		}, nil)
 }
 
@@ -623,14 +599,14 @@ func artifactsUpdate(environ config.Source, args []string, stdout, stderr io.Wri
 	var fs *flag.FlagSet
 	var title, description, icon *string
 	return gesture(environ, args, stdout, stderr, "update", 1, "the artifact",
-		func(c *nodeClient, pos []string, key string) (string, error) {
+		func(c *nodeClient, pos []string, key string) (string, writtenAnswer, error) {
 			id, err := artifactID(pos[0])
 			if err != nil {
-				return "", err
+				return "", writtenAnswer{}, err
 			}
 			named := namedHeadFields(fs)
 			if len(named) == 0 {
-				return "", errors.New("name what to change: -title, -description or -icon")
+				return "", writtenAnswer{}, errors.New("name what to change: -title, -description or -icon")
 			}
 			values := map[string]*string{"title": title, "description": description, "icon": icon}
 			body := map[string]string{}
@@ -640,9 +616,9 @@ func artifactsUpdate(environ config.Source, args []string, stdout, stderr io.Wri
 			var answer writtenAnswer
 			if err := c.write(context.Background(), http.MethodPatch, "/artifacts/"+id.String(),
 				key, nil, body, &answer); err != nil {
-				return "", err
+				return "", writtenAnswer{}, err
 			}
-			return outcomeLine(fmt.Sprintf("updated the %s of %s", fieldList(named), id), answer), nil
+			return fmt.Sprintf("updated the %s of %s", fieldList(named), id), answer, nil
 		}, func(set *flag.FlagSet) {
 			fs = set
 			title, description, icon = headFlags(set, "to set", "")
@@ -659,49 +635,49 @@ func fieldList(fields []string) string {
 
 func artifactsShare(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	return gesture(environ, args, stdout, stderr, "share", 3, "the artifact, the audience and the role",
-		func(c *nodeClient, pos []string, key string) (string, error) {
+		func(c *nodeClient, pos []string, key string) (string, writtenAnswer, error) {
 			id, err := artifactID(pos[0])
 			if err != nil {
-				return "", err
+				return "", writtenAnswer{}, err
 			}
 			audience, err := artifacts.ParseAudience(pos[1])
 			if err != nil {
-				return "", fmt.Errorf("the audience is seat:<handle>, unit:<key> or company: %w", err)
+				return "", writtenAnswer{}, fmt.Errorf("the audience is seat:<handle>, unit:<key> or company: %w", err)
 			}
 			role := artifacts.Role(pos[2])
 			if !slices.Contains(artifacts.ShareableRoles, role) {
-				return "", fmt.Errorf("the role is one of %v: ownership moves only by transfer",
+				return "", writtenAnswer{}, fmt.Errorf("the role is one of %v: ownership moves only by transfer",
 					artifacts.ShareableRoles)
 			}
 			var answer writtenAnswer
 			if err := c.write(context.Background(), http.MethodPut, "/artifacts/"+id.String()+"/shares",
 				key, nil, map[string]any{"audience": audience, "role": role}, &answer); err != nil {
-				return "", err
+				return "", writtenAnswer{}, err
 			}
-			return outcomeLine(fmt.Sprintf("shared %s with %s as %s", id, audienceText(audience), role),
-				answer), nil
+			return fmt.Sprintf("shared %s with %s as %s", id, audienceText(audience), role),
+				answer, nil
 		}, nil)
 }
 
 func artifactsUnshare(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	return gesture(environ, args, stdout, stderr, "unshare", 2, "the artifact and the audience",
-		func(c *nodeClient, pos []string, key string) (string, error) {
+		func(c *nodeClient, pos []string, key string) (string, writtenAnswer, error) {
 			id, err := artifactID(pos[0])
 			if err != nil {
-				return "", err
+				return "", writtenAnswer{}, err
 			}
 			audience, err := artifacts.ParseAudience(pos[1])
 			if err != nil {
-				return "", fmt.Errorf("the audience is seat:<handle>, unit:<key> or company: %w", err)
+				return "", writtenAnswer{}, fmt.Errorf("the audience is seat:<handle>, unit:<key> or company: %w", err)
 			}
 			var answer writtenAnswer
 			if err := c.write(context.Background(), http.MethodDelete,
 				"/artifacts/"+id.String()+"/shares/"+audienceText(audience), key, nil, nil,
 				&answer); err != nil {
-				return "", err
+				return "", writtenAnswer{}, err
 			}
-			return outcomeLine(fmt.Sprintf("withdrew %s's share of %s", audienceText(audience), id),
-				answer), nil
+			return fmt.Sprintf("withdrew %s's share of %s", audienceText(audience), id),
+				answer, nil
 		}, nil)
 }
 
@@ -710,17 +686,17 @@ func statusGesture(environ config.Source, args []string, stdout, stderr io.Write
 	suffix, done string) error {
 
 	return gesture(environ, args, stdout, stderr, name, 1, "the artifact",
-		func(c *nodeClient, pos []string, key string) (string, error) {
+		func(c *nodeClient, pos []string, key string) (string, writtenAnswer, error) {
 			id, err := artifactID(pos[0])
 			if err != nil {
-				return "", err
+				return "", writtenAnswer{}, err
 			}
 			var answer writtenAnswer
 			if err := c.write(context.Background(), method, "/artifacts/"+id.String()+suffix, key,
 				nil, nil, &answer); err != nil {
-				return "", err
+				return "", writtenAnswer{}, err
 			}
-			return outcomeLine(done+" "+id.String(), answer), nil
+			return done + " " + id.String(), answer, nil
 		}, nil)
 }
 
@@ -739,21 +715,21 @@ func artifactsUntrash(environ config.Source, args []string, stdout, stderr io.Wr
 func artifactsPurge(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	var confirm *string
 	return gesture(environ, args, stdout, stderr, "purge", 1, "the artifact",
-		func(c *nodeClient, pos []string, key string) (string, error) {
+		func(c *nodeClient, pos []string, key string) (string, writtenAnswer, error) {
 			id, err := artifactID(pos[0])
 			if err != nil {
-				return "", err
+				return "", writtenAnswer{}, err
 			}
 			if strings.TrimSpace(*confirm) != id.String() {
-				return "", fmt.Errorf("a purge destroys %s and its data for good: repeat its id as "+
+				return "", writtenAnswer{}, fmt.Errorf("a purge destroys %s and its data for good: repeat its id as "+
 					"-confirm %s", id, id)
 			}
 			var answer writtenAnswer
 			if err := c.write(context.Background(), http.MethodPost, "/artifacts/"+id.String()+"/purge",
 				key, nil, nil, &answer); err != nil {
-				return "", err
+				return "", writtenAnswer{}, err
 			}
-			return outcomeLine("purged "+id.String(), answer), nil
+			return "purged " + id.String(), answer, nil
 		}, func(fs *flag.FlagSet) {
 			confirm = fs.String("confirm", "", "the artifact's id again: nothing undoes a purge")
 		})
@@ -1002,10 +978,15 @@ func artifactsPublish(environ config.Source, args []string, stdout, stderr io.Wr
 				"`crewlet artifacts update %s -%s ...`", named[0], *target, named[0])
 		}
 	}
-	key, err := operation(*opID, "publish")
+	key, err := operationFor("publish", *opID)
 	if err != nil {
 		return err
 	}
+	check := "your artifacts (`crewlet artifacts list`)"
+	if *target != "" {
+		check = "the artifact's versions (`crewlet artifacts versions " + *target + "`)"
+	}
+	write := keyedWrite{gesture: "publish", operation: key, check: check}
 	files, err := collectFiles(pos[0], exclude)
 	if err != nil {
 		return err
@@ -1024,12 +1005,10 @@ func artifactsPublish(environ config.Source, args []string, stdout, stderr io.Wr
 			return err
 		}
 	}
-	p := publishing{client: client, files: files, key: key, stdout: stdout}
+	p := publishing{client: client, files: files, write: write, stdout: stdout}
 	head := newHead{title: *title, description: *description, icon: *icon, kind: created}
-	if err := p.run(*target, entryPath, head, *label, *contract, *item, *force, caps.list); err != nil {
-		return unknownOutcome(err, "publish", key)
-	}
-	return nil
+	return write.settle(stderr, p.run(*target, entryPath, head, *label, *contract, *item,
+		*force, caps.list))
 }
 
 // capabilitiesFlag is `-capabilities`. It remembers whether it was named at
@@ -1078,8 +1057,12 @@ func joinCapabilities(caps []artifacts.Capability, sep string) string {
 type publishing struct {
 	client *nodeClient
 	files  []localFile
-	key    string
 	stdout io.Writer
+
+	// write is the publish's operation: the upload intent is sent under its
+	// key and the publish under a step of it, so a retry under -op-id is
+	// answered the same upload and lands the same version.
+	write keyedWrite
 }
 
 // newHead is what a publish that creates an artifact says about it; a new
@@ -1117,7 +1100,7 @@ func (p publishing) run(target, entry string, head newHead, label, contract, ite
 	// THE INTENT FIRST, under the invocation's key, so a retry is answered
 	// the same upload; the publish under a step of it.
 	var intent artifacts.UploadIntent
-	if err := p.client.write(ctx, http.MethodPost, intentPath, p.key, nil,
+	if err := p.client.write(ctx, http.MethodPost, intentPath, p.write.operation, nil,
 		artifacts.UploadRequest{Entries: entries}, &intent); err != nil {
 		return err
 	}
@@ -1136,7 +1119,7 @@ func (p publishing) run(target, entry string, head newHead, label, contract, ite
 			specs[i] = fileSpec{Path: f.path, Upload: true}
 		}
 	}
-	publishKey := statelog.StepOpID(p.key, "publish")
+	publishKey := statelog.StepOpID(p.write.operation, "publish")
 	var answer struct {
 		writtenAnswer
 		Artifact string `json:"artifact"`
@@ -1183,6 +1166,13 @@ func (p publishing) run(target, entry string, head newHead, label, contract, ite
 	// version holds new. A page the upload sent can still be one the
 	// artifact held (it is stored linted, so its author's digest never
 	// matches), which the intent cannot know and the manifest does.
+	what := "publish a new artifact"
+	if target != "" {
+		what = "publish " + target
+	}
+	if err := p.write.confirmed(what, answer.Outcome); err != nil {
+		return err
+	}
 	files := fmt.Sprintf("files: %d sent", len(intent.Transfers))
 	if answer.Files != nil {
 		files += fmt.Sprintf(", %d new, %d already held", answer.Files.Stored, answer.Files.Carried)
