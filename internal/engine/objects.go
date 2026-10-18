@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/references"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // The object store, wired — ADR-0026.
@@ -107,6 +108,11 @@ type collectorDuty struct {
 	// resumed is whether the schedule has been read back from the fleet's
 	// record since this node took the duty.
 	resumed bool
+
+	// usage is the bucket's last-read usage against its reservation,
+	// zero until the holder has read one and on a backend with no
+	// reservation (an S3 bucket).
+	usage objstore.Usage
 }
 
 // collectionReport is what the collector's duty records in the coordination
@@ -183,15 +189,18 @@ func (e *Engine) collectorTurn(ctx context.Context, claim func(context.Context) 
 	duty.holding = mine
 	if !mine {
 		duty.resumed = false
+		duty.usage = objstore.Usage{}
 	}
 	resume := mine && !duty.resumed
 	duty.mu.Unlock()
 	if !mine {
+		e.unsetObjectsUsage()
 		return
 	}
 	if resume {
 		e.resumeCollector(ctx, duty)
 	}
+	e.sampleObjectsUsage(ctx, duty)
 
 	now := time.Now()
 	duty.mu.Lock()
@@ -210,6 +219,45 @@ func (e *Engine) collectorTurn(ctx context.Context, claim func(context.Context) 
 	}
 	if ctx.Err() == nil {
 		e.recordCollection(ctx, duty)
+	}
+}
+
+// sampleObjectsUsage reads how much of the bucket's reservation its objects
+// take, on every turn of the duty's holder: the gauges and the
+// `objects_bucket_near_ceiling` alarm read it.
+//
+// ONE NODE, ONCE A POLL. The bucket is one the whole fleet shares, so the
+// holder's reading is the fleet's, and a read a minute is one stream-info
+// request to the stream's leader, against the hour a bucket at four fifths
+// takes to fill at any upload rate a fleet sustains. A read that fails keeps
+// the last one, since unknown is not empty, and says so.
+func (e *Engine) sampleObjectsUsage(ctx context.Context, duty *collectorDuty) {
+	usage, held, err := e.objects.store.Usage(ctx)
+	switch {
+	case !held:
+		return
+	case err != nil:
+		if ctx.Err() == nil {
+			log.WarnContext(ctx, "objects_usage_unread", "error", err,
+				"detail", "the bucket's gauges and its near-ceiling alarm keep the last reading")
+		}
+		return
+	}
+	duty.mu.Lock()
+	duty.usage = usage
+	duty.mu.Unlock()
+	if e.metrics != nil {
+		e.metrics.Set(metrics.ObjectsBucketBytes, float64(usage.Bytes), nil)
+		e.metrics.Set(metrics.ObjectsBucketMaxBytes, float64(usage.MaxBytes), nil)
+	}
+}
+
+// unsetObjectsUsage withdraws the bucket's gauges from a node that no longer
+// holds the duty, so two nodes never report the one bucket.
+func (e *Engine) unsetObjectsUsage() {
+	if e.metrics != nil {
+		e.metrics.Unset(metrics.ObjectsBucketBytes, nil)
+		e.metrics.Unset(metrics.ObjectsBucketMaxBytes, nil)
 	}
 }
 
@@ -299,7 +347,8 @@ func (e *Engine) stopObjectCollector() {
 	}
 }
 
-// objectsReading fills the object store's half of an alarm reading: the files
+// objectsReading fills the object store's half of an alarm reading: the
+// bucket's usage against its reservation, and the files
 // the collector's last audit to run to its end found missing or damaged — on
 // the node holding the collector's duty, and nothing on any other, since the
 // store is one the whole fleet shares and one node's count of it is the
@@ -316,11 +365,12 @@ func (e *Engine) objectsReading(_ time.Time, out *statelog.Reading) {
 		return
 	}
 	duty.mu.Lock()
-	holding := duty.holding
+	holding, usage := duty.holding, duty.usage
 	duty.mu.Unlock()
 	if !holding {
 		return
 	}
+	out.ObjectsBucketBytes, out.ObjectsBucketMaxBytes = usage.Bytes, usage.MaxBytes
 	if found := duty.collector.Status().Audit.Found; found != nil {
 		out.ObjectsMissing = found.Missing + found.Damaged
 	}
