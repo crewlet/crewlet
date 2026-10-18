@@ -24,12 +24,8 @@ import (
 func TestAPredicateCompiledForAnAliasNamesNoOther(t *testing.T) {
 	t.Parallel()
 	row := regexp.MustCompile(`\b` + string(rowAlias) + `\.`)
-	cases := map[string]map[string]any{}
-	for name, params := range registeredQueries() {
-		cases[name] = params
-		cases[name+", flat"] = withParam(params, "subtasks", "separate")
-	}
-	for name, params := range everyClause() {
+	cases := registeredQueries()
+	for name, params := range inBothModes(everyClause()) {
 		cases[name] = params
 	}
 	for name, params := range cases {
@@ -99,14 +95,4 @@ func everyClause() map[string]map[string]any {
 		"two branches":               {"any": `[{"assignee":"h-1","tag":"none:a"},{"assignee":"none","container":"project:P01","due":"lt:today","f.owner":"x"}]`},
 		"a column of a status board": {"container": "project:P01", "group_by": "status", "group": "todo"},
 	}
-}
-
-// withParam is params with one more key.
-func withParam(params map[string]any, key string, value any) map[string]any {
-	out := make(map[string]any, len(params)+1)
-	for k, v := range params {
-		out[k] = v
-	}
-	out[key] = value
-	return out
 }
