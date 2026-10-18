@@ -132,6 +132,53 @@ func TestASchemaChangeMigratesItsDocumentsWithinItsBound(t *testing.T) {
 	}
 }
 
+// A SCHEMA CHANGE REACHES A ROW WHOSE LIST IS EMPTY: removing the last chip
+// leaves `[]`, which indexes no scalar, and the change still finds the row
+// (through its presence marker), so a removed column leaves its body and a
+// retyped one is cleared where its new type cannot hold it. Were it missed,
+// the row would keep a field its schema no longer declares, and every
+// whole-row write of it would be refused as naming that field.
+func TestASchemaChangeReachesARowHoldingAnEmptyList(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	jane := person("jane", artifacts.RoleOwner)
+	options := []artifacts.Option{{ID: "copy", Label: "Copy"}, {ID: "design", Label: "Design"}}
+	spec := artifacts.Collection{Name: "chips", Preset: artifacts.PresetShared, Columns: []artifacts.Column{
+		{Key: "title", Type: artifacts.ColumnText},
+		{Key: "tags", Type: artifacts.ColumnMultiSelect, Options: options},
+		{Key: "topics", Type: artifacts.ColumnMultiSelect, Options: options},
+	}}
+	n.configure(jane, spec)
+	n.applied(jane, set("chips", "r1", map[string]string{"title": `"One"`, "tags": `["copy"]`,
+		"topics": `["design"]`}))
+	n.applied(jane, field(artifacts.DataRemove, "chips", "r1", "tags", `"copy"`),
+		field(artifacts.DataRemove, "chips", "r1", "topics", `"design"`))
+	if got := fields(t, n.doc("chips", "r1")); got["tags"] != `[]` || got["topics"] != `[]` {
+		t.Fatalf("after removing the last chips the row reads %v, want both lists empty", got)
+	}
+	next := spec
+	next.Columns = []artifacts.Column{
+		{Key: "title", Type: artifacts.ColumnText},
+		{Key: "topics", Type: artifacts.ColumnSelect, Options: options},
+	}
+	n.configure(jane, next)
+	d := n.doc("chips", "r1")
+	if got := fields(t, d); len(got) != 1 || got["title"] != `"One"` {
+		t.Fatalf("after removing tags and retyping topics the row reads %v, want only its title", got)
+	}
+	if len(d.Invalid) != 0 {
+		t.Fatalf("the migrated row still holds fields its schema refuses: %v", d.Invalid)
+	}
+	n.applied(jane, set("chips", "r1", map[string]string{"title": `"Renamed"`}))
+	if got := fields(t, n.doc("chips", "r1")); got["title"] != `"Renamed"` {
+		t.Fatalf("a whole-row write after the migration left %v", got)
+	}
+	computed, stored := n.digestFromRows(sheet)
+	if computed != stored {
+		t.Fatal("the digest after the migration is not the sum of the rows")
+	}
+}
+
 // A MIGRATION PAST ONE RECORD'S BOUND IS REFUSED, naming the bound, before it
 // is appended (review A7): an apply holds the estate's only writer.
 func TestAMigrationPastItsBoundIsRefused(t *testing.T) {

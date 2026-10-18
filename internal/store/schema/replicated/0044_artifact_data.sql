@@ -124,17 +124,21 @@ CREATE INDEX artifact_data_docs_since_idx ON artifact_data_docs (store_no, versi
 CREATE INDEX artifact_data_docs_creator_idx ON artifact_data_docs (store_no, collection_no, created_by); -- own rows, private rows, a principal's cap
 
 -- artifact_data_fields: the field index, one row per indexed scalar of a live
--- document. A value inside a body cannot be indexed, and a query that decodes
--- every body is a full scan wearing an index's name.
+-- document, and one presence marker for a top-level field holding nothing
+-- scalar, so every top-level field a document holds has a row here. A value
+-- inside a body cannot be indexed, and a query that decodes every body is a
+-- full scan wearing an index's name.
 CREATE TABLE artifact_data_fields (
     store_no      INTEGER NOT NULL,
     collection_no INTEGER NOT NULL,
     path_no       INTEGER NOT NULL,
     doc_id        TEXT    NOT NULL,
     -- 0 for a scalar field, 1 and up for each element of an array of
-    -- scalars, which is what `contains` (a chip set) reads.
+    -- scalars, which is what `contains` (a chip set) reads, and -1 for a
+    -- presence marker, which no query reads.
     ord           INTEGER NOT NULL,
-    -- s (string), n (number), b (boolean, num 1 or 0), z (null).
+    -- s (string), n (number), b (boolean, num 1 or 0), z (null), p (a
+    -- presence marker).
     kind          TEXT    NOT NULL,
     num           REAL,
     -- A string's first 256 bytes, cut at a rune boundary.

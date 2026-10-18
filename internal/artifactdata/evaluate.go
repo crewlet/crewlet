@@ -100,10 +100,24 @@ type docState struct {
 type fieldEntry struct {
 	path string
 	ord  int
-	kind string // s, n, b, z
+	kind string // s, n, b, z, or p for a presence marker
 	num  float64
 	txt  string
 }
+
+// A PRESENCE MARKER is the one index entry a top-level field holding nothing
+// scalar takes (an empty list, an object, a list of objects), at its own ord
+// and kind, so every top-level field a document holds has at least one row in
+// the field index. A schema change finds the documents holding a removed or
+// retyped column through that index; without the marker, a row whose list was
+// emptied by removing its last chip would keep the removed column for good, and
+// a whole-row write of it would be refused as naming an undeclared field. No
+// query clause reads either value: a filter, `contains` and the order all
+// read ord 0 or above.
+const (
+	presenceOrd  = -1
+	presenceKind = "p"
+)
 
 // view is what an evaluation reads: the store's rows, through the applier's
 // transaction or through a test's own.
@@ -869,11 +883,13 @@ func encodeFields(fields map[string]canon.Value) []byte {
 }
 
 // explode is a body's field-index entries: every top-level scalar at ord
-// zero, every scalar element of a top-level array at ord one and up, and every
+// zero, every scalar element of a top-level array at ord one and up, a
+// presence marker for a top-level field holding no scalar at all, and every
 // declared dotted path the body holds, in path order.
 func explode(fields map[string]canon.Value, indexed []string) []fieldEntry {
 	var out []fieldEntry
-	add := func(path string, v canon.Value) {
+	add := func(path string, v canon.Value) int {
+		before := len(out)
 		switch v.Kind {
 		case canon.KindArray:
 			for i, e := range v.Array {
@@ -885,9 +901,12 @@ func explode(fields map[string]canon.Value, indexed []string) []fieldEntry {
 		default:
 			out = append(out, entryOf(path, 0, v))
 		}
+		return len(out) - before
 	}
 	for _, name := range sortedKeys(fields) {
-		add(name, fields[name])
+		if add(name, fields[name]) == 0 {
+			out = append(out, fieldEntry{path: name, ord: presenceOrd, kind: presenceKind})
+		}
 	}
 	for _, p := range slices.Sorted(slices.Values(indexed)) {
 		head, tail, _ := strings.Cut(p, ".")

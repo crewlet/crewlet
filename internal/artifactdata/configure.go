@@ -284,8 +284,11 @@ func affectedFields(cur, next artifacts.Collection) ([]string, *refusal, error) 
 }
 
 // migrationDocs is the live documents of a collection a change rewrites: every
-// one holding an affected field (found through the field index, where every
-// top-level field is), or every one when its indexed paths change.
+// one holding an affected field, or every one when its indexed paths change. A
+// document holding a field is found through the field index, where every
+// top-level field a document holds has at least one entry: its scalar, its
+// list's scalar elements, or a presence marker where it holds nothing scalar
+// (an emptied multiselect is the common case).
 func migrationDocs(ctx context.Context, tx *sql.Tx, storeNo int64, c *collState, fields []string,
 	reindex bool) ([]string, error) {
 

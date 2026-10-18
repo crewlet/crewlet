@@ -21,7 +21,10 @@
 // booleans, and its text for strings truncated to [TextIndexBytes]. An array of
 // scalars indexes each element, at `ord` one and up; a scalar sits at `ord`
 // zero, so equality never matches an array's element and `contains` never
-// matches a scalar. A string literal longer than the truncation is matched on
+// matches a scalar. A top-level field holding nothing scalar (an empty list, an
+// object) keeps one presence marker below ord zero, kind `p`, which no clause
+// compiled here reads: it is what a schema change finds the documents holding a
+// column through. A string literal longer than the truncation is matched on
 // its truncated prefix in SQL and named in [Compiled.Recheck], so the reader
 // re-checks the body: a long string is never a false positive.
 package query
