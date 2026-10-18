@@ -121,6 +121,9 @@ Every write prints its outcome: "applied" (this node has it) or "pending"
 same command again with -op-id <op id> from the error: every write that takes
 -op-id is sent under one made before it asks. Don't start fresh, or it runs
 twice. If the node can't confirm it, retry through another node with -api.
+A token or a reset link takes no -op-id, since its route reads no key: if its
+outcome is unknown or unreadable, its value isn't printed, and running it
+again makes a new one.
 
 A person always holds one human seat. They're invited or created onto a
 vacant one, "iam bind" moves them, and "iam remove" frees it. "iam unbind" is
@@ -583,6 +586,9 @@ var iamKeyed = map[string]bool{
 // iamUnkeyed refuses -op-id on a subcommand whose route reads none,
 // saying what to do instead: sent anyway, the key would be ignored and the
 // operator told nothing, which is the one outcome worse than the refusal.
+//
+// It is also how a mint or a reset link whose answer leaves it open ends
+// ([iamPrinter.settled]): why no key can retry one is why it is run again.
 func iamUnkeyed(sub string) error {
 	switch sub {
 	case "token":
@@ -1087,8 +1093,10 @@ type iamPrinter struct {
 	raw bool
 
 	// write is the command's own write, which a write's answer is judged
-	// against before anything of it is printed ([iamPrinter.settled]), and
-	// what names it in a sentence: "suspend p-1", "invalidate-all".
+	// against before anything of it is printed ([iamPrinter.settled]) — its
+	// operation empty for a write whose route reads no key, a mint and a
+	// reset link — and what names it in a sentence: "suspend p-1",
+	// "invalidate-all".
 	write keyedWrite
 	what  string
 }
@@ -1104,14 +1112,30 @@ type iamPrinter struct {
 // ([keyedWrite.confirmed]), naming the retry under the operation the command
 // sent.
 //
+// A MINT OR A RESET LINK IS RUN AGAIN INSTEAD, as the node's own unknown for
+// either says: their routes read no key, so there is no operation to retry
+// under, and this command refuses -op-id on both ([iamUnkeyed] says why). The
+// op id the answer names is said for the trail.
+//
 // BEFORE ANYTHING OF THE ANSWER IS PRINTED, under -json too: the node hands
-// out no invitation or first password link for a write nobody can confirm —
-// it would be a link that answers 410 the first time somebody follows it — so
-// neither does this, and the retry under -op-id hands back the very link its
-// first attempt issued. A document printed beside a failure is one a script
-// reads before it reads the exit status.
+// out no invitation, first password link, reset link or token for a write
+// nobody can confirm — a link would answer 410 the first time somebody
+// followed it — so neither does this, and the retry under -op-id hands back
+// the very link an invitation's or a create's first attempt issued. A document
+// printed beside a failure is one a script reads before it reads the exit
+// status.
 func (p *iamPrinter) settled(answer map[string]any) error {
-	return p.write.confirmed(p.what, str(answer["outcome"]))
+	outcome := str(answer["outcome"])
+	if p.write.operation != "" {
+		return p.write.confirmed(p.what, outcome)
+	}
+	said := unconfirmed(outcome)
+	if said == "" {
+		return nil
+	}
+	return fmt.Errorf("%s: %s — the node could not confirm the write, so what it "+
+		"answered is not shown (op %s): %w", p.what, said, dash(str(answer["op_id"])),
+		iamUnkeyed(p.write.gesture))
 }
 
 func (p *iamPrinter) dump(answer map[string]any) error {
@@ -1535,16 +1559,23 @@ func seatInvitation(invitation map[string]any) string {
 	return id
 }
 
-// reset prints a reset link ONCE, for the invitation's reason.
+// reset prints a reset link ONCE, for the invitation's reason, and where the
+// issue stands, as every write here says ([iamPrinter.outcome]) — on `pending`
+// too, since the record is durable and the link opens wherever it has been
+// applied. An issue nobody can confirm prints nothing ([iamPrinter.settled]).
 func (p *iamPrinter) reset(answer map[string]any, err error) error {
 	if err != nil {
+		return err
+	}
+	if err := p.settled(answer); err != nil {
 		return err
 	}
 	if p.raw {
 		return p.dump(answer)
 	}
-	fmt.Fprintf(p.w, "password reset for %s\n%s\n\n", str(answer["id"]),
-		str(answer["url"]))
+	fmt.Fprintf(p.w, "password reset for %s\n", str(answer["id"]))
+	p.outcome(answer)
+	fmt.Fprintf(p.w, "%s\n\n", str(answer["url"]))
 	fmt.Fprintf(p.w, "expires %s\n", stamp(answer["expires_at"]))
 	fmt.Fprintln(p.w, "This link is shown once. It sets a new password "+
 		"and signs them out everywhere. Send it to them yourself (Crewlet "+
@@ -1552,9 +1583,19 @@ func (p *iamPrinter) reset(answer map[string]any, err error) error {
 	return nil
 }
 
-// token prints the value ONCE, for the same reason.
+// token prints the value ONCE, for the same reason, and where the mint stands —
+// on `pending` too: the record is durable, and a node that has not applied it
+// yet answers a request carrying the token 503, that it cannot say yet, rather
+// than refusing it. A mint nobody can confirm prints nothing
+// ([iamPrinter.settled]), as the node's own unknown hands out no value.
+//
+// THE VALUE STAYS THE FIRST LINE, alone, so whatever reads it from this
+// command's output takes the line it always took.
 func (p *iamPrinter) token(answer map[string]any, err error) error {
 	if err != nil {
+		return err
+	}
+	if err := p.settled(answer); err != nil {
 		return err
 	}
 	if p.raw {
@@ -1563,6 +1604,7 @@ func (p *iamPrinter) token(answer map[string]any, err error) error {
 	fmt.Fprintf(p.w, "%s\n\n", str(answer["token"]))
 	fmt.Fprintf(p.w, "token %s for %s, expires %s\n", str(answer["id"]),
 		str(answer["person"]), stamp(answer["expires_at"]))
+	p.outcome(answer)
 	fmt.Fprintf(p.w, "carries %s\n", dash(joinAny(answer["grants"])))
 	fmt.Fprintln(p.w, "This token is shown once. Use it as "+
 		apiTokenEnv+" or in an `Authorization: Bearer` header.")

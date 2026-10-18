@@ -247,7 +247,8 @@ func TestIamTokenAsksForWhatTheRouteReads(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"id":"c-1","person":"p-1","token":"cwl_pat_the-value",` +
-			`"grants":["worklet"],` +
+			`"grants":["worklet"],"outcome":"applied","position":"CREWLET_IAM_LOG@0:7",` +
+			`"op_id":"the-mint-key.k0123456789abcdef",` +
 			`"expires_at":"2026-07-01T00:00:00Z"}`))
 	}))
 	defer node.Close()
@@ -1098,6 +1099,136 @@ func TestAnIamWriteTheNodeNeverAnsweredNamesTheOperationItWasSentUnder(t *testin
 			t.Errorf("an unanswered iam %s reads %v under the key %q, want no "+
 				"key and no retry under one", args[0], err, last())
 		}
+	}
+}
+
+// A MINT AND A RESET LINK SAY WHERE THEY STAND, AND ONE NOBODY CAN CONFIRM IS
+// RUN AGAIN — never retried under a key, and never shown.
+//
+// `token` and `reset-password` printed their value and nothing of the outcome,
+// though every write here says where it stands; and a 2xx carrying an outcome
+// this build cannot read, or none, printed the value and exited zero. Their
+// routes read no key and the command refuses -op-id on both, so such an answer
+// is finished as the node's own unknown for either is — run again, as a new
+// one, with the op id said for the trail — and nothing of it is shown: a token
+// or a link nobody can confirm is one the node itself hands out to nobody.
+// Every path that mints is asked: a service account's under the bearer, and
+// your own under the session `-login` opens — each as a table and as -json,
+// where a document printed beside a failure is one a script reads before the
+// exit status. A token's value stays the table's first line, alone, with the
+// line saying where it stands after it, so what took the value from that line
+// still takes the value; and a failure begins with the write it is about.
+// Mutation: drop the judgement from either printer or make it after the -json
+// dump, prescribe the keyed retry for a write no key names, drop the op id
+// from the sentence, drop the line from either printer, print a token's line
+// before its value, or name nothing of the write in the failure, and rows
+// fail.
+func TestAMintAndAResetLinkSayWhereTheyStand(t *testing.T) {
+	t.Parallel()
+	const (
+		person = "0192f00d-0000-7000-8000-0000000000bb"
+		token  = "cwl_pat_the-value"
+		link   = "https://crewlet.example.com/dashboard#/reset/c-1.s3cr3t"
+		op     = "the-mint-key.k0123456789abcdef"
+	)
+	cfg := bootstrapWithKeyring(t, "k1")
+	for _, tc := range []struct {
+		name    string
+		outcome any
+		lands   bool
+		says    string
+	}{
+		{name: "applied", outcome: "applied", lands: true},
+		{name: "pending", outcome: "pending", lands: true},
+		{name: "unknown", outcome: "unknown", says: "could not confirm the write"},
+		{name: "a newer build's", outcome: "deferred",
+			says: `the node answered "deferred", which this build cannot read`},
+		{name: "none at all", outcome: nil, says: "could not confirm the write"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			node := newFakeKeyedNode(t)
+			node.status = http.StatusCreated
+			node.body = map[string]any{"id": person, "person": "svc-1", "token": token,
+				"url": link, "position": "CREWLET_IAM_LOG@0:7", "op_id": op}
+			if tc.outcome != nil {
+				node.body["outcome"] = tc.outcome
+			}
+			self := newSelfNode(t)
+			self.mintOutcome = tc.outcome
+			bearer := func(args ...string) func(...string) (string, error) {
+				return func(flags ...string) (string, error) {
+					var out, errs bytes.Buffer
+					err := runIAM(tokenEnviron("a-tier-a-token"),
+						append(append(slices.Clone(args), flags...), "-config", cfg,
+							"-api", node.server.URL), nil, &out, &errs)
+					return out.String(), err
+				}
+			}
+			for _, asJSON := range []bool{false, true} {
+				var flags []string
+				if asJSON {
+					flags = []string{"-json"}
+				}
+				for _, write := range []struct {
+					what, value, again, names string
+					run                       func(...string) (string, error)
+				}{
+					{"token -person", token, "Just run it again", "token: ",
+						bearer("token", "-person", "svc-1")},
+					{"token -login", token, "Just run it again", "token: ",
+						func(flags ...string) (string, error) {
+							out, _, err := runSelf(t, self, "a long pass phrase\n", flags...)
+							return out, err
+						}},
+					{"reset-password", link, "the new link replaces the old one",
+						"reset-password " + person + ": ",
+						bearer("reset-password", person)},
+				} {
+					what := strings.Join(append([]string{write.what}, flags...), " ")
+					printed, err := write.run(flags...)
+					if tc.lands {
+						// The line is the table's; a document carries the
+						// outcome as a field.
+						want := tc.name + " at CREWLET_IAM_LOG@0:7 (op " + op + ")"
+						if err != nil || !strings.Contains(printed, write.value) ||
+							(!asJSON && !strings.Contains(printed, want)) {
+							t.Errorf("a %s iam %s answered %v and printed\n%s\nwant %q "+
+								"and its value", tc.name, what, err, printed, want)
+						}
+						if first, _, _ := strings.Cut(printed, "\n"); !asJSON &&
+							write.value == token && first != token {
+							t.Errorf("a %s iam %s printed %q as its first line, want "+
+								"the value alone:\n%s", tc.name, what, first, printed)
+						}
+						continue
+					}
+					if err == nil {
+						t.Errorf("iam %s: a 2xx carrying %s outcome exited zero:\n%s",
+							what, tc.name, printed)
+						continue
+					}
+					if !strings.HasPrefix(err.Error(), write.names) {
+						t.Errorf("iam %s answered %q, want it to begin with the write "+
+							"it is about, %q", what, err, write.names)
+					}
+					for _, want := range []string{tc.says, write.again, "(op " + op + ")"} {
+						if !strings.Contains(err.Error(), want) {
+							t.Errorf("iam %s answered %q, want it to say %q", what, err,
+								want)
+						}
+					}
+					if strings.Contains(err.Error(), "again with -op-id") {
+						t.Errorf("iam %s prescribes a retry under a key its route "+
+							"never reads: %v", what, err)
+					}
+					if printed != "" {
+						t.Errorf("iam %s printed what nobody can confirm:\n%s", what,
+							printed)
+					}
+				}
+			}
+		})
 	}
 }
 

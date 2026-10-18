@@ -97,17 +97,32 @@ type keyedWrite struct {
 // "applied". So it FAILS, as every open outcome [keyedWrite.settle] reads
 // does, naming the same retry.
 func (k keyedWrite) confirmed(what, outcome string) error {
-	switch statelog.Outcome(outcome) {
-	case statelog.OutcomeApplied, statelog.OutcomePending:
+	said := unconfirmed(outcome)
+	if said == "" {
 		return nil
-	}
-	said := "unknown"
-	if outcome != "" && outcome != string(statelog.OutcomeUnknown) {
-		said = fmt.Sprintf("unknown (the node answered %q, which this build cannot "+
-			"read)", outcome)
 	}
 	return fmt.Errorf("%s: %s — the node could not confirm the write. To find out, %s",
 		what, said, k.retry())
+}
+
+// unconfirmed is how the outcome a 2xx answer carried is said where it leaves
+// the write open — `unknown`, beside the word a node newer than this command
+// answered where it answered one — and "" where it says where the write
+// stands: applied, or pending.
+//
+// A FUNCTION OF ITS OWN, because a write no key names reads the same answer
+// the same way and finishes it differently: `crewlet iam`'s mint and reset
+// link are run again as new ones ([iamPrinter.settled]), where every write
+// [keyedWrite.confirmed] judges is retried under its operation.
+func unconfirmed(outcome string) string {
+	switch statelog.Outcome(outcome) {
+	case statelog.OutcomeApplied, statelog.OutcomePending:
+		return ""
+	case "", statelog.OutcomeUnknown:
+		return "unknown"
+	}
+	return fmt.Sprintf("unknown (the node answered %q, which this build cannot read)",
+		outcome)
 }
 
 // retry is the sentence that finishes the write: the same command, under the

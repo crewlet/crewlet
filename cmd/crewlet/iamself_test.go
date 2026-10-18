@@ -37,13 +37,18 @@ type selfNode struct {
 	// restricted makes every sign-in answer a session that may only enrol
 	// a second factor.
 	restricted bool
+
+	// mintOutcome is the outcome a mint answers, as a real node's every
+	// write answer carries one: `applied` unless a case says otherwise, and
+	// nil for an answer carrying none.
+	mintOutcome any
 }
 
 const selfCookie = "the-session-bearer"
 
 func newSelfNode(t *testing.T) *selfNode {
 	t.Helper()
-	n := &selfNode{mintCode: http.StatusCreated}
+	n := &selfNode{mintCode: http.StatusCreated, mintOutcome: "applied"}
 	var boot config.Bootstrap
 	boot.API.ExternalURL = "https://crewlet.example.com"
 	mux := http.NewServeMux()
@@ -81,7 +86,7 @@ func newSelfNode(t *testing.T) *selfNode {
 		n.steps = append(n.steps, "mint")
 		n.mintAuth, n.mintQuery = r.Header.Get("Authorization"), r.URL.RawQuery
 		_ = json.NewDecoder(r.Body).Decode(&n.mintBody)
-		code := n.mintCode
+		code, outcome := n.mintCode, n.mintOutcome
 		n.mu.Unlock()
 		if !signedIn(r) {
 			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
@@ -92,11 +97,16 @@ func newSelfNode(t *testing.T) *selfNode {
 				map[string]string{"detail": "not today"})
 			return
 		}
-		httpjson.Write(w, http.StatusCreated, map[string]any{
+		answer := map[string]any{
 			"id": "c-1", "person": "p-jane", "token": "cwl_pat_the-value",
 			"grants":     []string{"worklet"},
 			"expires_at": "2026-07-01T00:00:00Z",
-		})
+			"position":   "CREWLET_IAM_LOG@0:7", "op_id": "the-mint-key.k0123456789abcdef",
+		}
+		if outcome != nil {
+			answer["outcome"] = outcome
+		}
+		httpjson.Write(w, http.StatusCreated, answer)
 	})
 	mux.HandleFunc("POST /auth/logout", func(w http.ResponseWriter, r *http.Request) {
 		n.mu.Lock()
