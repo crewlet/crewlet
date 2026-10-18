@@ -1,7 +1,6 @@
 package subagent
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // How a worker answers, and how that answer is classified.
@@ -329,11 +329,12 @@ func (r Result) TimedOut() bool { return r.Status == StatusTimedOut }
 //
 // The SUBMISSION where there is one, as JSON: it is already structured, the
 // parent asked for that shape, and re-flattening it into prose would undo the
-// whole reason the worker submitted rather than narrated. Prose otherwise,
-// which is what a `no_result` has.
+// whole reason the worker submitted rather than narrated — in
+// [tools.PlainJSON]'s spelling, which carries a `<` the worker quoted as the
+// byte it is. Prose otherwise, which is what a `no_result` has.
 func (r Result) Answer() string {
 	if r.Status == StatusOK && len(r.Output) > 0 {
-		if blob, err := json.Marshal(r.Output); err == nil {
+		if blob, err := tools.PlainJSON(r.Output, ""); err == nil {
 			return string(blob)
 		}
 		// A submission that will not re-marshal cannot happen through the

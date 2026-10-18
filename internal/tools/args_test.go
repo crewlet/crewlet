@@ -131,3 +131,27 @@ func TestReadArgsReadsAnOrdinaryDocument(t *testing.T) {
 		t.Errorf("ReadArgs = %v, want both arguments", got)
 	}
 }
+
+// A TOOL'S ANSWER IS INDENTED AS ITS CALLER ASKS AND ENDS WHERE ITS VALUE DOES,
+// with the characters a person wrote left as they wrote them: what a model is
+// handed is weighed against a ceiling by these bytes, so an encoder's escapes
+// and its trailing newline would each be bytes the answer is charged for and
+// nobody reads.
+func TestAnAnswerIsIndentedAsAskedAndEndsWithItsValue(t *testing.T) {
+	t.Parallel()
+	value := map[string]any{"body": "a < b && c > d", "n": 1}
+	indented, err := tools.PlainJSON(value, "  ")
+	if err != nil {
+		t.Fatalf("PlainJSON: %v", err)
+	}
+	if want := "{\n  \"body\": \"a < b && c > d\",\n  \"n\": 1\n}"; string(indented) != want {
+		t.Errorf("indented = %q, want %q", indented, want)
+	}
+	flat, err := tools.PlainJSON(value, "")
+	if err != nil {
+		t.Fatalf("PlainJSON: %v", err)
+	}
+	if want := `{"body":"a < b && c > d","n":1}`; string(flat) != want {
+		t.Errorf("one line = %q, want %q", flat, want)
+	}
+}

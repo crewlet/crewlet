@@ -8,26 +8,32 @@ import (
 	"strings"
 )
 
-// RecordArgs renders a call's arguments as the JSON text a RECORD holds — a
-// phase event's payload, a bridged run's row — for a person to read back on a
-// transcript afterwards.
+// PlainJSON is v as the JSON text its reader reads AS TEXT — a person shown a
+// record of what a tool was called with, a model handed what a tool answered —
+// indented by `indent` per level ("" for one line), and ending where the value
+// does.
 //
-// NOT `json.Marshal`, and the difference is one that reader sees. Marshal
+// NOT `json.Marshal`, and the difference is one each reader sees. Marshal
 // escapes `<`, `>` and `&` into `\u003c`, `\u003e` and `\u0026` so its
 // output can be dropped inside an HTML document without closing a tag. Nothing
-// on this path is such a document: the bytes go into a store column and come
-// out as the text of a `pre`. What the escaping buys here is nothing, and what
-// it costs is that every URL argument reads `?a=1\u0026b=2` and every
-// markdown or HTML body `\u003ch1\u003e` on the one screen somebody opens
-// to find out what a tool was actually called with.
+// read through this is such a document. A record goes into a store column and
+// comes out as the text of a `pre`, where every URL argument would read
+// `?a=1\u0026b=2` and every markdown or HTML body `\u003ch1\u003e` on the one
+// screen somebody opens to find out what a tool was actually called with. An
+// answer is spliced into a model's context, which is shown a comment saying
+// `if a < b && c > d` as six-byte escapes it has to decode back into the code
+// it is reasoning about — five more bytes each of the turn's context and of
+// whatever ceiling the answer is held to.
 //
-// ONE FUNCTION because the two callers are two copies of one rule, which is
-// how the copies in this tree have always started drifting: `internal/whsec`
-// and `internal/textcut` are both what a second spelling of a small decision
-// cost. What stays with each caller is what genuinely differs — a phase event
-// spells "no arguments" as `{}` and a bridged run's row spells it as the empty
-// string, and an encoder that chose for them would be choosing what two
-// different screens say.
+// The encoder's trailing newline is dropped: a record holds the document alone
+// and an answer ends where its value does, so the newline would be one more
+// byte every consumer has to know to ignore.
+//
+// ONE FUNCTION because every caller is a copy of one rule, which is how the
+// copies in this tree have always started drifting: `internal/whsec` and
+// `internal/textcut` are both what a second spelling of a small decision cost.
+// What stays with each caller is what genuinely differs — the indent its
+// reader is handed, and how it spells nothing at all.
 //
 // NOT the only place the rule is written down. `internal/agent/ledger` renders
 // a call into a prior-work line for the model to re-read — and for a person to
@@ -36,17 +42,31 @@ import (
 // encoder with the same escaping off. The two point at each other rather than
 // folding into one name, because the import would drag this whole tool layer
 // behind a type the turn context, the prompt builder and the API all hold.
-func RecordArgs(args map[string]any) (string, error) {
+func PlainJSON(v any, indent string) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	if err := enc.Encode(args); err != nil {
+	enc.SetIndent("", indent)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
+}
+
+// RecordArgs renders a call's arguments as the JSON text a RECORD holds — a
+// phase event's payload, a bridged run's row — for a person to read back on a
+// transcript afterwards, through [PlainJSON] on one line.
+//
+// What stays with each of its two callers is how it spells "no arguments": a
+// phase event spells it as `{}` and a bridged run's row as the empty string,
+// and an encoder that chose for them would be choosing what two different
+// screens say.
+func RecordArgs(args map[string]any) (string, error) {
+	text, err := PlainJSON(args, "")
+	if err != nil {
 		return "", err
 	}
-	// Encode writes a trailing newline after the document. A record holds the
-	// document alone — the newline would be one more byte every consumer has
-	// to know to ignore.
-	return strings.TrimSuffix(buf.String(), "\n"), nil
+	return string(text), nil
 }
 
 // ReadArgs turns a recorded argument document back into the map a renderer
