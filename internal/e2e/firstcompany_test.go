@@ -1,7 +1,6 @@
 package e2e
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -77,19 +76,16 @@ func TestANodeWithNoCompanySignsInAndServesWorkAfterItsFirstApply(t *testing.T) 
 	withServingTierA(t, &boot)
 	withSignIn(&boot)
 
-	e, err := engine.New(t.Context(), engine.Options{Bootstrap: &boot})
-	if err != nil {
-		t.Fatalf("engine.New with no company: %v", err)
-	}
-	t.Cleanup(func() { e.Stop(context.Background()) })
+	e, chatLive := bootEngine(t, engine.Options{Bootstrap: &boot})
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("engine.Start: %v", err)
 	}
 	if e.Company() != nil {
 		t.Fatal("the premise: this node has no company")
 	}
-	app, srv := serveAPI(t, e, &boot, nil)
-	n := &node{engine: e, app: app, server: srv, model: model, id: e.Node().ID()}
+	app, srv := serveAPI(t, e, &boot, chatLive.Hub(), nil)
+	n := &node{engine: e, app: app, server: srv, model: model, id: e.Node().ID(),
+		chat: chatLive}
 
 	operator := newBrowser(t)
 	file := map[string]any{"title": "the first thing we do", "project": "ENG"}

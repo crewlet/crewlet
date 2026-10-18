@@ -1,7 +1,6 @@
 package e2e
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -83,7 +82,7 @@ func startStatelessPairWith(t *testing.T, amend func(doc string) string,
 	// whose every request is refused.
 	ring := fleetRing(t)
 	data, dataBoot := bootDataMember(t, cfg, model, env, ring)
-	data.app, data.server = serveAPI(t, data.engine, dataBoot, nil)
+	data.app, data.server = serveAPI(t, data.engine, dataBoot, data.chat.Hub(), nil)
 	port := dataBoot.Stream.Leaf.Port
 
 	agentDir := t.TempDir()
@@ -183,20 +182,24 @@ func bootNodeWith(t *testing.T, opts engine.Options, model *scriptedModel) *node
 
 // newNode is [bootNodeWith] handing its failure back, for a caller that can do
 // something about one.
+//
+// ITS CHAT HUB WITH IT ([newEngine]), whether or not the node will serve an
+// API: the pair's stateless member serves none, and it is exactly the node
+// whose seat raises the working indicator a room on the data member shows.
 func newNode(t *testing.T, opts engine.Options, model *scriptedModel) (*node, error) {
 	t.Helper()
 	logs.attribute(t)
 	seedStore(t, opts.Bootstrap)
 	id := opts.Bootstrap.Node.ID
-	e, err := engine.New(t.Context(), opts)
+	e, chatLive, stops, err := newEngine(t.Context(), opts)
+	t.Cleanup(func() { stopInReverse(stops) })
 	if err != nil {
 		return nil, fmt.Errorf("engine.New(%s): %w", id, err)
 	}
-	t.Cleanup(func() { e.Stop(context.Background()) })
 	if err := e.Start(t.Context()); err != nil {
 		return nil, fmt.Errorf("engine.Start(%s): %w", id, err)
 	}
-	return &node{engine: e, model: model, id: id}, nil
+	return &node{engine: e, model: model, id: id, chat: chatLive}, nil
 }
 
 // A DATA MEMBER REFUSES A LEAF PORT SOMEBODY HOLDS, BY NAME — the premise
