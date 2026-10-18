@@ -1,5 +1,11 @@
 package codingagent
 
+import (
+	"time"
+
+	"github.com/crewlet/crewlet/internal/sandbox"
+)
+
 // Bounded holds r's failure — the error stream it reads from the end, and the
 // whole failure it composes — to failure bytes, and the lines of an event
 // stream it reads to line bytes, and returns r.
@@ -31,3 +37,23 @@ const (
 	LiveWindow  = liveWindow
 	LiveBacklog = liveBacklog
 )
+
+// OpenCodeCommandTimed is [OpenCode.Command] with the script waiting listen
+// for its server and mcp for its MCP servers, and exporting a login it was
+// given every sync — for the cases about a wait running out or a sync coming
+// round, at lengths a test can afford.
+func OpenCodeCommandTimed(req sandbox.RunRequest, paths Paths, listen, mcp, sync time.Duration) string {
+	return "sh -c " + shellQuote(openCodeScript(req, paths, newOpenCodeSession(),
+		openCodeTimes{listen: listen, mcp: mcp, sync: sync}))
+}
+
+// OpenCodeListenWait and OpenCodeMCPWait are the waits [OpenCode.Command] runs
+// its script at, for a timed case whose subject is another of them.
+const (
+	OpenCodeListenWait = openCodeListenWait
+	OpenCodeMCPWait    = openCodeMCPWait
+)
+
+// JSONStringify is how a run's script spells a server name it looks for in an
+// OpenCode answer.
+func JSONStringify(s string) string { return jsonStringify(s) }

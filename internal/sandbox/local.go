@@ -764,9 +764,14 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 		awaitJobExit(ctx, layout)
 	}
 	// Kill is a teardown like any other, and the box on disk may hold a login
-	// the run refreshed before it was reclaimed. The files are already there
-	// — collecting them needs no resume, which is the one thing this method
-	// must not do.
+	// the run refreshed before it was reclaimed — collecting it needs no
+	// resume, which is the one thing this method must not do. What is on disk
+	// is all there is: nothing in the box runs again after a SIGKILL or a
+	// `docker rm -f`. A CLI that keeps its login in a file has rewritten that
+	// file itself; one that keeps it in a database of its own has it on disk
+	// only as far as its runner exported it, which is why such a runner
+	// exports while the run works rather than only at its end (see
+	// codingagent's OpenCode).
 	collectCredentials(layout, readCredentialMap(layout))
 	removeBox(layout)
 	localLog.Debug("local_sandbox_killed", "sandbox_id", sandboxID)

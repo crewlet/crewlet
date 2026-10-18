@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
@@ -18,32 +19,63 @@ import (
 // fakeOpenCode is an `opencode` that records what the run's script asks of it,
 // in the order it asks, and answers as OpenCode 2.0.32 measured:
 //
-//   - `serve` prints where it listens and its password, then serves until it
-//     is stopped;
+//   - `serve` prints where it listens and the password it minted, then serves
+//     until it is stopped — and, given OPENCODE_PASSWORD or
+//     OPENCODE_SERVER_PASSWORD, takes that as its password and prints none;
+//   - every call to the server is refused unless it presents the server's
+//     password, read as 2.0.32's client reads it: OPENCODE_PASSWORD, and
+//     OPENCODE_SERVER_PASSWORD only where that is unset;
 //   - `api mcp.list` lists nothing at first — the workspace's servers start as
-//     it is first asked about — then the bridge pending, then connected;
+//     it is first asked about — then the bridge pending, then connected, or
+//     always FAKE_MCP_LIST where that is set;
 //   - `api session.get` prints a session's usage report on one line;
-//   - `auth import` keeps what it was given, `auth export` prints FAKE_EXPORT;
-//   - `run` keeps its stdin and the server password it was handed.
+//   - `auth import` keeps what it was given as its database, and `auth export`
+//     prints that database, whether through the server or beside it;
+//   - `run` keeps its stdin and the password it presented, puts FAKE_REFRESH
+//     in the database where that is set — a login refreshed mid-run — and
+//     then works for FAKE_RUN_SLEEP seconds before it exits.
+//
+// FAKE_SERVE=listen-only is a server that says where it listens and never
+// prints a password; FAKE_SERVE=silent one that says nothing at all; and
+// FAKE_SERVE=password-first one that prints its password a second before it
+// says where it listens.
 const fakeOpenCode = `#!/bin/sh
 d="$FAKE_DIR"
 echo "$*" >> "$d/calls"
+authed() {
+  [ "${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}" = "$(cat "$d/server-password" 2> /dev/null)" ] && return 0
+  echo "Error: Server at http://127.0.0.1:4242 rejected the password" >&2; exit 1
+}
 case "$1" in
 --version) echo "${FAKE_VERSION:-opencode v2.0.32}" ;;
 auth)
   case "$2" in
-  import) cat > "$d/imported" ;;
-  export) printf '%s' "$FAKE_EXPORT" ;;
+  import) cat > "$d/imported"; cp "$d/imported" "$d/db" ;;
+  export)
+    [ "$3" != --server ] || authed
+    cat "$d/db" 2> /dev/null ;;
   esac ;;
 serve)
-  echo "server listening on http://127.0.0.1:4242"
-  echo "server password pw-secret"
+  printf '%s|%s' "${OPENCODE_PASSWORD:-}" "${OPENCODE_SERVER_PASSWORD:-}" > "$d/serve-env"
   echo $$ > "$d/serve.pid"
+  [ "${FAKE_SERVE:-}" != silent ] || exec sleep 60
+  if [ "${FAKE_SERVE:-}" = password-first ]; then
+    printf '%s' pw-secret > "$d/server-password"
+    echo "server password pw-secret"; sleep 1
+    echo "server listening on http://127.0.0.1:4242"
+    exec sleep 60
+  fi
+  pw=${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}
+  echo "server listening on http://127.0.0.1:4242"
+  if [ -z "$pw" ] && [ "${FAKE_SERVE:-}" != listen-only ]; then pw=pw-secret; echo "server password $pw"; fi
+  printf '%s' "$pw" > "$d/server-password"
   exec sleep 60 ;;
 api)
+  authed
   case "$4" in
   mcp.list)
     n=$(cat "$d/polls" 2> /dev/null || echo 0); n=$((n+1)); echo "$n" > "$d/polls"
+    if [ -n "${FAKE_MCP_LIST:-}" ]; then printf '%s\n' "$FAKE_MCP_LIST"; exit 0; fi
     case "$n" in
     1) echo '{"data":[]}' ;;
     2) echo '{"data":[{"name":"crewlet-bridge","status":{"status":"pending"}}]}' ;;
@@ -52,14 +84,40 @@ api)
   session.get) echo '{"data":{"id":"'"${6#sessionID=}"'","cost":0.5,"tokens":{"input":10,"output":2,"reasoning":3,"cache":{"read":40,"write":1}}}}' ;;
   esac ;;
 run)
+  authed
   cat > "$d/brief"
-  printf '%s' "$OPENCODE_SERVER_PASSWORD" > "$d/run-password"
+  printf '%s' "${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}" > "$d/run-password"
+  if [ -n "${FAKE_REFRESH+set}" ]; then printf '%s' "$FAKE_REFRESH" > "$d/db"; fi
+  : > "$d/refreshed"
   echo '{"type":"text","part":{"text":"done"}}'
+  [ -z "${FAKE_RUN_SLEEP:-}" ] || sleep "$FAKE_RUN_SLEEP"
   exit "${FAKE_RUN_EXIT:-0}" ;;
 esac
 `
 
-// scriptRun is one execution of a run's script against [fakeOpenCode].
+// scriptOpts is one run of a run's script against [fakeOpenCode].
+type scriptOpts struct {
+	req   sandbox.RunRequest
+	login string
+	env   []string
+	// timed runs the script at these waits and this sync interval
+	// ([codingagent.OpenCodeCommandTimed]) rather than as Command builds it.
+	timed             bool
+	listen, mcp, sync time.Duration
+}
+
+// scriptJob is the script running, in a process group of its own as the
+// wrapper's job is, so a case can signal the whole of it as a teardown does.
+type scriptJob struct {
+	t              *testing.T
+	dir, home      string
+	paths          codingagent.Paths
+	cmd            *exec.Cmd
+	stdout, stderr bytes.Buffer
+	exited         chan error
+}
+
+// scriptRun is what one execution of the script left.
 type scriptRun struct {
 	dir, home       string
 	stdout, stderr  string
@@ -68,9 +126,9 @@ type scriptRun struct {
 	document, brief string
 }
 
-// runScript executes the script OpenCode's Command builds, under a real sh,
-// the way the wrapper does: the brief on stdin, stdout the event stream.
-func runScript(t *testing.T, req sandbox.RunRequest, login string, env ...string) scriptRun {
+// startScript starts the script under a real sh, the way the wrapper does: the
+// brief on stdin, stdout the event stream.
+func startScript(t *testing.T, o scriptOpts) *scriptJob {
 	t.Helper()
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
@@ -80,38 +138,111 @@ func runScript(t *testing.T, req sandbox.RunRequest, login string, env ...string
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte(fakeOpenCode), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte(fakeOpenCode), 0o700); err != nil { //nolint:gosec // the fake must run
 		t.Fatal(err)
 	}
 	paths := codingagent.Paths{Home: home}
-	if login != "" {
-		if err := os.WriteFile(paths.CredentialDocument(), []byte(login), 0o600); err != nil {
+	if o.login != "" {
+		if err := os.WriteFile(paths.CredentialDocument(), []byte(o.login), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	script := scriptOf(t, codingagent.OpenCode{}.Command(req, paths, ""))
+	command := codingagent.OpenCode{}.Command(o.req, paths, "")
+	if o.timed {
+		command = codingagent.OpenCodeCommandTimed(o.req, paths, o.listen, o.mcp, o.sync)
+	}
+	script := scriptOf(t, command)
 
-	cmd := exec.Command("sh", "-c", script) //nolint:gosec // the script under test
-	cmd.Dir = dir
-	cmd.Env = append([]string{
+	j := &scriptJob{t: t, dir: dir, home: home, paths: paths, exited: make(chan error, 1)}
+	j.cmd = exec.Command("sh", "-c", script) //nolint:gosec // the script under test
+	j.cmd.Dir = dir
+	j.cmd.Env = append([]string{
 		"PATH=" + bin + ":" + os.Getenv("PATH"), "HOME=" + home, "FAKE_DIR=" + dir,
-	}, env...)
-	cmd.Stdin = strings.NewReader(`fix "the" flake`)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	err := cmd.Run()
-	run := scriptRun{dir: dir, home: home, stdout: stdout.String(), stderr: stderr.String()}
+	}, o.env...)
+	j.cmd.Stdin = strings.NewReader(`fix "the" flake`)
+	j.cmd.Stdout, j.cmd.Stderr = &j.stdout, &j.stderr
+	j.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := j.cmd.Start(); err != nil {
+		t.Fatalf("starting the script: %v", err)
+	}
+	go func() { j.exited <- j.cmd.Wait() }()
+	// Whatever a failed case left running goes with it.
+	t.Cleanup(func() { _ = syscall.Kill(-j.cmd.Process.Pid, syscall.SIGKILL) })
+	return j
+}
+
+// runScript runs the script to its end.
+func runScript(t *testing.T, o scriptOpts) scriptRun {
+	t.Helper()
+	return startScript(t, o).wait()
+}
+
+// signal sends sig to the script's whole process group, as a teardown does.
+func (j *scriptJob) signal(sig syscall.Signal) {
+	j.t.Helper()
+	if err := syscall.Kill(-j.cmd.Process.Pid, sig); err != nil {
+		j.t.Fatalf("signalling the script's group with %v: %v", sig, err)
+	}
+}
+
+// await polls until cond holds, failing the case after ten seconds — the
+// script's own steps take milliseconds against the fake.
+func (j *scriptJob) await(what string, cond func() bool) {
+	j.t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			j.t.Fatalf("waited 10s for %s; calls:\n%s\nstderr:\n%s", what,
+				strings.Join(j.calls(), "\n"), j.stderrSoFar())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// stderrSoFar is the script's stderr, read only once it has exited — the
+// buffer is written by exec's copier until then.
+func (j *scriptJob) stderrSoFar() string {
+	select {
+	case err := <-j.exited:
+		j.exited <- err
+		return j.stderr.String()
+	default:
+		return "(still running)"
+	}
+}
+
+func (j *scriptJob) calls() []string {
+	raw, _ := os.ReadFile(filepath.Join(j.dir, "calls")) //nolint:gosec // under the test's own dir
+	return strings.Split(strings.TrimSpace(string(raw)), "\n")
+}
+
+func (j *scriptJob) document() string {
+	doc, _ := os.ReadFile(j.paths.CredentialDocument())
+	return string(doc)
+}
+
+// wait waits for the script to exit — thirty seconds at most, past which it is
+// hung rather than slow — and reads what it left.
+func (j *scriptJob) wait() scriptRun {
+	j.t.Helper()
+	var err error
+	select {
+	case err = <-j.exited:
+		j.exited <- err
+	case <-time.After(30 * time.Second):
+		j.signal(syscall.SIGKILL)
+		j.t.Fatalf("the script had not exited after 30s; calls:\n%s", strings.Join(j.calls(), "\n"))
+	}
+	run := scriptRun{dir: j.dir, home: j.home, stdout: j.stdout.String(), stderr: j.stderr.String()}
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
 		run.code = exit.ExitCode()
 	} else if err != nil {
-		t.Fatalf("running the script: %v", err)
+		j.t.Fatalf("running the script: %v", err)
 	}
-	raw, _ := os.ReadFile(filepath.Join(dir, "calls")) //nolint:gosec // under the test's own dir
-	run.calls = strings.Split(strings.TrimSpace(string(raw)), "\n")
-	doc, _ := os.ReadFile(paths.CredentialDocument())
-	run.document = string(doc)
-	brief, _ := os.ReadFile(filepath.Join(dir, "brief")) //nolint:gosec // under the test's own dir
+	run.calls = j.calls()
+	run.document = j.document()
+	brief, _ := os.ReadFile(filepath.Join(j.dir, "brief")) //nolint:gosec // under the test's own dir
 	run.brief = string(brief)
 	return run
 }
@@ -126,9 +257,30 @@ func (r scriptRun) callIndex(prefix string) int {
 	return -1
 }
 
+func countCalls(calls []string, prefix string) int {
+	n := 0
+	for _, c := range calls {
+		if strings.HasPrefix(c, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
+func readIn(t *testing.T, dir, name string) string {
+	t.Helper()
+	raw, _ := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // under the test's own dir
+	return string(raw)
+}
+
 var bridgeOnly = map[string]sandbox.MCPServer{
 	"crewlet-bridge": {Name: "crewlet-bridge", Transport: sandbox.TransportHTTP, URL: "http://127.0.0.1:1/mcp/x"},
 }
+
+const (
+	seededLogin    = `[{"id":"cred_1","key":"old"}]`
+	refreshedLogin = `[{"id":"cred_1","key":"new"}]`
+)
 
 // THE BRIEF IS SENT ONLY ONCE THE SEAT'S TOOLS EXIST. OpenCode 2 fixes a step's
 // tools as the step starts, so a brief sent before the run's MCP servers have
@@ -138,14 +290,13 @@ var bridgeOnly = map[string]sandbox.MCPServer{
 // runs the brief, verbatim on stdin, against the server it started.
 func TestTheBriefWaitsForTheSeatsTools(t *testing.T) {
 	t.Parallel()
-	run := runScript(t, sandbox.RunRequest{MCPServers: bridgeOnly}, "")
+	run := runScript(t, scriptOpts{req: sandbox.RunRequest{MCPServers: bridgeOnly}})
 	if run.code != 0 {
 		t.Fatalf("exit %d:\n%s", run.code, run.stderr)
 	}
-	polls, _ := os.ReadFile(filepath.Join(run.dir, "polls")) //nolint:gosec // under the test's own dir
-	if strings.TrimSpace(string(polls)) != "3" {
+	if polls := strings.TrimSpace(readIn(t, run.dir, "polls")); polls != "3" {
 		t.Errorf("mcp.list was asked %s times, want 3 — through the empty and the pending "+
-			"answers to the connected one", strings.TrimSpace(string(polls)))
+			"answers to the connected one", polls)
 	}
 	runAt := run.callIndex("run ")
 	if runAt < 0 || runAt < run.callIndex("api --server http://127.0.0.1:4242 mcp.list") {
@@ -158,12 +309,71 @@ func TestTheBriefWaitsForTheSeatsTools(t *testing.T) {
 	if run.brief != `fix "the" flake` {
 		t.Errorf("the run read %q, want the brief verbatim", run.brief)
 	}
-	pw, _ := os.ReadFile(filepath.Join(run.dir, "run-password")) //nolint:gosec // under the test's own dir
-	if string(pw) != "pw-secret" {
+	if pw := readIn(t, run.dir, "run-password"); pw != "pw-secret" {
 		t.Errorf("the run was handed %q, want the server's password", pw)
 	}
 	if _, err := os.Stat(filepath.Join(run.home, ".crewlet", "opencode-server")); !os.IsNotExist(err) {
 		t.Errorf("the server's password outlived its read (%v)", err)
+	}
+}
+
+// A SERVER NAMED THE WAY OPENCODE NAMES IT. The readiness check matches the
+// `mcp.list` answer as text, so each name has to be spelled as OpenCode's
+// JSON.stringify spells it — and encoding/json spells `&`, `<`, `>`, U+2028
+// and U+2029 otherwise, so a server named with any of them never matched and
+// every run waited out the whole bound for one that had settled at once.
+//
+// The answer is OpenCode 2.0.32's own, recorded from `opencode api mcp.list`
+// with two servers that exit at once — only the location's directory, a
+// scratch path, is replaced.
+//
+// Mutation: spell the names with json.Marshal, and the run waits the bound
+// and says a server was still connecting.
+func TestTheReadinessCheckSpellsANameAsOpenCodeDoes(t *testing.T) {
+	t.Parallel()
+	const recorded = "{\"location\":{\"directory\":\"/home/crewlet/workspace\"},\"data\":[" +
+		"{\"name\":\"quote\\\"back\\\\slash\\ttab\",\"status\":{\"status\":\"failed\",\"error\":\"Connection closed: MCP server process exited with code 1\"}}," +
+		"{\"name\":\"R&D <x> tools\u2028\",\"status\":{\"status\":\"failed\",\"error\":\"Connection closed: MCP server process exited with code 1\"}}]}"
+	servers := map[string]sandbox.MCPServer{
+		"R&D <x> tools\u2028":     {Name: "R&D <x> tools\u2028", Command: "false"},
+		"quote\"back\\slash\ttab": {Name: "quote\"back\\slash\ttab", Command: "false"},
+	}
+	run := runScript(t, scriptOpts{
+		req:   sandbox.RunRequest{MCPServers: servers},
+		env:   []string{"FAKE_MCP_LIST=" + recorded},
+		timed: true, listen: codingagent.OpenCodeListenWait, mcp: 3 * time.Second, sync: time.Hour,
+	})
+	if run.code != 0 {
+		t.Fatalf("exit %d:\n%s", run.code, run.stderr)
+	}
+	if strings.Contains(run.stderr, "still connecting") {
+		t.Errorf("the run waited for servers OpenCode had already settled:\n%s", run.stderr)
+	}
+	if polls := strings.TrimSpace(readIn(t, run.dir, "polls")); polls != "1" {
+		t.Errorf("mcp.list was asked %s times, want once: the first answer settles both", polls)
+	}
+}
+
+// JSON.stringify's spelling, to the byte: `"`, `\` and the control characters
+// escaped — five by their short forms, the rest as \u and lowercase hex — and
+// everything else literal, DEL and U+2029 included. A byte that is not UTF-8
+// is U+FFFD written as itself, which is the name OpenCode read from the config
+// encoding/json wrote it into.
+func TestANameIsSpelledAsJSONStringifySpellsIt(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{
+		"a&b<c>d":        `"a&b<c>d"`,
+		"x\u2029y":       "\"x\u2029y\"",
+		"q\"b\\s":        `"q\"b\\s"`,
+		"\b\f\n\r\t":     `"\b\f\n\r\t"`,
+		"\x01\x1f\x7f":   "\"\\u0001\\u001f\x7f\"",
+		"bad\xffbyte":    "\"bad\ufffdbyte\"",
+		"Ünï 🙂":          `"Ünï 🙂"`,
+		"plain-name_1.0": `"plain-name_1.0"`,
+	} {
+		if got := codingagent.JSONStringify(in); got != want {
+			t.Errorf("JSONStringify(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -173,12 +383,17 @@ func TestTheBriefWaitsForTheSeatsTools(t *testing.T) {
 // and its credentials alive past the run.
 func TestTheRunsServerIsStoppedWithIt(t *testing.T) {
 	t.Parallel()
-	run := runScript(t, sandbox.RunRequest{}, "")
-	raw, err := os.ReadFile(filepath.Join(run.dir, "serve.pid")) //nolint:gosec // under the test's own dir
-	if err != nil {
-		t.Fatalf("no server was started: %v", err)
+	run := runScript(t, scriptOpts{})
+	assertServerStopped(t, run.dir)
+}
+
+func assertServerStopped(t *testing.T, dir string) {
+	t.Helper()
+	raw := readIn(t, dir, "serve.pid")
+	if raw == "" {
+		t.Fatal("no server was started")
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	pid, err := strconv.Atoi(strings.TrimSpace(raw))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,12 +403,84 @@ func TestTheRunsServerIsStoppedWithIt(t *testing.T) {
 	}
 }
 
+// THE SERVER'S PASSWORD IS ITS OWN. `opencode serve` takes a password from
+// OPENCODE_PASSWORD or OPENCODE_SERVER_PASSWORD and then prints none, so a box
+// environment carrying either — an operator's role.sandbox.env, an image built
+// for OpenCode — had the script wait out the whole bound and fail saying the
+// server never listened. The server is started with neither, and the run's
+// own clients present the password it minted.
+//
+// Mutation: drop the unset, and the run fails with no password printed.
+func TestARunsServerNeverTakesAnOutsidePassword(t *testing.T) {
+	t.Parallel()
+	run := runScript(t, scriptOpts{
+		env:   []string{"OPENCODE_SERVER_PASSWORD=operator-chosen", "OPENCODE_PASSWORD=operator-other"},
+		timed: true, listen: 5 * time.Second, mcp: codingagent.OpenCodeMCPWait, sync: time.Hour,
+	})
+	if run.code != 0 {
+		t.Fatalf("exit %d:\n%s", run.code, run.stderr)
+	}
+	if env := readIn(t, run.dir, "serve-env"); env != "|" {
+		t.Errorf("the server was started with OPENCODE_PASSWORD|OPENCODE_SERVER_PASSWORD = %q, want neither", env)
+	}
+	if pw := readIn(t, run.dir, "run-password"); pw != "pw-secret" {
+		t.Errorf("the run presented %q, want the password its server minted", pw)
+	}
+}
+
+// A SERVER THAT NEVER SAYS ALL IT MUST IS NAMED FOR WHAT IT LEFT OUT — where it
+// listens, or its password — rather than every such failure reading as one
+// that never listened.
+func TestAServerThatNeverPrintsWhatTheRunNeedsIsNamed(t *testing.T) {
+	t.Parallel()
+	for serve, want := range map[string]string{
+		"listen-only": "opencode serve listened but printed no server password within 1s",
+		"silent":      "opencode serve did not say where it listens within 1s",
+	} {
+		t.Run(serve, func(t *testing.T) {
+			t.Parallel()
+			run := runScript(t, scriptOpts{
+				env:   []string{"FAKE_SERVE=" + serve},
+				timed: true, listen: time.Second, mcp: codingagent.OpenCodeMCPWait, sync: time.Hour,
+			})
+			if run.code == 0 {
+				t.Fatal("the run went on without what it needs from its server")
+			}
+			if !strings.Contains(run.stderr, want) {
+				t.Errorf("stderr = %q, want %q", run.stderr, want)
+			}
+			if run.callIndex("run ") >= 0 {
+				t.Errorf("the brief was run anyway:\n%s", strings.Join(run.calls, "\n"))
+			}
+			assertServerStopped(t, run.dir)
+		})
+	}
+}
+
+// THE SCRIPT WAITS FOR BOTH LINES, whichever its server prints first: a run
+// sent on once the password was there and the address was not would be sent
+// to no server at all.
+//
+// Mutation: wait for the password line alone, and the brief goes to an empty
+// address.
+func TestTheRunWaitsForTheServersAddressAndItsPassword(t *testing.T) {
+	t.Parallel()
+	run := runScript(t, scriptOpts{env: []string{"FAKE_SERVE=password-first"}})
+	if run.code != 0 {
+		t.Fatalf("exit %d:\n%s", run.code, run.stderr)
+	}
+	if at := run.callIndex("run "); at < 0 ||
+		!strings.HasPrefix(run.calls[at], "run --server http://127.0.0.1:4242 ") {
+		t.Errorf("the brief was not sent to the server's address:\n%s", strings.Join(run.calls, "\n"))
+	}
+}
+
 // THE RUN'S EXIT IS THE RUN'S, and its usage follows it: the session's report,
 // asked of the run's own session, as the stream's last line — which the
 // decoder reads as the run's tokens and price.
 func TestTheScriptReportsTheSessionsUsageAndKeepsTheRunsExit(t *testing.T) {
 	t.Parallel()
-	run := runScript(t, sandbox.RunRequest{}, "", "FAKE_RUN_EXIT=3")
+	run := runScript(t, scriptOpts{env: []string{"FAKE_RUN_EXIT=3"}})
 	if run.code != 3 {
 		t.Errorf("exit %d, want the run's own 3:\n%s", run.code, run.stderr)
 	}
@@ -214,33 +501,171 @@ func TestTheScriptReportsTheSessionsUsageAndKeepsTheRunsExit(t *testing.T) {
 
 // A BOX GIVEN A LOGIN IMPORTS IT BEFORE THE RUN AND WRITES THE REFRESHED ONE
 // BACK AFTER — the export, over the document the box was seeded with, which is
-// what the box's teardown copies back to the shared login. Never an export of
-// nothing over it, and never a document where the box was given none.
+// what the box's teardown copies back to the shared login. Never an export
+// that holds no login over it, and never a document where the box was given
+// none.
 func TestABoxsLoginIsImportedAndTheRefreshedOneWrittenBack(t *testing.T) {
 	t.Parallel()
-	seeded := `[{"id":"cred_1","key":"old"}]`
-
-	run := runScript(t, sandbox.RunRequest{}, seeded, `FAKE_EXPORT=[{"id":"cred_1","key":"new"}]`)
-	imported, _ := os.ReadFile(filepath.Join(run.dir, "imported")) //nolint:gosec // under the test's own dir
-	if string(imported) != seeded {
+	run := runScript(t, scriptOpts{login: seededLogin, env: []string{"FAKE_REFRESH=" + refreshedLogin}})
+	if imported := readIn(t, run.dir, "imported"); imported != seededLogin {
 		t.Errorf("imported %q, want the login the box was given", imported)
 	}
 	if run.callIndex("auth import --standalone") > run.callIndex("serve ") {
 		t.Errorf("the login was imported after the server started:\n%s", strings.Join(run.calls, "\n"))
 	}
-	if run.document != `[{"id":"cred_1","key":"new"}]` {
+	if run.document != refreshedLogin {
 		t.Errorf("the box's login is %q, want the refreshed export", run.document)
 	}
 
-	run = runScript(t, sandbox.RunRequest{}, seeded, "FAKE_EXPORT= [ ]\n")
-	if run.document != seeded {
-		t.Errorf("an export of nothing replaced the box's login: %q", run.document)
-	}
-
-	run = runScript(t, sandbox.RunRequest{}, "", `FAKE_EXPORT=[{"id":"cred_1","key":"minted"}]`)
+	run = runScript(t, scriptOpts{env: []string{"FAKE_REFRESH=" + `[{"id":"cred_1","key":"minted"}]`}})
 	if run.document != "" || run.callIndex("auth ") >= 0 {
 		t.Errorf("a box given no login touched one: document %q, calls\n%s",
 			run.document, strings.Join(run.calls, "\n"))
+	}
+}
+
+// exportsHoldingNoLogin are what an export can print that is no login to keep:
+// the empty array OpenCode prints for a database with nothing in it (with and
+// without whitespace), nothing at all, an array cut short, and text that is
+// not the JSON an export prints.
+var exportsHoldingNoLogin = map[string]string{
+	"empty array":       "[]",
+	"spaced empty":      " [ ]\n",
+	"nothing":           "",
+	"cut short":         `[{"id":"cred_1","key":"n`,
+	"not an export":     "Imported 1 credential\n",
+	"an object, not []": `{"id":"cred_1"}`,
+}
+
+// No export holding no login replaces the box's, at the run's end: the
+// teardown writes what the document holds back over the shared login.
+func TestAnExportHoldingNoLoginNeverReplacesTheBoxs(t *testing.T) {
+	t.Parallel()
+	for name, export := range exportsHoldingNoLogin {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			run := runScript(t, scriptOpts{login: seededLogin, env: []string{"FAKE_REFRESH=" + export}})
+			if run.document != seededLogin {
+				t.Errorf("the box's login became %q", run.document)
+			}
+		})
+	}
+}
+
+// A LOGIN REFRESHED MID-RUN SURVIVES THE RUN BEING KILLED. Every production
+// teardown of a run in flight is a SIGKILL of its group or a `docker rm -f`,
+// in which nothing in the box runs again, and a login OpenCode refreshed lives
+// in its database until it is exported — so it is exported while the run
+// works, through the run's own server, and what a kill finds is the document
+// the last export left.
+//
+// Mutation: export only when the run ends, and the document is still the seed
+// when the run is killed.
+func TestALoginRefreshedMidRunSurvivesTheRunBeingKilled(t *testing.T) {
+	t.Parallel()
+	j := startScript(t, scriptOpts{
+		login: seededLogin,
+		env:   []string{"FAKE_REFRESH=" + refreshedLogin, "FAKE_RUN_SLEEP=60"},
+		timed: true, listen: codingagent.OpenCodeListenWait, mcp: codingagent.OpenCodeMCPWait,
+		sync: 200 * time.Millisecond,
+	})
+	j.await("the refreshed login exported mid-run", func() bool { return j.document() == refreshedLogin })
+	if countCalls(j.calls(), "auth export --server http://127.0.0.1:4242") == 0 {
+		t.Errorf("the login was not exported through the run's own server:\n%s", strings.Join(j.calls(), "\n"))
+	}
+	if _, err := os.Stat(filepath.Join(j.dir, "refreshed")); err != nil {
+		t.Fatalf("the run had not refreshed the login yet: %v", err)
+	}
+	j.signal(syscall.SIGKILL)
+	run := j.wait()
+	if run.code != -1 {
+		t.Fatalf("exit %d, want the kill to have ended the run", run.code)
+	}
+	if run.document != refreshedLogin {
+		t.Errorf("after the kill the box's login is %q, want the refreshed one", run.document)
+	}
+}
+
+// The loop holds its exports to the same rule as the last one: an export that
+// holds no login never replaces the box's, however often it comes round.
+func TestTheLoginLoopNeverWritesAnExportHoldingNoLogin(t *testing.T) {
+	t.Parallel()
+	for name, export := range exportsHoldingNoLogin {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			j := startScript(t, scriptOpts{
+				login: seededLogin,
+				env:   []string{"FAKE_REFRESH=" + export, "FAKE_RUN_SLEEP=60"},
+				timed: true, listen: codingagent.OpenCodeListenWait, mcp: codingagent.OpenCodeMCPWait,
+				sync: 100 * time.Millisecond,
+			})
+			j.await("three exports after the refresh", func() bool {
+				calls := j.calls()
+				refreshed := false
+				exports := 0
+				for _, c := range calls {
+					if strings.HasPrefix(c, "run ") {
+						refreshed = true
+					} else if refreshed && strings.HasPrefix(c, "auth export --server") {
+						exports++
+					}
+				}
+				return exports >= 3
+			})
+			j.signal(syscall.SIGKILL)
+			if run := j.wait(); run.document != seededLogin {
+				t.Errorf("the box's login became %q", run.document)
+			}
+		})
+	}
+}
+
+// A SIGNALLED RUN EXPORTS ITS LOGIN BEFORE IT GOES, beside a server that is
+// going with the group, and exits with the conventional status. A plain sh
+// runs no EXIT trap on a signal it does not trap, so a run stopped this way
+// left the export to an end it never reached.
+//
+// Mutation: drop the signal traps, and the refreshed login is lost.
+func TestASignalledRunExportsItsLoginBeforeItGoes(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		sig  syscall.Signal
+		code int
+	}{
+		{syscall.SIGTERM, 143},
+		{syscall.SIGINT, 130},
+		{syscall.SIGHUP, 129},
+	} {
+		t.Run(c.sig.String(), func(t *testing.T) {
+			t.Parallel()
+			j := startScript(t, scriptOpts{
+				login: seededLogin,
+				env:   []string{"FAKE_REFRESH=" + refreshedLogin, "FAKE_RUN_SLEEP=60"},
+				// A sync that never comes round, so only the signal's
+				// export can have written the document.
+				timed: true, listen: codingagent.OpenCodeListenWait, mcp: codingagent.OpenCodeMCPWait,
+				sync: time.Hour,
+			})
+			j.await("the run to refresh the login", func() bool {
+				_, err := os.Stat(filepath.Join(j.dir, "refreshed"))
+				return err == nil
+			})
+			if doc := j.document(); doc != seededLogin {
+				t.Fatalf("the document moved before the signal: %q", doc)
+			}
+			j.signal(c.sig)
+			run := j.wait()
+			if run.code != c.code {
+				t.Errorf("exit %d, want %d:\n%s", run.code, c.code, run.stderr)
+			}
+			if run.document != refreshedLogin {
+				t.Errorf("after %v the box's login is %q, want the refreshed one", c.sig, run.document)
+			}
+			if last := run.calls[len(run.calls)-1]; last != "auth export --standalone" {
+				t.Errorf("the last call was %q, want the export beside the going server", last)
+			}
+			assertServerStopped(t, run.dir)
+		})
 	}
 }
 
@@ -248,7 +673,7 @@ func TestABoxsLoginIsImportedAndTheRefreshedOneWrittenBack(t *testing.T) {
 // the usage text 1.x prints for an unknown flag as the run's failure.
 func TestOpenCodeOneIsRefusedByName(t *testing.T) {
 	t.Parallel()
-	run := runScript(t, sandbox.RunRequest{}, "", "FAKE_VERSION=1.18.35")
+	run := runScript(t, scriptOpts{env: []string{"FAKE_VERSION=1.18.35"}})
 	if run.code == 0 {
 		t.Fatal("a 1.x box ran")
 	}

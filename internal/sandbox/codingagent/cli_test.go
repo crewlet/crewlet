@@ -639,17 +639,28 @@ func TestOpenCodeReadsTheSessionsUsageReport(t *testing.T) {
 
 // An invented token count in the spend rollup is worse than a missing one,
 // because a reader cannot tell it is invented — so a run with no usage report
-// reports none, and an OpenCode price of zero is no price at all.
+// reports none.
 func TestOpenCodeReportsNoTokensRatherThanEstimatingThem(t *testing.T) {
 	t.Parallel()
 	res := opencode().Parse(`{"type":"text","part":{"text":"done"}}`)
 	if res.InputTokens != 0 || res.OutputTokens != 0 || res.CostUSD != 0 {
 		t.Fatalf("tokens were invented: %+v", res)
 	}
-	res = opencode().Parse(`{"type":"text","part":{"text":"done"}}` + "\n" +
-		`{"type":"crewlet.usage","report":{"data":{"cost":0,"tokens":{"input":1,"output":1}}}}`)
-	if res.CostUSD != 0 {
-		t.Errorf("an unpriced run was given a price: %v", res.CostUSD)
+}
+
+// A NEGATIVE PRICE IS PASSED ON, as a negative count is: the coordinator floors
+// both where every collected result enters it and says so
+// (sandbox_usage_negative). Zeroed here, an OpenCode price below zero was
+// floored with nothing logged while a negative count beside it was reported.
+//
+// Mutation: keep the price only when it is above zero, and the result reads 0.
+func TestOpenCodeHandsANegativePriceOnForTheCoordinatorToFloor(t *testing.T) {
+	t.Parallel()
+	res := opencode().Parse(`{"type":"text","part":{"text":"done"}}` + "\n" +
+		`{"type":"crewlet.usage","report":{"data":{"cost":-0.25,"tokens":{"input":-3,"output":1}}}}`)
+	if res.CostUSD != -0.25 || res.InputTokens != -3 {
+		t.Errorf("cost %v input %d, want both as reported (-0.25, -3) for the coordinator's floor",
+			res.CostUSD, res.InputTokens)
 	}
 }
 
