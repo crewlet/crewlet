@@ -208,6 +208,8 @@ func runIn(environ config.Source, args []string, stdout, stderr io.Writer) error
 		return runFleet(environ, rest, stdout, stderr)
 	case "seats":
 		return runSeats(environ, rest, stdout, stderr)
+	case "artifacts":
+		return runArtifacts(environ, rest, stdout, stderr)
 	case "llm":
 		return runLLM(environ, rest, stdout, stderr)
 	case "search":
@@ -247,6 +249,8 @@ Usage:
                               remove a member that is gone for good
   crewlet seats <cmd>         Pause a seat (-stop also ends the turn it is on)
                               or resume it: its holder, its lead, or an admin
+  crewlet artifacts <cmd>     List, publish, version, share, trash and purge the
+                              company's artifacts, as the token's principal
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet iam <cmd>           People, seats, invitations, permissions,
@@ -279,10 +283,10 @@ Config:
 Environment:
   %s
             The token for commands that talk to a running node (budgets,
-            backup, retention, work, seats, secrets, config, iam): one of
-            the node's api.auth.tokens values, or an access token from
-            "crewlet iam token". It's never a flag (flags end up in shell
-            history) and never read from the config file.
+            backup, retention, work, seats, artifacts, secrets, config,
+            iam): one of the node's api.auth.tokens values, or an access
+            token from "crewlet iam token". It's never a flag (flags end up
+            in shell history) and never read from the config file.
 `, version.String(), defaultBootstrapPath, defaultCompanyPath, apiTokenEnv)
 }
 
@@ -1632,10 +1636,9 @@ func companyConfig(e *engine.Engine) (*config.Company, *org.Organization) {
 // questions' source over the engine's estate router, or neither on an engine
 // built with no router (which serves no estate to route).
 //
-// ONE GATE FOR BOTH, so a write route and a read question decide who may touch
-// an artifact's data by one admission: the artifact's shares read through the
-// router, the chart the rest of the API decides by, the company's own artifacts
-// settings read per decision, and the Tier A plan quotas this node stamps.
+// THE ARTIFACTS' OWN GATE ([artifactsGate]), so a datastore route, a datastore
+// question, an artifacts route and an artifacts question decide who may touch
+// one artifact by one admission.
 func artifactDataSurfaces(e *engine.Engine, boot *config.Bootstrap) (
 	*artifactdataapi.Service, *queries.ArtifactDataSource, error) {
 
@@ -1644,16 +1647,7 @@ func artifactDataSurfaces(e *engine.Engine, boot *config.Bootstrap) (
 	if !routed || !headsRouted {
 		return nil, nil, nil
 	}
-	gate := artifactdataapi.Gate{
-		Heads: heads, Chart: engine.ChartAuthorityOf(e),
-		Company: func() config.CompanyArtifacts {
-			if company, _ := companyConfig(e); company != nil {
-				return company.Artifacts
-			}
-			return config.CompanyArtifacts{}
-		},
-		Limits: boot.Artifacts.Stamp,
-	}
+	gate := artifactsGate(e, boot, heads)
 	surface, err := artifactdataapi.New(artifactdataapi.Options{Gate: gate, Data: data, Versions: heads})
 	if err != nil {
 		return nil, nil, err
@@ -1927,6 +1921,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, err
 	}
 	workSource, pageSource, backlinkSource, searchSource, fileSource := api.NativeSources(e)
+	// THE ARTIFACTS: their routes and their read questions, each deciding
+	// through the one admission they share, over the estate router so a
+	// node whose own copy is out of service answers through a peer's.
+	artifactsSurface, artifactsSource, err := artifactsSurfaces(e, boot)
+	if err != nil {
+		return nil, err
+	}
 	// AN ARTIFACT'S DATASTORE: its write routes and its read questions,
 	// each deciding through the one admission they share, over the estate
 	// router's datastore and artifacts so a node whose own copy is out of
@@ -2159,6 +2160,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Backups:     e.Backends().Fleet,
 			BackupFloor: boot.Stream.TrackerRetention.Floor(),
 			NodeID:      nodeID,
+			// THE ARTIFACTS, decided per artifact and shaped by the
+			// reader's role; nil on an engine with no router.
+			Artifacts: artifactsSource,
 			// AN ARTIFACT'S DATA, decided per artifact and shaped by each
 			// collection's read rule; nil on an engine with no router.
 			ArtifactData: artifactDataSource,
@@ -2254,6 +2258,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// than mounting its routes over a nil service. See
 	// [api.HumanSurfaces.Mount].
 	humans.Mount(&opts)
+	// THE ARTIFACTS' ROUTES, each stating its authority where it is
+	// mounted. Set only where it was built, so an absent surface is a nil
+	// interface rather than a nil service mounted.
+	if artifactsSurface != nil {
+		opts.Artifacts = artifactsSurface
+	}
 	// THE ARTIFACT DATASTORE'S WRITES, its undo, its schema, the per-viewer
 	// state and the CSV export, each deciding on the artifact's own shares
 	// where it is mounted. Set only where it was built, so an absent
