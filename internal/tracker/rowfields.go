@@ -238,7 +238,7 @@ func listOrdered(q Query) bool {
 
 // listCursorOrder is the order a list-ordered cursor is minted under, and it
 // is not one [renderOrder] can produce — so a list cursor handed to a keyset
-// query, or a keyset cursor handed to a list, is refused by [cursorClause]'s
+// query, or a keyset cursor handed to a list, is refused by [cursorArms]'s
 // own order check rather than resumed against the wrong sequence.
 const listCursorOrder = "priority-list"
 
