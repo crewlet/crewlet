@@ -8888,22 +8888,68 @@ count its live `nodes` and name the worst of its standing `alarms` (the company
 has never taken a backup, so one stands). The replay and the Go half each hold
 all of it, so a red run says which side stopped.
 
-The capture ends with a **write**, made AS THE PERSON A SESSION RESOLVES TO:
-a browser holding the cookie a password sign-in minted, whom the identity
-directory binds to the founder's seat, pins a project through
-`POST /operator/act/set_pins` under its own operation key in
-`Idempotency-Key`, exactly as the dashboard's `act` sends it. The route is the
-node's own operator surface, the one `crewlet run` builds inside
-`api.NewHumanSurfaces`, so the harness wires no second catalogue, and the
-viewer names the write among its `acts` before it is pressed. The Go
-half holds the answer to the read it promises: its `position` is in the grammar
-a read accepts back, and `GET /worklet/people/{handle}` at
+The captured tab is a **person's**: a browser holding the cookie a password
+sign-in minted, whom the identity directory binds to the founder's seat, holding
+`admin` — every permission there is, so the one tab is sent every kind of frame
+a tab can be. It is the only kind of socket the company's own chat is pushed to,
+since every chat frame is decided per recipient seat; one tab is one person, as
+on the dashboard. So the capture also carries the founder using **Chatlet** the way
+its screen does: a room made from the tab with a seat in it, looked at (the
+`chat_focus` frame), a message said and reacted to, and the seat asked in that
+message's thread. The seat's turn claims to have answered, is refused for
+having said nothing, replies in the thread — held on that round until the
+room's presence has shown it at work, which is true only while its turn runs —
+and submits citing the reply: three rounds, the captured company's cap, so the
+turn ends on its own `delivered` rather than on the engine's rescue, which the
+Go half reads off the turn's phase record. Then the first message is edited and
+deleted, the room read through the seat's answer with `mark_chat_read`, left,
+and pruned through the human write surface's
+`POST /chatlet/channels/{channel_id}/prune` — an administrator's gesture, with the
+step-up the sign-in has just proved. Every other change is a press of the act
+transport. Every chat push kind is then on the capture, held against the
+engine's own list (`stream.ChatPushKinds`), so a kind the engine adds is a
+capture that stops passing until it is produced. The replay is handed an
+account of the room written beside the frames, never read from them — its id,
+the person and the seat, the highest `channel_seq` the engine minted, every
+record it took (its op, the message it names, its author and their kind, and a
+post's thread), where its last record sits and the cursor the founder flushed.
+What the engine minted is read from its answers: the room's id, each message's
+id from its post's receipt (the seat's from the room's transcript), the
+numbering, the prune's position. Each record is otherwise the gesture the
+capture made, written down as it made it — the founder as the human seat a
+person writes as, through the act transport and the prune route alike, and the
+seat as an agent in the thread it was asked in — so an author or a thread the
+write path recorded wrongly is a failure rather than part of the expectation.
+The replay holds the store to that account: the room filed with that
+high-water mark, a frame filed for every record naming exactly what the capture
+did and none naming anything else (the Go half holds the frames to the same
+account first, so a red run says which side stopped), its newest moment the
+prune's position, presence that at some frame showed the founder looking and
+the seat working, and the founder's read state with that cursor and a
+revision. Each record is held on its own because the room's messages taken
+together are named by its posts alone: an edit, a delete or a reaction filed
+under the wrong message is a screen re-reading the wrong range of a room, and
+only a comparison per frame sees it.
+
+The capture also carries two **writes** whose floors the replay holds, each
+made AS THE PERSON THE SESSION RESOLVES TO under its own operation key in
+`Idempotency-Key`, exactly as the dashboard's `act` sends it. The founder pins
+a project through `POST /operator/act/set_pins` after the frames are taken, and
+the founder's first message in the room is `POST /operator/act/post_message`.
+The route is the node's own operator surface, the one `crewlet run` builds
+inside `api.NewHumanSurfaces`, so the harness wires no second catalogue, and
+the viewer names each write among its `acts` before it is pressed. The Go half
+holds each answer to the read it promises: its `position` is in the grammar a
+read accepts back, and `GET /worklet/people/{handle}` (for the pin) or
+`GET /chatlet/channels/{channel_id}/messages` (for the message) at
 `read_level=session&min_position=<position>` is served at `session` and already
-holds the pin. The replay hands the same answer, byte for byte, to the client's
-own `act` and `SessionFloors`: the tab's `tracker` floor must be that position,
-and a read of `work_person` or `work_items` must name it as its `min_position`.
-A floor the client could not parse raises nothing, and the screen that pressed
-the button would redraw from before the press with nothing to say so.
+holds the write. The replay hands the same answers, byte for byte, to the
+client's own `act` and one tab's `SessionFloors`: the `tracker` floor must be
+the pin's position and the `chat` floor the message's, and a read of
+`work_person` or `work_items` — or of `chat_messages` or `chat_channels` — must
+name its log's as its `min_position`. A floor the client could not parse raises
+nothing, and the screen that pressed the button would redraw from before the
+press with nothing to say so.
 
 The suites themselves run in **Europe/Berlin** under jsdom (`vitest.config.ts`), and
 `src/test/environment.test.tsx` says so by what the zone produces — both
