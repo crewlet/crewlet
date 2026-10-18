@@ -6,8 +6,10 @@
 /**
  * Every `kind` a frame from `/ws/stream` carries — the pushes, the one push
  * addressed to a SEAT rather than to every tab (`inbox_changed`, sent only to
- * a socket whose `watch` of that seat was allowed), the two answers to a
- * query, and the pong.
+ * a socket whose `watch` of that seat was allowed), the company's own chat
+ * (`chat_*`, each frame sent only to the viewers its room admits, a person's
+ * read state only to their own sockets), the two answers to a query, and the
+ * pong.
  *
  * EXACTLY THE ENGINE'S `stream.Kind` CONSTANTS, held both ways by
  * `internal/api/stream`'s push-kind gate. A kind the engine sends that this
@@ -29,6 +31,14 @@ export type PushKind =
   | "tools"
   | "health"
   | "inbox_changed"
+  | "chat_posted"
+  | "chat_edited"
+  | "chat_deleted"
+  | "chat_reacted"
+  | "chat_room_changed"
+  | "chat_membership_changed"
+  | "chat_cursor_moved"
+  | "chat_presence"
   | "result"
   | "error"
   | "pong";

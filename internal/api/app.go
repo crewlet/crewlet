@@ -43,6 +43,10 @@ type App struct {
 	state  *livestate.LiveState
 	stream *stream.Service
 
+	// chatLive is the process's chat hub, which the socket carries chat
+	// through. The App's to mount and never to start or stop.
+	chatLive *stream.ChatHub
+
 	// runtime is the engine this process runs beside. See NodeRuntime.
 	runtime NodeRuntime
 
@@ -363,6 +367,23 @@ type Options struct {
 	// company's state until it closed on its own.
 	Credentials CredentialFeed
 
+	// ChatLive is the company's own chat on this node's sockets: the
+	// process's chat hub ([NewEngineChatLive]), whose committed frames, presence
+	// and read-state pushes the socket carries for each viewer the room
+	// admits. [New] mounts the socket over it and says so to it
+	// ([stream.ChatHub.AttachSockets]) — which is what makes it follow a
+	// peer's batches while this node's own copy is out of service, and
+	// what starts its read-state push — and neither starts nor stops it:
+	// the hub is the PROCESS's, attached to the engine on every node
+	// whether or not that node serves an API.
+	//
+	// REQUIRED, for Inbox's reason: a hub exists on every node, so a nil
+	// one here is a wiring mistake, and the screen it costs — a room that
+	// never updates while a person is talking in it — looks exactly like
+	// a quiet company. A company whose chat is not the engine's simply
+	// gives it nothing to say.
+	ChatLive *stream.ChatHub
+
 	// State is the projection to serve. Nil builds an empty one on
 	// [Options.Now].
 	//
@@ -674,6 +695,11 @@ func New(opts Options) (*App, error) {
 	// AND WHOSE CREDENTIALS MOVED, deciding the sockets opened with them
 	// again.
 	opts.Credentials.SetOnIdentityMoved(a.pushIdentityMoved)
+	// AND THE COMPANY'S OWN CHAT, on the socket mounted below — told so
+	// once this app is built, not before: a build that failed past here
+	// serves no socket, and a hub told otherwise would follow a peer's
+	// batches for nobody.
+	a.chatLive = opts.ChatLive
 
 	tree := opts.Assets
 	if tree == nil {
@@ -751,7 +777,7 @@ func New(opts Options) (*App, error) {
 	if err := a.mountDeployment(mux); err != nil {
 		return nil, fmt.Errorf("api: mount the deployment's controls: %w", err)
 	}
-	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.csrf, a.stream, a.answer))
+	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.csrf, a.stream, a.answer, a.chatLive))
 	// The OPERATOR surface: the same tracker and knowledge tools a seat
 	// holds, offered to a person's own assistant over MCP and to the person
 	// themself over the act route. Under its own
@@ -880,10 +906,11 @@ func New(opts Options) (*App, error) {
 	// exactly where the deployment had published them over https.
 	if opts.Bootstrap == nil || !opts.Bootstrap.API.Public.Enabled() {
 		a.handler = servedOn(opts.Bootstrap, false, chain)
-		return a, nil
+	} else {
+		a.handler = servedOn(opts.Bootstrap, false, partition(false, chain))
+		a.public = servedOn(opts.Bootstrap, true, partition(true, chain))
 	}
-	a.handler = servedOn(opts.Bootstrap, false, partition(false, chain))
-	a.public = servedOn(opts.Bootstrap, true, partition(true, chain))
+	a.chatLive.AttachSockets()
 	return a, nil
 }
 
@@ -963,6 +990,7 @@ func (o Options) missing() error {
 		{"Runtime", o.Runtime == nil},
 		{"Inbox", o.Inbox == nil},
 		{"Credentials", o.Credentials == nil},
+		{"ChatLive", o.ChatLive == nil},
 		{"Sources.Company", o.Sources.Company == nil},
 		{"Sources.Events", o.Sources.Events == nil},
 		{"Sources.NodeID", strings.TrimSpace(o.Sources.NodeID) == ""},

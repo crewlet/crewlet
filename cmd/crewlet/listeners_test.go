@@ -236,7 +236,8 @@ func TestASeatsNodeWithNoAPIPortBindsNothing(t *testing.T) {
 		listeners.close(context.Background(), logging.Get("test"))
 		t.Fatalf("bindListeners on api.port 0 = %v, %v; want nothing bound", listeners, err)
 	}
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, listeners, logging.Get("test"))
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, nil, listeners,
+		logging.Get("test"))
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}

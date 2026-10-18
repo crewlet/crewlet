@@ -34,6 +34,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
@@ -1230,6 +1231,20 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 		return err
 	}
 
+	// THE COMPANY'S OWN CHAT, LIVE, on EVERY node and from here on: a seat
+	// raises its working indicator on whichever node its turn runs on and
+	// every node answers the fleet's presence probe, so the hub is the
+	// PROCESS's rather than the API's — built after the engine and attached
+	// through its setter, started before it is attached. serveAPI mounts the
+	// socket over it where this node serves one. See [api.EngineChatLive].
+	chatLive := api.NewEngineChatLive(ctx, e)
+	// abandon takes down what a boot that failed before the engine started
+	// had brought up: the hub before the engine whose appliers call it.
+	abandon := func() {
+		chatLive.Stop(context.WithoutCancel(ctx))
+		e.Stop(context.WithoutCancel(ctx))
+	}
+
 	// ONE keyring for the process, and it is the ENGINE's: the reconciler
 	// opens and authenticates revisions under it, so the config surface
 	// seals them with the same one and the seed seals the file with it.
@@ -1246,7 +1261,7 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// node will actually serve rather than under the file's and then moved.
 	reconciler, err := startReconciler(ctx, e, boot, seed, cipher, log)
 	if err != nil {
-		e.Stop(context.WithoutCancel(ctx))
+		abandon()
 		return err
 	}
 
@@ -1294,7 +1309,7 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// `ingress` surface, and config refuses either without `data`.
 	configSurface, err := companySurface(e, boot, cipher)
 	if err != nil {
-		e.Stop(context.WithoutCancel(ctx))
+		abandon()
 		return err
 	}
 	// The surface a DISCONNECT removes a block through. Until it is set
@@ -1328,9 +1343,10 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// and a webhook that arrives in the window is retained rather than
 	// dropped because the mailboxes are created before any claiming (see
 	// Node.Start).
-	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, configSurface, dev, listeners, log)
+	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, configSurface,
+		chatLive.Hub(), dev, listeners, log)
 	if err != nil {
-		e.Stop(context.WithoutCancel(ctx))
+		abandon()
 		return err
 	}
 	handedOver = true
@@ -1345,7 +1361,7 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 		// a boot that failed: the listener is already accepting, and it
 		// is the drain, not a closed port, that refuses new work on it.
 		// See [shutdown].
-		shutdown(context.WithoutCancel(ctx), e, surface, log)
+		shutdown(context.WithoutCancel(ctx), e, surface, chatLive, log)
 		return err
 	}
 
@@ -1461,7 +1477,7 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// fails at once rather than waiting on a broker. Either way the order
 	// after the drain is the one a signal takes, and a second shutdown path
 	// that skipped it would be one more order to keep correct.
-	shutdown(context.WithoutCancel(ctx), e, surface, log)
+	shutdown(context.WithoutCancel(ctx), e, surface, chatLive, log)
 	if fatal != nil {
 		return fmt.Errorf("the node stopped itself: %w", fatal)
 	}
@@ -1504,17 +1520,27 @@ func interruptContext() (context.Context, context.CancelFunc) {
 //     ended, and not before: a node that closed it first answered neither
 //     probe for the whole drain, so its liveness probe failed while it was
 //     doing exactly what it should.
-//  3. TEAR THE ENGINE DOWN, after the listener, because both probes read the
+//  3. STOP THE CHAT HUB, after the drain and the listener — the drain's
+//     turns raise and clear indicators, and the sockets it served are closed
+//     by then — and before the engine, whose appliers would otherwise go on
+//     announcing batches into a hub that no longer drains them. It is
+//     detached from the engine first, so the native indicator driver goes
+//     with it, and never attached again.
+//  4. TEAR THE ENGINE DOWN, after the listener, because both probes read the
 //     broker and the coordination store the teardown closes.
 //
 // A nil surface is a node that bound no listener — api.port 0, or a node
 // without the ingress role and with no tool bridge to serve — and it drains
-// and stops the same way with nothing to close between the two.
-func shutdown(ctx context.Context, e *engine.Engine, surface *httpSurface, log *slog.Logger) {
+// and stops the same way with nothing to close between the two. A nil hub is
+// a boot that never built one.
+func shutdown(ctx context.Context, e *engine.Engine, surface *httpSurface,
+	chatLive *api.EngineChatLive, log *slog.Logger) {
+
 	e.Drain(ctx)
 	if surface != nil {
 		surface.stop(ctx, log)
 	}
+	chatLive.Stop(ctx)
 	e.Stop(ctx)
 }
 
@@ -1748,10 +1774,14 @@ func companySurface(e *engine.Engine, boot *config.Bootstrap,
 // from now on and stores it into each listener's handler slot, which is the
 // whole of the handover. A failure here leaves both listeners with the
 // caller, which closes them.
+//
+// chatLive is the process's chat hub, which the socket is mounted over where
+// this node serves the API — and only there, which is what tells the hub its
+// node shows anybody what it hears.
 func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	reconciler *engine.Reconciler, cipher secrets.Cipher,
-	configSurface *configapi.Service, dev *auth.DevPrincipal, listeners *nodeListeners,
-	log *slog.Logger,
+	configSurface *configapi.Service, chatLive *stream.ChatHub,
+	dev *auth.DevPrincipal, listeners *nodeListeners, log *slog.Logger,
 ) (*httpSurface, error) {
 	if boot.API.Port == 0 {
 		// A real posture: a node with no listener at all. Saying so is the
@@ -2012,6 +2042,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// WHOSE CREDENTIALS MOVED, from this engine's own identity
 		// applier — what closes the open tab of a session that ended.
 		Credentials: e,
+		// THE COMPANY'S OWN CHAT on this node's sockets: the process's
+		// hub, attached to the engine on every node and mounted here.
+		ChatLive: chatLive,
 		// THE ENGINE'S OWN RECEIVER, not a second one built here. The API
 		// verifies tokens this process's engine minted, and a second
 		// receiver is a second construction of one decision that nothing
