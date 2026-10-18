@@ -93,7 +93,7 @@ func TestAFileIsHeldToItsClassBound(t *testing.T) {
 }
 
 // A VERSION'S MANIFEST IS SORTED, UNIQUE, BOUNDED, AND ITS ENTRY IS A PAGE ITS
-// KIND RENDERS — and a sheet may hold nothing at all.
+// KIND RENDERS, and a sheet may hold nothing at all.
 func TestAManifestIsValidatedAgainstItsKind(t *testing.T) {
 	t.Parallel()
 	page := entry(t, 1, "index.html", "<!doctype html>")
@@ -149,7 +149,7 @@ func manyFiles(t *testing.T, n int) artifacts.Manifest {
 }
 
 // THE STORED FORM IS CANONICAL, so two writers that listed the same files in
-// another order, or a handler hash twice, store one row — and a row in another
+// another order, or a handler hash twice, store one row, and a row in another
 // form is refused on read rather than trusted.
 func TestTheManifestHasOneStoredForm(t *testing.T) {
 	t.Parallel()

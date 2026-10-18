@@ -99,7 +99,7 @@ func TestNoTestFileReachesBackIntoTheEngine(t *testing.T) {
 	for name, paths := range imports {
 		for _, path := range paths {
 			if strings.HasPrefix(path, module) && !slices.Contains(leafSet, path) {
-				t.Errorf("%s imports %q — the leaf's own suite may not reach back "+
+				t.Errorf("%s imports %q: the leaf's own suite may not reach back "+
 					"into the engine", name, path)
 			}
 		}
@@ -111,7 +111,7 @@ func TestNoTestFileReachesBackIntoTheEngine(t *testing.T) {
 
 // stdlib reports a standard-library import path: the first element of every
 // module path is a domain and carries a dot, and no standard-library path's
-// does — the toolchain's own rule.
+// does: the toolchain's own rule.
 func stdlib(path string) bool {
 	first, _, _ := strings.Cut(path, "/")
 	return !strings.Contains(first, ".")

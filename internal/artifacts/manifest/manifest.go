@@ -89,7 +89,7 @@ func Validate(kind artifacts.Kind, m artifacts.Manifest) error {
 	for i, e := range m.Files {
 		if i > 0 && m.Files[i-1].Path >= e.Path {
 			return fmt.Errorf("%w: the files are not in strictly ascending path order "+
-				"at %q (after %q) — a manifest is sorted bytewise by path and names "+
+				"at %q (after %q): a manifest is sorted bytewise by path and names "+
 				"each path once", ErrInvalid, e.Path, m.Files[i-1].Path)
 		}
 		p, err := CleanPath(e.Path)

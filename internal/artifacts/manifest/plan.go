@@ -78,7 +78,7 @@ func Next(mode Mode, base artifacts.Manifest, entry string, changes []Change) (a
 		if c.Remove {
 			if mode != ModePatch {
 				return artifacts.Manifest{}, fmt.Errorf("%w: %q is removed in a whole "+
-					"publish, which states the full set — leave it out instead",
+					"publish, which states the full set; leave it out instead",
 					ErrInvalid, p)
 			}
 			if _, held := files[p]; !held {

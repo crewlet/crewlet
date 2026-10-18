@@ -54,7 +54,7 @@ func CleanPath(raw string) (string, error) {
 	for _, prefix := range []string{ReservedRuntimePrefix, ReservedAssetsPrefix} {
 		if strings.HasPrefix(lower, prefix) {
 			return "", fmt.Errorf("%w: %q is under %q, which the serving origin "+
-				"routes itself — publish the file under another folder", ErrReserved,
+				"routes itself; publish the file under another folder", ErrReserved,
 				p, prefix)
 		}
 	}
