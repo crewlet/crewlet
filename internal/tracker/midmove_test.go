@@ -396,3 +396,39 @@ func TestAGenerationRecordNamesItsOperatorsKindAndCredential(t *testing.T) {
 		})
 	}
 }
+
+// A MOVED TASK IS FOUND BY ITS TAGS IN THE PROJECT IT MOVED TO, AND ONLY THERE.
+//
+// A project's tag filter is read from that project's tag rows — the arm seeks
+// the slug and the project together — so it answers right only while every tag
+// row carries its task's CURRENT project. The applier rewrites a task's tag
+// rows with the task on every apply, which is what this holds across the one
+// change that moves a task between projects: found in OPS after the move, and
+// never in ENG.
+func TestAMovedTaskIsFoundByItsTagsInItsNewProject(t *testing.T) {
+	t.Parallel()
+	r := lateTagFixture(t)
+	tagged := newTask("m-tagged")
+	tagged.Key = "ENG-tagged"
+	tagged.Tags = []string{"late-tag"}
+	if _, err := r.writer.CreateTask(t.Context(), "op-tagged", tagged, nil); err != nil {
+		t.Fatalf("file the tagged task: %v", err)
+	}
+	r.drain()
+	if _, err := r.writer.MoveTaskToProject(t.Context(),
+		statelog.NewOpID(time.Now(), "move"), "m-tagged", "OPS", nil); err != nil {
+		t.Fatalf("move the tagged task: %v", err)
+	}
+	r.drain()
+	for container, want := range map[string]int{"project:OPS": 1, "project:ENG": 0} {
+		for _, filter := range []string{"late-tag", "all:late-tag"} {
+			got := ids(r.ask(map[string]any{"container": container, "tag": filter,
+				"subtasks": "separate"}))
+			if len(got) != want || (want == 1 && got[0] != "m-tagged") {
+				t.Errorf("tag=%s in %s answers %v after the move, want %d "+
+					"task(s) — the tag rows still carry the project it left",
+					filter, container, got, want)
+			}
+		}
+	}
+}
