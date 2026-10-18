@@ -767,7 +767,7 @@ each column into swimlanes:
 
 | Axis | Columns |
 |---|---|
-| `status` · `status_group` · `priority` | The closed sets, in the order they mean rather than by size |
+| `status` · `status_group` · `priority` | The closed sets, in the order they mean rather than by size — as columns and as swimlanes |
 | `assignee` · `type` · `tag` · `project` · `unit` · `routing_unit` · `parent` | A column per distinct value, biggest first |
 | `f.<slug>` | A custom field's own values |
 | `due:day` · `due:week` · `start:week` | The calendar day or week a date falls in, headed `2031-04-16` or `2031-W16` |
