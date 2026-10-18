@@ -364,23 +364,29 @@ func segmentFirst(ctx context.Context, tx *sql.Tx, seg segment,
 func sortValuesOf(ctx context.Context, tx *sql.Tx, terms []sortTerm,
 	id string) ([]any, error) {
 
-	columns := make([]string, len(terms))
-	for i, term := range terms {
-		columns[i] = term.Column
-	}
-	joins, joinArgs := sortJoins(terms)
 	values := make([]any, len(terms))
 	targets := make([]any, len(terms))
 	for i := range values {
 		targets[i] = &values[i]
 	}
-	if err := tx.QueryRowContext(ctx, "SELECT "+strings.Join(columns, ", ")+
-		" FROM tracker_tasks t"+joins+" WHERE t.id = ?",
-		append(joinArgs, id)...).Scan(targets...); err != nil {
+	statement, args := sortValuesStatement(terms, id)
+	if err := tx.QueryRowContext(ctx, statement, args...).Scan(targets...); err != nil {
 		return nil, fmt.Errorf("worklet: read the around task's sort values: %w",
 			err)
 	}
 	return values, nil
+}
+
+// sortValuesStatement is [sortValuesOf]'s read, named for the plan test: the
+// one task by its key, and each sort term's join beside it.
+func sortValuesStatement(terms []sortTerm, id string) (string, []any) {
+	columns := make([]string, len(terms))
+	for i, term := range terms {
+		columns[i] = term.Column
+	}
+	joins, joinArgs := sortJoins(terms)
+	return "SELECT " + strings.Join(columns, ", ") + " FROM tracker_tasks t" +
+		joins + " WHERE t.id = ?", append(joinArgs, id)
 }
 
 // renderReverse is [renderOrder] read backwards — the order "the row before

@@ -947,6 +947,12 @@ comma-separated list (`any:api,ui`) and `range` takes both ends
 own text begins `<scheme>://` is a value rather than an operator call, so a
 `url` field can be filtered by what it holds.
 
+A filter finds the tasks holding a value from that field's own values, so a
+rare value is cheap to ask about anywhere. **Sorting, grouping or totalling by
+a field** is the other question — what the tasks being listed hold — and reads
+each listed task's own value, so it costs the board or the list in front of
+you rather than every value the company has ever set on that field.
+
 **A saved view's query is parsed when it is saved**, not when it is opened. A
 view that cannot be run is otherwise discovered by whoever opens it, weeks
 later, with no way to tell a typo from a grammar change — so a save runs the
