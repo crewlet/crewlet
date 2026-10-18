@@ -232,6 +232,7 @@ describe("every widget a section offers", () => {
       "integrations",
       "budgets",
       "work",
+      "chat",
       "live",
       "knowledge",
       "settings",

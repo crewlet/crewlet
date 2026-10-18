@@ -6,7 +6,7 @@
  * The WORKSPACES, from `nav.ts`'s one table, in its groups (`SIDEBAR_GROUPS`):
  * the three that are about you (Home, Inbox, My work), then Company (Overview,
  * Policies, Org chart, Schedules, Integrations, Budgets), then Workspace
- * (Work, Knowledge, Artifacts, Live), and Settings at the foot.
+ * (Work, Chat, Knowledge, Artifacts, Live), and Settings at the foot.
  * Then three LIVE SHORTCUTS, each a real object with its own path: the views
  * this reader pinned, the pages they starred, and the turns running now.
  * Nothing else. A workspace's own sections are tabs in its page header and its
@@ -48,9 +48,9 @@
  * row that vanished when access is absent is indistinguishable from one that
  * does not exist. Its title names what would open it — the access a reader
  * would ask an admin for: Inbox, My work and Work say Tracker, Knowledge says
- * Knowledge. A workspace only PART of which is closed is not locked as a
- * whole: Settings draws its locks per section, in its column, and is open to
- * every reader through Spend's readings.
+ * Knowledge, Chat says Chat. A workspace only PART of which is closed is not
+ * locked as a whole: Settings draws its locks per section, in its column, and
+ * is open to every reader through Spend's readings.
  *
  * AND WHAT A LOCKED ROW WOULD SHOW IS NOT ASKED FOR: the Inbox's badge, My
  * work's count and the pinned views are tracker answers, so a reader without

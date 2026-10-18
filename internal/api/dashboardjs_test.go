@@ -1055,6 +1055,9 @@ const (
 	// sheet rather than adding to it, and the rail head's status, the
 	// engine's state beside the company's name, brought its rules and its
 	// component into the shell: 312.1 KiB. 314 KiB, the same two seconds.
+	// The company's own chat adds about 4.5 KiB to it: its pushes and rooms
+	// in the socket client, its routes and its rail are the frame's, because
+	// a reader is told of a mention on whatever screen they are on.
 	initialBudget = 314 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
