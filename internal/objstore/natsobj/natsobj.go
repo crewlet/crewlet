@@ -462,29 +462,29 @@ func (b *Backend) Put(ctx context.Context, name string, r io.Reader, m objstore.
 			// had acknowledged, to send it again.
 			data := slices.Clone(buf[:n])
 			digest.Write(data)
-			fut, err := b.puts.PublishMsgAsync(&nats.Msg{Subject: subject, Data: data})
-			if err != nil {
-				return b.failPut(name, subject, window, err)
+			fut, pubErr := b.puts.PublishMsgAsync(&nats.Msg{Subject: subject, Data: data})
+			if pubErr != nil {
+				return b.failPut(ctx, name, subject, window, pubErr)
 			}
 			window.futs = append(window.futs, fut)
 			size += uint64(n)
 			pieces++
 			if len(window.futs) == putWindow {
-				if err := b.settle(window); err != nil {
-					return b.failPut(name, subject, window, err)
+				if err = b.settle(window); err != nil {
+					return b.failPut(ctx, name, subject, window, err)
 				}
 				window = &inFlight{futs: window.futs[:0]}
 			}
 		}
-		if readErr == io.EOF {
+		if readErr == io.EOF { //nolint:errorlint // the end is io.EOF itself and a wrapped EOF is a failure; see filler
 			break
 		}
 		if readErr != nil {
-			return b.failPut(name, subject, window, readErr)
+			return b.failPut(ctx, name, subject, window, readErr)
 		}
 	}
-	if err := b.settle(window); err != nil {
-		return b.failPut(name, subject, window, err)
+	if err = b.settle(window); err != nil {
+		return b.failPut(ctx, name, subject, window, err)
 	}
 	meta := jetstream.ObjectMeta{Name: name, Opts: &jetstream.ObjectMetaOptions{ChunkSize: MessageBytes}}
 	if m.ContentType != "" {
@@ -494,7 +494,7 @@ func (b *Backend) Put(ctx context.Context, name string, r io.Reader, m objstore.
 		ModTime: time.Now().UTC(), Chunks: pieces, Digest: jetstream.GetObjectDigestValue(digest)}
 	data, err := json.Marshal(info)
 	if err != nil {
-		return b.failPut(name, subject, nil, fmt.Errorf("encode the metadata: %w", err))
+		return b.failPut(ctx, name, subject, nil, fmt.Errorf("encode the metadata: %w", err))
 	}
 	msg := nats.NewMsg(metaSubject(name))
 	msg.Header.Set(jetstream.MsgRollup, jetstream.MsgRollupSubject)
@@ -510,7 +510,7 @@ func (b *Backend) Put(ctx context.Context, name string, r io.Reader, m objstore.
 		if got, readErr := b.meta(readCtx, name); readErr == nil && got.NUID == id && !got.Deleted {
 			return nil
 		}
-		return b.failPut(name, subject, nil, fmt.Errorf("publish the metadata: %w", err))
+		return b.failPut(ctx, name, subject, nil, fmt.Errorf("publish the metadata: %w", err))
 	}
 	return nil
 }
@@ -575,16 +575,18 @@ func (b *Backend) settle(w *inFlight) error {
 // failPut cleans up after a failed put and answers why it failed: what is
 // still in flight waited for, once more at most a window's pace (so no piece
 // lands after the purge), then the pieces purged, both under a context of
-// their own. A purge that fails, or a piece that lands after it, leaves
-// pieces no metadata names, which the collector abandons
-// ([Backend.Pending]); the put fails with its own error either way.
-func (b *Backend) failPut(name, subject string, w *inFlight, cause error) error {
+// their own, detached from the put's cancellation (a put cancelled part way
+// still purges what it published) but carrying its values. A purge that
+// fails, or a piece that lands after it, leaves pieces no metadata names,
+// which the collector abandons ([Backend.Pending]); the put fails with its
+// own error either way.
+func (b *Backend) failPut(ctx context.Context, name, subject string, w *inFlight, cause error) error {
 	for w != nil && w.settled < len(w.futs) {
 		if err := b.settle(w); err != nil && w.settled < len(w.futs) && errors.Is(err, nats.ErrTimeout) {
 			break
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), cleanupBudget)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupBudget)
 	defer cancel()
 	if err := b.stream.Purge(ctx, jetstream.WithPurgeSubject(subject)); err != nil {
 		log.WarnContext(ctx, "natsobj_put_cleanup_failed", "object", name, "subject", subject,
