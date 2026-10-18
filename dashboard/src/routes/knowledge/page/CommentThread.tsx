@@ -26,7 +26,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { useAct } from "~/lib/useAct.ts";
 import type { PageComment } from "~/protocol/index.ts";
 
-export function PageComments({
+export function PageCommentThread({
   pageID,
   title,
   comments,
