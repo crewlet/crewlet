@@ -185,11 +185,11 @@ A few things worth knowing when deploying Crewlet:
   company's spend must not reach somebody, do not give them a credential
   (`docs/concepts/identity-and-access.md#everybodys-overview`).
 - **Carrying a credential is not the same as being allowed to use it.** Every
-  route and every socket question declares who may ask it — everybody, one of
-  the [three permissions](docs/concepts/identity-and-access.md#access-admin-and-one-permission-per-app)
-  (`admin`, `tracker`, `knowledge`), or a verb the answer decides record by
-  record — and both transports are decided by the same registry, so a question
-  cannot be reached by choosing a channel. A route registered without saying
+  route and every socket question declares who may ask it (everybody, one of
+  the [permissions](docs/concepts/identity-and-access.md#access-admin-and-one-permission-per-app),
+  `admin`, `tracker`, `knowledge` or `artifacts`, or a verb the answer decides
+  record by record), and both transports are decided by the same registry, so
+  a question cannot be reached by choosing a channel. A route registered without saying
   so is a build failure rather than a route that answers to anyone.
 - **`admin` is host access: it runs code on every engine host.** It is
   deliberately one permission over the whole company — its configuration, its

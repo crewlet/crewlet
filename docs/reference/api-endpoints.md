@@ -524,8 +524,8 @@ trusted, because the engine never terminates TLS itself.
 
 Holding a credential is not the same as being allowed to use it here. Every
 route and every socket question declares who may ask it — **everybody**, one
-of the [three permissions](../concepts/identity-and-access.md#access-admin-and-one-permission-per-app)
-(`admin`, `tracker`, `knowledge`), or a verb of the authority table that the
+of the [permissions](../concepts/identity-and-access.md#access-admin-and-one-permission-per-app)
+(`admin`, `tracker`, `knowledge`, `artifacts`), or a verb of the authority table that the
 answer decides record by record — and a principal that does not carry what it
 declares is refused, a Tier A token included, whose declared permissions are
 read through the node's `api.auth.admin` posture on every request.

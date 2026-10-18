@@ -104,8 +104,9 @@ api:
       - id: founder
         token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26 characters at minimum
         grants: [admin]   # what this credential may do — required and
-                          #   non-empty: admin, tracker, knowledge. Admin
-                          #   runs the company and includes every app.
+                          #   non-empty: admin, tracker, knowledge,
+                          #   artifacts. Admin runs the company and
+                          #   includes every app.
 
 secrets:                  # REQUIRED. Every record on every state log — the
                           #   tracker's, the knowledge base's — is signed
@@ -516,9 +517,9 @@ export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
 crewlet iam invite you@example.com -seat founder -grants admin
 ```
 
-`-grants admin` stores `admin` and both apps beside it; `-grants` takes
-`admin`, `tracker`, `knowledge` or `none`, and left out on an invitation it
-sends every app and not admin.
+`-grants admin` stores `admin` and every app beside it; `-grants` takes
+`admin`, `tracker`, `knowledge`, `artifacts` or `none`, and left out on an
+invitation it sends every app and not admin.
 
 ```
 invitation 0192f4c8-…
