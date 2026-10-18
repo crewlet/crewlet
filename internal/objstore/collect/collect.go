@@ -81,11 +81,22 @@
 // # Audit: what the store has lost
 //
 // Every object the estate names should be in the backend, whole — a file's
-// record is written only after its object is stored. The audit asks the
-// backend for each one and finds two things: an object it does not hold
-// (MISSING, asked about once more at the end of the pass before it is called
-// so) and one it holds at another size, or under another digest where the
-// backend keeps one (DAMAGED). Both are files the company cannot read: the
+// record is written only after its object is stored. The audit holds every
+// reference against what the backend LISTS and finds two things: an object it
+// does not hold (MISSING, asked about once more, by name, at the end of the
+// pass before it is called so) and one it holds at another size, or under
+// another digest where the backend keeps one (DAMAGED).
+//
+// A LISTING, NEVER A QUESTION PER OBJECT. One stat per reference was a
+// request per file a day, which on a bucket that bills per request is the
+// audit's whole cost, and on the broker a round trip to the stream's leader
+// per file; a listing answers a thousand names a request on S3 and streams
+// the broker's metadata in one consumer. It is read a WINDOW at a time
+// ([auditWindow] keys, the smallest above the last window's), and the
+// references in that window walked in key order beside it, so the audit holds
+// a window of the inventory in memory and never the whole of it: a store of
+// more objects than a window is listed once per window, still a small
+// fraction of the requests a stat apiece cost. Both are files the company cannot read: the
 // `objects_missing` alarm and the list `crewlet objects status` prints, each
 // named as the file that holds it, since a person restores files rather
 // than keys. A durable backend loses nothing, so a non-zero count is the
@@ -93,9 +104,8 @@
 //
 // THE ESTATE IS READ A PAGE AT A TIME AND THE BACKEND IS ASKED BETWEEN PAGES,
 // never inside a read: a read of the estate holds one of the node's few
-// reader connections and the snapshot under it, and a question to the backend
-// is a network round trip — tens of thousands of them inside one read would
-// hold the connection for the length of the audit.
+// reader connections and the snapshot under it, and a listing or a question
+// to the backend is a network round trip that connection must not wait on.
 //
 // WHAT AN AUDIT FOUND OUTLIVES THE AUDIT THAT FAILED AFTER IT, and the duty
 // moving: the report keeps the last audit that ran to its end beside the
@@ -106,6 +116,7 @@
 package collect
 
 import (
+	"container/heap"
 	"context"
 	"errors"
 	"fmt"
@@ -143,11 +154,20 @@ const CollectInterval = time.Hour
 // AuditInterval is how often the store is asked for every object the estate
 // names.
 //
-// A DAY: an audit is one stat per referenced object, and what it looks for is a
-// backend losing acknowledged bytes — an event, not a drift — so a day is
-// soon enough to page somebody and a fraction of the requests a tighter
-// cadence would cost on a store that bills per request.
+// A DAY: an audit lists the store once per window, and what it looks for is a
+// backend losing acknowledged bytes (an event, not a drift), so a day is soon
+// enough to page somebody and a fraction of the requests a tighter cadence
+// would cost on a store that bills per request.
 const AuditInterval = 24 * time.Hour
+
+// auditWindow is how many listed objects one window of the audit holds in
+// memory, matched against the references whose keys fall in it.
+//
+// A HUNDRED THOUSAND: about a hundred bytes an entry with the map and the heap
+// around it, so ten megabytes or so, on a data node whose own estate is far
+// larger; and the million objects the broker's bucket is sized for are ten
+// listings, against the million stats the audit used to make.
+const auditWindow = 100_000
 
 // PinsPerDay is how many times the collector pins the estate in a day at its
 // steady cadence — a collection every [CollectInterval] and an audit every
@@ -293,6 +313,11 @@ type Options struct {
 type Collector struct {
 	opts Options
 
+	// window is [auditWindow], which New sets and nothing in the engine
+	// changes: a field so this package's tests can cross windows with a
+	// handful of objects, every use reading it rather than the constant.
+	window int
+
 	mu     sync.Mutex
 	status Status
 }
@@ -311,7 +336,7 @@ func New(opts Options) (*Collector, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	return &Collector{opts: opts}, nil
+	return &Collector{opts: opts, window: auditWindow}, nil
 }
 
 // Status is what the last passes found.
@@ -517,10 +542,10 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 	}
 	var (
 		shown []MissingFile
-		// suspects is every reference the store answered "not found"
-		// for, asked about again once the walk is over: a store that had
-		// not caught up with an object a moment ago — a bucket that lists
-		// a new object late — is not one that lost it.
+		// suspects is every reference no listing showed, asked about by
+		// name once the walk is over: a store that had not caught up with
+		// an object a moment ago (a bucket that lists a new object late, a
+		// gateway that left its date out) is not one that lost it.
 		suspects []Reference
 		complete = true
 	)
@@ -529,48 +554,55 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 			shown = append(shown, MissingFile{Object: ref.Object.Key, NamedBy: ref.NamedBy, Damaged: damaged})
 		}
 	}
-	// judge is the store's answer about one reference: missing (false),
-	// or held and checked against the row.
-	judge := func(ref Reference) (bool, error) {
-		info, err := c.opts.Store.Stat(ctx, ref.Object.Key)
-		switch {
-		case errors.Is(err, objstore.ErrNotFound):
-			return false, nil
-		case err != nil:
-			return false, fmt.Errorf("ask the store for %s: %w", ref.Object.Key, err)
-		}
+	// judge holds one reference against what the store holds for it.
+	judge := func(ref Reference, info objstore.Info) {
 		if info.Size != ref.Object.Size || (info.Digest != "" && info.Digest != ref.Object.Hash) {
 			r.Damaged++
 			note(ref, true)
 		}
-		return true, nil
 	}
-	for i, s := range c.opts.References {
-		// ONE QUESTION PER REFERENCE, and no set of the keys asked about:
-		// a key is named only by the write that uploaded it, so no two
-		// rows name one, and a set would hold the company's whole
-		// inventory in memory for nothing.
-		whole, err := s.Each(ctx, v[i], func(ref Reference) error {
-			r.Referenced++
-			held, err := judge(ref)
-			if err == nil && !held {
-				suspects = append(suspects, ref)
-			}
-			return err
-		})
+	var after objstore.Key
+	for {
+		win, err := c.listWindow(ctx, after)
 		if err != nil {
-			return nil, fmt.Errorf("objstore/collect: audit %s's references: %w", s.Name(), err)
+			return nil, fmt.Errorf("objstore/collect: audit: %w", err)
 		}
-		complete = complete && whole
+		for i, s := range c.opts.References {
+			// ONE LOOK PER REFERENCE, and no set of the keys looked at: a
+			// key is named only by the write that uploaded it, so no two
+			// rows name one.
+			whole, err := s.Each(ctx, v[i], after, func(ref Reference) error {
+				if !win.last && ref.Object.Key.Compare(win.through) > 0 {
+					return SkipTable
+				}
+				r.Referenced++
+				if info, held := win.held[ref.Object.Key]; held {
+					judge(ref, info)
+				} else {
+					suspects = append(suspects, ref)
+				}
+				return nil
+			})
+			if err != nil {
+				return nil, fmt.Errorf("objstore/collect: audit %s's references: %w", s.Name(), err)
+			}
+			complete = complete && whole
+		}
+		if win.last {
+			break
+		}
+		after = win.through
 	}
 	for _, ref := range suspects {
-		held, err := judge(ref)
-		if err != nil {
-			return nil, fmt.Errorf("objstore/collect: %w", err)
-		}
-		if !held {
+		info, err := c.opts.Store.Stat(ctx, ref.Object.Key)
+		switch {
+		case errors.Is(err, objstore.ErrNotFound):
 			r.Missing++
 			note(ref, false)
+		case err != nil:
+			return nil, fmt.Errorf("objstore/collect: ask the store for %s: %w", ref.Object.Key, err)
+		default:
+			judge(ref, info)
 		}
 	}
 	slices.SortFunc(shown, func(a, b MissingFile) int {
@@ -581,6 +613,66 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 	})
 	r.Completed = complete
 	return shown, nil
+}
+
+// window is one window of the audit's listing: what the store holds under
+// every key in it, the last key in it, and whether it is the last window.
+type window struct {
+	held    map[objstore.Key]objstore.Info
+	through objstore.Key
+	last    bool
+}
+
+// listWindow lists the store once and keeps the window's smallest keys
+// after `after` (the zero key: from the first). The window is the last one
+// when the listing held no more keys than that; otherwise it runs through the
+// largest key kept, and the next window starts after it.
+//
+// AN UNDATED LISTING IS NO FAILURE HERE. An entry the backend could not date
+// is left out of the listing ([objstore.ErrUndated]), so the reference naming
+// it reads as unlisted and is asked about by name at the end of the pass,
+// which answers whether the object is there; the collection, which deletes,
+// is the pass that must refuse to judge what it cannot date.
+func (c *Collector) listWindow(ctx context.Context, after objstore.Key) (window, error) {
+	held := map[objstore.Key]objstore.Info{}
+	var largest keyHeap
+	truncated := false
+	err := c.opts.Store.Backend().List(ctx, func(info objstore.Info) error {
+		k, ours := keyNamed(info.Name)
+		if !ours || (!after.IsZero() && k.Compare(after) <= 0) {
+			return nil
+		}
+		held[k] = info
+		heap.Push(&largest, k)
+		if largest.Len() > c.window {
+			delete(held, heap.Pop(&largest).(objstore.Key))
+			truncated = true
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, objstore.ErrUndated) {
+		return window{}, err
+	}
+	w := window{held: held, last: !truncated}
+	if truncated {
+		w.through = largest[0]
+	}
+	return w, nil
+}
+
+// keyHeap is a max-heap of keys: the window keeps the smallest keys it has
+// seen, so the one it gives up is always the largest.
+type keyHeap []objstore.Key
+
+func (h keyHeap) Len() int           { return len(h) }
+func (h keyHeap) Less(i, j int) bool { return h[i].Compare(h[j]) > 0 }
+func (h keyHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *keyHeap) Push(x any)        { *h = append(*h, x.(objstore.Key)) }
+func (h *keyHeap) Pop() any {
+	old := *h
+	k := old[len(old)-1]
+	*h = old[:len(old)-1]
+	return k
 }
 
 // keyNamed is the key a listed name stores, and whether it is one at all —
