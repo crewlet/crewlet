@@ -243,33 +243,54 @@ func BenchmarkS7BucketCeiling(b *testing.B) {
 	}
 }
 
-// memoryObjects is how many objects the memory benchmark holds: enough that
-// the per-object figure is not the bucket's fixed cost.
-const memoryObjects = 10_000
+// memoryFloor and memoryObjects are the two points the memory benchmark reads
+// the heap at: the cost of an object is the difference over the objects put
+// between them, so neither the bucket's fixed cost nor what earlier spikes in
+// the same process left behind is counted. A hundred thousand objects apart,
+// because what a member keeps per object (the index entry of the object's
+// metadata subject) is a few hundred bytes, and the heap moves by megabytes
+// as the broker's caches fill and expire.
+const (
+	memoryFloor   = 20_000
+	memoryObjects = 120_000
+)
 
 // BenchmarkS7BrokerMemoryPerObject reports the heap one object held in the
 // bucket costs the process, the embedded broker included.
+//
+// WITHOUT THE FSYNC, alone of the spikes: what a member holds in memory per
+// object is the same whether each write was flushed or not, and a hundred
+// thousand flushed puts would take most of an hour on a laptop's disk. The
+// objects are one byte, so the figure is the per-object cost and not the
+// bytes'.
 func BenchmarkS7BrokerMemoryPerObject(b *testing.B) {
 	for range b.N {
 		b.StopTimer()
-		br := startBrokers(b, topoSolo)
+		br := startBrokersOn(b, topoSolo, js.Config{StoreMaxBytes: memberStoreBytes})
 		store, err := objstore.NewStore(openBucket(b, br.queues[0], 1, 256<<20))
 		if err != nil {
 			b.Fatalf("build the object store: %v", err)
 		}
-		body := bytes.Repeat([]byte("m"), 1<<10)
-		before := settledHeap()
-		b.StartTimer()
-		for k := range memoryObjects {
-			if _, err := store.Put(b.Context(), bytes.NewReader(body), int64(len(body)),
-				objstore.PutMeta{}); err != nil {
-				b.Fatalf("put object %d: %v", k, err)
+		body := []byte("m")
+		put := func(from, to int) {
+			for k := from; k < to; k++ {
+				if _, err := store.Put(b.Context(), bytes.NewReader(body), int64(len(body)),
+					objstore.PutMeta{}); err != nil {
+					b.Fatalf("put object %d: %v", k, err)
+				}
 			}
 		}
+		b.StartTimer()
+		put(0, memoryFloor)
 		b.StopTimer()
-		after := settledHeap()
-		b.ReportMetric(float64(after-before)/memoryObjects, "heap-B/object")
-		b.ReportMetric(float64(after-before)/memoryObjects*1_000_000/mib, "heap-MiB-per-million")
+		floor := settledHeap()
+		b.StartTimer()
+		put(memoryFloor, memoryObjects)
+		b.StopTimer()
+		held := settledHeap()
+		perObject := float64(held-floor) / (memoryObjects - memoryFloor)
+		b.ReportMetric(perObject, "heap-B/object")
+		b.ReportMetric(perObject*1_000_000/mib, "heap-MiB-per-million")
 	}
 }
 

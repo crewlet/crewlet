@@ -66,7 +66,13 @@ type brokers struct {
 // the durability the review's figures assume.
 func startBrokers(tb testing.TB, topo topology) *brokers {
 	tb.Helper()
-	base := js.Config{SyncAlways: true, StoreMaxBytes: memberStoreBytes}
+	return startBrokersOn(tb, topo, js.Config{SyncAlways: true, StoreMaxBytes: memberStoreBytes})
+}
+
+// startBrokersOn starts the topology from base, for the one spike whose
+// figure does not depend on the fsync and would take an hour behind it.
+func startBrokersOn(tb testing.TB, topo topology, base js.Config) *brokers {
+	tb.Helper()
 	switch topo {
 	case topoSolo:
 		base.StoreDir = tb.TempDir()
