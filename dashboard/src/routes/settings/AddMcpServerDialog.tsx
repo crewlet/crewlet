@@ -86,6 +86,8 @@ function addRefusalWords(refusal: ConfigRefusal, name: string): string {
       }
     case "draining":
       return `This node is draining and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
+    case "starting":
+      return `This node is still starting and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
     case "unreachable":
       return "The engine did not answer, so the server may or may not have been added. Look for it in the list before trying again.";
     case "problems":

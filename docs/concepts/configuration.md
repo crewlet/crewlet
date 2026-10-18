@@ -50,7 +50,8 @@ seat, and an invitation or a create names the one they will hold, so a company
 that declares no `kind: human` seat has nowhere to put anybody. That is right
 for a company its agents run alone, administered through the deployment's Tier
 A tokens, so it is never refused: `crewlet validate` and every `/config` write
-name it in an `advisory` warning at `roles`.
+name it in an `advisory` warning at `roles`, and every node logs that warning
+when it applies the company ([`config_advisory`](#what-an-applied-company-is-worth-knowing)).
 
 ### Tier A example (`crewlet.yaml`)
 
@@ -177,11 +178,13 @@ both ways out: a data node on a leaf, a broker member without `data`, and
 `ingress` or `workers` without `data`. Every data node holds the whole estate
 as a member of the broker, and a node without `data` reaches the estate
 through one — so a node without `data` on an embedded stream joins the fleet
-as a leaf through `stream.leaf.urls`. `crewlet validate` also warns about two
-valid shapes: a member whose peer list names more than four other members
-(no stream keeps more than five copies, so a sixth member is a voter holding
-nothing — a fleet grows by adding leaves), and a fleet node that left
-`node.roles` undeclared and so runs every role.
+as a leaf through `stream.leaf.urls`. Two valid shapes are warned about, by
+`crewlet validate` and by every start of the node, which logs them as
+`config_advisory`: a member whose peer list names more than four other
+members (no stream keeps more than five copies, so a sixth member is a voter
+holding nothing — a fleet grows by adding leaves), and a fleet node that left
+`node.roles` undeclared and so runs every role. The start judges the roles it
+runs with, so a fleet node given `-roles` is not told they are undeclared.
 
 #### `node.labels`
 
@@ -216,7 +219,7 @@ The engine boots in this order:
    the only thing that sets the console destination; a later command changes how
    loud it is with `SetVerbosity` and keeps the sink already installed. The level
    and format come from the file's `logging:` block with any `-log-level` /
-   `-log-format` / `-debug` flag layered on top, and only where the flag was
+   `-log-format` / `-debug` flag folded into it, and only where the flag was
    actually given. Lines emitted *before* this — the file's own `${VAR}`
    warnings, a refused field — come out under the flags alone, which is the
    best a process can do about a file it has not opened yet
@@ -233,20 +236,55 @@ The engine boots in this order:
    the Tier A document itself never reaches this step, so stderr is the only
    record of it, `logging.stderr` notwithstanding
 4. Hold the Tier A this process is about to run to Tier A's rules once more —
-   the file with every `-roles`, `-api-host` and `-api-port` flag applied. The
-   engine does this itself, before it opens anything, because it is the one
-   thing that runs Tier A: the file was validated as it loaded, but a flag, or
-   a bootstrap a tool built in code, reaches the engine having passed no rule,
-   and a node that opened its store first would have migrated a database for a
-   config it was always going to refuse
-5. Open the store file and start or dial the stream — a node without `data` opens a scratch store, deleted at every boot, and joins the members' broker as a leaf
-6. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
-7. Start the **core runtime** — on every data node, with a company or without one: the [state log](../guides/consistency.md) for **every** registered domain, the node gate over every identity-claiming log, the [identity estate](identity-and-access.md) with the loops that keep this node's view of it, and — on a node that publishes — the log's own trim and the identity duties. None of it depends on a company, and a node with none is exactly the one that has to sign a Tier A token's session in — `ingress` requires `data`, so the node anybody signs in on always has it — because that session is what the dashboard creates the company through; the company's first person is invited or created once it declares the human seat they will hold. It is **every** domain rather than the identity estate alone because a join replaces the whole replicated file and a snapshot names every registered domain, and because the trim counts nodes per log: a node that applied part of the register could neither adopt nor donate, and would pin the rest of the logs' trims for as long as it was up. A node without `data` starts none of it: it applies no log, and reaches the estate — the identity directory included — through a node that holds it ([A node that holds no data](scaling.md#a-node-that-holds-no-data))
-8. Start the API inside this process, bound to `api.host:api.port`, wire up auth middleware, register `/config/*` routes — and, when `api.public.port` is set, the routes outside parties call (`/webhooks/*`, `/otlp/{token}`, `/mcp/{token}`) on that second listener instead (see [Deployment → Exposing webhooks without the admin API](../guides/deployment.md#exposing-webhooks-without-the-admin-api)). A node without the `ingress` role serves only its `/health` and `/ready` probes on `api.port`, and a seats node's agent-mode tool bridge beside them, or on `api.public.port` when that is set
-9. Start the [control plane](control-plane.md) — the reconcile loop that polls the activation pointer, plus a broadcast `crewlet.config.revision_activated` nudge that wakes it early
-10. `SELECT payload FROM company_config WHERE is_active <> 0`
-   - **Row present**: apply the payload, which spawns the full company — including the **native halves** the company declares: the tracker's and the knowledge base's writers and readers over the logs step 7 already applies, their lexical index, change feeds and embedding duty
-   - **No row**: engine stays in the **unconfigured** state — the API keeps serving so an operator can push the first revision via `PUT /config` or `crewlet config import`, and a Tier A token's session signs in — which is how the dashboard creates the company. Nobody can be invited or created yet: every person holds a human seat the company declares, so that waits for the first revision
+   the file with every run flag applied: `-roles`, `-api-host`, `-api-port`
+   and the four logging flags. The file was validated as it loaded, but a flag
+   reaches every rule that reads what it moved — `-api-port` on a file with no
+   `api:` block turns on an API that has to name `api.external_url` — so
+   `crewlet run` asks as soon as the flags are in, before it binds or opens
+   anything, and its refusal names them. Once that has passed, every advisory
+   Tier A raises is logged, one `config_advisory` line at `WARN` each — after
+   the file is open, so they are in it, and judged on that same document (see
+   [what every start says](../reference/cli.md#every-start-says-what-its-tier-a-is-worth-knowing))
+5. Bind `api.host:api.port` — and `api.public.port`, on a node that serves one
+   (an `ingress` node with it set, or a seats node serving its agent-mode tool
+   bridge there) — and log `api_bound`. A port somebody holds fails the boot
+   here, before anything slow has run. From now until step 13 the sockets
+   answer what a starting node answers: `/health` `503` with
+   `"phase": "recovering"` until step 11 and `200` with
+   `"phase": "preparing"` from step 11 to step 13, `/ready` `503 starting`
+   throughout, and every route the node will serve `503 starting` with a
+   `Retry-After` (see
+   [While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting))
+6. On a data node started without `-company`, read the revision its own store
+   marks active (`SELECT payload FROM company_config WHERE is_active <> 0`),
+   which opens and migrates that store and closes it again: the engine opens
+   its own. A node without `data` reads nothing here, since its store is
+   scratch, and learns the company from the fleet in step 12
+7. The engine holds Tier A to its rules again as it starts, before it starts
+   the stream or opens a store of its own, because it is the one thing that
+   runs Tier A: a bootstrap a tool built in code reaches it having passed no
+   rule
+8. Start or dial the stream — the embedded broker recovers its file store
+   here, as long as the store is large — then open the store file: a node
+   without `data` opens a scratch store, deleted at every boot, and joins the
+   members' broker as a leaf
+9. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
+10. Start the **core runtime** — on every data node, with a company or without one: the [state log](../guides/consistency.md) for **every** registered domain, the node gate over every identity-claiming log, the [identity estate](identity-and-access.md) with the loops that keep this node's view of it, and — on a node that publishes — the log's own trim and the identity duties. None of it depends on a company, and a node with none is exactly the one that has to sign a Tier A token's session in — `ingress` requires `data`, so the node anybody signs in on always has it — because that session is what the dashboard creates the company through; the company's first person is invited or created once it declares the human seat they will hold. It is **every** domain rather than the identity estate alone because a join replaces the whole replicated file and a snapshot names every registered domain, and because the trim counts nodes per log: a node that applied part of the register could neither adopt nor donate, and would pin the rest of the logs' trims for as long as it was up. A node without `data` starts none of it: it applies no log, and reaches the estate — the identity directory included — through a node that holds it ([A node that holds no data](scaling.md#a-node-that-holds-no-data))
+11. **The node has recovered what it holds.** It logs `engine_recovered`, and
+    `/health` turns `200` with `"phase": "preparing"`: everything above is the
+    node's own and is bounded by the deployment's startup probe, and
+    everything below is the company's, which no probe bounds — a part that
+    waits on something else has a bound of its own, and the apply has none
+    beyond its parts' (see
+    [Sizing the startup probe](../guides/deployment.md#sizing-the-startup-probe)).
+    The state logs step 10 started catch up in the background from here, and
+    hold the node's seats rather than its probes. Then, with the revision
+    step 6 read (or the `-company` file):
+    - **A company**: apply it, which spawns the full company — the sandbox backends it configures, the **native halves** it declares (the tracker's and the knowledge base's writers and readers over the logs step 10 already applies, their lexical index, change feeds and embedding duty), and its seats' tools, the shared MCP servers among them, each within its own `startup_timeout_seconds`
+    - **No company**: the engine stays in the **unconfigured** state — the API serves from step 13 so an operator can push the first revision via `PUT /config` or `crewlet config import`, and a Tier A token's session signs in — which is how the dashboard creates the company. Nobody can be invited or created yet: every person holds a human seat the company declares, so that waits for the first revision
+12. Start the [control plane](control-plane.md): publish the file's revision where one was given, then one reconcile against the activation pointer — on a node that booted with no company and finds one active, this is where the company of step 11 is built — before the loop that polls the pointer, and a broadcast `crewlet.config.revision_activated` nudge that wakes it early, run from step 14 on
+13. Hand the listeners the API inside this process — auth middleware, the `/config/*` routes and the rest — and, when `api.public.port` is set, the routes outside parties call (`/webhooks/*`, `/otlp/{token}`, `/mcp/{token}`) on that second listener instead (see [Deployment → Exposing webhooks without the admin API](../guides/deployment.md#exposing-webhooks-without-the-admin-api)). A node without the `ingress` role serves only its `/health` and `/ready` probes on `api.port`, and a seats node's agent-mode tool bridge beside them, or on `api.public.port` when that is set. Logged as `api_listening` (`api_probes_listening`)
+14. Start the engine — claim this node's seats, each with its per-role MCP children — and the reconcile loop
 
 **A boot that fails leaves nothing running.** Any step above can fail — an
 unreachable broker, a keyring the node cannot open, a provider whose model is a
@@ -312,7 +350,7 @@ Until the first active row exists, the engine holds an empty `Organization` (no 
 **What stays running:**
 
 - The Tier A resources — the stream, the store file, the API socket — all up.
-- The **core runtime** ([Bootstrap Sequence](#bootstrap-sequence) step 6): every domain's state log, the node gate and the identity estate, and on a node that publishes the trim and the identity duties. So an unconfigured node **signs a Tier A token's session in** — which is how the dashboard creates its company — and can be evicted from and readmitted to the logs it is counted on. What it cannot do yet is put anybody on a seat: every person holds a human seat the company declares, so an invitation or a create naming a seat answers `409 no_active_revision`, as `GET /iam/seats` does, until a company declaring one is applied. Then its first person is invited or created onto that seat under a Tier A token, exactly as everybody after them is (`crewlet iam invite -seat`, `crewlet iam create -seat`).
+- The **core runtime** ([Bootstrap Sequence](#bootstrap-sequence) step 10): every domain's state log, the node gate and the identity estate, and on a node that publishes the trim and the identity duties. So an unconfigured node **signs a Tier A token's session in** — which is how the dashboard creates its company — and can be evicted from and readmitted to the logs it is counted on. What it cannot do yet is put anybody on a seat: every person holds a human seat the company declares, so an invitation or a create naming a seat answers `409 no_active_revision`, as `GET /iam/seats` does, until a company declaring one is applied. Then its first person is invited or created onto that seat under a Tier A token, exactly as everybody after them is (`crewlet iam invite -seat`, `crewlet iam create -seat`).
 - The API's `/config/*` routes and the node's [reconcile loop](control-plane.md) — which is exactly what wakes an unconfigured node when the first revision lands.
 - A structured log line carrying `state=unconfigured`, so the unconfigured posture is obvious in logs and on the dashboard.
 
@@ -321,7 +359,7 @@ Until the first active row exists, the engine holds an empty `Organization` (no 
 | Route | Behaviour while unconfigured |
 |-------|------------------------------|
 | `GET /health` | `200 {"status": "unconfigured", "node": "node-0", "configured": false, ...}` — 200 because the status code is liveness; read `configured` for readiness |
-| `GET /ready` | `503 {"ready": false, "configured": false, "reason": "unconfigured", ...}` — an unconfigured node cannot verify a webhook signature, so it stays out of rotation. `reason` names which of [the four](control-plane.md#posture-what-a-lagging-node-does) took it out |
+| `GET /ready` | `503 {"ready": false, "configured": false, "reason": "unconfigured", ...}` — an unconfigured node cannot verify a webhook signature, so it stays out of rotation. `reason` names what took it out — `unconfigured` here; every reason `/ready` can name, in its order of precedence, is in [the routes table](../reference/api-endpoints.md#routes) |
 | `GET /config` | `404 {"error": "no_active_revision"}` with a hint |
 | `GET /config/revisions` | `200 []` |
 | `PUT /config` | Accepted, and creates the first active revision, as long as the FLEET has no activation either: a node that has not caught up with its fleet answers `412 already_configured` (with `If-None-Match: *`) or `409 revision_advanced`, naming the revision the fleet is on. Send no precondition, or `If-None-Match: *` to insist nothing is configured yet; an `If-Match` names a revision to match, so it answers `412 no_active_revision` |
@@ -400,7 +438,7 @@ in a fixed order, and names each stage it got through.
 2. **`company`** — validate and build the new epoch, resolving `${VAR}` where each provider is *constructed*. A refusal here changes nothing: this node keeps serving the previous epoch.
    A company with no `providers.llm` is not refused: it builds with no model registry (see [A Company With No Model Provider](#a-company-with-no-model-provider)).
    The revision's sandbox catalogue (`providers.sandbox`) is built straight after, and one that cannot be built refuses the apply there — reporting `secrets, company` and nothing else, since nothing below has touched the node yet. On **every** node, whether or not it runs a sandbox yet: the alternative publishes a company whose sandbox-enabled seats plan around a box nobody can mint.
-3. **`native`** — bring up the native tracker's and knowledge base's **halves** on a node running neither, for its first company on them: their read and write sides, the lexical index, and — on a node that publishes — the embedding duty and the change feeds. Not their logs: every node has applied every domain's log since boot, company or none ([Bootstrap Sequence](#bootstrap-sequence) step 6), so what the first company brings up is the writers and readers over logs the node already holds. **Before** `tools`, because the native tools are registered only where the halves exist, and before `integrations`, whose inbound edge includes the native parsers. A start that fails refuses the apply. **Conditional:** reported only on the apply that started it — once per process, and never at all on a node that met its company at boot. The halves follow the fleet's logs rather than a revision, so a later refusal of the same apply does not take them down, and which halves run are the ones that first company declared: changing `tracker.backend` or `knowledge.backend` after that still takes a restart.
+3. **`native`** — bring up the native tracker's and knowledge base's **halves** on a node running neither, for its first company on them: their read and write sides, the lexical index, and — on a node that publishes — the embedding duty and the change feeds. Not their logs: every node has applied every domain's log since boot, company or none ([Bootstrap Sequence](#bootstrap-sequence) step 10), so what the first company brings up is the writers and readers over logs the node already holds. **Before** `tools`, because the native tools are registered only where the halves exist, and before `integrations`, whose inbound edge includes the native parsers. A start that fails refuses the apply. **Conditional:** reported only on the apply that started it — once per process, and never at all on a node that met its company at boot. The halves follow the fleet's logs rather than a revision, so a later refusal of the same apply does not take them down, and which halves run are the ones that first company declared: changing `tracker.backend` or `knowledge.backend` after that still takes a restart.
 4. **`sandbox_runtime`** — bring up the [code sandbox](code-sandbox.md)'s coordinator and completion poll on a node running neither, for the first revision whose `providers.sandbox` reaches a cell, and prepare the seats this node **already** holds: each was taken before there was anything to prepare, so each now attaches its completion topic and recovers the runs recorded on it, as a seat taken afterwards does on its way in. A seat whose preparation fails is handed back (a voluntary `unprepared` release), so its next acquisition, here or on a peer, runs the whole of it. **Before** `tools` for the reason `native` is: `run_sandbox` and an agent-mode executor are offered only where the runtime exists. A start that fails refuses the apply. **Conditional:** reported only on the apply that started it — once per process, and never at all on a node that met a sandbox company at boot. Like the native halves it is a fact about the process rather than a revision, so a later refusal of the same apply does not take it down.
 5. **`tools`** — equip the new epoch with this node's builtins. An epoch is published, never mutated, so each one gets its own registry; a node that equipped only its first would serve a company whose agents silently lost every builtin at the first config change. (The one part of a published epoch that does change is its shared MCP servers' tools: a server that comes up after its start failed, or comes back from a crash with a different tool list, is refiled into the current epoch's registry without an apply. See [A server that dies, or will not start](../guides/tools-and-mcp.md#a-server-that-dies-or-will-not-start).)
 6. **`learning`**: rebuild the reflection workers against the new org. Deliberately cannot fail the apply: reflecting against a stale org is a far smaller wrong than not reflecting. The one exception is a node's **first** company: a node that booted with none has no reflect dispatcher to swap workers into, so this stage builds it, and a build that fails refuses the apply for the reason it fails a boot (a company served without it learns nothing while looking healthy). What feeds the dispatcher is not this stage's: each seat's reflection subject is attached by the node that acquires the seat, beside its mailbox.
@@ -738,6 +776,34 @@ A seat may not be called `none` either — what `integrations.datadog.route_to` 
 
 A written document is refused for breaking one. A revision being applied that breaks one is applied, booted on, reloaded and reverted to like any other, and each node logs `org_admission_warning` once per violation when it applies the epoch. Every other rule is a **runnable** rule, and nothing applies a revision that breaks one.
 
+### What an applied company is worth knowing
+
+A revision can also be valid and carry a consequence: a company with no human
+seat, which can admit nobody; a human seat with no contact, which nobody can
+message on a chat surface; a token ceiling another ceiling leaves unable to
+refuse a turn; a `-e NAME` in `providers.sandbox.local.run_args` that nothing
+supplies; an Anthropic model the capability table does not know. `crewlet
+validate`, a `/config` write and a dry run answer these to whoever asked, as
+`advisory` warnings. **Every node also logs them, once for each epoch it
+applies**, one `config_advisory` line at `WARN` each, and never for a revision
+it refused:
+
+| Field | Meaning |
+|---|---|
+| `config` | `company`: which tier. A node's start logs its Tier A's advisories under the same event with `config=bootstrap` (see [`crewlet run`](../reference/cli.md#every-start-says-what-its-tier-a-is-worth-knowing)) |
+| `revision`, `epoch` | The revision and the activation the node applied |
+| `path` | Where in the document the remedy is written |
+| `seat`, `unit` | The seat's handle or the unit's name the advisory is about — present only when it is about one |
+| `detail` | The whole message: what will happen, then what to do instead |
+
+The log is the only place some companies are told. A `/config` answer goes to
+the person or the system that wrote, but a company a node imports from
+`-company` or `-import-company` is answered to nobody, so before this line it
+ran silent unless somebody ran `crewlet validate` on the file. The two other
+kinds of warning keep their own lines at apply — `org_dangling_reference` for a
+[reference that resolves to nothing](organization-model.md#dangling-references)
+and `org_admission_warning` above — so no fact is logged twice.
+
 ---
 
 ## Auth
@@ -958,15 +1024,17 @@ are separate settings because they are separate sockets — a person reaches
 Without a public listener the two are the same address and only
 `api.external_url` is stated.
 
-### What `crewlet validate` warns about
+### The API postures Tier A warns about
 
 Three API postures are **valid** and worth reading before a deployment runs on
 them. None can be a refusal, because each is a configuration that works exactly
-as written with its consequence somewhere else:
+as written with its consequence somewhere else. `crewlet validate` prints each,
+and every start of a node serving the API logs each as a `config_advisory`
+line at `WARN`:
 
 | Warning | Why it is not a refusal |
 |---------|-------------------------|
-| `api.auth.accept_insecure` is set | It is what makes an otherwise-refused posture legal. The acknowledgement is a decision made once that everybody after inherits, so `crewlet validate` says it every time and the engine logs it on every start |
+| `api.auth.accept_insecure` is set | It is what makes an otherwise-refused posture legal — `totp: optional` on an address a browser reaches over the network. The acknowledgement is a decision made once that everybody after inherits, so `crewlet validate` says it every time and every start logs it |
 | `api.external_url` is `http://` off loopback | The session cookie cannot carry `Secure` and no `__Host-` prefix protects it, so every credential travels in the clear — but a tunnel, a staging box and an internal network genuinely look like this. The one posture it *would* be a refusal for, an optional second factor, already is one |
 | `api.external_url` is `https://` and `api.trusted_proxies` is empty | The engine never terminates TLS itself, so something in front of it does — and unless it is named, every caller's source is its address. The sign-in throttle then keys every caller's attempts at one login together, so a stranger guessing at somebody's login slows that person's own sign-in, and every audit row names the proxy. Not a refusal because one front end is right with the list empty: a balancer that passes each client's own address through as the peer rather than in a header |
 
@@ -1095,7 +1163,8 @@ answer says whether the caller's credential may change the document
 writes the document — a lead's edit of their own team included — is drawn
 disabled with that sentence, and the org builder opens read-only.
 
-`crewlet validate` warns about a list that is valid and almost certainly wrong:
+`crewlet validate` warns about a list that is valid and almost certainly wrong,
+and so does every start of the node, as `config_advisory`:
 an id that names no token in `api.auth.tokens` (it lets nobody write), and a
 list naming no configured token at all (nothing may change the document
 through the API — a frozen document). An entry outside the token-id grammar

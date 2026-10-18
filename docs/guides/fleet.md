@@ -190,7 +190,8 @@ the engine's own tracker at scale. No stream keeps more than five copies
 (`stream.replicas` stops at five, JetStream's own ceiling), so a sixth member
 holds no copy anybody asked for and only adds a voter every election and
 every create waits on — `crewlet validate` warns about a peer list naming more
-than four other members. **Beyond five, a fleet grows by adding leaves, not
+than four other members, and so does every start of such a member, as
+`config_advisory`. **Beyond five, a fleet grows by adding leaves, not
 members.**
 
 **A member of a fleet persists.** A member that names a cluster, lists peers or
@@ -582,6 +583,14 @@ it turns `200` only once the node has linked to the broker, holds its
 presence lease and — running seats — has been admitted to claim (see
 [Probes on a node without ingress](../reference/api-endpoints.md#probes-on-a-node-without-ingress)). The engine does not impose its own cutoff, because that would be a
 guess at yours.
+
+A node coming up answers both from its first seconds, before it serves:
+`/ready` is `503 starting` until it does, which is what holds the rollout, and
+`/health` is `503` only while the node recovers what it holds — the startup
+probe's window, sized by the store ([Sizing the startup probe](deployment.md#sizing-the-startup-probe))
+— and `200` while its company's tools come up, so a slow tool server never
+gets a starting node restarted (see
+[While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting)).
 
 The node keeps its listener for the whole drain, so both probes answer
 until the last turn has finished, and closes it only then. A request that

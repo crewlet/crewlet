@@ -78,6 +78,7 @@ export const ACT_ERRORS = {
   no_active_revision:
     "This node has not been handed a company yet, so there is nothing to change. Try again once it has.",
   draining: "This node is shutting down and takes no changes now. Try again in a moment.",
+  starting: "This node is still starting and takes no changes yet. Try again in a moment.",
   // The tool's own refusal classes. `internal_error` is one of them — a fault
   // of the node, which no retry clears — and is also what a failure that
   // carried no class at all is answered with.

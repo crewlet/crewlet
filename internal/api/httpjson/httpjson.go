@@ -135,6 +135,15 @@ const (
 	// belongs on another node, or on this one once it has restarted.
 	CodeDraining Code = "draining"
 
+	// CodeStarting is a request that reached a node still starting: its
+	// listener is bound and answers, and the surface that serves the route is
+	// not up yet. Nothing was done with the request; it belongs on this node
+	// again after the Retry-After it carries, or on a peer. Its own code
+	// rather than `draining`, because the remedy is the opposite one: a
+	// starting node is about to serve, so asking it again is right, where a
+	// draining one is going away.
+	CodeStarting Code = "starting"
+
 	// CodeNoRoute is a path nothing on this node serves — a route that is
 	// not registered, a surface its build or configuration does not mount,
 	// an asset that is not in the build. Answered by [Mux] for the mux's
@@ -849,6 +858,8 @@ var codes = map[Code]string{
 		"in this node's log.",
 	CodeDraining: "This node is shutting down and is not taking new work. " +
 		"Try another node, or this one once it has restarted.",
+	CodeStarting: "This node is still starting and is not serving yet. " +
+		"Try again in a moment.",
 	CodeNoRoute: "Nothing here at that path. Check the address, or whether " +
 		"this node runs it.",
 	CodeMethodNotAllowed: "That path does not take this method. The Allow " +

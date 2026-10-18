@@ -184,6 +184,13 @@ describe("classifySave", () => {
     expect(
       classifySave({ status: 503, body: { error: "draining", detail: "restarting" } }, EDIT, false),
     ).toMatchObject({ kind: "refused" });
+    // AND SO IS A STARTING NODE'S: its listener refuses every route before
+    // the node serves, so the save was never read. Settling it read the
+    // revision chain of a node that had not started for a write that never
+    // happened.
+    expect(
+      classifySave({ status: 503, body: { error: "starting", detail: "recovering" } }, EDIT, false),
+    ).toMatchObject({ kind: "refused" });
     // Every other 5xx stays unknown: the engine stores the revision before it
     // activates it, so a failure after that point may have landed.
     expect(

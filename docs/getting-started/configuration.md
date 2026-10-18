@@ -1457,11 +1457,11 @@ retention:
                                   #   person, a team, a scheduler's name. Free
                                   #   text, read by a human at the moment an
                                   #   alarm names it. `crewlet validate` warns
-                                  #   when it is unset — a company that never
-                                  #   backs up never trims, so "who is
-                                  #   responsible for this" has a real answer on
-                                  #   every deployment that intends to keep
-                                  #   working
+                                  #   when it is unset, and every start logs
+                                  #   it — a company that never backs up never
+                                  #   trims, so "who is responsible for this"
+                                  #   has a real answer on every deployment
+                                  #   that intends to keep working
 ```
 
 **`crewlet validate` prints warnings as well as refusals**, and they are
@@ -1474,6 +1474,17 @@ member count because it is this node's own route or a repeat, a node that
 declares the `ingress` role and binds no port, a unit keyed on a name somebody
 will rename, a company that declares no human seat and so can admit nobody.
 
+**`validate` is not the only place a warning is said.** Most deployments
+never run it — an image, a chart or an operator renders the document and
+starts the node — so `crewlet run` logs every Tier A warning at every start
+too, one `config_advisory` line at `WARN` each, into the log file when there is
+one, and judged on the document with that run's flags folded in (see
+[`crewlet run`](../reference/cli.md#every-start-says-what-its-tier-a-is-worth-knowing)).
+A company's advisories are logged the same way by every node, once for each
+epoch it applies, which is the only report a company seeded from a file with
+`-company` gets (see
+[What an applied company is worth knowing](../concepts/configuration.md#what-an-applied-company-is-worth-knowing)).
+
 `api.port` is **one** listener per node, on every node, and `node.roles`
 decides what it carries rather than whether it exists. A node without the
 `ingress` role serves its two
@@ -1485,7 +1496,9 @@ on this listener, and a second address for the same two routes would be one
 more thing to keep in step. `crewlet validate` warns about a node whose
 declared roles include `ingress` while its port is `0`: the node every
 integration, browser and probe looks for would bind nothing. It warns rather
-than refuses, because `crewlet run -api-port` sets the port at run time.
+than refuses, because `crewlet run -api-port` sets the port at run time — and
+`crewlet run` judges the same warning on the port and roles its flags leave
+the node with, logging it as `config_advisory` at every start.
 
 `api.host` and `api.port` are what this node **binds**, which is rarely where it
 **answers**: a fleet behind a load balancer binds `0.0.0.0:8000` and is reached
@@ -1723,7 +1736,7 @@ units:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | yes | The seat's display name — what people read. It is NOT how anything refers to this seat: `manages:` and a unit's `lead:` both take the `handle` below |
-| `kind` | `agent` \| `human` | no | Who holds the seat (default `agent`). `human` marks a [human seat](../concepts/humans-in-the-org.md) — addressable, never spawned; rejects every runtime-only field below. It is also where a person joins: every person holds exactly one human seat, invited onto it or created on it from that seat in **Agents › Org chart** (or `crewlet iam invite -seat`), so a company that declares no `kind: human` seat at all can admit nobody — legitimate for a company its agents run alone through Tier A tokens, and named in an `advisory` warning at `roles` by `crewlet validate` and every `/config` write. Its `contact` identities are optional: a seat with none is legitimate, and the same two name it in an `advisory` warning at the seat's `contact` |
+| `kind` | `agent` \| `human` | no | Who holds the seat (default `agent`). `human` marks a [human seat](../concepts/humans-in-the-org.md) — addressable, never spawned; rejects every runtime-only field below. It is also where a person joins: every person holds exactly one human seat, invited onto it or created on it from that seat in **Agents › Org chart** (or `crewlet iam invite -seat`), so a company that declares no `kind: human` seat at all can admit nobody — legitimate for a company its agents run alone through Tier A tokens, and named in an `advisory` warning at `roles` by `crewlet validate` and every `/config` write, and logged by every node that applies the company. Its `contact` identities are optional: a seat with none is legitimate, and the same three name it in an `advisory` warning at the seat's `contact` |
 | `contact` | dict | no | A human seat's external identities — optional, see `kind` above; refused on an agent seat: `slack_user_id`, `mattermost_user_id` (a username, not an ID — the engine asks the Mattermost server which account holds it, and reports one nobody holds), `atlassian_account_id` (Jira+Confluence), `github_login`, `gitlab_username`. Each accepts a literal ID or exactly one whole-value `${VAR}` reference, resolved at use time through the [secret store](../concepts/secret-store.md) and then the environment, by every consumer alike; values are whitespace-stripped, the names of platforms that ignore case (`github_login`, `gitlab_username`, `mattermost_user_id`) are lowercased while Slack and Atlassian ids keep theirs, and a `${VAR}` embedded inside a longer string is rejected at validation (see [Humans in the Org Chart](../concepts/humans-in-the-org.md)). **No two seats may declare the same identity** — an external account belongs to one person, and a duplicate is refused rather than silently sending one of them somebody else's mail. Every one is a place a message can be sent; who a person is on the engine's own surface — the dashboard, the API, the operator tool server — is not here but in the identity directory, which binds each person to the seat they were invited or created on (`crewlet iam bind` moves them to another) (see [Acting as your seat](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api)) |
 | `availability` | string | no | Human seats only — free-text availability rendered into rosters and `lookup_colleague` results |
 | `avatar` | dict | no | **Agent seats only.** How the dashboard draws this seat wherever it shows who the seat is: `character`, one of the thirty Crewlet characters (`crewlet`, `hexlet`, `peaklet`, `prismlet`, `towerlet`, `bricklet`, `gemlet`, `coglet`, `pluslet`, `shieldlet`, `stacklet`, `sparklet`, `cloudlet`, `foxlet`, `rocketlet`, `crownlet`, `cactlet`, `wisplet`, `heartlet`, `flasklet`, `chiplet`, `duolet`, `chatlet`, `pagelet`, `archlet`, `dashlet`, `octlet`, `conelet`, `hivelet`, `folderlet`), and `color`, one of `purple`, `cyan`, `green`, `amber`, `rose` or `blue`. Either may be left out: an absent character is `crewlet`, the original, and an absent colour is `purple`, so a seat that says nothing is drawn as every agent was before a seat could choose. Presentation only: no prompt, route or placement reads it, and it survives a rename because nothing derives it from the name. An id outside those lists, or the block on a human seat (a person is drawn as themself), is refused by an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to). The org builder offers both as pickers in the seat's editor and in the Add dialog, which suggests a character no agent wears yet |

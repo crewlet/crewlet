@@ -3760,8 +3760,8 @@ one, beside its class). The dashboard never retries on its own. When you press
 Retry it sends the **same operation key** it sent the first time, from which the
 engine derives the same operations; a new press is a new key. Each Retry is
 bound to the press it reports — press twice and the first toast's Retry still
-sends the first press, never the second. A refusal a busy or draining node
-caused offers "Try again" on the same terms; one the request caused does not,
+sends the first press, never the second. A refusal a busy, draining or
+starting node caused offers "Try again" on the same terms; one the request caused does not,
 because the same request would be refused again. A control reused across
 objects — the Inbox's Mark read as you move between notices — belongs to the
 object it is drawn for, so one notice's refusal never appears under another's.

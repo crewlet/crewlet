@@ -142,12 +142,12 @@ the wrong document on a machine that has both. Tier B is read from the `company_
 | `-log-file PATH` | Also write the log to this file, overriding `logging.file.path` in Tier A, and only when actually given. It is a **second** destination: stderr keeps every line. An explicit `-log-file ""` writes no file for one run, whatever the Tier A document says — unless that document also set `logging.stderr: false`, which would leave the node writing its log nowhere; that combination is refused by name. It moves the path only — the file's shape, level and rotation caps stay Tier A's. A path that cannot be opened **fails the command** rather than resolving to a default: a durable record an operator did not get, with nothing saying why, is worse than not starting. |
 | `-debug` | Shorthand for `-log-level debug`; wins if both are given. It only ever *raises* — to quieten a file that sets `logging.level: debug`, pass `-log-level info`. It makes the **engine** verbose and not the embedded broker: nats-server's own debug output is `stream.debug` in Tier A, off by default, because it is per internal-client rather than per event and the engine's coordination reads produce a constant stream of it. The broker's warnings and errors reach the log at either setting. |
 | `-api-host HOST` | Bind address, overriding `api.host` |
-| `-api-port PORT` | Bind port, overriding `api.port`. With the `ingress` role it carries the whole HTTP surface (less the routes `api.public.port` moves to its own listener); without it, only the [probes](api-endpoints.md#probes-on-a-node-without-ingress) — `/health` and `/ready` — and a seats node's agent-mode tool bridge where `api.public.port` is unset. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint and no probe, so every integration goes deaf and no orchestrator can probe the node. That is why leaving the flag off is not the same as passing `0`. Either flag is refused when it contradicts the file's other listeners: `0` beneath an `api.public.port`, or a port another listener in the file binds on the same address. |
+| `-api-port PORT` | Bind port, overriding `api.port`. With the `ingress` role it carries the whole HTTP surface (less the routes `api.public.port` moves to its own listener); without it, only the [probes](api-endpoints.md#probes-on-a-node-without-ingress) — `/health` and `/ready` — and a seats node's agent-mode tool bridge where `api.public.port` is unset. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint and no probe, so every integration goes deaf and no orchestrator can probe the node. That is why leaving the flag off is not the same as passing `0`. Any other port is bound as the node starts, before it opens its store, so a port somebody holds fails the run at once; until the node serves, it answers what a [starting node](api-endpoints.md#while-a-node-is-starting) answers. Either flag is refused when it contradicts the file's other listeners: `0` beneath an `api.public.port`, or a port another listener in the file binds on the same address. So is a port on an ingress node whose file has no `api:` block: a node serving the API must state `api.external_url`, `api.auth.admin` and a token. |
 | `-mode MODE` | `maintenance` or `seal`: boot for a [capacity window](../guides/retention.md#changing-a-logs-ceiling) rather than for service. Both start the broker and **no publisher** — no seats, no duties, no schedulers, no writer on any surface, no barrier (a `linearizable` read is refused `maintenance`), no object collection or audit (each pins the estate with a barrier), and no eviction, readmission or reanchor — while the node keeps its presence lease, and the difference is that `maintenance` may write stream configuration while `seal` may not, which is exactly what makes a `seal`-mode acknowledgement evidence. Leave it off for a node in service; a node in either mode refuses to run a company. |
 | `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `data` (hold the company's durable state), `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all four — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. The flag is applied after the file validates, so what the roles require of the file is checked again here: dropping `data` from a node whose store is not `store.scratch` is refused, naming the setting. Roles decide what a node serves and which duties it holds, and `data` alone decides which state logs it applies: every data node applies all five, the identity directory included, and a node without `data` applies none and reaches the estate through one that does — see [what a satellite holds](../guides/satellite-nodes.md#what-a-satellite-holds). See [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data). |
 | `-dev-principal LOGIN` | **Development only.** Resolve every request that presents no credential to `dev:LOGIN`, carrying every app, and `admin` only where `api.auth.admin` is `serve`. It is what `api.auth.disabled` should have been, and it is **refused** unless *both* hold: `api.host` binds a loopback address, and the binary is a development build. See below. |
 
-The logging flags override the Tier A `logging:` block **only when they are actually given**: a flag carries its default whether or not anyone typed it, so applying them unconditionally would pin every node at `info` and make the file's own setting dead on arrival. `-log-file` needs that distinction in both directions — its default *is* the empty string, which is also how an operator says "no file for this run".
+The logging flags override the Tier A `logging:` block **only when they are actually given**: a flag carries its default whether or not anyone typed it, so applying them unconditionally would pin every node at `info` and make the file's own setting dead on arrival. `-log-file` needs that distinction in both directions — its default *is* the empty string, which is also how an operator says "no file for this run". Every flag that overrides Tier A is **folded into the document** the node runs, the logging flags as much as `-roles` and the API's: the verbosity, the log file and the [advisories the start logs](#every-start-says-what-its-tier-a-is-worth-knowing) all read that one document. The run holds that document to every Tier A rule once the flags are in, and a refusal names the flags given — the file passed as it loaded, but a flag reaches every rule that reads what it moved — and the engine asks the rules again before it opens anything.
 
 The four overrides — `-roles`, `-api-host`, `-api-port` and `-log-file` — are the fields whose right value depends on *where the process is running* rather than on what the company is: which job this node does, where its HTTP surface binds, and which path on this host its log lands on. Everything else in Tier A belongs in the file, where it can be reviewed — including the log file's own shape and rotation caps, which describe the disk rather than the invocation.
 
@@ -161,6 +161,71 @@ The four overrides — `-roles`, `-api-host`, `-api-port` and `-log-file` — ar
 | `75` | The [watchdog](../concepts/seat-ownership.md#the-wedged-node-and-why-it-leaves) ended a wedged process, with no shutdown at all |
 
 Every non-zero status is a node that wants restarting, so run it under something that restarts a process that exits non-zero (`Restart=on-failure`, a container restart policy).
+
+### Every start says what its Tier A is worth knowing
+
+Every warning [`crewlet validate`](#crewlet-validate) prints for a Tier A
+document, `crewlet run` logs too: once per start, at `WARN`, one
+`config_advisory` line each, in the order `validate` lists them.
+
+```json
+{"level":"WARN","msg":"config_advisory","component":"cli","config":"bootstrap","path":"retention.backup_owner","detail":"nobody is named as this deployment's backup owner. The trim stops when the newest backup ages past `stream.tracker_retention.backup_max_age`, and the alarm that says so has nobody to name"}
+```
+
+`validate` is the moment before a deployment where a consequence can still
+change the decision, and most deployments never have it: an image, a Helm chart
+or an operator renders the document and starts the node, and nobody runs a
+command against the file on the way. The node's own log is the one place every
+deployment has, and each of these — a declined fsync, a trim nobody
+acknowledges, a peer entry no rule counts, an acknowledged insecure sign-in
+posture — describes what the node does for as long as it runs. Tier A changes
+only on a restart, so once per start is the whole record.
+
+| Field | Meaning |
+|---|---|
+| `config` | `bootstrap`: which tier. `config_reference_unresolved` uses the same key for the same question, so one query finds both |
+| `path` | Where in the document the remedy is written, exactly as `validate` locates it |
+| `detail` | The whole message — what will happen, then what to do instead |
+
+**After every Tier A refusal, and into the log file.** The lines are written
+once the document, with every flag folded in, has passed every Tier A rule —
+the run holds it to them itself, and a refusal names the flags given — and
+once `-dev-principal` and `-mode` have been checked, because a warning printed
+beside a refusal is noise at the moment somebody reads carefully; and after the
+log file named by `logging.file.path` or `-log-file` is open, so they are in it
+— unlike `config_reference_unresolved`, which comes out while the document is
+still being read, before any file exists (see
+[Deployment → Logging](../guides/deployment.md#logging)). What can still fail
+after them is not Tier A's to refuse: a `CREWLET_NODE_ID` no node may carry, a
+port somebody else holds, a company file the seed writes into the store and
+holds to the
+[admission rules](../concepts/configuration.md#what-a-stored-revision-is-held-to)
+then, a store or a broker that will not open.
+
+**Judged on the document the run applies.** The flags are folded in first, so
+a fleet node started with `-roles` is not told its roles are undeclared, and
+one started with `-debug` is not told the embedded broker's debug output has
+nowhere to go — unless `logging.stderr: false` hands the stream to a log file
+that keeps a quieter `logging.file.level` of its own, which `-debug` does not
+raise, and then the line names that level and never `-debug`. A start with
+nothing to say logs no such line; a warning never stops a node or changes how
+it exits.
+
+**And the company's, at every apply.** The advisories a Tier B document
+raises — a human seat nobody can message, a company nobody can join, an idle
+token ceiling — are logged under the same event with `config=company`, by every
+node, once for each epoch it applies, with the revision, the epoch and the seat
+or unit each is about (see
+[What an applied company is worth knowing](../concepts/configuration.md#what-an-applied-company-is-worth-knowing)).
+That is what reports them for a company `-company` or `-import-company` seeds,
+which no write answers to anybody.
+
+**One fact, one warning.** A node with `api.port` 0 logs `api_disabled` to say
+what it gave up, and that line is `WARN` only on a node whose `node.roles` is
+undeclared — every role, `ingress` among them, which the `api.port` advisory
+leaves out on purpose. A node whose declared roles name `ingress` has been
+warned by that advisory already, and its `api_disabled` is `INFO`, like that of
+a node without `ingress`.
 
 ### `-dev-principal`, and why it is a flag
 
@@ -208,7 +273,7 @@ Publishing knowledge and tool skills is its own command rather than a flag on `r
 
 Press `Ctrl+C` for graceful shutdown — signals escalate in two tiers:
 
-1. **First `Ctrl+C`**: graceful. Every held seat quiesces, running LLM turns finish their rounds (there is no internal timeout, and `drain_in_progress` logs the in-flight count every 10 s), and turns still queued behind the concurrency limit are returned to the broker for prompt redelivery. The HTTP surface stays up **for the whole drain** and closes only once it completes: `/health` stays `200`, `/ready` answers `503` naming the drain, and the dashboard and every read keep answering, so the drain can be watched there as well as in the logs. What it stops doing, from the first moment, is taking work: every webhook, config, secret and setup write, operator write and backup answers `503` with `{"error": "draining"}` and a `Retry-After`, because the drain waits on in-flight turns and a surface still accepting deliveries would keep making more.
+1. **First `Ctrl+C`**: graceful. Pressed while the node is still starting, it ends the boot — once an embedded broker's store recovery in progress has finished, which cannot be cut short — with the listener answering a drain's answers, as far as a [starting node](api-endpoints.md#while-a-node-is-starting) can give them, until the boot has unwound. Once the node serves, every held seat quiesces, running LLM turns finish their rounds (there is no internal timeout, and `drain_in_progress` logs the in-flight count every 10 s), and turns still queued behind the concurrency limit are returned to the broker for prompt redelivery. The HTTP surface stays up **for the whole drain** and closes only once it completes: `/health` stays `200`, `/ready` answers `503` naming the drain, and the dashboard and every read keep answering, so the drain can be watched there as well as in the logs. What it stops doing, from the first moment, is taking work: every webhook, config, secret and setup write, operator write and backup answers `503` with `{"error": "draining"}` and a `Retry-After`, because the drain waits on in-flight turns and a surface still accepting deliveries would keep making more.
 2. **Second `Ctrl+C`**: the process exits immediately. The first signal hands signal handling back to the operating system precisely so this works: in-flight turns are killed with their triggers unacknowledged, and the broker redelivers them once its ack window elapses.
 
 There is no third tier, because the second is already an unconditional exit rather than something the engine has to be well enough to perform.
@@ -708,14 +773,27 @@ name, is one message and one problem beside each of them, so `problems` can
 hold more entries than the prose output has lines. The prose output prints
 that message once, led by every path it applies to.
 
-Each warning is a reference that resolves to nothing (a unit `lead`, a root
-seat's `unit`, a `manages` entry, a GitLab access level): `{"kind":
-"dangling_reference", "ref": "lead" | "unit" | "manages" |
-"gitlab_access_level", "path", "segments", "seat", "unit", "from", "to",
-"message"}`. The engine runs a company with one, so a warning never fails
-validation; prose output prints each on its own `warning:` line. Warnings are
-reported for any company document that parses, valid or not. Both lists are
-always arrays.
+Each warning is `{"kind", "ref", "path", "segments", "seat", "unit", "from",
+"to", "message"}`, every field always present, and it is one of two kinds
+here:
+
+- **`dangling_reference`** — a reference that resolves to nothing: a unit
+  `lead`, a root seat's `unit`, a `manages` entry, a GitLab access level.
+  `ref` names which (`lead`, `unit`, `manages` or `gitlab_access_level`), and
+  `from` and `to` are what holds it and what it names.
+- **`advisory`** — a setting that is valid and carries a consequence: a
+  declined fsync, a backup nobody owns, a human seat nobody can message, a
+  token ceiling another one leaves idle. `ref`, `from` and `to` are empty. It
+  is the only kind a Tier A document raises.
+
+The third kind a `/config` answer can carry, `admission`, is a rule a stored
+revision breaks, and a document validated here cannot carry one: it is a
+problem instead. The engine runs a document with either kind, so a warning
+never fails validation; prose output prints each on its own line, led by its
+kind — `warning (dangling reference): …` or `warning (advisory): …`. A company
+document that parses is checked for dangling references whether or not it is
+valid; advisories are reported only for a document that validates, because a
+warning printed beside a refusal is noise. Both lists are always arrays.
 
 Exit code is `0` when valid and `1` otherwise, **in both output modes**: a
 `-json` run that printed `{"valid": false}` and exited zero would pass every

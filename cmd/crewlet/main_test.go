@@ -321,18 +321,57 @@ func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 	// package: the CLI dispatch reconfigures it to WARN-on-stderr for
 	// every non-`run` command, so whichever ran last decided where this
 	// assertion's record went.
-	var logged bytes.Buffer
-	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	//
+	// AT WARN ONLY WHERE NOTHING ELSE WARNED. A node whose DECLARED roles
+	// name ingress has been told at WARN already, by the `api.port`
+	// advisory its start logs, which leaves an undeclared node.roles out —
+	// so that node is the one this line warns, and every other is told at
+	// info. Mutation: warn on every ingress node and the declared-ingress
+	// row goes red; warn on none and the undeclared row does.
+	for _, tc := range []struct {
+		name  string
+		roles []string
+		want  slog.Level
+	}{
+		{"undeclared roles, which are every role", nil, slog.LevelWarn},
+		{"declared roles naming ingress", []string{"data", "ingress", "seats", "workers"}, slog.LevelInfo},
+		{"declared roles without ingress", []string{"data", "seats", "workers"}, slog.LevelInfo},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var logged bytes.Buffer
+			log := slog.New(slog.NewJSONHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
+			boot := bootstrapFor(t, 0)
+			boot.Node.Roles = tc.roles
 
-	surface, err := serveAPI(t.Context(), bootstrapFor(t, 0), nil, nil, nil, nil, nil, bindNothing(t), log)
-	if err != nil {
-		t.Fatalf("serveAPI: %v", err)
-	}
-	if surface != nil {
-		t.Error("a node with api.port 0 built an HTTP surface")
-	}
-	if !strings.Contains(logged.String(), "api_disabled") {
-		t.Errorf("the node did not say it serves no HTTP:\n%s", logged.String())
+			// NOTHING BOUND before the boot, asked of the one path every
+			// listener is opened through.
+			listeners, err := bindListeners(t.Context(), boot, "node-0", false, bindNothing(t), log)
+			if err != nil || listeners != nil {
+				t.Fatalf("bindListeners on api.port 0 = %v, %v; want nothing bound", listeners, err)
+			}
+			surface, err := serveAPI(t.Context(), boot, nil, nil, nil, nil, nil, listeners, log)
+			if err != nil {
+				t.Fatalf("serveAPI: %v", err)
+			}
+			if surface != nil {
+				t.Error("a node with api.port 0 built an HTTP surface")
+			}
+			var record struct {
+				Msg   string `json:"msg"`
+				Level string `json:"level"`
+				Hint  string `json:"hint"`
+			}
+			if err = json.Unmarshal(logged.Bytes(), &record); err != nil || record.Msg != "api_disabled" {
+				t.Fatalf("the node did not say it serves no HTTP, in one line:\n%s", logged.String())
+			}
+			if record.Level != tc.want.String() {
+				t.Errorf("api_disabled at %s, want %s", record.Level, tc.want)
+			}
+			if record.Hint == "" {
+				t.Error("api_disabled does not say what the node gave up")
+			}
+		})
 	}
 }
 
@@ -755,9 +794,22 @@ func serveNodeWith(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		t.Fatalf("reconciler: %v", err)
 	}
-	// ON THE SOCKET THE CASE RESERVED for each port it configured, rather
-	// than a second bind of a port it let go: see [reservePort].
-	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface, nil, bindReserved, log)
+	// BOUND AS runEngine BINDS, on the socket the case reserved for each port
+	// it configured rather than a second bind of a port it let go (see
+	// [reservePort]) — and here after the engine has booted, which is the
+	// one difference from a running node: the boot surface's own answers are
+	// [TestAStartingNodeAnswersItsProbesBeforeItServes]'s. The bridge is the
+	// engine's own, since a case hands it one rather than the environment.
+	listeners, err := bindListeners(t.Context(), boot, e.Node().ID(), e.Bridge() != nil,
+		bindReserved, log)
+	if err != nil {
+		return nil, reconciler, err
+	}
+	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface, nil, listeners, log)
+	if err != nil {
+		// THE CALLER'S TO CLOSE until the handover, as in runEngine.
+		listeners.close(context.Background(), log)
+	}
 	return surface, reconciler, err
 }
 
