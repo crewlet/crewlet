@@ -235,11 +235,17 @@ type artifactRow struct {
 	Title      string    `json:"title"`
 	Owner      string    `json:"owner"`
 	HeadNumber int       `json:"head_number"`
+	Contract   string    `json:"contract"`
 	Status     string    `json:"status"`
 	Role       string    `json:"role"`
 	ShareCount int       `json:"share_count"`
 	UpdatedAt  time.Time `json:"updated_at"`
-	Shares     []struct {
+
+	// Capabilities are the head version's; the node answers an empty list,
+	// never an absent one, for a version that declares none.
+	Capabilities []artifacts.Capability `json:"capabilities"`
+
+	Shares []struct {
 		Audience artifacts.Audience `json:"audience"`
 		Role     string             `json:"role"`
 	} `json:"shares"`
@@ -311,8 +317,9 @@ func artifactsGet(environ config.Source, args []string, stdout, stderr io.Writer
 		return err
 	}
 	fmt.Fprintf(stdout, "%s\n  title    %s\n  kind     %s\n  owner    %s\n  version  %d\n"+
-		"  status   %s\n  role     %s (yours)\n  updated  %s\n", a.ID, a.Title, a.Kind, a.Owner,
-		a.HeadNumber, a.Status, a.Role, a.UpdatedAt.Format(time.RFC3339))
+		"  contract %s\n  can      %s\n  status   %s\n  role     %s (yours)\n  updated  %s\n",
+		a.ID, a.Title, a.Kind, a.Owner, a.HeadNumber, contractText(a.Contract),
+		capabilitiesText(a.Capabilities), a.Status, a.Role, a.UpdatedAt.Format(time.RFC3339))
 	if a.Shares == nil {
 		fmt.Fprintf(stdout, "  shares   %d\n", a.ShareCount)
 		return nil
@@ -321,6 +328,26 @@ func artifactsGet(environ config.Source, args []string, stdout, stderr io.Writer
 		fmt.Fprintf(stdout, "  shared   %s as %s\n", audienceText(s.Audience), s.Role)
 	}
 	return nil
+}
+
+// contractText is a version's runtime contract as `get` and `versions` print
+// it: `none` for a version that pins none (a Markdown document or a sheet,
+// which the dashboard draws).
+func contractText(contract string) string {
+	if contract == "" {
+		return "none"
+	}
+	return contract
+}
+
+// capabilitiesText is a version's declared capabilities as `get` and
+// `versions` print them: `none` for an empty set, so a version whose
+// capabilities were stripped reads as such rather than as a missing line.
+func capabilitiesText(caps []artifacts.Capability) string {
+	if len(caps) == 0 {
+		return "none"
+	}
+	return joinCapabilities(caps, ",")
 }
 
 // audienceText is an audience as an operator names it.
@@ -346,12 +373,14 @@ func artifactsVersions(environ config.Source, args []string, stdout, stderr io.W
 	}
 	var page struct {
 		Versions []struct {
-			Number    int       `json:"number"`
-			Label     string    `json:"label"`
-			Files     int       `json:"files"`
-			Bytes     int64     `json:"bytes"`
-			CreatedAt time.Time `json:"created_at"`
-			Author    struct {
+			Number       int                    `json:"number"`
+			Label        string                 `json:"label"`
+			Contract     string                 `json:"contract"`
+			Capabilities []artifacts.Capability `json:"capabilities"`
+			Files        int                    `json:"files"`
+			Bytes        int64                  `json:"bytes"`
+			CreatedAt    time.Time              `json:"created_at"`
+			Author       struct {
 				Name string `json:"name"`
 			} `json:"author"`
 		} `json:"versions"`
@@ -364,8 +393,9 @@ func artifactsVersions(environ config.Source, args []string, stdout, stderr io.W
 		if v.Label != "" {
 			label = "  [" + v.Label + "]"
 		}
-		fmt.Fprintf(stdout, "v%-4d %s  %-12s  %d files, %d bytes%s\n", v.Number,
-			v.CreatedAt.Format(time.RFC3339), v.Author.Name, v.Files, v.Bytes, label)
+		fmt.Fprintf(stdout, "v%-4d %s  %-12s  %d files, %d bytes  contract %s  can %s%s\n", v.Number,
+			v.CreatedAt.Format(time.RFC3339), v.Author.Name, v.Files, v.Bytes,
+			contractText(v.Contract), capabilitiesText(v.Capabilities), label)
 	}
 	return nil
 }
@@ -891,13 +921,7 @@ type capabilitiesFlag struct {
 	list []artifacts.Capability // nil until the flag is named
 }
 
-func (f *capabilitiesFlag) String() string {
-	names := make([]string, len(f.list))
-	for i, c := range f.list {
-		names[i] = string(c)
-	}
-	return strings.Join(names, ",")
-}
+func (f *capabilitiesFlag) String() string { return joinCapabilities(f.list, ",") }
 
 // Set parses a comma-separated set. `none`, or an empty value, declares none;
 // a name this build does not serve is refused before any byte moves.
@@ -920,12 +944,15 @@ func (f *capabilitiesFlag) Set(value string) error {
 
 // capabilityNames lists every capability this build serves, for the flag's
 // help and its refusal.
-func capabilityNames() string {
-	names := make([]string, len(artifacts.Capabilities))
-	for i, c := range artifacts.Capabilities {
+func capabilityNames() string { return joinCapabilities(artifacts.Capabilities, ", ") }
+
+// joinCapabilities is a capability set as text, its names joined by sep.
+func joinCapabilities(caps []artifacts.Capability, sep string) string {
+	names := make([]string, len(caps))
+	for i, c := range caps {
 		names[i] = string(c)
 	}
-	return strings.Join(names, ", ")
+	return strings.Join(names, sep)
 }
 
 // publishing is one publish in flight.

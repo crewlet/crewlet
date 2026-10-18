@@ -77,7 +77,7 @@ type Head struct {
 	SourceKey    string                 `json:"source_key,omitempty"`
 	HeadNumber   int                    `json:"head_number"`
 	Contract     string                 `json:"contract,omitempty"`
-	Capabilities []artifacts.Capability `json:"capabilities,omitempty"`
+	Capabilities []artifacts.Capability `json:"capabilities"`
 	Status       Status                 `json:"status"`
 	TrashedBy    iam.Actor              `json:"trashed_by"`
 	TrashedAt    time.Time              `json:"trashed_at"`
@@ -117,7 +117,7 @@ type VersionSummary struct {
 	Label        string                 `json:"label,omitempty"`
 	Entry        string                 `json:"entry,omitempty"`
 	Contract     string                 `json:"contract,omitempty"`
-	Capabilities []artifacts.Capability `json:"capabilities,omitempty"`
+	Capabilities []artifacts.Capability `json:"capabilities"`
 	Files        int                    `json:"files"`
 	Bytes        int64                  `json:"bytes"`
 	Author       iam.Actor              `json:"author"`
@@ -415,13 +415,15 @@ func scanHead(row rowScanner, extra ...any) (Head, error) {
 }
 
 // decodeCapabilities reads a stored capability array.
+//
+// NONE IS AN EMPTY SET, NEVER AN ABSENT ONE: a head or a version that
+// declares no capability answers `"capabilities": []`, so a reader tells a
+// version whose capabilities were stripped from one that never said, and
+// nothing falls back to another version's set on a missing field.
 func decodeCapabilities(raw string) ([]artifacts.Capability, error) {
 	var names []string
 	if err := json.Unmarshal([]byte(raw), &names); err != nil {
 		return nil, fmt.Errorf("artifactsdomain: decode stored capabilities: %w", err)
-	}
-	if len(names) == 0 {
-		return nil, nil
 	}
 	out := make([]artifacts.Capability, len(names))
 	for i, n := range names {

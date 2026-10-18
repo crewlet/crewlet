@@ -6293,6 +6293,11 @@ a person present, and the version is marked forced.
 | `GET /artifacts/usage` | `artifact_usage` | The company's counters against the Tier A quotas; `artifacts.usage`, an administrator's |
 | `GET /artifacts/trail` | `artifact_trail` | **The company trail of every artifact**: every artifact's history rows across the company, private ones included, newest first in the log's order, each naming its `artifact`, its current `title` and `owner`, the op, the actor and whether only the admin path admitted them. `op=` narrows it to one op (`read_elevated` lists every administrator's override, so one nobody would find in an artifact's own history is found here), with `cursor` and `limit`; an op the log does not record is `400 bad_params`. `audit.read`, an administrator's, decided by no relation to any artifact |
 
+A head and every version carry `capabilities`, the set the version declares,
+always present and `[]` for none, so a version that declares nothing is told
+from one whose field went missing; `contract` is absent for a kind that runs
+no page runtime (a Markdown document, a sheet).
+
 The same questions are asked over the socket by name. Every question about one
 artifact is decided by `get_artifact` and records the admin path's override
 as every read route does.

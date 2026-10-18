@@ -32,6 +32,8 @@ type fakeArtifactsNode struct {
 	patches   []map[string]any
 	ifMatch   []string
 	files     map[string]int
+	head      map[string]any
+	versions  []map[string]any
 	shares    []map[string]any
 	purges    int
 	refuse    map[string]any
@@ -99,7 +101,12 @@ func newFakeArtifactsNode(t *testing.T) *fakeArtifactsNode {
 	mux.HandleFunc("PUT /artifacts/{id}/shares", record(&n.shares, 0))
 	mux.HandleFunc("PATCH /artifacts/{id}", record(&n.patches, 0))
 	mux.HandleFunc("GET /artifacts/{id}", func(w http.ResponseWriter, r *http.Request) {
-		answer(w, http.StatusOK, map[string]any{"id": r.PathValue("id"), "head_number": 3})
+		head := map[string]any{"id": r.PathValue("id"), "head_number": 3}
+		maps.Copy(head, n.head)
+		answer(w, http.StatusOK, head)
+	})
+	mux.HandleFunc("GET /artifacts/{id}/versions", func(w http.ResponseWriter, r *http.Request) {
+		answer(w, http.StatusOK, map[string]any{"versions": n.versions})
 	})
 	mux.HandleFunc("POST /artifacts/{id}/purge", func(w http.ResponseWriter, r *http.Request) {
 		n.mu.Lock()
@@ -420,6 +427,42 @@ func TestArtifactsPublishCountsWhatWasSentAndWhatWasHeld(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "version 1 (files: 3 sent)") {
 		t.Errorf("printed %q", stdout)
+	}
+}
+
+// GET AND VERSIONS SHOW EACH VERSION'S RUNTIME CONTRACT AND CAPABILITIES, an
+// empty set as `none` rather than a missing line, so a version whose
+// capabilities were stripped is visible as such.
+func TestArtifactsGetAndVersionsShowTheContractAndCapabilities(t *testing.T) {
+	t.Parallel()
+	node := newFakeArtifactsNode(t)
+	cfg := bootstrapForURL(t, node.server.URL)
+	node.head = map[string]any{"contract": "1.0.0", "capabilities": []string{"db", "state"}}
+	stdout, stderr, err := cli(t, "artifacts", "get", cliArtifact, cfg)
+	if err != nil {
+		t.Fatalf("get: %v\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "  contract 1.0.0\n") || !strings.Contains(stdout, "  can      db,state\n") {
+		t.Errorf("get printed %q", stdout)
+	}
+	node.head = map[string]any{"kind": "markdown", "capabilities": []string{}}
+	if stdout, _, _ = cli(t, "artifacts", "get", cliArtifact, cfg); !strings.Contains(stdout, "  contract none\n") ||
+		!strings.Contains(stdout, "  can      none\n") {
+		t.Errorf("get of a version declaring nothing printed %q", stdout)
+	}
+
+	node.versions = []map[string]any{
+		{"number": 2, "contract": "1.0.0", "capabilities": []string{}, "files": 1, "bytes": 9},
+		{"number": 1, "contract": "1.0.0", "capabilities": []string{"db"}, "files": 1, "bytes": 9},
+	}
+	stdout, stderr, err = cli(t, "artifacts", "versions", cliArtifact, cfg)
+	if err != nil {
+		t.Fatalf("versions: %v\n%s", err, stderr)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], "contract 1.0.0  can none") ||
+		!strings.Contains(lines[1], "contract 1.0.0  can db") {
+		t.Errorf("versions printed %q", stdout)
 	}
 }
 

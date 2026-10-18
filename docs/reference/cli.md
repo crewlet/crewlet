@@ -30,7 +30,7 @@ subcommand below is served by it.
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it. The token takes `admin` |
 | `crewlet seats pause <handle> [-stop] [-reason TEXT] [-op-id ID]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round. Taken by the seat's holder, whoever leads it, or an administrator, and recorded under the caller's own name, kind and credential |
 | `crewlet seats resume <handle> [-op-id ID]` | Lift the pause; what waited is delivered first, in order. The same authority as `pause` |
-| `crewlet artifacts list\|get\|versions\|assets\|usage` | Read the company's artifacts through a running node, as the token's principal: the listing it may see (`-scope`, `-kind`, `-q`, `-status`, `-work-item`), one artifact's head and audience, its versions, its assets, and the company's usage against its quota (an administrator's). See [`crewlet artifacts`](#crewlet-artifacts) |
+| `crewlet artifacts list\|get\|versions\|assets\|usage` | Read the company's artifacts through a running node, as the token's principal: the listing it may see (`-scope`, `-kind`, `-q`, `-status`, `-work-item`), one artifact's head (its runtime contract and capabilities among it) and audience, its versions, each with its contract and capabilities, its assets, and the company's usage against its quota (an administrator's). See [`crewlet artifacts`](#crewlet-artifacts) |
 | `crewlet artifacts publish <dir\|file> [-artifact ID] [-op-id ID]` | Publish a directory or a file as a new artifact, or as the next version of one: an upload intent first, then only the files the artifact does not already hold are sent, then the version is published against the head it read |
 | `crewlet artifacts update\|restore\|label\|share\|unshare\|trash\|untrash\|purge` | Change the title, description or icon, roll back to a version, label one, share with a seat, a unit or the company, withdraw a share, move to and from the trash, and purge for good (an administrator's, with a person present; the id is asked twice) |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
@@ -1335,6 +1335,13 @@ manifest that landed. The two differ for an unchanged page: a page is stored
 in its linted form, so its own digest never matches what the artifact holds
 and it is sent, and the node then finds the linted page already held and
 carries it. The publish policy's warnings are printed beneath the result.
+
+**`get` and `versions` show each version's runtime contract and
+capabilities**: `get` the head version's on its `contract` and `can` lines,
+`versions` one `contract` and `can` per version. Either reads `none` where
+there is none (a Markdown document or a sheet pins no contract; a version
+publishing `-capabilities none` declares none), so a version whose
+capabilities were stripped shows as such.
 
 **`update` changes the title, the description or the icon** (`PATCH
 /artifacts/{id}`, an editor's) and sends exactly the flags it names: an

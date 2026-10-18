@@ -5063,7 +5063,8 @@ export interface ArtifactHead {
   source_key?: string;
   head_number: number;
   contract?: string;
-  capabilities?: ArtifactCapability[];
+  /** What the head version declares; empty, never absent, for none. */
+  capabilities: ArtifactCapability[];
   status: ArtifactStatus;
   trashed_by: ArtifactActor;
   trashed_at: string;
@@ -5157,7 +5158,8 @@ export interface ArtifactVersionSummary {
   label?: string;
   entry?: string;
   contract?: string;
-  capabilities?: ArtifactCapability[];
+  /** What the version declares; empty, never absent, for none. */
+  capabilities: ArtifactCapability[];
   files: number;
   bytes: number;
   author: ArtifactActor;
