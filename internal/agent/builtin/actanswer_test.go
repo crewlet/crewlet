@@ -642,8 +642,11 @@ func (f *ledgerFake) WriteView(_ context.Context, opID string, _ tracker.View,
 	return f.written(opID)
 }
 
+// ViewPrior holds every view a case names, as a shared tab on ENG: a save
+// naming an id no view holds is refused before it writes anything.
 func (f *ledgerFake) ViewPrior(context.Context, string) (tracker.ViewPrior, error) {
-	return tracker.ViewPrior{}, nil
+	return tracker.ViewPrior{Held: true,
+		Container: tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"}}, nil
 }
 
 func (f *ledgerFake) WriteTypes(_ context.Context, opID string, _ []tracker.TaskType) (tracker.WriteResult, error) {
