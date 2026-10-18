@@ -35,23 +35,34 @@ import (
 //     another transaction it is a number from another instant, and a selection
 //     that answered it would be promising something it cannot see.
 //
-// So a duty composes the two: it reads the company's rooms, asks [Eligible]
-// which of them have a horizon at all, and publishes one prune per room
-// through the write path — which forms the cutoff, checks it against its own
-// clock and decides inside its own snapshot.
+// So a duty composes the two: it reads the company's rooms a page at a time,
+// asks [Eligible] which of each page have a horizon at all, and publishes one
+// prune per room through the write path — which forms the cutoff, checks it
+// against its own clock and decides inside its own snapshot.
 //
 // # Why every eligible room is named, with no cap on the sweep
 //
 // Because a cap needs an order, and the only order available here is the
 // rooms' own ids: a sweep that took the first N alphabetically would prune the
 // same rooms every tick and never reach the tail, which is a company whose
-// last rooms are kept for ever while a screen says they are not. Nothing caps
-// the set — not [MaxChannels] either, which counts LIVE rooms while an
-// archived room keeps its horizon — so it is every room the company ever made.
-// What keeps that cheap is the duty's own read beside this selection: one
-// index seek per room for its oldest message, and a record only for a room
-// with something below its cutoff — cheaper than the bookkeeping that would
-// remember where a capped sweep had got to.
+// last rooms are kept for ever while a screen says they are not.
+//
+// AND THE SET IT NAMES FROM HAS NO BOUND. It is every room the company ever
+// made, for as long as the company exists: there is no room delete in this
+// vocabulary, so nothing leaves it. [MaxChannels] does not bound it — that
+// counts LIVE rooms, an archive releases a slot while the archived room keeps
+// its horizon, and it binds only a channel's create: a direct or group
+// conversation is opened without it ever refusing one, and there is one for
+// every distinct set of people who ever spoke. So this selection is asked a
+// PAGE at a time rather than of the whole set: the duty reads the rooms in
+// room-id pages, each its own snapshot, hands each page here and publishes for
+// it before reading the next — and a tick that runs out of its interval resumes
+// its lap where it stopped rather than at the first id, which would be the
+// capped sweep's starvation again. Per page, what keeps it cheap is the duty's
+// own read beside this selection: one index seek per room for its oldest
+// message, and a record only for a room with something below its cutoff. The
+// ORDER below is what makes a page's answer a slice of the whole one: sorted by
+// room id, the same order the pages are read in.
 
 // RetentionSource says whose setting decided a room's horizon.
 //
