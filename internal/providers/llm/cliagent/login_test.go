@@ -111,7 +111,7 @@ func TestACredentialBundleRoundTrips(t *testing.T) {
 	}
 
 	target := loginProvider(t)
-	if err := target.RestoreBundle(blob); err != nil {
+	if err := target.RestoreBundle(t.Context(), blob); err != nil {
 		t.Fatalf("RestoreBundle: %v", err)
 	}
 	restored, err := os.ReadFile(filepath.Join(target.Workspace().CredentialsDir(), "creds.json"))
@@ -134,7 +134,7 @@ func TestARestoredBundleCannotEscapeTheCredentialDirectory(t *testing.T) {
 		"nested/creds.json",
 		"unexpected.json",
 	} {
-		err := p.RestoreBundle(bundleOf(t, name, "pwned"))
+		err := p.RestoreBundle(t.Context(), bundleOf(t, name, "pwned"))
 		if err == nil {
 			t.Errorf("RestoreBundle accepted %q", name)
 			continue
@@ -156,7 +156,7 @@ func TestARestoredBundleCannotEscapeTheCredentialDirectory(t *testing.T) {
 func TestAnOversizedBundleIsRefusedRatherThanPartlyRestored(t *testing.T) {
 	t.Parallel()
 	p := loginProvider(t)
-	err := p.RestoreBundle(bundleOf(t, "creds.json", strings.Repeat("x", maxBundle+1)))
+	err := p.RestoreBundle(t.Context(), bundleOf(t, "creds.json", strings.Repeat("x", maxBundle+1)))
 	if err == nil {
 		t.Fatal("an oversized bundle was accepted")
 	}
@@ -198,7 +198,7 @@ func TestARejectedBundleLeavesNothingBehind(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := p.RestoreBundle(base64.StdEncoding.EncodeToString(raw.Bytes())); err == nil {
+	if err := p.RestoreBundle(t.Context(), base64.StdEncoding.EncodeToString(raw.Bytes())); err == nil {
 		t.Fatal("a bundle holding a path traversal was accepted")
 	}
 	if p.Workspace().HasLogin() {
@@ -216,7 +216,7 @@ func TestABundleDoesNotOverwriteALiveLogin(t *testing.T) {
 	if _, err := p.AdoptHostLogin(t.Context(), home); err != nil {
 		t.Fatalf("AdoptHostLogin: %v", err)
 	}
-	if err := p.RestoreBundle(bundleOf(t, "creds.json", `{"token":"stale"}`)); err != nil {
+	if err := p.RestoreBundle(t.Context(), bundleOf(t, "creds.json", `{"token":"stale"}`)); err != nil {
 		t.Fatalf("RestoreBundle: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(p.Workspace().CredentialsDir(), "creds.json"))
@@ -482,5 +482,58 @@ func TestTheClaudeProfilesMarkersAreStringsTheCLIStillEmits(t *testing.T) {
 		if !slices.ContainsFunc(p.AuthMarkers, func(m cliprofile.AuthMarker) bool { return m.Sentinel == want }) {
 			t.Errorf("auth_markers lacks %q: %+v", want, p.AuthMarkers)
 		}
+	}
+}
+
+// BUILDING AN ENTRY WRITES NOTHING. [New] is what `crewlet validate` reaches,
+// and it used to restore a configured bundle into the state directory — under
+// the shared login's lock — so validating a document wrote a login onto the
+// host. The restore is [Provider.RestoreConfiguredBundle], made by whoever runs
+// the entry, and an entry with no bundle configured restores nothing.
+func TestAConfiguredBundleIsRestoredOnlyWhenAsked(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	t.Cleanup(func() { forgetWorkspace(dir) })
+	build := func(bundle string) *Provider {
+		p, err := New(Config{
+			Key: "sub", Agent: "custom", StateDir: dir,
+			Timeout: time.Second, MaxConcurrent: 1, CredentialBundle: bundle,
+			Overrides: map[string]any{
+				"binary": os.Args[0], "complete_args": []any{"-test.run=TestCLIAgentFakeCLI"},
+				"model_args": []any{}, "output": "text",
+				"credential_paths": []any{".fake/creds.json"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		return p
+	}
+
+	if err := build("").RestoreConfiguredBundle(t.Context()); err != nil {
+		t.Fatalf("an entry with no bundle: %v", err)
+	}
+	p := build(bundleOf(t, "creds.json", `{"token":"configured"}`))
+	if p.Workspace().HasLogin() {
+		t.Fatal("building the entry restored its bundle — `crewlet validate` would write a login onto the host")
+	}
+	if err := p.RestoreConfiguredBundle(t.Context()); err != nil {
+		t.Fatalf("RestoreConfiguredBundle: %v", err)
+	}
+	restored, err := os.ReadFile(filepath.Join(p.Workspace().CredentialsDir(), "creds.json"))
+	if err != nil || string(restored) != `{"token":"configured"}` {
+		t.Fatalf("restored %q (%v), want the configured bundle's login", restored, err)
+	}
+	// A login already in place is the running node's, and fresher: a second
+	// restore leaves it and is no error.
+	if err := os.WriteFile(filepath.Join(p.Workspace().CredentialsDir(), "creds.json"),
+		[]byte(`{"token":"refreshed"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RestoreConfiguredBundle(t.Context()); err != nil {
+		t.Fatalf("a restore over a login: %v", err)
+	}
+	if kept, _ := os.ReadFile(filepath.Join(p.Workspace().CredentialsDir(), "creds.json")); string(kept) != `{"token":"refreshed"}` {
+		t.Errorf("a restore replaced the running login with the bundle: %q", kept)
 	}
 }

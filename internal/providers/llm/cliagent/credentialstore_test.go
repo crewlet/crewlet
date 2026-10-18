@@ -400,7 +400,7 @@ func TestABundleCarriesTheDocument(t *testing.T) {
 		t.Fatalf("ExportBundle: %v", err)
 	}
 	target := storeProvider(t, nil, nil)
-	if err := target.RestoreBundle(blob); err != nil {
+	if err := target.RestoreBundle(t.Context(), blob); err != nil {
 		t.Fatalf("RestoreBundle: %v", err)
 	}
 	if got := readDocument(t, target); got != `[{"id":"cred_1","key":"k-bundled"}]` {

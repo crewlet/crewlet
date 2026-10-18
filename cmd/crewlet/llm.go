@@ -171,6 +171,12 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 		if err != nil {
 			return err
 		}
+		if err := p.RestoreConfiguredBundle(ctx); err != nil {
+			// The engine warns and runs the entry signed out; status then
+			// says who the CLI is logged in as, which is nobody, and this
+			// line says why.
+			fmt.Fprintf(stderr, "crewlet: the entry's configured credential bundle did not restore: %v\n", err)
+		}
 		return p.Status(ctx, stdout, stderr)
 	case "logout":
 		p, err := oneProvider(providers, key)
@@ -324,6 +330,9 @@ func doctorEntries(company *config.Company, resolver *config.Resolver, companyPa
 				break
 			}
 			entry.diagnose = func(ctx context.Context, smoke bool) diagnosis {
+				if err := built.RestoreConfiguredBundle(ctx); err != nil {
+					return bundleFailure{key: key, err: err}
+				}
 				return built.Diagnose(ctx, cliagent.DiagnoseOptions{
 					Smoke: smoke,
 					// THE ENGINE'S OWN ANSWERS, not the provider's guess at
@@ -362,6 +371,23 @@ func (e doctorEntry) examined() bool { return e.diagnose != nil }
 type buildFailure struct {
 	key string
 	err error
+}
+
+// bundleFailure is a cli-agent entry whose configured credential bundle did not
+// restore: the engine warns and runs it signed out, so there is no login to
+// diagnose, and the bundle is what to fix.
+type bundleFailure struct {
+	key string
+	err error
+}
+
+func (b bundleFailure) Healthy() bool { return false }
+
+func (b bundleFailure) Render(w io.Writer) {
+	fmt.Fprintf(w, "%-14s: %s\n", "provider", b.key)
+	fmt.Fprintln(w, "problems:")
+	fmt.Fprintf(w, "  - its configured credential bundle did not restore, so the engine would run it "+
+		"signed out — export the bundle again (`crewlet llm export`): %v\n", b.err)
 }
 
 func unbuilt(key string, err error) func(context.Context, bool) diagnosis {
@@ -568,6 +594,10 @@ func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentP
 	}
 	if key == "" {
 		key = providers[0].key
+	}
+	if err = p.RestoreConfiguredBundle(ctx); err != nil {
+		return fmt.Errorf("the entry's configured credential bundle did not restore, so there is "+
+			"no login the engine would run with to export: %w", err)
 	}
 	bundle, err := p.ExportBundle()
 	if err != nil {

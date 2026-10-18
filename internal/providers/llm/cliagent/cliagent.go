@@ -87,8 +87,10 @@ type Config struct {
 	// which of it reaches the child.
 	Auth Auth
 	// CredentialBundle is a resolved bundle from `crewlet llm export`,
-	// restored into an EMPTY credential directory at boot so a container
-	// rebuilt on every deploy comes up already authenticated.
+	// restored into an EMPTY credential directory so a container rebuilt on
+	// every deploy comes up already authenticated. Kept, not restored, by
+	// [New]: [Provider.RestoreConfiguredBundle] is the restore, made by
+	// whoever builds the entry to run it.
 	CredentialBundle string
 }
 
@@ -109,6 +111,10 @@ type Provider struct {
 	// exec so that one value reaches all of them, and so the suite can watch a
 	// stubborn child be killed at a grace it can afford to wait out.
 	termGrace time.Duration
+
+	// bundle is [Config.CredentialBundle], which
+	// [Provider.RestoreConfiguredBundle] restores.
+	bundle string
 
 	// slots caps concurrent child processes. A buffered channel rather
 	// than a semaphore type because acquisition has to be selectable
@@ -154,6 +160,7 @@ func New(cfg Config) (*Provider, error) {
 	}
 	p := &Provider{
 		key:       cfg.Key,
+		bundle:    cfg.CredentialBundle,
 		model:     cfg.Model,
 		agent:     cfg.Agent,
 		agentMode: cfg.AgentMode,
@@ -169,16 +176,13 @@ func New(cfg Config) (*Provider, error) {
 		return nil, fmt.Errorf("cli-agent %q: timeout is zero — a CLI call with no "+
 			"wall-clock cap holds a seat forever", cfg.Key)
 	}
-	if cfg.CredentialBundle != "" {
-		// Restored, not refused, when it fails: a node with a broken
-		// bundle can still be logged in by hand, and taking the company
-		// down at boot over one blob is the worse outcome. RestoreBundle
-		// itself declines to overwrite a login already on disk — the
-		// running node has the fresher refresh token.
-		if err := p.RestoreBundle(cfg.CredentialBundle); err != nil {
-			log.Warn("cli_agent_bundle_restore_failed", "provider", cfg.Key, "error", err)
-		}
-	}
+	// THE BUNDLE IS NOT RESTORED HERE. Building a provider is what
+	// `crewlet validate` does to a document, and a constructor that wrote a
+	// login into the state directory — under the shared login's lock, which
+	// can wait out another writer — would make validating a document a write
+	// to the host and a wait nobody's context bounds. The restore is
+	// [Provider.RestoreConfiguredBundle], called with a context by the engine
+	// as it builds an epoch to run and by the `crewlet llm` commands.
 	return p, nil
 }
 

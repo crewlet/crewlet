@@ -1279,8 +1279,13 @@ encrypted secret store:
 crewlet llm export default -secret-store
 ```
 
-That engine restores it at boot when its own `credentials/` directory is
-empty, so a fresh container on the same store comes up already authenticated.
+That engine restores it when it builds a company to run — at boot, and again
+at every apply — whenever its own `credentials/` directory is empty, so a
+fresh container on the same store comes up already authenticated. `crewlet llm
+status`, `export` and `doctor` restore it first too, so they answer about the
+login the engine would run with; `login`, `logout` and `import` do not, since
+each replaces or removes that login. `crewlet validate` never does: checking a
+document writes nothing onto the host.
 It is **that node's** store and nothing else's — the rows do not travel, and a
 second host needs its own `crewlet llm login`, or the same bundle handed to it
 through `providers.llm[].auth.credential_bundle`. The blob is validated on the way back in — only the

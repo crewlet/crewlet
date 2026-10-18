@@ -17,6 +17,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -266,6 +267,34 @@ func buildAnthropic(key string, spec config.LLMProvider, e endpoint) (*anthropic
 
 // log is the package logger.
 var log = logging.Get("engine")
+
+// restoreBundles restores every cli-agent entry's configured credential bundle
+// into its state directory where that directory holds no login yet
+// ([cliagent.Provider.RestoreConfiguredBundle]).
+//
+// A STEP OF ITS OWN, made by the paths that build an epoch to RUN it — a node's
+// boot and every apply — and not by building one: [NewCompany] is also what
+// `crewlet validate` calls, and validating a document must neither write a
+// login onto the host nor wait on the shared login's lock. It runs before the
+// epoch is published, so the epoch's first call already finds the login.
+//
+// A failed restore is WARNED and never refuses the epoch: a node with a broken
+// bundle can still be logged in by hand, and refusing a whole revision over one
+// blob is the worse outcome.
+func (c *Company) restoreBundles(ctx context.Context) {
+	if c == nil || c.Models == nil {
+		return
+	}
+	for key, provider := range c.Models.All() {
+		cli, ok := provider.(*cliagent.Provider)
+		if !ok {
+			continue
+		}
+		if err := cli.RestoreConfiguredBundle(ctx); err != nil {
+			log.WarnContext(ctx, "cli_agent_bundle_restore_failed", "provider", key, "error", err)
+		}
+	}
+}
 
 // BuildCLIAgent constructs one cli-agent provider from its config entry.
 //

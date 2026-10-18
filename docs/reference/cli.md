@@ -2010,10 +2010,12 @@ running holds the fresher refresh token, and restoring a boot-time blob over
 it is how a fleet logs itself out. `crewlet llm logout <KEY>` first if you
 mean to replace it.
 
-The engine also restores a bundle **itself**, at boot, from
+The engine also restores a bundle **itself**, at boot and at every apply, from
 `cli.auth.credential_bundle` or the conventional
 `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` variable — and only into an empty
-credential directory, by the same rule. That path authenticates a fresh
+credential directory, by the same rule. `status`, `export` and `doctor` make
+the same restore before they look, so they report the login the engine would
+run with; `validate` never writes one. That path authenticates a fresh
 container before its first turn rather than after an operator remembers a
 command; `import` is for the hosts that are already up. See [environment
 variables](environment-variables.md).

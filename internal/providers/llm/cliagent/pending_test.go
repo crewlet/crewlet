@@ -107,7 +107,7 @@ func TestAPendingLoginStillOutranksASeatsRefresh(t *testing.T) {
 func TestAPendingLoginOutranksABootRestore(t *testing.T) {
 	t.Parallel()
 	p := pendingLogin(t, nil)
-	if err := p.RestoreBundle(bundleOf(t, "exported-credentials", `[{"id":"cred_b","key":"k-bundle"}]`)); err != nil {
+	if err := p.RestoreBundle(t.Context(), bundleOf(t, "exported-credentials", `[{"id":"cred_b","key":"k-bundle"}]`)); err != nil {
 		t.Fatalf("RestoreBundle: %v", err)
 	}
 	if err := p.Status(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {

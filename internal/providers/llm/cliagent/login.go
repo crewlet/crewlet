@@ -518,13 +518,28 @@ func (p *Provider) ExportBundle() (string, error) {
 // epoch where it is ([Workspace.bumpLoginEpoch]) — and a login an operator made
 // on this node whose export failed, which is why the directory is empty, is
 // still carried out over it by the next command, being the newer of the two.
-func (p *Provider) RestoreBundle(blob string) error {
-	// Called from [New], at boot, which has no context of its own to hand on;
-	// the one wait inside is bounded by hostbox.CredentialLockWait.
-	if err := p.restoreBundle(context.Background(), blob, false); err != nil && !errors.Is(err, ErrLoginPresent) {
+func (p *Provider) RestoreBundle(ctx context.Context, blob string) error {
+	if err := p.restoreBundle(ctx, blob, false); err != nil && !errors.Is(err, ErrLoginPresent) {
 		return err
 	}
 	return nil
+}
+
+// RestoreConfiguredBundle restores the entry's own configured bundle
+// ([Config.CredentialBundle]) by [Provider.RestoreBundle], and does nothing for
+// an entry that configures none.
+//
+// Called by whoever builds the entry to RUN it — the engine, for every epoch it
+// builds, and the `crewlet llm` commands, which answer as that engine would —
+// and never by [New], whose callers include `crewlet validate`. A failure is the
+// caller's to report and never a refusal to build: a node with a broken bundle
+// can still be logged in by hand, and taking a company down over one blob is
+// the worse outcome.
+func (p *Provider) RestoreConfiguredBundle(ctx context.Context) error {
+	if p.bundle == "" {
+		return nil
+	}
+	return p.RestoreBundle(ctx, p.bundle)
 }
 
 // ErrLoginPresent is a bundle import that found the entry already signed in,

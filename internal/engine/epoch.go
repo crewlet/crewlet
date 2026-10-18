@@ -249,6 +249,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
 	}
 	stampActivation(next, activatedAt)
+	next.restoreBundles(ctx)
 	applied = append(applied, "company")
 	// THE REVISION'S SANDBOX MANAGER, built HERE — beside the company it is
 	// a part of, before anything below mutates this node — because a
