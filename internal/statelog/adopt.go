@@ -233,8 +233,12 @@ var ErrEstateNotRestored = errors.New("statelog: the live replicated database " 
 //  7. RE-CHECK that every adopted position is still above the floor. The hold
 //     makes this a belt; a fleet that trimmed anyway is one this node must not
 //     follow into a hole.
-//  8. INSTALL, which is the one place the engine replaces a live database.
-//  9. COMPLETE, and only then release the hold.
+//  8. NAME THE COPY: mint the artefact a fresh estate instance, so whatever
+//     this node derives from the rows by a forward walk sees the replacement
+//     from the file itself — whether or not the process that installed it is
+//     still running when it next looks ([EstateInstance]).
+//  9. INSTALL, which is the one place the engine replaces a live database.
+//  10. COMPLETE, and only then release the hold.
 func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 	req, err := a.deps.Need(ctx)
 	if err != nil {
@@ -331,7 +335,7 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 	return Manifest{}, fmt.Errorf("%w: %w", ErrNoOffer, errors.Join(refusals...))
 }
 
-// adopt runs steps 1 and 3 through 9 for one chosen offer, recording each
+// adopt runs steps 1 and 3 through 10 for one chosen offer, recording each
 // phase under the adoption's start, began.
 func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (Manifest, error) {
 	at := make(map[string]uint64, len(offer.Manifest.Domains))
@@ -439,7 +443,14 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (Mani
 		}
 	}
 
-	// 8. INSTALL. Both databases must be closed: this process's claim is
+	// 8. NAME THE COPY, after every check of the file and before the
+	// rename — see [stampEstateInstance] for why on both counts.
+	instance, stampErr := stampEstateInstance(ctx, part, a.now())
+	if stampErr != nil {
+		return Manifest{}, stampErr
+	}
+
+	// 9. INSTALL. Both databases must be closed: this process's claim is
 	// on the PATH rather than the inode, so an open handle would be
 	// writing into a file that is no longer at that name.
 	if err := a.deps.Close(ctx); err != nil {
@@ -470,7 +481,7 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (Mani
 		return Manifest{}, fmt.Errorf("statelog: record the install: %w", err)
 	}
 
-	// 9. COMPLETE.
+	// 10. COMPLETE.
 	if err := a.deps.Record(ctx, began, offer.Manifest.NodeID, offer.Manifest, AdoptionComplete); err != nil {
 		return Manifest{}, fmt.Errorf("statelog: complete the adoption: %w", err)
 	}
@@ -478,11 +489,13 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (Mani
 	// checksum is what matches it to the donor's `statelog_snapshot_sent`,
 	// and the instant it was taken is how old the history it installed is.
 	// The engine wrote a second `statelog_adopted` holding those two, and
-	// one adoption read as two.
+	// one adoption read as two. The instance is the copy's new name, which
+	// a reader that rebuilds on seeing it will log beside its own line.
 	a.log.InfoContext(ctx, "statelog_adopted",
 		"node", a.deps.NodeID, "donor", offer.Manifest.NodeID,
 		"sha256", offer.Manifest.SHA256, "taken_at", offer.Manifest.TakenAt,
-		"bytes", offer.Manifest.Bytes, "domains", len(offer.Manifest.Domains))
+		"bytes", offer.Manifest.Bytes, "domains", len(offer.Manifest.Domains),
+		"instance", instance)
 	return offer.Manifest, nil
 }
 
