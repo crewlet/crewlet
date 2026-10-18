@@ -2289,14 +2289,39 @@ func (a *Applier) writeThread(ctx context.Context, tx *sql.Tx, task Task,
 	return written, nil
 }
 
-// writeComment writes one comment row, and every EDIT of it.
+// writeComment writes what one record says about one comment: a POST creates
+// its row, an EDIT rewrites its words and a RESOLVE marks it resolved.
 //
-// AN UPSERT ON THE ID, because a comment is edited, answered, resolved and
-// removed in place — each of those is a later patch naming the same comment,
-// and an insert-only write would leave the thread showing the first version of
-// every remark for ever. The id is derived from the operation, so a retried
-// turn lands on the row it already wrote rather than saying the same thing
-// twice.
+// # Each kind writes only what it owns
+//
+// A post owns the row's existence and what the remark is — who wrote it, its
+// words, what it asks and what it answers. An edit owns the words: the body,
+// when they were last changed, and the document that carries both. A resolve
+// owns the resolution: `resolved`, `resolved_by` and `resolved_at`, and the
+// fields of the document that carry them. None owns `answered_by`, which is
+// the ANSWERING remark's: a later record, about another row, stamps it below.
+// So the post is an insert of a row that is not there yet and the edit and the
+// resolve updates of what each owns, and none can reach a column another
+// record put there.
+//
+// It was one upsert of everything the record carried, and the record carries
+// no `answered_by` — so it wrote NULL there on every write. An author
+// correcting the wording of a question somebody had answered reopened it: back
+// in `has_open_asks`, `asked_of=`, `asked_by=`, the answerer's own
+// `my_work.asked_of_me` and the item's `open_asks`, asking somebody again a
+// question they had answered. And a post naming a row that already exists — a
+// re-run of the call that posted it — rewrote it whole, the author's edit
+// since and the answer that closed it included.
+//
+// NO GESTURE TAKES A TRACKER COMMENT DOWN YET. The `removed` column is written
+// by nothing — every comment holds the row's default — so no kind writes it,
+// and a record of the removal kind ([ChangeCommentRemoved]) writes nothing at
+// all. Taken for a post, as a comment under any kind but the edit and the
+// resolve is, it made the remark it named up from the removal on a node that
+// did not hold it, closing whatever ask the remark claimed to answer.
+//
+// `record_id` is the record that POSTED the remark, which an edit leaves as it
+// is: the row is that record's, and its words are all an edit changes.
 func writeComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 	c applyContext) (int, error) {
 
@@ -2306,30 +2331,32 @@ func writeComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 		// two nodes' threads would stop matching.
 		return 0, nil
 	}
+	switch c.record.Kind {
+	case ChangeCommentEdited:
+		return editComment(ctx, tx, task, comment, c)
+	case ChangeCommentResolved:
+		return resolveComment(ctx, tx, task, comment, c)
+	case ChangeCommentRemoved:
+		return 0, nil
+	}
 	comment.Task = task.ID
 	document, err := json.Marshal(comment)
 	if err != nil {
 		return 0, fmt.Errorf("worklet: encode comment %s at %s: %w",
 			comment.ID, c.position, err)
 	}
+	// A ROW ALREADY UNDER THIS ID IS LEFT AS IT IS: it was posted by the
+	// record that created it, and whatever has happened to it since — an
+	// edit, an answer — is a later record's to have said. Every node meets
+	// the same row at the same position, so every node leaves it alone.
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO tracker_comments
 			(id, task_id, author, author_kind, body, reply_to, ask, answers,
-			 answered_by, resolved, resolved_by, resolved_at, removed,
 			 record_id, created_at, updated_at, document)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT (id) DO UPDATE SET
-			body = excluded.body, ask = excluded.ask,
-			answers = excluded.answers, answered_by = excluded.answered_by,
-			resolved = excluded.resolved, resolved_by = excluded.resolved_by,
-			resolved_at = excluded.resolved_at, removed = excluded.removed,
-			record_id = excluded.record_id, updated_at = excluded.updated_at,
-			document = excluded.document`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT (id) DO NOTHING`,
 		comment.ID, task.ID, comment.Author, string(comment.AuthorKind),
-		comment.Body, comment.ReplyTo, comment.Ask,
-		comment.Answers, nil,
-		boolInt(comment.Resolved), nonEmpty(comment.ResolvedBy),
-		nullableTime(comment.ResolvedAt), boolInt(comment.Removed),
+		comment.Body, comment.ReplyTo, comment.Ask, comment.Answers,
 		c.record.OpID, store.EncodeTime(comment.CreatedAt),
 		store.EncodeTime(commentUpdatedAt(comment)), document)
 	if err != nil {
@@ -2339,6 +2366,12 @@ func writeComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 	written, err := affected(res)
 	if err != nil {
 		return 0, err
+	}
+	if written == 0 {
+		// NOTHING POSTED, SO NOTHING ANSWERED: a post that found its row
+		// already there closes no ask either, since whatever it answers
+		// was closed — or not — by the record that did post it.
+		return 0, nil
 	}
 	// AND AN ANSWER CLOSES THE ASK IT NAMES. The two are separate rows —
 	// a reply is its own comment — so the ask stays open on every board,
@@ -2362,6 +2395,117 @@ func writeComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 	return written, nil
 }
 
+// editComment rewrites a stored comment's words: its body, the instant they
+// were changed and the document carrying both.
+//
+// THE STORED COMMENT WITH ITS WORDS REPLACED, rather than the record's whole
+// comment written over it: what a remark asked, the question it answers, the
+// decision it carries and whom it mentioned stay what its post made them,
+// whatever an edit record carries beside its body. The writer forms an edit
+// from the stored row anyway ([Writer.EditComment]); building the document
+// here as well is what keeps the columns and the document one account of the
+// remark rather than two that a record could make disagree.
+//
+// AN EDIT OF A ROW THIS NODE DOES NOT HOLD WRITES NOTHING: the post is below
+// it in the log, so a missing row is a remark nobody posted, and one made up
+// from an edit would be a remark with no post behind it.
+func editComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
+	c applyContext) (int, error) {
+
+	var stored []byte
+	err := tx.QueryRowContext(ctx, `
+		SELECT document FROM tracker_comments WHERE id = ? AND task_id = ?`,
+		comment.ID, task.ID).Scan(&stored)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return 0, nil
+	case err != nil:
+		return 0, fmt.Errorf("worklet: read comment %s to edit at %s: %w",
+			comment.ID, c.position, err)
+	}
+	var edited Comment
+	if err = json.Unmarshal(stored, &edited); err != nil {
+		return 0, fmt.Errorf("worklet: decode comment %s to edit at %s: %w",
+			comment.ID, c.position, err)
+	}
+	edited.Body = comment.Body
+	if !comment.UpdatedAt.IsZero() {
+		edited.UpdatedAt = comment.UpdatedAt
+	}
+	document, err := json.Marshal(edited)
+	if err != nil {
+		return 0, fmt.Errorf("worklet: encode comment %s at %s: %w",
+			comment.ID, c.position, err)
+	}
+	res, err := tx.ExecContext(ctx, `
+		UPDATE tracker_comments SET body = ?, updated_at = ?, document = ?
+		WHERE id = ? AND task_id = ?`,
+		edited.Body, store.EncodeTime(commentUpdatedAt(edited)), document,
+		comment.ID, task.ID)
+	if err != nil {
+		return 0, fmt.Errorf("worklet: edit comment %s at %s: %w",
+			comment.ID, c.position, err)
+	}
+	return affected(res)
+}
+
+// resolveComment marks a stored comment resolved: who resolved it and when,
+// in its columns and in the document carrying them.
+//
+// THE STORED COMMENT WITH ITS RESOLUTION SET, for [editComment]'s reason: its
+// words, when they last changed, what it asked and answers and the answer that
+// closed it stay what the records that own them made them, whatever a resolve
+// record carries beside its resolution. A question resolved after somebody
+// answered it is still answered, and the answer still says what was decided.
+//
+// THE KIND IS THE GESTURE: a resolve record resolves whatever flag its comment
+// carries, and who resolved it and when are what the record states. A record
+// stating them again is written again, as an edit that changes no word is, so
+// the row holds the newest resolution.
+//
+// A RESOLVE OF A ROW THIS NODE DOES NOT HOLD WRITES NOTHING, for an edit's
+// reason: the post is below it in the log, so a missing row is a remark nobody
+// posted, and one made up from a resolve would be a remark with no post behind
+// it.
+func resolveComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
+	c applyContext) (int, error) {
+
+	var stored []byte
+	err := tx.QueryRowContext(ctx, `
+		SELECT document FROM tracker_comments WHERE id = ? AND task_id = ?`,
+		comment.ID, task.ID).Scan(&stored)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return 0, nil
+	case err != nil:
+		return 0, fmt.Errorf("worklet: read comment %s to resolve at %s: %w",
+			comment.ID, c.position, err)
+	}
+	var resolved Comment
+	if err = json.Unmarshal(stored, &resolved); err != nil {
+		return 0, fmt.Errorf("worklet: decode comment %s to resolve at %s: %w",
+			comment.ID, c.position, err)
+	}
+	resolved.Resolved = true
+	resolved.ResolvedBy, resolved.ResolvedAt = comment.ResolvedBy, comment.ResolvedAt
+	document, err := json.Marshal(resolved)
+	if err != nil {
+		return 0, fmt.Errorf("worklet: encode comment %s at %s: %w",
+			comment.ID, c.position, err)
+	}
+	res, err := tx.ExecContext(ctx, `
+		UPDATE tracker_comments
+		SET resolved = 1, resolved_by = ?, resolved_at = ?, document = ?
+		WHERE id = ? AND task_id = ?`,
+		sql.NullString{String: resolved.ResolvedBy, Valid: resolved.ResolvedBy != ""},
+		nullableTime(resolved.ResolvedAt), document, comment.ID, task.ID)
+	if err != nil {
+		return 0, fmt.Errorf("worklet: resolve comment %s at %s: %w",
+			comment.ID, c.position, err)
+	}
+	return affected(res)
+}
+
 // commentUpdatedAt is the edit instant, defaulting to the creation one so the
 // column is never zero on a comment nobody has touched.
 func commentUpdatedAt(comment Comment) time.Time {
@@ -2369,13 +2513,6 @@ func commentUpdatedAt(comment Comment) time.Time {
 		return comment.CreatedAt
 	}
 	return comment.UpdatedAt
-}
-
-func nonEmpty(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
 }
 
 // writeBodyRevision keeps the body a write replaced, and prunes what the

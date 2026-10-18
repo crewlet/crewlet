@@ -659,11 +659,13 @@ func (w *Writer) EditComment(ctx context.Context, opID, taskID, project,
 					"%s — reply to it instead of rewriting it", ErrNotAuthor,
 					commentID, stored.Author)
 			}
-			// THE STORED COMMENT WITH ITS BODY REPLACED, whole, because
-			// the apply is an upsert of the row the record carries: a
-			// patch holding only the id and the body would clear the
-			// question it asked, the answer it closed and the mentions it
-			// woke.
+			// THE STORED COMMENT WITH ITS BODY REPLACED, whole, so the
+			// record states the remark as it now reads: the history row
+			// and the wake quote it, and every reader of the record sees
+			// the question it asked and whom it mentioned. The apply
+			// rewrites the words alone whatever the record carries
+			// ([editComment]), so this is the record's account of the
+			// remark, not what keeps the row's other columns.
 			edited := stored
 			edited.Body, edited.UpdatedAt = patch.Comment.Body, at
 			patch.Comment = &edited
