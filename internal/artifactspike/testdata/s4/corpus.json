@@ -148,11 +148,11 @@
  {
   "file": "importmap-offlist.html",
   "what": "A chart whose import map points a module at esm.sh",
-  "refused": [],
-  "breaks": [],
-  "escapes": [
-   "import_map_remote"
+  "refused": [
+   "remote_import"
   ],
+  "breaks": [],
+  "escapes": [],
   "storage": false
  },
  {
@@ -409,12 +409,10 @@
  },
  {
   "file": "threejs-importmap.html",
-  "what": "A three.js scene whose import map points at jsDelivr",
+  "what": "A three.js scene whose import map points at jsDelivr, copied in",
   "refused": [],
   "breaks": [],
-  "escapes": [
-   "import_map_remote"
-  ],
+  "escapes": [],
   "storage": false
  },
  {

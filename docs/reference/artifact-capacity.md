@@ -274,17 +274,17 @@ what the browser half below measures on captured pages.
 
 | Outcome | Pages | Share |
 |---|---|---|
-| Refused by the linter | 12 | 21.8 percent |
-| Published, and nothing the policy stops | 26 | 47.3 percent |
+| Refused by the linter | 13 | 23.6 percent |
+| Published, and nothing the policy stops | 25 | 45.5 percent |
 | Published, and something the policy stops | 17 | 30.9 percent |
 | Published with browser storage (breaks in shared mode only) | 5 | 9.1 percent |
-| Published with an import map naming another origin (an escape, below) | 2 | 3.6 percent |
+| Published with an import map naming another origin | 0 | 0 percent (two pages did before finding 7's fix) |
 
 | Refusal | Pages | A typical source |
 |---|---|---|
 | `remote_script` | 4 | `d3js.org`, `cdn.plot.ly`, an unlisted CDN, a CDN over `http` |
 | `unpinned_version` | 3 | `cdn.jsdelivr.net/npm/chart.js`, Tailwind's Play CDN with no version |
-| `remote_import` | 2 | `import mermaid from "https://cdn.jsdelivr.net/..."` |
+| `remote_import` | 3 | `import mermaid from "https://cdn.jsdelivr.net/..."`, an import map entry on `esm.sh` |
 | `form_off_origin` | 1 | a form posting to a form service |
 | `javascript_url` | 1 | `<a href="javascript:void(0)">` |
 | `refresh_off_origin` | 1 | a meta refresh to another site |
@@ -301,15 +301,17 @@ what the browser half below measures on captured pages.
 | A worker started from a URL | 1 | `worker-src blob:` |
 | A base element | 1 | `base-uri 'none'` |
 
-The linter takes 120 to 170 microseconds a page.
+The linter takes 120 to 170 microseconds a page. The three.js page's import
+map entry on jsDelivr is copied in and rewritten to the version's copy, as a
+module script's source is.
 
 **Reading.** The CDN rules refuse what models most often write (an unpinned
-jsDelivr reference, `d3js.org`, Plotly's own CDN, an ES module import), and
-each refusal names the fix. What breaks after publishing is mostly what the
-origin is for: a page cannot call another site's API or hotlink its images.
-Three shapes break silently and the linter could name them: string evaluation
-in the page's own script, handlers written by script, and import maps (which
-escape the copy-in rather than break).
+jsDelivr reference, `d3js.org`, Plotly's own CDN, an ES module import, an
+import map entry on an unlisted host), and each refusal names the fix. What
+breaks after publishing is mostly what the origin is for: a page cannot call
+another site's API or hotlink its images. Two shapes break silently and the
+linter could name them: string evaluation in the page's own script, and
+handlers written by script.
 
 **Target**: the share of pages that break under the strict policy reported per
 cause, each cause either fixed in the linter or stated in the authoring guide.
@@ -485,12 +487,16 @@ it.
    acknowledgement came later and the put failed. Bounding the chunks in
    flight, or giving the put a deadline from its pace allowance, makes a put's
    success independent of the disk's flush time.
-7. **An import map escapes the copy-in (`internal/artifactupload/lint`).** A
-   page whose import map names a module on another origin is published, and
-   the module loads in the viewer's browser from wherever the map points
-   (under the nonce of the module that imports it); the same reference written
-   as a literal import is refused `remote_import`. The linter should read
-   `<script type="importmap">` and hold every remote entry to the same rule.
+7. **An import map escaped the copy-in (fixed, `internal/artifactupload/lint`).**
+   A page whose import map named a module on another origin was published, and
+   the module loaded in the viewer's browser from wherever the map pointed
+   (under the nonce of the module that imports it). The linter now reads every
+   `<script type="importmap">`: each remote entry in `imports` and `scopes` is
+   held to the module rule (an allowlisted CDN file at an exact version,
+   copied in and the entry rewritten to the copy) or refused `remote_import`,
+   a map it cannot parse is refused, and the rewritten page's maps are
+   verified before it is stored (`TestAnImportMapEntryOnAnotherOriginIsCopiedIn`,
+   `TestTheVerificationRefusesAnImportMapNamingAnotherOrigin`).
 8. **Three silent breaks the linter could name (`internal/artifactupload/lint`).**
    String evaluation in the page's own script (`eval`, `new Function`, a
    string timer, a template compiler), handlers written by script, and a form
