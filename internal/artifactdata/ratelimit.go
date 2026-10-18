@@ -92,10 +92,17 @@ type limiter struct {
 	stores     map[string]*bucket
 }
 
-// bucket is one token bucket: tokens held at last.
+// bucket is one token bucket: tokens held at last, earned at rate up to
+// burst. Each bucket carries its own rate and burst, so the principal's and
+// the store's buckets are told apart by what they hold, never by the caller.
 type bucket struct {
-	tokens float64
-	last   time.Time
+	tokens, rate, burst float64
+	last                time.Time
+}
+
+// newBucket is a full bucket at now.
+func newBucket(rate, burst float64, now time.Time) *bucket {
+	return &bucket{tokens: burst, rate: rate, burst: burst, last: now}
 }
 
 // newLimiter builds the node's buckets on a clock.
@@ -115,28 +122,25 @@ func (l *limiter) take(store, principal string, cost int) *RateLimited {
 	}
 	pb := l.principals[[2]string{store, principal}]
 	if pb == nil {
-		pb = &bucket{tokens: artifacts.DataWritesBurst, last: now}
+		pb = newBucket(artifacts.DataWritesPerPrincipalPerSecond, artifacts.DataWritesBurst, now)
 		l.principals[[2]string{store, principal}] = pb
 	}
 	sb := l.stores[store]
 	if sb == nil {
-		sb = &bucket{tokens: artifacts.DataWritesStoreBurst, last: now}
+		sb = newBucket(artifacts.DataWritesPerStorePerSecond, artifacts.DataWritesStoreBurst, now)
 		l.stores[store] = sb
 	}
-	pb.refill(now, artifacts.DataWritesPerPrincipalPerSecond, artifacts.DataWritesBurst)
-	sb.refill(now, artifacts.DataWritesPerStorePerSecond, artifacts.DataWritesStoreBurst)
+	pb.refill(now)
+	sb.refill(now)
 	// A WRITE HEAVIER THAN A WHOLE BUCKET weighs a whole bucket: it is
 	// admitted when the bucket is full and empties it, rather than being a
 	// write no wait could ever admit.
-	pc := math.Min(float64(cost), artifacts.DataWritesBurst)
-	sc := math.Min(float64(cost), artifacts.DataWritesStoreBurst)
+	pc, sc := pb.weigh(cost), sb.weigh(cost)
 	if pb.tokens < pc {
-		return &RateLimited{Scope: "principal", Cost: cost,
-			RetryAfter: wait(pc-pb.tokens, artifacts.DataWritesPerPrincipalPerSecond)}
+		return &RateLimited{Scope: "principal", Cost: cost, RetryAfter: pb.wait(pc)}
 	}
 	if sb.tokens < sc {
-		return &RateLimited{Scope: "store", Cost: cost,
-			RetryAfter: wait(sc-sb.tokens, artifacts.DataWritesPerStorePerSecond)}
+		return &RateLimited{Scope: "store", Cost: cost, RetryAfter: sb.wait(sc)}
 	}
 	pb.tokens -= pc
 	sb.tokens -= sc
@@ -144,31 +148,38 @@ func (l *limiter) take(store, principal string, cost int) *RateLimited {
 }
 
 // refill adds what the time since last earned, up to the burst.
-func (b *bucket) refill(now time.Time, rate, burst float64) {
+func (b *bucket) refill(now time.Time) {
 	if elapsed := now.Sub(b.last).Seconds(); elapsed > 0 {
-		b.tokens = math.Min(burst, b.tokens+elapsed*rate)
+		b.tokens = math.Min(b.burst, b.tokens+elapsed*b.rate)
 	}
 	b.last = now
 }
 
-// wait is how long a deficit takes to refill at rate, rounded up to a whole
+// weigh is what cost takes from the bucket: the cost, at most a whole bucket.
+func (b *bucket) weigh(cost int) float64 { return math.Min(float64(cost), b.burst) }
+
+// full reports a bucket that has refilled, which admits exactly as an absent
+// one does.
+func (b *bucket) full() bool { return b.tokens >= b.burst }
+
+// wait is how long the bucket takes to hold need again, rounded up to a whole
 // millisecond so a Retry-After is never zero.
-func wait(deficit, rate float64) time.Duration {
-	d := time.Duration(math.Ceil(deficit / rate * float64(time.Second)))
+func (b *bucket) wait(need float64) time.Duration {
+	d := time.Duration(math.Ceil((need - b.tokens) / b.rate * float64(time.Second)))
 	return max(d.Round(time.Millisecond), time.Millisecond)
 }
 
 // forgetFull drops every bucket that has refilled.
 func (l *limiter) forgetFull(now time.Time) {
 	for k, b := range l.principals {
-		b.refill(now, artifacts.DataWritesPerPrincipalPerSecond, artifacts.DataWritesBurst)
-		if b.tokens >= artifacts.DataWritesBurst {
+		b.refill(now)
+		if b.full() {
 			delete(l.principals, k)
 		}
 	}
 	for k, b := range l.stores {
-		b.refill(now, artifacts.DataWritesPerStorePerSecond, artifacts.DataWritesStoreBurst)
-		if b.tokens >= artifacts.DataWritesStoreBurst {
+		b.refill(now)
+		if b.full() {
 			delete(l.stores, k)
 		}
 	}

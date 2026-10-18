@@ -695,8 +695,8 @@ func (h *Hub) tick(ctx context.Context, now time.Time) {
 	var frames []Frame
 	for id, r := range h.rooms {
 		if r.expire(now) {
-			h.scheduleLocked(r) //nolint:contextcheck // the hub's own lifetime, ended by Stop, never a caller's; see Start
-			h.scheduleSendLocked(r)
+			h.scheduleLocked(r)     //nolint:contextcheck // the hub's own lifetime, ended by Stop, never a caller's; see Start
+			h.scheduleSendLocked(r) //nolint:contextcheck // the hub's own lifetime, ended by Stop, never a caller's; see Start
 		}
 		if members := r.localMembers(); len(members) > 0 {
 			frames = append(frames, h.frameLocked(id, FrameState, members, nil, true))
