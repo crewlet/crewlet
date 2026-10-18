@@ -127,13 +127,8 @@ type TokenCheck struct {
 func CheckToken(presented Token, row TokenRow, now time.Time,
 	stall time.Duration) TokenCheck {
 
-	switch {
-	case row.Lag > stall:
-		return TokenCheck{TokenUnknown, fmt.Sprintf("this node is %s behind "+
-			"on identity changes, over the %s limit", row.Lag, stall)}
-	case row.Deferred:
-		return TokenCheck{TokenUnknown, "this node has an identity change it " +
-			"can't read that may affect this token's owner"}
+	if check, covered := coverage(row, stall); !covered {
+		return check
 	}
 	if !row.Found {
 		if row.Applied >= presented.Position {
@@ -154,6 +149,57 @@ func CheckToken(presented Token, row TokenRow, now time.Time,
 			"not a machine token"}
 	case !matched:
 		return TokenCheck{TokenRefused, "the secret does not verify"}
+	}
+	return ending(row, now)
+}
+
+// CheckHeld decides one token by its rows alone, for a caller that holds the
+// token's NAME rather than its secret: a view ticket minted through the token,
+// whose secret the minting request already proved, decided again on the
+// artifact origin, where the secret never travels.
+//
+// THE SAME TABLE BUT THE TWO FACTS ONLY A BEARER HAS. Coverage and every fact
+// that ends a good token are [CheckToken]'s, cell for cell. The secret is not
+// checked, since nothing here presents one. And an ABSENT row is UNKNOWN,
+// never refused: without the mint position a presented token carries, a node
+// cannot tell a credential it has not applied yet from one that was never
+// there, and a refusal it could not stand behind would end a frame whose
+// credential is fine.
+func CheckHeld(row TokenRow, now time.Time, stall time.Duration) TokenCheck {
+	if check, covered := coverage(row, stall); !covered {
+		return check
+	}
+	switch {
+	case !row.Found:
+		return TokenCheck{TokenUnknown, "this node holds no credential under " +
+			"that id, and without the token's mint position it cannot say " +
+			"whether it has applied it"}
+	case !row.IsToken:
+		return TokenCheck{TokenRefused, "the id names a credential that is " +
+			"not a machine token"}
+	}
+	return ending(row, now)
+}
+
+// coverage is whether this node can vouch for the rows at all: a node past the
+// stall grace, or holding a record it could not decode whose scope covers the
+// owner, cannot, and every answer below it would be a guess.
+func coverage(row TokenRow, stall time.Duration) (TokenCheck, bool) {
+	switch {
+	case row.Lag > stall:
+		return TokenCheck{TokenUnknown, fmt.Sprintf("this node is %s behind "+
+			"on identity changes, over the %s limit", row.Lag, stall)}, false
+	case row.Deferred:
+		return TokenCheck{TokenUnknown, "this node has an identity change it " +
+			"can't read that may affect this token's owner"}, false
+	}
+	return TokenCheck{}, true
+}
+
+// ending is the facts that end a token this node has established is real, in
+// the order a log line should name the first of them.
+func ending(row TokenRow, now time.Time) TokenCheck {
+	switch {
 	case !row.RevokedAt.IsZero():
 		// A REVOCATION IS A FACT AND NOT A SCHEDULE. The stamp is the
 		// REVOKING node's clock, kept for the listing's "withdrawn on the

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -396,7 +398,7 @@ func (s *Signer) validate(ctx context.Context, directory Directory,
 	// AND ONLY THEN THE ROWS. Nothing above this line reads anything, so
 	// an unauthenticated caller cannot price a request by sending rubbish.
 	identity, err := directory.Resolve(ctx, b.Lineage.String(), b.Person)
-	v := s.standing(b, identity, err)
+	v := standing(b, identity, err)
 	switch {
 	case v.Row != RowValid && v.Row != RowBehind:
 		return v
@@ -416,8 +418,8 @@ func (s *Signer) validate(ctx context.Context, directory Directory,
 //
 // A SERVING ROW comes back bare, for [Signer.validate] to finish: a request's
 // re-issues through [Signer.served], and an open connection's is filled in and
-// re-issues nothing.
-func (s *Signer) standing(b Bearer, identity Identity, err error) Validation {
+// re-issues nothing; [StandingByName] fills it in as an open connection's is.
+func standing(b Bearer, identity Identity, err error) Validation {
 	if err != nil {
 		return Validation{Row: RowStalled, Bearer: b, Err: err,
 			Detail: "this node couldn't read its identity data"}
@@ -482,6 +484,44 @@ func (s *Signer) standing(b Bearer, identity Identity, err error) Validation {
 			Detail: "this node has not applied the session's start record yet"}
 	}
 	return Validation{Row: RowValid, Bearer: b}
+}
+
+// StandingByName is the row one read of the estate puts a session on for a caller that
+// holds the session's NAME rather than its bearer: a view ticket minted for the
+// session's holder, decided again on the artifact origin, where no cookie ever
+// travels.
+//
+// THE SAME TABLE AS A BEARER, over the facts the rows keep. A bearer carries
+// three facts of its own (the epoch and fleet generation its session was
+// opened at, and the position its start landed at), and this reads each from
+// the session's own row instead: the epoch the row was opened at, the
+// generation this node holds, and a start the rows have already applied. So a
+// person whose revocation epoch moved past the session, a person who may not
+// act, a session the row says ended and an identity copy that cannot vouch for
+// its rows all land on the rows they land on for a cookie. What the row cannot
+// say is the company's generation at the session's start and the two
+// deadlines the bearer signs: the caller decides those first, over the same
+// rows ([iamdomain.Reader.SessionStanding] judges the generation and the
+// absolute deadline together; a ticket never outlives the deadline it was
+// minted under).
+//
+// A serving row comes back with the person and the session filled in, for the
+// caller to compose a principal from.
+func StandingByName(lineage uuid.UUID, person string, identity Identity, err error) Validation {
+	// AN ABSENT ROW STATES NO EPOCH, so it is read as the person's own and
+	// the absent-row arm says what happened, rather than an epoch check
+	// against a zero no session was ever opened at.
+	epoch := identity.Session.Epoch
+	if !identity.Session.Found {
+		epoch = identity.Person.Epoch
+	}
+	b := Bearer{Lineage: lineage, Person: person, Epoch: epoch,
+		Generation: identity.Generation}
+	v := standing(b, identity, err)
+	if v.Row == RowValid {
+		v.Person, v.Session = identity.Person, identity.Session
+	}
+	return v
 }
 
 // served finishes a row that is allowed to serve, re-issuing the cookie once
