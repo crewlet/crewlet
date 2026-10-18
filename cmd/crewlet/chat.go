@@ -58,7 +58,7 @@ import (
 // human write surface's routes beside the tracker's purge. None of them reads
 // the room it destroys from, because an administrator is in no private room
 // they were not invited to, and what they confirm is what the request itself
-// destroys: an erase's count of messages, a prune's cutoff.
+// destroys: an erase's count of messages, a prune's cutoff, a horizon's days.
 
 const chatUsage = `crewlet chat — the company's own chat, as the seat your credential acts as
 
@@ -78,7 +78,7 @@ Usage:
   crewlet chat prune ROOM-ID -cutoff TIME -confirm TIME
                                                     Destroy everything a room said
                                                     before an instant, now; no inverse
-  crewlet chat retention ROOM-ID -days N | -company
+  crewlet chat retention ROOM-ID -days N | -company -confirm N|company
                                                     Set how long one room keeps what
                                                     is said in it, or return it to
                                                     the company's horizon
@@ -837,11 +837,21 @@ type chatDestroyed struct {
 // `-company`, sent as null. A command naming neither is refused rather than
 // guessed at, because the guess that reads an absent value as "the company's"
 // destroys the past of a room an administrator had set to keep for ever.
+//
+// # Why the horizon is typed twice
+//
+// The prune's guard, for the prune's reason: a shorter horizon destroys the
+// room's past on the duty's next pass, on every data node, with no inverse —
+// so `-confirm` repeats it, the days or `company` in the route's own spelling
+// ([chat.HorizonConfirmation]), and the route refuses the pair if they differ.
+// Checked here first, so a typo sends nothing. Every horizon takes it, a
+// longer one too: whether this one shortens the room's depends on what the
+// room had, which neither this command nor the route reads.
 func chatRetention(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	channel, rest := splitSubject(args)
 	var days chatDays
 	var company *bool
-	var opID *string
+	var confirm, opID *string
 	client, err := nodeClientFor(environ, rest, "chat retention", stderr,
 		func(fs *flag.FlagSet) {
 			fs.Var(&days, "days",
@@ -849,6 +859,9 @@ func chatRetention(environ config.Source, args []string, stdout, stderr io.Write
 			company = fs.Bool("company", false,
 				"return the room to the company's own horizon "+
 					"(chat.native.message_retention_days)")
+			confirm = fs.String("confirm", "",
+				"the horizon again — the days, or company — since a shorter one is a "+
+					"prune on a delay on every data node")
 			opID = opIDFlag(fs,
 				"retry a change whose outcome is unknown with the id it printed, so the "+
 					"retry is this change rather than another; empty starts a new one")
@@ -859,9 +872,19 @@ func chatRetention(environ config.Source, args []string, stdout, stderr io.Write
 	room := strings.TrimSpace(channel)
 	if room == "" || days.set == *company {
 		fmt.Fprintln(stderr, "usage: crewlet chat retention ROOM-ID -days N | -company "+
-			"[-op-id ID]")
+			"-confirm N|company [-op-id ID]")
 		return errors.New("name the room and exactly one horizon: -days N (0 keeps " +
 			"it for ever) or -company for the company's own")
+	}
+	var stated *int
+	if days.set {
+		stated = &days.n
+	}
+	repeat := chat.HorizonConfirmation(stated)
+	if strings.TrimSpace(*confirm) != repeat {
+		return fmt.Errorf("repeat the horizon in -confirm %s: a shorter one is a "+
+			"prune on a delay — everything %s said before it is destroyed on every "+
+			"data node at the retention duty's next pass, with no inverse", repeat, room)
 	}
 	operation, err := operationFor("retention", *opID)
 	if err != nil {
@@ -879,7 +902,8 @@ func chatRetention(environ config.Source, args []string, stdout, stderr io.Write
 		}
 	}
 	var answer chatDestroyed
-	path := "/chat/channels/" + url.PathEscape(room) + "/retention"
+	path := "/chat/channels/" + url.PathEscape(room) + "/retention?" +
+		url.Values{"confirm": {repeat}}.Encode()
 	// PATIENTLY, for the purge's reason ([logWriteTimeout]): a room's horizon
 	// is one record on the chat log.
 	if err := write.settle(stderr, client.patiently(logWriteTimeout).putKeyed(
