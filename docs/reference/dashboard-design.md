@@ -3779,8 +3779,8 @@ one, beside its class). The dashboard never retries on its own. When you press
 Retry it sends the **same operation key** it sent the first time, from which the
 engine derives the same operations; a new press is a new key. Each Retry is
 bound to the press it reports — press twice and the first toast's Retry still
-sends the first press, never the second. A refusal a busy or draining node
-caused offers "Try again" on the same terms; one the request caused does not,
+sends the first press, never the second. A refusal a busy, draining or
+starting node caused offers "Try again" on the same terms; one the request caused does not,
 because the same request would be refused again. A control reused across
 objects — the Inbox's Mark read as you move between notices — belongs to the
 object it is drawn for, so one notice's refusal never appears under another's.
@@ -7328,13 +7328,17 @@ cooldown refresher's cadence.
 **Secrets** lists the names the fleet holds, their key ids and provenance, and
 can store, rotate and remove one over the same guarded routes the CLI uses.
 Every row is sealed in the fleet's store; **Source is provenance** — which path
-last wrote the row (`api` for this page or `PUT /secrets`, `cli`, `setup`,
-`provision`, `rekey`, `migrated`) — and the credential's peek says what its
-word means rather than leaving it to a pointer. Three tiles count the
-credentials, the names **read by nothing** (no field in the active
-configuration points at them: a forgotten `${VAR}`, or a credential nothing
-needs any more — not known, and never 0, when the reference check did not
-answer) and the distinct key ids. The peek says each property once: its
+last wrote the row, in that path's own word and never one a request chose
+(`api` for this page, `PUT /secrets` and the CLI against a running node,
+`setup` for an integration's setup, `provision` for what an integration's
+provisioning pass minted, `migrated` for a row moved off a stopped node's own
+table) — and the credential's peek says what its word means rather than
+leaving it to a pointer. Those four are all the listing can carry, so a word
+outside them is said as one this build does not know rather than guessed at.
+Three tiles count the credentials, the names **read by nothing** (no field in
+the active configuration points at them: a forgotten `${VAR}`, or a credential
+nothing needs any more — not known, and never 0, when the reference check did
+not answer) and the distinct key ids. The peek says each property once: its
 header carries the name, and **Where it came from** carries Source, Key id,
 Set by and Updated.
 **It never asks for a value**: there is no reveal, and a rotation asks for the

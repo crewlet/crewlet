@@ -859,6 +859,35 @@ type Options struct {
 	// reason in a file nobody re-read. Empty is normal.
 	Mode statelog.MaintenanceMode
 
+	// Recovered is called once, from New, at the boundary between the two
+	// halves of a boot — and never on a boot that fails before it.
+	//
+	// WHAT COMES BEFORE IT IS THE NODE'S OWN: its store and its migrations,
+	// the broker (the embedded one's file-store recovery, a leaf's link, a
+	// member's cluster), the streams and buckets it provisions, the
+	// replicated estate, the state logs it provisions and a join's snapshot.
+	// All of it takes as long as what the node holds is large, so the
+	// DEPLOYMENT bounds it — a startup probe sized for the store it gave the
+	// node — and nothing in this process does: a recovery cannot be cut short
+	// without losing what it recovers. APPLYING those logs is not part of it:
+	// their appliers catch up in the background from here on, and what waits
+	// for them is a seat's acquisition ([Engine.StateLogHydrated]), never
+	// this call.
+	//
+	// WHAT COMES AFTER IT IS THE COMPANY'S: the sandboxes it configures, the
+	// native halves it runs, and equipping its seats' tools, the shared MCP
+	// servers among them, each bounded by its own `startup_timeout_seconds`.
+	// None of that may hold a startup probe, since a probe sized for a
+	// store's recovery knows nothing about a company's tool servers, so a
+	// caller answering probes (internal/api's Boot) treats this call as the
+	// moment the node is alive past anything only a dead disk could hold for
+	// ever.
+	//
+	// Called on every boot that gets that far, a node with no company and a
+	// node started in a maintenance mode included, since each recovers what
+	// it holds before deciding what else to start. Nil calls nothing.
+	Recovered func()
+
 	// Metrics is where this node's measurements are written.
 	//
 	// ONE RECORDER FOR THE PROCESS, built by the caller and shared with
@@ -1443,7 +1472,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// person holds a human seat the company declares (ADR-0032). See core.go.
 	//
 	// It does NOT wait for hydration — the reconcile is O(keys), and a node
-	// that blocked here would serve no dashboard, answer no probe and run no
+	// that blocked here would serve no dashboard, hold its startup probe at
+	// the recovery's 503 ([Options.Recovered] is called below) and run no
 	// duty until it finished. Seat acquisition is what waits; see
 	// [Engine.StateLogHydrated].
 	//
@@ -1459,6 +1489,17 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		}
 	} else {
 		e.startRoutedDirectory(ctx)
+	}
+	// THE BOUNDARY: everything above is what this node holds, recovered;
+	// everything below is what its company configures. See
+	// [Options.Recovered]. Logged, because it is the line a deployment sizes
+	// its startup probe by, and the time from the process's first line to
+	// this one is the recovery to measure.
+	log.InfoContext(ctx, "engine_recovered", "node", nodeID,
+		"detail", "what this node holds is open and recovered; what its company "+
+			"configures (sandboxes, native halves, tool servers) starts next")
+	if opts.Recovered != nil {
+		opts.Recovered()
 	}
 	// THE REST IS SKIPPED WHEN THERE IS NO EPOCH. Everything here is
 	// derived from a company — the sandbox backends it configures, the

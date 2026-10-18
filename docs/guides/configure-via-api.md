@@ -10,7 +10,7 @@ export TOKEN="$CREWLET_API_TOKEN_FOUNDER"   # matches api.auth.tokens[].token in
 export AUTH="Authorization: Bearer $TOKEN"
 ```
 
-`/health` should report `{"status":"unconfigured","configured":false}` before you start (still HTTP **200** — the status code is liveness, and an engine waiting for a configuration is alive). After the first PUT it flips to `{"status":"ok","configured":true}` and stays that way for the engine's lifetime.
+`/health` should report `{"status":"unconfigured","configured":false}` before you start (still HTTP **200** — the status code is liveness, and an engine waiting for a configuration is alive). A node still booting says `"status":"starting"` instead — with a `503` while it recovers what it holds, then a `200` — and every other route answers `503 starting` until it serves: wait until `/health`'s status is `unconfigured`, as [While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting) describes. (`/ready` is no signal here: it answers `503` throughout the boot, and goes on answering `503 unconfigured` until the first PUT.) After the first PUT it flips to `{"status":"ok","configured":true}` and stays that way for the engine's lifetime.
 
 ```bash
 curl -s $CREWLET_URL/health

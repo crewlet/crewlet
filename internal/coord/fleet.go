@@ -1101,9 +1101,11 @@ type SandboxRuns interface {
 // without opening any of them.
 //
 // PROVENANCE IS FOUR FIELDS — who wrote it, what sort of author, the
-// credential they acted through, and the surface it arrived by — because a
+// credential they acted through, and the write path it arrived by — because a
 // record that named only the credential lost its author the week the
-// credential's own row was swept. See internal/secrets' Author.
+// credential's own row was swept. See internal/secrets' Author, and its Source
+// for the fourth: held here as the plain string a store of bytes keeps, and
+// stamped and checked by the write path rather than by anything here.
 type SecretRecord struct {
 	Name          string
 	Value         string

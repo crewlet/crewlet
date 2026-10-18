@@ -582,9 +582,14 @@ type APIAuth struct {
 
 	// AcceptInsecure is the deliberate acknowledgement that this
 	// deployment is reachable off loopback with a posture that should not
-	// be. It is what lets `totp: optional` and an `http://` external URL
-	// stand on a routable address, and it is logged at WARN on every
-	// start for the whole life of the deployment.
+	// be. It is what lets `totp: optional` stand on an address a browser
+	// reaches over the network, which [APIAuth.validatePasswords] refuses
+	// without it, and it is logged at WARN on every start for the whole
+	// life of the deployment.
+	//
+	// NOT what lets an `http://` external URL stand: plain http off
+	// loopback is a warning with or without it ([API.warnings]), never a
+	// refusal, so there is nothing for an acknowledgement to lift there.
 	//
 	// A FIELD RATHER THAN A FLAG, unlike `-dev-principal`, and the
 	// difference is what each one opens: the flag authenticates every
@@ -1267,8 +1272,10 @@ func (a API) warnings(serving bool) []Warning {
 
 	// AN INSECURE POSTURE SOMEBODY ACKNOWLEDGED IS STILL INSECURE. The
 	// acknowledgement is what makes it legal, and it is a decision made
-	// once that everybody after inherits — so `crewlet validate` says it
-	// out loud every time, exactly as the engine logs it on every start.
+	// once that everybody after inherits — so it is said out loud every
+	// time: by `crewlet validate`, and by every start of a node serving
+	// the API, which logs this advisory as `config_advisory`. A line that
+	// fired only the first time would be a decision nobody can see.
 	if auth.AcceptInsecure {
 		out = append(out, advisory(field("api.auth.accept_insecure"),
 			"insecure sign-in settings are allowed at "+a.ExternalBase()+

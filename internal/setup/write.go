@@ -41,7 +41,7 @@ import (
 // setup route must never be able to read a value back.
 type Secrets interface {
 	Set(ctx context.Context, name, value string, by secrets.Author,
-		source string, now time.Time) error
+		source secrets.Source, now time.Time) error
 }
 
 // Config is the company document this package patches.
@@ -95,10 +95,6 @@ func authorOf(by iam.Actor) secrets.Author {
 	return secrets.Author{Name: by.Name, Kind: string(by.Kind),
 		OperatorID: by.OperatorID}
 }
-
-// Source is the value the secret store records for a row this package wrote,
-// so `crewlet secrets list` says which surface put it there.
-const Source = "setup"
 
 // Submission is one set of values for one integration.
 type Submission struct {
@@ -269,7 +265,7 @@ func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (R
 	written := []string{}
 	for _, p := range secretsToWrite {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := w.Secrets.Set(ctx, p.name, p.value, authorOf(in.By), Source, now); err != nil {
+		if err := w.Secrets.Set(ctx, p.name, p.value, authorOf(in.By), secrets.SourceSetup, now); err != nil {
 			// Named, never valued. The name is a fact an operator needs;
 			// the value is the one thing that must not reach a log or a
 			// response body.
@@ -396,7 +392,7 @@ func (w Writer) writeSeat(ctx context.Context, reqs []Requirement, in Submission
 	written := []string{}
 	for _, p := range secretsToWrite {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := w.Secrets.Set(ctx, p.name, p.value, authorOf(in.By), Source, now); err != nil {
+		if err := w.Secrets.Set(ctx, p.name, p.value, authorOf(in.By), secrets.SourceSetup, now); err != nil {
 			return Result{}, fmt.Errorf("setup: seal %s: %w", p.name, err)
 		}
 		written = append(written, p.name)

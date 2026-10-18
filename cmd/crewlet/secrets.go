@@ -107,8 +107,6 @@ func runSecrets(environ config.Source, args []string, stdout, stderr io.Writer) 
 		"the id the generated key is installed under (keygen only)")
 	dryRun := fs.Bool("dry-run", false,
 		"report what would be re-sealed without writing (rekey only)")
-	source := fs.String("source", "cli",
-		"provenance recorded with the row (set only)")
 	apiURL := fs.String("api", "",
 		"the running node's API; default is the api.host:port in -config")
 	if err := fs.Parse(rest); err != nil {
@@ -153,8 +151,7 @@ func runSecrets(environ config.Source, args []string, stdout, stderr io.Writer) 
 	case "list":
 		return listSecrets(ctx, sv, stdout)
 	case "set":
-		return setSecret(ctx, sv, name, *value, isFlagSet(fs, "value"), *source,
-			stdout, stderr)
+		return setSecret(ctx, sv, name, *value, isFlagSet(fs, "value"), stdout, stderr)
 	case "get":
 		return getSecret(ctx, sv, name, *reveal, stdout)
 	case "unset":
@@ -198,8 +195,10 @@ type secretBackend interface {
 	// is not always the one offered: on the fleet's store the node stamps
 	// the party its own guard authenticated, and this command printed the
 	// shell's user as the author of a row that named the API token instead.
-	Set(ctx context.Context, name, value string, by secrets.Author, source string,
-		now time.Time) (secrets.Author, error)
+	// The source is offered the same way, and only this node's own table
+	// keeps it: the node stamps its route's own word, whatever the command.
+	Set(ctx context.Context, name, value string, by secrets.Author,
+		source secrets.Source, now time.Time) (secrets.Author, error)
 	Get(ctx context.Context, name string) (string, error)
 	Unset(ctx context.Context, name string) (bool, error)
 	Rekey(ctx context.Context, activeKeyID string) (rotation, error)
@@ -238,10 +237,10 @@ type engineHeld struct {
 // moves the operator's rows alone.
 type localSecrets struct{ *store.SecretValues }
 
-// Set writes the row under the author offered, which on this node's own table
-// is what it records.
+// Set writes the row under the author and source offered, which on this node's
+// own table are what it records.
 func (l localSecrets) Set(ctx context.Context, name, value string, by secrets.Author,
-	source string, now time.Time) (secrets.Author, error) {
+	source secrets.Source, now time.Time) (secrets.Author, error) {
 
 	return by, l.SecretValues.Set(ctx, name, value, by, source, now)
 }
@@ -475,7 +474,7 @@ func total(byKey map[string]int) int {
 }
 
 func setSecret(ctx context.Context, sv *secretTarget, name, value string,
-	valueGiven bool, source string, stdout, stderr io.Writer,
+	valueGiven bool, stdout, stderr io.Writer,
 ) error {
 	if name == "" {
 		return errors.New("secrets set needs a name")
@@ -491,7 +490,10 @@ func setSecret(ctx context.Context, sv *secretTarget, name, value string,
 		}
 		value = read
 	}
-	recorded, err := sv.Set(ctx, name, value, hostAuthor(), source, time.Now().UTC())
+	// THIS COMMAND'S OWN WORD, and no flag offers another: a stopped node's
+	// table records `cli`, and a running node records its route's `api`.
+	recorded, err := sv.Set(ctx, name, value, hostAuthor(), secrets.SourceCLI,
+		time.Now().UTC())
 	if err != nil {
 		return err
 	}

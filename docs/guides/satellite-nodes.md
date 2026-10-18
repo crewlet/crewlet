@@ -301,7 +301,15 @@ curl -s http://sat-eu-1.internal:8000/ready
 alive — through a drain, and through a broker link that is down — with the
 node's half of the [health envelope](../reference/api-endpoints.md#probes-on-a-node-without-ingress):
 its id, its roles, its posture and applied epoch, the seats it holds, and
-`shutting_down`.
+`shutting_down`. Before that, while it boots, it answers as every starting node
+does ([While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting)):
+`503` with `"phase": "recovering"` until it has linked to a member of the
+fleet and provisioned what it uses on it — a satellite holds no store, so that
+is the whole of its recovery. The engine bounds every step of it: a minute for
+the link, and five minutes for each of the bring-ups that provision what it
+uses — the event streams, the coordination buckets and the object store's
+bucket, each a sequence of its own — past any of which it exits. Then it
+answers `200` with `"phase": "preparing"` while its company's tools come up.
 
 `/ready` answers whether the node is **doing its work**, because a
 satellite takes no traffic for a probe to steer. It is `503` until all of
@@ -309,6 +317,7 @@ these hold, naming the first that does not in `reason`:
 
 | `reason` | What it means here |
 |---|---|
+| `starting` | The node has not started yet: its listener is bound and answers the boot's answers. |
 | `draining` | The node is stopping: its turns finish and it claims nothing new. |
 | `broker_unlinked` | Its leaf link to every member is down (or, on an external cluster, its connection is reconnecting); `detail` says which. Its seats can neither receive nor publish anything. |
 | `unconfigured` | No company revision has reached it yet. |

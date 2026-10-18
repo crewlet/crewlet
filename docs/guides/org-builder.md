@@ -48,10 +48,11 @@ A node that has not caught up is never offered create mode: its own store is
 empty while the fleet runs a company, and a create from there could only be
 refused.
 
-A node that is draining refuses every check and save with `503 draining`,
-and the builder treats it as a node it could not reach: the draft is kept,
-and the check retries until a peer or the restarted node answers. Nothing is
-written by a refused write, so there is nothing to settle afterwards.
+A node that is draining refuses every check and save with `503 draining`, and
+one that is still starting with `503 starting`, and the builder treats either
+as a node it could not reach: the draft is kept, and the check retries until a
+peer or the node itself answers. Nothing is written by a refused write, so
+there is nothing to settle afterwards.
 
 Signing in as somebody else — in another tab, since the session cookie is the
 browser's — while a draft is open keeps the draft on screen. The builder reads

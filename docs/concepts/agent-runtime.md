@@ -605,7 +605,13 @@ booting as much as while it drains, because a boot can wait unboundedly too.
 A boot that fails once the engine is up runs the same drain. An embedded
 broker that is still recovering a large store cannot be interrupted, so a
 first Ctrl+C during that recovery waits for it to finish (the log says
-`embedded_start_cancel_waits`) before the boot gives up. The handover is what
+`embedded_start_cancel_waits`) before the boot gives up. The listener is
+already bound by then, and from the first signal it answers a drain's answers
+as far as a starting node can — `/health` `status: "shutting_down"`, still
+`503` while it recovers and `200` after, `/ready` `reason: "draining"`, and
+every route it would have served `503 draining` — until the boot gives up and
+closes it (see
+[While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting)). The handover is what
 makes those unbounded waits safe to offer. Without it the engine would still
 be the installed handler, every further press would be swallowed, and an
 operator watching a drain or a slow boot from the terminal they started it in

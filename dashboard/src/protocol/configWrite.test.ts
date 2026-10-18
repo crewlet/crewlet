@@ -254,19 +254,23 @@ describe("one reading of a /config refusal", () => {
       { error: "draining", detail: "shutting down" },
       { kind: "draining", detail: "shutting down" },
     ],
+    [503, { error: "starting", detail: "recovering" }, { kind: "starting", detail: "recovering" }],
     [502, {}, { kind: "unreachable", detail: "" }],
     [0, { error: "unreachable", detail: "offline" }, { kind: "unreachable", detail: "offline" }],
   ])("status %i %j reads as %j", (status, body, want) => {
     expect(classifyConfigRefusal({ status, body })).toEqual(want);
   });
 
-  // THE DRAIN IS THE ONE 5xx THAT IS CERTAIN: refused before the handler ran,
-  // so it stored nothing. Every other 5xx may have been raised after the
-  // revision was stored, and reading it as a refusal is how a save that
-  // landed gets replayed on top of itself.
-  test("only the drain gate's 503 is a refusal that stored nothing", () => {
+  // A DRAIN AND A START ARE THE TWO 5xx THAT ARE CERTAIN: each refused before
+  // the handler ran, so it stored nothing. Every other 5xx may have been
+  // raised after the revision was stored, and reading it as a refusal is how
+  // a save that landed gets replayed on top of itself.
+  test("only the drain gate's and a starting node's 503 are refusals that stored nothing", () => {
     expect(classifyConfigRefusal({ status: 503, body: { error: "draining" } }).kind).toBe(
       "draining",
+    );
+    expect(classifyConfigRefusal({ status: 503, body: { error: "starting" } }).kind).toBe(
+      "starting",
     );
     expect(classifyConfigRefusal({ status: 503, body: { error: "unavailable" } }).kind).toBe(
       "unreachable",

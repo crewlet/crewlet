@@ -294,14 +294,30 @@ without the `ingress` role serves only its two
 count, seats, posture and applied epoch rather than reporting them as
 unknowable.
 
-**The HTTP surface binds before the engine starts.** A seat is not claimed until
-its per-role MCP children are up — one subprocess per server per seat, each a
-spawn, a handshake and a `tools/list` — and on the example company, whose one
-`shared: false` server is Mattermost, that is 7 children; a company with a
-tracker, a wiki and a code host wired in runs three times that. Binding first means the dashboard, the REST API and every webhook
-route answer during that window, and `/ready` says honestly that this node holds
-no seats yet. Webhooks arriving in the window are retained rather than dropped,
-because a seat's mailbox is created before any claiming.
+**The listener binds before the boot, and the HTTP surface serves before the
+engine starts.** `crewlet run` binds `api.port` (and `api.public`) as soon as
+it has checked its Tier A, and until the node serves, that socket answers what
+a starting node answers: `/health` `503` while the node recovers what it holds
+— its store, its broker, its copy of the estate, which only the deployment can
+bound — and `200` from then on, while what the company configures comes up;
+`/ready` `503 starting`; every route it will serve `503 starting` with a
+`Retry-After`
+([While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting)).
+The line between the two halves is the engine's own: `engine.Options.Recovered`
+is called once, at the boundary, and a startup probe sized for the store is
+never held by a tool server the company declared.
+
+Then the node's surface takes the socket over, and only after that does the
+engine start claiming seats. A seat is not claimed until its per-role MCP
+children are up — one subprocess per server per seat, each a spawn, a handshake
+and a `tools/list` — and on the example company, whose one `shared: false`
+server is Mattermost, that is 7 children; a company with a tracker, a wiki and
+a code host wired in runs three times that. Serving first means the dashboard,
+the REST API and every webhook route answer during that window, and `/health`
+says honestly that this node holds no seats yet: its `seats` list is the seats
+claimed so far, which is none. `/ready` carries no seats at all. Webhooks
+arriving in the window are retained rather than dropped, because a seat's
+mailbox is created before any claiming.
 
 ---
 
@@ -831,6 +847,13 @@ has completed, because the probes are what an orchestrator reads while the turns
 finish. The door it closes instead is the one to new work: every webhook and
 every write is refused with `503` from the drain's first moment. See
 [Graceful shutdown](agent-runtime.md#graceful-shutdown).
+
+**A starting node answers both before it serves.** Its listener is bound before
+the boot, `/health` answers `503` while it recovers what it holds and `200`
+once it has, and `/ready` answers `503 starting` until the node serves — so the
+startup probe bounds exactly the part only the deployment can size, the
+recovery of the node's own store, and nothing the company configures can hold
+it. See [While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting).
 
 **One config, agreed by pointer.** An activation is a compare-and-set on an
 append-only pointer whose own revision *is* the epoch, so two operators

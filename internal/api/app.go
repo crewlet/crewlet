@@ -939,16 +939,25 @@ func New(opts Options) (*App, error) {
 	// renders (the GitHub App return, the Slack OAuth landing), so judged by
 	// the admin side's scheme those went out with no Strict-Transport-Security
 	// exactly where the deployment had published them over https.
-	served := func(public bool, h http.Handler) http.Handler {
-		return pagepolicy.Apply(authz.CanonicalPath(h), servedOverHTTPS(opts.Bootstrap, public))
-	}
 	if opts.Bootstrap == nil || !opts.Bootstrap.API.Public.Enabled() {
-		a.handler = served(false, chain)
+		a.handler = servedOn(opts.Bootstrap, false, chain)
 		return a, nil
 	}
-	a.handler = served(false, partition(false, chain))
-	a.public = served(true, partition(true, chain))
+	a.handler = servedOn(opts.Bootstrap, false, partition(false, chain))
+	a.public = servedOn(opts.Bootstrap, true, partition(true, chain))
 	return a, nil
+}
+
+// servedOn is the outermost wrapping of everything one of a node's sockets
+// serves: the security headers, judged by that socket's own scheme
+// ([servedOverHTTPS]), and the canonical-path refusal before anything reads the
+// path. See [New] for why each sits where it does.
+//
+// ONE WRAPPING for the full surface and the boot surface api.port and
+// api.public serve before it ([Boot]), so a request a node refuses while it
+// starts carries the headers the same request carries once it serves.
+func servedOn(bootstrap *config.Bootstrap, public bool, h http.Handler) http.Handler {
+	return pagepolicy.Apply(authz.CanonicalPath(h), servedOverHTTPS(bootstrap, public))
 }
 
 // partition serves the requests on one side of [auth.Public] and answers every
@@ -980,15 +989,27 @@ func partition(public bool, next http.Handler) http.Handler {
 		case public:
 			httpjson.NoRoute(w, r)
 		default:
-			httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoRoute, map[string]string{
-				"detail": fmt.Sprintf("this listener serves nothing at %s %s",
-					r.Method, r.URL.Path),
-				"hint": "This node has a public listener (api.public): the " +
-					"webhooks, the vendor app landings and the sandbox " +
-					"endpoints are served there and only there. Point the " +
-					"sender at that address.",
-			})
+			servedOnThePublicListener(w, r)
 		}
+	})
+}
+
+// servedOnThePublicListener is api.port's answer for a route outside parties
+// call, on a node whose public listener serves it: the 404 that names the right
+// listener, for the reason [partition] gives.
+//
+// ITS OWN FUNCTION because two surfaces answer it: the partition, and the boot
+// surface api.port serves before the node hands it this one ([Boot]) — so a
+// vendor configured with the wrong port learns it from its first delivery
+// whichever of the two that delivery meets.
+func servedOnThePublicListener(w http.ResponseWriter, r *http.Request) {
+	httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoRoute, map[string]string{
+		"detail": fmt.Sprintf("this listener serves nothing at %s %s",
+			r.Method, r.URL.Path),
+		"hint": "This node has a public listener (api.public): the " +
+			"webhooks, the vendor app landings and the sandbox " +
+			"endpoints are served there and only there. Point the " +
+			"sender at that address.",
 	})
 }
 

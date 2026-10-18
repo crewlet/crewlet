@@ -119,7 +119,7 @@ func (s sinkFlags) open(ctx context.Context, environ config.Source, stdout io.Wr
 type sinkStore struct{ *secretTarget }
 
 func (s sinkStore) Set(ctx context.Context, name, value string, by secrets.Author,
-	source string, now time.Time) error {
+	source secrets.Source, now time.Time) error {
 
 	_, err := s.secretTarget.Set(ctx, name, value, by, source, now)
 	return err

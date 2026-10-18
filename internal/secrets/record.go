@@ -3,6 +3,7 @@ package secrets
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/envref"
@@ -35,20 +36,97 @@ type Record struct {
 
 	// UpdatedBy, UpdatedByKind, OperatorID and Source are provenance: who
 	// wrote it, what sort of author that is, the credential they acted
-	// through, and the surface it arrived by — an operator at the CLI, a
-	// provisioning run that minted a token. Answering "where did this
-	// credential come from" months later is the whole reason they are
+	// through, and the write path it arrived by — the API, an integration's
+	// setup, a provisioning pass that minted a token. Answering "where did
+	// this credential come from" months later is the whole reason they are
 	// fields rather than a log line. See [Author] for why the first three
-	// are three.
+	// are three, and [Source] for why the fourth is the path's own word.
 	UpdatedBy     string
 	UpdatedByKind string
 	OperatorID    string
-	Source        string
+	Source        Source
 
 	// Version is the store's own revision of the row, where the store has
 	// one: what a write or a delete conditioned on "nothing has changed
 	// since I read it" names. Zero where the store keeps none.
 	Version uint64
+}
+
+// Source is the write path a stored secret arrived by, stamped by that path.
+//
+// # A fact of the write path, never a claim of the request
+//
+// It was a word the caller chose: `PUT /secrets/{name}?source=` stored
+// whatever it was sent and `crewlet secrets set -source` sent whatever it was
+// given, so any holder of the write could stamp any word — and a client that
+// judged which rows were its own by the word read a row somebody else wrote
+// over, under that client's word, as still its own. Provenance the writer
+// picks answers nothing. Who wrote a row is what the author and the
+// credential say, both taken from the credential the write authenticated with
+// ([Author]); the source says only which path carried it, and each path
+// stamps its own constant below.
+//
+// # Closed, and refused at the write
+//
+// The set is the paths, so it is closed, and [CheckSource] refuses any other
+// word at every store's write. The type alone cannot: an untyped string
+// constant converts to a Source wherever one is expected, so
+// `"gitlab-provision"` compiled as one and, unchecked, was stored as one.
+type Source string
+
+const (
+	// SourceAPI is a value stored through a running node's
+	// `PUT /secrets/{name}`, whoever called it: the dashboard, and `crewlet
+	// secrets set`, a `crewlet <vendor> provision` run and `crewlet llm
+	// login` or `export` against a running node, as much as any other
+	// client. The route stamps it and takes no word from the request.
+	SourceAPI Source = "api"
+
+	// SourceSetup is a value the dashboard's integration setup stored: a
+	// submitted form, or the GitHub App a person created from it.
+	SourceSetup Source = "setup"
+
+	// SourceProvision is a credential an integration's provisioning pass
+	// minted: the engine's own pass, or `crewlet <vendor> provision
+	// -secret-store` against a stopped node's own table.
+	SourceProvision Source = "provision"
+
+	// SourceMigrated is a row the engine moved onto the fleet from a node's
+	// own table at boot. It replaces the word the stopped node stamped, so
+	// [SourceCLI] and [SourceLLMLogin] are never on the fleet.
+	SourceMigrated Source = "migrated"
+
+	// SourceCLI is `crewlet secrets set` against a stopped node's own table.
+	SourceCLI Source = "cli"
+
+	// SourceLLMLogin is a coding CLI's login — `crewlet llm login`'s headless
+	// token, or `crewlet llm export -secret-store`'s bundle — stored against
+	// a stopped node's own table.
+	SourceLLMLogin Source = "llm-login"
+
+	// SourceIAM is the engine's own key material, minted by the engine
+	// ([Reserved] names, which no listing shows).
+	SourceIAM Source = "iam"
+)
+
+// Sources are every write path's word.
+var Sources = []Source{SourceAPI, SourceSetup, SourceProvision, SourceMigrated,
+	SourceCLI, SourceLLMLogin, SourceIAM}
+
+// Valid reports whether a source off the wire is one this build stamps.
+func (s Source) Valid() bool { return slices.Contains(Sources, s) }
+
+// CheckSource refuses a source no write path stamps.
+//
+// EVERY STORE CALLS IT AT THE WRITE, for the reason [Source] gives: the type
+// alone does not close the set, and a row stored under a word no path stamps
+// is a row every reader of provenance has to guess at.
+func CheckSource(s Source) error {
+	if s.Valid() {
+		return nil
+	}
+	return fmt.Errorf("secrets: %q is not a write path's source; a row "+
+		"records one of %q, stamped by the path that wrote it", string(s), Sources)
 }
 
 // Author is who writes a secret: the three facts every other trail in the

@@ -399,6 +399,14 @@ func (x *identityIndex) entityOf(path Path) (seat, unit string) {
 // answers them to a caller that never sees a terminal. Each is a moment where
 // the consequence can still change the decision.
 //
+// They are ALSO log lines, because many deployments have neither moment: a
+// document an image, a chart or an operator renders reaches a node nobody
+// validated by hand, Tier A is never written through the API, and a company
+// seeded from a file is answered to nobody. So `crewlet run` logs every Tier A
+// advisory once per start, and every node logs a company's advisories once
+// per epoch it applies — both as `config_advisory`, beside the lines the apply
+// already writes for the other two kinds.
+//
 // # What Kind says
 //
 // "dangling_reference" is a name that resolves to nothing, with Ref naming
@@ -516,7 +524,8 @@ func (c *Company) ReferenceWarnings() []Warning {
 }
 
 // AdvisoryWarnings is everything valid about this company that its author
-// should still know.
+// should still know: answered by `crewlet validate` and a `/config` write, and
+// logged by every node that applies the company.
 //
 // A UNIT WITH NO ID USED TO BE ONE OF THESE, and it is now an ADMISSION rule
 // instead: a unit is referenced by its key, so a document leaving a team
@@ -616,11 +625,16 @@ func (c *Company) unreachableWarnings() []Warning {
 }
 
 // Warnings is everything valid about this bootstrap that its author should
-// still know.
+// still know: printed by `crewlet validate`, and logged by `crewlet run` on
+// every start, judged on the document that run applies — the file with every
+// run flag folded into it.
 //
 // SEPARATE FROM Validate, and it takes no error path: a document that does not
 // validate has problems worth fixing first, and a warning printed beside a
-// refusal is noise at exactly the moment somebody is reading carefully.
+// refusal is noise at exactly the moment somebody is reading carefully. Both
+// callers ask it only of a document that validated — `crewlet run` of the one
+// its flags left, which it holds to every Tier A rule again first, naming the
+// flags in a refusal.
 func (b *Bootstrap) Warnings() []Warning {
 	var out []Warning
 
@@ -787,13 +801,15 @@ func (b *Bootstrap) Warnings() []Warning {
 	// filters by level, so the pair that reads as "I asked for broker
 	// diagnostics" is the pair that produces none. `crewlet run`'s own
 	// -debug / -log-level flags override the file and are invisible from
-	// it, which is why this names them rather than being a refusal.
+	// it, which is why this names them rather than being a refusal. The run
+	// folds them into the document before it asks, and the message offers
+	// only what would change the answer for the document it was asked
+	// about ([Bootstrap.unrecordedDebug]), so a node already at `debug` is
+	// told why that is not enough rather than to pass `-debug`.
 	if b.Stream.Debug && !b.logsAtDebug() {
 		out = append(out, advisory(field("stream.debug"),
 			"the embedded broker will produce its debug output and no "+
-				"destination records it: `logging.level` is "+b.loggingLevelName()+
-				" and no `logging.file.level` is `debug`. Set one of them, or pass "+
-				"`-debug` to `crewlet run`"))
+				"destination records it: "+b.unrecordedDebug()))
 	}
 
 	out = append(out, b.API.warnings(b.ServesAPI())...)
@@ -843,6 +859,60 @@ func (b *Bootstrap) logsAtDebug() bool {
 		level = b.Logging.Level
 	}
 	return level == logging.LevelDebug
+}
+
+// unrecordedDebug says why no destination this document installs records a
+// debug line, and what would — one sentence for each shape of
+// [Bootstrap.logsAtDebug]'s false answer, read off the destinations the same
+// way, because the two disagreeing would name a cause the node does not have.
+//
+// # Only the remedies that work
+//
+// The obvious remedy, raising the level, is wrong in exactly the shape that
+// is easiest to reach: `logging.stderr: false` makes the log file the only
+// destination, and a file given a level of its own does not follow
+// `logging.level` — so telling that node to pass `-debug`, or to set
+// `logging.level`, names a change that leaves it exactly as silent, and tells
+// a node already started with `-debug` to do what it did. Each case names the
+// cause it found and the changes that would make a destination record the
+// broker, and no others.
+//
+// `logging.level` is named with the flags that override it, because the
+// level this reads is the one the document holds once `crewlet run` has
+// folded `-log-level` and `-debug` into it — not necessarily the file's.
+func (b *Bootstrap) unrecordedDebug() string {
+	level := "`logging.level` — which `-log-level` and `-debug` override on " +
+		"`crewlet run` — is " + b.loggingLevelName()
+	raise := "Pass `-debug` to `crewlet run`, or set `logging.level`"
+	switch {
+	case strings.TrimSpace(b.Logging.File.Path) == "":
+		// The console is the only destination: `logging.stderr: false`
+		// with no file is refused by name, so it is on.
+		return level + ", and no log file is configured. " + raise + " to `debug`"
+	case b.Logging.File.Level == "":
+		// The file follows the level, so raising it reaches the file
+		// whether or not the console is a destination.
+		where := "the log file follows it"
+		if !b.Logging.StderrEnabled() {
+			where = "`logging.stderr` is false, so the log file, which follows it, " +
+				"is the only destination"
+		}
+		return level + ", and " + where + ". " + raise + " or `logging.file.level` to `debug`"
+	case b.Logging.StderrEnabled():
+		return level + ", and `logging.file.level` is `" + string(b.Logging.File.Level) +
+			"`. " + raise + " or `logging.file.level` to `debug`"
+	default:
+		// The file keeps a level of its own and the console is not a
+		// destination, so the process level reaches nothing: neither
+		// `-debug` nor `logging.level` is a remedy here.
+		out := "`logging.stderr` is false, so the log file is the only destination, " +
+			"and `logging.file.level` is `" + string(b.Logging.File.Level) +
+			"`. Set that to `debug`"
+		if b.Logging.Level == logging.LevelDebug {
+			out += ", or set `logging.stderr` back to true: `logging.level` is `debug` already"
+		}
+		return out
+	}
 }
 
 // loggingLevelName is the level this document names, spelled as an operator

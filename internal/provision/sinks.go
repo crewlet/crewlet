@@ -27,8 +27,8 @@ import (
 // concretely here would have made a provisioner that works on a stopped node
 // and a provisioner that works on a running fleet two different sinks.
 type SecretStore interface {
-	Set(ctx context.Context, name, value string, by secrets.Author, source string,
-		now time.Time) error
+	Set(ctx context.Context, name, value string, by secrets.Author,
+		source secrets.Source, now time.Time) error
 	Get(ctx context.Context, name string) (string, error)
 	Unset(ctx context.Context, name string) (bool, error)
 }
@@ -53,9 +53,15 @@ func NewSecretStoreSink(values SecretStore, by secrets.Author) *SecretStoreSink 
 	return &SecretStoreSink{values: values, by: by}
 }
 
-// Record implements [TokenSink], write-through.
+// Record implements [TokenSink], write-through, as [secrets.SourceProvision].
+//
+// The word is the store's to keep where the store is the writer: the engine's
+// own pass and a stopped node's table record it, while a `crewlet <vendor>
+// provision` run through a running node reaches that node's `/secrets` route,
+// which stamps its own word whoever calls it.
 func (s *SecretStoreSink) Record(ctx context.Context, name, value string) error {
-	if err := s.values.Set(ctx, name, value, s.by, "provision", time.Now().UTC()); err != nil {
+	if err := s.values.Set(ctx, name, value, s.by, secrets.SourceProvision,
+		time.Now().UTC()); err != nil {
 		return err
 	}
 	s.mu.Lock()

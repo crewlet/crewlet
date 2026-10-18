@@ -62,7 +62,11 @@ package secretsapi
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
+	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
@@ -331,6 +335,11 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 // arbitrary text — a PEM key has newlines, a token can be anything — and
 // making the caller escape it into JSON puts an encoding step between the
 // operator and the byte sequence the vendor will check.
+//
+// NOTHING ELSE IS THE REQUEST'S TO SAY. The row's author, kind and credential
+// are the caller the guard authenticated, and its source is this route's own,
+// [secrets.SourceAPI], whoever calls it — see [secrets.Source] for what a
+// source the caller named cost.
 func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if reserved(w, name) {
@@ -350,6 +359,9 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if !noQuery(w, r) {
+		return
+	}
 	// THE SHARED READER, not a copy of it. This route answered
 	// `value_too_large` where configapi answered `body_too_large` for the
 	// same 413, and its own reader is also the one place a body arrived
@@ -364,31 +376,65 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	by := iam.ActorFor(caller)
-	source := r.URL.Query().Get("source")
-	if source == "" {
-		source = "api"
-	}
 	// THE AUTHOR AND THE CREDENTIAL BOTH, on the row: a row that named only
 	// the credential named, for a person's machine token, something the
 	// identity sweep deletes a week after it lapses.
 	if err := s.store.Set(r.Context(), name, string(body), secrets.Author{
 		Name: by.Name, Kind: string(by.Kind), OperatorID: by.OperatorID,
-	}, source, s.now()); err != nil {
+	}, secrets.SourceAPI, s.now()); err != nil {
 		s.fail(w, "store the secret", err)
 		return
 	}
 	// The NAME and the byte count. Confirming the value would undo the
-	// reason it was sent as a body in the first place.
+	// reason it was sent as a body in the first place. No source: it is
+	// this route's constant, so the line says nothing by carrying it.
 	log.InfoContext(r.Context(), "secret_written", "name", name,
-		"bytes", len(body), "by", by.Name, "operator", by.OperatorID,
-		"source", source)
-	// THE AUTHOR THE ROW RECORDS, in the answer: a client offering its own
-	// name has no say in it, so the only honest confirmation is the node's.
+		"bytes", len(body), "by", by.Name, "operator", by.OperatorID)
+	// THE PROVENANCE THE ROW RECORDS, in the answer: a client has no say in
+	// any of it, so the only honest confirmation is the node's.
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"name": name, "bytes": len(body), "key_id": s.keyID,
 		"updated_by": by.Name, "updated_by_kind": string(by.Kind),
-		"operator_id": by.OperatorID,
+		"operator_id": by.OperatorID, "source": secrets.SourceAPI,
 	})
+}
+
+// noQuery refuses a write that carries a query string, naming its parameters,
+// and reports whether the request may go on.
+//
+// REFUSED, NEVER IGNORED. `?source=` once chose the word a row recorded, and a
+// client still sending it would otherwise be told its write landed while the
+// row says something else — a client that judged its own rows by that word
+// would read every one as overwritten and write it again, for ever, with
+// nothing failing. So any parameter is a 400 before the body is read, and the
+// answer says where the provenance comes from instead.
+func noQuery(w http.ResponseWriter, r *http.Request) bool {
+	if r.URL.RawQuery == "" {
+		return true
+	}
+	names := slices.Sorted(maps.Keys(r.URL.Query()))
+	quoted := make([]string, 0, len(names))
+	for _, name := range names {
+		quoted = append(quoted, strconv.Quote(name))
+	}
+	// A query that parses to no name at all (`?&`) is still a query, and is
+	// refused in general terms rather than by a name it does not have.
+	detail := "PUT /secrets/{name} takes no query parameters"
+	switch {
+	case len(quoted) == 1:
+		detail = quoted[0] + " is not a parameter of PUT /secrets/{name}, which takes none"
+	case len(quoted) > 1:
+		detail = strings.Join(quoted, ", ") + " are not parameters of " +
+			"PUT /secrets/{name}, which takes none"
+	}
+	httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery, map[string]string{
+		"detail": detail,
+		"hint": "who stored a value is the credential this request " +
+			"authenticated with (updated_by, updated_by_kind, operator_id), " +
+			"and its source is this route's own, " + string(secrets.SourceAPI) +
+			"; send the value as the body and nothing in the query",
+	})
+	return false
 }
 
 // delete serves DELETE /secrets/{name}.
@@ -533,9 +579,9 @@ func render(row secrets.Record) map[string]any {
 		"key_id":     row.KeyID,
 		"updated_at": row.UpdatedAt.Format(time.RFC3339Nano),
 		"updated_by": row.UpdatedBy,
-		// THE KIND AND THE CREDENTIAL BESIDE THE AUTHOR, empty on a row
-		// written before either was recorded, and the credential empty on
-		// one no credential wrote.
+		// THE KIND AND THE CREDENTIAL BESIDE THE AUTHOR, the credential
+		// empty on a row no credential wrote: the engine's own, and one
+		// set on a stopped node and moved onto the fleet at its start.
 		"updated_by_kind": row.UpdatedByKind,
 		"operator_id":     row.OperatorID,
 		"source":          row.Source,

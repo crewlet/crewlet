@@ -13,12 +13,13 @@ import (
 // through every byte, which is exact only if no match can begin anywhere else
 // and the scan reads a word as (?i) does. Fed every way a word's spellings, its
 // case folds, its fragments, the separators and the bytes around them can
-// follow one another, the scan's matches, its replacement, its answer to "is
-// there one" and where its first match begins are the pattern's own — for both
-// patterns the password rule is built from, and for a list whose words open
-// with runes that fold outside ASCII (k to the Kelvin sign, s to ſ), so the
-// scan is certified for whatever word [passwordKeys] gains rather than for the
-// three it holds today.
+// follow one another — escaped line breaks among the separators, since the
+// password rule's runs across them — the scan's matches, its replacement, its
+// answer to "is there one" and where its first match begins are the pattern's
+// own — for both patterns the password rule is built from, and for a list
+// whose words open with runes that fold outside ASCII (k to the Kelvin sign, s
+// to ſ), so the scan is certified for whatever word [passwordKeys] gains rather
+// than for the three it holds today.
 //
 // The texts are built from the list itself, so a word added to it is in them.
 // Seeded, so a failure names a text that fails every time.
@@ -38,7 +39,7 @@ func TestAKeyedScanFindsWhatItsPatternFinds(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			pieces := []string{
-				":", "=", " ", "\t", "\n", "\r\n", "x", "日", "\xff", "hunter2", Marker + "password]",
+				":", "=", " ", "\t", "\n", "\r\n", `\n`, `\r`, `\`, "x", "日", "\xff", "hunter2", Marker + "password]",
 			}
 			for _, word := range k.words {
 				pieces = append(pieces, spellings(word)...)

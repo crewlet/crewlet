@@ -49,9 +49,9 @@ func TestAMintedCredentialRecordsWhoTheRunWasFor(t *testing.T) {
 	}
 	got := secrets.Author{Name: rows[0].UpdatedBy, Kind: rows[0].UpdatedByKind,
 		OperatorID: rows[0].OperatorID}
-	if got != runFor || rows[0].Source != "provision" {
-		t.Errorf("the row records %+v from %q, want %+v from provision", got,
-			rows[0].Source, runFor)
+	if got != runFor || rows[0].Source != secrets.SourceProvision {
+		t.Errorf("the row records %+v from %q, want %+v from %q", got,
+			rows[0].Source, runFor, secrets.SourceProvision)
 	}
 }
 

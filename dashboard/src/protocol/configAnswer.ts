@@ -63,11 +63,18 @@ export type ConfigRefusal =
     }
   /**
    * `503 draining`: the drain gate refused it BEFORE the handler ran, so
-   * nothing was stored. The one 5xx that is certain.
+   * nothing was stored. One of the two 5xx that are certain.
    */
   | { readonly kind: "draining"; readonly detail: string }
   /**
-   * Never answered, or answered with a 5xx that is not the drain gate's: a
+   * `503 starting`: the node had not started serving, and its listener
+   * refused the write before anything read it, so nothing was stored. The
+   * other certain 5xx — and the opposite remedy to a drain's: this node is
+   * about to serve, so the same write sent again in a moment is right.
+   */
+  | { readonly kind: "starting"; readonly detail: string }
+  /**
+   * Never answered, or answered with a 5xx that is neither of those: a
    * gateway that gave up, an engine that failed after storing the revision.
    * For a WRITE this is "it may have landed" — settle it before believing
    * either way.
@@ -175,7 +182,13 @@ export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
     };
   }
   const detail = text(body.detail) || code;
+  // THE TWO CERTAIN 5xx, each refused before the handler ran: a draining
+  // node's gate, and a starting node's listener, which answers every route
+  // `503 starting` until the node hands it its own surface. Read as
+  // unreachable, a save that met a restarting node was settled as one that
+  // might have landed, for a write nothing ever read.
   if (answer.status === 503 && code === "draining") return { kind: "draining", detail };
+  if (answer.status === 503 && code === "starting") return { kind: "starting", detail };
   if (answer.status === 0 || answer.status >= 500) return { kind: "unreachable", detail };
   // Every other refusal is about the document or the request that carried it:
   // a validation error, a patch the engine could not apply, a body too large.

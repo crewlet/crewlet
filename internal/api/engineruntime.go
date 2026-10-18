@@ -81,9 +81,11 @@ func EngineProbeOptions(boot *config.Bootstrap, e *engine.Engine,
 	}
 	// A BRIDGED SESSION IS A LIVE TOOL SURFACE IN THE PROCESS THAT OPENED IT,
 	// so the node running the agent-mode seat is the only node its box can
-	// reach — and only a node running seats opens one.
-	if profile.RunsSeats() {
-		opts.Bridge = e.Bridge()
+	// reach — and only a node running seats opens one. THROUGH THE PREDICATE
+	// the listener on api.public was bound by, before this engine existed
+	// ([PublicListener]), so the bridge is served exactly where it was bound.
+	if bridge := e.Bridge(); servesBridge(profile.RunsSeats(), bridge != nil) {
+		opts.Bridge = bridge
 	}
 	return opts, nil
 }

@@ -238,14 +238,14 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) string {
 	p := r.URL.Path
 	dest := destSubresource
 	switch {
-	case strings.HasPrefix(p, "/_crewlet/runtime/"):
+	case strings.HasPrefix(p, runtimePrefix):
 		dest = destRuntime
-	case strings.HasPrefix(p, "/_crewlet/kit/"):
+	case strings.HasPrefix(p, kitPrefix):
 		dest = destKit
 	case fetchDest(r) == "iframe" || fetchDest(r) == "document":
 		dest = destDocument
 	}
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+	if !servedMethod(r) {
 		w.Header().Set("Allow", "GET, HEAD")
 		h.refuse(w, http.StatusMethodNotAllowed, 0)
 		return dest
@@ -257,13 +257,8 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) string {
 		}
 		return dest
 	}
-	rest, ok := strings.CutPrefix(p, ticketPath)
+	token, file, ok := ticketOf(p)
 	if !ok {
-		h.refuse(w, http.StatusNotFound, 0)
-		return dest
-	}
-	token, file, ok := strings.Cut(rest, "/")
-	if !ok || token == "" {
 		h.refuse(w, http.StatusNotFound, 0)
 		return dest
 	}
@@ -272,6 +267,31 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) string {
 		return served
 	}
 	return dest
+}
+
+// The prefixes of the embedded trees the origin serves beside its tickets: the
+// runtime and the kit of [Routes].
+const (
+	runtimePrefix = "/_crewlet/" + destRuntime + "/"
+	kitPrefix     = "/_crewlet/" + destKit + "/"
+)
+
+// servedMethod reports whether r asks with a method the origin answers: GET,
+// and HEAD beside it.
+func servedMethod(r *http.Request) bool {
+	return r.Method == http.MethodGet || r.Method == http.MethodHead
+}
+
+// ticketOf splits a ticketed path (`/t/<ticket>/<file>`) into its ticket and
+// the file it names, reporting false for any other path, and for one whose
+// ticket is empty or that names no file at all.
+func ticketOf(p string) (token, file string, ok bool) {
+	rest, ok := strings.CutPrefix(p, ticketPath)
+	if !ok {
+		return "", "", false
+	}
+	token, file, ok = strings.Cut(rest, "/")
+	return token, file, ok && token != ""
 }
 
 // fetchDest is the request's Sec-Fetch-Dest, lower case, or empty for a
@@ -288,13 +308,21 @@ func fetchDest(r *http.Request) string {
 // page could read about other artifacts, and the origin serves bytes and
 // nothing else.
 func (h *Handler) refuse(w http.ResponseWriter, status int, retry time.Duration) {
+	refuseUnder(w, h.origins.refusalPolicy(), status, retry)
+}
+
+// refuseUnder is [Handler.refuse] under the header facts policy names, for an
+// answer given before there is a handler: [Starting]'s.
+func refuseUnder(w http.ResponseWriter, policy pagepolicy.ArtifactOrigin, status int,
+	retry time.Duration) {
+
 	header := w.Header()
 	for k := range header {
 		if k != "Allow" {
 			header.Del(k)
 		}
 	}
-	pagepolicy.ArtifactSubresource(header, h.origins.refusalPolicy())
+	pagepolicy.ArtifactSubresource(header, policy)
 	header.Set("Cache-Control", "no-store")
 	if retry > 0 {
 		header.Set("Retry-After", strconv.Itoa(int((retry+time.Second-1)/time.Second)))

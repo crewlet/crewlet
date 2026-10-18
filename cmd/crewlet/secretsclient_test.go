@@ -147,19 +147,21 @@ func (n *fakeSecretsNode) client(t *testing.T) *secretsClient {
 	return c
 }
 
-// THE VALUE IS THE BODY, verbatim.
+// THE VALUE IS THE BODY, verbatim, and nothing else travels.
 //
 // A credential is arbitrary bytes — a PEM key has newlines, a token can hold
 // anything — and wrapping it in JSON puts an encoding step between the
 // operator and the byte sequence the vendor will compare. A value that came
-// back re-encoded would fail at the vendor with a 401 that names neither.
+// back re-encoded would fail at the vendor with a 401 that names neither. And
+// NO QUERY: the node stamps its route's own source and refuses a write that
+// names one, so the `?source=` this sent once would now fail every rotation.
 func TestSettingASecretSendsTheRawValue(t *testing.T) {
 	t.Parallel()
 	node := newFakeSecretsNode(t)
 	value := "-----BEGIN KEY-----\nline two\n\ttabbed \n"
 
 	if _, err := node.client(t).Set(t.Context(), "GL_TOKEN", value,
-		secrets.Author{Name: "ignored"}, "cli", time.Now()); err != nil {
+		secrets.Author{Name: "ignored"}, secrets.SourceCLI, time.Now()); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	if node.last.body != value {
@@ -168,8 +170,9 @@ func TestSettingASecretSendsTheRawValue(t *testing.T) {
 	if node.last.method != http.MethodPut || node.last.path != "/secrets/GL_TOKEN" {
 		t.Errorf("%s %s, want PUT /secrets/GL_TOKEN", node.last.method, node.last.path)
 	}
-	if node.last.query != "source=cli" {
-		t.Errorf("query = %q, want the provenance to travel", node.last.query)
+	if node.last.query != "" {
+		t.Errorf("query = %q, want none: the node's route stamps its own source "+
+			"and refuses a write that names one", node.last.query)
 	}
 	if node.last.auth != "Bearer ops-token" {
 		t.Errorf("auth = %q, want the bearer token", node.last.auth)
@@ -190,7 +193,7 @@ func TestASecretWriteReportsTheAuthorTheNodeRecorded(t *testing.T) {
 		`"operator_id":"pat:0192f00d-0000-7000-8000-00000000000a"}`
 
 	recorded, err := node.client(t).Set(t.Context(), "GL_TOKEN", "value",
-		secrets.Author{Name: "shell-user", Kind: "operator"}, "cli", time.Now())
+		secrets.Author{Name: "shell-user", Kind: "operator"}, secrets.SourceCLI, time.Now())
 	if err != nil {
 		t.Fatalf("set: %v", err)
 	}
@@ -251,7 +254,7 @@ func TestTheCredentialIsTheEnvironmentsAndNotTheConfigs(t *testing.T) {
 func TestAnAwkwardNameIsEscapedIntoThePath(t *testing.T) {
 	t.Parallel()
 	node := newFakeSecretsNode(t)
-	if _, err := node.client(t).Set(t.Context(), "a/b c", "v", secrets.Author{}, "", time.Now()); err != nil {
+	if _, err := node.client(t).Set(t.Context(), "a/b c", "v", secrets.Author{}, secrets.SourceCLI, time.Now()); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	if node.last.path != "/secrets/a/b c" {
@@ -332,7 +335,7 @@ func TestARejectedTokenSaysWhatToSet(t *testing.T) {
 	node := newFakeSecretsNode(t)
 	node.status = http.StatusUnauthorized
 
-	_, err := node.client(t).Set(t.Context(), "T", "v", secrets.Author{}, "", time.Now())
+	_, err := node.client(t).Set(t.Context(), "T", "v", secrets.Author{}, secrets.SourceCLI, time.Now())
 	if err == nil || !strings.Contains(err.Error(), apiTokenEnv) {
 		t.Fatalf("err = %v, want it to name %s", err, apiTokenEnv)
 	}
@@ -347,7 +350,7 @@ func TestTheNodesHintIsCarriedIntoTheError(t *testing.T) {
 	node.status = http.StatusBadRequest
 	node.body = `{"error":"invalid_name","hint":"a name is what a ${VAR} can hold"}`
 
-	_, err := node.client(t).Set(t.Context(), "T", "v", secrets.Author{}, "", time.Now())
+	_, err := node.client(t).Set(t.Context(), "T", "v", secrets.Author{}, secrets.SourceCLI, time.Now())
 	if err == nil {
 		t.Fatal("a 400 was accepted as success")
 	}
@@ -452,7 +455,7 @@ func TestAListingParsesWhatTheNodeReported(t *testing.T) {
 	t.Parallel()
 	node := newFakeSecretsNode(t)
 	node.body = `{"secrets":[{"name":"A","key_id":"k1",` +
-		`"updated_at":"2026-03-04T05:06:07Z","updated_by":"sam","source":"cli"}]}`
+		`"updated_at":"2026-03-04T05:06:07Z","updated_by":"sam","source":"api"}]}`
 
 	rows, err := node.client(t).List(t.Context())
 	if err != nil {
@@ -463,6 +466,9 @@ func TestAListingParsesWhatTheNodeReported(t *testing.T) {
 	}
 	if !rows[0].UpdatedAt.Equal(time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)) {
 		t.Errorf("updated_at = %v, want the reported instant", rows[0].UpdatedAt)
+	}
+	if rows[0].Source != secrets.SourceAPI {
+		t.Errorf("source = %q, want the path the node reported", rows[0].Source)
 	}
 	if rows[0].Value != "" {
 		t.Error("a listing carried a value, which is the one thing it must not")

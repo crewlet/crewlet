@@ -6,9 +6,10 @@
  * that never arrived: both are status 0. So is a 5xx: a gateway that gave up
  * waiting (502, 504) says nothing about the engine behind it, and the engine
  * itself stores the revision before it activates it, so a failure reported
- * after that point leaves a revision that may be active. The one 5xx that is
- * certain is `503 draining`, which the drain gate refuses before the handler
- * runs. Pressing Save again then meets the
+ * after that point leaves a revision that may be active. The two 5xx that are
+ * certain are `503 draining`, which the drain gate refuses before the handler
+ * runs, and `503 starting`, which a node's listener answers before the node
+ * serves at all. Pressing Save again then meets the
  * operator's OWN revision as a 409, and a builder that took every 409 as
  * "somebody else saved" would rebase the draft onto its own save and replay
  * every operation a second time, producing duplicate seats or dropping the
@@ -154,11 +155,12 @@ export function classifySave(
       derived: isRecord(result.derived) ? (result.derived as unknown as Derived) : null,
     };
   }
-  // THE ONE 5xx THAT IS CERTAIN is the drain gate's, which refuses a write
-  // before the handler runs, so it stored nothing and needs no settling
-  // read — where every other 5xx, and an answer that never came, may have
-  // been raised after the revision was stored. `protocol/configAnswer.ts`
-  // draws exactly that line, for every /config writer.
+  // THE TWO 5xx THAT ARE CERTAIN are the drain gate's and a starting node's,
+  // each of which refuses a write before the handler runs, so it stored
+  // nothing and needs no settling read — where every other 5xx, and an
+  // answer that never came, may have been raised after the revision was
+  // stored. `protocol/configAnswer.ts` draws exactly that line, for every
+  // /config writer.
   const refusal = classifyConfigRefusal(answer);
   const detail =
     typeof body.detail === "string" && body.detail !== ""
