@@ -12,13 +12,17 @@ import (
 // as one call the engine checks, resolves and draws as a brief card.
 const AnswerBriefTool = "answer_brief"
 
-// BriefRefKinds are the records a brief's row may cite: the kinds whose
-// screen the link table opens through a read of the record itself
-// ([Open]'s probes), so every cited record is one the engine reads again as
-// the person before it is drawn.
+// BriefRefKinds are the records a brief's row may cite: EXACTLY the kinds
+// whose screen the link table opens through a read of the record itself
+// ([Open]'s probes), held to each other both ways. Every cited record is one
+// the engine reads again as the person before it is drawn, and every record
+// whose screen is opened through its own read may be cited: a screen added
+// with a probe and no kind here is a record a brief reads and can never name,
+// as a chat room was, where a question asked of the person waits as surely as
+// on a task.
 var BriefRefKinds = []wire.ResourceKind{
 	wire.ResourceTask, wire.ResourceProject, wire.ResourceSeat, wire.ResourcePage,
-	wire.ResourceArtifact,
+	wire.ResourceArtifact, wire.ResourceRoom,
 }
 
 // BriefScreenOf is the link table's screen for a brief ref's kind, and false
@@ -35,6 +39,8 @@ func BriefScreenOf(kind wire.ResourceKind) (screen, param string, ok bool) {
 		return "page", "id", true
 	case wire.ResourceArtifact:
 		return "artifact", "id", true
+	case wire.ResourceRoom:
+		return "chatlet", "id", true
 	}
 	return "", "", false
 }
@@ -65,7 +71,8 @@ var brief = sync.OnceValues(func() (Tool, error) {
 	need := object([]string{"ref_kind", "ref_id", "do", "tone", "action"}, map[string]*schema{
 		"ref_kind": oneOf("The kind of the record this row is about.", kinds...),
 		"ref_id": text("The record's key, handle or id exactly as a read in this turn "+
-			"returned it: ENG-42, pm, a page's id.", nameBytes),
+			"returned it: ENG-42, pm, a page's id, a chat room's id or its name with its "+
+			"# (#launch).", nameBytes),
 		"do": line("What the person has to do, as an instruction that starts with a verb "+
 			"and names the record: \"Answer ENG-42: hand it to the App Engineer?\".",
 			wire.BriefTextMaxRunes),

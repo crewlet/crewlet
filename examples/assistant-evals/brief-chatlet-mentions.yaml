@@ -1,0 +1,51 @@
+# A brief of Chatlet's mentions: Ada asked the person in #launch whether they
+# approve the launch copy. A row may cite the chat room the ask waits in, by
+# its name with its # as the read gave it; the engine resolves the name to the
+# room's id through the room's own read as the person, keeps the row and counts
+# it in the verdict, and the row opens the room. Before a room could be cited,
+# no row could name it, and the brief said nothing needed the person while the
+# ask waited on them.
+person:
+  apps: [chatlet]
+page:
+  screen: chatlet-mentions
+  title: Chatlet › Mentions
+  params: {}
+  query: {}
+  resources: []
+  selection: null
+  source_revision: url:7d3e2f1a
+  accepts: []
+mode: brief
+question: Brief me on this page
+answers:
+  - route: GET /chatlet/mentions
+    body:
+      mentions:
+        - channel_id: 0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31
+          channel_name: launch
+          channel_kind: public
+          author: ada
+          excerpt: "@grace can you approve the launch copy?"
+          message_id: 0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e41
+          at: "2026-10-26T09:00:00Z"
+  - route: GET /chatlet/channels/{channel_id}
+    body:
+      channel: {id: 0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31, kind: public, name: launch, topic: Friday's launch}
+      members: [{handle: ada}, {handle: grace}]
+script:
+  - call: list_chat_mentions
+  - call: answer_brief
+    args:
+      about: Ada asks in #launch whether you approve the launch copy.
+      needs:
+        - {ref_kind: room, ref_id: "#launch", do: "Answer Ada in #launch: approve the launch copy?", why: "Asked at 09:00", tone: warning, action: open}
+expect:
+  calls: [list_chat_mentions, answer_brief]
+  proposals: 0
+  state: completed
+  brief:
+    needs: [0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31]
+    tones: [warning]
+    verdict: 1 thing needs you
+  shows: ["#/chatlet/0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31", Open the room]

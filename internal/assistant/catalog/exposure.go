@@ -61,8 +61,16 @@ var questionExposures = []Exposure{
 	asked("config_audit", "list_config_changes"),
 	asked("artifacts", "list_artifacts"),
 	asked("artifact", "get_artifact"),
+	asked("chat_channels", "list_chat_rooms"),
+	asked("chat_channel", "get_chat_room"),
+	asked("chat_messages", "read_chat_messages"),
+	asked("chat_thread", "get_chat_thread"),
+	asked("chat_mentions", "list_chat_mentions"),
+	asked("chat_search", "search_chat"),
 	// READ BY A PREVIEW ONLY: a priority change is bound to the person's
-	// record at the version its preview read.
+	// record at the version its preview read. (The room and the thread every
+	// chat write's preview reads are read by get_chat_room and
+	// get_chat_thread above.)
 	{Question: "work_person", As: AsPreviewRead, Name: "set_my_priorities"},
 }
 

@@ -19,12 +19,14 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// THE COMPANY'S OWN CHAT: the writes a person makes in a room, each executing
-// as the chat gesture the dashboard's own controls send on the act route, so a
+// THE COMPANY'S OWN CHAT: the reads that draw it as the chat screen does
+// ([chatReads]), and the writes a person makes in a room, each executing as
+// the chat gesture the dashboard's own controls send on the act route, so a
 // message the assistant prepared and one the person typed are one code path.
 //
 // A CHAT GESTURE IS A CALL, NOT A RESOURCE. The generic change can show what a
@@ -66,7 +68,8 @@ import (
 // down is one of these writes, so its card must not copy the credential into
 // the conversation's record.
 
-// The two reads a chat write's preview makes (internal/api's named reads).
+// The reads of one room (internal/api's named reads): the room and a thread in
+// it, which a chat write's preview reads too, and its transcript.
 const (
 	chatRoomRoute = "GET /chatlet/channels/{channel_id}"
 	// chatThreadRoute is also how ONE MESSAGE is read: a thread is addressed
@@ -74,6 +77,8 @@ const (
 	// that message as its root, which is how the chat tools themselves read
 	// whose words a message is before an edit or a delete.
 	chatThreadRoute = "GET /chatlet/channels/{channel_id}/threads/{root_id}"
+	// chatMessagesRoute is a room's transcript, which only a read reads.
+	chatMessagesRoute = "GET /chatlet/channels/{channel_id}/messages"
 )
 
 // The bounds a chat write's arguments are held to. They are internal/chatlet's
@@ -93,6 +98,312 @@ const (
 	// person, whom chatlet.MaxDMParticipants counts as well.
 	chatDirectOthers = 7
 )
+
+// chatApp is the app every chat read needs: chat's questions answer a holder
+// of Chatlet, and a card drawn from one is withheld from a person who no longer
+// holds it.
+var chatApp = []iam.Grant{iam.GrantChatlet}
+
+// chatReads are the chat reads, each one of chat's questions carded as the
+// chat screen draws it: a room by its name, a speaker by the seat's name, a
+// message by what it says, never a room's id or the log's bookkeeping. Each
+// card opens the chat screen at its room where it is about one, and the
+// mentions and the search their own screens.
+//
+// A ROOM IS NAMED AS PEOPLE WRITE IT. Every read about one room takes it by
+// its name ("#launch") as well as its id, which the room's questions resolve
+// by the one rule every surface reads a typed room by: the rail lists only
+// the rooms somebody is in, and a name reaches every room they may read. Its
+// step and its card's title say where the read is ([Tool.Room]): "in #launch"
+// where the call wrote the name, and where it gave an id, the room as the
+// turn reads it through the person's grant, a direct conversation by the
+// people in it ("with Ada Lovelace"), which is all one has to be named by.
+// So two conversations read by their ids are two reads to the person, never
+// one drawn twice.
+//
+// A READ IS ONE PAGE, as every read in the catalogue is (ADR-0061): the
+// newest messages or mentions, a thread from its first reply, at most a
+// limit, and the card says when more lie past it. None takes a cursor. A
+// page past the first would be a second read titled as the first, which the
+// drawer takes for the same read and keeps only once; older words are found
+// by what they say (search_chat), and the room's screen, which every card
+// about one room opens, reads all of it.
+func chatReads() []Tool {
+	room := text("The room, by its name as people write it (#launch) or by its id.", nameBytes)
+	return []Tool{
+		{
+			Name: "list_chat_rooms", Phrase: "list your chat rooms",
+			Narrow: []string{"unread"},
+			Description: "List the chat rooms the person is in, most recently active first: " +
+				"each one's name, or the people in a direct conversation, how many messages " +
+				"they have not read and the last thing said. Any other room they may read is " +
+				"reached by its name with get_chat_room.",
+			schema: object(nil, map[string]*schema{
+				"unread": flag("Only the rooms with messages the person has not read."),
+				"include_archived": flag("Include rooms closed to new messages, which stay " +
+					"readable."),
+				"limit": positive("How many rooms, at most.", chatRoomsLimit),
+			}),
+			Routes: []string{"GET /chatlet/channels"}, Apps: chatApp, Fence: true,
+			// ONE PAGE OF ROOMS, the most recently active, `truncated` saying
+			// more lie past it: the rail answers every room whole, and a person
+			// in about sixty rooms with long last messages is past what one step
+			// reads ([chatRoomsPage]).
+			Build: func(a map[string]any) (exec.Request, error) {
+				return get("GET /chatlet/channels", nil, query(a).truth("unread", "unread").
+					truth("include_archived", "include_archived").
+					num("limit", "limit", chatRoomsPage).values())
+			},
+			// NO LINK: the chat screen opens one room, and a table's link is
+			// the whole card's.
+			Cards: one(cards.Spec{Table: &cards.Table{Title: "Chat rooms", Rows: "channels",
+				Brief: []string{"room", "people", "unread", "last"},
+				Columns: []cards.Column{roomColumn("room", "channel.name"),
+					col("people", "People", "participants", tText),
+					col("unread", "Unread", "unread", tNumber),
+					prose("last", "Last message", "last.excerpt"),
+					seat("by", "Said by", "last.author"),
+					col("at", "Said", "last.at", tDatetime),
+					prose("topic", "Topic", "channel.topic"),
+					col("kind", "Kind", "channel.kind", tLabel),
+					// THE ID, for the model only: a direct conversation has no
+					// name to be asked for by.
+					col("id", "Room ID", "channel.id", tText)},
+				More: "truncated"}}),
+			Label: func(map[string]any) string { return "Reading your chat rooms" },
+			Scope: func(a Args) string {
+				unread, archived := "", ""
+				if a.Bool("unread") {
+					unread = "with unread messages"
+				}
+				if a.Bool("include_archived") {
+					archived = "including archived"
+				}
+				return scopeOf(unread, archived)
+			},
+		},
+		{
+			Name: "get_chat_room", Phrase: "read this chat room",
+			Description: "Read one chat room: its topic and purpose, what kind of room it is " +
+				"and who is in it. Its messages are read_chat_messages.",
+			schema: object([]string{"channel"}, map[string]*schema{"channel": room}),
+			Routes: []string{chatRoomRoute}, Apps: chatApp, Fence: true,
+			Build: func(a map[string]any) (exec.Request, error) {
+				return get(chatRoomRoute, map[string]string{"channel_id": Args(a).String("channel")},
+					nil)
+			},
+			// A ROOM IS WRITTEN BY ITS NAME after its "#", which is its key: the
+			// answer's "#launch" is its chip. A DIRECT CONVERSATION HAS NO NAME,
+			// so no key, and is headed by its people, as the turn says the room
+			// it is ("Direct conversation with Ada Lovelace"), its members listed
+			// beneath; by what it is where the room could not be read again.
+			Cards: one(cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceRoom, Root: "channel",
+				ID: "id", Key: "name", KeyPrefix: "#", Title: "name", TitlePrefix: "#",
+				Room: "id", Subtitle: "topic", Name: "Direct conversation", Prose: true,
+				Facts: []cards.Fact{fact("Kind", "kind", tLabel),
+					fact("Purpose", "purpose", tText), fact("Unit", "unit", tText),
+					fact("Created", "created_at", tDatetime),
+					fact("Archived", "archived_at", tDatetime)},
+				Items: &cards.Items{Path: "members", ID: "handle", Label: "handle",
+					Noun: wire.Noun{One: "member", Many: "members"}},
+				Open: &cards.Open{Screen: "chatlet", Params: map[string]string{"id": "id"}}}}),
+			Label: func(a map[string]any) string {
+				return "Reading " + roomCalled(Args(a).String("channel"))
+			},
+		},
+		{
+			Name: "read_chat_messages", Phrase: "read a chat room's messages",
+			Description: "Read what was said in a chat room, newest first: who said each " +
+				"message, its words and when. A thread under a message is get_chat_thread. " +
+				"Older messages are found by what they say with search_chat.",
+			schema: object([]string{"channel"}, map[string]*schema{
+				"channel": room,
+				"limit":   positive("How many messages, at most.", 50),
+			}),
+			Routes: []string{chatMessagesRoute}, Apps: chatApp, Fence: true,
+			Build: func(a map[string]any) (exec.Request, error) {
+				return get(chatMessagesRoute,
+					map[string]string{"channel_id": Args(a).String("channel")},
+					query(a).num("limit", "limit", 20).values())
+			},
+			Cards: one(cards.Spec{Table: &cards.Table{Title: "Messages", Rows: "messages",
+				Brief: []string{"from", "said", "at"},
+				Columns: []cards.Column{seat("from", "From", "message.author"),
+					prose("said", "Message", "message.body"),
+					col("at", "When", "message.created_at", tDatetime),
+					col("edited", "Edited", "message.edited_at", tDatetime),
+					// THE IDS, for the model only: a reply, an edit and a
+					// thread name the message they are about by its id, and a
+					// brief cites the room by its own.
+					col("id", "Message ID", "message.id", tText),
+					col("thread", "In thread", "message.thread_root", tText),
+					col("room_id", "Room ID", "message.channel_id", tText)},
+				More: "next_cursor",
+				Open: &cards.Open{Screen: "chatlet", Params: map[string]string{"id": "channel_id"}}}}),
+			Label: func(map[string]any) string { return "Reading the messages" },
+			Room:  "channel",
+		},
+		{
+			Name: "get_chat_thread", Phrase: "read a chat thread",
+			Description: "Read a thread in a chat room: the message it hangs off and the " +
+				"replies under it, oldest first.",
+			schema: object([]string{"channel", "message_id"}, map[string]*schema{
+				"channel":    room,
+				"message_id": text("The id of the message the thread hangs off.", nameBytes),
+				"limit":      positive("How many replies, at most.", 50),
+			}),
+			Routes: []string{chatThreadRoute}, Apps: chatApp, Fence: true,
+			Build: func(a map[string]any) (exec.Request, error) {
+				args := Args(a)
+				return get(chatThreadRoute, map[string]string{"channel_id": args.String("channel"),
+					"root_id": args.String("message_id")},
+					query(a).num("limit", "limit", 20).values())
+			},
+			// HEADED BY ITS FIRST WORDS, as the screen lists a thread: two
+			// threads read in one answer are two chips, never two "Thread"s.
+			// A thread whose first message was taken back has no words left,
+			// and is headed by what it is.
+			Cards: one(cards.Spec{Entity: &cards.Entity{Root: "root", ID: "message.id",
+				Title: "message.body", TitlePrefix: "Thread: ", TitleCut: threadHeadingBytes,
+				Name: "Thread", Text: "message.body", Prose: true,
+				Facts: []cards.Fact{fact("Started by", "message.author", tText),
+					fact("Said", "message.created_at", tDatetime)},
+				Items: &cards.Items{Path: "replies", ID: "message.id", Label: "message.body",
+					Fact: "message.author", Prose: true, More: "next_cursor",
+					Noun: wire.Noun{One: "reply", Many: "replies"}},
+				Open: &cards.Open{Screen: "chatlet",
+					Params: map[string]string{"id": "message.channel_id"}}}}),
+			Label: func(map[string]any) string { return "Reading a thread" },
+			Room:  "channel",
+		},
+		{
+			Name: "list_chat_mentions", Phrase: "read where you were named in chat",
+			Description: "Where the person was named with @ in chat, newest first: the room, " +
+				"who named them and what they said.",
+			schema: object(nil, map[string]*schema{
+				"limit": positive("How many, at most.", 50),
+			}),
+			Routes: []string{"GET /chatlet/mentions"}, Apps: chatApp, Fence: true,
+			Build: func(a map[string]any) (exec.Request, error) {
+				return get("GET /chatlet/mentions", nil,
+					query(a).num("limit", "limit", 20).values())
+			},
+			Cards: one(cards.Spec{Table: &cards.Table{Title: "Where you were named",
+				Rows: "mentions", Brief: []string{"room", "by", "said", "at"},
+				Columns: []cards.Column{roomColumn("room", "channel_name"),
+					seat("by", "By", "author"), prose("said", "Message", "excerpt"),
+					col("at", "When", "at", tDatetime),
+					col("kind", "Room kind", "channel_kind", tLabel),
+					col("room_id", "Room ID", "channel_id", tText),
+					col("id", "Message ID", "message_id", tText)},
+				More: "next_cursor", Open: &cards.Open{Screen: "chatlet-mentions"}}}),
+			Label: func(map[string]any) string { return "Reading where you were named" },
+		},
+		{
+			Name: "search_chat", Phrase: "search chat",
+			Narrow: []string{"q", "author"},
+			Description: "Find chat messages by what they say, ranked, over every room the " +
+				"person may read, joined or not.",
+			schema: object([]string{"q"}, map[string]*schema{
+				"q":      text("What was said, in a few words.", queryBytes),
+				"author": text("Only what one seat said: its handle or name.", nameBytes),
+				"limit":  positive("How many results, at most.", 25),
+			}),
+			Routes: []string{"GET /chatlet/search"}, Apps: chatApp, Fence: true,
+			Build: func(a map[string]any) (exec.Request, error) {
+				return get("GET /chatlet/search", nil, query(a).str("q", "q").
+					str("author", "author").num("limit", "limit", 10).values())
+			},
+			// AN INDEX STILL CATCHING UP SAYS SO in the answer's own note, as
+			// search_work's does, rather than reading as "nobody said that".
+			Cards: one(cards.Spec{Note: "note", Table: &cards.Table{Title: "Matching messages",
+				Rows: "hits", Brief: []string{"room", "by", "said", "at"},
+				Columns: []cards.Column{roomColumn("room", "channel_name"),
+					seat("by", "By", "author"), prose("said", "Matched", "snippet"),
+					col("at", "When", "at", tDatetime),
+					col("kind", "Room kind", "channel_kind", tLabel),
+					col("room_id", "Room ID", "channel_id", tText),
+					col("id", "Message ID", "message_id", tText)},
+				Open: &cards.Open{Screen: "chatlet-search"}}}),
+			Label: func(map[string]any) string { return "Searching chat" },
+			// THE WORDS AND WHOSE: one search's words by two authors are two
+			// reads.
+			Scope: func(a Args) string { return scopeOf(quoted(a), labelled(a, "author", "by")) },
+			Names: map[string]Directory{"author": DirSeat},
+		},
+	}
+}
+
+// The bounds of the chat reads.
+const (
+	// chatRoomsPage is the rooms list_chat_rooms asks for when the call names
+	// no limit: the most recently active, as many as one step reads whole
+	// at every field's cap. The rail answers each room whole (its name,
+	// topic and purpose, its last message's excerpt) beside the person's
+	// whole read state (up to 256 cursors and 256 mutes), so fifteen rooms
+	// with every one of those at its cap are 58,116 bytes against the step's
+	// 65,536; seventeen are 62,482, and twenty past it
+	// (TestTheAssistantsPageOfRoomsIsReadInOneStep, internal/api/queries).
+	// What is left is for markup, which the API's encoding writes as six
+	// bytes to a `<`, `>` or `&`: about 1,500 such characters across a page.
+	// A page markup takes past the step is a read too large to show, which
+	// names what narrows it: the rooms with something unread, or fewer.
+	chatRoomsPage = 15
+	// chatRoomsLimit is the most rooms a call asks for: as many as most
+	// people are in, past which a page is cut at a step's bound and drawn as
+	// a read too large to show, which names what narrows it.
+	chatRoomsLimit = 50
+	// threadHeadingBytes is how much of its first message heads a thread's
+	// card: about a dozen words, which a chip on the Also read line holds on
+	// one line, and enough to tell two threads of one room apart.
+	threadHeadingBytes = 80
+)
+
+// roomColumn is a column of room names, each drawn as every screen draws a
+// room, after its "#"; a direct conversation has no name and draws nothing.
+func roomColumn(key, path string) cards.Column {
+	c := col(key, "Room", path, tText)
+	c.Prefix = "#"
+	return c
+}
+
+// roomName is the name ref gives a room as people write it, normalised as the
+// room's questions read it (without its "#", in lower case: internal/chatlet's
+// RoomRef), or "" where ref names it by its id or names nothing.
+func roomName(ref string) string {
+	name := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(ref), "#")))
+	if name == "" || opaqueID(name) {
+		return ""
+	}
+	return name
+}
+
+// roomCalled is a room as a step says it: "#launch" where the call names it by
+// its name, and "the room" where it names it by its id, which reads as
+// nothing to anybody.
+func roomCalled(ref string) string {
+	if name := roomName(ref); name != "" {
+		return "#" + name
+	}
+	return "the room"
+}
+
+// roomWhere is where a read of the room ref names is, as its step and its
+// card's title say it ([cards.Room.Where]): by the name the call wrote, else
+// as o says the room the id names, a direct conversation by its people; "" where
+// neither can say it.
+func roomWhere(ref string, o cards.Options) string {
+	if name := roomName(ref); name != "" {
+		return cards.Room{Name: name}.Where()
+	}
+	if strings.TrimSpace(ref) == "" || o.Room == nil {
+		return ""
+	}
+	if r, ok := o.Room(strings.TrimSpace(ref)); ok {
+		return r.Where()
+	}
+	return ""
+}
 
 // chatWrites are the chat writes, in the order a model meets them: what the
 // person says, then what they change about a room.

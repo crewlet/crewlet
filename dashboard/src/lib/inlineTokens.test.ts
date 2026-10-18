@@ -13,11 +13,15 @@ import type { LinkHost } from "~/contract/integrations.ts";
 import {
   codeColour,
   codeHostOwners,
+  codeRoom,
   describeLink,
   inlineTokens,
   messageScope,
+  NO_ROOMS,
+  NO_SCOPE,
   referenceTarget,
   repositoryTarget,
+  type RoomSet,
 } from "./inlineTokens.ts";
 
 /** What a run's tokens are, as `kind:text`, read under `owners`. */
@@ -488,6 +492,58 @@ describe("bare numbers", () => {
   });
 });
 
+describe("rooms", () => {
+  // THE COMPANY'S ROOMS, as the frame reads them: every one a name prose may
+  // spell as a colour or an issue's number.
+  const ROOMS = new Set(["e2e", "2fa", "b2b", "2026", "launch", "e2e-tests"]);
+  const GH: LinkHost[] = [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }];
+  /** A run's tokens as `kind:text`, read against `rooms` in a message of `texts`. */
+  const read = (text: string, rooms: RoomSet = ROOMS, texts: readonly string[] = [text]) =>
+    inlineTokens(text, new Set(["gophrase"]), messageScope(texts, GH), rooms).map(
+      (t) => `${t.kind}:${t.text}`,
+    );
+
+  test("a room the reader may read is a room, where its name is spelled as a colour", () => {
+    expect(read("#e2e has 4 unread messages and #2fa has 2.")).toEqual(["room:#e2e", "room:#2fa"]);
+    expect(read("Shall I post the notes in #b2b?")).toEqual(["room:#b2b"]);
+    // AND AS WORDS BY THEIR SHAPE WHERE THE READER HAS NO SUCH ROOM.
+    expect(read("#e2e has 4 unread messages and #2fa has 2.", NO_ROOMS)).toEqual([
+      "colour:#e2e",
+      "colour:#2fa",
+    ]);
+  });
+
+  test("a room spelled as an issue's number is the room, and a number the sentence binds is not", () => {
+    const text = "Fixed in gophrase/backend#12, and I told #2026 about it.";
+    expect(read(text)).toEqual(["reference:gophrase/backend#12", "room:#2026"]);
+    expect(read(text, NO_ROOMS)).toEqual(["reference:gophrase/backend#12", "reference:#2026"]);
+    // THE SENTENCE SAYS WHAT IT IS: a number bound to a repository is longer
+    // than the room's name at the same place, and wins it.
+    expect(read("See #2026 in gophrase/frontend.")).toEqual([
+      "reference:#2026 in gophrase/frontend",
+    ]);
+  });
+
+  test("a room is a whole name, in any case, at a colour's boundaries", () => {
+    expect(read("Ask #Launch, then #E2E.")).toEqual(["room:#Launch", "room:#E2E"]);
+    expect(inlineTokens("#Launch", undefined, NO_SCOPE, ROOMS)).toMatchObject([
+      { kind: "room", name: "launch" },
+    ]);
+    // A LONGER NAME IS ANOTHER ROOM, or none: never its first part.
+    expect(read("#e2e-tests and #e2e-nightly")).toEqual(["room:#e2e-tests"]);
+    expect(read("#launchpad, x#launch, &#launch, /#launch, ##launch")).toEqual([]);
+    expect(read("in https://x.test/#launch")).toEqual(["address:https://x.test/#launch"]);
+  });
+
+  test("a code span holding just a room's name is code, and anything else is not a room", () => {
+    expect(codeRoom("#e2e", ROOMS)).toBe(true);
+    expect(codeRoom(" #E2E ", ROOMS)).toBe(true);
+    expect(codeRoom("#e2e x", ROOMS)).toBe(false);
+    expect(codeRoom("#fff", ROOMS)).toBe(false);
+    expect(codeRoom("#e2e", NO_ROOMS)).toBe(false);
+  });
+});
+
 describe("cost", () => {
   // EVERY PATTERN IS LINEAR IN ITS RUN: a comment an agent wrote is rendered by
   // every reader, so a run that costs seconds freezes everybody.
@@ -537,5 +593,14 @@ describe("cost", () => {
     ["repositories and numbers", (n) => "a/b #1 ".repeat(n / 7)],
   ])("%s read in linear time", (_, make) => {
     expect(growth(make, 5_000)).toBeLessThan(8);
+  });
+
+  test.each([
+    ["10,000 rooms", "#e2e ".repeat(10_000)],
+    ["2,000 names past a room's longest", `#${"a".repeat(80)} `.repeat(2_000)],
+  ])("%s read in linear time", (_, text) => {
+    const start = performance.now();
+    inlineTokens(text, new Set(["a"]), NO_SCOPE, new Set(["e2e", "a".repeat(64)]));
+    expect(performance.now() - start).toBeLessThan(250);
   });
 });

@@ -197,6 +197,10 @@ var namedRoutes = []struct {
 	// board: a transcript is a position in one room and keeps that room's
 	// order, while a search ranks a corpus, so its answer IS the order.
 	{method: "GET", pattern: "/chatlet/search", what: "chat_search"},
+	// THE NAME OF EVERY ROOM THE CALLER MAY READ, joined or not: what prose
+	// names a room by, which a reader cannot tell from a colour or an
+	// issue's number without knowing the rooms.
+	{method: "GET", pattern: "/chatlet/room-names", what: "chat_room_names"},
 	// WHO IS ASKING. Not under /worklet/: the answer is the caller's own
 	// identity rather than anything the tracker holds, and a node with no
 	// Worklet still has a viewer.

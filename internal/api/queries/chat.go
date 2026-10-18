@@ -81,6 +81,8 @@ type ChatReader interface {
 		fresh statelog.Freshness) (chatlet.Thread, error)
 	Mentions(ctx context.Context, viewer string, q chatlet.MentionQuery,
 		fresh statelog.Freshness) (chatlet.MentionFeed, error)
+	RoomNames(ctx context.Context, viewer string,
+		fresh statelog.Freshness) (chatlet.RoomNames, error)
 }
 
 // ChatSearcher is the keyword search over the company's chat, as this surface
@@ -242,9 +244,10 @@ type chatRail struct {
 
 	Channels []chatRoom `json:"channels"`
 
-	// Truncated says this person is in more rooms than
-	// [chatlet.MaxRailChannels] — the reader's own flag, carried rather than
-	// inferred from the length.
+	// Truncated says the rail left rooms out: this person is in more rooms
+	// than [chatlet.MaxRailChannels], or more matched than the `limit` asked
+	// for — the reader's own flag, carried rather than inferred from the
+	// length.
 	Truncated bool `json:"truncated,omitempty"`
 
 	// Unreadable is how many of this person's rooms this build could not
@@ -276,12 +279,19 @@ type chatRail struct {
 	Read *coord.PersonChatRead `json:"read,omitempty"`
 }
 
-// chatChannels answers the viewer's own rooms, newest activity first.
+// chatChannels answers the viewer's own rooms, newest activity first: every
+// one, or with `limit` the most recently active that many, and with `unread`
+// only those with something unread.
 //
 // THE CURSORS TRAVEL INTO THE READ rather than the badge being counted
 // afterwards, which is what makes an unread count cost a bounded range scan
 // per room: the reader counts above this person's own cursor and stops at
 // [chatlet.UnreadLimit].
+//
+// `unread` OVER A READ STATE NOBODY COULD READ IS REFUSED, unavailable: the
+// counts are unknown, and answering the rooms with something unread out of
+// counts zeroed for it would say nothing is unread, which is a different
+// answer, and a wrong one.
 func (s Sources) chatChannels(ctx context.Context, p Params) (any, error) {
 	who, err := s.chatViewer(ctx, authz.ActionChatList)
 	if err != nil {
@@ -292,12 +302,21 @@ func (s Sources) chatChannels(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	state, measured := s.chatReadState(ctx, who)
+	unread := p.Bool("unread", false)
+	if unread && !measured {
+		return nil, fmt.Errorf("%w: which rooms have unread messages cannot be said now, "+
+			"because the read state could not be read. Ask again shortly, or for the rooms "+
+			"without `unread`", ErrUnavailable)
+	}
 	listing, err := s.Chat.Channels(ctx, who, chatlet.ChannelsQuery{
 		Cursors: state.Cursors,
 		// AN ARCHIVED ROOM IS READABLE FOR EVER and belongs in a search
 		// result or a deliberate visit rather than in the list somebody
 		// works out of.
 		IncludeArchived: p.Bool("include_archived", false),
+		Unread:          unread,
+		// THE WHOLE RAIL BY DEFAULT, which is what the dashboard draws.
+		Limit: Clamp(p.Int("limit", 0), chatlet.MaxRailChannels, chatlet.MaxRailChannels),
 	}, fresh)
 	if err != nil {
 		return nil, chatFailure(err)
@@ -349,6 +368,35 @@ func (s Sources) chatReadState(ctx context.Context, who string) (coord.ChatReadS
 		return coord.ChatReadState{}, false
 	}
 	return state, true
+}
+
+// chatRoomNames answers the name of every room the viewer may READ, joined or
+// not, the archived ones included: each room's id, name and kind, and no more.
+//
+// FOR PROSE, which names a room as `#launch`. A room's name may be spelled
+// exactly as a colour (`#e2e`) or an issue's number (`#2026`), and the only
+// way a reader tells which a sentence means is to know which rooms there are.
+// The rail cannot say: it is the rooms somebody is IN, and the room an agent
+// names in an ask is as often a public room the reader never joined. The room
+// finder offers the same rooms, so a room nobody has spoken in is still found.
+//
+// THE RAIL'S VERB, and seated as every chat question is: the set is
+// [chatlet.Reader.RoomNames]', resolved by the serving reader from this
+// viewer, so a private room is named only to a member of it.
+func (s Sources) chatRoomNames(ctx context.Context, p Params) (any, error) {
+	who, err := s.chatViewer(ctx, authz.ActionChatList)
+	if err != nil {
+		return nil, err
+	}
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	names, err := s.Chat.RoomNames(ctx, who, fresh)
+	if err != nil {
+		return nil, chatFailure(err)
+	}
+	return names, nil
 }
 
 // ---- one room ---------------------------------------------------------- //
@@ -527,6 +575,12 @@ type chatSearchAnswer struct {
 	// "nobody said that".
 	Building bool `json:"building,omitempty"`
 
+	// Note says it in words, as the knowledge and the work searches' notes
+	// do, so a reader that shows the answer's own sentence rather than its
+	// flags (the assistant's card) tells "nobody said that" from "not
+	// indexed yet". Empty over a caught-up index.
+	Note string `json:"note,omitempty"`
+
 	// ReadLevel is what the VISIBLE SET was resolved at — the only half of
 	// a search that can be behind, and the half that decides what may be
 	// seen.
@@ -537,6 +591,11 @@ type chatSearchAnswer struct {
 	// read's own and never overstates what the answer saw.
 	Position statelog.Position `json:"position"`
 }
+
+// chatIndexBuilding is what a search over a chat index still catching up says
+// of itself.
+const chatIndexBuilding = "the node that answered is still indexing chat, so a message " +
+	"that says this may not be findable yet"
 
 // chatSearch ranks the company's chat for the viewer, over the rooms they may
 // read.
@@ -588,6 +647,9 @@ func (s Sources) chatSearch(ctx context.Context, p Params) (any, error) {
 		// should not have to guard the field as well.
 		Hits: make([]chatHit, 0, len(found.Hits)), Searched: found.Searched,
 		Building: found.Building, ReadLevel: fresh.Level, Position: found.Position,
+	}
+	if found.Building {
+		out.Note = chatIndexBuilding
 	}
 	for _, hit := range found.Hits {
 		room := found.Rooms[hit.ChannelID]

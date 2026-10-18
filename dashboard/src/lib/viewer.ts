@@ -155,6 +155,16 @@ export interface ViewerState {
    * is known to be wrong with it: the drawer's notice, never a reason above.
    */
   assistantModel: AssistantModelNotice | null;
+  /**
+   * Which chat the company runs — the engine's answer, named to a reader
+   * holding Chatlet only, and "" when nobody has said (no answer yet, or a reader
+   * without the app). Read by the chat screen, which draws a company on a
+   * vendor's chat or on none as that rather than asking questions this engine
+   * does not serve — and reads "" as not said, never as Chatlet.
+   */
+  chatBackend: Viewer["chat_backend"];
+  /** On a vendor company, which vendor surfaces it declares. */
+  chatVendors: readonly string[];
 }
 
 /** The mounted reads of the viewer, asked again by [rereadViewer]. */
@@ -218,6 +228,8 @@ function useViewerRead(): ViewerState {
     configManagedBy: data?.config_managed_by ?? [],
     assistant: assistantUnavailable(data?.assistant),
     assistantModel: assistantModelNotice(data?.assistant),
+    chatBackend: data?.chat_backend ?? "",
+    chatVendors: data?.chat_vendors ?? [],
   };
 }
 

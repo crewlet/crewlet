@@ -60,6 +60,8 @@ const JANE: ViewerState = {
   configManagedBy: [],
   assistant: "disabled",
   assistantModel: null,
+  chatBackend: "",
+  chatVendors: [],
 };
 
 let sent: { tool: string; body: { request_id: string; args: Record<string, unknown> } }[];

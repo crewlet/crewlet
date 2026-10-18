@@ -239,6 +239,13 @@ type Tool struct {
 	// of one tool with different arguments never look like one read drawn
 	// twice.
 	Scope func(args Args) string
+	// Room, for a read of one chat room, is the argument that names the
+	// room: the step and the card's title say where the read is, before the
+	// rest of its scope, as the turn says the room ("in #launch", "with Ada
+	// Lovelace", [cards.Options.Room]). A room named by its id says nothing a
+	// person reads, and a direct conversation has nothing else to be named
+	// by, so two conversations read by their ids are two titles.
+	Room string
 	// Names are the arguments that name a seat, a unit, a project or a
 	// space, each by its directory: the call takes the record's key or its
 	// name, one or a list of them (the people a direct message goes to, a
@@ -294,14 +301,15 @@ type Tool struct {
 }
 
 // StepLabel is the sentence the drawer shows for one call of the tool: its
-// own [Tool.Label] where it has one, and otherwise a sentence from what the
-// catalogue already says of it, never its model-facing name. A write is a
+// own [Tool.Label] where it has one, its scope after it as o says it
+// ([Tool.ScopeOf]), and otherwise a sentence from what the catalogue already
+// says of it, never its model-facing name. A write is a
 // proposal being prepared, named by the task it touches where the call names
 // one; a page action prepares a change to the screen; a link is looked up.
-func (t Tool) StepLabel(args map[string]any) string {
+func (t Tool) StepLabel(args map[string]any, o cards.Options) string {
 	if t.Label != nil {
 		if l := strings.TrimSpace(t.Label(args)); l != "" {
-			return withScope(l, t.ScopeOf(Args(args)))
+			return withScope(l, t.ScopeOf(Args(args), o))
 		}
 	}
 	switch t.Kind {
@@ -321,12 +329,18 @@ func (t Tool) StepLabel(args map[string]any) string {
 	return strings.ToUpper(t.Phrase[:1]) + t.Phrase[1:]
 }
 
-// ScopeOf is the call's scope ([Tool.Scope]), "" for a tool that states none.
-func (t Tool) ScopeOf(args Args) string {
-	if t.Scope == nil {
-		return ""
+// ScopeOf is the call's scope: where a read of one room is ([Tool.Room]), as
+// o says the room, then what its own [Tool.Scope] says; "" for a tool that
+// states neither.
+func (t Tool) ScopeOf(args Args, o cards.Options) string {
+	room, own := "", ""
+	if t.Room != "" {
+		room = roomWhere(args.String(t.Room), o)
 	}
-	return strings.TrimSpace(t.Scope(args))
+	if t.Scope != nil {
+		own = t.Scope(args)
+	}
+	return scopeOf(room, own)
 }
 
 // withScope is a label or a title with the call's scope after it, the one

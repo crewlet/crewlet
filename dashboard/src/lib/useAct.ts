@@ -101,6 +101,20 @@ export interface RunOptions {
    * they are owed.
    */
   signal?: AbortSignal;
+  /**
+   * The operation key of the press this one REPEATS, for a caller that keeps
+   * its own presses past the hook's single refusal: the chat outbox, whose
+   * every unanswered message is a row with a Retry of its own. The engine
+   * derives the same operations from the same key, so the repeat is the first
+   * attempt again rather than a second message. Omitted — every new press —
+   * the key is minted here.
+   *
+   * ONLY WHILE THE TAB IS THE SAME READER, which the hook cannot check for a
+   * press it does not hold: the engine scopes a key by the principal that
+   * sent it, and a different person signing in reloads the tab
+   * (`lib/session.ts`), which takes every kept press with it.
+   */
+  opId?: string;
 }
 
 export interface Act<T extends ActionTool> {
@@ -286,10 +300,11 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
   );
 
   // A NEW PRESS IS A NEW OPERATION KEY, minted here in the handler and never
-  // per attempt: only a retry of that press reuses it.
+  // per attempt: only a retry of that press reuses it — through [retry], or
+  // through `options.opId` from a caller that keeps its own presses.
   const run = useCallback(
     (args: ActionArgs<T>, label: PressLabel, options?: RunOptions) =>
-      send({ args, opId: newActOpID(), label }, options?.signal),
+      send({ args, opId: options?.opId ?? newActOpID(), label }, options?.signal),
     [send],
   );
 

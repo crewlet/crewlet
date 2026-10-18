@@ -25,6 +25,7 @@ var chatReadRoutes = map[string]string{
 	"/chatlet/channels/room-1/threads/m-1": "chat_thread",
 	"/chatlet/mentions":                    "chat_mentions",
 	"/chatlet/search":                      "chat_search",
+	"/chatlet/room-names":                  "chat_room_names",
 }
 
 // EVERY CHAT READ ROUTE REACHES THE REGISTRY.
@@ -80,6 +81,7 @@ func TestEachChatReadRouteAsksItsOwnQuestionWithItsPath(t *testing.T) {
 		"/chatlet/channels":                              "chat_channels",
 		"/chatlet/mentions?cursor=c":                     "chat_mentions",
 		"/chatlet/search":                                "chat_search",
+		"/chatlet/room-names":                            "chat_room_names",
 	} {
 		rec := httptest.NewRecorder()
 		a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, path, nil)))
@@ -150,6 +152,11 @@ func (quietChat) Thread(context.Context, string, chatlet.ThreadQuery,
 func (quietChat) Mentions(context.Context, string, chatlet.MentionQuery,
 	statelog.Freshness) (chatlet.MentionFeed, error) {
 	return chatlet.MentionFeed{}, nil
+}
+
+func (quietChat) RoomNames(context.Context, string,
+	statelog.Freshness) (chatlet.RoomNames, error) {
+	return chatlet.RoomNames{}, nil
 }
 
 func (quietChat) Search(context.Context, estate.ChatQuery) (estate.ChatSearchAnswer, error) {

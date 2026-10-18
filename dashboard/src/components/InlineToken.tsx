@@ -17,6 +17,11 @@
  *    (`repositoryTarget`).
  *  - A KEY links to its work item only when its project is one of the
  *    company's (`lib/projectKeys.ts`): `ISO-8601` is a key's shape and a word.
+ *  - A ROOM is a token only when the reader may read a room of that name
+ *    (`lib/roomNames.ts`), and links to it, with the mark the assistant's
+ *    room chip carries, so a room's chip and its later mentions in one answer
+ *    read as one thing. A code span holding just a room's `#name` is code,
+ *    never a swatch ([ColourCode]).
  *  - A MENTION links to the seat only when the chart holds that handle.
  *
  * A MENTION IS ITS WORDS, with no face: a face at the text's size before
@@ -27,19 +32,27 @@
  *
  * WHERE A TOKEN LINKS is the run's `LinkMode` (`lib/inlineTokens.ts`):
  * `text` draws every token as words with its mark (an Inbox row, an answer's
- * option), and `checked` (the assistant's answers, the Inbox) links only what
- * the dashboard built: every token but an address is built from checked
- * parts already, and an address opens only as it is rebuilt on the
- * company's own host, else it is drawn inert, as written.
+ * option), and `checked` (the assistant's answers, the Inbox, a coding run's
+ * question) links only what the dashboard built: every token but an address
+ * is built from checked parts already, and an address opens only as it is
+ * rebuilt on the company's own host, else it is drawn inert, as written. An
+ * address that is no run of prose (a chat message's links) is drawn by the
+ * same rule ([AddressLink]).
  */
 
 import { createContext, useContext, useMemo, type ReactNode } from "react";
-import { ColorChip, Highlight, InlineRef } from "@crewlethq/ui";
+import { ColorChip, Highlight, InlineCode, InlineRef } from "@crewlethq/ui";
 import { VendorMark } from "@crewlethq/icons";
-import { GlobeGlyph, SquareKanbanGlyph, type GlyphSize } from "@crewlethq/icons/glyphs";
+import {
+  GlobeGlyph,
+  MessageSquareGlyph,
+  SquareKanbanGlyph,
+  type GlyphSize,
+} from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import {
   codeHostOwners,
+  codeRoom,
   describeLink,
   inlineTokens,
   linkTarget,
@@ -56,6 +69,7 @@ import type { LinkHost } from "~/contract/integrations.ts";
 import { useLinkHosts } from "~/lib/linkHosts.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { useProjectKeys } from "~/lib/projectKeys.ts";
+import { useRoomNames } from "~/lib/roomNames.ts";
 import { seatPath, useOrgIndex } from "~/lib/seats.ts";
 import { itemPath } from "~/lib/work.ts";
 
@@ -109,10 +123,11 @@ function scopeOf(texts: readonly string[], hosts: readonly LinkHost[]): MessageS
  * a search matched (`highlight`).
  *
  * A COMPONENT, so the run is read once: the recogniser runs when the run's
- * words, the company's code host owners or what its message names change,
- * and a re-render of the surface around it (a page of comments, an Inbox
- * list ticking its times) reads nothing again. The owners come from the
- * frame's `link_hosts`, which a plain function of the text could not read.
+ * words, the company's code host owners, the reader's rooms or what its
+ * message names change, and a re-render of the surface around it (a page of
+ * comments, an Inbox list ticking its times) reads nothing again. The owners
+ * and the rooms come from the frame's readings (`link_hosts`,
+ * `chat_room_names`), which a plain function of the text could not read.
  *
  * `message` is the message the run was rendered from; undefined, the run is
  * part of the enclosing [TokenScope]'s (or, with none, its own words).
@@ -129,10 +144,14 @@ export function TokenRun({
   message: string | undefined;
 }) {
   const hosts = useLinkHosts();
+  const rooms = useRoomNames();
   const surface = useContext(MessageTexts);
   const owners = useMemo(() => codeHostOwners(hosts), [hosts]);
   const scope = scopeOf(message !== undefined ? [message] : (surface ?? [text]), hosts);
-  const tokens = useMemo(() => inlineTokens(text, owners, scope), [text, owners, scope]);
+  const tokens = useMemo(
+    () => inlineTokens(text, owners, scope, rooms),
+    [text, owners, scope, rooms],
+  );
   const words = (part: string, at: number): ReactNode =>
     highlight ? <Highlight key={`w${at}`} text={part} terms={highlight} /> : part;
   const out: ReactNode[] = [];
@@ -162,6 +181,8 @@ export function InlineToken({ token, links }: { token: Token; links: LinkMode })
       return <CodeHostToken token={token} links={links} />;
     case "key":
       return <KeyToken token={token} links={links} />;
+    case "room":
+      return <RoomToken token={token} links={links} />;
     case "mention":
       return <MentionToken token={token} links={links} />;
   }
@@ -174,24 +195,49 @@ function AddressToken({
   token: Extract<Token, { kind: "address" }>;
   links: LinkMode;
 }) {
+  return <AddressLink address={token.href} text={token.text} links={links} />;
+}
+
+/**
+ * An address drawn as the address token is, for one that is no run of prose:
+ * a chat message's links (`routes/chatlet/MessageLinks.tsx`), each an address
+ * on its own. `address` is the address [safeHref] kept, and `text` the words
+ * it is shown by where it is drawn as written, the address itself unless
+ * given.
+ *
+ * ONE DRAWING FOR AN ADDRESS, wherever it stands, so a structured link and the
+ * same address in a sentence open by one rule: the mark of the app its host
+ * belongs to, and under `checked` a link only where the dashboard rebuilt it
+ * on a host the company configured, otherwise the address inert, whole and
+ * with its title.
+ */
+export function AddressLink({
+  address,
+  text = address,
+  links,
+}: {
+  address: string;
+  text?: string;
+  links: LinkMode;
+}) {
   const hosts = useLinkHosts();
-  const said = describeLink(token.href, hosts);
+  const said = describeLink(address, hosts);
   // NO WEB ADDRESS (a `mailto:`): no app's and no host to show, so it is the
   // address as written, a link only where any link may be.
   if (said === null) {
-    return <InlineRef href={links === "anchor" ? token.href : undefined}>{token.text}</InlineRef>;
+    return <InlineRef href={links === "anchor" ? address : undefined}>{text}</InlineRef>;
   }
   // CHECKED AND NOT THE COMPANY'S: the address as written ([InertAddress]).
   if (links === "checked" && said.canonical === null) {
-    return <InertAddress said={said} raw={token.href} written={token.text} />;
+    return <InertAddress said={said} raw={address} written={text} />;
   }
-  const to = links === "text" ? undefined : links === "checked" ? said.canonical! : token.href;
+  const to = links === "text" ? undefined : links === "checked" ? said.canonical! : address;
   return (
     <InlineRef
       mark={addressMark(said)}
       href={to}
       kind={said.kind ?? undefined}
-      title={token.href}
+      title={address}
       code={said.code}
     >
       {said.label}
@@ -217,8 +263,8 @@ export function addressMark(said: LinkDescription, size?: GlyphSize): ReactNode 
  * screen reader, and the address `written` as its writer wrote it, whole, so a
  * reader sees and can copy exactly where it would go. Never a control and
  * never a label the dashboard did not build: under `checked`, every address
- * that is not rebuilt on the company's own host is drawn this way, in prose
- * and as an ask's evidence alike.
+ * that is not rebuilt on the company's own host is drawn this way, in prose,
+ * as an ask's evidence and as a chat message's link alike.
  */
 export function InertAddress({
   said,
@@ -300,6 +346,47 @@ function KeyToken({ token, links }: { token: Extract<Token, { kind: "key" }>; li
     >
       {token.text}
     </InlineRef>
+  );
+}
+
+/**
+ * A room the reader may read, linked to it: a route the dashboard builds from
+ * a name the engine said is a room, so it is live under `checked` as a key and
+ * a handle are.
+ */
+function RoomToken({ token, links }: { token: Extract<Token, { kind: "room" }>; links: LinkMode }) {
+  const id = useRoomNames().get(token.name);
+  if (id === undefined) return token.text;
+  return (
+    <InlineRef
+      mark={<MessageSquareGlyph />}
+      kind="Room"
+      href={links !== "text" ? href(["chatlet", id]) : undefined}
+    >
+      {token.text}
+    </InlineRef>
+  );
+}
+
+/**
+ * A code span holding one colour and nothing else (`codeColour`), drawn with a
+ * swatch of it, unless it is one of the reader's rooms' `#name` (`#e2e`),
+ * which is code naming the room (`lib/inlineTokens.ts`, rule 1).
+ *
+ * A COMPONENT, because the rooms are the frame's reading, which the Markdown
+ * renderer's plain walk cannot read.
+ */
+export function ColourCode({ code, colour }: { code: string; colour: string }) {
+  const rooms = useRoomNames();
+  if (codeRoom(code, rooms)) return <InlineCode whole>{code}</InlineCode>;
+  return (
+    <InlineCode whole>
+      {/* THE SAME MARK BOX as a colour in words, so the two swatches stand at
+          one height and both say "Colour" to a screen reader. */}
+      <InlineRef kind="Colour" mark={<ColorChip value={colour} size="text" shape="square" />}>
+        {code}
+      </InlineRef>
+    </InlineCode>
   );
 }
 

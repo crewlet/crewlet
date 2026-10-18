@@ -22,6 +22,7 @@
  */
 
 import type { BrokerKind, FleetBrokerAnswer } from "./broker.ts";
+import type { LogPosition } from "./session.ts";
 // THE SHAPES AN ENGINE GATE HOLDS ARE NOT DECLARED HERE. They live in
 // `../contract/`, the one home of every declaration a Go test reads, and this
 // file composes them into the answers and frames it declares. RELATIVE, like
@@ -3760,6 +3761,540 @@ export interface PageDetail {
 }
 
 // ---------------------------------------------------------------------------
+// Chat
+// ---------------------------------------------------------------------------
+
+/**
+ * A point on one of the engine's state logs, as an answer reports it —
+ * DECLARED ONCE, in `session.ts`, beside the floor that parses the same point
+ * off a write's answer: a position this file declared again would be a second
+ * shape for one value, and the floor and a chat cursor would be free to come
+ * to mean different things by it.
+ *
+ * Chatlet needs the shape by name for a reason the other answers do not: a READ
+ * CURSOR is the PACKED form of one (`(generation << 40) | seq`), so the client
+ * has to carry a whole position from a message to the flush rather than a
+ * number it read off a field.
+ *
+ * Several answers above spell the same shape inline with every field optional,
+ * and they are left as they are deliberately: those are answers that may omit
+ * the position entirely, and widening this type to match would make a cursor
+ * built from one a compile-time promise the engine does not keep.
+ */
+export type { LogPosition };
+
+/** What every chat answer carries beside its rows — `chatlet.Served`. */
+export interface ChatServed {
+  /** What the read was SERVED at, never what was asked for. */
+  read_level: ReadLevel;
+  /** False when a deferred record's scope met this read: rows may be missing. */
+  complete: boolean;
+  /** The point on the chat log these rows were derived through. */
+  position: LogPosition;
+  /** ABSENT rather than zero when the broker could not be reached. */
+  log_lag?: number;
+}
+
+/** A room's kind. OPEN, because a newer peer may write one this build does not
+ *  know — and a room whose kind this build cannot classify is one the engine
+ *  refuses every write on, so the screen renders it read-only rather than
+ *  guessing it is public. */
+export type ChatKind = "public" | "private" | "unit" | "dm" | "group" | (string & {});
+
+/** Who said something, as `iam.ActorFor` names a principal: a person — or a
+ *  machine the identity directory binds to them — writes as `human`, under
+ *  the seat they hold; a seat's own turn as `agent`; and `system` is the
+ *  engine speaking as itself. `operator` is a credential acting as itself,
+ *  which no chat gesture admits, and is here only because a row a newer peer
+ *  wrote may carry it — a screen draws it as a person, never as an agent.
+ *  Open for the reason [ChatKind] is. */
+export type ChatAuthorKind = "agent" | "human" | "operator" | "system" | (string & {});
+
+/** The record op a live frame carries — `chatlet.OpKind`, the same word the event
+ *  store's own column holds. Open for the reason [ChatKind] is. */
+export type ChatOp =
+  | "create"
+  | "patch"
+  | "members"
+  | "post"
+  | "edit"
+  | "delete"
+  | "react"
+  | "erase"
+  | "prune"
+  | (string & {});
+
+/** A room. The NAME IS IMMUTABLE — there is no rename in the value layer — so
+ *  an address built from a room's id is stable and its name is safe to cache. */
+export interface ChatChannel {
+  v: number;
+  id: string;
+  kind: ChatKind;
+  /** Empty for a direct conversation, which has no name and is titled by who
+   *  is in it. */
+  name?: string;
+  topic?: string;
+  purpose?: string;
+  /** The unit whose room this is, for `kind: unit`. */
+  unit?: string;
+  /** This room's own horizon in days, overriding the company's. 0 is "for
+   *  ever" and absent is "the company's answer", which is why it is nullable
+   *  rather than a number defaulting to zero. */
+  retention_days?: number | null;
+  created_at: string;
+  created_by?: string;
+  created_by_kind?: ChatAuthorKind;
+  /** Present on an archived room, which is readable for ever and writable by
+   *  nobody. */
+  archived_at?: string;
+}
+
+/** One message, whole. */
+export interface ChatMessage {
+  v: number;
+  id: string;
+  channel_id: string;
+  /** The message this hangs off, empty for a room post. A thread is ONE LEVEL
+   *  DEEP: a reply to a reply carries the same root. */
+  thread_root?: string;
+  author: string;
+  author_kind: ChatAuthorKind;
+  /** Empty on a tombstone: a delete blanks the body and keeps the row, so a
+   *  thread does not lose the message it hangs off. */
+  body?: string;
+  links?: string[];
+  /** The handles this message named, already resolved by whichever surface
+   *  read what somebody typed. */
+  mentions?: string[];
+  /** `@channel` — the room as a whole. */
+  collective?: boolean;
+  created_at: string;
+  edited_at?: string;
+  edited_by?: string;
+  edited_by_kind?: ChatAuthorKind;
+  deleted_at?: string;
+  deleted_by?: string;
+  deleted_by_kind?: ChatAuthorKind;
+}
+
+/** One emoji on one message, with whether this viewer is among the reactors. */
+export interface ChatReaction {
+  emoji: string;
+  count: number;
+  mine?: boolean;
+}
+
+/** One message as a transcript draws it: the message, where it sits in the
+ *  room, and where the record that wrote it sits on the log. */
+export interface ChatMessageView {
+  message: ChatMessage;
+  /** The room's own per-message number, minted by the applier from log order.
+   *  It is what a transcript cursor is built from and what a live frame's
+   *  contiguity is checked on. */
+  channel_seq: number;
+  /** The record's point on the log. Its PACKED form is what a read cursor
+   *  stores, which is why the position travels rather than the sequence. */
+  position: LogPosition;
+  reactions?: ChatReaction[];
+}
+
+/** The newest message in a room, as the rail previews it. */
+export interface ChatMessagePreview {
+  message_id: string;
+  author?: string;
+  author_kind?: ChatAuthorKind;
+  /** Bounded by the engine (`chatlet.MaxExcerpt`), and a cut one ends in an
+   *  ellipsis — so a preview never has to claim to be the whole message. */
+  excerpt?: string;
+  channel_seq: number;
+  at: string;
+  /** The newest message is a tombstone. The room still moved, and the row
+   *  still sorts by it. */
+  deleted?: boolean;
+  position: LogPosition;
+}
+
+/** One of the viewer's rooms, as the rail renders it. */
+export interface ChatChannelSummary {
+  channel: ChatChannel;
+  /** The room's own log revision, which a later edit states as its
+   *  expectation. */
+  revision: number;
+  /** THIS VIEWER'S membership flag: every message in the room reaches them. */
+  follow_all?: boolean;
+  /** Messages above this viewer's cursor, counted to `chatlet.UnreadLimit`
+   *  (100). Their own messages and the tombstones do not count. */
+  unread: number;
+  /** The count stopped at the limit — the "99+" case, stated rather than
+   *  inferred from the number. */
+  unread_capped?: boolean;
+  last?: ChatMessagePreview;
+  /** Who is in a direct conversation, which is how one is titled. */
+  participants?: string[];
+  /** This viewer silenced the room. It suppresses NOTICE and never delivery. */
+  muted?: boolean;
+}
+
+/** The viewer's own rooms, newest activity first — `chat_channels`. */
+export interface ChatChannelsAnswer extends ChatServed {
+  channels: ChatChannelSummary[];
+  /**
+   * Rooms were left out: this person is in more rooms than
+   * `chatlet.MaxRailChannels` (256), or more matched than the `limit` the
+   * read asked for (this screen asks for none, and so for all of them).
+   */
+  truncated?: boolean;
+  /** Rooms this build could not present — one a newer peer wrote. */
+  unreadable?: number;
+  /**
+   * What a room created WITHOUT a stated visibility will be, from
+   * `chat.chatlet.default_channel_private`.
+   *
+   * IT IS FOR THE FORM TO BE HONEST WITH, not for the form to enforce. The
+   * server resolves an omitted kind itself, so this only decides what the
+   * visibility selector OPENS on — and it has to, because a form showing
+   * "public" while the company default is private misleads a person about a
+   * privacy control at the one moment they are deciding it.
+   *
+   * Absent means public, which is the field's own default.
+   */
+  default_private?: boolean;
+  /**
+   * The badges on these rows are a MEASUREMENT.
+   *
+   * False means the coordination record could not be read: the counts are
+   * then zero, the mutes absent and `read` with them, which is not "you have
+   * read everything" but "nobody could look". A screen that renders a zero
+   * without reading this says the first when the engine said the second.
+   */
+  read_state: boolean;
+  /**
+   * This person's WHOLE read state, as the badges were counted against it —
+   * every room they muted (the rows mark only the rooms listed), when their
+   * do-not-disturb ends, and the `revision` that orders it against every
+   * later `chat_cursor_moved`. It is how a tab opened a moment ago knows the
+   * state before anything moves it. Absent when `read_state` is false.
+   */
+  read?: ChatReadState;
+}
+
+/** One member of a room. */
+export interface ChatMember {
+  handle: string;
+  role?: string;
+  /**
+   * Who decides this membership, derived from the ROOM'S KIND: `org` for
+   * every member of a unit room, whose membership the org chart restates
+   * WHOLE at every activation and no gesture can change (a join, a leave and
+   * a members edit are each refused on a unit room); `explicit` for every
+   * member of every other room. A screen must never offer to remove an `org`
+   * member: the next apply would put them straight back.
+   */
+  source?: string;
+  follow_all?: boolean;
+  joined_at: string;
+}
+
+/** One room, its membership and what it is true as of — `chat_channel`. */
+export interface ChatChannelDetail extends ChatServed {
+  channel: ChatChannel;
+  revision: number;
+  /** The room's high-water mark: the number the next message will take, minus
+   *  one. NOT a count — a prune removes rows and deliberately does not move
+   *  it. */
+  message_seq: number;
+  members?: ChatMember[];
+  /** Whether the VIEWER is in the room, which a public room answers no to
+   *  without that meaning they cannot read it. */
+  member: boolean;
+}
+
+/** A page of one room, newest first — `chat_messages`. */
+export interface ChatMessagesAnswer extends ChatServed {
+  channel_id: string;
+  messages: ChatMessageView[];
+  /** Where the next OLDER page starts, empty at the start of the room. Pass it
+   *  back unchanged: it is the room's own per-message number, never an offset
+   *  and never an instant. */
+  next_cursor?: string;
+  /** Rows on this page this build could not decode. */
+  unreadable?: number;
+}
+
+/** One thread, its root and its replies, oldest first — `chat_thread`. */
+export interface ChatThreadAnswer extends ChatServed {
+  channel_id: string;
+  /** Read even when it is a tombstone, which is what the tombstone is for. */
+  root: ChatMessageView;
+  replies?: ChatMessageView[];
+  /** Who has spoken here, derived by the applier. It is not a follow. */
+  participants?: string[];
+  /** Where the next page of replies starts — this one pages FORWARD. */
+  next_cursor?: string;
+  unreadable?: number;
+}
+
+/** One message that named the viewer. */
+export interface ChatMention {
+  message_id: string;
+  channel_id: string;
+  channel_name?: string;
+  channel_kind: ChatKind;
+  thread_root?: string;
+  author?: string;
+  author_kind?: ChatAuthorKind;
+  /** What the message says NOW, after any edit. A delete takes the mention
+   *  away rather than leaving a tombstone here: a message somebody took back
+   *  no longer names you. */
+  excerpt?: string;
+  /** WHEN YOU WERE NAMED — the instant of `position`'s record: the message's
+   *  own for a post, the edit's for an edit that named you where the words
+   *  before it did not. A row's time never contradicts its place. */
+  at: string;
+  /** The message's last edit, absent where it was never edited: the excerpt
+   *  may not be the words that named you. */
+  edited_at?: string;
+  /** The position of the record that named this handle, and the feed's
+   *  cursor. It never moves: an edit keeps the mention of every handle it
+   *  still names where it was. */
+  position: LogPosition;
+}
+
+/** A page of the viewer's own @-mention feed — `chat_mentions`. */
+export interface ChatMentionsAnswer extends ChatServed {
+  handle: string;
+  mentions: ChatMention[];
+  /** A LOG POSITION where a transcript's cursor is a room's message number.
+   *  The two are not interchangeable; both are opaque here. */
+  next_cursor?: string;
+}
+
+/** One room the viewer may read, as prose names it. */
+export interface ChatRoomName {
+  id: string;
+  /** The address a sentence writes as `#launch`: lower case, never renamed. */
+  name: string;
+  kind: ChatKind;
+  archived?: boolean;
+}
+
+/**
+ * The name of every room the viewer may READ, joined or not, the archived
+ * ones included — `chat_room_names`. A room's name may be spelled exactly as a
+ * colour (`#e2e`) or an issue's number (`#2026`), so prose is read by it
+ * (`lib/roomNames.ts`); the room finder offers the same rooms.
+ */
+export interface ChatRoomNamesAnswer extends ChatServed {
+  /** The live rooms in name order, then the archived ones, the most recently
+   *  archived first. */
+  rooms: ChatRoomName[];
+  /** Rooms were left out past `chatlet.MaxRoomNames` (1000), the archived
+   *  ones first: a name this answer lacks may still be a room. */
+  truncated?: boolean;
+}
+
+/** One matched message. */
+export interface ChatHit {
+  message_id: string;
+  channel_id: string;
+  /** The thread the match was said in, empty on a room post — which is what
+   *  lets a result open the thread rather than the room. */
+  thread_root?: string;
+  author?: string;
+  /** What the message says around the words that matched, bounded by the
+   *  index itself and marked where it was cut. */
+  snippet?: string;
+  at: string;
+  score: number;
+}
+
+/** A ranked search over the rooms this viewer may read — `chat_search`.
+ *
+ *  It does NOT extend [ChatServed]: the ranking is a read of this node's own
+ *  index, which is not on the log at all, so the only half that can be behind
+ *  is the visible-room set — which is what `read_level` and `position` here
+ *  describe. */
+export interface ChatSearchAnswer {
+  hits: ChatHit[];
+  /**
+   * How many rooms this query actually ran over — the DENOMINATOR a reader
+   * needs. "Nothing matched" over three rooms and over three hundred are
+   * different answers.
+   */
+  searched: number;
+  /**
+   * The answering node's index had not caught up with its transcript while
+   * it searched, so the hits are drawn from part of it: "the index is still
+   * building", which a screen must say rather than "nobody said that".
+   */
+  building?: boolean;
+  /** What the VISIBLE SET was resolved at. */
+  read_level: ReadLevel;
+  /** This node's applied position, read BEFORE the visible set was resolved,
+   *  so it is at or below the read's rather than above it. */
+  position: LogPosition;
+}
+
+/**
+ * One committed chat record, as the socket announces it.
+ *
+ * EVIDENCE THAT SOMETHING LANDED, NEVER A COPY OF THE MESSAGE. There is no
+ * body here on purpose: a frame carrying one would be a second rendering path
+ * for a conversation, and the two would disagree the first time an edit raced
+ * a reload. What it carries is enough to decide what to do — the room, the
+ * message and the CONTIGUOUS per-room sequence.
+ *
+ * A FRAME NAMING NO ROOM IS A GAP, and carries nothing else: the engine's word
+ * that this socket may have missed frames in any room — the node's live relay
+ * switched source, or the hub could not hand it a batch — so every screen
+ * reads what it holds again (`Store.applyChatChange`).
+ */
+export interface ChatChange {
+  /** The room. Empty ONLY on a gap. */
+  channel_id: string;
+  /** The record's own word for what happened. Absent on a gap. */
+  op?: ChatOp;
+  /** The record's idempotency key, so a client recognises its own effect
+   *  coming back and renders it once. Absent on a gap. */
+  op_id?: string;
+  message_id?: string;
+  /** The room's own per-message number. Contiguous, so a client holding 41 and
+   *  handed 43 knows it missed one. */
+  channel_seq?: number;
+  thread_root?: string;
+  author?: string;
+  author_kind?: ChatAuthorKind;
+  /** The BROKER'S own instant, which is what every node renders. Absent on a
+   *  gap. */
+  at?: string;
+  /** Where the record sits on the log — what a read cursor stores. Absent on
+   *  a gap. */
+  position?: LogPosition;
+  /** At most `chatlet.MaxExcerpt` bytes of what a card shows, from the record's
+   *  routing snapshot — carried by every post and edit an author made, even
+   *  one that woke nobody, and ABSENT on a record that carries none (a system
+   *  line, a delete, a reaction, a room record). Never a substitute for
+   *  reading the room. */
+  excerpt?: string;
+  /** The handles the message names, from the same snapshot and absent
+   *  wherever `excerpt` is — so a system line's post, which writes mention
+   *  rows, carries none. */
+  mentions?: string[];
+  /** For a toast about a room the tab is not looking at. Empty for a direct
+   *  conversation, which has no name. */
+  channel_name?: string;
+  channel_kind?: ChatKind;
+}
+
+/** One seat running a turn against a message in a room. */
+export interface ChatWorking {
+  handle: string;
+  /** The message the work will be answered under, which is what puts the
+   *  indicator where the reply will land. */
+  thread?: string;
+  /** The phrase to render, and an empty one renders the bare indicator. The
+   *  engine's hub declares it renders words, so every frame it sends carries
+   *  one. */
+  status?: string;
+}
+
+/** Who is in one room right now. None of it is durable and none of it is on
+ *  the log. */
+export interface ChatRoomPresence {
+  /** The people with this room open. Handles, because a person in chat IS a
+   *  seat. */
+  viewing?: string[];
+  /** Composing in it — a subset of `viewing` that expires on its own. */
+  typing?: string[];
+  working?: ChatWorking[];
+}
+
+/** The presence push's payload: the rooms this socket asked about, WHOLE —
+ *  a tab that reconnects has no starting point to apply a delta against. */
+export interface ChatPresenceFrame {
+  rooms: Record<string, ChatRoomPresence>;
+}
+
+/**
+ * Where one person's eye has reached — `coord.PersonChatRead`.
+ *
+ * It is NOT on the log: a cursor is a fact about one reader's attention that
+ * nobody replays. It is kept under the SEAT the person holds, so whoever holds
+ * the seat next inherits it, as they inherit its inbox. It reaches a tab three
+ * ways, in this one form: the rail's `read`, the answer to a read-state write
+ * the tab made itself ([ChatReadReceipt]), and the `chat_cursor_moved` push,
+ * derived from the coordination record and sent to every socket reading as
+ * that seat — the one that made the write included — and nobody else's.
+ */
+export interface ChatReadState {
+  /**
+   * WHOSE STATE THIS IS — the seat the engine read it for, on every state it
+   * sends a client. The `revision` orders two states of ONE seat and nothing
+   * else, so a state naming another seat than the one a tab holds — the seat
+   * its session is bound to moved — replaces it rather than being compared
+   * with it.
+   */
+  handle: string;
+  /** Channel id to the PACKED log position that person has read through.
+   *  Packed because it is only ever compared, never decomposed. */
+  cursors?: Record<string, number>;
+  /** The rooms that raise no badge. A mute suppresses NOTICE, never
+   *  delivery. */
+  muted?: string[];
+  /** When do-not-disturb ends. Absent is not in it. */
+  dnd_until?: string;
+  updated_at?: string;
+  /** The record's own revision, which ORDERS two states of one seat: its
+   *  flushes are taken in one order and their pushes can arrive in another,
+   *  so a screen keeps the state with the highest. Absent is a seat with no
+   *  record. */
+  revision?: number;
+}
+
+/**
+ * What a chat gesture's tool answered: the `receipt` of
+ * `POST /operator/act/{tool}` (`protocol/act.ts`), which is the tool's own
+ * JSON. The outcome and the position are lifted out of it by the act
+ * transport; what is left is what the screen does next.
+ *
+ * EVERY ONE NAMES ITS ROOM, by id: the room `create_channel` made, the
+ * conversation `open_dm` opened or reached, the room a message was said in or
+ * a membership moved. A screen goes there only on an outcome that landed — an
+ * id echoed by an answer nobody can vouch for may name nothing.
+ */
+export interface ChatReceipt {
+  channel: string;
+  /** A post's or a reply's message, by the id the engine derived from the
+   *  press's operation key (its `Idempotency-Key`) — which is why a retry
+   *  under that key is the same message. */
+  message_id?: string;
+  /**
+   * `open_dm` only: whether this call made the conversation or reached the
+   * one already open. A direct conversation's id is derived from the sorted
+   * handles of the people in it, so two people opening one from two nodes
+   * converge on one room and the loser of the race is handed the winner's.
+   *
+   * IT IS NOT AN ERROR FLAG. `created: false` beside a landed outcome is the
+   * ordinary answer — the conversation is open, and it is that one.
+   */
+  created?: boolean;
+}
+
+/**
+ * What `mark_chat_read` answered: the `receipt` of its press, which names no
+ * room — a read state is the seat's, across every room.
+ */
+export interface ChatReadReceipt {
+  /**
+   * The seat's whole read state as the write left it, in the form the push
+   * and the rail carry. The tab that wrote applies it, and the push the same
+   * write raises reaches that tab too: the record's revision makes the two one
+   * state, whichever arrives first.
+   */
+  read: ChatReadState;
+}
+
+// ---------------------------------------------------------------------------
 // Turn
 // ---------------------------------------------------------------------------
 
@@ -4995,6 +5530,19 @@ export interface Viewer {
    *  Absent from an engine that does not serve the assistant, which the
    *  client reads as off (`assistantUnavailable`). */
   assistant?: AssistantViewerAssistant;
+  /**
+   * Which chat the company runs (`chat.backend`, resolved): the engine's own
+   * (`chatlet`), a vendor's (`vendor`) or none (`none`) — and "" for a caller
+   * not holding the Chatlet app, and on a node with no company yet. Every chat
+   * question is served only where it is `chatlet`, so a screen says which it
+   * is before it asks one: asked of a vendor company, each would be
+   * `unknown_query`, which reads as a node fault rather than a company's
+   * choice.
+   */
+  chat_backend: "chatlet" | "vendor" | "none" | "";
+  /** On a `vendor` company, the vendor surfaces it declares (`mattermost`,
+   *  `slack`), in that order; empty everywhere else. */
+  chat_vendors: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -5475,13 +6023,6 @@ export interface ArtifactActor {
   name: string;
   kind: string;
   operator_id?: string;
-}
-
-/** A state-log position (`statelog.Position`). */
-export interface LogPosition {
-  stream: string;
-  generation: number;
-  seq: number;
 }
 
 /** The principal set one share names (`artifacts.Audience`). `id` is empty for the company. */
@@ -6825,6 +7366,27 @@ export interface QueryMap {
   company_feed: CompanyFeedAnswer;
   decisions: DecisionsAnswer;
   answered_decisions: AnsweredDecisionsAnswer;
+  /* THE CHAT FAMILY IS THE CHATLET APP'S, ALL OF IT, and asked for the seat the
+     caller acts as and nobody else: none of these takes a handle — there is
+     nowhere to write one. A caller without the app is refused `unauthorized`
+     naming it; a credential acting as no seat (a deployment's own token, a
+     service account bound to nobody) is refused `unauthorized` naming no
+     grant, since no grant would cure it — a binding in the identity
+     directory (`crewlet iam bind`) would. */
+  chat_channels: ChatChannelsAnswer;
+  chat_channel: ChatChannelDetail;
+  chat_messages: ChatMessagesAnswer;
+  /* A THREAD IS ITS OWN QUESTION, not a filter on the room: it is opened
+     beside the transcript and paged in the opposite direction, because a
+     conversation is read forwards. */
+  chat_thread: ChatThreadAnswer;
+  chat_mentions: ChatMentionsAnswer;
+  /* EVERY ROOM THE CALLER MAY READ, BY NAME, joined or not: what a room
+     written in prose is told from a colour or an issue's number by. */
+  chat_room_names: ChatRoomNamesAnswer;
+  /* REGISTERED ONLY WHERE THE INDEX EXISTS, so a node with rooms and no index
+     answers `unknown_query` rather than a ranking that finds nothing. */
+  chat_search: ChatSearchAnswer;
   pages: PagesAnswer;
   page: PageDetail;
   containers: { containers: PageContainer[] };

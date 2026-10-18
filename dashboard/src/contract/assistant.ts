@@ -169,7 +169,8 @@ type AssistantResourceKind =
   | "turn"
   | "run"
   | "schedule"
-  | "view";
+  | "view"
+  | "room";
 
 /**
  * What the person calls the record a screen has open, as the drawer names it
@@ -177,7 +178,16 @@ type AssistantResourceKind =
  * agent.
  */
 export type AssistantRecordNoun =
-  "decision" | "update" | "task" | "project" | "agent" | "artifact" | "page" | "turn" | "run";
+  | "decision"
+  | "update"
+  | "task"
+  | "project"
+  | "agent"
+  | "artifact"
+  | "page"
+  | "turn"
+  | "run"
+  | "room";
 
 /** What a question asks for: an answer, or a brief of the page or its open record. */
 export type AssistantTurnMode = "ask" | "brief";

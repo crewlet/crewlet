@@ -257,11 +257,11 @@ func TestAGenericRequestIsTitledByWhatItReaches(t *testing.T) {
 	}
 	_, read, change := generic(t, admin)
 	args := map[string]any{"route": "GET /config/units/{id}", "path": map[string]any{"id": "eng"}}
-	if got := read.StepLabel(args); got != "Reading unit · eng" {
+	if got := read.StepLabel(args, cards.Options{}); got != "Reading unit · eng" {
 		t.Errorf("a read's step is labelled %q, want it titled as its card is", got)
 	}
 	args["route"] = "PUT /config/units/{id}"
-	if got := change.StepLabel(args); got != "Preparing unit · eng" {
+	if got := change.StepLabel(args, cards.Options{}); got != "Preparing unit · eng" {
 		t.Errorf("a change's step is labelled %q, want it titled as its request", got)
 	}
 }

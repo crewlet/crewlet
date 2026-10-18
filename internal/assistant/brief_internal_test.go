@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -163,6 +164,31 @@ func TestTheBriefPromptStatesEveryCap(t *testing.T) {
 	} {
 		if !strings.Contains(briefRules, want) {
 			t.Errorf("the brief's prompt does not say %q", want)
+		}
+	}
+}
+
+// THE BRIEF'S RULES NAME EVERY RECORD A ROW MAY CITE, in words, from the one
+// list the answer's schema takes ([catalog.BriefRefKinds]): written out by
+// hand, the rules named five kinds, and a sixth the schema came to take (a
+// chat room) was a record the model was never told it could cite. Mutation:
+// drop a kind's words, give words to a kind no row may cite, or write the list
+// out again by hand, and this fails.
+func TestTheBriefRulesNameEveryCitableKind(t *testing.T) {
+	t.Parallel()
+	listed := briefCitable()
+	if !strings.Contains(briefRules, "("+listed+")") {
+		t.Errorf("the brief's rules do not name the records a row may cite as %q", listed)
+	}
+	for _, k := range catalog.BriefRefKinds {
+		words, ok := briefCiteWords[k]
+		if !ok || !strings.Contains(listed, words) {
+			t.Errorf("the brief's rules have no words for %s, which a row may cite", k)
+		}
+	}
+	for k := range briefCiteWords {
+		if !slices.Contains(catalog.BriefRefKinds, k) {
+			t.Errorf("the brief's rules name %s, which no row may cite", k)
 		}
 	}
 }

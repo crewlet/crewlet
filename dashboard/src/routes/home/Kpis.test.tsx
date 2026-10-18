@@ -46,6 +46,8 @@ const VIEWER: ViewerState = {
   configManagedBy: [],
   assistant: "disabled",
   assistantModel: null,
+  chatBackend: "",
+  chatVendors: [],
 };
 
 function draw(figures?: readonly KpiId[]) {

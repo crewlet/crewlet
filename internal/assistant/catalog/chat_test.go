@@ -11,9 +11,12 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
+	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // roomPath and threadPath are where [assistanttest.World] holds its chat room
@@ -458,5 +461,191 @@ func TestAChatCardNamesTheRoomAndWhoReadsIt(t *testing.T) {
 		!strings.Contains(p.Note, "no longer read") ||
 		p.Summary != "This removes you from #launch." || p.Risk != wire.RiskDestructive {
 		t.Errorf("leaving previews %+v, %v", p, err)
+	}
+}
+
+// A CHAT READ SAYS THE ROOM AS PEOPLE WRITE IT.
+//
+// A read about one room takes it by its name ("#launch") as by its id, sent
+// as the room's questions read it, and its step and its card's title say
+// where the read is: "#launch" where the call did, and where the call named it
+// by its id, the room as the turn reads it, a direct conversation by the
+// people in it beside the reader, never the id; with nothing to read it by,
+// "the room". So two direct conversations, which only an id names, are two
+// titles and two reads to the drawer. Its card opens the chat screen at the
+// room the answer carries, labelled by what it opens; a room is drawn with the
+// "#" every screen draws and is keyed by it, so the answer's "#launch" is its
+// chip, and the room's card heads a direct conversation, which has no name and
+// so no key, by its people, as the rail draws one. Mutation: say the call's id
+// in the step, title two conversations alike, open the screen by anything but
+// the answer's room, draw or key a room without its "#", key a conversation,
+// or head one by its id or by what it is alone, and a case here fails.
+func TestAChatReadSaysTheRoomAsPeopleWriteIt(t *testing.T) {
+	t.Parallel()
+	room := assistanttest.RecordID
+	withAda, withEngineer := "0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e21",
+		"0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e22"
+	world := assistanttest.World()
+	for id, other := range map[string]string{withAda: "ada", withEngineer: "engineer"} {
+		world["/chatlet/channels/"+id] = map[string]any{"channel": map[string]any{"id": id,
+			"kind": "dm"}, "members": []any{map[string]any{"handle": "pm"},
+			map[string]any{"handle": other}}}
+	}
+	names := catalog.NewResolver(reader(world))
+	said := cards.Options{SeatName: func(h string) (string, bool) {
+		return names.SeatName(t.Context(), h)
+	}, Room: func(ref string) (cards.Room, bool) { return names.Room(t.Context(), ref) }}
+	get, _ := catalog.Lookup("get_chat_room")
+	messages, _ := catalog.Lookup("read_chat_messages")
+	for _, c := range []struct {
+		ref      string
+		o        cards.Options
+		get, msg string
+	}{
+		{"#launch", cards.Options{}, "Reading #launch", "Reading the messages, in #launch"},
+		{"Launch", cards.Options{}, "Reading #launch", "Reading the messages, in #launch"},
+		{room, said, "Reading the room", "Reading the messages, in #launch"},
+		{withAda, said, "Reading the room", "Reading the messages, with Ada Lovelace"},
+		{withEngineer, said, "Reading the room", "Reading the messages, with Backend engineer"},
+		{room, cards.Options{}, "Reading the room", "Reading the messages"},
+	} {
+		if got := get.StepLabel(map[string]any{"channel": c.ref}, c.o); got != c.get {
+			t.Errorf("a read of the room %q is the step %q, want %q", c.ref, got, c.get)
+		}
+		if got := messages.StepLabel(map[string]any{"channel": c.ref}, c.o); got != c.msg {
+			t.Errorf("a read of %q's messages is the step %q, want %q", c.ref, got, c.msg)
+		}
+	}
+	// A PERSON WHOSE OWN SEAT CANNOT BE READ (one the chart no longer holds,
+	// which chat still answers as) is still told two conversations apart:
+	// each by all of its people.
+	unseated := maps.Clone(world)
+	delete(unseated, "/viewer")
+	blind := catalog.NewResolver(reader(unseated))
+	for id, want := range map[string]string{withAda: "Product manager and Ada Lovelace",
+		withEngineer: "Product manager and Backend engineer"} {
+		if r, ok := blind.Room(t.Context(), id); !ok || r.With != want {
+			t.Errorf("a conversation read by a person whose seat cannot be read is said as "+
+				"%+v (%t), want with %s", r, ok, want)
+		}
+	}
+	req, err := messages.Request(map[string]any{"channel": "#launch"})
+	if err != nil || req.Path != "/chatlet/channels/%23launch/messages" {
+		t.Errorf("the messages of #launch are asked as %s (%v)", req.Path, err)
+	}
+
+	shape := func(tool catalog.Tool, args catalog.Args, o cards.Options, answer string) wire.Card {
+		t.Helper()
+		res, err := catalog.Shape(tool, args, exec.Response{Status: http.StatusOK,
+			Body: []byte(answer)}, provenance.NewBoundary(), wednesday, o)
+		if err != nil || len(res.Cards) == 0 {
+			t.Fatalf("%s shaped %+v (%v)", tool.Name, res, err)
+		}
+		return res.Cards[0]
+	}
+	card := shape(messages, catalog.Args{"channel": "#launch"}, cards.Options{},
+		`{"channel_id":"`+room+`","messages":[{"message":{"id":"m1","author":"pm",`+
+			`"body":"Ship it.","created_at":"2031-04-16T14:00:00Z"}}],"next_cursor":"41"}`)
+	if table := card.Table; table == nil || table.Title != "Messages, in #launch" ||
+		table.Open == nil || table.Open.Href != "#/chatlet/"+room || table.Open.Label != "Open room" {
+		t.Errorf("the messages of #launch are carded as %+v", card.Table)
+	}
+	var titles []string
+	for _, id := range []string{withAda, withEngineer} {
+		titles = append(titles, shape(messages, catalog.Args{"channel": id}, said,
+			`{"channel_id":"`+id+`","messages":[{"message":{"id":"m1","author":"pm",`+
+				`"body":"Hi.","created_at":"2031-04-16T14:00:00Z"}}]}`).Table.Title)
+	}
+	if !slices.Equal(titles, []string{"Messages, with Ada Lovelace",
+		"Messages, with Backend engineer"}) {
+		t.Errorf("two direct conversations read by their ids are titled %q", titles)
+	}
+	card = shape(get, catalog.Args{"channel": "#launch"}, cards.Options{}, `{"channel":{"id":"`+
+		room+`","kind":"public","name":"launch"}}`)
+	if entity := card.Entity; entity == nil || entity.Title != "#launch" ||
+		entity.Key != "#launch" || entity.Kind != wire.ResourceRoom {
+		t.Errorf("a room is headed %+v", card.Entity)
+	}
+	rooms, _ := catalog.Lookup("list_chat_rooms")
+	card = shape(rooms, catalog.Args{}, cards.Options{}, `{"channels":[{"channel":{"id":"`+room+
+		`","kind":"public","name":"launch"},"unread":2},{"channel":{"id":"`+room+
+		`","kind":"dm"},"participants":["pm","ada"],"unread":0}]}`)
+	if table := card.Table; table == nil || len(table.Rows) != 2 || table.Rows[0][0] != "#launch" ||
+		table.Rows[1][0] != nil || table.Rows[1][1] != "pm, ada" {
+		t.Errorf("the rail is carded as %+v", card.Table)
+	}
+	direct := `{"channel":{"id":"` + withAda + `","kind":"dm"},"members":[{"handle":"pm"},` +
+		`{"handle":"ada"}]}`
+	card = shape(get, catalog.Args{"channel": withAda}, said, direct)
+	if entity := card.Entity; entity == nil || entity.Title != "Direct conversation with Ada Lovelace" ||
+		entity.Key != "" || entity.Kind != wire.ResourceRoom || len(entity.Items) != 2 ||
+		entity.Open == nil || entity.Open.Href != "#/chatlet/"+withAda {
+		t.Errorf("a direct conversation is carded as %+v", card.Entity)
+	}
+	if entity := shape(get, catalog.Args{"channel": withAda}, cards.Options{}, direct).Entity; entity == nil ||
+		entity.Title != "Direct conversation" {
+		t.Errorf("a direct conversation no read can say again is headed %+v", entity)
+	}
+}
+
+// A CHAT READ IS TOLD APART BY EVERYTHING IT ASKS: a search by its words and
+// whose they are, a thread by its first words, and the rooms by whether they
+// are only those with something unread; and it is one page, asked for one
+// (ADR-0061). Mutation: drop search_chat's author from its scope, head a
+// thread by "Thread" alone or by all of its first message, or let the rooms
+// read ask the whole rail, and a case here fails.
+func TestAChatReadIsToldApartByWhatItAsks(t *testing.T) {
+	t.Parallel()
+	search, _ := catalog.Lookup("search_chat")
+	if a, b := search.StepLabel(map[string]any{"q": "launch", "author": "ada"}, cards.Options{}),
+		search.StepLabel(map[string]any{"q": "launch", "author": "engineer"},
+			cards.Options{}); a != "Searching chat, “launch”, by ada" || a == b {
+		t.Errorf("one search by two authors is the steps %q and %q", a, b)
+	}
+
+	thread, _ := catalog.Lookup("get_chat_thread")
+	world := assistanttest.World()
+	answer := func(body string) []byte {
+		root := world["/chatlet/channels/"+assistanttest.RecordID+"/threads/"+
+			assistanttest.RecordID].(map[string]any)["root"].(map[string]any)
+		root["message"].(map[string]any)["body"] = body
+		raw, err := json.Marshal(world["/chatlet/channels/"+assistanttest.RecordID+"/threads/"+
+			assistanttest.RecordID])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	args := catalog.Args{"channel": assistanttest.RecordID, "message_id": assistanttest.RecordID}
+	heading := func(body string) string {
+		t.Helper()
+		res, err := catalog.Shape(thread, args, exec.Response{Status: http.StatusOK,
+			Body: answer(body)}, provenance.NewBoundary(), wednesday, cards.Options{})
+		if err != nil || len(res.Cards) == 0 || res.Cards[0].Entity == nil {
+			t.Fatalf("a thread starting %q shaped %+v (%v)", body, res.Cards, err)
+		}
+		return res.Cards[0].Entity.Title
+	}
+	if got := heading("Can we ship\nthe launch copy?"); got != "Thread: Can we ship the launch copy?" {
+		t.Errorf("a thread is headed %q, want its first words on one line", got)
+	}
+	if got := heading(strings.Repeat("word ", 40)); !strings.HasPrefix(got, "Thread: word word") ||
+		!strings.HasSuffix(got, "…") || len(got) > len("Thread: ")+80 {
+		t.Errorf("a thread of a long first message is headed %q, want its first words, marked "+
+			"where they are cut", got)
+	}
+	if got := heading(""); got != "Thread" {
+		t.Errorf("a thread whose first message was taken back is headed %q", got)
+	}
+
+	rooms, _ := catalog.Lookup("list_chat_rooms")
+	req, err := rooms.Request(map[string]any{"unread": true})
+	if err != nil || req.Query.Get("limit") != "15" || req.Query.Get("unread") != "true" {
+		t.Errorf("the rooms with something unread are asked as %s?%s (%v)", req.Path,
+			req.Query.Encode(), err)
+	}
+	if got := rooms.StepLabel(map[string]any{"unread": true}, cards.Options{}); got !=
+		"Reading your chat rooms, with unread messages" {
+		t.Errorf("the rooms with something unread are the step %q", got)
 	}
 }

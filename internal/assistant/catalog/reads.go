@@ -230,7 +230,10 @@ func readTools() []Tool {
 					col("rounds", "Rounds", "rounds", tNumber),
 					col("wall", "Time", "wall_ms", tDuration),
 					col("at", "When", "at", tDatetime), prose("summary", "Summary", "summary")}}}),
-			Label: func(a map[string]any) string { return "Reading the cost of " + Args(a).String("item") },
+			Label: func(map[string]any) string { return "Reading what a task cost" },
+			// THE TASK, IN THE TITLE: the turns on two tasks are two reads, never
+			// one table the drawer keeps once.
+			Scope: func(a Args) string { return a.String("item") },
 		},
 		{
 			Name: "get_my_work", Phrase: "read your work",
@@ -536,13 +539,15 @@ func readTools() []Tool {
 					prose("summary", "Summary", "summary"),
 					col("turn", "Turn", "turn_id", tText)},
 				Open: &cards.Open{Screen: "turns"}}}),
-			Label: func(a map[string]any) string { return "Listing " + Args(a).String("handle") + "'s turns" },
+			Label: func(map[string]any) string { return "Listing the turns" },
+			// THE SEAT, IN THE TITLE: two seats' turns are two reads, never one
+			// table the drawer keeps once.
 			Scope: func(a Args) string {
 				failedOnly := ""
 				if a.Bool("failed") {
 					failedOnly = "failed only"
 				}
-				return scopeOf(failedOnly, lastDays(a, 0))
+				return scopeOf(labelled(a, "handle", "for"), failedOnly, lastDays(a, 0))
 			},
 			Names: map[string]Directory{"handle": DirSeat},
 		},
@@ -623,9 +628,16 @@ func readTools() []Tool {
 					"phase", "model", "provider", "seat", "unit", "worker"),
 			}),
 			Routes: []string{"GET /tokens/series"},
+			// THE GROUP ONLY WHERE THE VIEW IS ONE: it groups by_group alone,
+			// and sent beside the series it asks nothing of the rows drawn,
+			// and refuses an over-time read by provider to anyone but an
+			// administrator.
 			Build: func(a map[string]any) (exec.Request, error) {
-				return get("GET /tokens/series", nil, query(a).num("days", "days", 30).
-					str("bucket", "bucket").str("group", "group").values())
+				q := query(a).num("days", "days", 30).str("bucket", "bucket")
+				if Args(a).String("view") == "by_group" {
+					q = q.str("group", "group")
+				}
+				return get("GET /tokens/series", nil, q.values())
 			},
 			Variant: by("view", "over_time"),
 			Cards: map[string]cards.Spec{

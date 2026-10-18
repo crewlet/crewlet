@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // Spec is how one tool's answer becomes a card: exactly one of a table and an
@@ -70,6 +71,10 @@ type Column struct {
 	// knows "QA Engineer", not "qa", and the model reads what the person
 	// sees, which the catalogue's resolver takes back as a name.
 	Seat bool
+	// Prefix is written before every value the column draws, never before
+	// an empty one: a room's "#", as every screen draws a room's name, so
+	// the card and the screen say "#launch" alike.
+	Prefix string
 }
 
 // Options are what a build is told beyond the spec and the answer.
@@ -82,6 +87,48 @@ type Options struct {
 	// person sees keeps the instant, which the dashboard draws in the
 	// viewer's own zone.
 	Zone *time.Location
+	// Room is a chat room as the turn says it by its id or its name, read
+	// through the person's own grant, false where it could not be read; nil
+	// says none. A direct conversation has no name, and is said by its people
+	// ([Entity.Room], and a read's scope).
+	Room func(ref string) (Room, bool)
+}
+
+// Room is a chat room as the turn says it where an answer cannot: a named room
+// by its name, and a direct conversation, which has none, by the people in it
+// beside the reader, as the chat screen names one.
+type Room struct {
+	// Name is the room's name, without its "#"; empty for a direct
+	// conversation.
+	Name string
+	// With is who a direct conversation is with beside the reader, by their
+	// seats' names in words ("Ada Lovelace and Bo"), empty for one the reader
+	// holds alone.
+	With string
+}
+
+// Heading is the room as a card heads it: "#launch", or a direct conversation
+// by its people.
+func (r Room) Heading() string {
+	switch {
+	case r.Name != "":
+		return "#" + r.Name
+	case r.With != "":
+		return "Direct conversation with " + r.With
+	}
+	return "Direct conversation with yourself"
+}
+
+// Where is where a read of the room is, as its step and its card's title say
+// it: "in #launch", or "with Ada Lovelace and Bo".
+func (r Room) Where() string {
+	switch {
+	case r.Name != "":
+		return "in #" + r.Name
+	case r.With != "":
+		return "with " + r.With
+	}
+	return "with yourself"
 }
 
 // MaxBrief is the most columns a table draws in the drawer: what its narrowest
@@ -98,11 +145,31 @@ type Entity struct {
 	// ID, Title and Subtitle are paths within the record.
 	ID, Title, Subtitle string
 	// Key is the path to the short name the record is written by in prose
-	// (a task's key, a project's), empty for a record with none.
+	// (a task's key, a project's, a room's name), empty for a record with
+	// none.
 	Key string
-	// Name is the card's heading where the record names none of its own
-	// (Title is empty): the company's principles are three values, not a
-	// record with a name.
+	// KeyPrefix is written before the key, as TitlePrefix is before the
+	// title and never before an empty key: a room is written by its name
+	// after its "#", "#launch".
+	KeyPrefix string
+	// TitlePrefix is written before the heading the record's title gives,
+	// as [Column.Prefix] is before a cell, and never before an empty title,
+	// so a record with none is still headed by Name.
+	TitlePrefix string
+	// TitleCut, where set, is the most bytes of the title a heading takes:
+	// a record headed by somebody's words (a thread by its first message) is
+	// headed by them on one line, cut with a marker where they pass it,
+	// and its whole words are its Text.
+	TitleCut int
+	// Room, where set, is the path within the record to the id of the chat
+	// room it is: a room with no name of its own (a direct conversation) is
+	// headed by its people, as the turn says the room ([Options.Room]),
+	// rather than by Name alone, so two conversations read as two.
+	Room string
+	// Name is the card's heading where the record names none of its own:
+	// the company's principles are three values, not a record with a name
+	// (Title is empty), and a direct conversation is a room with no name
+	// (Title names a field this record leaves empty).
 	Name  string
 	Facts []Fact
 	// Text is the path to a body the record carries, which is always
@@ -245,8 +312,9 @@ func (s Spec) Validate() error {
 				return fmt.Errorf("cards: table column %q is not a unique key with a "+
 					"label, a path and a type", c.Key)
 			}
-			if c.Seat && c.Type != wire.ColumnText {
-				return fmt.Errorf("cards: table column %q names a seat and is not text", c.Key)
+			if (c.Seat || c.Prefix != "") && c.Type != wire.ColumnText {
+				return fmt.Errorf("cards: table column %q names a seat or a prefix and is "+
+					"not text", c.Key)
 			}
 			keys[c.Key] = true
 		}
@@ -265,16 +333,20 @@ func (s Spec) Validate() error {
 		links = append(links, t.Open)
 	}
 	if e := s.Entity; e != nil {
-		if (e.Kind != "" && !e.Kind.Valid()) || (e.Title == "") == (e.Name == "") {
+		if (e.Kind != "" && !e.Kind.Valid()) || (e.Title == "" && e.Name == "") {
 			return fmt.Errorf("cards: an entity spec needs a kind of %v or none, and "+
-				"exactly one of a title path and a name", wire.ResourceKinds)
+				"a title path, a name, or both", wire.ResourceKinds)
 		}
 		// A KEYED KIND CARRIES ITS KEY, and no other kind does: the drawer
 		// finds a record in the answer's words by it (ADR-0061), so a spec
 		// that left it out would draw a task it could never name.
 		if e.Kind.Keyed() != (e.Key != "") {
 			return fmt.Errorf("cards: an entity spec of kind %q needs a key path exactly when "+
-				"its kind is written by a key (a task's, a project's)", e.Kind)
+				"its kind is written by a key (a task's, a project's, a room's)", e.Kind)
+		}
+		if e.TitleCut < 0 || (e.Room != "" && e.Kind != wire.ResourceRoom) {
+			return fmt.Errorf("cards: an entity spec of kind %q cuts its title at %d bytes "+
+				"or heads it by a room, and only a room is headed by one", e.Kind, e.TitleCut)
 		}
 		for _, f := range e.Facts {
 			if f.Label == "" || f.Path == "" || !f.Type.Valid() {
@@ -353,7 +425,7 @@ func BuildWith(spec Spec, answer []byte, now time.Time, o Options) (Built, error
 	if spec.Table != nil {
 		built, err = buildTable(spec.Table, doc, now, o)
 	} else {
-		built, err = buildEntity(spec.Entity, doc)
+		built, err = buildEntity(spec.Entity, doc, o)
 	}
 	if err != nil {
 		return Built{}, err
@@ -405,6 +477,9 @@ func buildTable(t *Table, doc any, now time.Time, o Options) (Built, error) {
 					cells[i] = name
 				}
 			}
+			if s, ok := cells[i].(string); ok && s != "" {
+				cells[i] = c.Prefix + s
+			}
 		}
 		card.Rows = append(card.Rows, cells)
 	}
@@ -449,17 +524,34 @@ func morePast(v any) bool {
 	return true
 }
 
-func buildEntity(e *Entity, doc any) (Built, error) {
+func buildEntity(e *Entity, doc any, o Options) (Built, error) {
 	record := lookup(doc, e.Root)
 	card := &wire.EntityCard{Kind: e.Kind, ID: text(field(record, e.ID)),
 		Key: text(field(record, e.Key)), Title: text(field(record, e.Title)),
 		Subtitle: text(field(record, e.Subtitle))}
-	if card.Title == "" {
+	if card.Key != "" {
+		card.Key = e.KeyPrefix + card.Key
+	}
+	if e.TitleCut > 0 {
+		card.Title = textcut.Within(strings.Join(strings.Fields(card.Title), " "), e.TitleCut)
+	}
+	if card.Title != "" {
+		card.Title = e.TitlePrefix + card.Title
+	}
+	// AN ID HEADS A RECORD ONLY WHERE A PERSON READS IT (a task's key): one
+	// known by nothing but its UUID is headed by its spec's name, never by
+	// the id, which reads as nothing to anybody.
+	if card.Title == "" && !uuidLike(card.ID) {
 		card.Title = card.ID
 	}
 	// NOTHING THE RECORD HOLDS, asked before the heading a spec names is
 	// put in: a fixed name over no value is still an empty answer.
 	recordless := card.Title == "" && card.Subtitle == ""
+	if card.Title == "" && e.Room != "" && o.Room != nil {
+		if room, ok := o.Room(text(field(record, e.Room))); ok {
+			card.Title = room.Heading()
+		}
+	}
 	if card.Title == "" {
 		card.Title = e.Name
 	}

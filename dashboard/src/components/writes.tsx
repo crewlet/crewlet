@@ -1124,13 +1124,16 @@ function AnswerRunDialog({
 /**
  * Message a seat — as a task that ASKS it.
  *
- * THERE IS NO PERSON-TO-SEAT CHAT CHANNEL. Message opens the one New task
- * sheet with the seat as assignee and `ask` naming it, so the question is
- * filed as work the seat owes an answer on, and the answer lands in the
- * asker's Inbox. The sheet's Create is the write; this button opens it, and is
- * held with the reason where the reader could not file one — a door that
- * opened onto a sheet that then refused would teach the reason one press too
- * late.
+ * MESSAGE IS THE TRACKER'S ASK, and it stays that wherever chat is. It opens
+ * the one New task sheet with the seat as assignee and `ask` naming it, so the
+ * question is filed as work the seat owes an answer on, and the answer lands
+ * in the asker's Inbox. A company on the engine's own chat also offers a
+ * DIRECT conversation with the seat beside it (`routes/agents/DirectMessage.
+ * tsx`) — a remark that obliges nothing — and the two are different gestures,
+ * so neither stands in for the other. The sheet's Create is the write; this
+ * button opens it, and is held with the reason where the reader could not
+ * file one — a door that opened onto a sheet that then refused would teach
+ * the reason one press too late.
  *
  * AND HELD ON THE READER'S OWN SEAT, by itself (`useMessageSeatAccess`): an
  * ask of your own seat is a question only you could answer. Decided here
@@ -1147,8 +1150,8 @@ export function MessageSeatButton({
   const write = useAct("create_work_item");
   const access = useMessageSeatAccess(handle);
   const openNewTask = useOpenNewTask();
-  // A MESSAGE IS AN ASK FILED AS A TASK, so where the company runs no Crewlet
-  // Works there is nothing to file it in and no button (`lib/services.ts`).
+  // A MESSAGE IS AN ASK FILED AS A TASK, so where the company runs no
+  // Worklet there is nothing to file it in and no button (`lib/services.ts`).
   const runs = useServicesRun();
   if (!runs.tracker) return null;
   return (

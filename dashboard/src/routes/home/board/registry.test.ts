@@ -61,6 +61,7 @@ describe("the tray's sections", () => {
       "integrations",
       "budgets",
       "worklet",
+      "chatlet",
       "live",
       "doclet",
       "settings",
@@ -106,6 +107,15 @@ describe("who may add what", () => {
 
   test("an admin is offered every widget", () => {
     for (const def of WIDGETS.values()) expect(canUse(def, ADMIN), def.key).toBe(true);
+  });
+
+  test("a reader without Chatlet is offered none of Chatlet's widgets", () => {
+    const chat = AREAS.find((a) => a.key === "chatlet")!.widgets;
+    expect(chat.length).toBeGreaterThan(0);
+    for (const def of chat) {
+      expect(canUse(def, MEMBER), def.key).toBe(false);
+      expect(canUse(def, ["chatlet"]), def.key).toBe(true);
+    }
   });
 
   test("a reader without Worklet is offered none of Worklet's widgets", () => {

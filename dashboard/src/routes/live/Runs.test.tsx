@@ -14,6 +14,7 @@ import {
   fireEvent,
   render as rtlRender,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
@@ -404,6 +405,58 @@ test("a parked run's long question heads the banner and reads as Markdown in its
   fireEvent.click(within(dialog).getByRole("button", { name: "Send answer" }));
   await settle();
   expect(posted).toEqual([{ tool: "answer_run", args: { turn_id: "turn-1", answer: "Three." } }]);
+});
+
+// A PARKED RUN'S QUESTION OPENS ONLY WHAT THE DASHBOARD BUILT. Its context and
+// the run's reasoning are a model's words, which may carry what it read, so
+// the Answer dialog reads them `checked` as the Inbox reads an ask (ADR-0061):
+// an address there opens only as it is rebuilt on the company's own host, and
+// any other is its words, whole and never a control.
+//
+// Mutation: read the context with `scoped` alone, or the reasoning as
+// `anchor`, and an address to evil.example.net is a control.
+test("a parked run's question opens only what the dashboard built", async () => {
+  mountPage({
+    sandbox_runs: {
+      runs: [
+        run({
+          status: "awaiting_clarification",
+          question: "Which retry ceiling?",
+          question_context:
+            "The client used three. See https://evil.example.net/c?q=secret and " +
+            "https://github.com/gophrase/backend/pull/11?x=1.",
+          decision: {
+            question: "Which retry ceiling?",
+            options: [
+              { id: "three", label: "Three" },
+              { id: "five", label: "Five" },
+            ],
+            recommended: "three",
+            rationale: "The API allows five: https://evil.example.net/r?q=secret",
+            role: "approver",
+          },
+          audience_handles: ["jane"],
+        }),
+      ],
+    },
+    turn: { turn_id: "turn-1", events: [] },
+    link_hosts: { hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }] },
+  });
+  await settle();
+  const banner = document.querySelector(".run-awaiting") as HTMLElement;
+  fireEvent.click(within(banner).getByRole("button", { name: "Answer" }));
+  const dialog = await screen.findByRole("dialog");
+  const hrefs = await waitFor(() => {
+    const found = [...dialog.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+    if (!found.some((href) => href?.startsWith("https://github.com/"))) {
+      throw new Error("the address on the company's host is not linked yet");
+    }
+    return found;
+  });
+  expect(hrefs.filter((href) => href?.includes("evil.example.net"))).toEqual([]);
+  expect(hrefs).toContain("https://github.com/gophrase/backend/pull/11");
+  expect(dialog.textContent).toContain("https://evil.example.net/c?q=secret");
+  expect(dialog.textContent).toContain("https://evil.example.net/r?q=secret");
 });
 
 // A RUNNING JOB'S OUTPUT IS ASKED OF ITS OWNER, by the job the row holds.

@@ -182,10 +182,11 @@ func TestACompanyOffChatletIsServedNoneOfIt(t *testing.T) {
 var chatQuestionPaths = []string{
 	"/chatlet/channels", "/chatlet/channels/c1", "/chatlet/channels/c1/messages",
 	"/chatlet/channels/c1/threads/m1", "/chatlet/mentions", "/chatlet/search?q=launch",
+	"/chatlet/room-names",
 	"/query/chat_channels", "/query/chat_channel?channel_id=c1",
 	"/query/chat_messages?channel_id=c1",
 	"/query/chat_thread?channel_id=c1&root_id=m1", "/query/chat_mentions",
-	"/query/chat_search?q=launch",
+	"/query/chat_search?q=launch", "/query/chat_room_names",
 }
 
 // chatDestructionRoutes are the human write surface's three chat routes that

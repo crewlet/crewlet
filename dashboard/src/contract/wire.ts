@@ -101,6 +101,19 @@ export const MAX_EVENTS = 400;
 export const QUERY_TIMEOUT_MS = 10_000;
 
 /**
+ * How many queries one socket runs at once.
+ *
+ * EXACTLY THE ENGINE'S OWN (`stream.MaxInFlightQueries` — four, the size of
+ * the node's reader pool), held there by `internal/api/stream`'s
+ * `TestTheDashboardAsksNoMoreAtOnceThanTheSocketRuns`. Past it the engine stops
+ * reading the socket until a query finishes, so a burst a screen asks of its
+ * own — the chat screen's room lookups — is bounded to one wave of these: the
+ * reads around it then wait behind one read rather than behind several, which
+ * is the delay a bound past the socket's would bring back.
+ */
+export const MAX_IN_FLIGHT_QUERIES = 4;
+
+/**
  * The longest text `colleague{q}` resolves, in UTF-8 bytes.
  *
  * EXACTLY THE ENGINE'S OWN (`queries.ColleagueQueryMax`), held there by
@@ -111,8 +124,9 @@ export const QUERY_TIMEOUT_MS = 10_000;
 export const COLLEAGUE_QUERY_MAX = 200;
 
 /**
- * The longest phrase the engine's two ranked searches take — `work_search`,
- * `knowledge` and the `answer_knowledge` question — in UTF-8 bytes.
+ * The longest phrase the engine's ranked searches take — `work_search`,
+ * `knowledge`, `chat_search` and the `answer_knowledge` question — in UTF-8
+ * bytes.
  *
  * EXACTLY THE ENGINE'S OWN (`knowledge.MaxQueryBytes`), held there by
  * `internal/api/queries`'s search gate: the engine refuses a longer phrase as

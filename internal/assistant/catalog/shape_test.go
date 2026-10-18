@@ -529,9 +529,10 @@ func TestAnEmptySearchSaysWhatItAskedAndWhy(t *testing.T) {
 	b := provenance.NewBoundary()
 	const note = "this node is still indexing what it has projected"
 	args := catalog.Args{"q": "company mission"}
-	// BOTH SEARCHES answer a building index the same way (internal/api/
-	// queries' knowledgeSearch and workSearch): no hits, and a note saying why.
-	for _, name := range []string{"search_knowledge", "search_work"} {
+	// EVERY SEARCH answers a building index the same way (internal/api/
+	// queries' knowledgeSearch, workSearch and chatSearch): no hits, and a note
+	// saying why.
+	for _, name := range []string{"search_knowledge", "search_work", "search_chat"} {
 		tool, _ := catalog.Lookup(name)
 		res, err := catalog.Shape(tool, args, exec.Response{Status: 200, Body: []byte(
 			`{"available":false,"reason":"building","note":"` + note + `","hits":[]}`)},

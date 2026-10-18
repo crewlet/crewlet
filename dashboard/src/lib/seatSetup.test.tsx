@@ -41,6 +41,8 @@ const READER: ViewerState = {
   configManagedBy: [],
   assistant: "disabled",
   assistantModel: null,
+  chatBackend: "",
+  chatVendors: [],
 };
 
 class InertWebSocket {

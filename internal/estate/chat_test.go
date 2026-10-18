@@ -125,6 +125,13 @@ func (d *chatDesk) Mentions(_ context.Context, viewer string, q chatlet.MentionQ
 	return chatlet.MentionFeed{Served: served, Handle: viewer, NextCursor: q.Cursor}, nil
 }
 
+func (d *chatDesk) RoomNames(_ context.Context, viewer string,
+	fresh statelog.Freshness) (chatlet.RoomNames, error) {
+	served := d.read("room_names", viewer, fresh)
+	return chatlet.RoomNames{Served: served, Truncated: true,
+		Rooms: []chatlet.RoomName{{ID: "room-1", Name: "general", Kind: chatlet.KindPublic}}}, nil
+}
+
 func (d *chatDesk) Readable(_ context.Context, viewer string,
 	fresh statelog.Freshness) ([]chatlet.ReadableRoom, error) {
 	d.read("readable", viewer, fresh)
@@ -329,6 +336,11 @@ func TestEveryChatReadIsAnsweredForItsViewerAtItsLevel(t *testing.T) {
 		{"mentions", func() (chatlet.Served, bool, error) {
 			out, err := c.Mentions(ctx, "jane", chatlet.MentionQuery{Cursor: "c3"}, linear)
 			return out.Served, out.Handle == "jane" && out.NextCursor == "c3", err
+		}},
+		{"room_names", func() (chatlet.Served, bool, error) {
+			out, err := c.RoomNames(ctx, "jane", linear)
+			return out.Served, out.Truncated && len(out.Rooms) == 1 &&
+				out.Rooms[0].Name == "general", err
 		}},
 	} {
 		served, carried, err := tc.read()
