@@ -43,7 +43,7 @@ import { WORKSPACES } from "./nav.ts";
 
 /** Where a row is live. See the file's doc. */
 export type KeyScope =
-  "frame" | "list" | "object" | "peek" | "canvas" | "builder" | "compose" | "search" | "layer";
+  "frame" | "list" | "object" | "peek" | "canvas" | "draft" | "compose" | "search" | "layer";
 
 /** The scopes in the order the legend draws them, with what each heading says. */
 export const KEY_SCOPES: readonly { scope: KeyScope; title: string }[] = [
@@ -52,7 +52,7 @@ export const KEY_SCOPES: readonly { scope: KeyScope; title: string }[] = [
   { scope: "peek", title: "With a peek open" },
   { scope: "object", title: "On a page with tabs" },
   { scope: "canvas", title: "On a chart" },
-  { scope: "builder", title: "In the org builder" },
+  { scope: "draft", title: "Editing a draft: the org builder, or Home while it is arranged" },
   { scope: "compose", title: "Writing a reply" },
   { scope: "search", title: "In search" },
   { scope: "layer", title: "In a dialog, a menu or the navigation drawer" },
@@ -233,12 +233,14 @@ const PAGE: KeyRow[] = [
     by: "kit",
   },
   {
-    // The builder's undo is its own listener rather than [useKeymap]'s — it
-    // is scoped to presses from inside the builder, which a window chord
-    // cannot see — so it reads its presses from here through [matchesRow].
-    // A field keeps the key: the same press undoes typing there.
-    id: "builder.undo",
-    scope: "builder",
+    // A draft's undo is its own listener rather than [useKeymap]'s (see
+    // `lib/useUndoKeys.ts`): it is scoped to presses from inside the surface
+    // keeping the draft, which a window chord cannot see, so it reads its
+    // presses from here through [matchesRow]. A field keeps the key: the same
+    // press undoes typing there. The org builder and Home's board are never
+    // on screen together, so one pair of rows serves both.
+    id: "draft.undo",
+    scope: "draft",
     // `shift: false` rather than absent: Mod+Shift+Z is redo, so undo has
     // to refuse Shift rather than ignore it.
     presses: [{ key: "z", mod: true, shift: false }],
@@ -246,8 +248,8 @@ const PAGE: KeyRow[] = [
     by: "dashboard",
   },
   {
-    id: "builder.redo",
-    scope: "builder",
+    id: "draft.redo",
+    scope: "draft",
     presses: [{ key: "z", mod: true, shift: true }],
     does: "Redo it",
     by: "dashboard",
