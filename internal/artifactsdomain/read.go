@@ -580,7 +580,7 @@ func (r *Reader) Versions(ctx context.Context, id artifacts.ID, cursor string, l
 	var page VersionPage
 	_, err = r.log.Read(ctx, staleFresh(statelog.Freshness{}).Query(
 		ArtifactScope(id.String()), true), func(tx *sql.Tx) error {
-		if _, err := mustHead(ctx, tx, id.String()); err != nil {
+		if _, err := mustHead(ctx, tx, id.String()); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 			return err
 		}
 		query := `SELECT ` + versionColumns + ` FROM artifact_versions WHERE artifact_id = ?`
@@ -589,7 +589,7 @@ func (r *Reader) Versions(ctx context.Context, id artifacts.ID, cursor string, l
 			query += ` AND number < ?`
 			args = append(args, before)
 		}
-		rows, err := tx.QueryContext(ctx, query+` ORDER BY number DESC LIMIT ?`,
+		rows, err := tx.QueryContext(ctx, query+` ORDER BY number DESC LIMIT ?`, //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			append(args, limit+1)...)
 		if err != nil {
 			return fmt.Errorf("artifactsdomain: read %s's versions: %w", id, err)
@@ -657,7 +657,7 @@ func readAssets(ctx context.Context, tx *sql.Tx, id, only string) ([]Asset, erro
 			addedKind             string
 			addedAt               int64
 		)
-		if err := rows.Scan(&assetID, &a.Name, &a.ContentType, &object, &hash,
+		if err := rows.Scan(&assetID, &a.Name, &a.ContentType, &object, &hash, //nolint:govet // shadow: scoped to this block; see .golangci.yml
 			&a.Object.Size, &a.AddedBy.Name, &addedKind, &addedAt, &a.Version); err != nil {
 			return nil, fmt.Errorf("artifactsdomain: read %s's assets: %w", id, err)
 		}
@@ -685,7 +685,7 @@ func (r *Reader) History(ctx context.Context, id artifacts.ID, cursor string, li
 	var page HistoryPage
 	_, err = r.log.Read(ctx, staleFresh(statelog.Freshness{}).Query(
 		ArtifactScope(id.String()), true), func(tx *sql.Tx) error {
-		if _, err := mustHead(ctx, tx, id.String()); err != nil {
+		if _, err := mustHead(ctx, tx, id.String()); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 			return err
 		}
 		query := `SELECT ` + historyColumns + ` FROM artifact_history WHERE artifact_id = ?`
@@ -694,7 +694,7 @@ func (r *Reader) History(ctx context.Context, id artifacts.ID, cursor string, li
 			query += ` AND position < ?`
 			args = append(args, before)
 		}
-		rows, err := tx.QueryContext(ctx, query+` ORDER BY position DESC LIMIT ?`,
+		rows, err := tx.QueryContext(ctx, query+` ORDER BY position DESC LIMIT ?`, //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			append(args, limit+1)...)
 		if err != nil {
 			return fmt.Errorf("artifactsdomain: read %s's history: %w", id, err)
@@ -799,7 +799,7 @@ func (r *Reader) Trail(ctx context.Context, q TrailQuery) (TrailPage, error) {
 	if q.Cursor != "" {
 		data, err := base64.RawURLEncoding.DecodeString(q.Cursor)
 		if err != nil {
-			return TrailPage{}, fmt.Errorf("%w: %v", ErrBadCursor, err)
+			return TrailPage{}, fmt.Errorf("%w: %w", ErrBadCursor, err)
 		}
 		if err := json.Unmarshal(data, &after); err != nil || after.Position <= 0 ||
 			after.Artifact == "" {
@@ -1066,8 +1066,7 @@ func (r *Reader) List(ctx context.Context, v Viewer, q ListQuery) (ListPage, err
 	}
 	var page ListPage
 	served, err := r.log.Read(ctx, staleFresh(q.Fresh).Query(DomainScope(), true),
-		func(tx *sql.Tx) error {
-			var err error
+		func(tx *sql.Tx) (err error) {
 			page, err = spec.run(ctx, tx)
 			return err
 		})
@@ -1271,7 +1270,7 @@ func (s listSpec) run(ctx context.Context, tx *sql.Tx) (ListPage, error) {
 	for rows.Next() {
 		var opened int64
 		var pinned int
-		head, err := scanHead(rows, &opened, &pinned)
+		head, err := scanHead(rows, &opened, &pinned) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			return ListPage{}, fmt.Errorf("artifactsdomain: read the listing: %w", err)
 		}
@@ -1291,13 +1290,13 @@ func (s listSpec) run(ctx context.Context, tx *sql.Tx) (ListPage, error) {
 			keys = append(keys, strconv.FormatInt(store.EncodeTime(head.UpdatedAt), 10))
 		}
 	}
-	if err := rows.Err(); err != nil {
+	if err := rows.Err(); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		return ListPage{}, err
 	}
 	if len(page.Items) > s.limit {
 		page.Items = page.Items[:s.limit]
 		last := page.Items[s.limit-1]
-		cursor, err := json.Marshal(listCursor{Sort: s.sort, Key: keys[s.limit-1], ID: last.ID.String()})
+		cursor, err := json.Marshal(listCursor{Sort: s.sort, Key: keys[s.limit-1], ID: last.ID.String()}) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			return ListPage{}, fmt.Errorf("artifactsdomain: encode the listing cursor: %w", err)
 		}
@@ -1322,7 +1321,7 @@ func (s listSpec) run(ctx context.Context, tx *sql.Tx) (ListPage, error) {
 func decodeListCursor(raw string, sort ListSort) (listCursor, error) {
 	data, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil {
-		return listCursor{}, fmt.Errorf("%w: %v", ErrBadCursor, err)
+		return listCursor{}, fmt.Errorf("%w: %w", ErrBadCursor, err)
 	}
 	var c listCursor
 	if err := json.Unmarshal(data, &c); err != nil || c.ID == "" || c.Sort != sort {
@@ -1355,7 +1354,7 @@ func intCursor(raw string) (int64, error) {
 	}
 	data, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil {
-		return 0, fmt.Errorf("%w: %v", ErrBadCursor, err)
+		return 0, fmt.Errorf("%w: %w", ErrBadCursor, err)
 	}
 	var n int64
 	if err := json.Unmarshal(data, &n); err != nil || n <= 0 {

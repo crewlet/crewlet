@@ -34,7 +34,7 @@ type Source interface {
 	// Each hands every reference the domain holds whose key sorts after
 	// `after` (the zero key: every one) to visit, read no earlier than at,
 	// IN KEY ORDER WITHIN EACH TABLE, and reports whether the walk was
-	// COMPLETE. visit returning [SkipTable] ends the walk of the table it
+	// COMPLETE. visit returning [ErrSkipTable] ends the walk of the table it
 	// was reading and goes on to the next; any other error ends the walk.
 	// visit is NEVER CALLED INSIDE A READ of the estate: a caller may ask
 	// the backend about each, a round trip a read's connection must not be
@@ -43,11 +43,11 @@ type Source interface {
 		visit func(Reference) error) (bool, error)
 }
 
-// SkipTable is what a visitor of [Source.Each] returns to end the walk of the
+// ErrSkipTable is what a visitor of [Source.Each] returns to end the walk of the
 // table it is reading, as filepath.SkipDir ends a directory: the audit walks
 // one window of keys at a time, and a table's keys are in order, so the first
 // key past the window is the end of that table's part of it.
-var SkipTable = errors.New("objstore/collect: skip the rest of this table")
+var ErrSkipTable = errors.New("objstore/collect: skip the rest of this table")
 
 // Reference is one row naming an object: the object as the row records it, and
 // the row's owner, as a person reads it.
@@ -232,7 +232,7 @@ func (s *tableSource) Each(ctx context.Context, at statelog.Position, from objst
 			complete = complete && whole
 			for _, ref := range page {
 				err := visit(ref)
-				if errors.Is(err, SkipTable) {
+				if errors.Is(err, ErrSkipTable) {
 					break pages
 				}
 				if err != nil {

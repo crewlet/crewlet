@@ -3,8 +3,6 @@ package lint
 import (
 	"bytes"
 	"strings"
-
-	"golang.org/x/net/html"
 )
 
 // rawAttr is one attribute of a start tag as it is SPELLED in the source: its
@@ -83,14 +81,6 @@ func rawAttrs(raw []byte) []rawAttr {
 		out = append(out, a)
 	}
 	return out
-}
-
-// value is the attribute's value, decoded as the tokenizer decodes it.
-func (a rawAttr) value(raw []byte) string {
-	if !a.valued {
-		return ""
-	}
-	return html.UnescapeString(string(raw[a.start:a.end]))
 }
 
 // attrValue renders a value for a double-quoted attribute.

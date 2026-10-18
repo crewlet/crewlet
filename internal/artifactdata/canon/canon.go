@@ -35,6 +35,7 @@ var (
 // Kind is what a decoded value is.
 type Kind uint8
 
+// The kinds a decoded value can be.
 const (
 	KindNull Kind = iota + 1
 	KindBool

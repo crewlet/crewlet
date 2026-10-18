@@ -238,7 +238,7 @@ func (r *Reader) Docs(ctx context.Context, id artifacts.ID, rd Reading, collecti
 	}
 	var page DocPage
 	served, err := r.read(ctx, id, rd, func(tx *sql.Tx, s storeRow, present bool) error {
-		c, err := visibleCollection(ctx, tx, s, present, collection, rd)
+		c, err := visibleCollection(ctx, tx, s, present, collection, rd) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			return err
 		}
@@ -633,7 +633,7 @@ func (r *Reader) History(ctx context.Context, id artifacts.ID, rd Reading, filte
 		if !present {
 			return nil
 		}
-		colls, err := readCollections(ctx, tx, s.no)
+		colls, err := readCollections(ctx, tx, s.no) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			return err
 		}
@@ -647,7 +647,7 @@ func (r *Reader) History(ctx context.Context, id artifacts.ID, rd Reading, filte
 		args := []any{}
 		where := []string{"w.store_no = ?"}
 		if filter.Doc != "" {
-			c, err := visibleCollection(ctx, tx, s, present, filter.Collection, rd)
+			c, err := visibleCollection(ctx, tx, s, present, filter.Collection, rd) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			if err != nil {
 				return err
 			}

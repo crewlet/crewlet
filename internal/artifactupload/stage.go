@@ -109,18 +109,18 @@ func (r *run) stageProduced(ctx context.Context) error {
 		return fmt.Errorf("artifactupload: read the company's usage: %w", err)
 	}
 	until := holdUntil(now.Add(objstore.PaceFor(largest)))
-	if err := r.s.grow(ctx, r.stage.ID, r.principal, total, until, usage.Bytes); err != nil {
+	if err := r.s.grow(ctx, r.stage.ID, r.principal, total, until, usage.Bytes); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		giveBack()
 		return err
 	}
-	if err := r.recordFresh(ctx, fresh, until); err != nil {
+	if err := r.recordFresh(ctx, fresh, until); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		giveBack()
 		r.s.release(ctx, r.stage.ID)
 		return err
 	}
 	for _, g := range fresh {
 		f := r.files[g.Path]
-		stored, err := r.s.objects.PutMinted(ctx, g.Key, bytes.NewReader(f.text), g.Size,
+		stored, err := r.s.objects.PutMinted(ctx, g.Key, bytes.NewReader(f.text), g.Size, //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			objstore.PutMeta{ContentType: g.ContentType})
 		if err != nil {
 			return fmt.Errorf("artifactupload: store %q: %w", g.Path, err)
@@ -347,9 +347,9 @@ func (r *run) fail(ctx context.Context, cause error) error {
 // reservation released. A file the client put straight to the bucket and the
 // version does not name stays held until the hold lapses: its put may still be
 // in flight on a URL the engine cannot recall.
-func (r *run) close(ctx context.Context, published artifactsdomain.Published, m artifacts.Manifest) error {
+func (r *run) close(ctx context.Context, published artifactsdomain.Published, m artifacts.Manifest) {
 	if r.stage == nil || r.stageNew {
-		return nil
+		return
 	}
 	ctx = context.WithoutCancel(ctx)
 	named := map[objstore.Key]bool{}
@@ -373,7 +373,7 @@ func (r *run) close(ctx context.Context, published artifactsdomain.Published, m 
 		// stay held until the hold lapses, and a retry of the operation is
 		// answered by the domain from its own record.
 		log.WarnContext(ctx, "artifact_upload_record_failed", "upload", r.stage.ID, "error", err.Error())
-		return nil
+		return
 	}
 	var deleted []objstore.Key
 	for _, f := range closed.Files {
@@ -401,7 +401,6 @@ func (r *run) close(ctx context.Context, published artifactsdomain.Published, m 
 		}
 	}
 	r.s.release(ctx, closed.ID)
-	return nil
 }
 
 // typeOf is the media table's type for a path, refused as [ErrMediaType].

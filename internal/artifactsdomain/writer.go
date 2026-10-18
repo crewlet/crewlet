@@ -638,7 +638,7 @@ func (w *Writer) onSourced(ctx context.Context, id artifacts.ID,
 	for range sourcedMoveAttempts {
 		var sourceID string
 		if err = w.db.Read(ctx, func(tx *sql.Tx) error {
-			head, found, err := readHeadTx(ctx, tx, id.String())
+			head, found, err := readHeadTx(ctx, tx, id.String()) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			if found {
 				sourceID = sourceIDOf(head)
 			}

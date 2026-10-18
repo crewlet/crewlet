@@ -101,7 +101,7 @@ func (t *readArtifactData) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return jsonResult(out)
 	}
 	if doc != "" {
-		got, err := t.d.data.Store.Doc(ctx, a.head.ID, a.reading(), collection, doc)
+		got, err := t.d.data.Store.Doc(ctx, a.head.ID, a.reading(), collection, doc) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			return dataFailure(ctx, t.Name(), err), nil
 		}

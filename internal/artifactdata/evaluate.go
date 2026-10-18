@@ -223,6 +223,7 @@ func evaluate(v view, authority artifacts.Authority, ops []artifacts.DataOp, und
 	b := &batch{v: v, authority: authority, undo: undo,
 		colls: map[string]*collState{}, docs: map[docRef]*docState{}}
 	if r := checkAuthority(authority); r != nil {
+		//nolint:nilerr // A refusal is the plan's verdict, never the store's error.
 		return plan{refusal: r}, nil
 	}
 	if len(ops) == 0 || len(ops) > artifacts.MaxBatchOps {
@@ -504,7 +505,7 @@ func (b *batch) setFields(c *collState, d *docState, op artifacts.DataOp) error 
 	for _, name := range names {
 		v, err := canon.Parse(op.Fields[name], MaxValueDepth+1)
 		if err != nil {
-			return fmt.Errorf("%w: field %s: %v", ErrInvalid, name, err)
+			return fmt.Errorf("%w: field %s: %w", ErrInvalid, name, err)
 		}
 		if v.Kind == canon.KindNull {
 			delete(next, name)
@@ -519,7 +520,7 @@ func (b *batch) setFields(c *collState, d *docState, op artifacts.DataOp) error 
 	for _, name := range unionKeys(d.fields, next) {
 		old, had := d.fields[name]
 		val, has := next[name]
-		changed := !(had && has && sameValue(old, val))
+		changed := !had || !has || !sameValue(old, val)
 		_, named := op.Fields[name]
 		if !changed && !named {
 			continue
@@ -552,7 +553,7 @@ func (b *batch) fieldOp(c *collState, d *docState, op artifacts.DataOp) error {
 	}
 	operand, err := canon.Parse(op.Value, MaxValueDepth+1)
 	if err != nil {
-		return fmt.Errorf("%w: the value of %s: %v", ErrInvalid, op.Field, err)
+		return fmt.Errorf("%w: the value of %s: %w", ErrInvalid, op.Field, err)
 	}
 	col, declared := c.columns[op.Field]
 	old, had := d.fields[op.Field]
@@ -566,8 +567,8 @@ func (b *batch) fieldOp(c *collState, d *docState, op artifacts.DataOp) error {
 		if operand.Kind != canon.KindNumber {
 			return fmt.Errorf("%w: an increment adds a number", ErrInvalid)
 		}
-		if _, err := finite(operand.Number); err != nil {
-			return fmt.Errorf("%w: %v", ErrInvalid, err)
+		if _, err := finite(operand.Number); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
+			return fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
 		base := "0"
 		if had {
@@ -576,9 +577,9 @@ func (b *batch) fieldOp(c *collState, d *docState, op artifacts.DataOp) error {
 			}
 			base = old.Number
 		}
-		sum, err := addDecimal(base, operand.Number)
+		sum, err := addDecimal(base, operand.Number) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
-			return fmt.Errorf("%w: %s: %v", ErrInvalid, op.Field, err)
+			return fmt.Errorf("%w: %s: %w", ErrInvalid, op.Field, err)
 		}
 		next = canon.Value{Kind: canon.KindNumber, Number: sum}
 	case artifacts.DataAppend:
@@ -775,6 +776,7 @@ func (b *batch) finish() (plan, error) {
 		}
 		if d.live {
 			if r := checkWhole(d); r != nil {
+				//nolint:nilerr // A refusal is the plan's verdict, never the store's error.
 				return plan{refusal: r}, nil
 			}
 		}

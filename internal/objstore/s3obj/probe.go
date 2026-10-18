@@ -127,7 +127,7 @@ func (b *Backend) probe(ctx context.Context) (capabilities, error) {
 		c.checksums = true
 	case status/100 == 2:
 		c.why = "the provider stored a body whose x-amz-checksum-sha256 did not match it"
-		if err := b.Delete(ctx, name); err != nil {
+		if err := b.Delete(ctx, name); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 			return capabilities{}, fmt.Errorf("s3obj: delete the probe object: %w", err)
 		}
 	default:

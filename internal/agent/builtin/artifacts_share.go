@@ -316,7 +316,7 @@ func (t *uploadArtifactAsset) CallForTurn(ctx context.Context, turn *turnctx.Tur
 			spec[field] = v
 		}
 	}
-	if refusal := files.parseSpec(ctx, name, spec); refusal != nil {
+	if refusal := files.parseSpec(ctx, name, spec); refusal != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		return *refusal, nil
 	}
 	// AN ASSET IS ALWAYS AN UPLOAD of its own, never carried and never

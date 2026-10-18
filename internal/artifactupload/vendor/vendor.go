@@ -24,6 +24,7 @@ import (
 // it as.
 type Kind string
 
+// The kinds a vendored file can be fetched as.
 const (
 	KindScript     Kind = "script"
 	KindModule     Kind = "module"
@@ -285,7 +286,7 @@ func (c *Cache) fetch(ctx context.Context, req Request) (File, error) {
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, req.URL.String(), nil)
 	if err != nil {
-		return File{}, fmt.Errorf("%w: %v", ErrRefused, err)
+		return File{}, fmt.Errorf("%w: %w", ErrRefused, err)
 	}
 	// A BROWSER'S AGENT, because a web font's stylesheet is written for the
 	// agent asking: the one a current browser is answered with names WOFF2

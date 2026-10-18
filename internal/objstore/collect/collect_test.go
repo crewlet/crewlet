@@ -71,7 +71,7 @@ func (s *fakeSource) Each(_ context.Context, _ statelog.Position, after objstore
 			continue
 		}
 		err := visit(ref)
-		if errors.Is(err, SkipTable) {
+		if errors.Is(err, ErrSkipTable) {
 			break
 		}
 		if err != nil {

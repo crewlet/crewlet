@@ -49,6 +49,7 @@ func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFiel
 // OpKind is what a record does.
 type OpKind string
 
+// The ops an artifacts record can carry.
 const (
 	// OpCreate makes an artifact and its first version in one record: on
 	// the artifact's own subject when it has no source key, on the source

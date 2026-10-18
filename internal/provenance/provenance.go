@@ -45,6 +45,7 @@ func (t Trust) Valid() bool { return slices.Contains(Trusts, t) }
 // label a model reads is one a person auditing the transcript can look up.
 type Source string
 
+// The sources a provenance label can name.
 const (
 	SourcePageBody        Source = "page_body"
 	SourcePageComment     Source = "page_comment"

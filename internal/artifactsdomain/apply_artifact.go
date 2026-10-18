@@ -157,12 +157,12 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, c applyContext, i
 	if err != nil {
 		return no(RefusedInvalid, HistorySummary{})
 	}
-	if _, marked, err := deletionMarker(ctx, tx, id); err != nil {
+	if _, marked, err := deletionMarker(ctx, tx, id); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		return 0, err
 	} else if marked {
 		return no(RefusedPurged, HistorySummary{})
 	}
-	if _, found, err := readHead(ctx, tx, id); err != nil {
+	if _, found, err := readHead(ctx, tx, id); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		return 0, err
 	} else if found {
 		return no(RefusedExists, HistorySummary{})
@@ -170,7 +170,7 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, c applyContext, i
 	var owner, token string
 	if sourced {
 		owner, token = p.Owner, SourceToken(p.SourceKey)
-		holder, held, err := sourceHolder(ctx, tx, owner, token)
+		holder, held, err := sourceHolder(ctx, tx, owner, token) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			return 0, err
 		}
@@ -222,6 +222,7 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, c applyContext, i
 	}
 	actor := c.record.actor()
 	rows := 0
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO artifacts
 			(id, label, kind, title, description, icon, owner, owner_kind,
@@ -237,6 +238,7 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, c applyContext, i
 	}
 	rows++
 	if sourced {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO artifact_source_claims (owner, token, source_key, artifact_id, version)
 			VALUES (?, ?, ?, ?, ?)
@@ -305,7 +307,7 @@ func (a *Applier) applyPublish(ctx context.Context, tx *sql.Tx, c applyContext, 
 		return no(RefusedInvalid, HistorySummary{})
 	}
 	if v.Label != "" {
-		taken, err := labelHolder(ctx, tx, id, v.Label)
+		taken, err := labelHolder(ctx, tx, id, v.Label) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			return 0, err
 		}
@@ -357,6 +359,7 @@ func (a *Applier) applyPublish(ctx context.Context, tx *sql.Tx, c applyContext, 
 	}
 	rows += n
 	actor := c.record.actor()
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE artifacts SET head_number = ?, contract = ?, capabilities = ?,
 			search_text = ?, bytes_held = bytes_held + ?, updated_by = ?,
@@ -413,7 +416,7 @@ func (a *Applier) applyPatch(ctx context.Context, tx *sql.Tx, c applyContext, id
 	var fields []string
 	var unlabelled map[int]bool
 	if p.Label != nil {
-		held, err := versionExists(ctx, tx, id, p.Label.Number)
+		held, err := versionExists(ctx, tx, id, p.Label.Number) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			return 0, err
 		}
@@ -467,6 +470,7 @@ func (a *Applier) applyPatch(ctx context.Context, tx *sql.Tx, c applyContext, id
 		}
 	}
 	if p.Label != nil {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE artifact_versions SET label = ? WHERE artifact_id = ? AND number = ?`,
 			p.Label.Label, id, p.Label.Number); err != nil {
@@ -488,7 +492,7 @@ func (a *Applier) applyPatch(ctx context.Context, tx *sql.Tx, c applyContext, id
 	set = append(set, "bytes_held = bytes_held - ?", "updated_by = ?", "updated_by_kind = ?",
 		"updated_at = ?", "version = ?")
 	args = append(args, plan.freed, actor.Name, string(actor.Kind), c.at(), c.packed, id)
-	if _, err := tx.ExecContext(ctx, `UPDATE artifacts SET `+strings.Join(set, ", ")+
+	if _, err := tx.ExecContext(ctx, `UPDATE artifacts SET `+strings.Join(set, ", ")+ //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		` WHERE id = ?`, args...); err != nil {
 		return 0, fmt.Errorf("artifactsdomain: patch artifact %s: %w", id, err)
 	}
@@ -651,6 +655,7 @@ func (a *Applier) applyTransfer(ctx context.Context, tx *sql.Tx, c applyContext,
 	rows += int(dropped)
 	actor := c.record.actor()
 	epoch := head.epoch + 1
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE artifacts SET owner = ?, owner_kind = ?, source_key = '',
 			access_epoch = ?, updated_by = ?, updated_by_kind = ?, updated_at = ?,
@@ -690,6 +695,7 @@ func (a *Applier) applyTrash(ctx context.Context, tx *sql.Tx, c applyContext, id
 	}
 	actor := c.record.actor()
 	epoch := head.epoch + 1
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE artifacts SET status = ?, trashed_by = ?, trashed_by_kind = ?,
 			trashed_at = ?, access_epoch = ?, updated_by = ?, updated_by_kind = ?,
@@ -726,6 +732,7 @@ func (a *Applier) applyRestore(ctx context.Context, tx *sql.Tx, c applyContext, 
 		return refuse(ctx, tx, c, id, OpRestore, RefusedPurging, 0, HistorySummary{}, nil)
 	}
 	actor := c.record.actor()
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE artifacts SET status = ?, trashed_by = '', trashed_by_kind = '',
 			trashed_at = 0, updated_by = ?, updated_by_kind = ?, updated_at = ?,
@@ -824,6 +831,7 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, c applyContext, id
 		return rows, nil
 	}
 	var versions, assets int64
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := tx.QueryRowContext(ctx, `
 		SELECT (SELECT COUNT(*) FROM artifact_versions WHERE artifact_id = ?),
 		       (SELECT COUNT(*) FROM artifact_assets WHERE artifact_id = ? AND object IS NOT NULL)`,
@@ -841,7 +849,7 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, c applyContext, id
 		`DELETE FROM artifact_history WHERE artifact_id = ?`,
 		`DELETE FROM artifacts WHERE id = ?`,
 	} {
-		res, err := tx.ExecContext(ctx, stmt, id)
+		res, err := tx.ExecContext(ctx, stmt, id) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			return 0, fmt.Errorf("artifactsdomain: purge %s: %w", id, err)
 		}

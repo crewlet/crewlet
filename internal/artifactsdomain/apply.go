@@ -56,6 +56,7 @@ const (
 // translates each into the refusal its caller acts on.
 type Refusal string
 
+// The refusals an applier can write.
 const (
 	// RefusedInvalid is a record its writer should never have formed: an id
 	// that does not parse, a source address the payload does not match, a

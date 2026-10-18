@@ -65,7 +65,7 @@ func (g Gate) viewerFor(ctx context.Context, p iam.Principal) (artifactsdomain.V
 		return artifactsdomain.Viewer{}, err
 	}
 	for _, unit := range units {
-		member, err := g.Chart.MemberOf(ctx, actor, unit)
+		member, err := g.Chart.MemberOf(ctx, actor, unit) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			return artifactsdomain.Viewer{}, fmt.Errorf("artifactsapi: does %s sit in %s: %w",
 				actor, unit, err)

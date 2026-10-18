@@ -228,7 +228,7 @@ func (s *Service) updateRecord(ctx context.Context, id string, change func(*reco
 		if r == nil {
 			return nil, fmt.Errorf("%w: %s", ErrUploadNotFound, id)
 		}
-		if err := change(r); err != nil {
+		if err := change(r); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 			return nil, err
 		}
 		wrote, err := s.writeRecord(ctx, r, rev)
@@ -245,16 +245,16 @@ func (s *Service) updateRecord(ctx context.Context, id string, change func(*reco
 // ownRecord is the principal's upload: another principal's, or none, is
 // [ErrUploadNotFound] alike, so an upload id tells a caller nothing about an
 // upload that is not theirs.
-func (s *Service) ownRecord(ctx context.Context, principal, id string) (*record, uint64, error) {
+func (s *Service) ownRecord(ctx context.Context, principal, id string) (*record, error) {
 	if id == "" {
-		return nil, 0, fmt.Errorf("%w: no upload is named", ErrUploadNotFound)
+		return nil, fmt.Errorf("%w: no upload is named", ErrUploadNotFound)
 	}
-	r, rev, err := s.readRecord(ctx, id)
+	r, _, err := s.readRecord(ctx, id)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	if r == nil || r.Principal != principal {
-		return nil, 0, fmt.Errorf("%w: %s", ErrUploadNotFound, id)
+		return nil, fmt.Errorf("%w: %s", ErrUploadNotFound, id)
 	}
-	return r, rev, nil
+	return r, nil
 }

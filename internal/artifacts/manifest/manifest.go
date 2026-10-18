@@ -40,7 +40,7 @@ func NewEntry(path, declaredType string, obj objstore.Object, carried bool) (art
 
 // checkFile holds one entry to the bounds its path and type set.
 func checkFile(e artifacts.Entry, typ mediatype.Type) error {
-	limit := int64(artifacts.MaxBinaryFileBytes)
+	limit := artifacts.MaxBinaryFileBytes
 	if typ.Text {
 		limit = artifacts.MaxTextFileBytes
 	}

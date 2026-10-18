@@ -190,10 +190,6 @@ const holdTail = collect.PendingGrace + 2*collect.CollectInterval
 // reservation's records at least this long after their last write.
 const MaxHold = objstore.MaxPresignTerm + time.Duration((artifacts.MaxTextFileBytes+objstore.MiB-1)/objstore.MiB)*objstore.MiBPace + holdTail
 
-// intentBase is the shortest transfer window an intent is given: the term a
-// presigned put of an empty file gets (objstore.PresignTerm).
-const intentBase = 15 * time.Minute
-
 // holdUntil is the end of a hold whose bytes are stored no later than last.
 func holdUntil(last time.Time) time.Time { return last.Add(holdTail) }
 

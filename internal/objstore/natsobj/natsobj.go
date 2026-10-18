@@ -276,7 +276,7 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 			"bucket's replicas or align stream.replicas on every node",
 			Bucket, got, replicas)
 	}
-	if err := checkCeiling(ctx, held.MaxBytes, cfg); err != nil {
+	if err := checkCeiling(ctx, held.MaxBytes, cfg); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		return nil, err
 	}
 	leader, err := jsapi.NewLeader(js, Stream)

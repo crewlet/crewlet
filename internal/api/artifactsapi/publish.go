@@ -601,7 +601,7 @@ func (s *Service) readText(ctx context.Context, e artifacts.Entry, limit int64) 
 	var raw []byte
 	if truncated {
 		raw = make([]byte, limit)
-		if _, err := io.ReadFull(body, raw); err != nil {
+		if _, err := io.ReadFull(body, raw); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 			return "", false, err
 		}
 		// A CUT MID-RUNE loses at most the rune's leading bytes.

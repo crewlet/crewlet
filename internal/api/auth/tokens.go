@@ -163,7 +163,7 @@ func (g *Guard) token(r *http.Request, presented credential.Token) (*http.Reques
 
 	// A MACHINE TOKEN ENDS ON ITS OWN AT ITS EXPIRY — see [Lifetime].
 	ctx = withLifetime(ctx, row.ExpiresAt)
-	p, unresolved, refusal := g.machinePrincipal(ctx, presented.ID, row, now)
+	p, refusal, unresolved := g.machinePrincipal(ctx, presented.ID, row, now)
 	if unresolved != nil {
 		return r.WithContext(iam.WithUnresolved(ctx, unresolved)), nil
 	}
@@ -173,13 +173,13 @@ func (g *Guard) token(r *http.Request, presented credential.Token) (*http.Reques
 // machinePrincipal composes the principal a machine token whose rows checked
 // out acts as: its owner, carrying the grants the mint conferred that the
 // owner still holds, under this node's admin posture, as their seat where they
-// are bound to one. unresolved is the reason this node could not say, and
-// refusal a binding the chart will not let it act as.
+// are bound to one. refusal is a binding the chart will not let it act as,
+// and unresolved the reason this node could not say.
 //
 // ONE COMPOSITION for a token presented as a bearer and a token a view ticket
 // names ([Lineages]), so the two can never compose one token two ways.
 func (g *Guard) machinePrincipal(ctx context.Context, id string, row credential.TokenRow,
-	now time.Time) (p iam.Principal, unresolved error, refusal *Refusal) {
+	now time.Time) (p iam.Principal, refusal *Refusal, unresolved error) {
 
 	owner := row.Owner
 	ownerID, err := uuid.Parse(owner.ID)
@@ -188,7 +188,7 @@ func (g *Guard) machinePrincipal(ctx context.Context, id string, row credential.
 		// store that is not answering the question it was asked.
 		log.WarnContext(ctx, "api_token_owner_unreadable",
 			"credential", id, "error", err)
-		return iam.Principal{}, errTokenUnavailable, nil
+		return iam.Principal{}, nil, errTokenUnavailable
 	}
 	p = iam.Principal{
 		ID: ownerID, Login: owner.Login, Kind: owner.Kind, Stage: owner.Stage,
@@ -233,7 +233,7 @@ func (g *Guard) machinePrincipal(ctx context.Context, id string, row credential.
 		log.Log(ctx, UnreadLevel(ctx), "api_token_seat_unavailable",
 			"credential", id, "seat", owner.Seat,
 			"detail", binding.Detail, "error", errText(binding.Err))
-		return iam.Principal{}, errBindingUnavailable, nil
+		return iam.Principal{}, nil, errBindingUnavailable
 	case session.AnswerServe:
 		// THE KIND FOLLOWS THE SEAT, for [Guard.principalFor]'s reason:
 		// [iam.ActorFor] splits a person on their seat and a machine has
@@ -243,5 +243,5 @@ func (g *Guard) machinePrincipal(ctx context.Context, id string, row credential.
 		p.Position = binding.Seat.Unit
 		return p, nil, nil
 	}
-	return p, nil, seatRefusal(binding)
+	return p, seatRefusal(binding), nil
 }

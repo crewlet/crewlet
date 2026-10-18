@@ -13,6 +13,7 @@ import (
 // is held to and how the serving origin treats it.
 type Class string
 
+// The classes a media type can fall in.
 const (
 	// ClassDocument is a page or a text document: HTML, Markdown, plain
 	// text, CSV, XML.

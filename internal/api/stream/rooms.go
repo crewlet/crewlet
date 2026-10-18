@@ -713,6 +713,7 @@ func (s *Service) decideMember(ctx context.Context, p iam.Principal, id artifact
 	switch {
 	case err != nil:
 		if ctx.Err() != nil {
+			//nolint:nilerr // A decision ended by ctx leaves nothing to ask; see the doc above.
 			return nil
 		}
 		log.InfoContext(ctx, "stream_room_redecision_undecidable", "login", p.Login,

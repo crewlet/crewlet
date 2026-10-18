@@ -160,7 +160,7 @@ func decideShared(ctx context.Context, p iam.Principal, r rule, o Object,
 	}
 	rel := relate(ctx, p, o, chart)
 	switch {
-	case rel.role.Includes(r.minRole) && !(admin && rel.standing(false).Err() != nil):
+	case rel.role.Includes(r.minRole) && (!admin || rel.standing(false).Err() == nil):
 		return consulting(Decision{Allowed: true, Reason: rel.via,
 			Standing: rel.standing(false)}, adminGrant)
 	case admin:

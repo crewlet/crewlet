@@ -368,7 +368,7 @@ func (t *getArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// owner and the editors see "read by an administrator" in the artifact's
 	// own history, and a read whose record could not be written is not made.
 	if dec.Elevated {
-		if err := t.deps.readElevated(ctx, c, dec, h, number); err != nil {
+		if err := t.deps.readElevated(ctx, c, dec, h, number); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 			return elevatedUnrecorded(t.Name(), err), nil
 		}
 	}

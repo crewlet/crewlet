@@ -80,6 +80,7 @@ func (t *writeArtifactData) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 	var ops []artifacts.DataOp
 	if err := argJSON(args, "ops", &ops); err != nil || len(ops) == 0 {
+		//nolint:nilerr // A tool failure is a RESULT the model reads, not a Go error.
 		return failed(fmt.Sprintf("%s needs `ops`: a list of 1 to %d {op, collection, doc, "+
 			"...} objects.", t.Name(), artifacts.MaxBatchOps)), nil
 	}

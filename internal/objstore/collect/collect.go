@@ -573,7 +573,7 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 			// rows name one.
 			whole, err := s.Each(ctx, v[i], after, func(ref Reference) error {
 				if !win.last && ref.Object.Key.Compare(win.through) > 0 {
-					return SkipTable
+					return ErrSkipTable
 				}
 				r.Referenced++
 				if info, held := win.held[ref.Object.Key]; held {

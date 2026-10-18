@@ -127,7 +127,7 @@ func (s *fileSources) addInline(p, content, encoding string) *tools.Result {
 		r := failed(fmt.Sprintf("%s carries more than %d bytes of inline content. Build "+
 			"larger files with your coding run and publish them with `from_sandbox`, or "+
 			"keep them as project files and use `from_project_file`.", s.tool,
-			int64(artifacts.MaxInlineBytes)))
+			artifacts.MaxInlineBytes))
 		return &r
 	}
 	return s.add(artifactFile{path: p, inline: data})
@@ -289,7 +289,7 @@ func (s *fileSources) boxFile(ctx context.Context, published, raw string) (artif
 	if refusal != nil {
 		return artifactFile{}, refusal
 	}
-	stream, refusal := s.digest(ctx, from, "sandbox path "+from,
+	stream, refusal := s.digest(ctx, "sandbox path "+from,
 		func(ctx context.Context) (io.ReadCloser, error) { return box.Open(ctx, from) })
 	if refusal != nil {
 		return artifactFile{}, refusal
@@ -346,7 +346,7 @@ func (s *fileSources) addBoxDir(ctx context.Context, raw string) *tools.Result {
 			return refusal
 		}
 		from := got
-		stream, refusal := s.digest(ctx, from, "sandbox path "+from,
+		stream, refusal := s.digest(ctx, "sandbox path "+from,
 			func(ctx context.Context) (io.ReadCloser, error) { return box.Open(ctx, from) })
 		if refusal != nil {
 			return refusal
@@ -360,7 +360,7 @@ func (s *fileSources) addBoxDir(ctx context.Context, raw string) *tools.Result {
 
 // digest reads a streamed file once for its digest and size, refusing one
 // past the largest file an artifact holds before any byte is reserved.
-func (s *fileSources) digest(ctx context.Context, path, from string,
+func (s *fileSources) digest(ctx context.Context, from string,
 	open func(ctx context.Context) (io.ReadCloser, error)) (*streamedFile, *tools.Result) {
 
 	rc, err := open(ctx)
@@ -377,7 +377,7 @@ func (s *fileSources) digest(ctx context.Context, path, from string,
 	}
 	if n > artifacts.MaxTextFileBytes {
 		r := failed(fmt.Sprintf("%s: %s is larger than the %d bytes an artifact's "+
-			"largest file may hold.", s.tool, from, int64(artifacts.MaxTextFileBytes)))
+			"largest file may hold.", s.tool, from, artifacts.MaxTextFileBytes))
 		return nil, &r
 	}
 	hash, err := objstore.ParseHash(hex.EncodeToString(h.Sum(nil)))
@@ -427,7 +427,7 @@ func (s *fileSources) projectFile(ctx context.Context, published string,
 	if detail.File.Size > artifacts.MaxTextFileBytes {
 		r := failed(fmt.Sprintf("%s: project file %s/%s is larger than the %d bytes an "+
 			"artifact's largest file may hold.", s.tool, project, from,
-			int64(artifacts.MaxTextFileBytes)))
+			artifacts.MaxTextFileBytes))
 		return artifactFile{}, &r
 	}
 	objects := work.Objects
@@ -460,7 +460,7 @@ func (s *fileSources) stage(ctx context.Context, call artifactsdomain.Call, id a
 	}
 	if total > artifacts.MaxPublishBytes {
 		r := failed(fmt.Sprintf("%s would move %d bytes, and a publish uploads at most "+
-			"%d. Publish fewer or smaller files.", s.tool, total, int64(artifacts.MaxPublishBytes)))
+			"%d. Publish fewer or smaller files.", s.tool, total, artifacts.MaxPublishBytes))
 		return "", nil, &r
 	}
 	carried := map[string]bool{}

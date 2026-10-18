@@ -24,6 +24,7 @@ import (
 // ChangeOp is what one record did to one document.
 type ChangeOp string
 
+// The changes one record can make to one document.
 const (
 	ChangeCreate   ChangeOp = "create"
 	ChangeUpdate   ChangeOp = "update"
@@ -160,6 +161,7 @@ func writeHistory(ctx context.Context, tx *sql.Tx, c applyContext, s storeRow, h
 	if h.undoable {
 		undoable = 1
 	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO artifact_data_writes
 			(store_no, seq, op_id, op, actor, actor_kind, operator_id, origin, work_item,
@@ -212,13 +214,13 @@ func pruneHistory(ctx context.Context, tx *sql.Tx, c applyContext, s *storeRow, 
 	var oldest []old
 	for rows.Next() {
 		var o old
-		if err := rows.Scan(&o.seq, &o.at, &o.bytes); err != nil {
+		if err := rows.Scan(&o.seq, &o.at, &o.bytes); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 			_ = rows.Close()
 			return 0, fmt.Errorf("artifactdata: read store %s's history: %w", s.artifact, err)
 		}
 		oldest = append(oldest, o)
 	}
-	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		return 0, fmt.Errorf("artifactdata: read store %s's history: %w", s.artifact, err)
 	}
 	deleted := 0
@@ -230,7 +232,7 @@ func pruneHistory(ctx context.Context, tx *sql.Tx, c applyContext, s *storeRow, 
 			`DELETE FROM artifact_data_writes WHERE store_no = ? AND seq = ?`,
 			`DELETE FROM artifact_data_touches WHERE store_no = ? AND seq = ?`,
 		} {
-			res, err := tx.ExecContext(ctx, stmt, s.no, o.seq)
+			res, err := tx.ExecContext(ctx, stmt, s.no, o.seq) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			if err != nil {
 				return 0, fmt.Errorf("artifactdata: prune store %s's history: %w", s.artifact, err)
 			}

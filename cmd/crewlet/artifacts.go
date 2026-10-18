@@ -619,7 +619,7 @@ func collectFiles(root string) ([]localFile, error) {
 	}
 	var files []localFile
 	add := func(published, disk string) error {
-		raw, err := os.ReadFile(disk)
+		raw, err := os.ReadFile(disk) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			return err
 		}

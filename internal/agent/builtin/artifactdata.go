@@ -251,7 +251,7 @@ func (d dataTools) admit(ctx context.Context, turn *turnctx.Turn, tool string,
 	// a read only the admin path admitted writes the elevated-read record
 	// first, and is not made when the record cannot be written.
 	if !writes && dec.Elevated {
-		if err := d.art.readElevated(ctx, c, dec, h, h.HeadNumber); err != nil {
+		if err := d.art.readElevated(ctx, c, dec, h, h.HeadNumber); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 			r := elevatedUnrecorded(tool, err)
 			return dataAdmission{}, &r
 		}

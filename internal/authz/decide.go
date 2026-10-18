@@ -181,7 +181,7 @@ const (
 	// both of those folded into admin the two rules said the same thing.
 	ClassDirectory Class = "directory"
 
-	// ClassShared: one artifact, decided by the caller's ROLE on it, the
+	// ClassShared is one artifact, decided by the caller's ROLE on it, the
 	// best of owning it, a share naming their seat, a unit they sit in or
 	// the whole company, and leading the agent that owns it. The row names
 	// the least role it admits ([rule.minRole]); the owner holds every role.

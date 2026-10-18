@@ -85,6 +85,7 @@ type DataWrite struct {
 // every node.
 type DataVerdict string
 
+// The verdicts a datastore batch can be given.
 const (
 	DataApplied   DataVerdict = "applied"
 	DataConflict  DataVerdict = "conflict"  // an IfVersion guard moved
@@ -105,6 +106,7 @@ func (v DataVerdict) Valid() bool { return slices.Contains(DataVerdicts, v) }
 // ColumnType is how one field is stored, validated and drawn.
 type ColumnType string
 
+// The types a collection's column can declare.
 const (
 	ColumnText        ColumnType = "text"        // single line
 	ColumnLongText    ColumnType = "longtext"    // whole-field guarded writes plus append
@@ -132,6 +134,7 @@ func (t ColumnType) Valid() bool { return slices.Contains(ColumnTypes, t) }
 // query, the history, a live push and an export.
 type ReadRule string
 
+// The read rules a collection can carry.
 const (
 	ReadAll     ReadRule = "all"      // every participant
 	ReadOwnRows ReadRule = "own_rows" // each participant their own rows; editors and above every row
@@ -182,6 +185,7 @@ func (m FieldMode) Valid() bool { return slices.Contains(FieldModes, m) }
 // evaluator reads one vocabulary.
 type Preset string
 
+// The presets a collection can start from.
 const (
 	PresetShared     Preset = "shared"     // participants read, editors write
 	PresetContribute Preset = "contribute" // participants add rows and edit their own

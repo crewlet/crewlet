@@ -270,14 +270,6 @@ func (n *node) applyBody(spec statelog.StreamSpec, seq uint64, body []byte, stor
 	n.waiter.reach(record.Position)
 }
 
-// holdApplier keeps this node's applier out of every wait: a write resolves
-// `pending`, which is a node whose applier is behind its own log.
-func (n *node) holdApplier() {
-	n.waiter.mu.Lock()
-	defer n.waiter.mu.Unlock()
-	n.waiter.advance = nil
-}
-
 // head reads one artifact back at the session level.
 func (n *node) head(id artifacts.ID) artifactsdomain.Head {
 	n.t.Helper()

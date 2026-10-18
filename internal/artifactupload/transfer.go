@@ -50,7 +50,7 @@ func (s *Service) transfer(ctx context.Context, c artifactsdomain.Call, upload, 
 	if err != nil {
 		return err
 	}
-	if _, _, err := s.ownRecord(ctx, principal, upload); err != nil {
+	if _, err := s.ownRecord(ctx, principal, upload); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		return err
 	}
 	p, err := manifest.CleanPath(path)

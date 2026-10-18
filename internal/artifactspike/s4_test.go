@@ -102,11 +102,6 @@ const (
 // publishes it written as a map entry.
 const escapeImportMap = "import_map_remote"
 
-// storageShared is browser storage, which works per viewer on a per-artifact
-// origin and throws on the shared mode's opaque origin: recorded apart from
-// the breaks, since whether it breaks is the deployment's origin mode.
-const storageShared = "storage_shared_mode"
-
 // corpusEntry is one page's record.
 type corpusEntry struct {
 	File    string   `json:"file"`

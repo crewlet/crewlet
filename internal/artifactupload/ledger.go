@@ -158,7 +158,7 @@ func (s *Service) changeLedger(ctx context.Context, change func(l *ledger, now t
 		}
 		var l ledger
 		if raw != nil {
-			if err := json.Unmarshal(raw, &l); err != nil {
+			if err := json.Unmarshal(raw, &l); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 				return fmt.Errorf("artifactupload: the reservation ledger is not one this build reads: %w", err)
 			}
 			if l.V > ledgerVersion {
@@ -171,7 +171,7 @@ func (s *Service) changeLedger(ctx context.Context, change func(l *ledger, now t
 		l.Holds = slices.DeleteFunc(l.Holds, func(h hold) bool {
 			return !h.Until.After(now) || h.Bytes <= 0 || released[h.Upload]
 		})
-		if err := change(&l, now); err != nil {
+		if err := change(&l, now); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 			return err
 		}
 		l.Holds = slices.DeleteFunc(l.Holds, func(h hold) bool { return h.Bytes <= 0 })

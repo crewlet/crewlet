@@ -179,7 +179,7 @@ func (f *Frames) For(r FrameRequest) (artifacts.Frame, error) {
 func (f *Frames) Claims(frameURL string) (artifacts.TicketClaims, error) {
 	u, err := url.Parse(strings.TrimSpace(frameURL))
 	if err != nil {
-		return artifacts.TicketClaims{}, fmt.Errorf("%w: %v", ErrNotAFrame, err)
+		return artifacts.TicketClaims{}, fmt.Errorf("%w: %w", ErrNotAFrame, err)
 	}
 	rest, ok := strings.CutPrefix(u.Path, ticketPath)
 	token, _, named := strings.Cut(rest, "/")
@@ -191,7 +191,7 @@ func (f *Frames) Claims(frameURL string) (artifacts.TicketClaims, error) {
 	case verdict == ticket.Expired:
 		return artifacts.TicketClaims{}, fmt.Errorf("%w: its ticket has ended", ErrNotAFrame)
 	case verdict != ticket.Valid:
-		return artifacts.TicketClaims{}, fmt.Errorf("%w: %v", ErrNotAFrame, err)
+		return artifacts.TicketClaims{}, fmt.Errorf("%w: %w", ErrNotAFrame, err)
 	case !strings.EqualFold(u.Scheme+"://"+u.Host, f.origins.Origin(claims.Artifact)):
 		return artifacts.TicketClaims{}, fmt.Errorf("%w: it is not on its artifact's origin",
 			ErrNotAFrame)

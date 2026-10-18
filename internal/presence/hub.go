@@ -212,8 +212,8 @@ func (h *Hub) Start(ctx context.Context) error {
 	}
 	h.serving = stop
 	h.loops.Add(2)
-	go h.reconciler(lifetime)
-	go h.ticker(lifetime)
+	go h.reconciler(lifetime) //nolint:contextcheck // the hub's own lifetime, ended by Stop, never a caller's; see Start
+	go h.ticker(lifetime)     //nolint:contextcheck // the hub's own lifetime, ended by Stop, never a caller's; see Start
 	return nil
 }
 
@@ -614,7 +614,7 @@ func (h *Hub) ask(ctx context.Context, id artifacts.ID) {
 			continue
 		}
 		h.count("peer")
-		h.apply(f)
+		h.apply(f) //nolint:contextcheck // the hub's own lifetime, ended by Stop, never a caller's; see Start
 	}
 }
 
@@ -645,7 +645,7 @@ func (h *Hub) tick(ctx context.Context, now time.Time) {
 	var frames []Frame
 	for id, r := range h.rooms {
 		if r.expire(now) {
-			h.scheduleLocked(r)
+			h.scheduleLocked(r) //nolint:contextcheck // the hub's own lifetime, ended by Stop, never a caller's; see Start
 		}
 		if members := r.localMembers(); len(members) > 0 {
 			frames = append(frames, h.frameLocked(id, FrameState, members, nil, true))

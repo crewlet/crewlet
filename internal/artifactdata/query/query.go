@@ -18,6 +18,7 @@ import (
 // Op is one filter's comparison.
 type Op string
 
+// The comparisons a filter can make.
 const (
 	OpEq       Op = "eq"       // the scalar field equals the value
 	OpNe       Op = "ne"       // the scalar field is absent or differs

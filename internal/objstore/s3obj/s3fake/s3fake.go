@@ -213,7 +213,7 @@ func (s *Server) denied(key string, q map[string][]string) bool {
 	// A BUCKET-LEVEL REQUEST: a listing confined to the prefix is a
 	// right such a credential has; anything else about the bucket is not.
 	listed := first(q["prefix"])
-	return !(first(q["list-type"]) == "2" || len(q["uploads"]) > 0) ||
+	return first(q["list-type"]) != "2" && len(q["uploads"]) == 0 ||
 		!strings.HasPrefix(listed, prefix)
 }
 

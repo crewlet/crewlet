@@ -195,7 +195,7 @@ func checkArtifactTemplate(path Path, raw string) error {
 		return p.err()
 	}
 	for _, r := range label {
-		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
 			p.add(path, ErrShape, "%q follows %s with %q, and a host label "+
 				"holds only lowercase letters, digits and hyphens", raw,
 				ArtifactPlaceholder, label)

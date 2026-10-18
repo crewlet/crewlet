@@ -99,7 +99,7 @@ func (s *Service) newRun(ctx context.Context, c artifactsdomain.Call, kind artif
 		files: map[string]*pending{}, removes: map[string]bool{}, vendored: map[string]bool{},
 		versions: map[int]artifactsdomain.Version{}}
 	if upload != "" {
-		claimed, err := s.claim(ctx, c, principal, upload, p, id)
+		claimed, err := s.claim(ctx, c, principal, upload, p, id) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			return nil, err
 		}
@@ -161,7 +161,7 @@ func (s *Service) takeClaim(rec *record) error {
 func (s *Service) claim(ctx context.Context, c artifactsdomain.Call, principal, upload string,
 	p purpose, id artifacts.ID) (*record, error) {
 
-	if _, _, err := s.ownRecord(ctx, principal, upload); err != nil {
+	if _, err := s.ownRecord(ctx, principal, upload); err != nil {
 		return nil, err
 	}
 	return s.updateRecord(ctx, upload, func(r *record) error {
@@ -238,7 +238,7 @@ func (r *run) compose(ctx context.Context, mode manifest.Mode, specs []FileSpec,
 	if err != nil {
 		return artifactsdomain.PublishInput{}, err
 	}
-	if err := r.stageProduced(ctx); err != nil {
+	if err := r.stageProduced(ctx); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		return artifactsdomain.PublishInput{}, err
 	}
 	m, uploaded, err := r.manifest(mode, entry)
@@ -272,7 +272,7 @@ func (r *run) nameFiles(ctx context.Context, mode manifest.Mode, specs []FileSpe
 		if err != nil {
 			return classify(err)
 		}
-		if err := authorPath(p); err != nil {
+		if err := authorPath(p); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 			return err
 		}
 		if spec.sources() != 1 {
@@ -310,7 +310,7 @@ func (r *run) nameFiles(ctx context.Context, mode manifest.Mode, specs []FileSpe
 				missing = append(missing, p)
 				continue
 			}
-			typ, err := typeOf(p, up.ContentType)
+			upType, err := typeOf(p, up.ContentType) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			if err != nil {
 				return err
 			}
@@ -323,12 +323,12 @@ func (r *run) nameFiles(ctx context.Context, mode manifest.Mode, specs []FileSpe
 			if err != nil {
 				return err
 			}
-			e, err := manifest.NewEntry(p, typ.Served, up.object(), false)
+			e, err := manifest.NewEntry(p, upType.Served, up.object(), false)
 			if err != nil {
 				return classify(err)
 			}
-			f.typ, f.entry, f.hasObj = typ, e, true
-			if typ.Text {
+			f.typ, f.entry, f.hasObj = upType, e, true
+			if upType.Text {
 				f.text = body
 			}
 		case spec.Carry != "":
@@ -358,7 +358,7 @@ func (r *run) nameFiles(ctx context.Context, mode manifest.Mode, specs []FileSpe
 			if inline > artifacts.MaxInlineBytes {
 				return fmt.Errorf("%w: the call carries more than the %d inline bytes a tool call "+
 					"may; write the files into the sandbox and publish them from there", ErrInvalid,
-					int64(artifacts.MaxInlineBytes))
+					artifacts.MaxInlineBytes)
 			}
 			if err := checkContent(p, typ, headOf(spec.Inline, typ.Text), int64(len(spec.Inline))); err != nil {
 				return err
@@ -457,7 +457,7 @@ func (r *run) applyEdits(ctx context.Context, list []edits.Edit, entry string) e
 	texts := map[string][]byte{}
 	types := map[string]mediatype.Type{}
 	for i, p := range edits.Paths(normalized) {
-		clean, err := manifest.CleanPath(p)
+		clean, err := manifest.CleanPath(p) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			return classify(err)
 		}
@@ -754,7 +754,7 @@ func (r *run) vendorFile(ctx context.Context, ref lint.Ref, local string, depth 
 		return fmt.Errorf("the file is %d stylesheets deep, and copying follows at most %d", depth, maxVendorDepth)
 	}
 	host := strings.ToLower(ref.URL.Hostname())
-	immutable := !(ref.Kind == lint.RefStylesheet && host == "fonts.googleapis.com")
+	immutable := ref.Kind != lint.RefStylesheet || host != "fonts.googleapis.com"
 	got, err := r.s.vendor.Fetch(ctx, vendorRequest(ref, immutable))
 	if err != nil {
 		return err

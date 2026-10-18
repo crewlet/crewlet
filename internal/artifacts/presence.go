@@ -15,6 +15,7 @@ import (
 // PresenceActivity is what a present member is doing.
 type PresenceActivity string
 
+// The activities a present member can report.
 const (
 	PresenceViewing PresenceActivity = "viewing"
 	PresenceEditing PresenceActivity = "editing"

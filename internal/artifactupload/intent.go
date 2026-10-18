@@ -80,7 +80,7 @@ func (s *Service) intend(ctx context.Context, c artifactsdomain.Call, id artifac
 	if !id.IsZero() {
 		// NOTHING IS RESERVED FOR AN ARTIFACT THAT CANNOT TAKE IT: one this
 		// node's copy holds no head for, or one in the trash.
-		head, _, err := s.reads.Artifact(ctx, id, statelog.Freshness{Level: statelog.ReadStale})
+		head, _, err := s.reads.Artifact(ctx, id, statelog.Freshness{Level: statelog.ReadStale}) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			return artifacts.UploadIntent{}, err
 		}
@@ -95,13 +95,13 @@ func (s *Service) intend(ctx context.Context, c artifactsdomain.Call, id artifac
 	if len(plan.Upload) == 0 {
 		return artifacts.UploadIntent{Carried: carriedPaths(plan)}, nil
 	}
-	if err := checkStrings(c.Authority.Actor.Kind, declaredPaths(plan)); err != nil {
+	if err := checkStrings(c.Authority.Actor.Kind, declaredPaths(plan)); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		return artifacts.UploadIntent{}, err
 	}
 
 	upload := uuid.NewString()
 	if c.OpKey != "" {
-		digest, err := requestDigest(id, req)
+		digest, err := requestDigest(id, req) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			return artifacts.UploadIntent{}, err
 		}
@@ -159,7 +159,7 @@ func (s *Service) intend(ctx context.Context, c artifactsdomain.Call, id artifac
 		// a put begun at the last moment is given its own time.
 		Until: holdUntil(r.Expires.Add(objstore.PaceFor(largest))),
 	}
-	if err := s.reserve(ctx, h, usage.Bytes); err != nil {
+	if err := s.reserve(ctx, h, usage.Bytes); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		giveBack()
 		return artifacts.UploadIntent{}, err
 	}
@@ -173,7 +173,7 @@ func (s *Service) intend(ctx context.Context, c artifactsdomain.Call, id artifac
 		if err != nil {
 			return artifacts.UploadIntent{}, err
 		}
-		winner, _, err := s.ownRecord(ctx, principal, upload)
+		winner, err := s.ownRecord(ctx, principal, upload)
 		if err != nil {
 			return artifacts.UploadIntent{}, err
 		}
@@ -242,7 +242,7 @@ func (s *Service) planIntent(ctx context.Context, p purpose, id artifacts.ID,
 			len(plan.Upload), artifacts.MaxFilesPerPublish)
 	case total > artifacts.MaxPublishBytes:
 		return manifest.CarryPlan{}, fmt.Errorf("%w: the upload moves %d bytes and a publish "+
-			"uploads at most %d", ErrInvalid, total, int64(artifacts.MaxPublishBytes))
+			"uploads at most %d", ErrInvalid, total, artifacts.MaxPublishBytes)
 	}
 	return plan, nil
 }
@@ -269,7 +269,7 @@ func planAssets(declared []manifest.Declared) (manifest.CarryPlan, error) {
 		if err != nil {
 			return manifest.CarryPlan{}, fmt.Errorf("%w: %w", ErrMediaType, err)
 		}
-		limit := int64(artifacts.MaxAssetBinaryBytes)
+		limit := artifacts.MaxAssetBinaryBytes
 		if typ.Text {
 			limit = artifacts.MaxAssetTextBytes
 		}
@@ -362,7 +362,7 @@ func (s *Service) Lookup(ctx context.Context, c artifactsdomain.Call, upload str
 	if err != nil {
 		return Upload{}, err
 	}
-	r, _, err := s.ownRecord(ctx, principal, upload)
+	r, err := s.ownRecord(ctx, principal, upload)
 	if err != nil {
 		return Upload{}, err
 	}

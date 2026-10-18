@@ -172,7 +172,8 @@ func (s *Service) create(ctx context.Context, c artifactsdomain.Call, req Create
 	if err != nil {
 		return published, Report{}, r.fail(ctx, err)
 	}
-	return published, r.report(), r.close(ctx, published, in.Manifest)
+	r.close(ctx, published, in.Manifest)
+	return published, r.report(), nil
 }
 
 // Publish adds a version to an artifact through THE pipeline: the upload's
@@ -238,7 +239,7 @@ func (s *Service) publish(ctx context.Context, c artifactsdomain.Call, req Publi
 		// REFUSED BEFORE A BYTE IS WRITTEN: the domain would refuse the
 		// record the same way, and an edit aimed at another version is
 		// never re-aimed at the head.
-		live, err := s.reads.Version(ctx, req.Artifact, head.HeadNumber)
+		live, err := s.reads.Version(ctx, req.Artifact, head.HeadNumber) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			return artifactsdomain.Published{}, Report{}, r.fail(ctx, err)
 		}
@@ -262,7 +263,8 @@ func (s *Service) publish(ctx context.Context, c artifactsdomain.Call, req Publi
 	if err != nil {
 		return published, Report{}, r.fail(ctx, err)
 	}
-	return published, r.report(), r.close(ctx, published, in.Manifest)
+	r.close(ctx, published, in.Manifest)
+	return published, r.report(), nil
 }
 
 // headFor is the artifact's head as a publish based on base decides against.
@@ -344,7 +346,7 @@ func (s *Service) addAsset(ctx context.Context, c artifactsdomain.Call, id artif
 	if err != nil {
 		return artifactsdomain.Asset{}, err
 	}
-	rec, _, err := s.ownRecord(ctx, principal, upload)
+	rec, err := s.ownRecord(ctx, principal, upload)
 	if err != nil {
 		return artifactsdomain.Asset{}, err
 	}
@@ -368,7 +370,7 @@ func (s *Service) addAsset(ctx context.Context, c artifactsdomain.Call, id artif
 		if f.State == fileDeleted || (f.Transport == transportEngine && f.State != fileStored) {
 			return artifactsdomain.Asset{}, &UploadMissing{Paths: []string{p}}
 		}
-		if _, err := s.readBack(ctx, f); err != nil {
+		if _, err := s.readBack(ctx, f); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 			return artifactsdomain.Asset{}, err
 		}
 	}

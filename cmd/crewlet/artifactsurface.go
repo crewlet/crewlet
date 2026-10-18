@@ -49,7 +49,7 @@ func artifactsSurfaces(e *engine.Engine, boot *config.Bootstrap) (
 		// first use, and a node that cannot (no object store, no
 		// coordination store) answers the upload routes with why.
 		Uploads: func() (artifactsapi.Pipeline, error) {
-			pipeline, err := e.ArtifactUploads()
+			pipeline, err := e.ArtifactUploads() //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			if err != nil {
 				return nil, err
 			}
@@ -61,7 +61,7 @@ func artifactsSurfaces(e *engine.Engine, boot *config.Bootstrap) (
 	// built from (engine.ArtifactServing), so a frame minted here and the
 	// document it loads there are one reading of the keyring and the URL.
 	if boot.API.Artifacts.ExternalBase() != "" {
-		tickets, origins, err := engine.ArtifactServing(boot)
+		tickets, origins, err := engine.ArtifactServing(boot) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			return nil, nil, fmt.Errorf("api: the artifact frames: %w", err)
 		}

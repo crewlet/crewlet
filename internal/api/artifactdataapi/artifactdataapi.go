@@ -215,6 +215,7 @@ func dataGone(w http.ResponseWriter, detail string) {
 // bridge; a bearer credential (the CLI, a script) is the API whatever it says.
 type Via string
 
+// The surfaces a write is stamped as coming through.
 const (
 	ViaDashboard Via = "dashboard"
 	ViaBridge    Via = "bridge"
@@ -499,7 +500,7 @@ func (c *csvResponse) Write(p []byte) (int, error) {
 // position, or the refusal before anything was appended.
 func answer(w http.ResponseWriter, r *http.Request, key string, res artifactdata.WriteResult, err error) {
 	if err != nil {
-		writeFailed(w, r, key, res, err)
+		writeFailed(w, r, key, err)
 		return
 	}
 	body := httpjson.Detail{"op_id": key, "outcome": string(res.Result.Outcome),
@@ -542,7 +543,7 @@ func answer(w http.ResponseWriter, r *http.Request, key string, res artifactdata
 
 // writeFailed renders a write refused before anything was appended, or one
 // whose outcome nobody can establish.
-func writeFailed(w http.ResponseWriter, r *http.Request, key string, res artifactdata.WriteResult, err error) {
+func writeFailed(w http.ResponseWriter, r *http.Request, key string, err error) {
 	var limited *artifactdata.RateLimited
 	detail := map[string]string{"detail": strings.TrimPrefix(err.Error(), "artifactdata: ")}
 	switch {

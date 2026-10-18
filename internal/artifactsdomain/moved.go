@@ -22,6 +22,7 @@ import (
 // MoveKind is what one movement was.
 type MoveKind string
 
+// The movements an applier can tell.
 const (
 	// MoveVersion is a new head version: a create, a publish or a rollback.
 	MoveVersion MoveKind = "version"

@@ -165,7 +165,7 @@ func (s artifactData) query(ctx context.Context, p Params) (any, error) {
 	}
 	var q query.Query
 	if raw := p.String("q"); raw != "" {
-		if err := json.Unmarshal([]byte(raw), &q); err != nil {
+		if err := json.Unmarshal([]byte(raw), &q); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 			return nil, fmt.Errorf("%w: q is a query as JSON: %w", ErrBadParams, err)
 		}
 	}

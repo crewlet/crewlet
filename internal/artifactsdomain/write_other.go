@@ -53,7 +53,7 @@ func (w *Writer) AddAsset(ctx context.Context, c Call, in AssetInput) (Asset, Wr
 	}
 	res, err := w.publish(ctx, request(subject, scope, opID, statelog.PatternCreate,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			head, err := mustHead(ctx, tx, id)
+			head, err := mustHead(ctx, tx, id) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -61,6 +61,7 @@ func (w *Writer) AddAsset(ctx context.Context, c Call, in AssetInput) (Asset, Wr
 				return statelog.Decision{}, fmt.Errorf("%w: %s", ErrTrashed, id)
 			}
 			var count, bytes int64
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := tx.QueryRowContext(ctx, `
 				SELECT COUNT(*), COALESCE(SUM(size), 0) FROM artifact_assets
 				WHERE artifact_id = ? AND object IS NOT NULL`, id).Scan(&count, &bytes); err != nil {
@@ -73,7 +74,7 @@ func (w *Writer) AddAsset(ctx context.Context, c Call, in AssetInput) (Asset, Wr
 			if bytes+in.Object.Size > artifacts.MaxAssetBytesPerArtifact {
 				return statelog.Decision{}, fmt.Errorf("%w: artifact %s's assets would hold "+
 					"%d bytes and an asset store keeps at most %d", ErrInvalid, id,
-					bytes+in.Object.Size, int64(artifacts.MaxAssetBytesPerArtifact))
+					bytes+in.Object.Size, artifacts.MaxAssetBytesPerArtifact)
 			}
 			elsewhere, err := namedElsewhere(ctx, tx, "", in.Object.Key)
 			if err != nil {
@@ -111,7 +112,7 @@ func checkAsset(in AssetInput, at time.Time) (name, served string, err error) {
 	if err := in.Object.Validate(); err != nil {
 		return "", "", fmt.Errorf("%w: the asset's object: %w", ErrInvalid, err)
 	}
-	limit := int64(artifacts.MaxAssetBinaryBytes)
+	limit := artifacts.MaxAssetBinaryBytes
 	if typ.Text {
 		limit = artifacts.MaxAssetTextBytes
 	}
@@ -140,10 +141,10 @@ func (w *Writer) RemoveAsset(ctx context.Context, c Call, id artifacts.ID, asset
 	subject, scope := AssetSubject(id, asset.String()), ScopeSet{Subject: true}
 	res, err := w.publish(ctx, request(subject, scope, opID, statelog.PatternArbitrated,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			if _, err := mustHead(ctx, tx, id.String()); err != nil {
+			if _, err := mustHead(ctx, tx, id.String()); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 				return statelog.Decision{}, err
 			}
-			live, err := readAssets(ctx, tx, id.String(), asset.String())
+			live, err := readAssets(ctx, tx, id.String(), asset.String()) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -187,10 +188,11 @@ func (w *Writer) Pin(ctx context.Context, c Call, id artifacts.ID, pinned bool) 
 	subject, scope := ReaderSubject(record), readerScope(record, id)
 	res, err := w.publish(ctx, request(subject, scope, opID, statelog.PatternArbitrated,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			if _, err := mustHead(ctx, tx, id.String()); err != nil {
+			if _, err := mustHead(ctx, tx, id.String()); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 				return statelog.Decision{}, err
 			}
 			var held int
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := tx.QueryRowContext(ctx, `
 				SELECT COUNT(*) FROM artifact_pins WHERE seat = ? AND artifact_id = ?`,
 				record, id.String()).Scan(&held); err != nil {

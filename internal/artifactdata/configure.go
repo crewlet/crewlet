@@ -129,6 +129,7 @@ func planConfigure(ctx context.Context, tx *sql.Tx, s storeRow, present bool,
 		return configPlan{refusal: refuse(v, format, args...)}, nil
 	}
 	if r := checkAuthority(authority); r != nil {
+		//nolint:nilerr // A refusal is the plan's verdict, never the store's error.
 		return configPlan{refusal: r}, nil
 	}
 	if !authority.Role.Includes(artifacts.RoleEditor) {
@@ -197,9 +198,10 @@ func planConfigure(ctx context.Context, tx *sql.Tx, s storeRow, present bool,
 		if !held {
 			continue
 		}
-		affected, r, err := affectedFields(cur.spec, next)
-		if err != nil || r != nil {
-			return configPlan{refusal: r}, err
+		affected, r := affectedFields(cur.spec, next)
+		if r != nil {
+			//nolint:nilerr // A refusal is the plan's verdict, never the store's error.
+			return configPlan{refusal: r}, nil
 		}
 		reindex := !slices.Equal(slices.Sorted(slices.Values(cur.spec.Indexed)),
 			slices.Sorted(slices.Values(next.Indexed)))
@@ -228,6 +230,7 @@ func planConfigure(ctx context.Context, tx *sql.Tx, s storeRow, present bool,
 		for _, d := range docs {
 			d.reindex = reindex
 			if r := checkWhole(d); r != nil {
+				//nolint:nilerr // A refusal is the plan's verdict, never the store's error.
 				return configPlan{refusal: r}, nil
 			}
 		}
@@ -244,12 +247,12 @@ func sameRules(a, b artifacts.Collection) bool {
 // affectedFields is every top-level field whose values a collection's change
 // rewrites: a removed column's, and a retyped column's. A retype with no
 // coercion, and an option removed outright, refuse the change.
-func affectedFields(cur, next artifacts.Collection) ([]string, *refusal, error) {
+func affectedFields(cur, next artifacts.Collection) ([]string, *refusal) {
 	if cur.Columns == nil || next.Columns == nil {
 		// A SCHEMALESS COLLECTION GAINING A SCHEMA, or one losing it,
 		// rewrites nothing: reads are lenient, and the next whole write
 		// of a row holds it to whatever the schema then says.
-		return nil, nil, nil
+		return nil, nil
 	}
 	nextCols := map[string]artifacts.Column{}
 	for _, col := range next.Columns {
@@ -264,14 +267,14 @@ func affectedFields(cur, next artifacts.Collection) ([]string, *refusal, error) 
 		}
 		if !coercible(col.Type, n.Type) {
 			return nil, refuse(artifacts.DataInvalid, "column %s of %s cannot be retyped from %s "+
-				"to %s; add a column and copy into it", col.Key, next.Name, col.Type, n.Type), nil
+				"to %s; add a column and copy into it", col.Key, next.Name, col.Type, n.Type)
 		}
 		if hasOptions(col.Type) && hasOptions(n.Type) {
 			for _, o := range col.Options {
 				if !slices.ContainsFunc(n.Options, func(x artifacts.Option) bool { return x.ID == o.ID }) {
 					return nil, refuse(artifacts.DataInvalid, "column %s of %s drops option %q; "+
 						"archive it instead, so the rows that chose it keep their value",
-						col.Key, next.Name, o.ID), nil
+						col.Key, next.Name, o.ID)
 				}
 			}
 		}
@@ -280,7 +283,7 @@ func affectedFields(cur, next artifacts.Collection) ([]string, *refusal, error) 
 		}
 	}
 	slices.Sort(out)
-	return out, nil, nil
+	return out, nil
 }
 
 // migrationDocs is the live documents of a collection a change rewrites: every
@@ -460,7 +463,7 @@ func (a *Applier) writeConfigure(ctx context.Context, tx *sql.Tx, c applyContext
 		}
 		cur, exists := held[next.Name]
 		if !exists {
-			n, err := insertCollection(ctx, tx, c, s, newCollState(next, 0, false, false, 0))
+			n, err := insertCollection(ctx, tx, c, s, newCollState(next, 0, false, false, 0)) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			if err != nil {
 				return 0, 0, err
 			}

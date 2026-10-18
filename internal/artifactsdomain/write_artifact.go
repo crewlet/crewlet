@@ -69,7 +69,7 @@ func (w *Writer) Create(ctx context.Context, c Call, in CreateInput) (Published,
 	res, err := w.publish(ctx, request(subject, scope, opID, statelog.PatternCreate,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			if in.SourceKey != "" {
-				holder, held, err := sourceHolder(ctx, tx, in.Owner, SourceToken(in.SourceKey))
+				holder, held, err := sourceHolder(ctx, tx, in.Owner, SourceToken(in.SourceKey)) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 				if err != nil {
 					return statelog.Decision{}, err
 				}
@@ -77,12 +77,12 @@ func (w *Writer) Create(ctx context.Context, c Call, in CreateInput) (Published,
 					return statelog.Decision{}, fmt.Errorf("%w: %s holds it", ErrSourceTaken, holder)
 				}
 			}
-			if _, marked, err := deletionMarker(ctx, tx, id.String()); err != nil {
+			if _, marked, err := deletionMarker(ctx, tx, id.String()); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 				return statelog.Decision{}, err
 			} else if marked {
 				return statelog.Decision{}, fmt.Errorf("%w: %s", ErrPurged, id)
 			}
-			plan, refusal, err := planObjects(ctx, tx, id.String(), payload.Version.Manifest.Files, nil)
+			plan, refusal, err := planObjects(ctx, tx, id.String(), payload.Version.Manifest.Files, nil) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -262,7 +262,7 @@ func (w *Writer) Publish(ctx context.Context, c Call, in PublishInput) (Publishe
 	var number int
 	res, err := w.publish(ctx, request(subject, scope, opID, statelog.PatternArbitrated,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			head, err := mustHead(ctx, tx, id)
+			head, err := mustHead(ctx, tx, id) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -403,7 +403,7 @@ func (w *Writer) Patch(ctx context.Context, c Call, id artifacts.ID, p Patch) (W
 	subject, scope := ArtifactSubject(id), ScopeSet{Subject: true}
 	res, err := w.publish(ctx, request(subject, scope, opID, statelog.PatternArbitrated,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			head, err := mustHead(ctx, tx, id.String())
+			head, err := mustHead(ctx, tx, id.String()) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -511,7 +511,7 @@ func (w *Writer) Share(ctx context.Context, c Call, id artifacts.ID, s artifacts
 	subject, scope := ArtifactSubject(id), ScopeSet{Subject: true}
 	res, err := w.publish(ctx, request(subject, scope, opID, statelog.PatternArbitrated,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			head, err := mustHead(ctx, tx, id.String())
+			head, err := mustHead(ctx, tx, id.String()) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -549,10 +549,10 @@ func (w *Writer) Unshare(ctx context.Context, c Call, id artifacts.ID, a artifac
 	subject, scope := ArtifactSubject(id), ScopeSet{Subject: true}
 	res, err := w.publish(ctx, request(subject, scope, opID, statelog.PatternArbitrated,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			if _, err := mustHead(ctx, tx, id.String()); err != nil {
+			if _, err := mustHead(ctx, tx, id.String()); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 				return statelog.Decision{}, err
 			}
-			_, held, err := shareRole(ctx, tx, id.String(), a)
+			_, held, err := shareRole(ctx, tx, id.String(), a) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			if err != nil || !held {
 				return statelog.Decision{}, err
 			}
@@ -589,7 +589,7 @@ func (w *Writer) Transfer(ctx context.Context, c Call, id artifacts.ID, toSeat s
 		scope := sourcedScope(id, sourceID)
 		return request(subject, scope, opID, statelog.PatternArbitrated,
 			func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-				head, err := mustHead(ctx, tx, id.String())
+				head, err := mustHead(ctx, tx, id.String()) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 				if err != nil {
 					return statelog.Decision{}, err
 				}
@@ -634,7 +634,7 @@ func (w *Writer) status(ctx context.Context, c Call, id artifacts.ID, op OpKind)
 	subject, scope := ArtifactSubject(id), ScopeSet{Subject: true}
 	res, err := w.publish(ctx, request(subject, scope, opID, statelog.PatternArbitrated,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			head, err := mustHead(ctx, tx, id.String())
+			head, err := mustHead(ctx, tx, id.String()) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -704,8 +704,8 @@ func (w *Writer) purge(ctx context.Context, c Call, id artifacts.ID, guard func(
 	}
 	step := statelog.StepOpID(opID, "artifact")
 	var gone bool
-	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
-		head, found, err := readHeadTx(ctx, tx, id.String())
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml
+		head, found, err := readHeadTx(ctx, tx, id.String()) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		switch {
 		case err != nil:
 			return err
@@ -731,7 +731,7 @@ func (w *Writer) purge(ctx context.Context, c Call, id artifacts.ID, guard func(
 		return Written{}, err
 	}
 	if !gone {
-		if err := w.beginPurge(ctx, c, id, statelog.StepOpID(opID, "begin"), guard, at); err != nil {
+		if err := w.beginPurge(ctx, c, id, statelog.StepOpID(opID, "begin"), guard, at); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 			return Written{}, err
 		}
 	}
@@ -739,7 +739,7 @@ func (w *Writer) purge(ctx context.Context, c Call, id artifacts.ID, guard func(
 	if !gone && w.dependents != nil {
 		for i, d := range w.dependents() {
 			sub := statelog.StepOpID(opID, "dependent-"+strconv.Itoa(i))
-			if err := d.PurgeArtifactState(ctx, c, sub, id); err != nil {
+			if err := d.PurgeArtifactState(ctx, c, sub, id); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 				return Written{}, fmt.Errorf("artifactsdomain: purge %s's dependent state "+
 					"(step %d) before the artifact: %w", id, i, err)
 			}
@@ -751,7 +751,7 @@ func (w *Writer) purge(ctx context.Context, c Call, id artifacts.ID, guard func(
 		scope := sourcedScope(id, sourceID)
 		return request(subject, scope, step, statelog.PatternArbitrated,
 			func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-				head, found, err := readHeadTx(ctx, tx, id.String())
+				head, found, err := readHeadTx(ctx, tx, id.String()) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 				if err != nil {
 					return statelog.Decision{}, err
 				}
@@ -814,7 +814,7 @@ func (w *Writer) beginPurge(ctx context.Context, c Call, id artifacts.ID, opID s
 					StatusPayload{V: baseRecordVersion}, at)
 			})
 	})
-	if _, err := w.written(ctx, id, opID, res, err); err != nil {
+	if _, err := w.written(ctx, id, opID, res, err); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		return err
 	}
 	if res.Outcome == statelog.OutcomeUnknown {

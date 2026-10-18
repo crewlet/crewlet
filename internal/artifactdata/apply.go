@@ -303,7 +303,7 @@ func (a *Applier) commitRows(ctx context.Context, tx *sql.Tx, c applyContext, s 
 	rows += pruned
 	s.footprint = s.computeFootprint()
 	usage.footprint = s.footprint - before
-	if err := saveStore(ctx, tx, c, s); err != nil {
+	if err := saveStore(ctx, tx, c, s); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		return 0, err
 	}
 	n, err = addUsage(ctx, tx, usage)
@@ -575,6 +575,7 @@ func writeDoc(ctx context.Context, tx *sql.Tx, c applyContext, s *storeRow, d *d
 	// inserted in one statement each, which is cheaper than diffing paths
 	// and leaves no stale entry behind a path a value left.
 	if d.live0 || d.entries0 > 0 {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := tx.ExecContext(ctx, `
 			DELETE FROM artifact_data_fields WHERE store_no = ? AND collection_no = ? AND doc_id = ?`,
 			s.no, d.coll.no, d.id)
@@ -637,7 +638,7 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, c applyContext, ar
 		`DELETE FROM artifact_data_collections WHERE store_no = ?`,
 		`DELETE FROM artifact_data_stores WHERE store_no = ?`,
 	} {
-		res, err := tx.ExecContext(ctx, stmt, s.no)
+		res, err := tx.ExecContext(ctx, stmt, s.no) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			return 0, fmt.Errorf("artifactdata: purge store %s: %w", artifact, err)
 		}

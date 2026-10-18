@@ -253,7 +253,7 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		if p == "" {
 			p = defaultEntry(kind)
 		}
-		clean, refusal := files.cleanPath(p)
+		clean, refusal := files.cleanPath(p) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if refusal != nil {
 			return *refusal, nil
 		}
@@ -262,11 +262,11 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			return *refusal, nil
 		}
 	}
-	if refusal := files.parseFiles(ctx, args, false); refusal != nil {
+	if refusal := files.parseFiles(ctx, args, false); refusal != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		return *refusal, nil
 	}
 	if hasSource {
-		if refusal := files.addBoxDir(ctx, argString(source, "sandbox")); refusal != nil {
+		if refusal := files.addBoxDir(ctx, argString(source, "sandbox")); refusal != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 			return *refusal, nil
 		}
 	}
@@ -618,7 +618,7 @@ func (t *publishArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				return *refusal, nil
 			}
 		}
-		clean, refusal := files.cleanPath(p)
+		clean, refusal := files.cleanPath(p) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if refusal != nil {
 			return *refusal, nil
 		}
@@ -626,12 +626,12 @@ func (t *publishArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			return *refusal, nil
 		}
 	}
-	if refusal := files.parseFiles(ctx, args, true); refusal != nil {
+	if refusal := files.parseFiles(ctx, args, true); refusal != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		return *refusal, nil
 	}
 	if hasSource {
 		mode = manifest.ModeWhole
-		if refusal := files.addBoxDir(ctx, argString(source, "sandbox")); refusal != nil {
+		if refusal := files.addBoxDir(ctx, argString(source, "sandbox")); refusal != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 			return *refusal, nil
 		}
 	}
@@ -778,7 +778,7 @@ func (t *publishArtifact) stale(ctx context.Context, turn *turnctx.Turn, c artif
 			omitted = append(omitted, p)
 			continue
 		}
-		limit := min(int64(artifacts.ToolReadPageBytes), int64(budget))
+		limit := min(artifacts.ToolReadPageBytes, int64(budget))
 		text, complete, err := t.deps.Publisher.SourceText(ctx, e, limit)
 		if err != nil {
 			omitted = append(omitted, p)

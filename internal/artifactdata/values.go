@@ -320,7 +320,7 @@ func checkLoose(field string, v canon.Value, depth int) error {
 		}
 	case canon.KindNumber:
 		if _, err := finite(v.Number); err != nil {
-			return fmt.Errorf("%w: %s: %v", ErrInvalid, field, err)
+			return fmt.Errorf("%w: %s: %w", ErrInvalid, field, err)
 		}
 	case canon.KindArray:
 		for _, e := range v.Array {

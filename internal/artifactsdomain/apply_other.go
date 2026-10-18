@@ -66,6 +66,7 @@ func (a *Applier) addAsset(ctx context.Context, tx *sql.Tx, c applyContext, arti
 		return no(RefusedInvalid)
 	}
 	var existing int
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM artifact_assets WHERE artifact_id = ? AND asset_id = ?`,
 		artifact, asset).Scan(&existing); err != nil {
@@ -75,6 +76,7 @@ func (a *Applier) addAsset(ctx context.Context, tx *sql.Tx, c applyContext, arti
 		return no(RefusedExists)
 	}
 	var named int
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := tx.QueryRowContext(ctx, `
 		SELECT (SELECT COUNT(*) FROM artifact_objects WHERE object = ?) +
 		       (SELECT COUNT(*) FROM artifact_assets WHERE object = ?)`,
@@ -94,6 +96,7 @@ func (a *Applier) addAsset(ctx context.Context, tx *sql.Tx, c applyContext, arti
 		return no(RefusedQuotaBytes)
 	}
 	actor := c.record.actor()
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO artifact_assets
 			(artifact_id, asset_id, name, content_type, object, hash, size,
@@ -104,6 +107,7 @@ func (a *Applier) addAsset(ctx context.Context, tx *sql.Tx, c applyContext, arti
 		c.packed); err != nil {
 		return 0, fmt.Errorf("artifactsdomain: add asset %s to %s: %w", asset, artifact, err)
 	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE artifacts SET bytes_held = bytes_held + ?, updated_by = ?,
 			updated_by_kind = ?, updated_at = ?, version = ?
@@ -155,6 +159,7 @@ func (a *Applier) removeAsset(ctx context.Context, tx *sql.Tx, c applyContext, a
 	}
 	summary.Name, summary.Bytes = name, size
 	actor := c.record.actor()
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE artifact_assets SET object = NULL, removed_by = ?, removed_by_kind = ?,
 			removed_at = ?, version = ?
@@ -162,6 +167,7 @@ func (a *Applier) removeAsset(ctx context.Context, tx *sql.Tx, c applyContext, a
 		c.packed, artifact, asset); err != nil {
 		return 0, fmt.Errorf("artifactsdomain: remove asset %s of %s: %w", asset, artifact, err)
 	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE artifacts SET bytes_held = bytes_held - ?, updated_by = ?,
 			updated_by_kind = ?, updated_at = ?, version = ?
@@ -208,7 +214,7 @@ func (a *Applier) applyReader(ctx context.Context, tx *sql.Tx, c applyContext) (
 	}
 	seat := c.record.Subject.ID
 	if c.record.Op == OpUnpin {
-		res, err := tx.ExecContext(ctx,
+		res, err := tx.ExecContext(ctx, //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			`DELETE FROM artifact_pins WHERE seat = ? AND artifact_id = ?`, seat, p.Artifact)
 		if err != nil {
 			return 0, fmt.Errorf("artifactsdomain: unpin %s for %s: %w", p.Artifact, seat, err)

@@ -211,7 +211,7 @@ func (l *Lineages) machineToken(ctx context.Context, name string) (iam.Principal
 	default:
 		return iam.Principal{}, iam.Anonymous
 	}
-	p, unresolved, refusal := l.guard.machinePrincipal(ctx, id, row, now)
+	p, refusal, unresolved := l.guard.machinePrincipal(ctx, id, row, now)
 	switch {
 	case unresolved != nil:
 		return iam.Principal{}, iam.Unknown

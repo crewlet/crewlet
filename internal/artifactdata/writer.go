@@ -289,7 +289,7 @@ func (w *Writer) write(ctx context.Context, c Call, id artifacts.ID, in artifact
 	payload := WritePayload{V: baseRecordVersion, Write: in, Authority: c.Authority}
 	res, err := w.publisher.Publish(ctx, request(id, opID, statelog.PatternSequenced,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			if err := w.early(ctx, tx, id, in.Ops); err != nil {
+			if err := w.early(ctx, tx, id, in.Ops); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 				return statelog.Decision{}, err
 			}
 			return w.decision(stamp, c, StoreSubject(id), OpWrite, opID, payload)
@@ -382,7 +382,7 @@ func (w *Writer) verdict(ctx context.Context, c Call, id artifacts.ID, opID stri
 			&out.Seq, &out.Verdict, &out.Reason, &changes)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
-			_, marked, err := deletionMarker(ctx, tx, id.String())
+			_, marked, err := deletionMarker(ctx, tx, id.String()) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			gone = marked
 			return err
 		case err != nil:
@@ -525,7 +525,7 @@ func (w *Writer) undo(ctx context.Context, c Call, id artifacts.ID, seq int64) (
 	// appended: the apply marks a row undoable only when its inverse fits,
 	// and this keeps an undo from ever reaching the log as a record the log
 	// refuses.
-	if err := checkBatch(ops); err != nil {
+	if err := checkBatch(ops); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		return WriteResult{}, oversizeUndo(seq, err)
 	}
 	if limited := w.limits.take(id.String(), c.Authority.Actor.Name, Cost(ops)); limited != nil {
@@ -538,7 +538,7 @@ func (w *Writer) undo(ctx context.Context, c Call, id artifacts.ID, seq int64) (
 	payload := UndoPayload{V: baseRecordVersion, Undoes: seq, Ops: ops, Authority: c.Authority}
 	res, err := w.publisher.Publish(ctx, request(id, opID, statelog.PatternSequenced,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			if _, marked, err := deletionMarker(ctx, tx, id.String()); err != nil {
+			if _, marked, err := deletionMarker(ctx, tx, id.String()); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 				return statelog.Decision{}, err
 			} else if marked {
 				return statelog.Decision{}, fmt.Errorf("%w: %s", ErrGone, id)
@@ -586,7 +586,7 @@ func (w *Writer) inverse(ctx context.Context, c Call, id artifacts.ID, seq int64
 				ErrForbidden, seq, actor)
 		}
 		var chs []Change
-		if err := json.Unmarshal([]byte(changes), &chs); err != nil {
+		if err := json.Unmarshal([]byte(changes), &chs); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 			return fmt.Errorf("artifactdata: decode write %d of %s: %w", seq, id, err)
 		}
 		if undoable == 0 {
@@ -709,12 +709,12 @@ func (w *Writer) Configure(ctx context.Context, c Call, id artifacts.ID,
 	payload := ConfigurePayload{V: baseRecordVersion, Collections: compiled, Authority: c.Authority}
 	res, err := w.publisher.Publish(ctx, request(id, opID, statelog.PatternArbitrated,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			if _, marked, err := deletionMarker(ctx, tx, id.String()); err != nil {
+			if _, marked, err := deletionMarker(ctx, tx, id.String()); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 				return statelog.Decision{}, err
 			} else if marked {
 				return statelog.Decision{}, fmt.Errorf("%w: %s", ErrGone, id)
 			}
-			s, present, err := readStore(ctx, tx, id.String())
+			s, present, err := readStore(ctx, tx, id.String()) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			if err != nil {
 				return statelog.Decision{}, err
 			}

@@ -158,7 +158,7 @@ func (v *txView) collection(name string) (*collState, error) {
 			WHERE store_no = ? AND name = ?`, v.store.no, name).Scan(&no, &spec, &implicit, &docs)
 		switch {
 		case err == nil:
-			c, err := decodeSpec(spec)
+			c, err := decodeSpec(spec) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			if err != nil {
 				return nil, err
 			}
