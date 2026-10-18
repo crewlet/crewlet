@@ -209,3 +209,119 @@ func TestTheRuntimeContractIsResolvedAtPublish(t *testing.T) {
 		t.Fatalf("a markdown version pins %q", v.Contract)
 	}
 }
+
+// A WEB FONT'S STYLESHEET IS COPIED WITH THE FONTS IT NAMES, each held to its
+// format's bytes, and the copied stylesheet points at the copies.
+func TestAStylesheetIsCopiedWithItsFonts(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{})
+	h.cdn.set("/css2", "text/css", "@font-face { font-family: Inter; "+
+		"src: url(https://fonts.gstatic.com/s/inter/v13/inter.woff2) format('woff2'); }")
+	h.cdn.set("/s/inter/v13/inter.woff2", "font/woff2", "wOF2"+strings.Repeat("\x00", 32))
+	src := `<!doctype html><meta name="viewport" content="width=device-width">` +
+		`<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter">` +
+		`<style>@media (prefers-color-scheme: dark) { body { color: #eee } }</style><p>Fonts</p>`
+	got := h.create(h.person("ada", h.opKey("create")), map[string]string{"index.html": src})
+	v := h.version(got.Artifact, 1)
+	var css string
+	for _, e := range v.Manifest.Files {
+		if strings.HasPrefix(e.Path, "_vendor/fonts.googleapis.com/css2-") && strings.HasSuffix(e.Path, ".css") {
+			css = h.file(v, e.Path)
+			if !strings.Contains(h.file(v, "index.html"), `href="`+e.Path+`"`) {
+				t.Errorf("the page does not point at %s:\n%s", e.Path, h.file(v, "index.html"))
+			}
+		}
+	}
+	if !strings.Contains(css, `url("../fonts.gstatic.com/s/inter/v13/inter.woff2")`) {
+		t.Fatalf("the copied stylesheet reads %q", css)
+	}
+	if got := h.file(v, "_vendor/fonts.gstatic.com/s/inter/v13/inter.woff2"); !strings.HasPrefix(got, "wOF2") {
+		t.Fatalf("the font copy holds %q", got)
+	}
+
+	// A FONT THAT IS NOT ONE is refused with the page.
+	h.cdn.set("/s/inter/v14/inter.woff2", "font/woff2", "<html>not a font</html>")
+	h.cdn.set("/css2", "text/css", "@font-face { src: url(https://fonts.gstatic.com/s/inter/v14/inter.woff2) }")
+	_, _, err := h.svc.Create(t.Context(), h.person("ada", h.opKey("bad")), artifactupload.CreateRequest{
+		Kind: artifacts.KindHTML, Title: "x", Owner: "ada", OwnerKind: "human", Entry: "index.html",
+		Files: []artifactupload.FileSpec{{Path: "index.html",
+			Inline: []byte(`<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Other">`)}},
+	})
+	if !errors.Is(err, lint.ErrRefused) || !strings.Contains(err.Error(), "woff2") {
+		t.Fatalf("a polyglot font answered %v", err)
+	}
+}
+
+// A COPY NOTHING REFERENCES ANY MORE LEAVES THE VERSION: a page moved to
+// another release of a library holds that release's copy and not the old one.
+func TestACopyNothingReferencesLeavesTheVersion(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{})
+	created := h.create(h.person("ada", h.opKey("create")), map[string]string{"index.html": page})
+	// THE SOURCE NAMES THE COPY: an edit moving the copy's own path to a
+	// release the version does not hold is refused, the refusal saying to
+	// name the CDN file instead.
+	_, _, err := h.svc.Publish(t.Context(), h.person("ada", h.opKey("bump")), artifactupload.PublishRequest{
+		Artifact: created.Artifact, Base: 1, Mode: manifest.ModePatch,
+		Edits: []edits.Edit{{Old: `chart.js@4.4.1`, New: `chart.js@4.4.2`}},
+	})
+	if !errors.Is(err, lint.ErrRefused) || !strings.Contains(err.Error(), "CDN file's own URL") {
+		t.Fatalf("an edit pointing at a copy the version does not hold answered %v", err)
+	}
+	next, _, err := h.svc.Publish(t.Context(), h.person("ada", h.opKey("bump2")), artifactupload.PublishRequest{
+		Artifact: created.Artifact, Base: 1, Mode: manifest.ModePatch,
+		Files: []artifactupload.FileSpec{{Path: "index.html",
+			Inline: []byte(strings.ReplaceAll(page, "chart.js@4.4.1", "chart.js@4.4.2"))}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := h.version(created.Artifact, next.Number)
+	if _, ok := manifest.EntryAt(v.Manifest, "_vendor/cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"); !ok {
+		t.Fatal("the new release's copy is not in the version")
+	}
+	if _, ok := manifest.EntryAt(v.Manifest, "_vendor/cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"); ok {
+		t.Fatal("the old release's copy stayed in the version although nothing references it")
+	}
+}
+
+// EVERY FILE'S REFUSALS ARE ANSWERED TOGETHER, so an author fixes the whole
+// publish in one pass.
+func TestEveryFilesRefusalsAreAnsweredTogether(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{})
+	_, _, err := h.svc.Create(t.Context(), h.person("ada", h.opKey("create")), artifactupload.CreateRequest{
+		Kind: artifacts.KindHTML, Title: "x", Owner: "ada", OwnerKind: "human", Entry: "index.html",
+		Files: []artifactupload.FileSpec{
+			{Path: "index.html", Inline: []byte(`<script src="https://evil.example/a.js"></script>`)},
+			{Path: "app.mjs", Inline: []byte(`import x from "https://esm.sh/x";`)},
+		},
+	})
+	var refusal *lint.Refusal
+	if !errors.As(err, &refusal) || len(refusal.Findings) != 2 {
+		t.Fatalf("two refused files answered %v", err)
+	}
+	if len(h.stored()) != 0 {
+		t.Fatalf("a refused create stored %d objects", len(h.stored()))
+	}
+}
+
+// A VERSION'S TEXT IS READ BACK IN ITS AUTHOR'S FORM, a page of it cut at a
+// character.
+func TestSourceTextIsTheAuthorsForm(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{})
+	created := h.create(h.person("ada", h.opKey("create")), map[string]string{"index.html": page})
+	e, _ := manifest.EntryAt(h.version(created.Artifact, 1).Manifest, "index.html")
+	text, complete, err := h.svc.SourceText(t.Context(), e, artifacts.MaxConflictEntryText)
+	if err != nil || !complete {
+		t.Fatalf("SourceText = complete %v, %v", complete, err)
+	}
+	if strings.Contains(string(text), artifacts.NoncePlaceholder) || !strings.Contains(string(text), "<script>function go()") {
+		t.Fatalf("the source form reads\n%s", text)
+	}
+	cut, complete, err := h.svc.SourceText(t.Context(), e, 10)
+	if err != nil || complete || len(cut) > 10 {
+		t.Fatalf("a page of 10 bytes answered %q complete %v, %v", cut, complete, err)
+	}
+}

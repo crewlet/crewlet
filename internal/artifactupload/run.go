@@ -629,7 +629,13 @@ func (f *pending) produce(out []byte) {
 // carries) is carried from the base version where this publish did not copy it
 // again, and a base copy nothing references any more is dropped.
 func (r *run) carryVendored(ctx context.Context) error {
-	queue := []string{}
+	type ref struct {
+		path, from string
+		// fresh is a reference a file this publish brings new bytes for
+		// makes: one the version must hold.
+		fresh bool
+	}
+	queue := []ref{}
 	for _, p := range r.sortedPaths() {
 		f := r.files[p]
 		isHTML := f.typ.Essence() == "text/html"
@@ -637,8 +643,8 @@ func (r *run) carryVendored(ctx context.Context) error {
 		if (!isHTML && !isCSS) || strings.HasPrefix(p, VendorPrefix) {
 			continue
 		}
-		body := f.text
-		if f.carried || body == nil {
+		body, fresh := f.text, !f.carried && f.text != nil
+		if !fresh {
 			read, err := readObject(ctx, r.s.objects, f.entry.Object, true)
 			if err != nil {
 				return fmt.Errorf("artifactupload: read carried %q: %w", p, err)
@@ -653,26 +659,38 @@ func (r *run) carryVendored(ctx context.Context) error {
 				f.script = &policy
 			}
 		}
-		for _, ref := range lint.LocalRefs(p, body, isHTML) {
-			if strings.HasPrefix(ref, VendorPrefix) {
-				queue = append(queue, ref)
+		for _, local := range lint.LocalRefs(p, body, isHTML) {
+			if strings.HasPrefix(local, VendorPrefix) {
+				queue = append(queue, ref{path: local, from: p, fresh: fresh})
 			}
 		}
 	}
+	var missing []lint.Finding
 	for len(queue) > 0 {
-		p := queue[0]
+		next := queue[0]
 		queue = queue[1:]
-		if r.vendored[p] {
-			continue
-		}
-		r.vendored[p] = true
+		p := next.path
 		if r.files[p] != nil {
+			r.vendored[p] = true
 			continue
 		}
 		e, held := r.sourceEntry(p)
 		if !held {
+			// A COPY THE VERSION DOES NOT HOLD, named by bytes this publish
+			// brings: an author pointing at the engine's folder by hand,
+			// or an edit that changed a copy's path. A page carried as it
+			// was is not refused for what it already referenced.
+			if next.fresh {
+				missing = append(missing, lint.Finding{Path: next.from, Code: lint.CodeVendorFailed,
+					Message: fmt.Sprintf("the file references %s, a copy of a CDN file this version "+
+						"does not hold; reference the CDN file's own URL and the engine copies it in", p)})
+			}
 			continue
 		}
+		if r.vendored[p] {
+			continue
+		}
+		r.vendored[p] = true
 		typ, err := typeOf(p, e.ContentType)
 		if err != nil {
 			return err
@@ -684,12 +702,15 @@ func (r *run) carryVendored(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("artifactupload: read carried %q: %w", p, err)
 			}
-			for _, ref := range lint.LocalRefs(p, body, false) {
-				if strings.HasPrefix(ref, VendorPrefix) {
-					queue = append(queue, ref)
+			for _, local := range lint.LocalRefs(p, body, false) {
+				if strings.HasPrefix(local, VendorPrefix) {
+					queue = append(queue, ref{path: local, from: p})
 				}
 			}
 		}
+	}
+	if len(missing) > 0 {
+		return &lint.Refusal{Findings: missing}
 	}
 	if r.hasBase {
 		for _, e := range r.base.Manifest.Files {

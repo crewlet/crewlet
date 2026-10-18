@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // UploadNamespace scopes the derivation of an upload's id from the operation
@@ -75,6 +76,17 @@ func (s *Service) intend(ctx context.Context, c artifactsdomain.Call, id artifac
 		p = purposeAsset
 	case id.IsZero():
 		p = purposeCreate
+	}
+	if !id.IsZero() {
+		// NOTHING IS RESERVED FOR AN ARTIFACT THAT CANNOT TAKE IT: one this
+		// node's copy holds no head for, or one in the trash.
+		head, _, err := s.reads.Artifact(ctx, id, statelog.Freshness{Level: statelog.ReadStale})
+		if err != nil {
+			return artifacts.UploadIntent{}, err
+		}
+		if head.Status == artifactsdomain.StatusTrashed {
+			return artifacts.UploadIntent{}, fmt.Errorf("%w: %s", artifactsdomain.ErrTrashed, id)
+		}
 	}
 	plan, err := s.planIntent(ctx, p, id, req)
 	if err != nil {
