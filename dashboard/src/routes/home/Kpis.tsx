@@ -43,11 +43,28 @@ import {
   type Waiting,
 } from "./model.ts";
 
+/**
+ * The five figures, in the order the row draws them by default. A board's
+ * Figure widget names one of them by this id, so an id is never renamed.
+ */
+export const KPI_IDS = ["agents", "waiting", "progress", "completed", "tokens"] as const;
+export type KpiId = (typeof KPI_IDS)[number];
+
+/** What each figure is called where it is offered on its own. */
+export const KPI_LABELS: Record<KpiId, string> = {
+  agents: "Agents working now",
+  waiting: "Waiting on your decision",
+  progress: "Tasks in progress",
+  completed: "Completed",
+  tokens: "Tokens",
+};
+
 /** How many days of the series the in-progress sparkline draws, and how far
  *  back its delta compares: a week. */
 const WEEK = 7;
 
 export function Kpis({
+  figures = KPI_IDS,
   range,
   crew,
   viewer,
@@ -57,6 +74,8 @@ export function Kpis({
   spend,
   now,
 }: {
+  /** The figures to draw, in this order: all five unless a widget names fewer. */
+  figures?: readonly KpiId[];
   range: HomeRange;
   crew: Crew;
   viewer: ViewerState;
@@ -66,16 +85,34 @@ export function Kpis({
   spend: QueryResult<TokenSeries>;
   now: number;
 }) {
+  const tile = (id: KpiId) => {
+    switch (id) {
+      case "agents":
+        return <AgentsTile crew={crew} />;
+      case "waiting":
+        return <WaitingTile viewer={viewer} waiting={waiting} error={waitingError} now={now} />;
+      case "progress":
+        return <InProgressTile flow={flow} locked={trackerLocked(viewer)} />;
+      case "completed":
+        return <CompletedTile flow={flow} range={range} locked={trackerLocked(viewer)} />;
+      case "tokens":
+        // WHO MAY SET A BUDGET is whoever may write the company's configuration
+        // (Admin, the access a ceiling is written under, and on a managed
+        // document one of its writers), never a kind of credential.
+        return <TokensTile spend={spend} range={range} mayConfigure={mayChangeConfig(viewer)} />;
+    }
+  };
+  // THE ROW'S COLUMNS ARE ITS FIGURES', so one figure on its own fills its
+  // cell rather than a fifth of it (`data-count`, `screens.css`).
   return (
-    <section className="home-kpis" aria-label="The company at a glance">
-      <AgentsTile crew={crew} />
-      <WaitingTile viewer={viewer} waiting={waiting} error={waitingError} now={now} />
-      <InProgressTile flow={flow} locked={trackerLocked(viewer)} />
-      <CompletedTile flow={flow} range={range} locked={trackerLocked(viewer)} />
-      {/* WHO MAY SET A BUDGET is whoever may write the company's configuration
-          — Admin, the access a ceiling is written under, and on a
-          managed document one of its writers — never a kind of credential. */}
-      <TokensTile spend={spend} range={range} mayConfigure={mayChangeConfig(viewer)} />
+    <section
+      className="home-kpis"
+      data-count={figures.length}
+      aria-label={figures.length === 1 ? KPI_LABELS[figures[0]!] : "The company at a glance"}
+    >
+      {figures.map((id) => (
+        <Fragment key={id}>{tile(id)}</Fragment>
+      ))}
     </section>
   );
 }

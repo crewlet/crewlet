@@ -7887,10 +7887,9 @@ a.work-cal-chip {
 
 /* ---- Home --------------------------------------------------------------- */
 
-/* THE LANDING SCREEN, the design's Main board: a head, five figures, the
-   decisions beside who is working, three cards of how the work is going, and
-   the feed. Rows are grids so each card keeps its column at every width, and
-   each collapses on its own breakpoint rather than the page reflowing as one. */
+/* THE LANDING SCREEN: a head, and under it the reader's board, which until
+   they arrange it is the design's Main board (five figures, the decisions
+   beside who is working, three cards of how the work is going, and the feed). */
 .home {
   display: flex;
   flex-direction: column;
@@ -7942,44 +7941,38 @@ a.work-cal-chip {
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: var(--spacing-3);
 }
+/* FEWER FIGURES, FEWER COLUMNS: a board's Figure widget draws one or a few of
+   the five, and each takes its share of the cell rather than a fifth of it. */
+.home-kpis[data-count="1"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.home-kpis[data-count="2"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.home-kpis[data-count="3"] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.home-kpis[data-count="4"] {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
 
-/* A second line's facts stay whole — see `Parts` in Kpis.tsx. */
+/* A second line's facts stay whole: see `Parts` in Kpis.tsx. */
 .home-kpi-part {
   white-space: nowrap;
 }
 
-.home-row {
-  display: grid;
-  gap: var(--spacing-4);
-  align-items: start;
-}
-/* The decisions are the wider of the pair: the design's 1.62 : 1. */
-.home-row-main {
-  grid-template-columns: minmax(0, 1.62fr) minmax(0, 1fr);
-}
-.home-row-three {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-.home-row > .home-card {
-  height: 100%;
-}
-
 /* 928px IS FIVE TILES' FLOOR: a tile's value line holds the figure and the
    kit's 96px trend slot inside 16px of padding each side, 176px, and five of
-   them take four 12px gaps. Below it the figures fold to three a row and the
-   paired cards stack, since the decisions card's buttons need the width the
-   live column would take. */
+   them take four 12px gaps. Below it the figures fold to three a row, and the
+   board's blocks stack (`STACKS_BELOW` in `routes/home/Home.tsx`), since the
+   decisions card's buttons need the width the live column would take. */
 @container page (width < 928px) {
-  .home-kpis {
+  .home-kpis:is([data-count="4"], [data-count="5"]) {
     grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-  .home-row-main,
-  .home-row-three {
-    grid-template-columns: minmax(0, 1fr);
   }
 }
 @container page (width < 640px) {
-  .home-kpis {
+  .home-kpis[data-count] {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -8021,6 +8014,430 @@ a.work-cal-chip {
   flex-direction: column;
   gap: var(--spacing-1);
   padding: var(--spacing-3) var(--spacing-4);
+  border-top: 1px solid var(--color-border-default);
+}
+
+/* ---- Home's board ------------------------------------------------------ */
+
+/* THE READER'S BOARD (`routes/home/board/`): blocks on twelve columns, each
+   spanning its own width, in groups or on the page. Measured from the page
+   column; below Home's stacking width every block spans the page
+   (`data-stacked`, set from the page's own width in `Home.tsx`). The chrome
+   of a block being arranged (its ring, toolbar, resize handles and the column
+   lanes) is the design system's ArrangeFrame and ArrangeBoard. */
+.home-board-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--spacing-4);
+  align-items: stretch;
+}
+.home-board-cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.home-board-cell > .home-card {
+  flex: 1 1 auto;
+}
+
+.home-pinned-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(17rem, 100%), 1fr));
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: var(--spacing-3) var(--spacing-4) var(--spacing-4);
+  list-style: none;
+}
+.home-pinned-grid > li {
+  display: flex;
+  min-width: 0;
+}
+.home-pinned-grid > li > * {
+  flex: 1 1 auto;
+}
+.home-pinned-empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) var(--spacing-4) var(--spacing-4);
+  border-top: 1px solid var(--color-border-default);
+}
+.home-pinned-empty-text {
+  flex: 1 1 22rem;
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.home-pinned-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
+/* The edit bar. */
+
+.home-editbar {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+.home-editbar-done {
+  margin-inline-start: var(--spacing-1);
+}
+/* How much is unsaved: a live dot and a few words. */
+.home-editbar-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding-inline: var(--spacing-2);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.home-editbar-sep {
+  flex: 0 0 auto;
+  width: 1px;
+  height: var(--spacing-5);
+  background: var(--color-border-default);
+}
+
+/* The board while it is arranged. */
+
+/* More room between rows while editing: each toolbar sits on its widget's
+   top edge, half in the gap above it. */
+.home-board.is-editing .home-board-grid,
+.home-group-body {
+  row-gap: var(--spacing-5);
+}
+
+/* Widgets. */
+
+.home-board-cell--bare {
+  justify-content: center;
+}
+
+/* Words with no card of their own start where a card's words do: a card's
+   padding in from the column's edge, past its 1px border. The divider's rule
+   keeps the same inset at both ends, so it reads as part of that column. */
+.home-block-heading,
+.home-block-divider {
+  padding-inline: calc(var(--spacing-4) + 1px);
+}
+
+.home-block-note {
+  height: 100%;
+}
+
+.home-block-heading {
+  margin: 0;
+  padding-block: var(--spacing-1);
+  color: var(--color-text-primary);
+  text-wrap: balance;
+}
+.home-block-heading--center {
+  text-align: center;
+}
+
+.home-block-divider {
+  min-height: var(--size-row-lg);
+}
+
+.home-block-links-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: var(--spacing-2) var(--spacing-4) var(--spacing-4);
+  list-style: none;
+}
+.home-block-link {
+  font-size: var(--font-size-sm);
+}
+
+/* The tray. */
+
+/* The sheet's body is a column that scrolls; nothing in it may shrink. */
+.home-tray-tabs,
+.home-tray {
+  flex-shrink: 0;
+}
+.home-tray {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+}
+.home-tray-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+.home-tray-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.home-tray-title {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--font-letter-spacing-wide);
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+}
+.home-tray-hint {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+.home-tray-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(13rem, 100%), 1fr));
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.home-tray-grid > li {
+  display: flex;
+}
+.home-tray-grid .home-tray-tile {
+  flex: 1 1 auto;
+  width: 100%;
+  font: inherit;
+  color: inherit;
+}
+.home-tray-grid .home-tray-tile.is-placed {
+  cursor: default;
+  opacity: 0.55;
+}
+/* The tile's own row: the icon beside the words, both from the top. */
+.home-tray-tile-inner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-3);
+  width: 100%;
+  text-align: start;
+}
+.home-tray-tile-text,
+.home-tray-template-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  text-align: start;
+}
+.home-tray-tile-name {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+.home-tray-tile-desc {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+.home-tray-tile-state {
+  margin-top: var(--spacing-1);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-tertiary);
+}
+
+.home-tray-templates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.home-tray-template {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+}
+.home-tray-template-text {
+  align-items: flex-start;
+  gap: var(--spacing-1);
+}
+
+/* Settings. */
+
+.home-settings-shape {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-4);
+}
+.home-settings-links {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+.home-settings-link-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto;
+  align-items: end;
+  gap: var(--spacing-2);
+}
+
+/* Contributed widgets (board/kit.tsx). */
+
+/* The card a section's widget is drawn in fills its cell, so a widget whose
+   height the reader set scrolls inside its own card. */
+.home-widget {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.home-widget-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+/* Content that is not a list of rows takes the card's own inset. */
+.home-widget-pad {
+  padding: var(--spacing-3) var(--spacing-4) var(--spacing-4);
+}
+.home-widget-open {
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
+/* A page shortcut: the page's mark, its name and the sidebar's sentence. */
+/* A Card is a column; the shortcut is a row, its mark beside its words. */
+.home-shortcut {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--spacing-3);
+  height: 100%;
+  color: inherit;
+  text-decoration: none;
+}
+.home-shortcut-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.home-shortcut-name {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+.home-shortcut-hint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+/* The widget being added, as it will draw, under its choices. */
+.home-settings-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin-top: var(--spacing-2);
+}
+
+/* The tracker's widgets (Work, My work, Inbox): a task or a notice as one
+   line of the design system's list, inside the widget's card. */
+/* The rows sit on the card's own inset, under a hairline from its header. */
+.home-tasks {
+  border-top: 1px solid var(--color-border-default);
+}
+
+/* A task: its key in the mono face, then its name, cut to the line it has. */
+.home-tasks-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
+  min-width: 0;
+  font-size: var(--font-size-compact);
+}
+.home-tasks-key {
+  flex: none;
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+.home-tasks-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A notice or an ask: what it says, and under it where and from whom. */
+.home-tasks-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: var(--font-size-compact);
+}
+.home-tasks-meta {
+  overflow: hidden;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-tasks-when {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* A project's meter with its percentage at the end of the same line. */
+.home-tasks-project {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+.home-tasks-meter {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+.home-tasks-meter > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.home-tasks-pct {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+/* What the project holds, when it is due and when it last moved, in one line. */
+.home-tasks-census {
+  margin: 0;
+  white-space: normal;
+}
+
+/* A list row's title over the caption that says whose it is and when. */
+.home-widget-line {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+}
+/* A seat's own card is the widget, so it fills the cell it is placed in. */
+.home-agents-seat {
+  display: flex;
+  height: 100%;
+}
+.home-agents-seat > .seat-card {
+  flex: 1 1 auto;
+}
+/* A flush row of figures sits on the widget's card, with one hairline under
+   it where a list follows. */
+.home-admin-stats + .home-admin-list {
   border-top: 1px solid var(--color-border-default);
 }
 

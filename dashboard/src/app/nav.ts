@@ -182,6 +182,14 @@ export interface WorkspaceRow {
   /** The reader's own, as [Section.personal]: the Account. */
   personal?: boolean;
   /**
+   * NO STAR IN THE BAR on this workspace's pages. A workspace's own page is a
+   * sidebar row already, and the frame draws its star there unavailable only
+   * so the bar holds still between the workspace's sections; a workspace with
+   * no sections has nothing to hold still for, and its bar carries its own
+   * controls instead (Home's Edit Home).
+   */
+  starless?: boolean;
+  /**
    * A sentence at the end of the section tabs that holds for every section —
    * how to read what the workspace draws. It gives way to the tabs: drawn only
    * where the strip has room for it beside every tab (`noteFits` in
@@ -257,6 +265,7 @@ export const WORKSPACES: WorkspaceRow[] = [
     place: "you",
     renderer: "none",
     sections: [],
+    starless: true,
   },
   {
     key: "inbox",

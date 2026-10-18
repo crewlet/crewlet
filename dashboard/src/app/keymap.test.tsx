@@ -286,7 +286,7 @@ describe("binding a row", () => {
     expect(matchesRow("search.create", mac)).toBe(false);
     // And a row that names no Alt refuses one: Alt+Z is not undo.
     const altZ = new KeyboardEvent("keydown", { key: "z", ctrlKey: true, altKey: true });
-    expect(matchesRow("builder.undo", altZ)).toBe(false);
+    expect(matchesRow("draft.undo", altZ)).toBe(false);
   });
 
   test("an Alt row cannot be a window chord", () => {
@@ -297,12 +297,12 @@ describe("binding a row", () => {
     const undo = new KeyboardEvent("keydown", { key: "z", ctrlKey: true });
     const redo = new KeyboardEvent("keydown", { key: "Z", ctrlKey: true, shiftKey: true });
     const russian = new KeyboardEvent("keydown", { key: "я", code: "KeyZ", metaKey: true });
-    expect(matchesRow("builder.undo", undo)).toBe(true);
-    expect(matchesRow("builder.redo", undo)).toBe(false);
-    expect(matchesRow("builder.redo", redo)).toBe(true);
-    expect(matchesRow("builder.undo", redo)).toBe(false);
-    expect(matchesRow("builder.undo", russian)).toBe(true);
-    expect(matchesRow("builder.undo", new KeyboardEvent("keydown", { key: "z" }))).toBe(false);
+    expect(matchesRow("draft.undo", undo)).toBe(true);
+    expect(matchesRow("draft.redo", undo)).toBe(false);
+    expect(matchesRow("draft.redo", redo)).toBe(true);
+    expect(matchesRow("draft.undo", redo)).toBe(false);
+    expect(matchesRow("draft.undo", russian)).toBe(true);
+    expect(matchesRow("draft.undo", new KeyboardEvent("keydown", { key: "z" }))).toBe(false);
   });
 });
 
@@ -351,10 +351,10 @@ describe("a screen's search", () => {
 describe("the table is the only way a key is bound", () => {
   const LISTENERS: Record<string, string> = {
     "lib/keys.ts": "the mechanism useKeymap is built on",
+    "lib/useUndoKeys.ts":
+      "undo and redo of a draft, scoped to presses from inside its surface; it reads its keys with matchesRow",
     "routes/artifacts/ArtifactPage.tsx":
       "follow mode's stop, on the element of the artifact's body only: it binds nothing (no press is prevented, the browser's own scroll keys still scroll) and reads a navigation key as the reader moving the view themselves, as it reads a wheel, a touch drag or a press beside it",
-    "routes/org/builder/Builder.tsx":
-      "undo and redo, scoped to presses from inside the builder; it reads its keys with matchesRow",
     "runtime/runtime.ts":
       "the page runtime's Mod+Escape, inside an artifact's own document on its own origin, where no keymap of the frame's runs",
   };
@@ -387,7 +387,10 @@ describe("the table is the only way a key is bound", () => {
       });
     }
     expect([...listening].sort()).toEqual(Object.keys(LISTENERS).sort());
-    const builder = modules().find((m) => m.path === "routes/org/builder/Builder.tsx")!;
-    expect(builder.text).toContain('matchesRow("builder.undo"');
+    const undoKeys = modules().find((m) => m.path === "lib/useUndoKeys.ts")!;
+    expect(undoKeys.text).toContain('matchesRow("draft.undo", e)');
+    for (const surface of ["routes/org/builder/Builder.tsx", "routes/home/Home.tsx"]) {
+      expect(modules().find((m) => m.path === surface)!.text).toContain("useUndoKeys(");
+    }
   });
 });

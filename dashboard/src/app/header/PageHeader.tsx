@@ -148,6 +148,10 @@ export function PageHeader({
   const edges = useScrollEdges(controls);
   // WORK'S SCOPE PAGES: All projects' lenses, or a project's.
   const at = scopeAt(route.path, route.query);
+  // THE FRAME'S STAR: not on Work's scope pages (see the module doc), not
+  // where the screen's own menu carries it, and not in a workspace that draws
+  // none (`WorkspaceRow.starless`).
+  const framesStar = star && !at && !row?.starless;
   return (
     <div className="page-head">
       <AppShell.Topbar className="page-bar">
@@ -170,9 +174,8 @@ export function PageHeader({
           {working && <WorkingNow />}
           {/* THE FRAME'S OWN STAR, drawn inline on a wide bar and folded
               into "More" on a phone (see `PageMore`), where the bar keeps one
-              action in view. Not on Work's scope pages (see the module doc),
-              and not where the screen's own menu carries the star. */}
-          {star && !at && (
+              action in view, wherever `framesStar` says the frame draws one. */}
+          {framesStar && (
             <span className="page-frame-actions">
               <StarPage path={route.path} label={title} workspace={workspace} />
             </span>
@@ -185,7 +188,7 @@ export function PageHeader({
             label={title}
             workspace={workspace}
             entries={menu}
-            star={star && !at}
+            star={framesStar}
           />
           <div className="row gap-2 wrap page-actions" id={PAGE_ACTIONS_SLOT} />
         </div>

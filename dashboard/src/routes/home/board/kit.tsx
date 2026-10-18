@@ -1,0 +1,225 @@
+/**
+ * What a section of the dashboard needs to offer widgets for Home: the
+ * contribution API, and the card every contributed widget is drawn in.
+ *
+ * A SECTION OFFERS ITS OWN WIDGETS. Each one lives beside the screen it
+ * summarises, in a `*.widgets.tsx` file exporting `widgets = defineWidgets([...])`,
+ * and Home finds every such file at build time (`registry.tsx`). A section
+ * added next year offers widgets by adding that one file: nothing in Home, the
+ * tray or the board's storage changes, and a reader sees the new widgets in
+ * the tray under the section's own name.
+ *
+ * A WIDGET NAMES THE PAGE IT COMES FROM (`from`, a key of the navigation's
+ * `DESTINATIONS`), and takes everything it does not need to say from there:
+ * the tray category it is listed under, the access that opens it, and where
+ * its card's Open link goes. So a widget can never be readable by someone its
+ * page refuses, and the access rule lives in one place, the navigation.
+ *
+ * A WIDGET READS, IT DOES NOT ADMINISTER. It answers "is anything wrong or
+ * waiting?" with the same queries its page asks, and links to the page for
+ * anything that writes; a form or a step-up never moves onto Home.
+ */
+
+import type { ComponentType, ReactNode } from "react";
+import type { GlyphProps } from "@crewlethq/icons/glyphs";
+import { Card, type NodeHue } from "@crewlethq/ui";
+import { DESTINATIONS, WORKSPACES, type Destination } from "~/app/nav.ts";
+import { holdsAny } from "~/lib/access.ts";
+import { href, useParam } from "~/app/router.tsx";
+import { DEFAULT_RANGE, rangeOf } from "~/routes/home/model.ts";
+
+/** One choice a widget's setting offers: a saved view, a project, a seat. */
+export interface WidgetOption {
+  value: string;
+  label: string;
+}
+
+export interface WidgetChoices {
+  options: readonly WidgetOption[];
+  loading: boolean;
+  /** Said when there is nothing to choose from: "No saved views yet." */
+  empty?: string;
+}
+
+/**
+ * Something the reader chooses for one copy of a widget: which saved view it
+ * lists, which project it follows. Its choices are read live, by a hook, so a
+ * picker asks the engine the same question the section's own screen asks.
+ */
+export interface WidgetParam {
+  key: string;
+  label: string;
+  helper?: string;
+  useChoices: () => WidgetChoices;
+}
+
+export interface WidgetProps {
+  /** The reader's choices for this copy, by `WidgetParam.key`; checked against the choices before use. */
+  params: Readonly<Record<string, string>>;
+}
+
+export interface WidgetSize {
+  /** Columns of twelve it is added at. */
+  w: number;
+  /** The narrowest it reads at. */
+  minW: number;
+  /** The shortest it reads at, in rows of 16px, when its height is set. */
+  minH: number;
+  /** Whether a reader may set its height (a list may scroll; a figure may not). */
+  vertical: boolean;
+}
+
+export interface WidgetDef {
+  /** `<workspace>.<name>`, stored in every board that holds it, so never renamed: `settings.backups`. */
+  key: string;
+  /** The page it summarises, a key of `DESTINATIONS`: `settings-backups`. */
+  from: string;
+  label: string;
+  /** One short line on what it shows, for the tray. */
+  description: string;
+  icon: ComponentType<GlyphProps>;
+  /** Its tint in the tray. Decorative, per widget. */
+  hue: NodeHue;
+  size: WidgetSize;
+  /** At most one on a board: a card drawn twice is one fact drawn twice. */
+  once?: boolean;
+  params?: readonly WidgetParam[];
+  /** What this copy is called, when its params name it: "Waiting on your decision". */
+  nameOf?: (params: Readonly<Record<string, string>>) => string | undefined;
+  Component: ComponentType<WidgetProps>;
+}
+
+const KEY = /^[a-z]+(\.[a-z0-9-]+)+$/;
+const PARAM = /^[a-z][a-z0-9-]{0,30}$/;
+
+/** The page a widget names. */
+export function destinationOf(from: string): Destination | undefined {
+  return DESTINATIONS.find((d) => d.key === from);
+}
+
+/** Whether a reader holding `grants` may open a page: its workspace's grants and its own, as the sidebar locks them. */
+export function pageOpens(dest: Destination, grants: readonly string[]): boolean {
+  const row = WORKSPACES.find((w) => w.key === dest.workspace);
+  return holdsAny(grants, row?.grants) && holdsAny(grants, dest.grants);
+}
+
+/** A page's name with its workspace's, for a list of every page: "Settings › Backups & retention". */
+export function pageName(dest: Destination): string {
+  const row = WORKSPACES.find((w) => w.key === dest.workspace);
+  return row && row.label !== dest.label ? `${row.label} › ${dest.label}` : dest.label;
+}
+
+/**
+ * Every contribution refused so far, in words. A suite asserts it is empty,
+ * so a widget that names a page the navigation does not have fails the build;
+ * at run time the refused widget is left out and the rest of Home draws.
+ */
+export const WIDGET_PROBLEMS: string[] = [];
+
+/** What is wrong with one contribution, or nothing. */
+function problemsOf(d: WidgetDef): string[] {
+  const problems: string[] = [];
+  const dest = destinationOf(d.from);
+  if (!KEY.test(d.key)) problems.push(`${d.key}: a key is <workspace>.<name>, lowercase.`);
+  if (!dest) problems.push(`${d.key}: "${d.from}" is not a page in the navigation.`);
+  else if (!d.key.startsWith(`${dest.workspace}.`))
+    problems.push(`${d.key}: its key starts with its page's workspace, "${dest.workspace}.".`);
+  const { w, minW, minH } = d.size;
+  if (!(minW >= 2 && minW <= w && w <= 12)) problems.push(`${d.key}: 2 <= minW <= w <= 12.`);
+  if (!(minH >= 2 && minH <= 40)) problems.push(`${d.key}: minH is between 2 and 40 rows.`);
+  const keys = new Set<string>();
+  for (const p of d.params ?? []) {
+    if (!PARAM.test(p.key) || keys.has(p.key))
+      problems.push(`${d.key}: param "${p.key}" is a unique lowercase key.`);
+    keys.add(p.key);
+  }
+  return problems;
+}
+
+/**
+ * A section's widgets, checked as the module loads. ONE BAD CONTRIBUTION
+ * COSTS ONLY ITSELF: a widget that fails its check is reported and left out,
+ * rather than a throw that would take every widget, and Home, down with it.
+ */
+export function defineWidgets(defs: WidgetDef[]): readonly WidgetDef[] {
+  return defs.filter((d) => {
+    const problems = problemsOf(d);
+    if (problems.length === 0) return true;
+    WIDGET_PROBLEMS.push(...problems);
+    console.error(`Home widget left out:\n${problems.join("\n")}`);
+    return false;
+  });
+}
+
+/**
+ * The card a contributed widget is drawn in: the shipped Home card, with the
+ * widget's name and a link to the page it summarises.
+ *
+ * A widget that IS a card already (a shipped `SeatCard`, a `StatGroup` of
+ * tiles) draws itself without this one: a card inside a card is a double
+ * border.
+ */
+export function WidgetCard({
+  title,
+  from,
+  query,
+  actions,
+  children,
+}: {
+  title: ReactNode;
+  /** The page it summarises; its Open link goes there. */
+  from: string;
+  /** What the Open link narrows that page to, as the widget does: `{ blocked: "1" }`. */
+  query?: Record<string, string>;
+  /** Controls for the header, in place of the Open link. */
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  const dest = destinationOf(from);
+  return (
+    <Card padding="none" className="home-card home-widget">
+      <Card.Header
+        actions={
+          actions ??
+          (dest ? (
+            // "Open" alone, named in full for a screen reader: a page's label
+            // after a verb reads oddly ("Open Asked of me").
+            <a
+              className="t-link home-widget-open"
+              href={href(dest.path, query)}
+              aria-label={`Open ${pageName(dest)}`}
+            >
+              Open
+            </a>
+          ) : null)
+        }
+      >
+        <Card.Title as="h3">{title}</Card.Title>
+      </Card.Header>
+      <div className="home-widget-body">{children}</div>
+    </Card>
+  );
+}
+
+/**
+ * Home's range (Today, 7 days, 30 days), for a widget with a time axis: the
+ * page's one range control moves every such widget at once.
+ */
+export function useHomeRange() {
+  const [value] = useParam("range", DEFAULT_RANGE);
+  return rangeOf(value);
+}
+
+/** A widget's note in place of its content. */
+export function WidgetNote({ children }: { children: ReactNode }) {
+  return <p className="home-card-note">{children}</p>;
+}
+
+/**
+ * The note a widget draws when its choice is missing or no longer exists (a
+ * saved view deleted, a seat taken off the chart): one sentence for every
+ * widget, saying where the choice is made.
+ */
+export function ChoiceNote({ thing }: { thing: string }) {
+  return <WidgetNote>{`Choose a ${thing} in Edit Home.`}</WidgetNote>;
+}
