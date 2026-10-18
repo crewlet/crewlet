@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // EVERY CLIENT RENDERS THE HINT, because the hint is the half that says what
@@ -260,6 +262,50 @@ func TestAnUnseatedRefusalNamesTheTokenAndTheBinding(t *testing.T) {
 		"crewlet iam bind ID SEAT"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("an unseated refusal reads %q, want it to say %q", msg, want)
+		}
+	}
+}
+
+// A RULE NO GRANT LIFTS IS SAID IN THE NODE'S OWN WORDS FOR IT, and one a grant
+// does lift names the grant.
+//
+// The renderer answered every refusal with no grants by its reason's bare word
+// ("this token isn't allowed to do this (reason)"), and its own comment said
+// what was missing was a relation — for an account that is not active and a
+// verb only an agent's seat makes, it was neither. The node's `message`
+// follows the reason now, so it is what the operator reads. The bodies are the
+// node's own envelope, built the way every surface builds one, rather than a
+// sentence typed here. Mutation: drop the message arm and the stage and
+// seat-only rows read the bare reason; put it before the grants arm and the
+// no-grant row loses the grant's own word.
+func TestARefusalNoGrantLiftsSaysTheRule(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		reason authz.Reason
+		grants []iam.Grant
+		want   []string
+	}{
+		{authz.ReasonStage, nil, []string{"(stage)", "isn't active", "crewlet iam activate"}},
+		{authz.ReasonSeatOnly, nil, []string{"(seat_only)", "Only an agent can do this"}},
+		{authz.ReasonNotLead, []iam.Grant{iam.GrantAdmin},
+			[]string{"(not_lead)", "its lead", "With Admin access"}},
+		{authz.ReasonNoGrant, []iam.Grant{iam.GrantWorklet},
+			[]string{"doesn't have worklet. Ask an admin for it"}},
+	} {
+		raw, err := json.Marshal(httpjson.Envelope(httpjson.CodeUnauthorized,
+			authz.RefusalDetail(c.reason, c.grants)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, ok := credentialRefusal(http.StatusForbidden, raw, true)
+		if !ok || msg == "this token isn't allowed to do this ("+string(c.reason)+")" {
+			t.Errorf("%s reads %q, %v; want the node's own words for it", c.reason, msg, ok)
+			continue
+		}
+		for _, want := range c.want {
+			if !strings.Contains(msg, want) {
+				t.Errorf("%s reads %q, want it to say %q", c.reason, msg, want)
+			}
 		}
 	}
 }
