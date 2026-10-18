@@ -211,11 +211,13 @@ type Readiness struct {
 
 	// Reason names what took this node out of rotation, and is absent while
 	// it is in rotation: [ReasonDraining], [ReasonUnconfigured], or the
-	// diverged posture itself — and on a node without the ingress role also
+	// diverged posture itself — then, on a node with the ingress role,
+	// [ReasonEstateBehind], and on a node without it
 	// [ReasonBrokerUnlinked], [ReasonNoPresence] or
 	// [ReasonAdmissionWithheld]. ONE FIELD, decided by [judgeReadiness] in
-	// one precedence, so a record of a failed probe says why without its
-	// reader re-deriving it from the fields above.
+	// one precedence — the estate term after it, see [App.serveReady] — so a
+	// record of a failed probe says why without its reader re-deriving it
+	// from the fields above.
 	Reason string `json:"reason,omitempty"`
 
 	// Detail says what is down, where the reason alone cannot: the broker

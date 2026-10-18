@@ -422,12 +422,14 @@ type listener struct {
 // orchestrator could neither steer traffic from it while it drains nor tell it
 // from a dead one.
 //
-// ONLY ON AN INGRESS NODE. A node without the role serves no probe on any
-// port, so the reason does not reach it, and refusing it there broke the one
-// file every role reads: the documented `-roles data,seats,workers -api-port 0`
-// for a node that binds nothing was refused the moment the shared file set
-// api.public for its ingress peer. On such a node api.port 0 is still the hard
-// off switch — it binds no tool bridge on api.public either.
+// ONLY ON AN INGRESS NODE. A node without the role serves its probes on
+// api.port and never on api.public, so with api.port 0 it serves none whatever
+// api.public says: the reason does not reach it, and refusing it there broke
+// the one file every role reads — the documented
+// `-roles data,seats,workers -api-port 0` for a node that binds nothing was
+// refused the moment the shared file set api.public for its ingress peer. On
+// such a node api.port 0 is still the hard off switch — it binds no tool
+// bridge on api.public either.
 //
 // # No two listeners on one port
 //

@@ -222,7 +222,7 @@ node means nothing was done.
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)). Stays `200` through a drain (see [During a drain](#during-a-drain)); use `/ready` to steer traffic |
-| `GET` | `/ready` | Readiness for a load balancer: `503` while draining, before the first config revision applies, or on a `shed` or `stuck` posture, and `200` otherwise. A `503` names why in `reason`: `draining`, `unconfigured`, `shed` or `stuck`, in that order of precedence. It never reads the fleet's presence or alarm counts, which decide nothing here. A node without the `ingress` role answers a different question on the same route — whether it is doing its work — see [Probes on a node without ingress](#probes-on-a-node-without-ingress) |
+| `GET` | `/ready` | Readiness for a load balancer: `503` while draining, before the first config revision applies, on a `shed` or `stuck` posture, or while this node can no longer route the estate's reads and writes, and `200` otherwise. A `503` names why in `reason`: `draining`, `unconfigured`, `shed` or `stuck`, then `estate_behind`, in that order of precedence. `estate_behind` is the verdict that also gives a node's seats back ([`unserviceable`](../concepts/seat-ownership.md#a-copy-that-is-behind-and-a-copy-that-is-wrong)): its calls need another data node — its own copy is out of service — and its view of who serves the estate has been unreadable for longer than 60 seconds. A copy that is merely behind never takes a node out of rotation. The term that decided it is logged at debug (`ready_withheld_for_the_estate`), never put in the body, so a load balancer records one code for one outage. It never reads the fleet's presence or alarm counts, which decide nothing here. A node without the `ingress` role answers a different question on the same route — whether it is doing its work — see [Probes on a node without ingress](#probes-on-a-node-without-ingress) |
 | `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_call`). [Human seats](../concepts/humans-in-the-org.md) are excluded — they appear only in `/org` with `"kind": "human"` |
 | `GET` | `/agents/{id}` | Single agent — its `handle`, `agent_id` and `role` (its name), the live overlay (incl. `live_call`), and `llm_history`: the seat's finished phases newest first, capped at 50. `{id}` is the seat's **handle**, which is what every roster row carries as its `id`. A role name is NOT accepted: two seats may share one, and a name-addressed answer read one seat's live call and transcript as the other's. A handle no agent seat answers to is `404` |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills). Same `{id}` — the seat's handle, which the rest is keyed by, resolves to the derived agent id the diary is keyed by |
@@ -3268,8 +3268,8 @@ order of precedence:
 ```
 
 An ingress node's `/ready` is unchanged by any of this: it answers whether
-traffic should come to it, on `draining`, `unconfigured`, `shed` and `stuck`
-alone. The two share one judgement (`judgeReadiness`, `internal/api/health.go`)
+traffic should come to it, on `draining`, `unconfigured`, `shed`, `stuck` and
+`estate_behind` alone. The two share one judgement (`judgeReadiness`, `internal/api/health.go`)
 and one precedence, so a reason both can give means the same thing on both.
 
 ### Paging the event history

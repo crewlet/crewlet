@@ -299,8 +299,9 @@ its per-role MCP children are up — one subprocess per server per seat, each a
 spawn, a handshake and a `tools/list` — and on the example company, whose one
 `shared: false` server is Mattermost, that is 7 children; a company with a
 tracker, a wiki and a code host wired in runs three times that. Binding first means the dashboard, the REST API and every webhook
-route answer during that window, and `/ready` says honestly that this node holds
-no seats yet. Webhooks arriving in the window are retained rather than dropped,
+route answer during that window, and `/health` says honestly that this node
+holds no seats yet: its `seats` list is the seats claimed so far, which is none.
+`/ready` carries no seats at all. Webhooks arriving in the window are retained rather than dropped,
 because a seat's mailbox is created before any claiming.
 
 ---

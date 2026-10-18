@@ -1281,10 +1281,11 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// and every vendor failing FAST; a company whose vendors actually answer
 	// takes minutes, and it scales with seats times servers.
 	//
-	// Nothing here needs a started engine: the node exists, /health and
-	// /ready report honestly that it holds no seats yet, and a webhook that
-	// arrives in the window is retained rather than dropped because the
-	// mailboxes are created before any claiming (see Node.Start).
+	// Nothing here needs a started engine: the node exists, /health's seat
+	// list reports honestly that it holds no seats yet (/ready carries none),
+	// and a webhook that arrives in the window is retained rather than
+	// dropped because the mailboxes are created before any claiming (see
+	// Node.Start).
 	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, configSurface, dev, bind, log)
 	if err != nil {
 		e.Stop(context.WithoutCancel(ctx))
