@@ -271,6 +271,12 @@ type ListQuery struct {
 	// Pinned narrows to the viewer's pins.
 	Pinned bool
 
+	// WorkItem narrows to the artifacts a write was made for this tracker
+	// item under ([artifacts.Authority.WorkItem]), as the history rows of the
+	// last [artifacts.HistoryRetention] record it: what a work item's
+	// Artifacts panel lists. Empty narrows nothing.
+	WorkItem string
+
 	Sort   ListSort
 	Cursor string
 	Limit  int
@@ -951,6 +957,14 @@ func listSpecFor(v Viewer, q ListQuery) (listSpec, error) {
 	if q.Pinned {
 		s.where = append(s.where, `EXISTS (SELECT 1 FROM artifact_pins p WHERE p.artifact_id = a.id AND p.seat = ?)`)
 		s.args = append(s.args, v.Record)
+	}
+	if item := strings.TrimSpace(q.WorkItem); item != "" {
+		// THE ARTIFACT'S OWN HISTORY NAMES THE ITEM, read through the
+		// (work_item, artifact_id) index: one probe per artifact the page
+		// considers, never a scan of the history.
+		s.where = append(s.where, `EXISTS (SELECT 1 FROM artifact_history h
+			WHERE h.work_item = ? AND h.artifact_id = a.id)`)
+		s.args = append(s.args, item)
 	}
 	sharedWithViewer, sharedArgs := sharedClause(v)
 	visible := `(` + sharedWithViewer + ` OR a.owner = ?`

@@ -627,6 +627,56 @@ func TestTheListingShowsWhatTheViewerCanSee(t *testing.T) {
 	}
 }
 
+// A WORK ITEM LISTS THE ARTIFACTS MADE FOR IT: a write stamped with the item
+// it was charged to links its artifact there, whichever version it made, and
+// the listing narrowed to the item shows those and nothing else, still only
+// to a viewer who may see them.
+func TestAWorkItemListsTheArtifactsMadeForIt(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	jane := person("jane", artifacts.RoleOwner)
+	forItem := jane
+	forItem.Authority.WorkItem = "CRW-412"
+	made := n.create(forItem, "Made for the item", upload(t, "index.html", "<p>1</p>")).Artifact
+	later := n.create(jane, "Published for it later", upload(t, "index.html", "<p>2</p>")).Artifact
+	n.create(jane, "Unrelated", upload(t, "index.html", "<p>3</p>"))
+	next := page(upload(t, "index.html", "<p>2b</p>"))
+	next.Artifact, next.Base = later, 1
+	if _, err := n.writer.Publish(t.Context(), forItem, next); err != nil {
+		t.Fatalf("publish for the item: %v", err)
+	}
+	bob := person("bob", artifacts.RoleOwner)
+	bob.Authority.WorkItem = "CRW-412"
+	n.create(bob, "Bob's, for the item, unshared", upload(t, "index.html", "<p>4</p>"))
+
+	list := func(v artifactsdomain.Viewer) []artifacts.ID {
+		t.Helper()
+		got, err := n.reader.List(t.Context(), v, artifactsdomain.ListQuery{WorkItem: "CRW-412"})
+		if err != nil {
+			t.Fatalf("list for the item: %v", err)
+		}
+		var out []artifacts.ID
+		for _, item := range got.Items {
+			out = append(out, item.ID)
+		}
+		slices.SortFunc(out, compareIDs)
+		return out
+	}
+	want := []artifacts.ID{made, later}
+	slices.SortFunc(want, compareIDs)
+	if got := list(artifactsdomain.Viewer{Record: "jane"}); !slices.Equal(got, want) {
+		t.Errorf("jane sees %v on CRW-412, want %v", got, want)
+	}
+	if got := list(artifactsdomain.Viewer{Admin: true}); len(got) != 3 {
+		t.Errorf("the admin path lists %d artifacts on CRW-412, want 3", len(got))
+	}
+	none, err := n.reader.List(t.Context(), artifactsdomain.Viewer{Record: "jane"},
+		artifactsdomain.ListQuery{WorkItem: "CRW-9"})
+	if err != nil || len(none.Items) != 0 {
+		t.Errorf("an item nothing was made for lists %d (%v)", len(none.Items), err)
+	}
+}
+
 // compareIDs orders artifact ids by their text.
 func compareIDs(a, b artifacts.ID) int {
 	switch {
