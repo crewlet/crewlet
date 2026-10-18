@@ -199,9 +199,17 @@ export async function exportCSV(id: string, collection: string): Promise<string>
   return blob.text();
 }
 
-/** One file of a version as raw bytes, an attachment on the API origin. */
-export function filePath(id: string, number: number, path: string): string {
-  return `${base(id)}/versions/${number}/files/${path.split("/").map(encodeURIComponent).join("/")}`;
+/** One file of a version as raw bytes, an attachment on the API origin (`GET …/versions/{n}/files/{path}`). */
+export function versionFile(
+  id: string,
+  number: number,
+  path: string,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  return rest.blob(
+    `/artifacts/${encodeURIComponent(id)}/versions/${number}/files/${path.split("/").map(encodeURIComponent).join("/")}`,
+    signal,
+  );
 }
 
 /**

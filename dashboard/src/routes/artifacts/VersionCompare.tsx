@@ -21,13 +21,12 @@
 import { useMemo, useState } from "react";
 import { Callout, DiffList, Select, Skeleton, type DiffRow } from "@crewlethq/ui";
 import type { ArtifactDetail, ArtifactEntry, ArtifactVersionSummary } from "~/protocol/index.ts";
-import { rest } from "~/protocol/index.ts";
 import { QueryState, Section } from "~/components/common.tsx";
 import { Segmented } from "~/ui/primitives.tsx";
 import { fmtBytes, plural } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useRest } from "~/lib/useRest.ts";
-import { filePath } from "~/lib/artifacts/api.ts";
+import { versionFile } from "~/lib/artifacts/api.ts";
 import {
   MAX_COMPARE_BYTES,
   compareFiles,
@@ -245,8 +244,8 @@ function LineCompare({
       : `${detail.id}:${older}:${newer}:${from.path}:${from.object.hash}:${to.object.hash}`,
     async (signal) => {
       const [a, b] = await Promise.all([
-        rest.blob(filePath(detail.id, older, from.path), signal),
-        rest.blob(filePath(detail.id, newer, to.path), signal),
+        versionFile(detail.id, older, from.path, signal),
+        versionFile(detail.id, newer, to.path, signal),
       ]);
       return compareLines(await a.text(), await b.text());
     },

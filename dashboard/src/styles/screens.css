@@ -10514,7 +10514,10 @@ a.live-row:focus-visible {
     grid-template-columns: minmax(0, 1fr);
   }
 }
-.artifact-compare-side {
+/* One side, and the list of a text file's changed lines: a heading over its
+   content. */
+.artifact-compare-side,
+.artifact-compare-lines {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
@@ -10600,7 +10603,7 @@ a.live-row:focus-visible {
 }
 .artifact-person-where {
   overflow-wrap: anywhere;
-  color: var(--color-text-muted);
+  color: var(--color-text-tertiary);
   font-size: var(--font-size-sm);
 }
 .artifact-person-actions {

@@ -260,6 +260,7 @@ function Loaded({
   const viewer = useViewer();
   const nav = useNavigator();
   const [rail, setRail] = useParam("rail", "", "section");
+  const peopleOpen = rail === "people";
   const [follow, setFollow] = useParam("follow", "");
   const [sheetParam] = useParam("sheet", "");
   // WHO IS FOLLOWED is somebody else in the room: following oneself moves
@@ -413,10 +414,10 @@ function Loaded({
             )}
             <Button
               size="small"
-              variant={rail === "people" ? "secondary" : "ghost"}
+              variant={peopleOpen ? "secondary" : "ghost"}
               leadingIcon={<UsersGlyph size="sm" />}
-              pressed={rail === "people"}
-              onClick={() => setRail(rail === "people" ? "" : "people")}
+              pressed={peopleOpen}
+              onClick={() => setRail(peopleOpen ? "" : "people")}
             >
               People
             </Button>
@@ -514,8 +515,8 @@ function Loaded({
               })}
         />
       )}
-      <div className={rail === "people" ? "artifact-with-rail" : undefined}>
-        {rail === "people" && (
+      <div className={peopleOpen ? "artifact-with-rail" : undefined}>
+        {peopleOpen && (
           <PeopleRail
             members={room.others}
             self={viewer.handle ?? ""}

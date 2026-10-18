@@ -351,6 +351,8 @@ describe("a screen's search", () => {
 describe("the table is the only way a key is bound", () => {
   const LISTENERS: Record<string, string> = {
     "lib/keys.ts": "the mechanism useKeymap is built on",
+    "routes/artifacts/ArtifactPage.tsx":
+      "follow mode's stop, on the element of the artifact's body only: it binds nothing (no press is prevented, the browser's own scroll keys still scroll) and reads a navigation key as the reader moving the view themselves, as it reads a wheel, a touch drag or a press beside it",
     "routes/org/builder/Builder.tsx":
       "undo and redo, scoped to presses from inside the builder; it reads its keys with matchesRow",
     "runtime/runtime.ts":
