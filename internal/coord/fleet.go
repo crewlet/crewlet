@@ -1431,6 +1431,12 @@ type Fleet interface {
 	Custody
 }
 
+// ErrObjectBackendMoved is a move of the fleet's object backend from a store
+// that is not the recorded one: another migration moved it, or the caller
+// read a record that changed. The answer is to read the record again, never
+// to retry the write.
+var ErrObjectBackendMoved = errors.New("coord: the fleet's object backend is not the one the move names")
+
 // ObjectStores is what the whole fleet has to agree on about the object store
 // (ADR-0026): which backend its files are in, and what its collector last
 // found.
@@ -1457,6 +1463,15 @@ type ObjectStores interface {
 	// itself, or what the first node recorded. An error is UNKNOWN — the
 	// caller must not open a backend it could not check.
 	AgreeObjectBackend(ctx context.Context, identity string) (string, error)
+
+	// MoveObjectBackend replaces the recorded backend `from` with `to`,
+	// conditional on `from` being what is recorded: the one write that
+	// moves the fleet's files to another store, made by `crewlet objects
+	// migrate --to s3` once every object is copied, inside a maintenance
+	// window. It answers [ErrObjectBackendMoved] where another backend is
+	// recorded, and nil where `to` already is (the move was made, and a
+	// retry of it is the same move). An error is UNKNOWN.
+	MoveObjectBackend(ctx context.Context, from, to string) error
 
 	// RecordObjectCollection stores what the collector last found, an
 	// opaque value its owner (internal/engine) encodes, replacing the last

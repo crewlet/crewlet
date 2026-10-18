@@ -3,6 +3,9 @@ package kv
 import (
 	"context"
 	"errors"
+	"fmt"
+
+	"github.com/crewlet/crewlet/internal/coord"
 
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -55,6 +58,40 @@ func (f *FleetStore) AgreeObjectBackend(ctx context.Context, identity string) (s
 		return "", err
 	}
 	return agreed, nil
+}
+
+// MoveObjectBackend replaces the recorded backend from with to, by a
+// compare-and-set on the revision it read from the leader
+// ([coord.ObjectStores]).
+func (f *FleetStore) MoveObjectBackend(ctx context.Context, from, to string) error {
+	if from == "" || to == "" {
+		return errors.New("coord/kv: a move of the object backend names both stores")
+	}
+	return f.retryRaces(ctx, "MoveObjectBackend", objectBackendKey, func() (bool, error) {
+		entry, err := f.get(ctx, f.objects, objectBackendKey)
+		switch {
+		case errors.Is(err, jetstream.ErrKeyNotFound):
+			return false, fmt.Errorf("%w: no backend is recorded", coord.ErrObjectBackendMoved)
+		case err != nil:
+			return false, unavailable("read the object backend", err)
+		}
+		switch string(entry.Value()) {
+		case to:
+			return false, nil
+		case from:
+		default:
+			return false, fmt.Errorf("%w: %q is recorded", coord.ErrObjectBackendMoved, entry.Value())
+		}
+		_, err = f.objects.Update(ctx, objectBackendKey, []byte(to), entry.Revision())
+		switch {
+		case err == nil:
+			return false, nil
+		case errors.Is(err, jetstream.ErrKeyRevisionMismatch):
+			return true, nil
+		default:
+			return false, unavailable("move the object backend", err)
+		}
+	})
 }
 
 // RecordObjectCollection stores the collector's last report, replacing the
