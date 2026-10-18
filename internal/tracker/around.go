@@ -74,13 +74,11 @@ type Around struct {
 // one column or one lane when it is grouped. Its rows are in the answer's own
 // row order.
 type segment struct {
-	// Join reaches the grouping axis the clause compares, and Clause
-	// narrows the answer's predicate to this run. Both empty for a flat
-	// answer, which is one run.
-	Join     string
-	JoinArgs []any
-	Clause   string
-	Args     []any
+	// Clause narrows the answer's predicate to this run, by each axis's
+	// join-free predicate ([columnSet]). Empty for a flat answer, which is
+	// one run.
+	Clause string
+	Args   []any
 
 	// Count is how many rows the run holds, from the answer's own column
 	// and lane counts — exact, because a GROUP BY is — and unused for a
@@ -225,7 +223,7 @@ func drawingOrder(q Query, fields map[string]resolvedField,
 	}
 	var inner groupAxis
 	if q.GroupBy2 != "" {
-		if inner, err = compileLane(q.GroupBy2, fields, q.dayWindow(),
+		if inner, err = compileGroup(q.GroupBy2, fields, q.dayWindow(),
 			q.Units); err != nil {
 			return nil, err
 		}
@@ -239,16 +237,13 @@ func drawingOrder(q Query, fields map[string]resolvedField,
 			out = append(out, outer.run(column.Key, column.Count))
 			continue
 		}
-		clause, values := outer.joinedFilter(column.Key)
+		clause, values := outer.filter(column.Key)
 		for _, lane := range column.Subgroups {
 			if lane.Count == 0 {
 				continue
 			}
-			laneClause, laneValues := inner.joinedFilter(lane.Key)
+			laneClause, laneValues := inner.filter(lane.Key)
 			out = append(out, segment{
-				Join: outer.Join + inner.Join,
-				JoinArgs: append(append([]any{}, outer.JoinArgs...),
-					inner.JoinArgs...),
 				Clause: clause + " AND " + laneClause,
 				Args:   append(append([]any{}, values...), laneValues...),
 				Count:  lane.Count,
@@ -258,12 +253,11 @@ func drawingOrder(q Query, fields map[string]resolvedField,
 	return out, nil
 }
 
-// run is one column of the axis as a run of the drawing order: the axis's
-// join, and the column's predicate on the joined value.
+// run is one column of the axis as a run of the drawing order: the column's
+// own join-free predicate, for the reason [columnSet] gives.
 func (a groupAxis) run(key string, count int) segment {
-	clause, values := a.joinedFilter(key)
-	return segment{Join: a.Join, JoinArgs: a.JoinArgs, Clause: clause,
-		Args: values, Count: count}
+	clause, values := a.filter(key)
+	return segment{Clause: clause, Args: values, Count: count}
 }
 
 // aroundSides is the two sides of one task in an order, given its own sort
@@ -299,11 +293,10 @@ func segmentFrom(seg segment, terms []sortTerm, set taskSet,
 	if extra != "" {
 		clause += " AND " + extra
 	}
-	bound := append(append([]any{}, seg.JoinArgs...), joinArgs...)
-	bound = append(bound, set.args...)
+	bound := append(append([]any{}, joinArgs...), set.args...)
 	bound = append(bound, seg.Args...)
 	bound = append(bound, extraArgs...)
-	return " FROM " + set.from + seg.Join + joins + " WHERE " + clause, bound
+	return " FROM " + set.from + joins + " WHERE " + clause, bound
 }
 
 // segmentHolds reports whether one run holds the task.
@@ -391,7 +384,7 @@ func segmentFirstStatement(seg segment, terms []sortTerm, set taskSet,
 }
 
 // sortValuesOf reads one task's value for every column an order sorts by,
-// scanned as opaque values exactly as [readTasksJoined] scans a cursor's.
+// scanned as opaque values exactly as [readTasks] scans a cursor's.
 func sortValuesOf(ctx context.Context, tx *sql.Tx, terms []sortTerm,
 	id string) ([]any, error) {
 
