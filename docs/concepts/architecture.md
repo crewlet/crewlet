@@ -202,6 +202,7 @@ and write this node's own copy of the replicated estate.
 | `worker:iam_sweep` | The identity estate's retention: a sweep record for every bucket that is due, which every data node's applier carries out. |
 | `worker:trash-reaper` | The trash's term: hourly, purges what has been in the knowledge base's or the artifacts' trash past thirty days, each through its domain's own purge record, as the engine. |
 | `worker:object-collector` | The [object store](object-store.md)'s collection and audit: hourly, the objects no row names and the uploads that never finished; daily, that every object a row names is there and whole. |
+| `worker:chat-prune` | Native chat's message horizon: hourly, publishes to the chat log the cutoff each room's horizon has reached, which every data node applies as the same delete. A record rather than a sweep, because the rows are replicated and a node's own clock would delete a different set on each. |
 
 **Four more services run on every node, whatever the roles say, and a fifth on every data node.**
 
