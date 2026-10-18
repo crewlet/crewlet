@@ -423,6 +423,70 @@ func TestTheTrashIsOrderedByRemoval(t *testing.T) {
 	}
 }
 
+// THE TRASH ANSWERS THE SAME AT EITHER SCOPE, THROUGH EVERY STATEMENT OVER IT.
+//
+// Every statement over a trash is read through an index that holds only
+// removed rows ([taskSource]), named in the statement — so a statement whose
+// predicate stopped implying that index's would fail rather than answer, and
+// one reading another scope's index would answer another scope's trash. The
+// plan test holds what each statement reads; this holds what it ANSWERS: the
+// page, the count beside it, a total and a board's columns, at the workspace
+// and inside the project, in the default subtask mode (where the rollup's own
+// subquery reads the index too) and flat.
+func TestTheTrashAnswersTheSameAtEitherScope(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"kept", "first", "second"} {
+		filedTask(t, r, id)
+	}
+	for i, id := range []string{"first", "second"} {
+		r.at = wednesday.Add(time.Duration(i) * time.Minute)
+		if _, err := r.writer.RemoveTask(t.Context(), "op-rm-"+id, id, "ENG",
+			false, nil); err != nil {
+			t.Fatalf("RemoveTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	r.at = wednesday
+
+	want := []string{"second", "first"}
+	for _, container := range []string{"workspace", "project:ENG"} {
+		for _, mode := range []string{"collapsed", "separate"} {
+			params := func(extra map[string]any) map[string]any {
+				out := map[string]any{"container": container, "removed": "true",
+					"show_closed": "true", "subtasks": mode}
+				for key, value := range extra {
+					out[key] = value
+				}
+				return out
+			}
+			what := container + " " + mode
+			answer := r.ask(params(map[string]any{"totals": "tasks:count"}))
+			if got := ids(answer); !slices.Equal(got, want) {
+				t.Errorf("%s: the trash answers %v, want %v", what, got, want)
+			}
+			if answer.TotalHint != len(want) {
+				t.Errorf("%s: the trash counts %d beside its page, want %d",
+					what, answer.TotalHint, len(want))
+			}
+			if len(answer.Totals) != 1 || answer.Totals[0].Value == nil ||
+				*answer.Totals[0].Value != float64(len(want)) {
+				t.Errorf("%s: the trash totals %v, want a count of %d", what,
+					answer.Totals, len(want))
+			}
+			board := r.ask(params(map[string]any{"group_by": "status"}))
+			counted := 0
+			for _, column := range board.Groups {
+				counted += column.Count
+			}
+			if counted != len(want) {
+				t.Errorf("%s: a board over the trash counts %d across its "+
+					"columns, want %d", what, counted, len(want))
+			}
+		}
+	}
+}
+
 // AND A READER MAY ASK FOR THE OTHER END OF IT.
 //
 // The default above is what an unsorted trash gets. `sort=removed` is the
