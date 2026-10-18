@@ -43,18 +43,34 @@ webhooks have to come from the internet and the dashboard must not, give them
 a listener of their own instead: see
 [Exposing webhooks without the admin API](#exposing-webhooks-without-the-admin-api).
 
-Give that proxy a **read timeout above fifty seconds** on the API port.
-Nearly every request is answered in well under a second, but a node eviction
-or readmission ([Retention](retention.md#eviction)) may take up to fifty
-seconds — twenty to judge it and thirty to write every log — and `crewlet
-retention evict` and the dashboard's evict dialog both wait a minute for its
-answer. nginx's `proxy_read_timeout` defaults to sixty, which is enough; a
-proxy set below fifty cuts those answers off with a 504. Nothing is lost when
-it does — the node finishes the gesture whatever happens to the connection,
-and both clients read an answer the engine did not write as one that never
-arrived, keeping the operation id to finish it with — but the operator then
-has to finish it to see what it did. The one route whose work grows with what
-it reads — a check of a git node's copy of a repository
+Give that proxy at least **two minutes** of silence in either direction on
+the API port's REST and file routes. Requests to `/git/` on the same port
+have a sizing of their own, which can be longer — a cold cache sync before a
+request's first byte, sized by your largest repository, and three minutes for
+a push from a client that asks for no side-band — so give `/git/` its own
+location with what [The code host](#the-code-host) asks for. Nearly every
+other request is answered in well under a second; the slowest answer a REST
+or file route gives is a file upload whose object store fails or stops
+answering — about a minute and a half: a minute, then thirty seconds
+abandoning an upload made in parts (95 s measured against an S3 fake whose
+bucket hung the abandon too) — and the node stops reading the upload's body
+while it waits, so the silence runs both ways. nginx's `proxy_read_timeout`
+and `proxy_send_timeout`, both sixty seconds by default, each cut that answer
+to a `504`; the upload is not written either way, and the object the store
+may hold is collected a day later. A store that keeps throttling an upload
+holds it to the upload's own deadline — a throttle slows a request down and
+is never given up
+([Object store](../concepts/object-store.md#an-s3-bucket--s3)) — which a
+two-minute proxy also cuts: still not written, and the person uploads again.
+A node eviction or readmission ([Retention](retention.md#eviction)) may take
+up to fifty seconds — twenty to judge it and thirty to write every log — and
+`crewlet retention evict` and the dashboard's evict dialog both wait a minute
+for its answer; a proxy set below fifty cuts those answers off with a 504.
+Nothing is lost when it does — the node finishes the gesture whatever happens
+to the connection, and both clients read an answer the engine did not write
+as one that never arrived, keeping the operation id to finish it with — but
+the operator then has to finish it to see what it did. The one route whose
+work grows with what it reads — a check of a git node's copy of a repository
 (`POST /code/repos/{name}/verify`), about nine seconds a gigabyte — needs no
 longer timeout: it runs on the node's own time and answers within a quarter
 of a second — `200` with a small copy's report, `202` for a check still
