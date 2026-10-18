@@ -131,6 +131,23 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 						field.Type, index, strings.Join(plan, "\n"))
 				}
 			}
+			holdTagFilter(t, plan, q)
+			// AND NO CHILD TABLE IS WALKED. A walk of the task table
+			// in an order a LIMIT stops is a plan; a walk of a task's
+			// tags, dependencies or field values is every such row in
+			// the company read to answer about some of them, and it
+			// is an index scan, so the heap check above cannot see
+			// it. Measured: `tag=all:` walked every tag row through
+			// the primary key, and passed.
+			for _, line := range plan {
+				for _, table := range covered[1:4] {
+					if strings.HasPrefix(line, "SCAN "+table+" ") ||
+						line == "SCAN "+table {
+						t.Errorf("this read walks every row of %s:\n%s",
+							table, strings.Join(plan, "\n"))
+					}
+				}
+			}
 		})
 	}
 
@@ -292,6 +309,21 @@ func registeredQueries() map[string]map[string]any {
 		"one subtree everywhere":  {"root": "t-00001"},
 		"by spend everywhere":     {"sort": "-spend_tokens"},
 
+		// EVERY TAG MODE AT BOTH SCOPES, each held to the plan its mode
+		// calls for by [holdTagFilter]: `any:` and `all:` seek the tag
+		// rows one slug at a time, and `none:` probes each task's own.
+		"tagged with either": {"container": "project:P01",
+			"tag": "any:tag-1,tag-2"},
+		"tagged with both": {"container": "project:P01",
+			"tag": "all:tag-1,tag-2"},
+		"tagged with neither": {"container": "project:P01",
+			"tag": "none:tag-1,tag-2"},
+		"tagged everywhere":           {"tag": "tag-1"},
+		"tagged with both everywhere": {"tag": "all:tag-1,tag-2"},
+		"tagged with either, flat": {"container": "project:P01",
+			"tag": "any:tag-1,tag-2", "subtasks": "separate"},
+		"tagged everywhere, flat": {"tag": "tag-1", "subtasks": "separate"},
+
 		// THE TRASH AS ITS TAB ASKS FOR IT ([ViewKeyTrash]), and with every
 		// row filtered on its own, which is how the dashboard and
 		// `list_work_items` run any view — at both scopes, because each is
@@ -369,9 +401,47 @@ func dutyReads() map[string]indexedRead {
 			removedWithStatement, "t-00001"),
 		"key resolution":       seek(keys, resolveTaskStatement, "ENG-1", "ENG-1", "ENG-1"),
 		"a point read's scope": seek(keys, taskReadScopeStatement, "ENG-1", "ENG-1", "ENG-1"),
-		"one tag's tasks": seek("tracker_task_tags_slug_idx",
-			`SELECT task_id FROM tracker_task_tags
-			 WHERE project_key = ? AND slug = ?`, "P01", "tag-1"),
+	}
+}
+
+// holdTagFilter fails a plan whose tag filter is not read the way its mode
+// calls for ([tagClause]).
+//
+// `any:` and `all:` SEEK the tag rows once per slug — and inside a project on
+// the project too, which is what makes a project's tag filter that project's
+// tagged work rather than the company's — while `none:`, which no index over
+// present rows can drive, probes each task's own rows by the primary key.
+// Counted per slug, because a list compiled to `slug IN (…)` still reaches the
+// index, seeking the slug column alone and filtering the project out of every
+// task in the company that carries it.
+func holdTagFilter(t *testing.T, plan []string, q Query) {
+	t.Helper()
+	if len(q.Tags.Tags) == 0 {
+		return
+	}
+	shown := strings.Join(plan, "\n")
+	const slugs, key = "tracker_task_tags_slug_idx", "sqlite_autoindex_tracker_task_tags_1"
+	if q.Tags.Mode == TagNone {
+		if !seeks(plan, key) {
+			t.Errorf("tag=none: does not probe each task's own tag rows:\n%s", shown)
+		}
+		return
+	}
+	scoped := q.Scope.Project != ""
+	sought := 0
+	for _, line := range plan {
+		if !seeks([]string{line}, slugs) {
+			continue
+		}
+		sought++
+		if !strings.Contains(line, "(slug=?") || scoped != strings.Contains(line, "project_key=?") {
+			t.Errorf("tag=%s:%v seeks %s on other than one slug (and, in a "+
+				"project, the project):\n%s", q.Tags.Mode, q.Tags.Tags, slugs, shown)
+		}
+	}
+	if sought != len(q.Tags.Tags) {
+		t.Errorf("tag=%s:%v seeks %s %d times, want once per slug:\n%s",
+			q.Tags.Mode, q.Tags.Tags, slugs, sought, shown)
 	}
 }
 
@@ -781,9 +851,12 @@ func seedTaskCorpus(ctx context.Context, tx *sql.Tx, maxVariables int) error {
 		what, prefix, row string
 		args              func(k int) []any
 	}{
+		// UNDER THE TASK'S OWN PROJECT, as the applier writes a tag row
+		// ([Applier.explodeTask]).
 		{"tags", `INSERT INTO tracker_task_tags (task_id, project_key, slug) VALUES`,
 			`(?,?,?)`, func(k int) []any {
-				return []any{id(k), "ENG", fmt.Sprintf("tag-%d", k*tagEvery%11)}
+				return []any{id(k), fmt.Sprintf("P%02d", k*tagEvery%projects),
+					fmt.Sprintf("tag-%d", k*tagEvery%11)}
 			}},
 		{"dependencies", `INSERT INTO tracker_task_deps
 			(blocker_id, task_id, blocker_open, cleared_at) VALUES`,

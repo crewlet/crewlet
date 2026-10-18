@@ -822,7 +822,7 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 			placeholders(len(q.ChecklistAssignee))+"))", anyOf(q.ChecklistAssignee)...)
 	}
 	if len(q.Tags.Tags) > 0 {
-		clause, values := tagClause(q.Tags)
+		clause, values := tagClause(q.Tags, q.Scope.Project)
 		add(clause, values...)
 	}
 	if q.Parent != "" {
@@ -1194,27 +1194,63 @@ func handleClause(column string, handles []string) (string, []any) {
 	return column + " IN (" + placeholders(len(named)) + ")", named
 }
 
-// tagClause builds the three tag modes.
-func tagClause(filter TagFilter) (string, []any) {
-	args := make([]any, 0, len(filter.Tags)+1)
-	for _, tag := range filter.Tags {
-		args = append(args, tag)
+// tagClause builds the three tag modes, over the project a scoped query is
+// about ("" at the workspace).
+//
+// # Two of them are read FROM the tag rows, one slug at a time
+//
+// `any:` and `all:` ask which tasks carry a slug, and the tag rows answer that
+// directly through `tracker_task_tags_slug_idx` (replicated 0057) — the tagged
+// work and nothing else, at either scope, where a probe of each task's own tag
+// rows reads every task in scope to find the few that carry it. Measured: the
+// probe form walked a project's whole board, or every live task in the company
+// through `tracker_tasks_type_idx`, and `all:`, written as a correlated count,
+// was turned by the planner into a scan of EVERY tag row in the company.
+//
+// ONE ARM PER SLUG, because this engine's planner stops seeking at an `IN`
+// list: `slug IN (?, ?) AND project_key = ?` seeks the slug and filters the
+// project out of every task in the company carrying it, where `slug = ? AND
+// project_key = ?` seeks both. So `any:` is the arms' union and `all:` their
+// intersection, which is exactly "carries every one of them" — each slug is
+// named once ([Query.parseTags]), so there is no count to take.
+//
+// `all:` IS ONE COMPOUND STATEMENT, NEVER A CHAIN OF MEMBERSHIPS. Written as one
+// `t.id IN (…)` per slug ANDed together, the predicate's expression tree grew a
+// level for every slug, and this engine refuses one past a hundred (`Parse
+// error: Expression tree is too large (maximum depth 100)`): measured, `all:`
+// of ninety-five tags failed the read, where the count it replaced answered
+// nothing — which is what a list longer than any task carries
+// ([MaxTagsPerTask]) has to answer. A compound SELECT is a list of statements
+// rather than one expression, so its depth does not grow with the list — the
+// reason `any:` is a `UNION ALL` too.
+//
+// AND THE PROJECT IS A TERM OF EACH ARM, not only of the task row: a tag row
+// carries its task's project ([Applier.explodeTask] rewrites it with the task),
+// so inside a project the seek is that project's tagged tasks rather than the
+// company's.
+//
+// `none:` is about rows that are ABSENT, which no index over present rows can
+// drive, so it stays a probe of the task's own rows by the primary key.
+func tagClause(filter TagFilter, project string) (string, []any) {
+	if filter.Mode == TagNone {
+		return "NOT EXISTS (SELECT 1 FROM tracker_task_tags x WHERE x.task_id = t.id " +
+			"AND x.slug IN (" + placeholders(len(filter.Tags)) + "))", anyOf(filter.Tags)
 	}
-	exists := "EXISTS (SELECT 1 FROM tracker_task_tags x WHERE x.task_id = t.id " +
-		"AND x.slug IN (" + placeholders(len(filter.Tags)) + "))"
-	switch filter.Mode {
-	case TagNone:
-		return "NOT " + exists, args
-	case TagAll:
-		// EVERY tag, which is a count rather than a membership: a task
-		// carrying two of three is not a match, and an IN test cannot
-		// say so.
-		return "(SELECT COUNT(DISTINCT x.slug) FROM tracker_task_tags x " +
-				"WHERE x.task_id = t.id AND x.slug IN (" +
-				placeholders(len(filter.Tags)) + ")) = ?",
-			append(args, len(filter.Tags))
+	arms := make([]string, 0, len(filter.Tags))
+	var args []any
+	for _, slug := range filter.Tags {
+		arm := "SELECT x.task_id FROM tracker_task_tags x WHERE x.slug = ?"
+		args = append(args, slug)
+		if project != "" {
+			arm += " AND x.project_key = ?"
+			args = append(args, project)
+		}
+		arms = append(arms, arm)
 	}
-	return exists, args
+	if filter.Mode == TagAll {
+		return "t.id IN (" + strings.Join(arms, " INTERSECT ") + ")", args
+	}
+	return "t.id IN (" + strings.Join(arms, " UNION ALL ") + ")", args
 }
 
 // dateColumns maps a grammar key to the column it filters.
