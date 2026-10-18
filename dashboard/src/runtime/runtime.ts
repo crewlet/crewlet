@@ -319,10 +319,22 @@ function release(subscription: number): void {
   );
 }
 
-/** A collection's live documents, held for its subscribers and kept from the host's events. */
+/**
+ * A collection's live documents, held for its subscribers and kept from the
+ * host's events.
+ *
+ * A REFUSED SUBSCRIPTION IS SAID TO THE PAGE: `onError` is called once with
+ * the refusal (`forbidden`, `not_found`, `capability_not_declared`,
+ * `unavailable`), and the callback is never called, because an empty
+ * collection and one the viewer may not read are different answers. A page
+ * that passes no `onError` has the refusal reported where its errors are
+ * seen, rather than waiting on a first delivery that will never come in
+ * silence.
+ */
 function subscribeTo(
   collection: string,
   cb: (docs: BridgeDoc[], change: { changed: string[]; removed: string[] }) => void,
+  onError?: (err: RuntimeError) => void,
 ): Unsubscribe {
   let stopped = false;
   let subscription = 0;
@@ -346,10 +358,14 @@ function subscribeTo(
       cb([...docs.values()], { changed: answer.docs.map((d) => d.id), removed: [] });
     })
     .catch((err: unknown) => {
-      // A REFUSED SUBSCRIPTION IS SAID where a page's errors are seen, and
-      // its callback is never called: a page that asked for a collection it
-      // may not read sees nothing rather than an empty one.
-      console.error("crewlet.data subscription refused:", err);
+      if (stopped) return;
+      bridge.onEvent.delete(listener);
+      const refusal =
+        err instanceof RuntimeError
+          ? err
+          : new RuntimeError("unavailable", "the subscription could not be made");
+      if (onError) onError(refusal);
+      else console.error("crewlet.data subscription refused:", refusal);
     });
   return () => {
     stopped = true;
@@ -375,7 +391,8 @@ function collection(name: string) {
       }),
     subscribe: (
       cb: (docs: BridgeDoc[], change: { changed: string[]; removed: string[] }) => void,
-    ) => subscribeTo(name, cb),
+      onError?: (err: RuntimeError) => void,
+    ) => subscribeTo(name, cb, onError),
     set: (id: string, fields: Record<string, Json>, opts?: WriteOptions) =>
       write([ops.set(id, fields, opts)]),
     merge: (id: string, fields: Record<string, Json>, opts?: WriteOptions) =>

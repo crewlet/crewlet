@@ -172,7 +172,10 @@ interface Collection<T = Record<string, Json>> {
   get(id: string): Promise<Doc<T> | null>;
   list(opts?: { cursor?: string; limit?: number }): Promise<Page<T>>;
   query(q: Query): Promise<Page<T>>;
-  subscribe(cb: (docs: Doc<T>[], change: { changed: string[]; removed: string[] }) => void): Unsubscribe;
+  subscribe(
+    cb: (docs: Doc<T>[], change: { changed: string[]; removed: string[] }) => void,
+    onError?: (err: CrewletError) => void,   // the subscription was refused; cb is never called
+  ): Unsubscribe;
 
   set(id: string, fields: Partial<T>, opts?: WriteOptions): Promise<WriteOutcome>;     // replace, creating it
   merge(id: string, fields: Partial<T>, opts?: WriteOptions): Promise<WriteOutcome>;   // set the named fields
@@ -242,7 +245,11 @@ and nothing else, unless the viewer is an editor.
 
 `subscribe` delivers the collection's current documents, then every change as
 the engine applies it, with the documents a remote write changed listed in
-`changed`. In contract 1.0 a subscription is to a whole collection and a page
+`changed`. A subscription the host or the engine refuses (`forbidden`,
+`not_found`, `capability_not_declared`, `unavailable`) calls `onError` once
+with the refusal and never calls the callback, since an empty collection and
+one the viewer may not read are different answers; a page that passes no
+`onError` has the refusal reported on its console. In contract 1.0 a subscription is to a whole collection and a page
 filters on its side; a store holds at most 50 000 documents across its
 collections.
 
@@ -347,7 +354,8 @@ own charts.
 
 ## Errors
 
-Every call returns a promise. A rejection carries `{ code, message }`, with
+Every call returns a promise (a subscription reports through its `onError`). A
+rejection is a `CrewletError`, an `Error` carrying `{ code, message }`, with
 `code` one of:
 
 | Code | Means |
