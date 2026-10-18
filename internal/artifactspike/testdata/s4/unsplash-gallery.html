@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Offsite photos</title>
+
+<style>
+:root { --bg: #ffffff; --fg: #1d1d1f; --muted: #6b6b70; --accent: #3b5bdb; --card: #f5f5f7; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111114; --fg: #f2f2f5; --muted: #a0a0a8; --accent: #7b93ff; --card: #1c1c21; }
+}
+body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+main { max-width: 960px; margin: 0 auto; padding: 16px; }
+.card { background: var(--card); border-radius: 12px; padding: 16px; margin: 12px 0; }
+button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--muted); background: var(--card); color: var(--fg); cursor: pointer; }
+.gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; } .gallery img { width: 100%; border-radius: 12px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Team offsite</h1>
+<div class="gallery">
+  <img src="https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=600" alt="Team at a table">
+  <img src="https://images.unsplash.com/photo-1600880292203-757bb62b4baf?w=600" alt="Workshop">
+  <img src="https://images.unsplash.com/photo-1552664730-d307ca884978?w=600" alt="Planning wall">
+</div>
+</main>
+
+</body>
+</html>

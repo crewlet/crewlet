@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CSV explorer</title>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<style>
+:root { --bg: #ffffff; --fg: #1d1d1f; --muted: #6b6b70; --accent: #3b5bdb; --card: #f5f5f7; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111114; --fg: #f2f2f5; --muted: #a0a0a8; --accent: #7b93ff; --card: #1c1c21; }
+}
+body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+main { max-width: 960px; margin: 0 auto; padding: 16px; }
+.card { background: var(--card); border-radius: 12px; padding: 16px; margin: 12px 0; }
+button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--muted); background: var(--card); color: var(--fg); cursor: pointer; }
+
+</style>
+</head>
+<body>
+<main>
+<div class="card"><input type="file" id="file" accept=".csv"><table id="table"></table></div>
+</main>
+<script>
+document.getElementById("file").addEventListener("change", (e) => {
+  Papa.parse(e.target.files[0], { header: true, complete: (res) => {
+    const table = document.getElementById("table");
+    table.replaceChildren();
+    res.data.slice(0, 50).forEach(row => {
+      const tr = document.createElement("tr");
+      Object.values(row).forEach(v => { const td = document.createElement("td"); td.textContent = v; tr.append(td); });
+      table.append(tr);
+    });
+  } });
+});
+</script>
+</body>
+</html>
