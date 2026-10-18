@@ -376,6 +376,36 @@ describe("what a change came to", () => {
     });
   });
 
+  // THE RULE SAYS WHAT A REFUSAL ON AUTHORITY SAYS: `unauthorized` is every
+  // rule's, so its sentence is the engine's for the rule that refused, and the
+  // rule travels beside the grants. Mutation: say ACT_ERRORS' one sentence for
+  // the code, or leave the reason behind, and this fails.
+  test("a refusal on authority says its rule's sentence, and carries the rule", async () => {
+    const said =
+      "Your role on this doesn't allow that. Whoever owns it can share it with you at a higher one.";
+    stub(async () =>
+      json(
+        {
+          error: "unauthorized",
+          message: said,
+          reason: "role",
+          role: "editor",
+          grants: ["admin"],
+          tool: "set_pins",
+        },
+        403,
+      ),
+    );
+    const result = await act("set_pins", {}, { floors: new SessionFloors() });
+    expect(result).toMatchObject({
+      kind: "refused",
+      code: "unauthorized",
+      reason: "role",
+      grants: ["admin"],
+      sentence: said,
+    });
+  });
+
   // NOBODY SIGNED IN IS THE SESSION'S NEED, not a token to set: the browser
   // holds nothing a script could read, so the repair is a sign-in.
   test("a refused credential asks for a sign-in", async () => {

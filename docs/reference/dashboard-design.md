@@ -4382,7 +4382,13 @@ maps every wire state to exactly one component state): the question in a
 container, and the engine's cards (`ResultTableCard` with its CSV and XLSX
 downloads from the stored snapshot, `EntityList`, `OpenInAppCard`,
 `RefusalCard`, `ProposalCard` with the before and after of every change, and,
-where the result's visibility changes, who will see it). A conversation an
+where the result's visibility changes, who will see it). A refusal of access
+is a `RefusalCard` (a value not accepted or a record not found is a warning
+`Callout`), and it names a missing permission, with a request to copy for an
+admin and the line that the assistant acts with your access only, only where
+access is the way past it, which the refusal's `reason` decides
+(`lib/authorityRemedy.ts`, the table a screen's refusal asks too); any other
+says the engine's own sentence, with nothing to copy. A conversation an
 administrator read for compliance says so at its top, with each reader, when
 and the reason they gave.
 
@@ -4586,7 +4592,13 @@ decision has 0 option(s) …" rather than the package's name in front of it, and
 a forbidden one no longer ends by repeating the sentinel's own "not this
 actor's to write". `contract/errors.ts` `ACT_ERRORS` holds one sentence per
 code and is held against the engine's codes both ways
-(`TestTheDashboardKnowsExactlyTheActRefusals`). A conditional edit that lost
+(`TestTheDashboardKnowsExactlyTheActRefusals`), but for a refusal on authority:
+`unauthorized` is every rule's, so it is the engine's sentence for the rule
+that refused, which follows its `reason`. A refused change names the access to
+ask an admin for ("You need Worklet access for this. Ask an admin.") only where
+that access is the way past the rule (`lib/authorityRemedy.ts`): a proof gone
+stale names the access that admitted you, and an artifact's role is cleared by
+its owner's share. A conditional edit that lost
 the race reads "Changed by somebody else since you opened it." — somebody
 else, not a name, because the refusal carries the version it lost to and not
 its author. That refusal, and every other that says the screen is out of date
@@ -4704,7 +4716,24 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   and `closed` — as a sentence saying which.
   `bad_params` is the one that names the SCREEN as the fault: the engine
   understood the question and refused it, so retrying sends the same bad
-  request again. `unavailable` is the opposite: the node will answer in a
+  request again. `unauthorized` says the rule that refused — the access the
+  refusal names where access is a way past it, the rule's own sentence
+  (`contract/authority.ts`, keyed by the engine's reasons) where it is not —
+  and offers the ONE control that clears that rule (`lib/authorityRemedy.ts`):
+  **Sign in** for a reader short of access or an agent's seat on a verb only a
+  person makes, **Confirm it’s you** for a proof gone stale (the step-up
+  ceremony, after which the screen asks again on the socket's reconnect),
+  **Sign in as yourself** for a credential acting as no seat or a token on a
+  gesture that needs the person, **Try again** once an admin has activated an
+  account that is not active or an artifact's owner has shared it at the role
+  the verb needs, **Reload** for a request this engine's build has no rule
+  for, and nothing where no reader can clear it from here (a verb only an
+  agent's seat makes, a request that named no record, an agent acting for
+  somebody who could not take the verb, a request the Dashboard Assistant made
+  for a gesture it never takes or a change its person did not approve, which
+  only its own panel meets). A stale proof's `grants` are what
+  admitted the reader, and an artifact refusal's `admin` is the override beside
+  the share its owner makes, so neither is drawn as access to ask for. `unavailable` is the opposite: the node will answer in a
   moment, so `useQuery` asks again on its own rather than leaving a person to
   reload — WHEN the engine's frame says (`retry_after`, read through
   `protocol/retry.ts`), never after a constant of the client's. A hint is

@@ -123,6 +123,11 @@ export type ActResult =
        */
       grants: string[];
       /**
+       * On a refusal on AUTHORITY, the rule that decided it; "" everywhere
+       * else. Beside the grants it says whether they are a way past it.
+       */
+      reason: string;
+      /**
        * Whether sending it again may succeed: the engine refused for the
        * NODE rather than the request, and said waiting can change that. A
        * retry sends the same operation.

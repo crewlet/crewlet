@@ -16,14 +16,15 @@
  * states precisely.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
 import { Tag } from "@crewlethq/ui";
 
 import { QueryState, SeatCard } from "./common.tsx";
 import { drawnClasses } from "~/testing.tsx";
 import type { Seat } from "~/lib/seats.ts";
-import type { AgentRow, LiveCall } from "~/protocol/index.ts";
+import { setStepUpConfirmer, type AgentRow, type LiveCall } from "~/protocol/index.ts";
+import { page } from "~/lib/session.ts";
 
 afterEach(cleanup);
 
@@ -164,4 +165,68 @@ test.each([
   const callout = screen.getByText(new RegExp(`Refused as`)).closest(".crewlet-callout")!;
   expect(callout.textContent).toMatch(said);
   expect(callout.textContent).toContain(reason);
+});
+
+// A REFUSAL OFFERS WHAT CLEARS ITS OWN RULE, and nothing where no reader can.
+//
+// The banner offered Sign in for every rule. A reader whose proof had gone
+// stale was sent to sign in again rather than to confirm who they are; one
+// whose account is not active signed in to the same refusal; and a stale
+// proof's grants — what ADMITTED the reader — were drawn as "needs Admin
+// access" to an admin. Mutation: offer Sign in for every reason and the
+// step_up, stage, unknown_action, seat_only, role and ceiling rows fail; draw
+// the grants whatever the reason and the step_up row says "needs Admin access"
+// and the role row names Admin where its owner's share is the remedy.
+test.each([
+  ["no_grant", ["worklet"], "Sign in", /needs Worklet access/],
+  ["not_lead", ["admin"], "Sign in", /needs Admin access/],
+  ["step_up", ["admin"], "Confirm it’s you", /Confirm it’s you, then try again/],
+  ["stage", [], "Try again", /Your account isn’t active/],
+  ["unseated", [], "Sign in as yourself", /bind it to a human seat/],
+  ["token_refused", [], "Sign in as yourself", /Access tokens can’t do this/],
+  ["unknown_action", [], "Reload", /no rule for that request/],
+  ["seat_only", ["admin"], null, /Only an agent can do this/],
+  ["role", ["admin"], "Try again", /Its owner can share it with you at a higher one/],
+  ["ceiling", [], null, /working for can’t do this/],
+  ["unnamed", [], null, /didn’t say what it’s about/],
+  ["a_reason_from_a_newer_engine", [], null, /no access would change that/],
+  ["a_reason_from_a_newer_engine", ["chatlet"], "Sign in", /needs Chatlet access/],
+])("a refusal by %s naming %j offers %s", (reason, grants, control, said) => {
+  render(<QueryState error="unauthorized" refusal={{ reason, grants }} loading={false} />);
+  const callout = screen.getByText(new RegExp(`Refused as`)).closest(".crewlet-callout")!;
+  expect(callout.textContent).toMatch(said);
+  const buttons = [...callout.querySelectorAll("button")].map((b) => b.textContent);
+  expect(buttons).toEqual(control === null ? [] : [control]);
+  if (reason === "step_up" || reason === "role") {
+    expect(callout.textContent).not.toMatch(/needs Admin access/);
+  }
+});
+
+// EACH CONTROL DOES WHAT IT SAYS: Confirm asks the one step-up ceremony, and
+// asking again reloads this screen, after an admin has acted. Mutation: point
+// Confirm at the sign-in and the first assertion fails.
+test("a stale proof's control asks for the step-up, and an inactive account's reloads", () => {
+  const asked = vi.fn(() => Promise.resolve(false));
+  const uninstall = setStepUpConfirmer(asked);
+  const reload = vi.spyOn(page, "reloadInto").mockImplementation(() => {});
+  try {
+    render(
+      <QueryState
+        error="unauthorized"
+        refusal={{ reason: "step_up", grants: ["admin"] }}
+        loading={false}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Confirm it’s you/ }));
+    expect(asked).toHaveBeenCalledTimes(1);
+    cleanup();
+    render(
+      <QueryState error="unauthorized" refusal={{ reason: "stage", grants: [] }} loading={false} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Try again/ }));
+    expect(reload).toHaveBeenCalledWith(location.hash);
+  } finally {
+    uninstall();
+    reload.mockRestore();
+  }
 });

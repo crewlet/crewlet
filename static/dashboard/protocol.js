@@ -1349,6 +1349,16 @@ var RestError = class extends Error {
 		return remedyOf(this.body.remedy);
 	}
 	/**
+	* The rule a refusal on authority was decided by (the envelope's `reason`),
+	* or "" where the answer named none. Beside [grants] it says whether the
+	* access they name is a way past the refusal, which they cannot say alone:
+	* a stale proof names the grants that admitted the person
+	* (`lib/authorityRemedy.ts` decides by both).
+	*/
+	get reason() {
+		return typeof this.body.reason === "string" ? this.body.reason : "";
+	}
+	/**
 	* This refusal in the shape `QueryState` renders from — the one the
 	* socket's error frame carries, under the same keys and on the same terms:
 	* a `403 unauthorized`'s rule and the grants that would have admitted the
@@ -3954,12 +3964,14 @@ function writeFailed(err) {
 		kind: "unknown",
 		reason: err.detail || `The answer was lost (status ${err.status}).`
 	};
+	const own = code === "" ? null : ACT_ERRORS[code];
 	return {
 		kind: "refused",
 		code,
-		sentence: (code === "" ? null : ACT_ERRORS[code]) ?? (err.detail || err.sentence || `The engine refused the change (status ${err.status}).`),
+		sentence: (code === "unauthorized" && err.reason !== "" ? err.sentence : "") || (own ?? (err.detail || err.sentence || `The engine refused the change (status ${err.status}).`)),
 		hint: err.hint,
 		grants: err.grants,
+		reason: err.reason,
 		retryable: err.retryHint !== null && retryAfterMs(err.retryHint) !== null,
 		remedy: err.remedy,
 		lookAgain: LOOK_AGAIN.has(code)

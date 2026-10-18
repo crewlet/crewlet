@@ -84,7 +84,10 @@ API, the same way the dashboard's own screens load. So:
   guessing.
 - **A refusal stays a refusal.** When something needs a permission you do not
   hold, the assistant shows a card saying which one, with a ready-made request
-  you can copy to an administrator. It cannot obtain the access for you.
+  you can copy to an administrator. It cannot obtain the access for you. When
+  no permission would help, for example with something only you can do
+  yourself or a change the assistant can only propose, the card says why in
+  the engine's own words and offers no request.
 - **It never acts as anyone else.** It cannot impersonate a colleague, an
   agent or an administrator, and nothing you type can make it.
 

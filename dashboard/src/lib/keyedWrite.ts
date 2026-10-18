@@ -15,12 +15,12 @@
  *    attempt's write rather than a second one, except on a route that reads no
  *    key, where a retry is a new one and the sentence says so;
  *  - **refused**: the engine said no, in its own words, with the access that
- *    would have admitted the caller where the refusal named it, the steps a
- *    sequence had already landed (`landed`, worded by the caller) where it was
- *    refused part way, and the refusal itself for a caller that branches on
- *    its code. A `409 stale` is marked `stale`: what the gesture was about has
- *    moved on, so the same request is refused the same however often it is
- *    sent.
+ *    would have admitted the caller where that access is the way past the
+ *    rule, the steps a sequence had already landed (`landed`, worded by the
+ *    caller) where it was refused part way, and the refusal itself for a
+ *    caller that branches on its code. A `409 stale` is marked `stale`: what
+ *    the gesture was about has moved on, so the same request is refused the
+ *    same however often it is sent.
  *
  * A `403 step_up_required` is not among them: `protocol/rest.ts` asks the
  * person to confirm who they are and REPLAYS the same request, key included,
@@ -40,7 +40,7 @@ import { useCallback, useState } from "react";
 import { isAbort, newActOpID, rest, RestError, type QueryValue } from "~/protocol/index.ts";
 import { openSentence } from "./format.ts";
 import { refusalText } from "./refusal.ts";
-import { youNeedWords } from "./access.ts";
+import { accessToAsk } from "./authorityRemedy.ts";
 
 /** What one keyed write came to. */
 export type KeyedAnswer =
@@ -171,15 +171,14 @@ function refusalOf(
       error: err,
     };
   }
-  // ONLY A RULE'S REFUSAL names access the caller lacks, and then it is ONE
-  // sentence naming that access, as a refused change says it everywhere
-  // (`WriteButton`'s `RefusalNote`): the engine's own sentence lists every
-  // access in general, and the two side by side said it twice. A step-up
-  // refusal names the access that ADMITTED them, so it never comes here.
-  const parts =
-    err.code === "unauthorized" && err.grants.length > 0
-      ? [`${youNeedWords(err.grants)} Ask an admin.`]
-      : [refusalText(err)];
+  // ONLY WHERE ACCESS IS THE WAY PAST does a refusal name the access the
+  // caller lacks, and then in ONE sentence, as a refused change says it
+  // everywhere ([accessToAsk]): the engine's own sentence lists every access
+  // in general, and the two side by side said it twice. The rule decides,
+  // never the grants alone: an artifact's role names the admin override
+  // beside the share its owner makes, and reads the engine's own sentence.
+  const asked = accessToAsk(err);
+  const parts = asked === null ? [refusalText(err)] : [asked];
   return {
     kind: "refused",
     text: parts.join(" ") + changed,

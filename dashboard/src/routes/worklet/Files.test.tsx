@@ -111,6 +111,29 @@ test("a download refused on authority says which grant would admit the reader", 
   );
 });
 
+// A REFUSAL NO ACCESS CLEARS IS THE ENGINE'S OWN WORDS, whatever it names: a
+// proof gone stale names the access that admitted the reader. Mutation: decide
+// by the grants alone and this names Admin.
+test("a download refused for a stale proof says the engine's words, never a grant", async () => {
+  serving({ "": { project: "ENG", files: [file("a.md")], complete: true } });
+  vi.spyOn(rest, "blob").mockRejectedValueOnce(
+    new RestError(403, {
+      error: "step_up_required",
+      message: "Confirm it's you to do this, then try again.",
+      reason: "step_up",
+      grants: ["admin"],
+    }),
+  );
+  mount();
+  fireEvent.click(await screen.findByText("Download"));
+  await waitFor(() =>
+    expect(
+      screen.getByText(/Not downloaded: Confirm it's you to do this, then try again\./),
+    ).toBeTruthy(),
+  );
+  expect(screen.queryByText(/needs Admin access/)).toBeNull();
+});
+
 test("a path is escaped segment by segment and saved under its own name", () => {
   expect(fileAddress("ENG", "a b/c#d.md")).toBe("ENG/a%20b/c%23d.md");
   expect(fileName("reports/2026/q3.md")).toBe("q3.md");

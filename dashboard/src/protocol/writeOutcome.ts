@@ -106,6 +106,13 @@ export type WriteFailed =
        * admitted the caller, read from the answer. Empty everywhere else.
        */
       grants: string[];
+      /**
+       * On a refusal on AUTHORITY, the rule that decided it, read from the
+       * answer; "" everywhere else. The grants alone cannot say whether the
+       * access they name is a way past it (a stale proof names the access that
+       * admitted the person), and the rule can (`lib/authorityRemedy.ts`).
+       */
+      reason: string;
       /** Whether sending it again may succeed: the engine said waiting can change it. */
       retryable: boolean;
       /** Where the limit that caused it is changed, for a refusal a limit caused (a spent budget). */
@@ -201,14 +208,22 @@ export function writeFailed(err: RestError): WriteFailed {
     };
   }
   const own = code === "" ? null : ACT_ERRORS[code];
+  // A RULE'S REFUSAL IS SAID BY ITS RULE. `unauthorized` is every refusal the
+  // authority table makes, and the engine's sentence for one follows the rule
+  // that decided it, while this build's one sentence for the code said the
+  // reader lacked access: to somebody whose role on an artifact was below the
+  // verb's, or whose account was not active, among them.
+  const rule = code === "unauthorized" && err.reason !== "" ? err.sentence : "";
   return {
     kind: "refused",
     code,
     sentence:
-      own ??
-      (err.detail || err.sentence || `The engine refused the change (status ${err.status}).`),
+      rule ||
+      (own ??
+        (err.detail || err.sentence || `The engine refused the change (status ${err.status}).`)),
     hint: err.hint,
     grants: err.grants,
+    reason: err.reason,
     // THE ENGINE SAYS WHETHER WAITING CHANGES IT: a `503` it wrote carries a
     // `Retry-After` where it does and none where it does not (a full log, a
     // record this node cannot decode), read through the one interpreter of

@@ -21,7 +21,14 @@ import {
   InlineCode,
 } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
-import { PlugGlyph, KeyGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
+import {
+  PlugGlyph,
+  KeyGlyph,
+  ClockGlyph,
+  RefreshCwGlyph,
+  ShieldUserGlyph,
+  TriangleAlertGlyph,
+} from "@crewlethq/icons/glyphs";
 // STILL OURS: an attention row's mark is named by `lib/attention.ts` as a
 // value, and uilet's glyphs are components. The name -> drawing lookup stays
 // in `~/ui/Icon.tsx`, which is the one place a port of it moves every caller
@@ -30,9 +37,10 @@ import { PhaseTag } from "~/ui/primitives.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { isLogRefusal } from "~/protocol/index.ts";
-import { goSignIn } from "~/lib/session.ts";
+import { confirmStepUp, isLogRefusal } from "~/protocol/index.ts";
+import { goSignIn, page } from "~/lib/session.ts";
 import { needsWords } from "~/lib/access.ts";
+import { remedyFor, type AuthorityAction } from "~/lib/authorityRemedy.ts";
 import {
   activityOf,
   shownStateOf,
@@ -433,9 +441,9 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
 
 /**
  * A refusal on authority that says WHY: the access any one of which would
- * have admitted the reader ("needs Worklet access"), or (an empty list) what
- * the deciding rule asks that no access gives, in its own sentence
- * ([REFUSAL_SENTENCES], keyed by the rule's reason).
+ * have admitted the reader ("needs Worklet access"), or (where none was named,
+ * or the rule is one no access changes) what the deciding rule asks, in its
+ * own sentence ([REFUSAL_SENTENCES], keyed by the rule's reason).
  *
  * FROM THE ANSWER, NEVER WRITTEN HERE. The engine's error frame carries the
  * deciding rule's own reason and grants under the keys its REST envelope uses;
@@ -445,37 +453,55 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
  * to no seat, and a token on a gesture that needs the person, that what they
  * lacked was leading somebody. A reason this build has no sentence for says
  * only that no access would change it.
+ *
+ * AND IT OFFERS WHAT CLEARS THAT RULE ([remedyFor]), never one control for
+ * all of them: Sign in for a reader short of access, which somebody holding it
+ * clears; Confirm for a proof gone stale, which the reader clears in this tab;
+ * Sign in as yourself for a credential acting as no seat; Try again once an
+ * admin has activated an account; Reload for a request this engine's build has
+ * no rule for — and nothing at all for a rule no reader can clear from here.
+ * It offered Sign in to every one of them, so a reader whose account was not
+ * active signed in again to the same refusal.
  */
 function RefusedOnAuthority({ refusal }: { refusal: QueryRefusal }) {
-  // NO ACCESS WOULD ADMIT THIS READER, so signing in again changes nothing
-  // and no button offers it: what the deciding rule asks instead is its own
-  // sentence.
-  if (refusal.grants.length === 0) {
-    return (
-      <Callout variant="warning" icon={<KeyGlyph size="md" />}>
-        {REFUSAL_SENTENCES[refusal.reason] ??
-          "You can’t see this, and no access would change that."}{" "}
-        <span className="t-caption">
-          Refused as <InlineCode>{refusal.reason}</InlineCode>.
-        </span>
-      </Callout>
-    );
-  }
+  const remedy = remedyFor(refusal.reason, refusal.grants);
   return (
     <Callout
       variant="warning"
       icon={<KeyGlyph size="md" />}
-      action={
-        <Button size="small" variant="secondary" leadingIcon={<KeyGlyph />} onClick={goSignIn}>
-          Sign in
-        </Button>
-      }
+      action={remedy.action ? <AuthorityRemedy action={remedy.action} /> : undefined}
     >
-      {needsWords("This answer", refusal.grants)}{" "}
+      {remedy.namesAccess
+        ? needsWords("This answer", refusal.grants)
+        : (REFUSAL_SENTENCES[refusal.reason] ??
+          "You can’t see this, and no access would change that.")}{" "}
       <span className="t-caption">
         Refused as <InlineCode>{refusal.reason}</InlineCode>.
       </span>
     </Callout>
+  );
+}
+
+/**
+ * The one control a refusal on authority offers, each the move that clears its
+ * rule. Signing in comes back to this screen, so somebody who holds the access
+ * lands where the refusal was; a confirmed step-up replaces the session, which
+ * re-dials the socket, and every read on the screen asks again on the
+ * reconnect; asking again and reloading reload this screen.
+ */
+function AuthorityRemedy({ action }: { action: AuthorityAction }) {
+  const controls: Record<AuthorityAction, [string, ReactNode, () => void]> = {
+    sign_in: ["Sign in", <KeyGlyph />, goSignIn],
+    sign_in_yourself: ["Sign in as yourself", <KeyGlyph />, goSignIn],
+    confirm: ["Confirm it’s you", <ShieldUserGlyph />, () => void confirmStepUp()],
+    try_again: ["Try again", <RefreshCwGlyph />, () => page.reloadInto(location.hash)],
+    reload: ["Reload", <RefreshCwGlyph />, () => page.reloadInto(location.hash)],
+  };
+  const [label, icon, act] = controls[action];
+  return (
+    <Button size="small" variant="secondary" leadingIcon={icon} onClick={act}>
+      {label}
+    </Button>
   );
 }
 
