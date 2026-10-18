@@ -16,10 +16,10 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 )
 
-// nonceAttr is what the linter writes into every script element, straight
+// NonceAttr is what the linter writes into every script element, straight
 // after its name so it is the first nonce a browser reads. [Source] removes
 // exactly this text, which no source may contain ([CodePlaceholder]).
-const nonceAttr = ` nonce="` + artifacts.NoncePlaceholder + `"`
+const NonceAttr = ` nonce="` + artifacts.NoncePlaceholder + `"`
 
 // Options configure one lint.
 type Options struct {
@@ -315,7 +315,7 @@ func (l *linter) startTag(tok html.Token, raw []byte, line int) []byte {
 				l.policy.UnsafeEval = true
 			}
 		}
-		insert = nonceAttr
+		insert = NonceAttr
 	case "link":
 		href, _ := get("href")
 		rel, _ := get("rel")
@@ -561,7 +561,7 @@ func asRefused(err error, target **RefusedRef) bool { return errors.As(err, targ
 // Source is a stored page as its author wrote it: the nonce placeholders the
 // linter wrote removed, so an edit or a read sees the author's text and a
 // second lint writes them again where they were.
-func Source(text []byte) []byte { return bytes.ReplaceAll(text, []byte(nonceAttr), nil) }
+func Source(text []byte) []byte { return bytes.ReplaceAll(text, []byte(NonceAttr), nil) }
 
 // Stored is the script policy of a page the linter already wrote, a carried
 // file a version names again: its source linted again with nothing copied in
