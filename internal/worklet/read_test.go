@@ -3,6 +3,7 @@ package worklet_test
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -398,38 +399,93 @@ func TestARemovedTaskIsOutOfEveryOrdinaryAnswer(t *testing.T) {
 	}
 }
 
-// THE THREE TAG MODES ANSWER THREE DIFFERENT QUESTIONS.
+// THE THREE TAG MODES ANSWER THREE DIFFERENT QUESTIONS, AT EITHER SCOPE.
 //
-// `all:` is a COUNT rather than a membership — a task carrying two of three is
-// not a match, and an IN test cannot say so, which is the one of the three
-// that reads correctly while being wrong.
+// `all:` is every membership at once — a task carrying two of three is not a
+// match, which is the one of the three that reads correctly while being wrong.
+// And each is asked of a project and of the whole company, because the two are
+// read from the tag rows differently ([worklet.Query] compiles a project's
+// filter to that project's tag rows): a task in another project carrying the
+// same tags is in the company's answer and never in the project's.
 func TestTheTagModesAreThreeDifferentQuestions(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
 	h.seed("both", func(task *worklet.Task) { task.Tags = []string{"api", "v2"} })
 	h.seed("one", func(task *worklet.Task) { task.Tags = []string{"api"} })
 	h.seed("none", nil)
+	h.seed("elsewhere", func(task *worklet.Task) {
+		task.Project, task.Key = "OPS", "OPS-1"
+		task.Tags = []string{"api", "v2"}
+	})
 
 	for name, tc := range map[string]struct {
-		filter string
-		want   []string
+		filter                string
+		inProject, everywhere []string
 	}{
-		"any matches either":          {"any:api,v2", []string{"both", "one"}},
-		"all matches only both":       {"all:api,v2", []string{"both"}},
-		"none matches neither":        {"none:api,v2", []string{"none"}},
-		"a bare list defaults to any": {"api,v2", []string{"both", "one"}},
+		"any matches either": {"any:api,v2", []string{"both", "one"},
+			[]string{"both", "elsewhere", "one"}},
+		"all matches only both": {"all:api,v2", []string{"both"},
+			[]string{"both", "elsewhere"}},
+		"none matches neither": {"none:api,v2", []string{"none"},
+			[]string{"none"}},
+		"a bare list defaults to any": {"api,v2", []string{"both", "one"},
+			[]string{"both", "elsewhere", "one"}},
+		"one tag": {"v2", []string{"both"}, []string{"both", "elsewhere"}},
 		// THE SPELLING A PERSON OR A MODEL TYPES — a label, not the slug
 		// the rows hold — finds the same work.
-		"a label finds its slug": {"all:API,V2", []string{"both"}},
+		"a label finds its slug": {"all:API,V2", []string{"both"},
+			[]string{"both", "elsewhere"}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got := ids(h.ask(map[string]any{
-				"container": "project:ENG", "tag": tc.filter,
-			}))
-			if len(got) != len(tc.want) {
-				t.Fatalf("tag=%s answered %v, want %v", tc.filter, got, tc.want)
+			for container, want := range map[string][]string{
+				"project:ENG": tc.inProject, "workspace": tc.everywhere,
+			} {
+				got := ids(h.ask(map[string]any{
+					"container": container, "tag": tc.filter,
+				}))
+				slices.Sort(got)
+				if !slices.Equal(got, want) {
+					t.Errorf("tag=%s in %s answered %v, want %v", tc.filter,
+						container, got, want)
+				}
 			}
 		})
+	}
+}
+
+// A LONG TAG LIST IS ANSWERED, NOT REFUSED.
+//
+// `all:` was one `t.id IN (…)` per slug ANDed together, an expression a level
+// deeper for every slug, and this engine refuses one past a hundred levels — so
+// a list of ninety-odd tags failed the read rather than answering it. A list
+// that long is longer than any task can carry ([worklet.MaxTagsPerTask]), so
+// `all:` of it answers nothing, and `any:` and `none:` of the same list answer
+// as they do for two tags, at either scope and in either subtask mode.
+func TestALongTagListIsAnsweredRatherThanRefused(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+	h.seed("tagged", func(task *worklet.Task) { task.Tags = []string{"api", "v2"} })
+	h.seed("bare", nil)
+	tags := []string{"api", "v2"}
+	for i := len(tags); i < 3*worklet.MaxTagsPerTask; i++ {
+		tags = append(tags, fmt.Sprintf("tag-%03d", i))
+	}
+	list := strings.Join(tags, ",")
+	for mode, want := range map[string][]string{
+		"all:": nil, "any:": {"tagged"}, "none:": {"bare"},
+	} {
+		for _, container := range []string{"project:ENG", "workspace"} {
+			for _, subtasks := range []string{"collapsed", "separate"} {
+				got := ids(h.ask(map[string]any{
+					"container": container, "tag": mode + list, "subtasks": subtasks,
+				}))
+				slices.Sort(got)
+				if !slices.Equal(got, want) {
+					t.Errorf("tag=%s of %d tags in %s (%s) answered %v, want %v",
+						mode, len(tags), container, subtasks, got, want)
+				}
+			}
+		}
 	}
 }
 

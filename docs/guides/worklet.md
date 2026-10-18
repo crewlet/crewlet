@@ -598,8 +598,11 @@ and what a filter compares, so it is normalised on the way in — `Regression`,
 it never changes. A filter normalises what it is given the same way, so
 `tag=Needs Design` finds the work filed under `needs-design`, and a value that
 normalises to no slug at all is refused naming it rather than answered as an
-empty board. The label is what a person reads, and renaming a tag moves only
-that.
+empty board. A filter on tags (`any:` or `all:`) reads the work that carries
+them — inside a project, that project's — rather than every task in scope, so
+a rare tag is as cheap to ask about at the workspace as on one board; `none:`,
+a question about tags a task does *not* carry, reads each task's own. The label
+is what a person reads, and renaming a tag moves only that.
 
 **A tag is declared before it is used.** A write naming a label the project does
 not have is refused, listing the ones it does and the nearest match, because
