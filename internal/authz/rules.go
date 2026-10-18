@@ -142,6 +142,12 @@ const (
 	// --- beyond recovery -------------------------------------------- //
 	ActionWorkPurge Action = "work.purge"
 	ActionPagePurge Action = "pages.purge"
+	// A ROOM'S MESSAGES DESTROYED, and its horizon set. DOTTED, because no
+	// tool is named for any of the three: each is a route of the human
+	// write surface, said in nobody's voice in the room (internal/chat).
+	ActionChatErase     Action = "chat.erase"
+	ActionChatPrune     Action = "chat.prune"
+	ActionChatRetention Action = "chat.channel.retention"
 
 	// --- what somebody wrote ---------------------------------------- //
 	ActionPageCommentEdit   Action = "pages.comment.edit"
@@ -772,6 +778,23 @@ var rules = map[Action]rule{
 	// every other irreversible gesture does.
 	ActionWorkPurge: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyStepUp},
 	ActionPagePurge: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyStepUp},
+	// A CHAT DESTRUCTION IS A PURGE'S: admin's, a person's or a credential's
+	// — never an agent's, which could erase the evidence of what it said —
+	// and a recent proof's, since nothing undoes it. An erase and a prune
+	// destroy what people wrote; a room's retention is a prune on a delay,
+	// so setting a shorter one is the same decision taken in advance.
+	//
+	// NOT SEATED, unlike every other chat verb: none of the three is said in
+	// a room, so the store records whoever made it under their own name —
+	// an administrator's pipeline token included — and none READS the room
+	// it destroys from, which is what lets an administrator who is in no
+	// private room take a credential pasted into one out of it without being
+	// shown what else was said there. Which room exists is the store's to
+	// answer; a destruction of a room the store does not hold destroys
+	// nothing and says so.
+	ActionChatErase:     {class: ClassAdmin, humanOnly: true, recency: iam.RecencyStepUp},
+	ActionChatPrune:     {class: ClassAdmin, humanOnly: true, recency: iam.RecencyStepUp},
+	ActionChatRetention: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyStepUp},
 
 	// --- the org chart ------------------------------------------------- //
 	//
