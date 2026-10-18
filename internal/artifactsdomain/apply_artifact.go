@@ -507,10 +507,6 @@ func (a *Applier) applyPatch(ctx context.Context, tx *sql.Tx, c applyContext, id
 	return rows, nil
 }
 
-// roleRank is a role's place on the ladder, -1 for a role this build does not
-// know. The ladder's order is the leaf's ([artifacts.Roles]).
-func roleRank(r artifacts.Role) int { return slices.Index(artifacts.Roles, r) }
-
 // applyShare grants one audience a role. A grant that LOWERS a role the
 // audience held is a narrowing, and moves the access epoch.
 func (a *Applier) applyShare(ctx context.Context, tx *sql.Tx, c applyContext, id string,
@@ -537,7 +533,10 @@ func (a *Applier) applyShare(ctx context.Context, tx *sql.Tx, c applyContext, id
 		return 0, err
 	}
 	epoch := head.epoch
-	if held && roleRank(p.Share.Role) < roleRank(before) {
+	// A LOWERED ROLE IS A NARROWING, by the ladder's own ordering
+	// ([artifacts.Role.Rank]); a role this build does not know ranks below
+	// every real one, so replacing one is never read as a narrowing.
+	if held && p.Share.Role.Rank() < before.Rank() {
 		epoch++
 	}
 	rows, err := upsertShare(ctx, tx, c, id, p.Share)

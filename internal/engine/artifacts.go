@@ -83,19 +83,6 @@ func (e *Engine) ArtifactsWriter() *artifactsdomain.Writer {
 	return nil
 }
 
-// ArtifactsTrash is the trash reaper's source for artifacts, purging as the
-// engine under this node's id, and false on an engine with no core runtime.
-func (e *Engine) ArtifactsTrash() (artifactsdomain.TrashSource, bool) {
-	c := e.core.Load()
-	if c == nil || c.artifactsReader == nil || c.artifactsWriter == nil {
-		return artifactsdomain.TrashSource{}, false
-	}
-	return artifactsdomain.TrashSource{
-		Reader: c.artifactsReader, Writer: c.artifactsWriter,
-		Actor: iam.Actor{Name: c.nodeID, Kind: iam.ActorSystem},
-	}, true
-}
-
 // objectEstatesFor is every estate the object store's passes read on a node
 // running n: the native half's, and the artifacts log's over artifacts, which
 // every data node runs. EMPTY WHERE THE NATIVE HALF OFFERS NONE: the collector

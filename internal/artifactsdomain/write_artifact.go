@@ -204,7 +204,7 @@ func checkShare(c Call, s artifacts.Share, ceiling artifacts.Role) error {
 		return fmt.Errorf("%w: the call's authority names no role on the artifact, so "+
 			"no share could be held to it", ErrInvalid)
 	}
-	if roleRank(s.Role) > roleRank(ceiling) {
+	if !ceiling.Includes(s.Role) {
 		return fmt.Errorf("%w: %s holds %s and cannot grant %s", ErrAboveOwnRole,
 			c.Authority.Actor.Name, ceiling, s.Role)
 	}

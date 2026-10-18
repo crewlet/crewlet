@@ -504,9 +504,13 @@ func TestMovementsAreToldAfterTheCommit(t *testing.T) {
 	}
 }
 
-// THE TRASH REAPER PURGES ONLY WHAT HAS BEEN TRASHED PAST ITS TERM: a listing
-// a moment old does not purge an artifact restored since.
-func TestTheTrashReaperPurgesOnlyWhatHasBeenTrashedPastItsTerm(t *testing.T) {
+// THE TRASH REAPER PURGES ONLY WHAT HAS BEEN TRASHED SINCE BEFORE ITS CUTOFF: a
+// listing a moment old does not purge an artifact restored since, nor one
+// trashed after the cutoff, and each refusal says so by name.
+//
+// Mutation: drop the guard from PurgeTrashed and the restored artifact is
+// purged.
+func TestTheTrashPurgeTakesOnlyWhatWasTrashedBeforeItsCutoff(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
 	jane := person("jane", artifacts.RoleOwner)
@@ -517,22 +521,26 @@ func TestTheTrashReaperPurgesOnlyWhatHasBeenTrashedPastItsTerm(t *testing.T) {
 			t.Fatalf("trash: %v", err)
 		}
 	}
-	reaper := artifactsdomain.TrashSource{
-		Reader: n.reader, Writer: n.writer,
-		Actor: iam.Actor{Name: "node-a", Kind: iam.ActorSystem},
-		Now:   func() time.Time { return time.Now().Add(artifacts.TrashRetention + time.Hour) },
-	}
-	listed, err := reaper.TrashedBefore(t.Context(), time.Now().Add(time.Hour), 10)
+	cutoff := time.Now().Add(time.Hour)
+	listed, err := n.reader.TrashedBefore(t.Context(), cutoff, 10)
 	if err != nil || len(listed) != 2 {
-		t.Fatalf("the reaper listed %v (%v)", listed, err)
+		t.Fatalf("the trash listed %v (%v)", listed, err)
 	}
 	if _, err := n.writer.Restore(t.Context(), jane, restored); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
-	for _, id := range listed {
-		if err := reaper.PurgeTrashed(t.Context(), id, statelog.NewOpID(time.Now(), "")); err != nil {
-			t.Fatalf("purge %s: %v", id, err)
-		}
+	reaper := artifactsdomain.Call{Authority: artifacts.Authority{
+		Actor: iam.Actor{Name: "trash-reaper", Kind: iam.ActorSystem}, Role: artifacts.RoleOwner,
+	}}
+	if _, err := n.writer.PurgeTrashed(t.Context(), reaper, old,
+		time.Now().Add(-time.Hour)); !errors.Is(err, artifactsdomain.ErrNotInTrash) {
+		t.Errorf("a purge with a cutoff before the trash answered %v", err)
+	}
+	if _, err := n.writer.PurgeTrashed(t.Context(), reaper, restored, cutoff); !errors.Is(err, artifactsdomain.ErrNotInTrash) {
+		t.Errorf("a purge of the restored artifact answered %v", err)
+	}
+	if _, err := n.writer.PurgeTrashed(t.Context(), reaper, old, cutoff); err != nil {
+		t.Fatalf("purge the long-trashed artifact: %v", err)
 	}
 	if _, _, err := n.reader.Artifact(t.Context(), old, statelog.Freshness{Level: statelog.ReadSession}); !errors.Is(err, artifactsdomain.ErrPurged) {
 		t.Errorf("the long-trashed artifact answered %v", err)
