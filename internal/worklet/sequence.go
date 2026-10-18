@@ -244,6 +244,15 @@ type WriteResult struct {
 	// declared a moment earlier.
 	Declared []string
 
+	// Posted is the remark a post found already on its task under its id —
+	// the call that posted it, made again — which the write answered from
+	// that row with nothing published ([PostedRemark]). Read in the snapshot
+	// that decided the write, because what the remark asked and answered is
+	// the row's: a caller reporting what its own read resolved before the
+	// write could name a question the post never closed, where the first
+	// attempt landed after that read. Nil on every other path.
+	Posted *PostedRemark
+
 	// Caveats are what the caller should know and was not refused for: a
 	// body carrying more task keys than the applier will resolve, a tag
 	// that nearly matched an existing one. THE APPLY MUST NEVER DEPEND ON

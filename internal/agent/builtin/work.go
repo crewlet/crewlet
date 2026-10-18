@@ -1306,7 +1306,8 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 		return *refused, nil
 	}
 	if !holder {
-		if _, refused := t.deps.askedOn(ctx, authz.ActionWorkRead, id, actor.Handle); refused != nil {
+		if _, refused := t.deps.askedOn(ctx, authz.ActionWorkRead, id, actor.Handle,
+			nil); refused != nil {
 			return *refused, nil
 		}
 	}
@@ -3369,8 +3370,13 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			return *t.deps.answerOnly(ctx, "`ask` and `decision` put a new "+
 				"question to somebody, which takes Worklet."), nil
 		}
+		// WITH THE ID THIS COMMENT WILL CARRY, so the answer made again
+		// after it landed — which closed the ask that admitted it — is
+		// admitted as the answer it is, and answered from its row.
 		if before, refused = t.deps.askedOn(ctx, authz.ActionWorkComment, ref,
-			actor.Handle); refused != nil {
+			actor.Handle, func(task string) string {
+				return commentID(actor, t.Name(), task, args)
+			}); refused != nil {
 			return *refused, nil
 		}
 	}
@@ -3524,6 +3530,20 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				fmt.Sprintf("Read %s's thread with get_work_item", before.Address()),
 				"that is a second comment")), nil
 	}
+	if got.Posted != nil {
+		// THIS CALL MADE AGAIN, whose first attempt posted the remark: the
+		// writer answered it from that row and published nothing, so what
+		// it asked and answered is what the row says. The thread read
+		// resolves a landed remark from its row as well, but this is the
+		// write's own snapshot, and it also holds a first attempt that
+		// landed after that read.
+		comment.Ask = got.Posted.Asked
+		comment.Answers = nil
+		if got.Posted.Answers != "" {
+			answered := got.Posted.Answers
+			comment.Answers = &answered
+		}
+	}
 	t.deps.settle(ctx, got.Position)
 	answer := withOperation(ReceiptOf(map[string]any{
 		"comment_id": comment.ID,
@@ -3595,9 +3615,10 @@ func unaddressedCaveat(task worklet.Task, actor Actor, comment *worklet.Comment)
 // it. A rebased attempt ([Actor.RebasedTo], ADR-0029) mints its operations
 // afresh so the ledger decides them again, and that is all a rebase is about:
 // the ledger, which forgets. The comment's row does not, so a remark the
-// attempt before it posted is found by its id and left as it stands rather
-// than posted a second time beside it — the one write of a rebased attempt
-// that still lands once. Why a UUIDv5 here and an operation id for a page's
+// attempt before it posted is found by its id, and the writer answers the post
+// from that row and publishes nothing — so an answer, an edit or an unwatch
+// since stands, and nobody is woken a second time. It is the one write of a
+// rebased attempt that still lands once. Why a UUIDv5 here and an operation id for a page's
 // comment is [callOpKey]'s, "What the tracker's tools derive from it".
 //
 // A CALLER WITH NO TURN derives it from the call's operation instead

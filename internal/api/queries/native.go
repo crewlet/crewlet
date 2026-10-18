@@ -395,8 +395,10 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	if unread {
+		// A READ POSTS NOTHING, so it names no remark of the caller's own:
+		// only an open ask admits it.
 		asked, err := worklet.AskedOn(ctx, s.Work, detail.Task.ID,
-			iam.RecordOwner(principal), fresh)
+			iam.RecordOwner(principal), "", fresh)
 		if err != nil {
 			// THE PROBE COULD NOT READ THE THREAD, which says nothing
 			// about whether this caller was asked: unknown, never a

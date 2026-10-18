@@ -128,10 +128,11 @@ func TestAnAskResolvedWithoutAnAnswerIsListedAsResolved(t *testing.T) {
 	ask := worklet.Comment{ID: "c-1", Task: "a", Author: "bo", AuthorKind: worklet.AuthorAgent,
 		Body: "still needed?", Ask: "jane", CreatedAt: wednesday.Add(-3 * time.Hour)}
 	askOn(t, r, "op-ask", "a", ask)
+	// BY ITS ASKER, the one who may resolve it, at the writer's clock.
 	resolvedAt := wednesday.Add(-time.Hour)
-	ask.Resolved, ask.ResolvedBy, ask.ResolvedAt = true, "bo", &resolvedAt
-	if _, err := r.writer.UpdateTask(t.Context(), "op-resolve", "a", "ENG",
-		worklet.NoIfMatch, worklet.TaskPatch{Comment: &ask}, worklet.ChangeCommentResolved,
+	r.at = resolvedAt
+	bo := r.writer.As("bo", worklet.AuthorAgent, worklet.Provenance{})
+	if _, err := bo.ResolveComment(t.Context(), "op-resolve", "a", "ENG", "c-1",
 		nil); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -219,12 +220,7 @@ func TestAResolvedAskIsFollowedUpFromItsResolve(t *testing.T) {
 	}
 	resolve := func(opID, id string) {
 		t.Helper()
-		at := wednesday.Add(-time.Hour)
-		ask := worklet.Comment{ID: id, Task: "a", Author: "bo",
-			AuthorKind: worklet.AuthorAgent, Body: "still needed?", Ask: "jane",
-			CreatedAt: asked, Resolved: true, ResolvedBy: "bo", ResolvedAt: &at}
-		if _, err := bo.UpdateTask(t.Context(), opID, "a", "ENG", worklet.NoIfMatch,
-			worklet.TaskPatch{Comment: &ask}, worklet.ChangeCommentResolved,
+		if _, err := bo.ResolveComment(t.Context(), opID, "a", "ENG", id,
 			nil); err != nil {
 			t.Fatalf("%s: %v", opID, err)
 		}

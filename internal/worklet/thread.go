@@ -41,17 +41,27 @@ type ThreadQuery struct {
 
 	// Answers is the comment this one answers, as the caller stated it —
 	// or empty, in which case [Reader.Thread] INFERS it when exactly one
-	// open ask on this task is addressed to the author.
+	// open ask on this task is addressed to the author — unless the
+	// comment is already posted, which answers what its row says (Comment).
 	Answers string
 
 	// Author is who is writing, which the inference needs: an ask is
 	// answered by the person it was addressed to.
 	Author string
 
-	// Comment is the id the comment being written will carry, so that an
-	// ask this very comment already answered — a retried write whose
-	// first attempt landed — is not reported as answered by somebody
-	// else. Empty treats every answer as another's.
+	// Comment is the id the comment being written will carry.
+	//
+	// A REMARK ALREADY ON THE TASK UNDER IT is this call made again — a
+	// retried write, a redelivered turn, an approval retried after its
+	// outcome went unknown — whose first attempt landed, and the write
+	// answers it from that row ([PostedRemark]). So the read resolves it
+	// from that row too, before anything is inferred: it asked whom the
+	// remark asked and answers what the remark answered, nothing when it
+	// answered nothing, however the asks open to its author have moved
+	// since. Inferred again, a re-run of an answer found its own question
+	// closed — a choice refused, a person warned that nobody was asked to
+	// reply — or claimed a question asked since, which its write never
+	// closed. Empty treats the comment as new.
 	Comment string
 
 	// Choice is the option the comment chooses, checked against the
@@ -157,6 +167,11 @@ func (e *ErrAmbiguousAnswer) Error() string {
 // person is woken as a watcher instead of under `thread`, while an `answers`
 // resolved to the wrong comment closes somebody else's question. So a read
 // failure empties the first and refuses the second.
+//
+// A COMMENT ALREADY POSTED IS RESOLVED FROM ITS ROW, before anything is
+// inferred — see [ThreadQuery.Comment] — because its write is answered from
+// that row ([postedComment], the one read both take), and a resolution of the
+// thread as it stands now would describe a write that was never made.
 func (r *Reader) Thread(ctx context.Context, q ThreadQuery,
 	fresh statelog.Freshness) (ResolvedThread, error) {
 
@@ -184,7 +199,20 @@ func (r *Reader) Thread(ctx context.Context, q ThreadQuery,
 			}
 			out.Participants = participants
 		}
-		if out.Answers == "" && q.Author != "" {
+		var posted *PostedRemark
+		if q.Comment != "" {
+			var err error
+			if posted, err = postedComment(ctx, tx, q.Task, q.Comment,
+				q.Author); err != nil {
+				return err
+			}
+		}
+		switch {
+		case posted != nil:
+			// THIS CALL MADE AGAIN, whose post landed: it asked and
+			// answers what its row says, and nothing is inferred.
+			out.Asked, out.Answers = posted.Asked, posted.Answers
+		case out.Answers == "" && q.Author != "":
 			inferred, err := inferAnswer(ctx, tx, q.Task, q.Author)
 			if err != nil {
 				return err
@@ -198,8 +226,14 @@ func (r *Reader) Thread(ctx context.Context, q ThreadQuery,
 		if err != nil {
 			return err
 		}
-		if err := ask.answerableBy(q.Author, q.Comment); err != nil {
-			return err
+		// A POSTED ANSWER IS NOT ASKED AGAIN WHETHER IT MAY BE GIVEN: it was
+		// given, and the decide answers it from its row whatever has become
+		// of the question since. The choice is still checked, against a
+		// decision that never changes once asked.
+		if posted == nil {
+			if err := ask.answerableBy(q.Author); err != nil {
+				return err
+			}
 		}
 		if err := checkChoice(q.Task, ask.id, ask.decision, q.Choice); err != nil {
 			return err
@@ -381,13 +415,14 @@ func readAsk(ctx context.Context, tx *sql.Tx, task, comment string) (openAsk, er
 // the first — which the applier's `answered_by IS NULL` guard kept off the
 // ask while the answering comment still claimed to answer it.
 //
-// self is the id of the comment being written: an ask THIS comment already
-// answered is a retried write whose first attempt landed, not a second
-// answer.
+// NO ANSWER ALREADY POSTED IS ASKED: an ask the comment being written already
+// answered is that comment's call made again, which both callers resolve from
+// the comment's own row before asking this ([postedComment]). So an ask
+// answered here is answered by another comment, always.
 //
 // The rows and the author are seat handles, compared as such, and every
 // refusal NAMES them, because the caller reads the refusal to find the person.
-func (a openAsk) answerableBy(author, self string) error {
+func (a openAsk) answerableBy(author string) error {
 	switch {
 	case a.asked == "":
 		return invalidSaying(caveat.NotAQuestion(), "comment %s on task %s asked nobody a "+
@@ -401,8 +436,6 @@ func (a openAsk) answerableBy(author, self string) error {
 	case a.removed:
 		return invalidSaying(caveat.QuestionRemoved(), "comment %s on task %s was removed",
 			a.id, a.task)
-	case self != "" && a.answeredBy == self:
-		return nil
 	case a.answeredBy != "":
 		return &AlreadyAnsweredError{Task: a.task, Comment: a.id,
 			By: a.answerAuthor, At: a.answeredAt}

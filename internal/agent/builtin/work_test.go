@@ -96,6 +96,11 @@ type fakeTracker struct {
 	threadQuery worklet.ThreadQuery
 	threadErr   error
 
+	// posted is the remark UpdateTask answers that it found already on the
+	// task — the call that posted it, made again — for the cases about what
+	// the comment tool reports of a write answered from a row.
+	posted *worklet.PostedRemark
+
 	// depended is every dependency change the tool composed, dependErr
 	// what the sequence answers, and dependAnswer — when set — the result
 	// it answers in place of the default applied commit.
@@ -494,7 +499,7 @@ func (f *fakeTracker) UpdateTask(_ context.Context, opID, _, _ string, ifMatch u
 	return worklet.WriteResult{
 		Key: "ENG-1", Outcome: statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 12},
-		Version:  12,
+		Version:  12, Posted: f.posted,
 	}, nil
 }
 

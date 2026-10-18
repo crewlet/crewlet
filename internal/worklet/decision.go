@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -549,15 +548,6 @@ func checkCommentShape(task string, c *Comment) error {
 			"needs `answers`", c.ID, task, c.Choice)
 	}
 	return nil
-}
-
-// sameDecision reports whether an edit leaves a comment's decision as it was
-// asked.
-func sameDecision(a, b *Decision) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return reflect.DeepEqual(*a, *b)
 }
 
 // checkChoice is the check that an answer's choice names an option of the
