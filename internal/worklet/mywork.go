@@ -277,7 +277,6 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 		return err
 	}
 	dayStart := anchor.At
-	open := openGroups()
 
 	priorities, total, err := readPriorityRows(ctx, tx, handle, dayStart)
 	if err != nil {
@@ -286,17 +285,8 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 	out.Priorities = priorities
 	out.Totals.Priorities = ClaimTotal{Total: total}
 
-	// ASSIGNED, in the queue's own order — priority then due, which is
-	// exactly what `tracker_tasks_queue_idx` is built in, so the block a
-	// turn opens on is the query the index is named for.
 	if out.Assigned, out.Totals.Assigned, err = taskBlock(ctx, tx,
-		"t.removed_at IS NULL AND t.assignee = ? AND t.status_group IN ("+
-			placeholders(len(open))+")",
-		append([]any{handle}, open...),
-		[]sortTerm{
-			{Column: "t.prio_rank", Descending: true},
-			{Column: "t.due_at"}, {Column: "t.id"},
-		}, dayStart); err != nil {
+		assignedBlock(handle), dayStart); err != nil {
 		return err
 	}
 
@@ -310,54 +300,96 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 		return err
 	}
 
-	// COLLABORATING EXCLUDES WHAT THIS PERSON OWNS, because a task already
-	// in `assigned` listed again here is one row spending two of the seven
-	// blocks — and the distinction the block exists for is precisely
-	// "brought on without owning".
 	if out.Collaborating, out.Totals.Collaborating, err = taskBlock(ctx, tx,
-		"t.removed_at IS NULL AND t.assignee <> ? AND t.status_group IN ("+
-			placeholders(len(open))+") AND EXISTS (SELECT 1 FROM "+
-			"tracker_collaborators c WHERE c.task_id = t.id AND c.handle = ?)",
-		append(append([]any{handle}, open...), handle),
-		[]sortTerm{{Column: "t.updated_at", Descending: true}, {Column: "t.id"}},
-		dayStart); err != nil {
+		collaboratingBlock(handle), dayStart); err != nil {
 		return err
 	}
-
-	// WATCHING, MINUS THE MUTED. A mute is how somebody says "keep me on
-	// this but stop telling me", and a block that ignored it would put
-	// every muted task back in front of them once a turn.
 	if out.WatchingRecent, out.Totals.WatchingRecent, err = taskBlock(ctx, tx,
-		"t.removed_at IS NULL AND t.assignee <> ? AND EXISTS (SELECT 1 FROM "+
-			"tracker_watchers w WHERE w.task_id = t.id AND w.handle = ? "+
-			"AND w.muted = 0)",
-		[]any{handle, handle},
-		[]sortTerm{{Column: "t.updated_at", Descending: true}, {Column: "t.id"}},
-		dayStart); err != nil {
+		watchingBlock(handle), dayStart); err != nil {
 		return err
 	}
-
-	// UNBLOCKED: this person's open work that HAD a blocker and no longer
-	// has an open one. The only block about a CHANGE rather than a state,
-	// and the reason it is here at all — a task that became workable while
-	// nobody was looking has nothing else to announce it at turn start.
-	//
-	// THE EXISTS/NOT-EXISTS PAIR IS THE WHOLE PREDICATE. Without the first
-	// leg every task that never had a dependency qualifies, which is most
-	// of the board; without the second, a task with one blocker cleared
-	// and another still open reads as workable and is not.
 	if out.UnblockedRecent, out.Totals.UnblockedRecent, err = taskBlock(ctx, tx,
-		"t.removed_at IS NULL AND t.assignee = ? AND t.status_group IN ("+
-			placeholders(len(open))+") AND EXISTS (SELECT 1 FROM "+
-			"tracker_task_deps d WHERE d.task_id = t.id "+
-			"AND d.cleared_at IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM "+
-			"tracker_task_deps d WHERE d.task_id = t.id AND d.blocker_open = 1)",
-		append([]any{handle}, open...),
-		[]sortTerm{{Column: "t.updated_at", Descending: true}, {Column: "t.id"}},
-		dayStart); err != nil {
+		unblockedBlock(handle), dayStart); err != nil {
 		return err
 	}
 	return nil
+}
+
+// blockQuery is one task block of [readMyWork]: the predicate over the task
+// table, its arguments, and the order its page is read in — everything
+// [taskBlock] reads the page and the total from.
+type blockQuery struct {
+	where string
+	args  []any
+	terms []sortTerm
+}
+
+// The task blocks [readMyWork] reads, each named for the plan test.
+//
+// ASSIGNED is in the queue's own order — priority then due, which is exactly
+// what `tracker_tasks_queue_idx` is built in, so the block a turn opens on is
+// the query the index is named for.
+func assignedBlock(handle string) blockQuery {
+	open := openGroups()
+	return blockQuery{
+		where: "t.removed_at IS NULL AND t.assignee = ? AND t.status_group IN (" +
+			placeholders(len(open)) + ")",
+		args: append([]any{handle}, open...),
+		terms: []sortTerm{
+			{Column: "t.prio_rank", Descending: true},
+			{Column: "t.due_at"}, {Column: "t.id"},
+		},
+	}
+}
+
+// COLLABORATING EXCLUDES WHAT THIS PERSON OWNS, because a task already in
+// `assigned` listed again here is one row spending two of the seven blocks —
+// and the distinction the block exists for is precisely "brought on without
+// owning".
+func collaboratingBlock(handle string) blockQuery {
+	open := openGroups()
+	return blockQuery{
+		where: "t.removed_at IS NULL AND t.assignee <> ? AND t.status_group IN (" +
+			placeholders(len(open)) + ") AND " + peopleClause("SELECT c.task_id FROM "+
+			"tracker_collaborators c WHERE c.handle = ?"),
+		args:  append(append([]any{handle}, open...), handle),
+		terms: []sortTerm{{Column: "t.updated_at", Descending: true}, {Column: "t.id"}},
+	}
+}
+
+// WATCHING, MINUS THE MUTED. A mute is how somebody says "keep me on this but
+// stop telling me", and a block that ignored it would put every muted task
+// back in front of them once a turn.
+func watchingBlock(handle string) blockQuery {
+	return blockQuery{
+		where: "t.removed_at IS NULL AND t.assignee <> ? AND " +
+			peopleClause("SELECT w.task_id FROM tracker_watchers w "+
+				"WHERE w.handle = ? AND w.muted = 0"),
+		args:  []any{handle, handle},
+		terms: []sortTerm{{Column: "t.updated_at", Descending: true}, {Column: "t.id"}},
+	}
+}
+
+// UNBLOCKED: this person's open work that HAD a blocker and no longer has an
+// open one. The only block about a CHANGE rather than a state, and the reason
+// it is here at all — a task that became workable while nobody was looking
+// has nothing else to announce it at turn start.
+//
+// THE EXISTS/NOT-EXISTS PAIR IS THE WHOLE PREDICATE. Without the first leg
+// every task that never had a dependency qualifies, which is most of the
+// board; without the second, a task with one blocker cleared and another
+// still open reads as workable and is not.
+func unblockedBlock(handle string) blockQuery {
+	open := openGroups()
+	return blockQuery{
+		where: "t.removed_at IS NULL AND t.assignee = ? AND t.status_group IN (" +
+			placeholders(len(open)) + ") AND EXISTS (SELECT 1 FROM " +
+			"tracker_task_deps d WHERE d.task_id = t.id " +
+			"AND d.cleared_at IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM " +
+			"tracker_task_deps d WHERE d.task_id = t.id AND d.blocker_open = 1)",
+		args:  append([]any{handle}, open...),
+		terms: []sortTerm{{Column: "t.updated_at", Descending: true}, {Column: "t.id"}},
+	}
 }
 
 // taskBlock reads one task block's page AND its total, from ONE predicate.
@@ -366,11 +398,11 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 // statement beside the page's is a second copy of the claim, and the first
 // edit to one of them makes a heading count rows the list below it would
 // never show.
-func taskBlock(ctx context.Context, tx *sql.Tx, where string, args []any,
-	terms []sortTerm, dayStart time.Time) ([]TaskRow, ClaimTotal, error) {
+func taskBlock(ctx context.Context, tx *sql.Tx, block blockQuery,
+	dayStart time.Time) ([]TaskRow, ClaimTotal, error) {
 
-	set := tasksWhere(where, args)
-	rows, _, err := readTasks(ctx, tx, set, terms, MyWorkRows, dayStart)
+	set := tasksWhere(block.where, block.args)
+	rows, _, err := readTasks(ctx, tx, set, block.terms, MyWorkRows, dayStart)
 	if err != nil {
 		return nil, ClaimTotal{}, err
 	}
@@ -633,6 +665,28 @@ func answerCall(address, comment string, decision *decision.Decision) string {
 		CommentOnWorkTool, address, comment)
 }
 
+// The checklist items one person owns, bound to their record name as the one
+// argument, and [readChecklistClaims]' page of them, named for the plan test.
+//
+// AN OWNER IS NEVER EMPTY, and saying so is the index's own predicate —
+// `tracker_checklist_items_assignee_idx` holds only the items that have an
+// owner — stated because the planner does not prove that an equality implies
+// it: without it the claims every turn opens on read every checklist item in
+// the company from the heap, where the person's own items are one seek.
+const (
+	claimsFrom = `tracker_checklist_items i
+		JOIN tracker_tasks t ON t.id = i.task_id`
+	claimsWhere = `i.assignee = ? AND i.assignee <> '' AND i.done = 0
+		AND t.removed_at IS NULL`
+	claimsPageStatement = `
+		SELECT i.task_id, t.key, t.key_collision, t.title, i.checklist_id,
+		       i.item_id, i.name, i.done
+		FROM ` + claimsFrom + `
+		WHERE ` + claimsWhere + `
+		ORDER BY t.key, i.ord
+		LIMIT ?`
+)
+
 // readChecklistClaims reads the sub-items this person owns, and how many.
 func readChecklistClaims(ctx context.Context, tx *sql.Tx, handle string) (
 	[]ChecklistRow, ClaimTotal, error) {
@@ -640,23 +694,15 @@ func readChecklistClaims(ctx context.Context, tx *sql.Tx, handle string) (
 	// THE OPEN ONES, on live tasks. A done item is not a claim, and an
 	// item on a removed task is an item nobody can act on. ONE
 	// FROM-AND-WHERE for the page and the count — see [taskBlock].
-	const from = `tracker_checklist_items i
-		JOIN tracker_tasks t ON t.id = i.task_id`
-	const where = `i.assignee = ? AND i.done = 0 AND t.removed_at IS NULL`
-	total, capped, err := countCapped(ctx, tx, from, where, []any{handle})
+	total, capped, err := countCapped(ctx, tx, claimsFrom, claimsWhere,
+		[]any{handle})
 	if err != nil {
 		return nil, ClaimTotal{}, fmt.Errorf("worklet: count the checklist "+
 			"items of %s: %w", handle, err)
 	}
 	claim := ClaimTotal{Total: total, Capped: capped}
 
-	rows, err := tx.QueryContext(ctx, `
-		SELECT i.task_id, t.key, t.key_collision, t.title, i.checklist_id,
-		       i.item_id, i.name, i.done
-		FROM `+from+`
-		WHERE `+where+`
-		ORDER BY t.key, i.ord
-		LIMIT ?`, handle, MyWorkRows)
+	rows, err := tx.QueryContext(ctx, claimsPageStatement, handle, MyWorkRows)
 	if err != nil {
 		return nil, ClaimTotal{}, fmt.Errorf("worklet: read the checklist items of %s: %w",
 			handle, err)

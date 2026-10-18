@@ -2247,11 +2247,15 @@ Queue, Asked of me, Asked by me, Unblocked, Collaborating, Watching,
 Checklist), each carrying the engine's own total on its tab so an unanswered
 question is visible without opening it. A section shows at most twenty rows of
 its claim, and one that holds fewer than its total says which twenty ("the 20
-most recently changed of 130"). The Queue is read by due date or in the order
-somebody put it (`order=due|priorities`). Above the list a band says whose day
-is on screen, links to that person's seat, and carries the one thing here that
-asks to be answered — a queue somebody *else* put in order, named by the
-person who did, with a flag on the Priorities choice. A caller the directory
+most recently changed of 130"). Collaborating, Watching and Checklist are read
+from that person's own rows — the items they collaborate on, watch, or own a
+checklist item of — and so are the `collaborator`, `watcher` and
+`checklist_assignee` filters on a listing, so what they cost is what the person
+is on rather than everything the company holds. The Queue is read by due date
+or in the order somebody put it (`order=due|priorities`). Above the list a band
+says whose day is on screen, links to that person's seat, and carries the one
+thing here that asks to be answered — a queue somebody *else* put in order,
+named by the person who did, with a flag on the Priorities choice. A caller the directory
 binds to no seat — an API token's session, or a service account — is an
 ordinary state: its day is the one kept under its own login — the name its
 assistant writes its marks and priorities under — and the screen says what

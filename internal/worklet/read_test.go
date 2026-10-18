@@ -859,3 +859,64 @@ func TestARowCarriesItsType(t *testing.T) {
 		t.Errorf("the bug column carries %+v, want one row typed bug", column.Rows)
 	}
 }
+
+// A FILTER ON A PERSON FINDS THE WORK THE PERSON IS ON, AND NOTHING ELSE —
+// read from the person's own rows rather than by probing every task, at both
+// scopes and in both subtask modes, and answering what the probe answered: a
+// flat listing every task the person is on, a collapsed one the roots they
+// are on with their subtrees.
+func TestAPersonFilterFindsTheWorkThePersonIsOn(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"a", "b", "c"} {
+		filedTask(t, r, id)
+	}
+	parent := "c"
+	sub := newTask("s")
+	sub.Key, sub.Parent = "ENG-s", &parent
+	if _, err := r.writer.CreateTask(t.Context(), "op-s", sub, nil); err != nil {
+		t.Fatalf("CreateTask s: %v", err)
+	}
+	r.drain()
+	for _, write := range []struct {
+		id    string
+		patch worklet.TaskPatch
+		kind  worklet.ChangeKind
+	}{
+		{"a", worklet.TaskPatch{Collaborators: &[]string{"ana"}}, worklet.ChangeCollaborators},
+		{"s", worklet.TaskPatch{Collaborators: &[]string{"ana"}}, worklet.ChangeCollaborators},
+		{"b", worklet.TaskPatch{Watchers: &[]string{"ana", "bob"}}, worklet.ChangeWatchers},
+		{"c", worklet.TaskPatch{Watchers: &[]string{"bob"}}, worklet.ChangeWatchers},
+	} {
+		if _, err := r.writer.UpdateTask(t.Context(), "op-"+write.id+string(write.kind),
+			write.id, "ENG", worklet.NoIfMatch, write.patch, write.kind, nil); err != nil {
+			t.Fatalf("UpdateTask %s: %v", write.id, err)
+		}
+		r.drain()
+	}
+	for _, scope := range []map[string]any{{}, {"container": "project:ENG"}} {
+		for _, c := range []struct {
+			params map[string]any
+			want   []string
+		}{
+			{map[string]any{"collaborator": "ana", "subtasks": "separate"}, []string{"a", "s"}},
+			{map[string]any{"collaborator": "ana"}, []string{"a"}},
+			{map[string]any{"watcher": "ana"}, []string{"b"}},
+			{map[string]any{"watcher": "ana,bob", "subtasks": "separate"}, []string{"b", "c"}},
+			{map[string]any{"watcher": "carol"}, []string{}},
+		} {
+			params := map[string]any{}
+			for key, value := range scope {
+				params[key] = value
+			}
+			for key, value := range c.params {
+				params[key] = value
+			}
+			got := ids(r.ask(params))
+			slices.Sort(got)
+			if !slices.Equal(got, c.want) {
+				t.Errorf("%v found %v, want %v", params, got, c.want)
+			}
+		}
+	}
+}
