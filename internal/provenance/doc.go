@@ -12,4 +12,7 @@
 //
 // A LEAF: it imports the identity vocabulary and nothing else from the engine,
 // so every tool and prompt builder can use it.
+//
+// Content a model reads carries its provenance: ADR-0040, whose authority this
+// package is.
 package provenance

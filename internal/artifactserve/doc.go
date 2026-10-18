@@ -19,4 +19,7 @@
 // byte substitution of the placeholder the linter wrote at publish, so the
 // policy admits the page's own scripts and the scripts they load, and nothing an
 // attacker injects.
+//
+// An artifact is served from an origin that holds no credential: ADR-0035,
+// whose authority this package is.
 package artifactserve

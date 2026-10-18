@@ -14,4 +14,6 @@
 //
 // Agents are present too: a tool session reading or writing an artifact
 // announces itself like a person's tab does.
+//
+// Presence is told, never stored: ADR-0038, whose authority this package is.
 package presence

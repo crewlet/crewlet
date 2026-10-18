@@ -9,6 +9,12 @@
 // THE VOCABULARY IS ADMIN AND ONE PERMISSION PER APP — ADR-0033, whose
 // authority this package is: see "Admin, and one permission per app" below.
 //
+// AN ARTIFACT IS SHARED, AND A SHARE IS A RELATION: ADR-0034, whose authority
+// this package also is. The artifacts app gates authoring only; every artifact
+// row is decided by one class over a five-role ladder, the lead arm opens only
+// an agent owner's artifacts, and a caller with no relation is answered as if
+// the artifact did not exist.
+//
 // # What it replaces, and what each of those got wrong
 //
 // Three structs carried authority into the tracker as BOOLS the caller had

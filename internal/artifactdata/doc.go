@@ -22,4 +22,9 @@
 // documents (and every history row the digest after it), and the footprint is
 // metered in real bytes, so moving idle stores to object storage later is not a
 // re-derive of every store.
+//
+// A datastore write is decided where it is applied, from authority stamped at
+// the API: ADR-0037. A cold store will live in object storage and return
+// through the log, and the hot store keeps what that needs from its first
+// release: ADR-0039. This package is the authority for both.
 package artifactdata

@@ -23,4 +23,8 @@
 // path: edits, the policy linter, vendoring of allowlisted CDN files into the
 // artifact's own version, search text extraction and runtime contract
 // resolution all run here, and the domain's writer decides last.
+//
+// Bytes are reserved before they move, and a carried object is named again
+// only by a record that finds it named: ADR-0036, whose authority this package
+// is.
 package artifactupload
