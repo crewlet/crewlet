@@ -1296,6 +1296,15 @@ store:
                                     #   copies on its members like every stream
                                     #   and backed up with them. s3: an
                                     #   S3-compatible bucket, named below
+  #   nats_max_bytes: 0             #   the nats bucket's byte RESERVATION on
+                                    #   the broker, 1 GiB..64 TiB. Unset
+                                    #   derives the smaller of a quarter of the
+                                    #   broker's limit and what its state logs'
+                                    #   half and a 1 GiB coordination floor
+                                    #   leave. A full bucket refuses uploads,
+                                    #   never the fleet's leases. An existing
+                                    #   bucket keeps the reservation it was
+                                    #   created with. REFUSED with backend s3
   #   s3:                           #   REFUSED unless backend is s3
   #     endpoint: ""                #   the S3 API's base URL; empty is Amazon
                                     #   S3's own for the region. R2, MinIO,
@@ -1304,13 +1313,14 @@ store:
   #     region: eu-west-1           #   REQUIRED — every request is signed for
                                     #   a region, even where the provider
                                     #   ignores it (R2: auto, MinIO: us-east-1)
-  #     bucket: acme-files          #   REQUIRED. Checked at boot: a node that
-                                    #   cannot reach it, or whose credentials it
-                                    #   refuses, does not start
-  #     prefix: ""                  #   prepended to every key — an object is
-                                    #   `<prefix>files/<key>` — so one bucket
-                                    #   can hold more than one company; e.g.
-                                    #   `acme/`
+  #     bucket: acme-files          #   REQUIRED. Probed at boot under the
+                                    #   prefix: a node that cannot store and
+                                    #   delete an object there does not start
+  #     prefix: ""                  #   prepended to every key: an object is
+                                    #   `<prefix>files/<key>`, e.g. `acme/`.
+                                    #   Companies sharing one bucket are kept
+                                    #   apart only by credentials scoped to
+                                    #   their own prefix, never by the prefix
   #     path_style: false           #   address the bucket in the path rather
                                     #   than the host name; MinIO and most
                                     #   self-hosted gateways need it

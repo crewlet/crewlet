@@ -72,9 +72,11 @@ type ObjectsS3 struct {
 	Region string `yaml:"region,omitempty" json:"region,omitempty" desc:"The bucket's region; required (R2: auto, MinIO: us-east-1)."`
 	// Bucket is the bucket's name.
 	Bucket string `yaml:"bucket,omitempty" json:"bucket,omitempty" desc:"The bucket's name; required."`
-	// Prefix is prepended to every key, so one bucket can hold more than
-	// one company.
-	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty" desc:"Prepended to every key, so one bucket can hold more than one company; e.g. acme/."`
+	// Prefix is prepended to every key: an object is `<prefix>files/<key>`.
+	// It keeps keys from colliding where companies share a bucket, and
+	// nothing more: what keeps one company out of another's files is a
+	// credential scoped to its own prefix (see docs/concepts/object-store.md).
+	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty" desc:"Prepended to every object's key, e.g. acme/. Companies sharing a bucket are isolated only by credentials scoped to their own prefix."`
 	// PathStyle addresses the bucket in the URL's path rather than its host
 	// name, which MinIO and most self-hosted gateways need.
 	PathStyle bool `yaml:"path_style,omitempty" json:"path_style,omitempty" desc:"Address the bucket in the path rather than the host name; MinIO and most self-hosted gateways need it."`
