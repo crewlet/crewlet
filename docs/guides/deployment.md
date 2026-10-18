@@ -89,11 +89,16 @@ from the disk that would be scaled below 1 GiB is **held at 1 GiB** instead,
 and a log whose own default is smaller than that is held at what it asked
 for — so:
 
-- **A first boot needs at least 8.7 GiB free on that volume.** Three
-  quarters of it, 6.5 GiB, holds the 6.5 GiB the seven logs reserve at their
-  smallest: 1 GiB each for the mutation log, the vector changelog, the
-  knowledge base's log, the artifacts log and the artifact datastore's log, the usage log's flat 1 GiB
-  default, and the identity estate's flat 512 MiB default. Below that the node refuses
+- **A first boot needs at least 8.7 GiB free on that volume, and 11.6 GiB
+  with the object store on the broker** (`store.objects.backend: nats`, the
+  default). Three quarters of the first, 6.5 GiB, holds the 6.5 GiB the seven
+  logs reserve at their smallest: 1 GiB each for the mutation log, the vector
+  changelog, the knowledge base's log, the artifacts log and the artifact
+  datastore's log, the usage log's flat 1 GiB default, and the identity
+  estate's flat 512 MiB default. The object store's bucket is reserved before
+  the logs are sized, at a quarter of the broker's limit and never under
+  1 GiB ([Object store](../concepts/object-store.md#its-byte-reservation)),
+  which is the rest of the second. Below that the node refuses
   to boot with an error naming the log it could not reserve, the bytes it
   needed, the bytes the broker had left, and the Tier A field that sets the
   ceiling.

@@ -928,7 +928,9 @@ The remedies are the ones it lists. Give the broker more room: raise
 on that volume (a first boot needs at least 8.7 GiB free there, three
 quarters of which, 6.5 GiB, holds the 6.5 GiB the seven logs reserve at their
 smallest: the five 1 GiB scaling floors, the usage log's 1 GiB default and the
-identity log's 512 MiB), which the broker measures again when
+identity log's 512 MiB; and 11.6 GiB with the object store's bucket on the
+broker, which is reserved first, at a quarter of the broker's limit), which
+the broker measures again when
 the node next starts. Or, when the refused log's ceiling is above the smallest
 value its own field accepts, set that field to a smaller ceiling — the refusal
 offers it only then, and names that floor: 1 GiB for the tracker's, the
