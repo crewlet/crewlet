@@ -293,8 +293,18 @@ func totalExpr(column, op string, fields map[string]resolvedField) (
 // rather than every value the field holds in the company, which is what
 // driving it from the field's value index read, inside one project as at the
 // workspace.
+//
+// A CROSS JOIN, which in this engine as in SQLite is an inner join whose
+// tables are read in the order written: the matched set first, then each
+// task's values. Written as a plain JOIN the planner chose the order by its
+// estimates, which no statistics anchor and any clause of the answer's
+// predicate moves — and measured at the workspace, once the subtask rollup's
+// probe of each row's root changed the matched set's estimate, it read the
+// value table's whole key index first and scanned the matched set again for
+// every value, which is every value of every field in the company for one
+// header.
 const matchedValues = `FROM matched m
-		         JOIN tracker_field_values v INDEXED BY ` + fieldValuesKey + `
+		         CROSS JOIN tracker_field_values v INDEXED BY ` + fieldValuesKey + `
 		           ON v.task_id = m.id`
 
 // rankedValues is the value expression and the FROM … WHERE clause an order
