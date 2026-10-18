@@ -76,13 +76,17 @@ func TestTheDashboardPolicyLetsTheManifestFormReachACodeHost(t *testing.T) {
 		"base-uri":        "'none'",
 		"frame-ancestors": "'none'",
 		"form-action":     "'self' https:",
+		// TRUSTED TYPES, enforced with no policy: the dashboard reaches no
+		// markup or script sink (dashboard/src/app/trustedTypes.test.ts).
+		"require-trusted-types-for": "'script'",
+		"trusted-types":             "'none'",
 	} {
 		if got := directives[name]; got != want {
 			t.Errorf("%s = %q, want %q", name, got, want)
 		}
 	}
-	if len(directives) != 10 {
-		t.Errorf("the dashboard policy has %d directives, want exactly the ten above: %s",
+	if len(directives) != 12 {
+		t.Errorf("the dashboard policy has %d directives, want exactly the twelve above: %s",
 			len(directives), pagepolicy.Dashboard)
 	}
 }
