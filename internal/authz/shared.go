@@ -19,10 +19,18 @@ import (
 // may do; Related is what their relations alone grant, which is what tells an
 // override from an ordinary admission ([Standing.Elevated]) and what the
 // caller would hold on a node that refuses admin.
+//
+// THE ADMIN PATH IS ALL OR NOTHING, PER DECISION. An administrator whose
+// relations reach the row is admitted as the sharer they are and stands at
+// exactly that role, so every surface shapes what they read, and stamps what
+// they write, by the relation, and nothing beyond it reaches them unrecorded.
+// Only a decision the admin path alone made stands at owner, and that decision
+// is [Decision.Elevated], which the surfaces record.
 type Standing struct {
-	// Role is the EFFECTIVE role: owner through the admin path, and
-	// otherwise [Standing.Related]. Empty for a caller with no relation and
-	// no admin path, which is nobody the artifact was shared with.
+	// Role is the EFFECTIVE role: owner where the admin path alone admitted
+	// the caller, and otherwise [Standing.Related]. Empty for a caller with
+	// no relation and no admin path, which is nobody the artifact was shared
+	// with.
 	Role artifacts.Role
 
 	// Related is the best role the caller's RELATIONS grant: owning the
@@ -50,10 +58,11 @@ type Standing struct {
 // rather than the admission, asks this and answers unknown on an error, which
 // [StandingOn] does for it.
 //
-// An administrator's Role is always exact (the admin path is owner); only
-// their Related may be a lower bound, which reports an override where a share
-// the chart could not read would have made it ordinary. That is the direction
-// an audit can live with.
+// An administrator is never left unsettled: a relation the chart could not
+// settle sends them through the admin path, whose Role is exact (owner) and
+// recorded as an override; only their Related may then be a lower bound,
+// which reports an override where a share the chart could not read would have
+// made it ordinary. That is the direction an audit can live with.
 func (s Standing) Err() error { return s.unsettled }
 
 // Elevated reports whether a verb needing need is reached ONLY through the
@@ -76,6 +85,11 @@ func (s Standing) Elevated(need artifacts.Role) bool {
 // ONE RESOLVER, THE TABLE'S OWN: it is [Decide] over the read row, so a role a
 // surface stamps is exactly the role every row compares, and moving a rule
 // moves both.
+//
+// A VERB ONLY THE ADMIN PATH ADMITTED ([Decision.Elevated]) is acted on with
+// that decision's own standing (owner), not this one: an administrator whose
+// viewer share reaches the read row stands at viewer here, and publishing over
+// it is the override the publish decision recorded.
 func StandingOn(ctx context.Context, p iam.Principal, o Object, chart Chart,
 	now time.Time) (Standing, error) {
 
@@ -110,9 +124,13 @@ func StandingOn(ctx context.Context, p iam.Principal, o Object, chart Chart,
 //
 // THEN THE ADMIN PATH, AFTER THE RELATIONS AND BEFORE ANY CHART FAILURE CAN
 // DECIDE. After, so an administrator who also holds a share that reaches the
-// row is admitted as a sharer and nothing records an override that did not
-// happen; before the failure, so a node behind its chart never tells an
-// administrator it cannot tell.
+// row is admitted as a sharer, AT THE SHARER'S ROLE, and nothing records an
+// override that did not happen; an owner standing there instead would shape
+// every read and stamp every write past the relation with no record of it.
+// Before the failure, so a node behind its chart never tells an administrator
+// it cannot tell: an administrator whose relations admit the row but whose
+// role the chart could not settle takes the admin path, recorded, rather than
+// an unsettled role.
 //
 // THEN UNKNOWN, only where an arm the chart could not answer could have
 // admitted: a unit share of viewer that could not be read changes nothing
@@ -142,9 +160,9 @@ func decideShared(ctx context.Context, p iam.Principal, r rule, o Object,
 	}
 	rel := relate(ctx, p, o, chart)
 	switch {
-	case rel.role.Includes(r.minRole):
+	case rel.role.Includes(r.minRole) && !(admin && rel.standing(false).Err() != nil):
 		return consulting(Decision{Allowed: true, Reason: rel.via,
-			Standing: rel.standing(admin)}, adminGrant)
+			Standing: rel.standing(false)}, adminGrant)
 	case admin:
 		return overridden(rel)
 	case rel.err != nil && rel.pending.Includes(r.minRole):

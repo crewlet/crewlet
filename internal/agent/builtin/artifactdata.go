@@ -217,8 +217,13 @@ func (d dataTools) admit(ctx context.Context, turn *turnctx.Turn, tool string,
 	object := d.art.objectOf(h)
 	// THE ROLE ITSELF, exact: a role the chart could not settle stamped
 	// into a write would have the applier refuse what the caller may do, or
-	// admit what they may not.
-	standing, err := authz.StandingOn(ctx, c.principal, object, d.art.Chart, d.art.now())
+	// admit what they may not. A verb only the admin path admitted acts at
+	// its own decision's standing (owner, recorded as elevated); the read
+	// row would stand the same administrator at the share they hold.
+	standing, err := dec.Standing, error(nil)
+	if !dec.Elevated {
+		standing, err = authz.StandingOn(ctx, c.principal, object, d.art.Chart, d.art.now())
+	}
 	switch {
 	case err != nil:
 		r := refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", ErrUndecidable, err),

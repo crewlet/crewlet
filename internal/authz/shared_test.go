@@ -359,12 +359,15 @@ func TestAnArtifactRowIsNeverShownByItsApp(t *testing.T) {
 // An administrator with no relation is admitted on the permission, at owner,
 // ELEVATED, which is what the surfaces record as an override of somebody's
 // private work. One whose share already reaches the row is admitted as a
-// sharer and is not marked, so nothing records an override that did not
-// happen; the same share short of the row is marked. And no chart failure ever
-// reaches an administrator's answer, while it does reach a lead's. Mutation:
-// check the admin path before the relations and the sharer is marked; after
-// the unknown arm and the administrator on a lagging node is told it cannot
-// tell.
+// sharer, AT THE SHARER'S ROLE, and is not marked: nothing records an override
+// that did not happen, and nothing beyond the share reaches them through a
+// role every surface would shape by. The same share short of the row is
+// marked, at owner. And no chart failure ever reaches an administrator's
+// answer, while it does reach a lead's: a share the chart could not settle
+// sends them through the admin path rather than leaving their role unsettled.
+// Mutation: check the admin path before the relations and the sharer is
+// marked; stand the sharer at owner and the viewer's read goes red; after the
+// unknown arm and the administrator on a lagging node is told it cannot tell.
 func TestTheAdminPathIsMarkedExactlyWhereItAloneAdmitted(t *testing.T) {
 	t.Parallel()
 	admin := personLeading("ops", iam.GrantAdmin)
@@ -377,33 +380,47 @@ func TestTheAdminPathIsMarkedExactlyWhereItAloneAdmitted(t *testing.T) {
 		chart    authz.Chart
 		reason   authz.Reason
 		elevated bool
+		role     artifacts.Role
 		related  artifacts.Role
 	}{
 		{"no relation, reading", authz.ActionArtifactRead, artifact("jane"), nimbus(),
-			authz.ReasonGrant, true, ""},
+			authz.ReasonGrant, true, artifacts.RoleOwner, ""},
 		{"a viewer share, reading", authz.ActionArtifactRead, viewer, nimbus(),
-			authz.ReasonShared, false, artifacts.RoleViewer},
+			authz.ReasonShared, false, artifacts.RoleViewer, artifacts.RoleViewer},
+		{"a viewer share, writing data", authz.ActionArtifactDataWrite, viewer, nimbus(),
+			authz.ReasonShared, false, artifacts.RoleViewer, artifacts.RoleViewer},
 		{"a viewer share, publishing", authz.ActionArtifactPublish, viewer, nimbus(),
-			authz.ReasonGrant, true, artifacts.RoleViewer},
+			authz.ReasonGrant, true, artifacts.RoleOwner, artifacts.RoleViewer},
 		{"a viewer share, trashing", authz.ActionArtifactTrash, viewer, nimbus(),
-			authz.ReasonGrant, true, artifacts.RoleViewer},
+			authz.ReasonGrant, true, artifacts.RoleOwner, artifacts.RoleViewer},
 		{"a unit share on a chart that cannot answer", authz.ActionArtifactRead,
 			artifact("jane", unitShare("ops-team", artifacts.RoleEditor)), down,
-			authz.ReasonGrant, true, ""},
+			authz.ReasonGrant, true, artifacts.RoleOwner, ""},
+		{"a viewer share beside a unit share the chart cannot settle",
+			authz.ActionArtifactRead, artifact("jane", seatShare("ops", artifacts.RoleViewer),
+				unitShare("ops-team", artifacts.RoleEditor)), down,
+			authz.ReasonGrant, true, artifacts.RoleOwner, artifacts.RoleViewer},
 		{"an agent's artifact on a chart that cannot answer", authz.ActionArtifactShare,
-			agentOwned("sre"), down, authz.ReasonGrant, true, ""},
+			agentOwned("sre"), down, authz.ReasonGrant, true, artifacts.RoleOwner, ""},
 		{"a row nobody has read", authz.ActionArtifactPublish,
 			authz.Object{Kind: authz.KindArtifact, Unresolved: true}, down,
-			authz.ReasonGrant, true, ""},
+			authz.ReasonGrant, true, artifacts.RoleOwner, ""},
 		{"a row naming nobody", authz.ActionArtifactRead,
-			authz.Object{Kind: authz.KindArtifact}, nimbus(), authz.ReasonGrant, true, ""},
+			authz.Object{Kind: authz.KindArtifact}, nimbus(), authz.ReasonGrant, true,
+			artifacts.RoleOwner, ""},
 	} {
 		d := authz.Decide(t.Context(), admin, c.action, c.object, c.chart, decidedAt)
 		if d.Unknown() || !d.Allowed || d.Reason != c.reason || d.Elevated != c.elevated ||
-			d.Standing.Role != artifacts.RoleOwner || d.Standing.Related != c.related {
+			d.Standing.Role != c.role || d.Standing.Related != c.related ||
+			d.Standing.Err() != nil {
 			t.Errorf("%s: decided %+v, want admitted (%s), elevated %v, standing "+
-				"owner over %q", c.name, d, c.reason, c.elevated, c.related)
+				"%s over %q, settled", c.name, d, c.reason, c.elevated, c.role, c.related)
 		}
+	}
+	if st, err := authz.StandingOn(t.Context(), admin, viewer, nimbus(), decidedAt); err != nil ||
+		st.Role != artifacts.RoleViewer || st.Elevated(artifacts.RoleEditor) {
+		t.Errorf("StandingOn for an administrator holding a viewer share = %+v, %v; want "+
+			"the viewer they are, never owner", st, err)
 	}
 	lead := authz.Decide(t.Context(), personLeading("cto", iam.Apps...),
 		authz.ActionArtifactShare, agentOwned("sre"), down, decidedAt)

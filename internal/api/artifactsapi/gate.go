@@ -250,10 +250,14 @@ func (g Gate) Decide(ctx context.Context, p iam.Principal, action authz.Action,
 		return Admission{}, &Refused{Action: action, Decision: d}
 	}
 	standing, elevated := d.Standing, d.Elevated
-	if action != authz.ActionArtifactRead {
+	if action != authz.ActionArtifactRead && !elevated {
 		// A VERB WHOSE ROW IS NOT THE READ ROW resolves the standing the
 		// read row does, so the role a write is stamped with is the role a
-		// reader is shown, from one resolver.
+		// reader is shown, from one resolver. A verb only the admin path
+		// admitted keeps its own decision's standing (owner): the read row
+		// may admit the same administrator as the sharer they are, and a
+		// publish stamped with a viewer's role would be refused by the
+		// applier it was admitted to reach.
 		var err error
 		if standing, err = authz.StandingOn(ctx, p, object, g.Chart, now); err != nil {
 			return Admission{}, err
@@ -263,8 +267,11 @@ func (g Gate) Decide(ctx context.Context, p iam.Principal, action authz.Action,
 	case d.Standing.Role == "":
 		// A ROW THAT REACHED NO RELATION (the admin row a purge is decided
 		// by): the override is an administrator acting on an artifact they
-		// do not own.
-		elevated = standing.Elevated(artifacts.RoleOwner)
+		// do not own, at owner over whatever their relations grant.
+		if !standing.Related.Includes(artifacts.RoleOwner) {
+			standing = authz.Standing{Role: artifacts.RoleOwner, Related: standing.Related}
+			elevated = true
+		}
 	case standing.Role == "":
 		// THE VERB ADMITTED AND THE READ DID NOT: only a row looser than
 		// reading would, and no shared row is. Answered as absent rather
