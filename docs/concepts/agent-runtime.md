@@ -419,7 +419,7 @@ resuming it is the same, and neither is ever a seat's to do. No app is asked:
 a lead who uses neither app still runs their team. Everybody signed in holds a
 credential, so "any operator" would let every reader of the board stop any
 seat in the company. A refusal names the permission that would have admitted
-the caller. See [the authority table](identity-and-access.md#the-fifteen-rules).
+the caller. See [the authority table](identity-and-access.md#the-sixteen-rules).
 
 ```mermaid
 stateDiagram-v2

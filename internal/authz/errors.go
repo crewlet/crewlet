@@ -38,6 +38,15 @@ var ErrNoChart = errors.New("authz: this surface holds no company chart, so " +
 var ErrUnresolved = errors.New("authz: whose record this is decides it, and " +
 	"the name has not been resolved to one yet")
 
+// ErrUnsettled reports an artifact role this node could not settle: what the
+// chart did answer admits the caller, and an arm it could not answer (a unit
+// they may sit in, an agent they may lead) might raise the role further. See
+// [Standing.Err]. An UNKNOWN for a surface that needs the role itself, never a
+// refusal and never the lower role: stamped into a write, the lower role would
+// have the applier refuse what the caller may do.
+var ErrUnsettled = errors.New("authz: a relation that could raise this role " +
+	"could not be read, so the role is not known exactly")
+
 // ErrNoPattern reports a route mounted with no pattern at all.
 var ErrNoPattern = errors.New("authz: a guarded route needs a pattern")
 

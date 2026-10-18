@@ -788,8 +788,8 @@ What that means in practice:
   present: reveal a secret, change who may do anything, or end everybody's
   sessions ([two locks](identity-and-access.md#some-gestures-ask-how-recently-you-proved-who-you-are)).
 - Everything a company does *with* its apps — filing work, writing pages —
-  needs no admin: that is `tracker` and `knowledge`, which is what most people
-  hold.
+  needs no admin: that is `tracker`, `knowledge` and `artifacts`, which is what
+  most people hold.
 
 The org chart inside this document is also written by its **leads**, who need
 no permission for it: a person who leads a unit may change the seats and units

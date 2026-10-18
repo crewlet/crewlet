@@ -232,3 +232,9 @@ func (leadOf) LeadsContainer(context.Context, string, string) (bool, error) {
 func (c leadOf) LeadsAnyone(_ context.Context, actor string) (bool, error) {
 	return actor == c.lead, nil
 }
+
+// MemberOf answers that nobody sits in any unit: no case here shares an
+// artifact with a team.
+func (leadOf) MemberOf(context.Context, string, string) (bool, error) {
+	return false, nil
+}

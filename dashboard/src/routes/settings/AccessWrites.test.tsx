@@ -859,14 +859,14 @@ test("unticking Admin keeps the apps it included", async () => {
   expect(admin).toHaveProperty("disabled", false);
   expect(tracker).toHaveProperty("checked", true);
   expect(tracker).toHaveProperty("disabled", true);
-  expect(within(edit).getAllByText("Included with Admin.")).toHaveLength(2);
+  expect(within(edit).getAllByText("Included with Admin.")).toHaveLength(3);
   fireEvent.click(admin);
   expect(within(edit).getByRole("checkbox", { name: "Tracker" })).toHaveProperty("checked", true);
   expect(within(edit).getByRole("checkbox", { name: "Tracker" })).toHaveProperty("disabled", false);
   fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
   await settle();
   expect(eng.writes().map((w) => w.body)).toEqual([
-    { add_grants: ["tracker", "knowledge"], remove_grants: ["admin"] },
+    { add_grants: ["tracker", "knowledge", "artifacts"], remove_grants: ["admin"] },
   ]);
 });
 
@@ -913,7 +913,9 @@ test("a service account's mint starts from its own access, and never a name this
   expect(within(mint).getByRole("checkbox", { name: "Admin" })).toHaveProperty("checked", true);
   fireEvent.click(within(mint).getByRole("button", { name: "Create token" }));
   await settle();
-  expect(eng.writes().map((w) => w.body)).toEqual([{ grants: ["tracker", "admin", "knowledge"] }]);
+  expect(eng.writes().map((w) => w.body)).toEqual([
+    { grants: ["tracker", "admin", "knowledge", "artifacts"] },
+  ]);
 });
 
 // A RESET LINK READS NO KEY and is shown once; REMOVING somebody waits for

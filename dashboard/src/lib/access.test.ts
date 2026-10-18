@@ -25,8 +25,8 @@ import {
 
 describe("expand", () => {
   // ADMIN INCLUDES EVERY APP, as the engine's `iam.Expand` reads it, so a
-  // stored row of `[admin]` is read as holding the tracker and the knowledge
-  // base without listing them.
+  // stored row of `[admin]` is read as holding every app without listing
+  // them.
   test("adds every app to a set holding admin, and nothing to one without", () => {
     expect(expand(["admin"])).toEqual(["admin", ...APPS]);
     expect(expand(["tracker"])).toEqual(["tracker"]);
@@ -39,6 +39,7 @@ describe("expand", () => {
       "admin",
       "knowledge",
       "tracker",
+      "artifacts",
     ]);
   });
 

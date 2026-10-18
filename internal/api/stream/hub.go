@@ -269,8 +269,9 @@ var answers = map[Kind]bool{
 }
 
 // Audience is what one reader may receive: whether they are an admin, which
-// apps they use, their own record, and which seats' bodies — what a seat is
-// saying, as opposed to what it is doing — are theirs to read.
+// apps they use, their own record, which seats' bodies (what a seat is
+// saying, as opposed to what it is doing) are theirs to read, and the
+// principal it was described for.
 //
 // ITS ZERO VALUE RECEIVES NO COMPANY FACT AT ALL, because it was resolved for
 // nobody: the closed end and the only safe one, since a reader nobody
@@ -279,16 +280,40 @@ var answers = map[Kind]bool{
 // A VALUE, compared whole by [Audience.Equal], because an open socket keeps
 // the audience it was opened with and a published company that would give it
 // another closes it for the reconnect to build the new one.
+//
+// # The apps are a set read from iam.Apps, never a field per app
+//
+// It held one boolean per app and a switch over them in [Audience.Has], so an
+// app added to the vocabulary was an app no socket reader held until somebody
+// remembered a second edit here, in a switch nothing compared with the list.
+// The set is whatever [iam.Apps] declares, filled through [iam.Principal.Can]
+// (an administrator through every app), so the audience can never disagree
+// with the authority table about which apps a reader uses.
+//
+// # And the principal, for what is decided per object
+//
+// An artifact is decided by the reader's ROLE on it, which no app answers:
+// whether a socket may join an artifact's room, and which of its rows a push
+// may carry to it, are the authority table's question about this principal
+// and that artifact ([authz.StandingOn]). So the audience keeps who it was
+// described for ([Audience.Principal]) rather than a second, narrower copy of
+// the facts a role is decided from.
 type Audience struct {
-	resolved  bool
-	admin     bool
-	tracker   bool
-	knowledge bool
-	record    string
+	resolved bool
+	admin    bool
+
+	// apps are the apps this reader uses, in [iam.Apps] order: every one of
+	// them for an administrator.
+	apps   []iam.Grant
+	record string
 
 	// body is the agent ids of the seats whose body this reader may read,
 	// sorted. Unread for an admin, who reads every body whatever it holds.
 	body []string
+
+	// principal is who this audience was described for. Never handed out
+	// shared: [Audience.Principal] copies its grants.
+	principal iam.Principal
 }
 
 // NewAudience is the audience principal p describes, given the agent ids of
@@ -299,9 +324,14 @@ type Audience struct {
 // the authority table, seat by seat. This constructor is the value half, for
 // a caller that already holds the decision.
 func NewAudience(p iam.Principal, body []string) Audience {
+	p.Grants = slices.Clone(p.Grants)
 	a := Audience{resolved: true, admin: p.Can(iam.GrantAdmin),
-		tracker: p.Can(iam.GrantTracker), knowledge: p.Can(iam.GrantKnowledge),
-		record: iam.RecordOwner(p)}
+		record: iam.RecordOwner(p), principal: p}
+	for _, app := range iam.Apps {
+		if p.Can(app) {
+			a.apps = append(a.apps, app)
+		}
+	}
 	if !a.admin {
 		a.body = slices.Compact(slices.Sorted(slices.Values(body)))
 	}
@@ -322,7 +352,7 @@ func (a Audience) Receives(kind Kind) bool {
 	case NeedAdmin:
 		return a.admin
 	case NeedTracker:
-		return a.tracker
+		return a.Has(iam.GrantTracker)
 	}
 	return false
 }
@@ -332,19 +362,21 @@ func (a Audience) Receives(kind Kind) bool {
 func (a Audience) Admin() bool { return a.resolved && a.admin }
 
 // Has reports whether this audience may use app — an administrator through
-// every app.
+// every app. A permission that is not an app (admin itself, or a name this
+// build does not know) is no app anybody uses: [Audience.Admin] is the
+// question about admin.
 func (a Audience) Has(app iam.Grant) bool {
-	switch {
-	case !a.resolved:
-		return false
-	case a.admin:
-		return true
-	case app == iam.GrantTracker:
-		return a.tracker
-	case app == iam.GrantKnowledge:
-		return a.knowledge
-	}
-	return false
+	return a.resolved && app.IsApp() && slices.Contains(a.apps, app)
+}
+
+// Principal is who this audience was described for, with its own copy of the
+// grants, so a caller that appends to them cannot reach this audience or any
+// other client's. The zero principal for the zero audience, which every class
+// of the authority table refuses.
+func (a Audience) Principal() iam.Principal {
+	p := a.principal
+	p.Grants = slices.Clone(p.Grants)
+	return p
 }
 
 // Body reports whether this audience may read the body of the seat with
@@ -371,10 +403,19 @@ func (a Audience) Reach(agentID string) livestate.Reach {
 }
 
 // Equal reports whether two audiences receive exactly the same.
+//
+// WHO THE PRINCIPAL IS COUNTS, beside what it may read: an artifact room is
+// decided for the principal, so a reader re-bound to another seat, or re-kinded
+// by its binding, receives differently even where every app and body is the
+// same. What does NOT count is how recently it proved who it is: that moves on
+// every step-up and changes nothing a socket is sent.
 func (a Audience) Equal(b Audience) bool {
 	return a.resolved == b.resolved && a.admin == b.admin &&
-		a.tracker == b.tracker && a.knowledge == b.knowledge &&
-		a.record == b.record && (a.admin || slices.Equal(a.body, b.body))
+		slices.Equal(a.apps, b.apps) && a.record == b.record &&
+		(a.admin || slices.Equal(a.body, b.body)) &&
+		a.principal.ID == b.principal.ID && a.principal.Kind == b.principal.Kind &&
+		a.principal.Login == b.principal.Login && a.principal.Seat == b.principal.Seat &&
+		a.principal.Stage == b.principal.Stage
 }
 
 // variant is the name of what this audience receives of a payload masked by
@@ -383,6 +424,9 @@ func (a Audience) Equal(b Audience) bool {
 // byte-identical frames and a broadcast encodes once per variant rather than
 // once per client. withRecord adds the reader's own record, for a payload that
 // shows something to a person by who they are (a coding run's question).
+//
+// THE APPS BY NAME, in [iam.Apps] order, so an app added to the vocabulary
+// splits the variants it should with no edit here.
 //
 // THE BODY SET AS A DIGEST, so a variant name stays short however many seats a
 // lead leads; two different sets colliding would hand one reader another's
@@ -394,9 +438,13 @@ func (a Audience) variant(withRecord bool) string {
 	case a.admin:
 		return "admin"
 	}
+	apps := make([]string, 0, len(a.apps))
+	for _, app := range a.apps {
+		apps = append(apps, string(app))
+	}
 	sum := sha256.Sum256([]byte(strings.Join(a.body, "\x00")))
-	name := fmt.Sprintf("tracker=%t;knowledge=%t;body=%s", a.tracker,
-		a.knowledge, hex.EncodeToString(sum[:]))
+	name := fmt.Sprintf("apps=%s;body=%s", strings.Join(apps, ","),
+		hex.EncodeToString(sum[:]))
 	if withRecord {
 		name += ";record=" + a.record
 	}

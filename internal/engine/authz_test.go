@@ -42,6 +42,9 @@ func TestAChartAuthorityWithNoCompanyIsUnknownRatherThanFalse(t *testing.T) {
 	if _, err := chart.LeadsAnyone(t.Context(), "cto"); !errors.Is(err, authz.ErrNoChart) {
 		t.Errorf("LeadsAnyone err = %v, want it to name the absent chart", err)
 	}
+	if _, err := chart.MemberOf(t.Context(), "sre", "platform"); !errors.Is(err, authz.ErrNoChart) {
+		t.Errorf("MemberOf err = %v, want it to name the absent chart", err)
+	}
 	// AND THE DECISION IS UNKNOWN, which is what a surface renders as 503
 	// rather than 403 — the whole reason the error exists.
 	//

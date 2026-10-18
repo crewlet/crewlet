@@ -47,6 +47,12 @@ func (leadsOneProject) LeadsAnyone(context.Context, string) (bool, error) {
 	return false, nil
 }
 
+// MemberOf answers that nobody sits in any unit: no case here shares an
+// artifact with a team.
+func (leadsOneProject) MemberOf(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
 // moveRegistry is a seat's registry with the move wired, decided by chart.
 func moveRegistry(t *testing.T, trk *fakeTracker, chart authz.Chart) *tools.Registry {
 	t.Helper()

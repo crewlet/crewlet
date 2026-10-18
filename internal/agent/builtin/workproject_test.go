@@ -489,6 +489,12 @@ func (c projectChart) LeadsAnyone(context.Context, string) (bool, error) {
 	return false, nil
 }
 
+// MemberOf answers that nobody sits in any unit: no case here shares an
+// artifact with a team.
+func (projectChart) MemberOf(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
 // chartLeads and chartRefuses are the two answers a chart that CAN answer
 // gives.
 var (

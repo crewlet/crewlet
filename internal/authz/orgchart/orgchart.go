@@ -1,6 +1,6 @@
 // Package orgchart answers [authz.Chart] over one organization: who leads
-// whom, a project, a unit and a page container, read off the tree a company
-// document builds.
+// whom, a project, a unit and a page container, and who sits in a unit, read
+// off the tree a company document builds.
 //
 // # Pure over one tree, and why it is its own package
 //
@@ -226,6 +226,38 @@ func (c chart) LeadsUnit(_ context.Context, actor, unitKey string) (bool, error)
 	}
 	for _, unit := range o.UnitChainTo(unitKey) {
 		if lead := o.EffectiveLead(unit); lead != nil && lead.Handle() == actor {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// MemberOf reports whether actor's seat sits in the unit key names or in any
+// unit below it: who a share with that team admits.
+//
+// THE SEAT'S OWN CHAIN, outermost unit down to the one holding it, compared BY
+// POINTER against the unit the key resolves to, for the reason
+// [org.Organization.UnitChainFor] finds a seat by pointer: two units carrying
+// one name must not answer for each other. A unit's lead seated in the unit
+// above it is NOT a member, because they are not in the team; a share that
+// should reach them names their seat or their own unit.
+//
+// A KEY NAMING NO UNIT, or an actor the tree does not seat, answers false
+// rather than erroring: the tree was read and holds no such membership.
+func (c chart) MemberOf(_ context.Context, actor, unitKey string) (bool, error) {
+	o, err := c.tree()
+	if err != nil {
+		return false, err
+	}
+	if actor == "" || unitKey == "" {
+		return false, nil
+	}
+	seat, unit := o.Role(actor), o.Unit(unitKey)
+	if seat == nil || unit == nil {
+		return false, nil
+	}
+	for _, in := range o.UnitChainFor(seat) {
+		if in == unit {
 			return true, nil
 		}
 	}

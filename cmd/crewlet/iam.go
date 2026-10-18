@@ -177,7 +177,7 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	asJSON := fs.Bool("json", false, "print the raw answer")
 	reason := fs.String("reason", "", "recorded on the change")
 	grants := fs.String("grants", "",
-		"admin, tracker or knowledge, comma-separated, or `none`. admin "+
+		iamGrantWords()+", comma-separated, or `none`. admin "+
 			"includes every app. If left out: every app on invite and a "+
 			"person's create, the owner's permissions on token. Required on a "+
 			"service account's create")
@@ -533,9 +533,8 @@ func iamNewcomer(sub, kind, email, login, seat string, granted bool) error {
 					"(or token:<id> for an API token)")
 			}
 			if !granted {
-				return errors.New("name what the service account gets with " +
-					"-grants: admin, tracker, knowledge (comma-separated), " +
-					"or none")
+				return fmt.Errorf("name what the service account gets with "+
+					"-grants: %s (comma-separated), or none", iamGrantWords())
 			}
 		case "", iam.KindPerson:
 			if strings.TrimSpace(email) == "" {

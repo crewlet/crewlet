@@ -201,6 +201,8 @@ func TestEveryAdminRowAsksForAProofOrSaysWhyNot(t *testing.T) {
 			"and a seat's registry, neither of which is a step-up surface",
 		authz.ActionSkillPageWrite: "asked from inside the page tools, on the " +
 			"knowledge surface the design leaves out of step-up",
+		authz.ActionArtifactUsage: "a read of what the company's artifacts " +
+			"hold against their quotas changes nothing",
 	}
 	walked := 0
 	for _, a := range authz.Actions() {

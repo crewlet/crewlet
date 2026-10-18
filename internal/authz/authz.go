@@ -125,10 +125,10 @@
 //
 // # Admin, and one permission per app (ADR-0033)
 //
-// The vocabulary is three names ([iam.Grant]): `admin`, which runs the company
-// and the engine, and one permission per APP — `tracker` and `knowledge` —
-// which uses it. Every row names at most one app ([rule.app]), and that
-// decides three things at once: a [ClassApp] row admits whoever holds the app;
+// The vocabulary is admin and the apps ([iam.Grant]): `admin`, which runs the
+// company and the engine, and one permission per APP (`tracker`, `knowledge`
+// and `artifacts`), which uses it. Every row names at most one app
+// ([rule.app]), and that decides three things at once: a [ClassApp] row admits whoever holds the app;
 // a RELATION row — a person's own record, a container's lead, a comment's
 // author — admits its relation only beside the app, so a lead who does not use
 // the tracker does not reorder a report's queue in it; and an administrator
@@ -151,6 +151,46 @@
 // role offers the tool takes it — asking a colleague, starting a coding run —
 // with no permission at all, because which seats are offered it is the role's
 // registry's decision and a person has no turn for it to spend.
+//
+// # An artifact is decided per object, by its shares
+//
+// Every other kind is decided per APP: a tracker holder reads every task. An
+// artifact is not, because it is somebody's own work handed to the people it
+// names, so [KindArtifact] belongs to no app ([AppFor]) and one class decides
+// it: [ClassShared]. A caller's ROLE on an artifact (viewer, commenter,
+// contributor, editor, owner; internal/artifacts declares the ladder) is the
+// best of their relations to it: owning it, a share naming their seat, a unit
+// they sit in or the whole company, and leading the AGENT that owns it. A row
+// names the least role it admits ([rule.minRole]).
+//
+// A SHARE IS A RELATION, NEVER A PERMISSION. The `artifacts` app gates
+// AUTHORING only: creating one, publishing a version, renaming it, adding an
+// asset, changing its data's shape, and taking one's own out of circulation
+// and back. A row that reads or participates (opening, filling in data) asks
+// the relation alone, so somebody invited with no app still answers the review
+// sheet a colleague shared with them; an authoring row asks the app beside the
+// relation ([withApp]), so editor without the app writes data and does not
+// publish.
+//
+// NO RELATION IS NOT FOUND, NEVER FORBIDDEN ([Decision.NotFound]): an
+// artifact's existence, id and title are its owner's and its audience's to
+// disclose. A relation below the row's role is refused naming the role it
+// needs ([ReasonRole], [Decision.Role]).
+//
+// THE ADMIN PATH ADMITS EVERY ROW, because admin is host access (below) and a
+// refusal would promise a privacy the engine cannot keep. What the engine can
+// do is make the override visible, so an admission only the admin path made is
+// marked ([Decision.Elevated]) and the surfaces record it. It is consulted
+// AFTER the caller's relations and before any chart failure can decide, so an
+// administrator who also holds a share is admitted as a sharer (nothing to
+// record), and one on a node behind its chart is still never told "I cannot
+// tell".
+//
+// AN AGENT is held two ways further. It never manages somebody else's work
+// unless the company says so ([Object.AgentsManageOthers]); and inside a turn
+// somebody woke, every artifact verb it takes is decided again for the person
+// it is acting for, except the edits it makes to its own work
+// ([DecideWithin]).
 //
 // # Admin is host access, and the table does not pretend otherwise
 //
@@ -180,6 +220,7 @@ package authz
 import (
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
@@ -225,12 +266,18 @@ const (
 	// credentials, its integrations, the node it runs on: what the admin
 	// verbs and everybody's overview are about.
 	KindCompany ObjectKind = "company"
+	// KindArtifact is one artifact, and everything decided as it: its
+	// versions, files, assets, datastore collections and rows, presence and
+	// view tickets. The one kind decided PER OBJECT rather than per app: who
+	// may touch an artifact is its owner and whoever it is shared with
+	// ([ClassShared]), so no app admits a reader to it ([AppFor], [Visible]).
+	KindArtifact ObjectKind = "artifact"
 )
 
 // ObjectKinds are every kind, in declaration order.
 var ObjectKinds = []ObjectKind{
 	KindTask, KindProject, KindUnit, KindPage, KindContainer, KindPerson,
-	KindView, KindCompany,
+	KindView, KindCompany, KindArtifact,
 }
 
 // Valid reports whether a kind is one this build knows.
@@ -333,6 +380,47 @@ type Object struct {
 	// view those rules read as a project. Empty on every other class,
 	// which reads Kind and never this.
 	ContainerKind ObjectKind
+
+	// Shares are an artifact's audience list, as its stored row holds it:
+	// each one a seat, a unit or the whole company, with the role it grants
+	// ([ClassShared]). Read beside [Object.Owner], which names the artifact's
+	// owner: [iam.RecordOwner] of whoever created it or was last handed it, a
+	// seat handle, or a machine login for a service account bound to none.
+	//
+	// SET ONLY BY A CALLER THAT HAS READ THE ARTIFACT, never from an
+	// argument, exactly as [Object.Asked] is: a share a caller could state
+	// for themselves would be every artifact handed to whoever typed their
+	// own seat. Empty means the artifact is shared with nobody, its owner's
+	// alone.
+	Shares []artifacts.Share
+
+	// OwnerIsAgent says the artifact's owner is an AGENT seat (the stored
+	// owner's kind is [iam.ActorAgent]), which is what opens the LEAD ARM: a
+	// seat's lead holds owner-level on the artifacts that seat owns, as they
+	// already steer, pause and read its trail, and an agent that is paused or
+	// removed must not orphan its work. False for a person's artifact, whose
+	// lead holds nothing on it: a person's draft is theirs, and the lead
+	// relation was built for a team's work queue, not for reading a report's
+	// drafts.
+	//
+	// Read off the stored row, never inferred from the owner's name, for
+	// [Object.Shares]' reason.
+	OwnerIsAgent bool
+
+	// AgentsManageOthers is the company's `artifacts.agents_manage_others`
+	// setting, read by the surface from the company document it runs. False,
+	// the default, keeps an agent seat to `contributor` on every artifact it
+	// does not own, however it is shared and whoever it leads: it reads the
+	// artifact and writes its data, and never publishes over, renames,
+	// reshapes or reshares somebody else's work ([ReasonSeatRefused]). True
+	// lifts the cap, and the agent holds whatever its relations grant.
+	//
+	// A FACT ABOUT THE COMPANY rather than the object, carried here because
+	// [Decide] is pure over values: the alternative was a second argument
+	// every caller of every verb passes, read by one class. The zero is the
+	// closed end, so a surface that never read the setting keeps agents off
+	// other people's work rather than letting them in.
+	AgentsManageOthers bool
 }
 
 // Decision is what [Decide] concluded.
@@ -366,7 +454,10 @@ type Decision struct {
 	// rule reads before it consults any permission, and the refusals that
 	// are not about permission at all — an enrolment stage, a seat taking
 	// a human-only verb, a person taking a seat-only one, a machine token
-	// taking a verb that needs a person present, a verb with no rule.
+	// taking a verb that needs a person present, a verb with no rule, an
+	// agent kept off somebody else's artifact by the company's setting
+	// ([Object.AgentsManageOthers]) and a turn's requester who could not
+	// take the verb ([DecideWithin]).
 	//
 	// ON THE DECISION rather than looked up beside it, because a refusal
 	// that names what would have admitted the caller has to name what the
@@ -384,6 +475,28 @@ type Decision struct {
 	// is why it rides on the decision rather than being looked up beside
 	// it.
 	Recency iam.Recency
+
+	// Role is the role a [ReasonRole] refusal needed, set on that refusal
+	// and on nothing else: the caller holds a relation to the artifact, and
+	// it is below what the verb asks ([ClassShared]). It is what lets a
+	// surface say "ask the owner for editor" rather than a bare no, and it
+	// rides on the decision for [Decision.Recency]'s reason.
+	Role artifacts.Role
+
+	// Standing is what the caller holds on the artifact, set on every
+	// [ClassShared] decision that reached the caller's relations, admitted
+	// or refused, and zero on every other class. It is what a surface stamps
+	// into the record a write forms (the effective role) and what it shows
+	// a reader as their own role; see [Standing] for when it is exact.
+	Standing Standing
+
+	// Elevated reports an admission ONLY THE ADMIN PATH made: an
+	// administrator whose relations to the artifact, if any, do not reach
+	// the role the verb asks ([ReasonGrant] on a [ClassShared] row). The
+	// override of somebody's private work is recorded where it is used, so
+	// a read admitted this way is the one a surface writes an elevated-read
+	// record for, and a write admitted this way is stamped elevated.
+	Elevated bool
 }
 
 // Unknown reports a decision this node could not reach.
@@ -392,6 +505,21 @@ type Decision struct {
 // the thing callers get wrong: `if !d.Allowed { refuse }` reads correctly and
 // is wrong exactly when the store blinked.
 func (d Decision) Unknown() bool { return d.Err != nil }
+
+// NotFound reports a refusal a surface must answer EXACTLY as it answers an
+// object nobody holds: a caller with no relation at all to an artifact
+// ([ReasonNotShared]).
+//
+// A METHOD, for [Decision.Unknown]'s reason: the rule is that existence is
+// the relation's to disclose (an artifact's id, title and very existence are
+// its owner's and its audience's), and a surface that compared reasons itself
+// would be one more place to forget it. [EnvelopeRefusal] answers it `404
+// not_found` with no reason and no grants, which is byte for byte what an
+// artifact surface answers for an id nothing holds, so the two cannot be told
+// apart; a tool reports it as the object not existing.
+func (d Decision) NotFound() bool {
+	return d.Err == nil && !d.Allowed && d.Reason == ReasonNotShared
+}
 
 // Reason names the rule that decided, in the words a refusal uses.
 //
@@ -421,8 +549,10 @@ const (
 	ReasonNotLead Reason = "not_lead"
 	// ReasonNotAuthor is a refusal: somebody else wrote it.
 	ReasonNotAuthor Reason = "not_author"
-	// ReasonSeatRefused is a refusal an agent gets and a person does not.
-	// See [rule.humanOnly].
+	// ReasonSeatRefused is a refusal an agent gets and a person does not:
+	// a human-only verb ([rule.humanOnly]), or managing an artifact the
+	// agent does not own while the company keeps agents to contributor
+	// there ([Object.AgentsManageOthers]).
 	ReasonSeatRefused Reason = "seat_refused"
 	// ReasonTokenRefused is a refusal a request that presented a MACHINE
 	// TOKEN gets and the person it acts as would not: the verb needs a
@@ -454,6 +584,22 @@ const (
 	// agent seat does not: the verb is an agent's own ([rule.seatOnly]).
 	// It names no permission, because none would change it.
 	ReasonSeatOnly Reason = "seat_only"
+	// ReasonShared is an admission on a SHARE: the artifact is shared with
+	// the caller's seat, a unit they sit in or the whole company, at a role
+	// that includes what the verb asks ([ClassShared]).
+	ReasonShared Reason = "shared"
+	// ReasonNotShared is a refusal: the caller holds no relation at all to
+	// the artifact. It is answered as an object nobody holds
+	// ([Decision.NotFound]), so it says nothing about whether one exists.
+	ReasonNotShared Reason = "not_shared"
+	// ReasonRole is a refusal: the caller holds a relation to the artifact,
+	// below the role the verb asks, which [Decision.Role] names.
+	ReasonRole Reason = "role"
+	// ReasonCeiling is a refusal an agent gets inside a turn somebody woke:
+	// the agent may take the verb, and the person whose request it is
+	// acting on could not ([DecideWithin]). It names no permission, because
+	// none the agent could hold would change it.
+	ReasonCeiling Reason = "ceiling"
 )
 
 // Reasons are every one, in declaration order.
@@ -462,7 +608,7 @@ var Reasons = []Reason{
 	ReasonNoGrant, ReasonNotSelf, ReasonNotLead, ReasonNotAuthor,
 	ReasonSeatRefused, ReasonTokenRefused, ReasonStage, ReasonUnnamed,
 	ReasonUnknownAction, ReasonStepUp, ReasonEverybody, ReasonAsked,
-	ReasonSeatOnly,
+	ReasonSeatOnly, ReasonShared, ReasonNotShared, ReasonRole, ReasonCeiling,
 }
 
 // Valid reports whether a reason is one this build knows.

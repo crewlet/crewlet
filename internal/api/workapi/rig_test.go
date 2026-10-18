@@ -52,6 +52,12 @@ func (c chart) LeadsAnyone(_ context.Context, actor string) (bool, error) {
 	return actor == "cto", c.err
 }
 
+// MemberOf answers that nobody sits in any unit: no case here shares an
+// artifact with a team.
+func (c chart) MemberOf(context.Context, string, string) (bool, error) {
+	return false, c.err
+}
+
 // ---- principals --------------------------------------------------------- //
 
 // person is somebody signed in and bound to a seat, holding these grants.
