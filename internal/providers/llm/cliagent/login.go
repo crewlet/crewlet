@@ -44,6 +44,9 @@ var ErrNoLoginCommand = errors.New("cliagent: this CLI has no such login command
 // headless browser through a vendor's login page — that breaks on the
 // vendor's next redesign, and it is exactly the kind of re-implementation
 // this whole backend exists to avoid.
+//
+// A login that leaves NO login is a failure, even where the CLI exited 0: see
+// [Provider.loginLeftNothing].
 func (p *Provider) BrokerLogin(ctx context.Context, in io.Reader, out, errOut io.Writer) error {
 	if len(p.profile.LoginArgs) == 0 {
 		// NOT "it authenticates on first use", which this said once: a seat
@@ -55,7 +58,38 @@ func (p *Provider) BrokerLogin(ctx context.Context, in io.Reader, out, errOut io
 			"or give the entry a key",
 			ErrNoLoginCommand, p.agent, p.key)
 	}
-	return p.runInCredentialHome(ctx, p.profile.LoginArgs, in, out, errOut)
+	holds, err := p.runInCredentialHome(ctx, syncLogin, p.profile.LoginArgs, in, out, errOut)
+	if err != nil {
+		return err
+	}
+	if !holds {
+		return p.loginLeftNothing()
+	}
+	return nil
+}
+
+// loginLeftNothing is the failure of a login command that exited without
+// leaving a login anywhere this entry reads one.
+//
+// A FAILURE, NOT A SUCCESS THAT WROTE NOTHING. Its caller prints "Login written
+// to …" on a nil error, and an operator who backed out of the CLI's provider
+// picker — or whose CLI put the credential somewhere no seat is seeded from —
+// was told exactly that about a directory holding nothing, and found out at
+// the first call. Every shipped profile with a login command names where that
+// login lands (its credential files, or the database its credential store
+// exports), so a login that left none there is one no seat would ever have
+// been signed in by.
+func (p *Provider) loginLeftNothing() error {
+	if len(p.profile.CredentialPaths) == 0 && p.profile.CredentialStore == nil {
+		return fmt.Errorf("cliagent: the %q profile names no place a login is kept — no "+
+			"credential_paths and no credential_store — so nothing its login command stores "+
+			"can reach a seat; declare where it keeps one under "+
+			"providers.llm.%s.cli.overrides", p.agent, p.key)
+	}
+	return fmt.Errorf("cliagent: the %q CLI exited without leaving a login where this "+
+		"entry reads one (%s), so nothing was written to %s — if the sign-in did not "+
+		"finish, run `crewlet llm login %s` again",
+		p.agent, p.profile.LoginLocation(), p.ws.CredentialsDir(), p.key)
 }
 
 // CaptureToken runs the vendor's token-minting command and returns what it
@@ -91,10 +125,15 @@ func (p *Provider) CaptureToken(ctx context.Context, in io.Reader, errOut io.Wri
 	// simply vanished and the operator's terminal went blank again, which is
 	// the very bug this is fixing. One mutex, shared by both, restores the
 	// guarantee without folding stderr into the buffer the token is read from.
+	//
+	// A LOGIN COMMAND for the sync that follows it (syncLogin): a minting
+	// command is the vendor's sign-in, and one that also leaves a credential
+	// file behind has left the operator's own new login. Not one that must
+	// leave a login, though — what it is FOR is the token it prints.
 	var out bytes.Buffer
 	mirror := lockedWriter{mu: new(sync.Mutex), w: errOut}
-	if err := p.runInCredentialHome(
-		ctx, p.profile.CaptureTokenArgs, in, io.MultiWriter(&out, mirror), mirror,
+	if _, err := p.runInCredentialHome(
+		ctx, syncLogin, p.profile.CaptureTokenArgs, in, io.MultiWriter(&out, mirror), mirror,
 	); err != nil {
 		return "", err
 	}
@@ -177,20 +216,42 @@ func (p *Provider) CredentialLogin(ctx context.Context, username, password strin
 		extra[login.PasswordEnv] = password
 		stdin = ""
 	}
-	return p.runInCredentialHome(ctx, args, strings.NewReader(stdin), out, errOut, extra)
+	holds, err := p.runInCredentialHome(ctx, syncLogin, args, strings.NewReader(stdin), out, errOut, extra)
+	if err != nil {
+		return err
+	}
+	if !holds {
+		return p.loginLeftNothing()
+	}
+	return nil
 }
 
 // Logout revokes the login where the CLI can, and removes the credential
 // files either way.
 //
-// Both halves, and the local half unconditionally: a vendor command that
-// failed must not leave a working login on disk that an operator believes
-// they removed.
+// Both halves, and the local half whatever the vendor's command did: a vendor
+// command that failed must not leave a working login on disk that an operator
+// believes they removed.
+//
+// The vendor's command makes no login, so what it leaves is carried out as a
+// refresh ([syncRefresh]) — which a login the CLI has just revoked never is:
+// it can only write over the very login it was seeded from, and a home whose
+// login is gone writes nothing. The removal takes the shared login's lock, so
+// a seat carrying a refresh out at the same moment either lands before it,
+// and is removed with the rest, or finds the login gone and keeps it gone.
 func (p *Provider) Logout(ctx context.Context, out, errOut io.Writer) error {
 	var vendorErr error
 	if len(p.profile.LogoutArgs) > 0 {
-		vendorErr = p.runInCredentialHome(ctx, p.profile.LogoutArgs, nil, out, errOut)
+		_, vendorErr = p.runInCredentialHome(ctx, syncRefresh, p.profile.LogoutArgs, nil, out, errOut)
 	}
+	if err := p.discardLoginHome(ctx); err != nil {
+		return errors.Join(fmt.Errorf("cliagent: the login was NOT removed: %w", err), vendorErr)
+	}
+	unlock, err := p.ws.lockShared(ctx)
+	if err != nil {
+		return errors.Join(fmt.Errorf("cliagent: the login was NOT removed: %w", err), vendorErr)
+	}
+	defer unlock()
 	var removeErr error
 	for _, path := range p.ws.LoginFiles() {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -203,14 +264,46 @@ func (p *Provider) Logout(ctx context.Context, out, errOut io.Writer) error {
 	return vendorErr
 }
 
+// discardLoginHome empties the login home of a login a command left there and
+// never carried out — what a failed export leaves for the next command to
+// write — so that a logout is not followed by the next `status` carrying the
+// login it removed back into the shared directory.
+//
+// A home another command is using is left to it: that command is a login in
+// progress, an operator's own new sign-in, which a logout that came first does
+// not undo.
+func (p *Provider) discardLoginHome(ctx context.Context) error {
+	unlock, err := p.ws.lockLoginHome(ctx)
+	var busy *loginHomeBusyError
+	if errors.As(err, &busy) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	home := p.ws.loginHome()
+	return errors.Join(
+		p.ws.dropCopies(home),
+		p.ws.prune(home),
+		clearGeneration(filepath.Join(p.ws.Root(), loginGenerationFile)))
+}
+
 // Status asks the CLI who it is logged in as.
+//
+// A status makes no login, so it is carried out as a refresh ([syncRefresh]):
+// a home whose CLI changed nothing writes nothing, and one whose CLI did
+// refresh writes only over the login it was seeded from — so asking who the
+// entry is signed in as can neither revert a seat's refresh that landed while
+// it ran nor bring back a login `crewlet llm logout` removed.
 func (p *Provider) Status(ctx context.Context, out, errOut io.Writer) error {
 	if len(p.profile.StatusArgs) == 0 {
 		return fmt.Errorf("%w: the %q CLI has no status command — "+
 			"`crewlet llm doctor` reports what can be observed instead",
 			ErrNoLoginCommand, p.agent)
 	}
-	return p.runInCredentialHome(ctx, p.profile.StatusArgs, nil, out, errOut)
+	_, err := p.runInCredentialHome(ctx, syncRefresh, p.profile.StatusArgs, nil, out, errOut)
+	return err
 }
 
 // AdoptHostLogin copies the CLI's login out of a human's home directory into
@@ -225,7 +318,13 @@ func (p *Provider) Status(ctx context.Context, out, errOut io.Writer) error {
 //
 // A login the CLI keeps in a database of its own is taken the only way it can
 // leave one, through the CLI's own export run against that home
-// ([Provider.exportHostLogin]).
+// ([Provider.exportHostLogin]) — run FIRST, before anything is written, so an
+// export that fails adopts nothing rather than half a login.
+//
+// It is the operator's own new login, so it is written over whatever the
+// shared directory holds, under the shared login's lock: a seat carrying out a
+// refresh of the old login at the same moment then finds the login moved and
+// keeps this one ([syncRefresh]).
 func (p *Provider) AdoptHostLogin(ctx context.Context, home string) ([]string, error) {
 	if home == "" {
 		var err error
@@ -235,10 +334,23 @@ func (p *Provider) AdoptHostLogin(ctx context.Context, home string) ([]string, e
 				"(%w) — name one with --home", err)
 		}
 	}
+	var document []byte
+	if p.profile.CredentialStore != nil {
+		var err error
+		document, err = p.exportHostLogin(ctx, home)
+		if err != nil {
+			return nil, fmt.Errorf("cliagent: reading the %q login in %q: %w", p.agent, home, err)
+		}
+	}
 	dest := p.ws.CredentialsDir()
 	if err := os.MkdirAll(dest, 0o700); err != nil {
 		return nil, fmt.Errorf("cliagent: preparing %q: %w", dest, err)
 	}
+	unlock, err := p.ws.lockShared(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	var taken []string
 	for _, rel := range p.hostSources() {
 		src, err := cliprofile.UnderRoot(home, rel)
@@ -262,17 +374,11 @@ func (p *Provider) AdoptHostLogin(ctx context.Context, home string) ([]string, e
 		}
 		taken = append(taken, src)
 	}
-	if p.profile.CredentialStore != nil {
-		document, err := p.exportHostLogin(ctx, home)
-		if err != nil {
-			return nil, fmt.Errorf("cliagent: reading the %q login in %q: %w", p.agent, home, err)
+	if holdsLogin(document) {
+		if err := hostbox.ReplaceFile(p.ws.documentPath(), bytes.NewReader(document)); err != nil {
+			return nil, fmt.Errorf("cliagent: writing %q: %w", p.ws.documentPath(), err)
 		}
-		if holdsLogin(document) {
-			if err := p.ws.replaceShared(p.ws.documentPath(), document, true); err != nil {
-				return nil, err
-			}
-			taken = append(taken, p.hostStoreName(home))
-		}
+		taken = append(taken, p.hostStoreName(home))
 	}
 	if len(taken) == 0 {
 		return nil, fmt.Errorf("cliagent: no %q login found under %q — log in with the "+
@@ -384,11 +490,32 @@ func (p *Provider) ExportBundle() (string, error) {
 //
 // It refuses to overwrite an existing login: a node that has been running has
 // the fresher refresh token, and restoring a boot-time blob over it is how a
-// fleet logs itself out.
+// fleet logs itself out. At boot that is the ordinary case and not an error;
+// [Provider.ImportBundle] is the operator's form, which says so.
 func (p *Provider) RestoreBundle(blob string) error {
+	// Called from [New], at boot, which has no context of its own to hand on;
+	// the one wait inside is bounded by sharedLockWait.
+	if err := p.ImportBundle(context.Background(), blob); err != nil && !errors.Is(err, ErrLoginPresent) {
+		return err
+	}
+	return nil
+}
+
+// ErrLoginPresent is a bundle import that found the entry already signed in,
+// and so restored nothing.
+var ErrLoginPresent = errors.New("cliagent: the entry already has a login, so the bundle was not restored")
+
+// ImportBundle is [Provider.RestoreBundle] for an operator who asked for it,
+// and so it answers [ErrLoginPresent] where a login is already in place rather
+// than nothing.
+//
+// DECIDED UNDER THE SHARED LOGIN'S LOCK, with the writes: a caller that looked
+// for a login first and then restored was told "restored" whenever a login
+// landed between the two, about a bundle that had written nothing.
+func (p *Provider) ImportBundle(ctx context.Context, blob string) error {
 	dest := p.ws.CredentialsDir()
 	if p.ws.HasLogin() {
-		return nil
+		return ErrLoginPresent
 	}
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(blob))
 	if err != nil {
@@ -464,6 +591,18 @@ func (p *Provider) RestoreBundle(blob string) error {
 		staged[name] = data
 	}
 
+	// THE EMPTINESS ASKED AGAIN UNDER THE SHARED LOGIN'S LOCK, with the
+	// writes: the check above is the cheap path for a node that already has
+	// a login, and a login that landed while the bundle was being validated
+	// is the fresher one.
+	unlock, lockErr := p.ws.lockShared(ctx)
+	if lockErr != nil {
+		return lockErr
+	}
+	defer unlock()
+	if p.ws.HasLogin() {
+		return ErrLoginPresent
+	}
 	for name, data := range staged {
 		if err := hostbox.ReplaceFile(filepath.Join(dest, name), bytes.NewReader(data)); err != nil {
 			return fmt.Errorf("cliagent: writing %q: %w", name, err)
@@ -472,39 +611,68 @@ func (p *Provider) RestoreBundle(blob string) error {
 	return nil
 }
 
-// runInCredentialHome runs one of the CLI's own auth commands with its home
-// pointed at the SHARED credential directory rather than a seat's.
+// runInCredentialHome runs one of the CLI's own auth commands in the LOGIN
+// HOME, which is seeded from and carried back to the shared credential
+// directory rather than a seat's, and reports whether the home held a login
+// once the command was done.
 //
 // A login has to write where every seat's checkout is seeded FROM, and a seat
 // home is pruned; brokering a login into one would delete the credential
 // moments later.
+//
+// mode is whether the command MAKES a login ([syncLogin]: login, a capture, a
+// credential login — the one kind of command that may create the shared login,
+// and whose result is written over whatever the shared directory holds by
+// then) or only USES one ([syncRefresh]: status, a vendor's own logout).
+//
+// The whole of it holds the login home's lock ([Workspace.lockLoginHome]): it
+// prunes the home on the way in and out, and a second command doing that under
+// a first's browser flow deleted the database the first was about to store
+// its login in.
 func (p *Provider) runInCredentialHome(
-	ctx context.Context, args []string,
+	ctx context.Context, mode syncMode, args []string,
 	in io.Reader, out, errOut io.Writer, extra ...map[string]string,
-) error {
-	home := filepath.Join(p.ws.Root(), "login-home")
-	dest := p.ws.CredentialsDir()
-	for _, dir := range []string{home, dest} {
+) (bool, error) {
+	home := p.ws.loginHome()
+	cache := p.ws.loginCache()
+	record := filepath.Join(p.ws.Root(), loginGenerationFile)
+	for _, dir := range []string{home, cache, p.ws.CredentialsDir()} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return fmt.Errorf("cliagent: preparing %q: %w", dir, err)
+			return false, fmt.Errorf("cliagent: preparing %q: %w", dir, err)
 		}
 	}
-	checkout := &Checkout{Home: home, Cache: filepath.Join(p.ws.Root(), "login-cache")}
-	if err := os.MkdirAll(checkout.Cache, 0o700); err != nil {
-		return fmt.Errorf("cliagent: preparing %q: %w", checkout.Cache, err)
+	unlock, lockErr := p.ws.lockLoginHome(ctx)
+	if lockErr != nil {
+		return false, lockErr
 	}
-	// The login home is seeded from and synced back to the shared
+	defer unlock()
+	// A COMMAND THAT DID NOT FINISH CARRYING ITS LOGIN OUT is finished
+	// first, before the prune that would discard what it left: a login whose
+	// export failed after the operator completed the browser flow, or one
+	// whose process was killed before its export ran, is still in this home's
+	// database and nowhere else. Its record is on disk because this command
+	// is a process of its own, and the one that left it is gone.
+	if err := p.ws.carryOut(ctx, home, cache, p, record); err != nil {
+		return false, err
+	}
+	// The login home is seeded from and carried back to the shared
 	// directory exactly like a seat's, so re-running a login updates the
 	// one credential every seat reads — and PRUNED first exactly like one,
 	// so a login the CLI keeps in its own database is imported into an
 	// empty one rather than skipped by a database still holding an older
 	// copy of the same credential.
 	if err := p.ws.prune(home); err != nil {
-		return err
+		return false, err
 	}
-	if err := p.ws.seed(ctx, home, checkout.Cache, p); err != nil {
-		return err
+	seeded, err := p.ws.seed(ctx, home, cache, p)
+	if err != nil {
+		return false, err
 	}
+	gen := generation{Mode: mode, Seeded: seeded}
+	if err := writeGeneration(record, gen); err != nil {
+		return false, err
+	}
+	checkout := &Checkout{Home: home, Cache: cache}
 	env := map[string]string{}
 	for k, v := range p.env {
 		env[k] = v
@@ -534,24 +702,33 @@ func (p *Provider) runInCredentialHome(
 	// command hanging.
 	cmd.WaitDelay = p.termGrace
 	runErr := cmd.Run()
+	if runErr != nil {
+		runErr = fmt.Errorf("cliagent: %s %s: %w", p.profile.Binary, strings.Join(args, " "), runErr)
+	}
 
-	// Synced back even on failure: a login that authenticated and then
+	// Carried out even on failure: a login that authenticated and then
 	// failed a later step still wrote a credential worth keeping — and on an
 	// operator's Ctrl+C too, which is why the export does not inherit the
-	// cancellation that ended the command. This is the one sync that may
-	// CREATE the shared login: it is where a login is made.
-	syncErr := p.ws.syncCredentialsOut(context.WithoutCancel(ctx), home, checkout.Cache, p, true)
-	// Pruned after as well, so the login home does not keep a second copy of
-	// a login held in the CLI's own database: the shared directory's document
-	// is the login of record, and the next command here imports it afresh.
+	// cancellation that ended the command.
+	holds, syncErr := p.ws.syncCredentialsOut(context.WithoutCancel(ctx), home, cache, p, gen)
+	if syncErr != nil {
+		// NOT PRUNED, and the record stays: the home is now the only place
+		// the login this command made may exist, and the next `crewlet llm`
+		// command carries it out before it prunes anything.
+		return holds, errors.Join(fmt.Errorf("cliagent: the login in %q could not be carried "+
+			"back to %s, so it was kept there, and the next `crewlet llm` command that runs "+
+			"the CLI for %q carries it out before anything else: %w",
+			home, p.ws.CredentialsDir(), p.key, syncErr), runErr)
+	}
+	// Emptied after as well, so the login home keeps NO second copy of the
+	// login — a credential file or a database: the shared directory is the
+	// login of record, and the next command here starts afresh from it. A
+	// copy left behind is one a later command would carry back, which is how
+	// a login `crewlet llm logout` removed came back on the next `status`.
+	dropErr := p.ws.dropCopies(home)
 	pruneErr := p.ws.prune(home)
-	for _, err := range []error{syncErr, pruneErr} {
-		if err != nil {
-			return err
-		}
+	if err := errors.Join(dropErr, pruneErr, clearGeneration(record)); err != nil {
+		return holds, err
 	}
-	if runErr != nil {
-		return fmt.Errorf("cliagent: %s %s: %w", p.profile.Binary, strings.Join(args, " "), runErr)
-	}
-	return nil
+	return holds, runErr
 }

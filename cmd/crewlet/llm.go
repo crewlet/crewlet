@@ -185,7 +185,7 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 	case "export":
 		return exportLLM(ctx, environ, providers, key, *secretStore, *bootstrapPath, stdout)
 	case "import":
-		return importLLM(providers, key, os.Stdin, stdout)
+		return importLLM(ctx, providers, key, os.Stdin, stdout)
 	default:
 		fmt.Fprintf(stderr, llmUsage, defaultCompanyPath, defaultBootstrapPath)
 		return fmt.Errorf("unknown llm command %q", sub)
@@ -632,8 +632,11 @@ func storeLLMSecret(ctx context.Context, environ config.Source, bootstrapPath, n
 // own rule: a host that has been running holds the fresher refresh token, and
 // restoring a blob over it is how a fleet logs itself out. That is reported
 // here rather than swallowed, because "nothing happened" and "restored" look
-// identical from the outside and only one of them means the host is ready.
-func importLLM(providers []cliAgentProvider, key string, stdin io.Reader, stdout io.Writer) error {
+// identical from the outside and only one of them means the host is ready —
+// asked before stdin is read, so a refusal costs nothing, and answered again by
+// [cliagent.Provider.ImportBundle] under the lock its write takes, because a
+// login landing between the two was otherwise reported as a bundle restored.
+func importLLM(ctx context.Context, providers []cliAgentProvider, key string, stdin io.Reader, stdout io.Writer) error {
 	p, err := oneProvider(providers, key)
 	if err != nil {
 		return err
@@ -641,12 +644,15 @@ func importLLM(providers []cliAgentProvider, key string, stdin io.Reader, stdout
 	if key == "" {
 		key = providers[0].key
 	}
-	if p.Workspace().HasLogin() {
+	present := func() error {
 		return fmt.Errorf(
 			"%s already has a login in %s, and restoring over it would replace "+
 				"a fresher refresh token with an older one — log it out first "+
 				"(`crewlet llm logout %s`) if you mean to replace it",
 			key, p.Workspace().CredentialsDir(), key)
+	}
+	if p.Workspace().HasLogin() {
+		return present()
 	}
 	// +1 SO THE OVERRUN IS VISIBLE. io.LimitReader stops at the cap and
 	// reports a clean EOF, so reading exactly maxBundleBytes cannot be told
@@ -671,7 +677,9 @@ func importLLM(providers []cliAgentProvider, key string, stdin io.Reader, stdout
 			"stdin held no bundle: pipe one in, e.g. " +
 				"`crewlet llm export " + key + " | ssh host crewlet llm import " + key + "`")
 	}
-	if err := p.RestoreBundle(blob); err != nil {
+	if err := p.ImportBundle(ctx, blob); errors.Is(err, cliagent.ErrLoginPresent) {
+		return present()
+	} else if err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "Restored %s into %s.\nVerify it with `crewlet llm doctor %s`.\n",

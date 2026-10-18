@@ -334,6 +334,78 @@ func TestSeatSlugIsSafeAndRecognisable(t *testing.T) {
 	}
 }
 
+// A CALL THAT WAS NEVER PREPARED LEAVES NO SCRATCH DIRECTORY. It has no
+// Checkout to Release, so a working directory an error path in Acquire left
+// behind is one nothing removes — one per failing call for as long as the
+// failure lasts. Only a failed seed used to clean up; a failed prune and a
+// failed work-scope settings file did not.
+func TestAFailedAcquireLeavesNoWorkingDirectory(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		profile func(*cliprofile.Profile)
+		// breakIt makes the step fail, given the seat dir and the call's
+		// working directory; it runs before Acquire.
+		breakIt func(t *testing.T, ws *Workspace, seatDir, work string)
+	}{
+		"the prune fails": {
+			breakIt: func(t *testing.T, _ *Workspace, seatDir, _ string) {
+				// A FILE where a volatile path's parent should be is
+				// what RemoveAll cannot get through, even as root.
+				blocker := filepath.Join(seatDir, "home", ".fake")
+				if err := os.MkdirAll(filepath.Dir(blocker), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		"the seed fails": {
+			breakIt: func(t *testing.T, ws *Workspace, _, _ string) {
+				if err := os.MkdirAll(filepath.Join(ws.CredentialsDir(), "creds.json"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		"the working directory's settings file fails": {
+			profile: func(p *cliprofile.Profile) {
+				p.SeedFiles = []cliprofile.SeedFile{{Path: ".vendor/project.json", In: cliprofile.SeedWork, Content: "{}"}}
+			},
+			breakIt: func(t *testing.T, _ *Workspace, _, work string) {
+				if err := os.MkdirAll(work, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(work, ".vendor"), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			profile := testProfile(t)
+			if c.profile != nil {
+				c.profile(&profile)
+			}
+			dir := t.TempDir()
+			t.Cleanup(func() { forgetWorkspace(dir) })
+			ws, err := Shared(dir, "fake-cli", profile)
+			if err != nil {
+				t.Fatalf("Shared: %v", err)
+			}
+			work := filepath.Join(ws.SeatDir("dev"), "work", seatSlug("call"))
+			c.breakIt(t, ws, ws.SeatDir("dev"), work)
+			if co, err := ws.Acquire(t.Context(), "dev", "call", nil); err == nil {
+				_ = co.Release(t.Context())
+				t.Fatal("the broken step did not fail the acquire")
+			}
+			if _, err := os.Stat(work); !os.IsNotExist(err) {
+				t.Errorf("a failed acquire left its working directory behind (%v)", err)
+			}
+		})
+	}
+}
+
 // AND INJECTIVE. This directory is a seat's HOME — its coding-CLI session,
 // its history, its credentials — so two seats that land on one slug get one
 // home, which is the cross-seat read this package exists to prevent. The

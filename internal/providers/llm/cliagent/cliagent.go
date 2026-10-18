@@ -268,8 +268,9 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		if err := checkout.Release(context.WithoutCancel(ctx)); err != nil {
 			// Logged, not returned: the completion already happened
 			// and failing it over a cleanup would throw away work the
-			// operator paid for. The next call into this seat prunes
-			// again, so the state does not compound.
+			// operator paid for. A login that could not be carried out
+			// is kept in the home, and the next call into this seat
+			// carries it out before it prunes — see [Workspace.Acquire].
 			log.WarnContext(ctx, "cli_agent_release_failed", "provider", p.key, "seat", seat, "error", err)
 		}
 	}()

@@ -27,6 +27,10 @@ func (p *Provider) exportLogin(ctx context.Context, home, cache string) ([]byte,
 	return []byte(out), nil
 }
 
+// providerKey implements [loginStore]: the providers.llm key, for the log lines
+// a sync writes.
+func (p *Provider) providerKey() string { return p.key }
+
 // homeEnv is the child environment a call in home gets, from [buildEnv], so a
 // credential-store command reads the database and the settings the call itself
 // will: an import that wrote into a different XDG_DATA_HOME than the call reads

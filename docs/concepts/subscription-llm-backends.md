@@ -1025,6 +1025,20 @@ in a REPL you have to interrupt — after a login that had already
 succeeded. `crewlet llm login` returning you to your shell is the
 signal that it worked; `crewlet llm doctor <KEY>` confirms it.
 
+**A login that leaves no login fails**, even when the CLI exited 0: if
+nothing ends up where the entry reads its login — its credential files, or
+for OpenCode the document its export prints — `crewlet llm login` says the
+CLI exited without leaving one and writes nothing, rather than printing
+`Login written to …` over an empty directory. Backing out of the vendor's
+sign-in is the usual way to get there; run the login again.
+
+**One `crewlet llm` command at a time per entry.** `login`, `status` and a
+vendor's own `logout` all run the CLI in the same login home, rebuilt from the
+shared login for each command and emptied after it, so a second one started
+while the first is running — a `status` in another terminal while a login
+waits on its browser flow — is refused at once with a message saying so,
+rather than pruning the database the sign-in is about to store its login in.
+
 **`pi` is the one CLI where the REPL *is* the login**, and its profile says
 so rather than pretending otherwise: `/login` there is a slash command and
 the vendor ships no login subcommand at all. So the broker starts pi's own
@@ -1065,25 +1079,30 @@ The document `auth export` prints is the login of record, kept as
 `credentials/exported-credentials`. `crewlet llm login` runs OpenCode's own
 `auth login` in a home rebuilt from it and exports what it holds afterwards;
 each seat's generation starts from an **empty** database with the document
-imported into it, and ends by exporting the database and replacing the
-document when it changed — so a token OpenCode refreshed mid-call reaches
-every seat — and the database itself is then pruned with the rest of the
-seat's sessions. An import always lands in an empty database because
-OpenCode skips a credential id it already holds rather than updating it.
+imported into it, and ends by exporting the database and carrying the export
+back when OpenCode changed it — so a token OpenCode refreshed mid-call reaches
+every seat ([below](#token-refresh-across-seats)) — and the database itself is
+then pruned with the rest of the seat's sessions. An import always lands in an
+empty database because OpenCode skips a credential id it already holds rather
+than updating it.
 `-from-host` exports the login from your own home with your own OpenCode,
 bundles carry the document, and a [local coding box](code-sandbox.md)
 imports it before a run and exports it back after. Measured on 2.0.32, an
 import followed by an export reproduces the document byte for byte, and an
 empty database exports `[]`.
 
-**A seat never creates a login, or brings back one you removed.** A seat
-writes back only over a login the shared directory still holds — for a
-credential file as much as a document — so a call that was running while
-`crewlet llm logout` ran cannot put the login back, and an export holding no
-login never replaces one. Only `crewlet llm login` (and `-from-host`, and a
-bundle restored into an empty directory) creates the shared login, and every
-write to it replaces the file whole rather than rewriting it in place, so a
-seat starting its generation never reads half of one.
+**Only a login creates the shared login, and nothing brings back one you
+removed.** `crewlet llm login` (with `-capture-token` and `-username`), and
+`-from-host` and a bundle restored into an empty directory, are what create
+the shared login. A seat, `crewlet llm status` and a vendor's own logout only
+ever *refresh* the login they started from: each writes back only over that
+very login, so a call or a `status` running while `crewlet llm logout` ran
+cannot put the login back — for a credential file as much as a document — and
+an export holding no login never replaces one. `crewlet llm logout` also
+empties the login home, so a login a failed export left there for the next
+command (below) is discarded with the rest. Every write to the shared login
+replaces the file whole rather than rewriting it in place, so a seat starting
+its generation never reads half of one.
 
 ### 2. Capture a headless token (best where it exists)
 
@@ -1237,13 +1256,51 @@ declare `env_sign_in`, and a key in its `cli.env` is not counted.
 
 OAuth access tokens expire in hours, and the CLI refreshes them
 mid-run. Most vendors rotate the *refresh* token at the same time, so
-Crewlet syncs a changed credential file — or a changed export, for a CLI
+Crewlet carries a changed credential file — or a changed export, for a CLI
 that keeps its login in its own database — back to the shared directory
 when a seat's generation closes — otherwise the whole fleet would be
-logged out at the next expiry. Two seats refreshing at the same instant
-can still race, exactly as two terminals running the vendor's CLI would.
-A headless token (option 2) has no refresh file and sidesteps this
-entirely.
+logged out at the next expiry.
+
+**Changed means changed from what the home was seeded with**, never
+"different from the shared login now". When a generation starts, Crewlet
+records a digest of every credential file it copied into the home and of the
+document it imported; when it closes, a home holding exactly that wrote
+nothing, whatever the shared directory holds by then. Compared with the shared
+login instead, an idle seat's copy would differ the moment another seat had
+refreshed — and writing it back would put the refresh token the vendor had just
+rotated away in front of every seat.
+
+**And a refresh is a compare-and-swap.** A seat whose CLI did refresh writes
+only while the shared login is still exactly what that seat started from. If
+anything else wrote in between — another seat's refresh, your `crewlet llm
+login` or `-from-host` while seats were mid-call, a `crewlet llm logout` — the
+newer login is kept and the seat's is dropped, with a `cli_agent_login_superseded`
+warning naming the provider and the file (never what either holds). The check
+and the write are one step under a lock in the state directory, which the
+engine's seats and every `crewlet llm` command — each a process of its own —
+take alike. `crewlet llm status` follows the same rule, so it can neither
+revert a refresh that landed while it ran nor bring back a removed login. The
+commands that *make* a login are the one exception: what your sign-in stored
+is written whenever it differs from what the command started with, over a
+refresh a seat made during a browser flow that took minutes, because your new
+login is the one you asked for.
+
+**A refreshed login that cannot be carried out is kept, not pruned.** If the
+export fails — a host too busy to finish it inside its 30-second bound, a CLI
+killed mid-export — the home is left exactly as it is, with its generation
+recorded beside it, and the seat's next call carries the login out before it
+prunes anything; a call that cannot carry it out either is refused, naming
+the export, rather than run on the stale database or discard it. The record is on disk, so an engine
+that stopped mid-call is covered too: the next process's first call into that
+seat finishes the generation first. The login home works the same way — a
+`crewlet llm login` whose export failed after you finished the browser flow
+keeps the login there, and the next `crewlet llm` command that runs the CLI
+for that entry carries it out before anything else.
+
+Two seats refreshing at the same instant still race for the vendor's next
+token, exactly as two terminals running the vendor's CLI would; the one that
+wrote first is kept. A headless token (option 2) has no refresh file and
+sidesteps all of this.
 
 ---
 

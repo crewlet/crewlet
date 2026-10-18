@@ -26,10 +26,21 @@ import (
 //   - store-login stores the login FAKE_LOGIN_KEY names;
 //   - store-list prints the logins it holds;
 //   - store-usage <session> prints that session's usage report;
+//   - store-file-login writes a login FILE, $HOME/.fake/creds.json, holding
+//     FAKE_LOGIN_KEY — a CLI that keeps its login in a file, for the cases
+//     about one;
 //   - anything else is a call: it answers with the key it holds, records the
 //     usage FAKE_SESSION_USAGE names under the session `--session` named, and
 //     then refreshes its login to FAKE_STORE_REFRESH, or drops every login on
 //     FAKE_STORE_DROP.
+//
+// And three ways to fail or to race: FAKE_STORE_IMPORT_REJECT refuses every
+// document, quoting it; FAKE_STORE_EXPORT_FAIL fails every export after
+// printing its logins (FAKE_STORE_EXPORT_FAIL_ONCE only the first, marking
+// the file it names), quoting them on stderr too under FAKE_STORE_EXPORT_QUOTE;
+// and FAKE_MIDRUN_VERB names a verb during which FAKE_MIDRUN_BODY is written
+// to FAKE_MIDRUN_PATH — another writer's login landing while this command is
+// running.
 func fakeStore() {
 	data := filepath.Join(os.Getenv("XDG_DATA_HOME"), "fake")
 	db := filepath.Join(data, "db.json")
@@ -62,13 +73,33 @@ func fakeStore() {
 	if tmp := os.Getenv("TMPDIR"); tmp != "" {
 		_ = os.MkdirAll(tmp, 0o700)
 	}
+	if v := os.Getenv("FAKE_MIDRUN_VERB"); v != "" && v == verb {
+		_ = os.WriteFile(os.Getenv("FAKE_MIDRUN_PATH"), []byte(os.Getenv("FAKE_MIDRUN_BODY")), 0o600)
+	}
 	switch verb {
 	case "store-export":
-		if os.Getenv("FAKE_STORE_EXPORT_FAIL") == "1" {
+		failOnce := os.Getenv("FAKE_STORE_EXPORT_FAIL_ONCE")
+		failing := os.Getenv("FAKE_STORE_EXPORT_FAIL") == "1"
+		if failOnce != "" {
+			if _, err := os.Stat(failOnce); os.IsNotExist(err) {
+				_ = os.WriteFile(failOnce, nil, 0o600)
+				failing = true
+			}
+		}
+		if failing {
 			// A CLI that printed its logins and THEN failed: the half
 			// on stdout is every secret it holds.
-			fmt.Print(`[{"id":"cred_1","key":"LEAKED-SECRET"}]`)
-			fmt.Fprint(os.Stderr, "export broke")
+			printed := `[{"id":"cred_1","key":"LEAKED-SECRET"}]`
+			if creds := read(); len(creds) > 0 {
+				raw, _ := json.Marshal(creds)
+				printed = string(raw)
+			}
+			fmt.Print(printed)
+			if os.Getenv("FAKE_STORE_EXPORT_QUOTE") == "1" {
+				fmt.Fprintf(os.Stderr, "export broke after writing: %s", printed)
+			} else {
+				fmt.Fprint(os.Stderr, "export broke")
+			}
 			os.Exit(1)
 		}
 		raw, _ := json.Marshal(read())
@@ -79,7 +110,7 @@ func fakeStore() {
 	case "store-import":
 		doc, _ := io.ReadAll(os.Stdin)
 		var in []map[string]string
-		if err := json.Unmarshal(doc, &in); err != nil {
+		if err := json.Unmarshal(doc, &in); err != nil || os.Getenv("FAKE_STORE_IMPORT_REJECT") == "1" {
 			// Quoting what it rejected, as a CLI may.
 			fmt.Fprintf(os.Stderr, "invalid document: %s", doc)
 			os.Exit(1)
@@ -94,6 +125,10 @@ func fakeStore() {
 		fmt.Printf("Imported %d\n", len(in))
 	case "store-login":
 		write(append(read(), map[string]string{"id": "cred_login", "key": os.Getenv("FAKE_LOGIN_KEY")}))
+	case "store-file-login":
+		file := filepath.Join(os.Getenv("HOME"), ".fake", "creds.json")
+		_ = os.MkdirAll(filepath.Dir(file), 0o700)
+		_ = os.WriteFile(file, []byte(`{"token":"`+os.Getenv("FAKE_LOGIN_KEY")+`"}`), 0o600)
 	case "store-list":
 		for _, c := range read() {
 			fmt.Println(c["id"])
@@ -196,11 +231,29 @@ func TestASeatStartsEveryGenerationFromTheSharedLogin(t *testing.T) {
 			t.Fatalf("the call held %q, want the shared login imported into its home", comp.Content)
 		}
 	}
-	data := filepath.Join(p.ws.SeatDir(""), "home", ".local", "share", "fake")
-	if _, err := os.Stat(data); !os.IsNotExist(err) {
+	// The seat the calls RAN in, as Complete names it. This looked in
+	// SeatDir(""), a directory no call ever uses, so the absence below held
+	// for any build.
+	if _, err := os.Stat(seatHome(t, p)); err != nil {
+		t.Fatalf("the calls did not run in %q: %v", seatHome(t, p), err)
+	}
+	if _, err := os.Stat(seatDatabase(t, p)); !os.IsNotExist(err) {
 		t.Errorf("the seat's database outlived its generation (%v) — the next "+
 			"generation would start from this one's transcript", err)
 	}
+}
+
+// seatHome is the home of the seat [ask]'s calls run in — the one
+// [llm.SeatOf] names for a context that names none.
+func seatHome(t *testing.T, p *Provider) string {
+	t.Helper()
+	return filepath.Join(p.ws.SeatDir(llm.SeatOf(t.Context())), "home")
+}
+
+// seatDatabase is where [fakeStore] keeps the database of that seat's CLI.
+func seatDatabase(t *testing.T, p *Provider) string {
+	t.Helper()
+	return filepath.Join(seatHome(t, p), ".local", "share", "fake")
 }
 
 // A LOGIN THE CALL REFRESHED IS WRITTEN BACK — exported from the database and
@@ -447,6 +500,8 @@ func (s *stubStore) importLogin(_ context.Context, _, _ string, document []byte)
 func (s *stubStore) exportLogin(context.Context, string, string) ([]byte, error) {
 	return s.exported, nil
 }
+
+func (s *stubStore) providerKey() string { return "stub" }
 
 // A LOGOUT WHILE A SEAT IS MID-CALL IS NOT UNDONE BY THE SEAT. The shared
 // login disappearing is `crewlet llm logout` having run, and a seat writing

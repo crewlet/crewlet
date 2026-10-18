@@ -226,6 +226,11 @@ func TestABundleDoesNotOverwriteALiveLogin(t *testing.T) {
 	if string(got) != `{"token":"current"}` {
 		t.Errorf("a boot-time bundle overwrote the running node's login: %q", got)
 	}
+	// The operator's form of the same restore SAYS it restored nothing,
+	// rather than leaving `crewlet llm import` to print "Restored".
+	if err := p.ImportBundle(t.Context(), bundleOf(t, "creds.json", `{"token":"stale"}`)); !errors.Is(err, ErrLoginPresent) {
+		t.Errorf("ImportBundle over a live login = %v, want ErrLoginPresent", err)
+	}
 }
 
 // Exporting nothing must say what to run, not produce an empty archive that
