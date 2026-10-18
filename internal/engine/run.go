@@ -944,7 +944,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// ASSIGNED, not declared through a temporary: `opened, err :=`
 		// shadows the err the node-id read above already declared, which is
 		// the one shape govet cannot tell from the bug that check is on for.
-		backends, err = OpenBackends(ctx, opts.Bootstrap, opts.Company)
+		backends, err = OpenBackends(ctx, opts.Bootstrap, opts.Company, opts.Metrics)
 		if err != nil {
 			return nil, err
 		}

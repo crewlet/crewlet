@@ -258,7 +258,7 @@ func bootRejoinNode(t testing.TB) (*Engine, *Backends, *jetstream.Queue) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	back, err := OpenBackends(t.Context(), &b, cfg)
+	back, err := OpenBackends(t.Context(), &b, cfg, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}

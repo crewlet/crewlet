@@ -329,7 +329,7 @@ func TestBorrowedBackendsOutliveTheEngine(t *testing.T) {
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	})
-	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
+	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc), nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -365,7 +365,7 @@ func TestAStoppedEngineAppliesNothing(t *testing.T) {
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	})
-	back, err := engine.OpenBackends(t.Context(), b, nil)
+	back, err := engine.OpenBackends(t.Context(), b, nil, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -401,7 +401,7 @@ func TestASecondStopTearsNothingDownAgain(t *testing.T) {
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	})
-	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
+	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc), nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -451,7 +451,7 @@ func TestBackendsSuppliedWithoutEveryEstateAreRefused(t *testing.T) {
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	})
-	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
+	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc), nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}

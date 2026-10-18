@@ -172,7 +172,7 @@ func TestTheRestartLineIsSaidAtAnActivation(t *testing.T) {
 		t.Fatalf("the premise: the node boots on tracker.backend %q, want native",
 			booted.TrackerBackendFor())
 	}
-	back, err := OpenBackends(t.Context(), &b, booted)
+	back, err := OpenBackends(t.Context(), &b, booted, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}

@@ -52,7 +52,7 @@ func TestAnApplierThatStopsIsWrittenOnceAndByTheStateLog(t *testing.T) {
 	stream := tracker.Domain{}.Stream().Name
 
 	// FIRST BOOT, and a checkpoint committed under the stream it ran on.
-	back, err := OpenBackends(t.Context(), &b, cfg)
+	back, err := OpenBackends(t.Context(), &b, cfg, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestAnApplierThatStopsIsWrittenOnceAndByTheStateLog(t *testing.T) {
 	// would compare equal, so it waits one out.
 	time.Sleep(2 * time.Millisecond)
 
-	back2, err := OpenBackends(t.Context(), &b, cfg)
+	back2, err := OpenBackends(t.Context(), &b, cfg, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends again: %v", err)
 	}

@@ -59,7 +59,7 @@ func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 		b.Coordination.LeaseTTLSeconds = 3
 	})
-	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
+	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc), nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestAStopOnAStreamThatWillNotAcknowledgeLeavesNothingHeld(t *testing.T) {
 		b.Stream.StoreMaxBytes = 16 << 30
 		b.Coordination.LeaseTTLSeconds = 15
 	})
-	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
+	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc), nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}

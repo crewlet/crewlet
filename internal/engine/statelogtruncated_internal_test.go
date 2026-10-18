@@ -274,7 +274,7 @@ func TestAHeartbeatInFlightCannotPutAReanchoredNodesOldGenerationBack(t *testing
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	back, err := OpenBackends(t.Context(), &b, cfg)
+	back, err := OpenBackends(t.Context(), &b, cfg, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -373,7 +373,7 @@ func TestTheTruncationFenceStaysUntilThePassedVerdictReplacesIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	back, err := OpenBackends(t.Context(), &b, cfg)
+	back, err := OpenBackends(t.Context(), &b, cfg, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}

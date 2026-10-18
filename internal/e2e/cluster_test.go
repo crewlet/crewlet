@@ -481,7 +481,7 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 	// only once every member's engine has stopped — see [stopAll]. Opened by
 	// the call engine.New makes for an engine that owns them, so the member
 	// runs on what `crewlet run` would have opened.
-	backends, err := engine.OpenBackends(ctx, boot, cfg)
+	backends, err := engine.OpenBackends(ctx, boot, cfg, nil)
 	if err != nil {
 		return fail(refusal("open backends", err))
 	}

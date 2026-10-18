@@ -209,7 +209,7 @@ func joinBackends(t *testing.T) (*config.Bootstrap, *config.Company, *engine.Bac
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	})
 	company := parsedCompany(t, companyDoc)
-	backends, err := engine.OpenBackends(t.Context(), boot, company)
+	backends, err := engine.OpenBackends(t.Context(), boot, company, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}

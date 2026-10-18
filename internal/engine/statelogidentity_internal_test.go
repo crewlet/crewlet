@@ -52,7 +52,7 @@ func TestTheApplierIsHandedTheStreamsStampedIdentity(t *testing.T) {
 	stream := tracker.Domain{}.Stream().Name
 
 	// FIRST BOOT: the running domain carries the stream's stamped identity.
-	back, err := OpenBackends(t.Context(), &b, cfg)
+	back, err := OpenBackends(t.Context(), &b, cfg, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestTheApplierIsHandedTheStreamsStampedIdentity(t *testing.T) {
 	time.Sleep(2 * time.Millisecond)
 
 	// SECOND BOOT: the applier stops and says why.
-	back2, err := OpenBackends(t.Context(), &b, cfg)
+	back2, err := OpenBackends(t.Context(), &b, cfg, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends again: %v", err)
 	}
@@ -392,7 +392,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 	stream := tracker.Domain{}.Stream().Name
 
 	// FIRST BOOT: an object with history on the log, and the log's end.
-	back, err := OpenBackends(t.Context(), &b, cfg)
+	back, err := OpenBackends(t.Context(), &b, cfg, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -430,7 +430,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 	back.Close(context.Background())
 
 	// SECOND BOOT.
-	back2, err := OpenBackends(t.Context(), &b, cfg)
+	back2, err := OpenBackends(t.Context(), &b, cfg, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends again: %v", err)
 	}
@@ -679,7 +679,7 @@ func aRunningNodeWith(t *testing.T, company string, opts Options) (*Engine, nats
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	back, err := OpenBackends(t.Context(), &b, cfg)
+	back, err := OpenBackends(t.Context(), &b, cfg, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}

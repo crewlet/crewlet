@@ -7,6 +7,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -192,6 +193,34 @@ func TakeSpares(b *Backend) (giveBack func()) {
 // asked for.
 func SpanOf(contentRange string, from, most, size int64) (n, total int64, err error) {
 	return spanOf(contentRange, from, most, size)
+}
+
+// Operations, AttemptOutcomes and RequestOutcomes are [operations],
+// [attemptOutcomes] and [requestOutcomes] — copies, so no case can change what
+// the client counts under — for the cases that hold the counts and their
+// documentation to them.
+var (
+	Operations      = slices.Clone(operations)
+	AttemptOutcomes = slices.Clone(attemptOutcomes)
+	RequestOutcomes = slices.Clone(requestOutcomes)
+)
+
+// OtherOperation is [otherOperation], the label of an operation outside
+// [Operations].
+const OtherOperation = otherOperation
+
+// AttemptOutcome and RequestOutcome are [attemptOutcome] and
+// [requestOutcome], for the case that holds every kind of answer to exactly
+// one outcome.
+var (
+	AttemptOutcome = attemptOutcome
+	RequestOutcome = requestOutcome
+)
+
+// GiveUp is err as the last failure of a request given up after attempts
+// attempts ([givenUp]).
+func GiveUp(err error, attempts int) error {
+	return &givenUp{err: err, span: giveUpAfter, most: giveUpAfter, attempts: attempts}
 }
 
 // GateLetsOut sends one attempt of operation through b's gate under ctx — the

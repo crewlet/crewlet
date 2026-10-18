@@ -157,6 +157,35 @@
 // minute after its first failure or its deadline, whichever is first
 // ([newRetryer]).
 //
+// # What it counts
+//
+// Into the node's recorder ([Config.Metrics]), by S3 `operation` — the API's
+// own name for each request, a closed set ([operations]) — and never by key,
+// bucket or prefix:
+//
+//   - `crewlet.objects.s3.attempts` counts every attempt the bucket was sent,
+//     by what it made of it: `answered`, `throttled`, `failed` (any other
+//     answer), `unreached` (none at all) or `ended` (its own context ended it
+//     in flight). The session request S3 Express signs with is counted too,
+//     and so is an attempt whose session could not be had, as `unreached`.
+//   - `crewlet.objects.s3.request.attempts` observes every request once as it
+//     ends, at how many attempts it took, by how it ended: `answered`,
+//     `given_up` (nothing but failures, for up to a minute), `ended` (its
+//     deadline or caller, after an attempt), `unsent` (before its first,
+//     observed at zero) or `failed` (a failure asking again cannot change).
+//   - `crewlet.objects.s3.gate.limit` is how many attempts the gate lets out
+//     at once while a throttle holds the node back, and zero while nothing
+//     does; it is set only when it changes.
+//   - `crewlet.objects.s3.gate.waiting` is how many attempts wait in line at
+//     the gate, set only when it changes too.
+//
+// The outcomes are read by the gate's own predicates ([isThrottle],
+// [answered]), so what the counter calls a throttle is what cut the gate. An
+// operation's RETRIES are its attempts less its requests, plus the requests
+// counted `unsent` — which is why a request that never got its turn has an
+// outcome of its own: the histogram's first bucket holds zero and one
+// together.
+//
 // # What it costs the node, measured
 //
 // `make bench` (BenchmarkBackend, through internal/objstore/objstoretest's
@@ -301,6 +330,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // Config is where the bucket is and how to reach it.
@@ -325,6 +355,11 @@ type Config struct {
 	// node on AWS should hold none at all.
 	AccessKeyID     string
 	SecretAccessKey string
+	// Metrics is the node's recorder, which the client counts its attempts,
+	// its requests and its gate into from its first request — the check of
+	// the bucket at open (see "What it counts"). Nil counts nothing: a test,
+	// the backup's benchmark.
+	Metrics *metrics.Recorder
 }
 
 // PartBytes is the size of every part of a multipart upload but its last, and
@@ -588,12 +623,13 @@ func open(ctx context.Context, cfg Config, backoff retry.BackoffDelayer, c clock
 	if err != nil {
 		return nil, err
 	}
-	g := newGate(c)
+	count := counted{rec: cfg.Metrics}
+	g := newGate(c, count)
 	// ONE RETRYER, read by the SDK's retry step and by the judge alike, so
 	// what the judge counts as a failure is exactly an answer the retry step
 	// would ask again.
 	retryer := newRetryer(backoff)
-	j := &judge{now: c.now, retryer: retryer, giveUpAfter: giveUpAfter}
+	j := &judge{now: c.now, retryer: retryer, giveUpAfter: giveUpAfter, count: count}
 	client := s3.NewFromConfig(base, func(o *s3.Options) {
 		// THE BUCKET IS REACHED THROUGH THE ENGINE'S OWN TRANSPORT
 		// (internal/httpx), never a pool of the SDK's.
@@ -621,8 +657,9 @@ func open(ctx context.Context, cfg Config, backoff retry.BackoffDelayer, c clock
 		o.RetryMaxAttempts = 0
 		// A THROTTLE SLOWS THE WHOLE CLIENT ([gate]), a request the bucket
 		// keeps failing is given up within a minute ([judge]), and a
-		// request its deadline ends names the bucket's last answer.
-		o.APIOptions = append(o.APIOptions, paced(g, j))
+		// request its deadline ends names the bucket's last answer — each
+		// counted into the node's recorder as it happens.
+		o.APIOptions = append(o.APIOptions, paced(follows(count), g, j))
 	})
 	b := &Backend{client: client, bucket: cfg.Bucket, prefix: cfg.Prefix, gate: g, judge: j}
 	b.cutParts(PartBytes)

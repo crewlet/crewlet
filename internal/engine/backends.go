@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -252,7 +253,11 @@ type backgroundCloser interface {
 //
 // A node that HAS a revision does not arrive here nil: the caller reads the
 // active revision first and passes it, so the store opens at the right width.
-func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (*Backends, error) {
+//
+// rec is the node's recorder, which a backend that counts what it does counts
+// into from its first request — the object store's bucket client, whose
+// check of the bucket is a request ([openObjects]). Nil counts nothing.
+func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company, rec *metrics.Recorder) (*Backends, error) {
 	if b == nil {
 		return nil, fmt.Errorf("engine: no bootstrap config")
 	}
@@ -260,7 +265,7 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (
 	var err error
 	switch b.Stream.Type {
 	case config.StreamNATS, config.StreamEmbedded, "":
-		out, err = openNATS(ctx, b)
+		out, err = openNATS(ctx, b, rec)
 	default:
 		err = fmt.Errorf("engine: unknown stream type %q", b.Stream.Type)
 	}
@@ -349,8 +354,9 @@ func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*st
 // only in who owns the broker and therefore who owns the connection; what is
 // built on top of it is identical, and writing that twice is how one copy
 // ends up without a fleet store — which is not a startup error but a panic
-// hours later in whichever subsystem reached for it first.
-func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
+// hours later in whichever subsystem reached for it first. rec is the node's
+// recorder, handed on to the object store ([openObjects]).
+func openNATS(ctx context.Context, b *config.Bootstrap, rec *metrics.Recorder) (*Backends, error) {
 	// THROUGH THE RESOLVER, never the raw field. `node.id` is only one of
 	// the three places a node's name comes from — the file, then
 	// CREWLET_NODE_ID, then the default — and the raw field is empty for
@@ -432,7 +438,7 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 		out.Close(ctx)
 		return nil, err
 	}
-	if err = openObjects(ctx, b, out, js); err != nil {
+	if err = openObjects(ctx, b, out, js, rec); err != nil {
 		out.Close(ctx)
 		return nil, err
 	}
@@ -473,7 +479,12 @@ func (e *ObjectStoreMismatchError) Error() string {
 // where the fleet uses a bucket — would split the company's files between two
 // stores, each side's uploads readable on that side alone, with nothing
 // failing. Refused here, by name, it is a node that does not start.
-func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js natsjs.JetStream) error {
+//
+// An `s3` bucket's client counts its attempts, its requests and its throttle
+// gate into rec, the node's recorder, from its first request — the check of
+// the bucket below — so it is handed to the client's constructor rather than
+// set on the backend afterwards. Nil counts nothing.
+func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js natsjs.JetStream, rec *metrics.Recorder) error {
 	objects := b.Store.Objects
 	identity := objects.Identity()
 	agreed, err := out.Fleet.AgreeObjectBackend(ctx, identity)
@@ -490,6 +501,7 @@ func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js nat
 		backend, err := s3obj.Open(ctx, s3obj.Config{
 			Endpoint: s3.Endpoint, Region: s3.Region, Bucket: s3.Bucket, Prefix: s3.Prefix,
 			PathStyle: s3.PathStyle, AccessKeyID: s3.AccessKeyID, SecretAccessKey: s3.SecretAccessKey,
+			Metrics: rec,
 		})
 		if err != nil {
 			return fmt.Errorf("engine: the object store (store.objects.s3): %w", err)

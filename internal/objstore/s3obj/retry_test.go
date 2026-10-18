@@ -864,17 +864,12 @@ func TestTheSessionRequestIsNeverHeldByTheGate(t *testing.T) {
 	}
 }
 
-// sends is every operation the backend sends its bucket: the twelve it asks
-// of any bucket, and S3 Express's session request for a directory bucket.
-var sends = []string{"HeadBucket", "HeadObject", "GetObject", "PutObject", "CreateMultipartUpload",
-	"UploadPart", "CompleteMultipartUpload", "AbortMultipartUpload", "DeleteObject", "DeleteObjects",
-	"ListObjectsV2", "ListMultipartUploads", "CreateSession"}
-
 // ONLY THE SESSION REQUEST PASSES THE GATE: of every operation the backend
-// sends, and of names it does not, an attempt is let past a gate whose one
-// place is held only for CreateSession — known by the operation the SDK names
-// in its context, so no other request a directory bucket's URL shares slips
-// through beside it.
+// sends ([s3obj.Operations], which TestEveryOperationTheBackendSendsIsALabel
+// holds to what the verbs send), and of names it does not, an attempt is let
+// past a gate whose one place is held only for CreateSession — known by the
+// operation the SDK names in its context, so no other request a directory
+// bucket's URL shares slips through beside it.
 func TestOnlyTheSessionRequestPassesTheGate(t *testing.T) {
 	t.Parallel()
 	b := openRetrying(t, s3fake.Start(t, "files"), "", s3obj.Clock{})
@@ -889,7 +884,7 @@ func TestOnlyTheSessionRequestPassesTheGate(t *testing.T) {
 	}
 	// AFTER EVERY SUBTEST, which run once this function has returned.
 	t.Cleanup(func() { held.Leave(nil) })
-	for _, op := range append(slices.Clone(sends), "other", "") {
+	for _, op := range append(slices.Clone(s3obj.Operations), "other", "") {
 		t.Run("operation="+op, func(t *testing.T) {
 			t.Parallel()
 			ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)

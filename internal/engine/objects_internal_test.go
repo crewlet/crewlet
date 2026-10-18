@@ -19,8 +19,10 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	"github.com/crewlet/crewlet/internal/objstore/references"
+	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -263,7 +265,7 @@ func TestANodeNamingAnotherObjectStoreIsRefusedNamingBoth(t *testing.T) {
 		PathStyle: true,
 	}}
 	out := &Backends{Fleet: fleet}
-	err := openObjects(t.Context(), &boot, out, nil)
+	err := openObjects(t.Context(), &boot, out, nil, nil)
 	var mismatch *ObjectStoreMismatchError
 	if !errors.As(err, &mismatch) {
 		t.Fatalf("a node naming another object store than the fleet's was answered %v, "+
@@ -282,6 +284,44 @@ func TestANodeNamingAnotherObjectStoreIsRefusedNamingBoth(t *testing.T) {
 		t.Errorf("a refused node opened its object store anyway (%T, %q)", out.Objects,
 			out.objectsIdentity)
 	}
+}
+
+// THE OBJECT STORE'S BUCKET COUNTS INTO THE NODE'S RECORDER, from its first
+// request: the check of the bucket that opening it makes is an attempt and a
+// request like any other, so an `s3` node handed its recorder holds
+// `crewlet.objects.s3.attempts{operation=HeadBucket,outcome=answered}` once
+// the store is open. A recorder that stopped at the engine — never handed to
+// the client's constructor — leaves every S3 series the catalogue publishes
+// empty, which reads as a bucket that never throttled anybody.
+func TestTheObjectStoresBucketCountsIntoTheNodesRecorder(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	boot := config.DefaultBootstrap()
+	// STATIC KEYS: with none the SDK's own chain looks for credentials on
+	// the machine — the instance's metadata endpoint among them — before
+	// the first request.
+	boot.Store.Objects = config.StoreObjects{Backend: config.ObjectBackendS3, S3: config.ObjectsS3{
+		Endpoint: srv.URL, Region: "us-east-1", Bucket: srv.Bucket(), PathStyle: true,
+		AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret",
+	}}
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := &Backends{Fleet: coordmemory.NewFleet()}
+	if err := openObjects(t.Context(), &boot, out, nil, rec); err != nil {
+		t.Fatalf("open the object store: %v", err)
+	}
+	for _, s := range rec.Read() {
+		if s.Name == metrics.ObjectsS3Attempts && s.Attrs["operation"] == "HeadBucket" &&
+			s.Attrs["outcome"] == "answered" {
+			if s.Total != 1 {
+				t.Fatalf("the check at open counted %d answered attempts, want 1", s.Total)
+			}
+			return
+		}
+	}
+	t.Fatalf("the node's recorder holds no answered HeadBucket after the object store opened: %v", rec.Read())
 }
 
 // collectorNode is an engine holding just enough to run the collector's duty

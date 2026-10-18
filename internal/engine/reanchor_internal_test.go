@@ -1177,7 +1177,7 @@ func countRows(t *testing.T, e *Engine, query string, args ...any) int {
 // bootNode starts one engine over a bootstrap, closing it with the test.
 func bootNode(t *testing.T, b *config.Bootstrap, cfg *config.Company) (*Engine, *Backends) {
 	t.Helper()
-	back, err := OpenBackends(t.Context(), b, cfg)
+	back, err := OpenBackends(t.Context(), b, cfg, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}

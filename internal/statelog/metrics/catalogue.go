@@ -578,6 +578,78 @@ func Catalogue() []Instrument {
 				"budget: every second here is a second in which reads are " +
 				"behind and writes are pending on every node.",
 		},
+		// ---- the object store's bucket --------------------------------
+		{
+			Name: ObjectsS3Attempts, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"operation", "outcome"},
+			Shows: "Every attempt this node's S3 client sent its bucket, by S3 " +
+				"`operation` (the API's own name: `HeadBucket`, `HeadObject`, " +
+				"`GetObject`, `PutObject`, `CreateMultipartUpload`, " +
+				"`UploadPart`, `CompleteMultipartUpload`, " +
+				"`AbortMultipartUpload`, `DeleteObject`, `DeleteObjects`, " +
+				"`ListObjectsV2`, `ListMultipartUploads`, and S3 Express's " +
+				"`CreateSession`) and what the bucket made of it (`outcome`): " +
+				"`answered` — served, a success or a refusal such as a missing " +
+				"key; `throttled` — asked to slow down (`503 SlowDown`, any " +
+				"`429`, MinIO's `SlowDownRead` and `SlowDownWrite`), which cuts " +
+				"the node's gate; `failed` — any other answer: a server error " +
+				"that is no throttle, or a status no request expects, such as a " +
+				"redirect to another region; `unreached` — no answer at all: a " +
+				"connection refused or reset, a name that did not resolve, a TLS " +
+				"failure, or an attempt never sent because its S3 Express " +
+				"session could not be had; `ended` — the attempt's own deadline " +
+				"or its caller ended it in flight. An operation's RETRIES are " +
+				"this counter's total for it, less the count of " +
+				"`crewlet.objects.s3.request.attempts` for it, plus that " +
+				"histogram's `unsent` count for it. `throttled` rising is the " +
+				"fleet over the bucket's rate for the prefix (S3 serves 5 500 " +
+				"reads and 3 500 writes a second a prefix); `failed` the " +
+				"bucket's own fault; `unreached` the network or the endpoint.",
+		},
+		{
+			Name: ObjectsS3GateLimit, Kind: KindGauge, Unit: UnitCount,
+			Shows: "How many attempts this node's S3 client lets its bucket " +
+				"hold at once while a throttle holds it back — seven tenths of " +
+				"the most the node had out at once when the bucket last " +
+				"throttled it, one more each round of answers — and zero while " +
+				"nothing does: the gate lifts a minute after the bucket's last " +
+				"throttle. Above zero for long is a fleet held over the " +
+				"prefix's rate; every request of the node — git syncs, the " +
+				"collector, backups, people's files — shares what it allows.",
+		},
+		{
+			Name: ObjectsS3GateWaiting, Kind: KindGauge, Unit: UnitCount,
+			Shows: "Attempts of this node's S3 client waiting in line for the " +
+				"gate, first come first served: what a throttle is costing the " +
+				"node now. High while `crewlet.objects.s3.gate.limit` stays low " +
+				"is a node sending more than the prefix will take from it — its " +
+				"requests wait rather than fail, until their own deadlines.",
+		},
+		{
+			Name: ObjectsS3RequestAttempts, Kind: KindHistogram, Unit: UnitCount,
+			Attributes: []string{"operation", "outcome"},
+			Shows: "How many attempts each request of this node's S3 client " +
+				"took, observed once as it ends, by `operation` and how it " +
+				"ended (`outcome`): `answered` — the bucket's final answer, a " +
+				"success or a refusal; `given_up` — the bucket answered nothing " +
+				"but failures (server errors that are no throttle, or no answer " +
+				"at all) from the first to a bound drawn for it between forty " +
+				"seconds and a minute after it, so the request was not asked " +
+				"again and its caller was told the bucket's last answer; " +
+				"`ended` — its deadline or its caller ended it after at least " +
+				"one attempt, one still throttled among them; `unsent` — it " +
+				"ended before its first attempt, observed at zero: its deadline " +
+				"or its caller ended it while it waited at the gate (the gate " +
+				"starving the node's requests), or it was refused before " +
+				"sending; `failed` — a failure asking again cannot change, such " +
+				"as a certificate the node does not trust, or an S3 Express " +
+				"session that could not be had for it. Nothing counts a " +
+				"request's attempts but its deadline and that bound, so the " +
+				"tail is how long the bucket made requests wait: a p95 above " +
+				"one is a bucket throttling or failing, and `given_up` above " +
+				"zero is a bucket that failed every attempt for most of a " +
+				"minute.",
+		},
 		// ---- code -----------------------------------------------------
 		{
 			Name: CodeCommitBatchSize, Kind: KindHistogram, Unit: UnitCount,

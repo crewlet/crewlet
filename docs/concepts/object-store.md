@@ -352,6 +352,19 @@ promises, and its size is the provider's problem rather than any node's disk.
   seconds was ridden through by one upload in eight, of 8 MiB and of 100 KiB
   alike — the requests whose bound fell past it. These figures are the
   fake's.
+- **What the client counts.** Every attempt the node sends its bucket is
+  counted by S3 operation and what the bucket made of it
+  (`crewlet.objects.s3.attempts`), and every request by how many attempts it
+  took and how it ended (`crewlet.objects.s3.request.attempts`); the gate's
+  limit and its queue are gauges (`crewlet.objects.s3.gate.limit`, zero when
+  nothing holds the node back, and `.gate.waiting`). An operation's retries
+  are its attempts less its requests that made one — a request ended before
+  its first attempt is counted `unsent`. Throttles rising is the fleet over
+  the bucket's rate for its prefix — more git nodes syncing at once than it
+  takes, or a bucket shared with other traffic; failures rising is the
+  bucket's own fault; requests given up are a bucket that failed every
+  attempt of a request for most of a minute. See the
+  [metrics reference](../reference/metrics.md).
 - **The prefix is optional**, and with or without one the engine touches only
   names under its own `files/` corner: another application's objects in the
   same bucket are never listed as the engine's, judged or deleted.

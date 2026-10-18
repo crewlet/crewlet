@@ -364,13 +364,19 @@ type gate struct {
 	armed bool
 	// queue is the attempts waiting for a place, first come first.
 	queue []chan pass
+
+	// count is where the gate's two gauges go ([gate.reportLocked]), and
+	// shownLimit and shownWaiting what it last set them to.
+	count        counted
+	shownLimit   int
+	shownWaiting int
 }
 
 // pass is one attempt the gate let out, and the count of cuts it was let out
 // under.
 type pass struct{ cuts uint64 }
 
-func newGate(c clock) *gate { return &gate{now: c.now, after: c.after} }
+func newGate(c clock, count counted) *gate { return &gate{now: c.now, after: c.after, count: count} }
 
 // enter waits, under ctx, for the gate to let an attempt out.
 func (g *gate) enter(ctx context.Context) (pass, error) {
@@ -378,11 +384,13 @@ func (g *gate) enter(ctx context.Context) (pass, error) {
 	g.liftLocked()
 	if len(g.queue) == 0 && g.roomLocked() {
 		p := g.takeLocked()
+		g.reportLocked()
 		g.mu.Unlock()
 		return p, nil
 	}
 	let := make(chan pass, 1)
 	g.queue = append(g.queue, let)
+	g.reportLocked()
 	g.mu.Unlock()
 	select {
 	case p := <-let:
@@ -400,6 +408,7 @@ func (g *gate) enter(ctx context.Context) (pass, error) {
 	default:
 		g.queue = slices.DeleteFunc(g.queue, func(q chan pass) bool { return q == let })
 	}
+	g.reportLocked()
 	return pass{}, ctx.Err()
 }
 
@@ -424,6 +433,7 @@ func (g *gate) leave(p pass, err error) {
 	}
 	g.liftLocked()
 	g.letOutLocked()
+	g.reportLocked()
 }
 
 // roomLocked reports whether the gate has a place for one more attempt.
@@ -470,6 +480,7 @@ func (g *gate) wake() {
 	g.armed = false
 	g.liftLocked()
 	g.armLocked()
+	g.reportLocked()
 }
 
 // letOutLocked lets the attempts waiting out, first come first, for as many
@@ -480,6 +491,31 @@ func (g *gate) letOutLocked() {
 		g.queue[0] = nil
 		g.queue = g.queue[1:]
 		let <- g.takeLocked()
+	}
+}
+
+// reportLocked sets the gate's gauges to what it holds now, each only when it
+// has changed since the gate last set it — so a node nothing throttles sets
+// neither, and a gate under load sets one at a cut, at a whole place grown, at
+// the lift and as its line moves, never at every attempt.
+//
+// THE WHOLE NUMBER OF PLACES, never the limit itself: the limit grows by a
+// fraction of a place an answer, and what holds the node back is how many
+// attempts it lets out, [gate.roomLocked]'s figure — at least one while it is
+// engaged, and zero while it is lifted, which a quiet node reads within the
+// minute after its last throttle ([gate.armLocked]).
+func (g *gate) reportLocked() {
+	limit := 0
+	if g.limit > 0 {
+		limit = max(1, int(g.limit))
+	}
+	if limit != g.shownLimit {
+		g.shownLimit = limit
+		g.count.gateLimit(limit)
+	}
+	if waiting := len(g.queue); waiting != g.shownWaiting {
+		g.shownWaiting = waiting
+		g.count.gateWaiting(waiting)
 	}
 }
 
@@ -663,10 +699,18 @@ func (r *request) lastAnswer() error {
 	return r.last
 }
 
+// attemptsSent is how many attempts r has sent.
+func (r *request) attemptsSent() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.attempts
+}
+
 // follows is the step every operation of the bucket's client begins with: it
-// gives the operation a [request], which the [judge] fills at every attempt,
-// and adds the bucket's last answer to an operation that ends because its
-// context did.
+// gives the operation a [request], which the [judge] fills at every attempt;
+// counts the request into count as it ends — by its operation, how it ended
+// ([requestOutcome]) and how many attempts it sent; and adds the bucket's last
+// answer to an operation that ends because its context did.
 //
 // THE DEADLINE ALONE SAYS NOTHING: a request the bucket keeps throttling, or
 // one it fails for less than [giveUpAfter] before the deadline comes, ends at
@@ -675,18 +719,26 @@ func (r *request) lastAnswer() error {
 // So the last one is named beside it, as TEXT: the error is still the
 // deadline, and no caller that judges an error by what it is reads a throttle
 // or a server error out of it.
-var follows = middleware.InitializeMiddlewareFunc("crewlet.FollowsRequest",
-	func(ctx context.Context, in middleware.InitializeInput, next middleware.InitializeHandler) (
-		middleware.InitializeOutput, middleware.Metadata, error) {
-		r := &request{}
-		out, md, err := next.HandleInitialize(middleware.WithStackValue(ctx, requestKey{}, r), in)
-		if err != nil && ctx.Err() != nil {
-			if answer := r.lastAnswer(); answer != nil {
-				err = fmt.Errorf("%w; the bucket's last answer before then: %s", err, answer.Error())
+//
+// ONE STEP PER CLIENT, built with the client's recorder as the gate and the
+// judge are: a step shared by every client could count into none.
+func follows(count counted) middleware.InitializeMiddleware {
+	return middleware.InitializeMiddlewareFunc("crewlet.FollowsRequest",
+		func(ctx context.Context, in middleware.InitializeInput, next middleware.InitializeHandler) (
+			middleware.InitializeOutput, middleware.Metadata, error) {
+			operation := operationOf(middleware.GetOperationName(ctx))
+			r := &request{}
+			out, md, err := next.HandleInitialize(middleware.WithStackValue(ctx, requestKey{}, r), in)
+			attempts := r.attemptsSent()
+			count.request(operation, requestOutcome(ctx, attempts, err), attempts)
+			if err != nil && ctx.Err() != nil {
+				if answer := r.lastAnswer(); answer != nil {
+					err = fmt.Errorf("%w; the bucket's last answer before then: %s", err, answer.Error())
+				}
 			}
-		}
-		return out, md, err
-	})
+			return out, md, err
+		})
+}
 
 // judge is the step that reads each attempt's answer into its [request], and
 // gives up a request the bucket has answered with nothing but failures to the
@@ -719,13 +771,20 @@ var follows = middleware.InitializeMiddlewareFunc("crewlet.FollowsRequest",
 // answer names one leaves its waiter a failure by this rule, asked again, and
 // given up at the first of its sessions' give-ups that its own span, measured
 // from the first of them, reaches its bound at — bounded, a minute or two in.
+//
+// IT COUNTS EVERY ATTEMPT into count, by its operation and what the bucket
+// made of it ([attemptOutcome]) — a success, the session request and an
+// attempt whose identity could not be had included — from the attempt's own
+// answer, before it is judged: what the counter reads as a throttle or an
+// answer is exactly what the gate, just before it, cut or grew by.
 type judge struct {
 	now         func() time.Time
 	retryer     aws.Retryer
 	giveUpAfter time.Duration
 	// draw is a random share of n for each span's bound ([judge.bound]):
 	// math/rand/v2's where nil, or a case's own seeded one.
-	draw func(n time.Duration) time.Duration
+	draw  func(n time.Duration) time.Duration
+	count counted
 }
 
 // ID implements [middleware.FinalizeMiddleware].
@@ -735,6 +794,7 @@ func (j *judge) ID() string { return "crewlet.JudgesAttempt" }
 func (j *judge) HandleFinalize(ctx context.Context, in middleware.FinalizeInput, next middleware.FinalizeHandler) (
 	middleware.FinalizeOutput, middleware.Metadata, error) {
 	out, md, err := next.HandleFinalize(ctx, in)
+	j.count.attempt(operationOf(middleware.GetOperationName(ctx)), attemptOutcome(ctx, err))
 	if r, ok := middleware.GetStackValue(ctx, requestKey{}).(*request); ok {
 		err = j.judged(ctx, r, err)
 	}
@@ -790,12 +850,12 @@ func (j *judge) bound() time.Duration {
 }
 
 // paced adds the client's own steps to every operation's stack: the request
-// followed from its start ([follows]), and every attempt sent through g and
-// judged by j — directly after the SDK's retry step, in that order, so both
-// run once an attempt.
-func paced(g *gate, j *judge) func(*middleware.Stack) error {
+// followed from its start by f ([follows]), and every attempt sent through g
+// and judged by j — directly after the SDK's retry step, in that order, so
+// both run once an attempt.
+func paced(f middleware.InitializeMiddleware, g *gate, j *judge) func(*middleware.Stack) error {
 	return func(stack *middleware.Stack) error {
-		if err := stack.Initialize.Add(follows, middleware.Before); err != nil {
+		if err := stack.Initialize.Add(f, middleware.Before); err != nil {
 			return err
 		}
 		if err := stack.Finalize.Insert(g, "Retry", middleware.After); err != nil {
