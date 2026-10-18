@@ -1354,6 +1354,7 @@ func (l *LLMProvider) validateCLICredentials(path Path) error {
 	// on the mode and on whether the secret store or the engine's own
 	// environment holds a credential — which the document cannot see, so an
 	// entry relying on cli.env for one is configured to work only sometimes.
+	isolation := profile.IsolationVariables()
 	for _, name := range slices.Sorted(maps.Keys(cli.Env)) {
 		switch name {
 		case "":
@@ -1370,6 +1371,21 @@ func (l *LLMProvider) validateCLICredentials(path Path) error {
 					"here reaches the CLI depends on auth.mode, and on whether api_keys "+
 					"resolves or the engine's environment holds a key of its own. Give "+
 					"the key as api_keys with cli.auth.mode api-key", name)
+		default:
+			// cli.env is layered OVER the variables that keep each seat's
+			// CLI inside its own home and its call's working directory, so a
+			// value here would replace them for every seat on the entry —
+			// the engine user's real dotfiles, or a configuration directory
+			// the seat's system prompt is never written to — and nothing
+			// would say so.
+			if slices.Contains(isolation, name) {
+				p.add(entry(at(path, "cli.env"), name), ErrConflict,
+					"%s is a variable the engine sets for every call of this CLI to keep "+
+						"it inside its seat's own home and its call's working directory "+
+						"(%s); a value here would replace that isolation for every seat, so "+
+						"drop it — a vendor directory is relocated with "+
+						"cli.overrides.config_env", name, strings.Join(isolation, ", "))
+			}
 		}
 	}
 	return p.err()

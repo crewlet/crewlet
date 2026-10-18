@@ -235,8 +235,9 @@ func TestSeededSettingsFilesAreValidJSONThatKeepsTheWebOn(t *testing.T) {
 			[]string{"run_shell_command", `"web_fetch"`}, nil},
 		// 2.0's own permissions format, deny-all first: the LAST matching
 		// rule wins, and 2.0 allows whatever is not denied, so a list of
-		// local tools to deny let its new ones through.
-		"opencode": {".config/opencode/opencode.json", cliprofile.SeedHome,
+		// local tools to deny let its new ones through. In the call's own
+		// configuration directory, the only one OpenCode reads.
+		"opencode": {".crewlet-config/opencode.json", cliprofile.SeedWork,
 			[]string{
 				`"permissions":[{"action":"*","resource":"*","effect":"deny"},`,
 				`{"action":"webfetch","resource":"*","effect":"allow"}`,

@@ -409,11 +409,20 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// estimate.
 	var usageDoc string
 	if usagePath != "" {
-		if raw, readErr := os.ReadFile(usagePath); readErr == nil { //nolint:gosec // rooted in the per-call dir
-			usageDoc = string(raw)
-		} else if !os.IsNotExist(readErr) {
+		raw, readErr := os.ReadFile(usagePath) //nolint:gosec // rooted in the per-call dir
+		switch {
+		case os.IsNotExist(readErr):
+		case readErr != nil:
 			log.WarnContext(ctx, "cli_agent_usage_file_unreadable", "provider", p.key,
 				"agent", p.agent, "path", usagePath, "error", readErr)
+		case strings.TrimSpace(string(raw)) == "":
+			// Written and empty is not "the run did not get that far": the
+			// vendor began its report and wrote nothing into it, and what
+			// is read below could not tell this from no file at all.
+			log.WarnContext(ctx, "cli_agent_usage_file_unreadable", "provider", p.key,
+				"agent", p.agent, "path", usagePath, "error", "the file is empty")
+		default:
+			usageDoc = string(raw)
 		}
 	}
 
@@ -431,10 +440,18 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		}
 		report, reportErr := p.runAuxiliary(ctx, args, checkout.Work,
 			buildEnv(p.profile, checkout, p.env, p.auth), "")
-		if reportErr != nil {
+		switch {
+		case reportErr != nil:
 			log.WarnContext(ctx, "cli_agent_usage_report_failed", "provider", p.key,
 				"agent", p.agent, "error", reportErr)
-		} else {
+		case strings.TrimSpace(report) == "":
+			// A command that succeeded and printed nothing reported nothing,
+			// and the empty string handed on below reads as no report at all
+			// — so this is the one place that can say so.
+			log.WarnContext(ctx, "cli_agent_usage_report_failed", "provider", p.key,
+				"agent", p.agent, "error", fmt.Sprintf("%s %s exited 0 and printed nothing",
+					p.profile.Binary, strings.Join(args, " ")))
+		default:
 			usageDoc = report
 		}
 	}
@@ -507,8 +524,22 @@ func (p *Provider) completion(
 	out := extract(p.profile, res.stdout)
 	// The CLI's own report wins over anything stdout happened to carry:
 	// a profile only names one when its vendor puts the counts nowhere
-	// else, so a hit here is the only real figure there is.
-	out.applyUsageReport(p.profile, usageDoc)
+	// else, so a hit here is the only real figure there is. A report that
+	// ARRIVED and could not be read is said out loud, because the counts
+	// then fall back to stdout's — an estimate, for a CLI that reports
+	// none there — on every call until somebody notices the budget
+	// figures are made up.
+	if outcome := out.applyUsageReport(p.profile, usageDoc); outcome.unreadable() {
+		fallback := "an estimate, four characters a token"
+		if out.reported {
+			fallback = "the counts stdout reported"
+		}
+		log.WarnContext(ctx, "cli_agent_usage_report_unreadable", "provider", p.key,
+			"agent", p.agent, "source", usageSource(p.profile), "reason", outcome.String(),
+			"input_paths", cliprofile.PathList(p.profile.Usage.Input),
+			"output_paths", cliprofile.PathList(p.profile.Usage.Output),
+			"counts_from", fallback)
+	}
 
 	// A spent subscription is checked BEFORE the exit code, because it
 	// arrives on a successful one: the process exits 0 and the answer is
@@ -526,6 +557,11 @@ func (p *Provider) completion(
 	// vendor sentences, and scanning a healthy run's whole telemetry for
 	// them adds false-positive surface for nothing. When the answer WAS
 	// located it is the only thing the vendor said that matters.
+	//
+	// The events scope reads neither as text: it decodes the whole of
+	// stdout and looks only at the CLI's own failure events — see
+	// [cliprofile.MarkerScope] — which is why stdout itself is handed over
+	// beside what was said.
 	said := nonEmpty(out.text, res.stdout)
 	if hit, ok := classifyMarkers(p.profile, said, res.stdout, res.stderr); ok {
 		return nil, p.fail(hit.Kind, hit.Retry,
@@ -675,8 +711,8 @@ func (p *Provider) completion(
 // produces is to be able to ask without a running provider.
 //
 // said is what the CLI said — the located answer, or the whole of stdout when
-// none was located — and stdout is the whole of it, which only the
-// stdout-and-stderr scope searches.
+// none was located — and stdout is the whole of it, which only the events
+// scope reads, and only as decoded events.
 func classifyMarkers(p cliprofile.Profile, said, stdout, stderr string) (markerHit, bool) {
 	// THE ANSWER IS A HAYSTACK ONLY WHERE A VENDOR PUTS ITS FAILURES IN
 	// ONE — see [cliprofile.MarkerScope]. Searching the model's own words is what
@@ -687,10 +723,10 @@ func classifyMarkers(p cliprofile.Profile, said, stdout, stderr string) (markerH
 	// classify anything.
 	var haystacks []string
 	switch p.EffectiveMarkerScope() {
+	case cliprofile.MarkerScopeEvents:
+		return classifyFailureEvents(p, stdout)
 	case cliprofile.MarkerScopeStderr:
 		haystacks = []string{stderr}
-	case cliprofile.MarkerScopeStdoutAndStderr:
-		haystacks = []string{stdout, stderr}
 	default:
 		haystacks = []string{said, stderr}
 	}

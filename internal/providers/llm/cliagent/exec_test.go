@@ -69,6 +69,11 @@ func runFakeCLI() {
 		// A CLI that keeps its login, its sessions and their usage in a
 		// database of its own — see credentialstore_test.go.
 		fakeStore()
+	case os.Getenv("FAKE_USAGE_COMMAND") != "" && slices.Contains(os.Args, os.Getenv("FAKE_USAGE_COMMAND")):
+		// A usage command run after the call, told apart from the call by an
+		// argument only it carries, printing FAKE_USAGE_REPORT verbatim —
+		// nothing at all included — and exiting 0.
+		fmt.Print(os.Getenv("FAKE_USAGE_REPORT"))
 	case os.Getenv("FAKE_STUBBORN") == "1":
 		// A CLI that ignores the polite signal and leaves a forking
 		// descendant behind — a Node or Bun runtime under a launcher, which
@@ -148,6 +153,25 @@ func runFakeCLI() {
 		}
 		fmt.Printf("%s|%o|%s", strings.Join(os.Args[1:], " "), info.Mode().Perm(),
 			base64.StdEncoding.EncodeToString(body))
+	case os.Getenv("FAKE_READ_UNDER_ENV") != "":
+		// Answers, FROM INSIDE THE CHILD, where a relocation variable points
+		// and what is there when the CLI starts: `VAR:rel,rel` prints the
+		// child's working directory, the variable's value, and each file's
+		// bytes under it. The per-call directory is removed on release, so
+		// nothing outside the child can tell a file the CLI found from one
+		// written after it had looked.
+		name, rels, _ := strings.Cut(os.Getenv("FAKE_READ_UNDER_ENV"), ":")
+		cwd, _ := os.Getwd()
+		dir := os.Getenv(name)
+		fmt.Printf("CWD=%s\n%s=%s\n", cwd, name, dir)
+		for rel := range strings.SplitSeq(rels, ",") {
+			body, err := os.ReadFile(filepath.Join(dir, rel))
+			if err != nil {
+				fmt.Printf("%s UNREADABLE: %v\n", rel, err)
+				continue
+			}
+			fmt.Printf("%s=%s\n", rel, base64.StdEncoding.EncodeToString(body))
+		}
 	case os.Getenv("FAKE_REPORT_ENV") != "":
 		// Reports whether one named variable reached the child, FROM
 		// INSIDE it. The parent cannot answer this: what an invocation

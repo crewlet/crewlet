@@ -129,8 +129,10 @@ func TestAUsageCommandIsAskedAboutTheCallsOwnSession(t *testing.T) {
 // A DISCOVERED SYSTEM-PROMPT FILE IS FOUND BY WHERE IT IS AND SELECTED BY THE
 // ARGV. A discovered file with no name writes the default bare file no CLI
 // looks for; one with no argv is found and never used; one whose argv carries
-// the path or the text as well is two channels for one prompt; and a name that
-// leaves the working directory writes the prompt somewhere else.
+// the path or the text as well is two channels for one prompt — and the text,
+// `{system}`, is the seat's whole system prompt on argv, where every account on
+// the machine reads it; a name that leaves the working directory writes the
+// prompt somewhere else; and a name that is a DIRECTORY fails every call.
 func TestADiscoveredSystemPromptFileIsFoundAndSelected(t *testing.T) {
 	t.Parallel()
 	discovered := func(name string) map[string]any {
@@ -144,14 +146,34 @@ func TestADiscoveredSystemPromptFileIsFoundAndSelected(t *testing.T) {
 		"system_prompt_args": []any{"--agent", "seat"},
 		"system_prompt_file": discovered("../outside.md"),
 	}, "stay inside")
+	// Out and back in by the name of the directory a stand-in root used to
+	// be called, which the stand-in passed and every real call refused.
+	refused(t, map[string]any{
+		"system_prompt_args": []any{"--agent", "seat"},
+		"system_prompt_file": discovered("x/../../seat/agents/seat.md"),
+	}, "stay inside")
 	refused(t, map[string]any{
 		"system_prompt_args": []any{"--agent", "seat"},
 		"system_prompt_file": discovered("/etc/agents/seat.md"),
 	}, "relative")
+	// A directory where a file goes: `.` and `x/..` are the working
+	// directory itself, which a write fails on with EISDIR, and a trailing
+	// separator writes a regular FILE where the CLI looks for a directory of
+	// agents — every call then fails "Agent not found".
+	for _, name := range []string{".", "./", ".agents/", ".agents/..", "x/../", ".agents/seat.md/."} {
+		refused(t, map[string]any{
+			"system_prompt_args": []any{"--agent", "seat"},
+			"system_prompt_file": discovered(name),
+		}, "must name a FILE", name)
+	}
 	refused(t, map[string]any{
 		"system_prompt_args": []any{"--agent-file", "{file}"},
 		"system_prompt_file": discovered(".agents/seat.md"),
 	}, "{file}")
+	refused(t, map[string]any{
+		"system_prompt_args": []any{"--prompt", "{system}"},
+		"system_prompt_file": discovered(".agents/seat.md"),
+	}, "{system}")
 	refused(t, map[string]any{
 		"system_prompt_env":  "SYSTEM_MD",
 		"system_prompt_file": discovered(".agents/seat.md"),
@@ -166,6 +188,16 @@ func TestADiscoveredSystemPromptFileIsFoundAndSelected(t *testing.T) {
 	}
 	if !p.WritesSystemPromptFile() {
 		t.Error("a discovered system-prompt file is not reported as a file channel")
+	}
+	// A path that merely PASSES THROUGH a directory element is still a file,
+	// and must stay accepted: the rule is about where it ends.
+	for _, name := range []string{"seat.md", "./.agents/seat.md", "a/../.agents/seat.md"} {
+		if _, err := loadCustom(map[string]any{
+			"system_prompt_args": []any{"--agent", "seat"},
+			"system_prompt_file": discovered(name),
+		}); err != nil {
+			t.Errorf("%q names a file inside the directory and was refused: %v", name, err)
+		}
 	}
 	// The directory a discovered name carries is the one place a name may
 	// have one: an ordinary {file} channel's name stays bare.

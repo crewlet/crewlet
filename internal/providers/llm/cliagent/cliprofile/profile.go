@@ -190,7 +190,9 @@ type LimitMarker struct {
 	// Sentinel is the exact substring the vendor emits. It is compared
 	// case-sensitively against the extracted text: the vendors write these
 	// as fixed strings, and folding case is what turns a sentinel back
-	// into a keyword.
+	// into a keyword. In the [MarkerScopeEvents] scope it is the failure
+	// CLASS instead, compared whole and case-sensitively with the string at
+	// [Profile.MarkerPath] in the CLI's own failure event.
 	Sentinel string `yaml:"sentinel,omitempty"`
 
 	// ResetSeparator splits the reset value off the sentinel line. Claude
@@ -226,19 +228,37 @@ type LimitMarker struct {
 // there — all three measured. A profile only narrows this when the vendor's
 // own behaviour makes the answer an impossible place for the report.
 //
-// THE THIRD SCOPE IS THE OTHER DIRECTION, for a CLI that reports a failure as
-// an EVENT OF ITS OWN in a JSON stream: OpenCode 2.0's `--format json` prints
+// THE THIRD SCOPE MATCHES STRUCTURE, NOT TEXT, for a CLI that reports a failure
+// as an EVENT OF ITS OWN in a JSON stream. OpenCode 2's `--format json` prints
 // `{"type":"error",…,"error":{"type":"provider.quota",…}}` on stdout and nothing
 // on stderr, so the report is neither the answer nor stderr. And it can follow
 // an answer — a call that wrote a sentence, fetched a page and was then refused
 // on its next step has a located answer that does not contain the refusal — so
 // searching the answer finds nothing exactly when a spent plan most needs the
-// chain to carry the seat on. Every line of stdout is searched instead, which is
-// safe ONLY because the model's words are inside those events as JSON strings:
-// a sentinel spelled with its own quotes (`"type":"provider.quota"`) cannot
-// occur in an escaped string, so nothing a model writes can reproduce it.
-// [Profile.Validate] refuses the scope on a text profile, whose stdout IS the
-// model's words.
+// chain to carry the seat on.
+//
+// A substring search of stdout cannot stand in for it, and the first shape of
+// this scope was exactly that, defended on the grounds that the model's words
+// reach a JSON stream only as escaped strings. They do not: OpenCode prints
+// every tool call as a `tool_use` event whose `state.input` is the model's
+// arguments as a raw JSON OBJECT, so a model that put `"type":"provider.quota"`
+// into a webfetch call — which text injected into a page or a message it read
+// can ask it to — printed the sentinel verbatim on a call that exited 0 with a
+// correct answer, and the credential was benched (measured on 2.0.32). So the
+// scope decodes each stdout line, looks only at the events the profile names
+// as the CLI's own failure reports ([Profile.MarkerEvents], told apart by
+// [Profile.EventTypePath]), and compares every sentinel by EQUALITY with the
+// string at [Profile.MarkerPath] in such an event. Whatever bytes a model puts
+// in its text or a tool's arguments, they arrive inside an event of another
+// type, or nested where the path does not reach.
+//
+// STDERR IS NOT SEARCHED in this scope. The one CLI that takes it writes none
+// of these failures there — zero bytes, measured on 2.0.32 with
+// `--print-logs=false` for a refused key, a spent plan and a rate limit — and a
+// byte search of a channel with nothing to find is only a way for something
+// other than the CLI's own event to classify a call. [Profile.Validate] refuses
+// the scope without a jsonl stream, its discriminator, the failure events and
+// the path.
 type MarkerScope string
 
 const (
@@ -249,15 +269,15 @@ const (
 	// MarkerScopeStderr searches stderr only, for a CLI whose failures
 	// never reach the answer.
 	MarkerScopeStderr MarkerScope = "stderr"
-	// MarkerScopeStdoutAndStderr searches every line the CLI printed on
-	// stdout, not only the answer located in it, and stderr — for a CLI
-	// that reports a failure as an event of its own in a JSON stream.
-	MarkerScopeStdoutAndStderr MarkerScope = "stdout-and-stderr"
+	// MarkerScopeEvents compares sentinels with the failure class in the
+	// CLI's own failure events and looks nowhere else — for a CLI that
+	// reports a failure as an event of its own in a JSON stream.
+	MarkerScopeEvents MarkerScope = "events"
 )
 
 // Valid reports whether s is a scope this package knows.
 func (s MarkerScope) Valid() bool {
-	return s == MarkerScopeAnswerAndStderr || s == MarkerScopeStderr || s == MarkerScopeStdoutAndStderr
+	return s == MarkerScopeAnswerAndStderr || s == MarkerScopeStderr || s == MarkerScopeEvents
 }
 
 // LocalTools says what a profile does about the CLI's OWN tools — its shell,
@@ -328,10 +348,16 @@ type SeedFile struct {
 	Content string `yaml:"content,omitempty"`
 }
 
-// seedValidationRoot is the stand-in a seed path's shape is checked against
-// at load time. Any ordinary directory does; what is proved is that the path
-// is relative and climbs out of nothing.
-var seedValidationRoot = filepath.Join(string(filepath.Separator), "seat")
+// staysInside reports, at load time, whether a profile-declared relative path
+// stays inside whatever directory it is later joined onto: relative, not
+// empty, and climbing out of nothing once cleaned ([filepath.IsLocal]).
+//
+// The load-time half of [UnderRoot], for a path whose real root does not exist
+// yet. It used to be UnderRoot against a stand-in root named `/seat`, which
+// proved less than it claimed: `../seat/settings.json` climbs out and back in
+// by that very name, so it passed at load and was refused by the real
+// UnderRoot on every call.
+func staysInside(rel string) bool { return filepath.IsLocal(rel) }
 
 // Scope is the seed scope with its default applied.
 func (f SeedFile) Scope() SeedScope {
@@ -362,19 +388,21 @@ func (f SeedFile) Scope() SeedScope {
 // vendor's default agent, and every tool it has, to exactly the calls that
 // exist to prove the tools are off.
 //
-// OpenCode 2.0 is the second, and it takes the file a different way: it is
-// handed no path at all. It DISCOVERS agents by their location in the project it
-// runs in — `.opencode/agents/<name>.md`, with the body as the agent's system
-// prompt — and `--agent <name>` selects one. The per-call working directory is
-// that project, so the file is written there and the channel's argv names the
-// agent rather than carrying `{file}`: see [SystemPromptFile.Discovered].
+// OpenCode 2 is the second, and it takes the file a different way: it is
+// handed no path at all. It DISCOVERS agents by their location — `agents/<name>.md`
+// in its configuration directory, with the body as the agent's system prompt —
+// and `--agent <name>` selects one. Its profile points that directory inside
+// the per-call working directory ([Profile.WorkConfigEnv]), so the file is
+// written there and the channel's argv names the agent rather than carrying
+// `{file}`: see [SystemPromptFile.Discovered].
 type SystemPromptFile struct {
 	// Name is the file to write in the per-call working directory. Empty
 	// takes the default. A bare name for a file whose path the CLI is
 	// handed: a vendor that keys on the extension (`--agent-file` wants
-	// `.md`) is the only reason to set it. A relative path, staying inside
-	// the working directory, for a [SystemPromptFile.Discovered] one, which
-	// the CLI finds where its vendor says to look.
+	// `.md`) is the only reason to set it. A relative path naming a FILE,
+	// staying inside the working directory, for a
+	// [SystemPromptFile.Discovered] one, which the CLI finds where its
+	// vendor says to look.
 	Name string `yaml:"name,omitempty"`
 
 	// Template is the file's content, with `{system}` substituted by the
@@ -421,6 +449,7 @@ const DefaultSystemPromptFile = "crewlet-system-prompt.txt"
 // unrecognised failure would get, so that a role keeps working off its
 // metered fallback while the operator re-runs `crewlet llm login`.
 type AuthMarker struct {
+	// Sentinel is matched exactly as a [LimitMarker]'s is, in the same scope.
 	Sentinel string `yaml:"sentinel,omitempty"`
 }
 
@@ -465,9 +494,10 @@ type Profile struct {
 	//
 	// A DECLARATION OF A VENDOR FACT, measured per CLI and overridable like
 	// every other: a release that starts accepting a bare id is an override,
-	// not a Crewlet release. Only opencode's is measured — its `run --model`
-	// splits the value at the first slash and a bare id is "Model not
-	// found: <id>/." — so only opencode declares it.
+	// not a Crewlet release. Only opencode's is measured — OpenCode 2's
+	// `run --model` takes `provider/model[#variant]`, splits it at the first
+	// slash, and refuses a bare id as "Invalid model reference: <id>" — so
+	// only opencode declares it.
 	ModelNamesProvider bool `yaml:"model_names_provider,omitempty"`
 
 	// PromptMode is stdin (the default), argv or file.
@@ -600,7 +630,11 @@ type Profile struct {
 	// the process exits; when it is absent or unreadable the counts fall
 	// back to whatever stdout said, because the vendor writes it "even
 	// when the run fails" and a broken usage write must never mask the
-	// run's own outcome.
+	// run's own outcome. Absent is silent — the run did not get that far —
+	// while a file that cannot be read or is empty logs
+	// `cli_agent_usage_file_unreadable`, and one that does not decode, or in
+	// which usage.input and usage.output do not both resolve, logs
+	// `cli_agent_usage_report_unreadable`.
 	UsageFileArgs []string `yaml:"usage_file_args,omitempty"`
 
 	// SessionArgs name the session one call runs in, with `{session}`
@@ -634,8 +668,12 @@ type Profile struct {
 	// whole total (`opencode api session.get`), so that is asked instead.
 	//
 	// A failed or unreadable report is not a failed call: the counts fall
-	// back to whatever stdout said, as for a usage file, and a warning
-	// names the command.
+	// back to whatever stdout said, as for a usage file — which, for a CLI
+	// that reports no usage there, is the estimate — and a warning says
+	// which: `cli_agent_usage_report_failed` for a command that failed or
+	// printed nothing, `cli_agent_usage_report_unreadable` for a report that
+	// does not decode or in which usage.input and usage.output do not both
+	// resolve.
 	UsageArgs []string `yaml:"usage_args,omitempty"`
 
 	// ConfigEnv maps a vendor's own relocation variable to a directory
@@ -643,9 +681,38 @@ type Profile struct {
 	// dotfiles and every seat shares one set of sessions.
 	ConfigEnv map[string]string `yaml:"config_env,omitempty"`
 
+	// WorkConfigEnv maps a vendor's relocation variable to a directory under
+	// the PER-CALL WORKING directory, where [Profile.ConfigEnv] maps one under
+	// the seat's home — for a CLI that reads configuration it must not share
+	// with the seat's other calls from a directory a variable names.
+	//
+	// The seat's home cannot be that directory, because every call a seat runs
+	// at once shares it and each call's system prompt is its own. OpenCode 2 is
+	// the CLI that needs it, and the alternative it replaced was its PROJECT
+	// configuration: OpenCode reads `opencode.json`, and `.opencode/` agents
+	// and plugins, from the working directory and EVERY ANCESTOR of it, and a
+	// project's permissions beat the seat's — so an `opencode.json` anywhere
+	// above the state directory (the engine user's home, a repository
+	// cli.state_dir was put in) handed every seat a shell, and a plugin there
+	// ran its code in every call (measured on 2.0.32). With that walk switched
+	// off (OPENCODE_DISABLE_PROJECT_CONFIG, in [Profile.Env]) the only
+	// configuration OpenCode reads is the directory OPENCODE_CONFIG_DIR names
+	// — it REPLACES the one under XDG_CONFIG_HOME rather than adding to it —
+	// so that variable points inside the call's own directory, where the
+	// profile's `in: work` seed and its discovered agent file are written.
+	//
+	// Set only for a command that runs AS A CALL: the completion, and the
+	// usage command after it. A command with no call of its own — a credential
+	// store's import and export, `crewlet llm login` and `status`, the version
+	// probe — has no working directory to point inside, and runs without the
+	// variable.
+	WorkConfigEnv map[string]string `yaml:"work_config_env,omitempty"`
+
 	// Env is fixed child environment the CLI needs. Never a credential,
 	// and never the profile's own token_env or api_key_env, both refused
-	// by [Profile.ValidateCredentials].
+	// by [Profile.ValidateCredentials] — nor a variable the engine sets to
+	// isolate the call ([Profile.IsolationVariables]), refused by
+	// [Profile.Validate].
 	Env map[string]string `yaml:"env,omitempty"`
 
 	// PassthroughEnv names engine environment variables forwarded to the
@@ -654,6 +721,9 @@ type Profile struct {
 	// forwarded before auth.mode is consulted, so a key listed here would
 	// reach every seat whatever the mode said, which is exactly the
 	// metered-bill-on-a-flat-rate-plan failure auth.mode exists to prevent.
+	// Nor may it name a variable the engine sets to isolate the call
+	// ([Profile.IsolationVariables]): forwarding the engine's own HOME is
+	// handing the CLI the engine user's dotfiles.
 	PassthroughEnv []string `yaml:"passthrough_env,omitempty"`
 
 	// TokenEnv is the variable carrying a long-lived headless
@@ -729,6 +799,18 @@ type Profile struct {
 	// see [MarkerScope]. Empty searches the answer and stderr, which is
 	// what a CLI reporting a spent plan as its answer needs.
 	MarkerScope MarkerScope `yaml:"marker_scope,omitempty"`
+
+	// MarkerEvents names the events — by the value at [Profile.EventTypePath]
+	// — in which the CLI reports a failure of its own: the only lines the
+	// [MarkerScopeEvents] scope looks at. Required by that scope, and refused
+	// beside any other, which reads nothing here.
+	MarkerEvents []string `yaml:"marker_events,omitempty"`
+
+	// MarkerPath locates the failure CLASS inside one of
+	// [Profile.MarkerEvents]: the string a sentinel must EQUAL, not merely
+	// contain. Required by the [MarkerScopeEvents] scope, and refused beside
+	// any other.
+	MarkerPath Path `yaml:"marker_path,omitempty"`
 
 	// HostCredentialPaths are where this CLI keeps its login in a human's
 	// own home directory, for `crewlet llm login -from-host` to adopt.
@@ -852,6 +934,33 @@ func (p *Profile) EffectiveMarkerScope() MarkerScope {
 	return p.MarkerScope
 }
 
+// HomeIsolation is the variables the engine points inside a seat's home — or,
+// for XDG_CACHE_HOME, beside it — for every CLI, whatever its profile says.
+//
+// Declared here, beside [Profile.IsolationVariables], rather than only in the
+// code that sets them, because config refuses an entry that would override
+// one and has to be able to name them without importing the backend.
+var HomeIsolation = []string{
+	"HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "TMPDIR",
+}
+
+// IsolationVariables names every variable the engine sets to keep this CLI
+// inside its seat's home and its call's working directory: [HomeIsolation],
+// then the profile's [Profile.ConfigEnv] and [Profile.WorkConfigEnv], each
+// sorted.
+//
+// One list for the three places that must not set one of them — the profile's
+// own env and passthrough_env ([Profile.Validate]) and an entry's cli.env
+// (config) — because every one of those is layered OVER the isolation when the
+// child's environment is built, so a value there silently replaces the seat's
+// home with whatever it names: the engine user's own dotfiles, or a
+// configuration directory no seat's system prompt is written to.
+func (p *Profile) IsolationVariables() []string {
+	names := slices.Clone(HomeIsolation)
+	names = append(names, slices.Sorted(maps.Keys(p.ConfigEnv))...)
+	return append(names, slices.Sorted(maps.Keys(p.WorkConfigEnv))...)
+}
+
 // HasSystemChannel reports whether this profile carries the system prompt on
 // a channel of its own rather than leaving it in the transcript.
 func (p *Profile) HasSystemChannel() bool {
@@ -887,6 +996,22 @@ func isBareFileName(name string) bool {
 	return !strings.ContainsRune(name, '/') && !strings.ContainsRune(name, filepath.Separator)
 }
 
+// namesAFile reports whether a relative path that [staysInside] names a FILE
+// under the directory it is joined onto, rather than that directory or a
+// directory spelled with a trailing separator: its last element, as written,
+// is a [isBareFileName], and it does not clean to the directory itself.
+//
+// The last element AS WRITTEN, not after cleaning, because cleaning is what
+// hides the shape: `x/..` cleans to `.` and `agents/` to `agents`, and the
+// second of those reads as a file name while the operator wrote a directory.
+func namesAFile(rel string) bool {
+	if strings.HasSuffix(rel, "/") || strings.HasSuffix(rel, string(filepath.Separator)) {
+		return false
+	}
+	last := rel[strings.LastIndexAny(rel, "/"+string(filepath.Separator))+1:]
+	return isBareFileName(last) && filepath.Clean(rel) != "."
+}
+
 // Validate reports what is wrong with a profile, naming the override field an
 // operator would edit rather than the Go field they cannot see.
 func (p *Profile) Validate(name string) error {
@@ -917,11 +1042,7 @@ func (p *Profile) Validate(name string) error {
 		// output is a json profile, and the raw field printed "a  profile".
 		add("text_paths is empty — a %s profile must say where the answer is", p.EffectiveOutput())
 	}
-	for dir := range p.ConfigEnv {
-		if dir == "HOME" {
-			add("config_env may not name HOME — it is set from the seat home already")
-		}
-	}
+	p.validateRelocations(add)
 	if len(p.PromptArgs) > 0 && p.EffectivePromptMode() != PromptArgv && p.EffectivePromptMode() != PromptFile {
 		add("prompt_args is set but prompt_mode is %q — the flag introduces a prompt "+
 			"on argv and there is none to introduce", p.EffectivePromptMode())
@@ -1024,16 +1145,18 @@ func (p *Profile) Validate(name string) error {
 	switch {
 	case p.MarkerScope != "" && !p.MarkerScope.Valid():
 		add("marker_scope %q (want %s, %s or %s)", p.MarkerScope,
-			MarkerScopeAnswerAndStderr, MarkerScopeStderr, MarkerScopeStdoutAndStderr)
-	case p.MarkerScope == MarkerScopeStdoutAndStderr && p.EffectiveOutput() == OutputText:
-		// Refused rather than tolerated: the scope is safe only because a
-		// structured stream carries the model's words as escaped strings, and
-		// on a text profile stdout IS the model's words — so the scope would
-		// match sentinels against the reply itself while claiming not to.
-		add("marker_scope is %s but output is text — on a text profile stdout is "+
-			"the model's own reply, so the scope would match sentinels against what "+
-			"the model wrote; use %s, or a structured output", MarkerScopeStdoutAndStderr,
-			MarkerScopeAnswerAndStderr)
+			MarkerScopeAnswerAndStderr, MarkerScopeStderr, MarkerScopeEvents)
+	case p.MarkerScope == MarkerScopeEvents:
+		p.validateEventMarkers(add)
+	case len(p.MarkerEvents) > 0 || len(p.MarkerPath) > 0:
+		// Refused rather than ignored: an operator who named the failure
+		// event meant markers to be matched in it, and under any other scope
+		// they would be matched as substrings of the answer and stderr while
+		// the profile appeared to say otherwise.
+		add("marker_events or marker_path is set but marker_scope is %q — they say "+
+			"where the %s scope looks, and no other scope reads them; set "+
+			"marker_scope: %s, or drop them", p.EffectiveMarkerScope(), MarkerScopeEvents,
+			MarkerScopeEvents)
 	}
 	for i, m := range p.LimitMarkers {
 		if problem := sentinelProblem(m.Sentinel); problem != "" {
@@ -1104,11 +1227,9 @@ func (p *Profile) Validate(name string) error {
 		if f.In != "" && !f.In.Valid() {
 			add("seed_files[%d].in %q (want home or work)", i, f.In)
 		}
-		// UnderRoot against a stand-in root proves the same two things
-		// seeding will: relative, and not escaping the scope. No seat
-		// home exists at load time, and the root directory itself will
-		// not do — nothing can sit "inside" it by this test.
-		if _, err := UnderRoot(seedValidationRoot, f.Path); err != nil {
+		// The same two things seeding's UnderRoot proves — relative, and
+		// not escaping the scope — asked before any seat home exists.
+		if !staysInside(f.Path) {
 			add("seed_files[%d].path %q must be relative and stay inside the %s directory",
 				i, f.Path, f.Scope())
 		}
@@ -1121,6 +1242,111 @@ func (p *Profile) Validate(name string) error {
 		return nil
 	}
 	return fmt.Errorf("cli-agent profile %q: %s", name, strings.Join(bad, "; "))
+}
+
+// validateRelocations holds [Profile.ConfigEnv] and [Profile.WorkConfigEnv] to
+// the one shape in which they relocate anything: each variable named once,
+// none the engine already points at the seat's home, and each directory
+// relative and inside its root — and holds env and passthrough_env off every
+// variable either of them, or [HomeIsolation], names.
+//
+// The directories were never checked before: `config_env: {CODEX_HOME: ../..}`
+// loaded, and pointed the vendor's whole configuration — sessions and login
+// included — outside the seat's home, which is the isolation this field exists
+// to provide.
+func (p *Profile) validateRelocations(add func(string, ...any)) {
+	for _, name := range slices.Sorted(maps.Keys(p.ConfigEnv)) {
+		rel := p.ConfigEnv[name]
+		switch {
+		case name == "HOME":
+			add("config_env may not name HOME — it is set from the seat home already")
+		case strings.TrimSpace(rel) == "":
+			add("config_env.%s is empty — name the directory under the seat home it points at", name)
+		case !staysInside(rel):
+			add("config_env.%s %q must be relative and stay inside the seat home", name, rel)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(p.WorkConfigEnv)) {
+		rel := p.WorkConfigEnv[name]
+		_, alsoHome := p.ConfigEnv[name]
+		switch {
+		case slices.Contains(HomeIsolation, name):
+			// A home variable pointed at a directory removed after every call
+			// takes the login and every setting the home holds with it.
+			add("work_config_env may not name %s — the engine points it at the seat's "+
+				"home, which outlives the call", name)
+		case alsoHome:
+			add("config_env and work_config_env both name %s — one variable names one "+
+				"directory; keep it in whichever the CLI must not share across calls", name)
+		case strings.TrimSpace(rel) == "":
+			add("work_config_env.%s is empty — name the directory under the per-call "+
+				"working directory it points at", name)
+		case !staysInside(rel):
+			add("work_config_env.%s %q must be relative and stay inside the per-call "+
+				"working directory", name, rel)
+		}
+	}
+	// LAYERED OVER THE ISOLATION, which is why they are refused here: the
+	// child's environment applies the profile's env and passthrough after
+	// the variables that point it at its own home, so one named here
+	// replaces the seat's home with something else and says nothing.
+	isolation := p.IsolationVariables()
+	for _, name := range slices.Sorted(maps.Keys(p.Env)) {
+		if slices.Contains(isolation, name) {
+			add("env names %s, which the engine sets to keep the CLI inside its seat's "+
+				"home and its call's working directory — a value here would replace that "+
+				"isolation; relocate a vendor directory with config_env or work_config_env", name)
+		}
+	}
+	for _, name := range p.PassthroughEnv {
+		if slices.Contains(isolation, name) {
+			add("passthrough_env names %s, which the engine sets to keep the CLI inside "+
+				"its seat's home and its call's working directory — forwarding the engine's "+
+				"own would hand the CLI the engine user's directories", name)
+		}
+	}
+}
+
+// validateEventMarkers holds a [MarkerScopeEvents] profile to the shape in
+// which a sentinel can only be the CLI's own: a jsonl stream, a discriminator
+// that tells its events apart, the events that report a failure, and where in
+// them the class is.
+func (p *Profile) validateEventMarkers(add func(string, ...any)) {
+	if p.EffectiveOutput() != OutputJSONL {
+		// On a text profile stdout IS the model's reply, and a json one is a
+		// single document with no events to tell apart.
+		add("marker_scope is %s but output is %q — a failure event exists only in a "+
+			"jsonl stream; use %s for a CLI that reports a failure as its answer",
+			MarkerScopeEvents, p.EffectiveOutput(), MarkerScopeAnswerAndStderr)
+	}
+	if len(p.EventTypePath) == 0 {
+		add("marker_scope is %s but event_type_path is empty — without the "+
+			"discriminator no line can be told to be the CLI's failure event rather than "+
+			"one carrying the model's words", MarkerScopeEvents)
+	}
+	if len(p.MarkerEvents) == 0 {
+		add("marker_scope is %s but marker_events is empty — name the event types the "+
+			`CLI reports a failure in, e.g. ["error"]`, MarkerScopeEvents)
+	}
+	if len(p.MarkerPath) == 0 {
+		add("marker_scope is %s but marker_path is empty — say where in that event the "+
+			`failure class is, e.g. ["error", "type"]`, MarkerScopeEvents)
+	}
+	for _, kind := range p.MarkerEvents {
+		if slices.Contains(p.TextEvents, kind) {
+			// An event that carries the answer carries the model's words, and
+			// matching a sentinel in it is matching what the model wrote.
+			add("marker_events and text_events both name %q — an event that carries "+
+				"the model's answer is not the CLI's failure report", kind)
+		}
+	}
+	for i, m := range p.LimitMarkers {
+		if m.ResetSeparator != "" {
+			add("limit_markers[%d].reset_separator is set but marker_scope is %s — the "+
+				"sentinel is compared with the whole failure class, so there is no text "+
+				"after it to read a reset from", i, MarkerScopeEvents)
+		}
+	}
 }
 
 // validateUsageCommand holds [Profile.SessionArgs] and [Profile.UsageArgs] to
@@ -1164,16 +1390,28 @@ func (p *Profile) validateUsageCommand(add func(string, ...any)) {
 // and an argv that selects it.
 func (p *Profile) validateDiscoveredPromptFile(add func(string, ...any)) {
 	fileName := p.SystemPromptFile.Name
-	if fileName == "" {
+	switch {
+	case fileName == "":
 		// The default name is a bare prompt file no vendor looks for, so a
 		// discovered channel without a name of its own writes a file nothing
 		// will ever find — and the argv then selects an agent that does not
 		// exist.
 		add("system_prompt_file is discovered but its name is empty — say where the " +
-			"CLI looks for it, e.g. .opencode/agents/crewlet-seat.md")
-	} else if _, err := UnderRoot(seedValidationRoot, fileName); err != nil {
+			"CLI looks for it, e.g. .crewlet-config/agents/crewlet-seat.md")
+	case !staysInside(fileName):
 		add("system_prompt_file.name %q must be relative and stay inside the per-call "+
 			"working directory", fileName)
+	case !namesAFile(fileName):
+		// The prompt is written to exactly this path, so a name that cleans
+		// to a DIRECTORY fails every call: `.` and `x/..` are the working
+		// directory itself (a write onto it is EISDIR), and
+		// `.opencode/agents/` writes a regular FILE where the CLI looks for a
+		// directory of agents, so it finds none. The bare-name rule beside
+		// this one refuses `.` and `..` for the same reason.
+		add("system_prompt_file.name %q must name a FILE inside the per-call working "+
+			"directory — not the directory itself, not a path ending in a separator, and "+
+			"not one whose last element is . or .. — e.g. "+
+			".crewlet-config/agents/crewlet-seat.md", fileName)
 	}
 	switch {
 	case len(p.SystemPromptArgs) == 0:

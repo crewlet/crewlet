@@ -94,6 +94,21 @@ func TestACLIAgentCredentialWithNowhereToGoIsRefused(t *testing.T) {
 			says: "the token as cli.auth.token",
 		},
 		{
+			// cli.env is layered over the variables that keep every seat's
+			// CLI in its own home, so this would hand every seat the
+			// engine user's dotfiles and nothing would say so.
+			name:  "a home isolation variable written into cli.env",
+			lines: []string{`cli: {agent: claude-code, env: {HOME: /home/engine}}`},
+			path:  "providers.llm.sub.cli.env.HOME", kind: ErrConflict,
+			says: "a value here would replace that isolation for every seat",
+		},
+		{
+			name:  "the profile's own relocation variable written into cli.env",
+			lines: []string{`cli: {agent: codex, env: {CODEX_HOME: /srv/codex}}`},
+			path:  "providers.llm.sub.cli.env.CODEX_HOME", kind: ErrConflict,
+			says: "CODEX_HOME is a variable the engine sets for every call",
+		},
+		{
 			name:  "a credential in the profile's own env",
 			lines: []string{`cli: {agent: hermes, overrides: {env: {OPENROUTER_API_KEY: sk-or-literal}}}`},
 			path:  "providers.llm.sub.cli.overrides", kind: ErrConflict,

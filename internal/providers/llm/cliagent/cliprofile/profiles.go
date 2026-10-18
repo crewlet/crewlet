@@ -87,8 +87,11 @@ func (p Profile) Clone() Profile {
 	out.TextEvents = append([]string(nil), p.TextEvents...)
 	out.LimitMarkers = append([]LimitMarker(nil), p.LimitMarkers...)
 	out.AuthMarkers = append([]AuthMarker(nil), p.AuthMarkers...)
+	out.MarkerEvents = append([]string(nil), p.MarkerEvents...)
+	out.MarkerPath = append(Path(nil), p.MarkerPath...)
 	out.SeedFiles = append([]SeedFile(nil), p.SeedFiles...)
 	out.ConfigEnv = cloneMap(p.ConfigEnv)
+	out.WorkConfigEnv = cloneMap(p.WorkConfigEnv)
 	out.Env = cloneMap(p.Env)
 	if p.SystemPromptFile != nil {
 		spec := *p.SystemPromptFile

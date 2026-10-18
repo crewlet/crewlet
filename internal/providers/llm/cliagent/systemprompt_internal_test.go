@@ -132,14 +132,15 @@ func TestAProfileCannotDeclareBothSystemPromptChannels(t *testing.T) {
 // A DISCOVERED AGENT FILE IS WHERE THE CLI LOOKS, PRIVATE, AND SELECTED — never
 // carried — by the argv.
 //
-// OpenCode 2.0 has no system-prompt flag: it finds `.opencode/agents/<name>.md`
-// in the project it runs in, and `--agent` picks one. So the file has to be in
-// the per-call working directory at exactly that path when the child starts —
-// which only the child can confirm, since the directory is removed on release
-// — and nothing of the text may reach argv.
+// OpenCode 2.0 has no system-prompt flag: it finds `agents/<name>.md` in its
+// configuration directory, which its profile points inside the per-call working
+// directory, and `--agent` picks one. So the file has to be in the per-call
+// working directory at exactly that path when the child starts — which only the
+// child can confirm, since the directory is removed on release — and nothing
+// of the text may reach argv.
 func TestADiscoveredAgentFileIsWhereTheCLILooks(t *testing.T) {
 	t.Parallel()
-	const name = ".opencode/agents/crewlet-seat.md"
+	const name = ".crewlet-config/agents/crewlet-seat.md"
 	p := fakeProvider(t, map[string]string{"FAKE_READ_DISCOVERED": name}, map[string]any{
 		"system_prompt_args": []any{"--agent", "crewlet-seat"},
 		"system_prompt_file": map[string]any{

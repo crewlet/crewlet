@@ -149,9 +149,10 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		"codex":        "", // 0.153.4, on `codex` and `codex exec` alike
 		"copilot":      "", // 1.0.83
 		"cursor-agent": "", // 2026.09.02
-		// 2.0.32: no flag and no variable, but a PROJECT AGENT —
-		// `.opencode/agents/<name>.md` in the working directory, its body
-		// replacing the CLI's own prompt — which `--agent` selects.
+		// 2.0.32: no flag and no variable, but a DISCOVERED AGENT —
+		// `agents/<name>.md` in its configuration directory, which the
+		// profile points inside the per-call directory, its body replacing
+		// the CLI's own prompt — which `--agent` selects.
 		"opencode": discoveredChannel,
 		// 1.0.3: the flag set is model, reasoning effort, the
 		// permission levers, workspace and session logging, plus --json,

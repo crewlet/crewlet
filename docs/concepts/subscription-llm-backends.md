@@ -76,8 +76,13 @@ its own place to run:
 **Between seats.** Every seat gets its own `home`. `HOME`,
 `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `TMPDIR` and the
 vendor's own relocation variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, …)
-all point inside it. Nothing in a CLI's state layout is reachable across
-that boundary.
+all point inside it — or, for a variable naming configuration a call must
+not share with the seat's other calls (`OPENCODE_CONFIG_DIR`), inside that
+call's own working directory. Nothing in a CLI's state layout is reachable
+across that boundary, and nothing configured may move it: a profile's `env`
+or `passthrough_env`, or an entry's `cli.env`, naming one of those variables
+is refused, because each is layered over the isolation and would replace it
+without a word.
 
 **Between turns.** Each profile declares its `volatile_paths` —
 sessions, transcripts, history, todo state. They are deleted before and
@@ -103,6 +108,23 @@ exported.
 directory that is removed afterwards — so a CLI that reads `AGENTS.md` /
 `CLAUDE.md` from `cwd`, or writes scratch files, finds nothing from
 anyone else.
+
+**An empty directory is not enough for a CLI that also walks *up* from
+it.** The per-call directory is `<state_dir>/seats/<seat>/work/<call>`, and
+`state_dir` defaults to a directory under the engine user's home, so whatever
+sits above it — that home, or a repository you pointed `cli.state_dir` into —
+is an ancestor of every call. OpenCode reads project configuration from every
+ancestor (`opencode.json`, and `.opencode/` agents, skills and plugins), and a
+project's permissions beat the seat's: measured on 2.0.32, an allow-all
+`opencode.json` anywhere above the state directory handed every seat a shell,
+file writes and code execution, and a plugin there ran its code in every call.
+So the `opencode` profile switches that walk off and reads its configuration
+from the call's own directory — see
+[Tool calls in text mode](#tool-calls-in-text-mode). Whether another CLI
+reads an ancestor's configuration is that vendor's behaviour, and the one way
+to know on your host is `crewlet llm doctor`'s shell probe, which asks the CLI
+to run a command and believes only an answer it could not have guessed — run
+it from the state directory you deploy with.
 
 ### Concurrency within a seat
 
@@ -397,7 +419,7 @@ actually have, and every field is a
 | `qwen-code` | 0.23.0 | **both**: `QWEN_SYSTEM_MD` (file) *and* `--system-prompt` (string) | `system_prompt_env: QWEN_SYSTEM_MD` |
 | `grok` | 1.0.13 | flag, string: `--system-prompt-override` (`--rules` appends) | `system_prompt_args: ["--system-prompt-override", "{system}"]` |
 | `codex` | 0.153.4 | none, on `codex` or `codex exec` alike | — |
-| `opencode` | 2.0.32 | **discovered file**: no flag and no variable, but a project agent — `.opencode/agents/<name>.md` in the working directory, its body replacing OpenCode's own prompt — which `--agent` selects | `system_prompt_args: ["--agent", "crewlet-seat"]` + `system_prompt_file` with `discovered: true` |
+| `opencode` | 2.0.32 | **discovered file**: no flag and no variable, but an agent it discovers — `agents/<name>.md` in its configuration directory, which the profile points inside the per-call directory, its body replacing OpenCode's own prompt — which `--agent` selects | `system_prompt_args: ["--agent", "crewlet-seat"]` + `system_prompt_file` with `discovered: true` |
 | `copilot` | 1.0.83 | none (`--no-custom-instructions` only disables its own) | — |
 | `cursor-agent` | 2026.09.02 | none | — |
 | `muse-code` | 1.0.3 | none (`AGENTS.md` / `CLAUDE.md` only, and only in a **trusted** workspace) | — |
@@ -465,16 +487,19 @@ system_prompt_file:
 ```
 
 **A channel can be found rather than handed.** OpenCode 2 takes no path at
-all: it *discovers* the agents a project defines, at
-`.opencode/agents/<name>.md`, and `--agent <name>` selects one. The per-call
-working directory is that project, so the profile writes the file there and
-its argv only names the agent:
+all: it *discovers* the agents in its configuration directory, at
+`agents/<name>.md`, and `--agent <name>` selects one. The profile points that
+directory — `OPENCODE_CONFIG_DIR` — at `.crewlet-config` inside the per-call
+working directory (`work_config_env`), so the file is the call's own, and its
+argv only names the agent:
 
 ```yaml
+work_config_env:
+  OPENCODE_CONFIG_DIR: .crewlet-config         # relative to the per-call directory
 system_prompt_args: ["--agent", "crewlet-seat"]
 system_prompt_file:
-  name: .opencode/agents/crewlet-seat.md   # where OpenCode looks, inside the per-call directory
-  discovered: true                         # found by its location: the argv carries no {file}
+  name: .crewlet-config/agents/crewlet-seat.md # where OpenCode looks, inside the per-call directory
+  discovered: true                             # found by its location: the argv carries no {file}
   template: |
     ---
     description: The Crewlet seat this run serves.
@@ -483,14 +508,24 @@ system_prompt_file:
     {system}
 ```
 
-A `discovered` file's `name` is the one that may carry a directory, and it
-must stay inside the per-call directory; it needs `system_prompt_args` to
-select what was found, and refuses `{file}` and `{system}` in them, since
-handing over the path or the text as well would be two channels for one
-prompt. Measured on 2.0.32, the agent's body replaces OpenCode's own
-coding-agent prompt (OpenCode appends a short block naming the model and the
-date) and is not interpolated: `{env:…}` and `{file:…}` in a seat's prompt
-reach the model as written.
+Per call rather than in the seat's home, because a seat runs calls
+concurrently in one home and each call's system prompt is its own. It used
+to be `.opencode/agents/` in the working directory, OpenCode's *project*
+location — and reading project configuration is what let every ancestor of
+that directory configure the call (see
+[Tool calls in text mode](#tool-calls-in-text-mode)).
+
+A `discovered` file's `name` is the one that may carry a directory; it must
+stay inside the per-call directory and name a *file* there — not the
+directory itself (`.`, `x/..`), and not a path ending in a separator, which
+would write a file where the CLI looks for a directory of agents and fail
+every call. It needs `system_prompt_args` to select what was found, and
+refuses `{file}` and `{system}` in them, since handing over the path or the
+text as well would be two channels for one prompt — and `{system}` would put
+the seat's whole system prompt on argv. Measured on 2.0.32, the agent's body
+replaces OpenCode's own coding-agent prompt (OpenCode appends a short block
+naming the model and the date) and is not interpolated: `{env:…}` and
+`{file:…}` in a seat's prompt reach the model as written.
 
 `system_prompt_file` only means something on a channel that writes a file
 (`{file}`, a discovered file, or `system_prompt_env`); on a `{system}` channel it is refused,
@@ -622,8 +657,7 @@ rule denies — so a list of local tools to deny, which is what its 1.x profile
 seeded, let 2.0's new tools straight through: `execute` (Code Mode, a
 JavaScript runtime with `fetch`) and the session and worktree tools it
 exposes. The profile denies every action first and then allows the two web
-tools, and measured on 2.0.32 the model is offered exactly `webfetch` and
-`websearch`:
+tools:
 
 ```json
 {"permissions": [
@@ -632,6 +666,32 @@ tools, and measured on 2.0.32 the model is offered exactly `webfetch` and
   {"action": "websearch", "resource": "*", "effect": "allow"}
 ]}
 ```
+
+**And only if nothing else configures the call.** OpenCode also reads
+*project* configuration — `opencode.json`, and `.opencode/` agents, skills and
+plugins — from the working directory and every ancestor of it, and a
+project's permissions beat the global ones. Measured on 2.0.32 with that
+policy in the seat's home: an `opencode.json` or `.opencode/opencode.json`
+above the state directory allowing everything — in 2.0's `permissions` shape
+or 1.x's `permission` map, which 2.0 translates — widened the model's tools
+from `webfetch` and `websearch` to `shell`, `read`, `write`, `edit` and
+`execute`, and a plugin there was loaded and ran. So the profile sets
+`OPENCODE_DISABLE_PROJECT_CONFIG=1` on every command it runs, and points
+`OPENCODE_CONFIG_DIR` at `.crewlet-config` inside the call's own directory
+(`work_config_env`), where the policy above is seeded on every call as
+`.crewlet-config/opencode.json` beside the seat's agent file. That variable
+*replaces* the global directory under the seat's home rather than adding to
+it (measured: a provider declared only there was not found), which is why the
+policy moved into the call. Measured on 2.0.32 under exactly that
+environment, with those ancestor files planted — each shape in each location,
+beside an ancestor agent of the seat's own name, a plugin, skills,
+`AGENTS.md` and `CLAUDE.md`: the seat's agent is found and its body is the
+system message, the model is offered exactly `webfetch` and `websearch`, no
+ancestor file reaches the request, and no plugin loads. A command with no call of its own — the credential store's
+`auth import` and `auth export`, `auth login`, `auth list` — runs with the walk
+off and no `OPENCODE_CONFIG_DIR`, so it reads no configuration at all, and
+each was measured working so; the usage command (`api session.get`) runs as
+part of the call and reads the call's directory.
 
 **A refusal and a removal are not the same guard, and only one of them
 is a denial.** `muse-code` is the profile that makes the difference
@@ -709,7 +769,10 @@ the web silently, so a test refuses it for every other profile.
 Both stances are profile fields, so an operator can override them like
 any other — `cli.overrides.local_tools`, `cli.overrides.local_tools_note`,
 and `cli.overrides.seed_files` (a list of `{path, in: home|work, content}`;
-lists replace wholesale).
+lists replace wholesale). On an `opencode` entry the policy goes at
+`{path: .crewlet-config/opencode.json, in: work}`, the call's own
+configuration directory: under `OPENCODE_CONFIG_DIR` a file in the seat's
+home is read by nothing, and the CLI would run on its vendor defaults.
 
 Instead the CLI is used strictly as a text model, and the tool channel
 rides in the prompt:
@@ -885,12 +948,17 @@ usage:
 ```
 
 Three rules travel with it. A report that never arrived is not a call that
-cost nothing — the counts fall back to the estimate, because the vendor writes
-the file "even when the run fails", so its absence means the run did not get
-that far and failing a completion the model answered over a count would throw
-away work you paid for. A report whose keys this profile cannot read is
-**drift**, not a zero-token turn, and falls back the same way rather than
-charging zero. And both prompt counts come from the file or neither does: a
+cost nothing — the counts fall back to what stdout reported, which for
+`hermes -z` is nothing, so the estimate — because the vendor writes the file
+"even when the run fails", so its absence means the run did not get that far
+and failing a completion the model answered over a count would throw away work
+you paid for; that is the one fallback that logs nothing. A file that is there
+and cannot be read, or holds nothing, logs `cli_agent_usage_file_unreadable`.
+A report whose keys this profile cannot read is **drift**, not a zero-token
+turn: it falls back the same way rather than charging zero, and logs
+`cli_agent_usage_report_unreadable` with the reason (`the report is not one
+JSON object`, or `usage.input and usage.output do not both resolve in it`),
+the paths it looked in and what the counts came from instead. And both prompt counts come from the file or neither does: a
 partial overlay would pair one source's input count with another's output
 count, and the sum is what a budget is charged. (The two cache figures are
 not part of that test — a provider that caches nothing reports neither, and
@@ -925,10 +993,14 @@ directory and environment, whose stdout is read through the `usage` paths
 exactly as a usage file is — with the same three rules, plus one: it must
 name `{session}`, and `session_args` must give the call one, because a
 seat's home holds every call running in it at once and "the latest session"
-can be a sub-agent's. A command that fails or cannot be read leaves the
-counts to the estimate and logs `cli_agent_usage_report_failed`.
-`usage_args` and `usage_file_args` are refused together: one call, one
-report.
+can be a sub-agent's. Either way the call keeps its answer, and the counts
+fall back to what stdout reported — for OpenCode, whose stdout carries no
+`data.tokens`, the estimate — with a warning naming which way it failed: a
+command that exits non-zero, times out, overflows its output or exits 0 having
+printed nothing logs `cli_agent_usage_report_failed`; one that printed a
+report this profile cannot read logs `cli_agent_usage_report_unreadable`, as a
+usage file does. `usage_args` and `usage_file_args` are refused together: one
+call, one report.
 
 **`reasoning` is the one figure that is added, not reported as itself.**
 Every provider bills a model's reasoning as output, and OpenCode's session
@@ -1343,7 +1415,7 @@ sidesteps all of this.
 | `codex` | `codex` | ChatGPT Plus / Pro | `codex login`. Streams JSONL events; runs `--sandbox read-only`. |
 | `gemini-cli` | `gemini` | Google AI Pro / free tier | First run starts the auth picker. `GOOGLE_CLOUD_PROJECT` passes through. |
 | `qwen-code` | `qwen` | Qwen OAuth | Gemini CLI fork; same shape. |
-| `opencode` | `opencode` | Anthropic / Copilot / any | **OpenCode 2 only** — `@opencode/cli` (`opencode --version` prints `opencode v2.…`); 1.x (`opencode-ai`) runs neither the profile nor a coding box. Every command runs `--standalone`, because without it OpenCode drives a background service on a port shared by every home on the machine, which keeps the credentials of whichever call started it. `opencode auth login` (no status beyond `auth list`, no logout — see [the login it keeps in its own database](#1-broker-the-vendors-own-login-any-cli)). A provider key goes in `cli.env` under that provider's own variable, and `doctor` counts it — see [Signing in with a provider key](#5-a-provider-key-in-clienv-hermes-pi-opencode). `model` is `<provider>/<model>` (`anthropic/claude-sonnet-5`, `openrouter/anthropic/claude-sonnet-5`); a bare id is refused on a write. Prompt on stdin, system prompt as a project agent, failures read from its JSON `error` events, tokens from the call's session. |
+| `opencode` | `opencode` | Anthropic / Copilot / any | **OpenCode 2 only** — `@opencode/cli` (`opencode --version` prints `opencode v2.…`); 1.x (`opencode-ai`) runs neither the profile nor a coding box. Every command runs `--standalone`, because without it OpenCode drives a background service on a port shared by every home on the machine, which keeps the credentials of whichever call started it. `opencode auth login` (no status beyond `auth list`, no logout — see [the login it keeps in its own database](#1-broker-the-vendors-own-login-any-cli)). A provider key goes in `cli.env` under that provider's own variable, and `doctor` counts it — see [Signing in with a provider key](#5-a-provider-key-in-clienv-hermes-pi-opencode). `model` is `<provider>/<model>` (`anthropic/claude-sonnet-5`, `openrouter/anthropic/claude-sonnet-5`); a bare id is refused on a write. Prompt on stdin; no project configuration from the working directory or any ancestor of it, only the call's own (see [Tool calls in text mode](#tool-calls-in-text-mode)); the system prompt as an agent in that configuration; failures read from the class in its own JSON `error` events and nowhere else; tokens from the call's session. |
 | `cursor-agent` | `cursor-agent` | Cursor seat | `cursor-agent login`. A Cursor API key (`CURSOR_API_KEY`, its `api_key_env`) is the headless alternative, reached through `auth.mode: api-key`. |
 | `copilot` | `copilot` | GitHub Copilot seat | Prompt goes on argv, so very long transcripts are bounded by `ARG_MAX`. Authenticates with a GitHub token, so `GITHUB_TOKEN` is its `api_key_env` — reached via `auth.mode: api-key` or `inherit-env`, never forwarded silently. |
 | `grok` | `grok` | xAI | **xAI's own CLI** from [x.ai/cli](https://x.ai/cli), not the same-named npm package. Accepts `XAI_API_KEY` (the variable its own signed-out message names) through `auth.mode: api-key`. |
@@ -1417,7 +1489,7 @@ So a CLI whose failures reach stderr and nowhere else declares that, and then
 nothing the model writes classifies anything:
 
 ```yaml
-marker_scope: stderr        # or answer-and-stderr (the default), or stdout-and-stderr
+marker_scope: stderr        # or answer-and-stderr (the default), or events
 ```
 
 Three profiles narrow it, each on a measurement rather than an assumption:
@@ -1430,24 +1502,50 @@ answer an impossible place for the report — a profile that narrows it
 wrongly stops recognising spent plans, which is silent until somebody hits
 their cap.
 
-**The third scope widens it instead, for a failure that is an event of its
-own.** OpenCode 2's `--format json` prints a refused key or a spent plan as
-`{"type":"error",…,"error":{"type":"provider.quota",…}}` on stdout and
-nothing on stderr — and that event can follow an answer the profile located,
-so neither the answer nor stderr holds it. `marker_scope: stdout-and-stderr`
-searches every line of stdout. That is safe only because the model's words
-reach a JSON stream as escaped strings, so the profile's sentinels are
-spelled with the event's own quotes — `'"type":"provider.quota"'`,
-`'"type":"provider.rate-limit"'`, `'"type":"provider.auth"'`, the classes
-2.0.32 named for a provider answering 429 with a quota body, 429 with a
-rate-limit body and 401 — and nothing a model writes can reproduce one. The
-scope is refused on a text profile, whose stdout *is* the model's words.
-(1.x's sentinels — "usage limit", "not authenticated" — were printed by
-neither major, so a spent OpenCode plan used to classify as fatal and never
-moved the fallback chain.) OpenCode retries a rate limit itself, with no
-setting to bound it (about 86 seconds, measured), so a transient one holds the
-seat until then — or until `timeout_seconds` — before the sentinel can hand it
-on.
+**The third scope matches structure instead of text, for a failure that is
+an event of its own.** OpenCode 2's `--format json` prints a refused key or a
+spent plan as `{"type":"error",…,"error":{"type":"provider.quota",…}}` on
+stdout — and that event can follow an answer the profile located, so the
+answer does not hold it. `marker_scope: events` decodes every stdout line,
+keeps only the CLI's own failure events — those whose `event_type_path` value
+is one of `marker_events` — and compares each sentinel by **equality** with
+the string at `marker_path` in such an event:
+
+```yaml
+marker_scope: events
+marker_events: ["error"]          # read through event_type_path
+marker_path: ["error", "type"]    # the failure class; a sentinel must equal it
+limit_markers:
+  - sentinel: provider.quota
+  - sentinel: provider.rate-limit
+auth_markers:
+  - sentinel: provider.auth
+```
+
+Those are the classes 2.0.32 named for a provider answering 429 with a quota
+body, 429 with a rate-limit body and 401. **Never a substring of stdout**,
+which is what this scope first did, on the reasoning that a model's words
+reach a JSON stream only as escaped strings. A tool call's do not: OpenCode
+prints a call's arguments as the model's own raw JSON object, so a model that
+put `"type":"provider.quota"` into a `webfetch` call — which text injected
+into a page or a message a seat reads can ask it to — printed the sentinel
+exactly as the CLI's event spells it, on a call that exited 0 with a correct
+answer, and the credential was benched for the cooldown (measured on 2.0.32).
+Whatever a model writes arrives inside an event of another type, or nested
+where `marker_path` does not reach. **Stderr is not searched** in this scope:
+OpenCode writes none of these failures there (zero bytes, measured with
+`--print-logs=false`, for all three), so a byte search there could only let
+something other than the CLI's own event classify a call. The scope is
+refused without a `jsonl` output, an `event_type_path`, `marker_events` and
+`marker_path`; `marker_events` may not name a `text_events` kind; a limit
+marker may not carry a `reset_separator`, since the class is compared whole;
+and `marker_events` and `marker_path` are refused beside any other scope,
+which reads neither. (1.x's sentinels — "usage limit", "not authenticated" —
+were printed by neither major, so a spent OpenCode plan used to classify as
+fatal and never moved the fallback chain.) OpenCode retries a rate limit
+itself, with no setting to bound it (about 86 seconds, measured), so a
+transient one holds the seat until then — or until `timeout_seconds` — before
+the sentinel can hand it on.
 
 **And check where it prints it.** A sentinel can only match what the CLI
 puts on stdout or stderr, and one vendor puts the failure *nowhere a
@@ -1463,9 +1561,9 @@ through to its metered key.
 
 Every field a profile has, and therefore every key `cli.overrides` accepts.
 A key not in this table is refused by name. Every mapping field
-(`config_env`, `env`, `usage`, `stdin_login`, `system_prompt_file`,
-`credential_store`) merges key by key; lists and single values replace
-wholesale.
+(`config_env`, `work_config_env`, `env`, `usage`, `stdin_login`,
+`system_prompt_file`, `credential_store`) merges key by key; lists and single
+values replace wholesale.
 
 | Field | What it is |
 |---|---|
@@ -1477,7 +1575,7 @@ wholesale.
 | `prompt_mode` | How the prompt travels: `stdin` (default), `argv` or `file`. |
 | `system_prompt_args` | The flag carrying the system prompt, with `{file}` (preferred) or `{system}`. Empty leaves it in the transcript. |
 | `system_prompt_env` | A variable naming a file the CLI reads its system prompt from; exclusive with `system_prompt_args`. |
-| `system_prompt_file` | `{name, template, discovered}`: the file a `{file}` channel writes, and the text around `{system}`. `discovered: true` is a file the CLI finds by its location in the per-call directory (`name` may then carry a directory), selected by `system_prompt_args` without `{file}`. |
+| `system_prompt_file` | `{name, template, discovered}`: the file a `{file}` channel writes, and the text around `{system}`. `discovered: true` is a file the CLI finds by its location in the per-call directory (`name` may then carry a directory, and must name a file inside it), selected by `system_prompt_args` without `{file}` or `{system}`. |
 | `prompt_args` | The flag introducing the prompt in `argv` mode, or carrying `{file}` in `file` mode. |
 | `output` | How stdout is encoded: `json` (default), `jsonl` or `text`. |
 | `text_paths` | Where the answer is in a `json`/`jsonl` document. |
@@ -1487,10 +1585,11 @@ wholesale.
 | `usage` | `{input, output, cache_read, cache_write, reasoning}`: where the token counts are. `reasoning` is added to output, for a CLI that reports it apart. |
 | `usage_file_args` | The flag asking the CLI to write its counts to a file, with `{usage_file}`. |
 | `session_args` | The flag naming the call's session, with `{session}` — 32 hex characters minted per call. |
-| `usage_args` | A command run after the call that prints its counts, with the same `{session}`; read through `usage`. Exclusive with `usage_file_args`. |
-| `config_env` | A vendor's own relocation variable, mapped to a directory under the seat home. |
-| `env` | Fixed child environment. Never a credential, and never `token_env` or `api_key_env`. |
-| `passthrough_env` | Engine variables forwarded to the child. Never a credential. |
+| `usage_args` | A command run after the call that prints its counts, with the same `{session}`; read through `usage`. Exclusive with `usage_file_args`. One that fails, or prints nothing, logs `cli_agent_usage_report_failed`; one this profile cannot read logs `cli_agent_usage_report_unreadable`; either way the counts are what stdout reported. |
+| `config_env` | A vendor's own relocation variable, mapped to a directory under the seat home — relative, and staying inside it. |
+| `work_config_env` | A vendor's relocation variable mapped to a directory under the per-call working directory, for configuration a call must not share with the seat's other calls. Set only for the call and its usage command; never `HOME`, an XDG home, `TMPDIR`, or a `config_env` variable. |
+| `env` | Fixed child environment. Never a credential, never `token_env` or `api_key_env`, and never a variable the engine sets to isolate the call (`HOME`, the XDG homes, `TMPDIR`, a `config_env` or `work_config_env` variable). |
+| `passthrough_env` | Engine variables forwarded to the child. Never a credential, and never an isolation variable. |
 | `token_env` | The variable a headless subscription token goes in (`cli.auth.token`). |
 | `api_key_env` | The variable a metered key goes in (`api_keys` under `auth.mode: api-key`). |
 | `model_names_provider` | The CLI reads its model as `<provider>/<model>`, split at the first slash, so a `model` with nothing before or after that slash (as the CLI is handed it, through `model_args`) is refused on a write. Declared by `opencode` only — measured from its source; `hermes` and `pi` document a `provider/id` model but are not known to refuse a bare one. |
@@ -1505,7 +1604,9 @@ wholesale.
 | `credential_store` | `{export_args, import_args}`: a login the CLI keeps in a database of its own, moved as the document its export prints (stdout) and its import reads (stdin). Both, and never `{file}`. |
 | `limit_markers` | Sentences recognising a spent plan — see above. |
 | `auth_markers` | Sentences recognising an expired login. |
-| `marker_scope` | Where markers match: `answer-and-stderr` (default), `stderr`, or `stdout-and-stderr` (every stdout line; not on a `text` profile). |
+| `marker_scope` | Where markers match: `answer-and-stderr` (default), `stderr`, or `events` (the class in the CLI's own failure events, compared by equality; `jsonl` only, and stderr is not searched). |
+| `marker_events` | Under `marker_scope: events`, the event kinds (read through `event_type_path`) the CLI reports a failure in. Refused beside any other scope. |
+| `marker_path` | Under `marker_scope: events`, where in such an event the failure class is; a sentinel must equal it. Refused beside any other scope. |
 | `host_credential_paths` | Where the CLI keeps its login in a person's own home, for `-from-host`. |
 | `local_tools` | The profile's stance on the CLI's own tools: `denied` or `vendor-default`. |
 | `local_tools_note` | Why a `vendor-default` stance is one. |
@@ -1747,7 +1848,9 @@ holding the reset instant, so the retry-after is a datum rather than a
 guess. They are matched against whatever the CLI printed — which on a
 healthy call is **the model's own answer** — and a match benches the
 credential for a cooldown and hands the seat to the next entry in the
-chain.
+chain. Under `marker_scope: events` a sentinel is instead the failure
+*class*, compared whole with the CLI's own failure event and nothing else
+(see [CLI flags drift](#cli-flags-drift--and-thats-a-config-edit-not-a-release)).
 
 So a sentinel has to be the vendor's *wording*, and a profile is refused
 at `crewlet validate` if one contains no letters. The rule exists because

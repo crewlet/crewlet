@@ -338,24 +338,57 @@ opencode:
   # making a SECOND billed model call per run to generate a title for a
   # transcript nobody will ever list.
   complete_args: ["run", "--standalone", "--print-logs=false", "--format", "json", "--title", "crewlet"]
-  # OpenCode takes its tool policy from opencode.json under XDG_CONFIG_HOME,
-  # which the child environment points inside the seat HOME — in 2.0's own
-  # permissions format, an ordered list in which the LAST matching rule wins:
-  # deny every action, then allow the two web tools. Deny-all rather than a
-  # list of the local tools, because 2.0 allows whatever is not denied, and
-  # its new tools (`execute`, Code Mode's JavaScript runtime with `fetch`,
-  # and the session and worktree tools it exposes) passed a v1-style list of
-  # denials — measured: with this seed the model is offered exactly
-  # `webfetch` and `websearch`. Never `ask`, which a headless run cannot
-  # answer.
+  # THE ONLY CONFIGURATION A CALL READS IS ITS OWN. OpenCode also reads
+  # PROJECT configuration — `opencode.json`, and `.opencode/` agents, skills
+  # and plugins — from the working directory and EVERY ANCESTOR of it, and a
+  # project's permissions beat the global ones. The per-call directory is
+  # <state_dir>/seats/<seat>/work/<call>, and state_dir defaults to a
+  # directory under the engine user's home, so whatever sits above it was
+  # configuration for every seat. Measured on 2.0.32 with this profile's
+  # global seed in place: an ancestor `opencode.json` or
+  # `.opencode/opencode.json` allowing everything — in 2.0's `permissions`
+  # shape or 1.x's `permission` map, which 2.0 translates — widened the
+  # model's tools from webfetch and websearch to shell, read, write, edit and
+  # execute, and an ancestor plugin was loaded and ran its code.
+  #
+  # So the walk is off (OPENCODE_DISABLE_PROJECT_CONFIG, in env below), and
+  # OPENCODE_CONFIG_DIR points at `.crewlet-config` INSIDE THE CALL'S OWN
+  # DIRECTORY (work_config_env). That variable REPLACES the global directory
+  # under XDG_CONFIG_HOME rather than adding to it — measured: a provider
+  # declared only in the seat home's opencode.json was not found — so the
+  # seed below and the seat's agent file are both written there, per call.
+  # Per call rather than per seat because the agent file is the call's own
+  # system prompt, and a seat runs calls concurrently in one home. Measured
+  # on 2.0.32 under exactly this environment, with the ancestor files above
+  # planted — each shape in each location, across two runs, beside an
+  # ancestor agent of the same name, plugins, skills, AGENTS.md and
+  # CLAUDE.md: the seat's agent is found and its body is the system message,
+  # the model is offered exactly webfetch and websearch, no ancestor file
+  # reaches the request, and no plugin loads. A command that runs outside a call — the credential
+  # store's import and export, `auth login` and `auth list`, the version
+  # probe — gets the walk switched off and no OPENCODE_CONFIG_DIR, so it
+  # reads no configuration at all: measured, import, export and list all
+  # work so, and `api session.get` (usage_args) runs as a call and reads the
+  # call's directory.
+  #
+  # The tool policy is 2.0's own permissions format, an ordered list in
+  # which the LAST matching rule wins: deny every action, then allow the two
+  # web tools. Deny-all rather than a list of the local tools, because 2.0
+  # allows whatever is not denied, and its new tools (`execute`, Code Mode's
+  # JavaScript runtime with `fetch`, and the session and worktree tools it
+  # exposes) passed a v1-style list of denials. Never `ask`, which a
+  # headless run cannot answer.
   #
   # `update: disable` keeps a seat's call from checking for, and fetching, a
   # new release; `share: disabled` keeps it from publishing a transcript;
   # `snapshots: false` stops it keeping a git snapshot of a working
   # directory that is empty by construction.
   local_tools: denied
+  work_config_env:
+    OPENCODE_CONFIG_DIR: .crewlet-config
   seed_files:
-    - path: .config/opencode/opencode.json
+    - path: .crewlet-config/opencode.json
+      in: work
       content: '{"$schema":"https://opencode.ai/config.json","update":"disable","share":"disabled","snapshots":false,"permissions":[{"action":"*","resource":"*","effect":"deny"},{"action":"webfetch","resource":"*","effect":"allow"},{"action":"websearch","resource":"*","effect":"allow"}]}'
   model_args: ["--model", "{model}"]
   # `--model` takes `provider/model` (2.0 adds an optional `#variant`) and
@@ -368,18 +401,19 @@ opencode:
   # and no other: 2.0 accepts a session id it does not hold and creates the
   # session under it, and refuses one that does not begin `ses`.
   session_args: ["--session", "ses_{session}"]
-  # THE SYSTEM PROMPT AS A PROJECT AGENT. 2.0 has no system-prompt flag and
-  # no variable naming a file; it discovers agents in the project it runs in
-  # — `.opencode/agents/<name>.md`, the body being the agent's system prompt
-  # — and `--agent` selects one. The per-call working directory is that
-  # project. Measured on 2.0.32: the body REPLACES OpenCode's own
-  # coding-agent prompt (2.0 then appends a short block naming the model and
-  # the date), and it is not interpolated — `{env:…}` and `{file:…}` in it
-  # reach the model as written, so nothing a seat's prompt quotes can make
-  # the CLI read a file or a variable into it.
+  # THE SYSTEM PROMPT AS AN AGENT OPENCODE DISCOVERS. 2.0 has no
+  # system-prompt flag and no variable naming a file; it discovers agents in
+  # its configuration directory — `agents/<name>.md`, the body being the
+  # agent's system prompt — and `--agent` selects one. That directory is the
+  # call's own `.crewlet-config` (work_config_env, above). Measured on
+  # 2.0.32: the body REPLACES OpenCode's own coding-agent prompt (2.0 then
+  # appends a short block naming the model and the date), and it is not
+  # interpolated — `{env:…}` and `{file:…}` in it reach the model as
+  # written, so nothing a seat's prompt quotes can make the CLI read a file
+  # or a variable into it.
   system_prompt_args: ["--agent", "crewlet-seat"]
   system_prompt_file:
-    name: .opencode/agents/crewlet-seat.md
+    name: .crewlet-config/agents/crewlet-seat.md
     discovered: true
     template: |
       ---
@@ -439,6 +473,11 @@ opencode:
     # by construction. Off, a call took ~0.5s less on 2.0.32, and a host
     # running many seats is not spending inotify watches on nothing.
     OPENCODE_DISABLE_FILEWATCHER: "1"
+    # No project configuration from the working directory or any ancestor
+    # of it — see work_config_env above. On every command this profile
+    # runs, the credential store's and the login's included: an ancestor
+    # plugin is code.
+    OPENCODE_DISABLE_PROJECT_CONFIG: "1"
   login_args: ["auth", "login", "--standalone"]
   status_args: ["auth", "list", "--standalone"]
   # NO logout_args. 2.0's `auth logout` removes ONE credential from the
@@ -450,22 +489,31 @@ opencode:
   # NO stdin_login. 1.x's profile declared `auth login --username`, a flag no
   # release of either major has — it printed usage and exited 1 — and 2.0's
   # login is a provider picker and the provider's own flow.
-  marker_scope: stdout-and-stderr
-  # THE CLASS 2.0 NAMES IN ITS `error` EVENT, quoted, so the sentinel can
-  # only match the event's own JSON: inside a model's text the quotes are
-  # escaped. Measured on 2.0.32 against a provider answering 429 with a
-  # quota body, 429 with a rate-limit body, and 401: `provider.quota`,
-  # `provider.rate-limit`, `provider.auth`. 1.x's sentinels ("usage limit",
-  # "not authenticated", "no credentials") were never printed by either
-  # major, so a spent plan or a dead key was classified fatal and the
-  # fallback chain never moved. 2.0 retries a rate limit itself, with no
-  # setting to bound it — ~86s, measured — so a transient one holds the seat
-  # up to cli.timeout_seconds before this sentinel can hand it on.
+  # THE CLASS 2.0 NAMES IN ITS OWN `error` EVENT, compared by equality with
+  # `error.type` in an event whose `type` is `error` — and nowhere else.
+  # Not a substring of stdout: 2.0 prints every tool call as a `tool_use`
+  # event carrying the model's arguments as a raw JSON object, so a model
+  # that put `"type":"provider.quota"` in a webfetch call's arguments
+  # printed it verbatim on a healthy call (measured), and text injected into
+  # a page a seat fetched can ask a model to. Not stderr either: 2.0 writes
+  # none of these there — zero bytes, measured with --print-logs=false.
+  # Measured on 2.0.32 against a provider answering 429 with a quota body,
+  # 429 with a rate-limit body, and 401: `provider.quota`,
+  # `provider.rate-limit`, `provider.auth`, every one exiting 1 with stdout
+  # holding the event. 1.x's sentinels ("usage limit", "not authenticated",
+  # "no credentials") were never printed by either major, so a spent plan or
+  # a dead key was classified fatal and the fallback chain never moved. 2.0
+  # retries a rate limit itself, with no setting to bound it — ~86s,
+  # measured — so a transient one holds the seat up to cli.timeout_seconds
+  # before this sentinel can hand it on.
+  marker_scope: events
+  marker_events: ["error"]
+  marker_path: ["error", "type"]
   limit_markers:
-    - sentinel: '"type":"provider.quota"'
-    - sentinel: '"type":"provider.rate-limit"'
+    - sentinel: "provider.quota"
+    - sentinel: "provider.rate-limit"
   auth_markers:
-    - sentinel: '"type":"provider.auth"'
+    - sentinel: "provider.auth"
 
 cursor-agent:
   binary: cursor-agent
