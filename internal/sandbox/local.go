@@ -235,14 +235,25 @@ func collectCredentials(ctx context.Context, l boxLayout, seeded map[string]seed
 			// looking at. It names the file, never what either copy holds.
 			localLog.Warn("local_sandbox_credential_superseded",
 				"sandbox_id", l.id, "file", relative, "path", rec.Source, "shared", string(got),
-				"detail", "the run refreshed this login, but the shared one had "+string(got)+
-					" since the box was seeded, so the shared one was kept")
+				"detail", supersededDetail[got])
 		}
 	}
 }
 
 // writeBack is what a teardown did with one login file.
 type writeBack string
+
+// supersededDetail is what local_sandbox_credential_superseded says of each
+// outcome in which a login the run refreshed was not written back: one
+// sentence apiece, because the two leave different things behind — a newer
+// login kept, and no login at all.
+var supersededDetail = map[writeBack]string{
+	writeBackChanged: "the run refreshed this login, but the shared one changed after the box " +
+		"was seeded — another seat's refresh, or a new crewlet llm login — so the shared one " +
+		"was kept, being the newer",
+	writeBackRemoved: "the run refreshed this login, but the shared one was removed after the " +
+		"box was seeded — crewlet llm logout — and a box never creates one, so none was written",
+}
 
 const (
 	// writeBackIdle: the box holds what it was seeded with, or nothing —

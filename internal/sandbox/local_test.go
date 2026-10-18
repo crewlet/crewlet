@@ -737,11 +737,14 @@ func TestAnIdleBoxNeverWritesItsSeedBackOverALoginTheHostRefreshed(t *testing.T)
 // refreshed while the host also did holds the older of the two — the host's
 // refresh rotated the token the box's copy came from — so the shared login is
 // kept, and the dropped refresh is said, by file and path and never by value.
+// And a run that refreshed a login the operator removed meanwhile writes none,
+// which is said in its own words: there is no shared login to have kept.
 //
 // Not parallel: it captures the process-wide logger ([captureLogs]).
 //
-// Mutation: write back whenever the box's copy changed, and the host's
-// refresh is replaced.
+// Mutations: write back whenever the box's copy changed, and the host's
+// refresh is replaced; say both outcomes in one sentence, and the removed
+// login's warning claims a login was kept.
 func TestARefreshIsDroppedWhereTheSharedLoginMovedPastItsSeed(t *testing.T) {
 	logs := captureLogs(t)
 	shared := filepath.Join(t.TempDir(), "credentials.json")
@@ -781,11 +784,43 @@ func TestARefreshIsDroppedWhereTheSharedLoginMovedPastItsSeed(t *testing.T) {
 	}
 	out := logs.String()
 	if !strings.Contains(out, "local_sandbox_credential_superseded") ||
-		!strings.Contains(out, shared) || !strings.Contains(out, "shared=changed") {
-		t.Errorf("the dropped refresh was not said, naming the path:\n%s", out)
+		!strings.Contains(out, shared) || !strings.Contains(out, "shared=changed") ||
+		!strings.Contains(out, "the shared one changed after the box was seeded") ||
+		!strings.Contains(out, "the shared one was kept") {
+		t.Errorf("the dropped refresh was not said, naming the path and the newer login kept:\n%s", out)
 	}
 	if strings.Contains(out, "refreshed\"}") || strings.Contains(out, "box-refreshed") {
 		t.Errorf("the log carries a login's value:\n%s", out)
+	}
+
+	// The operator removes the login while a box refreshes it.
+	writeFile(t, shared, `{"refresh":"v1"}`)
+	box, err = local.Create(t.Context(), Spec{
+		CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	writeFile(t, filepath.Join(box.Home(), ".claude", ".credentials.json"), `{"refresh":"box-refreshed"}`)
+	if err := os.Remove(shared); err != nil {
+		t.Fatal(err)
+	}
+	before := len(logs.String())
+	if err := local.Kill(t.Context(), box.ID()); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	if _, err := os.Stat(shared); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("a teardown recreated a login the operator removed")
+	}
+	removed := logs.String()[before:]
+	if !strings.Contains(removed, "local_sandbox_credential_superseded") ||
+		!strings.Contains(removed, "shared=removed") ||
+		!strings.Contains(removed, "the shared one was removed after the box was seeded") ||
+		!strings.Contains(removed, "a box never creates one") {
+		t.Errorf("the refresh dropped over a removed login was not said in its own words:\n%s", removed)
+	}
+	if strings.Contains(removed, "was kept") {
+		t.Errorf("the removed login's warning claims a login was kept:\n%s", removed)
 	}
 }
 
