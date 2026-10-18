@@ -98,18 +98,17 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseQuery: %v", err)
 			}
-			where, args, err := compile(q, planNow, planFields(q))
+			set, err := compile(q, planNow, planFields(q))
 			if err != nil {
 				t.Fatalf("compile: %v", err)
 			}
-			// THE SAME STATEMENT THE READER RUNS. Explaining the
-			// WHERE clause alone would explain a query nobody
-			// issues — and the ORDER BY is half of what decides
-			// which index the planner reaches for.
-			order := orderBy(q, planFields(q))
-			plan := explain(t, db, `
-				SELECT t.id, t.rank, t.updated_at FROM tracker_tasks t
-				WHERE `+where+` ORDER BY `+order+` LIMIT 51`, args)
+			// THE SAME STATEMENT THE READER RUNS ([taskRowsStatement]).
+			// Explaining the WHERE clause alone would explain a query
+			// nobody issues — and the FROM and the ORDER BY are half of
+			// what decides which index the planner reaches for.
+			statement, args := taskRowsStatement("", nil, set,
+				sortTerms(q, planFields(q)))
+			plan := explain(t, db, statement, append(args, 51))
 			for _, index := range indexesIn(plan) {
 				used[index] = true
 			}
@@ -994,10 +993,11 @@ func TestTheSubtaskRollupKeepsItsContainer(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseQuery: %v", err)
 			}
-			where, args, err := compile(q, planNow, planFields(q))
+			set, err := compile(q, planNow, planFields(q))
 			if err != nil {
 				t.Fatalf("compile: %v", err)
 			}
+			where, args := set.where, set.args
 			outer, _, found := strings.Cut(where, "t.root_id IN (")
 			if !found {
 				t.Fatalf("this query did not roll subtasks up at all:\n%s", where)

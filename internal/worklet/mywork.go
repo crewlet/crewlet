@@ -369,11 +369,12 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 func taskBlock(ctx context.Context, tx *sql.Tx, where string, args []any,
 	terms []sortTerm, dayStart time.Time) ([]TaskRow, ClaimTotal, error) {
 
-	rows, _, err := readTasks(ctx, tx, where, args, terms, MyWorkRows, dayStart)
+	set := tasksWhere(where, args)
+	rows, _, err := readTasks(ctx, tx, set, terms, MyWorkRows, dayStart)
 	if err != nil {
 		return nil, ClaimTotal{}, err
 	}
-	total, capped, err := countHint(ctx, tx, where, args)
+	total, capped, err := countHint(ctx, tx, set)
 	if err != nil {
 		return nil, ClaimTotal{}, err
 	}
@@ -430,10 +431,10 @@ func readPriorityRows(ctx context.Context, tx *sql.Tx, handle string,
 		args = append(args, id)
 	}
 	args = append(args, open...)
-	rows, _, err := readTasks(ctx, tx,
+	rows, _, err := readTasks(ctx, tx, tasksWhere(
 		"t.removed_at IS NULL AND t.id IN ("+placeholders(len(ids))+
-			") AND t.status_group IN ("+placeholders(len(open))+")",
-		args, []sortTerm{{Column: "t.id"}}, len(ids), dayStart)
+			") AND t.status_group IN ("+placeholders(len(open))+")", args),
+		[]sortTerm{{Column: "t.id"}}, len(ids), dayStart)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -557,7 +558,7 @@ func askRowsOf(ctx context.Context, tx *sql.Tx, pending []askRecord,
 		ids = append(ids, a.task)
 	}
 	tasks, _, err := readTasks(ctx, tx,
-		"t.id IN ("+placeholders(len(ids))+")", ids,
+		tasksWhere("t.id IN ("+placeholders(len(ids))+")", ids),
 		[]sortTerm{{Column: "t.id"}}, len(ids), dayStart)
 	if err != nil {
 		return nil, err

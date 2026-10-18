@@ -567,33 +567,9 @@ func weekBucket(column string) string {
 
 // groupCounts reads one axis's distinct values and their counts.
 func groupCounts(ctx context.Context, tx *sql.Tx, axis groupAxis,
-	where string, args []any, limit int) ([]Group, int, error) {
+	set taskSet, limit int) ([]Group, int, error) {
 
-	// THE DECLARED ORDER WHERE THERE IS ONE, and the largest column first
-	// where there is not — see [groupAxis.Order]. The CASE is built from
-	// the closed set's own sequence, so nothing here composes a caller's
-	// value into SQL.
-	order := "n DESC, g"
-	if len(axis.Order) > 0 {
-		var arms strings.Builder
-		arms.WriteString("CASE g")
-		for i, value := range axis.Order {
-			fmt.Fprintf(&arms, " WHEN '%s' THEN %d", value, i)
-		}
-		fmt.Fprintf(&arms, " ELSE %d END, g", len(axis.Order))
-		order = arms.String()
-	}
-	query := `SELECT ` + axis.Expr + ` AS g, COUNT(*) AS n
-	          FROM tracker_tasks t` + axis.Join + `
-	          WHERE ` + where + `
-	          GROUP BY g
-	          ORDER BY ` + order + `
-	          LIMIT ?`
-	// IN STATEMENT ORDER: the expression is written in the SELECT, the
-	// join after it, the predicate after that — and a placeholder binds
-	// where it is written.
-	bound := append(append([]any{}, axis.ExprArgs...), axis.JoinArgs...)
-	bound = append(bound, args...)
+	query, bound := groupCountsStatement(axis, set)
 	rows, err := tx.QueryContext(ctx, query, append(bound, limit+1)...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("worklet: count the groups: %w", err)
@@ -630,13 +606,44 @@ func groupCounts(ctx context.Context, tx *sql.Tx, axis groupAxis,
 	return out, dropped, nil
 }
 
+// groupCountsStatement is the statement [groupCounts] counts an axis's
+// columns with, and its arguments up to the LIMIT it ends in — named for the
+// plan test.
+func groupCountsStatement(axis groupAxis, set taskSet) (string, []any) {
+	// THE DECLARED ORDER WHERE THERE IS ONE, and the largest column first
+	// where there is not — see [groupAxis.Order]. The CASE is built from
+	// the closed set's own sequence, so nothing here composes a caller's
+	// value into SQL.
+	order := "n DESC, g"
+	if len(axis.Order) > 0 {
+		var arms strings.Builder
+		arms.WriteString("CASE g")
+		for i, value := range axis.Order {
+			fmt.Fprintf(&arms, " WHEN '%s' THEN %d", value, i)
+		}
+		fmt.Fprintf(&arms, " ELSE %d END, g", len(axis.Order))
+		order = arms.String()
+	}
+	query := `SELECT ` + axis.Expr + ` AS g, COUNT(*) AS n
+	          FROM ` + set.from + axis.Join + `
+	          WHERE ` + set.where + `
+	          GROUP BY g
+	          ORDER BY ` + order + `
+	          LIMIT ?`
+	// IN STATEMENT ORDER: the expression is written in the SELECT, the
+	// join after it, the predicate after that — and a placeholder binds
+	// where it is written.
+	bound := append(append([]any{}, axis.ExprArgs...), axis.JoinArgs...)
+	return query, append(bound, set.args...)
+}
+
 // groupRows reads one group's own page.
 //
 // THE AXIS BECOMES A PREDICATE, which is what makes this the ordinary flat
 // statement: a column's rows are the answer's rows narrowed to one value, so
 // the same sort, the same joins and the same row shape serve both.
 func groupRows(ctx context.Context, tx *sql.Tx, axis groupAxis, key string,
-	where string, args []any, terms []sortTerm, limit int,
+	set taskSet, terms []sortTerm, limit int,
 	dayStart time.Time) ([]TaskRow, error) {
 
 	// THE JOINED FORM HERE, not the join-free one: this statement already
@@ -644,8 +651,7 @@ func groupRows(ctx context.Context, tx *sql.Tx, axis groupAxis, key string,
 	// joined column is one predicate rather than a second subquery.
 	clause, values := axis.joinedFilter(key)
 	rows, _, err := readTasksJoined(ctx, tx, axis.Join, axis.JoinArgs,
-		"("+where+") AND "+clause,
-		append(append([]any{}, args...), values...), terms, limit, dayStart)
+		set.and(clause, values), terms, limit, dayStart)
 	return rows, err
 }
 
@@ -793,15 +799,14 @@ var ErrTooBroad = errors.New("worklet: this query selects more rows than the ans
 // whole point of the gate being cheap, and it means the honest thing to report
 // is the ceiling that was crossed rather than a total nobody counted.
 func checkGroupBreadth(ctx context.Context, tx *sql.Tx, q Query,
-	where string, args []any) error {
+	set taskSet) error {
 
 	if q.Scope.Project != "" {
 		return nil
 	}
-	query := `SELECT COUNT(*) FROM (SELECT 1 FROM tracker_tasks t WHERE ` +
-		where + ` LIMIT ?)`
+	query := cappedCountStatement(set.from, set.where)
 	var n int
-	bound := append(append([]any{}, args...), GroupByRowCeiling+1)
+	bound := append(append([]any{}, set.args...), GroupByRowCeiling+1)
 	if err := tx.QueryRowContext(ctx, query, bound...).Scan(&n); err != nil {
 		return fmt.Errorf("worklet: count what group_by=%s would sort: %w",
 			q.GroupBy, err)
@@ -825,20 +830,20 @@ func checkGroupBreadth(ctx context.Context, tx *sql.Tx, q Query,
 // row in the corpus to return twenty per column, which is what a board would
 // pay on every poll.
 func readGroups(ctx context.Context, tx *sql.Tx, q Query,
-	fields map[string]resolvedField, where string, args []any,
+	fields map[string]resolvedField, set taskSet,
 	terms []sortTerm) (grouped, error) {
 
 	// THE GATE BEFORE THE WORK, and before the axis is even compiled: what
 	// it refuses is the cost of the statements below, so paying any part of
 	// that cost first would be paying exactly what it exists to avoid.
-	if err := checkGroupBreadth(ctx, tx, q, where, args); err != nil {
+	if err := checkGroupBreadth(ctx, tx, q, set); err != nil {
 		return grouped{}, err
 	}
 	axis, err := compileGroup(q.GroupBy, fields, q.dayWindow(), q.Units)
 	if err != nil {
 		return grouped{}, err
 	}
-	// THE GROUP FILTER IS ALREADY IN `where` — [compile] adds it, in its
+	// THE GROUP FILTER IS ALREADY IN THE SET — [compile] adds it, in its
 	// join-free form, so the count hint and the totals are narrowed by it
 	// too. Narrowing again here would double the predicate and, worse,
 	// would leave those two describing the whole board.
@@ -857,7 +862,7 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 	if q.GroupBy2 != "" {
 		columns = MaxGroupsWithSubgroups
 	}
-	groups, dropped, err := groupCounts(ctx, tx, axis, where, args, columns)
+	groups, dropped, err := groupCounts(ctx, tx, axis, set, columns)
 	if err != nil {
 		return grouped{}, err
 	}
@@ -881,7 +886,7 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 			// one task as much as one with six.
 			continue
 		}
-		rows, err := groupRows(ctx, tx, axis, groups[i].Key, where, args,
+		rows, err := groupRows(ctx, tx, axis, groups[i].Key, set,
 			terms, rowsPer, q.DayStart)
 		if err != nil {
 			return grouped{}, err
@@ -894,7 +899,7 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 		// One level and no more: a third would be a tree, and a board
 		// draws columns and swimlanes rather than a hierarchy.
 		inner, innerDropped, err := readSubgroups(ctx, tx, q, fields, axis,
-			groups[i].Key, where, args, terms, rowsPer)
+			groups[i].Key, set, terms, rowsPer)
 		if err != nil {
 			return grouped{}, err
 		}
@@ -907,7 +912,7 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 // readSubgroups is the second axis within one column.
 func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 	fields map[string]resolvedField, outer groupAxis, key string,
-	where string, args []any, terms []sortTerm, rowsPer int) ([]Group, int, error) {
+	set taskSet, terms []sortTerm, rowsPer int) ([]Group, int, error) {
 
 	inner, err := compileLane(q.GroupBy2, fields, q.dayWindow(), q.Units)
 	if err != nil {
@@ -917,8 +922,7 @@ func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 	// join rides with it — a subgroup of a tag column is still inside that
 	// tag.
 	outerClause, outerArgs := outer.joinedFilter(key)
-	scoped := "(" + where + ") AND " + outerClause
-	bound := append(append([]any{}, args...), outerArgs...)
+	scoped := set.and(outerClause, outerArgs)
 	joined := groupAxis{
 		Expr: inner.Expr, ExprArgs: inner.ExprArgs,
 		Join: outer.Join + inner.Join,
@@ -933,16 +937,15 @@ func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 	// the outer one — which is how a board loads one swimlane further.
 	if q.Subgroup != nil {
 		innerClause, innerArgs := inner.joinedFilter(*q.Subgroup)
-		scoped += " AND " + innerClause
-		bound = append(append([]any{}, bound...), innerArgs...)
+		scoped = scoped.and(innerClause, innerArgs)
 	}
-	counts, dropped, err := groupCounts(ctx, tx, joined, scoped, bound, MaxSubgroups)
+	counts, dropped, err := groupCounts(ctx, tx, joined, scoped, MaxSubgroups)
 	if err != nil {
 		return nil, 0, err
 	}
 	groupLabels(counts, inner)
 	for i := range counts {
-		rows, err := groupRows(ctx, tx, joined, counts[i].Key, scoped, bound,
+		rows, err := groupRows(ctx, tx, joined, counts[i].Key, scoped,
 			terms, rowsPer, q.DayStart)
 		if err != nil {
 			return nil, 0, err

@@ -310,18 +310,17 @@ func rankedValues(column string, fields map[string]resolvedField) (string, strin
 // A COMMON TABLE EXPRESSION HOLDS THE MATCHED SET, so a custom field's
 // correlated aggregate and a task column's plain one read the same rows — and
 // the predicate is evaluated once rather than once per total.
-func readTotals(ctx context.Context, tx *sql.Tx, where string, whereArgs []any,
+func readTotals(ctx context.Context, tx *sql.Tx, set taskSet,
 	totals []Total, exprs []string, exprArgs []any) ([]Total, error) {
 
 	if len(totals) == 0 {
 		return nil, nil
 	}
-	query := matchedSet(where) + `
-	          SELECT ` + strings.Join(exprs, ", ") + ` FROM matched t`
+	query := totalsStatement(set, exprs)
 	// THE EXPRESSION ARGUMENTS COME AFTER THE PREDICATE'S, because the
 	// common table expression is written first and its placeholders are
 	// bound in statement order.
-	args := append(append([]any{}, whereArgs...), exprArgs...)
+	args := append(append([]any{}, set.args...), exprArgs...)
 
 	cells := make([]any, len(totals))
 	targets := make([]any, len(totals))
@@ -338,7 +337,7 @@ func readTotals(ctx context.Context, tx *sql.Tx, where string, whereArgs []any,
 			// THE CELL IS A COUNT, and the value is the one at its
 			// nearest-rank position.
 			var err error
-			if number, held, err = readRanked(ctx, tx, where, whereArgs, total, int64(number)); err != nil {
+			if number, held, err = readRanked(ctx, tx, set, total, int64(number)); err != nil {
 				return nil, err
 			}
 		}
@@ -372,17 +371,17 @@ func (t Total) answered(number float64, held bool) Total {
 // matched", measured), and a window function would number every row of the
 // set to read one. An EMPTY set has no position to read and answers absent,
 // like every other aggregate over nothing.
-func readRanked(ctx context.Context, tx *sql.Tx, where string, whereArgs []any,
+func readRanked(ctx context.Context, tx *sql.Tx, set taskSet,
 	total Total, n int64) (float64, bool, error) {
 
 	if n <= 0 {
 		return 0, false, nil
 	}
 	offset := (n*int64(total.rank)+rankDenominator-1)/rankDenominator - 1
-	query := matchedSet(where) + `
+	query := matchedSet(set) + `
 	          SELECT ` + total.value + ` ` + total.ranked + `
 	          ORDER BY ` + total.value + ` LIMIT 1 OFFSET ?`
-	args := append(append(append([]any{}, whereArgs...), total.rankArgs...), offset)
+	args := append(append(append([]any{}, set.args...), total.rankArgs...), offset)
 	var cell any
 	switch err := tx.QueryRowContext(ctx, query, args...).Scan(&cell); {
 	case errors.Is(err, sql.ErrNoRows):
@@ -395,9 +394,16 @@ func readRanked(ctx context.Context, tx *sql.Tx, where string, whereArgs []any,
 	return number, held, nil
 }
 
+// totalsStatement is the one statement [readTotals] reads every total with,
+// one column per expression — named for the plan test.
+func totalsStatement(set taskSet, exprs []string) string {
+	return matchedSet(set) + `
+	          SELECT ` + strings.Join(exprs, ", ") + ` FROM matched t`
+}
+
 // matchedSet is the common table expression every total is read over: the
-// answer's own predicate, and every column a total may name.
-func matchedSet(where string) string {
+// answer's own set, and every column a total may name.
+func matchedSet(set taskSet) string {
 	return `WITH matched AS (SELECT t.id, t.spend_tokens, t.spend_turns,
 	                                  t.spend_rounds, t.spend_input,
 	                                  t.spend_output, t.spend_cache_read,
@@ -407,7 +413,7 @@ func matchedSet(where string) string {
 	                                  t.reassignments, t.reopens, t.depth, t.due_at,
 	                                  t.start_at, t.created_at, t.updated_at,
 	                                  t.finished_at
-	                             FROM tracker_tasks t WHERE ` + where + `)`
+	                             FROM ` + set.from + ` WHERE ` + set.where + `)`
 }
 
 // asFloat reads whatever the driver handed back for an aggregate.
