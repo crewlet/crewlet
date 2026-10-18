@@ -194,24 +194,26 @@ const (
 //
 // A PACK HELD DAMAGED IS INSTALLED AGAIN BY RENAMING OVER ITS FILES, NEVER
 // REMOVED FIRST: one at the wrong size, and one whose .idx, .rev or .pack a
-// check or a scrub found failing and that is still the file found so
-// (checked.still). Removed before its download, its objects were missing for
-// the whole of that download to every git process over the copy that opened
-// the pack meanwhile; renamed over, a process holding the old files reads the
-// inodes it opened, and one that opens the path afterwards reads the new
-// ones. Such a reinstall adds no pack to the counts; the incarnation's size
-// moves by the difference.
+// check, a scrub or a confirmed hint found failing and that is still the
+// file found so (checked.still). Removed before its download, its objects
+// were missing for the whole of that download to every git process over the
+// copy that opened the pack meanwhile; renamed over, a process holding the
+// old files reads the inodes it opened, and one that opens the path
+// afterwards reads the new ones. Such a reinstall adds no pack to the counts;
+// the incarnation's size moves by the difference.
 //
 // THE DERIVED FILES GO ONLY WHERE THEY MAY HAVE BEEN BUILT FROM THE DAMAGE —
-// once, before the first such placement: a pack whose .idx failed, or a pack
-// at the wrong size. The multi-pack-index and its bitmap record each object's
-// offset as the pack's .idx placed it, and the commit-graph was built reading
-// commits through it; a pack whose .pack or .rev alone failed is installed
-// again byte for byte — its name is its checksum, its bundle held to its row
-// — so every offset the index and the bitmap record, and every commit the
-// graph does, is the same over the new files. Dropped for a .pack's body, a
-// copy lost its bitmap for the whole rewrite over its history — and for good
-// where the node's memory no longer holds the bitmap's charge.
+// once, before the first such placement: a pack whose .idx failed, a pack at
+// the wrong size, or one a confirmed hint named whose .idx this process has
+// not held to its trailer (the hint names the bundle, not the file). The
+// multi-pack-index and its bitmap record each object's offset as the pack's
+// .idx placed it, and the commit-graph was built reading commits through it;
+// a pack whose .pack or .rev alone failed is installed again byte for byte
+// — its name is its checksum, its bundle held to its row — so every offset
+// the index and the bitmap record, and every commit the graph does, is the
+// same over the new files. Dropped for a .pack's body, a copy lost its
+// bitmap for the whole rewrite over its history — and for good where the
+// node's memory no longer holds the bitmap's charge.
 //
 // A REINSTALL IS A REPAIR, NEVER THE ROUND'S PRECONDITION: one whose download
 // fails — the object store unreachable, or a bundle it no longer holds — is
@@ -235,10 +237,20 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 	reinstall, _ := ck.still(inc.dir)
 	var todo []code.PackRow
 	// over is every pack this install places over files present, by its
-	// checksum, with what found it damaged and why that looked.
+	// checksum, with what found it damaged and why that looked; absent, in a
+	// request's forced round, every pack it installs that the directory
+	// LOST — held before this round (lost) and gone from it since — that
+	// request's repair as much as one installed again. A pack the rows name
+	// that the copy never held is a push it has not read yet, which repairs
+	// nothing.
 	over := map[string]reinstallWhy{}
+	absent := map[string]bool{}
 	now := c.now()
 	e.mu.Lock()
+	var before *state
+	if ck.forced {
+		before = inc.state
+	}
 	heldOff := inc.repair.heldOff(now)
 	e.mu.Unlock()
 	for _, p := range snap.packs {
@@ -253,10 +265,15 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 			// Its last download to install it again failed, and its backoff
 			// has not passed: left as it stands, its finding on the mark.
 			continue
+		case have == packWhole && f.hinted:
+			over[p.GitChecksum] = reinstallWhy{found: "hint", trigger: f.trigger,
+				drops: f.index || !c.indexVouched(e, inc, p.GitChecksum)}
 		case have == packWhole:
 			over[p.GitChecksum] = reinstallWhy{found: "trailer", trigger: f.trigger, drops: f.index}
 		case have == packWrongSize:
 			over[p.GitChecksum] = reinstallWhy{found: "size", trigger: ck.trigger, drops: true}
+		case ck.forced && lost(before, snap, p):
+			absent[p.GitChecksum] = true
 		}
 		todo = append(todo, p)
 	}
@@ -317,7 +334,7 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 			cancel(err)
 		})
 	}
-	var added, replaced atomic.Int64
+	var added, replaced, restored atomic.Int64
 	var failedMu sync.Mutex
 	share := semaphore.NewWeighted(int64(c.fetchConcurrency))
 	inHand := semaphore.NewWeighted(int64(installsPerFetch * c.fetchConcurrency))
@@ -410,12 +427,17 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 					return
 				}
 			}
-			if err := c.placePack(e, inc, packDir, staged, present); err != nil {
+			if err := c.placePack(e, inc, packDir, staged, present, absent[staged.p.GitChecksum]); err != nil {
 				fail(err)
 				return
 			}
 			if !present {
 				added.Add(1)
+				if absent[staged.p.GitChecksum] {
+					restored.Add(1)
+					c.log.Warn("code_cache_pack_reinstalled", "repo", e.id, "incarnation", inc.n,
+						"pack_id", staged.p.PackID, "found", "absent", "trigger", string(ck.trigger))
+				}
 				return
 			}
 			replaced.Add(1)
@@ -428,7 +450,7 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 	if err == nil && waited != nil {
 		err = fmt.Errorf("cache: sync %s: install: %w", e.id, waited)
 	}
-	out.added, out.replaced = int(added.Load()), int(replaced.Load())
+	out.added, out.replaced, out.restored = int(added.Load()), int(replaced.Load()), int(restored.Load())
 	if droppedOver.Load() {
 		out.dropped = gitproc.PartMultiPackIndex | gitproc.PartCommitGraph
 	}
@@ -443,9 +465,11 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 
 // reinstallWhy is why an install places a pack over files the directory
 // holds: what found them damaged — `trailer` (a check or a scrub held one to
-// its checksum) or `size` (a full round found one at another size than its
-// row's) — and the trigger of the check or scrub that looked, both logged
-// with code_cache_pack_reinstalled. drops: the derived files may have been
+// its checksum), `hint` (a confirmed hint named it: ConfirmHint held its
+// bytes to its row) or `size` (a full round found one at another size than
+// its row's) — and the trigger of the check or scrub that looked, both logged
+// with code_cache_pack_reinstalled; a request's forced round logs a pack the
+// directory lost (lost) as `absent`. drops: the derived files may have been
 // built from the damage, so they go before it is placed (install's doc).
 type reinstallWhy struct {
 	found   string
@@ -458,10 +482,38 @@ type reinstallWhy struct {
 // before the first of those.
 type installs struct {
 	added, replaced int
-	dropped         gitproc.Part
+	// restored is how many of the added were packs the copy had lost (lost):
+	// a request's forced round's repair, where the rest are pushes it had
+	// not yet read.
+	restored int
+	dropped  gitproc.Part
 	// failed is the packs, by checksum, it was to install again over their
 	// files and could not download: left as they stand.
 	failed []string
+}
+
+// indexVouched reports whether the .idx of inc's pack cs is one this process
+// wrote or held to its trailer, at the identity it has now: a hint's damage,
+// which the hint places only in the pack's bundle, is then not the index's.
+func (c *Cache) indexVouched(e *entry, inc *incarnation, cs string) bool {
+	rel := packFileRel(cs, ".idx")
+	id := lstatID(filepath.Join(inc.dir, rel))
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return vouchedAt(inc, rel, id)
+}
+
+// lost reports whether p, a pack the directory does not hold, is one the
+// incarnation held before the round began (st, its state then): its row added
+// on the log st was read from, at or before st's position — so the copy had
+// it and has lost it. A row added since is a push the copy has not yet read,
+// and no state (or another stream's) says nothing either way.
+func lost(st *state, snap snapshot, p code.PackRow) bool {
+	if st == nil || !st.StreamCreated.Equal(snap.streamCreated) || p.Added.IsZero() {
+		return false
+	}
+	newer, err := st.Position.Before(p.Added)
+	return err == nil && !newer
 }
 
 // packHeld is how much of a pack a directory holds.
@@ -517,8 +569,10 @@ func installed(packDir string, p code.PackRow, sized bool) (packHeld, error) {
 // the same order, so the .idx that names the new .pack is the last to land;
 // the pack is counted already, and the incarnation's size moves by what the
 // files it replaced held. What it placed is vouched either way: this process
-// wrote it, from a bundle held to its row (check.go).
-func (c *Cache) placePack(e *entry, inc *incarnation, packDir string, s *stagedPack, over bool) error {
+// wrote it, from a bundle held to its row (check.go). A placement over damaged
+// files, or of a pack the copy had lost, is a REPAIR (incarnation.repairWrite):
+// a request that failed before it may have failed on what it replaced.
+func (c *Cache) placePack(e *entry, inc *incarnation, packDir string, s *stagedPack, over, repairs bool) error {
 	defer s.remove(c)
 	if err := c.syncStaged(s); err != nil {
 		return fmt.Errorf("cache: sync %s: install pack %s: %w", e.id, s.p.PackID, err)
@@ -544,6 +598,9 @@ func (c *Cache) placePack(e *entry, inc *incarnation, packDir string, s *stagedP
 		inc.objects += s.p.Objects
 	}
 	c.setSize(inc, inc.diskBytes+s.p.Size-was, inc.metaBytes)
+	if over || repairs {
+		repaired(inc)
+	}
 	// In place: a backoff its download earned while it could not be fetched
 	// is over (repairMark.fetchFailed).
 	delete(inc.repair.fetchFailed, s.p.GitChecksum)

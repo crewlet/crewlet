@@ -316,12 +316,12 @@ type incarnation struct {
 	// due (scrub.go).
 	inherited bool
 	// scrubbing: its scrub is running now, asked at scrubRunning: a report
-	// meanwhile is answered by one a report asked for, which hashes every
-	// file it holds, and ends a routine one to run as a report's in its
-	// place (scrub.go). scrubDue is why its next scrub is due AT ONCE — zero
-	// when only its interval makes it due — and scrubAsked when it was made
-	// so: the scrubber takes the due-at-once by evidence, and within each
-	// the oldest first.
+	// meanwhile is answered by one evidence asked for (a report's, a
+	// request's), which hashes every file it holds, and ends a routine one
+	// to run as a report's in its place (scrub.go). scrubDue is why its next
+	// scrub is due AT ONCE — zero when only its interval makes it due — and
+	// scrubAsked when it was made so: the scrubber takes the due-at-once by
+	// evidence, and within each the oldest first.
 	scrubbing    bool
 	scrubRunning scrubPrio
 	scrubDue     scrubWhy
@@ -334,6 +334,38 @@ type incarnation struct {
 	// anything: ScrubCooldown runs from them. All on Options.Now's clock.
 	scrubBase, scrubbedAt time.Time
 	scrubFound            bool
+	// scrubBegan and scrubEnded are when its last scrub began and ended, as
+	// time.Now() readings compared on the monotonic clock with repairWrite
+	// and a failed request's Began; scrubWhole is the packs that scrub found
+	// whole, all three files, by checksum. A request's escalation
+	// (Cache.escalate) takes them for a scrub of its own when that scrub
+	// began after the request failed, or found nothing within ScrubCooldown
+	// with no repair written since — the same bytes, which would be found
+	// whole again.
+	scrubBegan, scrubEnded time.Time
+	scrubWhole             []string
+	// repairWrite is when this process last wrote into it what can END a
+	// pack's or an object's failure — a pack installed again over its files,
+	// a pack it had lost installed again, a derived file dropped (a
+	// multi-pack-index or a graph that placed an object wrongly is read
+	// around once it is gone) — as a time.Now() reading, compared on the
+	// monotonic clock with a failed request's Began (the guard of a
+	// request's repair, rebuild.go). NOTHING ELSE: a push's pack, an
+	// adoption and the maintainer's index or graph add what the failing
+	// request never needed, and leave whatever failed it as it was — taken
+	// for repairs, a repository taking pushes answered every request's
+	// damage "as it stands" and never repaired it.
+	repairWrite time.Time
+	// forcedAt and forcedEnded are when its last FORCED round — a failed
+	// request's in-place repair, every index file held to its trailer —
+	// ended having repaired nothing, on Options.Now's clock and as a
+	// time.Now() reading; zero when that round repaired something. A
+	// request failing within ScrubCooldown of it, with no repair written
+	// since, is not given another (rebuild.go): the same files would hash
+	// the same, and each forced round reads the rows whole and holds every
+	// reader of the repository while it hashes a quarter of the copy's
+	// bytes.
+	forcedAt, forcedEnded time.Time
 	// lastUsed is when a reader last took or released it, or made a push's
 	// scratch over it: set as the incarnation is made or read at boot, and
 	// moved only by used, which wakes the scrubber at the first use since
@@ -343,6 +375,11 @@ type incarnation struct {
 	// moved forward by the janitor's recordUse.
 	stamped time.Time
 }
+
+// repaired stamps that this process has just written into inc what can end a
+// pack's or an object's failure (incarnation.repairWrite), as a time.Now()
+// reading; e.mu is held.
+func repaired(inc *incarnation) { inc.repairWrite = time.Now() }
 
 // fromState sets inc's in-memory fields from a state read at boot.
 func (inc *incarnation) fromState(st *state) {

@@ -96,15 +96,16 @@ func TestAHintIsConfirmedAgainstThePacksRow(t *testing.T) {
 	noRows := strings.Repeat("cd", 20)
 	asks := func(s cache.Synced, round string) {
 		t.Helper()
-		if reason, ok := c.ConfirmHint(t.Context(), s, gitproc.Hint{Object: object, Pack: damagedRow.GitChecksum}); !ok ||
-			reason != cache.RebuildCorrupt {
-			t.Errorf("%s: a hint naming a pack not its row's: ConfirmHint = %q, %v; want corrupt", round, reason, ok)
+		if f, ok := c.ConfirmHint(t.Context(), s, gitproc.Hint{Object: object, Pack: damagedRow.GitChecksum}); !ok ||
+			f.Reason != cache.RebuildCorrupt || !slices.Equal(f.Packs, []string{damagedRow.GitChecksum}) {
+			t.Errorf("%s: a hint naming a pack not its row's: ConfirmHint = %+v, %v; want corrupt naming the pack",
+				round, f, ok)
 		}
-		if reason, ok := c.ConfirmHint(t.Context(), s, gitproc.Hint{Object: object, Pack: soundRow.GitChecksum}); ok {
-			t.Errorf("%s: a hint naming a sound pack: ConfirmHint = %q, want no repair", round, reason)
+		if f, ok := c.ConfirmHint(t.Context(), s, gitproc.Hint{Object: object, Pack: soundRow.GitChecksum}); ok {
+			t.Errorf("%s: a hint naming a sound pack: ConfirmHint = %+v, want no repair", round, f)
 		}
-		if reason, ok := c.ConfirmHint(t.Context(), s, gitproc.Hint{Object: object, Pack: noRows}); ok {
-			t.Errorf("%s: a hint naming no row's pack: ConfirmHint = %q, want no repair", round, reason)
+		if f, ok := c.ConfirmHint(t.Context(), s, gitproc.Hint{Object: object, Pack: noRows}); ok {
+			t.Errorf("%s: a hint naming no row's pack: ConfirmHint = %+v, want no repair", round, f)
 		}
 	}
 	asks(s, "first")
@@ -164,8 +165,8 @@ func TestAHintIsConfirmedAgainstThePacksRow(t *testing.T) {
 	if err := os.Rename(idx+".tmp", idx); err != nil {
 		t.Fatal(err)
 	}
-	if reason, ok := c.ConfirmHint(t.Context(), s2, gitproc.Hint{Object: object, Pack: soundRow.GitChecksum}); ok {
-		t.Errorf("a hint naming a sound pack whose index was replaced: ConfirmHint = %q, want no repair", reason)
+	if f, ok := c.ConfirmHint(t.Context(), s2, gitproc.Hint{Object: object, Pack: soundRow.GitChecksum}); ok {
+		t.Errorf("a hint naming a sound pack whose index was replaced: ConfirmHint = %+v, want no repair", f)
 	}
 	if got := log.hashed(); len(got) != 3 || got[2] != soundRow.GitChecksum {
 		t.Errorf("hashed %v, want the sound pack hashed again once its files were replaced", got)
@@ -233,8 +234,8 @@ func TestOneHashAPackHowManyHintsAskAtOnce(t *testing.T) {
 		wg.Go(func() {
 			ask, done := context.WithTimeout(t.Context(), 30*time.Second)
 			defer done()
-			reason, ok := c.ConfirmHint(ask, s, hint)
-			answers <- ok && reason == cache.RebuildCorrupt
+			f, ok := c.ConfirmHint(ask, s, hint)
+			answers <- ok && f.Reason == cache.RebuildCorrupt
 		})
 	}
 	// Every confirmation has long since reached the pack's check: what is
@@ -281,8 +282,8 @@ func TestAHintsHashRunsInAReadSlot(t *testing.T) {
 	var free []int
 	log := hashLog{during: func() { free = append(free, w.pool.Free(gitproc.ClassRead)) }}
 	cache.SetHashHook(c, log.hook)
-	if reason, ok := c.ConfirmHint(t.Context(), s, gitproc.Hint{Object: strings.Repeat("ab", 20), Pack: row.GitChecksum}); ok {
-		t.Fatalf("a hint naming a sound pack: ConfirmHint = %q, want no repair", reason)
+	if f, ok := c.ConfirmHint(t.Context(), s, gitproc.Hint{Object: strings.Repeat("ab", 20), Pack: row.GitChecksum}); ok {
+		t.Fatalf("a hint naming a sound pack: ConfirmHint = %+v, want no repair", f)
 	}
 	if len(free) != 1 || free[0] != slots-1 {
 		t.Errorf("inside the hash the read lane had %v of %d slots free, want %d", free, slots, slots-1)
@@ -316,8 +317,8 @@ func TestAHintReadsOnlyThePacksOfItsRows(t *testing.T) {
 	object := strings.Repeat("ab", 20)
 
 	before := len(w.log.callsOf(repo))
-	if reason, ok := c.ConfirmHint(t.Context(), s, gitproc.Hint{Object: object, Pack: row.GitChecksum}); ok {
-		t.Fatalf("a hint naming a sound pack: ConfirmHint = %q, want no repair", reason)
+	if f, ok := c.ConfirmHint(t.Context(), s, gitproc.Hint{Object: object, Pack: row.GitChecksum}); ok {
+		t.Fatalf("a hint naming a sound pack: ConfirmHint = %+v, want no repair", f)
 	}
 	calls := w.log.callsOf(repo)[before:]
 	if len(calls) != 1 || calls[0].Level != statelog.ReadSession || calls[0].Page != 1 {
@@ -326,8 +327,8 @@ func TestAHintReadsOnlyThePacksOfItsRows(t *testing.T) {
 
 	before = len(w.log.callsOf(repo))
 	noRows := strings.Repeat("cd", 20)
-	if reason, ok := c.ConfirmHint(t.Context(), s, gitproc.Hint{Object: object, Pack: noRows}); ok {
-		t.Fatalf("a hint naming no row's pack: ConfirmHint = %q, want no repair", reason)
+	if f, ok := c.ConfirmHint(t.Context(), s, gitproc.Hint{Object: object, Pack: noRows}); ok {
+		t.Fatalf("a hint naming no row's pack: ConfirmHint = %+v, want no repair", f)
 	}
 	calls = w.log.callsOf(repo)[before:]
 	if len(calls) != 2 || calls[0].Level != statelog.ReadSession || calls[1].Level != statelog.ReadLinearizable {

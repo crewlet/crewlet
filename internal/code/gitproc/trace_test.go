@@ -516,6 +516,33 @@ func TestAHintIsOnlyTheOneAnchoredMessage(t *testing.T) {
 			}
 		})
 	}
+	// THE SAME SENTENCE AS THE ROW (2.40 to 2.55) names the same pack: a hint
+	// beside the row's damage, under the same anchoring — so the repair can
+	// name the pack the row says is damaged. Mutation: read hints only from
+	// "%s" events.
+	const row = `packed object %s (stored in %s) is corrupt`
+	for _, tc := range []struct {
+		name    string
+		message string
+		hints   int
+	}{
+		{"upload-pack's relative path", relative, 1},
+		{"rev-list's absolute path", absolute, 1},
+		{"another repository's pack", sentence("/srv/crewlet/git/repos/0190c3a2.2.git/objects/pack/pack-" + pack +
+			".pack"), 0},
+		{"text after", relative + " x", 0},
+	} {
+		t.Run("the row/"+tc.name, func(t *testing.T) {
+			tr, kind, damage := gitproc.ReadTrace(dir, stream(errorLine(2, row, tc.message)), 0)
+			if len(tr.Hints) != tc.hints || (tc.hints == 1 && tr.Hints[0] != want) {
+				t.Errorf("hints %v, want %d naming %v", tr.Hints, tc.hints, want)
+			}
+			var dmg *gitproc.Damage
+			if !errors.Is(kind, gitproc.ErrCorrupt) || !errors.As(damage, &dmg) || dmg.Parts&gitproc.PartPack == 0 {
+				t.Errorf("the row's run is kind %v, damage %v; want ErrCorrupt naming a pack", kind, damage)
+			}
+		})
+	}
 	// A run that names a pack with no repository of its own hints nothing.
 	if tr, _, _ := gitproc.ReadTrace("", stream(errorLine(2, "%s", relative)), 0); len(tr.Hints) != 0 {
 		t.Errorf("a run with no Cmd.Dir hinted %v", tr.Hints)

@@ -68,6 +68,10 @@ func TestARebuildReplacesTheDirectoryUnderItsReaders(t *testing.T) {
 // damaged directory at once share one rebuild — one whole read and one
 // download of each pack — and a request that failed on an incarnation already
 // replaced is answered from the current one with no rebuild at all.
+//
+// Driven through the whole rebuild itself (cache.RebuildWhole): a request
+// reaches it only once its in-place round and its scrub found nothing to
+// fetch again (TestARequestsPackDamageIsRepairedInPlaceFirst).
 func TestManyFailuresOnOneCacheCostOneRebuild(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -111,7 +115,7 @@ func TestManyFailuresOnOneCacheCostOneRebuild(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			answers[i], errs[i] = c.Rebuild(context.Background(), failed, cache.Failure{Reason: cache.RebuildMissing})
+			answers[i], errs[i] = cache.RebuildWhole(context.Background(), c, failed, cache.Failure{Reason: cache.RebuildMissing})
 		}()
 	}
 	wg.Wait()
@@ -133,7 +137,7 @@ func TestManyFailuresOnOneCacheCostOneRebuild(t *testing.T) {
 	}
 
 	before, opens = wholeReads(), w.objects.total()
-	late, err := c.Rebuild(t.Context(), failed, cache.Failure{Reason: cache.RebuildMissing})
+	late, err := cache.RebuildWhole(t.Context(), c, failed, cache.Failure{Reason: cache.RebuildMissing})
 	if err != nil {
 		t.Fatalf("a rebuild of an incarnation already replaced: %v", err)
 	}
@@ -272,6 +276,10 @@ func TestWhatTheMaintainerWritesEndsWhatARebuildRead(t *testing.T) {
 // day apart, each repaired, then an attempt the estate fails transiently: the
 // next is refused inside the cooldown and allowed at it, where a line that
 // counted every rebuild the process ever made would wait eight times as long.
+//
+// Driven through the whole rebuild itself (cache.RebuildWhole): a request
+// reaches it only once its in-place round and its scrub found nothing to
+// fetch again (TestARequestsPackDamageIsRepairedInPlaceFirst).
 func TestALineOfRebuildsEndsWhenTheAskingStops(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -281,7 +289,7 @@ func TestALineOfRebuildsEndsWhenTheAskingStops(t *testing.T) {
 	c := w.open(t, clk.on)
 	s := w.sync(t, c, repo)
 	for n := 2; n <= 4; n++ {
-		next, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildCorrupt})
+		next, err := cache.RebuildWhole(t.Context(), c, s, cache.Failure{Reason: cache.RebuildCorrupt})
 		if err != nil {
 			t.Fatalf("the rebuild of incident %d, a quiet day after the last: %v", n-1, err)
 		}
@@ -297,20 +305,20 @@ func TestALineOfRebuildsEndsWhenTheAskingStops(t *testing.T) {
 	unreachable := errors.New("the estate is unreachable")
 	w.log.set(func(f *fakeLog) { f.hook = func(fakeCall) error { return unreachable } })
 	failedAt := clk.Now()
-	if _, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildMissing}); !errors.Is(err, unreachable) {
+	if _, err := cache.RebuildWhole(t.Context(), c, s, cache.Failure{Reason: cache.RebuildMissing}); !errors.Is(err, unreachable) {
 		t.Fatalf("a rebuild whose whole read failed = %v, want the read's error", err)
 	}
 	w.log.set(func(f *fakeLog) { f.hook = nil })
 
 	clk.Set(failedAt.Add(cache.RebuildCooldown - time.Minute))
-	if _, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildMissing}); !errors.Is(err, cache.ErrRebuildRefused) {
+	if _, err := cache.RebuildWhole(t.Context(), c, s, cache.Failure{Reason: cache.RebuildMissing}); !errors.Is(err, cache.ErrRebuildRefused) {
 		t.Fatalf("a rebuild inside the cooldown of a failed first attempt = %v, want ErrRebuildRefused", err)
 	}
 	if got := counter(w.rec, metrics.CodeCacheRebuildRefusals, "rule", "cooldown"); got != 1 {
 		t.Errorf("%s{rule=cooldown} = %d, want the one refusal", metrics.CodeCacheRebuildRefusals, got)
 	}
 	clk.Set(failedAt.Add(cache.RebuildCooldown))
-	again, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildMissing})
+	again, err := cache.RebuildWhole(t.Context(), c, s, cache.Failure{Reason: cache.RebuildMissing})
 	if err != nil {
 		t.Fatalf("a rebuild a cooldown after a failed first attempt at new damage: %v", err)
 	}
@@ -421,6 +429,10 @@ func TestARefusedRebuildIsLoggedOnceACooldown(t *testing.T) {
 // A FAILED REBUILD KEEPS THE OLD CACHE: the incarnation it was building goes
 // into trash/ and the one it would have replaced is still current and still
 // serving — and the attempt started the cooldown, success or not.
+//
+// Driven through the whole rebuild itself (cache.RebuildWhole): a request
+// reaches it only once its in-place round and its scrub found nothing to
+// fetch again (TestARequestsPackDamageIsRepairedInPlaceFirst).
 func TestAFailedRebuildKeepsTheOldCache(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -434,7 +446,7 @@ func TestAFailedRebuildKeepsTheOldCache(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := c.Rebuild(t.Context(), failed, cache.Failure{Reason: cache.RebuildMissing})
+	_, err := cache.RebuildWhole(t.Context(), c, failed, cache.Failure{Reason: cache.RebuildMissing})
 	var missing *cache.ErrPackMissing
 	if !errors.As(err, &missing) || missing.Pack.PackID != lost.PackID {
 		t.Fatalf("a rebuild the store cannot complete = %v, want *ErrPackMissing naming %s", err, lost.PackID)
@@ -454,7 +466,7 @@ func TestAFailedRebuildKeepsTheOldCache(t *testing.T) {
 	if got := trashed(t, w, repo+".2.git"); len(got) != 1 {
 		t.Errorf("trash/ holds %v, want the partial incarnation 2", names(t, w.path("trash")))
 	}
-	if _, err = c.Rebuild(t.Context(), failed, cache.Failure{Reason: cache.RebuildMissing}); !errors.Is(err, cache.ErrRebuildRefused) {
+	if _, err = cache.RebuildWhole(t.Context(), c, failed, cache.Failure{Reason: cache.RebuildMissing}); !errors.Is(err, cache.ErrRebuildRefused) {
 		t.Errorf("a rebuild straight after a failed one = %v, want ErrRebuildRefused", err)
 	}
 }
@@ -465,6 +477,10 @@ func TestAFailedRebuildKeepsTheOldCache(t *testing.T) {
 // incarnation it would have replaced is still current and still serving, and
 // the sync is answered from it by an ordinary round rather than told of
 // somebody else's failed repair.
+//
+// Driven through the whole rebuild itself (cache.RebuildWhole): a request
+// reaches it only once its in-place round and its scrub found nothing to
+// fetch again (TestARequestsPackDamageIsRepairedInPlaceFirst).
 func TestAFailedRebuildAnswersOnlyItsOwnCallers(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -506,7 +522,7 @@ func TestAFailedRebuildAnswersOnlyItsOwnCallers(t *testing.T) {
 	}()
 	eventually(t, "the second sync queues behind the held round", func() bool { return cache.Waiting(c, repo) == 2 })
 	go func() {
-		s, err := c.Rebuild(context.Background(), failed, cache.Failure{Reason: cache.RebuildMissing})
+		s, err := cache.RebuildWhole(context.Background(), c, failed, cache.Failure{Reason: cache.RebuildMissing})
 		rebuilt <- answer{s, err}
 	}()
 	eventually(t, "the rebuild joins the queued round", func() bool { return cache.Waiting(c, repo) == 3 })

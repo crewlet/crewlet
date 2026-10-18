@@ -75,6 +75,15 @@ func headValid(raw []byte) bool {
 // entry's mu with the digest that describes the new file — so Verify reads
 // the file and its digest together — and the incarnation synced once, before
 // the state that claims the position may be renamed in.
+//
+// A FULL ROUND WHOSE packed-refs IS ALREADY, BYTE FOR BYTE, THE ONE IT STAGED
+// leaves it in place and reports nothing written: the file on disk is hashed
+// against the staged file's digest, so damage or an edit is still put right,
+// while a copy holding exactly its image is not written into. Reported as
+// written, every full round "wrote into" its copy whatever it changed, so the
+// in-place round a failed request asks first (Cache.Rebuild) made every copy
+// a rebuild had just read look moved, and the rule that refuses a rebuild of
+// what the last one read (rebuildRefusal's unchanged) never held.
 func (c *Cache) writeRefs(ctx context.Context, e *entry, inc *incarnation, snap snapshot) (bool, error) {
 	e.mu.Lock()
 	noState, branchMoved := inc.state == nil, inc.repo.DefaultBranch != snap.repo.DefaultBranch
@@ -114,7 +123,14 @@ func (c *Cache) writeRefs(ctx context.Context, e *entry, inc *incarnation, snap 
 			return false, fmt.Errorf("cache: sync %s: refs: %w", e.id, err)
 		}
 		written = out
-		staged = append(staged, placement{staged: path, dst: filepath.Join(inc.dir, "packed-refs")})
+		if snap.full && holdsDigest(filepath.Join(inc.dir, "packed-refs"), out.digest) {
+			// Already the file it would write: nothing to rename in.
+			if err := removeStaged(path, nil); err != nil {
+				return false, fmt.Errorf("cache: sync %s: refs: %w", e.id, err)
+			}
+		} else {
+			staged = append(staged, placement{staged: path, dst: filepath.Join(inc.dir, "packed-refs")})
+		}
 	}
 	if writeHead {
 		path, err := c.stage(hostbox.FileMode, func(f *os.File) error {
@@ -133,6 +149,7 @@ func (c *Cache) writeRefs(ctx context.Context, e *entry, inc *incarnation, snap 
 	}
 
 	e.mu.Lock()
+	placedRefs := false
 	for i := range staged {
 		if err := c.place(staged[i].staged, staged[i].dst); err != nil {
 			e.mu.Unlock()
@@ -140,16 +157,37 @@ func (c *Cache) writeRefs(ctx context.Context, e *entry, inc *incarnation, snap 
 			return false, fmt.Errorf("cache: sync %s: refs: %w", e.id, err)
 		}
 		staged[i].staged = ""
+		placedRefs = placedRefs || filepath.Base(staged[i].dst) == "packed-refs"
 	}
 	if writePacked {
 		inc.refsDigest, inc.refs = written.digest, written.refs
+	}
+	if placedRefs {
 		c.setSize(inc, inc.diskBytes+written.bytes-written.was, inc.metaBytes)
 	}
 	e.mu.Unlock()
+	if len(staged) == 0 {
+		return false, nil
+	}
 	if err := syncDir(inc.dir); err != nil {
 		return false, fmt.Errorf("cache: sync %s: refs: %w", e.id, err)
 	}
 	return true, nil
+}
+
+// holdsDigest reports whether the file at path hashes to digest (SHA-256,
+// hex) — false for any file that cannot be read whole.
+func holdsDigest(path, digest string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }() // read-only: what was read is the answer
+	sum := sha256.New()
+	if _, err := io.Copy(sum, f); err != nil {
+		return false
+	}
+	return hex.EncodeToString(sum.Sum(nil)) == digest
 }
 
 // placement is a staged file and where it goes; staged is "" once placed.

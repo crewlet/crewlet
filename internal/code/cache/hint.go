@@ -87,16 +87,21 @@ const (
 )
 
 // ConfirmHint holds the pack h nominates — a pack of s's incarnation, by
-// its checksum — to the row that names it, and answers [RebuildCorrupt]
-// when its bytes are not the row's, and no repair otherwise: the pack sound,
-// no row naming it, no verdict reached, s not this cache's, or ctx ended
-// first (the hash goes on, for the next hint). See the paragraphs above for
-// what a hash costs and how long it is kept.
-func (c *Cache) ConfirmHint(ctx context.Context, s Synced, h gitproc.Hint) (RebuildReason, bool) {
+// its checksum — to the row that names it, and answers the repair of that
+// pack when its bytes are not the row's — [RebuildCorrupt] naming it in
+// Failure.Packs, which [Cache.Rebuild] installs again IN PLACE, one GET — and
+// no repair otherwise: the pack sound, no row naming it, no verdict reached,
+// s not this cache's, or ctx ended first (the hash goes on, for the next
+// hint). The caller sets Failure.Began from the run that recorded h. See the
+// paragraphs above for what a hash costs and how long it is kept.
+func (c *Cache) ConfirmHint(ctx context.Context, s Synced, h gitproc.Hint) (Failure, bool) {
 	if c.handedOut(s, "a hint's confirmation") != nil {
-		return "", false
+		return Failure{}, false
 	}
-	return c.confirmHint(ctx, s.entry, s.inc, h, nil)
+	if !c.confirmHint(ctx, s.entry, s.inc, h, nil) {
+		return Failure{}, false
+	}
+	return Failure{Reason: RebuildCorrupt, Packs: []string{h.Pack}}, true
 }
 
 // hinted is a round's own git process, in inc, failing with hints and no
@@ -136,8 +141,8 @@ func hintsOf(err error) []gitproc.Hint {
 // git's failure.
 func (c *Cache) confirmRound(e *entry, h *hinted) error {
 	for _, hint := range h.hints {
-		if reason, ok := c.confirmHint(c.life, e, h.inc, hint, h.rows); ok {
-			return &damaged{inc: h.inc, name: h.name, reason: reason, swept: h.full, err: h.err}
+		if c.confirmHint(c.life, e, h.inc, hint, h.rows) {
+			return &damaged{inc: h.inc, name: h.name, reason: RebuildCorrupt, swept: h.full, err: h.err}
 		}
 	}
 	return h.err
@@ -156,30 +161,28 @@ type packCheck struct {
 
 // confirmHint is ConfirmHint's body over inc: it waits, for as long as ctx,
 // for the verdict on h's pack — one reached on the pack's present files, a
-// hash of them in flight, or one it starts (packCheck) — and answers it.
-// rows is a full read of inc's rows the caller holds, or nil.
+// hash of them in flight, or one it starts (packCheck) — and answers whether
+// it confirmed the pack damaged. rows is a full read of inc's rows the caller
+// holds, or nil.
 func (c *Cache) confirmHint(ctx context.Context, e *entry, inc *incarnation, h gitproc.Hint,
-	rows *snapshot) (RebuildReason, bool) {
+	rows *snapshot) bool {
 
 	//nolint:contextcheck // The hash runs on the cache's lifetime, never ctx's: a caller that leaves must leave it running for the next (see the file's doc).
 	check := c.packCheck(e, inc, h, rows)
 	if check == nil {
 		// The cache is stopping: no hash starts, and nothing is repaired.
 		c.countHint(hintUnread)
-		return "", false
+		return false
 	}
 	select {
 	case <-check.done:
 	case <-ctx.Done():
 		c.countHint(hintGone)
 		c.log.Debug("code_cache_hint_gone", "repo", e.id, "pack", h.Pack, "error", context.Cause(ctx))
-		return "", false
+		return false
 	}
 	c.countHint(check.verdict)
-	if check.verdict == hintConfirmed {
-		return RebuildCorrupt, true
-	}
-	return "", false
+	return check.verdict == hintConfirmed
 }
 
 // packCheck is the check whose verdict answers a hint about h's pack in inc:

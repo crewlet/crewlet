@@ -90,6 +90,13 @@ const (
 	// triggerReport: a scrub a git process's report made due — a pack or an
 	// object it could not read, a pack it named in words, or a crash.
 	triggerReport checkTrigger = "report"
+	// triggerForced: a request's in-place round (Cache.Rebuild), holding
+	// every index file to its trailer whatever its vouch.
+	triggerForced checkTrigger = "forced"
+	// triggerRequest: what a request's in-place round could not repair —
+	// the scrub it runs next (Cache.escalate) — and a pack a confirmed hint
+	// named, installed again without a hash of the cache's own.
+	triggerRequest checkTrigger = "request"
 )
 
 // hashVerdict is what hashing one file concluded: sound, damaged, or NONE — the
@@ -150,6 +157,9 @@ type checkedFile struct {
 	// scrubbed: a scrub found it (scrub.go), not a round's check — the two
 	// share the trigger `first`.
 	scrubbed bool
+	// hinted: a pack a confirmed hint named (Failure.Packs) — its bytes held
+	// to its row by ConfirmHint's hash, not to its trailer by the cache's.
+	hinted bool
 }
 
 // by is what a derived file's drop for this finding is logged as asked by:
@@ -590,9 +600,12 @@ func vouchedRels(inc *incarnation) []string {
 // checked is what a check found: why it ran, how many files were sound, every
 // file found damaged at the identity it was hashed at — a pack's .idx or .rev,
 // whose pack the install puts in again, or a derived file, which the round
-// drops (still) — and the bytes read.
+// drops (still) — and the bytes read. forced: a request's in-place round asked
+// it (Cache.Rebuild), so a pack the rows name and the directory lacks is
+// installed as that request's repair.
 type checked struct {
 	trigger checkTrigger
+	forced  bool
 	sound   int
 	damaged []checkedFile
 	bytes   int64
@@ -609,17 +622,26 @@ type checked struct {
 // The round holds the entry's write lock and has stopped the maintainer, so
 // nothing else writes a file it hashes.
 //
+// FORCED by a request's failure (Cache.Rebuild), it holds every file to its
+// trailer whether or not it is vouched for: what failed the request may be
+// damage that arrived after this process checked a file, which no vouch sees.
+//
 // (Not `check`: verify.go's Verify body has that name.)
-func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, snap snapshot) (checked, error) {
+func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, snap snapshot, forced bool) (checked,
+	error) {
+
 	e.mu.Lock()
 	trigger := triggerUnvouched
-	if !inc.checkedOnce {
+	switch {
+	case !inc.checkedOnce:
 		trigger = triggerFirst
+	case forced:
+		trigger = triggerForced
 	}
 	e.mu.Unlock()
 	began := time.Now()
 	var (
-		ck    = checked{trigger: trigger}
+		ck    = checked{trigger: trigger, forced: forced}
 		files []checkedFile
 		wants = map[string]expect{}
 	)
@@ -663,7 +685,7 @@ func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, sn
 	for _, f := range files {
 		path := filepath.Join(inc.dir, f.rel)
 		e.mu.Lock()
-		skip := vouchedAt(inc, f.rel, lstatID(path))
+		skip := !forced && vouchedAt(inc, f.rel, lstatID(path))
 		e.mu.Unlock()
 		if skip {
 			continue
@@ -725,14 +747,14 @@ func (c *Cache) countCheck(kind fileKind, outcome checkOutcome, trigger checkTri
 	}
 }
 
-// still is what of ck's findings — its own and a scrub's (repairMark.found)
-// — the incarnation at dir still holds at the identity each was hashed at:
-// the packs to install again, by checksum, each with what found it, and the
-// derived parts to drop, each with what asked. A REPAIR ACTS ONLY ON THE FILE
-// ITS FINDING NAMES: one replaced or removed since its hash — rewritten by the
-// maintainer, put right by an earlier repair — is no finding any more, and its
-// successor, which no hash of this process read, is checked by the next round
-// or the next scrub.
+// still is what of ck's findings — its own, a scrub's (repairMark.found) and
+// a confirmed hint's (repairMark.reinstall) — the incarnation at dir still
+// holds at the identity each was found at: the packs to install again, by
+// checksum, each with its first finding, and the derived parts to drop, each
+// with what asked. A REPAIR ACTS ONLY ON THE FILE ITS FINDING NAMES: one
+// replaced or removed since its hash — rewritten by the maintainer, put right
+// by an earlier repair — is no finding any more, and its successor, which no
+// hash of this process read, is checked by the next round or the next scrub.
 func (ck checked) still(dir string) (map[string]packFinding, partDrops) {
 	packs := map[string]packFinding{}
 	var drops partDrops
@@ -752,6 +774,7 @@ func (ck checked) still(dir string) (map[string]packFinding, partDrops) {
 		if !ok {
 			p.trigger = f.trigger
 		}
+		p.hinted = p.hinted || f.hinted
 		p.index = p.index || f.kind == fileIdx
 		packs[m[1]] = p
 	}
@@ -759,11 +782,12 @@ func (ck checked) still(dir string) (map[string]packFinding, partDrops) {
 }
 
 // packFinding is what of one pack's files the findings still true of it say:
-// the trigger of the first that found it, and whether its .idx failed — the
-// derived files may have been built from that index (install).
+// the trigger of the first that found it, whether a confirmed hint named it
+// (its bundle, not a file of it), and whether its .idx failed — the derived
+// files may have been built from that index (install).
 type packFinding struct {
-	trigger checkTrigger
-	index   bool
+	trigger       checkTrigger
+	hinted, index bool
 }
 
 // findings is the sentences a check's damaged files are reported to a
@@ -771,6 +795,10 @@ type packFinding struct {
 func (ck checked) findings() []string {
 	out := make([]string, 0, len(ck.damaged))
 	for _, f := range ck.damaged {
+		if f.hinted {
+			// No check's finding: a request's, handed on by its repair.
+			continue
+		}
 		action := "dropped it to be written again"
 		if _, _, derived := derivedFile(f.rel); !derived {
 			action = "fetched its pack again"

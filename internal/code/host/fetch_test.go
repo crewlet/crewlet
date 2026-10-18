@@ -455,7 +455,7 @@ esac`)
 // protocol-0 advertisement, the maintainer — reads around an index it cannot
 // load and reports it, and the scrub that report makes due may repair the
 // copy first, in place: then the fetch meets nothing and retries nothing.
-func TestACorruptCacheIsRebuiltAndTheFetchRetried(t *testing.T) {
+func TestACorruptCacheIsRepairedAndTheFetchRetried(t *testing.T) {
 	for _, v := range []int{0, 2} {
 		t.Run(fmt.Sprintf("protocol=%d", v), func(t *testing.T) {
 			var l logs
@@ -470,7 +470,7 @@ func TestACorruptCacheIsRebuiltAndTheFetchRetried(t *testing.T) {
 				t.Fatalf("a clone of the damaged cache: %v\n%s", err, stderr)
 			}
 			if got := p.Head(clone); got != head {
-				t.Errorf("the clone after the rebuild is at %s, want %s", got, head)
+				t.Errorf("the clone after the repair is at %s, want %s", got, head)
 			}
 			retried := l.count("code_fetch_retried", `"reason":"corrupt"`)
 			switch {
@@ -483,24 +483,32 @@ func TestACorruptCacheIsRebuiltAndTheFetchRetried(t *testing.T) {
 	}
 }
 
-// UPLOAD-PACK'S OWN DAMAGE IS REPAIRED UNDER THE REQUEST THAT MET IT. A cache
-// whose tip commit's pack entry has its compressed bytes damaged (G) passes
-// the check of a fetch's wants — cat-file reads only the entry's header and
-// the index, and names nothing — and upload-pack then dies parsing the want,
-// BEFORE it writes its pack. Its trace names the damage by git's own format,
-// so the cache is rebuilt from the object store and the fetch run again over
-// the same request and served, under either protocol. Read only from its
-// answer's side band, as before, upload-pack's own failure was answered in
-// git's words on every fetch of such a copy until a later request elsewhere
-// or an operator repaired it.
+// UPLOAD-PACK'S OWN DAMAGE IS REPAIRED UNDER THE REQUEST THAT MET IT, IN
+// PLACE. A cache whose tip commit's pack entry has its compressed bytes
+// damaged (G) passes the check of a fetch's wants — cat-file reads only the
+// entry's header and the index, and names nothing — and upload-pack then dies
+// parsing the want, BEFORE it writes its pack. Its trace names the damage by
+// git's own format, so the cache repairs it and the fetch runs again over the
+// same request and is served, under either protocol: the one damaged pack
+// fetched again over its files, the SAME incarnation answering — never the
+// whole repository downloaded into a new one. From 2.55 git names the pack
+// (the row naming a corrupt packed object, or its sentence through "%s" from
+// 2.56: a hint the host confirms against its row), and the request's in-place
+// round installs it again; before 2.55 it names none, the in-place round
+// finds every index file sound, and the scrub it runs for the request finds
+// the pack's body failing its trailer. Read only from its answer's side band,
+// as before, upload-pack's own failure was answered in git's words on every
+// fetch of such a copy until a later request elsewhere or an operator
+// repaired it.
 //
 // The retry is logged naming upload-pack's failure: had the wants check met
 // the damage, it would name cat-file's (TestTheWantsCheckRepairsWhatItsCatFileNames),
 // and the case would not be about upload-pack at all.
 //
-// Mutation: read an upload-pack run as a push's scratch is read (fetch.go's
+// Mutations: read an upload-pack run as a push's scratch is read (fetch.go's
 // inIncarnation → asAlternate), and every arm answers git's failure with
-// nothing rebuilt.
+// nothing repaired; repair a pack's damage by the whole rebuild first, and the
+// cache is a new incarnation.
 func TestUploadPacksOwnDamageIsRepairedUnderTheRequest(t *testing.T) {
 	t.Parallel()
 	for _, v := range []int{0, 2} {
@@ -521,17 +529,28 @@ func TestUploadPacksOwnDamageIsRepairedUnderTheRequest(t *testing.T) {
 				t.Fatalf("a clone of a cache whose tip is damaged: %v\n%s", err, stderr)
 			}
 			if got := p.Head(clone); got != head {
-				t.Errorf("the clone after the rebuild is at %s, want %s", got, head)
+				t.Errorf("the clone after the repair is at %s, want %s", got, head)
 			}
 			if n := l.count("code_fetch_retried", `"reason":"corrupt"`, "git upload-pack exited"); n != 1 {
 				t.Errorf("code_fetch_retried reason=corrupt naming upload-pack's failure was logged %d times, "+
 					"want once: %q", n, l.lines("code_fetch_retried"))
 			}
-			if got := cacheCount(c, metrics.CodeCacheRebuilds, map[string]string{"reason": "corrupt"}); got != 1 {
-				t.Errorf("%s{reason=corrupt} = %d, want one rebuild", metrics.CodeCacheRebuilds, got)
+			if got := cacheCount(c, metrics.CodeCacheRebuilds, map[string]string{"reason": "stored"}); got != 1 {
+				t.Errorf("%s{reason=stored} = %d, want the one pack fetched again in place",
+					metrics.CodeCacheRebuilds, got)
 			}
-			if now := incarnationDir(t, c); now == dir {
-				t.Errorf("the cache is still %s: a damaged pack is rebuilt into a new incarnation", dir)
+			if got := cacheCount(c, metrics.CodeCacheRebuilds, map[string]string{"reason": "corrupt"}); got != 0 {
+				t.Errorf("%s{reason=corrupt} = %d, want no whole rebuild", metrics.CodeCacheRebuilds, got)
+			}
+			// Found by the request's own repair, or by the scrub upload-pack's
+			// report of the pack made due on the cache's scrubber — whichever
+			// reads the pack first; the pack is fetched again once either way.
+			if n := l.count("code_cache_pack_reinstalled"); n != 1 {
+				t.Errorf("code_cache_pack_reinstalled was logged %d times, want once: %q", n,
+					l.lines("code_cache_pack_reinstalled"))
+			}
+			if now := incarnationDir(t, c); now != dir {
+				t.Errorf("the cache is %s, was %s: a damaged pack is repaired in place", now, dir)
 			}
 		})
 	}
@@ -539,11 +558,14 @@ func TestUploadPacksOwnDamageIsRepairedUnderTheRequest(t *testing.T) {
 
 // THE WANTS CHECK REPAIRS WHAT ITS CAT-FILE NAMES. A fetch's wants are asked
 // of the copy before upload-pack runs (cache.Missing's cat-file), and damage
-// that check meets is repaired under the fetch: an entry of a type git does
-// not know (G1) and a pack index whose every offset lies past its pack (M) by
-// a rebuild, and a multi-pack-index missing a chunk it requires (F7, fatal for
-// every reader) IN PLACE — the derived file dropped and the SAME incarnation
-// answering — and the fetch served. Each fetch is the request alone, so
+// that check meets is repaired under the fetch, IN PLACE — the SAME
+// incarnation answering — and the fetch served: an entry of a type git does
+// not know (G1, its pack named by the row naming a corrupt packed object, or
+// through "%s" from 2.56, confirmed against its row) and a pack index whose
+// every offset lies past its pack (M, found by the request's in-place round)
+// by fetching that one pack again over its files, and a multi-pack-index
+// missing a chunk it requires (F7, fatal for every reader) by dropping the
+// derived file. Each fetch is the request alone, so
 // cat-file is the first git to read the copy. And a multi-pack-index whose
 // table of contents ends early (F6, a CHUNK-FORMAT report, which names
 // neither derived file): the check's cat-file is asked about object ids
@@ -562,7 +584,9 @@ func TestTheWantsCheckRepairsWhatItsCatFileNames(t *testing.T) {
 		name   string
 		damage func(t *testing.T, c *codetest.Case, head string) string // the incarnation it damaged
 		reason string
-		moves  bool
+		// counted is the crewlet.code.cache.rebuilds reason the repair is
+		// counted under.
+		counted string
 		// dropped is what the in-place repair says it dropped
 		// (code_cache_derived_repaired's files), where the case states it.
 		dropped string
@@ -577,14 +601,14 @@ func TestTheWantsCheckRepairsWhatItsCatFileNames(t *testing.T) {
 			overwriteFile(t, filepath.Join(dir, "objects", "pack", "multi-pack-index"),
 				gittest.ChunkRow(gittest.MidxHeader, 0), []byte{0, 0, 0, 0})
 			return dir
-		}, "derived", false, `"files":["multi-pack-index"]`},
+		}, "derived", "derived", `"files":["multi-pack-index"]`},
 		{"G1 the tip's type", func(t *testing.T, c *codetest.Case, head string) string {
 			dir := incarnationDir(t, c)
 			pack, start, _ := entryOf(t, dir, head)
 			b := readAt(t, pack, start, 1)[0]
 			overwriteFile(t, pack, start, []byte{b&0x8f | 5<<4}) // type 5 is reserved
 			return dir
-		}, "corrupt", true, ""},
+		}, "corrupt", "stored", ""},
 		{"M every index offset past its pack", func(t *testing.T, c *codetest.Case, _ string) string {
 			dir := incarnationDir(t, c)
 			idx, err := filepath.Glob(filepath.Join(dir, "objects", "pack", "pack-*.idx"))
@@ -600,13 +624,13 @@ func TestTheWantsCheckRepairsWhatItsCatFileNames(t *testing.T) {
 				overwriteFile(t, path, 8+256*4+n*24, bytes.Repeat([]byte{0x00, 0x0f, 0xff, 0xff}, int(n)))
 			}
 			return dir
-		}, "corrupt", true, ""},
+		}, "corrupt", "stored", ""},
 		{"F7 a multi-pack-index's pack names missing", func(t *testing.T, c *codetest.Case, _ string) string {
 			dir := maintainersBitmap(t, c)
 			gittest.RenameChunk(t, filepath.Join(dir, "objects", "pack", "multi-pack-index"), gittest.MidxHeader,
 				"PNAM", "XNAM")
 			return dir
-		}, "derived", false, ""},
+		}, "derived", "derived", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -626,11 +650,14 @@ func TestTheWantsCheckRepairsWhatItsCatFileNames(t *testing.T) {
 				t.Errorf("code_fetch_retried reason=%s naming cat-file's failure was logged %d times, want once: %q",
 					tc.reason, n, l.lines("code_fetch_retried"))
 			}
-			if got := cacheCount(c, metrics.CodeCacheRebuilds, map[string]string{"reason": tc.reason}); got != 1 {
-				t.Errorf("%s{reason=%s} = %d, want one repair", metrics.CodeCacheRebuilds, tc.reason, got)
+			if got := cacheCount(c, metrics.CodeCacheRebuilds, map[string]string{"reason": tc.counted}); got != 1 {
+				t.Errorf("%s{reason=%s} = %d, want one repair", metrics.CodeCacheRebuilds, tc.counted, got)
 			}
-			if now := incarnationDir(t, c); (now != dir) != tc.moves {
-				t.Errorf("the repaired cache is %s, was %s: want a new incarnation %v", now, dir, tc.moves)
+			if got := cacheCount(c, metrics.CodeCacheRebuilds, map[string]string{"reason": "corrupt"}); got != 0 {
+				t.Errorf("%s{reason=corrupt} = %d, want no whole rebuild", metrics.CodeCacheRebuilds, got)
+			}
+			if now := incarnationDir(t, c); now != dir {
+				t.Errorf("the repaired cache is %s, was %s: want it repaired in place", now, dir)
 			}
 			if tc.dropped == "" {
 				return
@@ -643,39 +670,44 @@ func TestTheWantsCheckRepairsWhatItsCatFileNames(t *testing.T) {
 	}
 }
 
-// A PACKED OBJECT ONLY A "%s" NAMES IS REPAIRED UNDER THE REQUEST, once its
-// pack is held to its row. Git 2.56 reports a packed object whose stated size
-// is wrong (S1) through a bare "%s" alone — upload-pack, parsing the want,
-// says "packed object <id> (stored in ./objects/pack/pack-<sum>.pack) is
-// corrupt" and nothing a format names — so the run names no damage, only a
-// HINT (gitproc), and the cache hashes the pack it nominates against its row
-// (cache.Cache.ConfirmHint): a pack that is not its row's is rebuilt and the
-// fetch served. Below 2.56 git names the same damage otherwise (2.55 by a
-// row; older gits only `not our ref`), so the real arm skips there, declared
+// THE PACK GIT NAMES AS HOLDING A CORRUPT OBJECT IS FETCHED AGAIN UNDER THE
+// REQUEST, IN PLACE, once it is held to its row. A packed object whose stated
+// size is wrong (S1) is reported by upload-pack, parsing the want, as "packed
+// object <id> (stored in ./objects/pack/pack-<sum>.pack) is corrupt": on 2.55
+// as a ROW of the table, a pack's damage, and from 2.56 through a bare "%s"
+// alone, which names no damage. Either way the run records the pack as a
+// HINT (gitproc), the host has the cache hash it against its row
+// (cache.Cache.ConfirmHint), and a pack that is not its row's is named to the
+// repair (cache.Failure.Packs): that one pack is fetched again over its files,
+// the same incarnation answering, and the fetch served. Before 2.55 git names
+// only `not our ref`, so the real arm skips there, declared
 // (internal/skipgate).
 //
 // And its control, on any git: a HEALTHY copy whose upload-pack — a stand-in
 // in front of the real git — dies naming one of the copy's own packs in that
-// very sentence. The pack is hashed, found sound, and nothing is rebuilt: a
+// very sentence. The pack is hashed, found sound, and nothing is repaired: a
 // message only nominates.
 //
 // Mutations: repair on a hint without hashing its pack (the control
-// rebuilds); drop the hint path from repair (S1 answers git's failure).
-func TestAPackedObjectOnlyAPercentSNamesIsRepairedUnderTheRequest(t *testing.T) {
+// repairs); drop the hint path from repair (S1 answers git's failure on
+// 2.56); hand the repair no pack (the in-place round finds nothing and the
+// scrub finds the pack: `found` is `trailer`, not `hint`).
+func TestThePackGitNamesIsFetchedAgainInPlace(t *testing.T) {
 	t.Parallel()
 	t.Run("a pack whose object's size is wrong", func(t *testing.T) {
 		t.Parallel()
 		var l logs
 		c := newCase(t, codetest.SoloOptions{Logger: l.logger()}, codetest.Settings())
-		if got := c.Fleet.Nodes()[0].Pool().Version(); !got.AtLeast(namesPackedObjectOnlyByPercentS) {
-			t.Skipf("git %s names a packed object whose size is wrong by a row or by nothing (from %s it is a "+
-				"bare %%s alone)", got, namesPackedObjectOnlyByPercentS)
+		if got := c.Fleet.Nodes()[0].Pool().Version(); !got.AtLeast(namesThePackOfACorruptObject) {
+			t.Skipf("git %s names a packed object whose size is wrong by nothing but `not our ref` (from %s it "+
+				"names its pack)", got, namesThePackOfACorruptObject)
 		}
 		p := codetest.NewPerson(t, c.Fleet, "ceo")
 		work := p.Init()
 		head := p.Commit(work, map[string]string{"README.md": "one\n", "src/a.go": "package a\n"}, "one")
 		c.MustPush(p, work, "main")
-		pack, start, _ := entryOf(t, incarnationDir(t, c), head)
+		dir := incarnationDir(t, c)
+		pack, start, _ := entryOf(t, dir, head)
 		b := readAt(t, pack, start, 1)[0]
 		if b&0x0f == 0x0f {
 			b-- // the size nibble is full: one less is as wrong
@@ -689,16 +721,26 @@ func TestAPackedObjectOnlyAPercentSNamesIsRepairedUnderTheRequest(t *testing.T) 
 			t.Fatalf("a clone of a cache whose tip's size is wrong: %v\n%s", err, stderr)
 		}
 		if got := p.Head(clone); got != head {
-			t.Errorf("the clone after the rebuild is at %s, want %s", got, head)
+			t.Errorf("the clone after the repair is at %s, want %s", got, head)
 		}
 		if got := cacheCount(c, metrics.CodeCacheHints, map[string]string{"outcome": "confirmed"}); got != 1 {
 			t.Errorf("%s{outcome=confirmed} = %d, want the one hint confirmed", metrics.CodeCacheHints, got)
 		}
-		if got := cacheCount(c, metrics.CodeCacheRebuilds, map[string]string{"reason": "corrupt"}); got != 1 {
-			t.Errorf("%s{reason=corrupt} = %d, want one rebuild", metrics.CodeCacheRebuilds, got)
+		if got := cacheCount(c, metrics.CodeCacheRebuilds, map[string]string{"reason": "stored"}); got != 1 {
+			t.Errorf("%s{reason=stored} = %d, want the one pack fetched again", metrics.CodeCacheRebuilds, got)
+		}
+		if got := cacheCount(c, metrics.CodeCacheRebuilds, map[string]string{"reason": "corrupt"}); got != 0 {
+			t.Errorf("%s{reason=corrupt} = %d, want no whole rebuild", metrics.CodeCacheRebuilds, got)
+		}
+		if n := l.count("code_cache_pack_reinstalled", `"found":"hint"`); n != 1 {
+			t.Errorf("code_cache_pack_reinstalled found=hint was logged %d times, want once: %q", n,
+				l.lines("code_cache_pack_reinstalled"))
 		}
 		if n := l.count("code_fetch_retried", `"reason":"corrupt"`); n != 1 {
 			t.Errorf("code_fetch_retried reason=corrupt was logged %d times, want once", n)
+		}
+		if now := incarnationDir(t, c); now != dir {
+			t.Errorf("the cache is %s, was %s: the pack a hint named is fetched again in place", now, dir)
 		}
 	})
 	t.Run("a stand-in naming a sound pack", func(t *testing.T) {
@@ -731,7 +773,7 @@ esac`)
 			t.Errorf("%s{outcome=sound} = %d, want the one hint hashed and found sound", metrics.CodeCacheHints, got)
 		}
 		if got := cacheCount(c, metrics.CodeCacheRebuilds, nil); got != 0 {
-			t.Errorf("a hint naming a sound pack caused %d rebuilds, want none", got)
+			t.Errorf("a hint naming a sound pack caused %d repairs, want none", got)
 		}
 		if n := l.count("code_fetch_retried"); n != 0 {
 			t.Errorf("a hint naming a sound pack was retried %d times", n)
@@ -742,9 +784,11 @@ esac`)
 	})
 }
 
-// namesPackedObjectOnlyByPercentS is the first git that reports a packed
-// object whose header states the wrong size through a bare "%s" alone (S1).
-var namesPackedObjectOnlyByPercentS = gitproc.Version{Major: 2, Minor: 56}
+// namesThePackOfACorruptObject is the first git that names the pack of a
+// packed object whose header states the wrong size (S1): 2.55 by the row
+// naming a corrupt packed object, 2.56 and later by the same sentence through
+// a bare "%s" alone.
+var namesThePackOfACorruptObject = gitproc.Version{Major: 2, Minor: 55}
 
 // entryOf is the pack file under dir holding oid, where oid's entry begins in
 // it and where its header (its type and size, seven bits a byte) ends.
@@ -957,9 +1001,10 @@ func TestANotOurRefIsNeverARebuild(t *testing.T) {
 // may fetch, a token bound to nobody among them. The host reads a run only by
 // the FORMATS of its trace2 reports (gitproc), which carry none of the
 // request's text, so none of these touches the cache: no rebuild of any
-// reason, no retry, and no hint hashed — the payload carries git's sentence
-// for a corrupt packed object, naming one of the copy's own packs, which is a
-// hint only as a report's whole message.
+// reason, no retry, no report of a git process (so no scrub made due), no
+// check a request's repair forces, and no hint hashed — the payload carries
+// git's sentence for a corrupt packed object, naming one of the copy's own
+// packs, which is a hint only as a report's whole message.
 //
 // Every form a client can send upload-pack that carries text of its own is
 // sent, under v2 and v0, through the host's own request handling (a form the
@@ -971,7 +1016,7 @@ func TestANotOurRefIsNeverARebuild(t *testing.T) {
 //
 // Mutations: read the run's stderr through the regexps this replaced, or
 // classify the events' messages by the rows' formats as substrings, and the
-// echo forms rebuild the cache.
+// echo forms are taken as reports of a damaged copy, repaired and rebuilt.
 func TestACraftedRequestCannotForceARebuild(t *testing.T) {
 	t.Parallel()
 	var l logs
@@ -1096,6 +1141,15 @@ func TestACraftedRequestCannotForceARebuild(t *testing.T) {
 	}
 	if got := cacheCount(c, metrics.CodeCacheHints, nil); got != 0 {
 		t.Errorf("requests quoting git's sentence for a corrupt packed object had %d packs hashed, want none", got)
+	}
+	if got := cacheCount(c, metrics.CodeCacheReports, nil); got != 0 {
+		t.Errorf("requests quoting git's damage sentences were taken as %d reports of a git process, want none", got)
+	}
+	for _, trigger := range []string{"report", "forced", "request"} {
+		if got := cacheCount(c, metrics.CodeCacheChecks, map[string]string{"trigger": trigger}); got != 0 {
+			t.Errorf("requests quoting git's damage sentences had %d files held to their checksums by a %s check, "+
+				"want none", got, trigger)
+		}
 	}
 	if now := incarnationDir(t, c); now != before {
 		t.Errorf("requests quoting git's damage sentences moved the incarnation from %s to %s", before, now)

@@ -890,69 +890,109 @@ func (p *packOrder) seen() []string {
 // THE NODE'S ONE SCRUB IS GIVEN BY EVIDENCE. Three copies a previous process
 // left have had their first rounds, so each has its first scrub due — routine
 // work a restart queues for every copy it inherited. The first of them is
-// being scrubbed when a REPORT (a crash) arrives for the LAST: it ends the
-// routine scrub in flight and its scrub runs at once, before either copy
-// still queued — the preempted copy's own scrub then due again as it was, so
-// it runs after the report's, and before the copy queued behind it.
+// being scrubbed when evidence of damage arrives for the LAST:
 //
-// The due-at-once scrubs were taken by when each was asked, so a failing
-// copy's report waited behind every first scrub a restart had queued — hours
-// of them on a node holding a terabyte — and the routine scrub in flight ran
-// to its end first.
+//   - a REQUEST whose in-place round found nothing (its scrub, Cache.escalate)
+//     ends the routine scrub in flight and runs at once, before either copy
+//     still queued — that copy's own scrub then due again as it was, so it
+//     runs after the request's, and before the copy queued behind it;
+//   - a REPORT (a crash) does the same, and its scrub is taken ahead of every
+//     first scrub due, however much later it was asked.
 //
-// Mutations: a report's scrub that waits for the scrub in flight (no
+// A mutex released and taken again by the scrubber's next scrub handed itself
+// to a waiting request only a scrub later, since Go wakes a waiter without
+// handing it the lock; and the due-at-once scrubs were taken by when each was
+// asked, so a failing copy's report waited behind every first scrub a restart
+// had queued — hours of them on a node holding a terabyte.
+//
+// Mutations: a request's scrub that waits for the scrub in flight (no
 // preemption) — the held copy's pack is hashed to its end first; due-at-once
 // scrubs ordered by when they were asked — the report's scrub goes last.
 func TestTheNodesScrubIsGivenByEvidence(t *testing.T) {
 	t.Parallel()
-	w := newSyncWorld(t, onMemory)
-	repos := []string{w.repo(t, 1), w.repo(t, 2), w.repo(t, 3)}
-	for _, repo := range repos {
-		w.push(t, repo, "refs/heads/main", nil)
-	}
-	c := w.open(t)
-	for _, repo := range repos {
-		w.sync(t, c, repo).Release()
-	}
-	order := &packOrder{hold: newHeldHash()}
-	c = w.reopen(t, c, func(o *cache.Options) { cache.WhileHashing(o, order.at) })
-	for _, repo := range repos {
-		w.sync(t, c, repo).Release()
-		if why, _ := cache.ScrubDue(c, repo); why != "first" {
-			t.Fatalf("an inherited copy's scrub is due for %q after its first round, want first", why)
-		}
-	}
-	slices.Sort(repos)
-	first, middle, last := repos[0], repos[1], repos[2]
+	for _, evidence := range []string{"request", "report"} {
+		t.Run(evidence, func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, onMemory)
+			repos := []string{w.repo(t, 1), w.repo(t, 2), w.repo(t, 3)}
+			for _, repo := range repos {
+				w.push(t, repo, "refs/heads/main", nil)
+			}
+			c := w.open(t)
+			for _, repo := range repos {
+				w.sync(t, c, repo).Release()
+			}
+			order := &packOrder{hold: newHeldHash()}
+			c = w.reopen(t, c, func(o *cache.Options) { cache.WhileHashing(o, order.at) })
+			for _, repo := range repos {
+				w.sync(t, c, repo).Release()
+				if why, _ := cache.ScrubDue(c, repo); why != "first" {
+					t.Fatalf("an inherited copy's scrub is due for %q after its first round, want first", why)
+				}
+			}
+			slices.Sort(repos)
+			first, middle, last := repos[0], repos[1], repos[2]
 
-	order.hold.armed.Store(".pack")
-	passed := make(chan []string, 1)
-	go func() { passed <- cache.ScrubPass(c) }()
-	select {
-	case path := <-order.hold.reached:
-		if repoOfPath(path) != first {
-			t.Fatalf("the pass began with %s, want the first copy queued (%s)", path, first)
-		}
-	case <-time.After(hangDetector):
-		t.Fatal("the pass never began a scrub")
-	}
+			order.hold.armed.Store(".pack")
+			passed := make(chan []string, 1)
+			go func() { passed <- cache.ScrubPass(c) }()
+			select {
+			case path := <-order.hold.reached:
+				if repoOfPath(path) != first {
+					t.Fatalf("the pass began with %s, want the first copy queued (%s)", path, first)
+				}
+			case <-time.After(hangDetector):
+				t.Fatal("the pass never began a scrub")
+			}
 
-	cache.Report(c, gitproc.Ran{Dir: w.dir(t, c, last), Result: gitproc.Result{Crashed: true}})
-	close(order.hold.release)
-	select {
-	case <-passed:
-	case <-time.After(hangDetector):
-		t.Fatal("the scrub pass never ended")
-	}
-	want := []string{first, last, first, middle}
-	if got := order.seen(); !slices.Equal(got, want) {
-		t.Errorf("the scrubs hashed packs of %v, want %v: the report's scrub preempting the routine one in "+
-			"flight and going before every first scrub due", got, want)
-	}
-	for _, repo := range []string{first, middle} {
-		if at, _, _ := cache.Scrubbed(c, repo); at.IsZero() {
-			t.Errorf("%s's first scrub, preempted or queued, never ran", repo)
-		}
+			asked := make(chan error, 1)
+			switch evidence {
+			case "request":
+				s, ok := cache.Pin(c, last)
+				if !ok {
+					t.Fatal("the last copy is not held")
+				}
+				defer s.Release()
+				go func() {
+					r, err := c.Rebuild(context.Background(), s,
+						cache.Failure{Reason: cache.RebuildMissing, Began: time.Now()})
+					if err == nil {
+						r.Release()
+					}
+					asked <- err
+				}()
+				eventually(t, "the request's scrub waiting for the node's one scrub", func() bool {
+					return cache.ScrubAsking(c) == 1
+				})
+			case "report":
+				cache.Report(c, gitproc.Ran{Dir: w.dir(t, c, last), Result: gitproc.Result{Crashed: true}})
+				close(asked)
+			}
+			close(order.hold.release)
+			if err := <-asked; err != nil {
+				t.Fatalf("the %s: %v", evidence, err)
+			}
+			select {
+			case <-passed:
+			case <-time.After(hangDetector):
+				t.Fatal("the scrub pass never ended")
+			}
+			if evidence == "request" {
+				// The request's scrub ran beside the pass; the pass ended
+				// with its first copy's scrub due again, run now.
+				cache.ScrubPass(c)
+			}
+			want := []string{first, last, first, middle}
+			if got := order.seen(); !slices.Equal(got, want) {
+				t.Errorf("the scrubs hashed packs of %v, want %v: the %s's scrub preempting the routine one "+
+					"in flight and going before every first scrub due", got, want, evidence)
+			}
+			for _, repo := range []string{first, middle} {
+				if at, _, _ := cache.Scrubbed(c, repo); at.IsZero() {
+					t.Errorf("%s's first scrub, preempted or queued, never ran", repo)
+				}
+			}
+		})
 	}
 }
 
@@ -1181,11 +1221,4 @@ func TestACopysFirstScrubReadsNoIndexItsFirstRoundChecked(t *testing.T) {
 		t.Errorf("the interval's scrub hashed %d index files, want every one of the %d, vouched or not", got,
 			checked)
 	}
-}
-
-// checks is the cache's crewlet.code.cache.checks of file with outcome and
-// trigger.
-func checks(w *syncWorld, file, outcome, trigger string) uint64 {
-	return counterOf(w.rec, metrics.CodeCacheChecks, map[string]string{"file": file, "outcome": outcome,
-		"trigger": trigger})
 }

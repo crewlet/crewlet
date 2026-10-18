@@ -374,12 +374,14 @@ var allowed = []Allowance{
 	// -----------------------------------------------------------------
 	{
 		Package: "internal/code/host",
-		Test:    "TestAPackedObjectOnlyAPercentSNamesIsRepairedUnderTheRequest/a_pack_whose_object's_size_is_wrong",
+		Test:    "TestThePackGitNamesIsFetchedAgainInPlace/a_pack_whose_object's_size_is_wrong",
 		When:    Environment,
-		Why: "Needs git 2.56 or newer, the first to report this damage through a bare %s alone. " +
-			"The hint's reading is held on every git by gitproc's TestAHintIsOnlyTheOneAnchoredMessage, " +
-			"its confirmation by cache's TestAHintIsConfirmedAgainstThePacksRow, and the repair's " +
-			"path by TestAHintIsRepairedOnlyWhereItsPackIsNotItsRows and this case's stand-in control.",
+		Why: "Needs git 2.55 or newer, the first to name the pack of this damage (2.55 by a row, " +
+			"2.56 through a bare %s alone). The hint's reading is held on every git by gitproc's " +
+			"TestAHintIsOnlyTheOneAnchoredMessage, its confirmation by cache's " +
+			"TestAHintIsConfirmedAgainstThePacksRow, the pack's reinstall by cache's " +
+			"TestAConfirmedHintReinstallsOnePack, and the repair's path by " +
+			"TestAHintIsRepairedOnlyWhereItsPackIsNotItsRows and this case's stand-in control.",
 	},
 }
 

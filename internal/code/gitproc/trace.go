@@ -251,8 +251,9 @@ func (s *traceSink) decode(line []byte) {
 	}
 }
 
-// classify reads one error event: by its format against the table, and — a
-// bare "%s" — for the one sentence a hint is.
+// classify reads one error event: by its format against the table — the row
+// naming a corrupt packed object read for its hint as well — and, a bare
+// "%s", for the one sentence a hint is.
 func (s *traceSink) classify(format, message string) {
 	c := canonicalFormat(format)
 	if !s.seen[c] && len(s.t.Formats) < maxFormats {
@@ -270,6 +271,15 @@ func (s *traceSink) classify(format, message string) {
 			s.first[rank].format, s.first[rank].message = c, message
 		}
 		s.rank = max(s.rank, rank)
+		if c == packedObjectRow {
+			// The same sentence 2.56 reports through "%s" is a ROW on 2.40
+			// to 2.55, and its message names the same pack: read as a hint
+			// too, under the same anchoring, so the repair can name the pack
+			// it would otherwise have to find (the cache's ConfirmHint).
+			if h, ok := hintOf(message, s.dir); ok {
+				s.hint(h)
+			}
+		}
 		return
 	}
 	if crashFormats[c] {
@@ -282,6 +292,11 @@ func (s *traceSink) classify(format, message string) {
 		}
 	}
 }
+
+// packedObjectRow is the canonical format of git's sentence for a corrupt
+// packed object, a row of the table on 2.40 to 2.55 (classify.go), whose
+// message is the sentence a hint is read from (hintOf).
+var packedObjectRow = canonicalFormat(`packed object %s (stored in %s) is corrupt`)
 
 // hint records h, once, up to maxHints.
 func (s *traceSink) hint(h Hint) {
@@ -297,11 +312,13 @@ func (s *traceSink) hint(h Hint) {
 
 // hintOf is the hint message names when it is EXACTLY git's sentence for a
 // corrupt packed object — "packed object <id> (stored in <pack>) is corrupt",
-// nothing before it and nothing after — with <pack> a pack file of dir's own
-// pack directory, as rev-list spells it (dir/objects/pack/pack-<checksum>.pack)
-// or as upload-pack does, from inside the repository
-// (./objects/pack/pack-<checksum>.pack). Anything else names no pack, and a
-// run with no directory has no pack directory for a hint to be anchored to.
+// nothing before it and nothing after, reported through a bare "%s" (2.56) or
+// as the row whose format it is (2.40 to 2.55) — with <pack> a pack file of
+// dir's own pack directory, as rev-list spells it
+// (dir/objects/pack/pack-<checksum>.pack) or as upload-pack does, from inside
+// the repository (./objects/pack/pack-<checksum>.pack). Anything else names no
+// pack, and a run with no directory has no pack directory for a hint to be
+// anchored to.
 func hintOf(message, dir string) (Hint, bool) {
 	if dir == "" {
 		return Hint{}, false

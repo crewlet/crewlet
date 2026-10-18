@@ -353,14 +353,28 @@ func derivedFiles(drop gitproc.Part) []string {
 // that write's.
 func (c *Cache) dropCommitGraph(e *entry, inc *incarnation) error {
 	graph := filepath.Join(inc.dir, "objects", "info", "commit-graph")
-	if err := toTrash(c.dir, graph, newV7()+"-"+filepath.Base(graph)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	err := toTrash(c.dir, graph, newV7()+"-"+filepath.Base(graph))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
 		return err
 	}
 	e.mu.Lock()
 	unvouch(inc, filepath.Join(infoRel, "commit-graph"))
-	wrote(inc, gitproc.PartCommitGraph)
+	droppedDerived(inc, gitproc.PartCommitGraph)
 	e.mu.Unlock()
 	return syncDir(filepath.Dir(graph))
+}
+
+// droppedDerived stamps that this process has just dropped a file of part
+// from inc: a write of that part (wrote, D4's guard) and one that can end a
+// pack's or an object's failure (repaired: git looks an object up through
+// the packs' own indexes once a multi-pack-index that placed it wrongly is
+// gone). A drop that found nothing to move stamps neither. e.mu is held.
+func droppedDerived(inc *incarnation, part gitproc.Part) {
+	wrote(inc, part)
+	repaired(inc)
 }
 
 // dropMultiPackIndex moves the multi-pack-index files — the index, its bitmap
@@ -380,12 +394,16 @@ func (c *Cache) dropMultiPackIndex(e *entry, inc *incarnation) error {
 			continue
 		}
 		path := filepath.Join(packDir, d.Name())
-		if err = toTrash(c.dir, path, newV7()+"-"+d.Name()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		err = toTrash(c.dir, path, newV7()+"-"+d.Name())
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			continue
+		case err != nil:
 			return err
 		}
 		e.mu.Lock()
 		unvouch(inc, filepath.Join(packRel, d.Name()))
-		wrote(inc, gitproc.PartMultiPackIndex)
+		droppedDerived(inc, gitproc.PartMultiPackIndex)
 		e.mu.Unlock()
 	}
 	return syncDir(packDir)

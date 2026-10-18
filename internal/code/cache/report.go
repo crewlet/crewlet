@@ -179,6 +179,14 @@ type repairMark struct {
 	// reinstalls a pack, or drops a derived file, only while it still has
 	// that identity (checked.still).
 	found map[string]checkedFile
+	// forces is how many failed requests asked the next full round to hold
+	// EVERY index file to its trailer, vouched or not ([Cache.Rebuild]); a
+	// round settles those it answered.
+	forces int
+	// reinstall is the packs a confirmed hint named ([Failure].Packs), by
+	// checksum, each at the identity of its .pack when it was asked: the
+	// round installs each again, one GET, while it still has that identity.
+	reinstall map[string]checkedFile
 	// fetchFailed is the packs, by checksum, whose last download to install
 	// them again failed (install.go), each held off until its backoff has
 	// passed: RebuildCooldown after the first failure, twice as long after
@@ -195,20 +203,28 @@ type fetchBackoff struct {
 	until    time.Time
 }
 
-// pending reports whether the mark asks anything.
-func (m repairMark) pending() bool { return len(m.drops) > 0 || len(m.found) > 0 }
+// pending reports whether the mark asks anything at all.
+func (m repairMark) pending() bool {
+	return len(m.drops) > 0 || len(m.found) > 0 || m.forces > 0 || len(m.reinstall) > 0
+}
 
 // due reports whether the mark asks a full round anything it can do at now:
-// a drop, or a finding that is a derived file's or a pack's not held off. A
-// mark whose every finding is a pack held off asks nothing, so the copy's
-// rounds stay deltas and keep answering until the backoff passes.
+// a drop, a forced check, or a finding that is a derived file's or a pack's
+// not held off. A mark whose every finding is a pack held off asks nothing,
+// so the copy's rounds stay deltas and keep answering until the backoff
+// passes.
 func (m repairMark) due(now time.Time) bool {
-	if len(m.drops) > 0 {
+	if len(m.drops) > 0 || m.forces > 0 {
 		return true
 	}
 	held := m.heldOff(now)
 	for _, f := range m.found {
 		if cs, ok := packOfRel(f.rel); !ok || !held[cs] {
+			return true
+		}
+	}
+	for cs := range m.reinstall {
+		if !held[cs] {
 			return true
 		}
 	}

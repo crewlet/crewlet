@@ -732,7 +732,10 @@ func Catalogue() []Instrument {
 				"every file a copy holds, packs included — once after a " +
 				"copy a previous process left first answers, daily while it " +
 				"is used, and at once when a git process over it reports a " +
-				"pack it could not read or crashes. By `file` " +
+				"pack it could not read or crashes; and when a request " +
+				"fails on a pack or an object, every index file again, " +
+				"whatever was checked before, then every file if that " +
+				"repaired nothing. By `file` " +
 				"(`commit-graph`, `multi-pack-index`, `bitmap`, `midx-rev`: " +
 				"files the node derives from its packs; `idx`, `rev`: a " +
 				"pack's index and reverse index, stored with its push; " +
@@ -752,7 +755,12 @@ func Catalogue() []Instrument {
 				"later full sync reading only what this process has neither " +
 				"written nor checked since; `scrub`, a used copy's daily " +
 				"scrub; `report`, a scrub a git process's report or crash " +
-				"made due). Any `damaged` is a disk losing data, or something " +
+				"made due; `forced`, the in-place repair a request's pack " +
+				"or object failure asks first, every index file held to its " +
+				"checksum whatever was checked before; `request`, the scrub " +
+				"that repair runs at once when it found nothing, and a pack " +
+				"a git process named in words, confirmed against its row and " +
+				"fetched again). Any `damaged` is a disk losing data, or something " +
 				"outside the engine writing into the cache: the copy repairs " +
 				"it, and a verify of the repository names what else that " +
 				"disk holds damaged.",
@@ -762,7 +770,7 @@ func Catalogue() []Instrument {
 			Attributes: []string{"trigger"},
 			Shows: "How long one check of a copy's index files, or one scrub " +
 				"of every file it holds, took, by `trigger` (`first`, " +
-				"`unvouched`, `scrub` or `report`, as " +
+				"`unvouched`, `scrub`, `report`, `forced` or `request`, as " +
 				"`crewlet.code.cache.checks`), counted only where it read " +
 				"something. A check is what a copy's first request after a " +
 				"restart waited for beside its sync — about a quarter of the " +
@@ -791,16 +799,20 @@ func Catalogue() []Instrument {
 				"while a check of the repository ran, repaired once it ends; " +
 				"`stale`, not dropped — the node wrote the file after the " +
 				"process that named it began, so the report was of the file " +
-				"it replaced; `unrouted`, a pack, an object or a hint named " +
+				"it replaced — and, for a `pack` or an `object`, a failed " +
+				"request whose process began before the node last wrote a " +
+				"repair into the copy, answered from the copy as it stands " +
+				"once no round is repairing it and run once more rather " +
+				"than repaired further; `unrouted`, a pack, an object or a hint named " +
 				"by a push's own throwaway repository, which may be the " +
 				"client's pack; `again`, a derived file named damaged within " +
 				"a day of its last drop for damage, whatever the node wrote " +
 				"of it between: dropped and left to the ordinary schedule " +
-				"rather than written again at once; `cooldown`, a stored report or a " +
-				"crash within an hour of a scrub of the copy that found " +
-				"nothing, which makes no other; `covered`, one within an " +
-				"hour of a scrub whose findings still wait for their repair, " +
-				"which is its answer. `queued` rising is a disk " +
+				"rather than written again at once; `cooldown`, a stored " +
+				"report or a crash within an hour of a scrub of the copy " +
+				"that found nothing, which makes no other; `covered`, one " +
+				"within an hour of a scrub whose findings still wait for " +
+				"their repair, which is its answer. `queued` rising is a disk " +
 				"losing data under the cache; `again`, a disk that keeps " +
 				"losing it; `cooldown` rising, a git process failing on " +
 				"something the copy's checksums do not show.",
@@ -918,9 +930,14 @@ func Catalogue() []Instrument {
 				"or a sync's own — read from the format strings of git's " +
 				"own reports, which no request can write. `corrupt` and " +
 				"`missing` are a rebuild into " +
-				"a new directory beside the damaged one, downloading every " +
-				"pack again: it found a pack or an index it could not read, " +
-				"or an object a row names that no pack held. `derived` is a " +
+				"a new directory beside the damaged one: it found a pack or " +
+				"an index it could not read, or an object a row names that " +
+				"no pack held — the last step of a request's repair, after " +
+				"an in-place repair and a scrub of every file the copy holds " +
+				"found nothing to fetch again, so it links every pack the " +
+				"scrub found whole and downloads only the rest, nothing at " +
+				"all when the damage is in the rows; a sync's own git that " +
+				"names such damage asks it directly. `derived` is a " +
 				"damaged derived file (the multi-pack-index with its bitmap " +
 				"and reverse index, the commit-graph, or a chunk-format file " +
 				"of either), named by any git process over the copy and " +
@@ -929,7 +946,9 @@ func Catalogue() []Instrument {
 				"maintainer rewrites sound ones over the same packs, none " +
 				"downloaded — since those are derived files, not the " +
 				"repository; damage the drop does not end escalates to " +
-				"`corrupt`. `shape` is the " +
+				"`corrupt`; a request's pack or object failure whose " +
+				"in-place repair only dropped derived files is counted " +
+				"`derived` too. `shape` is the " +
 				"pool refusing to run git there because the directory is " +
 				"not the shape the engine writes (its config edited, a " +
 				"commondir, an objects directory not its own, or an " +
@@ -948,10 +967,15 @@ func Catalogue() []Instrument {
 				"no read of the rows' history at all: a pack whose stored " +
 				"files — the pack, its index or its reverse index — a check " +
 				"before serving or a scrub behind it found failing their " +
-				"own checksum, or a full sync found at another size than " +
-				"their row's, fetched again IN PLACE with one download a " +
-				"pack, renamed over the damaged files, counted once a sync " +
-				"that did it; rising is a disk losing data under the cache. " +
+				"own checksum, a full sync found at another size than " +
+				"their row's, a request's repair found the copy had lost, " +
+				"or a git process named in words " +
+				"and its row confirmed, fetched again IN PLACE with one " +
+				"download a pack, renamed over the damaged files, counted " +
+				"once a sync that did it — the first repair of a request's " +
+				"pack or object failure, which reaches `corrupt` or " +
+				"`missing` only when it and a scrub find nothing; rising is " +
+				"a disk losing data under the cache. " +
 				"`stream` is " +
 				"the code log " +
 				"RECREATED under the cache (provisioned anew, its stamp not " +

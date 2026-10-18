@@ -208,7 +208,9 @@
 // writes no stream is refused at [New] ([ErrNoTrace]). The one damage git 2.56
 // names only through a bare "%s" — a corrupt packed object — is a [Hint]
 // naming a pack, which decides nothing until that pack's bytes are held to its
-// row (the cache's ConfirmHint).
+// row (the cache's ConfirmHint); the same sentence is a row on 2.40 to 2.55,
+// a pack's damage, and the pack its message names is recorded as a hint
+// beside it, so the repair can fetch that pack again rather than look for it.
 //
 // WHAT A RUN NAMED IS REPORTED WHETHER OR NOT IT FAILED. git reads around
 // most damage to a derived file — it warns, and answers from the packs — and

@@ -49,6 +49,9 @@ type round struct {
 	// (check.go), as sentences: a check among its callers names them first
 	// (waiter.found), since the copy it is handed no longer holds them.
 	found []string
+	// did is what the round's applies did, summed: what a request's
+	// in-place round answers its escalation by (applied.repaired).
+	did applied
 }
 
 // waiter is one caller of a round.
@@ -58,6 +61,23 @@ type waiter struct {
 	// an ordinary round (Cache.run).
 	fresh   statelog.Freshness
 	rebuild bool
+	// escalate: the caller is a REQUEST whose pack or object damage of the
+	// incarnation failedOn this round repairs in place (Cache.Rebuild), for
+	// this reason: should the round repair nothing, the caller is not
+	// answered by it but handed to the scrub and, past it, to the whole
+	// rebuild (Cache.escalate) — only while the round's incarnation IS
+	// failedOn, since one a rebuild made since is not the copy that failed.
+	escalate RebuildReason
+	failedOn *incarnation
+	// began is when the failed request's process began (Failure.Began), the
+	// escalation's guard: a repair written into failedOn after it — while the
+	// repair ran — may be what ended the failure, so the caller is answered
+	// from the copy as it stands rather than handed on to a rebuild.
+	began time.Time
+	// asIs: the caller is such a request, answered from the copy as it
+	// stands once the round that may be repairing it has ended (asItStands):
+	// with Kind SyncNone, whatever the round queued behind it read.
+	asIs bool
 	// checks: the caller is a CHECK of the copy (Verification.Run), which a
 	// round whose own git names damage of its incarnation answers with that
 	// damage and the incarnation pinned (damage, got) rather than with the
@@ -167,6 +187,8 @@ func (c *Cache) answer(e *entry, w *waiter, inc *incarnation, kind SyncKind, err
 	case w.gone:
 	case err != nil:
 		w.err = err
+	case w.asIs:
+		w.got = c.pin(e, inc, SyncNone)
 	default:
 		w.got = c.pin(e, inc, kind)
 	}
@@ -405,9 +427,31 @@ func (c *Cache) run(e *entry, r *round) {
 	if requeue {
 		failedRebuild(r.of, err)
 	}
+	// A REQUEST'S IN-PLACE ROUND (Cache.Rebuild) that repaired nothing hands
+	// its callers on rather than answer them from the copy that failed them:
+	// to the scrub, and past it to the whole rebuild (Cache.escalate).
+	var escalating []*waiter
+	requeued := func(w *waiter) bool { return (replaced || requeue && !w.rebuild) && !w.gone }
+	asks := func(w *waiter) bool {
+		return !requeued(w) && w.escalate != "" && w.failedOn == inc && err == nil && r.rebuild == ""
+	}
+	if r.did.repaired() && r.did.reinstalled == 0 && r.did.restored == 0 && c.metrics != nil &&
+		slices.ContainsFunc(r.waiters, asks) {
+		// COUNTED BY WHAT IT DID, never by its mark: a request's round that
+		// only dropped is a derived file's repair. One that put a pack in —
+		// over its files, or one the copy had lost — was counted `stored` by
+		// its apply, whoever waited on it. And counted BEFORE anybody is
+		// answered, so a caller that reads the count once it has its answer
+		// finds it there.
+		c.metrics.Add(metrics.CodeCacheRebuilds, 1, metrics.Attrs{"reason": string(RebuildDerived)})
+	}
 	for _, w := range r.waiters {
-		if (replaced || requeue && !w.rebuild) && !w.gone {
+		if requeued(w) {
 			c.queue(e, w)
+			continue
+		}
+		if asks(w) && !r.did.repaired() && !w.gone {
+			escalating = append(escalating, w)
 			continue
 		}
 		if w.checks {
@@ -448,6 +492,9 @@ func (c *Cache) run(e *entry, r *round) {
 			c.answer(e, w, nil, "", quit.err())
 		}
 		e.mu.Unlock()
+	}
+	if len(escalating) > 0 {
+		c.escalate(e, inc, escalating)
 	}
 }
 
@@ -582,7 +629,7 @@ func (c *Cache) converging(e *entry, r *round) (*incarnation, SyncKind, error) {
 		return nil, "", ErrStopped
 	}
 	defer c.releaseWrite(e, writeExclusive)
-	return c.converge(e, r.fresh, r.rebuild, r.of, r.whole, &r.found)
+	return c.converge(e, r.fresh, r.rebuild, r.of, r.whole, &r.found, &r.did)
 }
 
 // converge is one round's body, in order — every step's name is the field
@@ -634,9 +681,9 @@ func (c *Cache) converging(e *entry, r *round) (*incarnation, SyncKind, error) {
 // held to their rows (seedRebuild), before its first install.
 //
 // What each check it runs finds failing and repairs is added to found
-// (round.found).
+// (round.found), and what each apply did to did (round.did).
 func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReason, of *incarnation,
-	whole []string, found *[]string) (_ *incarnation, _ SyncKind, err error) {
+	whole []string, found *[]string, did *applied) (_ *incarnation, _ SyncKind, err error) {
 
 	if !c.enter() {
 		return nil, "", ErrStopped
@@ -761,6 +808,7 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 		}
 		res, err = c.apply(ctx, e, inc, snap, epoch, marks)
 		*found = append(*found, res.checked.findings()...)
+		did.add(res)
 		var missing *ErrPackMissing
 		switch {
 		case errors.Is(err, errRefsNotOurs) && !snap.full && !askedFull:
@@ -831,7 +879,11 @@ func (c *Cache) reread(reason RebuildReason, which func(*incarnation) bool) uint
 // applied is what one round did to its incarnation.
 type applied struct {
 	packsAdded int
-	trashed    bool
+	// reinstalled is the packs the round installed again over their files,
+	// and restored those it installed that the copy had held and lost
+	// (installs.restored) — of packsAdded, the ones that repair something.
+	reinstalled, restored int
+	trashed               bool
 	// dropped is the derived files the round dropped for a mark
 	// (incarnation.drop) or for its check, taken before anything else the
 	// round did.
@@ -839,6 +891,22 @@ type applied struct {
 	// checked is what the round's check found (check.go); zero for a delta.
 	checked checked
 }
+
+// add sums what another apply of the same round did into a.
+func (a *applied) add(b applied) {
+	a.packsAdded += b.packsAdded
+	a.reinstalled += b.reinstalled
+	a.restored += b.restored
+	a.dropped |= b.dropped
+	a.trashed = a.trashed || b.trashed
+}
+
+// repaired reports whether the round did anything a failed request may have
+// met the want of: installed a pack the copy had held and lost, installed one
+// again over its files, or dropped a derived file. A pack of a push the copy
+// had not yet read repairs nothing — its install is a write into the copy,
+// which the escalation's guard reads instead (Cache.escalate).
+func (a applied) repaired() bool { return a.restored > 0 || a.reinstalled > 0 || a.dropped != 0 }
 
 // apply makes inc equal to snap — steps 4 to 8 of converge. epoch is the
 // reread mark the round began under, and marks the incarnation's in-place
@@ -848,8 +916,10 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	error) {
 
 	var (
-		res   applied
-		found []checkedFile
+		res       applied
+		found     []checkedFile
+		forces    int
+		reinstall []checkedFile
 	)
 	if snap.full {
 		// The sweep lists the directory and moves whatever lies outside the
@@ -872,9 +942,15 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		// in place; a derived one is dropped below. With nothing writing
 		// beside it — the write lock held, the maintainer stopped — what it
 		// hashes is what it repairs.
-		if res.checked, err = c.checkIndexes(ctx, e, inc, snap); err != nil {
+		// A FAILED REQUEST'S REPAIR (Cache.Rebuild): every index file held to
+		// its trailer whatever its vouch, and the packs a confirmed hint
+		// named installed again — none of it under a check of the
+		// repository, whose release asks the round again.
+		forces, reinstall = c.requested(e, inc)
+		if res.checked, err = c.checkIndexes(ctx, e, inc, snap, forces > 0); err != nil {
 			return res, fmt.Errorf("cache: sync %s: check: %w", e.id, err)
 		}
+		res.checked.damaged = append(res.checked.damaged, reinstall...)
 		// What a scrub found failing (scrub.go) is repaired with what the
 		// check found — a pack installed again, a derived file dropped — each
 		// only while it is still the file that failed (checked.still), and
@@ -886,15 +962,20 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	// wrong size, is installed again by renaming over its files (install.go),
 	// and the derived files that may have been built from it go first.
 	ins, err := c.install(ctx, e, inc, snap, res.checked)
-	if ins.replaced > 0 && c.metrics != nil {
-		// COUNTED BY THE ROUND THAT DID IT, once a round: a pack's stored
-		// files repaired in place, one GET a pack (RebuildStored).
+	// COUNTED BY THE ROUND THAT DID IT, once a round, and here — before
+	// anybody is answered: a pack's stored files repaired in place, or a pack
+	// the copy had lost put back, one GET a pack (RebuildStored). Never by
+	// who waited on the round: a request's forces are read in this apply
+	// (requested), so a full round already running when the request asked —
+	// a report's repair round — may be the one that repairs it, and the
+	// round the request waits on finds nothing to do.
+	if ins.replaced+ins.restored > 0 && c.metrics != nil {
 		c.metrics.Add(metrics.CodeCacheRebuilds, 1, metrics.Attrs{"reason": string(RebuildStored)})
 	}
 	if err != nil {
 		return res, err
 	}
-	res.packsAdded = ins.added
+	res.packsAdded, res.reinstalled, res.restored = ins.added, ins.replaced, ins.restored
 	if ins.dropped != 0 {
 		res.trashed, res.dropped = true, ins.dropped
 	}
@@ -994,7 +1075,17 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	}
 	if snap.full {
 		c.settleFound(e, inc, found, unrepaired)
+		c.settleRequested(e, inc, forces, reinstall, unrepaired)
 		e.mu.Lock()
+		if forces > 0 {
+			// A FORCED round that repaired nothing bounds the next request's
+			// (Cache.Rebuild): its verdict holds for ScrubCooldown while no
+			// repair is written.
+			inc.forcedAt, inc.forcedEnded = time.Time{}, time.Time{}
+			if !res.repaired() {
+				inc.forcedAt, inc.forcedEnded = c.now(), time.Now()
+			}
+		}
 		inc.converged = c.rereads.Load() == epoch && inc.marks == marks
 		var reason RebuildReason
 		if inc.converged {
@@ -1005,7 +1096,9 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 			c.firstScrub(inc)
 		}
 		e.mu.Unlock()
-		if reason != "" && c.metrics != nil {
+		// A request's in-place read (RebuildStored) is counted by what its
+		// round did (Cache.run), not by its mark.
+		if reason != "" && reason != RebuildStored && c.metrics != nil {
 			c.metrics.Add(metrics.CodeCacheRebuilds, 1, metrics.Attrs{"reason": string(reason)})
 		}
 		if reason == RebuildShape {

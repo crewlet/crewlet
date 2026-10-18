@@ -268,27 +268,29 @@
 // answer); past it such a report scrubs the copy again, at most once a
 // [ScrubCooldown], so damage that landed elsewhere in the copy meanwhile is
 // not left to the interval. ONE SCRUB ON THE NODE AT A TIME, IN THE ORDER OF
-// ITS EVIDENCE: a report's first, then a copy's first, then the interval's,
-// the least recently held to its checksums first among equals — and evidence
-// does not wait behind a routine scrub: a report stops the first or interval
-// scrub running at its next piece, which is due again after it, where it once
-// waited minutes behind a twenty-gigabyte copy nobody had reported. A read
-// slot a piece, the slot waited for however long, since no caller waits on a
-// scrub; and NO LOCK of the repository, so the copy keeps answering and its
-// rounds and maintenance run beside it. Its pin keeps the copy from the
-// budget and a retire, and is no use: a scrub never makes the next one due.
-// What it finds — a file failing its checksum, or one the disk could not
-// read — goes on the copy's repair mark at the identity it failed at, and the
-// repair round installs a pack again over its files with one GET
-// ([RebuildStored]), or drops a derived file to be written again at once —
-// only while the file is still the one that failed, and never under a check.
-// A pack whose .pack alone failed is the same pack fetched again, byte for
-// byte, so the derived files built over it stay; one whose .idx failed takes
-// them with it, since they may have been built from it. A GET that fails is
-// logged (code_cache_pack_reinstall_failed) and ends nothing: the round goes
-// on, the copy keeps serving, and that pack is asked again after
-// [RebuildCooldown] doubling to [RebuildBackoffCap], so an object store that
-// is down neither wedges the copy's rounds nor is asked once a round.
+// ITS EVIDENCE: a failing request's first, then a report's, then a copy's
+// first, then the interval's, the least recently held to its checksums first
+// among equals —
+// and evidence does not wait behind a routine scrub: a request or a report
+// stops the first or interval scrub running at its next piece, which is due
+// again after it, where it once waited minutes behind a twenty-gigabyte copy
+// nobody had reported. A read slot a piece, the slot waited for however long,
+// since no caller waits on a routine scrub; and NO LOCK of the repository, so
+// the copy keeps answering and its rounds and maintenance run beside it. Its
+// pin keeps the copy from the budget and a retire, and is no use: a scrub
+// never makes the next one due. What it finds — a file failing its checksum,
+// or one the disk could not read — goes on the copy's repair mark at the
+// identity it failed at, and the repair round installs a pack again over its
+// files with one GET ([RebuildStored]), or drops a derived file to be written
+// again at once — only while the file is still the one that failed, and never
+// under a check. A pack whose .pack alone failed is the same pack fetched
+// again, byte for byte, so the derived files built over it stay; one whose
+// .idx failed takes them with it, since they may have been built from it. A
+// GET that fails is logged (code_cache_pack_reinstall_failed) and ends
+// nothing: the round goes on, the copy keeps serving, and that pack is asked
+// again after [RebuildCooldown] doubling to [RebuildBackoffCap], so an object
+// store that is down neither wedges the copy's rounds nor is asked once a
+// round.
 // What it costs, measured (BenchmarkScrub, the same histories, six runs
 // each): it reads 1.13 times the copy's pack bytes, 0.86 to 1.38 s a gigabyte
 // of packs from the page cache — 18 to 30 s for the largest repository the
@@ -341,9 +343,41 @@
 //     whose own git meets it marks the same drop; a round that had dropped
 //     those very files and meets the damage again asks a rebuild
 //     ([RebuildCorrupt]) — the damage was the packs'.
-//   - Everything else is read whole at the log's head into the NEXT
-//     incarnation, beside the one its readers hold, which replaces it once
-//     converged.
+//   - A PACK OR AN OBJECT git could not read ([RebuildCorrupt],
+//     [RebuildMissing]) loses at most the packs that hold the damage, so
+//     those are what is fetched again, IN PLACE FIRST. A failure whose
+//     process began before this process last wrote a REPAIR into the copy —
+//     a pack installed again over its files, a lost pack installed again, a
+//     derived file dropped — may have been of what the repair replaced: it
+//     is answered from the copy as it stands, once a round still repairing it
+//     has ended, and the host runs it once more. A push's pack installed or
+//     adopted is no repair: it replaces nothing the failing process read,
+//     and on a repository pushed to every few seconds a guard that counted it
+//     answered every failure from the damaged copy for ever. Otherwise the
+//     copy is read whole by a FORCED round, every index file held to its
+//     checksum whatever this process vouched for, and every pack whose index
+//     files fail, that the copy lost (named by the rows at a position it had
+//     read) or holds at another size, or that a confirmed hint named (the
+//     [Failure]'s Packs) is fetched again over its files — one GET a pack,
+//     the same incarnation — at most once a [ScrubCooldown] while it repairs
+//     nothing: a forced round that found nothing, with no repair written
+//     since, is not run again for the failures of the hour after it, which
+//     go to the scrub's answer, so a damaged pack body a busy repository's
+//     requests keep failing on costs one read of every index file rather than
+//     one a request. A repair written into the copy while that runs answers
+//     the failure from the copy as it stands too, asked again before the
+//     scrub and before a rebuild. A round that found nothing has the copy's
+//     SCRUB run at once for its callers — ahead of every routine scrub on the
+//     node, which it stops — which finds a damaged pack body no index shows;
+//     a scrub begun after the failing process, or within [ScrubCooldown] with
+//     no repair written since, answers from its verdict, and what an earlier
+//     scrub found that still waits for its repair is answered by that repair.
+//     Only when neither finds anything to fetch again is the repository read
+//     whole at the log's head into the NEXT incarnation, beside the one its
+//     readers hold, which replaces it once converged — seeded with every pack
+//     the scrub found whole, so it downloads nothing when the damage is in
+//     the rows. A request whose copy such a rebuild replaced while its round
+//     waited is answered from the rebuilt copy.
 //
 // Ten requests failing on one damaged cache cost one repair, a request that
 // failed on an incarnation already replaced costs none, and a sync queued
@@ -365,8 +399,11 @@
 // object through a bare "%s", a format that names nothing — is a HINT naming
 // a pack (gitproc.Hint), and repairs nothing until [Cache.ConfirmHint] has
 // hashed that pack, as a check does, against the row naming it: a pack that
-// is not its row's is [RebuildCorrupt], a sound one is no repair, and a pack
-// no row names is no damage of the copy. A pack is hashed ONCE however many
+// is not its row's is a [RebuildCorrupt] repair naming THAT pack, fetched
+// again in place, a sound one is no repair, and a pack no row names is no
+// damage of the copy. The same sentence is a row on 2.40 to 2.55, a pack's
+// damage, whose pack is recorded as a hint beside it and confirmed the same
+// way, so the repair fetches that pack rather than look for it. A pack is hashed ONCE however many
 // hints name it, on the cache's lifetime rather than any request's — every
 // hint about a pack being hashed waits for that hash as long as its own
 // caller does, and a caller that leaves leaves it running for the next —

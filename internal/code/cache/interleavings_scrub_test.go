@@ -1,6 +1,7 @@
 package cache_test
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -28,6 +29,49 @@ func (in *interleaving) damageInPlace(string) string {
 	}
 	flipInPlace(in.t, filepath.Join(dir, rel))
 	return fmt.Sprintf("%s of repo-%d flipped", filepath.Base(rel), slices.Index(in.repos, repo)+1)
+}
+
+// requestMeetsDamage is a request whose git meets damage of a copy: a file
+// the copy holds flipped in place, as media damage is, and the request's pack
+// or object failure handed to Rebuild as the host hands it — begun after
+// every write into the copy, so it is repaired, never answered as it stands:
+// by the forced round where an index file or a derived one failed, by the
+// scrub that round runs when it found nothing (a pack's body), and by the
+// whole rebuild only where neither found anything to fetch again.
+func (in *interleaving) requestMeetsDamage(string) string {
+	repo, dir, rel := in.heldFile(true)
+	if rel == "" {
+		return "nothing held"
+	}
+	s := in.syncAt(repo, linearizable)
+	defer s.Release()
+	if s.Dir != dir {
+		return "replaced before the damage"
+	}
+	flipInPlace(in.t, filepath.Join(dir, rel))
+	reason := []cache.RebuildReason{cache.RebuildCorrupt, cache.RebuildMissing}[in.rng.IntN(2)]
+	r, err := in.c.Rebuild(in.t.Context(), s, cache.Failure{Reason: reason, Began: time.Now()})
+	switch {
+	case errors.Is(err, cache.ErrRebuildRefused):
+		return fmt.Sprintf("%s of repo-%d flipped, %s: refused", filepath.Base(rel),
+			slices.Index(in.repos, repo)+1, reason)
+	case err != nil:
+		in.fatalf("Rebuild: %v", err)
+		return ""
+	}
+	r.Release()
+	what := "rebuilt"
+	switch {
+	case r.Kind == cache.SyncNone:
+		in.fatalf("a request that began after every write was answered from the copy as it stands")
+	case cache.Incarnation(r) == cache.Incarnation(s):
+		in.saw("a request repaired in place")
+		what = "repaired in place"
+	default:
+		in.saw("rebuild")
+	}
+	return fmt.Sprintf("%s of repo-%d flipped, %s: %s", filepath.Base(rel), slices.Index(in.repos, repo)+1,
+		reason, what)
 }
 
 // report hands the cache's observer a run over repo's current incarnation

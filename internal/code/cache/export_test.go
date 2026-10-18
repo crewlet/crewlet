@@ -403,6 +403,20 @@ func Maintaining(c *Cache, repoID string) bool {
 // refused, for an incarnation n attempts in a row stand behind.
 func RebuildWindow(n int) time.Duration { return rebuildWindow(n) }
 
+// RebuildWhole is the last step of a request's repair alone (rebuild.go): the
+// whole rebuild of the incarnation failed was handed out of — joined,
+// refused by the same rules and counted as an ask of the incarnation's line,
+// as Cache.escalate asks it — seeded with no pack, so every pack is
+// downloaded. What the cases of the whole rebuild's own rules drive: a
+// request reaches it only once its in-place round and its scrub repaired
+// nothing, and then seeded with what the scrub found whole.
+func RebuildWhole(ctx context.Context, c *Cache, failed Synced, f Failure) (Synced, error) {
+	if err := c.handedOut(failed, "a rebuild"); err != nil {
+		return Synced{}, err
+	}
+	return c.rebuild(ctx, failed, f, true, nil)
+}
+
 // Total is what the janitor holds the cache to its budget by: every
 // incarnation's files, the downloads in flight and scratch/ as last measured.
 func Total(c *Cache) int64 { return c.total() }
@@ -790,16 +804,6 @@ func VouchMemory(n int) (perPack float64) {
 	return float64(after.HeapAlloc-before.HeapAlloc) / float64(n)
 }
 
-// ReadFails makes every hash a check or a scrub makes ask f before each piece
-// it reads, an error f answers being that read's: a disk failing under one
-// file.
-func ReadFails(o *Options, f func(path string) error) {
-	if o.knobs == nil {
-		o.knobs = &knobs{}
-	}
-	o.knobs.readFault = f
-}
-
 // CheckPiecesOf makes every hash read a file n bytes a slot, in place of
 // CheckPieceBytes, and tell f each piece's path once it is read, its slot still
 // held (held), and again once the slot is given back.
@@ -982,6 +986,23 @@ func ScrubWakesWith(o *Options, f func(next time.Time) <-chan time.Time) {
 		o.knobs = &knobs{}
 	}
 	o.knobs.scrubWake = f
+}
+
+// ReadFails makes every hash a check or a scrub makes ask f before each piece
+// it reads, an error f answers being that read's: a disk failing under one
+// file.
+func ReadFails(o *Options, f func(path string) error) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.readFault = f
+}
+
+// ScrubAsking is how many requests' scrubs wait for the node's one scrub.
+func ScrubAsking(c *Cache) int {
+	c.scrubs.mu.Lock()
+	defer c.scrubs.mu.Unlock()
+	return c.scrubs.asking
 }
 
 // Quiet reports whether repoID has no round running or queued, whatever its

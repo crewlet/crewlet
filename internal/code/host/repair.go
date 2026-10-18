@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/code/cache"
@@ -18,9 +19,10 @@ import (
 // from the rows and the object store and derived again when damaged
 // (cache.Cache.Rebuild — a directory the pool refuses for its shape read whole
 // in place, and derived files git could not read dropped in place, with no
-// download; a pack or an object git could not read rebuilt into the next
-// incarnation), so a failure that names its damage is the cache's to repair,
-// not the client's to retry. Answered instead, every request after it would
+// download; a pack or an object git could not read repaired in place first,
+// each failing pack installed again with one GET, and only damage no in-place
+// repair and no scrub finds rebuilt into the next incarnation), so a failure
+// that names its damage is the cache's to repair, not the client's to retry. Answered instead, every request after it would
 // meet the same directory and the same failure until a restart's full round or
 // an operator's repair, and git would print an answer that no retry keeps.
 //
@@ -40,7 +42,12 @@ import (
 // ONLY IN WORDS — 2.56's corrupt packed object, which it reports through a
 // bare "%s" — is a hint: the pack it nominates is held to its row
 // (cache.Cache.ConfirmHint), and only a pack that is not the row's is
-// repaired, so no message decides a repair. A process in a push's scratch or
+// repaired, so no message decides a repair. The same sentence is a ROW on
+// 2.40 to 2.55, which names the damage itself (a pack's) and records the hint
+// beside it, so there too the pack it names is confirmed and handed to the
+// repair (cache.Failure.Packs): the cache installs THAT pack again, one GET,
+// where with no pack named it must hash every pack the copy holds to find it
+// (its scrub). A process in a push's scratch or
 // an advertisement view reads the incarnation only as its alternate, where
 // only the alternate's shape is the cache's (asAlternate, cache.ShapeReason)
 // — that scratch's index-pack reads the client's pack, whose damage is the
@@ -98,7 +105,7 @@ func (s *Server) repairing(ctx context.Context, r *http.Request, name string, sy
 // cache.Cache.ConfirmHint).
 type rebuilder interface {
 	Rebuild(ctx context.Context, failed cache.Synced, f cache.Failure) (cache.Synced, error)
-	ConfirmHint(ctx context.Context, s cache.Synced, h gitproc.Hint) (cache.RebuildReason, bool)
+	ConfirmHint(ctx context.Context, s cache.Synced, h gitproc.Hint) (cache.Failure, bool)
 }
 
 // maxRepairs is how many times repair asks the cache to repair one request's
@@ -110,6 +117,12 @@ type rebuilder interface {
 // is not a derived file's, and the second repair reads the repository whole
 // (RebuildCorrupt). A reason met a SECOND time, or a third distinct reason, is
 // damage no repair ends. A hint's confirmation counts as the repair it asks.
+// The cache's answer FROM THE COPY AS IT STANDS — a pack's or an object's
+// failure that began before the cache last wrote a repair into the copy,
+// which that repair may have ended (Kind SyncNone, cache.Cache.Rebuild's
+// guard) — is no repair, once: the run that meets the damage again began
+// after the repair, and its reason is asked again as though for the first
+// time.
 const maxRepairs = 2
 
 // repair is repairing over any rebuilder, logging on log.
@@ -117,14 +130,23 @@ func repair(ctx context.Context, log *slog.Logger, c rebuilder, r *http.Request,
 	read reading, started func() bool, run func(cache.Synced) error) error {
 
 	done := map[cache.RebuildReason]bool{}
+	guarded := false
 	for {
 		err := run(*synced)
 		if err == nil || started() {
 			return err
 		}
 		f, repairs := read.reasonOf(err)
-		if !repairs && read.hints {
-			f, repairs = confirmed(ctx, c, *synced, err)
+		if read.hints && (!repairs || f.Reason == cache.RebuildCorrupt || f.Reason == cache.RebuildMissing) {
+			// A hint names the pack: confirmed, it is handed to the repair,
+			// which installs that pack again rather than hash every pack
+			// the copy holds to find it.
+			if packs, began := confirmed(ctx, c, *synced, err); len(packs) > 0 {
+				if !repairs {
+					f, repairs = cache.Failure{Reason: cache.RebuildCorrupt, Began: began}, true
+				}
+				f.Packs = packs
+			}
 		}
 		switch {
 		case !repairs:
@@ -141,25 +163,36 @@ func repair(ctx context.Context, log *slog.Logger, c rebuilder, r *http.Request,
 		if rerr != nil {
 			return rerr
 		}
+		if rebuilt.Kind == cache.SyncNone && !guarded {
+			// Answered from the copy as it stands: no repair (maxRepairs).
+			guarded = true
+			delete(done, f.Reason)
+		}
 		synced.Release()
 		*synced = rebuilt
 	}
 }
 
-// confirmed is the repair a failure's hints ask once their packs are held to
-// their rows (cache.Cache.ConfirmHint): the first hint whose pack is not its
-// row's, or none.
-func confirmed(ctx context.Context, c rebuilder, synced cache.Synced, err error) (cache.Failure, bool) {
+// confirmed is the packs a failure's hints name that are not their rows'
+// once held to them (cache.Cache.ConfirmHint) — each pack once, however many
+// of its objects git named — and when the run that recorded them began.
+func confirmed(ctx context.Context, c rebuilder, synced cache.Synced, err error) ([]string, time.Time) {
 	var exit *gitproc.ExitError
 	if !errors.As(err, &exit) {
-		return cache.Failure{}, false
+		return nil, time.Time{}
 	}
+	var packs []string
+	asked := map[string]bool{}
 	for _, h := range exit.Result.Trace.Hints {
-		if reason, ok := c.ConfirmHint(ctx, synced, h); ok {
-			return cache.Failure{Reason: reason}, true
+		if asked[h.Pack] {
+			continue
+		}
+		asked[h.Pack] = true
+		if f, ok := c.ConfirmHint(ctx, synced, h); ok {
+			packs = append(packs, f.Packs...)
 		}
 	}
-	return cache.Failure{}, false
+	return packs, exit.Result.Began
 }
 
 // retriedLine is the line a request whose cache was rebuilt under it is

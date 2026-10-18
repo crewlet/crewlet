@@ -168,10 +168,15 @@
 // the cache names (cache.DamageReason; only the shape, cache.ShapeReason, for
 // a process whose directory merely has the cache as its alternate) has the
 // cache REPAIRED — a shape, or derived files git could not read (a
-// multi-pack-index, a commit-graph), in place with no download, a pack or an
-// object into the next incarnation — and runs once more over the repaired one
-// (repair.go): the cache is disposable, so damage it can name is its own to
-// repair, never the client's to retry. DAMAGE IS READ FROM GIT'S FORMAT
+// multi-pack-index, a commit-graph), in place with no download; a pack or an
+// object in place first, each pack that fails fetched again over its files
+// with one GET, and into the next incarnation only when neither that nor a
+// scrub of the copy finds what to fetch again — and runs once more over the
+// repaired one (repair.go): the cache is disposable, so damage it can name is
+// its own to repair, never the client's to retry. A failure whose process
+// began before the cache last wrote a repair into the copy is answered from
+// the copy as it stands and run once more, and that answer is no repair: the
+// run after it is repaired as though first. DAMAGE IS READ FROM GIT'S FORMAT
 // STRINGS, NEVER ITS WORDS: upload-pack copies its request's text into the
 // messages it dies with ("unexpected line: '<arg>'"), so the pool classifies a
 // run by the format of each trace2 report its process tree makes, which
@@ -181,7 +186,10 @@
 // it, like any other process's. A damage git 2.56 names only through a bare
 // "%s" — a corrupt packed object — is a HINT naming a pack, and repaired only
 // once the cache has held that pack to its row and found it is not
-// (cache.Cache.ConfirmHint). A FETCH'S FIRST BYTE IS ITS PACK'S: upload-pack
+// (cache.Cache.ConfirmHint); the same sentence is a row on 2.40 to 2.55, and
+// its pack is confirmed the same way beside the damage the row names, so the
+// repair is told which pack to fetch again (cache.Failure.Packs) rather than
+// look for it. A FETCH'S FIRST BYTE IS ITS PACK'S: upload-pack
 // writes its answer's first line before its pack-objects runs, and
 // pack-objects meets damage after it — "invalid MIDX object position, MIDX is
 // likely corrupt", over a multi-pack-index bitmap whose reverse index is

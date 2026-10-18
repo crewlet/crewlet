@@ -365,30 +365,40 @@ func TestEveryCacheErrorHasADecidedAnswer(t *testing.T) {
 }
 
 // rebuilds is a rebuilder that hands back a Synced and counts what it was
-// asked, so repair's loop runs without a cache: every repair's reason and the
-// derived files it was told to drop, and every hint it was asked to confirm,
-// which it confirms as corrupt when the hint's pack is in bad.
+// asked, so repair's loop runs without a cache: every repair's reason, the
+// derived files it was told to drop, when the failing run began and the
+// packs it was told to install again, and every hint it was asked to
+// confirm, which it confirms as the cache does — a corrupt repair naming the
+// pack — when the hint's pack is in bad. The i-th repair answers from the
+// copy as it stands (Kind SyncNone, the cache's guard) where guard[i].
 type rebuilds struct {
 	asked []cache.RebuildReason
 	drops []gitproc.Part
 	began []time.Time
+	packs [][]string
 	hints []gitproc.Hint
 	bad   map[string]bool
+	guard map[int]bool
 }
 
 func (b *rebuilds) Rebuild(_ context.Context, _ cache.Synced, f cache.Failure) (cache.Synced, error) {
+	i := len(b.asked)
 	b.asked = append(b.asked, f.Reason)
 	b.drops = append(b.drops, f.Drops)
 	b.began = append(b.began, f.Began)
-	return cache.Synced{}, nil
+	b.packs = append(b.packs, f.Packs)
+	if b.guard[i] {
+		return cache.Synced{Kind: cache.SyncNone}, nil
+	}
+	return cache.Synced{Kind: cache.SyncFull}, nil
 }
 
-func (b *rebuilds) ConfirmHint(_ context.Context, _ cache.Synced, h gitproc.Hint) (cache.RebuildReason, bool) {
+func (b *rebuilds) ConfirmHint(_ context.Context, _ cache.Synced, h gitproc.Hint) (cache.Failure, bool) {
 	b.hints = append(b.hints, h)
 	if b.bad[h.Pack] {
-		return cache.RebuildCorrupt, true
+		return cache.Failure{Reason: cache.RebuildCorrupt, Packs: []string{h.Pack}}, true
 	}
-	return "", false
+	return cache.Failure{}, false
 }
 
 // repairOf runs repair over a git run that fails with fails[i] on its i-th
@@ -466,9 +476,13 @@ func TestDamageARepairDidNotEndSaysSo(t *testing.T) {
 // process run in the incarnation. A run whose trace named no damage but
 // nominated a pack (gitproc.Trace.Hints: git 2.56 reports a corrupt packed
 // object through a bare "%s") has the cache hold that pack to its row
-// (cache.Cache.ConfirmHint): a pack that is not its row's is rebuilt
-// (`corrupt`) and the run served again; a sound one is no repair, and git's
-// own failure is the answer. A process in a push's scratch or an
+// (cache.Cache.ConfirmHint): a pack that is not its row's is repaired
+// (`corrupt`, the pack named in cache.Failure.Packs, which the cache installs
+// again in place, and the run's start in Began) and the run served again; a
+// sound one is no repair, and git's own failure is the answer. The same
+// sentence as a ROW (2.40 to 2.55) names a pack's damage itself, and its hint
+// still names the pack to the repair — confirmed, each pack once however
+// many of its objects git named. A process in a push's scratch or an
 // advertisement view (asAlternate) never asks — its hint names the scratch's
 // own pack, the client's. And a derived damage's repair is told which files
 // to drop and when the run that named them began (cache.Failure: the cache
@@ -478,13 +492,13 @@ func TestDamageARepairDidNotEndSaysSo(t *testing.T) {
 // Mutations: repair on a hint without confirming it (the sound arm
 // rebuilds); read hints for asAlternate (the scratch arm asks); hand Rebuild
 // no drops (the derived arms' drops are empty); hand it no Began (their
-// began is zero).
+// began is zero); confirm no hint beside a row (the row arm names no pack).
 func TestAHintIsRepairedOnlyWhereItsPackIsNotItsRows(t *testing.T) {
 	const pack = "0123456789abcdef0123456789abcdef01234567"
 	hint := gitproc.Hint{Object: strings.Repeat("ab", 20), Pack: pack}
-	hinted := &gitproc.ExitError{Command: "upload-pack", Kind: gitproc.ErrFailed,
-		Result: gitproc.Result{Exit: 128, Trace: gitproc.Trace{Hints: []gitproc.Hint{hint}}}}
 	began := time.Now()
+	hinted := &gitproc.ExitError{Command: "upload-pack", Kind: gitproc.ErrFailed,
+		Result: gitproc.Result{Exit: 128, Began: began, Trace: gitproc.Trace{Hints: []gitproc.Hint{hint}}}}
 	derived := func(parts gitproc.Part) error {
 		return &gitproc.ExitError{Command: "upload-pack", Kind: gitproc.ErrCorrupt, Result: gitproc.Result{Exit: 128,
 			Damage: &gitproc.Damage{Kind: gitproc.ErrCorrupt, Parts: parts, Began: began}}}
@@ -495,9 +509,35 @@ func TestAHintIsRepairedOnlyWhereItsPackIsNotItsRows(t *testing.T) {
 	t.Run("a pack that is not its row's", func(t *testing.T) {
 		b, err := repairWith(t, &rebuilds{bad: map[string]bool{pack: true}}, inIncarnation, hinted)
 		if err != nil || !slices.Equal(b.asked, []cache.RebuildReason{cache.RebuildCorrupt}) ||
-			!slices.Equal(b.hints, []gitproc.Hint{hint}) {
-			t.Errorf("answered %v, the cache asked to confirm %v and to repair %v; want served after one "+
-				"confirmed corrupt repair", err, b.hints, b.asked)
+			!slices.Equal(b.hints, []gitproc.Hint{hint}) || len(b.packs) != 1 ||
+			!slices.Equal(b.packs[0], []string{pack}) || !b.began[0].Equal(began) {
+			t.Errorf("answered %v, the cache asked to confirm %v and to repair %v naming %v for runs begun %v; "+
+				"want served after one confirmed corrupt repair naming %s for a run begun %v", err, b.hints,
+				b.asked, b.packs, b.began, pack, began)
+		}
+	})
+	rowed := func(hints ...gitproc.Hint) error {
+		return &gitproc.ExitError{Command: "upload-pack", Kind: gitproc.ErrCorrupt, Result: gitproc.Result{Exit: 128,
+			Trace:  gitproc.Trace{Hints: hints},
+			Damage: &gitproc.Damage{Kind: gitproc.ErrCorrupt, Parts: gitproc.PartPack, Began: began}}}
+	}
+	t.Run("a row naming a pack that is not its row's", func(t *testing.T) {
+		other := gitproc.Hint{Object: strings.Repeat("cd", 20), Pack: pack}
+		b, err := repairWith(t, &rebuilds{bad: map[string]bool{pack: true}}, inIncarnation, rowed(hint, other))
+		if err != nil || !slices.Equal(b.asked, []cache.RebuildReason{cache.RebuildCorrupt}) ||
+			!slices.Equal(b.hints, []gitproc.Hint{hint}) || len(b.packs) != 1 ||
+			!slices.Equal(b.packs[0], []string{pack}) || !b.began[0].Equal(began) {
+			t.Errorf("answered %v, the cache asked to confirm %v and to repair %v naming %v for runs begun %v; "+
+				"want one confirmation of the pack two objects name, one corrupt repair naming it", err, b.hints,
+				b.asked, b.packs, b.began)
+		}
+	})
+	t.Run("a row naming a sound pack", func(t *testing.T) {
+		b, err := repairWith(t, &rebuilds{}, inIncarnation, rowed(hint))
+		if err != nil || !slices.Equal(b.asked, []cache.RebuildReason{cache.RebuildCorrupt}) ||
+			len(b.packs) != 1 || len(b.packs[0]) != 0 {
+			t.Errorf("answered %v, the cache asked to repair %v naming %v; want the row's corrupt repair, naming "+
+				"no pack", err, b.asked, b.packs)
 		}
 	})
 	t.Run("a sound pack", func(t *testing.T) {
@@ -533,6 +573,25 @@ func TestAHintIsRepairedOnlyWhereItsPackIsNotItsRows(t *testing.T) {
 			}
 		})
 	}
+	// THE CACHE'S ANSWER FROM THE COPY AS IT STANDS IS NO REPAIR, ONCE: the
+	// run that meets the damage again began after the write the cache
+	// answered it by, and is repaired as though first; a second such answer
+	// counts. Mutation: count the guard's answer (the first arm is answered
+	// still damaged after one ask).
+	t.Run("damage answered from the copy as it stands", func(t *testing.T) {
+		b, err := repairWith(t, &rebuilds{guard: map[int]bool{0: true}}, inIncarnation, corrupt, corrupt)
+		if err != nil || !slices.Equal(b.asked, []cache.RebuildReason{cache.RebuildCorrupt, cache.RebuildCorrupt}) {
+			t.Errorf("answered %v, the cache asked %v; want the guard's answer, then a repair, then served", err,
+				b.asked)
+		}
+		b, err = repairWith(t, &rebuilds{guard: map[int]bool{0: true, 1: true}}, inIncarnation, corrupt, corrupt,
+			corrupt)
+		if !errors.Is(err, errStillDamaged) ||
+			!slices.Equal(b.asked, []cache.RebuildReason{cache.RebuildCorrupt, cache.RebuildCorrupt}) {
+			t.Errorf("answered %v, the cache asked %v; want still damaged after a second answer from the copy",
+				err, b.asked)
+		}
+	})
 	t.Run("derived damage the drop did not end", func(t *testing.T) {
 		b, err := repairWith(t, &rebuilds{}, inIncarnation, derived(gitproc.PartMultiPackIndex), corrupt)
 		if err != nil || !slices.Equal(b.asked, []cache.RebuildReason{cache.RebuildDerived, cache.RebuildCorrupt}) ||

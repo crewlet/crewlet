@@ -180,6 +180,10 @@ func TestVerifysRepairDownloadsOnlyWhatItFoundDamaged(t *testing.T) {
 // held to, since the damage is named — and a repair Verify then checked
 // against every row is known to have ended what it was made for, so damage
 // found on it later is new damage, rebuilt at once.
+//
+// Driven through the whole rebuild itself (cache.RebuildWhole): a request
+// reaches it only once its in-place round and its scrub found nothing to
+// fetch again (TestARequestsPackDamageIsRepairedInPlaceFirst).
 func TestARebuildVerifyHasShownWholeEndsItsLine(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -187,13 +191,13 @@ func TestARebuildVerifyHasShownWholeEndsItsLine(t *testing.T) {
 	w.push(t, repo, "refs/heads/main", nil)
 	c := w.open(t)
 	s := w.sync(t, c, repo)
-	first, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildCorrupt})
+	first, err := cache.RebuildWhole(t.Context(), c, s, cache.Failure{Reason: cache.RebuildCorrupt})
 	if err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
 	defer first.Release()
 	write(t, filepath.Join(first.Dir, "refs", "heads", "loose"), "x\n")
-	if _, err := c.Rebuild(t.Context(), first, cache.Failure{Reason: cache.RebuildCorrupt}); !errors.Is(err, cache.ErrRebuildRefused) {
+	if _, err := cache.RebuildWhole(t.Context(), c, first, cache.Failure{Reason: cache.RebuildCorrupt}); !errors.Is(err, cache.ErrRebuildRefused) {
 		t.Fatalf("a second rebuild of a rebuild's product = %v, want ErrRebuildRefused", err)
 	}
 	repaired, err := verify(t.Context(), c, repo, true)
@@ -202,7 +206,7 @@ func TestARebuildVerifyHasShownWholeEndsItsLine(t *testing.T) {
 			repaired, err)
 	}
 	rebuilt := w.sync(t, c, repo)
-	again, err := c.Rebuild(t.Context(), rebuilt, cache.Failure{Reason: cache.RebuildCorrupt})
+	again, err := cache.RebuildWhole(t.Context(), c, rebuilt, cache.Failure{Reason: cache.RebuildCorrupt})
 	if err != nil {
 		t.Fatalf("a rebuild of the incarnation a verified repair made: %v", err)
 	}

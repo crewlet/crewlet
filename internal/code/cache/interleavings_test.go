@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -118,6 +119,7 @@ var interleavingOps = []struct {
 	{"damage and restart", 4, (*interleaving).damageAndRestart},
 	{"replace while hashed", 3, (*interleaving).replaceWhileHashed},
 	{"damage in place", 4, (*interleaving).damageInPlace},
+	{"a request meets damage", 3, (*interleaving).requestMeetsDamage},
 	{"report", 6, (*interleaving).report},
 	{"scrub", 2, (*interleaving).scrub},
 }
@@ -131,7 +133,8 @@ var interleavingOutcomes = []string{
 	"push", "tag annotated", "tag lightweight", "delete a ref", "refused push", "adopt",
 	"sync stale", "sync session", "sync linearizable",
 	"sync killed at sync.download", "sync killed at sync.refs", "sync killed at sync.state",
-	"crash leaving a maintenance run's files", "evict", "rebuild", "maintain", "maintain over its own index",
+	"crash leaving a maintenance run's files", "evict", "rebuild", "a request repaired in place",
+	"a request answered from the copy as it stands", "maintain", "maintain over its own index",
 	"sweep tombstones", "recreate backwards", "round index", "round index over a crash's lock",
 	"a first round's check found damage", "a pack reinstalled in place", "a derived file dropped by its check",
 	"a verdict withheld",
@@ -490,14 +493,32 @@ func (in *interleaving) evict(string) string {
 	return fmt.Sprintf("%d of %d repositories evicted", evicted, before)
 }
 
+// rebuild is a request's pack or object failure over repo's current
+// incarnation handed to Rebuild: answered from the copy as it stands when the
+// failing run began before the cache last wrote into it (half the runs began
+// an hour ago), repaired in place when its forced round or its scrub finds
+// what to fetch again, and otherwise the whole rebuild, seeded with what the
+// scrub found whole — or refused.
 func (in *interleaving) rebuild(repo string) string {
 	s := in.syncAt(repo, linearizable)
 	defer s.Release()
 	reason := []cache.RebuildReason{cache.RebuildCorrupt, cache.RebuildMissing}[in.rng.IntN(2)]
-	r, err := in.c.Rebuild(in.t.Context(), s, cache.Failure{Reason: reason})
+	began := time.Now()
+	if in.rng.IntN(2) == 0 {
+		began = began.Add(-time.Hour)
+	}
+	r, err := in.c.Rebuild(in.t.Context(), s, cache.Failure{Reason: reason, Began: began})
 	switch {
 	case err == nil:
 		r.Release()
+		switch {
+		case r.Kind == cache.SyncNone:
+			in.saw("a request answered from the copy as it stands")
+			return fmt.Sprintf("%s: answered from incarnation %d as it stands", reason, cache.Incarnation(r))
+		case cache.Incarnation(r) == cache.Incarnation(s):
+			in.saw("a request repaired in place")
+			return fmt.Sprintf("%s: incarnation %d repaired in place", reason, cache.Incarnation(r))
+		}
 		in.saw("rebuild")
 		return fmt.Sprintf("%s: incarnation %d", reason, cache.Incarnation(r))
 	case errors.Is(err, cache.ErrRebuildRefused):

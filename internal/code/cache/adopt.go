@@ -354,6 +354,8 @@ func (c *Cache) placeStaging(e *entry, inc *incarnation, st *staging) (adoptOutc
 	inc.objects += st.pack.Objects
 	c.setSize(inc, inc.diskBytes+st.pack.Size, inc.metaBytes)
 	inc.unmoved = false
+	// No repair (incarnation.repairWrite): a push's pack adds what no
+	// failed request needed, and leaves whatever failed it as it was.
 	// The maintainer's debounce and ceiling, exactly as a round that adds a
 	// pack sets them; and like such a round's, no kick: the pack is due only
 	// once the debounce has passed, which is the maintainer's own tick.

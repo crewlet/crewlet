@@ -47,14 +47,20 @@ import (
 //     ScrubCooldown after a scrub that found nothing.
 //
 // ONE SCRUB ON THE NODE AT A TIME (scrubSlot), given BY EVIDENCE: a
-// REPORT's first, then a copy's FIRST, then an INTERVAL's — within each the
-// oldest asked first, the interval's the least recently held to its
-// checksums. Evidence PREEMPTS routine work: a report that finds a first or
-// an interval scrub running cancels it, and that scrub is due again as it
-// was, so a node just restarted, with every inherited copy's first scrub
-// queued, reads a failing copy next rather than after a terabyte of routine
-// reads. Each hashes a piece at a time under one slot of the read lane
-// (scrubHold), through one buffer of its own. It holds NO LOCK of
+// REQUEST's (scrubFor: what a failed request's in-place round could not
+// repair, rebuild.go) before anything the scrubber has due, then a REPORT's,
+// then a copy's FIRST, then an INTERVAL's — within each the oldest asked
+// first, the interval's the least recently held to its checksums. Evidence
+// PREEMPTS routine work: a request or a report that finds a first or an
+// interval scrub running cancels it, and that scrub is due again as it was,
+// so a node just restarted, with every inherited copy's first scrub queued,
+// reads a failing copy next rather than after a terabyte of routine reads.
+// A request waits only for a report's or another request's scrub in flight,
+// and the scrubber takes nothing while a request waits: a mutex let go and
+// taken again by the scrubber's next scrub handed itself to a waiting
+// request only one scrub later, since Go's mutex wakes a waiter without
+// handing it the lock. Each hashes a piece at a time under one slot of the
+// read lane (scrubHold), through one buffer of its own. It holds NO LOCK of
 // the entry, so the copy keeps answering and rounds and the maintainer run
 // beside it: a verdict holds only for the file it hashed (trailerSound), and
 // its PIN — which keeps the budget from evicting the copy and a retire from
@@ -114,6 +120,9 @@ const (
 	// prioReport: a git process over the copy reported a pack or an object
 	// it could not read, named a pack in words, or crashed.
 	prioReport
+	// prioRequest: a request failed on the copy, and its in-place round
+	// found nothing to repair.
+	prioRequest
 )
 
 // routine reports whether a scrub at p is one the cache makes on its own
@@ -121,32 +130,45 @@ const (
 func (p scrubPrio) routine() bool { return p < prioReport }
 
 // errPreempted ends a routine scrub that a scrub asked by evidence of damage
-// — a report's — preempted (scrubSlot).
+// — a request's, a report's — preempted (scrubSlot).
 var errPreempted = errors.New("cache: a routine scrub was preempted by one evidence of damage asked for")
 
 // scrubSlot is the node's ONE scrub: whether it is held, at what priority and
-// how to end it. A mutex would serialise the scrubs and nothing more — no
-// order, no preemption.
+// how to end it, and how many requests wait for it. A mutex would serialise
+// the scrubs and nothing more — no order, no preemption — and a mutex let go
+// and taken again at once is taken again by the same goroutine: Go wakes a
+// waiter without handing it the lock.
 type scrubSlot struct {
 	mu     sync.Mutex
 	held   bool
 	prio   scrubPrio
 	cancel context.CancelCauseFunc
-	// changed is closed, and replaced, whenever the slot is given back.
+	// asking counts the requests waiting for the slot: while any does,
+	// nothing else takes it.
+	asking int
+	// changed is closed, and replaced, whenever the slot is given back or a
+	// waiting request gives up.
 	changed chan struct{}
 }
 
 // newScrubSlot is a free slot.
 func newScrubSlot() *scrubSlot { return &scrubSlot{changed: make(chan struct{})} }
 
-// take waits for the slot, preempting a routine scrub that holds it when prio
+// take waits for the slot — and, for anything but a request, for every
+// request waiting for it — preempting a routine scrub that holds it when prio
 // is evidence's. It answers the context the scrub runs under, which ctx, a
 // preemption (errPreempted) and the giving back each end, and how to give the
 // slot back; or ctx's end.
 func (s *scrubSlot) take(ctx context.Context, prio scrubPrio) (context.Context, func(), error) {
 	s.mu.Lock()
+	if prio == prioRequest {
+		s.asking++
+	}
 	for {
-		if !s.held {
+		if !s.held && (prio == prioRequest || s.asking == 0) {
+			if prio == prioRequest {
+				s.asking--
+			}
 			sctx, cancel := context.WithCancelCause(ctx)
 			s.held, s.prio, s.cancel = true, prio, cancel
 			s.mu.Unlock()
@@ -166,6 +188,12 @@ func (s *scrubSlot) take(ctx context.Context, prio scrubPrio) (context.Context, 
 		select {
 		case <-changed:
 		case <-ctx.Done():
+			s.mu.Lock()
+			if prio == prioRequest {
+				s.asking--
+				s.broadcast()
+			}
+			s.mu.Unlock()
 			return nil, nil, context.Cause(ctx)
 		}
 		s.mu.Lock()
@@ -253,8 +281,8 @@ func (c *Cache) scrubber(ctx context.Context) {
 // scrubPass runs every scrub due now, one after another, and answers the
 // repositories it scrubbed, in order, and when the next interval falls due —
 // zero when no copy waits on one. Each takes the node's one scrub (scrubSlot)
-// before it picks what to scrub, so a scrub a report preempted is picked again
-// after the report's.
+// before it picks what to scrub, so it never takes it while a request's waits,
+// and a scrub a report preempted is picked again after the report's.
 func (c *Cache) scrubPass(ctx context.Context) ([]string, time.Time) {
 	var done []string
 	for ctx.Err() == nil && c.life.Err() == nil {
@@ -414,18 +442,20 @@ func (c *Cache) scrubAsked(inc *incarnation) reportOutcome {
 
 // runScrub runs one scrub of inc, pinned and marked scrubbing by its caller,
 // under sctx — the node's scrub slot's context (scrubSlot) — and records it:
-// when it ended, whether it found anything, and what it found on the repair
-// mark, with a repair round asked. A scrub the cache's stop, its caller's
-// context or a preemption ended records nothing and leaves the copy due for
-// why as it was, and answers the context's cause; one that could not list a
-// file records what it read, so the cooldown and the interval bound how soon
-// it runs again, and says so.
+// when it began and ended, whether it found anything, the packs it found
+// whole, and what it found on the repair mark, with a repair round asked. A
+// scrub the cache's stop, its caller's context or a preemption ended records
+// nothing and leaves the copy due for why as it was (none for a request's),
+// and answers the context's cause; one that could not list a file records
+// what it read, so the cooldown and the interval bound how soon it runs again,
+// and says so.
 func (c *Cache) runScrub(sctx context.Context, e *entry, inc *incarnation, trigger checkTrigger,
 	why scrubWhy) (scrubbed, error) {
 
 	ctx, cancel := context.WithCancelCause(sctx)
 	//nolint:contextcheck // The cache's lifetime ends the scrub too: Stop must end its reads however long the pass's ctx lives.
 	stop := context.AfterFunc(c.life, func() { cancel(ErrStopped) })
+	began := time.Now()
 	out, err := c.scrub(ctx, e, inc, trigger)
 	stop()
 	ended := ctx.Err() != nil
@@ -442,6 +472,7 @@ func (c *Cache) runScrub(sctx context.Context, e *entry, inc *incarnation, trigg
 	case e.current == inc && !e.dead && !inc.retired:
 		now := c.now()
 		inc.scrubbedAt, inc.scrubBase, inc.scrubFound = now, now, len(out.damaged) > 0
+		inc.scrubBegan, inc.scrubEnded, inc.scrubWhole = began, time.Now(), out.whole
 		inc.scrubAsked = time.Time{}
 		for _, f := range out.damaged {
 			if inc.repair.found == nil {
@@ -469,11 +500,70 @@ func (c *Cache) runScrub(sctx context.Context, e *entry, inc *incarnation, trigg
 	return out, nil
 }
 
+// scrubFor runs a scrub of inc for requests whose in-place round repaired
+// nothing (Cache.escalate: a request's repair, rebuild.go) and whose failing
+// processes began at or before began (zero: unknown) — the node's one scrub,
+// taken ahead of every scrub the scrubber has due and preempting a routine
+// one it is running (scrubSlot) — and answers what it found: its findings, on
+// the repair mark already with a repair round asked, and the packs it found
+// whole. What another scrub of inc already said answers instead, unread
+// again: findings it made that still wait for their repair, which is the
+// answer; or, when it found nothing, its verdict, when it began after every
+// failure it is asked about (it read the bytes they failed on) or ended
+// within ScrubCooldown with no repair written into inc since (the same
+// bytes would be found whole again). Nothing at all for an incarnation no
+// longer current; ErrStopped when the cache stops.
+//
+// It takes no context: a request's scrub runs on the cache's lifetime, never
+// a caller's, since every caller of the round that asks it shares its answer
+// and one leaving must not end it for the rest.
+//
+//nolint:contextcheck // the scrub slot's context is derived from the cache's lifetime (above)
+func (c *Cache) scrubFor(e *entry, inc *incarnation, began time.Time) (scrubbed, error) {
+	sctx, give, err := c.scrubs.take(c.life, prioRequest)
+	if err != nil {
+		return scrubbed{}, ErrStopped
+	}
+	defer give()
+	// No scrub of the copy runs: the scrubber marks one scrubbing only
+	// while it holds the node's one scrub, which this request now does.
+	e.mu.Lock()
+	recent := !inc.scrubbedAt.IsZero() && !inc.scrubFound &&
+		((!began.IsZero() && inc.scrubBegan.After(began)) ||
+			(c.now().Sub(inc.scrubbedAt) < ScrubCooldown && !inc.repairWrite.After(inc.scrubEnded)))
+	switch {
+	case e.dead || e.current != inc || inc.retired:
+		e.mu.Unlock()
+		return scrubbed{}, nil
+	case len(inc.repair.found) > 0:
+		var out scrubbed
+		for _, f := range inc.repair.found {
+			out.damaged = append(out.damaged, f)
+		}
+		e.mu.Unlock()
+		return out, nil
+	case recent:
+		whole := slices.Clone(inc.scrubWhole)
+		e.mu.Unlock()
+		return scrubbed{whole: whole}, nil
+	}
+	// Every file, vouched or not: it answers whatever scrub of the copy was
+	// due, which is due again only if it is ended first.
+	why := inc.scrubDue
+	inc.scrubbing, inc.scrubRunning, inc.scrubDue = true, prioRequest, 0
+	inc.pins++
+	e.mu.Unlock()
+	return c.runScrub(sctx, e, inc, triggerRequest, why)
+}
+
 // scrubbed is what one scrub found: every file it found failing, at the
-// identity it failed at, how many files were sound, and the bytes read.
+// identity it failed at, how many files were sound, the packs whose three
+// files it found sound, by checksum (what a rebuild may link rather than
+// download, seedRebuild), and the bytes read.
 type scrubbed struct {
 	damaged []checkedFile
 	sound   int
+	whole   []string
 	bytes   int64
 }
 
@@ -507,6 +597,8 @@ func (c *Cache) scrub(ctx context.Context, e *entry, inc *incarnation, trigger c
 		}
 	}()
 	p := c.pieces(c.scrubHold)
+	// soundOf counts each pack's files found sound: three is a pack whole.
+	soundOf := map[string]int{}
 	for _, f := range files {
 		path := filepath.Join(inc.dir, f.rel)
 		if trigger == triggerFirst && f.kind != filePack {
@@ -514,6 +606,9 @@ func (c *Cache) scrub(ctx context.Context, e *entry, inc *incarnation, trigger c
 			skip := vouchedAt(inc, f.rel, lstatID(path))
 			e.mu.Unlock()
 			if skip {
+				if cs, ok := packOfRel(f.rel); ok {
+					soundOf[cs]++
+				}
 				continue
 			}
 		}
@@ -539,6 +634,9 @@ func (c *Cache) scrub(ctx context.Context, e *entry, inc *incarnation, trigger c
 		case v == hashSound:
 			c.countCheck(f.kind, checkSound, trigger)
 			out.sound++
+			if m := packFileName.FindStringSubmatch(filepath.Base(f.rel)); m != nil {
+				soundOf[m[1]]++
+			}
 			e.mu.Lock()
 			vouch(inc, f.rel, id)
 			e.mu.Unlock()
@@ -550,6 +648,12 @@ func (c *Cache) scrub(ctx context.Context, e *entry, inc *incarnation, trigger c
 		c.log.Warn("code_cache_check_damaged", "repo", e.id, "incarnation", inc.n, "file", f.rel,
 			"trigger", string(trigger), "action", repairAction(f.rel))
 	}
+	for cs, n := range soundOf {
+		if n == 3 {
+			out.whole = append(out.whole, cs)
+		}
+	}
+	slices.Sort(out.whole)
 	return out, nil
 }
 

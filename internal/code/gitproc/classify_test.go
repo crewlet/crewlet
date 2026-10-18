@@ -380,7 +380,16 @@ func removePack(t *testing.T, stem string) {
 // damages its own copy, every byte offset read from the file's own header and
 // table of contents.
 func formatCases(f *fixture) []damageCase {
-	corrupt := func(r ...string) result { return result{rows: r, kind: gitproc.ErrCorrupt, parts: gitproc.PartPack} }
+	packed := packedRow
+	// corrupt is a pack's damage named by r; where the row naming a corrupt
+	// packed object is among them, the pack it names is a hint as well.
+	corrupt := func(r ...string) result {
+		res := result{rows: r, kind: gitproc.ErrCorrupt, parts: gitproc.PartPack}
+		if slices.Contains(r, packedRow) {
+			res.hints = 1
+		}
+		return res
+	}
 	missing := func(r ...string) result {
 		return result{rows: r, kind: gitproc.ErrMissingObject, parts: gitproc.PartObject}
 	}
@@ -389,7 +398,6 @@ func formatCases(f *fixture) []damageCase {
 	midxFatal := func(r ...string) result {
 		return result{rows: r, kind: gitproc.ErrCorrupt, parts: gitproc.PartMultiPackIndex}
 	}
-	packed := `packed object %s (stored in %s) is corrupt`
 	notOurs := `git upload-pack: not our ref %s`
 	ignoring := `ignoring existing multi-pack-index; checksum mismatch`
 	hashMismatch := `hash mismatch %s`
@@ -898,29 +906,34 @@ func receiveCut(_ *testing.T, d *damaged) gitproc.Cmd {
 		Stdin: bytes.NewReader(d.stdin), Class: gitproc.ClassTransfer, Deadline: gitproc.ReadDeadline, Indexed: indexed}
 }
 
-// unknownType is what an entry of an unknown type is reported as.
+// packedRow is the row naming a corrupt packed object: a pack's damage,
+// whose message names the pack — recorded as a hint as well, as the same
+// sentence through a bare "%s" is from 2.56.
+const packedRow = `packed object %s (stored in %s) is corrupt`
+
+// unknownType is what an entry of an unknown type is reported as: the pack
+// named as a hint on every git — by the row naming the corrupt object before
+// 2.56, and by its sentence through "%s" from it.
 func unknownType(running gitproc.Version) result {
 	r := result{rows: rows(`unknown object type %i at offset %lu in %s`), kind: gitproc.ErrCorrupt,
-		parts: gitproc.PartPack}
-	if running.AtLeast(v(2, 56)) {
-		r.hints = 1
-		return r
+		parts: gitproc.PartPack, hints: 1}
+	if !running.AtLeast(v(2, 56)) {
+		r.rows = append(r.rows, packedRow)
 	}
-	r.rows = append(r.rows, `packed object %s (stored in %s) is corrupt`)
 	return r
 }
 
 // sizeOff is S1 on each git: before 2.55 what an object git cannot find is
-// reported as (older), 2.55 the corrupt object's own row, and from 2.56 that
-// sentence through "%s" alone — no kind, no damage, one hint.
+// reported as (older), 2.55 the corrupt object's own row — the pack it names
+// a hint as well — and from 2.56 that sentence through "%s" alone — no kind,
+// no damage, one hint.
 func sizeOff(older result) func(gitproc.Version) result {
 	return func(running gitproc.Version) result {
 		switch {
 		case running.AtLeast(v(2, 56)):
 			return result{kind: gitproc.ErrFailed, hints: 1}
 		case running.AtLeast(v(2, 55)):
-			return result{rows: rows(`packed object %s (stored in %s) is corrupt`), kind: gitproc.ErrCorrupt,
-				parts: gitproc.PartPack}
+			return result{rows: rows(packedRow), kind: gitproc.ErrCorrupt, parts: gitproc.PartPack, hints: 1}
 		}
 		return older
 	}
