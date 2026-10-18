@@ -58,7 +58,7 @@ import {
 } from "react";
 import { href, useLeaveGuard, useNavigator, useParam, useUnloadGuard } from "~/app/router.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
-import { matchesRow } from "~/app/keymap.ts";
+import { useUndoKeys } from "~/lib/useUndoKeys.ts";
 import { useClickOnNothing } from "~/ui/clickOnNothing.ts";
 import { fmtDateTime, plural } from "~/lib/format.ts";
 import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
@@ -164,8 +164,6 @@ import {
   EmptyState,
   IconButton,
   InlineCode,
-  isComposing,
-  isModalLayerOpen,
   Kbd,
   LayerHost,
   Menu,
@@ -1033,22 +1031,11 @@ function BuilderScreen({
 
   // Undo and redo from the keyboard, anywhere in the builder that is not a
   // text field (where the same keys undo typing) and never under a modal.
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.defaultPrevented || isComposing(e) || isModalLayerOpen()) return;
-      if (e.altKey) return;
-      const redo = matchesRow("builder.redo", e);
-      if (!redo && !matchesRow("builder.undo", e)) return;
-      const root = container.current;
-      const target = e.target instanceof HTMLElement ? e.target : null;
-      if (!root || (target && target !== document.body && !root.contains(target))) return;
-      if (target && isTextEntry(target)) return;
-      e.preventDefault();
-      dispatch({ type: redo ? "redo" : "undo" });
-    }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [dispatch, container]);
+  useUndoKeys({
+    container,
+    onUndo: () => dispatch({ type: "undo" }),
+    onRedo: () => dispatch({ type: "redo" }),
+  });
 
   // ---- Selection ------------------------------------------------------------
 
@@ -2169,16 +2156,6 @@ function nameIn(key: NodeKey, drafts: readonly Draft[]): string | null {
     if (found) return found.node.data.name || null;
   }
   return null;
-}
-
-/** Whether keys pressed in an element edit text there. */
-function isTextEntry(el: HTMLElement): boolean {
-  if (el.isContentEditable) return true;
-  if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return true;
-  if (!(el instanceof HTMLInputElement)) return false;
-  return !["checkbox", "radio", "button", "submit", "reset", "range", "color", "file"].includes(
-    el.type,
-  );
 }
 
 function DialogHost({

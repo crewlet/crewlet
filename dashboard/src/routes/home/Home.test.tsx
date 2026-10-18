@@ -13,7 +13,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { EMPTY_VALUE, LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import type { ReactNode } from "react";
-import { Home, greeting } from "./Home.tsx";
+import { Home } from "./Home.tsx";
+import { greeting } from "./model.ts";
 import { Inbox } from "~/routes/inbox/Inbox.tsx";
 import { NOBODY_SENTENCE } from "./Decisions.tsx";
 import { Router } from "~/app/router.tsx";
