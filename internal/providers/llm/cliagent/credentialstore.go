@@ -31,10 +31,14 @@ func (p *Provider) exportLogin(ctx context.Context, home, cache string) ([]byte,
 // a sync writes.
 func (p *Provider) providerKey() string { return p.key }
 
-// homeEnv is the child environment a call in home gets, from [buildEnv], so a
-// credential-store command reads the database and the settings the call itself
-// will: an import that wrote into a different XDG_DATA_HOME than the call reads
-// from would report success and sign nobody in.
+// homeEnv is the child environment for a command run in home, from
+// [buildEnv], so a credential-store command reads and writes the database the
+// call itself will: an import that wrote into a different XDG_DATA_HOME than
+// the call reads from would report success and sign nobody in. It shares the
+// home's variables and the profile's isolation switches with the call, and
+// NOT the call's settings, which a call reads from its own working directory
+// ([cliprofile.Profile.WorkConfigEnv]) — a command in a home has none, so it
+// runs with no settings file at all, and the import and export need none.
 func (p *Provider) homeEnv(home, cache string) []string {
 	return buildEnv(p.profile, &Checkout{Home: home, Cache: cache}, p.env, p.auth)
 }

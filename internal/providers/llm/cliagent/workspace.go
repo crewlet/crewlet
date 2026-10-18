@@ -533,9 +533,13 @@ func (w *Workspace) emptyLoginHome() error {
 // the CLI started from, and the baseline would then excuse a write it should
 // have refused.
 //
-// A login held in the CLI's own database is IMPORTED last, once the settings
-// files are in place, because the import is the CLI itself starting in this
-// home and reading them: see [Workspace.importLogin].
+// A login held in the CLI's own database is IMPORTED last, after the home's
+// own settings files, because the import is the CLI itself starting in this
+// home and reads whatever global settings a home holds: see
+// [Workspace.importLogin]. The one profile with a credential store today,
+// OpenCode, seeds nothing in the home — its settings are each call's own
+// ([cliprofile.Profile.WorkConfigEnv]) — so its import reads only the
+// database location the home's variables name.
 func (w *Workspace) seed(ctx context.Context, home, cache string, store loginStore) (map[string]string, error) {
 	shared := w.CredentialsDir()
 	seeded := map[string]string{}
