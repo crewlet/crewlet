@@ -925,13 +925,14 @@ func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 	// tag.
 	outerClause, outerArgs := outer.joinedFilter(key)
 	scoped := set.and(outerClause, outerArgs)
-	joined := groupAxis{
-		Expr: inner.Expr, ExprArgs: inner.ExprArgs,
-		Join: outer.Join + inner.Join,
-		JoinArgs: append(append([]any{}, outer.JoinArgs...),
-			inner.JoinArgs...),
-		Multi: inner.Multi, Unset: inner.Unset,
-	}
+	// THE INNER AXIS WHOLE, with the outer join added in front of its own.
+	// Rebuilt field by field it lost its declared order, so a lane board on
+	// a closed set — statuses, priorities, the due bands — came back largest
+	// lane first and reshuffled whenever work moved, which is exactly what
+	// [groupAxis.Order] exists to stop for a column.
+	joined := inner
+	joined.Join = outer.Join + inner.Join
+	joined.JoinArgs = append(append([]any{}, outer.JoinArgs...), inner.JoinArgs...)
 	// BOTH JOINS' ARGUMENTS RIDE ON THE AXIS, in statement order: the
 	// count statement writes its joins before its WHERE, so the outer
 	// join's binding comes first, then the inner's, then the predicate's.
