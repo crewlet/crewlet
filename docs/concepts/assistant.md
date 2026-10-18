@@ -261,10 +261,19 @@ These limits are structural: they hold whatever the model is asked or reads.
   changes nothing in Crewlet without your approval, but what it fetches from
   the web is not checked by anyone. Do not hand deep work a task whose data
   must not leave the company.
-- **It cannot manage access or secrets.** People, permissions, tokens,
-  invitations, secrets, setup, configuration changes, fleet operations and
-  purges are never available to it, even to an administrator. Make those
-  changes on their own screens.
+- **It cannot sign anybody in or handle a secret.** Signing in and the session
+  and token ceremonies (creating or inviting a person, minting or revoking a
+  token, resetting a password or a second factor, ending sessions), anything
+  that carries a credential or a secret in clear (revealing or writing a
+  secret, connecting an integration), and approving its own proposals are never
+  available to it, even to an administrator. Make those changes on their own
+  screens.
+- **An administrator's other changes are proposals too.** A configuration
+  change, editing what a person may do, a fleet operation, purging a task, a
+  page or an artifact, and erasing or pruning a chat room's messages or setting
+  its horizon are each prepared for an administrator to approve, at the same
+  recent sign-in the screen would ask. A change that destroys something for
+  good says so at the top of its card.
 - **It cannot read other people's conversations**, and nobody else can read
   yours, with the one audited exception below.
 - **Instructions found in your data cannot make it write.** A task

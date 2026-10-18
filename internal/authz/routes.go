@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +41,12 @@ type Policy struct {
 	// holds nothing: it creates it, or it is refused and the member is added
 	// elsewhere. Nil for every other route. See [Absent].
 	Absent *Absent
+
+	// Effect is what a POST to this route does to what its path names: it
+	// creates, rewrites, destroys or only reads it. Every POST declares one
+	// (a walk in internal/api holds them), and no other method may. See
+	// [Effect].
+	Effect Effect
 
 	// DryRun says the write answers `?dry_run=true` as a check: the same
 	// request, judged in the same order, that stores, activates and publishes
@@ -93,6 +100,76 @@ func AddedElsewhere(where string) *Absent { return &Absent{Elsewhere: where} }
 // WhenAbsent is p declaring what a PUT to an empty address does.
 func (p Policy) WhenAbsent(a *Absent) Policy {
 	p.Absent = a
+	return p
+}
+
+// Effect is what a POST does to what its path names, DECLARED WHERE THE ROUTE
+// IS MOUNTED beside [Absent], for the same reader: the Dashboard Assistant's
+// preview of a generic change (internal/assistant/catalog) titles a change and
+// rates its risk by it.
+//
+// THE METHOD SAYS IT FOR EVERY OTHER WRITE: a PUT replaces what its address
+// holds, a PATCH merges into it and a DELETE takes it away. A POST's says
+// nothing, and read off its method the assistant called every POST a create,
+// so a person approving a purge read "Create purge" under "Approve and
+// create", in the ordinary tone, with no word that anything goes for good.
+// Only the route knows which it is, so the route says.
+type Effect string
+
+const (
+	// EffectCreates is a POST that adds a record: a member of the collection
+	// its path names (a task, a page, a view), or one beneath the record it
+	// names (a comment, a version, an upload).
+	EffectCreates Effect = "creates"
+	// EffectRewrites is a POST that acts on what its path names and keeps
+	// it: a rename, a restore, a move, a revert, a fleet gesture that can be
+	// taken back.
+	EffectRewrites Effect = "rewrites"
+	// EffectDestroys is a POST that destroys what its path names, or a part
+	// of it, for good: a purge, an erase, a prune, a member taken out of the
+	// fleet's broker, sessions ended.
+	EffectDestroys Effect = "destroys"
+	// EffectReads is a POST that changes nothing: its body is a question too
+	// large or too sensitive for a URL (the files a publish would take, the
+	// names of the secrets to reveal, a credential to try at its vendor).
+	EffectReads Effect = "reads"
+	// EffectCalls is the act route's: a POST that calls the tool its path
+	// names, which alone decides what changes. The act route decides inside
+	// its handler and is mounted outside every [Router], so the table that
+	// binds it says so (internal/api's AssistantRoutes), and no route
+	// mounted here may.
+	EffectCalls Effect = "calls"
+)
+
+// Effects are the five, in declaration order.
+var Effects = []Effect{EffectCreates, EffectRewrites, EffectDestroys, EffectReads, EffectCalls}
+
+// Valid reports whether e is an effect this build knows.
+func (e Effect) Valid() bool { return slices.Contains(Effects, e) }
+
+// Creating is p declaring that its POST adds a record ([EffectCreates]).
+func (p Policy) Creating() Policy {
+	p.Effect = EffectCreates
+	return p
+}
+
+// Rewriting is p declaring that its POST acts on what its path names and keeps
+// it ([EffectRewrites]).
+func (p Policy) Rewriting() Policy {
+	p.Effect = EffectRewrites
+	return p
+}
+
+// Destroying is p declaring that its POST destroys what its path names, or a
+// part of it, for good ([EffectDestroys]).
+func (p Policy) Destroying() Policy {
+	p.Effect = EffectDestroys
+	return p
+}
+
+// Reading is p declaring that its POST changes nothing ([EffectReads]).
+func (p Policy) Reading() Policy {
+	p.Effect = EffectReads
 	return p
 }
 
@@ -191,6 +268,23 @@ func absentProblem(pattern string, a *Absent) string {
 		return "declares what an empty address does, which only a PUT's address has"
 	case a.Creates == (strings.TrimSpace(a.Elsewhere) != ""):
 		return "declares an empty address both created and added elsewhere, or neither"
+	}
+	return ""
+}
+
+// effectProblem says why a route's [Effect] cannot be mounted, or "": only a
+// POST's method says nothing of what it does, and a route mounted here never
+// calls a tool ([EffectCalls] is the act route's alone).
+func effectProblem(pattern string, e Effect) string {
+	method, _, _ := strings.Cut(pattern, " ")
+	switch {
+	case e == "":
+		return ""
+	case method != http.MethodPost:
+		return "declares what a POST does, which its method already says"
+	case !e.Valid() || e == EffectCalls:
+		return "declares the effect " + strconv.Quote(string(e)) + ", which a route " +
+			"mounted here does not have"
 	}
 	return ""
 }
@@ -440,6 +534,9 @@ func (t *Router) Handle(pattern string, p Policy, h http.Handler) error {
 			"names the action "+string(p.Action)+", which this build has no rule for")
 	}
 	if problem := absentProblem(pattern, p.Absent); problem != "" {
+		return newPolicyError(pattern, problem)
+	}
+	if problem := effectProblem(pattern, p.Effect); problem != "" {
 		return newPolicyError(pattern, problem)
 	}
 	if problem := writeFormProblem(pattern, p); problem != "" {

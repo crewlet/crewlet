@@ -97,6 +97,11 @@ type Route struct {
 	// route, and for a PUT that declares nothing, which then creates
 	// nothing a preview would propose.
 	Absent *authz.Absent
+	// Effect is what a POST here does to what its path names, as the route
+	// was mounted with it ([authz.Effect]): what its change is titled by and
+	// whether it is destructive. The act route calls a tool
+	// ([authz.EffectCalls]). Empty for every other method.
+	Effect authz.Effect
 	// DryRun is a write that answers `?dry_run=true` as a check
 	// ([authz.Policy.Checked]): the preview runs it before any card is drawn.
 	DryRun bool

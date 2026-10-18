@@ -39,6 +39,34 @@ func TestEveryRowStatesHowRecentAProofItAsksFor(t *testing.T) {
 	}
 }
 
+// A VERB NOTHING UNDOES ASKS A RECENT PROOF, AND THE PURGES AND CHAT'S
+// DESTRUCTIONS ARE SUCH VERBS.
+//
+// What a person approves before a gesture says it cannot be undone where the
+// row says so (authz.IrreversibleOf), so the row is held to both halves: each
+// verb that destroys for good is marked, and a marked verb asks the step-up
+// window, which is the decision "nothing undoes it" was made for. Mutation:
+// unmark a purge, or mark a verb that asks no recent proof, and this fails.
+func TestAVerbNothingUndoesAsksARecentProof(t *testing.T) {
+	t.Parallel()
+	for _, a := range []authz.Action{authz.ActionWorkPurge, authz.ActionPagePurge,
+		authz.ActionArtifactPurge, authz.ActionChatErase, authz.ActionChatPrune,
+		authz.ActionChatRetention} {
+		if gone, _ := authz.IrreversibleOf(a); !gone {
+			t.Errorf("%s destroys for good and its row does not say so", a)
+		}
+	}
+	for _, a := range authz.Actions() {
+		gone, ok := authz.IrreversibleOf(a)
+		if !ok {
+			t.Errorf("%s is listed and IrreversibleOf does not know it", a)
+		}
+		if r, _ := authz.RecencyOf(a); gone && r != iam.RecencyStepUp {
+			t.Errorf("%s is undone by nothing and asks %q, not a recent proof", a, r)
+		}
+	}
+}
+
 // A SELF ARM'S OWN WINDOW NAMES A REAL ONE, ON A ROW THAT HAS A SELF ARM.
 //
 // The second window is read off the decision's reason, so one stated on a row

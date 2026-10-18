@@ -143,6 +143,12 @@ const (
 	// --- beyond recovery -------------------------------------------- //
 	ActionWorkPurge Action = "work.purge"
 	ActionPagePurge Action = "pages.purge"
+	// A ROOM'S MESSAGES DESTROYED, and its horizon set. DOTTED, because no
+	// tool is named for any of the three: each is a route of the human
+	// write surface, said in nobody's voice in the room (internal/chatlet).
+	ActionChatErase     Action = "chat.erase"
+	ActionChatPrune     Action = "chat.prune"
+	ActionChatRetention Action = "chat.channel.retention"
 
 	// --- what somebody wrote ---------------------------------------- //
 	ActionPageCommentEdit   Action = "pages.comment.edit"
@@ -587,6 +593,17 @@ type rule struct {
 	// CHECKED BEFORE THE CLASS, so an agent holding the permission is told
 	// it is a seat rather than that it lacks a capability it plainly has.
 	humanOnly bool
+
+	// irreversible marks a verb NOTHING UNDOES: a purge, an erase of chat
+	// messages, a prune of a room's past, and a room's horizon, which is a
+	// prune on a delay. A fact about the VERB, beside humanOnly, and read by
+	// whatever shows the gesture to a person before they make it (the
+	// Dashboard Assistant's card marks it destructive and says it cannot be
+	// undone): a route's method cannot say it, since a purge is a POST and
+	// a horizon a PUT, and the row is where "a recent proof, since nothing
+	// undoes it" was already decided. A walk holds every such row to a
+	// recent proof. Decides nothing in [Decide].
+	irreversible bool
 
 	// seatOnly is humanOnly's MIRROR: a verb ONLY AN AGENT SEAT may take —
 	// putting a question to a colleague seat, starting a coding run — with
@@ -1075,10 +1092,30 @@ var rules = map[Action]rule{
 	// it, so it is the one tidy an author does not take for themselves —
 	// trash and restore are theirs — and it asks the step-up window as
 	// every other irreversible gesture does.
-	ActionWorkPurge: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyStepUp,
-		assist: AssistApprove},
-	ActionPagePurge: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyStepUp,
-		assist: AssistApprove},
+	ActionWorkPurge: {class: ClassAdmin, humanOnly: true, irreversible: true,
+		recency: iam.RecencyStepUp, assist: AssistApprove},
+	ActionPagePurge: {class: ClassAdmin, humanOnly: true, irreversible: true,
+		recency: iam.RecencyStepUp, assist: AssistApprove},
+	// A CHAT DESTRUCTION IS A PURGE'S: admin's, a person's or a credential's
+	// — never an agent's, which could erase the evidence of what it said —
+	// and a recent proof's, since nothing undoes it. An erase and a prune
+	// destroy what people wrote; a room's retention is a prune on a delay,
+	// so setting a shorter one is the same decision taken in advance.
+	//
+	// NOT SEATED, unlike every other chat verb: none of the three is said in
+	// a room, so the store records whoever made it under their own name —
+	// an administrator's pipeline token included — and none READS the room
+	// it destroys from, which is what lets an administrator who is in no
+	// private room take a credential pasted into one out of it without being
+	// shown what else was said there. Which room exists is the store's to
+	// answer; a destruction of a room the store does not hold destroys
+	// nothing and says so.
+	ActionChatErase: {class: ClassAdmin, humanOnly: true, irreversible: true,
+		recency: iam.RecencyStepUp, assist: AssistApprove},
+	ActionChatPrune: {class: ClassAdmin, humanOnly: true, irreversible: true,
+		recency: iam.RecencyStepUp, assist: AssistApprove},
+	ActionChatRetention: {class: ClassAdmin, humanOnly: true, irreversible: true,
+		recency: iam.RecencyStepUp, assist: AssistApprove},
 
 	// --- the org chart ------------------------------------------------- //
 	//
@@ -1247,7 +1284,7 @@ var rules = map[Action]rule{
 		assist: AssistApprove},
 	// A PURGE IS ADMIN'S, A PERSON'S AND A RECENT PROOF'S, as every other
 	// purge is: nothing undoes it.
-	ActionArtifactPurge: {class: ClassAdmin, humanOnly: true,
+	ActionArtifactPurge: {class: ClassAdmin, humanOnly: true, irreversible: true,
 		presence: PresenceRequired, recency: iam.RecencyStepUp, assist: AssistApprove},
 	// OWNERSHIP MOVES BY A PERSON'S GESTURE, never a token's and never a
 	// seat's: an agent handing its work to itself, or a pipeline moving
@@ -1337,6 +1374,17 @@ var rules = map[Action]rule{
 func RecencyOf(a Action) (iam.Recency, bool) {
 	r, ok := rules[a]
 	return r.recency, ok
+}
+
+// IrreversibleOf reports whether nothing undoes a verb ([rule.irreversible]),
+// and whether the table knows the verb at all.
+//
+// EXPORTED FOR WHAT SHOWS A GESTURE TO A PERSON before they make it (the
+// Dashboard Assistant's card), on [RecencyOf]'s terms: it says what the
+// gesture is, and decides nothing.
+func IrreversibleOf(a Action) (bool, bool) {
+	r, ok := rules[a]
+	return r.irreversible, ok
 }
 
 // SelfRecencyOf reports the proof a verb asks of its SELF arm where that

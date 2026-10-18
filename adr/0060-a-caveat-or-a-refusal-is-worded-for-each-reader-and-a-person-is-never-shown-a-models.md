@@ -146,8 +146,9 @@ Chatlet's tools and a person's chat gestures (an argument past its grammar or
 its cap, a gesture the room's rule refuses its caller, an archived room, a
 message carrying all the emoji it may, a name another room holds, a room this
 node cannot serve yet, and the read-state flush's mute cap and a room both
-muted and unmuted); and memory, delegation and sandbox tools a person's
-assistant can reach. The
+muted and unmuted) and the human write surface's chat verbs (an erase, a
+prune and a room's own horizon); and memory, delegation and sandbox tools a
+person's assistant can reach. The
 authority table's refusal already answers values a screen words itself
 (`reason`, `grants`) and needs none.
 

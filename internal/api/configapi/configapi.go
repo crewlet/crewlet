@@ -265,9 +265,6 @@ func (s *Service) Routes(mux authz.Mux) error {
 	read := func(pattern string, h http.HandlerFunc) {
 		mount(pattern, authz.ActionConfigRead, h)
 	}
-	write := func(pattern string, h http.HandlerFunc) {
-		mount(pattern, authz.ActionConfigWrite, h)
-	}
 	// THE ORG CHART'S ROUTES ARE ITS LEADS' TOO. The route admits whoever
 	// could lead some unit — admin, or anybody bound to a
 	// seat — before the body is read, and what the write changes is then
@@ -330,7 +327,11 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// surface performs: the pointer in the config is already correct, so
 	// there is no patch to make, and with no activation there is no apply
 	// and no refreshed secret snapshot. See [Service.Reload].
-	write("POST /config/reload", s.reload)
+	if err := router.Handle("POST /config/reload",
+		authz.Policy{Action: authz.ActionConfigWrite}.Rewriting(),
+		http.HandlerFunc(s.reload)); err != nil {
+		failures = append(failures, err)
+	}
 	// WHICH FIELDS NAME A ${VAR}, which is what an operator needs before
 	// they remove a credential. See [Service.References].
 	read("GET /config/references", s.references)
@@ -350,7 +351,10 @@ func (s *Service) Routes(mux authz.Mux) error {
 	read("GET /config/revisions/{id}/diff", s.diff)
 	// A REVERT IS JUDGED ON ITS WHOLE DIFF, from the active revision to the
 	// one reverted to, like any other write.
-	org("POST /config/revisions/{id}/revert", authz.ActionOrgWrite, s.revert)
+	if err := router.Handle("POST /config/revisions/{id}/revert",
+		orgPolicy(authz.ActionOrgWrite).Rewriting(), http.HandlerFunc(s.revert)); err != nil {
+		failures = append(failures, err)
+	}
 	// THE ENTITY ROUTES, one pair per addressable collection rather than a
 	// single {kind} wildcard: a wildcard would also match
 	// /config/revisions/{id}, and a route that answers for a path it was

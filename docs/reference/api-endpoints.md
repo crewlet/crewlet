@@ -813,8 +813,8 @@ is told what they lack, not sent to confirm who they are first.
 
 | Window | Setting (default) | What asks for it |
 |---|---|---|
-| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*` (a [dry run](#dry-runs) excepted, which changes nothing), `/setup`'s writes, `PUT`/`DELETE /secrets/{name}`, `POST /secrets/rekey` and revealing a value (`GET /secrets/{name}?reveal=true`, `POST /secrets/reveal`), the deployment's own controls (`POST /backup`, `POST /objects/migrate`, every `POST /worklet/retention*` and both `POST /fleet/broker/remove*`), the two purges (`POST /worklet/items/{key}/purge`, `POST /doclet/pages/{id}/purge`), and every `/iam` write: `POST /iam/people`, `PATCH /iam/people/{id}`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `DELETE /iam/invitations/{id}`, `POST /iam/people/{id}/mfa/reset`, `POST /iam/people/{id}/password-reset`, `POST /iam/credentials`, `DELETE /iam/credentials/{id}`, ending somebody else's sessions and `POST /iam/invalidate-all`; and your own `POST /auth/totp` and `POST /auth/totp/recovery` |
-| none | | Every read, the two deployment reads (`GET /worklet/retention/maintenance`, `GET /worklet/retention/reanchor`) included; ending your own sessions (`DELETE /iam/people/{id}/sessions` naming yourself), which is the first thing to do on finding somebody else in your account, while an administrator ending somebody else's asks `step_up`; changing your own password (`POST /auth/password`), whose current password (and code, from somebody who holds a second factor) is itself the proof; and every work and knowledge verb but the two purges: the tools, `/operator/mcp`, `/operator/act` and the rest of the human write surface |
+| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*` (a [dry run](#dry-runs) excepted, which changes nothing), `/setup`'s writes, `PUT`/`DELETE /secrets/{name}`, `POST /secrets/rekey` and revealing a value (`GET /secrets/{name}?reveal=true`, `POST /secrets/reveal`), the deployment's own controls (`POST /backup`, `POST /objects/migrate`, every `POST /worklet/retention*` and both `POST /fleet/broker/remove*`), the two purges (`POST /worklet/items/{key}/purge`, `POST /doclet/pages/{id}/purge`), chat's three destructions (`POST /chatlet/channels/{channel_id}/erase` and `/prune`, `PUT /chatlet/channels/{channel_id}/retention`), and every `/iam` write: `POST /iam/people`, `PATCH /iam/people/{id}`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `DELETE /iam/invitations/{id}`, `POST /iam/people/{id}/mfa/reset`, `POST /iam/people/{id}/password-reset`, `POST /iam/credentials`, `DELETE /iam/credentials/{id}`, ending somebody else's sessions and `POST /iam/invalidate-all`; and your own `POST /auth/totp` and `POST /auth/totp/recovery` |
+| none | | Every read, the two deployment reads (`GET /worklet/retention/maintenance`, `GET /worklet/retention/reanchor`) included; ending your own sessions (`DELETE /iam/people/{id}/sessions` naming yourself), which is the first thing to do on finding somebody else in your account, while an administrator ending somebody else's asks `step_up`; changing your own password (`POST /auth/password`), whose current password (and code, from somebody who holds a second factor) is itself the proof; and every work, knowledge and chat verb but the two purges and chat's three destructions: the tools, `/operator/mcp`, `/operator/act` and the rest of the human write surface |
 
 A proof that is too old is **`403 step_up_required`**, the code the sign-in
 surface answers for the same fact, carrying the window it needs so a client can
@@ -5985,7 +5985,8 @@ store, whatever became of it: see
 
 Everything a person does to the company's own work and pages — filing an item,
 moving it, commenting, arranging a board, writing a page, taking one out of
-circulation — as HTTP routes, under the name of whoever the request resolved
+circulation — and the three things an administrator does to its chat that no
+tool does, as HTTP routes, under the name of whoever the request resolved
 to. They are the **same tools** a seat holds in its turn and your own assistant
 holds over [`/operator/mcp`](#operatormcp--your-own-assistant): a route's body
 is the tool's own arguments, by the tool's own names, and its answer is the
@@ -6006,8 +6007,8 @@ whole number — is `400 invalid_body` rather than one of the two chosen for you
 
 Every route is **guarded**, reads and writes alike, and the half the company
 does not run is **absent** rather than refusing: a company on
-`tracker.backend: jira` gets `404 no_route` from the work routes, not a `503`
-that reads as an outage. The routes are mounted on **every** node and read the
+`tracker.backend: jira` gets `404 no_route` from the work routes, and one on a
+vendor's chat from the chat routes, not a `503` that reads as an outage. The routes are mounted on **every** node and read the
 halves each request finds, so a node that has not been handed a company yet
 answers them `503 no_active_revision` with a 15-second `Retry-After`: Worklet
 and Doclet come up with its first revision, under the same
@@ -6053,6 +6054,9 @@ route.
 | `DELETE` | `/doclet/pages/{id}` | Put the page in the trash | the page's **creator**, the lead of the page's container, or `admin`, with `doclet` |
 | `POST` | `/doclet/pages/{id}/restore` | Take it back | the same |
 | `POST` | `/doclet/pages/{id}/purge` | Destroy it: `?confirm=` repeats its **title**, `?reason=` is required | `admin`, a recent proof (`step_up`), and **never a seat** |
+| `POST` | `/chatlet/channels/{channel_id}/erase` | Destroy named messages of a room: `{"message_ids": […], "reason": "…"}`, with `?confirm=` repeating how many — see [below](#a-chat-erase-prune-or-horizon) | `admin`, a recent proof (`step_up`), and **never a seat** — a credential acting as itself included |
+| `POST` | `/chatlet/channels/{channel_id}/prune` | Destroy everything a room said before `?cutoff=` (RFC 3339), with `?confirm=` repeating it | the same |
+| `PUT` | `/chatlet/channels/{channel_id}/retention` | Set a room's own horizon: `{"retention_days": n}`, `0` keeping it for ever, or `null` for the company's | the same |
 
 **A page in the tool-skills container asks one question more.** Creating,
 saving, renaming, trashing, restoring or purging one is decided as
@@ -6105,7 +6109,7 @@ for one; otherwise its `message`, the code's own sentence, stands alone
 | `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, … | Somebody changed it after you read it (a stale `If-Match`, a title taken, a race lost), or the state the request needs is not there | `message`: read it again, or change what is in the way |
 | `409` | `invalid_input` | The `Idempotency-Key` already names a write to another object | send it under a new key |
 | `409` | `reader_changed` | The request names, in `X-Crewlet-Reader`, a principal its credential is not, and the guard refused it before it ran | nothing; ask `GET /auth/session` who the credential is — see [Auth](#routes) |
-| `422` | `invalid` | The domain refused the write on its own rules, such as a purge whose `?confirm=` names another item among them | `detail` in a person's words, where the refusal has them |
+| `422` | `invalid` | The domain refused the write on its own rules, such as a purge whose `?confirm=` names another item, an erase whose count or a prune whose cutoff it does not repeat, among them | `detail` in a person's words, where the refusal has them |
 | `500` | `internal_error` | The engine failed at something of its own, or a tool answered something that is not a receipt | nothing a retry changes; the reason, and anything the tool said instead, is in the node's log |
 | `503` | `unavailable`, `no_active_revision`, `identity_unavailable` | This node could not decide (it cannot tell who you are, or cannot read the chart yet), cannot establish whether the write landed, or its log refused the request | a `Retry-After`, and — for an unknown outcome — `"outcome": "unknown"` and the `op_id` to retry with, on every route, a tool-backed one included. A refusal waiting cannot clear on this node — it was evicted, it holds a record it cannot decode, the log is at its ceiling — carries **no** `Retry-After`: ask another node, or an operator |
 
@@ -6154,6 +6158,59 @@ the one line the project's lead is told, so a reason that would not fit that
 600-byte line is refused before anything is destroyed, rather than cut. A node that is offline or
 evicted keeps its copy until it replays, adopts a snapshot, is replaced or is
 destroyed. `crewlet worklet purge` is the same route from a shell.
+
+### A chat erase, prune or horizon
+
+The engine's own chat has three gestures no seat is given and no tool makes,
+because each destroys what people said — now or on a delay — and nothing
+undoes it. They are decided as the purges are: **`admin`, a recent proof, and
+never a seat**. Unlike every chat tool, none of them is said in the room, so
+none needs a seat to act as: an administrator's own token may make them, and
+each is recorded under whoever made it — the seat of a person, the login of a
+credential acting as itself.
+
+`POST /chatlet/channels/{channel_id}/erase?confirm=<count>` destroys the messages
+the body names — `{"message_ids": ["…"], "reason": "…"}`, at most 250 a
+request — on every data node, with the reactions, mentions and thread rows
+that hang off them. It is the precise tool: a credential pasted into one
+message. `?confirm=` repeats how many messages the request names, once a
+repeated id is folded, and a count that does not match is `422 invalid` and
+destroys nothing. The **reason is required, in the body** — at most 600 bytes,
+and never on the URL, which carries it into every proxy's access log —
+because the messages are gone and the erase record's reason is the only
+account of them that survives.
+
+`POST /chatlet/channels/{channel_id}/prune?cutoff=<instant>&confirm=<instant>`
+destroys everything the room said before the instant, on every data node — the
+blunt tool, and the one the retention duty runs on its own. `?confirm=`
+repeats the cutoff (the same instant, in any zone), and a cutoff in the future
+is refused, since that would empty the room rather than enforce a horizon.
+
+`PUT /chatlet/channels/{channel_id}/retention` sets how long one room keeps what
+it says — `{"retention_days": 90}`, `{"retention_days": 0}` to keep it for
+ever, `{"retention_days": null}` to return it to the company's
+`chat.chatlet.message_retention_days`. The field is required: an absent one would read
+as the company's horizon, and a request that said nothing would then destroy
+the past of a room somebody had set to keep for ever. A shorter horizon is a
+prune on a delay — the retention duty takes what it no longer covers on its
+next pass — which is why it is decided as one.
+
+**None of the three reads the room first.** The purges confirm against the row
+— the item's key, the page's title — and an administrator who could do that
+here would have to be shown a private room they are not in, or a direct
+conversation between two other people, to take a pasted credential out of it.
+So the confirmation is what the request itself destroys, repeated, and a room
+the store does not hold is the store's own answer.
+
+**A retry is the same destruction.** Each is bound to the request's
+`Idempotency-Key` and to what it destroys, in one canonical form — an erase's
+set of ids sorted and deduplicated with its reason, a prune's cutoff as an
+instant, the horizon as days or null — so the same erase named in another
+order is the same operation, and the same key sent with other messages, a
+later cutoff or another horizon is another operation that lands as asked,
+never answered from the first record while nothing it named was destroyed. An
+`unknown` answer is `503` with `outcome: "unknown"` and the `op_id` to send
+back.
 
 ### Somebody else's inbox
 

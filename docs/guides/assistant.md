@@ -54,9 +54,24 @@ says what the change does in plain words, read from the resource as it is now
 and what the change makes of it: "Add seat Technical Writer", "Remove seat QA
 Engineer", "Adopt version 4 of the brand kit", with one row per field that
 moves, each named by the seat or unit it belongs to ("Technical Writer ›
-Goal"). A change that deletes something, removes a member such as a seat, or
-removes fields is marked destructive: the card says what goes and whether the
-configuration history can revert it. The exact request, its body with secrets
+Goal"). A route that acts rather than writes a resource (a purge, a restore,
+a move) is titled by what it does, as the route itself declares it: "Purge
+item ENG-4", "Restore page Runbook", with everything the request sends as its
+rows, a prune's cutoff included. A record is named by what people call it, read
+with the person's own access where its address says nothing a person reads (a
+page by its title), and in plain words ("the page") where that read is not
+theirs, never by an internal id. A change that deletes something, destroys it
+for good, removes a member such as a seat, or removes fields is marked
+destructive: the card says what goes and whether the configuration history can
+revert it. Nothing undoes a purge, erasing or pruning a chat room's messages,
+or a room's horizon, so each of their cards leads with what goes, read from
+what the change sends (how many messages an erase takes, the instant a prune
+cuts at, how long the room keeps what it holds), and says it cannot be undone;
+keeping a room's messages for ever loses nothing, and is not marked
+destructive. A change that calls
+one of the tools the dashboard's own controls send (a reaction in chat, say)
+is shown as that call: titled by the tool ("React to message"), with the
+arguments it sends. The exact request, its body with secrets
 masked, is under **Technical details** for an administrator; everybody else
 reviews the rows, which are built from the same request. A change prepared against
 a resource that has moved since is refused rather than overwritten. Before any
@@ -73,7 +88,8 @@ person asked to remove leads the card ("This removes ..."). A task or a
 page that names no project or space
 is shown, and sent, with the one it will land in, or refused when the person's
 team owns none (ADR-0055). Adding a
-seat to the org chart, editing a person's permissions, purging a task or
+seat to the org chart, editing a person's permissions, purging a task,
+erasing or pruning a chat room's messages, setting a room's horizon or
 adopting a brand are all proposals the person approves, at the same step-up
 the screen would ask.
 

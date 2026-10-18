@@ -1212,8 +1212,10 @@ func (o Options) missing() error {
 func (a *App) mountDeployment(mux authz.Mux) error {
 	router := authz.NewRouter(mux, authz.ContextGuard(authz.NoChart{}))
 	var failures []error
-	a.deploymentRoutes(func(pattern string, h http.HandlerFunc) {
-		if err := router.Handle(pattern, deploymentPolicy(pattern), h); err != nil {
+	a.deploymentRoutes(func(pattern string, does authz.Effect, h http.HandlerFunc) {
+		policy := deploymentPolicy(pattern)
+		policy.Effect = does
+		if err := router.Handle(pattern, policy, h); err != nil {
 			failures = append(failures, err)
 		}
 	})
@@ -1222,17 +1224,18 @@ func (a *App) mountDeployment(mux authz.Mux) error {
 
 // deploymentRoutes names every route [App.mountDeployment] mounts, through the
 // mount it is handed: separate from the router, so a walk can read the whole
-// list without standing the deployment up.
-func (a *App) deploymentRoutes(mount func(string, http.HandlerFunc)) {
+// list without standing the deployment up. A POST says what it does
+// ([authz.Effect]); every other route passes none.
+func (a *App) deploymentRoutes(mount func(string, authz.Effect, http.HandlerFunc)) {
 	// A POST, and a read posture of any kind never opens it: copying every
 	// credential and every seat's memory to a path the caller names is not
 	// a read. There is no budget reset beside it — a window's turnover IS
 	// the reset (ADR-0019), and a raw reset would re-arm a company mid-window.
-	mount("POST /backup", a.serveBackup)
+	mount("POST /backup", authz.EffectCreates, a.serveBackup)
 	// The move of the company's files to an S3 bucket: a copy every
 	// object passes through, and on the final pass the fleet's record of
 	// where its files are. See objectsmigrate.go.
-	mount("POST /objects/migrate", a.serveMigrateObjects)
+	mount("POST /objects/migrate", authz.EffectRewrites, a.serveMigrateObjects)
 	// The three retention gestures that write. See retention.go.
 	a.mountRetention(mount)
 	// The capacity window's own control surface. It is the one thing a

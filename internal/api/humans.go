@@ -463,8 +463,8 @@ func workSurface(e *engine.Engine, operators *operator.Server,
 	return surface, nil
 }
 
-// nativeHalves are the tracker and knowledge-base halves this engine serves
-// now, and false where it has not been handed a company yet.
+// nativeHalves are the tracker, knowledge-base and chat halves this engine
+// serves now, and false where it has not been handed a company yet.
 //
 // [engine.Engine.NativeStarted] FIRST, and the halves after: it is monotonic,
 // so a half read as absent after it said "started" is one this company does
@@ -486,6 +486,12 @@ func nativeHalves(e *engine.Engine) (workapi.Halves, bool) {
 	}
 	if store, ok := engine.OperatorPageWriter(e); ok {
 		halves.PageStore = store
+	}
+	// CHAT'S WRITER THROUGH THE ROUTER, never this node's own store, for the
+	// tracker's reason; a node in a maintenance mode hands out none, and its
+	// chat routes answer as absent.
+	if rooms, ok := engine.OperatorChatWriter(e); ok {
+		halves.ChatStore = rooms
 	}
 	// THE CONVERSION IS THE POINT: a typed nil *objstore.Store inside the
 	// interface would pass the surface's own check and panic on the first

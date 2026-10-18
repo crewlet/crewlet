@@ -204,10 +204,12 @@ func (a *App) generationOf(stream string) (uint32, error) {
 // (internal/api/workapi), decided by the authority table's
 // [authz.ActionWorkPurge] like every other verb, with its op id taken from the
 // request's `Idempotency-Key`.
-func (a *App) mountRetention(mount func(string, http.HandlerFunc)) {
-	mount("POST /worklet/retention/ack", a.serveRetentionAck)
-	mount("POST /worklet/retention/evict/{node}", a.gate(true))
-	mount("POST /worklet/retention/readmit/{node}", a.gate(false))
+func (a *App) mountRetention(mount func(string, authz.Effect, http.HandlerFunc)) {
+	mount("POST /worklet/retention/ack", authz.EffectRewrites, a.serveRetentionAck)
+	// AN EVICTION IS TAKEN BACK by a readmission, its inverse commit, so it
+	// rewrites the node's standing rather than destroying it.
+	mount("POST /worklet/retention/evict/{node}", authz.EffectRewrites, a.gate(true))
+	mount("POST /worklet/retention/readmit/{node}", authz.EffectRewrites, a.gate(false))
 }
 
 // callerOpID is the operation id a caller brought in `?op_id=`, or a fresh one
@@ -360,13 +362,15 @@ type capacityRunner interface {
 // procedure requires to be stopped. Both cannot hold. What resolves it is that
 // the maintenance-mode node runs its API: these are that mode's own control
 // surface rather than the write routes the mode withholds.
-func (a *App) mountCapacity(mount func(string, http.HandlerFunc)) {
-	mount("POST /worklet/retention/capacity", a.serveSetCapacity)
-	mount("GET /worklet/retention/maintenance", a.serveMaintenanceStatus)
-	mount("POST /worklet/retention/maintenance/abandon", a.serveAbandon)
-	mount("POST /worklet/retention/maintenance/exclude", a.serveExclude)
-	mount("GET /worklet/retention/reanchor", a.serveReanchorStatus)
-	mount("POST /worklet/retention/reanchor", a.serveReanchor)
+func (a *App) mountCapacity(mount func(string, authz.Effect, http.HandlerFunc)) {
+	mount("POST /worklet/retention/capacity", authz.EffectRewrites, a.serveSetCapacity)
+	mount("GET /worklet/retention/maintenance", "", a.serveMaintenanceStatus)
+	mount("POST /worklet/retention/maintenance/abandon", authz.EffectRewrites, a.serveAbandon)
+	mount("POST /worklet/retention/maintenance/exclude", authz.EffectRewrites, a.serveExclude)
+	mount("GET /worklet/retention/reanchor", "", a.serveReanchorStatus)
+	// A REANCHOR DECLARES EVERY POSITION BELOW ITS NEW GENERATION STALE, and
+	// on a restored log discards what the restore did not hold.
+	mount("POST /worklet/retention/reanchor", authz.EffectDestroys, a.serveReanchor)
 }
 
 // serveReanchorStatus answers GET /worklet/retention/reanchor: the stream's own

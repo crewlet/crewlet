@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -143,13 +144,16 @@ func RenderBrokerRefusal(err error) (BrokerRefusal, bool) {
 // recent proof. The listing is a named read route over the `fleet_broker`
 // question, so the socket's query channel and REST answer it from one
 // implementation — see rest.go.
-func (a *App) mountFleetBroker(mount func(string, http.HandlerFunc)) {
-	mount("POST /fleet/broker/remove/{node}", func(w http.ResponseWriter, r *http.Request) {
-		a.serveBrokerRemove(w, r, voterByNode, r.PathValue("node"))
-	})
-	mount("POST /fleet/broker/remove-peer/{peer}", func(w http.ResponseWriter, r *http.Request) {
-		a.serveBrokerRemove(w, r, voterByPeer, r.PathValue("peer"))
-	})
+func (a *App) mountFleetBroker(mount func(string, authz.Effect, http.HandlerFunc)) {
+	// A MEMBER TAKEN OUT OF THE GROUP is gone from its quorum for good.
+	mount("POST /fleet/broker/remove/{node}", authz.EffectDestroys,
+		func(w http.ResponseWriter, r *http.Request) {
+			a.serveBrokerRemove(w, r, voterByNode, r.PathValue("node"))
+		})
+	mount("POST /fleet/broker/remove-peer/{peer}", authz.EffectDestroys,
+		func(w http.ResponseWriter, r *http.Request) {
+			a.serveBrokerRemove(w, r, voterByPeer, r.PathValue("peer"))
+		})
 }
 
 // voterName is how a removal route names the voter: the rule its path

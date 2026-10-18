@@ -95,10 +95,11 @@ const (
 	TransportAct = "act"
 	// TransportMCP is an operator's own assistant, `/operator/mcp`.
 	TransportMCP = "mcp"
-	// TransportWork is the human write surface's tool-backed routes,
-	// `/worklet/…` and `/doclet/pages/…` (internal/api/workapi): the scriptable
+	// TransportWork is the human write surface's routes, `/worklet/…`,
+	// `/doclet/pages/…` and `/chatlet/…` (internal/api/workapi): the scriptable
 	// resource REST a CLI or a script writes through, which calls the
-	// same dispatch rather than the tools directly.
+	// same dispatch rather than the tools directly, and whose verbs with
+	// no tool are recorded under it too.
 	TransportWork = "work"
 	// TransportAssistant is the Dashboard Assistant carrying out a write the
 	// person approved: the act route reached in process under an exec grant
