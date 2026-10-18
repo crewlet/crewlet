@@ -66,42 +66,49 @@ type Observer interface {
 // THE POSITION IS HERE because a viewer's cursor is a position: a screen that
 // reconnects says where it had reached, and a frame it cannot place is a frame
 // it must throw away.
+//
+// IT CROSSES THE FLEET, which is why every field is named on the wire: a node
+// whose own copy is out of service is relayed a sound peer's batches instead
+// of its own applier's (the engine's live relay), so what one node's applier
+// gathered is decoded by another — and a field that did not survive the trip
+// would be a frame rendered without it, on exactly the node nobody vouches
+// for. Additive, like every value that crosses between builds.
 type Applied struct {
 	// Position is where the record that caused this sits on the log.
-	Position statelog.Position
+	Position statelog.Position `json:"position"`
 
 	// Subject and Op are what the record was: the room's own state, its
 	// address, or a message in it.
-	Subject Subject
-	Op      OpKind
+	Subject Subject `json:"subject"`
+	Op      OpKind  `json:"op"`
 
 	// OpID is the record's idempotency key, so a caller that published
 	// this gesture recognises its own effect coming back.
-	OpID string
+	OpID string `json:"op_id"`
 
 	// ChannelID is the room, always — including for a message, whose
 	// subject id IS the room's.
-	ChannelID string
+	ChannelID string `json:"channel_id"`
 
 	// MessageID and ChannelSeq are the message this record wrote, and the
 	// contiguous number it landed at. Both empty and zero for a record
 	// that was not about one message.
-	MessageID  string
-	ChannelSeq int64
+	MessageID  string `json:"message_id,omitempty"`
+	ChannelSeq int64  `json:"channel_seq,omitempty"`
 
-	Actor     string
-	ActorKind AuthorKind
+	Actor     string     `json:"actor"`
+	ActorKind AuthorKind `json:"actor_kind"`
 
 	// At is the BROKER'S own instant for the record, which is what every
 	// node renders and therefore what a live frame carries. A local clock
 	// here would make one viewer's timeline disagree with another's.
-	At time.Time
+	At time.Time `json:"at"`
 
 	// Notify is the routing snapshot the record carried, nil when it woke
 	// nobody. It is passed through rather than interpreted: whether a
 	// viewer is in the recipient set is a question about that viewer, and
 	// this package has no idea who is watching.
-	Notify *Notify
+	Notify *Notify `json:"notify,omitempty"`
 }
 
 // accumulator gathers a transaction's effects and drains them once.
@@ -124,8 +131,10 @@ type accumulator struct {
 }
 
 // newAccumulator builds the live half for one applier. A NIL OBSERVER IS
-// LEGAL and is a no-op, which is what every test and every node with no
-// dashboard attached runs.
+// LEGAL and is a no-op, which is what a test that renders no room runs. A
+// running node always hands one — the engine's own hook, which keeps every
+// batch for the peers it relays to whether or not a dashboard is attached
+// here.
 func newAccumulator(obs Observer) *accumulator {
 	return &accumulator{obs: obs}
 }
@@ -140,8 +149,8 @@ func (a *accumulator) note(applied Applied) {
 		// NOTHING IS GATHERED WHEN NOBODY IS LISTENING, rather than
 		// gathered and dropped: this runs once per applied record on
 		// the busiest log in the engine, and a map that only ever grew
-		// until the next commit would be a cost every node pays for a
-		// screen no node has open.
+		// until the next commit would be a cost paid for a screen that
+		// does not exist.
 		return
 	}
 	if a.at == nil {
