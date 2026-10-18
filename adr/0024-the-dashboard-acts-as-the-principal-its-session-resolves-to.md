@@ -114,12 +114,13 @@ outcome and position the answer carries. It does not move `/config`,
 `/secrets`, `/setup` or `/backup`, which stay credential-scoped surfaces of
 their own, nor the verbs no seat is given and so no tool serves — a work item's
 purge, a page's rename, trash, restore and purge, a comment's take-down,
-rewriting one's own remark — which stay routes of the human write surface. And
-it does not change who may do what once admitted: every authority rule is the
-tool's, exactly as on `/operator/mcp`. That includes a verb made AS A SEAT,
-which the table's own row refuses a credential acting as itself (`seated`,
-refused `unseated`) — a fact about that verb, decided where every other is,
-and not the refusal of every unbound caller rejected above.
+rewriting one's own remark, chat's erase and prune and a room's own horizon —
+which stay routes of the human write surface. And it does not change who may
+do what once admitted: every authority rule is the tool's, exactly as on
+`/operator/mcp`. That includes a verb made AS A SEAT, which the table's own
+row refuses a credential acting as itself (`seated`, refused `unseated`) — a
+fact about that verb, decided where every other is, and not the refusal of
+every unbound caller rejected above.
 
 Nor does it decide **who can be unbound**. That is
 [ADR-0032](0032-every-person-holds-a-human-seat.md)'s: every person holds a
