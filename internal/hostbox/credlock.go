@@ -45,8 +45,14 @@ func CredentialLock(dir string) string { return filepath.Clean(dir) + ".lock" }
 // [CredentialLockWait] for another writer to let go, and hands back its
 // release. A lock still held at the end of the wait is a [*LockWaitError].
 func LockCredentials(ctx context.Context, dir string) (func(), error) {
-	return LockFile(ctx, CredentialLock(dir), CredentialLockWait)
+	return LockFile(ctx, CredentialLock(dir), CredentialLockWait, credentialHolder)
 }
+
+// credentialHolder is who keeps the shared credential directory's lock for
+// longer than [CredentialLockWait]: every writer holds it for milliseconds, so
+// only one that has stopped running mid-write.
+const credentialHolder = "another writer of the shared login — a `crewlet llm` command " +
+	"stopped part way through (a suspended terminal) holds it until it exits"
 
 // LockWaitError is a lock another holder kept for longer than the wait: a
 // TIMEOUT ([context.DeadlineExceeded]), so a caller that may move on past a
@@ -57,12 +63,13 @@ type LockWaitError struct {
 	Path string
 	// Wait is how long the caller waited for it.
 	Wait time.Duration
+	// Holder says who keeps the lock that long, as the caller that knows what
+	// the lock guards put it: what the reader has to go and find.
+	Holder string
 }
 
 func (e *LockWaitError) Error() string {
-	return fmt.Sprintf("hostbox: the lock %s was still held by another writer after %s — a "+
-		"holder that stopped running (a `crewlet llm` command suspended at a terminal) keeps "+
-		"it until it exits", e.Path, e.Wait)
+	return fmt.Sprintf("hostbox: the lock %s was held for longer than %s by %s", e.Path, e.Wait, e.Holder)
 }
 
 func (e *LockWaitError) Unwrap() error { return context.DeadlineExceeded }
@@ -70,7 +77,8 @@ func (e *LockWaitError) Unwrap() error { return context.DeadlineExceeded }
 // LockFile takes an exclusive flock on path, creating it at [FileMode],
 // waiting up to wait — zero for not at all — for another holder to let go, and
 // hands back its release. A lock still held at the end of the wait is a
-// [*LockWaitError].
+// [*LockWaitError] naming holder: who keeps this lock that long is the
+// caller's knowledge, not this function's.
 //
 // An flock rather than an fcntl lock, for the reason internal/store gives: an
 // fcntl lock is dropped when ANY descriptor for the file is closed in the
@@ -78,7 +86,7 @@ func (e *LockWaitError) Unwrap() error { return context.DeadlineExceeded }
 // open file description — two takers in one process exclude each other
 // exactly as two processes do, which is what lets a sandbox teardown and a
 // seat in the same engine share the shared login's lock.
-func LockFile(ctx context.Context, path string, wait time.Duration) (func(), error) {
+func LockFile(ctx context.Context, path string, wait time.Duration, holder string) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(path), DirMode); err != nil {
 		return nil, fmt.Errorf("hostbox: preparing %q: %w", filepath.Dir(path), err)
 	}
@@ -102,7 +110,7 @@ func LockFile(ctx context.Context, path string, wait time.Duration) (func(), err
 		}
 		if !time.Now().Before(deadline) {
 			_ = f.Close()
-			return nil, &LockWaitError{Path: path, Wait: wait}
+			return nil, &LockWaitError{Path: path, Wait: wait, Holder: holder}
 		}
 		select {
 		case <-ctx.Done():

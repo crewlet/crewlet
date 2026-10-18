@@ -2,8 +2,6 @@ package sandbox
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -182,7 +180,11 @@ func seedCredentials(l boxLayout, files map[string]string) map[string]seededCred
 				"sandbox_id", l.id, "path", relative, "error", err.Error())
 			continue
 		}
-		digest, copied, err := seedCredential(source, dst)
+		// THE SEED'S DIGEST IS OF THE BYTES THE BOX WAS GIVEN, taken as they
+		// are copied: read separately it could describe a newer file than
+		// the box's, and the teardown would then excuse a write it should
+		// have refused.
+		digest, copied, err := hostbox.CopyFileAtomicDigest(source, dst)
 		if err != nil {
 			localLog.Warn("local_sandbox_credential_seed_failed",
 				"sandbox_id", l.id, "path", relative, "error", err.Error())
@@ -193,34 +195,6 @@ func seedCredentials(l boxLayout, files map[string]string) map[string]seededCred
 		}
 	}
 	return seeded
-}
-
-// seedCredential copies the shared login source into the box at dst, and
-// reports the SHA-256 of what it copied — false where source holds no login.
-//
-// READ ONCE, the digest taken of the very bytes written into the box: a digest
-// read separately could describe a newer file than the one the box was given,
-// and the teardown would then excuse a write it should have refused.
-func seedCredential(source, dst string) (string, bool, error) {
-	info, err := os.Stat(source)
-	if err != nil || !info.Mode().IsRegular() {
-		// No login there yet — the ordinary case of a profile naming a
-		// credential file this vendor does not use.
-		return "", false, nil
-	}
-	if err = os.MkdirAll(filepath.Dir(dst), hostbox.DirMode); err != nil {
-		return "", false, err
-	}
-	in, err := os.Open(source) //nolint:gosec // the engine's own shared credential directory
-	if err != nil {
-		return "", false, err
-	}
-	defer func() { _ = in.Close() }()
-	sum := sha256.New()
-	if err = hostbox.ReplaceFile(dst, io.TeeReader(in, sum)); err != nil {
-		return "", false, err
-	}
-	return hex.EncodeToString(sum.Sum(nil)), true, nil
 }
 
 // collectCredentials writes a login the run refreshed back to the shared
@@ -328,10 +302,10 @@ func writeBackCredential(ctx context.Context, src string, rec seededCredential) 
 		return "", err
 	}
 	defer unlock()
-	current, present, err := sharedDigest(rec.Source)
+	current, present, err := hostbox.FileDigest(rec.Source)
 	switch {
 	case err != nil:
-		return "", err
+		return "", fmt.Errorf("reading the shared login: %w", err)
 	case !present:
 		return writeBackRemoved, nil
 	case current == digest:
@@ -346,32 +320,6 @@ func writeBackCredential(ctx context.Context, src string, rec seededCredential) 
 		return "", err
 	}
 	return writeBackWritten, nil
-}
-
-// sharedDigest is the SHA-256 of the shared login at path, false where there is
-// none. Anything other than a regular file there is an error: it is nothing a
-// login can be written over.
-func sharedDigest(path string) (string, bool, error) {
-	info, err := os.Stat(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, fmt.Errorf("reading the shared login %s: %w", path, err)
-	}
-	if !info.Mode().IsRegular() {
-		return "", false, fmt.Errorf("the shared login %s is not a regular file", path)
-	}
-	f, err := os.Open(path) //nolint:gosec // the engine's own shared credential directory
-	if err != nil {
-		return "", false, fmt.Errorf("reading the shared login %s: %w", path, err)
-	}
-	defer func() { _ = f.Close() }()
-	digest, err := hostbox.Digest(f)
-	if err != nil {
-		return "", false, fmt.Errorf("reading the shared login %s: %w", path, err)
-	}
-	return digest, true, nil
 }
 
 // recordCredentialMap persists what the box was seeded with so Connect can
