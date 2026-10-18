@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"path"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
+	"github.com/crewlet/crewlet/internal/artifactserve"
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // assetKind is what one extension is served as, and whether it is worth a
@@ -93,13 +96,6 @@ const (
 	cacheRevalidate = "no-cache"
 )
 
-// gzipSuffix marks the gzip representation's entity tag. Each representation
-// has its own, as a strong tag must: a tag names BYTES, and a cache that
-// holds both — one keyed per Accept-Encoding, which is what Vary asks of it —
-// would otherwise revalidate one body with the other's tag and be told it was
-// still current.
-const gzipSuffix = "-gz"
-
 // assets serves the embedded dashboard.
 //
 // Each file is read, hashed and — when it is text — compressed ONCE for the
@@ -110,6 +106,11 @@ const gzipSuffix = "-gz"
 // milliseconds, where serving the kept copy costs a write.
 type assets struct {
 	tree fs.FS
+
+	// policy is the Content-Security-Policy every dashboard file is served
+	// under: [pagepolicy.Dashboard], with a frame-src naming the artifact
+	// origin on a deployment that serves one ([pagepolicy.DashboardFor]).
+	policy string
 
 	// files holds every file that has been served. Only files that exist
 	// are kept: a probe for a path the tree does not have is read and
@@ -135,8 +136,31 @@ type asset struct {
 	gzipped func() []byte
 }
 
-func newAssets(tree fs.FS) *assets {
-	return &assets{tree: tree, files: map[string]*asset{}}
+func newAssets(tree fs.FS, policy string) *assets {
+	return &assets{tree: tree, policy: policy, files: map[string]*asset{}}
+}
+
+// dashboardPolicy is the Content-Security-Policy the dashboard is served under
+// on this deployment: [pagepolicy.Dashboard], plus a frame-src naming the
+// artifact origin where `api.artifacts.external_url` sets one, so the viewer
+// may embed an artifact's sandboxed frame and nothing else.
+//
+// EVERY NODE SERVING THE DASHBOARD NAMES THE ORIGIN, whether or not it binds
+// the artifact listener itself: the frame's bytes come from whichever ingress
+// node the load balancer picks, and the shell a browser loaded from this node
+// must let it load. No Tier A at all, a suite's, frames nothing.
+func dashboardPolicy(b *config.Bootstrap) (string, error) {
+	if b == nil {
+		return pagepolicy.Dashboard, nil
+	}
+	source, err := artifactserve.FrameSource(b.API.Artifacts.ExternalBase())
+	if err != nil {
+		return "", fmt.Errorf("api: %w", err)
+	}
+	if source == "" {
+		return pagepolicy.Dashboard, nil
+	}
+	return pagepolicy.DashboardFor([]string{source}), nil
 }
 
 // serveIndex answers the dashboard shell.
@@ -184,7 +208,7 @@ func (a *assets) serve(w http.ResponseWriter, r *http.Request, name string) {
 	// revalidation answer is the one a browser mostly gets: an asset served
 	// 200 once and 304 ever after would carry its policy exactly once.
 	h := w.Header()
-	pagepolicy.Set(h, pagepolicy.Dashboard)
+	pagepolicy.Set(h, a.policy)
 	h.Set("Cache-Control", file.cache)
 	h.Set("Content-Type", file.kind.contentType)
 
@@ -197,8 +221,8 @@ func (a *assets) serve(w http.ResponseWriter, r *http.Request, name string) {
 		// bytes to every client after the first. Added, never set: the
 		// CORS layer has already written `Vary: Origin` when one was sent.
 		h.Add("Vary", "Accept-Encoding")
-		if acceptsGzip(r.Header) {
-			body, etag = gz, gzipTag(file.etag)
+		if pagepolicy.AcceptsGzip(r.Header) {
+			body, etag = gz, pagepolicy.GzipTag(file.etag)
 			h.Set("Content-Encoding", "gzip")
 		}
 	}
@@ -270,110 +294,7 @@ func newAsset(name string, data []byte) *asset {
 			if !kind.compress {
 				return nil
 			}
-			return gzipSmaller(data)
+			return pagepolicy.GzipSmaller(data, gzip.BestCompression)
 		}),
-	}
-}
-
-// gzipSmaller compresses data at gzip's best level, or answers nil when the
-// result is not smaller — a tiny file costs more in gzip's own header and
-// trailer than it saves, and a body that grew is a body nobody should be
-// sent. nil means "serve it as it is", which is also the answer to a failure
-// that cannot happen: a gzip writer into memory at a valid level has no
-// error to return.
-func gzipSmaller(data []byte) []byte {
-	var buf bytes.Buffer
-	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
-	if err != nil {
-		return nil
-	}
-	if _, err := zw.Write(data); err != nil {
-		return nil
-	}
-	if err := zw.Close(); err != nil {
-		return nil
-	}
-	if buf.Len() >= len(data) {
-		return nil
-	}
-	return buf.Bytes()
-}
-
-// gzipTag is the gzip representation's entity tag, derived from the identity
-// one: `"abc"` becomes `"abc-gz"`.
-func gzipTag(identity string) string {
-	return strings.TrimSuffix(identity, `"`) + gzipSuffix + `"`
-}
-
-// acceptsGzip reports whether a request's Accept-Encoding admits gzip.
-//
-// ASKED, NEVER ASSUMED. RFC 9110 reads a request with no Accept-Encoding at
-// all as accepting any coding, and no browser sends such a request — the
-// clients that do are curl, a script and a health probe, which is to say the
-// ones that would print compressed bytes. So an absent or empty header is
-// identity, and so is one that names only codings this does not produce.
-//
-// gzip is admitted by a `gzip` member — or `x-gzip`, which §12.5.3 has a
-// recipient treat as the same coding — with a weight above zero, or failing
-// any such member by a `*` with one. A member that names gzip outranks the
-// wildcard whatever the order, so `*, gzip;q=0` refuses it. A weight that is
-// not a qvalue admits nothing: identity is always a correct answer, and an
-// encoded body a client did not ask for is not.
-func acceptsGzip(h http.Header) bool {
-	named, namedOK, wildOK := false, false, false
-	for _, field := range h.Values("Accept-Encoding") {
-		for _, member := range strings.Split(field, ",") {
-			coding, params, _ := strings.Cut(member, ";")
-			switch strings.ToLower(strings.TrimSpace(coding)) {
-			case "gzip", "x-gzip":
-				named = true
-				namedOK = namedOK || positiveWeight(params)
-			case "*":
-				wildOK = wildOK || positiveWeight(params)
-			}
-		}
-	}
-	if named {
-		return namedOK
-	}
-	return wildOK
-}
-
-// positiveWeight reports whether a member's parameters give it a weight above
-// zero. No `q` parameter is weight 1.
-func positiveWeight(params string) bool {
-	for _, param := range strings.Split(params, ";") {
-		name, value, found := strings.Cut(param, "=")
-		if !found || !strings.EqualFold(strings.TrimSpace(name), "q") {
-			continue
-		}
-		return positiveQValue(strings.TrimSpace(value))
-	}
-	return true
-}
-
-// positiveQValue reads a weight by RFC 9110 §12.4.2's grammar —
-//
-//	qvalue = ( "0" [ "." 0*3DIGIT ] ) / ( "1" [ "." 0*3("0") ] )
-//
-// — and reports whether it is above zero. Anything the grammar does not
-// produce is not a weight, so it is not a positive one.
-func positiveQValue(v string) bool {
-	whole, frac, _ := strings.Cut(v, ".")
-	if len(frac) > 3 {
-		return false
-	}
-	for _, c := range frac {
-		if c < '0' || c > '9' || (whole == "1" && c != '0') {
-			return false
-		}
-	}
-	switch whole {
-	case "1":
-		return true
-	case "0":
-		return strings.Trim(frac, "0") != ""
-	default:
-		return false
 	}
 }

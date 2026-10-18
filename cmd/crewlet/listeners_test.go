@@ -107,6 +107,72 @@ func TestANodeWithAPublicListenerBindsTwoSockets(t *testing.T) {
 	}
 }
 
+// AN ARTIFACT LISTENER IS A THIRD SOCKET, serving the artifact origin and
+// nothing the API serves: a probe there is an empty 404, not the API's JSON
+// one, and its stop closes it with the others. The routes themselves are
+// internal/artifactserve's to hold; what this holds is that a running node
+// binds the origin's handler at all, on the address the file names, and says
+// where and in which mode.
+func TestANodeWithAnArtifactListenerBindsAThirdSocket(t *testing.T) {
+	t.Parallel()
+	var logged bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	e := testEngine(t)
+	boot := bootstrapFor(t, reservePort(t))
+	port := reservePort(t)
+	boot.API.Artifacts = config.APIArtifacts{Host: "127.0.0.1", Port: port,
+		ExternalURL: "http://127.0.0.1:" + strconv.Itoa(port)}
+	surface, err := serveNodeLogged(t, boot, e, log)
+	if err != nil {
+		t.Fatalf("serveAPI: %v", err)
+	}
+	if surface.artifacts == nil {
+		surface.stop(context.Background(), logging.Get("test"))
+		t.Fatal("api.artifacts is set and the node bound no artifact listener")
+	}
+	origin := "http://127.0.0.1:" + strconv.Itoa(port)
+	if status, code := answer(t, http.MethodGet, origin+"/health"); status != http.StatusNotFound || code != "" {
+		t.Errorf("GET /health on the artifact listener = %d %q, want an empty 404", status, code)
+	}
+	if status, _ := answer(t, http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(boot.API.Port)+"/health"); status != http.StatusOK {
+		t.Errorf("GET /health on api.port = %d, want 200", status)
+	}
+	if !strings.Contains(logged.String(), "msg=api_artifacts_listening addr=127.0.0.1:"+strconv.Itoa(port)) ||
+		!strings.Contains(logged.String(), "mode=shared") {
+		t.Errorf("the node did not say where and how it serves artifacts:\n%s", logged.String())
+	}
+	surface.stop(context.Background(), logging.Get("test"))
+	if bound(port) {
+		t.Error("api.artifacts.port is still listening after the node stopped")
+	}
+}
+
+// AN ARTIFACT BIND THAT FAILS TAKES THE NODE DOWN, for the public listener's
+// reason: a dashboard whose every artifact frame finds nothing listening would
+// look healthy to every probe.
+func TestAnUnbindableArtifactPortFailsTheNode(t *testing.T) {
+	t.Parallel()
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = taken.Close() })
+	e := testEngine(t)
+	boot := bootstrapFor(t, reservePort(t))
+	port := taken.Addr().(*net.TCPAddr).Port
+	boot.API.Artifacts = config.APIArtifacts{Host: "127.0.0.1", Port: port,
+		ExternalURL: "http://127.0.0.1:" + strconv.Itoa(port)}
+	surface, err := serveNode(t, boot, e)
+	if err == nil {
+		surface.stop(context.Background(), logging.Get("test"))
+		t.Fatal("binding an artifact port already in use reported success")
+	}
+	if bound(boot.API.Port) {
+		t.Error("api.port is still listening although the node failed to start")
+	}
+}
+
 // A PUBLIC BIND THAT FAILS TAKES THE NODE'S LISTENER DOWN WITH IT. A node that
 // served its dashboard while every webhook found nothing listening would look
 // healthy to every probe and be deaf to every integration.

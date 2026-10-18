@@ -4,8 +4,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/crewlet/crewlet/internal/api/pagepolicy"
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // Internal because the handler has to be reached WITHOUT the mux in front of
@@ -22,7 +26,7 @@ func TestTheAssetHandlerCannotBeMadeToLeaveItsTree(t *testing.T) {
 	// request spelled.
 	files := newAssets(fstest.MapFS{
 		"dashboard/index.html": {Data: []byte("shell")},
-	})
+	}, pagepolicy.Dashboard)
 
 	for _, raw := range []string{
 		"/static/../../etc/passwd",
@@ -52,7 +56,7 @@ func TestTheAssetHandlerStillServesAValidPath(t *testing.T) {
 	// and serve no dashboard at all.
 	files := newAssets(fstest.MapFS{
 		"dashboard/js/app.js": {Data: []byte("export const app = 1")},
-	})
+	}, pagepolicy.Dashboard)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.URL.Path = "/static/dashboard/js/app.js"
 	rec := httptest.NewRecorder()
@@ -63,5 +67,37 @@ func TestTheAssetHandlerStillServesAValidPath(t *testing.T) {
 	}
 	if body := rec.Body.String(); body != "export const app = 1" {
 		t.Errorf("body = %q", body)
+	}
+}
+
+// THE DASHBOARD FRAMES THE ARTIFACT ORIGIN AND NOTHING ELSE: a deployment that
+// names one adds exactly that frame-src to the dashboard's policy (a wildcard
+// over the hosts a template names), on every node whether or not it binds the
+// listener, and one that names none keeps the policy that frames nothing.
+// Mutation: build the dashboard policy from the constant and every artifact
+// frame is refused by the browser.
+func TestTheDashboardFramesTheArtifactOrigin(t *testing.T) {
+	t.Parallel()
+	for external, want := range map[string]string{
+		"":                                  pagepolicy.Dashboard,
+		"https://artifacts.example.net":     pagepolicy.DashboardFor([]string{"https://artifacts.example.net"}),
+		"https://{artifact}.example-uc.net": pagepolicy.DashboardFor([]string{"https://*.example-uc.net"}),
+	} {
+		b := config.DefaultBootstrap()
+		b.API.Artifacts.ExternalURL = external
+		got, err := dashboardPolicy(&b)
+		if err != nil || got != want {
+			t.Errorf("%q: the dashboard policy is %q (%v), want %q", external, got, err, want)
+		}
+	}
+	if got, err := dashboardPolicy(nil); err != nil || got != pagepolicy.Dashboard {
+		t.Errorf("no Tier A: %q, %v", got, err)
+	}
+	files := newAssets(fstest.MapFS{"dashboard/index.html": {Data: []byte("shell")}},
+		pagepolicy.DashboardFor([]string{"https://*.example-uc.net"}))
+	rec := httptest.NewRecorder()
+	files.serveIndex(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
+	if got := rec.Header().Get("Content-Security-Policy"); !strings.HasSuffix(got, "; frame-src https://*.example-uc.net") {
+		t.Errorf("the shell is served under %q", got)
 	}
 }
