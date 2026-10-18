@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/authz"
 )
 
 // --- the Dashboard Assistant's route table (ADR-0052) ---
@@ -48,10 +49,16 @@ func (a *App) AssistantRoutes() []catalog.Route {
 		}
 		if policy, guarded := a.policies[pattern]; guarded {
 			out = append(out, catalog.Route{Pattern: pattern, Action: policy.Action,
-				Absent: policy.Absent, DryRun: policy.DryRun, Summary: policy.Summary,
-				Replaces: policy.Replaces})
+				Absent: policy.Absent, Effect: policy.Effect, DryRun: policy.DryRun,
+				Summary: policy.Summary, Replaces: policy.Replaces})
 		} else if decidedInside[pattern] {
-			out = append(out, catalog.Route{Pattern: pattern})
+			route := catalog.Route{Pattern: pattern}
+			if pattern == catalog.ActRoute {
+				// THE ONE POST MOUNTED OUTSIDE A ROUTER, so the table says
+				// what it does: it calls the tool its path names.
+				route.Effect = authz.EffectCalls
+			}
+			out = append(out, route)
 		}
 	}
 	return out

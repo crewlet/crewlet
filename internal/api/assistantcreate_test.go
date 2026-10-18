@@ -1,7 +1,9 @@
 package api_test
 
 import (
+	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -12,8 +14,10 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // prepareChange previews one generic change through the read grant, the way a
@@ -141,6 +145,123 @@ func TestEveryPUTAPreviewCanFindEmptyDeclaresWhatItDoes(t *testing.T) {
 			(refusedHere && exec.RefusalOf(answer).Hint != r.Absent.Elsewhere) {
 			t.Errorf("%s declares %+v, and its handler answered a create %d %s",
 				r.Pattern, *r.Absent, answer.Status, answer.Body)
+		}
+	}
+}
+
+// EVERY POST SAYS WHAT IT DOES, AND ITS CARD SAYS IT AFTER IT.
+//
+// A POST's method says nothing of what it does, so the assistant titled every
+// POST a create: a person approving a purge read "Create purge" under "Approve
+// and create", in the ordinary tone. Walked over every guarded POST the App
+// mounts, the ones the assistant never names included, each declares what it
+// does ([authz.Effect]), and the act route, mounted outside every router, is
+// declared a call where the table binds it. Over every POST the assistant may
+// name, the card says it: a destruction destructive with what goes said first,
+// and nothing else; a create titled as one, and nothing that does not create.
+// Mutation: mount a POST that declares nothing, declare an erase a rewrite, or
+// rate a POST by its method, and this names the route.
+func TestEveryPOSTSaysWhatItDoes(t *testing.T) {
+	t.Parallel()
+	app := everySurfaceApp(t)
+	posts := 0
+	for pattern, p := range app.Policies() {
+		if !strings.HasPrefix(pattern, http.MethodPost+" ") {
+			continue
+		}
+		posts++
+		if !p.Effect.Valid() || p.Effect == authz.EffectCalls {
+			t.Errorf("%s declares %q: say what it does (authz.Policy's Creating, Rewriting, "+
+				"Destroying or Reading)", pattern, p.Effect)
+		}
+	}
+	if posts < 40 {
+		t.Fatalf("walked %d guarded POSTs; the App's routes are not being read", posts)
+	}
+	for _, destroys := range []string{"POST /worklet/items/{key}/purge",
+		"POST /doclet/pages/{id}/purge", "POST /artifacts/{id}/purge",
+		"POST /chatlet/channels/{channel_id}/erase", "POST /chatlet/channels/{channel_id}/prune"} {
+		if got := app.Policies()[destroys].Effect; got != authz.EffectDestroys {
+			t.Errorf("%s declares %q, and it destroys what it names", destroys, got)
+		}
+	}
+
+	routes := app.AssistantRoutes()
+	table, err := catalog.NewRouteTable(routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin := iam.Principal{Kind: iam.KindPerson, Stage: iam.StageActive,
+		Grants: []iam.Grant{iam.GrantAdmin}}
+	change := catalog.GenericTools(table, admin, nil)[2]
+	read := func(_ context.Context, r exec.Request) (exec.Response, error) {
+		return exec.Response{Status: http.StatusOK, Body: []byte(`{"valid":true}`)}, nil
+	}
+	cards := 0
+	for _, r := range table.Routes() {
+		if r.Method() != http.MethodPost {
+			continue
+		}
+		if r.Pattern == catalog.ActRoute {
+			if r.Effect != authz.EffectCalls {
+				t.Errorf("the act route is bound as %q, and it calls a tool", r.Effect)
+			}
+			continue
+		}
+		path := map[string]any{}
+		for _, segment := range strings.Split(r.Path(), "/") {
+			if name, wild := strings.CutPrefix(segment, "{"); wild {
+				path[strings.TrimSuffix(strings.TrimSuffix(name, "}"), "...")] = "example"
+			}
+		}
+		p, err := change.Preview(t.Context(), read, time.Now(), map[string]any{
+			"route": r.Pattern, "path": path, "body": map[string]any{"name": "Example"}})
+		if err != nil {
+			continue
+		}
+		cards++
+		destructive := p.Risk == wire.RiskDestructive
+		creates := strings.HasPrefix(p.Title, "Create ")
+		switch {
+		case (r.Effect == authz.EffectDestroys) != destructive:
+			t.Errorf("%s destroys %v, and its card %q is at risk %q", r.Pattern,
+				r.Effect == authz.EffectDestroys, p.Title, p.Risk)
+		case destructive && (!strings.HasPrefix(p.Summary, "This ") || p.Note == ""):
+			t.Errorf("%s destroys, and its card says %q, %q", r.Pattern, p.Summary, p.Note)
+		case creates && r.Effect != authz.EffectCreates:
+			t.Errorf("%s %s, and its card is titled %q", r.Pattern, r.Effect, p.Title)
+		}
+	}
+	if cards < 20 {
+		t.Errorf("only %d POST cards drawn; the walk read nothing", cards)
+	}
+	// THE THREE THE QUESTION WAS ABOUT, as the person reads them, each from
+	// what it sends: the room is named by nothing this read answers, so in
+	// neutral words.
+	room := map[string]any{"channel_id": "7f3c2a9e-4b1d-4c8e-9a6f-2d5e8b1c0a47"}
+	for route, want := range map[string]struct {
+		args                    map[string]any
+		title, approve, summary string
+	}{
+		"POST /chatlet/channels/{channel_id}/erase": {map[string]any{"path": room,
+			"query": map[string]any{"confirm": "2"},
+			"body":  map[string]any{"message_ids": []any{"m1", "m2"}, "reason": "A key was pasted."}},
+			"Erase 2 messages from the room", "Approve and erase",
+			"This erases 2 messages from the room for good."},
+		"POST /chatlet/channels/{channel_id}/prune": {map[string]any{"path": room,
+			"query": map[string]any{"cutoff": "2031-01-01T00:00:00Z",
+				"confirm": "2031-01-01T00:00:00Z"}},
+			"Delete what the room said before 1 January 2031", "Approve and delete",
+			"This deletes everything said in the room before 1 January 2031 for good."},
+		"POST /worklet/items": {map[string]any{"body": map[string]any{"name": "Example"}},
+			"Create item Example", "Approve and create", ""},
+	} {
+		args := maps.Clone(want.args)
+		args["route"] = route
+		p, err := change.Preview(t.Context(), read, time.Now(), args)
+		if err != nil || p.Title != want.title || p.ApproveLabel != want.approve ||
+			p.Summary != want.summary {
+			t.Errorf("%s reads %q / %q: %q (%v)", route, p.Title, p.ApproveLabel, p.Summary, err)
 		}
 	}
 }

@@ -128,6 +128,15 @@ func TestARouteWithNoPolicyIsRefusedAtTheMount(t *testing.T) {
 			authz.Policy{Action: authz.ActionOrgWrite}.WhenAbsent(
 				&authz.Absent{Creates: true, Elsewhere: "PUT /config"}),
 			"or neither"},
+		// WHAT A WRITE DOES is a POST's to say, since its method does not,
+		// and a route mounted here never calls a tool.
+		{"what a POST does on a PUT", "PUT /config/units/{id}",
+			authz.Policy{Action: authz.ActionOrgWrite}.Destroying(), "its method already says"},
+		{"a mounted POST that calls a tool", "POST /worklet/items",
+			authz.Policy{Action: authz.ActionWorkCreate, Effect: authz.EffectCalls},
+			"does not have"},
+		{"an effect this build does not know", "POST /worklet/items",
+			authz.Policy{Action: authz.ActionWorkCreate, Effect: "vanishes"}, "does not have"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()

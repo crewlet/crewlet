@@ -438,7 +438,8 @@ everybody did:
   broker's membership;
 - **the company-wide trail** — every event, turn and phase, every
   agent-to-agent channel, the `event` push and `/iam/audit`;
-- **the purges**, and the **admin path** of every relation rule: an
+- **the purges** and **chat's destructions** — erasing messages, pruning a
+  room, setting its horizon — and the **admin path** of every relation rule: an
   administrator reaches a departed person's inbox, any project's policy and
   anybody's saved view.
 
@@ -2598,8 +2599,8 @@ verb asks for one:
 
 | Window | Sized by | Asked by |
 |---|---|---|
-| none | — | Every read; every work, knowledge and artifact verb but the three purges; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm; and changing your own password, whose current password is itself the proof |
-| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration writes, connecting an integration, writing a credential and revealing a secret's value, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures, ending every session in the company — purging a work item, a page or an artifact, which nothing undoes, and every identity-directory write: enrolling, inviting, cancelling an invitation, editing or removing somebody, resetting their second factor, issuing them a password reset link, minting or revoking a machine token or any other credential, ending somebody else's sessions, and enrolling or replacing your own second factor or regenerating your recovery codes |
+| none | — | Every read; every work, knowledge, artifact and chat verb but the three purges and chat's three destructions; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm; and changing your own password, whose current password is itself the proof |
+| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration writes, connecting an integration, writing a credential and revealing a secret's value, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures, ending every session in the company — purging a work item, a page or an artifact, and erasing or pruning a chat room or setting its horizon, which nothing undoes, and every identity-directory write: enrolling, inviting, cancelling an invitation, editing or removing somebody, resetting their second factor, issuing them a password reset link, minting or revoking a machine token or any other credential, ending somebody else's sessions, and enrolling or replacing your own second factor or regenerating your recovery codes |
 
 **One window, not two.** It is the practice of GitHub's sudo mode — one window
 over every sensitive gesture — at the stricter end of it (GitHub's is two

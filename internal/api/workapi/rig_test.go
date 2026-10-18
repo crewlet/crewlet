@@ -485,6 +485,7 @@ type rig struct {
 	reader *reader
 	writes *writes
 	kb     *kb
+	rooms  *rooms
 	dir    directory
 	audit  *auditLog
 }
@@ -498,7 +499,8 @@ func newRig(t *testing.T, c authz.Chart) *rig {
 func newRigWith(t *testing.T, c authz.Chart, dir directory) *rig {
 	t.Helper()
 	r := &rig{t: t, mux: http.NewServeMux(), reader: newReader(),
-		writes: &writes{}, kb: newKB(), dir: dir, audit: &auditLog{}}
+		writes: &writes{}, kb: newKB(), rooms: &rooms{}, dir: dir,
+		audit: &auditLog{}}
 	svc, err := workapi.New(r.options(c))
 	if err != nil || svc == nil {
 		t.Fatalf("New: %v (%v)", err, svc)
@@ -622,6 +624,7 @@ func (r *rig) halves() workapi.Halves {
 			return r.writes.as(a)
 		},
 		PageStore: r.kb,
+		ChatStore: r.rooms,
 	}
 }
 

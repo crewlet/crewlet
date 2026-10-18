@@ -934,6 +934,8 @@ func TestEveryWriteRouteIsGuardedAndDocumented(t *testing.T) {
 		"PATCH /doclet/pages/{id}/comments/{cid}",
 		"PATCH /worklet/items/{key}",
 		"PATCH /worklet/items/{key}/comments/{cid}",
+		"POST /chatlet/channels/{channel_id}/erase",
+		"POST /chatlet/channels/{channel_id}/prune",
 		"POST /doclet/pages",
 		"POST /doclet/pages/{id}/comments",
 		"POST /doclet/pages/{id}/purge",
@@ -949,6 +951,7 @@ func TestEveryWriteRouteIsGuardedAndDocumented(t *testing.T) {
 		"POST /worklet/items/{key}/restore",
 		"POST /worklet/projects/{key}/tags",
 		"POST /worklet/views",
+		"PUT /chatlet/channels/{channel_id}/retention",
 		"PUT /doclet/pages/{id}",
 		"PUT /worklet/catalogue",
 		"PUT /worklet/files/{project}/{path...}",
@@ -965,7 +968,7 @@ func TestEveryWriteRouteIsGuardedAndDocumented(t *testing.T) {
 		_, path, _ := strings.Cut(pattern, " ")
 		path = strings.NewReplacer("{key}", "ENG-1", "{id}", "p-1",
 			"{cid}", "c-1", "{handle}", "ana", "{project}", "ENG",
-			"{path...}", "reports/q3.csv").Replace(path)
+			"{path...}", "reports/q3.csv", "{channel_id}", "c-1").Replace(path)
 		if auth.Unguarded(path) {
 			t.Errorf("%s is exempt from the guard, so a write surface is "+
 				"reachable with no credential", pattern)

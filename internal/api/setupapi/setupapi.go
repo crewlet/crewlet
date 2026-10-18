@@ -357,24 +357,32 @@ func (s *Service) Routes(mux authz.Mux) error {
 			failures = append(failures, err)
 		}
 	}
+	// EVERY POST HERE IS THE CONNECT VERB, and says what it does, which its
+	// method does not ([authz.Effect]).
+	post := func(pattern string, does authz.Effect, h http.HandlerFunc) {
+		p := authz.Policy{Action: authz.ActionSetupConnect, Effect: does}
+		if err := router.Handle(pattern, p, h); err != nil {
+			failures = append(failures, err)
+		}
+	}
 	mount("GET /setup/integrations", authz.ActionSetupRead, s.list)
 	mount("GET /setup/integrations/{kind}", authz.ActionSetupRead, s.one)
-	mount("POST /setup/integrations/{kind}/inputs", authz.ActionSetupConnect, s.inputs)
+	post("POST /setup/integrations/{kind}/inputs", authz.EffectRewrites, s.inputs)
 	mount("DELETE /setup/integrations/{kind}", authz.ActionSetupConnect, s.disconnect)
 	// A TYPED CREDENTIAL CHECKED AT ITS VENDOR, and nothing stored. The
 	// connect verb, because it spends a credential at a vendor on a
 	// person's hand; see verify.go for why it asks nothing more.
-	mount("POST /setup/integrations/{kind}/verify", authz.ActionSetupConnect, s.verify)
+	post("POST /setup/integrations/{kind}/verify", authz.EffectReads, s.verify)
 	// The two that RUN something at the third-party app, and the read that follows
 	// one. See pass.go for why check and provision are one function. BOTH
 	// are the connect verb: a check writes nothing at the app, and it is
 	// still a pass run against the company's own credentials at a person's
 	// hand — the gesture of whoever connected it, not of a reader.
-	mount("POST /setup/integrations/{kind}/provision", authz.ActionSetupConnect, s.provision)
-	mount("POST /setup/integrations/{kind}/check", authz.ActionSetupConnect, s.check)
+	post("POST /setup/integrations/{kind}/provision", authz.EffectRewrites, s.provision)
+	post("POST /setup/integrations/{kind}/check", authz.EffectReads, s.check)
 	// ONE AGENT'S OWN APP. Not a company-wide connect: a GitHub App is one
 	// bot identity, so an app per agent is the only way each acts as itself.
-	mount("POST /setup/integrations/github/app", authz.ActionSetupConnect, s.beginApp)
+	post("POST /setup/integrations/github/app", authz.EffectCreates, s.beginApp)
 	mount("GET /setup/integrations/{kind}/runs/{id}", authz.ActionSetupRead, s.runByID)
 	// The LISTING, which is what makes the route above reachable at all:
 	// nothing could name a run id, so one pass was readable only by the

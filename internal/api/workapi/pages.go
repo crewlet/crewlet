@@ -31,20 +31,23 @@ func (s *Service) pageRoutes(mount mounter) {
 	}
 	page := func(a authz.Action) authz.Policy { return kinded(a, authz.KindPage) }
 
-	route("POST /doclet/pages", page(authz.ActionPageCreate), (*served).postPage)
+	route("POST /doclet/pages", page(authz.ActionPageCreate).Creating(), (*served).postPage)
 	// A SAVE NAMES THE VERSION IT EDITS, so it never creates a page.
 	route("PUT /doclet/pages/{id}", page(authz.ActionPageSave).WhenAbsent(authz.AddedElsewhere(
 		"A page is created with POST /doclet/pages.")), (*served).putPage)
-	route("POST /doclet/pages/{id}/rename", page(authz.ActionPageRead), (*served).postPageRename)
-	route("POST /doclet/pages/{id}/comments", page(authz.ActionPageComment), (*served).postPageComment)
+	route("POST /doclet/pages/{id}/rename", page(authz.ActionPageRead).Rewriting(),
+		(*served).postPageRename)
+	route("POST /doclet/pages/{id}/comments", page(authz.ActionPageComment).Creating(),
+		(*served).postPageComment)
 	route("PATCH /doclet/pages/{id}/comments/{cid}", page(authz.ActionPageComment),
 		(*served).patchPageComment)
 	route("DELETE /doclet/pages/{id}/comments/{cid}", page(authz.ActionPageRead),
 		(*served).deletePageComment)
 	route("DELETE /doclet/pages/{id}", page(authz.ActionPageRead), (*served).deletePage)
-	route("POST /doclet/pages/{id}/restore", page(authz.ActionPageRead), (*served).postPageRestore)
+	route("POST /doclet/pages/{id}/restore", page(authz.ActionPageRead).Rewriting(),
+		(*served).postPageRestore)
 	// THE PURGE NEEDS NO ROW TO DECIDE, as the work purge does not.
-	route("POST /doclet/pages/{id}/purge", authz.Policy{Action: authz.ActionPagePurge},
+	route("POST /doclet/pages/{id}/purge", authz.Policy{Action: authz.ActionPagePurge}.Destroying(),
 		(*served).postPagePurge)
 }
 

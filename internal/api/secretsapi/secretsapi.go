@@ -267,13 +267,19 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// way round they are declared — so the method is doing the work: a
 	// GET, PUT or DELETE of that name reaches the {name} routes, and no
 	// spelling of a secret's name can reach the rekey handler.
-	mount("POST /secrets/rekey", authz.ActionSecretWrite, s.rekey)
+	if err := router.Handle("POST /secrets/rekey", authz.Policy{Action: authz.ActionSecretWrite}.
+		Rewriting(), http.HandlerFunc(s.rekey)); err != nil {
+		failures = append(failures, err)
+	}
 	// THE VALUES OF SEVERAL NAMES, for a reader resolving one company
 	// document — a POST for the reason rekey is one, since no POST reaches
 	// the {name} routes, and because the names it asks for travel in a body
 	// rather than in a URL a proxy logs and bounds. The reveal's own verb
 	// on the route itself, since there is no metadata half to admit first.
-	mount("POST /secrets/reveal", authz.ActionSecretReveal, s.revealMany)
+	if err := router.Handle("POST /secrets/reveal", authz.Policy{Action: authz.ActionSecretReveal}.
+		Reading(), http.HandlerFunc(s.revealMany)); err != nil {
+		failures = append(failures, err)
+	}
 	// THE METADATA'S VERB, and a reveal asks the value's on top — see
 	// [Service.get]. The pattern cannot see `?reveal=true`.
 	mount("GET /secrets/{name}", authz.ActionSecretList, s.get)

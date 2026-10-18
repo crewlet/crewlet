@@ -1,7 +1,8 @@
-// Package workapi is the HUMAN WRITE SURFACE over Worklet and Doclet, under
-// `/worklet` and `/doclet/pages`: filing, editing, commenting on, arranging
-// and taking work and pages out of circulation, from a browser or a script,
-// as the person the request resolved to.
+// Package workapi is the HUMAN WRITE SURFACE over Worklet, Doclet and Chatlet,
+// under `/worklet`, `/doclet/pages` and `/chatlet/channels`: filing, editing,
+// commenting on, arranging and taking work and pages out of circulation, and
+// destroying what a room said, from a browser or a script, as the person the
+// request resolved to.
 //
 // # It is the SAME TOOLS a seat and the operator's assistant hold
 //
@@ -23,12 +24,14 @@
 // tests reached, because the tools' suites exercise the tools.
 //
 // A FEW ROUTES HAVE NO TOOL, and are the ones a seat is never given: rewriting
-// one's own remark on a work item, purging a work item, and Doclet's four
-// destructive verbs and its rename. Those call the domain's writer
-// themselves, decide first through the SAME table —
-// [authz.ActionWorkCommentEdit], [authz.ActionWorkPurge],
-// [authz.ActionPageRename], [authz.ActionPageTrash], [authz.ActionPageRestore],
-// [authz.ActionPagePurge] and [authz.ActionPageCommentRemove] — answer through
+// one's own remark on a work item, purging a work item, Doclet's four
+// destructive verbs and its rename, and chat's erase, prune and a room's own
+// horizon (chat.go). Those call the domain's writer themselves, decide first
+// through the SAME table — [authz.ActionWorkCommentEdit],
+// [authz.ActionWorkPurge], [authz.ActionPageRename], [authz.ActionPageTrash],
+// [authz.ActionPageRestore], [authz.ActionPagePurge],
+// [authz.ActionPageCommentRemove], [authz.ActionChatErase],
+// [authz.ActionChatPrune] and [authz.ActionChatRetention] — answer through
 // the same refusal mapping ([operator.Fail]), and publish the same
 // `operator_acted` record the dispatch publishes for a tool
 // ([operator.AuditGesture]), so a verb with no tool is no less recorded. The
@@ -94,8 +97,9 @@
 //     lost (`conflict`), a title taken (`exists`), or a state the request
 //     collided with (`reassignment_budget`, `inbox_full`, …).
 //   - 422 `invalid` — the domain refused an argument on its own rules, or a
-//     destructive verb's `?confirm=` does not name what it would destroy; the
-//     detail is its own sentence.
+//     destructive verb's `?confirm=` does not name what it would destroy — the
+//     item's key, the page's title, the number of messages an erase names, a
+//     prune's cutoff; the detail is its own sentence.
 //   - the byte routes keep the codes that are the BYTES' own and a file's as a
 //     resource with an ETag — `400 bad_path`, `bad_if_match` and
 //     `unreadable_body`, `404 no_project` and `no_file`, `409 upload_expired`,
@@ -245,6 +249,12 @@ type Halves struct {
 	// or a Work half holding no files, leaves the byte routes unserved: a
 	// company on a vendor's tracker, or a node running no object store.
 	Objects ObjectStore
+
+	// ChatStore is chat's writer, for the three verbs no tool makes (see
+	// chat.go). Nil leaves chat's routes unserved: a company talking on a
+	// vendor's chat, or a data node in a maintenance mode, which may
+	// publish nothing.
+	ChatStore ChatStore
 }
 
 // servesWork reports whether these halves hold Worklet's whole surface.
@@ -389,6 +399,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 	s.workRoutes(mount)
 	s.fileRoutes(mount)
 	s.pageRoutes(mount)
+	s.chatRoutes(mount)
 	return errors.Join(failures...)
 }
 
