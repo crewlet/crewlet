@@ -29,3 +29,18 @@ func (w *Writer) FileTaskAt(ctx context.Context, opID string, task Task,
 
 	return w.fileTask(ctx, opID, task, nil, n, settledCreate{}, nil)
 }
+
+// The turn's moved-task refusal and the bound on reading again after one, for
+// the cases that drive [Writer.recordTurn] through a read of their own.
+var (
+	ErrTurnTaskMoved   = errTurnTaskMoved
+	RecordTurnAttempts = recordTurnAttempts
+)
+
+// RecordTurnReading is [Writer.RecordTurn]'s attempts with the task's project
+// read by read — the seam the window between the read and the decide needs.
+func (w *Writer) RecordTurnReading(ctx context.Context, opID string, turn TurnRecord,
+	read func(context.Context, string) (string, error)) (WriteResult, error) {
+
+	return w.recordTurn(ctx, opID, turn, read)
+}

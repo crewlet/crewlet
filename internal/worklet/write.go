@@ -1669,7 +1669,9 @@ var errTurnTaskMoved = errors.New("worklet: the task moved project while its tur
 // it read when the turn was woken, and a task moved since would put the
 // record's scope in a container its rows are no longer in — a deferral in the
 // project the task now lives in would not see it. So the project is read off
-// the task's own row, and the decide confirms it inside its snapshot.
+// the task's own row ([Writer.projectOfTask]) to form the scope, and the decide
+// confirms it inside its snapshot ([chargeable]); a move landing between the
+// two is the refusal [Writer.recordTurn] reads again on.
 func (w *Writer) RecordTurn(ctx context.Context, opID string, turn TurnRecord) (WriteResult, error) {
 	switch {
 	case opID == "":
@@ -1696,8 +1698,23 @@ func (w *Writer) RecordTurn(ctx context.Context, opID string, turn TurnRecord) (
 			"replicated estate, and a turn's scope is its task's project, " +
 			"which only the task's own row can say")
 	}
+	return w.recordTurn(ctx, opID, turn, w.projectOfTask)
+}
+
+// recordTurn is [Writer.RecordTurn]'s attempts: read the task's project, form
+// the scope from it, and decide — reading again, up to [recordTurnAttempts]
+// times, while the decide finds the task moved since the read.
+//
+// THE READ IS A PARAMETER because the window it guards cannot be produced any
+// other way: a move landing between the read outside the snapshot and the
+// decide inside it is milliseconds wide, and a test that must show the decide
+// refusing a stale scope, the retry forming a fresh one and the bound ending
+// a chase hands in a read that answers what it needs.
+func (w *Writer) recordTurn(ctx context.Context, opID string, turn TurnRecord,
+	read func(context.Context, string) (string, error)) (WriteResult, error) {
+
 	for attempt := 1; ; attempt++ {
-		project, err := w.projectOfTask(ctx, turn.Task)
+		project, err := read(ctx, turn.Task)
 		if err != nil {
 			return WriteResult{}, err
 		}
@@ -1710,6 +1727,12 @@ func (w *Writer) RecordTurn(ctx context.Context, opID string, turn TurnRecord) (
 
 // taskProjectStatement is the project one task's row names, read by
 // [Writer.projectOfTask] and [chargeable] and named for the plan test.
+//
+// ONE STATEMENT FOR BOTH READS, and that is why a wrong column in it would
+// agree with itself: the scope's read and the decide's confirmation would name
+// the same wrong value, and nothing compared either with the task's project.
+// TestATurnIsScopedToTheProjectItsTaskIsIn is what does — it reads the
+// record's scope back and holds it to the project the task is in.
 const taskProjectStatement = `SELECT project_key FROM tracker_tasks WHERE id = ?`
 
 // projectOfTask is the project a task's own row names, read ahead of the
