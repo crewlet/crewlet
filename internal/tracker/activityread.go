@@ -869,17 +869,35 @@ func compileActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery) (
 		p.args = append(p.args, values...)
 	}
 
+	project := ProjectKey(q.Project)
 	if task := strings.TrimSpace(q.Task); task != "" {
 		// THE ID, RESOLVED FROM WHATEVER THE CALLER HELD. A feed asked
 		// for by a FORMER key must answer the same rows — the history is
 		// the one place a rename is most likely to be looked up from.
-		id, err := resolveTaskID(ctx, tx, task)
+		id, filed, err := resolveTaskIn(ctx, tx, task)
 		if err != nil {
 			return activityPredicate{}, err
 		}
+		// A TASK'S ACTIVITY IS ITS WHOLE HISTORY, and a container named
+		// beside it is a SCOPE CHECK rather than a row filter. As a filter
+		// it hid every row the task was written before it moved projects
+		// — each row carries the project it was written in — and asked
+		// the planner to intersect the task's rows with the container's
+		// whole history and sort them. It narrows nothing a reader is
+		// owed either: a tracker holder reads the whole tracker
+		// (ADR-0033), so the container is never what keeps a row out. So
+		// the task's own rows are read by its subject, and a container it
+		// is not filed in is refused naming the one it is, rather than
+		// answered with a history the caller would read as somebody
+		// else's task's, or with nothing.
+		if project != "" && filed != project {
+			return activityPredicate{}, fmt.Errorf("%w: task %s is filed in "+
+				"project %s, not %s — a task's activity is its whole history, "+
+				"wherever it was written: name the project it is in, or drop "+
+				"the container", ErrBadQuery, task, filed, project)
+		}
 		add("h.subject_id = ?", id)
-	}
-	if project := ProjectKey(q.Project); project != "" {
+	} else if project != "" {
 		add("h.project_key = ?", project)
 	}
 	if !q.Since.IsZero() {

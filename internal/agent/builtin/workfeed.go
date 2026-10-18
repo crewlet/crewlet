@@ -59,8 +59,10 @@ func (t *taskActivity) Parameters() map[string]any {
 					"has had or by its id. " + itemRef,
 			},
 			"project": map[string]any{
-				"type":        "string",
-				"description": "Everything that happened in one project.",
+				"type": "string",
+				"description": "Everything that happened in one project. " +
+					"Beside `task` it is only checked: the task's whole history " +
+					"is answered, and a project the task is not in is refused.",
 			},
 			"kinds": map[string]any{
 				"type": "string",
