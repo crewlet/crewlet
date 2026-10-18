@@ -1095,8 +1095,19 @@ func (h *Hub) Broadcast(env Envelope) {
 	}
 	h.mu.RUnlock()
 
-	// ONE ENCODE PER POSTURE AND PAYLOAD VARIANT: a plain payload has one
-	// variant, and a [Shaped] one as many as the audiences it tells apart.
+	fanOut(targets, env)
+}
+
+// fanOut hands env to every target its need and its posture admit, encoding it
+// ONCE PER POSTURE AND PAYLOAD VARIANT: a plain payload has one variant, and a
+// [Shaped] one as many as the audiences it tells apart.
+//
+// THE ONE PATH A PUSH LEAVES BY, whoever chose the targets — [Hub.Broadcast]
+// from its route, and a producer that decides its recipients one by one from
+// its own — so who may read a kind, what a posture delivers, how a payload is
+// shaped and how often it is encoded are each decided in one place. A producer
+// with a send loop of its own would be a second answer to all four.
+func fanOut(targets []*Client, env Envelope) {
 	type encoding struct {
 		slot    int
 		variant string
