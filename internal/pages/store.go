@@ -718,6 +718,19 @@ func (s *Store) refuseUndeclared(container string) error {
 		"or %s", key, where)
 }
 
+// SystemActor is how this domain records a write the engine makes on its own
+// behalf, under the name given: a container a chart declares, a page the trash
+// reaper purges.
+//
+// AN OPERATOR, because the knowledge base has no author kind for the engine
+// ([AuthorKinds]) and an operator is the party that acts on the company's
+// behalf while being neither a seat nor a person, which is the rule
+// [generationActor] applies to a generation the engine wrote. ONE CONSTRUCTOR
+// so every such write is recorded the same way: an operator holds no seat, so
+// nothing it writes subscribes anybody ([Actor.subscriber]), and no
+// reservation refuses it ([Store.refuseReserved]).
+func SystemActor(name string) Actor { return Actor{Handle: name, Kind: AuthorOperator} }
+
 // IsHuman reports an actor a notification treats as a person.
 func (a Actor) IsHuman() bool { return a.Kind == AuthorHuman || a.Kind == AuthorOperator }
 
