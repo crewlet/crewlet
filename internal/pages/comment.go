@@ -371,11 +371,11 @@ func readCommentTx(ctx context.Context, tx *sql.Tx, pageID, commentID string) (
 //
 // DERIVED FROM THE CALLER'S KEY ([Actor.OpKey]) where it brought one — a
 // turn's call through its own key, which a seat's tools derive from the turn,
-// the call's arguments and its repeat count in the run; a person's request
-// through its Idempotency-Key — so a retry or a re-run turn is one operation
-// the ledger collapses rather than a second comment. The comment's own id is
-// the same value: one comment is one operation here, and two identifiers for
-// one thing is two places for a retry to disagree with itself.
+// the tool, the call's arguments and its repeat count in the run; a person's
+// request through its Idempotency-Key — so a retry or a re-run turn is one
+// operation the ledger collapses rather than a second comment. The comment's
+// own id is the same value: one comment is one operation here, and two
+// identifiers for one thing is two places for a retry to disagree with itself.
 //
 // It is [statelog.KeyedObjectOpID], the derivation every keyed write takes,
 // UNNAMED because this is the comment's own id as well and a reader addresses
