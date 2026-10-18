@@ -178,11 +178,11 @@ func renderArgs(args map[string]any, opts FormatOptions) string {
 // conversation ledger's `tool_calls`. Neither is an HTML document.
 //
 // This package imports nothing from crewlet, so the rule is spelled here
-// rather than shared with `tools.RecordArgs`, which states the same one for
-// the records a transcript renders. That is the boundary working, not a copy
-// nobody noticed: an encoder is two lines and the import would drag the whole
-// tool layer behind a type the turn context, the prompt builder and the API
-// all hold.
+// rather than shared with `tools.PlainJSON`, which states the same one for
+// the records a transcript renders and the answers a tool hands a model. That
+// is the boundary working, not a copy nobody noticed: an encoder is two lines
+// and the import would drag the whole tool layer behind a type the turn
+// context, the prompt builder and the API all hold.
 func marshal(v map[string]any) string {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)

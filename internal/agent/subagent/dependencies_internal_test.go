@@ -92,3 +92,28 @@ func TestAWorkersErrorIsNotCut(t *testing.T) {
 		}
 	}
 }
+
+// A WORKER'S SUBMISSION REACHES ITS READERS AS WRITTEN — the parent reading
+// the call's answer and a task that waited on it — rather than as the six-byte
+// escapes an HTML-safe encoder writes for `<`, `>` and `&`. A worker's answer
+// is very often the code it was sent to read, and neither reader is a page a
+// tag could close.
+func TestAWorkersSubmissionReachesItsReadersAsWritten(t *testing.T) {
+	t.Parallel()
+	const quoted = `if a < b && c > d { return "<ok>" }`
+	done := Result{ID: "a", Status: StatusOK, Output: map[string]any{"snippet": quoted}}
+	for reader, text := range map[string]string{
+		"the parent":       renderResults([]Result{done}),
+		"a dependent task": done.Answer(),
+	} {
+		if !strings.Contains(text, `if a < b && c > d { return \"<ok>\" }`) ||
+			strings.Contains(text, `\u003c`) || strings.Contains(text, `\u0026`) {
+			t.Errorf("%s is shown %s, want the submission's own `<`, `>` and `&`",
+				reader, text)
+		}
+		if strings.HasSuffix(text, "\n") {
+			t.Errorf("%s is shown an answer ending in the encoder's newline: %q",
+				reader, text)
+		}
+	}
+}
