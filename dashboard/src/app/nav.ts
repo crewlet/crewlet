@@ -26,8 +26,9 @@
  *     Work, switched where the trail names it.
  *   - A SECTION is a PATH segment inside a workspace, drawn by one renderer:
  *     `tabs` in the page header, `lenses` beside Work's scope in the trail,
- *     `column` for Settings, or `none` where the workspace's own screens lead
- *     to it (Knowledge's landing).
+ *     `column` for Settings, `rail` for Chat, whose screen draws them beside
+ *     its rooms, or `none` where the workspace's own screens lead to it
+ *     (Knowledge's landing).
  *   - An OBJECT TAB is a `tab=` query on an object's own page, bound to 1–9.
  *
  * Nothing is two of those. A section is never a sidebar row and never a
@@ -37,10 +38,10 @@
  * # The order is the argument
  *
  * You first — what needs you, what reached you, what is yours — then the
- * company's work, its people, what is running, what it knows and what it
- * spent, and the machine last. A founder opening this meets their own
- * decisions first and the engine last, because the company is the product and
- * the engine is what runs it.
+ * company's work, its people, what they say to each other, what is running,
+ * what it knows and what it spent, and the machine last. A founder opening
+ * this meets their own decisions first and the engine last, because the
+ * company is the product and the engine is what runs it.
  */
 
 import type { GlyphName } from "@crewlethq/icons/glyphs";
@@ -53,6 +54,7 @@ export type Workspace =
   | "me"
   | "work"
   | "agents"
+  | "chat"
   | "live"
   | "knowledge"
   | "spend"
@@ -61,16 +63,25 @@ export type Workspace =
 
 /**
  * How a workspace draws its sections: `tabs` in the page header, a `column`
- * of them beside the screen (Settings), or `none`, where the workspace's own
- * screens lead to its sections (Home, Inbox, and Knowledge, whose landing
- * links its two sections under "For the agents").
+ * of them beside the screen (Settings), a `rail`, or `none`, where the
+ * workspace's own screens lead to its sections (Home, Inbox, and Knowledge,
+ * whose landing links its two sections under "For the agents").
  *
  * `lenses` is Work's. Its sections are the lenses of the scope the trail
  * names, All projects, drawn beside the trail's switcher the way a project
  * draws its own lenses, so the bar reads one way in either scope and Work
  * keeps no row of tabs of its own.
+ *
+ * `rail` is Chat's, whose SCREEN draws its sections at the head of the list
+ * of its objects, the rooms (`routes/chat/Chat.tsx`), from this table. The
+ * frame draws nothing for a rail, neither a strip nor a column, because the
+ * tabs are drawn on a section's own page and never on an object's, and a room
+ * is the object page a chat reader spends their time on. It is not `none`
+ * because the screen that draws it reads the renderer: Chat's rail is drawn
+ * from the row that says `rail`, every section of it, and a `none` row says
+ * no frame or screen owes it a strip.
  */
-export type SectionRenderer = "tabs" | "lenses" | "column" | "none";
+export type SectionRenderer = "tabs" | "lenses" | "column" | "rail" | "none";
 
 /**
  * Where a workspace's row sits in the sidebar — or `menu`, for the one with no
@@ -464,6 +475,58 @@ export const WORKSPACES: WorkspaceRow[] = [
     ],
   },
   {
+    // AFTER THE PEOPLE AND BEFORE WHAT THEY KNOW, which is the order the
+    // sidebar argues: the company, then the talking, then what the talking
+    // produced.
+    //
+    // A RAIL, and the screen draws it. Chat's rooms are its own object list,
+    // drawn beside the transcript because they carry unread counts, mute
+    // state and a preview that no tab can hold — and a room is an OBJECT
+    // page, where the header draws no section tabs, so tabs would leave the
+    // mention feed two presses from every room. The two lists that are not a
+    // room sit at the head of the rail instead, drawn from the sections
+    // below: the landing's label heads the rooms, and every other section is
+    // a link under the name it has here.
+    key: "chat",
+    label: "Chat",
+    icon: "message-square",
+    path: ["chat"],
+    hint: "The company's own rooms, threads and direct messages",
+    keywords: ["messages", "rooms", "channels", "direct message", "dm"],
+    chord: "c",
+    place: "workspace",
+    renderer: "rail",
+    // THE CHAT APP'S, every section and every room: each reads somebody's
+    // rooms as the seat the session holds, so the frame draws its one refusal
+    // in place of every chat page for a reader without it. What the screen
+    // answers is only what is chat's own: a company whose chat is elsewhere,
+    // and a credential acting as no seat.
+    grants: ["chat"],
+    sections: [
+      {
+        key: "rooms",
+        label: "Rooms",
+        icon: "hash",
+        path: ["chat"],
+        hint: "Your rooms, newest activity first",
+      },
+      {
+        key: "mentions",
+        label: "Mentions",
+        icon: "bell",
+        path: ["chat", "mentions"],
+        hint: "Every message that named you — the whole away story, because nothing is sent to you",
+      },
+      {
+        key: "search",
+        label: "Search chat",
+        icon: "search",
+        path: ["chat", "search"],
+        hint: "Rank what has been said in every room you can read",
+      },
+    ],
+  },
+  {
     key: "live",
     label: "Live",
     icon: "activity",
@@ -795,6 +858,7 @@ export const RESERVED_SEGMENTS: string[] = [
   "views",
   "history",
   "search",
+  "mentions",
   "asked-of-me",
   "asked-by-me",
   "unblocked",

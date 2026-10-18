@@ -44,6 +44,8 @@ const VIEWER: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  chatBackend: "",
+  chatVendors: [],
 };
 
 function draw(figures?: readonly KpiId[]) {

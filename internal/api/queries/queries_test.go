@@ -293,6 +293,9 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"page_activity": "knowledge", "page_revision": "knowledge",
 		"page_reads": "knowledge",
 
+		"chat_channels": "chat", "chat_channel": "chat", "chat_messages": "chat",
+		"chat_thread": "chat", "chat_mentions": "chat", "chat_search": "chat",
+
 		"work_item":       "decided_by:" + string(authz.ActionWorkRead),
 		"turns":           "decided_by:" + string(authz.ActionSeatTrailRead),
 		"phases":          "decided_by:" + string(authz.ActionSeatTrailRead),

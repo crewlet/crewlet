@@ -193,6 +193,7 @@ test("a session holding no app is dialled, and its sidebar locks the apps by nam
   );
   expect(row(/^Work/).querySelector("[title='Needs Tracker access']")).not.toBeNull();
   expect(row(/^Knowledge/).querySelector("[title='Needs Knowledge access']")).not.toBeNull();
+  expect(row(/^Chat/).querySelector("[title='Needs Chat access']")).not.toBeNull();
   expect(row(/^Home/).querySelector(".side-locked")).toBeNull();
   expect(row(/^Agents/).querySelector(".side-locked")).toBeNull();
   // NOTHING SAYS IT WAS REFUSED: there is no refusal to say.
