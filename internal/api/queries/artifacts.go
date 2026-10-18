@@ -10,7 +10,6 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // THE ARTIFACTS' READ QUESTIONS: the gallery's listing, one artifact's head,
@@ -89,13 +88,6 @@ func artifactFailure(what string, err error) error {
 	return err
 }
 
-// asker is the asking principal, which the registry resolved before any
-// answer runs.
-func asker(ctx context.Context) iam.Principal {
-	p, _ := iam.From(ctx)
-	return p
-}
-
 // artifactID is the artifact the `id` parameter names, answered as absent
 // where it names none.
 func artifactID(p Params) (artifacts.ID, error) {
@@ -124,7 +116,11 @@ func (s artifactsAnswers) read(ctx context.Context, what string, p Params, versi
 	if err != nil {
 		return artifactsapi.Admission{}, err
 	}
-	a, err := s.Gate.Read(ctx, asker(ctx), id, version)
+	asking, err := caller(ctx, what)
+	if err != nil {
+		return artifactsapi.Admission{}, err
+	}
+	a, err := s.Gate.Read(ctx, asking, id, version)
 	return a, artifactFailure(what, err)
 }
 
@@ -147,7 +143,11 @@ func (s artifactsAnswers) list(ctx context.Context, p Params) (any, error) {
 		Limit: Clamp(p.Int("limit", 0), artifactsdomain.DefaultListLimit, artifactsdomain.MaxListLimit),
 		Fresh: fresh,
 	}
-	page, err := s.Gate.List(ctx, s.Reads, asker(ctx), q)
+	asking, err := caller(ctx, "artifacts")
+	if err != nil {
+		return nil, err
+	}
+	page, err := s.Gate.List(ctx, s.Reads, asking, q)
 	return page, artifactFailure("artifacts", err)
 }
 
@@ -158,7 +158,11 @@ func (s artifactsAnswers) artifact(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	detail, err := s.Gate.Detail(ctx, asker(ctx), id)
+	asking, err := caller(ctx, "artifact")
+	if err != nil {
+		return nil, err
+	}
+	detail, err := s.Gate.Detail(ctx, asking, id)
 	return detail, artifactFailure("artifact", err)
 }
 
@@ -223,7 +227,11 @@ func (s artifactsAnswers) seenBy(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	seen, err := s.Gate.SeenBy(ctx, s.Reads, asker(ctx), id)
+	asking, err := caller(ctx, "artifact_seen_by")
+	if err != nil {
+		return nil, err
+	}
+	seen, err := s.Gate.SeenBy(ctx, s.Reads, asking, id)
 	return seen, artifactFailure("artifact_seen_by", err)
 }
 
@@ -234,14 +242,22 @@ func (s artifactsAnswers) access(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	access, err := s.Gate.Access(ctx, asker(ctx), id)
+	asking, err := caller(ctx, "artifact_access")
+	if err != nil {
+		return nil, err
+	}
+	access, err := s.Gate.Access(ctx, asking, id)
 	return access, artifactFailure("artifact_access", err)
 }
 
 // usage answers the company's artifacts counters against the plan quota in
 // force on this node.
 func (s artifactsAnswers) usage(ctx context.Context, _ Params) (any, error) {
-	d := authz.Decide(ctx, asker(ctx), authz.ActionArtifactUsage,
+	asking, err := caller(ctx, "artifact_usage")
+	if err != nil {
+		return nil, err
+	}
+	d := authz.Decide(ctx, asking, authz.ActionArtifactUsage,
 		authz.Object{Kind: authz.KindArtifact}, s.Gate.Chart, s.now())
 	switch {
 	case d.Unknown():
