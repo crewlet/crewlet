@@ -24,6 +24,10 @@ type headRow struct {
 	kind, status, owner, ownerKind, sourceKey string
 	head                                      int
 	epoch, bytesHeld                          int64
+
+	// purgeBegun is the broker instant the artifact's purge began, 0 for
+	// one no purge has begun on.
+	purgeBegun int64
 }
 
 // Status is whether an artifact is served.
@@ -43,9 +47,9 @@ func readHead(ctx context.Context, tx *sql.Tx, id string) (headRow, bool, error)
 	var h headRow
 	err := tx.QueryRowContext(ctx, `
 		SELECT kind, status, owner, owner_kind, source_key, head_number,
-		       access_epoch, bytes_held
+		       access_epoch, bytes_held, purge_begun_at
 		FROM artifacts WHERE id = ?`, id).Scan(&h.kind, &h.status, &h.owner,
-		&h.ownerKind, &h.sourceKey, &h.head, &h.epoch, &h.bytesHeld)
+		&h.ownerKind, &h.sourceKey, &h.head, &h.epoch, &h.bytesHeld, &h.purgeBegun)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return headRow{}, false, nil
@@ -85,6 +89,8 @@ func (a *Applier) applyArtifact(ctx context.Context, tx *sql.Tx, c applyContext)
 			return a.applyTrash(ctx, tx, c, id)
 		case OpRestore:
 			return a.applyRestore(ctx, tx, c, id)
+		case OpPurgeBegin:
+			return a.applyPurgeBegin(ctx, tx, c, id)
 		case OpPurge:
 			return a.applyPurge(ctx, tx, c, id)
 		}
@@ -716,6 +722,8 @@ func (a *Applier) applyRestore(ctx context.Context, tx *sql.Tx, c applyContext, 
 		return refuse(ctx, tx, c, id, OpRestore, RefusedNotFound, 0, HistorySummary{}, nil)
 	case head.status != string(StatusTrashed):
 		return refuse(ctx, tx, c, id, OpRestore, RefusedLive, 0, HistorySummary{}, nil)
+	case head.purgeBegun > 0:
+		return refuse(ctx, tx, c, id, OpRestore, RefusedPurging, 0, HistorySummary{}, nil)
 	}
 	actor := c.record.actor()
 	if _, err := tx.ExecContext(ctx, `
@@ -733,6 +741,55 @@ func (a *Applier) applyRestore(ctx context.Context, tx *sql.Tx, c applyContext, 
 		return 0, err
 	}
 	a.move(id, MoveRestore, head.epoch, head.head, c.position)
+	return 1 + n, nil
+}
+
+// applyPurgeBegin commits an artifact to its purge: it stamps the instant the
+// purge began and, for an artifact not yet in the trash, trashes it in the same
+// row (serving stops and the access epoch moves, as a trash's does), so from
+// this record on the artifact is never served, never written and never
+// restored, and only the purge's own record removes it. The purge runs its
+// dependents' irreversible steps only once this has applied.
+func (a *Applier) applyPurgeBegin(ctx context.Context, tx *sql.Tx, c applyContext, id string) (int, error) {
+	done, err := applied(ctx, tx, c, id)
+	if err != nil || done {
+		return 0, err
+	}
+	head, found, err := readHead(ctx, tx, id)
+	switch {
+	case err != nil:
+		return 0, err
+	case !found:
+		return refuse(ctx, tx, c, id, OpPurgeBegin, RefusedNotFound, 0, HistorySummary{}, nil)
+	case head.purgeBegun > 0:
+		return refuse(ctx, tx, c, id, OpPurgeBegin, RefusedPurging, 0, HistorySummary{}, nil)
+	}
+	actor := c.record.actor()
+	epoch := head.epoch
+	if head.status == string(StatusTrashed) {
+		_, err = tx.ExecContext(ctx, `
+			UPDATE artifacts SET purge_begun_at = ?, updated_by = ?, updated_by_kind = ?,
+				updated_at = ?, version = ?
+			WHERE id = ?`, c.at(), actor.Name, string(actor.Kind), c.at(), c.packed, id)
+	} else {
+		epoch++
+		_, err = tx.ExecContext(ctx, `
+			UPDATE artifacts SET status = ?, trashed_by = ?, trashed_by_kind = ?,
+				trashed_at = ?, access_epoch = ?, purge_begun_at = ?, updated_by = ?,
+				updated_by_kind = ?, updated_at = ?, version = ?
+			WHERE id = ?`, string(StatusTrashed), actor.Name, string(actor.Kind), c.at(),
+			epoch, c.at(), actor.Name, string(actor.Kind), c.at(), c.packed, id)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("artifactsdomain: begin the purge of %s: %w", id, err)
+	}
+	n, err := writeHistory(ctx, tx, c, historyEntry{
+		artifact: id, op: OpPurgeBegin, outcome: OutcomeApplied,
+	}, nil)
+	if err != nil {
+		return 0, err
+	}
+	a.move(id, MoveTrash, epoch, head.head, c.position)
 	return 1 + n, nil
 }
 

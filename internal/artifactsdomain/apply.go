@@ -79,6 +79,10 @@ const (
 	// RefusedLive is a restore of an artifact that is not trashed.
 	RefusedLive Refusal = "live"
 
+	// RefusedPurging is a restore of an artifact whose purge has begun, or a
+	// second beginning of one: only the purge finishes it.
+	RefusedPurging Refusal = "purging"
+
 	// RefusedHeadMoved is a version that is not head + 1.
 	RefusedHeadMoved Refusal = "head_moved"
 

@@ -80,6 +80,13 @@ const (
 	OpTrash   OpKind = "trash"
 	OpRestore OpKind = "restore"
 
+	// OpPurgeBegin commits an artifact to its purge before anything the
+	// purge removes is gone: it stamps the artifact in the trash with the
+	// instant its purge began, and from then on a restore is refused and
+	// only a purge finishes it. The datastore's removal, the purge's first
+	// irreversible step, runs only behind it.
+	OpPurgeBegin OpKind = "purge_begin"
+
 	// OpPurge removes an artifact permanently and INSTALLS A GATE by its op
 	// rather than by its kind: its subject is an ordinary artifact.
 	OpPurge OpKind = "purge"
@@ -116,7 +123,7 @@ const (
 // OpKinds are every op, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPublish, OpRestoreVersion, OpPatch, OpShare, OpUnshare, OpTransfer,
-	OpTrash, OpRestore, OpPurge, OpRemove, OpPin, OpUnpin, OpOpened, OpReadElevated,
+	OpTrash, OpRestore, OpPurgeBegin, OpPurge, OpRemove, OpPin, OpUnpin, OpOpened, OpReadElevated,
 	OpEviction, OpGeneration, OpBarrier,
 }
 

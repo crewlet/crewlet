@@ -641,6 +641,9 @@ func (w *Writer) status(ctx context.Context, c Call, id artifacts.ID, op OpKind)
 			if (op == OpTrash) == (head.Status == StatusTrashed) {
 				return statelog.Decision{}, nil
 			}
+			if op == OpRestore && !head.PurgeBegunAt.IsZero() {
+				return statelog.Decision{}, fmt.Errorf("%w: %s", ErrPurging, id)
+			}
 			return w.decision(stamp, c, subject, op, scope, opID,
 				StatusPayload{V: baseRecordVersion}, at)
 		}))
@@ -662,21 +665,34 @@ func (w *Writer) written(ctx context.Context, id artifacts.ID, opID string, res 
 	return Written{Result: res}, w.refused(ctx, id.String(), e)
 }
 
-// Purge removes an artifact permanently: every dependent's state first, each a
-// step of the gesture, then the artifact's own record, which writes the
-// deletion marker. A retry under the same key collapses every step that landed
-// and lands the rest.
+// Purge removes an artifact permanently, in three steps of one gesture: the
+// artifact is committed to its purge on its own subject ([OpPurgeBegin]), every
+// dependent's state is removed, and the artifact's own record removes its rows
+// and writes the deletion marker. A retry under the same key collapses every
+// step that landed and lands the rest.
+//
+// # Why the purge is committed before anything irreversible
+//
+// A dependent's removal cannot be undone: the datastore's deletion marker is
+// never lifted. A purge judged only before that step and again after it left a
+// restore free to land between the two, and a crash there left the artifact for
+// anybody to restore, either way a live artifact whose data was gone for good.
+// Once the first step has landed, a restore is refused and the artifact is
+// never served or written again, so the only way forward is the purge itself:
+// its retry, another purge by an administrator, or the trash reaper, which
+// finishes every purge that has begun ([Reader.TrashedBefore]).
 func (w *Writer) Purge(ctx context.Context, c Call, id artifacts.ID) (Written, error) {
 	return w.purge(ctx, c, id, nil)
 }
 
 // errNotPurgeable is a purge its guard declined: the artifact is not in the
 // state the caller purges from (the trash reaper's, which purges only what has
-// been trashed past its term).
+// been trashed past its term or whose purge has begun).
 var errNotPurgeable = errors.New("artifactsdomain: the artifact is not one this purge removes")
 
-// purge is [Writer.Purge] under an optional guard the artifact's head must pass,
-// both before the dependents run and in the artifact step's own snapshot.
+// purge is [Writer.Purge] under an optional guard the artifact's head must pass
+// before the purge is committed. Once it is (by this gesture or an earlier one),
+// the guard is not asked again: a committed purge only ever finishes.
 func (w *Writer) purge(ctx context.Context, c Call, id artifacts.ID, guard func(Head) bool) (Written, error) {
 	if err := validCall(c); err != nil {
 		return Written{}, err
@@ -693,7 +709,7 @@ func (w *Writer) purge(ctx context.Context, c Call, id artifacts.ID, guard func(
 		switch {
 		case err != nil:
 			return err
-		case found && guard != nil && !guard(head):
+		case found && head.PurgeBegunAt.IsZero() && guard != nil && !guard(head):
 			return errNotPurgeable
 		case found:
 			return nil
@@ -713,6 +729,11 @@ func (w *Writer) purge(ctx context.Context, c Call, id artifacts.ID, guard func(
 		return fmt.Errorf("%w: %s", ErrNotFound, id)
 	}); err != nil {
 		return Written{}, err
+	}
+	if !gone {
+		if err := w.beginPurge(ctx, c, id, statelog.StepOpID(opID, "begin"), guard, at); err != nil {
+			return Written{}, err
+		}
 	}
 	var dependents []string
 	if !gone && w.dependents != nil {
@@ -749,12 +770,56 @@ func (w *Writer) purge(ctx context.Context, c Call, id artifacts.ID, guard func(
 				if err := sameSource(head, sourceID); err != nil {
 					return statelog.Decision{}, err
 				}
-				if guard != nil && !guard(head) {
-					return statelog.Decision{}, errNotPurgeable
+				if head.PurgeBegunAt.IsZero() {
+					// UNREACHABLE after beginPurge landed: the begin is on
+					// this subject, and nothing clears it but this record.
+					return statelog.Decision{}, fmt.Errorf("artifactsdomain: the purge of %s "+
+						"reached its last step with no purge begun on the artifact", id)
 				}
 				return w.decision(stamp, c, subject, OpPurge, scope, step,
 					StatusPayload{V: baseRecordVersion, Dependents: dependents}, at)
 			})
 	})
 	return Written{Result: res}, err
+}
+
+// beginPurge is the purge's first step: the artifact committed to its purge on
+// its own subject, under the guard where the caller gave one, before any
+// dependent's irreversible step. An artifact a purge has already begun on (this
+// gesture's earlier attempt, or another purge's) publishes nothing and goes on:
+// a begun purge only ever finishes. It answers only once the record is durable,
+// so the dependents never run behind a step whose outcome nobody knows.
+func (w *Writer) beginPurge(ctx context.Context, c Call, id artifacts.ID, opID string,
+	guard func(Head) bool, at time.Time) error {
+
+	subject := ArtifactSubject(id)
+	res, err := w.onSourced(ctx, id, func(sourceID string) statelog.Request {
+		scope := sourcedScope(id, sourceID)
+		return request(subject, scope, opID, statelog.PatternArbitrated,
+			func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+				head, err := mustHead(ctx, tx, id.String())
+				if err != nil {
+					return statelog.Decision{}, err
+				}
+				if err := sameSource(head, sourceID); err != nil {
+					return statelog.Decision{}, err
+				}
+				if !head.PurgeBegunAt.IsZero() {
+					return statelog.Decision{}, nil
+				}
+				if guard != nil && !guard(head) {
+					return statelog.Decision{}, errNotPurgeable
+				}
+				return w.decision(stamp, c, subject, OpPurgeBegin, scope, opID,
+					StatusPayload{V: baseRecordVersion}, at)
+			})
+	})
+	if _, err := w.written(ctx, id, opID, res, err); err != nil {
+		return err
+	}
+	if res.Outcome == statelog.OutcomeUnknown {
+		return fmt.Errorf("artifactsdomain: the beginning of %s's purge has an unknown outcome, "+
+			"so nothing it would remove was touched; retry the purge under the same key", id)
+	}
+	return nil
 }

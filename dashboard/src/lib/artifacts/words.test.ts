@@ -51,6 +51,13 @@ describe("a history row", () => {
     );
   });
 
+  test("a purge's first step reads as the deletion beginning", () => {
+    expect(historyWords(entry({ op: "purge_begin" }), names)).toBe("began deleting it for good");
+    expect(historyWords(entry({ op: "purge_begin", outcome: "refused" }), names)).toBe(
+      "tried to begin deleting it for good and was refused",
+    );
+  });
+
   test("an op this build does not know is still said, in its own words", () => {
     expect(historyWords(entry({ op: "rename_collection" }), names)).toBe("rename collection");
   });

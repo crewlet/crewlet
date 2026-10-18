@@ -405,6 +405,8 @@ func (w *Writer) refusal(ctx context.Context, id string, reason Refusal, s Histo
 		return fmt.Errorf("%w: the object this write creates already exists", ErrInvalid)
 	case RefusedLive:
 		return fmt.Errorf("%w: artifact %s is not in the trash", ErrInvalid, id)
+	case RefusedPurging:
+		return fmt.Errorf("%w: %s", ErrPurging, id)
 	}
 	return fmt.Errorf("%w: the log refused this write as %s", ErrInvalid, reason)
 }

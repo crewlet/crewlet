@@ -162,6 +162,9 @@ type artifactsTrash struct {
 
 func (artifactsTrash) Name() string { return artifactsdomain.Domain{}.Name() }
 
+// TrashedBefore nominates the artifacts in the trash since before cutoff, and
+// ahead of them every artifact whose purge began and stopped part way, which
+// only a purge may finish.
 func (a artifactsTrash) TrashedBefore(ctx context.Context, cutoff time.Time,
 	limit int) ([]string, error) {
 

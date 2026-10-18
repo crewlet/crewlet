@@ -5062,6 +5062,8 @@ export interface ArtifactHead {
   status: ArtifactStatus;
   trashed_by: ArtifactActor;
   trashed_at: string;
+  /** When its purge began, the zero time for one no purge has begun on: such an artifact is in the trash and is never restored. */
+  purge_begun_at: string;
   access_epoch: number;
   bytes_held: number;
   /** The audience, to the owner and editors only; absent below. */
@@ -5212,7 +5214,7 @@ export interface ArtifactHistorySummary {
 export interface ArtifactHistoryEntry {
   position: number;
   op_id: string;
-  /** `create`, `publish`, `restore_version`, `patch`, `share`, `unshare`, `transfer`, `prune`, `trash`, `restore`, `purge`, `remove`, `pin`, `unpin`, `opened`, `read_elevated`. */
+  /** `create`, `publish`, `restore_version`, `patch`, `share`, `unshare`, `transfer`, `prune`, `trash`, `restore`, `purge_begin`, `purge`, `remove`, `pin`, `unpin`, `opened`, `read_elevated`. */
   op: string;
   outcome: "applied" | "refused";
   reason?: string;

@@ -81,13 +81,19 @@ type Head struct {
 	Status       Status                 `json:"status"`
 	TrashedBy    iam.Actor              `json:"trashed_by"`
 	TrashedAt    time.Time              `json:"trashed_at"`
-	AccessEpoch  int64                  `json:"access_epoch"`
-	BytesHeld    int64                  `json:"bytes_held"`
-	Shares       []artifacts.Share      `json:"shares,omitempty"`
-	CreatedBy    iam.Actor              `json:"created_by"`
-	UpdatedBy    iam.Actor              `json:"updated_by"`
-	CreatedAt    time.Time              `json:"created_at"`
-	UpdatedAt    time.Time              `json:"updated_at"`
+
+	// PurgeBegunAt is the instant the artifact's purge began, zero for one
+	// no purge has begun on. An artifact being purged is in the trash and
+	// is never restored: its datastore may already be gone for good.
+	PurgeBegunAt time.Time `json:"purge_begun_at"`
+
+	AccessEpoch int64             `json:"access_epoch"`
+	BytesHeld   int64             `json:"bytes_held"`
+	Shares      []artifacts.Share `json:"shares,omitempty"`
+	CreatedBy   iam.Actor         `json:"created_by"`
+	UpdatedBy   iam.Actor         `json:"updated_by"`
+	CreatedAt   time.Time         `json:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
 
 	// Version is the packed position of the last record that wrote the
 	// artifact's row.
@@ -359,7 +365,7 @@ func absent(ctx context.Context, tx *sql.Tx, id string) error {
 // headColumns is every column a Head is read from, in [scanHead]'s order.
 const headColumns = `a.id, a.label, a.kind, a.title, a.description, a.icon, a.owner,
 	a.owner_kind, a.source_key, a.head_number, a.contract, a.capabilities, a.status,
-	a.trashed_by, a.trashed_by_kind, a.trashed_at, a.access_epoch, a.bytes_held,
+	a.trashed_by, a.trashed_by_kind, a.trashed_at, a.purge_begun_at, a.access_epoch, a.bytes_held,
 	a.created_by, a.created_by_kind, a.created_at, a.updated_by, a.updated_by_kind,
 	a.updated_at, a.version`
 
@@ -376,10 +382,11 @@ func scanHead(row rowScanner, extra ...any) (Head, error) {
 		createdBy, createdKind             string
 		updatedBy, updatedKind             string
 		trashedAt, createdAt, updatedAt    int64
+		purgeBegunAt                       int64
 	)
 	dest := []any{&id, &label, &kind, &h.Title, &h.Description, &h.Icon, &h.Owner,
 		&ownerKind, &h.SourceKey, &h.HeadNumber, &h.Contract, &caps, &status,
-		&trashedBy, &trashedKind, &trashedAt, &h.AccessEpoch, &h.BytesHeld,
+		&trashedBy, &trashedKind, &trashedAt, &purgeBegunAt, &h.AccessEpoch, &h.BytesHeld,
 		&createdBy, &createdKind, &createdAt, &updatedBy, &updatedKind, &updatedAt,
 		&h.Version}
 	if err := row.Scan(append(dest, extra...)...); err != nil {
@@ -397,6 +404,9 @@ func scanHead(row rowScanner, extra ...any) (Head, error) {
 	h.TrashedBy = iam.Actor{Name: trashedBy, Kind: iam.ActorKind(trashedKind)}
 	if trashedAt > 0 {
 		h.TrashedAt = store.DecodeTime(trashedAt)
+	}
+	if purgeBegunAt > 0 {
+		h.PurgeBegunAt = store.DecodeTime(purgeBegunAt)
 	}
 	h.CreatedBy = iam.Actor{Name: createdBy, Kind: iam.ActorKind(createdKind)}
 	h.UpdatedBy = iam.Actor{Name: updatedBy, Kind: iam.ActorKind(updatedKind)}
@@ -977,8 +987,11 @@ func (r *Reader) Usage(ctx context.Context) (Usage, error) {
 	return out, nil
 }
 
-// TrashedBefore answers up to limit artifacts trashed before cutoff, the
-// longest trashed first: what the trash reaper purges.
+// TrashedBefore answers up to limit artifacts the trash reaper purges: first
+// every artifact whose purge has begun and not finished (a purge that stopped
+// part way, which nothing but a purge may finish, whatever its trash term),
+// the longest begun first, then those trashed before cutoff, the longest
+// trashed first.
 func (r *Reader) TrashedBefore(ctx context.Context, cutoff time.Time, limit int) ([]artifacts.ID, error) {
 	if limit <= 0 {
 		return nil, fmt.Errorf("%w: a trash listing names how many it wants", ErrInvalid)
@@ -986,30 +999,58 @@ func (r *Reader) TrashedBefore(ctx context.Context, cutoff time.Time, limit int)
 	var out []artifacts.ID
 	_, err := r.log.Read(ctx, staleFresh(statelog.Freshness{}).Query(DomainScope(), true),
 		func(tx *sql.Tx) error {
-			rows, err := tx.QueryContext(ctx, `
-				SELECT id FROM artifacts
-				WHERE status = ? AND trashed_at > 0 AND trashed_at < ?
-				ORDER BY trashed_at, id LIMIT ?`,
-				string(StatusTrashed), store.EncodeTime(cutoff), limit)
-			if err != nil {
-				return fmt.Errorf("artifactsdomain: read the trash: %w", err)
-			}
-			defer func() { _ = rows.Close() }()
 			out = []artifacts.ID{}
-			for rows.Next() {
-				var id string
-				if err := rows.Scan(&id); err != nil {
-					return fmt.Errorf("artifactsdomain: read the trash: %w", err)
+			seen := map[artifacts.ID]bool{}
+			for _, q := range []struct {
+				sql  string
+				args []any
+			}{
+				{`SELECT id FROM artifacts WHERE purge_begun_at > 0
+					ORDER BY purge_begun_at, id LIMIT ?`, nil},
+				{`SELECT id FROM artifacts
+					WHERE status = ? AND trashed_at > 0 AND trashed_at < ?
+					ORDER BY trashed_at, id LIMIT ?`,
+					[]any{string(StatusTrashed), store.EncodeTime(cutoff)}},
+			} {
+				if len(out) >= limit {
+					break
 				}
-				parsed, err := artifacts.ParseID(id)
+				ids, err := trashIDs(ctx, tx, q.sql, append(q.args, limit)...)
 				if err != nil {
-					return fmt.Errorf("artifactsdomain: the trash names %q: %w", id, err)
+					return err
 				}
-				out = append(out, parsed)
+				for _, id := range ids {
+					if len(out) < limit && !seen[id] {
+						seen[id] = true
+						out = append(out, id)
+					}
+				}
 			}
-			return rows.Err()
+			return nil
 		})
 	return out, err
+}
+
+// trashIDs runs one trash listing selecting artifact ids.
+func trashIDs(ctx context.Context, tx *sql.Tx, q string, args ...any) ([]artifacts.ID, error) {
+	rows, err := tx.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("artifactsdomain: read the trash: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []artifacts.ID
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("artifactsdomain: read the trash: %w", err)
+		}
+		parsed, err := artifacts.ParseID(id)
+		if err != nil {
+			return nil, fmt.Errorf("artifactsdomain: the trash names %q: %w", id, err)
+		}
+		out = append(out, parsed)
+	}
+	return out, rows.Err()
 }
 
 // List answers one page of the artifacts the viewer can see, filtered by the

@@ -848,6 +848,10 @@ const (
 	// CodeArtifactTrashed is a write to, or an open of, an artifact in the
 	// trash. 409: its owner restores it first.
 	CodeArtifactTrashed Code = "artifact_trashed"
+	// CodeArtifactPurging is a restore of an artifact whose purge has begun:
+	// its data may already be gone for good. 409: the purge finishes on its
+	// retry, an administrator's purge or the trash reaper's next pass.
+	CodeArtifactPurging Code = "artifact_purging"
 	// CodeQuotaExceeded is a write the company's plan quota refuses. 413,
 	// the detail naming the limit, the usage and the Tier A key an operator
 	// raises.
@@ -1217,6 +1221,8 @@ var codes = map[Code]string{
 
 	CodeArtifactTrashed: "This artifact is in the trash. Its owner can " +
 		"restore it, then try again.",
+	CodeArtifactPurging: "This artifact is being deleted for good, so it " +
+		"cannot be restored. The deletion finishes on its own.",
 	CodeQuotaExceeded: "This would take the company past its artifacts quota, " +
 		"so nothing was saved. Remove artifacts, or ask an operator to raise " +
 		"the limit the detail names.",

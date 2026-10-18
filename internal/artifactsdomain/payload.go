@@ -154,7 +154,8 @@ type TransferPayload struct {
 	ToKind iam.ActorKind `json:"to_kind"`
 }
 
-// StatusPayload is a trash, a restore, a purge, or an asset's removal.
+// StatusPayload is a trash, a restore, a purge's beginning, a purge, or an
+// asset's removal.
 //
 // A PURGE NAMES ITS DEPENDENTS' OPERATIONS, the steps that removed state other
 // domains keep per artifact before this one (the datastore first), so an
@@ -227,7 +228,7 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[UnsharePayload](rec)
 	case k == KindArtifact && op == OpTransfer:
 		return decodePayload[TransferPayload](rec)
-	case k == KindArtifact && (op == OpTrash || op == OpRestore || op == OpPurge):
+	case k == KindArtifact && (op == OpTrash || op == OpRestore || op == OpPurgeBegin || op == OpPurge):
 		return decodePayload[StatusPayload](rec)
 	case k == KindAsset && op == OpCreate:
 		return decodePayload[AssetPayload](rec)

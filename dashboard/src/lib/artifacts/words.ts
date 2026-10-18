@@ -163,6 +163,8 @@ export function historyWords(
         return "moved it to the trash";
       case "restore":
         return "restored it from the trash";
+      case "purge_begin":
+        return "began deleting it for good";
       case "purge":
         return "deleted it for good";
       case "remove":
@@ -197,6 +199,7 @@ function stripPast(said: string): string {
     ["gave", "give"],
     ["retired", "retire"],
     ["moved", "move"],
+    ["began", "begin"],
     ["deleted", "delete"],
     ["removed", "remove"],
     ["opened", "open"],

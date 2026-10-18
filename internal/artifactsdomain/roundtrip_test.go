@@ -551,6 +551,63 @@ func TestTheTrashPurgeTakesOnlyWhatWasTrashedBeforeItsCutoff(t *testing.T) {
 	}
 }
 
+// A PURGE IS COMMITTED BEFORE ITS DATA GOES: once its first step lands, the
+// artifact is in the trash, a restore is refused, and only a purge finishes
+// it. A purge that stopped part way (its dependent failed after the artifact
+// was committed) leaves an artifact nobody may bring back without its data,
+// which the trash reaper nominates whatever its trash term and finishes.
+//
+// Mutation: drop the applier's purging refusal from a restore and the
+// half-purged artifact comes back live; drop the begun purges from the trash
+// listing and the reaper never finishes it.
+func TestAPurgeIsCommittedBeforeItsDataGoes(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	dep := &fakeDependent{fail: errors.New("the datastore stopped part way")}
+	n.useDependents(dep)
+	jane := person("jane", artifacts.RoleOwner)
+	admin := person("root", artifacts.RoleOwner)
+	admin.Authority.Elevated = true
+	admin.OpKey = statelog.NewOpID(monday, "")
+	id := n.create(jane, "Half gone", upload(t, "index.html", "<p>h</p>")).Artifact
+
+	if _, err := n.writer.Purge(t.Context(), admin, id); err == nil {
+		t.Fatal("a purge whose dependent failed reported success")
+	}
+	h := n.head(id)
+	if h.Status != artifactsdomain.StatusTrashed || h.PurgeBegunAt.IsZero() || h.AccessEpoch != 1 {
+		t.Fatalf("the artifact a purge began on reads status %s, purge begun %v, epoch %d; "+
+			"want trashed, stamped and narrowed", h.Status, h.PurgeBegunAt, h.AccessEpoch)
+	}
+	if _, err := n.writer.Restore(t.Context(), jane, id); !errors.Is(err, artifactsdomain.ErrPurging) {
+		t.Fatalf("a restore of an artifact a purge began on answered %v", err)
+	}
+	if h := n.head(id); h.Status != artifactsdomain.StatusTrashed {
+		t.Fatalf("the refused restore left the artifact %s", h.Status)
+	}
+
+	// THE REAPER NOMINATES IT although it went in after the cutoff, and its
+	// guard, judged only where a purge is committed, does not refuse it.
+	cutoff := time.Now().Add(-time.Hour) // the broker stamps the trash at the wall clock
+	listed, err := n.reader.TrashedBefore(t.Context(), cutoff, 10)
+	if err != nil || !slices.Equal(listed, []artifacts.ID{id}) {
+		t.Fatalf("the trash listing before the trash went in: %v (%v), want the begun purge", listed, err)
+	}
+	dep.fail = nil
+	reaper := artifactsdomain.Call{Authority: artifacts.Authority{
+		Actor: iam.Actor{Name: "trash-reaper", Kind: iam.ActorSystem}, Role: artifacts.RoleOwner,
+	}}
+	if _, err := n.writer.PurgeTrashed(t.Context(), reaper, id, cutoff); err != nil {
+		t.Fatalf("the reaper's purge of the begun purge: %v", err)
+	}
+	if _, _, err := n.reader.Artifact(t.Context(), id, statelog.Freshness{Level: statelog.ReadSession}); !errors.Is(err, artifactsdomain.ErrPurged) {
+		t.Errorf("the finished purge's artifact answered %v", err)
+	}
+	if len(dep.calls) != 2 {
+		t.Errorf("the dependent was asked %v, want the failed step and the reaper's", dep.calls)
+	}
+}
+
 // THE LISTING SHOWS WHAT THE VIEWER CAN SEE: their own, what is shared with
 // their seat, a unit they sit in or the company, and an agent they lead's.
 func TestTheListingShowsWhatTheViewerCanSee(t *testing.T) {

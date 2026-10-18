@@ -21,6 +21,13 @@ var (
 	// ErrPurged reports an artifact a purge destroyed for good.
 	ErrPurged = errors.New("artifactsdomain: the artifact was purged")
 
+	// ErrPurging reports a restore of an artifact whose purge has begun: its
+	// data may already be gone for good, so it is never brought back, and
+	// the purge finishes on its retry, an administrator's purge or the trash
+	// reaper's next pass.
+	ErrPurging = errors.New("artifactsdomain: the artifact is being purged and " +
+		"cannot be restored")
+
 	// ErrSourceTaken reports a source address another of the owner's
 	// artifacts holds: republish to that artifact, or choose another key.
 	ErrSourceTaken = errors.New("artifactsdomain: that source address is held by " +

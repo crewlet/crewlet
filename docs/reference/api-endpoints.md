@@ -6077,6 +6077,14 @@ owner and shares, **before** a version, a file or a byte is read:
   its files, source and frames are `409 artifact_trashed`, its datastore
   questions `404 not_found`, its export `410 data_gone`, and a room's join is
   refused, before anything is read or recorded.
+- **A purge is committed before anything it removes is gone.** Its first step
+  stamps the artifact on its own record (`purge_begun_at` on the head, and into
+  the trash if it was live), and only then does the datastore go, which no
+  restore can bring back. From that step on a restore is `409 artifact_purging`
+  and the artifact is never served or written again; a purge that stopped part
+  way finishes on its retry under the same key, an administrator's purge, or
+  the trash reaper's next pass, which takes every begun purge whatever its
+  trash term.
 
 What the decision concluded is stamped into the record every write forms: the
 caller's role on the artifact, whether only the admin path admitted them, the
@@ -6100,8 +6108,8 @@ for. The domain's applier decides from the record alone.
 | `DELETE /artifacts/{id}/shares/{audience}` | `unshare_artifact` | The audience as `seat:<handle>`, `unit:<key>` or `company` |
 | `POST /artifacts/{id}/transfer` | `artifacts.transfer` | `{"to": "<seat>"}` |
 | `DELETE /artifacts/{id}` | `artifacts.trash` | Into the trash: every frame stops loading at once, and it is purged after thirty days |
-| `POST /artifacts/{id}/restore` | `artifacts.restore` | Out of the trash |
-| `POST /artifacts/{id}/purge` | `artifacts.purge` | Gone for good, its datastore first |
+| `POST /artifacts/{id}/restore` | `artifacts.restore` | Out of the trash; `409 artifact_purging` once a purge has begun on it |
+| `POST /artifacts/{id}/purge` | `artifacts.purge` | Gone for good, in three steps: the artifact is committed to its purge (into the trash, never restored again), its datastore goes, then its own rows |
 | `POST /artifacts/{id}/assets` | `upload_artifact_asset` | `{"upload": "<upload>", "name": "<name>"}`: finalize an asset |
 | `DELETE /artifacts/{id}/assets/{asset}` | `upload_artifact_asset` | Remove one |
 | `PUT`, `DELETE /artifacts/{id}/pin` | `artifacts.pin` | The caller's own pin |
@@ -6226,6 +6234,7 @@ The API origin **never renders an artifact**:
 | `404` | `not_found` | No such artifact for this caller, or no such version, asset or file |
 | `404` | `upload_not_found` | No such upload of this caller's |
 | `409` | `artifact_trashed` | The artifact is in the trash |
+| `409` | `artifact_purging` | A restore of an artifact whose purge has begun; the purge finishes on its own |
 | `409` | `carried_object_gone` / `upload_missing` | A carried file's bytes are gone, or a declared file has not arrived; `paths` names them |
 | `409` | `upload_consumed` / `upload_expired` | The upload is used, or an uploaded object is too old to name; upload again |
 | `409` | `label_taken` / `source_taken` | Another version holds the label, or another of the owner's artifacts the source address |
