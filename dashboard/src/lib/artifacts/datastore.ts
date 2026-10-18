@@ -779,7 +779,7 @@ export function resultOf(answer: KeyedAnswer): WriteResult {
   if (answer.kind === "done") {
     const body = answer.body as Partial<DataWriteAnswer>;
     const position = packedPosition(body.position);
-    if (answer.pending || body.outcome === "pending") return { verdict: "pending", position };
+    if (answer.pending || body.verdict === "pending") return { verdict: "pending", position };
     return { verdict: "applied", seq: body.seq ?? 0, position };
   }
   if (answer.kind === "unknown") return { verdict: "unknown", reason: answer.text };

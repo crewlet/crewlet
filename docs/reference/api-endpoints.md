@@ -2315,12 +2315,14 @@ the write is `403`. A bearer credential's write is stamped as the API's
 whatever it says.
 
 **A write answers its verdict**, read back from the node's own rows once it
-has applied the record:
+has applied the record. `verdict` is the one field that says how the write
+ended, beside `op_id`, `position` and, once decided, the `seq` an undo names;
+a refusal carries it next to its `error`:
 
 | Status | `error` | When |
 |---|---|---|
 | `200` | | `verdict: "applied"`, with the write's `seq`, which an undo names |
-| `202` | | The record landed and this node has not applied it yet: its verdict is on the `position` answered |
+| `202` | | `verdict: "pending"`: the record landed and this node has not applied it yet, so its verdict is on the `position` answered |
 | `409` | `stale_version` | An `if_version` that no longer matches; `conflict` names the documents |
 | `422` | `invalid` | A value outside its column's type, a field the collection does not declare, a long text written whole without its guard |
 | `403` | `forbidden` | The caller's role, or the column's rule, does not let them write it |

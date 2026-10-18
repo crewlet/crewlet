@@ -5544,10 +5544,9 @@ export interface DataOp {
 /** A datastore write's answer, success or the applier's refusal (`artifactdataapi.answer`). */
 export interface DataWriteAnswer {
   op_id: string;
-  outcome: "applied" | "pending" | "unknown";
   position?: LogPosition;
-  /** The applier's verdict; absent while `pending`. */
-  verdict?: DataVerdict;
+  /** How the write ended: the applier's verdict, or `pending` while the node that took it has not applied it. */
+  verdict: DataVerdict | "pending";
   /** The write's place in the store's history: what an undo names. */
   seq?: number;
   detail?: string;

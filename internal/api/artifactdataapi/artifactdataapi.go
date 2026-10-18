@@ -498,17 +498,24 @@ func (c *csvResponse) Write(p []byte) (int, error) {
 
 // answer renders a write's outcome: the verdict the applier wrote, the pending
 // position, or the refusal before anything was appended.
+//
+// ONE FIELD SAYS HOW THE WRITE ENDED, `verdict`, and `pending` is one of its
+// values. The state log's own three-valued outcome is NOT answered beside it:
+// a refused write is a record the log applied, so its `outcome` was `applied`
+// next to `"error":"invalid"`, which read as a write that both landed and did
+// not. The verdict is the answer a caller acts on, exactly as the agent's data
+// tool and the page runtime say it.
 func answer(w http.ResponseWriter, r *http.Request, key string, res artifactdata.WriteResult, err error) {
 	if err != nil {
 		writeFailed(w, r, key, err)
 		return
 	}
-	body := httpjson.Detail{"op_id": key, "outcome": string(res.Result.Outcome),
-		"position": res.Result.Position}
+	body := httpjson.Detail{"op_id": key, "position": res.Result.Position}
 	switch res.Result.Outcome {
 	case statelog.OutcomePending:
 		// THE RECORD LANDED and this node has not applied it yet: the
 		// verdict is on the position, read by catching up past it.
+		body["verdict"] = verdictPending
 		httpjson.Write(w, http.StatusAccepted, body)
 		return
 	case statelog.OutcomeUnknown:
@@ -540,6 +547,11 @@ func answer(w http.ResponseWriter, r *http.Request, key string, res artifactdata
 		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeConflict, body)
 	}
 }
+
+// verdictPending is the verdict a write answers while the node that took it
+// has not applied it: never one the applier writes, so it is not an
+// [artifacts.DataVerdict].
+const verdictPending = "pending"
 
 // writeFailed renders a write refused before anything was appended, or one
 // whose outcome nobody can establish.

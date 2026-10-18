@@ -73,7 +73,7 @@ function store(
 const applied = (seq: number, position: number): KeyedAnswer => ({
   kind: "done",
   pending: false,
-  body: { outcome: "applied", seq, position: { generation: 0, seq: position } },
+  body: { verdict: "applied", seq, position: { generation: 0, seq: position } },
 });
 
 const fieldsOf = (s: ArtifactDataStore, id: string) =>
@@ -265,6 +265,14 @@ describe("a keyed answer", () => {
     expect(resultOf(applied(4, 9))).toEqual({ verdict: "applied", seq: 4, position: 9 });
     expect(
       resultOf({ kind: "done", pending: true, body: { position: { generation: 0, seq: 9 } } }),
+    ).toEqual({ verdict: "pending", position: 9 });
+    // THE BODY SAYS PENDING TOO, in the one field that says how a write ended.
+    expect(
+      resultOf({
+        kind: "done",
+        pending: false,
+        body: { verdict: "pending", position: { generation: 0, seq: 9 } },
+      }),
     ).toEqual({ verdict: "pending", position: 9 });
     expect(
       resultOf({
