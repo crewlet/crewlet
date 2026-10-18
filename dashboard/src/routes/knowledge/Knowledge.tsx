@@ -51,6 +51,10 @@ import {
   Skeleton,
   highlightTerms,
   InlineCode,
+  DiffView,
+  collapseDiff,
+  diffLines,
+  firstChangedLines,
 } from "@crewlethq/ui";
 import {
   ArrowUpRightGlyph,
@@ -72,7 +76,6 @@ import { useOwnStar } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import { useNow } from "~/lib/clock.ts";
-import { collapse, diffLines, firstChanged } from "~/lib/diff.ts";
 import { fmtDateCompact, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { plainText, renderMarkdown } from "~/lib/markdown.ts";
 import { useRecents } from "~/lib/recents.ts";
@@ -109,7 +112,6 @@ import {
 } from "./parts.tsx";
 import { byDay, dayOf, foldRuns, leadOf, runPhrase, saveRevisions, type Run } from "./landing.ts";
 import { openingOf, withoutRepeatedTitle } from "./page/body.ts";
-import { DiffPane } from "./page/History.tsx";
 
 /** How often the landing's tiles are read again. */
 const LANDING_POLL_MS = 60_000;
@@ -387,13 +389,13 @@ function SaveDiff({ change, detail }: { change: PageChange; detail: PageDetail }
     () =>
       after === undefined || prior === undefined
         ? null
-        : firstChanged(collapse(diffLines(prior, after), 0), LATEST_DIFF_LINES),
+        : firstChangedLines(collapseDiff(diffLines(prior, after), 0), LATEST_DIFF_LINES),
     [prior, after],
   );
   if (!revs || !preview || preview.sections.length === 0) return null;
   return (
     <>
-      <DiffPane sections={preview.sections} />
+      <DiffView sections={preview.sections} aria-label="Latest change" />
       {preview.more > 0 && (
         <p className="knowledge-note">
           {plural(preview.more, "more changed line")} in{" "}

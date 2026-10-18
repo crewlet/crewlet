@@ -590,14 +590,19 @@ test("the newest saves are open to read: each note, the lines changed, and the o
     }),
   });
   const latest = await screen.findByRole("article", { name: "Newest change" });
-  await waitFor(() => expect(latest.querySelector(".diff")).not.toBeNull());
+  await waitFor(() =>
+    expect(within(latest).queryByRole("group", { name: "Latest change" })).not.toBeNull(),
+  );
   expect(latest.textContent).toContain("Crewlet-SWE saved it twice");
   const notes = [...latest.querySelectorAll(".knowledge-latest-note")].map((n) => n.textContent);
   expect(notes).toEqual(["08:00Breaks ties by join order", "07:10Adds a worked example"]);
-  const lines = (kind: string) =>
-    [...latest.querySelectorAll(`.diff-line.${kind} .diff-text`)].map((l) => l.textContent);
-  expect(lines("is-remove")).toEqual(["Equal balances are paid in any order."]);
-  expect(lines("is-add")).toEqual(["Equal balances are ordered by join order."]);
+  // BY THE WORD READ IN PLACE OF THE MARK, which is what a screen reader hears.
+  const lines = (word: "Added" | "Removed") =>
+    [...latest.querySelectorAll<HTMLElement>(".crewlet-diff-view__line")]
+      .filter((row) => within(row).queryByText(word))
+      .map((row) => row.querySelector(".crewlet-diff-view__text")?.textContent);
+  expect(lines("Removed")).toEqual(["Equal balances are paid in any order."]);
+  expect(lines("Added")).toEqual(["Equal balances are ordered by join order."]);
   // THE PAGE'S OWN BODY IS THE SAVE'S, so only the revision before it is read.
   expect(asked.filter((a) => a.what === "page_revision").map((a) => a.params.version)).toEqual([2]);
   const opening = latest.querySelector(".knowledge-latest-opening");
@@ -623,8 +628,10 @@ test("a long save's lines are a preview that counts the rest and opens the save"
     page_revision: { page_id: "p-1", version: 4, title: "Settlement algorithm", body: before },
   });
   const latest = await screen.findByRole("article", { name: "Newest change" });
-  await waitFor(() => expect(latest.querySelector(".diff")).not.toBeNull());
-  expect(latest.querySelectorAll(".diff-line")).toHaveLength(6);
+  await waitFor(() =>
+    expect(within(latest).queryByRole("group", { name: "Latest change" })).not.toBeNull(),
+  );
+  expect(latest.querySelectorAll(".crewlet-diff-view__line")).toHaveLength(6);
   // TWENTY-FOUR CHANGED LINES, twelve out and twelve in, and six drawn.
   expect(latest.textContent).toContain("18 more changed lines in this save");
   expect(within(latest).getByRole("link", { name: "this save" }).getAttribute("href")).toBe(
@@ -645,7 +652,7 @@ test("a revision answered for another version is not diffed against the save", a
   });
   const latest = await screen.findByRole("article", { name: "Newest change" });
   await waitFor(() => expect(latest.querySelector(".knowledge-latest-opening")).not.toBeNull());
-  expect(latest.querySelector(".diff")).toBeNull();
+  expect(within(latest).queryByRole("group", { name: "Latest change" })).toBeNull();
 });
 
 // A NEW PAGE leads with what it says: no note to repeat its title or its
@@ -676,7 +683,7 @@ test("a new page leads with its opening, and no note repeats its title", async (
   );
   expect(latest.textContent).toContain("Crewlet-SWE wrote it");
   expect(latest.querySelector(".knowledge-latest-notes")).toBeNull();
-  expect(latest.querySelector(".diff")).toBeNull();
+  expect(within(latest).queryByRole("group", { name: "Latest change" })).toBeNull();
   expect(latest.textContent?.match(/Split modes/g)).toHaveLength(1);
   // NOTHING ELSE was written, and the feed says so in one line.
   const feed = screen.getByRole("region", { name: /Recently written/ });

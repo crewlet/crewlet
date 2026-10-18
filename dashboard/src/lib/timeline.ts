@@ -2,7 +2,7 @@
  * The arithmetic behind the date axis: where a task's bar sits, and which of
  * them can be joined by an arrow.
  *
- * PURE FUNCTIONS OVER ROWS, for the reason `lib/diff.ts` and `lib/cron.ts` are:
+ * PURE FUNCTIONS OVER ROWS, for the reason `lib/cron.ts` is:
  * a layout exercised only by rendering it is a layout nobody re-measures, and
  * every interesting case here — a task dated one way round, an edge whose
  * blocker the filter excluded, a window a single row defines — is a value

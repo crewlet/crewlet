@@ -3413,32 +3413,6 @@ a.knowledge-reader-how:hover {
   width: var(--size-control-sm);
 }
 
-/* ONE REVISION, read in the page's place. */
-.knowledge-version {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-}
-.knowledge-version-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-2);
-  padding: var(--spacing-2) var(--spacing-3);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface-subtle);
-}
-.knowledge-version-what {
-  min-width: 0;
-  font-size: var(--font-size-compact);
-  color: var(--color-text-secondary);
-}
-.knowledge-version-what b {
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-}
-
 /* ---- Editing ------------------------------------------------------------ */
 
 .knowledge-editor {
@@ -3576,11 +3550,11 @@ a.knowledge-reader-how:hover {
    list, so the values start at one edge all the way down rather than wherever
    each row's own path happened to end.
 
-   ITS OWN CLASS NAMES. The knowledge page's line diff is `.diff-line`, later
-   in this sheet, and while this list spelled the same class that rule won the
-   cascade and laid every change out in its line-number tracks (`3.5ch 3.5ch
-   2ch`): at 1440 a 92px path got 23px and a 931px value 13px, and each change
-   read "− mc… {…". Two components never share a class here.
+   ITS OWN CLASS NAMES. The knowledge page's line diff is uilet's `DiffView`
+   now, but while this list once spelled the same class as the local line
+   diff, that rule won the cascade and laid every change out in its
+   line-number tracks: at 1440 a 92px path got 23px and a 931px value 13px.
+   Two components never share a class here.
 
    NOTHING IS CUT. The path is what a reader looks for in their YAML and the
    value is the change itself, so both wrap — a path breaks anywhere rather
@@ -7364,69 +7338,6 @@ a.work-cal-chip {
   font-weight: 600;
   color: var(--color-text-secondary);
   white-space: nowrap;
-}
-
-/* A LINE DIFF. Monospace and line-numbered on both sides, because the two
-   numbers are what a reader uses to find the paragraph in the version beside
-   it. Marked with a glyph as well as a tint: colour alone is not a signal, and
-   a printed or forced-colours render loses the tint entirely. */
-.diff {
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  line-height: var(--font-line-height-normal);
-}
-.diff-section + .diff-section,
-.diff-skip + .diff-line {
-  border-top: 1px solid var(--color-border-default);
-}
-/* A GAP SAYS WHAT IT STANDS FOR. Silently closed, a document edited at both
-   ends looks like one rewritten in the middle. */
-.diff-skip {
-  padding: var(--spacing-1) var(--spacing-3);
-  background: var(--color-surface-elevated);
-  color: var(--color-text-tertiary);
-  font-family: var(--font-family-sans);
-  font-size: var(--font-size-xs);
-}
-.diff-line {
-  display: grid;
-  grid-template-columns: 3.5ch 3.5ch 2ch minmax(0, 1fr);
-  gap: var(--spacing-2);
-  padding: 1px var(--spacing-3) 1px var(--spacing-2);
-}
-.diff-no {
-  color: var(--color-text-tertiary);
-  text-align: right;
-  user-select: none;
-}
-.diff-mark {
-  user-select: none;
-  text-align: center;
-}
-.diff-text {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.diff-line.is-add {
-  background: var(--color-feedback-success-soft);
-}
-.diff-line.is-add .diff-mark {
-  color: var(--color-feedback-success-ink);
-}
-.diff-line.is-remove {
-  background: var(--color-feedback-danger-soft);
-}
-.diff-line.is-remove .diff-mark {
-  color: var(--color-feedback-danger-ink);
-}
-.diff-add-ink {
-  color: var(--color-feedback-success-ink);
-}
-.diff-del-ink {
-  color: var(--color-feedback-danger-ink);
 }
 
 /* A schedule's expression over what it means — in a grid cell, on a phone's
