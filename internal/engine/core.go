@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -116,6 +117,13 @@ type core struct {
 	iamReader *iamdomain.Reader
 	iamWriter *iamdomain.Writer
 
+	// artifactsReader and artifactsWriter are the artifacts estate's two
+	// sides, built on every data node for the identity estate's reason:
+	// the register runs every domain, so one that did not come up is a
+	// boot failure naming it ([core.openArtifacts]).
+	artifactsReader *artifactsdomain.Reader
+	artifactsWriter *artifactsdomain.Writer
+
 	// run is the context the directory trigger runs under, and stop is
 	// what ends it.
 	//
@@ -197,6 +205,9 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 	// setting for it and no second place to keep one, so its absence is a
 	// boot failure naming the domain rather than a reader that answers nil.
 	if err = c.openIAM(e, sl, nodeID); err != nil {
+		return err
+	}
+	if err = c.openArtifacts(e, sl); err != nil {
 		return err
 	}
 

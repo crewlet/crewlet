@@ -482,7 +482,9 @@ func (e *Engine) startNativeCollector(ctx context.Context) {
 	if n == nil {
 		return
 	}
-	estates := n.objectEstates()
+	// THE NATIVE HALF'S AND THE CORE'S: the artifacts log runs on every data
+	// node, and its versions and assets name objects the same store keeps.
+	estates := objectEstatesFor(n, e.ArtifactsReader())
 	if len(estates) == 0 {
 		return
 	}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -505,14 +506,24 @@ type applyHooks struct {
 	// instead (inboxrelay.go), which this same hook feeds on that peer. It
 	// must not block.
 	inboxMoved func([]tracker.InboxMovement)
+
+	// artifactsMoved is what the ARTIFACTS APPLIER calls after a committed
+	// batch, with what it moved ([artifactsdomain.Moved]): a new version, a
+	// narrowing's access epoch, a trash, a purge. Threaded down for
+	// identityMoved's reason: the serving origin's authorization cache and
+	// the socket hub serve only this node's own requests, and the apply is
+	// the only thing that sees every record on every data node. It must not
+	// block. See [Engine.OnArtifactsMoved].
+	artifactsMoved func([]artifactsdomain.Moved)
 }
 
 // applyHooks is every post-commit hook this engine hands its appliers.
 func (e *Engine) applyHooks() applyHooks {
 	return applyHooks{
-		nudgeSkills:   e.nudgeSkills,
-		identityMoved: e.identityMoved,
-		inboxMoved:    e.inboxMoved,
+		nudgeSkills:    e.nudgeSkills,
+		identityMoved:  e.identityMoved,
+		inboxMoved:     e.inboxMoved,
+		artifactsMoved: e.artifactsMoved,
 	}
 }
 

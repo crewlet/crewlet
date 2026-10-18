@@ -216,6 +216,10 @@ type Engine struct {
 	// [Engine.SetOnIdentityMoved].
 	onIdentity atomic.Pointer[func(iamdomain.Moved)]
 
+	// artifactsListeners is told what each committed artifacts batch moved
+	// on this node; see [Engine.OnArtifactsMoved].
+	artifactsListeners artifactsFanout
+
 	// ownsBackends says whether Stop closes them. Ownership is a separate
 	// fact from use: a borrowed Backends is still the one this engine
 	// requeues and pauses through, so holding "the ones I use" and "do I
