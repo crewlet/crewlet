@@ -3,6 +3,9 @@
     "API": {
       "additionalProperties": false,
       "properties": {
+        "artifacts": {
+          "$ref": "#/$defs/APIArtifacts"
+        },
         "auth": {
           "$ref": "#/$defs/APIAuth"
         },
@@ -58,6 +61,50 @@
             "array",
             "null"
           ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "APIArtifacts": {
+      "additionalProperties": false,
+      "properties": {
+        "external_url": {
+          "description": "Where browsers reach artifacts: https://{artifact}.artifacts.example.net for an origin per artifact (wildcard DNS and TLS), or a plain origin such as https://artifacts.example.com for one opaque origin. Required once port is set on an ingress node.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "host": {
+          "description": "Bind address for the artifact listener. Empty binds every interface.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "port": {
+          "anyOf": [
+            {
+              "maximum": 65535,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Bind port for the artifact listener, which serves artifact bytes and nothing else; 0 serves none on this node. Ingress nodes only."
         }
       },
       "type": [
@@ -339,6 +386,112 @@
         "id",
         "token"
       ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "ArtifactLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "artifacts": {
+          "anyOf": [
+            {
+              "maximum": 10000000,
+              "minimum": 100,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Artifacts the company may hold, trashed ones included until purged; default 50000, 100..10000000."
+        },
+        "company_bytes": {
+          "anyOf": [
+            {
+              "maximum": 17592186044416,
+              "minimum": 1073741824,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Bytes every artifact's retained versions and assets may name, each distinct object counted once; default 10 GiB, 1 GiB..16 TiB."
+        },
+        "data_bytes": {
+          "anyOf": [
+            {
+              "maximum": 1099511627776,
+              "minimum": 67108864,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Datastore footprint every store together may hold on each data node; default 1 GiB, 64 MiB..1 TiB."
+        },
+        "data_store_bytes": {
+          "anyOf": [
+            {
+              "maximum": 1073741824,
+              "minimum": 1048576,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Datastore footprint one artifact's store may hold; default 32 MiB, 1 MiB..1 GiB."
+        },
+        "pending_bytes": {
+          "anyOf": [
+            {
+              "maximum": 17179869184,
+              "minimum": 67108864,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Bytes one principal may hold reserved for uploads not yet published; default 512 MiB, 64 MiB..16 GiB. A company may hold four times it."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "Artifacts": {
+      "additionalProperties": false,
+      "properties": {
+        "limits": {
+          "$ref": "#/$defs/ArtifactLimits"
+        }
+      },
       "type": [
         "object",
         "null"
@@ -919,6 +1072,23 @@
             "null"
           ]
         },
+        "nats_max_bytes": {
+          "anyOf": [
+            {
+              "maximum": 70368744177664,
+              "minimum": 1073741824,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Byte reservation of the nats backend's bucket on the broker; unset derives a share of stream.store_max_bytes, 1 GiB..64 TiB. Refused with backend s3."
+        },
         "s3": {
           "$ref": "#/$defs/ObjectsS3"
         }
@@ -931,6 +1101,40 @@
     "Stream": {
       "additionalProperties": false,
       "properties": {
+        "artifact_data_log_max_bytes": {
+          "anyOf": [
+            {
+              "maximum": 549755813888,
+              "minimum": 1073741824,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Byte ceiling on the artifact datastore's log; unset derives half of the mutation log's ceiling, set or derived, 1 GiB..32 GiB from a volume alone."
+        },
+        "artifacts_log_max_bytes": {
+          "anyOf": [
+            {
+              "maximum": 274877906944,
+              "minimum": 1073741824,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Byte ceiling on the artifacts log; unset derives a quarter of the mutation log's ceiling, set or derived, 1 GiB..16 GiB from a volume alone."
+        },
         "cluster": {
           "$ref": "#/$defs/StreamCluster"
         },
@@ -1617,6 +1821,9 @@
   "properties": {
     "api": {
       "$ref": "#/$defs/API"
+    },
+    "artifacts": {
+      "$ref": "#/$defs/Artifacts"
     },
     "coordination": {
       "$ref": "#/$defs/Coordination"

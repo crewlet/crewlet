@@ -93,6 +93,25 @@ const (
 	PagesLogMaxBytesFloor   int64 = 1 << 30
 	PagesLogMaxBytesCeiling int64 = 256 << 30
 
+	// ArtifactsLogMaxBytesFloor and ArtifactsLogMaxBytesCeiling bound the
+	// artifacts log, for the knowledge base's reasons and at its ratio
+	// ([DerivedArtifactsLogDivisor]).
+	ArtifactsLogMaxBytesFloor   int64 = 1 << 30
+	ArtifactsLogMaxBytesCeiling int64 = 256 << 30
+
+	// ArtifactDataLogMaxBytesFloor and ArtifactDataLogMaxBytesCeiling bound
+	// the datastore's log: the corpus floor, and half the largest mutation
+	// log an operator may write ([DerivedArtifactDataLogDivisor]).
+	ArtifactDataLogMaxBytesFloor   int64 = 1 << 30
+	ArtifactDataLogMaxBytesCeiling int64 = 512 << 30
+
+	// NatsObjectsMaxBytesFloor and NatsObjectsMaxBytesCeiling bound the
+	// nats object bucket's reservation (store.objects.nats_max_bytes): a
+	// gibibyte is the smallest bucket worth reserving a share of the broker
+	// for, and the ceiling is the store limit's own typo guard.
+	NatsObjectsMaxBytesFloor   int64 = 1 << 30
+	NatsObjectsMaxBytesCeiling int64 = 64 << 40
+
 	// IamLogMaxBytesFloor and IamLogMaxBytesCeiling bound the identity
 	// estate's log, and DefaultIamLogMaxBytes is what an unset value takes.
 	//
@@ -190,6 +209,17 @@ const (
 	// grows at about a quarter of the tracker's rate, and at a quarter of
 	// the tracker's ceiling a blocked trim fills both in the same time.
 	DerivedPagesLogDivisor = 4
+
+	// DerivedArtifactsLogDivisor is how much smaller an unset
+	// ArtifactsLogMaxBytes is than the mutation log's ceiling: FOUR, the
+	// knowledge base's ratio, because a publish is a page-rate event.
+	DerivedArtifactsLogDivisor = 4
+
+	// DerivedArtifactDataLogDivisor is how much smaller an unset
+	// ArtifactDataLogMaxBytes is than the mutation log's ceiling: TWO,
+	// because a datastore write is a click rather than a save, and a day of
+	// review meetings writes about as many records as a busy tracker week.
+	DerivedArtifactDataLogDivisor = 2
 
 	// DerivedLogMaxBytesFraction is the share of a volume's free space an
 	// unset TrackerLogMaxBytes takes, and DerivedLogMaxBytesFloor /
@@ -413,6 +443,39 @@ func (s Stream) PagesMaxBytes(free int64) (int64, bool) {
 	tracker, _ := s.LogMaxBytes(free)
 	return min(max(tracker/DerivedPagesLogDivisor, PagesLogMaxBytesFloor),
 		PagesLogMaxBytesCeiling), true
+}
+
+// ArtifactsMaxBytes is the artifacts log's ceiling, and whether it was derived:
+// a quarter of the mutation log's, set or derived, held inside the bounds Tier
+// A accepts for the field, exactly as [Stream.PagesMaxBytes] is.
+func (s Stream) ArtifactsMaxBytes(free int64) (int64, bool) {
+	if s.ArtifactsLogMaxBytes > 0 {
+		return s.ArtifactsLogMaxBytes, false
+	}
+	tracker, _ := s.LogMaxBytes(free)
+	return min(max(tracker/DerivedArtifactsLogDivisor, ArtifactsLogMaxBytesFloor),
+		ArtifactsLogMaxBytesCeiling), true
+}
+
+// ArtifactDataMaxBytes is the datastore log's ceiling, and whether it was
+// derived: half the mutation log's, set or derived, held inside the bounds
+// Tier A accepts for the field.
+func (s Stream) ArtifactDataMaxBytes(free int64) (int64, bool) {
+	if s.ArtifactDataLogMaxBytes > 0 {
+		return s.ArtifactDataLogMaxBytes, false
+	}
+	tracker, _ := s.LogMaxBytes(free)
+	return min(max(tracker/DerivedArtifactDataLogDivisor, ArtifactDataLogMaxBytesFloor),
+		ArtifactDataLogMaxBytesCeiling), true
+}
+
+// DeclaredLogCeilings is the sum of the state-log ceilings an operator WROTE.
+// A derived ceiling is scaled to fit whatever limit is in force, so only the
+// explicit ones can conflict with stream.store_max_bytes.
+func (s Stream) DeclaredLogCeilings() int64 {
+	return s.TrackerLogMaxBytes + s.TrackerVectorsMaxBytes + s.PagesLogMaxBytes +
+		s.IamLogMaxBytes + s.UsageLogMaxBytes + s.ArtifactsLogMaxBytes +
+		s.ArtifactDataLogMaxBytes
 }
 
 // IamMaxBytes is the identity estate's log ceiling, and whether it was derived.

@@ -67,6 +67,9 @@ type Company struct {
 	// search.
 	Knowledge Knowledge `yaml:"knowledge,omitempty" json:"knowledge"`
 
+	// Artifacts is the company's artifacts policy. See [CompanyArtifacts].
+	Artifacts CompanyArtifacts `yaml:"artifacts,omitempty" json:"artifacts,omitzero"`
+
 	// SkillVariables is an operator-defined name -> value map substituted
 	// into tool-skill text wherever a skill writes ${name}.
 	//
@@ -422,6 +425,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	if _, err := period.LoadZone(c.Timezone); err != nil {
 		p.add(field("timezone"), ErrUnknownValue, "%v", err)
 	}
+	p.wrap(c.Artifacts.validate(field("artifacts")))
 
 	// A SEAT MAY NOT BE CALLED WHAT "NOBODY" IS CALLED.
 	//

@@ -64,6 +64,10 @@ type Bootstrap struct {
 	// history: who owns its backups. The trim's terms live under
 	// `stream.tracker_retention`, beside the log they bound.
 	Retention Retention `yaml:"retention,omitempty" json:"retention,omitzero"`
+
+	// Artifacts is the plan quotas this node enforces on artifacts and their
+	// datastores. See [Artifacts].
+	Artifacts Artifacts `yaml:"artifacts,omitempty" json:"artifacts,omitzero"`
 }
 
 // Retention is what the operator owns about this deployment's history.
@@ -392,6 +396,8 @@ func (b *Bootstrap) Validate() error {
 	p.wrap(b.API.validate(field("api"), b.ServesAPI(), b.Profile("").RunsIngress()))
 	p.wrap(b.Secrets.validate(field("secrets")))
 	p.wrap(b.Logging.validate(field("logging")))
+	p.wrap(b.Artifacts.validate(field("artifacts")))
+	p.wrap(b.validateObjectReservation())
 	p.wrap(b.validateTopology())
 	p.wrap(b.ValidateListeners())
 	p.wrap(b.ValidateRoles())
@@ -464,6 +470,10 @@ func (b *Bootstrap) ValidateListeners() error {
 	}
 	if b.API.Public.Port > 0 {
 		open = append(open, listener{"api.public.port", b.API.Public.Host, b.API.Public.Port})
+	}
+	// THE ARTIFACT LISTENER, only where it is bound: on an ingress node.
+	if ingress && b.API.Artifacts.Port > 0 {
+		open = append(open, listener{"api.artifacts.port", b.API.Artifacts.Host, b.API.Artifacts.Port})
 	}
 	// THE EMBEDDED BROKER'S OWN LISTENERS, and only where it opens them: an
 	// external cluster's are not this host's, and a leaf opens neither.
@@ -1658,6 +1668,27 @@ type Stream struct {
 	// rather than dropping the oldest day.
 	UsageLogMaxBytes int64 `yaml:"usage_log_max_bytes,omitempty" json:"usage_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the usage log, the compacted stream each node's company days replicate on; default 1 GiB, sized for 181 days of a fleet's seats and schedules, 64 MiB..64 GiB."`
 
+	// ArtifactsLogMaxBytes is the byte ceiling on the artifacts log, the
+	// ordered stream every create, publish, share and trash of an artifact
+	// goes through.
+	//
+	// UNSET DERIVES IT beside the mutation log's, at a quarter of that log's
+	// ceiling as set or derived, for the knowledge base's reason: a publish
+	// is a human-scale event (a few an hour per artifact), so the log grows
+	// at about a page's rate and a blocked trim fills it in the time it
+	// fills the tracker's. It shares the state logs' one budget, and
+	// crossing it refuses the append rather than shedding history.
+	ArtifactsLogMaxBytes int64 `yaml:"artifacts_log_max_bytes,omitempty" json:"artifacts_log_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the artifacts log; unset derives a quarter of the mutation log's ceiling, set or derived, 1 GiB..16 GiB from a volume alone."`
+
+	// ArtifactDataLogMaxBytes is the byte ceiling on the datastore's log,
+	// where every sheet edit is one record.
+	//
+	// UNSET DERIVES HALF the mutation log's ceiling: a datastore write is a
+	// click, and thirty people on one review sheet write five to twenty
+	// records a second for the length of a meeting, so this log outgrows
+	// the knowledge base's by far and the tracker's in a busy week.
+	ArtifactDataLogMaxBytes int64 `yaml:"artifact_data_log_max_bytes,omitempty" json:"artifact_data_log_max_bytes,omitempty" js:"min=1073741824;max=549755813888" desc:"Byte ceiling on the artifact datastore's log; unset derives half of the mutation log's ceiling, set or derived, 1 GiB..32 GiB from a volume alone."`
+
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it
 	// trimming at all, deliberately, when a term it depends on is unknown.
@@ -2126,6 +2157,10 @@ func (s *Stream) validate(path Path) error {
 		IamLogMaxBytesFloor, IamLogMaxBytesCeiling)
 	bytesInRange(&p, path, "usage_log_max_bytes", s.UsageLogMaxBytes,
 		UsageLogMaxBytesFloor, UsageLogMaxBytesCeiling)
+	bytesInRange(&p, path, "artifacts_log_max_bytes", s.ArtifactsLogMaxBytes,
+		ArtifactsLogMaxBytesFloor, ArtifactsLogMaxBytesCeiling)
+	bytesInRange(&p, path, "artifact_data_log_max_bytes", s.ArtifactDataLogMaxBytes,
+		ArtifactDataLogMaxBytesFloor, ArtifactDataLogMaxBytesCeiling)
 	bytesInRange(&p, path, "store_max_bytes", s.StoreMaxBytes,
 		StoreMaxBytesFloor, StoreMaxBytesCeiling)
 	// A LIMIT SMALLER THAN THE CEILINGS DECLARED INSIDE IT is a refusal
@@ -2149,21 +2184,22 @@ func (s *Stream) validate(path Path) error {
 	// these ceilings exactly fill still fails at boot; what covers that is
 	// the refusal itself, which names this limit, what was already spoken
 	// for, and the field the ceiling came from.
-	declared := s.TrackerLogMaxBytes + s.TrackerVectorsMaxBytes +
-		s.PagesLogMaxBytes + s.IamLogMaxBytes + s.UsageLogMaxBytes
+	declared := s.DeclaredLogCeilings()
 	if s.StoreMaxBytes > 0 && declared > s.StoreMaxBytes {
 		p.add(at(path, "store_max_bytes"), ErrConflict,
 			"%d bytes is smaller than the stream ceilings declared inside it "+
 				"(tracker_log_max_bytes %d + tracker_vectors_max_bytes %d + "+
 				"pages_log_max_bytes %d + iam_log_max_bytes %d + "+
-				"usage_log_max_bytes %d = %d): the broker "+
+				"usage_log_max_bytes %d + artifacts_log_max_bytes %d + "+
+				"artifact_data_log_max_bytes %d = %d): the broker "+
 				"refuses a stream whose ceiling it cannot back, so this node would "+
 				"fail to provision one of them. Raise store_max_bytes, or lower the "+
 				"ceilings — and leave headroom, because the state logs reserve only "+
 				"a share of this limit and every other stream on the broker grows "+
 				"inside it",
 			s.StoreMaxBytes, s.TrackerLogMaxBytes, s.TrackerVectorsMaxBytes,
-			s.PagesLogMaxBytes, s.IamLogMaxBytes, s.UsageLogMaxBytes, declared)
+			s.PagesLogMaxBytes, s.IamLogMaxBytes, s.UsageLogMaxBytes,
+			s.ArtifactsLogMaxBytes, s.ArtifactDataLogMaxBytes, declared)
 	}
 	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
 	// Refused here rather than at the broker. nats-server validates an

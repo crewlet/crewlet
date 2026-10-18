@@ -30,6 +30,18 @@ type StoreObjects struct {
 
 	// S3 is the bucket, for the `s3` backend; refused for any other.
 	S3 ObjectsS3 `yaml:"s3,omitempty" json:"s3,omitzero"`
+
+	// NatsMaxBytes is the byte RESERVATION of the `nats` backend's bucket on
+	// the fleet's broker.
+	//
+	// A RESERVATION, NOT A HOPE. The state logs reserve their ceilings
+	// against stream.store_max_bytes, and the leases, ledgers and budget
+	// counters the fleet coordinates through share whatever is left. A
+	// bucket with no ceiling grows into that remainder, and a full remainder
+	// refuses a lease heartbeat: a fleet outage, not a file outage. Unset
+	// derives a share of the broker's limit; refused for the `s3` backend,
+	// whose bucket is not on the broker at all.
+	NatsMaxBytes int64 `yaml:"nats_max_bytes,omitempty" json:"nats_max_bytes,omitempty" js:"min=1073741824;max=70368744177664" desc:"Byte reservation of the nats backend's bucket on the broker; unset derives a share of stream.store_max_bytes, 1 GiB..64 TiB. Refused with backend s3."`
 }
 
 // ObjectBackend is a backend the object store can keep objects in.
@@ -118,6 +130,38 @@ func (o StoreObjects) validate(path Path) error {
 		p.add(s3, ErrConflict,
 			"names a bucket, and store.objects.backend is %q; set backend: s3 to use it",
 			o.BackendOrDefault())
+	}
+	if o.NatsMaxBytes != 0 && o.BackendOrDefault() != ObjectBackendNATS {
+		p.add(at(path, "nats_max_bytes"), ErrConflict,
+			"reserves room for the nats bucket on the broker, and store.objects."+
+				"backend is %q, whose objects are not on the broker. Remove it",
+			o.BackendOrDefault())
+	}
+	bytesInRange(&p, path, "nats_max_bytes", o.NatsMaxBytes,
+		NatsObjectsMaxBytesFloor, NatsObjectsMaxBytesCeiling)
+	return p.err()
+}
+
+// validateObjectReservation refuses a bucket reservation the broker cannot
+// back beside the state-log ceilings an operator wrote: the broker grants a
+// stream its whole ceiling when it creates it, so the sum must fit inside
+// stream.store_max_bytes. NECESSARY AND NOT SUFFICIENT, for the stream block's
+// own reason: every other stream on the broker grows inside the same limit.
+func (b *Bootstrap) validateObjectReservation() error {
+	var p problems
+	bucket := b.Store.Objects.NatsMaxBytes
+	limit := b.Stream.StoreMaxBytes
+	if bucket == 0 || limit == 0 || b.Store.Objects.BackendOrDefault() != ObjectBackendNATS {
+		return nil
+	}
+	if logs := b.Stream.DeclaredLogCeilings(); bucket+logs > limit {
+		p.add(field("store.objects.nats_max_bytes"), ErrConflict,
+			"%d bytes for the object bucket plus %d bytes of declared log "+
+				"ceilings is more than stream.store_max_bytes %d: the broker "+
+				"would refuse to create one of them. Lower the reservation or "+
+				"raise store_max_bytes, and leave headroom for the streams that "+
+				"reserve nothing",
+			bucket, logs, limit)
 	}
 	return p.err()
 }

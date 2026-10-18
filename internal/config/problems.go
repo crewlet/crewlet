@@ -797,6 +797,7 @@ func (b *Bootstrap) Warnings() []Warning {
 	}
 
 	out = append(out, b.API.warnings(b.ServesAPI())...)
+	out = append(out, b.API.Artifacts.warnings(b.API, b.ServesAPI())...)
 	return out
 }
 

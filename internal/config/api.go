@@ -128,6 +128,10 @@ type API struct {
 	// parties call. See [APIPublic].
 	Public APIPublic `yaml:"public,omitempty" json:"public,omitzero"`
 
+	// Artifacts is the optional listener that serves artifact bytes and
+	// nothing else. See [APIArtifacts].
+	Artifacts APIArtifacts `yaml:"artifacts,omitempty" json:"artifacts,omitzero"`
+
 	Auth APIAuth `yaml:"auth,omitempty" json:"auth"`
 }
 
@@ -342,6 +346,7 @@ func (a *API) validate(path Path, serving, ingress bool) error {
 		p.wrap(checkTrustedProxy(idx(at(path, "trusted_proxies"), i), block))
 	}
 	p.wrap(a.Public.validate(at(path, "public"), ingress))
+	p.wrap(a.Artifacts.validate(at(path, "artifacts"), a, ingress))
 	p.wrap(a.Auth.validate(at(path, "auth"), *a, serving))
 	return p.err()
 }
