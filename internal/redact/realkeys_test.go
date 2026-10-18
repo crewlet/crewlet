@@ -91,34 +91,71 @@ func openSSH(pub ed25519.PublicKey, key ed25519.PrivateKey) []string {
 }
 
 // brokenVariants are the ways a key reaches a transcript that a block does not
-// read whole but that must not publish any of it: broken by two lines in a row,
-// broken before its body, broken in two places, and a stream's end read from
-// inside the key — its BEGIN line dropped with the partial line the read began
-// in.
-func brokenVariants() map[string]func([]string) []string {
-	return map[string]func([]string) []string{
-		"broken by two lines in a row": func(l []string) []string {
+// read whole: broken by two lines in a row, broken before its body, broken in
+// two places, broken by two lines just before its last line. Two lines in a
+// row end a block, so each part of the key is read from its own armour, the
+// part before the break forward from its BEGIN and the part after it back from
+// its END.
+func brokenVariants() map[string]brokenVariant {
+	return map[string]brokenVariant{
+		"broken by two lines in a row": {lines: func(l []string) []string {
 			at := bodyAt(l)
 			return inserted(l, at+max(1, (len(l)-1-at)/2), foreignLine, "[worker 4] connected")
-		},
-		"broken before its body": func(l []string) []string {
+		}},
+		"broken before its body": {lines: func(l []string) []string {
 			return inserted(l, 1, foreignLine)
-		},
-		"broken by two lines, then by one": func(l []string) []string {
+		}},
+		"broken by two lines, then by one": {lines: func(l []string) []string {
 			at := bodyAt(l)
 			n := len(l) - 1 - at
 			l = inserted(l, at+max(1, n/3), foreignLine, "[worker 4] connected")
 			return inserted(l, len(l)-1-max(1, n/3), "[worker 5] connected")
+		}},
+		// The part after the break is the body's last line alone, and an
+		// END reading back finds no full line of the key above it: a line
+		// shorter than a key's full one, alone before an END, reads as a
+		// word does.
+		"broken by two lines just before its last line": {
+			lines: func(l []string) []string {
+				return inserted(l, len(l)-2, foreignLine, "[worker 4] connected")
+			},
+			unreached: func(body []string) []string {
+				if last := body[len(body)-1]; len(last) < 40 {
+					return []string{last}
+				}
+				return nil
+			},
 		},
 	}
 }
 
+// brokenVariant is a way a key reaches a transcript broken by lines that are
+// not its own.
+type brokenVariant struct {
+	// lines reads to the variant's lines from the key's.
+	lines func(lines []string) []string
+	// unreached is the lines of the body, given, that no read of the
+	// variant reaches, or nil for none.
+	unreached func(body []string) []string
+}
+
 // NO PIECE OF A REAL KEY SURVIVES, in any wrapping, whole or double-spaced,
-// broken by the lines of another process anywhere in it, or read from inside
-// it: not one window of 24 base64 characters — eighteen bytes of the key — of
-// any line of its body. The fixtures above are shapes the reader is written
-// against; these are the encoders' own output, with their own widths, headers
-// and last lines, and the windows are what a person could copy off a screen.
+// broken by the lines of another process, or read from inside it: not one
+// window of 24 base64 characters — eighteen bytes of the key — of any line of
+// its body. The fixtures above are shapes the reader is written against; these
+// are the encoders' own output, with their own widths, headers and last lines,
+// and the windows are what a person could copy off a screen.
+//
+// WHAT NO READ REACHES IS NAMED HERE, NOT SKIPPED. Two lines in a row end a
+// block, so each part of a key they break is read from its own armour, and a
+// part with no armour, or with only a short line before its END, has nothing
+// to read: broken by two lines just before a last line shorter than a full
+// one, that last line is published. And a key read from inside — its BEGIN
+// not in the text — is checked whole, double-spaced and broken by one line,
+// never broken by two: the lines above the break have no armour at all. Read
+// back, a blank line under a wrapping that marks every line — a reader's line
+// number, a grep's context mark — is a line interrupting the key, so such a
+// key double-spaced and broken by one line as well is broken by two.
 //
 // Mutation: end a block at a blank line, at the first line that is not the
 // key's, or read nothing back from an END, and pieces of these keys survive.
@@ -132,6 +169,8 @@ func TestNoPieceOfARealKeySurvivesAnyWrapping(t *testing.T) {
 			}
 		}
 		texts := map[string]string{}
+		// unreached is the lines of the body a text leaves to no read.
+		unreached := map[string][]string{}
 		for wname, w := range wrappings() {
 			for vname, v := range variants() {
 				if !v.lineByLine || !w.oneLine {
@@ -142,7 +181,10 @@ func TestNoPieceOfARealKeySurvivesAnyWrapping(t *testing.T) {
 				continue
 			}
 			for vname, broken := range brokenVariants() {
-				texts[vname+", "+wname] = w.wrap(broken(key)).text
+				texts[vname+", "+wname] = w.wrap(broken.lines(key)).text
+				if broken.unreached != nil {
+					unreached[vname+", "+wname] = broken.unreached(body)
+				}
 			}
 			for vname, v := range variants() {
 				whole := w.wrap(v.lines(key)).text
@@ -173,7 +215,10 @@ func TestNoPieceOfARealKeySurvivesAnyWrapping(t *testing.T) {
 		texts["one-line key whose END follows two words"] = "A=" + noEnd + " two words " + key[len(key)-1] + "\n"
 		for name, text := range texts {
 			got := redact.Secrets(text)
-			if leak := survivor(got, body); leak != "" {
+			reached := slices.DeleteFunc(slices.Clone(body), func(line string) bool {
+				return slices.Contains(unreached[name], line)
+			})
+			if leak := survivor(got, reached); leak != "" {
 				t.Errorf("%s, %s: %q survived in\n%s", kname, name, leak, got)
 				continue
 			}

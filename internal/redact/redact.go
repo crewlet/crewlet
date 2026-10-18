@@ -332,6 +332,21 @@ var (
 // key's.
 var pemArmour = regexp.MustCompile(`-----(?:BEGIN|END) [A-Z0-9][A-Z0-9 ]*-----`)
 
+// keyMarker is what a private key's block reads as once it is redacted, and it
+// stands where the block's armour stood: a block never runs across it either,
+// in either direction ([armoured]). Read as any other line, it let a second
+// pass over redacted text read a key back from a later END across the place
+// the first pass had stopped at — the END line the marker replaced — and
+// redact the lines above it with the key, so redacting twice was not
+// redacting once.
+const keyMarker = Marker + "private-key]"
+
+// armoured reports whether s holds what a key's block does not run across: a
+// PEM armour line's armour ([pemArmour]), or a redacted key's [keyMarker].
+func armoured(s string) bool {
+	return strings.Contains(s, keyMarker) || strings.Contains(s, "-----") && pemArmour.MatchString(s)
+}
+
 // keyArmour is what every BEGIN and END line above holds, tested before either
 // pattern runs: almost no text carries a key, and a substring test costs
 // nothing where a pattern execution costs a scan.
@@ -363,9 +378,17 @@ const minKeyLine = 40
 
 // Secrets replaces known credential patterns with markers.
 //
-// Idempotent: a marker matches no rule, so redacting twice is the same as
-// redacting once — which matters because this runs at more than one layer and
-// a transcript can pass through both.
+// REDACTING TWICE IS REDACTING ONCE, which matters because this runs at more
+// than one layer and a transcript can pass through both: a marker matches no
+// rule, and a key's marker ends a block where the armour it replaced did
+// ([keyMarker]), so a second pass reads no key the first did not. Not quite
+// everywhere: a rule's replacement can change the lines a key is read across.
+// A password's value taken off the next line takes the line break into its
+// marker, and a value written up to an armour line or a key's marker takes
+// that too; a token redacted in a prefix every line of a wrapping repeats
+// makes two lines' prefixes alike that were not. There an END that read
+// nothing back the first time can read back further the second, and the
+// second pass redacts more than the first — never less.
 func Secrets(text string) string {
 	if text == "" {
 		return text
@@ -376,7 +399,7 @@ func Secrets(text string) string {
 		at := 0
 		for _, s := range spans {
 			b.WriteString(text[at:s[0]])
-			b.WriteString(Marker + "private-key]")
+			b.WriteString(keyMarker)
 			at = s[1]
 		}
 		b.WriteString(text[at:])
@@ -452,7 +475,11 @@ func keySpans(text string) [][2]int {
 //     the last full line and the short last one, the short last line and
 //     the END — whether it is a log line another process wrote mid-print or
 //     a stray word. Two in a row end the block, and an END after them is
-//     read back from instead.
+//     read back from instead. Each part of the key is then read from its own
+//     armour, which bounds what this can promise: with no BEGIN in the text,
+//     the lines above the two are published, and where the two come just
+//     before the body's short last line, that line is — read back, it is a
+//     short line alone before an END, as a word is.
 //
 // A key reaches text in every WRAPPING there is, and each is allowed for:
 //
@@ -573,6 +600,12 @@ func readKey(text string, b []int) keyBlock {
 	stop, armour := hi, []int(nil)
 	if a := pemArmour.FindStringIndex(text[b[1]:hi]); a != nil {
 		armour = []int{b[1] + a[0], b[1] + a[1]}
+		stop = armour[0]
+	}
+	// A redacted key's marker is an armour here too, and is looked for only
+	// before the armour found, for the same reason.
+	if m := strings.Index(text[b[1]:stop], keyMarker); m >= 0 {
+		armour = []int{b[1] + m, b[1] + m + len(keyMarker)}
 		stop = armour[0]
 	}
 	// One byte past stop, so that a break AT the bound ends the line: a rest
@@ -764,14 +797,14 @@ func (r *keyReader) read(pos int) keyBlock {
 		line := r.text[pos:lineEnd]
 		if strings.Contains(line, "-----") {
 			if e := keyEnd.FindStringIndex(line); e != nil {
-				if !pemArmour.MatchString(line[:e[0]]) && r.closes(pos, line[:e[0]]) {
+				if !armoured(line[:e[0]]) && r.closes(pos, line[:e[0]]) {
 					return keyBlock{end: pos + e[1], closed: true, endArmour: pos + e[0]}
 				}
 				return r.ended()
 			}
-			if pemArmour.MatchString(line) {
-				return r.ended()
-			}
+		}
+		if armoured(line) {
+			return r.ended()
 		}
 		trimmed := trimLine(line)
 		switch {
@@ -902,21 +935,63 @@ func (r *keyReader) header(line string) bool {
 // span begins at the base64 of the earliest full line, so whatever wrapped it
 // — its prefix, the lines before it — is kept.
 //
+// THE END'S OWN LINE IS READ AS ITS PREFIX FIRST. What comes before the armour
+// may instead be the body's last line written up to it — a diff's `+` is a
+// line of base64 and a prefix both, a log's timestamp ends in a digit — and
+// the line does not say which. Read as the prefix, the END's line spends none
+// of the block's tail, and its prefix, all of what comes before the armour,
+// begins with the one the other reading is left with, so it admits every line
+// that one does ([wrapping.prefixOK]): whenever it finds a body it reaches at
+// least as far back, and the other reading adds only what it alone can find, a
+// body of one line written up to its armour. The read used to try the last
+// line first and keep the first body it found, so a `+` taken for the short
+// last line spent the tail on the END's own line, a line that reads like a
+// key's written between the key's real last line and its END was taken for the
+// block's one full line, and every line above it was published.
+//
 // One line is told apart differently read back: a blank line in the
 // wrapping, a line number with nothing after it, is one interrupting the key
 // rather than a blank line — because a live view has to hold back every line
 // an END not written yet could read back over ([backHold]), and what that
-// END's prefix will be is not known until it is written.
+// END's prefix will be is not known until it is written. So read back, a key
+// printed double-spaced under such a wrapping and broken by one line as well
+// is broken by two, and with no BEGIN in the text the lines above the break
+// are published ([keyBlocks]).
 //
 // READ BACK, A FULL LINE IS ALSO BASE64 THAT READS LIKE A KEY'S ([keyLike]):
-// upper and lower case letters and digits together, as the encoding of random
-// bytes almost always is. That is what makes reading back affordable for a
-// live view ([Settled]): an END not written yet can read back over every line
-// that could be its body, so each such line waits to be shown until enough
-// lines that cannot be follow it — and a path, a hash or a package name, the
-// long base64-alphabet runs a coding run actually prints, carries no case or
-// no digits. A real key's line lacks one about once in fifty thousand, and the
-// one interrupting line a block may carry is what that costs.
+// upper and lower case letters together, as the encoding of random bytes all
+// but always is. That is what keeps reading back affordable for a live view
+// ([Settled]): an END not written yet can read back over every line that could
+// be its body, so each such line waits to be shown until enough lines that
+// cannot be follow it — and a hash in hex, a path or a package name in lower
+// case, the commonest long base64-alphabet runs a coding run prints, are shown
+// at once.
+//
+// A DIGIT IS NOT ASKED FOR. A line of random bytes' base64 lacks one about once
+// in fifty thousand, and a line a key's encoding fixes in part far more often:
+// a last line of forty-odd characters, an EC key's second line, whose first
+// twelve characters are its encoding's and hold no digit. Asked for, a line
+// without one read back as a line interrupting the key — the one a block may
+// carry between two of its lines, which a key printed double-spaced under a
+// reader's line numbers, a grep's context marks or a log's timestamps has
+// already spent on every blank line in the wrapping, and a key broken by
+// another process's lines spends beside them. So the read stopped at that line
+// and published every line above it, and a body with no other line read back
+// was published whole. Lacking a case, a sixty-four-character line of random
+// base64 is rarer than one in a trillion.
+//
+// WHAT NOT ASKING COSTS is the runs of letters in both cases, as wide as a
+// key's line, that a coding run does print: a Go test's name — most of this
+// repository's are forty characters or more, in both cases with no digit — a
+// CamelCase identifier, a path in mixed case. Each reads like a key's line
+// now. A live view holds it as it holds one ([backHold]), so a verbose test
+// run's output waits, as far back as [MaxKeyBlockBytes], until lines holding no
+// such run release it; and a few of them directly above a bare END are read as
+// that END's body and redacted with it.
+//
+// A line that reads like a key's may still be one another process wrote, so
+// it is read both ways at once — a full line, and a line interrupting the key
+// — and the block reaches as far back as either reading does ([backReading]).
 //
 // prev is where the last key armour before this END ends, BEGIN or END, or 0:
 // the start of the END's line is looked for no further back than that, since
@@ -932,7 +1007,7 @@ func readBack(text string, e []int, prev int) (int, bool) {
 		return 0, false
 	}
 	pre := text[lineS:e[0]]
-	if strings.Contains(pre, "-----") && pemArmour.MatchString(pre) {
+	if armoured(pre) {
 		// The line holds another armour: a key on one line is read from
 		// its BEGIN.
 		return 0, false
@@ -944,34 +1019,32 @@ func readBack(text string, e []int, prev int) (int, bool) {
 		return 0, false
 	}
 	gutter := strings.Trim(pre, " \t")
-	if gutter != "" && inBase64(gutter[len(gutter)-1]) {
-		// The body's last line written up to the armour — or a prefix that
-		// ends in a letter or a digit, a log's timestamp, which the read
-		// after this one takes it for.
-		run := trailingRun(gutter)
-		end := lineS + leadingSpace(pre) + len(gutter)
-		w := wrapping{shape: prefixShape(strings.TrimRight(gutter[:len(gutter)-run], " \t")), suffix: suffix}
-		var c backChain
-		c.add(backKind(text[end-run:end]), end-run)
-		if start, ok := w.readBack(text, lineS, e[0], c); ok {
-			return start, true
-		}
-	}
 	w := wrapping{shape: prefixShape(gutter), suffix: suffix}
-	return w.readBack(text, lineS, e[0], backChain{})
+	if start, ok := w.readBack(text, lineS, e[0], tailNone, -1); ok {
+		return start, true
+	}
+	// Nothing above the END's line reads as a key's, so the block is the END's
+	// line alone: a body of one line written up to its armour, when that is
+	// what comes before it.
+	if run := trailingRun(gutter); run >= minKeyLine && keyLike(gutter[len(gutter)-run:]) {
+		return lineS + leadingSpace(pre) + len(gutter) - run, true
+	}
+	return 0, false
 }
 
 // readBack reads a block back from the line before the one starting at lineS,
-// whose END armour begins at armour, continuing the chain c.
-func (w wrapping) readBack(text string, lineS, armour int, c backChain) (int, bool) {
-	for start := lineS; start > 0; {
+// whose END armour begins at armour, going on from the readings r and the
+// span's start from (-1 for none yet): where the base64 of the earliest line a
+// reading takes as a full one begins, and whether one does.
+func (w wrapping) readBack(text string, lineS, armour int, r backReading, from int) (int, bool) {
+	for start := lineS; start > 0 && r != 0; {
 		var end int
 		start, end = lineBefore(text, start)
 		if armour-start > MaxKeyBlockBytes {
 			break
 		}
 		line := text[start:end]
-		if strings.Contains(line, "-----") && pemArmour.MatchString(line) {
+		if armoured(line) {
 			break
 		}
 		trimmed := trimLine(line)
@@ -979,95 +1052,165 @@ func (w wrapping) readBack(text string, lineS, armour int, c backChain) (int, bo
 			continue
 		}
 		kind, runStart, runEnd, _ := w.bodyLine(start+leadingSpace(line), trimmed)
-		if kind == fullLine && !keyLike(text[runStart:runEnd]) {
-			kind = otherLine
-		}
-		if !c.add(kind, runStart) {
-			break
+		var full bool
+		if r, full = r.past(readRun(kind, text[runStart:runEnd])); full {
+			from = runStart
 		}
 	}
-	return c.start, c.body > 0
+	return from, from >= 0
 }
 
-// backKind is what a run of base64 is as a line of a key read back from its
-// END ([readBack]).
-func backKind(run string) lineKind {
+// readRun is what a line read back can be, given its kind as
+// [wrapping.bodyLine] reads one and its run of base64: a full line that reads
+// like a key's ([keyLike]) is a full line or a line interrupting the key, and
+// one that does not is a line interrupting it.
+func readRun(kind lineKind, run string) readAs {
 	switch {
-	case len(run) >= minKeyLine && keyLike(run):
-		return fullLine
-	case len(run) >= minKeyLine:
-		return otherLine
+	case kind == shortLine:
+		return asShort
+	case kind == fullLine && keyLike(run):
+		return asFull | asOther
 	}
-	return shortLine
+	return asOther
 }
 
-// backChain is a key's block as read back from its END, a line at a time.
-type backChain struct {
-	// body counts the full lines read, and start is where the earliest
-	// one's base64 begins.
-	body, start int
-	// tail is what was read before the first full line, nearest the END
-	// first: the body's short last line, and lines interrupting the key.
-	tail []lineKind
-	// gap is whether the line read last since a full line was not one.
-	gap bool
-}
-
-// add takes the next line back, and reports whether the block can go on past
-// it.
-func (c *backChain) add(kind lineKind, start int) bool {
-	switch {
-	case kind == fullLine:
-		c.body++
-		c.start, c.gap = start, false
-	case c.body > 0 && !c.gap:
-		c.gap = true
-	case c.body > 0:
-		return false
-	default:
-		c.tail = append(c.tail, kind)
-		return validTail(c.tail)
-	}
-	return true
-}
-
-// validTail reports whether the lines between an END and the full line before
-// it, read back from the END, can be the key's: its short last line and at
-// most one line that is not the key's on either side of it. So no more than
+// backReading is the set of places a read back from an END can be in, a bit
+// for each: a SET, because what a line is can turn on lines not read yet, and
+// a reading that had to choose would stop where the other goes on. [readBack]
+// and [backHold] run the same readings — the one over what each line is under
+// the END's wrapping, the other over everything it could be under any — which
+// is what makes a live view's hold reach as far back as the read it waits for.
+//
+// BEFORE ANY FULL LINE a reading is the TAIL read so far, nearest the END
+// first: the body's short last line, and at most one line that is not the
+// key's on either side of it. Which short line is the last is not decided by
+// where it is: of two, either may be, and the other interrupts. So no more than
 // three, never two interruptions in a row, and of three, the middle one the
-// short last line. Which short line is the last is not decided by where it is:
-// of two, either may be, and the other interrupts. A tail this refuses cannot
-// become one it accepts by reading further.
-func validTail(tail []lineKind) bool {
-	switch len(tail) {
-	case 0, 1:
-		return true
-	case 2:
-		return tail[0] == shortLine || tail[1] == shortLine
-	case 3:
-		return tail[1] == shortLine
+// short last line — seven tails, and a line none of them can take ends the
+// reading.
+//
+// AFTER A FULL LINE a reading is whether the line read last since a full line
+// was not one: the one line interrupting the key a block may carry between two
+// of its own, which a second ends.
+type backReading uint16
+
+const (
+	// tailNone has read nothing since the END.
+	tailNone backReading = 1 << iota
+	// tailS has read the short last line.
+	tailS
+	// tailO has read a line interrupting the key.
+	tailO
+	// tailSS has read two short lines, either of them the last.
+	tailSS
+	// tailSO has read the short last line, then a line interrupting the
+	// key.
+	tailSO
+	// tailOS has read a line interrupting the key, then the short last line.
+	tailOS
+	// tail3 has read three lines, the middle one the short last line.
+	tail3
+	// body0 has read a full line, and nothing since; body1 one line since.
+	body0
+	body1
+
+	// everyReading is every place a read back can be in.
+	everyReading = tailNone | tailS | tailO | tailSS | tailSO | tailOS | tail3 | body0 | body1
+)
+
+// readAs is what one line can be read as, read back: a set, since a line that
+// reads like a key's may be a full line or a line interrupting the key, and
+// since a live view does not know the wrapping of the END that will read it
+// ([backHold]).
+type readAs uint8
+
+const (
+	// asShort is the body's short last line, or a line interrupting the key.
+	asShort readAs = 1 << iota
+	// asOther is a line interrupting the key.
+	asOther
+	// asFull is a full line of the body.
+	asFull
+)
+
+// past is the readings r go on to past one more line, read as any of as, and
+// whether one of them takes the line as a full line — one the block's span
+// reaches back to.
+func (r backReading) past(as readAs) (backReading, bool) {
+	var next backReading
+	if as&asShort != 0 {
+		next |= r.interrupted(true)
 	}
-	return false
+	if as&asOther != 0 {
+		next |= r.interrupted(false)
+	}
+	if as&asFull != 0 && r != 0 {
+		return next | body0, true
+	}
+	return next, false
+}
+
+// interrupted is the readings r go on to past one more line that is not a full
+// one: the short last line or a line interrupting the key when short is true, a
+// line interrupting it when it is not.
+func (r backReading) interrupted(short bool) backReading {
+	var next backReading
+	switch {
+	case short:
+		// Only as the short last line. Read as a line interrupting the key
+		// instead, it would take tailNone to tailO and tailS to tailSO, and
+		// tailS and tailSS go on past every line those two do: the set
+		// loses no reading without them.
+		if r&tailNone != 0 {
+			next |= tailS
+		}
+		if r&tailS != 0 {
+			next |= tailSS
+		}
+		if r&tailO != 0 {
+			next |= tailOS
+		}
+	default:
+		if r&tailNone != 0 {
+			next |= tailO
+		}
+		if r&tailS != 0 {
+			next |= tailSO
+		}
+		// tailO takes no second interruption in a row.
+	}
+	if r&(tailSS|tailOS) != 0 {
+		// Either way, the middle of the three is the short last line.
+		next |= tail3
+	}
+	// tailSO and tail3 take no further line: a third after an interruption
+	// would make the middle one no short last line, a fourth is one too
+	// many. body1 takes no second interruption.
+	if r&body0 != 0 {
+		next |= body1
+	}
+	return next
 }
 
 // keyLike reports whether a run of base64 reads like the encoding of random
-// bytes, as a key's body does: upper and lower case letters and digits
-// together. A sixty-four-character line of uniformly random base64 lacks a
-// digit with odds of about 2 in 100,000, and either case with odds below one
-// in a trillion.
+// bytes, as a key's body does: upper and lower case letters together. A
+// sixty-four-character line of uniformly random base64 lacks either case with
+// odds below one in a trillion. A digit is not asked for: such a line lacks one
+// about once in fifty thousand ([readBack]).
 func keyLike(run string) bool {
-	var upper, lower, digit bool
+	var upper, lower bool
 	for i := 0; i < len(run); i++ {
 		switch c := run[i]; {
 		case 'A' <= c && c <= 'Z':
 			upper = true
 		case 'a' <= c && c <= 'z':
 			lower = true
-		case '0' <= c && c <= '9':
-			digit = true
+		}
+		if upper && lower {
+			return true
 		}
 	}
-	return upper && lower && digit
+	return false
 }
 
 // backHold is where the earliest line of text — a text ending on a line break —
@@ -1075,64 +1218,49 @@ func keyLike(run string) bool {
 // or -1.
 //
 // Every line such an END could take, under ANY wrapping, since the END's
-// prefix and suffix are not written yet either. A line with a run of base64 at
-// a body's width that reads like a key's ([keyLike]) is one it could take as a
-// full line — or, in a wrapping its prefix or suffix does not fit, as a line
-// interrupting the key; any other line only as its short last line or an
-// interruption, and which of those two does not matter here, since any three
-// lines before a full one can be an interruption, the short last line and
-// another. So this reads back from the end of text along EVERY reading at once
-// — the set of places the real read could be in — and holds from the earliest
-// line any of them takes as a full one: never a shorter reach than the real
-// read's, whatever the END turns out to be or whatever is written before it.
-// One reading is not enough: a key-shaped line taken as full puts the lines
-// before it under the body's rule of one interruption, where the same line
-// taken as an interruption leaves them the tail's three.
+// prefix and suffix are not written yet either, nor the lines that may come
+// before it. So this runs the readings the read back runs ([backReading]),
+// from every one, over everything each line could be under some wrapping: a
+// line interrupting the key or the body's short last line, always, and a full
+// line when it holds a run of base64 at a body's width that reads like a key's
+// ([keyLike]). It holds from the earliest line a reading takes as a full one.
+// The same readings over a superset of what every line can be are never a
+// shorter reach than the real read's, whatever is written next.
 //
-// A line it holds is released once four lines that cannot be a body's follow
-// it, or two follow the earliest full line of every reading.
+// A line it holds is released once two lines in a row holding no such run
+// come after it with two more lines, of any kind, after them; a blank or glue
+// line counts for neither. Every reading has taken two lines by then, and from
+// there none takes more than one further line that is not a full one — a body
+// carries one interruption, and a tail its third line — so the two end every
+// reading short of the held line. Nothing less does: a line holding such a run
+// may be read as one interrupting a key, so it keeps a reading going through
+// it rather than ending one, which is why four lines in a row holding none
+// release a held line where three do not, and why one holding such a run among
+// them holds it longer.
 func backHold(text string) int {
-	// The places a read back can be in: before any full line, with up to
-	// three lines read; after one, with no interruption since or one.
-	const (
-		tail0 uint8 = 1 << iota
-		tail1
-		tail2
-		tail3
-		body0
-		body1
-	)
-	interrupted := func(live uint8) uint8 {
-		// One more line before a full one — a fourth ends that reading —
-		// or the one interruption after a full line, and a second ends
-		// that.
-		next := (live & (tail0 | tail1 | tail2)) << 1
-		if live&body0 != 0 {
-			next |= body1
-		}
-		return next
-	}
-	live, hold := tail0, -1
-	for start := len(text); start > 0 && live != 0; {
+	r, hold := everyReading, -1
+	for start := len(text); start > 0 && r != 0; {
 		var end int
 		start, end = lineBefore(text, start)
 		if len(text)-start > MaxKeyBlockBytes {
 			break
 		}
 		line := text[start:end]
-		if strings.Contains(line, "-----") && pemArmour.MatchString(line) {
+		if armoured(line) {
 			break
 		}
 		trimmed := trimLine(line)
 		if trimmed == "" || glue(trimmed) {
 			continue
 		}
-		next := interrupted(live)
+		as := asShort | asOther
 		if hasKeyRun(trimmed) {
-			next |= body0
+			as |= asFull
+		}
+		var full bool
+		if r, full = r.past(as); full {
 			hold = start
 		}
-		live = next
 	}
 	return hold
 }
@@ -1413,8 +1541,11 @@ func inBase64(c byte) bool {
 //     more than itself; after a body, two lines that are not a key's do;
 //   - lines an END NOT WRITTEN YET could read back over ([backHold]): a run
 //     of base64 that reads like a key's, and the lines after it a key's
-//     block could hold before its END — three that are not a key's release
-//     it, and almost nothing a coding run prints is such a run;
+//     block could hold before its END — two in a row that are not a key's
+//     release it once two more lines follow them, four in a row being the
+//     commonest case. A hash in hex or a path in lower case is shown at once;
+//     a Go test's name, a CamelCase identifier or a path in mixed case reads
+//     like a key's line and waits as one ([readBack]);
 //   - a key whose block, as written so far, runs across the boundary;
 //   - a password key at the end with its value not written yet, since the
 //     rule takes the value off the next line.
