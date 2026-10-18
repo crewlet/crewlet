@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 )
@@ -213,6 +214,18 @@ type request struct {
 	// holder's notices are kept under — and empty clears the
 	// subscription. See [watching] and [Hub.Watch].
 	Seat string `json:"seat"`
+
+	// Artifact is the artifact an `artifact_join`, `artifact_leave` or
+	// `presence` frame is about, by its id. Since is a join's catch-up
+	// point: the `through` the socket last held, zero for none.
+	Artifact string `json:"artifact"`
+	Since    int64  `json:"since"`
+
+	// Activity and Focus are a `presence` frame's: what the socket is doing
+	// in the room and where it is looking. Who is doing it is never the
+	// frame's to say: it is the principal the socket resolved.
+	Activity artifacts.PresenceActivity `json:"activity"`
+	Focus    artifacts.Focus            `json:"focus"`
 }
 
 // THE PER-FRAME CREDENTIAL IS GONE, and it went with `allow_anonymous_read`.
@@ -418,9 +431,22 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	// connects to a shedding node between two health ticks would otherwise
 	// be served live for the rest of the interval. See [Service.Join].
 	svc.Join(client)
-	defer svc.Hub().Unregister(client)
+	// LEAVING EVERY ROOM, ITS PRESENCE INCLUDED, on every path out: a tab
+	// that closed must not stay in an artifact's room for its peers to see.
+	defer svc.leave(client)
 	seats := &watching{hub: svc.Hub(), client: client, chart: svc.chart,
 		holders: svc.holders}
+	// THE SOCKET'S ROOM FRAMES, in the order it sent them, on a goroutine of
+	// their own: a join reads the artifact and its datastore, and the read
+	// loop must not wait on that to answer a ping. One goroutine rather than
+	// one per frame, so a leave can never overtake the join it undoes.
+	rooms := &socketRooms{ops: make(chan request, roomOpsDepth)}
+	var roomWorker sync.WaitGroup
+	roomWorker.Go(func() {
+		for req := range rooms.ops {
+			svc.roomOp(who.context(ctx), client, req)
+		}
+	})
 
 	var writer sync.WaitGroup
 	writer.Go(func() {
@@ -445,16 +471,62 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 		keepDecided(ctx, conn, l, cred, svc.seatOf, svc.now,
 			func(ctx context.Context, p iam.Principal) bool {
 				return !svc.AudienceFor(ctx, p).Equal(client.Audience())
-			}, seats.recheck)
+			}, func(ctx context.Context) {
+				// THE WATCH AND EVERY ROOM, decided again together as
+				// whoever this decision resolved.
+				seats.recheck(ctx)
+				svc.recheckRooms(ctx, client)
+			})
 	})
 	defer deciding.Wait()
 
-	code, reason := readLoop(ctx, conn, seats, client, query, who, svc.interval)
+	code, reason := readLoop(ctx, conn, seats, client, query, who, svc.interval, rooms)
 
-	// Unregister closes the client's queue, which is what ends the writer.
-	svc.Hub().Unregister(client)
+	// THE ROOM FRAMES FIRST, so no join lands after the leave below.
+	close(rooms.ops)
+	roomWorker.Wait()
+	// Leaving closes the client's queue, which is what ends the writer.
+	svc.leave(client)
 	writer.Wait()
 	_ = conn.Close(code, reason)
+}
+
+// roomOpsDepth is how many room frames one socket may have waiting for its room
+// goroutine before its read loop waits for room.
+//
+// SIXTEEN: presence frames are held to [artifacts.PresenceClientRate] a second
+// before they are queued and joins are rare, so this is more than a second of
+// an honest tab's frames, and the read loop waits only behind a join that is
+// slow to decide, which is backpressure on that one socket.
+const roomOpsDepth = 16
+
+// socketRooms is one socket's room frames on their way to its room goroutine,
+// and its presence allowance.
+type socketRooms struct {
+	ops      chan request
+	presence presenceFrames
+}
+
+// queue hands one room frame to the socket's room goroutine, waiting for room
+// in its queue no longer than the socket lives.
+func (r *socketRooms) queue(ctx context.Context, req request) {
+	select {
+	case r.ops <- req:
+	case <-ctx.Done():
+	}
+}
+
+// roomOp carries out one room frame, as whoever the latest decision of the
+// socket's credential resolved.
+func (s *Service) roomOp(ctx context.Context, client *Client, req request) {
+	switch req.Kind {
+	case "artifact_join":
+		s.joinArtifact(ctx, client, req)
+	case "artifact_leave":
+		s.leaveArtifact(client, req)
+	case "presence":
+		s.presenceFrame(ctx, client, req)
+	}
 }
 
 // writeLoop drains this client's queue onto the socket.
@@ -516,7 +588,7 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 // can next change — the hint a query refused on one carries.
 func readLoop(ctx context.Context, conn *websocket.Conn,
 	seats *watching, client *Client, query Query, who *asking,
-	healthEvery time.Duration,
+	healthEvery time.Duration, rooms *socketRooms,
 ) (websocket.StatusCode, string) {
 	// THIS SOCKET'S CONCURRENCY BOUND — see [MaxInFlightQueries] for why
 	// four, and why per socket. Queries run on their own goroutines so a
@@ -548,6 +620,14 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 		case "watch":
 			if code, reason := seats.watch(who.context(ctx), req); code != 0 {
 				return code, reason
+			}
+		case "artifact_join", "artifact_leave":
+			rooms.queue(ctx, req)
+		case "presence":
+			// HELD TO ITS ALLOWANCE HERE, on the read loop, so a socket
+			// that does not throttle itself fills no queue.
+			if rooms.presence.take(time.Now()) {
+				rooms.queue(ctx, req)
 			}
 		case "query":
 			// A DEGRADED NODE REFUSES rather than answers. Its copy of

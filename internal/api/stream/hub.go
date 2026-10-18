@@ -11,11 +11,15 @@
 // # What a client is, and what decides its bytes
 //
 // A [Client] carries two things beyond its queue: the [FramePosture] it is
-// being served in, and the seat it has asked to be a recipient for. The
-// posture decides the BYTES — one encode serves every client in the same
-// posture — and the seat decides the AUDIENCE for the kinds routed by seat.
-// Everything else about the fan-out follows from those two and from the total
-// route table below.
+// being served in, and the ROOMS it is in. The posture decides the BYTES (one
+// encode serves every client in the same posture) and a room decides the
+// AUDIENCE for the kinds routed to rooms. A room is a seat's (the sockets whose
+// watch of that seat was allowed, for `inbox_changed`) or an artifact's (the
+// sockets whose join of it was allowed, for what moves on the artifact, its
+// datastore and its presence), and ONE KEYED INDEX holds both ([RoomKey]), so
+// one rule, "a targeted frame with no room is dropped, never broadcast", covers
+// every targeted kind. Everything else about the fan-out follows from those two
+// and from the total route table below.
 //
 // # Who may be a recipient for a seat
 //
@@ -25,9 +29,14 @@
 // tracker — through the
 // same three-valued chart seam, and re-decides it whenever the socket's
 // credential is decided again (lifetime.go).
-// The one seat-routed kind, `inbox_changed`, says whose inbox moved, when and
-// why; an index anyone could write to would be a way to follow somebody else's
-// inbox that the question itself refuses.
+// The seat's room carries `inbox_changed`, which says whose inbox moved, when
+// and why; an index anyone could write to would be a way to follow somebody
+// else's inbox that the question itself refuses.
+//
+// # Who may be in an artifact's room
+//
+// Decided like reading the artifact, and decided again whenever access to it
+// can have narrowed: see rooms.go.
 //
 // AND IT IS RESOLVED BEFORE IT IS DECIDED, through [iam.OwnerOf] and the same
 // identity directory that question reads: a frame is pushed to the name a
@@ -59,6 +68,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -125,11 +135,11 @@ const (
 	KindTools     Kind = "tools"
 	KindHealth    Kind = "health"
 
-	// KindInboxChanged says one seat's inbox moved, and it is the first
-	// kind routed to an AUDIENCE rather than to everyone: it carries the
-	// seat in [Envelope.Seat] and reaches only the clients that asked to
-	// watch that seat (see [Hub.Watch]) and were allowed to (see
-	// [watching]).
+	// KindInboxChanged says one seat's inbox moved, and it is routed to an
+	// AUDIENCE rather than to everyone: it carries the seat in
+	// [Envelope.Seat] and reaches only the clients in that seat's room,
+	// the ones that asked to watch it (see [Hub.Watch]) and were allowed to
+	// (see [watching]).
 	//
 	// IT IS HOW A PERSON LEARNS THEY HAVE WORK. The tracker's applier, on
 	// every node serving the API — each holds the estate, since ingress
@@ -139,6 +149,30 @@ const (
 	// node forwards to another. The
 	// payload is an [InboxChange]: identifiers and a count, never content.
 	KindInboxChanged Kind = "inbox_changed"
+
+	// KindArtifactChanged says one artifact moved: a version published, its
+	// displayed fields or a label, its shares, its assets, the trash, a
+	// transfer or a purge. Routed to the artifact's room, and a HINT: the
+	// artifact, what moved, the head version and the record's position,
+	// never content, so a screen re-reads through the questions that decide
+	// what it may see. Pushed by every node from its own applier
+	// ([Service.ArtifactsMoved]).
+	KindArtifactChanged Kind = "artifact_changed"
+
+	// KindArtifactData is what a committed datastore batch changed, routed
+	// to the artifact's room and SHAPED PER READER: a document in an
+	// `own_rows`, `editors` or `private` collection reaches only the sockets
+	// its rule admits, and the changed documents travel inline while the
+	// frame stays within [artifacts.PushFrameMaxBytes] and as their keys
+	// with a re-read hint past it ([Service.ArtifactDataMoved]).
+	KindArtifactData Kind = "artifact_data"
+
+	// KindArtifactPresence is a room's presence fan-out: the members it now
+	// presents that are new or changed, the sessions it no longer presents,
+	// and for a large room the counts beside its most recent fifty
+	// (internal/presence). Routed to the artifact's room; told, never
+	// stored.
+	KindArtifactPresence Kind = "artifact_presence"
 
 	// KindResult and KindError answer one query, correlated by the
 	// client-minted id it was asked under.
@@ -167,8 +201,11 @@ var routes = map[Kind]Route{
 	KindTools:     RouteBroadcast,
 	KindHealth:    RouteBroadcast,
 
-	// One seat's audience.
-	KindInboxChanged: RouteSeat,
+	// One room's audience: a seat's, or an artifact's.
+	KindInboxChanged:     RouteRoom,
+	KindArtifactChanged:  RouteRoom,
+	KindArtifactData:     RouteRoom,
+	KindArtifactPresence: RouteRoom,
 
 	// The answers, to the one client that asked.
 	KindResult: RouteDirect,
@@ -200,10 +237,18 @@ const (
 	// inbox moved, which is what the `work_inbox` question it tells a
 	// screen to ask again answers.
 	NeedTracker Need = "tracker"
+
+	// NeedArtifact is an artifact room's: decided PER ARTIFACT, by the
+	// reader's role on it, which no app answers. A frame of such a kind
+	// reaches only the sockets in the artifact's room, and a socket is in
+	// it only because its join was decided like reading the artifact
+	// (`get_artifact`) and stays decided ([rooms]); any resolved reader may
+	// be in a room, so no grant stands in front of the kind itself.
+	NeedArtifact Need = "artifact"
 )
 
 // Needs is the closed set.
-var Needs = []Need{NeedEverybody, NeedAdmin, NeedTracker}
+var Needs = []Need{NeedEverybody, NeedAdmin, NeedTracker, NeedArtifact}
 
 // Valid reports whether n is a need this build knows.
 func (n Need) Valid() bool { return slices.Contains(Needs, n) }
@@ -234,6 +279,10 @@ var needs = map[Kind]Need{
 	KindTools:        NeedEverybody,
 	KindHealth:       NeedEverybody,
 	KindInboxChanged: NeedTracker,
+
+	KindArtifactChanged:  NeedArtifact,
+	KindArtifactData:     NeedArtifact,
+	KindArtifactPresence: NeedArtifact,
 }
 
 // NeedOf is who may read kind, and false for a kind that says nothing about
@@ -245,8 +294,9 @@ func NeedOf(kind Kind) (Need, bool) {
 }
 
 // Grants are the permissions any one of which admits a reader to a kind of
-// this need — what a refusal names. The overview names none, since nothing
-// the reader could be given would change an answer they already have.
+// this need: what a refusal names. The overview names none, since nothing the
+// reader could be given would change an answer they already have, and an
+// artifact room names none, since what admits a reader there is a share.
 func (n Need) Grants() []iam.Grant {
 	switch n {
 	case NeedAdmin:
@@ -353,6 +403,11 @@ func (a Audience) Receives(kind Kind) bool {
 		return a.admin
 	case NeedTracker:
 		return a.Has(iam.GrantTracker)
+	case NeedArtifact:
+		// THE ROOM DECIDES, by the reader's role on the artifact: a
+		// socket reaches a frame of this need only through a join that
+		// was allowed.
+		return true
 	}
 	return false
 }
@@ -474,6 +529,25 @@ type Shaped interface {
 	For(Audience) (variant string, data any)
 }
 
+// RoomShaped is a push payload to an artifact's room whose CONTENT depends on
+// the reader's ROLE on the artifact, beyond what [Shaped] decides from the
+// audience: a datastore delta in an `own_rows`, `editors` or `private`
+// collection reaches only the readers its rule admits. The hub hands it each
+// member's [Reader], the role being what that member's join decided.
+type RoomShaped interface {
+	// ForReader is the payload as one reader may receive it, and the name
+	// of that variant: two readers given one name receive byte-identical
+	// payloads, which is what lets a push encode once per variant. deliver
+	// is false for a reader the push has nothing for, who is sent nothing.
+	ForReader(Reader) (variant string, data any, deliver bool)
+}
+
+// Reader is one member of an artifact's room, as a push to it is shaped.
+type Reader struct {
+	Audience Audience
+	Role     artifacts.Role
+}
+
 // ShapeFor is data as audience may receive it — the payload itself when it is
 // not [Shaped] — for a REST mirror of a push, which answers one reader the
 // shape the push hands them.
@@ -543,15 +617,27 @@ type Envelope struct {
 	What  string        `json:"what,omitempty"`
 	Error httpjson.Code `json:"error,omitempty"`
 
-	// Seat names which seat a [RouteSeat] frame is about, and is the
-	// address the fan-out routes on rather than a label beside it.
+	// Seat names which seat a seat room's frame is about ([PushSeat]).
 	//
 	// ON THE WIRE, because a client watching a seat has to be able to tell
-	// two seats' frames apart if it ever watches more than one — and a
+	// two seats' frames apart if it ever watches more than one, and a
 	// routing key the receiver cannot read is a key only the sender can
 	// debug. Omitted on every other kind, so no existing frame changes
 	// shape.
 	Seat string `json:"seat,omitempty"`
+
+	// Artifact names the artifact whose room an `error` frame withdraws or
+	// refuses: a join refused, or a room taken away because the reader's
+	// access to the artifact narrowed. Omitted on every other frame; an
+	// artifact room's pushes name their artifact in their own payload.
+	Artifact string `json:"artifact,omitempty"`
+
+	// room is the room a [RouteRoom] frame is addressed to, and is the key
+	// the fan-out routes on. NOT ON THE WIRE: the payload and [Envelope.Seat]
+	// already say what the frame is about, and the key is the hub's own
+	// namespacing of them. Set only by the constructors that build such a
+	// frame, so a room frame cannot be built without one.
+	room RoomKey
 
 	// *Refused is a refusal on AUTHORITY's machine-readable half, on an
 	// `unauthorized` error frame and nowhere else: the rule's reason, and
@@ -623,18 +709,31 @@ func Push(kind Kind, data any, now time.Time) Envelope {
 	return Envelope{Kind: kind, Data: data, TS: now.UTC().Format(time.RFC3339Nano)}
 }
 
-// PushSeat builds an envelope addressed to one seat's watchers.
+// PushSeat builds an envelope addressed to one seat's watchers: its room.
 //
 // Its own constructor rather than a field a caller sets on [Push]'s result,
-// because the seat is the ADDRESS for a [RouteSeat] kind: a frame of such a
+// because the room is the ADDRESS for a [RouteRoom] kind: a frame of such a
 // kind that reached [Hub.Broadcast] without one would be dropped, and a
 // constructor that cannot produce one is how that stops being a runtime
 // discovery.
 func PushSeat(kind Kind, seat string, data any, now time.Time) Envelope {
 	env := Push(kind, data, now)
 	env.Seat = seat
+	env.room = SeatRoom(seat)
 	return env
 }
+
+// PushArtifact builds an envelope addressed to the sockets in one artifact's
+// room, for [PushSeat]'s reason.
+func PushArtifact(kind Kind, id artifacts.ID, data any, now time.Time) Envelope {
+	env := Push(kind, data, now)
+	env.room = ArtifactRoom(id)
+	return env
+}
+
+// Room is the room a frame is addressed to, empty for one that is not
+// room-routed.
+func (e Envelope) Room() RoomKey { return e.room }
 
 // Client is one connected dashboard.
 type Client struct {
@@ -664,18 +763,47 @@ type Client struct {
 	// reconnect is a new client (lifetime.go).
 	audience Audience
 
-	// seat is the seat this client asked to be a recipient for, empty
-	// while it has asked for none. The hub's index is the authority on
-	// which bucket the client is in; this is the same fact kept beside the
-	// client so a broadcast can report it and an unregister can find the
-	// bucket to leave.
-	seat string
+	// rooms is every room this client is in, with the join that put it
+	// there. The hub's index is the authority on which buckets the client
+	// is in; this is the same fact kept beside the client, so a broadcast
+	// can read a member's role, an unregister can find the buckets to
+	// leave, and a decision taken about one join withdraws that join alone.
+	// Written under the hub's lock and this one, read under this one.
+	rooms map[RoomKey]*membership
 
-	// watches counts every [Hub.Watch] this client has been through, so a
-	// decision taken about ONE watch can withdraw that watch and no later
-	// one — see [Hub.UnwatchIf].
-	watches uint64
+	// joins counts every join this client has been through, a seat watch
+	// cleared included, so a decision taken about ONE join can withdraw
+	// that join and no later one: see [Hub.UnwatchIf] and [Hub.LeaveIf].
+	joins uint64
 }
+
+// membership is one client's place in one room.
+type membership struct {
+	// join is which of the client's joins this is.
+	join uint64
+
+	// role is the client's role on the artifact an artifact room is for,
+	// as its join (or the last decision since) found it: what a push is
+	// shaped by. Empty in a seat's room.
+	role artifacts.Role
+
+	// session is the client's presence session in an artifact's room.
+	session string
+
+	// suspended means a decision about this membership is pending (the
+	// artifact's access narrowed), and missed that a push it would have
+	// received was withheld meanwhile ([withheldWhileSuspended]).
+	suspended bool
+	missed    bool
+}
+
+// withheldWhileSuspended reports whether a push of kind is held back from a
+// member whose room is being decided again: the document contents of the
+// datastore, which is what a reader whose share was just withdrawn must not
+// receive in the moment before the decision lands. The room's other pushes
+// say what moved and who is present, and keep flowing until the decision
+// withdraws the room or keeps it.
+func withheldWhileSuspended(kind Kind) bool { return kind == KindArtifactData }
 
 // NewClient builds a client with an empty queue, served LIVE, that may
 // receive what audience allows.
@@ -690,7 +818,7 @@ type Client struct {
 // nobody chose.
 func NewClient(audience Audience) *Client {
 	return &Client{out: make(chan *Frame, QueueDepth), posture: FrameLive,
-		audience: audience}
+		audience: audience, rooms: map[RoomKey]*membership{}}
 }
 
 // Receives reports whether this client may read a frame of kind.
@@ -741,7 +869,19 @@ func (c *Client) SetPosture(p FramePosture) bool {
 func (c *Client) Seat() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.seat
+	seat, _ := c.seatLocked()
+	return seat
+}
+
+// seatLocked is the seat whose room this client is in and that membership.
+// Caller holds c.mu.
+func (c *Client) seatLocked() (string, *membership) {
+	for key, m := range c.rooms {
+		if seat, ok := key.seat(); ok {
+			return seat, m
+		}
+	}
+	return "", nil
 }
 
 // Dropped reports how many frames this client has lost to backpressure.
@@ -842,22 +982,53 @@ func (c *Client) Close() {
 	close(c.out)
 }
 
+// RoomKey names one room on the hub's index: a seat's, whose inbox frames reach
+// the sockets watching it, or an artifact's, whose pushes reach the sockets in
+// it. NAMESPACED, so no seat handle can name an artifact's room or the reverse,
+// and one index answers both.
+type RoomKey string
+
+const (
+	seatRoomPrefix     = "seat:"
+	artifactRoomPrefix = "artifact:"
+)
+
+// SeatRoom is the room of one seat's watchers.
+func SeatRoom(handle string) RoomKey { return RoomKey(seatRoomPrefix + handle) }
+
+// ArtifactRoom is the room of the sockets in one artifact.
+func ArtifactRoom(id artifacts.ID) RoomKey { return RoomKey(artifactRoomPrefix + id.String()) }
+
+// seat is the handle a seat's room names, and false for any other room.
+func (k RoomKey) seat() (string, bool) { return strings.CutPrefix(string(k), seatRoomPrefix) }
+
+// Artifact is the artifact an artifact's room names, and false for any other
+// room.
+func (k RoomKey) Artifact() (artifacts.ID, bool) {
+	raw, ok := strings.CutPrefix(string(k), artifactRoomPrefix)
+	if !ok {
+		return artifacts.ID{}, false
+	}
+	id, err := artifacts.ParseID(raw)
+	return id, err == nil
+}
+
 // Hub is the set of connected clients, and the index that routes a frame to
 // the ones it is for.
 type Hub struct {
 	mu      sync.RWMutex
 	clients map[*Client]struct{}
 
-	// bySeat is the routing index: which clients asked to be recipients
-	// for which seat. A SECOND MAP rather than a filter over clients,
-	// because a per-seat frame on a company with fifty tabs open would
-	// otherwise walk fifty clients to find the one watching, on every
-	// inbox movement — and the walk's cost is paid by the publish path.
+	// rooms is the routing index: which clients are in which room. A
+	// SECOND MAP rather than a filter over clients, because a per-room frame
+	// on a company with fifty tabs open would otherwise walk fifty clients
+	// to find the few in it, on every inbox movement and every committed
+	// datastore batch, and the walk's cost is paid by the publish path.
 	//
-	// A seat with no watchers holds NO entry: an empty bucket left behind
-	// by the last watcher leaving is a map that grows with the number of
-	// seats anyone has ever looked at.
-	bySeat map[string]map[*Client]struct{}
+	// A room with no members holds NO entry: an empty bucket left behind by
+	// the last member leaving is a map that grows with the number of seats
+	// and artifacts anyone has ever looked at.
+	rooms map[RoomKey]map[*Client]struct{}
 
 	// posture is the node's current frame posture, applied to every client
 	// registered from now on and to every client already registered when
@@ -873,7 +1044,7 @@ type Hub struct {
 func NewHub() *Hub {
 	return &Hub{
 		clients: map[*Client]struct{}{},
-		bySeat:  map[string]map[*Client]struct{}{},
+		rooms:   map[RoomKey]map[*Client]struct{}{},
 		posture: FrameLive,
 	}
 }
@@ -893,12 +1064,17 @@ func (h *Hub) Register(c *Client) {
 	c.SetPosture(posture)
 }
 
-// Unregister removes a client and closes it.
+// Unregister removes a client from every room and from the fan-out, and closes
+// it.
 func (h *Hub) Unregister(c *Client) {
 	h.mu.Lock()
 	_, present := h.clients[c]
 	delete(h.clients, c)
-	h.unwatchLocked(c)
+	c.mu.Lock()
+	for key := range c.rooms {
+		h.leaveLocked(c, key)
+	}
+	c.mu.Unlock()
 	h.mu.Unlock()
 	if present {
 		if dropped := c.Dropped(); dropped > 0 {
@@ -908,6 +1084,39 @@ func (h *Hub) Unregister(c *Client) {
 		}
 	}
 	c.Close()
+}
+
+// joinLocked puts c in the room key with membership m, replacing whatever
+// membership it held there, and answers the one replaced. Caller holds h.mu
+// for writing and c.mu.
+func (h *Hub) joinLocked(c *Client, key RoomKey, m *membership) *membership {
+	prior := c.rooms[key]
+	c.joins++
+	m.join = c.joins
+	c.rooms[key] = m
+	members, ok := h.rooms[key]
+	if !ok {
+		members = map[*Client]struct{}{}
+		h.rooms[key] = members
+	}
+	members[c] = struct{}{}
+	return prior
+}
+
+// leaveLocked takes c out of the room key, answering the membership it held
+// there or nil. Caller holds h.mu for writing and c.mu.
+func (h *Hub) leaveLocked(c *Client, key RoomKey) *membership {
+	m, ok := c.rooms[key]
+	if !ok {
+		return nil
+	}
+	delete(c.rooms, key)
+	members := h.rooms[key]
+	delete(members, c)
+	if len(members) == 0 {
+		delete(h.rooms, key)
+	}
+	return m
 }
 
 // Watch makes c a recipient for seat, replacing whatever it watched before.
@@ -926,32 +1135,30 @@ func (h *Hub) Watch(c *Client, seat string) {
 	if _, present := h.clients[c]; !present {
 		return
 	}
-	h.unwatchLocked(c)
 	c.mu.Lock()
-	c.watches++
-	c.mu.Unlock()
+	defer c.mu.Unlock()
+	if current, _ := c.seatLocked(); current != "" {
+		h.leaveLocked(c, SeatRoom(current))
+	}
 	if seat == "" {
+		c.joins++
 		return
 	}
-	c.mu.Lock()
-	c.seat = seat
-	c.mu.Unlock()
-	watchers, ok := h.bySeat[seat]
-	if !ok {
-		watchers = map[*Client]struct{}{}
-		h.bySeat[seat] = watchers
-	}
-	watchers[c] = struct{}{}
+	h.joinLocked(c, SeatRoom(seat), &membership{})
 }
 
-// Watching is the seat c watches and which watch that is, for a decision about
+// Watching is the seat c watches and which join that is, for a decision about
 // it taken outside the hub's lock — see [Hub.UnwatchIf].
 func (h *Hub) Watching(c *Client) (seat string, watch uint64) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.seat, c.watches
+	seat, m := c.seatLocked()
+	if m == nil {
+		return "", c.joins
+	}
+	return seat, m.join
 }
 
 // UnwatchIf withdraws c's watch only if it is still the watch [Hub.Watching]
@@ -970,40 +1177,21 @@ func (h *Hub) UnwatchIf(c *Client, watch uint64) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	c.mu.Lock()
-	current, seat := c.watches, c.seat
-	c.mu.Unlock()
-	if current != watch || seat == "" {
+	defer c.mu.Unlock()
+	seat, m := c.seatLocked()
+	if m == nil || m.join != watch {
 		return false
 	}
-	h.unwatchLocked(c)
-	c.mu.Lock()
-	c.watches++
-	c.mu.Unlock()
+	h.leaveLocked(c, SeatRoom(seat))
+	c.joins++
 	return true
-}
-
-// unwatchLocked drops c from whatever seat bucket it is in. Caller holds the
-// write lock.
-func (h *Hub) unwatchLocked(c *Client) {
-	c.mu.Lock()
-	seat := c.seat
-	c.seat = ""
-	c.mu.Unlock()
-	if seat == "" {
-		return
-	}
-	watchers := h.bySeat[seat]
-	delete(watchers, c)
-	if len(watchers) == 0 {
-		delete(h.bySeat, seat)
-	}
 }
 
 // Watchers reports how many clients are recipients for one seat.
 func (h *Hub) Watchers(seat string) int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	return len(h.bySeat[seat])
+	return len(h.rooms[SeatRoom(seat)])
 }
 
 // WatchedSeats is every seat at least one client watches, sorted — the
@@ -1013,12 +1201,169 @@ func (h *Hub) Watchers(seat string) int {
 func (h *Hub) WatchedSeats() []string {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	seats := make([]string, 0, len(h.bySeat))
-	for seat := range h.bySeat {
-		seats = append(seats, seat)
+	var seats []string
+	for key := range h.rooms {
+		if seat, ok := key.seat(); ok {
+			seats = append(seats, seat)
+		}
 	}
 	slices.Sort(seats)
 	return seats
+}
+
+// RoomMember is one client's place in an artifact's room, as a decision about
+// it is taken outside the hub's lock: which join it is, the role it was last
+// decided at and its presence session.
+type RoomMember struct {
+	Client  *Client
+	Join    uint64
+	Role    artifacts.Role
+	Session string
+}
+
+// JoinArtifact puts c in id's room at role, under its presence session, and
+// answers the join and the session of a membership it replaced (a socket
+// joining an artifact it was already in), empty when it replaced none. False
+// for a client the hub does not hold, which is put in no room.
+func (h *Hub) JoinArtifact(c *Client, id artifacts.ID, role artifacts.Role,
+	session string) (join uint64, replaced string, ok bool) {
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, present := h.clients[c]; !present {
+		return 0, "", false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	m := &membership{role: role, session: session}
+	if prior := h.joinLocked(c, ArtifactRoom(id), m); prior != nil {
+		replaced = prior.session
+	}
+	return m.join, replaced, true
+}
+
+// LeaveArtifact takes c out of id's room, answering the presence session it
+// held there, false when it was not in it.
+func (h *Hub) LeaveArtifact(c *Client, id artifacts.ID) (string, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	m := h.leaveLocked(c, ArtifactRoom(id))
+	if m == nil {
+		return "", false
+	}
+	return m.session, true
+}
+
+// LeaveArtifactIf takes c out of id's room only if it is still the join a
+// decision was taken about, for [Hub.UnwatchIf]'s reason, answering the
+// session it held there.
+func (h *Hub) LeaveArtifactIf(c *Client, id artifacts.ID, join uint64) (string, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := ArtifactRoom(id)
+	if m := c.rooms[key]; m == nil || m.join != join {
+		return "", false
+	}
+	m := h.leaveLocked(c, key)
+	return m.session, true
+}
+
+// Session is c's presence session in id's room, false when it is not in it.
+func (h *Hub) Session(c *Client, id artifacts.ID) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	m, ok := c.rooms[ArtifactRoom(id)]
+	if !ok {
+		return "", false
+	}
+	return m.session, true
+}
+
+// Artifacts is every artifact room c is in, each as a decision about it is
+// taken, sorted by artifact.
+func (h *Hub) Artifacts(c *Client) map[artifacts.ID]RoomMember {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := map[artifacts.ID]RoomMember{}
+	for key, m := range c.rooms {
+		if id, ok := key.Artifact(); ok {
+			out[id] = RoomMember{Client: c, Join: m.join, Role: m.role, Session: m.session}
+		}
+	}
+	return out
+}
+
+// Members is every client in id's room.
+func (h *Hub) Members(id artifacts.ID) []RoomMember {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	key := ArtifactRoom(id)
+	out := make([]RoomMember, 0, len(h.rooms[key]))
+	for c := range h.rooms[key] {
+		c.mu.Lock()
+		if m, ok := c.rooms[key]; ok {
+			out = append(out, RoomMember{Client: c, Join: m.join, Role: m.role, Session: m.session})
+		}
+		c.mu.Unlock()
+	}
+	return out
+}
+
+// RoomsHeld is every artifact at least one client is in, sorted.
+func (h *Hub) RoomsHeld() []artifacts.ID {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	var out []artifacts.ID
+	for key := range h.rooms {
+		if id, ok := key.Artifact(); ok {
+			out = append(out, id)
+		}
+	}
+	slices.SortFunc(out, func(a, b artifacts.ID) int { return strings.Compare(a.String(), b.String()) })
+	return out
+}
+
+// Suspend marks every membership of id's room as pending a decision: until
+// each is decided again ([Hub.Resume], [Hub.LeaveArtifactIf]) it receives no
+// push [withheldWhileSuspended] withholds. Called on the applier's goroutine
+// the moment a narrowing of the artifact's access lands, so no document
+// reaches a reader whose share was withdrawn in the moment before the decision
+// that removes them.
+func (h *Hub) Suspend(id artifacts.ID) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	key := ArtifactRoom(id)
+	for c := range h.rooms[key] {
+		c.mu.Lock()
+		if m, ok := c.rooms[key]; ok {
+			m.suspended = true
+		}
+		c.mu.Unlock()
+	}
+}
+
+// Resume lifts a suspension on c's membership of id's room, if it is still
+// the join that was decided, at the role the decision found; missed reports
+// that a push was withheld meanwhile, which the caller follows with a re-read
+// hint.
+func (h *Hub) Resume(c *Client, id artifacts.ID, join uint64, role artifacts.Role) (missed, ok bool) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	m := c.rooms[ArtifactRoom(id)]
+	if m == nil || m.join != join {
+		return false, false
+	}
+	missed = m.missed
+	m.role, m.suspended, m.missed = role, false, false
+	return missed, true
 }
 
 // SetPosture moves the hub and every client on it to p.
@@ -1056,8 +1401,8 @@ func (h *Hub) Clients() int {
 	return len(h.clients)
 }
 
-// Broadcast encodes an envelope ONCE PER POSTURE and hands the bytes to every
-// client the kind's route names.
+// Broadcast encodes an envelope ONCE PER POSTURE AND VARIANT and hands the bytes
+// to every client the kind's route names.
 //
 // # Once per posture, not once per client
 //
@@ -1065,18 +1410,18 @@ func (h *Hub) Clients() int {
 // in the same posture must receive the byte-identical frame from one encode.
 // With N dashboards open this used to be N marshals of identical JSON — on N
 // goroutines, for every push — because the envelope travelled to each writer
-// and each writer encoded it. The cache below is an ARRAY indexed by
-// [FramePosture.index], filled lazily, so a company with every tab in one
-// posture pays exactly one encode and the second slot is never touched.
+// and each writer encoded it. The cache below is keyed by posture and payload
+// variant, filled lazily, so a company with every tab in one posture pays
+// exactly one encode for a plain payload.
 //
 // # The route decides the audience
 //
-// [RouteBroadcast] is every client; [RouteSeat] is the clients watching
-// [Envelope.Seat] and nobody else. [RouteDirect] is REFUSED here: a result
-// carries the correlation id of one client's question, and fanning it out
-// would answer every other tab's question with it. A kind with no route at all
-// is refused for the same reason — there is no safe default, and "everyone" is
-// the unsafe one.
+// [RouteBroadcast] is every client; [RouteRoom] is the clients in the frame's
+// room and nobody else. [RouteDirect] is REFUSED here: a result carries the
+// correlation id of one client's question, and fanning it out would answer
+// every other tab's question with it. A kind with no route at all is refused
+// for the same reason: there is no safe default, and "everyone" is the unsafe
+// one.
 //
 // Never blocks on any client: each client's own queue absorbs the difference,
 // and one that has fallen behind loses its oldest frame rather than holding up
@@ -1093,24 +1438,25 @@ func (h *Hub) Broadcast(env Envelope) {
 		log.Error("stream_direct_kind_broadcast", "kind", env.Kind,
 			"hint", "an answer belongs to the client that asked; use Client.Reply")
 		return
-	case route == RouteSeat && env.Seat == "":
-		log.Error("stream_seat_frame_without_a_seat", "kind", env.Kind,
-			"hint", "build it with PushSeat; a seat-routed frame with no seat "+
-				"has no audience and is never fanned out to everyone")
+	case route == RouteRoom && env.room == "":
+		log.Error("stream_room_frame_without_a_room", "kind", env.Kind,
+			"hint", "build it with PushSeat or PushArtifact; a room-routed frame "+
+				"with no room has no audience and is never fanned out to everyone")
 		return
 	}
 
 	h.mu.RLock()
 	var targets []*Client
-	if route == RouteSeat {
-		targets = slices.Collect(maps.Keys(h.bySeat[env.Seat]))
+	if route == RouteRoom {
+		targets = slices.Collect(maps.Keys(h.rooms[env.room]))
 	} else {
 		targets = slices.Collect(maps.Keys(h.clients))
 	}
 	h.mu.RUnlock()
 
 	// ONE ENCODE PER POSTURE AND PAYLOAD VARIANT: a plain payload has one
-	// variant, and a [Shaped] one as many as the audiences it tells apart.
+	// variant, and a [Shaped] or [RoomShaped] one as many as the readers it
+	// tells apart.
 	type encoding struct {
 		slot    int
 		variant string
@@ -1128,7 +1474,14 @@ func (h *Hub) Broadcast(env Envelope) {
 		if slot < 0 || !posture.Delivers(env.Kind) {
 			continue
 		}
-		variant, data := shapeFor(env.Data, c.Audience())
+		reader, member := c.reader(env.room, env.Kind)
+		if !member {
+			continue
+		}
+		variant, data, deliver := shapeForReader(env.Data, reader)
+		if !deliver {
+			continue
+		}
 		key := encoding{slot: slot, variant: variant}
 		frame, encoded := cache[key]
 		if !encoded {
@@ -1150,12 +1503,45 @@ func (h *Hub) Broadcast(env Envelope) {
 	}
 }
 
+// reader is who c is as a push to room is shaped, and false where c must not
+// receive it: no longer in the room, or in it while its room is being decided
+// again and the kind is one withheld meanwhile (which marks the push missed).
+// For a push that is not room-routed, c's audience with no role.
+func (c *Client) reader(room RoomKey, kind Kind) (Reader, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	r := Reader{Audience: c.audience}
+	if room == "" {
+		return r, true
+	}
+	m, ok := c.rooms[room]
+	if !ok {
+		return r, false
+	}
+	if m.suspended && withheldWhileSuspended(kind) {
+		m.missed = true
+		return r, false
+	}
+	r.Role = m.role
+	return r, true
+}
+
+// shapeForReader is data as one reader may receive it: [RoomShaped] by their
+// role, [Shaped] by their audience, and the payload itself otherwise.
+func shapeForReader(data any, r Reader) (string, any, bool) {
+	if shaped, ok := data.(RoomShaped); ok {
+		return shaped.ForReader(r)
+	}
+	variant, shaped := shapeFor(data, r.Audience)
+	return variant, shaped, true
+}
+
 // Close disconnects every client.
 func (h *Hub) Close() {
 	h.mu.Lock()
 	targets := slices.Collect(maps.Keys(h.clients))
 	h.clients = map[*Client]struct{}{}
-	h.bySeat = map[string]map[*Client]struct{}{}
+	h.rooms = map[RoomKey]map[*Client]struct{}{}
 	h.mu.Unlock()
 
 	for _, c := range targets {
