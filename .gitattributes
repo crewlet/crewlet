@@ -41,3 +41,11 @@
 # lose it is a `#` in front of it, which no substring check over these bytes
 # would notice.
 static/dashboard/** -merge
+#
+# THE ARTIFACT TREE IS BUILD OUTPUT TOO, from the same source by the third
+# build target (dashboard/vite.runtime.config.ts): the page runtime and the
+# artifact kit, under directories named by their versions. The same rule and
+# the same resolution: rebuild, never merge.
+#
+#     make dashboard && git add -A -- static/dashboard static/artifacts
+static/artifacts/** -merge

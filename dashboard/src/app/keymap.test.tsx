@@ -353,6 +353,8 @@ describe("the table is the only way a key is bound", () => {
     "lib/keys.ts": "the mechanism useKeymap is built on",
     "routes/org/builder/Builder.tsx":
       "undo and redo, scoped to presses from inside the builder; it reads its keys with matchesRow",
+    "runtime/runtime.ts":
+      "the page runtime's Mod+Escape, inside an artifact's own document on its own origin, where no keymap of the frame's runs",
   };
 
   test("nothing but the table calls the mechanism", () => {

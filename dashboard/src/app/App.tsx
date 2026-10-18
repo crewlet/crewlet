@@ -95,6 +95,9 @@ const Composer = lazyScreen("knowledge", (m) => m.Composer);
 const Skills = lazyScreen("knowledge", (m) => m.Skills);
 const Diaries = lazyScreen("knowledge", (m) => m.Diaries);
 const Diary = lazyScreen("knowledge", (m) => m.Diary);
+const ArtifactGallery = lazyScreen("artifacts", (m) => m.ArtifactGallery);
+const ArtifactPage = lazyScreen("artifacts", (m) => m.ArtifactPage);
+const NewArtifact = lazyScreen("artifacts", (m) => m.NewArtifact);
 const Spend = lazyScreen("spend", (m) => m.Spend);
 const Budgets = lazyScreen("spend", (m) => m.Budgets);
 const ExpensiveTasks = lazyScreen("spend", (m) => m.ExpensiveTasks);
@@ -188,6 +191,12 @@ export function screenFor(route: Resolved): ReactNode {
       return <Diaries />;
     case "diary":
       return <Diary key={route.handle} handle={route.handle} />;
+    case "artifacts":
+      return <ArtifactGallery key={route.section} section={route.section} />;
+    case "artifact":
+      return <ArtifactPage key={route.id} id={route.id} />;
+    case "new-artifact":
+      return <NewArtifact />;
     case "spend":
       return <Spend />;
     case "spend-tasks":

@@ -84,9 +84,20 @@ import (
 // so no static host list can name it. Browsers enforce form-action on a form
 // submitted into a new tab too, so 'self' alone makes the button do nothing
 // but log a violation.
+//
+// TRUSTED TYPES ARE ENFORCED WITH NO POLICY: `require-trusted-types-for
+// 'script'` makes every string handed to a sink that parses markup or loads
+// script throw, and `trusted-types 'none'` lets no code on the origin create a
+// policy to bless one. The dashboard reaches no such sink (its Markdown
+// renderer builds elements and never parses markup, and an artifact's page is
+// framed on its own origin rather than written into this one), and
+// dashboard/src/app/trustedTypes.test.ts holds the source to that, so a
+// script that did get onto this origin finds no markup sink to widen its
+// reach through.
 const Dashboard = "default-src 'self'; script-src 'self'; style-src 'self'; " +
 	"img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; " +
-	"base-uri 'none'; frame-ancestors 'none'; form-action 'self' https:"
+	"base-uri 'none'; frame-ancestors 'none'; form-action 'self' https:; " +
+	"require-trusted-types-for 'script'; trusted-types 'none'"
 
 // API is the policy for every response that is not a page: JSON, plain text,
 // the redirect from `/`, a 404.

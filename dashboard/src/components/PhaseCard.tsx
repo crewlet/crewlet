@@ -70,7 +70,16 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Callout, CodeBlock, cx, Disclosure, EmptyValue, Link, Tag } from "@crewlethq/ui";
+import {
+  ArtifactKindGlyph,
+  Callout,
+  CodeBlock,
+  cx,
+  Disclosure,
+  EmptyValue,
+  Link,
+  Tag,
+} from "@crewlethq/ui";
 import {
   ChevronRightGlyph,
   ChevronDownGlyph,
@@ -112,6 +121,8 @@ import { href, useIsCurrent } from "~/app/router.tsx";
 import { pathOf } from "~/app/frame/objects.ts";
 import { PromptRecord } from "~/components/PromptDoc.tsx";
 import { WITHHELD_WHY, WITHHELD_WORDS } from "~/lib/access.ts";
+import { artifactPath } from "~/lib/artifacts/api.ts";
+import { writtenArtifact, type WrittenArtifact } from "~/lib/artifacts/transcript.ts";
 
 /**
  * A call's two records, formatted.
@@ -234,7 +245,30 @@ function ToolRow({
       >
         <ToolRecords name={name} args={args} result={result} failed={failed} />
       </Disclosure>
+      <WrittenArtifactLink artifact={writtenArtifact(name, args, result, failed)} />
     </div>
+  );
+}
+
+/**
+ * The artifact a call wrote, as a link beside the call: a version that landed
+ * is the outcome a reader came to the transcript for, and an id inside a
+ * folded result is not a way to reach it. Outside the disclosure, so a closed
+ * row still says where its work went.
+ */
+function WrittenArtifactLink({ artifact }: { artifact: WrittenArtifact | null }) {
+  if (!artifact) return null;
+  const named = artifact.title ? `“${artifact.title}”` : "the artifact";
+  return (
+    <Link
+      className="tool-row-artifact"
+      variant="quiet"
+      size="caption"
+      href={href(artifactPath(artifact.id))}
+    >
+      {artifact.kind && <ArtifactKindGlyph kind={artifact.kind} size="xs" />}
+      {`Open ${named}, version ${artifact.version}`}
+    </Link>
   );
 }
 

@@ -346,6 +346,15 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       return sectionPage("diaries");
     case "diary":
       return inside("diaries", named(labels, where.handle));
+    case "artifacts":
+      return sectionPage(where.section);
+    case "artifact":
+      // AN ARTIFACT'S ADDRESS IS ITS ID, and what it is called is the
+      // artifact's own answer, published by its page; until then the trail
+      // names the id, which is still an address a reader can act on.
+      return [root(row, true), named(labels, where.id)];
+    case "new-artifact":
+      return [root(row, true), { label: section("new")?.label ?? "New sheet" }];
     case "budgets":
       return sectionPage("budgets");
     case "spend-tasks":

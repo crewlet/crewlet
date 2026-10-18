@@ -112,6 +112,18 @@ export const COLLEAGUE_QUERY_MAX = 200;
 export const SEARCH_QUERY_MAX = 400;
 
 /**
+ * How many artifact rooms one socket is in at once.
+ *
+ * EXACTLY THE ENGINE'S OWN (`stream.MaxRoomsPerSocket`), held there by
+ * `internal/api/stream`'s room gate: the engine refuses a ninth join as
+ * `bad_params`, so the socket tells a listener that would be past it at once
+ * rather than after a round trip. A tab is looking at one artifact, and at
+ * most a handful of its panels are open beside it, so a screen never reaches
+ * it.
+ */
+export const MAX_ARTIFACT_ROOMS = 8;
+
+/**
  * What a seat is doing: the ONE seat-state vocabulary, served on every
  * `agents` row as `activity` and computed by the engine alone
  * (`internal/api/livestate/activity.go`) from the seat's turn, its coding

@@ -1042,3 +1042,44 @@ describe("a phase whose body was withheld", () => {
     );
   });
 });
+
+/**
+ * A CALL THAT LANDED A VERSION LINKS THE ARTIFACT IT WROTE, under the call and
+ * outside its fold, so a reader reaches the artifact without opening the
+ * result and copying an id out of it. A call that failed links nothing.
+ */
+describe("a publishing call", () => {
+  const ID = "32f4d7b8-57d4-5ab7-a82f-413394e1825b";
+  function publishing(failed: boolean): PhaseRecord {
+    return phase({
+      roundsUsed: 1,
+      narration: [{ round: 1, reasoning: "", content: "Publishing.", declined: false }],
+      tools: [
+        {
+          name: "create_artifact",
+          round: 1,
+          args: JSON.stringify({ kind: "sheet", title: "Vendor review" }),
+          result: failed
+            ? "create_artifact needs a `title`: two to four words."
+            : JSON.stringify({ outcome: "created", artifact: ID, version: 1, write: "applied" }),
+          failed,
+          durationMs: 0,
+          origin: "builtin",
+          server: "",
+          startedAt: "",
+        },
+      ],
+    });
+  }
+
+  test("links the artifact it wrote", () => {
+    render(<PhaseCard record={publishing(false)} defaultOpen />);
+    const link = screen.getByRole("link", { name: "Open “Vendor review”, version 1" });
+    expect(link.getAttribute("href")).toBe(`#/artifacts/${ID}`);
+  });
+
+  test("links nothing when it failed", () => {
+    render(<PhaseCard record={publishing(true)} defaultOpen />);
+    expect(screen.queryByRole("link", { name: /^Open/ })).toBeNull();
+  });
+});

@@ -84,9 +84,9 @@ const FORWARDS: readonly { path: string; call: string; why: string }[] = [
     why: "the REST transport's one request: every path it sends is a caller's, read at that caller",
   },
   {
-    path: "lib/iamWrite.ts",
+    path: "lib/keyedWrite.ts",
     call: "rest.request",
-    why: "the identity directory's write: its path is the gesture's, every one a literal under `/iam` at the dialog that sends it, under the `/iam` entry",
+    why: "the keyed write every REST gesture is answered through: its path is the request's, the identity directory's a literal under `/iam` at the dialog that sends it and an artifact's built in `lib/artifacts/api.ts` under `/artifacts`, each under its own entry",
   },
   {
     path: "protocol/configWrite.ts",
