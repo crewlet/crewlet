@@ -191,13 +191,14 @@ type chatRoom struct {
 	// Oldest is the BROKER's stored instant on the oldest message still in
 	// the room, and the zero time in a room holding none.
 	//
-	// IT IS THE BOOKMARK, and it is why this duty keeps no state of its
-	// own. A prune moves this instant forward, so the next tick reads
-	// where the last one stopped out of the rows themselves — which is
-	// what internal/chatlet/retention.go's header means by a sweep that needs
-	// no bookkeeping. A column recording how far a room had been pruned
-	// would be a second answer to a question the rows already settle, and
-	// the two would disagree the first time a replay rebuilt one of them.
+	// IT IS THE BOOKMARK of how far each room was pruned, and it is why
+	// this duty keeps none of its own. A prune moves this instant forward,
+	// so the next tick reads where the last one stopped in the room out of
+	// the rows themselves. A column recording how far a room had been
+	// pruned would be a second answer to a question the rows already
+	// settle, and the two would disagree the first time a replay rebuilt
+	// one of them. (Where a tick's LAP begins is another question, and
+	// [chatPrune.resume] answers it; it says nothing about any room.)
 	Oldest time.Time
 }
 
@@ -210,9 +211,39 @@ type chatRoom struct {
 // which is the right shape for a person's rail and the wrong one for a sweep
 // that must reach every room in the company including the private ones it is
 // in none of.
+//
+// A PAGE, never the company: at most `limit` rooms in room-id order, every one
+// strictly after `after` ("" for the first). The set it pages through has no
+// bound — see [chatPruneRoomsPage] — so a read of all of it is a snapshot and
+// a slice that grow with every room the company ever made.
 type chatRooms interface {
-	PruneRooms(ctx context.Context) ([]chatRoom, error)
+	PruneRooms(ctx context.Context, after string, limit int) ([]chatRoom, error)
 }
+
+// chatPruneRoomsPage is how many rooms one read of the sweep takes.
+//
+// # Why the sweep is paged at all
+//
+// The sweep covers EVERY room the company ever made, and nothing bounds that
+// set. [chatlet.MaxChannels] counts LIVE rooms and is released by an archive, so
+// a company that archives its finished project rooms creates a thousand more;
+// it binds only a channel's create, so a direct or group conversation is
+// opened without it ever refusing one, and there is one for every distinct set
+// of people who ever spoke; and there is no channel delete in the vocabulary,
+// so nothing ever leaves. Read whole, that is one snapshot holding one index
+// seek per room the company has ever had, and one slice of all of them, every
+// hour, for the life of the deployment.
+//
+// # Why this figure
+//
+// [chatlet.MaxChannels], so a company that has never archived its way past the
+// live cap — which is most of them, and is what the cap's own sidebar argument
+// expects — reads its rooms in one page exactly as before, and what an
+// accumulation of archived rooms and conversations adds is more pages rather
+// than a longer snapshot. A thousand seeks of `chat_messages_prune_idx`'s
+// leading edge is a read measured in milliseconds, which is the length a read
+// transaction on the estate every applier writes should stay inside.
+const chatPruneRoomsPage = chatlet.MaxChannels
 
 // chatPruner publishes one prune record. [chatlet.Store] is what satisfies it;
 // the interface is here so the ladder below can be exercised without a broker.
@@ -243,6 +274,25 @@ type chatPrune struct {
 	// choice. A test that pins this field must not move ids into the
 	// ledger's past or future with it.
 	now func() time.Time
+
+	// resume is the room the next tick's lap begins AFTER, and "" for the
+	// first room. A tick that ran out of its interval before its lap ended
+	// leaves the last room it finished here; one whose lap came round
+	// clears it.
+	//
+	// IT IS NOT A BOOKMARK OF HOW FAR A ROOM WAS PRUNED — that is each room's
+	// own oldest message, read from the rows ([chatRoom.Oldest]) — but of
+	// where the LAP starts, and it exists for one failure: a lap that always
+	// began at the first room id and was cut by the tick's deadline would
+	// spend every tick on the same low ids while the backlog lasted, and the
+	// rooms at the tail would keep their messages past the horizon a screen
+	// says they are pruned at. Started where the last tick stopped, every
+	// room gets its turn. IN MEMORY ONLY, because losing it costs one lap
+	// that starts at the first room — a node that takes the duty over begins
+	// there — and nothing a replay or a peer could disagree with.
+	//
+	// Read and written only by the loop's goroutine, one tick at a time.
+	resume string
 
 	stop context.CancelFunc
 	done chan struct{}
@@ -465,27 +515,6 @@ func (d *chatPrune) tick(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, chatPruneInterval)
 	defer cancel()
 
-	rooms, err := d.rooms.PruneRooms(ctx)
-	if err != nil {
-		log.WarnContext(ctx, "chat_prune_rooms_unread", "err", err,
-			"detail", "no room's horizon is enforced this tick; the chat "+
-				"transcript grows until the read succeeds")
-		return
-	}
-	// THE SELECTION IS NOT RE-DERIVED HERE. Which rooms have a horizon,
-	// which number it is and whose setting decided it is [chatlet.Eligible],
-	// which is pure over values and ordered by room id — so two nodes that
-	// read the rooms in different orders publish the same sweep in the
-	// same sequence.
-	targets := chatlet.Eligible(policy.CompanyDays, retentionsOf(rooms))
-	if len(targets) == 0 {
-		return
-	}
-	floors := make(map[string]time.Time, len(rooms))
-	for _, room := range rooms {
-		floors[room.ID] = room.Oldest
-	}
-
 	// THE ENGINE ITSELF IS THE AUTHOR, named by this node. A prune is
 	// machinery rather than a remark, and attributing it to a seat or to
 	// an operator token would put a participant's name on a deletion
@@ -493,15 +522,150 @@ func (d *chatPrune) tick(ctx context.Context) {
 	// tracker's system writer already signs with, for the same reason.
 	actor := chatlet.Actor{Handle: d.nodeID, Kind: chatlet.AuthorSystem}
 	now := d.now()
-	records, swept := 0, 0
+
+	// ONE LAP OVER EVERY ROOM, A PAGE AT A TIME, beginning after the room
+	// the last tick stopped at and coming round to it — so a lap the
+	// deadline cuts is continued rather than restarted ([chatPrune.resume]).
+	// Each page is its own read, swept before the next is taken: the set has
+	// no bound ([chatPruneRoomsPage]), and neither may the snapshot or the
+	// slice that holds it.
+	start := d.resume
+	after, second := start, start == ""
+	records, swept, pages := 0, 0, 0
+	for {
+		if ctx.Err() != nil {
+			// THE DEADLINE OR THE STOP ENDED THE LAP BETWEEN PAGES,
+			// which is neither a failure nor any room's fault — so no
+			// warning, and the next tick begins where this one got to.
+			d.resume = after
+			break
+		}
+		// THE HORIZON IS ASKED AGAIN BEFORE EVERY PAGE AFTER THE FIRST,
+		// which this tick has just asked it for. A lap may run its whole
+		// interval while a backlog drains, and the fleet's pointer may
+		// move inside it: to a revision that raises the horizon, or sets
+		// it to keep everything because somebody asked for a conversation
+		// to be held. A lap that went on would delete by a horizon the
+		// company has replaced, page after page, so the next page is
+		// taken only while the fleet's revision still states the horizon
+		// the lap began with, and the lap ends where it got to otherwise.
+		// The next tick continues it under the horizon it reads then.
+		if pages > 0 {
+			current, err := d.policy(ctx)
+			if err != nil || current != policy {
+				d.resume = after
+				if ctx.Err() == nil {
+					reason := "the fleet's revision now states another horizon"
+					if err != nil {
+						reason = err.Error()
+					}
+					log.InfoContext(ctx, "chat_prune_lap_ended", "after", after,
+						"reason", reason,
+						"detail", "no further page is pruned by the horizon this "+
+							"lap began with; the next tick resumes the lap here")
+				}
+				break
+			}
+		}
+		pages++
+		page, err := d.rooms.PruneRooms(ctx, after, chatPruneRoomsPage)
+		if err != nil {
+			d.resume = after
+			// A READ THE DEADLINE OR THE STOP ENDED is the same cut as
+			// the one above, landed inside the read rather than before
+			// it — and the read is most of the time between pages, so
+			// that is where a deadline usually lands.
+			if ctx.Err() == nil {
+				log.WarnContext(ctx, "chat_prune_rooms_unread", "err", err,
+					"after", after,
+					"detail", "no further room's horizon is enforced this "+
+						"tick; the next tick resumes the lap here")
+			}
+			break
+		}
+		last := len(page) < chatPruneRoomsPage
+		if second && start != "" {
+			// THE LAP ENDS AT THE ROOM IT BEGAN AFTER, which the first
+			// leg did not reach and this one must not pass — and a page
+			// that ends ON it ends the lap as well, or the next read
+			// would take the first leg's rooms only to drop them. That
+			// is the usual case, not an edge: a lap cut between pages
+			// began after a page's last room.
+			cut := roomsThrough(page, start)
+			if cut < len(page) || (cut > 0 && page[cut-1].ID == start) {
+				page, last = page[:cut], true
+			}
+		}
+		reached, done, published, rooms := d.sweepPage(ctx, actor, policy,
+			page, after, now)
+		records += published
+		swept += rooms
+		if !done {
+			d.resume = reached
+			break
+		}
+		if !last {
+			after = reached
+			continue
+		}
+		if second {
+			d.resume = ""
+			break
+		}
+		// THE FIRST LEG REACHED THE LAST ROOM; the second starts from the
+		// first and stops at [chatPrune.resume].
+		after, second = "", true
+	}
+	if records > 0 {
+		log.InfoContext(ctx, "chat_pruned", "records", records,
+			"channels", swept, "company_horizon_days", policy.CompanyDays)
+	}
+}
+
+// roomsThrough is how many of a page's rooms sort at or before `id`.
+func roomsThrough(page []chatRoom, id string) int {
+	for i, room := range page {
+		if room.ID > id {
+			return i
+		}
+	}
+	return len(page)
+}
+
+// sweepPage publishes one page's prune records, and reports the room the lap
+// has finished through, whether the page was finished, how many records it
+// published and in how many rooms.
+//
+// `after` is where the page began, which is what the lap has reached when not
+// one of its rooms was finished.
+func (d *chatPrune) sweepPage(ctx context.Context, actor chatlet.Actor,
+	policy chatRetentionPolicy, page []chatRoom, after string,
+	now time.Time) (reached string, done bool, records, swept int) {
+
+	reached = after
+	// THE SELECTION IS NOT RE-DERIVED HERE. Which rooms have a horizon,
+	// which number it is and whose setting decided it is [chatlet.Eligible],
+	// which is pure over values and ordered by room id — the page's own
+	// order, so the lap's position is one room id whichever of the two is
+	// read.
+	targets := chatlet.Eligible(policy.CompanyDays, retentionsOf(page))
+	floors := make(map[string]time.Time, len(page))
+	for _, room := range page {
+		floors[room.ID] = room.Oldest
+	}
 	for _, target := range targets {
 		if ctx.Err() != nil {
-			break
+			return reached, false, records, swept
 		}
 		published, err := d.sweepRoom(ctx, actor, target, floors[target.ChannelID], now)
 		records += published
 		if published > 0 {
 			swept++
+		}
+		if ctx.Err() != nil {
+			// A LADDER THE DEADLINE CUT IS NOT FINISHED, so the lap
+			// resumes before this room rather than after it.
+			return reached, false, records, swept
 		}
 		if err != nil {
 			// ONE ROOM'S REFUSAL IS NOT THE COMPANY'S. A room whose
@@ -512,11 +676,12 @@ func (d *chatPrune) tick(ctx context.Context) {
 				"channel", target.ChannelID, "horizon_days", target.Days,
 				"horizon_source", target.Source, "err", err)
 		}
+		reached = target.ChannelID
 	}
-	if records > 0 {
-		log.InfoContext(ctx, "chat_pruned", "records", records,
-			"channels", swept, "company_horizon_days", policy.CompanyDays)
+	if len(page) > 0 {
+		reached = page[len(page)-1].ID
 	}
+	return reached, true, records, swept
 }
 
 // sweepRoom publishes the ladder of prune records one room takes this tick,
@@ -616,46 +781,58 @@ func retentionsOf(rooms []chatRoom) []chatlet.ChannelRetention {
 // chatRoomRows reads the rooms out of this node's replicated estate.
 type chatRoomRows struct{ db store.ReplicatedReader }
 
-// chatPruneRoomsSQL is every room, its own horizon and its oldest surviving
-// message.
+// chatPruneRoomsSQL is one page of the company's rooms, each with its own
+// horizon and its oldest surviving message.
 //
 // EVERY ROOM, INCLUDING THE ARCHIVED ONES. An archive closes a room to new
 // messages and not to its retention: its rows cost the same disk on every
 // node, in every snapshot and in every join transfer, and a company that
 // archived a room rather than deleting it did not ask to keep it for ever.
 //
+// A KEYSET PAGE on the room id, which is the table's primary key, so a page is
+// a seek to where the last one stopped and a walk of `limit` keys in the order
+// they are stored — never a sort of every room to find the next thousand. The
+// rooms are every one the company ever made, which nothing bounds (see
+// [chatPruneRoomsPage]), so the read is cut into pages rather than taken whole.
+//
 // A CORRELATED SUBQUERY rather than a join with a GROUP BY, and it is the
 // difference between a seek and a scan of the corpus. A room's oldest message
 // is the leading edge of `chat_messages_prune_idx` — the index the prune's own
 // range delete drives on — so the subquery is one index seek per room. The
-// rooms are every one the company ever made, archived ones included, so
-// [chatlet.MaxChannels] — which counts the live ones — does not bound them; a
-// seek per room is what keeps that cheap. The grouped join would read every
-// message row in the company to answer the same question.
+// grouped join would read every message row in the company to answer the same
+// question.
 //
 // `ORDER BY created_at LIMIT 1`, NEVER `MIN(created_at)`, though the two mean
 // the same row. This planner DECORRELATES an aggregate subquery: it builds an
 // ephemeral index of every room's minimum by scanning `chat_messages_prune_idx`
 // whole, and then looks each room up in that — so the MIN spelling is the
 // grouped join under another name, every message the company has ever kept
-// read once an hour. The limit is not decorrelated, and stays a seek per room;
+// read on every page. The limit is not decorrelated, and stays a seek per room;
 // [TestTheRoomReadSeeksEachRoomsOldestMessage] holds the plan to it.
 const chatPruneRoomsSQL = `
 	SELECT c.id, c.retention_days,
 	       (SELECT m.created_at FROM chat_messages m
 	         WHERE m.channel_id = c.id
 	         ORDER BY m.created_at LIMIT 1)
-	  FROM chat_channels c`
+	  FROM chat_channels c
+	 WHERE c.id > ?
+	 ORDER BY c.id
+	 LIMIT ?`
 
-// PruneRooms reads the company's rooms in one transaction.
+// PruneRooms reads one page of the company's rooms in one transaction.
 //
 // ONE SNAPSHOT for the retention setting and the floor together, so a room
 // whose horizon was changed while this read was running cannot be pruned at
-// the old number against the new room.
-func (r chatRoomRows) PruneRooms(ctx context.Context) ([]chatRoom, error) {
+// the old number against the new room. The pages are separate snapshots, and
+// that is safe for the same reason: each room is decided against its own
+// setting and its own floor, read together, and a prune's own decide forms the
+// cutoff against the estate as it then stands.
+func (r chatRoomRows) PruneRooms(ctx context.Context, after string,
+	limit int) ([]chatRoom, error) {
+
 	var out []chatRoom
 	err := r.db.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, chatPruneRoomsSQL)
+		rows, err := tx.QueryContext(ctx, chatPruneRoomsSQL, after, limit)
 		if err != nil {
 			return err
 		}
@@ -685,8 +862,9 @@ func (r chatRoomRows) PruneRooms(ctx context.Context) ([]chatRoom, error) {
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, fmt.Errorf("chat retention: read the company's rooms and "+
-			"each one's oldest message from the replicated estate: %w", err)
+		return nil, fmt.Errorf("chat retention: read the company's rooms after "+
+			"%q and each one's oldest message from the replicated estate: %w",
+			after, err)
 	}
 	return out, nil
 }

@@ -212,3 +212,85 @@ func TestADeclinedPruneNamesWhatThisNodeServesAndTheFleetsEpoch(t *testing.T) {
 			len(p.pruner.calls), p.claims)
 	}
 }
+
+// A POINTER THAT MOVES MID-LAP ENDS THE LAP WHERE IT GOT TO.
+//
+// A lap drains a backlog a page at a time for up to its whole interval, and
+// the company may replace its horizon inside one: raise it, or set it to keep
+// everything because somebody asked for a conversation to be held. Each page
+// after the first is taken only while the fleet's revision still states the
+// horizon the lap began with, so a move ends the lap after the page in hand,
+// and the next tick continues it from there under the horizon it reads then.
+// A revision this node has applied that states the same horizon deletes
+// nothing the lap would not, so the lap goes on. Mutation: ask for the horizon
+// only once a tick and the two cases that end the lap prune the second page by
+// the horizon the fleet has replaced.
+func TestAPointerThatMovesMidLapEndsTheLap(t *testing.T) {
+	t.Parallel()
+	floor := anchor.Add(-2 * 365 * 24 * time.Hour)
+	// A page and a short one, so the lap has a second page to end before.
+	const total = chatPruneRoomsPage + 3
+	var all []chatRoom
+	for i := range total {
+		all = append(all, room(fmt.Sprintf("room-%05d", i), nil, floor))
+	}
+	keepsEverything := strings.ReplaceAll(pruneCompanyDoc,
+		"message_retention_days: 30", "message_retention_days: 0")
+	for _, tc := range []struct {
+		name string
+		// move is what the fleet does while the first page is pruned.
+		move func(t *testing.T, e *Engine, fleet *rosterFleet)
+		ends bool
+	}{
+		{"the pointer moves to a revision this node has not applied",
+			func(t *testing.T, _ *Engine, fleet *rosterFleet) { activate(t, fleet, "rev-2") },
+			true},
+		{"this node applies a revision that keeps everything",
+			func(t *testing.T, e *Engine, fleet *rosterFleet) {
+				kept := companyWith(t, keepsEverything)
+				kept.ActivatedAt = activate(t, fleet, "rev-2").At
+				e.epoch.current.Store(kept)
+			}, true},
+		{"this node applies a revision that states the same horizon",
+			func(t *testing.T, e *Engine, fleet *rosterFleet) {
+				same := companyWith(t, pruneCompanyDoc)
+				same.ActivatedAt = activate(t, fleet, "rev-2").At
+				e.epoch.current.Store(same)
+			}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fleet := &rosterFleet{memoryFleet: coordmem.NewFleet()}
+			company := companyWith(t, pruneCompanyDoc)
+			company.ActivatedAt = activate(t, fleet, "rev-1").At
+			p := newPointedPrune(fleet, company, all...)
+			moved := false
+			p.pruner.after = func(int) {
+				if !moved {
+					moved = true
+					tc.move(t, p.engine, fleet)
+				}
+			}
+
+			p.duty.tick(t.Context())
+
+			pruned := len(p.pruner.channels())
+			if !tc.ends {
+				if pruned != total || p.duty.resume != "" {
+					t.Fatalf("a lap under a revision stating the same horizon pruned "+
+						"%d of %d rooms and left the next to begin after %q",
+						pruned, total, p.duty.resume)
+				}
+				return
+			}
+			if pruned != chatPruneRoomsPage {
+				t.Fatalf("a lap the pointer moved under pruned %d rooms, want the "+
+					"first page's %d and none of the next", pruned, chatPruneRoomsPage)
+			}
+			if finished := all[chatPruneRoomsPage-1].ID; p.duty.resume != finished {
+				t.Errorf("the lap ended to resume after %q, want %q: the last room "+
+					"of the page it finished", p.duty.resume, finished)
+			}
+		})
+	}
+}
