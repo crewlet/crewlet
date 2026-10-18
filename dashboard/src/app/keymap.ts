@@ -69,7 +69,7 @@ export const KEY_SCOPES: readonly { scope: KeyScope; title: string }[] = [
   { scope: "gallery", title: "In the artifacts gallery and its folders" },
   { scope: "canvas", title: "On a chart" },
   { scope: "draft", title: "Editing a draft: the org builder, or Home while it is arranged" },
-  { scope: "compose", title: "Writing a reply" },
+  { scope: "compose", title: "Writing a reply or a message" },
   { scope: "create", title: "Making a new artifact" },
   { scope: "charter", title: "Writing the company's principles" },
   { scope: "search", title: "In search" },
@@ -375,16 +375,24 @@ const PAGE: KeyRow[] = [
 ];
 
 /**
- * THE COMPOSER'S KEY, read by the Inbox's reply field from inside itself
- * through [matchesRow]: Enter alone is a new line in a reply, so sending takes
- * the command key, as it does in every chat surface a reader already uses.
+ * THE SEND KEY FOR WHAT A PERSON SAYS TO SOMEBODY, read from inside the field
+ * through [matchesRow] by every box that says it: a reply in the Inbox and a
+ * comment on a task (`components/Composer.tsx`), and a message in a chat room
+ * or a thread (`routes/chatlet/Composer.tsx`). Enter alone is a new line there,
+ * because what is said to somebody is often several lines: a list, a pasted
+ * stack trace.
+ *
+ * THE ASSISTANT'S QUESTION BOX IS THE ONE EXCEPTION, and on purpose: it sends
+ * on Enter ([ASSISTANT]'s `assistant.send`), the design system's own rule for
+ * a question, which is one line far more often than not. Two kinds of box,
+ * two keys, each listed in the legend under its own heading.
  */
 const COMPOSE: KeyRow[] = [
   {
     id: "compose.send",
     scope: "compose",
     presses: [{ key: "enter", mod: true }],
-    does: "Send the reply",
+    does: "Send it",
     by: "dashboard",
     whileTyping: true,
   },

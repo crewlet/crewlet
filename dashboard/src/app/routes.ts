@@ -208,6 +208,9 @@ export type FramedScreen =
   | { screen: "schedules"; scope: string[] }
   | { screen: "integrations"; kind?: string }
   | { screen: "budgets" }
+  | { screen: "chatlet"; id?: string }
+  | { screen: "chatlet-mentions" }
+  | { screen: "chatlet-search" }
   | { screen: "live" }
   | { screen: "turns" }
   | { screen: "turn"; id: string }
@@ -321,6 +324,8 @@ export function resolve(path: string[]): Route {
       return company(rest, screen, under);
     case "worklet":
       return worklet(rest, screen, under);
+    case "chatlet":
+      return chatlet(rest, screen, under);
     case "live":
       return live(rest, screen, under);
     case "doclet":
@@ -460,6 +465,33 @@ function org(rest: string[], screen: Make, under: Under): Route {
     default:
       return none();
   }
+}
+
+function chatlet(rest: string[], screen: Make, under: Under): Route {
+  const [first, ...tail] = rest;
+  if (first === undefined) return screen({ screen: "chatlet" });
+  // THE TWO SECTIONS THAT ARE NOT A ROOM are reserved words, and a tail under
+  // either is nothing: neither list has an object of its own to address.
+  if (first === "mentions" || first === "search") {
+    if (tail.length) return missing("chatlet", under("Chatlet"));
+    return screen({ screen: first === "mentions" ? "chatlet-mentions" : "chatlet-search" });
+  }
+  // THE ROOM IS THE ONLY THING UNDER `chatlet` WITH AN ID — the uuid the engine
+  // minted for it, a direct conversation's derived from who is in it — and
+  // never its NAME. A name is what a person types, so `#/chatlet/general` is the
+  // address somebody guesses, and read as a room it would ask the engine for
+  // one under an id nobody minted. The thread is deliberately NOT a segment
+  // either: it is `?thread=` on the room you are already in, because a thread
+  // is one level deep and has no life away from its room. Both guesses get the
+  // sentence that says how a room and a thread are reached.
+  if (tail.length || !ID_SHAPE.test(first)) {
+    return missing(
+      "chatlet",
+      under("Chatlet"),
+      "a room is opened from your rooms, a mention or a search, and a thread from its room",
+    );
+  }
+  return screen({ screen: "chatlet", id: first });
 }
 
 function live(rest: string[], screen: Make, under: Under): Route {

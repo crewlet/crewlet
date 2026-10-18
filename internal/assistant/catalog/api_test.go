@@ -329,7 +329,7 @@ func TestACallOnTheActRouteIsTitledByItsTool(t *testing.T) {
 		t.Errorf("a reaction is titled %q, approved by %q, decided by %q at risk %q", p.Title,
 			p.ApproveLabel, p.Act, p.Risk)
 	}
-	if step := change.StepLabel(reaction); step != "Preparing react to message" {
+	if step := change.StepLabel(reaction, cards.Options{}); step != "Preparing react to message" {
 		t.Errorf("a reaction is prepared in the step %q", step)
 	}
 	for _, c := range p.Changes {

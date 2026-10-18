@@ -40,14 +40,16 @@ the one to do first and has the main button; when there are two or more, it
 is marked **Do first**. A quiet line of context follows only when a fact from
 elsewhere changes what to do, and then up to two questions you may want to
 ask next. When the screen has one record open (a decision open in the Inbox, a
-task, an agent, an artifact), the row says so, "Brief me on this decision",
-and the brief covers that record and its immediate context only: the question
-asked, its task, the agent on it and its recent thread. Ask a follow-up in the
-same conversation as you would any question.
+task, an agent, an artifact, a Chatlet room), the row says so, "Brief me on
+this decision", and the brief covers that record and its immediate context
+only: the question asked, its task, the agent on it and its recent thread. Ask
+a follow-up in the same conversation as you would any question.
 
 A brief only reads, as you. Every row names a record the assistant read for
-this brief and that you may open, checked again by the engine before the row
-is drawn; a row it cannot check is left out rather than shown. A row is drawn
+this brief and that you may open (a task, a project, an agent, a page, an
+artifact, or a chat room, where a question asked of you there waits), checked
+again by the engine before the row is drawn; a row it cannot check is left out
+rather than shown. A row is drawn
 in red only for a fact the engine read (an agent stopped or whose last turn
 failed, a task marked urgent), never because the model chose to. The brief
 says when it was read: it is a reading of the page at that moment, so ask
@@ -93,8 +95,9 @@ sees each step's request (its method and path) beside it. A refusal is said in
 plain words too: the assistant is handed the engine's exact reason and says
 what to change.
 What a step read is not drawn as a card beside the answer. The first time
-the answer names a record it read (a task by its key, such as GOP-11, or an
-agent, a team, a project or a page by its name), that mention is a chip: press
+the answer names a record it read (a task by its key, such as GOP-11, a chat
+room by its name with its #, such as #launch, or an agent, a team, a project
+or a page by its name), that mention is a chip: press
 it for a peek with the record's facts, its body and the list under it, and
 **Open** to go to its page. A record it read and never named is on one
 **Also read** line under the answer, with a chip of its own. A table's peek
@@ -119,6 +122,7 @@ is a table ("Agents"), and one record is its values and the lists it holds
 |---|---|
 | Worklet (needs `worklet`) | Search and list tasks, read a task and its thread, a task's cost, your inbox and queue, projects, workload, open decisions |
 | Doclet (needs `doclet`) | Search pages, read a page, and list the spaces by name and key |
+| Chatlet (needs `chatlet`) | Your rooms and what is unread in them (your most recently active rooms, or only those with something unread), a room and who is in it, what was said in a room or a thread lately, where you were named, and a search of every room you may read, by what was said and who said it. A room is asked for by its name ("#launch"); the answer's "#launch" is the room's chip, and a direct conversation is named by the people in it. Older messages are found by a search; the room's chip opens the room, which holds all of it |
 | Everyone | Agents and their activity, the org chart, turns you may read (with why a failed one failed), coding runs, token spend and budgets, the company feed, artifacts shared with you |
 | Administrators (needs `admin`) | Integrations, fleet health, and the history of configuration changes |
 

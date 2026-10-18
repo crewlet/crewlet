@@ -348,7 +348,7 @@ export function Activity({
             leadingIcon={<ChevronUpGlyph size="sm" />}
             loading={paging}
             onClick={() => {
-              for (const source of drawn.earlier) paged[source].older();
+              for (const source of drawn.earlier) paged[source].next();
             }}
           >
             Earlier activity

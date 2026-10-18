@@ -13,10 +13,13 @@
  * Assign task (an existing task handed over conditionally, or a new one),
  * and Pause / Resume — each a `WriteButton`, so a reader who cannot make the
  * change sees the control and the reason rather than a page with no way to
- * act. Pause asks whether to stop the current turn too, and says that
- * without it the turn finishes first. "Events" (an agent's only: a person
- * publishes no events under a seat id for `seat=` to narrow by) and "Edit in
- * org" are the secondary pair, in the bar's "More" menu.
+ * act. Where the company runs the engine's own chat and the reader holds it,
+ * Direct message opens a conversation with the seat beside Message — a remark
+ * rather than an ask (`DirectMessage.tsx`), so it never replaces it. Pause
+ * asks whether to stop the current turn too, and says that without it the
+ * turn finishes first. "Events" (an agent's only: a person publishes no events
+ * under a seat id for `seat=` to narrow by) and "Edit in org" are the
+ * secondary pair, in the bar's "More" menu.
  *
  * WHILE IT IS WORKING the bar leads with "Watch live" — the running turn's
  * watch link, its Transcript with the phase it is on open — and the Turns tab
@@ -89,6 +92,7 @@ import {
   PauseGlyph,
   PencilGlyph,
   PlusGlyph,
+  SendGlyph,
   UserGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href, useNavigator } from "~/app/router.tsx";
@@ -112,6 +116,7 @@ import {
 import { TechnicalDetails } from "~/components/common.tsx";
 import { RaiseBudgetButton } from "~/components/budgetWrite.tsx";
 import { waitedOn } from "~/lib/budget.ts";
+import { DirectMessageSeatButton } from "./DirectMessage.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { relTime } from "~/lib/format.ts";
 import { unitPath } from "~/lib/orgchart.ts";
@@ -142,7 +147,12 @@ import type { RestResult } from "~/lib/useRest.ts";
 import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { turnIdOf, watchHref, watchLink } from "~/lib/turns.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { menuHold, useMessageSeatAccess, useWriteAccess } from "~/lib/useWriteAccess.ts";
+import {
+  menuHold,
+  useDirectSeatAccess,
+  useMessageSeatAccess,
+  useWriteAccess,
+} from "~/lib/useWriteAccess.ts";
 import type { RowChrome } from "~/components/work.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -247,6 +257,7 @@ export function SeatScreen({ handle }: { handle: string }) {
   // THE BUTTON'S OWN RULE, own-seat hold included, so the folded entry is
   // held in the words the inline control is.
   const messageAccess = useMessageSeatAccess(seat?.handle ?? "");
+  const directAccess = useDirectSeatAccess(seat?.handle ?? "");
   const assignAccess = useWriteAccess("update_work_item");
   const pauseAccess = useWriteAccess("pause_seat");
   usePageMenu(
@@ -273,6 +284,17 @@ export function SeatScreen({ handle }: { handle: string }) {
                   icon: <MessageSquareGlyph size="sm" />,
                   onSelect: () => openNewTask({ assignee: seat.handle, ask: seat.handle }),
                   ...menuHold(messageAccess),
+                },
+              ]
+            : []),
+          ...(directAccess
+            ? [
+                {
+                  key: "direct",
+                  label: "Direct message",
+                  icon: <SendGlyph size="sm" />,
+                  onSelect: () => nav.to(["chatlet"], { dm: seat.handle }),
+                  ...menuHold(directAccess),
                 },
               ]
             : []),
@@ -356,25 +378,34 @@ export function SeatScreen({ handle }: { handle: string }) {
         )}
         {/* FOLDED ON A PHONE into the bar's "More" (published above), all
             but the one action the bar keeps in view. */}
-        {/* WORKLET'S TWO WRITES, and their wrappers with them: where the
-            company runs no Worklet the buttons draw nothing, and their
-            empty spans still took the bar's gap. */}
+        {/* WORKLET'S TWO WRITES, Message here and Assign task after
+            chat's door, and their wrappers with them: where the company runs
+            no Worklet the buttons draw nothing, and their empty spans
+            still took the bar's gap. */}
         {runs.tracker && (
-          <>
-            <span className={paused ? "page-action-folds" : undefined}>
-              {/* HELD ON YOUR OWN SEAT BY ITSELF (`useMessageSeatAccess`), as
-                  everywhere the button is drawn. */}
-              <MessageSeatButton handle={seat.handle} />
-            </span>
-            <span className="page-action-folds">
-              <AssignToSeatButton
-                handle={seat.handle}
-                name={seat.name}
-                open={assigning}
-                onOpenChange={setAssigning}
-              />
-            </span>
-          </>
+          <span className={paused ? "page-action-folds" : undefined}>
+            {/* HELD ON YOUR OWN SEAT BY ITSELF (`useMessageSeatAccess`), as
+                everywhere the button is drawn. */}
+            <MessageSeatButton handle={seat.handle} />
+          </span>
+        )}
+        {/* CHATLET'S DOOR, beside Message and never inside the tracker's pair:
+            it opens wherever the company runs the engine's own chat, whatever
+            it runs for work, and its span is drawn only where the door is. */}
+        {directAccess && (
+          <span className="page-action-folds">
+            <DirectMessageSeatButton handle={seat.handle} />
+          </span>
+        )}
+        {runs.tracker && (
+          <span className="page-action-folds">
+            <AssignToSeatButton
+              handle={seat.handle}
+              name={seat.name}
+              open={assigning}
+              onOpenChange={setAssigning}
+            />
+          </span>
         )}
         {!human && (
           <span className={paused ? undefined : "page-action-folds"}>

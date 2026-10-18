@@ -168,6 +168,7 @@ describe("navigation identity", () => {
       integrations: "n",
       budgets: "b",
       worklet: "w",
+      chatlet: "t",
       doclet: "k",
       artifacts: "f",
       live: "l",
@@ -215,13 +216,15 @@ describe("am I already here", () => {
 });
 
 describe("the navigation grammar", () => {
-  // FOURTEEN WORKSPACES ARE SIDEBAR ROWS, in four runs, and the sidebar draws
+  // FIFTEEN WORKSPACES ARE SIDEBAR ROWS, in four runs, and the sidebar draws
   // them and nothing else from the table: a section that became a sidebar row
-  // is a second column of navigation arriving one row at a time. The FIFTEENTH
-  // is the reader's own Account, which has no row (the user block at the
-  // sidebar's foot is the reader, and its menu links it) and is a workspace
-  // all the same, so the palette and its chord reach it.
-  test("the sidebar's rows are fourteen workspaces, in the story's order, and the menu holds the fifteenth", () => {
+  // is a second column of navigation arriving one row at a time. Workspace
+  // runs in the order `nav.ts` argues: the work, then the talking, then what
+  // the talking produced (so Chatlet sits after Worklet and before Doclet). The
+  // SIXTEENTH is the reader's own Account, which has no row (the user block
+  // at the sidebar's foot is the reader, and its menu links it) and is a
+  // workspace all the same, so the palette and its chord reach it.
+  test("the sidebar's rows are fifteen workspaces, in the story's order, and the menu holds the sixteenth", () => {
     const run = (place: string) => WORKSPACES.filter((w) => w.place === place).map((w) => w.key);
     expect(run("you")).toEqual(["home", "inbox", "me"]);
     expect(run("company")).toEqual([
@@ -232,7 +235,7 @@ describe("the navigation grammar", () => {
       "integrations",
       "budgets",
     ]);
-    expect(run("workspace")).toEqual(["worklet", "doclet", "artifacts", "live"]);
+    expect(run("workspace")).toEqual(["worklet", "chatlet", "doclet", "artifacts", "live"]);
     expect(run("foot")).toEqual(["settings"]);
     expect(run("menu")).toEqual(["account"]);
     // THE COMPANY'S FIRST ROW IS "Principles", the same name in the sidebar,
@@ -294,6 +297,26 @@ describe("the navigation grammar", () => {
     }
     // NOT VACUOUS: the table has sections to hold.
     expect(sections).toBeGreaterThan(25);
+  });
+
+  // A RAIL IS DRAWN FROM ITS ROW'S SECTIONS, every one of them, by the
+  // workspace's own screen (Chatlet's), so a row that says `rail` and declares
+  // none would draw an empty rail beside the screen's objects and nothing
+  // would say why.
+  test("a workspace drawn by a rail declares the sections it draws", () => {
+    const rails = WORKSPACES.filter((ws) => ws.renderer === "rail");
+    expect(rails.length).toBeGreaterThan(0);
+    for (const ws of rails) {
+      expect(ws.sections.length, `${ws.key} says rail and declares no section`).toBeGreaterThan(0);
+    }
+  });
+
+  // CHATLET'S SECTIONS ARE DRAWN BY ITS SCREEN (`routes/chatlet/Chat.tsx`'s rail),
+  // so the frame must draw neither a tab strip nor a column for them: either
+  // would be a second renderer of one section, two links to Mentions on one
+  // page. `App.test.tsx` holds the drawn page to one link each.
+  test("chat's sections are its rail's, and no frame renderer's", () => {
+    expect(workspaceRow("chatlet")?.renderer).toBe("rail");
   });
 
   // A LOCK GOES WHERE THE CLOSED THING IS, by ONE rule: any one of a
@@ -363,6 +386,20 @@ describe("the navigation grammar", () => {
       expect(opens(path, ["doclet"]), path.join("/")).toBe(true);
       expect(opens(path, ["admin"]), path.join("/")).toBe(true);
       expect(opens(path, ["worklet"]), path.join("/")).toBe(false);
+    }
+    // CHATLET IS ITS APP'S, every list and every room: each is read as the seat
+    // the session holds, and no other app — nor the overview — opens it.
+    const CHAT_ONLY = [
+      ["chatlet"],
+      ["chatlet", "mentions"],
+      ["chatlet", "search"],
+      ["chatlet", "88888888-8888-4888-8888-888888888888"],
+    ];
+    for (const path of CHAT_ONLY) {
+      expect(opens(path, ["chatlet"]), path.join("/")).toBe(true);
+      expect(opens(path, ["admin"]), path.join("/")).toBe(true);
+      expect(opens(path, ["worklet", "doclet"]), path.join("/")).toBe(false);
+      expect(opens(path, []), path.join("/")).toBe(false);
     }
     const ADMIN_ONLY = [
       ["live", "turns"],
@@ -664,6 +701,35 @@ describe("the resolver", () => {
     }
   });
 
+  // A ROOM IS ITS ID, NEVER ITS NAME, and a thread is never a segment. The
+  // name is the address a person guesses — read as a room, `#/chatlet/general`
+  // would ask the engine for a room under an id nobody minted and draw its
+  // refusal under a trail naming a room — so it is Not Found, and says how a
+  // room is reached. The two lists that are not a room keep their words.
+  test("a chat room is a uuid, and its name or a thread segment is Not Found", () => {
+    expect(resolve(["chatlet"])).toMatchObject({ screen: "chatlet" });
+    expect(resolve(["chatlet"])).not.toHaveProperty("id");
+    expect(resolve(["chatlet", uuid])).toMatchObject({ screen: "chatlet", id: uuid });
+    expect(resolve(["chatlet", "mentions"])).toMatchObject({ screen: "chatlet-mentions" });
+    expect(resolve(["chatlet", "search"])).toMatchObject({ screen: "chatlet-search" });
+    for (const path of [
+      ["chatlet", "general"],
+      ["chatlet", "#general"],
+      ["chatlet", "GENERAL"],
+      ["chatlet", uuid, "thread"],
+      ["chatlet", uuid, uuid],
+    ]) {
+      const where = resolve(path);
+      expect(where.resolved, `#/${path.join("/")}`).toBe(false);
+      expect(where.workspace, `#/${path.join("/")}`).toBe("chatlet");
+      expect(where.resolved ? "" : (where.hint ?? ""), `#/${path.join("/")}`).toMatch(
+        /a room is opened from your rooms/,
+      );
+    }
+    expect(resolve(["chatlet", "mentions", uuid]).resolved).toBe(false);
+    expect(resolve(["chatlet", "search", "x"]).resolved).toBe(false);
+  });
+
   test("a closed set refuses the obvious typo rather than drawing the list", () => {
     expect(resolve(["settings", "spend", "task"]).resolved).toBe(false);
     expect(resolve(["company", "budgets", "x"]).resolved).toBe(false);
@@ -686,6 +752,9 @@ describe("the breadcrumb", () => {
       ["company", "org", "seats", "ada"],
       ["company", "org", "teams", "Platform"],
       ["doclet", "pages", "0f0f0f0f-1111-4222-8333-444455556666"],
+      ["chatlet"],
+      ["chatlet", "mentions"],
+      ["chatlet", "0f0f0f0f-1111-4222-8333-444455556666"],
       ["doclet", "new"],
       ["artifacts", "new", "sheet"],
       ["live", "turns", "t-1"],
@@ -843,6 +912,23 @@ describe("the breadcrumb", () => {
     });
     expect(named[named.length - 1]?.label).toBe("Platform");
     expect(named[named.length - 1]?.mono, "a name is not an identifier").toBeFalsy();
+  });
+
+  // A ROOM IS ADDRESSED BY AN ID, so it is an identifier until the room
+  // publishes its name — and the way back is Chatlet itself, whose landing IS
+  // the room list: a trail reading "Chatlet › Rooms › #general" would name a
+  // page that is the first crumb again.
+  test("a room's crumb is its name under Chatlet, and an unnamed id is an identifier", () => {
+    const id = "0f0f0f0f-1111-4222-8333-444455556666";
+    const raw = crumbsFor(["chatlet", id]);
+    expect(raw.map((c) => c.label)).toEqual(["Chatlet", id]);
+    expect(raw[0]?.path).toEqual(["chatlet"]);
+    expect(raw[1]?.mono, "an id drawn as prose reads as a room's name").toBe(true);
+    const named = crumbsFor(["chatlet", id], { [id]: "#general" });
+    expect(named.map((c) => c.label)).toEqual(["Chatlet", "#general"]);
+    expect(named[1]?.mono, "a name is not an identifier").toBeFalsy();
+    expect(crumbsFor(["chatlet"]).map((c) => c.label)).toEqual(["Chatlet"]);
+    expect(crumbsFor(["chatlet", "mentions"]).map((c) => c.label)).toEqual(["Chatlet", "Mentions"]);
   });
 
   // A SEAT'S BADGE IN THE TRAIL IS THE ONE ITS PAGE DRAWS: an agent wears

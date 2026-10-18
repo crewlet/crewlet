@@ -622,6 +622,12 @@ func (c Chat) Mentions(ctx context.Context, viewer string, q chatlet.MentionQuer
 	return call(ctx, c.r, opChatMentions, nil, chatMentionsArgs{Viewer: viewer, Query: q, Fresh: fresh})
 }
 
+// RoomNames answers the names of every room a viewer may read.
+func (c Chat) RoomNames(ctx context.Context, viewer string,
+	fresh statelog.Freshness) (chatlet.RoomNames, error) {
+	return call(ctx, c.r, opChatRoomNames, nil, chatRoomNamesArgs{Viewer: viewer, Fresh: fresh})
+}
+
 // settled raises the session floor to what a chat write reported.
 func (c Chat) settled(w chatlet.Written) { c.r.Observe(w.Outcome.Position) }
 

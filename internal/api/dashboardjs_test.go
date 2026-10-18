@@ -1135,6 +1135,9 @@ const (
 	// push leaves as it was, all in the attention queue and the store the
 	// frame loads, took it to 351.0 KiB. 352 KiB, still under two seconds on
 	// that link.
+	// The company's own chat adds about 4.5 KiB to it: its pushes and rooms
+	// in the socket client, its routes and its rail are the frame's, because
+	// a reader is told of a mention on whatever screen they are on.
 	initialBudget = 352 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a

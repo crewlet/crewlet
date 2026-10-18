@@ -1967,3 +1967,66 @@ test("the title open in its editor is the assistant's to read and set, and Save 
     },
   ]);
 });
+
+// THE TITLE AND THE DESCRIPTION OPEN TOGETHER ARE ONE DRAFT. The page context
+// carries one draft, the newest declared, and each editor declared its own, so
+// the one typed in last was the only one the assistant could read, and a
+// change it prepared for the other landed nowhere. Mutation: declare a draft
+// per editor again, and the title's field is gone once the description moves.
+test("the title and the description open together are one draft, each set through its own editor", async () => {
+  setFramePage({
+    screen: "worklet-item",
+    title: "Tasks › ENG-42",
+    path: ["worklet", "ENG-42"],
+    params: {},
+    query: {},
+  });
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Edit the title" }));
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: /description$/i }));
+  await settle();
+  const title = screen.getByRole("textbox", { name: "Title of ENG-42" }) as HTMLInputElement;
+  const body = screen.getByRole("textbox", {
+    name: "Description of ENG-42",
+  }) as HTMLTextAreaElement;
+  fireEvent.change(title, { target: { value: "Switch ports flap" } });
+  fireEvent.change(body, { target: { value: "Seen on rack 4." } });
+  await settle();
+
+  const open = () => pageSnapshot()!.context;
+  expect(open().draft).toMatchObject({
+    kind: "client",
+    id: "ENG-42",
+    revision: "7",
+    step: "description",
+    fields: [
+      { path: "title", label: "Title", value: "Switch ports flap", editable: true },
+      { path: "description", label: "Description", value: "Seen on rack 4.", editable: true },
+    ],
+  });
+  const setDraft = (values: Record<string, string>) =>
+    applyPageAction({
+      correlation_id: `c-${Object.keys(values).join("-")}`,
+      action: "draft.set",
+      payload: { values },
+      source_revision: open().action_revisions?.["draft.set"] ?? open().source_revision,
+    });
+  act(() => {
+    setDraft({ title: "Switch ports flap under load" });
+  });
+  await waitFor(() => expect(title.value).toBe("Switch ports flap under load"));
+  expect(body.value).toBe("Seen on rack 4.");
+  act(() => {
+    setDraft({ description: "Seen on racks 4 and 5." });
+  });
+  await waitFor(() => expect(body.value).toBe("Seen on racks 4 and 5."));
+  expect(title.value).toBe("Switch ports flap under load");
+  // EACH IN ITS OWN WORDS, and nothing sent until the person saves.
+  expect(setDraft({ title: " " })).toMatchObject({
+    outcome: "invalid",
+    reason: "A task needs a title.",
+  });
+  expect(posted).toEqual([]);
+});

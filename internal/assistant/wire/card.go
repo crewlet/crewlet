@@ -97,12 +97,14 @@ type EntityCard struct {
 	Kind ResourceKind `json:"kind,omitempty"`
 	ID   string       `json:"id"`
 	// Key is the short name the record is written by in prose, where it has
-	// one: a task's key ("GOP-11"), a project's ("GOP"). The drawer makes the
-	// answer's first mention of it the record's chip. A record with no key is
-	// matched by its Title, and only where the title is a name a person writes
-	// (a seat's, a team's), never a task's sentence (dashboard
-	// app/assistant/mentions.ts). A seat has none: the answer names a seat by
-	// its name, never its handle.
+	// one: a task's key ("GOP-11"), a project's ("GOP"), a room's name with
+	// its "#" ("#launch"). The drawer makes the answer's first mention of it
+	// the record's chip. A record with no key is matched by its Title, and
+	// only where the title is a name a person writes (a seat's, a team's),
+	// never a task's sentence (dashboard app/assistant/mentions.ts). A seat
+	// has none: the answer names a seat by its name, never its handle. Nor
+	// has a direct conversation, which has no name: it is headed by its
+	// people, which no answer is matched against.
 	Key      string `json:"key,omitempty"`
 	Title    string `json:"title"`
 	Subtitle string `json:"subtitle,omitempty"`

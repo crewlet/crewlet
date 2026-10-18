@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/assistant"
@@ -29,14 +30,18 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -48,16 +53,22 @@ import (
 // Four people sign in to one company through the guard's real session arm:
 // an administrator, a person holding only Worklet, one holding only the
 // knowledge base, and one holding nothing but the overview everybody reads.
-// For each of them, every catalogue read is made twice: once as the person,
-// with their own cookie, and once through the assistant, as a scripted model
-// calling the tool in a real turn of the real orchestrator, whose request the
-// App's own dispatcher carries on a grant derived from that cookie through
-// the App's own guard. The answers must be the SAME BYTES with the same status:
-// an answer stays that answer, and a refusal stays that refusal. The
-// company's sources are real enough that the split is real: every tool's
-// question is registered, so a refusal is the authority's and never a route
-// this fixture forgot to mount, and the walk fails when any principal sees
-// neither an answer nor a refusal anywhere.
+// For each of them, every catalogue read is made through the assistant, as a
+// scripted model calling the tool in a real turn of the real orchestrator,
+// whose requests the App's own dispatcher carries on a grant derived from the
+// person's cookie through the App's own guard, and EVERY REQUEST THE TURN
+// SENDS is made again as the person, with that cookie. Every one, not only the
+// read's own: a read's step and its card read through the same grant (a chat
+// room a call names by its id is read to say where the read is, and a direct
+// conversation is said by its people, so the person's own seat and the seats'
+// names are read as well), and each of those reads is the person's too. The
+// answers must be the SAME BYTES with the same status: an answer stays that
+// answer, and a refusal stays that refusal. The company's sources are real
+// enough that the split is real: every tool's question is registered, so a
+// refusal is the authority's and never a route this fixture forgot to mount
+// (a question the fixture does not serve fails the walk, rather than passing
+// as two equal 404s), and the walk fails when any principal sees neither an
+// answer nor a refusal anywhere.
 //
 // The catalogue's offering is a filter and never authority, so every read is
 // offered to the turn, including those the curated catalogue keeps from this
@@ -78,6 +89,11 @@ import (
 // permission (internal/api/auth's assist arm), and the overview-only person's
 // assistant reads Worklet; let iam.Assistable admit everybody, and a
 // token's session derives a grant and a machine token is started a turn.
+// Give it Chatlet, and the room a chat read names by its id is answered to the
+// overview-only person's assistant while their cookie is refused it, before
+// the read itself is sent; leave chat out of [parityWorldOf], and every chat
+// read is a question nobody serves; send a read other than the one its tool
+// builds, and the walk says so.
 func TestPermissionParityAcrossFivePrincipals(t *testing.T) {
 	t.Parallel()
 	sources := parityWorld(t)
@@ -116,14 +132,40 @@ func TestPermissionParityAcrossFivePrincipals(t *testing.T) {
 			curated := catalog.Offered(person, nil)
 			answered, refused := 0, 0
 			for _, tool := range reads {
+				own, err := tool.Request(assistanttest.ExampleArgs(t, tool.Parameters))
+				if err != nil {
+					t.Fatal(err)
+				}
 				began := time.Now()
 				frames := askOne(t, rig, fx, tool.Name, nil)
-				got := sent.take(t, tool.Name)
-				status, body := fx.asPerson(t, got.request)
-				if got.response.Status != status ||
-					!sameAnswer(t, got.response.Body, body, time.Since(began)) {
-					t.Errorf("%s through the assistant answered %d %s, and the person %d %s",
-						tool.Name, got.response.Status, got.response.Body, status, body)
+				// EVERY REQUEST THE TURN SENT, each made again with the
+				// cookie; the read's own answer then decides the step's.
+				var status int
+				var body []byte
+				sentOwn := false
+				for _, got := range sent.take() {
+					personStatus, personBody := fx.asPerson(t, got.request)
+					if got.response.Status != personStatus ||
+						!sameAnswer(t, got.response.Body, personBody, time.Since(began)) {
+						t.Errorf("a turn calling %s sent %s, answered %d %s through the "+
+							"assistant and %d %s to the person", tool.Name,
+							requestLine(got.request), got.response.Status, got.response.Body,
+							personStatus, personBody)
+					}
+					if envelope, ok := httpjson.Decode(personBody); ok &&
+						envelope.Code == httpjson.CodeUnknownQuery {
+						t.Errorf("a turn calling %s sent %s, a question this fixture does not "+
+							"serve: give its source to parityWorldOf", tool.Name,
+							requestLine(got.request))
+					}
+					if sameRequest(got.request, own) {
+						status, body, sentOwn = personStatus, personBody, true
+					}
+				}
+				if !sentOwn {
+					t.Errorf("a turn calling %s never sent %s, the request the tool builds",
+						tool.Name, requestLine(own))
+					continue
 				}
 				step := lastStep(t, frames, tool.Name)
 				switch {
@@ -328,8 +370,9 @@ func readTools() []catalog.Tool {
 // paritySources are one company's sources every parity App shares: a live
 // projection, an event store and a usage estate, a company, a coordination
 // store, a tracker, a knowledge base, a work index, the coding runs, the
-// artifacts and the configuration history, so EVERY catalogue read's
-// question is registered and its answer is the authority's to give.
+// artifacts, the company's own chat and the configuration history, so EVERY
+// catalogue read's question is registered and its answer is the authority's
+// to give.
 type paritySources struct {
 	queries.Sources
 	state  *livestate.LiveState
@@ -403,6 +446,7 @@ func parityWorldOf(t *testing.T, source string) paritySources {
 		Work: stubWorkReader{}, Pages: posturePages{}, WorkSearch: noWorkHits{},
 		Sandbox: noCodingRuns{}, Config: configs,
 		Artifacts: &queries.ArtifactsSource{Gate: artifactsGate(estate), Reads: estate},
+		Chat:      parityChat{}, ChatSearch: parityChat{},
 	}}
 }
 
@@ -427,6 +471,101 @@ func (noCodingRuns) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 
 func (noCodingRuns) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
 	return sandbox.PendingRun{}, false, nil
+}
+
+// parityChat is the company's own chat holding ONE DIRECT CONVERSATION, at the
+// id every example call names: the person and the CTO, where the CTO asked the
+// person one question nobody has replied to. A DIRECT ONE, because a read that
+// names it by its id says it by its people ([catalog.Tool.Room]): the turn
+// reads the room, the person's own seat and the seats' names through its grant
+// before the read itself, and the walk holds each of those to the person's own
+// request as well. Any other room is one nobody holds.
+type parityChat struct{}
+
+// parityDirect is parityChat's one room, which has no name: who is in it is
+// all it is said by.
+var parityDirect = chatlet.Channel{ID: assistanttest.RecordID, Kind: chatlet.KindDM}
+
+// parityAsked is the one message said in parityChat's room, which names the
+// person it asks.
+func parityAsked(viewer string) chatlet.MessageView {
+	return chatlet.MessageView{ChannelSeq: 1, Message: chatlet.Message{
+		ID: assistanttest.RecordID, ChannelID: assistanttest.RecordID, Author: "cto",
+		AuthorKind: chatlet.AuthorAgent, Body: "@" + viewer + " can the invoice export ship?",
+		Mentions: []string{viewer}, CreatedAt: clock}}
+}
+
+func (parityChat) Channels(_ context.Context, viewer string, _ chatlet.ChannelsQuery,
+	_ statelog.Freshness) (chatlet.ChannelListing, error) {
+	asked := parityAsked(viewer)
+	return chatlet.ChannelListing{Channels: []chatlet.ChannelSummary{{
+		Channel: parityDirect, Unread: 1, Participants: []string{viewer, "cto"},
+		Last: &chatlet.MessagePreview{MessageID: asked.Message.ID, Author: asked.Message.Author,
+			AuthorKind: asked.Message.AuthorKind, Excerpt: asked.Message.Body,
+			ChannelSeq: asked.ChannelSeq, At: asked.Message.CreatedAt}}}}, nil
+}
+
+func (parityChat) Channel(_ context.Context, viewer, id string, _ statelog.Freshness) (
+	chatlet.ChannelDetail, error) {
+	if id != assistanttest.RecordID {
+		return chatlet.ChannelDetail{}, chatlet.ErrNotFound
+	}
+	return chatlet.ChannelDetail{Channel: parityDirect, MessageSeq: 1, Member: true,
+		Members: []chatlet.ChannelMember{{Handle: viewer, JoinedAt: clock},
+			{Handle: "cto", JoinedAt: clock}}}, nil
+}
+
+// ChannelNamed finds no room: a direct conversation has no name to be found
+// by, and it is the only room here.
+func (parityChat) ChannelNamed(context.Context, string, string, statelog.Freshness) (
+	chatlet.ChannelDetail, error) {
+	return chatlet.ChannelDetail{}, chatlet.ErrNotFound
+}
+
+// RoomNames names no room, for the same reason: a direct conversation has no
+// name, and it is the only room here.
+func (parityChat) RoomNames(context.Context, string, statelog.Freshness) (
+	chatlet.RoomNames, error) {
+	return chatlet.RoomNames{}, nil
+}
+
+func (parityChat) Messages(_ context.Context, viewer string, q chatlet.TranscriptQuery,
+	_ statelog.Freshness) (chatlet.Transcript, error) {
+	if q.ChannelID != assistanttest.RecordID {
+		return chatlet.Transcript{}, chatlet.ErrNotFound
+	}
+	return chatlet.Transcript{ChannelID: q.ChannelID,
+		Messages: []chatlet.MessageView{parityAsked(viewer)}}, nil
+}
+
+func (parityChat) Thread(_ context.Context, viewer string, q chatlet.ThreadQuery,
+	_ statelog.Freshness) (chatlet.Thread, error) {
+	if q.ChannelID != assistanttest.RecordID || q.RootID != assistanttest.RecordID {
+		return chatlet.Thread{}, chatlet.ErrNotFound
+	}
+	return chatlet.Thread{ChannelID: q.ChannelID, Root: parityAsked(viewer)}, nil
+}
+
+func (parityChat) Mentions(_ context.Context, viewer string, _ chatlet.MentionQuery,
+	_ statelog.Freshness) (chatlet.MentionFeed, error) {
+	asked := parityAsked(viewer)
+	return chatlet.MentionFeed{Handle: viewer, Mentions: []chatlet.Mention{{
+		MessageID: asked.Message.ID, ChannelID: asked.Message.ChannelID,
+		ChannelKind: chatlet.KindDM, Author: asked.Message.Author,
+		AuthorKind: asked.Message.AuthorKind, Excerpt: asked.Message.Body,
+		At: asked.Message.CreatedAt}}}, nil
+}
+
+// Search finds the one message whatever it is asked, said in the room the
+// answer names, as the serving node names every room its hits were said in.
+func (parityChat) Search(_ context.Context, q estate.ChatQuery) (estate.ChatSearchAnswer, error) {
+	asked := parityAsked(q.Viewer)
+	return estate.ChatSearchAnswer{Searched: 1, Hits: []search.ChatHit{{
+		MessageID: asked.Message.ID, ChannelID: asked.Message.ChannelID,
+		Author: asked.Message.Author, Snippet: asked.Message.Body,
+		CreatedAt: asked.Message.CreatedAt, Score: 1}},
+		Rooms: map[string]chatlet.ReadableRoom{asked.Message.ChannelID: {
+			ID: asked.Message.ChannelID, Kind: chatlet.KindDM}}}, nil
 }
 
 // withCookie presents the fixture person's session cookie.
@@ -548,17 +687,32 @@ func (d *recordingDispatcher) Do(ctx context.Context, g exec.Grant, r exec.Reque
 	return resp, err
 }
 
-// take is the one exchange a turn calling tool made, removed from the record.
-func (d *recordingDispatcher) take(t *testing.T, tool string) exchange {
-	t.Helper()
+// take is every exchange a turn made, in the order it made them, removed
+// from the record. A read is NOT ONE REQUEST: its step and its card read
+// through the same grant (a chat room the call names by its id, the person's
+// own seat, the seats' names), and so may the turn's name resolution.
+func (d *recordingDispatcher) take() []exchange {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if len(d.sent) != 1 {
-		t.Fatalf("a turn calling %s sent %d requests, want 1", tool, len(d.sent))
-	}
-	out := d.sent[0]
+	out := d.sent
 	d.sent = nil
 	return out
+}
+
+// sameRequest reports whether a and b are one request: its method, its path,
+// its query and its body.
+func sameRequest(a, b exec.Request) bool {
+	return requestLine(a) == requestLine(b) && bytes.Equal(a.Body, b.Body)
+}
+
+// requestLine is req as a log line names it: its method, its path and its
+// query.
+func requestLine(req exec.Request) string {
+	line := req.Method + " " + req.Path
+	if len(req.Query) > 0 {
+		line += "?" + req.Query.Encode()
+	}
+	return line
 }
 
 // writes are the exchanges whose method is not a read.

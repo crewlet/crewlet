@@ -54,14 +54,22 @@ const VIEWER = {
 /** Drawn as the frame draws it: inside the client and the frame's readings. */
 async function draw(
   node: ReactNode,
-  { hosts = [{ kind: "github", url: "https://github.com" }] as LinkHost[], projects = ["GP"] } = {},
+  {
+    hosts = [{ kind: "github", url: "https://github.com" }] as LinkHost[],
+    projects = ["GP"],
+    viewer = VIEWER as Record<string, unknown>,
+    rooms = [] as { id: string; name: string; kind: string }[],
+    frames = [] as Record<string, unknown>[],
+    asked = [] as string[],
+  } = {},
 ) {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   const store = new Store();
   store.applyOrg(withDerived(ORG) as never);
+  for (const frame of frames) store.applyChatChange(frame as never);
   const socket = new LiveSocket(store);
   const answers: Record<string, unknown> = {
-    viewer: VIEWER,
+    viewer,
     // The frame's own readings, answered empty.
     work_inbox: { handle: "miles", notices: [], primary_reasons: [], unread: 0, primary: 0 },
     link_hosts: { hosts },
@@ -69,8 +77,17 @@ async function draw(
       projects: projects.map((key) => ({ key, name: key })),
       total: projects.length,
     },
+    chat_room_names: {
+      read_level: "stale",
+      complete: true,
+      position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 4 },
+      rooms,
+    },
   };
-  socket.query = ((what: string) => Promise.resolve(answers[what] ?? {})) as typeof socket.query;
+  socket.query = ((what: string) => {
+    asked.push(what);
+    return Promise.resolve(answers[what] ?? {});
+  }) as typeof socket.query;
   const view = render(
     <ClientContext.Provider value={{ store, socket }}>
       <FrameReadings>
@@ -386,6 +403,113 @@ describe.each([
     expect(el.querySelector("a")).toBeNull();
     expect(el.textContent).toContain("the report (evil.example.net/r)");
     expect(el.textContent).toContain("this task");
+  });
+});
+
+// A ROOM IS NAMED IN PROSE AS `#name` (rule 1a), and a room's name may be
+// spelled as a colour or an issue's number: only the company's rooms, as the
+// frame reads them for this reader, say which the words mean.
+describe("rooms", () => {
+  const CHATTER = { ...VIEWER, grants: [...VIEWER.grants, "chatlet"], chat_backend: "chatlet" };
+  const ROOMS = [
+    { id: "room-e2e", name: "e2e", kind: "public" },
+    { id: "room-2026", name: "2026", kind: "private" },
+  ];
+
+  test("a room the reader may read links to it, though its name is spelled as a colour or a number", async () => {
+    const el = await draw(
+      md("Ask in #e2e, not #2026, about gophrase/backend; ship #ffe100.", ASSISTANT_WORDS),
+      { hosts: GOPHRASE, viewer: CHATTER, rooms: ROOMS },
+    );
+    const links = [...el.querySelectorAll("a")];
+    expect(links.map((a) => a.getAttribute("href"))).toEqual([
+      "#/chatlet/room-e2e",
+      "#/chatlet/room-2026",
+      "https://github.com/gophrase/backend",
+    ]);
+    // ITS NAME IS ITS WORDS, what it is read before them, and its mark drawn.
+    expect(links[0]!.textContent).toBe("Room: #e2e");
+    expect(links[0]!.querySelector(".crewlet-inline-ref__mark svg")).not.toBeNull();
+    const chips = [...el.querySelectorAll<HTMLElement>(".crewlet-color-chip")];
+    expect(chips.map((c) => c.style.getPropertyValue("--crewlet-color-chip-value"))).toEqual([
+      "#ffe100",
+    ]);
+  });
+
+  test("a code span holding a room's name is code, and one holding a colour a swatch", async () => {
+    const el = await draw(md("`#e2e` is a room and `#e2f` a colour."), {
+      viewer: CHATTER,
+      rooms: ROOMS,
+    });
+    const chips = [...el.querySelectorAll<HTMLElement>(".crewlet-color-chip")];
+    expect(chips.map((c) => c.style.getPropertyValue("--crewlet-color-chip-value"))).toEqual([
+      "#ee22ff",
+    ]);
+    expect(el.textContent).toContain("#e2e is a room");
+    expect(el.querySelector("a")).toBeNull();
+  });
+
+  // Mutation: read the names for a reader who holds no Chatlet, or drop the
+  // gate, and the reader below is asked for rooms and draws a link.
+  test("for a reader who holds no Chatlet, no room is asked for and the words read by their shape", async () => {
+    const asked: string[] = [];
+    const el = await draw(md("Ask in #e2e, not #2026."), { rooms: ROOMS, asked });
+    expect(asked).not.toContain("chat_room_names");
+    expect(el.querySelector("a")).toBeNull();
+    expect(swatch(el)).toBe("#ee22ee");
+  });
+
+  test("a room this tab has seen a frame for is a room before the names read holds it", async () => {
+    const el = await draw(md("Post it in #b2b."), {
+      viewer: CHATTER,
+      frames: [
+        {
+          channel_id: "room-b2b",
+          channel_name: "b2b",
+          channel_kind: "public",
+          op: "post",
+          op_id: "op-1",
+          message_id: "m-1",
+          channel_seq: 1,
+          at: "2026-01-01T00:01:00Z",
+          position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 5 },
+        },
+      ],
+    });
+    expect(el.querySelector("a")?.getAttribute("href")).toBe("#/chatlet/room-b2b");
+  });
+
+  test("after a caller's chip for a room, its later mention is the room's token", async () => {
+    const el = await draw(
+      md("#e2e is waiting; ask in #e2e again.", {
+        ...ASSISTANT_WORDS,
+        prose: (text, key) =>
+          text.startsWith("#e2e")
+            ? [
+                <b key={key} data-chip="">
+                  #e2e
+                </b>,
+                text.slice(4),
+              ]
+            : text,
+      }),
+      { viewer: CHATTER, rooms: ROOMS },
+    );
+    expect(el.querySelector("[data-chip]")?.textContent).toBe("#e2e");
+    expect([...el.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([
+      "#/chatlet/room-e2e",
+    ]);
+    expect(swatch(el)).toBeNull();
+  });
+
+  test("inside a control a room is its mark and its words, never a link", async () => {
+    const el = await draw(<button type="button">{renderTokens("Post in #e2e")}</button>, {
+      viewer: CHATTER,
+      rooms: ROOMS,
+    });
+    expect(el.querySelector("a")).toBeNull();
+    expect(el.textContent).toBe("Post in Room: #e2e");
+    expect(swatch(el)).toBeNull();
   });
 });
 

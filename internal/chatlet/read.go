@@ -202,7 +202,8 @@ const UnreadLimit = 100
 // SQL would page by channel id and re-sort each page against itself, which is
 // an order that changes as you scroll. A bounded list sorted once is the
 // honest shape; [ChannelListing.Truncated] says when a person is in more rooms
-// than that.
+// than that. A caller that reads fewer ([ChannelsQuery.Limit]) is given the
+// most recently active of that one sorted list, its top, never a page of it.
 const MaxRailChannels = 256
 
 // Visible is the ONE answer to whether somebody may read a room.
@@ -354,6 +355,20 @@ type ChannelsQuery struct {
 	// search result or an explicit visit rather than in the list somebody
 	// works out of.
 	IncludeArchived bool
+
+	// Unread keeps only the rooms with messages above the viewer's cursor.
+	// It reads [ChannelsQuery.Cursors] as a MEASUREMENT: with none, every
+	// room's whole tail counts as unread, so a caller that could not read
+	// the person's read state must not ask for it.
+	Unread bool
+
+	// Limit is the most rooms the listing answers, the most recently
+	// active first, cut from the one list sorted by activity and never
+	// paged; zero is [MaxRailChannels]. A rail is answered whole, each room
+	// with its last message and the viewer's read state with it, so a
+	// caller bound to a size (the assistant's read, which one step holds to
+	// 64 KiB) asks for the top of it.
+	Limit int
 }
 
 // MessagePreview is the last thing said in a room, as a rail renders it.
@@ -425,10 +440,12 @@ type ChannelListing struct {
 
 	Channels []ChannelSummary `json:"channels"`
 
-	// Truncated says this person is in more rooms than [MaxRailChannels].
-	// STATED rather than left to a caller counting, because the list is
-	// sorted by activity after it is read: a caller could not tell a
-	// truncated list from a complete one by its length alone.
+	// Truncated says the listing left rooms out: this person is in more
+	// rooms than [MaxRailChannels], or more matched than the query's
+	// [ChannelsQuery.Limit]. STATED rather than left to a caller counting,
+	// because the list is sorted by activity after it is read: a caller
+	// could not tell a truncated list from a complete one by its length
+	// alone.
 	Truncated bool `json:"truncated,omitempty"`
 
 	// Unreadable is how many of this person's rooms this build could not
@@ -587,6 +604,130 @@ func readableChannels(ctx context.Context, tx *sql.Tx, who string) ([]ReadableRo
 	return out, nil
 }
 
+// ---- the names: every room a viewer may read, as prose names it -------- //
+
+// MaxRoomNames bounds how many rooms one names read answers.
+//
+// [MaxChannels], the most LIVE rooms a company can hold, so every live room a
+// viewer may read always fits. Archived rooms are the only ones a company can
+// hold more of than that, since nothing deletes a room, and they are the ones
+// prose names least: the read answers the live rooms first, fills what is left
+// with archived ones, the most recently archived first, and says when it left
+// any out ([RoomNames.Truncated]). At the cap the answer is about a hundred
+// kibibytes, read once by a reader's frame rather than on every screen.
+const MaxRoomNames = MaxChannels
+
+// RoomName is one room a viewer may read, as prose names it: its id, its name
+// (the address a sentence writes as `#launch`), its kind and whether it is
+// archived.
+type RoomName struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Kind     Kind   `json:"kind"`
+	Archived bool   `json:"archived,omitempty"`
+}
+
+// RoomNames is every named room a viewer may read, the live ones first.
+type RoomNames struct {
+	Served
+
+	// Rooms are the live rooms in name order, then the archived ones, the
+	// most recently archived first. Never nil.
+	Rooms []RoomName `json:"rooms"`
+
+	// Truncated says rooms were left out past [MaxRoomNames]: a caller
+	// that reads a name as a room only where this answer holds it reads
+	// the rest by their shape, and has to know that it is doing so.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// RoomNames answers every NAMED room the viewer may read: [Reader.Readable]'s
+// set, less the direct and group conversations, which have no name, and
+// bounded at [MaxRoomNames].
+//
+// # Why a reader needs the names
+//
+// A room's name is any `[a-z0-9][a-z0-9_-]{0,63}` ([namePattern]), so `#e2e`
+// and `#b2b` are spelled exactly as a colour is and `#2026` as an issue's
+// number. Prose names rooms that way, a seat's and a model's alike, and a
+// reader can only tell the room from the colour by knowing which rooms there
+// are. The rail is not that set, for [Reader.Readable]'s reason: a public room
+// and a unit's room are readable by every seat, joined or not, and they are
+// the rooms a company names most.
+//
+// # Names, never a room's contents
+//
+// Each room is its id, its name, its kind and whether it is archived: nothing
+// a [Visible] room does not already show the viewer, and nothing the rail adds
+// (a room's last message, its unread count), which costs a scan per room. It
+// is one statement over the rooms, read for a frame rather than per screen.
+func (r *Reader) RoomNames(ctx context.Context, viewer string,
+	fresh statelog.Freshness) (RoomNames, error) {
+
+	who, err := viewerOf(viewer)
+	if err != nil {
+		return RoomNames{}, err
+	}
+	if fresh.Level == "" {
+		return RoomNames{}, errNoLevel("the names of the rooms a viewer may read")
+	}
+	var out RoomNames
+	answer, err := r.log.Read(ctx, fresh.Query(ReadScope(""), true),
+		func(tx *sql.Tx) error {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			var err error
+			out, err = roomNames(ctx, tx, who)
+			return err
+		})
+	if err != nil {
+		return RoomNames{}, err
+	}
+	out.Served = servedFrom(answer)
+	return out, nil
+}
+
+// roomNames is [Reader.RoomNames] inside one transaction.
+//
+// NO LIMIT IN THE SQL: [visibleWhere] admits a superset and [Visible] decides,
+// so a LIMIT there could count a row this build then leaves out, and say
+// [RoomNames.Truncated] of a set that fits. The walk stops instead at the first
+// room past the cap that [Visible] keeps.
+func roomNames(ctx context.Context, tx *sql.Tx, who string) (RoomNames, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT c.id, c.kind, c.name, c.archived_at IS NOT NULL FROM chat_channels c
+		  WHERE c.name <> '' AND `+visibleWhere+`
+		  ORDER BY c.archived_at IS NOT NULL, c.archived_at DESC, c.name_norm`, who)
+	if err != nil {
+		return RoomNames{}, fmt.Errorf("chatlet: read the names of the rooms %q may read: %w",
+			who, err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := RoomNames{Rooms: make([]RoomName, 0, 16)}
+	for rows.Next() {
+		var room RoomName
+		var kind string
+		if err := rows.Scan(&room.ID, &kind, &room.Name, &room.Archived); err != nil {
+			return RoomNames{}, fmt.Errorf("chatlet: scan a room's name: %w", err)
+		}
+		room.Kind = Kind(kind)
+		// MEMBER IS TRUE for [readableChannels]' reason: the predicate
+		// established it for every private row it admitted.
+		if !Visible(who, Channel{Kind: room.Kind}, true) {
+			continue
+		}
+		if len(out.Rooms) == MaxRoomNames {
+			out.Truncated = true
+			break
+		}
+		out.Rooms = append(out.Rooms, room)
+	}
+	if err := rows.Err(); err != nil {
+		return RoomNames{}, fmt.Errorf("chatlet: read the names of the rooms %q may read: %w",
+			who, err)
+	}
+	return out, nil
+}
+
 // rail is the whole listing inside one transaction.
 //
 // FOUR STATEMENT SHAPES, and the order is what keeps the cost proportional to
@@ -649,6 +790,17 @@ func (r *Reader) rail(ctx context.Context, tx *sql.Tx, who string,
 		return ChannelListing{}, err
 	}
 	sortRail(out.Channels)
+	if q.Unread {
+		out.Channels = slices.DeleteFunc(out.Channels, func(c ChannelSummary) bool {
+			return c.Unread == 0
+		})
+	}
+	// THE TOP OF THE ONE SORTED LIST, never a page: the most recently active
+	// rooms, the rest said to be left out.
+	if q.Limit > 0 && len(out.Channels) > q.Limit {
+		out.Channels = out.Channels[:q.Limit]
+		out.Truncated = true
+	}
 	return out, nil
 }
 

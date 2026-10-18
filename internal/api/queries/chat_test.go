@@ -28,6 +28,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
@@ -46,10 +48,10 @@ import (
 // different posture from its siblings.
 var chatQuestions = []string{
 	"chat_channels", "chat_channel", "chat_messages", "chat_thread",
-	"chat_mentions", "chat_search",
+	"chat_mentions", "chat_search", "chat_room_names",
 }
 
-// chatAsked is a parameter set per question, so one table can ask all six
+// chatAsked is a parameter set per question, so one table can ask all seven
 // without a question being skipped for want of a room id.
 func chatAsked(what string) map[string]any {
 	switch what {
@@ -222,6 +224,26 @@ func (s *stubChat) Mentions(_ context.Context, viewer string, q chatlet.MentionQ
 	}
 	out := s.mentions
 	out.Handle, out.Served = viewer, chatServed
+	return out, nil
+}
+
+// RoomNames answers every named room this viewer may read, by the reader's
+// own rule: a private room only to a member of it.
+func (s *stubChat) RoomNames(_ context.Context, viewer string,
+	fresh statelog.Freshness) (chatlet.RoomNames, error) {
+
+	s.reads++
+	s.viewer, s.fresh = viewer, fresh
+	if s.err != nil {
+		return chatlet.RoomNames{}, s.err
+	}
+	out := chatlet.RoomNames{Served: chatServed, Rooms: []chatlet.RoomName{}}
+	for _, id := range slices.Sorted(maps.Keys(s.rooms)) {
+		if room := s.rooms[id]; room.Name != "" && s.see(viewer, id) == nil {
+			out.Rooms = append(out.Rooms, chatlet.RoomName{ID: id, Name: room.Name,
+				Kind: room.Kind})
+		}
+	}
 	return out, nil
 }
 
@@ -621,6 +643,40 @@ func TestARoomIsAskedForByItsNameAsByItsID(t *testing.T) {
 			t.Errorf("%s of a room named by nothing answered %v, want the key refused", what,
 				err)
 		}
+	}
+}
+
+// THE NAMES ARE EVERY ROOM THE VIEWER MAY READ, JOINED OR NOT, and a private
+// room only to a member of it.
+//
+// What a reader tells a room written in prose by: ana is in neither the public
+// room nor the private room she cannot read, and the answer names the public
+// room and the private room she is in, each with its id and kind, read as the
+// seat her session holds at the read's level. Mutation: answer the rail's rooms
+// (her membership), or hand the reader no viewer, and this fails.
+func TestTheRoomNamesAreTheRoomsTheViewerMayRead(t *testing.T) {
+	t.Parallel()
+	reader := newStubChat()
+	got := askChatJSON(t, chatSources(t, reader, nil, nil), "chat_room_names",
+		map[string]any{"read_level": "linearizable"})
+	rooms, _ := got["rooms"].([]any)
+	var named []string
+	for _, room := range rooms {
+		r, _ := room.(map[string]any)
+		named = append(named, fmt.Sprintf("%s %s %s", r["id"], r["name"], r["kind"]))
+	}
+	want := []string{
+		cEng + " engineering public",
+		cOurs + " leads private",
+	}
+	if !slices.Equal(named, want) {
+		t.Errorf("ana's room names are %v, want %v: every room she may read, the "+
+			"public one she never joined included, and never a private room she "+
+			"is outside", named, want)
+	}
+	if reader.viewer != "ana" || reader.fresh.Level != statelog.ReadLinearizable {
+		t.Errorf("the names were read for %q at %q, want ana's seat at the level asked",
+			reader.viewer, reader.fresh.Level)
 	}
 }
 
@@ -1065,10 +1121,12 @@ func TestALongChatSearchPhraseIsRefusedNamingTheLimit(t *testing.T) {
 // position and whether its index was still building.
 //
 // `searched` is what tells "nothing matched" from "nothing was looked at";
-// `building` is what tells "nobody said that" from "the index has not reached
-// it yet", which a reader acts on in opposite ways; the instant is an instant
-// a client can parse; each hit names its room as the rail does, by name and
-// kind; and an empty answer is an empty list rather than null.
+// `building` is what tells "nobody said that" from "the index has not
+// reached it yet", which a reader acts on in opposite ways, and the note
+// says it in words for a reader that shows sentences rather than flags; the
+// instant is an instant a client can parse; each hit names its room as the
+// rail does, by name and kind; and an empty answer is an empty list rather
+// than null.
 func TestASearchRendersWhatTheServingNodeRanked(t *testing.T) {
 	t.Parallel()
 	index := &stubChatSearch{answer: estate.ChatSearchAnswer{
@@ -1094,6 +1152,9 @@ func TestASearchRendersWhatTheServingNodeRanked(t *testing.T) {
 		t.Errorf("building = %v, want the serving node's own true — without it "+
 			"a half-built index reads as a company that never said the word",
 			got["building"])
+	}
+	if note, _ := got["note"].(string); !strings.Contains(note, "still indexing chat") {
+		t.Errorf("note = %v, want the building index said in words", got["note"])
 	}
 	hits, _ := got["hits"].([]any)
 	if len(hits) != 1 {
@@ -1121,6 +1182,9 @@ func TestASearchRendersWhatTheServingNodeRanked(t *testing.T) {
 	}
 	if _, said := empty["building"]; said {
 		t.Errorf("a search over a caught-up index said building: %v", empty)
+	}
+	if _, said := empty["note"]; said {
+		t.Errorf("a search over a caught-up index carried a note: %v", empty)
 	}
 }
 
@@ -1390,4 +1454,126 @@ func TestTheViewerSaysWhichChatTheCompanyRunsToAHolderOfChat(t *testing.T) {
 			}
 		})
 	}
+}
+
+// THE RAIL IS ASKED FOR THE TOP OF IT, and for only the rooms with something
+// unread, as the caller says: `limit` reaches the reader within the rail's own
+// cap (every room when absent, which is what the screen draws), `unread`
+// reaches it beside the person's read state, and `unread` over a read state
+// nobody could read is refused unavailable without a read, since the counts
+// zeroed for it would answer that nothing is unread. Mutation: drop either
+// parameter on its way to the reader, let the limit past the cap, or answer
+// `unread` from unmeasured counts, and a case here fails.
+func TestTheRailIsAskedForItsTopAndForTheRoomsWithSomethingUnread(t *testing.T) {
+	t.Parallel()
+	reads := chatReadsFor(t, "ana", coord.ChatReadDelta{Cursors: map[string]int64{cEng: 7}})
+	for _, c := range []struct {
+		params map[string]any
+		limit  int
+		unread bool
+	}{
+		{nil, chatlet.MaxRailChannels, false},
+		{map[string]any{"limit": "20", "unread": "true"}, 20, true},
+		{map[string]any{"limit": "100000"}, chatlet.MaxRailChannels, false},
+	} {
+		reader := newStubChat()
+		if _, err := askChat(t, chatSources(t, reader, nil, reads), "chat_channels",
+			c.params); err != nil {
+			t.Fatalf("%v: %v", c.params, err)
+		}
+		if reader.channels.Limit != c.limit || reader.channels.Unread != c.unread {
+			t.Errorf("asked with %v, the reader was asked for %d rooms, unread %v; want %d, %v",
+				c.params, reader.channels.Limit, reader.channels.Unread, c.limit, c.unread)
+		}
+	}
+
+	reader := newStubChat()
+	_, err := askChat(t, chatSources(t, reader, nil, &unreadableReads{}), "chat_channels",
+		map[string]any{"unread": "true"})
+	if !errors.Is(err, queries.ErrUnavailable) || reader.reads != 0 {
+		t.Errorf("the rooms with something unread over an unreadable read state answered %v "+
+			"after %d reads, want unavailable and none", err, reader.reads)
+	}
+}
+
+// fullRail is a reader whose person is in as many rooms as the rail answers,
+// every room at every field's cap, each with a last message at its cap: the
+// largest rail there is, in characters the answer's encoding writes as
+// themselves (the step's bytes left over are markup's, which it writes as six
+// bytes to a character). It answers the top of it the query's limit asks for,
+// as the reader does ([chatlet.ChannelsQuery.Limit]).
+type fullRail struct{ *stubChat }
+
+func (f fullRail) Channels(_ context.Context, viewer string, q chatlet.ChannelsQuery,
+	fresh statelog.Freshness) (chatlet.ChannelListing, error) {
+
+	f.channels = q
+	word := func(n int) string { return strings.Repeat("w", n) }
+	at := time.Date(2031, 5, 6, 7, 8, 0, 0, time.UTC)
+	var out chatlet.ChannelListing
+	out.Served = chatServed
+	for i := range chatlet.MaxRailChannels {
+		if q.Limit > 0 && i == q.Limit {
+			out.Truncated = true
+			break
+		}
+		days := 30
+		out.Channels = append(out.Channels, chatlet.ChannelSummary{
+			Channel: chatlet.Channel{V: 1, ID: uuid.NewString(), Kind: chatlet.KindPublic,
+				Name: word(chatlet.MaxChannelName), Topic: word(chatlet.MaxTopic),
+				Purpose: word(chatlet.MaxPurpose), RetentionDays: &days, CreatedAt: at,
+				CreatedBy: word(64), CreatedByKind: chatlet.AuthorAgent},
+			Revision: 1 << 40, FollowAll: true, Unread: chatlet.UnreadLimit, UnreadCapped: true,
+			Last: &chatlet.MessagePreview{MessageID: uuid.NewString(), Author: word(64),
+				AuthorKind: chatlet.AuthorAgent, Excerpt: word(chatlet.MaxExcerpt),
+				ChannelSeq: 1 << 40, At: at, Position: statelog.Position{
+					Stream: "CREWLET_CHAT_LOG", Generation: 1 << 20, Seq: 1 << 40}},
+		})
+	}
+	return out, nil
+}
+
+// THE ASSISTANT'S PAGE OF ROOMS IS READ WHOLE IN ONE STEP (ADR-0061): the rooms
+// list_chat_rooms asks for by default, from the largest rail there is (as many
+// rooms as it answers, every one at every field's cap) beside the person's
+// whole read state at its own caps, encode within what one step reads. The
+// rail answers every room whole, so the read asking for all of them was past
+// a step's bound for a person in about sixty rooms, cut, and answered nothing.
+// Mutation: let list_chat_rooms ask for the whole rail, or raise its page past
+// what fits, and this fails.
+func TestTheAssistantsPageOfRoomsIsReadInOneStep(t *testing.T) {
+	t.Parallel()
+	rooms, _ := catalog.Lookup("list_chat_rooms")
+	req, err := rooms.Request(map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := map[string]any{}
+	for name := range req.Query {
+		params[name] = req.Query.Get(name)
+	}
+	cursors := map[string]int64{}
+	var muted []string
+	for i := range coord.MaxReadCursors {
+		id := uuid.NewString()
+		cursors[id] = 1<<62 + int64(i)
+		muted = append(muted, id)
+	}
+	dnd := time.Date(2031, 5, 6, 9, 0, 0, 0, time.UTC)
+	reads := chatReadsFor(t, "ana", coord.ChatReadDelta{Cursors: cursors, Mute: muted,
+		DNDUntil: &dnd})
+	answer, err := askChat(t, chatSources(t, fullRail{newStubChat()}, nil, reads),
+		"chat_channels", params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(answer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > exec.MaxResponseBytes {
+		t.Errorf("list_chat_rooms asks %s?%s, and the largest answer to it is %d bytes, past "+
+			"the %d one step reads", req.Path, req.Query.Encode(), len(raw), exec.MaxResponseBytes)
+	}
+	t.Logf("the largest default page of rooms is %d bytes of %d", len(raw), exec.MaxResponseBytes)
 }

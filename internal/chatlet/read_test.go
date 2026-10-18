@@ -921,3 +921,58 @@ func TestAPageOfLongMessagesFitsOneReplyAndPagesOn(t *testing.T) {
 		}
 	}
 }
+
+// A RAIL ASKED FOR FEWER ROOMS IS THE TOP OF THE ONE SORTED LIST, never a page:
+// the most recently active rooms, in the order the whole rail draws them, and
+// said to leave the rest out; and one asked for the rooms with something unread
+// keeps only those, counted against the reader's own cursors. Mutation: cut the
+// list before it is sorted (by id, as the membership index orders it), cut it
+// without saying so, or keep a room the reader has read, and a case here fails.
+func TestARailAskedForFewerRoomsIsTheTopOfIt(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+	// ROOM IDS IN THE OPPOSITE ORDER TO THEIR ACTIVITY, so a cut taken in the
+	// membership index's order (by id) takes the least active.
+	for _, room := range []string{"room-c", "room-b", "room-a"} {
+		h.apply(readCreateRoom(room, strings.TrimPrefix(room, "room-"),
+			chatlet.KindPublic, "ada", "bob"))
+	}
+	var read statelog.Position
+	for _, room := range []string{"room-c", "room-b", "room-a"} {
+		read = h.apply(readPost(room, "msg-"+room, "bob", "news in "+room))
+	}
+	h.apply(readPost("room-a", "msg-room-a-2", "bob", "more news"))
+	reader := h.reader()
+	ask := func(q chatlet.ChannelsQuery) chatlet.ChannelListing {
+		t.Helper()
+		listing, err := reader.Channels(t.Context(), "ada", q, h.session())
+		if err != nil {
+			t.Fatalf("ada's channel list: %v", err)
+		}
+		return listing
+	}
+	ids := func(l chatlet.ChannelListing) []string {
+		out := make([]string, 0, len(l.Channels))
+		for _, c := range l.Channels {
+			out = append(out, c.Channel.ID)
+		}
+		return out
+	}
+	whole := ask(chatlet.ChannelsQuery{})
+	if !slices.Equal(ids(whole), []string{"room-a", "room-b", "room-c"}) || whole.Truncated {
+		t.Fatalf("ada's whole rail is %v (truncated=%t), want the three, most recently "+
+			"active first", ids(whole), whole.Truncated)
+	}
+	top := ask(chatlet.ChannelsQuery{Limit: 2})
+	if !slices.Equal(ids(top), []string{"room-a", "room-b"}) || !top.Truncated {
+		t.Errorf("ada's top two rooms are %v (truncated=%t), want the two most recently "+
+			"active and the rest said to be left out", ids(top), top.Truncated)
+	}
+	// ADA HAS READ room-b AND room-c TO THE END, and not room-a's last message.
+	unread := ask(chatlet.ChannelsQuery{Unread: true, Cursors: map[string]int64{
+		"room-a": read.Packed(), "room-b": read.Packed(), "room-c": read.Packed()}})
+	if !slices.Equal(ids(unread), []string{"room-a"}) || unread.Truncated {
+		t.Errorf("ada's rooms with something unread are %v (truncated=%t), want room-a "+
+			"alone", ids(unread), unread.Truncated)
+	}
+}

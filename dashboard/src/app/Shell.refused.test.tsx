@@ -197,6 +197,7 @@ test("a session holding no app is dialled, and its sidebar locks the apps by nam
   );
   expect(row(/^Worklet/).querySelector("[title='Needs Worklet access']")).not.toBeNull();
   expect(row(/^Doclet/).querySelector("[title='Needs Doclet access']")).not.toBeNull();
+  expect(row(/^Chatlet/).querySelector("[title='Needs Chatlet access']")).not.toBeNull();
   expect(row(/^Home/).querySelector(".crewlet-locked-label")).toBeNull();
   expect(row(/^Principles/).querySelector(".crewlet-locked-label")).toBeNull();
   expect(row(/^Org chart/).querySelector(".crewlet-locked-label")).toBeNull();

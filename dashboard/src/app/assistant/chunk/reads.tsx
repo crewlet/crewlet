@@ -35,6 +35,7 @@ import {
   FolderKanbanGlyph,
   LayersGlyph,
   ListFilterGlyph,
+  MessageSquareGlyph,
   SquareKanbanGlyph,
   TableGlyph,
   UsersGlyph,
@@ -69,6 +70,7 @@ const KIND_GLYPH: Record<EntityKind, () => ReactNode> = {
   run: () => <ActivityGlyph size="xs" />,
   schedule: () => <CalendarClockGlyph size="xs" />,
   view: () => <ListFilterGlyph size="xs" />,
+  room: () => <MessageSquareGlyph size="xs" />,
 };
 
 /** What a record's kind is called, at the head of its peek: "Task", "Agent". */

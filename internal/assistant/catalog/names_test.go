@@ -3,6 +3,7 @@ package catalog_test
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"reflect"
 	"slices"
@@ -296,25 +297,61 @@ func TestEveryFaultOfACallNamingRecordsIsOneRefusal(t *testing.T) {
 	}
 }
 
-// TWO READS OF ONE TOOL ARE TOLD APART on the step and the card: every
-// argument that narrows a read's rows is said in its scope, so "Spend by
-// agent" over seven days and over fourteen are two titles, not one card drawn
-// twice (the C1 report). Every read with a narrowing argument declares a
-// scope; an argument that only picks the card's shape (a view, a section), a
-// record's identity or a page size is exempt. Mutation: drop get_spend's
-// Scope, or the title's use of it, and this fails.
+// TWO READS OF ONE TOOL ARE TOLD APART on the step and the card, PROVED FOR
+// EVERY READ rather than declared: the drawer keeps one read per title (a
+// table's), or per record (an entity's kind and id), the freshest, so two
+// reads it took for one lost the first (the C1 report: "Spend by agent" over
+// seven days and over fourteen; two direct conversations both "Messages"; one
+// search by two authors). So for every read and every argument that changes
+// what it sends, other than a page's size: one that picks the card (a view, a
+// section) is two cards, one of a table changes its title's scope (a room read
+// by its id said as the turn says the room, a direct conversation by its
+// people), and one of a record names the record. Mutation: drop get_spend's
+// Scope or the title's use of it, search_chat's author, read_chat_messages'
+// room, list_turns' seat or get_task_cost's task, or give a record read a
+// paging argument, and this fails.
 func TestTwoReadsOfOneToolAreToldApart(t *testing.T) {
 	t.Parallel()
-	shapeOnly := map[string]bool{"limit": true, "view": true, "by": true, "scope": true,
-		"section": true, "item": true, "page": true, "artifact": true, "key": true}
+	// record are the arguments that name the record an entity read is of,
+	// told apart by its own kind and id.
+	record := map[string]bool{"item": true, "page": true, "artifact": true, "key": true,
+		"handle": true, "channel": true, "message_id": true}
+	said := cards.Options{Room: func(ref string) (cards.Room, bool) {
+		return cards.Room{With: "the people of " + ref}, true
+	}}
 	for _, tool := range catalog.Tools() {
-		if tool.Kind != catalog.KindRead {
+		if tool.Kind != catalog.KindRead || tool.Infer {
 			continue
 		}
 		props, _ := tool.Parameters["properties"].(map[string]any)
-		for arg := range props {
-			if !shapeOnly[arg] && tool.Scope == nil {
-				t.Errorf("%s narrows its read by %q and states no Scope", tool.Name, arg)
+		for _, v := range slices.Sorted(maps.Keys(tool.Cards)) {
+			base := variantArgs(t, tool, v)
+			for _, arg := range slices.Sorted(maps.Keys(props)) {
+				if arg == "limit" {
+					continue
+				}
+				one, two := twoValues(props[arg].(map[string]any))
+				a, b := maps.Clone(base), maps.Clone(base)
+				a[arg], b[arg] = one, two
+				ra, errA := tool.Request(a)
+				rb, errB := tool.Request(b)
+				if errA != nil || errB != nil || variantOf(tool, a) != v || variantOf(tool, b) != v ||
+					(ra.Path == rb.Path && ra.Query.Encode() == rb.Query.Encode()) {
+					continue
+				}
+				name := tool.Name + "/" + v
+				if tool.Cards[v].Entity != nil {
+					if !record[arg] {
+						t.Errorf("%s reads one record and %s changes what it asks without "+
+							"naming another, so two reads of it are one record to the drawer",
+							name, arg)
+					}
+					continue
+				}
+				if sa, sb := tool.ScopeOf(a, said), tool.ScopeOf(b, said); sa == sb {
+					t.Errorf("%s asked with %s=%v and with %v is titled alike (%q), so the "+
+						"drawer keeps one of the two", name, arg, one, two, sa)
+				}
 			}
 		}
 	}
@@ -322,8 +359,8 @@ func TestTwoReadsOfOneToolAreToldApart(t *testing.T) {
 	spend, _ := catalog.Lookup("get_spend")
 	week := map[string]any{"days": float64(7)}
 	fortnight := map[string]any{"days": float64(14)}
-	if a, b := spend.StepLabel(week), spend.StepLabel(fortnight); a == b ||
-		a != "Reading token spend, last 7 days" {
+	if a, b := spend.StepLabel(week, cards.Options{}), spend.StepLabel(fortnight,
+		cards.Options{}); a == b || a != "Reading token spend, last 7 days" {
 		t.Errorf("the two reads are labelled %q and %q", a, b)
 	}
 	answer := []byte(`{"by_agent":[{"role":"QA Engineer","handle":"qa","total_tokens":10}]}`)
@@ -342,6 +379,35 @@ func TestTwoReadsOfOneToolAreToldApart(t *testing.T) {
 	if titles[0] != "Spend by agent, last 7 days" || titles[1] != "Spend by agent, last 14 days" {
 		t.Errorf("the cards are titled %q", titles)
 	}
+}
+
+// variantOf is the card variant a call of tool is answered with.
+func variantOf(tool catalog.Tool, args map[string]any) string {
+	if tool.Variant == nil {
+		return ""
+	}
+	return tool.Variant(args)
+}
+
+// twoValues are two values an argument's schema takes, which differ: an enum's
+// first and last member, the two lowest numbers, both truths, and two words or
+// lists of one word.
+func twoValues(prop map[string]any) (any, any) {
+	switch kind, _ := prop["type"].(string); {
+	case prop["enum"] != nil:
+		enum := prop["enum"].([]string)
+		return enum[0], enum[len(enum)-1]
+	case kind == "integer" || kind == "number":
+		lo, _ := prop["minimum"].(int)
+		return float64(lo), float64(lo + 1)
+	case kind == "boolean":
+		return false, true
+	case kind == "array":
+		items, _ := prop["items"].(map[string]any)
+		one, two := twoValues(items)
+		return []any{one}, []any{two}
+	}
+	return "alpha", "bravo"
 }
 
 // A SEAT COLUMN IS DRAWN BY THE SEAT'S NAME, for the person and the model
@@ -466,11 +532,16 @@ func TestTheModelReadsTimesOnTheCompanysClock(t *testing.T) {
 	}
 }
 
-// EVERY TASK AND PROJECT CARD NAMES ITS KEY, and no seat card names one: the
-// drawer makes the answer's first mention of a record its chip, the model
-// writes a task or a project by its key and a seat by its name (the prompt's
-// rule), so a seat keyed by its handle would never be found. Mutation: drop
-// Key from a task spec, or key the seat detail by its handle.
+// EVERY TASK, PROJECT AND ROOM CARD NAMES ITS KEY, no seat card names one, and
+// EVERY RECORD HEADED BY ITS OWN NAME IS OF A KIND: the drawer makes the
+// answer's first mention of a record its chip, the model writes a task, a
+// project or a room by its key and a seat by its name (the prompt's rule), so
+// a seat keyed by its handle would never be found, and a record of no kind is
+// never matched at all, as a chat room was before it had one. A heading of
+// somebody's words (a thread by its first message, cut) names no record, and
+// is the one heading a record of no kind may have. Mutation: drop Key from a
+// task spec, key the seat detail by its handle, or card a room as it was
+// carded before (no kind, no key), and this fails.
 func TestARecordIsKeyedTheWayTheAnswerNamesIt(t *testing.T) {
 	t.Parallel()
 	keyed := 0
@@ -483,13 +554,17 @@ func TestARecordIsKeyedTheWayTheAnswerNamesIt(t *testing.T) {
 			if err := spec.Validate(); err != nil {
 				t.Errorf("%s (%q): %v", tool.Name, variant, err)
 			}
-			switch e.Kind {
-			case wire.ResourceTask, wire.ResourceProject:
+			if e.Title != "" && e.Kind == "" && e.TitleCut == 0 {
+				t.Errorf("%s (%q) heads a record by its %s and gives it no kind, so the "+
+					"answer's mention of it is never its chip", tool.Name, variant, e.Title)
+			}
+			switch {
+			case e.Kind.Keyed():
 				if e.Key == "" {
 					t.Errorf("%s (%q) cards a %s with no key", tool.Name, variant, e.Kind)
 				}
 				keyed++
-			case wire.ResourceSeat:
+			case e.Kind == wire.ResourceSeat:
 				if e.Key != "" {
 					t.Errorf("%s (%q) keys a seat by %q; the answer names a seat by its name",
 						tool.Name, variant, e.Key)

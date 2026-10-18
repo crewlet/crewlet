@@ -45,6 +45,8 @@ const JANE: ViewerState = {
   configManagedBy: [],
   assistant: "disabled",
   assistantModel: null,
+  chatBackend: "",
+  chatVendors: [],
 };
 
 beforeEach(() => {

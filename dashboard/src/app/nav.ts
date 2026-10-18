@@ -12,8 +12,8 @@
  *     agents make looks and sounds), the Org chart, Schedules, Integrations
  *     (the services built into Crewlet above the third-party apps it
  *     connects) and Budgets, last.
- *   - WORKSPACE: what the company does with it. Worklet, Doclet, Artifacts and
- *     Live.
+ *   - WORKSPACE: what the company does with it. Worklet, Chatlet, Doclet,
+ *     Artifacts and Live.
  *   - The FOOT: Settings, the engine's state and the reader. Account has no
  *     row: the user block IS the reader, and opens it from its name and menu.
  *
@@ -48,8 +48,9 @@
  *     Worklet, switched where the trail names it.
  *   - A SECTION is a PATH segment inside a workspace, drawn by one renderer:
  *     `tabs` in the page header, `lenses` beside Worklet's scope in the trail,
- *     `column` for Settings, or `none` where the workspace's own screens lead
- *     to it (Doclet's landing).
+ *     `column` for Settings, `rail` for Chatlet, whose screen draws them beside
+ *     its rooms, or `none` where the workspace's own screens lead to it
+ *     (Doclet's landing).
  *   - An OBJECT TAB is a `tab=` query on an object's own page, bound to 1-9.
  *
  * Nothing is two of those. A section is never a sidebar row and never a
@@ -84,6 +85,7 @@ export type Workspace =
   | "integrations"
   | "budgets"
   | "worklet"
+  | "chatlet"
   | "doclet"
   | "artifacts"
   | "live"
@@ -103,16 +105,26 @@ export type ServicesRun = Readonly<Record<Service, boolean>>;
 
 /**
  * How a workspace draws its sections: `tabs` in the page header, a `column`
- * of them beside the screen (Settings), or `none`, where the workspace's own
- * screens lead to its sections (Home, Inbox, and Doclet, whose landing links
+ * of them beside the screen (Settings), a `rail`, or `none`, where the
+ * workspace's own screens lead to its sections (Home, Inbox, and Doclet,
+ * whose landing links
  * its two sections under "For the agents").
  *
  * `lenses` is Worklet's. Its sections are the lenses of the scope the trail
  * names, All projects, drawn beside the trail's switcher the way a project
  * draws its own lenses, so the bar reads one way in either scope and Worklet
  * keeps no row of tabs of its own.
+ *
+ * `rail` is Chatlet's, whose SCREEN draws its sections at the head of the list
+ * of its objects, the rooms (`routes/chatlet/Chat.tsx`), from this table. The
+ * frame draws nothing for a rail, neither a strip nor a column, because the
+ * tabs are drawn on a section's own page and never on an object's, and a room
+ * is the object page a chat reader spends their time on. It is not `none`
+ * because the screen that draws it reads the renderer: Chatlet's rail is drawn
+ * from the row that says `rail`, every section of it, and a `none` row says
+ * no frame or screen owes it a strip.
  */
-export type SectionRenderer = "tabs" | "lenses" | "column" | "none";
+export type SectionRenderer = "tabs" | "lenses" | "column" | "rail" | "none";
 
 /**
  * Where a workspace's row sits in the sidebar: the unlabelled run at the top
@@ -686,6 +698,59 @@ export const WORKSPACES: WorkspaceRow[] = [
     ],
   },
   {
+    // SECOND IN WORKSPACE, after Worklet and before what the company knows: the
+    // work, then the talking, then what the talking produced (Doclet and
+    // Artifacts).
+    //
+    // A RAIL, and the screen draws it. Chatlet's rooms are its own object list,
+    // drawn beside the transcript because they carry unread counts, mute
+    // state and a preview that no tab can hold — and a room is an OBJECT
+    // page, where the header draws no section tabs, so tabs would leave the
+    // mention feed two presses from every room. The two lists that are not a
+    // room sit at the head of the rail instead, drawn from the sections
+    // below: the landing's label heads the rooms, and every other section is
+    // a link under the name it has here.
+    key: "chatlet",
+    label: "Chatlet",
+    icon: "message-square",
+    path: ["chatlet"],
+    hint: "The company's own rooms, threads and direct messages",
+    keywords: ["messages", "rooms", "channels", "direct message", "dm"],
+    // THE LETTER OF CHATLET NO OTHER ROW HOLDS: `g c` is Company's Principles.
+    chord: "t",
+    place: "workspace",
+    renderer: "rail",
+    // THE CHATLET APP'S, every section and every room: each reads somebody's
+    // rooms as the seat the session holds, so the frame draws its one refusal
+    // in place of every chat page for a reader without it. What the screen
+    // answers is only what is chat's own: a company whose chat is elsewhere,
+    // and a credential acting as no seat.
+    grants: ["chatlet"],
+    sections: [
+      {
+        key: "rooms",
+        label: "Rooms",
+        icon: "hash",
+        path: ["chatlet"],
+        hint: "Your rooms, newest activity first",
+      },
+      {
+        key: "mentions",
+        label: "Mentions",
+        icon: "bell",
+        path: ["chatlet", "mentions"],
+        hint: "Every message that named you — the whole away story, because nothing is sent to you",
+      },
+      {
+        key: "search",
+        label: "Search chat",
+        icon: "search",
+        path: ["chatlet", "search"],
+        hint: "Rank what has been said in every room you can read",
+      },
+    ],
+  },
+  {
     key: "doclet",
     label: "Doclet",
     icon: "book-open",
@@ -1120,6 +1185,7 @@ export const RESERVED_SEGMENTS: string[] = [
   "views",
   "history",
   "search",
+  "mentions",
   "asked-of-me",
   "asked-by-me",
   "unblocked",

@@ -53,10 +53,18 @@ const (
 	DirProject Directory = "project"
 	// DirSpace is Doclet's spaces, by key and name.
 	DirSpace Directory = "space"
+	// DirRoom is the company's own chat rooms, by name as people write it
+	// ("#launch") and by id. NOT A LIST: a room is read one at a time through
+	// its own read ([Resolver.Room]), which reaches every room the person may
+	// read by its name, where the rail lists only the rooms they are in. A
+	// name the room's read cannot place is sent as written and never
+	// refused here, for the route, or a write's preview, which reads the
+	// room itself, to decide in its own words.
+	DirRoom Directory = "room"
 )
 
-// Directories are the five, in declaration order.
-var Directories = []Directory{DirSeat, DirMember, DirUnit, DirProject, DirSpace}
+// Directories are the six, in declaration order.
+var Directories = []Directory{DirSeat, DirMember, DirUnit, DirProject, DirSpace, DirRoom}
 
 // Valid reports whether d is a directory this build knows.
 func (d Directory) Valid() bool { return slices.Contains(Directories, d) }
@@ -101,12 +109,113 @@ type Resolver struct {
 	// unreadable remembers a directory that could not be read, so a turn
 	// does not ask again for every call.
 	unreadable map[Directory]bool
+	// rooms are the chat rooms the turn has read, each by the reference a
+	// call named it by, its id or its name ([DirRoom]): one that could not
+	// be read is remembered as such too.
+	rooms map[string]roomRead
+	// viewer is the seat the person reads chat as, read once ([Resolver.Room]).
+	viewer *roomRead
+}
+
+// roomRead is one chat room as its read answered it, or that it could not be
+// read: its id, its name (empty for a direct conversation, which has none),
+// whether it is a direct conversation and the handles of the people in it.
+type roomRead struct {
+	ok             bool
+	id, name, kind string
+	people         []string
 }
 
 // NewResolver is a resolver reading through read, the turn's grant.
 func NewResolver(read proposal.Read) *Resolver {
 	return &Resolver{read: read, cache: map[Directory][]Entry{},
-		unreadable: map[Directory]bool{}}
+		unreadable: map[Directory]bool{}, rooms: map[string]roomRead{}}
+}
+
+// Room is the chat room ref names as the turn says it ([cards.Room]), read
+// through the person's own grant: a room the call names by its name is said
+// by it and read for nothing, and one named by its id is read once per turn,
+// a direct conversation said by its people beside the person (as the chat
+// screen names one), each by their seat's name. False where the room could
+// not be read: a room the person may not read is answered by its read exactly
+// as one nobody holds. WHERE THE PERSON'S OWN SEAT CANNOT BE READ (a seat the
+// chart no longer holds, which chat still answers as), a direct conversation
+// is said by all of its people, the person among them: said by nothing, two
+// conversations read by their ids would be one read to the drawer.
+func (r *Resolver) Room(ctx context.Context, ref string) (cards.Room, bool) {
+	if name := roomName(ref); name != "" {
+		return cards.Room{Name: name}, true
+	}
+	room := r.room(ctx, ref)
+	switch {
+	case !room.ok:
+		return cards.Room{}, false
+	case room.name != "":
+		return cards.Room{Name: room.name}, true
+	case room.kind != "dm" && room.kind != "group":
+		// A NAMED KIND WITH NO NAME is no room this build can say; a
+		// newer peer's, drawn by what its answer holds rather than guessed.
+		return cards.Room{}, false
+	}
+	viewer, known := r.viewerSeat(ctx)
+	var with []string
+	for _, handle := range room.people {
+		if known && handle == viewer {
+			continue
+		}
+		name, named := r.SeatName(ctx, handle)
+		if !named {
+			name = handle
+		}
+		with = append(with, name)
+	}
+	return cards.Room{With: inWords(with)}, true
+}
+
+// room is the room ref names, as its own read answers it, read once per turn
+// under the resolver's lock.
+func (r *Resolver) room(ctx context.Context, ref string) roomRead {
+	ref = strings.TrimSpace(ref)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if room, read := r.rooms[ref]; read {
+		return room
+	}
+	var room roomRead
+	if ref != "" && r.read != nil {
+		if doc, err := readGet(ctx, r.read, chatRoomRoute,
+			map[string]string{"channel_id": ref}, nil); err == nil {
+			room = roomRead{id: value(doc, "channel.id"), name: value(doc, "channel.name"),
+				kind: value(doc, "channel.kind")}
+			room.ok = room.id != ""
+			members, _ := cards.Lookup(doc, "members").([]any)
+			for _, m := range members {
+				if handle := value(m, "handle"); handle != "" {
+					room.people = append(room.people, handle)
+				}
+			}
+		}
+	}
+	r.rooms[ref] = room
+	return room
+}
+
+// viewerSeat is the seat the person reads chat as, as the person's own
+// viewer read answers it, the seat every chat question is answered for; read
+// once per turn.
+func (r *Resolver) viewerSeat(ctx context.Context) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.viewer == nil {
+		r.viewer = &roomRead{}
+		if r.read != nil {
+			if doc, err := readGet(ctx, r.read, "GET /viewer", nil, nil); err == nil {
+				r.viewer.id = value(doc, "handle")
+				r.viewer.ok = r.viewer.id != ""
+			}
+		}
+	}
+	return r.viewer.id, r.viewer.ok
 }
 
 // Entries is directory d as the person may read it, and whether it could be
@@ -335,13 +444,26 @@ func (r *Resolver) resolve(ctx context.Context, t Tool, arg, path, raw string) (
 		return raw, nil
 	}
 	dir := t.Names[arg]
+	if dir == DirRoom {
+		// A ROOM IS READ BY THE NAME THE CALL WROTE, and its id is what its
+		// read answered; a room named by its id, or one its read cannot
+		// place, is sent as written ([DirRoom]).
+		if roomName(value) == "" {
+			return raw, nil
+		}
+		if room := r.room(ctx, value); room.ok {
+			return room.id, nil
+		}
+		return raw, nil
+	}
 	asWritten := t.Kind != KindWrite || dir == DirMember
 	if asWritten && keyShaped(dir, value) {
 		// A READ OF A KEY AS IT IS SPELLED sends it as written, the route
 		// deciding it as it would without the resolver, and reads no
-		// directory: a read is one request, and the directory could only
-		// have told it the key it already has. A member's handle is sent
-		// the same way, for the write's preview to decide against the room.
+		// directory: naming a key adds no request to the read, and the
+		// directory could only have told it the key it already has. A
+		// member's handle is sent the same way, for the write's preview to
+		// decide against the room.
 		return raw, nil
 	}
 	entries, readable := r.Entries(ctx, dir)

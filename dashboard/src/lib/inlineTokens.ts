@@ -1,6 +1,7 @@
 /**
  * What operator-facing prose names, read out of its words: a colour, an
- * address, a code host's reference or commit, a work item's key, a seat.
+ * address, a code host's reference or commit, a work item's key, a chat room,
+ * a seat.
  *
  * The Markdown renderer draws each with its mark (a swatch, a vendor's mark,
  * a kind's glyph, a face) so a reader sees what a token IS before reading it.
@@ -18,6 +19,19 @@
  *     colour whatever its digits, since that is how a colour is quoted
  *     ([codeColour]); a colour inside a longer span (`color: #fff;`) is code.
  *     An alpha form (`#rrggbbaa`) is never one: a swatch cannot show it.
+ *     Where the reader may read a room of that name (rule 1a), the words are
+ *     the room, and a code span holding just its `#name` is code
+ *     ([codeRoom]).
+ *  1a. A ROOM is `#` and the whole name of a chat room the reader may read
+ *     (`lib/roomNames.ts`), in any case, at a colour's boundaries: `#launch`,
+ *     and `#e2e` or `#2026` where the company has a room of that name. A room's
+ *     name may be spelled exactly as a colour or an issue's number, and only
+ *     the company's rooms can say which the words mean, so a room wins a
+ *     colour (rule 1) and a bare number (rule 3b) at the same place; a number
+ *     the sentence binds (`#2026 in owner/repo`, rule 3b.0) is longer and
+ *     still wins (rule 7). A `#word` that names no room the reader may read
+ *     is read by the other rules, exactly as in a company with no chat of its
+ *     own: a private room the reader is outside is never one.
  *  2. AN ADDRESS is a bare `http://` or `https://` URL in prose, ending at a
  *     space, an angle bracket, a quote or a backtick, with a trailing stop or
  *     an unbalanced closing bracket left to the sentence. What it is (a pull
@@ -50,6 +64,7 @@
  *     2. THE MESSAGE NAMES ONE REPOSITORY: every reference, repository and
  *        code host address in it names the same one, and `#11` is in it.
  *     3. Otherwise `#11` is words: a list's number, a rank, a heading.
+ *     Neither 1 nor 2 places a number that is a room's name (rule 1a).
  *     A message is what [messageScope] reads. The number has no leading
  *     zero and nothing of a word, a path, an entity (`&#11;`) or a decimal
  *     (`#1.5`) on either side, and a code span is never read at all.
@@ -67,7 +82,9 @@
  *     letter, digit, dot, `@` or slash before it, so an email address is
  *     never one.
  *  7. Where two tokens overlap, the one that starts first wins, then the
- *     longer: an address swallows every key and colour spelled inside it.
+ *     longer, then the one found first: an address swallows every key and
+ *     colour spelled inside it, and a room found before a colour or a bare
+ *     number spelled the same wins it (rule 1a).
  *
  * Every pattern here runs in time linear in its run: a comment is written by
  * an agent that may have read anything, and every reader renders it.
@@ -109,6 +126,8 @@ export type InlineToken =
       repo: string;
     }
   | { kind: "key"; at: number; end: number; text: string; project: string }
+  /** A chat room, by its name in lower case ([RoomSet]). */
+  | { kind: "room"; at: number; end: number; text: string; name: string }
   | { kind: "mention"; at: number; end: number; text: string; handle: string };
 
 /** Hex digits holding a digit and a letter: a colour in prose, a commit's SHA. */
@@ -141,6 +160,8 @@ export function codeColour(code: string): string | null {
 }
 
 const COLOUR = /(?<![\p{L}\p{N}_&#/-])#([0-9a-f]{6}|[0-9a-f]{3})(?![\p{L}\p{N}_-])/giu;
+/** A room's name after its `#` (`chatlet`'s name grammar), at a colour's boundaries. */
+const ROOM = /(?<![\p{L}\p{N}_&#/-])#([a-z0-9][a-z0-9_-]{0,63})(?![\p{L}\p{N}_-])/giu;
 const ADDRESS = /\bhttps?:\/\/[^\s<>"'`]+/giu;
 const REFERENCE =
   /(?<![\p{L}\p{N}_./@-])((?:[A-Za-z0-9][\w.-]*\/)+[A-Za-z0-9][\w.-]*?)([#!@])([0-9a-f]{7,40}|\d+)(?![\p{L}\p{N}_-])/gu;
@@ -197,6 +218,32 @@ function trimAddress(raw: string): string {
 export const NO_OWNERS: ReadonlySet<string> = new Set();
 
 /**
+ * The names of the chat rooms the reader may read, in lower case: a set, or
+ * the frame's map of them (`lib/roomNames.ts`). Only whether a name is one is
+ * read here (rule 1a); where a room opens is decided where it is drawn.
+ */
+export interface RoomSet {
+  readonly size: number;
+  has(name: string): boolean;
+}
+
+/** No rooms: every `#word` is read by its shape (rule 1a). */
+export const NO_ROOMS: RoomSet = new Set<string>();
+
+/** A code span that is one room's `#name` and nothing else. */
+const ROOM_ONLY = /^#([a-z0-9][a-z0-9_-]{0,63})$/iu;
+
+/**
+ * Whether a code span holds one of the reader's rooms' `#name` and nothing
+ * else, which is code naming the room rather than a colour ([codeColour],
+ * rule 1).
+ */
+export function codeRoom(code: string, rooms: RoomSet): boolean {
+  const name = ROOM_ONLY.exec(code.trim())?.[1];
+  return name !== undefined && rooms.size > 0 && rooms.has(name.toLowerCase());
+}
+
+/**
  * What a message names (rule 3b): the repositories its references name under
  * each number, and every repository it names at all, each as `owner/repo`.
  */
@@ -210,13 +257,15 @@ export const NO_SCOPE: MessageScope = { numbers: new Map(), repositories: new Se
 
 /**
  * Every token in one run of prose, in order, none overlapping (rule 7), with
- * `owners` the code hosts' owners in lower case ([codeHostOwners]) and
- * `scope` what the message the run belongs to names ([messageScope]).
+ * `owners` the code hosts' owners in lower case ([codeHostOwners]), `scope`
+ * what the message the run belongs to names ([messageScope]) and `rooms` the
+ * chat rooms the reader may read ([RoomSet]).
  */
 export function inlineTokens(
   text: string,
   owners: ReadonlySet<string> = NO_OWNERS,
   scope: MessageScope = NO_SCOPE,
+  rooms: RoomSet = NO_ROOMS,
 ): InlineToken[] {
   const found: InlineToken[] = [];
   for (const m of text.matchAll(ADDRESS)) {
@@ -250,6 +299,16 @@ export function inlineTokens(
         owner,
         repo,
       });
+    }
+  }
+  // RULE 1a: a room the reader may read, found BEFORE the colours and the bare
+  // numbers its name may be spelled as, so it wins a tie with either at the
+  // same place (rule 7 keeps the first found of two tokens alike).
+  if (rooms.size > 0) {
+    for (const m of text.matchAll(ROOM)) {
+      const name = m[1]!.toLowerCase();
+      if (!rooms.has(name)) continue;
+      found.push({ kind: "room", at: m.index, end: m.index + m[0].length, text: m[0], name });
     }
   }
   for (const m of text.matchAll(COLOUR)) {
@@ -343,7 +402,10 @@ export function inlineTokens(
   return commits.length === 0 ? chosen : settle([...chosen, ...commits]);
 }
 
-/** The earliest token first, then the longer, and nothing that overlaps one chosen. */
+/**
+ * The earliest token first, then the longer, then the one found first (the sort
+ * is stable), and nothing that overlaps one chosen.
+ */
 function settle(found: InlineToken[]): InlineToken[] {
   const sorted = [...found].sort((a, b) => a.at - b.at || b.end - a.end);
   const out: InlineToken[] = [];
@@ -364,13 +426,13 @@ function settle(found: InlineToken[]): InlineToken[] {
  *  - `anchor`: a link is a link, to wherever its safe address goes.
  *  - `checked`: a link is live ONLY WHERE THE DASHBOARD BUILT IT, from parts
  *    it checked, to a place that is the company's: a key to its work item, a
- *    handle to its seat, a reference, a commit or a repository to the code
- *    host the company configured, and an address on a host the company
- *    configured (a code host, Jira, Confluence, Mattermost) REBUILT from
- *    what it is ([LinkDescription.canonical]), with nothing else the written
- *    address carried. Every other address, an app route a writer spelled
- *    among them, is drawn inert: its words, then the host it names, readable
- *    and copyable and never a control.
+ *    handle to its seat, a room's name to its room, a reference, a commit or
+ *    a repository to the code host the company configured, and an address on
+ *    a host the company configured (a code host, Jira, Confluence,
+ *    Mattermost) REBUILT from what it is ([LinkDescription.canonical]), with
+ *    nothing else the written address carried. Every other address, an app
+ *    route a writer spelled among them, is drawn inert: its words, then the
+ *    host it names, readable and copyable and never a control.
  *  - `text`: no link at all, inside a control or a link's own label, where a
  *    link is invalid or steals the press.
  *
@@ -380,7 +442,9 @@ function settle(found: InlineToken[]): InlineToken[] {
  * model read>` hands the words to whoever owns the host. A link the
  * dashboard builds can only reach the company's own places, so a click there
  * carries nothing a writer chose but a validated name or number. The
- * Dashboard Assistant's answers and the Inbox read `checked` (ADR-0061).
+ * Dashboard Assistant's answers, the Inbox and the links a chat message
+ * carries (`routes/chatlet/MessageLinks.tsx`, whoever wrote the message) read
+ * `checked` (ADR-0061).
  */
 export type LinkMode = "anchor" | "checked" | "text";
 

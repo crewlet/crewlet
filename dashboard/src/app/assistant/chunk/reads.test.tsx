@@ -142,6 +142,28 @@ test("a record's peek says its key once, its facts, and opens its page in place"
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 });
 
+test("a chat room's chip is its name, and its peek says it is a room and opens it", () => {
+  const id = "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f";
+  const launch = event({
+    type: "entity",
+    entity: {
+      kind: "room",
+      id,
+      key: "#launch",
+      title: "#launch",
+      subtitle: "Friday's release",
+      open: { label: "Open room", screen: "chatlet", href: `#/chatlet/${id}` },
+    },
+  });
+  draw("#launch is waiting on the launch copy.", [launch]);
+  expect(screen.queryByRole("list", { name: "Also read" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /#launch/ }));
+  const dialog = screen.getByRole("dialog");
+  expect(within(dialog).getByText("Room")).toBeTruthy();
+  const open = within(dialog).getByRole("link", { name: "Open #launch" });
+  expect(open.getAttribute("href")).toBe(`#/chatlet/${id}`);
+});
+
 test("a table's peek holds its rows, its downloads and the way to its page", () => {
   draw("", [waiting]);
   fireEvent.click(screen.getByRole("button", { name: "Decisions waiting on you (1)" }));

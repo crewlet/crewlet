@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
@@ -82,20 +83,39 @@ func appsOf(t *testing.T, tool string) []string {
 	return []string{string(app)}
 }
 
+// attentionTools are the chat tools whose write is NOT a record on the chat
+// log: a person's read cursors, mutes and do-not-disturb are a coordination
+// record ([chatlet.MarkChatReadTool]), answered `applied` at no position, so
+// there is no floor for a read to wait on.
+var attentionTools = []string{chatlet.MarkChatReadTool}
+
 // actionLog is the state log a tool's write lands on, by the family the tool
 // is registered under — the work tools on the tracker's, the page tools on
-// the knowledge base's — or "" for a write that lands on none: a pause, a
-// steer, a run's answer, a question answered.
+// the knowledge base's, the chat tools on chat's — or "" for a write that
+// lands on none: a pause, a steer, a run's answer, a question answered, a
+// person's attention.
 //
 // BY FAMILY RATHER THAN A TABLE OF TOOLS, so a tool added to a family is held
-// to that family's log without anybody writing its name here.
+// to that family's log without anybody writing its name here; the one carve-
+// out is declared above with its reason.
 func actionLog(tool string) string {
+	in := func(family ...[]string) bool {
+		for _, names := range family {
+			if slices.Contains(names, tool) {
+				return true
+			}
+		}
+		return false
+	}
 	switch {
-	case slices.Contains(worklet.Tools(), tool),
-		slices.Contains(worklet.OperatorOnlyTools(), tool):
+	case slices.Contains(attentionTools, tool):
+		return ""
+	case in(worklet.Tools(), worklet.OperatorOnlyTools()):
 		return "tracker"
-	case slices.Contains(builtin.PageTools(), tool):
+	case in(builtin.PageTools()):
 		return "pages"
+	case in(chatlet.Tools(), chatlet.OperatorOnlyTools()):
+		return "chat"
 	}
 	return ""
 }
@@ -321,7 +341,7 @@ var administrator = person("ada.admin", "jane-founder", iam.AllGrants...)
 // with no implementation behind it.
 func fullSurface(t *testing.T) *operator.Server {
 	t.Helper()
-	return newSurface(t, operator.Options{
+	s := newSurface(t, operator.Options{
 		Halves: fixed(operator.Halves{
 			Work: builtin.WorkDeps{
 				Reader:          struct{ fullReader }{},
@@ -359,6 +379,17 @@ func fullSurface(t *testing.T) *operator.Server {
 			Budget: struct{ builtin.AnswerBudget }{},
 		},
 	})
+	// EVERY CHAT GESTURE A PERSON MAKES IS AMONG THEM, the read-state flush
+	// included: the chat screen writes through nothing else (ADR-0024), so a
+	// fixture that dropped them would refuse every chat row ACTIONS carries as
+	// "serves no such tool" while a real company serves it.
+	for _, name := range append(chatlet.Tools(), chatlet.OperatorOnlyTools()...) {
+		if !slices.Contains(s.Tools(), name) {
+			t.Fatalf("the full surface serves %v, without the chat tool %s",
+				s.Tools(), name)
+		}
+	}
+	return s
 }
 
 // fullReader is every read seam the work tools test their reader for, so one

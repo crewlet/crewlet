@@ -15,8 +15,9 @@
  * sections exist is `nav.ts`, and what the sidebar shows is `sidebar/`. This
  * file wires them together and owns exactly the things nothing else can: the
  * palette, the watch on the viewer's own inbox, the strip that reports a
- * degraded connection, the page context a screen describes itself through,
- * and the peek column. Who is signed in is the sidebar's user block
+ * degraded connection, the page context a screen describes itself through
+ * (and what stands over the page, told back to it: [usePageInView]), and the
+ * peek column. Who is signed in is the sidebar's user block
  * (`sidebar/UserBlock.tsx`), and signing in is a screen outside the frame
  * (`App.tsx`): the frame holds no credential and asks for none, because the
  * browser's only credential is the session cookie the engine set.
@@ -46,6 +47,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import { AppShell, SectionFrame, useMediaMatch, useStoredWidth } from "@crewlethq/ui";
@@ -77,6 +79,7 @@ import { StateBar, degradationOf } from "./frame/StateBar.tsx";
 import { useClient, useConnection, useEngineHealth } from "~/lib/store-hooks.ts";
 import { LinkHostsProvider } from "~/lib/linkHosts.ts";
 import { ProjectKeysProvider } from "~/lib/projectKeys.ts";
+import { RoomNamesProvider } from "~/lib/roomNames.ts";
 import { ViewerProvider, useHeldGrants, useViewer } from "~/lib/viewer.ts";
 import { SessionReading, useFrameSession } from "~/lib/frameSession.ts";
 import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
@@ -120,6 +123,7 @@ import { goSignIn } from "~/lib/session.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import type { FleetAnswer } from "~/protocol/index.ts";
 import { useKeymap } from "./keymap.ts";
+import { useModalLayerOpen } from "~/lib/keys.ts";
 import { runningTarget } from "~/lib/turns.ts";
 import { focusSearchTarget } from "./searchTarget.ts";
 import { KeyLegend } from "./KeyLegend.tsx";
@@ -355,10 +359,60 @@ export function useOwnStar(): void {
 }
 
 /**
+ * Whether something stands OVER the page, so the screen under it is not in
+ * view: the assistant anywhere but its column, or a modal surface of the
+ * kit's (a dialog, a sheet, the navigation drawer, the palette). The frame
+ * publishes it ([PageCover]); outside a frame nothing covers the page.
+ */
+const PageCovered = createContext(false);
+
+/**
+ * Whether the screen is IN VIEW: the tab is in front, and nothing stands over
+ * the page ([PageCovered]).
+ *
+ * FOR A SCREEN THAT WRITES DOWN WHAT ITS READER HAS SEEN, a chat room's read
+ * cursor (`routes/chatlet/Room.tsx`). A row drawn in a tab in the background,
+ * under the assistant or behind a dialog is drawn for nobody, and counted as
+ * seen it clears a badge on every device over messages nobody read. A value
+ * the screen re-renders on, so what it drew meanwhile can count the moment
+ * the page is back in view.
+ */
+export function usePageInView(): boolean {
+  const covered = useContext(PageCovered);
+  const visible = useSyncExternalStore(onVisibilityChange, tabInFront, () => true);
+  return visible && !covered;
+}
+
+/** Whether the tab is in front: a hidden one is drawing for nobody. */
+function tabInFront(): boolean {
+  return document.visibilityState !== "hidden";
+}
+
+function onVisibilityChange(notify: () => void): () => void {
+  document.addEventListener("visibilitychange", notify);
+  return () => document.removeEventListener("visibilitychange", notify);
+}
+
+/**
+ * The page's [PageCovered], published around the screen: the assistant over
+ * the page (`over`, the frame's own state) or any modal surface on the kit's
+ * layer stack ([useModalLayerOpen]).
+ *
+ * ITS OWN COMPONENT, because the stack's feed re-renders whatever reads it on
+ * every change, a menu opening included: here that is one small render, and
+ * the screen under it re-renders only when the answer moves.
+ */
+function PageCover({ over, children }: { over: boolean; children: ReactNode }) {
+  const modal = useModalLayerOpen();
+  return <PageCovered.Provider value={over || modal}>{children}</PageCovered.Provider>;
+}
+
+/**
  * What the frame reads ONCE for every surface in it: who this browser is,
  * how much is waiting on them, how much open work is on them, and where the
- * company's apps live and which project keys are real, which every rendered
- * link and key reads (`lib/linkHosts.ts`, `lib/projectKeys.ts`).
+ * company's apps live, which project keys are real and which rooms a `#name`
+ * may be, which every rendered link, key and room reads (`lib/linkHosts.ts`,
+ * `lib/projectKeys.ts`, `lib/roomNames.ts`).
  *
  * All three are standing reads, and the first two used to be made per caller
  * — the viewer by the frame, the sidebar and the Inbox count, the count by the
@@ -377,7 +431,9 @@ export function FrameReadings({ children }: { children: ReactNode }) {
       <InboxCountsProvider>
         <QueueCountProvider>
           <LinkHostsProvider>
-            <ProjectKeysProvider>{children}</ProjectKeysProvider>
+            <ProjectKeysProvider>
+              <RoomNamesProvider>{children}</RoomNamesProvider>
+            </ProjectKeysProvider>
           </LinkHostsProvider>
         </QueueCountProvider>
       </InboxCountsProvider>
@@ -589,6 +645,12 @@ function Frame({ children }: { children: ReactNode }) {
   const assistantFits = useMediaMatch(`(width >= ${assistantColumnMin({ column: 0, scale })}px)`);
   const assistantShape = phone ? "sheet" : assistantFits ? "column" : "overlay";
   const assistantColumn = assistantOpen && assistantShape === "column";
+  // AND WHETHER IT STANDS OVER THE SCREEN, for a screen that writes down what
+  // its reader has seen ([usePageInView]): anywhere but its column, which only
+  // narrows the page. As the whole window it hides the screen, and over the
+  // page's end edge it leaves the page live, with no veil, yet stands over the
+  // screen's end, where a chat room's transcript and its thread are.
+  const assistantOver = assistantOpen && assistantShape !== "column";
   // THE READER'S WIDTH, kept per browser. Every other threshold counts it
   // (`assistantCounted`), not the resting width, so a panel dragged wider
   // folds Settings' column and turns a peek into a drawer at the width it
@@ -720,7 +782,9 @@ function Frame({ children }: { children: ReactNode }) {
       <PeekWidthRequest.Provider value={setRestingPeek}>
         <OwnHeaderRequest.Provider value={setOwnHeader}>
           <OwnHeaderSlot.Provider value={ownHeader ? headerSlot : null}>
-            <PageContextValue.Provider value={page}>{children}</PageContextValue.Provider>
+            <PageContextValue.Provider value={page}>
+              <PageCover over={assistantOver}>{children}</PageCover>
+            </PageContextValue.Provider>
           </OwnHeaderSlot.Provider>
         </OwnHeaderRequest.Provider>
       </PeekWidthRequest.Provider>
@@ -750,10 +814,11 @@ function Frame({ children }: { children: ReactNode }) {
               )
             }
             peekShape={peekShape}
-            // THE ASSISTANT, a third track of the frame mirroring the rail, or
-            // a modal over the page and the whole window on a phone; see the
-            // arithmetic above. Mounted only while open, and its code is a
-            // chunk of its own that first paint never carries.
+            // THE ASSISTANT, a third track of the frame mirroring the rail,
+            // over the page's end edge below that, and the whole window on a
+            // phone; see the arithmetic above. Only the whole window is a
+            // modal (`asideModal`, below). Mounted only while open, and its
+            // code is a chunk of its own that first paint never carries.
             aside={
               assistantOpen ? (
                 <AsideBoundary onClose={() => showAssistant(false)}>

@@ -1084,9 +1084,9 @@ and the tab.
 `g` then a letter jumps to a workspace: `g h`, `g i` and `g m` for the first
 run; `g c` for Company's Principles, `g e` for Brand, `g a` for the Org chart,
 `g d` for Schedules, `g n` for Integrations and `g b` for Budgets; `g w`,
-`g k`, `g f` for Artifacts and `g l` for Live; `g s` for Settings, and `g u`
-for your Account. A chord to a hidden place is not answered, as its row is not
-drawn. A chord rather than a
+`g t` for Chatlet, `g k`, `g f` for Artifacts and `g l` for Live; `g s` for
+Settings, and `g u` for your Account. A chord to a hidden place is not
+answered, as its row is not drawn. A chord rather than a
 modifier, because every single-modifier combination worth having is already
 the browser's. `g r` is the one `g` sequence that is not a workspace: it
 watches the running turn when exactly one seat is working, and opens Live ›
@@ -1189,6 +1189,10 @@ a screen, and every workspace and section the code declares is below.
 | `#/company/schedules` · `#/company/schedules/{scope_type}/{scope_id}/{name}` | **Schedules**, recurring work, its figures drawn once there is a schedule to count, and with none an empty state offering the configuration a schedule is written in to a reader who may open it; one schedule | |
 | `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: a directory of every integration by category (Chat, Work tracking, Docs and knowledge, Code, Observability), Crewlet's own service first in each, Atlassian listed as Jira and Confluence; beside it the page of the line chosen (an app's Overview, Agents, Activity and Settings, its settings form opening in place; a service's counts, agents, activity and settings, or what does its work instead), and with nothing chosen what is in use, as compact cards, with what needs a look, the recent activity and the address apps deliver to. `{kind}` is an app's key, a surface (`atlassian` and `forge` select Jira) or a service (`worklet`, `doclet`, `chat`). Every reader's; an app's state and connecting are an Admin's | |
 | `#/company/budgets` | **Budgets**, the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. Last in Company: what the company decides, while what it spent is Settings › Token spend | `window=` is not read here |
+| `#/chatlet` | **Chatlet**: the company's own rooms, with the rail of what you are in *(the whole of Chatlet needs Chatlet access)*. Every chat page is read as the seat your session holds: a credential acting as no seat (a deployment's own token, or a service account bound to nobody) reads nothing here, not even a public room | `dm=` (a seat's handle, from its page or peek: opens New direct message with that seat chosen, once, then leaves the address) |
+| `#/chatlet/mentions` | **Chatlet › Mentions**: every message that named you, across every room. The whole away story: the engine sends no email, no push and no SMS | |
+| `#/chatlet/search` | **Chatlet › Search chat**: ranked over every room you may READ, which is wider than your rail | `q=` · `in=` (narrowed to one room) |
+| `#/chatlet/{id}` | **Room**: the transcript, who is here, and the composer | `thread=` (which thread is open in it, one level deep) |
 | `#/live` | **Live › Now running** — the running turns, the coding runs waiting on a person and the rest in a box, the activity strip and the recent phases | `window=15m\|1h\|6h` (the activity strip) · `seat=` (a handle) · `phase=` · `failed=true` (the same spelling Turns uses) |
 | `#/live/turns` · `#/live/turns/{id}` | **Turns** — the turns that ended over the window, counted by the engine, then every turn one row each; one turn *(needs Admin access)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `seat=` (a handle) · `failed=true\|false` · `sort=-started\|-tokens` (the engine's order) |
 | `#/live/runs` · `#/live/runs/{turn_id}` | **Coding runs** — live and durable; a run's own page draws the run alone, answered in place, and a collected run's page reads its turn | |
@@ -1961,7 +1965,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | `sidebar/UserBlock` | who is signed in, at the sidebar's foot, called by their OWN name and never their seat's (`readerName`: their directory row's name as `GET /auth/session` answers it, else their login): bound (that name, the login where it is not the name, and the seat — its name off the chart, or `@handle` where the chart is unread — the seat's kind never captioned, since every binding is to a human seat), a credential acting as a seat (a Tier A token or a service account bound to a human seat: the seat's name, "via API token" under it with the token's name in the row's title and under the access in the menu, and the seat's initials with a key on the corner), unbound (the same name and login, and *No seat* — a Tier A token's session or a service account acting as itself, which is ordinary; never a person, who holds a human seat for as long as they are here ([ADR-0032](../../adr/0032-every-person-holds-a-human-seat.md))) or nobody (a **Sign in** button back to the screen they are on); a session read that FAILED says it could not tell who this is and still offers the Account and the sign-out. Pressing the name of anybody resolved opens the reader's own menu (the kit's `AccountRow` `menu`, named ", your menu", marked current on `#/account`, where it stands in for the row the Account does not have): their access as its header, then the reader's own [Account](#account-the-readers-own-page) (`place: "menu"` in `app/nav.ts`; never the seat, which holds none of what a person looks for there), where the password, the second factor and recovery codes, the sessions and the personal access tokens are, and both sign-outs, which need only `GET /auth/session` to answer — the frame's one read of it (`lib/frameSession.ts`), never one of the block's own: while the socket's `viewer` question has not (it never does for a person the socket refuses, or never dials for), a session is offered the two sign-outs under its own login. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
 | `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav` inside the kit's `SectionFrame`, which lays the column and the screen side by side and folds the column into a section picker below 1212px), with a lock naming what a section closed to the reader lacks (`sectionOpen`; drawn only once somebody has said what the reader holds), each row's hint as its title, and nothing that leads out of Settings. A screen whose design keeps the star in a menu rather than in the bar gets no star from the frame (`useOwnStar`): a Doclet page, whose More carries it, and Doclet's landing, whose pages are each starred from their own More |
 | `routes.ts` + `crumbs.ts` | the route table as a pure resolver, and the trail derived from it |
-| `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the one width the dashboard derives itself — where the peek becomes a column |
+| `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the widths the dashboard derives itself: where the peek becomes a column, where the assistant does, where Settings' column folds, and where Chat's columns fold |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied. The two positions that last one compares (`applied_through` against `log_seq`) are PACKED on the wire — (generation × 2^40) + sequence, so they compare with a plain `<` across a re-anchor — and are printed unpacked (`positionWords` in `components/work.tsx`): the bare sequence in a log's first generation and `generation:sequence` past it. The stride is the engine's `statelog.GenerationStride`, and a gate in internal/api holds the dashboard's copy (`GENERATION_STRIDE`) to it |
 | `ObjectHeader` | an object's eyebrow, title (a level-two heading in every frame: on a page the last crumb is the `h1` and already names the object, and a peek sits inside a page that has one), state marks and up to six facts, in the same order wherever the object appears — though a peek whose body is a properties rail passes none, because a header and a rail stacked in one column are [one reading](#an-objects-own-facts). A fact may carry a `note` saying where its value came from, for the facts a reader can reasonably doubt, and only those. A fact that is one token (an id, a build) or a set of chips (a node's roles) takes two tracks, so it is never broken mid-token or stacked chip over chip. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
 | `OwnPageHeader` | a screen that draws its own head in the frame's place: the frame draws the slot it is portalled into, with the state bar under it, instead of the page bar. ONE screen does, an open artifact, for the reason [An open artifact is the screen](#an-open-artifact-is-the-screen) gives; `FrameNavToggle` is the frame's navigation toggle for that head to place first |
@@ -1974,7 +1978,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | `lib/rangePicker` | the one control for `window=`: a screen's range mapped onto the kit's `TimeRangePicker` (Today as the company's day, a custom window on the reader's zone or as whole company days) |
 | `PageActions` + `PageNote` | a screen's own controls, portalled into the bar; its one sentence of explanation (the kit's `PageNote`), wrapped so its last line never holds a word alone |
 
-**Three widths, and only one is ours.** Below 1024 px (`breakpoint.shell`) the
+**Two widths are the kit's, and the rest are arithmetic.** Below 1024 px (`breakpoint.shell`) the
 sidebar is the drawer. Below 640 px (`breakpoint.phone`) a layout is single
 pane: a `DataGrid`'s rows become labelled cards — or, on a grid that asks for
 `phoneRows="compact"`, two unlabelled lines: what the row IS (its
@@ -2030,6 +2034,25 @@ asks for the window's height with `useFillScreen`), and the rail rests there
 until the reader drags it: a width they dragged is their preference on every
 screen, anywhere from 330 to 640. The threshold above is computed at the
 resting 420 for every screen.
+
+**Chatlet's columns give way by the screen's width.** Chatlet draws its rail, a
+room's transcript and an open thread side by side. They fold by the width of
+the SCREEN (`@container page`), never the window's, because the sidebar, a
+peek and the assistant's column each take a share of the window that a media
+query cannot see. The transcript keeps a 320 px floor (`TRANSCRIPT_FLOOR` in
+`app/layout.ts`, the width WCAG's Reflow criterion asks every page to read
+at). So the rail narrows from 260 px towards 200 px first, and below a 539 px
+screen it stacks above the room. A thread stands beside the transcript from a
+978 px screen (the rail at 260, the floor, the thread's 360 and two gaps) and
+under it below that, never in its place. The gaps are counted at the widest
+density, so the floor holds at every density.
+
+Beside the assistant's column at its resting width, a 1280 px window leaves
+the screen 556 px at the normal density: the rail narrows to 220 px and an
+open thread goes under the room. At 1168 px, where the column first fits, the
+screen is 444 px and the rail stacks too. A column dragged wider leaves the
+screen narrower still, and the columns fold sooner, because they ask the
+screen and not the window.
 
 **A screen publishes what the chrome needs and renders none of it.** The labels
 the route cannot supply (`usePageLabels`), the coverage of the answer it drew
@@ -2087,7 +2110,7 @@ for the keys is the reader who does not know `?` yet.
 | In the artifacts gallery and its folders | `x` starts picking artifacts (and, pressed again, stops and clears the picks), `m` moves what is picked to a folder, `n` makes a new folder where the reader is, `u` goes up to the folder above. Bare letters, since a window chord compares no Shift and no Alt |
 | On a chart | `+`, `-` zoom and `0` fits, with focus in the chart (bound by the design system's canvas) |
 | In the org builder | `Mod+Z` undo, `Mod+Shift+Z` redo |
-| Writing a reply | `Mod+Enter` sends it (the Inbox's composer; `Enter` alone is a new line) |
+| Writing a reply or a message | `Mod+Enter` sends it: a reply in the Inbox, a comment on a task, a message in a chat room or a thread. `Enter` alone is a new line, since what you say to somebody is often several lines. The assistant's question box is the one exception: a question is one line far more often than not, so `Enter` sends it there (below) |
 | Writing the company's principles | `Mod+Enter` saves the part being written and `Esc` stops writing it, asking first when it has changes (bound by the design system's `InlineEditor`); in the standing policies `Enter` adds the policy typed, and `Alt+Up` and `Alt+Down` move the one you are in |
 | In search | `Tab` and `Shift+Tab` walk the scopes (bound by the design system's palette), `Mod+Enter` asks an agent, `Alt+A` assigns the task at hand, `Alt+C` creates a task, `Backspace` in an empty picker goes back |
 | In the assistant | `Enter` sends the question and `Shift+Enter` adds a line (bound by the design system's `Composer`); `Esc` stops a running answer first, then closes the assistant and never a peek beside it; `Up` in an empty box brings back the last question |
@@ -3000,13 +3023,17 @@ holds rows, the pane says **All clear**; beside a list that is empty, whose own
 empty state already says so, the pane holds one quiet line ("New updates open
 here.") rather than a second empty state.
 
-**Two panes above a phone, one below it.** Both columns are present from the
-first paint and the first item not yet dealt with is open until the reader
-picks one, so the pane is never an empty box beside a list with something in
-it; stepping down the list, or `j` and `k`, replaces history, so four rows
-read through one pane are one place the reader has been. Under 640px the list
-is the screen and an item opens in its place, with Back at the start of its
-byline.
+**Two panes on a wide screen, one on a narrow one.** Both columns are present
+from the first paint and the first item not yet dealt with is open until the
+reader picks one, so the pane is never an empty box beside a list with
+something in it; stepping down the list, or `j` and `k`, replaces history, so
+four rows read through one pane are one place the reader has been. Under 640px
+of the SCREEN's width the list is the screen and an item opens in its place,
+with Back at the start of its byline: on a phone, and beside the assistant,
+whose column can leave a desktop window's screen a phone's width. Whether the
+page then scrolls as a whole is the window's: on a phone it does, and beside
+the assistant the screen still fills the window and the one pane scrolls
+itself.
 
 **Three viewer states, three sentences.** A reader with no credential, a
 reader whose credential no seat claims, and a bound reader. The unbound reader
@@ -3406,11 +3433,14 @@ vacant seat, **Cancel invitation** on an invited one), which on a phone are
 the only place they are; Message opens the New task sheet with
 the seat as assignee and `ask` set — on the project filed under the seat's own
 unit, or the nearest unit above it that has one — so the question is filed as
-work the seat owes an answer on and the answer lands in the Inbox — there is no
-person-to-seat chat. Message files a task, so where the company does not run
+work the seat owes an answer on and the answer lands in the Inbox. Where the
+company runs the engine's own chat and you hold Chatlet, **Direct message** sits
+beside it and opens a conversation with the seat instead
+(`#/chatlet?dm={handle}`), a remark that obliges nothing; it never replaces
+Message. Message files a task, so where the company does not run
 Worklet it is not drawn, nor is a seat's Assign (see
 [the sidebar](#the-sidebar)). **The peek of your own seat is your own seat's page in
-small**: Message is held, saying it is your own seat — held by the button
+small**: Message and Direct message are held, saying it is your own seat — held by the button
 itself (`useMessageSeatAccess`), never by the screen drawing it, because the
 page held it while the peek drew it bare and offered a person who found
 themselves on the chart an enabled Message to themselves — and under the state
@@ -3493,7 +3523,10 @@ for a reader who cannot make it:
 
 - **Message** opens the New task sheet with the seat as assignee and `ask` set:
   the question is filed as work the seat owes an answer on, and the answer
-  lands in the asker's Inbox. There is no person-to-seat chat.
+  lands in the asker's Inbox. Where the company runs the engine's own chat and
+  the reader holds Chatlet, **Direct message** beside it opens chat's New direct
+  message with the seat chosen — a conversation rather than an ask, so neither
+  stands in for the other; it folds into "More" on a phone.
 - **Assign task** finds an existing task by search and hands it over against
   the version a read of it returned (`update_work_item{assignee, if_match}`),
   so a task somebody moved in between is refused rather than taken from
@@ -3852,11 +3885,12 @@ and a pane of unmarked lines reads as one that failed to load.
 
 Operator-facing words are full of things a reader has to stop and decode:
 `gophrase/backend#14` is a pull request on GitHub, `#ffe100` is a yellow,
-`~design-review` is a Mattermost channel, `GP-66` is a task. Every surface
-`lib/markdown.ts` renders (a page, a description, a comment, the Inbox, an
-assistant's answer, a transcript) draws each with the mark that says what it
-is, a little below the text's size and just before its words (`InlineRef`
-from `@crewlethq/ui`), and a seat's handle by its words alone:
+`~design-review` is a Mattermost channel, `#launch` is a chat room, `GP-66` is
+a task. Every surface `lib/markdown.ts` renders (a page, a description, a
+comment, the Inbox, an assistant's answer, a transcript) draws each with the
+mark that says what it is, a little below the text's size and just before its
+words (`InlineRef` from `@crewlethq/ui`), and a seat's handle by its words
+alone:
 
 | Written | Drawn |
 |---|---|
@@ -3868,6 +3902,7 @@ from `@crewlethq/ui`), and a seat's handle by its words alone:
 | `#11`, where its message places it | The code host's mark, linked to the issue or pull request |
 | A SHA after a reference ("at b5362d2") or after the word *commit* | The same, linked to the commit |
 | `GP-66` | The task glyph, linked to the work item |
+| `#launch`, a chat room the reader may read | The room's mark, linked to the room; `#e2e` and `#2026` too where the company has rooms of those names |
 | `@miles` | Its words, linked to the seat |
 
 `lib/inlineTokens.ts` holds the recognition rules and the reasons for each.
@@ -3881,8 +3916,14 @@ refused:
   the company's, so `ISO-8601` and `UTF-8` are words; a handle needs a seat,
   so `@nobody` is a word and an email address is never a mention; a bare
   `owner/repo` needs its owner to be one the company's code hosts name, so
-  `and/or`, `src/app` and `2024/10` are words; and an address swallows every
-  key and colour spelled inside it.
+  `and/or`, `src/app` and `2024/10` are words; a `#name` is a room only
+  where the reader may read a room of that name, and a room's name wins the
+  colour or the issue number spelled the same, so `#e2e` and `#2026` are rooms
+  where the company has them, and colours and numbers where it does not. A
+  room the reader cannot see (a private room they are outside, or a company
+  whose chat is a vendor's) reads by those rules exactly as a vendor's channel
+  does, and a code span holding just a room's `#name` is code; and an address
+  swallows every key and colour spelled inside it.
 - **Too trusting.** A mark is chosen from the address a link GOES TO, parsed,
   and never from its words: a link labelled "github.com/…" that goes
   elsewhere carries no GitHub mark, and a look-alike host
@@ -3914,7 +3955,10 @@ project, team, credential or health. A bare reference links by the host
 alone; with both GitHub and GitLab configured it goes to the host whose
 owners hold it, and one neither or both hold is left as words. With no code host configured, `owner/repo#14` keeps GitHub's mark
 and links nowhere. The project keys a key needs are the reader's own
-`work_projects`, read once by the frame where Worklet is served to them. No
+`work_projects`, read once by the frame where Worklet is served to them, and
+the rooms a `#name` may be are the reader's own `chat_room_names`, every room
+they may read, joined or not, read once by the frame where Chatlet is served
+to them as a seat, with a room this tab has seen a live frame for since. No
 mark is ever fetched from anywhere: every mark is the design system's.
 
 **A bare `#11` is placed by its message.** `#11` alone is a list's number, a
@@ -3934,12 +3978,15 @@ steal the press, so those draw marks and swatches alone (`renderTokens`).
 Where the words were written by an agent or a model that may have read
 anything (the assistant's answers and the Inbox, `links: "checked"`), a link
 is live only where the dashboard built it, from parts it checked, to a place
-that is the company's: a key's and a handle's routes, a reference on the
-configured code host, and an address on a configured host rebuilt from what
-it names, with no query or fragment. Any other address there is drawn
+that is the company's: a key's, a room's and a handle's routes, a reference
+on the configured code host, and an address on a configured host rebuilt from
+what it names, with no query or fragment. Any other address there is drawn
 inert, as written and with the host it names, readable and copyable and never
 a control, because `https://evil.example/?q=<what it read>` is how an
 injected instruction would carry words away ([ADR-0061](../../adr/0061-a-read-is-named-in-the-answer-never-drawn-as-a-card.md)).
+A chat message's links are read the same way, whoever wrote the message
+(`routes/chatlet/MessageLinks.tsx`): each is the address token, and one whose
+scheme the allowlist refuses is its words.
 An outbound link a token makes opens a tab with `rel="noopener noreferrer"`
 and says so to a screen reader, as every outbound link in rendered Markdown
 does.
@@ -4181,7 +4228,8 @@ the reader.
 (`app/layout.ts`): a third track of the frame, mirroring the rail, where the
 window holds the page's sheet beside it with the list at its floor (1168 px
 on a screen and 1404 beside Settings' column, at the normal density); over
-the page's end edge, modal, below that; and the whole window on a phone. Its
+the page's end edge below that, leaving the page beside it live, with no veil
+and no Tab trap; and the whole window on a phone, as a modal. Its
 track is one more term of every other width, so a peek beside it becomes a
 drawer first (both are columns only from 1588 px) and Settings' column folds
 sooner. It rests at 420 px and is dragged between 360 and 640, from the
@@ -4273,7 +4321,15 @@ draft still says what the change made of it. A gate
 (`app/assistant/draftGate.test.ts`) fails for a module with draft or form state
 (a leave guard, an editing status, a setup wizard, a rich, inline or list
 editor, a form field) that neither declares a draft nor is listed as part of a
-screen that does, or as a modal or signed-out form with its reason. The brand
+screen that does, or as a modal or signed-out form with its reason. A page
+with several boxes open at once declares ONE draft whose fields are every box
+open on it (`app/assistant/boxes.ts`), each read from its box and set through
+the box's own setter, and the draft's step names the box written in last: the
+page context carries one draft, and a box that declared its own hid every
+other box from the assistant at its next keystroke. A chat room is such a page
+(its message box, the reply box of a thread open beside it and each of the
+person's messages open for a rewrite), and so is a task's, with its title and
+its description open together. The brand
 setup and the Brand page share one field list (`lib/brand/assistantDraft.ts`):
 name, tagline, colours, typefaces and voice are settable, and a logo is a
 `file` field, set only by a reference to one of the person's files in the
@@ -4542,6 +4598,7 @@ a tool arrives in it with the control that sends it. The controls
 | + (a sub-task) | A task's sub-tasks | `create_work_item{title, project, parent}` |
 | Create task (the New task sheet) | A work screen's New task, a board lane's `+` | `create_work_item{title, project, body?, type?, status?, assignee?, priority?, due?, labels?}`, only what was set |
 | Message (the same sheet, titled "Ask {seat}") | A seat's peek | `create_work_item{title, project, assignee, ask, …}` — the answer lands in your Inbox |
+| Direct message (chat's New direct message, the seat chosen) | A seat's page and peek, on the engine's own chat | `open_dm{to}` — opening one that exists is that conversation |
 | Edit project (the target date) | A project's page bar | `write_project{project, target_date}` — `null` clears it; a company write, whose authority the engine decides |
 | Comment · Reply · Ask… | A task's composer | `comment_on_work_item{item, body}`, `{item, body, reply_to}`, `{item, body, ask, decision?}` |
 | Restore (named "Restore ENG-42" to a screen reader, so a grid of them can be told apart) | A task in the trash, on its page and in the trash grid | `restore_work_item` |
@@ -8676,15 +8733,22 @@ dashboard/                  the source — React 19 + TypeScript, built by Vite
   src/ui/                   the component library and the chart kit
   src/components/           the pieces more than one screen draws, composed
                             out of the design system
-  src/routes/<workspace>/   one directory per workspace (home, inbox, me,
-                            worklet, agents, live, doclet, spend, settings) and
-                            one file per screen inside it, with an index.ts
-                            naming what its lazy chunk exports. Two things sit
-                            outside that shape: NotFound, which belongs to no
-                            workspace and is what the dispatch falls through
-                            to, and routes/org/, the organization builder — one
-                            screen big enough to be a directory, and a chunk,
-                            of its own (see below)
+  src/routes/<dir>/         one directory per group of framed screens, each
+                            its own lazy chunk, as ScreenDir in
+                            app/lazyScreen.ts declares them (home, inbox, me,
+                            worklet, chatlet, agents, live, doclet, artifacts,
+                            brand, spend, settings, account), with one file
+                            per screen inside it and an index.ts naming what
+                            its chunk exports. Four things sit outside that
+                            shape: NotFound, which belongs to no directory and
+                            is what the dispatch falls through to; routes/org/,
+                            the organization builder, one screen big enough to
+                            be a directory, and a chunk, of its own;
+                            routes/signin/, the screens drawn outside the
+                            frame, a chunk the idle prefetch leaves alone; and
+                            routes/artifacts/new/, where each kind's create
+                            page is a chunk of its own, never prefetched either
+                            (see below)
   src/styles/               tokens, base, components, shell, frame, screens —
                             what the design system does not draw
 static/dashboard/           THE BUILD OUTPUT — committed, and what the binary embeds
@@ -8825,23 +8889,28 @@ or a reference the crawl cannot read — and a crawl that silently skipped a laz
 chunk would certify a screen nobody can open. Every stylesheet the crawl
 reaches, a lazy one included, is also held to the Content-Security-Policy.
 
-**A chunk per workspace, and the next one fetched while nobody waits.** Every
-screen is loaded by `app/lazyScreen.ts`, one chunk per workspace's
-`routes/<workspace>/index.ts` plus one for the org builder, which is a section
-of the Org chart and larger than any whole workspace. The entry the shell loads holds
+**A chunk per screen directory, and the next one fetched while nobody waits.**
+Every screen is loaded by `app/lazyScreen.ts`, one chunk for each directory the
+tree above lists (`routes/<dir>/index.ts`, held to `ScreenDir` by
+`app/lazy.test.tsx` in both directions), plus one for the org builder, which is a
+section of the Org chart and larger than any whole workspace, one for the
+sign-in screens drawn outside the frame, and one for each kind's create page
+(`routes/artifacts/new/`). The entry the shell loads holds
 the frame (the sidebar, the page header, the socket client) and nothing a
 screen draws, so a reader who came to read the Inbox parses the Inbox and not
-the org builder. The command palette is a layer mounted only while it is open
-and the largest single piece of the frame, so it is a chunk of its own, the
-first the idle prefetch fetches; `app/lazy.test.tsx` refuses a static path to
-it from `main.tsx`. A screen's peek lives in its workspace's chunk
-beside it. Two things keep the second click fast: hovering or focusing a
-sidebar row starts fetching the chunk it leads to, and once the first screen is
-up every other chunk is fetched in turn, one at a time, each in an idle moment
-the browser reports (and not at all for a reader whose browser asks to save
-data). `app/lazy.test.tsx` refuses a static import of a screen's module from
-outside `routes/`, because the bundler follows one wherever it is and it would
-pull that workspace back into the entry with nothing failing.
+the org builder. The command palette and the assistant's panel are layers
+mounted only while open, each a large piece of the frame, so each is a chunk of
+its own, and they are the first two the idle prefetch fetches;
+`app/lazy.test.tsx` refuses a static path to either from `main.tsx`. A
+screen's peek lives in its directory's chunk beside it. Two things keep the
+second click fast: hovering or focusing a sidebar row starts fetching the chunk
+it leads to, and once the first screen is up every other chunk is fetched in
+turn, one at a time, each in an idle moment the browser reports (and not at all
+for a reader whose browser asks to save data), except the sign-in screens and
+the create pages, which a reader who is signed in, or who opened Artifacts to
+look, never needs. `app/lazy.test.tsx` refuses a static import of a screen's
+module from outside `routes/`, because the bundler follows one wherever it is
+and it would pull that directory back into the entry with nothing failing.
 
 **A chunk that does not arrive says so, and can be retried.** The usual reason
 is an upgrade: the page names its chunks by content hash, and an engine
@@ -8863,7 +8932,7 @@ and fails a build over any of four numbers:
 
 | What | Budget | Measured as | Why this number |
 |---|---|---|---|
-| The initial load: the entry, its static imports and the linked stylesheet | 316 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own. The create pages took it to 314.5 KiB: their rules (3.1 KiB) moved into `create.css`, which arrives with them, and the command palette (about 10 KiB) became a chunk of its own, which left it at 300.2 KiB. The rail head's engine status (uilet 0.41) took it to 312.1 KiB, over the 312 the settings tables had asked for. The editing pieces of uilet 0.46 and 0.47 (their rules in the one sheet, and the character count FormField's limit brings into the entry) took it to 315.1 KiB |
+| The initial load: the entry, its static imports and the linked stylesheet | 316 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own. The create pages took it to 314.5 KiB: their rules (3.1 KiB) moved into `create.css`, which arrives with them, and the command palette (about 10 KiB) became a chunk of its own, which left it at 300.2 KiB. The rail head's engine status (uilet 0.41) took it to 312.1 KiB, over the 312 the settings tables had asked for. The editing pieces of uilet 0.46 and 0.47 (their rules in the one sheet, and the character count FormField's limit brings into the entry) took it to 315.1 KiB. The company's own chat adds about 4.5 KiB to it: its pushes and rooms in the socket client, routes and rail are the frame's, since a mention is told on whatever screen the reader is on |
 | Each chunk fetched later: a workspace, the org builder, a lazy stylesheet | 150 KiB | the same | Half the initial load, for the first click into a screen the idle prefetch has not reached |
 | Every font face the build embeds | 90 KB | as served — woff2 is never recompressed | The four Geist faces (83,736 bytes) and room to re-cut them, never a fifth |
 | The whole of `static/dashboard`, which every binary and image carries | 4 MiB | raw | Every binary carries it, opened or not. 3 MiB, then 3.5 MiB for the artifacts workspace, then 4 MiB for the rich editor, whose chunk is about 276 KB raw (ProseMirror 228 KB of it) plus 15 KB of its packages' notices: it measured 3.54 MiB after it. A doubled 2.3 MB baseline is still refused |

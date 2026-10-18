@@ -869,6 +869,10 @@ func Register(r *Registry, s Sources) {
 		// conversation is read forwards.
 		r.Register("chat_thread", Requires(iam.GrantChatlet), s.chatThread)
 		r.Register("chat_mentions", Requires(iam.GrantChatlet), s.chatMentions)
+		// THE NAMES OF THE ROOMS A SEAT MAY READ, joined or not: how a
+		// reader tells a room written in prose from a colour or an
+		// issue's number spelled the same way.
+		r.Register("chat_room_names", Requires(iam.GrantChatlet), s.chatRoomNames)
 		if s.ChatSearch != nil {
 			r.Register("chat_search", Requires(iam.GrantChatlet), s.chatSearch)
 		}

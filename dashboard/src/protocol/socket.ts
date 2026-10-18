@@ -346,6 +346,16 @@ export class LiveSocket {
   private rooms = new Map<string, Room>();
   /** Join frames out now, by their id, to the artifact each names. */
   private joins = new Map<number, string>();
+  /**
+   * Which room a tab has open, and whether somebody is typing in it.
+   *
+   * HELD RATHER THAN SENT AND FORGOTTEN, for the reason the watch is: it is
+   * state the SERVER keeps per socket, so a reconnect gets a new socket that
+   * knows nothing, and a reader sitting in a room through a thirty-second
+   * backoff would come back invisible to everybody else in it and see nobody.
+   */
+  private focused = "";
+  private typing = false;
   /** Seats, by AGENT ID, whose live call is being fetched whole, each with
    *  whether a push found the call behind again while the fetch was out — see
    *  `fetchCalls`. */
@@ -525,6 +535,37 @@ export class LiveSocket {
     if (!this.connected || !this.sock) return; // `onopen` sends it
     try {
       this.sock.send(JSON.stringify({ kind: "watch", seat: this.watched }));
+    } catch {
+      // The close handler owns recovery, and the next open re-sends it.
+    }
+  }
+
+  /**
+   * Say which room this tab is looking at, and whether it is being typed in.
+   *
+   * IT ASKS NOTHING AND IS ANSWERED BY NOTHING. What it buys is that the
+   * fleet-wide presence probe is bounded to the rooms somebody actually has
+   * open — without it a node would have to ask its peers about every room in
+   * the company on every tick.
+   *
+   * It is not delivered while the socket is down and is not queued: presence
+   * is about now, and a probe from ten seconds ago is worse than none. The
+   * reconnect re-sends what this tab is looking at, which is the state above.
+   * Only the chat screen sends it, and the frame mounts that screen only for
+   * a reader holding Chatlet, so a tab without it never names a room.
+   */
+  focus(channelID: string, typing: boolean): void {
+    this.focused = channelID;
+    this.typing = typing;
+    this.sendFocus();
+  }
+
+  private sendFocus(): void {
+    if (!this.connected || !this.sock) return; // `onopen` sends it
+    try {
+      this.sock.send(
+        JSON.stringify({ kind: "chat_focus", channel_id: this.focused, typing: this.typing }),
+      );
     } catch {
       // The close handler owns recovery, and the next open re-sends it.
     }
@@ -772,6 +813,10 @@ export class LiveSocket {
       // `through` it last held so the engine can say whether a catch-up is
       // enough.
       for (const artifact of this.rooms.keys()) this.sendJoin(artifact);
+      // AND WHERE THIS TAB IS LOOKING, which the new socket does not know
+      // either: a reader who sat in a room through a reconnect would otherwise
+      // be invisible to everybody else in it until they clicked something.
+      if (this.focused !== "") this.sendFocus();
     };
     sock.onmessage = (e: MessageEvent) => this.onMessage(String(e.data));
     sock.onclose = (e: CloseEvent) => {
@@ -1061,6 +1106,32 @@ export class LiveSocket {
         break;
       case "artifact_presence":
         this.roomPush("presence", msg.data);
+        break;
+      // THE CHAT ARM. Six kinds, ONE store method: the frame carries the
+      // record's own `op` (`post`, `edit`, `react`, …) and the kind is a
+      // routing label the server derived from it, so passing the kind as well
+      // would be a second vocabulary for one fact — and the two would
+      // disagree on exactly the op somebody adds next.
+      //
+      // Every one of these was already filtered by the engine against whether
+      // this viewer may read the room, failing closed, so nothing below this
+      // line decides who may see what.
+      case "chat_posted":
+      case "chat_edited":
+      case "chat_deleted":
+      case "chat_reacted":
+      case "chat_room_changed":
+      case "chat_membership_changed":
+        this.store.applyChatChange(msg.data as never);
+        break;
+      case "chat_presence":
+        this.store.applyChatPresence(msg.data as never);
+        break;
+      // NOT ABOUT A ROOM AT ALL: where the seat this tab reads as has read
+      // to, sent to that seat's own sockets and nobody else's, so a badge
+      // cleared in one window clears in the other.
+      case "chat_cursor_moved":
+        this.store.applyChatRead(msg.data as never);
         break;
       case "result":
         if (msg.id !== undefined && this.joins.has(msg.id)) {

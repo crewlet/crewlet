@@ -1,0 +1,287 @@
+/**
+ * Chatlet's widgets on Home: the rail's question and the mention feed's, read as
+ * the seat the session holds — and nothing asked of a reader the engine would
+ * only refuse, or of a company whose chat is not the engine's own.
+ */
+
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, describe, expect, test, vi } from "vitest";
+
+import type { Store } from "~/protocol/index.ts";
+import { ADA, mountChat } from "~/test/chat.tsx";
+import { widgets } from "./home.widgets.tsx";
+import { LIVE_REFETCH_MS } from "./live.ts";
+
+const ROOMS = widgets.find((w) => w.key === "chatlet.unread")!;
+const MENTIONS = widgets.find((w) => w.key === "chatlet.mentions")!;
+
+const room = (id: string, name: string, unread: number, extra: Record<string, unknown> = {}) => ({
+  channel: { id, kind: "public", name },
+  unread,
+  last: { author: "bo", excerpt: `latest in ${name}`, at: "2026-10-18T09:00:00Z" },
+  ...extra,
+});
+
+const RAIL = {
+  read_state: true,
+  read: { handle: "ada", revision: 3, cursors: {} },
+  channels: [
+    room("c-general", "general", 2),
+    room("c-quiet", "quiet", 0),
+    room("c-launch", "launch", 120, { unread_capped: true }),
+    room("c-noise", "noise", 7, { muted: true }),
+  ],
+};
+
+async function settle() {
+  await act(async () => {
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+  });
+}
+
+/** How many times `what` has been asked. */
+const asks = (socket: { query: ReturnType<typeof vi.fn> }, what: string) =>
+  socket.query.mock.calls.filter(([asked]) => asked === what).length;
+
+/** A message posted somewhere in the company, as the hub pushes it. */
+const posted = (store: Store, seq: number) =>
+  act(() =>
+    store.applyChatChange({
+      channel_id: "c-elsewhere",
+      op: "post",
+      op_id: `op-${seq}`,
+      message_id: `m-${seq}`,
+      channel_seq: seq,
+      at: "2026-10-18T09:01:00Z",
+      position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq },
+    } as never),
+  );
+
+const pause = (ms: number) => act(() => new Promise((resolve) => setTimeout(resolve, ms)));
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+describe("unread rooms", () => {
+  test("lists the rooms with something unread, the engine's count on each, and counts the muted ones", async () => {
+    const { Component } = ROOMS;
+    const { socket } = mountChat(<Component params={{}} />, { answers: { chat_channels: RAIL } });
+    await settle();
+    expect(socket.query.mock.calls.map(([what]) => what)).toContain("chat_channels");
+    expect(screen.getByText("Unread rooms · 2")).toBeTruthy();
+    expect(screen.getByText("#general")).toBeTruthy();
+    expect(screen.getByText("#launch")).toBeTruthy();
+    // THE CAP IS THE ENGINE'S: "99+" only where the answer says it stopped.
+    const row = (name: string) => screen.getByText(`#${name}`).closest("a")!;
+    expect(within(row("launch")).getByText("99+")).toBeTruthy();
+    expect(within(row("general")).getByText("2")).toBeTruthy();
+    expect(screen.queryByText("#quiet")).toBeNull();
+    expect(screen.queryByText("#noise")).toBeNull();
+    expect(screen.getByText("1 muted room with unread messages left out.")).toBeTruthy();
+    expect(screen.getByText("#general").closest("a")?.getAttribute("href")).toBe(
+      "#/chatlet/c-general",
+    );
+  });
+
+  test("an unread count with no read state behind it is not a zero", async () => {
+    const { Component } = ROOMS;
+    mountChat(<Component params={{}} />, {
+      answers: { chat_channels: { ...RAIL, read_state: false } },
+    });
+    await settle();
+    expect(screen.getByText(/could not be read/)).toBeTruthy();
+    expect(screen.queryByText("You are caught up")).toBeNull();
+    expect(screen.queryByText("#general")).toBeNull();
+  });
+
+  test("a muted room is counted even when it is all that is unread", async () => {
+    const { Component } = ROOMS;
+    mountChat(<Component params={{}} />, {
+      answers: {
+        chat_channels: {
+          ...RAIL,
+          channels: [room("c-quiet", "quiet", 0), room("c-noise", "noise", 7, { muted: true })],
+        },
+      },
+    });
+    await settle();
+    // NOT "CAUGHT UP": a muted room has messages waiting, and the line that
+    // says so goes where the list would have been.
+    expect(screen.queryByText("You are caught up")).toBeNull();
+    expect(screen.getByText("Nothing unread to list")).toBeTruthy();
+    expect(screen.getByText("1 muted room with unread messages left out.")).toBeTruthy();
+    expect(screen.queryByText("#noise")).toBeNull();
+  });
+
+  test("a rail cut at the engine's bound says only its rooms are counted", async () => {
+    const { Component } = ROOMS;
+    const cut =
+      "You are in more rooms than Chatlet lists, so only your 4 most recently active are counted here.";
+    mountChat(<Component params={{}} />, {
+      answers: { chat_channels: { ...RAIL, truncated: true } },
+    });
+    await settle();
+    expect(screen.getByText("#general")).toBeTruthy();
+    expect(screen.getByText(cut)).toBeTruthy();
+    cleanup();
+
+    // AND NEVER "CAUGHT UP" over rooms nobody counted.
+    mountChat(<Component params={{}} />, {
+      answers: {
+        chat_channels: {
+          ...RAIL,
+          truncated: true,
+          channels: RAIL.channels.map((r) => ({ ...r, unread: 0 })),
+        },
+      },
+    });
+    await settle();
+    expect(screen.queryByText("You are caught up")).toBeNull();
+    expect(screen.getByText("Nothing unread to list")).toBeTruthy();
+    expect(screen.getByText(cut)).toBeTruthy();
+  });
+
+  test("a reader with nothing unread is caught up", async () => {
+    const { Component } = ROOMS;
+    mountChat(<Component params={{}} />, {
+      answers: { chat_channels: { ...RAIL, channels: [room("c-quiet", "quiet", 0)] } },
+    });
+    await settle();
+    expect(screen.getByText("You are caught up")).toBeTruthy();
+  });
+});
+
+// THE RAIL'S OWN LIVE HALF: a count on Home and the badge in the rail are one
+// reading only while both re-read on the same signals — a frame anywhere, and
+// the person's own read state once its revision passes what was drawn.
+describe("unread rooms, live", () => {
+  test("a frame anywhere re-reads the rooms", async () => {
+    const { Component } = ROOMS;
+    const { socket, store } = mountChat(<Component params={{}} />, {
+      answers: { chat_channels: RAIL },
+    });
+    await waitFor(() => expect(screen.getByText("#general")).toBeTruthy());
+    await pause(50);
+    const before = asks(socket, "chat_channels");
+    expect(before).toBe(1);
+    posted(store, 1);
+    await waitFor(() => expect(asks(socket, "chat_channels")).toBe(before + 1));
+  });
+
+  test("a newer read state re-reads the rooms, and the one they drew asks nothing", async () => {
+    const { Component } = ROOMS;
+    const { socket, store } = mountChat(<Component params={{}} />, {
+      answers: { chat_channels: RAIL },
+    });
+    await waitFor(() => expect(screen.getByText("#general")).toBeTruthy());
+    await pause(50);
+    // THE ANSWER'S OWN READ STATE SEEDS THE TAB'S, and that costs no second read.
+    const before = asks(socket, "chat_channels");
+    expect(before).toBe(1);
+    act(() => store.applyChatRead({ handle: "ada", revision: 3, cursors: {} } as never));
+    await pause(LIVE_REFETCH_MS + 50);
+    expect(asks(socket, "chat_channels")).toBe(before);
+    act(() =>
+      store.applyChatRead({ handle: "ada", revision: 4, cursors: { "c-general": 9 } } as never),
+    );
+    await waitFor(() => expect(asks(socket, "chat_channels")).toBe(before + 1));
+  });
+});
+
+describe("mentions", () => {
+  test("lists the newest mentions, a thread's opening its thread", async () => {
+    const { Component } = MENTIONS;
+    const { socket } = mountChat(<Component params={{}} />, {
+      answers: {
+        chat_mentions: {
+          handle: "ada",
+          mentions: [
+            {
+              message_id: "m-2",
+              channel_id: "c-general",
+              channel_name: "general",
+              channel_kind: "public",
+              thread_root: "m-1",
+              author: "bo",
+              excerpt: "@ada can you look?",
+              at: "2026-10-18T09:00:00Z",
+              position: "CREWLET_CHAT_LOG@1:9",
+            },
+          ],
+        },
+      },
+    });
+    await settle();
+    // THE FEED'S NEWEST PAGE, cut to what the card draws.
+    const asked = socket.query.mock.calls.find(([what]) => what === "chat_mentions");
+    expect(asked?.[1]).toMatchObject({ limit: 5 });
+    expect(screen.getByText(/@ada can you look\?/)).toBeTruthy();
+    expect(
+      screen
+        .getByText(/#general · in a thread/)
+        .closest("a")
+        ?.getAttribute("href"),
+    ).toBe("#/chatlet/c-general?thread=m-1");
+  });
+
+  test("a frame anywhere re-reads the newest page", async () => {
+    const { Component } = MENTIONS;
+    const { socket, store } = mountChat(<Component params={{}} />, {
+      answers: { chat_mentions: { handle: "ada", mentions: [] } },
+    });
+    await waitFor(() => expect(screen.getByText("Nobody has named you")).toBeTruthy());
+    await pause(50);
+    const before = asks(socket, "chat_mentions");
+    expect(before).toBe(1);
+    posted(store, 1);
+    await waitFor(() => expect(asks(socket, "chat_mentions")).toBe(before + 1));
+  });
+
+  test("nobody has named the reader", async () => {
+    const { Component } = MENTIONS;
+    mountChat(<Component params={{}} />, {
+      answers: { chat_mentions: { handle: "ada", mentions: [] } },
+    });
+    await settle();
+    expect(screen.getByText("Nobody has named you")).toBeTruthy();
+  });
+});
+
+describe("a reader chat answers nothing for", () => {
+  test.each([ROOMS, MENTIONS])(
+    "%s: a credential acting as no seat is told so, and nothing is asked",
+    async (def) => {
+      const { Component } = def;
+      const { socket } = mountChat(<Component params={{}} />, {
+        viewer: { ...ADA, handle: "", owner: "token:ci" },
+      });
+      await settle();
+      expect(
+        screen.getByText("Chatlet is read as a seat, and this sign-in holds none."),
+      ).toBeTruthy();
+      expect(socket.query.mock.calls.map(([what]) => what)).toEqual(["viewer"]);
+    },
+  );
+
+  test.each([ROOMS, MENTIONS])(
+    "%s: a company on a vendor's chat says where its chat is, and nothing is asked",
+    async (def) => {
+      const { Component } = def;
+      const { socket } = mountChat(<Component params={{}} />, {
+        viewer: { ...ADA, chat_backend: "vendor", chat_vendors: ["slack"] },
+      });
+      await settle();
+      expect(screen.getByText("This company's chat is on Slack.")).toBeTruthy();
+      expect(socket.query.mock.calls.map(([what]) => what)).toEqual(["viewer"]);
+    },
+  );
+
+  test("a company that runs no chat says so", async () => {
+    const { Component } = ROOMS;
+    mountChat(<Component params={{}} />, { viewer: { ...ADA, chat_backend: "none" } });
+    await settle();
+    expect(screen.getByText("This company runs no chat.")).toBeTruthy();
+  });
+});

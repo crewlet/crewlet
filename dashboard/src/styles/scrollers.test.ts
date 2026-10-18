@@ -153,7 +153,57 @@ const VIEW_BOUNDED: Record<string, string> = {
   "screens.css .tail-scroll.tailing": "a running phase's transcript",
   "screens.css .thread-split .thread-list": "a seat's thread list, beside the sticky detail",
   "screens.css .work-col-body": "a board lane's body",
+  "screens.css .chat-rail": "chat's rail, stacked above the room on a narrow screen",
 };
+
+/**
+ * The lists on a screen that FILLS THE SHELL, each scrolling itself.
+ *
+ * Under the fill (`app/fill.tsx`) the shell's own scroller stops being one, so
+ * a view whose list has no block scroller of its own is clipped at its foot
+ * with nothing to scroll it — the mention feed's older rows and Search chat's
+ * lower hits were, on any company with more than a screenful. Each of these
+ * FILLS rather than being bounded (no height of its own: it is the rest of a
+ * column the shell sized), so the bound rule below does not reach it; this
+ * does. jsdom computes no layout, which is why it is held in the sheets.
+ */
+const FILLS_AND_SCROLLS: Record<string, string> = {
+  "screens.css .chat-rail": "chat's rail",
+  "screens.css .chat-scroller": "a room's transcript",
+  "screens.css .chat-thread-body": "an open thread",
+  "screens.css .chat-list-body": "the mention feed and Search chat",
+};
+
+describe("a list on a screen that fills the shell", () => {
+  test("scrolls itself, and may shrink below what it holds", () => {
+    const all = rules();
+    for (const [where, what] of Object.entries(FILLS_AND_SCROLLS)) {
+      const body = all.get(where);
+      expect(body, `${what} (${where}) is gone from the sheets`).toBeDefined();
+      expect(scrollsBlock(body!), `${what} scrolls its block axis`).toBe(true);
+      expect(decl(body!, "min-height"), `${what} may shrink below its content`).toBe("0");
+    }
+  });
+
+  test("is what every chat list view draws its body in", () => {
+    // A LIST VIEW IS A `.chat-list`, and one whose body is not the scroller
+    // above is the clipped list again — so every view that draws one draws its
+    // body as `.chat-list-body`.
+    const views = modules().filter(
+      (m) => m.path.startsWith("routes/chatlet/") && /className="chat-list"/.test(m.text),
+    );
+    // THE CONTROL: the mention feed and the search are both list views.
+    expect(views.map((m) => m.path)).toEqual(
+      expect.arrayContaining(["routes/chatlet/Mentions.tsx", "routes/chatlet/Search.tsx"]),
+    );
+    for (const view of views) {
+      expect(
+        view.text,
+        `${view.path} draws a .chat-list with no .chat-list-body to scroll it`,
+      ).toMatch(/className="chat-list-body"/);
+    }
+  });
+});
 
 describe("a box that scrolls inside the page", () => {
   test("the detectors read every spelling, and only those", () => {

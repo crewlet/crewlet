@@ -170,7 +170,7 @@ func (s *surface) deep(ctx context.Context, tool catalog.Tool, args map[string]a
 	if err := s.t.svc.deepAvailable(ctx); err != nil {
 		return s.refuseBefore(ctx, tool, args, "Not available", err), nil
 	}
-	step := s.t.stepStart(tool, args, nil, "")
+	step := s.t.stepStart(tool, args, s.cardOptions(ctx), nil, "")
 	return s.t.runDeep(ctx, deepCall{step: step, goal: goal, brief: deepBrief(goal, plan, s.t.deep.attachments, s.t.page, s.t.boundary),
 		prior: parkedDeep{Step: step.Index, Label: step.Label, Goal: goal, StartedAt: step.started.UTC()}})
 }

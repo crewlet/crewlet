@@ -135,9 +135,12 @@ export interface DrawerProps {
   /** The reader's own name, for the greeting. */
   name: string;
   /**
-   * Where the panel stands. As an overlay or the whole window it is a modal,
-   * where the page's own keys stand aside and the panel answers ⌘. itself;
-   * as the whole window its foot is where a toast would otherwise land.
+   * Where the panel stands. As the whole window it is a modal, where the
+   * page's own keys stand aside and the panel answers ⌘. itself, and its foot
+   * is where a toast would otherwise land. Over the page's end edge it is not
+   * a modal (the frame passes `asideModal={false}`): the page beside it stays
+   * live, with no veil and no Tab trap, and the frame's own binding answers ⌘.
+   * from inside it, as it does beside the column.
    */
   shape: AssistantShape;
 }
@@ -164,7 +167,7 @@ export function Drawer({
   name,
   shape,
 }: DrawerProps) {
-  const modal = shape !== "column";
+  const modal = shape === "sheet";
   const view = useConversation();
   const page = usePageSnapshot();
   const toast = useToast();

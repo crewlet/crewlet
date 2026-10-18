@@ -194,7 +194,7 @@ func (s *surface) recordRefusal(ctx context.Context, tool catalog.Tool, args map
 	summary, reason string) string {
 
 	message := redact.Secrets(reason)
-	step := s.t.stepStart(tool, args, nil, "")
+	step := s.t.stepStart(tool, args, s.cardOptions(ctx), nil, "")
 	s.t.stepEnd(ctx, step, wire.StepRefused, summary, &wire.Refusal{Code: cards.CodeInvalidCall,
 		Message: message}, 0, 0)
 	return message
@@ -217,7 +217,7 @@ func (s *surface) read(ctx context.Context, tool catalog.Tool, args map[string]a
 	}
 	route, _ := tool.RouteOf(req)
 	shown, _ := tool.StepRequest(req)
-	step := s.t.stepStart(tool, args, shown, patternOf(route))
+	step := s.t.stepStart(tool, args, s.cardOptions(ctx), shown, patternOf(route))
 	resp, err := s.t.svc.dispatcher.Do(ctx, s.t.read, req)
 	if err != nil {
 		return s.unsent(ctx, step, tool, route, err)
@@ -296,13 +296,16 @@ func (s *surface) remember(key, model string) {
 	s.reads[key] = model
 }
 
-// cardOptions are what a read's card is told beyond its answer: each seat's
-// name, from the seat directory the turn reads through its own grant, read
-// only when a card has a seat to name; and the company's clock, which every
-// instant the model reads is said on.
+// cardOptions are what a read's card and a step's label are told beyond the
+// answer: each seat's name, from the seat directory the turn reads through its
+// own grant, read only when a card has a seat to name; each chat room as the
+// turn says it, read only when a call names one by its id; and the company's
+// clock, which every instant the model reads is said on.
 func (s *surface) cardOptions(ctx context.Context) cards.Options {
 	o := cards.Options{SeatName: func(handle string) (string, bool) {
 		return s.names.SeatName(ctx, handle)
+	}, Room: func(ref string) (cards.Room, bool) {
+		return s.names.Room(ctx, ref)
 	}}
 	if c, _ := s.t.svc.company(); c != nil {
 		o.Zone = c.Location()
@@ -320,7 +323,7 @@ func (s *surface) docs(ctx context.Context, tool catalog.Tool, args map[string]a
 	if err != nil {
 		return s.refuseBefore(ctx, tool, args, "Not found", err), nil
 	}
-	step := s.t.stepStart(tool, args, nil, "")
+	step := s.t.stepStart(tool, args, s.cardOptions(ctx), nil, "")
 	s.t.stepEnd(ctx, step, wire.StepDone, "Looked up", nil, 0, len(answer))
 	return toolloop.ToolResult{Output: provenance.Neutralise(s.t.boundary, answer)}, nil
 }
@@ -366,7 +369,7 @@ func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[strin
 		return s.refuseBefore(ctx, tool, args, "Not proposed", err), nil
 	}
 	args = prepared
-	step := s.t.stepStart(tool, args, nil, "")
+	step := s.t.stepStart(tool, args, s.cardOptions(ctx), nil, "")
 	// A PREVIEW'S READ is decoded and diffed, never handed to the model, so
 	// it reads to the preview's bound rather than a step's.
 	read := func(ctx context.Context, r exec.Request) (exec.Response, error) {
@@ -531,7 +534,7 @@ func (s *surface) navigate(ctx context.Context, tool catalog.Tool, args map[stri
 			request, pattern = shown, patternOf(route)
 		}
 	}
-	step := s.t.stepStart(tool, args, request, pattern)
+	step := s.t.stepStart(tool, args, s.cardOptions(ctx), request, pattern)
 	permitted, status, size := cards.MayOpen(link.Screen, s.t.person), 0, 0
 	if probe != nil {
 		resp, err := s.t.svc.dispatcher.Do(ctx, s.t.read, *probe)

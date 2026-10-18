@@ -168,10 +168,10 @@ time.
 ## Briefs
 
 The drawer's **Brief me on this page** row (or "Brief me on this decision",
-"this task", "this agent" where the screen has one record open) asks a
-**brief turn**: an ordinary turn of a new conversation, started, admitted,
-metered, recorded and streamed as any question is, that answers in a fixed
-shape rather than in prose. What a person sees is on the
+"this task", "this agent", "this room" where the screen has one record open)
+asks a **brief turn**: an ordinary turn of a new conversation, started,
+admitted, metered, recorded and streamed as any question is, that answers in a
+fixed shape rather than in prose. What a person sees is on the
 [concept page](../concepts/assistant.md#opening-it). What it means for you:
 
 - **It only reads.** A brief turn is offered the person's read tools and the
@@ -185,10 +185,13 @@ shape rather than in prose. What a person sees is on the
   something to do, ranked, the first the one to do first; a fact merely worth
   knowing goes in the optional `context` line, never a row
   ([ADR-0062](https://github.com/crewlet/crewlet/blob/main/adr/0062-a-briefs-verdict-is-its-rows-counted-and-every-row-is-something-to-do.md)).
-- **Its rows are the engine's.** A row survives only when the record it cites
-  appears in what this turn's own reads answered and the record's own read,
-  sent again as the person, answers it; the address is the engine's link
-  table's. A row the engine cannot check is dropped, never drawn, and counted
+- **Its rows are the engine's.** A row cites a task, a project, an agent, a
+  page, an artifact or a chat room (by its id or its name, `#launch`, which
+  the room's own read resolves), exactly the records whose screen the engine's
+  link table opens through a read of the record. A row survives only when the
+  record it cites appears in what this turn's own reads answered and the
+  record's own read, sent again as the person, answers it; the address is the
+  engine's link table's. A row the engine cannot check is dropped, never drawn, and counted
   in `crewlet.assistant.brief.rows_dropped`. A row is drawn danger only when
   that read carried the fact (a seat stopped or whose last turn failed, a task
   marked urgent).
@@ -210,7 +213,7 @@ shape rather than in prose. What a person sees is on the
 - **Its spend is its own.** Its rounds are recorded under the aux purpose
   `assistant_brief`, charged to the person's and the company's windows like
   any turn's, and its own cap below stops a brief that sets out to read the
-  company. Its turns are stamped with prompt version `assistant.brief.v3`.
+  company. Its turns are stamped with prompt version `assistant.brief.v4`.
 - **A card it cannot draw reads as a note.** A stored card in a shape this
   version's contract refuses (any brief written before prompt version
   `assistant.brief.v3`, or a newer node's card read by an older one during a
@@ -396,7 +399,7 @@ The assistant adds no hidden channel to the audit log. What it records:
 | `assistant_conversation_read` | An administrator's compliance read | Reader, owner, conversation and reason |
 
 A brief turn is an `assistant_turn_completed` like any other, told apart by its
-prompt version (`assistant.brief.v3`), and its spend is recorded under the aux
+prompt version (`assistant.brief.v4`), and its spend is recorded under the aux
 purpose `assistant_brief`.
 
 The `crewlet.assistant.*` metrics (turn duration, time to first output, turns

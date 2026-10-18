@@ -11,6 +11,13 @@
  * prose safe, so a description somebody else changed while this one was open is
  * refused and named rather than silently replaced.
  *
+ * Each editor, while it is open, is a field of the task's one draft for the
+ * person's own assistant (`app/assistant/boxes.ts`, declared by the page's
+ * edits in `edit.tsx`): the assistant reads the text as typed and proposes
+ * new text through the editor's own setter, and Save, with its `if_match`,
+ * stays the person's. One draft for both, because the page context carries
+ * one and each editor's own hid the other at its next keystroke.
+ *
  * # A checklist tick is a gesture
  *
  * `update_work_item{checklist: {op: "set_done"}}`, sent WITHOUT a version: the
@@ -40,60 +47,24 @@ import { plural } from "~/lib/format.ts";
 import type { AvatarStatus } from "@crewlethq/ui";
 import type { LogRefusal, QueryRefusal, WorkItem, WorkSummary } from "~/protocol/index.ts";
 import { useItemEdits } from "./edit.tsx";
-import { refuse, useAssistantDraft, type AssistantDraftSpec } from "~/app/assistant/draft.ts";
+import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { itemPath } from "~/lib/work.ts";
-
-/**
- * The task's title or description while it is open in its editor, as the
- * assistant reads and sets it (`useAssistantDraft`): the text as typed, set
- * through the editor's own setter, and Save, with its `if_match`, staying the
- * person's. Each editor declares its own; with both open, the one opened
- * last is the draft the assistant is told about.
- */
-function textDraft(args: {
-  item: WorkItem;
-  part: "title" | "description";
-  value: string;
-  apply: (next: string) => void;
-  busy: boolean;
-}): AssistantDraftSpec<string> {
-  const { item, part, value, apply, busy } = args;
-  const title = part === "title";
-  return {
-    kind: "client",
-    id: item.key,
-    revision: item.version,
-    step: part,
-    scope: `The ${part} of ${item.key} you are editing (not saved)`,
-    help:
-      `The ${part} of ${item.key} is open in its editor. You can propose new text for it; ` +
-      "Save stays the person's. Any other field of the task is changed with update_task.",
-    value,
-    fields: [
-      {
-        path: part,
-        label: title ? "Title" : "Description",
-        hint: title ? "One line" : "Markdown",
-        read: (v) => v,
-        write: (_, next) => {
-          if (typeof next !== "string") return refuse(`The ${part} is text.`);
-          if (title && next.trim() === "") return refuse("A task needs a title.");
-          return next;
-        },
-      },
-    ],
-    apply,
-    blocked: () => (busy ? "The task is being saved." : null),
-  };
-}
 
 /** The title, drawn as the page's heading and edited in place. */
 export function ItemTitle({ item }: { item: WorkItem }) {
   const edits = useItemEdits();
   const [draft, setDraft] = useState<string | null>(null);
-  useAssistantDraft(
+  useDraftBox(
     draft !== null && edits
-      ? textDraft({ item, part: "title", value: draft, apply: setDraft, busy: edits.busy })
+      ? {
+          path: "title",
+          label: "Title",
+          hint: "One line",
+          rank: 0,
+          value: draft,
+          set: setDraft,
+          refuses: (next) => (next.trim() === "" ? "A task needs a title." : null),
+        }
       : null,
   );
   if (draft !== null && edits) {
@@ -153,9 +124,17 @@ export function ItemTitle({ item }: { item: WorkItem }) {
 export function ItemDescription({ item, flush }: { item: WorkItem; flush?: boolean }) {
   const edits = useItemEdits();
   const [draft, setDraft] = useState<string | null>(null);
-  useAssistantDraft(
+  useDraftBox(
     draft !== null && edits
-      ? textDraft({ item, part: "description", value: draft, apply: setDraft, busy: edits.busy })
+      ? {
+          path: "description",
+          label: "Description",
+          hint: "Markdown",
+          rank: 1,
+          value: draft,
+          set: setDraft,
+          refuses: () => null,
+        }
       : null,
   );
   if (draft !== null && edits) {

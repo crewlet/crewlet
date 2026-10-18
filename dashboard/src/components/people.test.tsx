@@ -37,6 +37,7 @@ import {
 import type { HumanSeat } from "~/contract/identity.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 
 class InertWebSocket {
@@ -139,9 +140,41 @@ function mount(node: React.ReactNode) {
   const socket = new LiveSocket(store);
   render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>{node}</Router>
+      <ViewerProvider>
+        <Router>{node}</Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
+}
+
+/**
+ * The reach note as an admin granting access reads it, on a company whose
+ * chat is `chat_backend` — the one fact about the reader it reads.
+ */
+async function reach(node: React.ReactNode, chatBackend: string) {
+  const viewer = {
+    login: "ada.admin",
+    owner: "ada",
+    handle: "ada",
+    name: "Ada",
+    kind: "human",
+    grants: ["admin"],
+    acts: [],
+    project: "",
+    config_writer: true,
+    config_managed_by: [],
+    chat_backend: chatBackend,
+    chat_vendors: [],
+  };
+  const store = new Store();
+  store.setConnected(true);
+  const socket = { query: vi.fn(async (what: string) => (what === "viewer" ? viewer : {})) };
+  render(
+    <ClientContext.Provider value={{ store, socket } as never}>
+      <ViewerProvider>{node}</ViewerProvider>
+    </ClientContext.Provider>,
+  );
+  await settle();
 }
 
 /** A seat's holding as its page draws it, over the real listing hook — which
@@ -810,10 +843,34 @@ describe("the access picker", () => {
 });
 
 // WHAT A PERSON WILL MISS, said to the reader about themselves as well.
-test("the reach note speaks to the reader about their own access", () => {
-  render(<AppReachNote grants={["doclet"]} you />);
+test("the reach note speaks to the reader about their own access", async () => {
+  await reach(<AppReachNote grants={["doclet"]} you />, "chatlet");
   expect(screen.getByText(/agents can’t send you work/)).toBeTruthy();
   cleanup();
-  render(<AppReachNote grants={["admin"]} you />);
+  await reach(<AppReachNote grants={["admin"]} you />, "chatlet");
   expect(document.body.textContent).toBe("");
 });
+
+// WITHOUT CHATLET, WHAT AGENTS SAY NEVER REACHES THEM — on a company running the
+// engine's own chat, and only there: on a vendor's the conversation is the
+// vendor's, and a reader the viewer names no backend to is told nothing it
+// cannot stand behind. The tracker's note comes first where both are missing.
+// Mutation: drop the backend check and the vendor row goes red; drop the
+// chat note and the chatlet row does.
+test.each([
+  ["chatlet", true],
+  ["vendor", false],
+  ["none", false],
+  ["", false],
+])(
+  "on a company whose chat is %j, a person without Chatlet is told so: %s",
+  async (backend, said) => {
+    await reach(<AppReachNote grants={["worklet"]} />, backend);
+    expect(/Without Chatlet, what agents say to them/.test(document.body.textContent ?? "")).toBe(
+      said,
+    );
+    cleanup();
+    await reach(<AppReachNote grants={["doclet"]} />, backend);
+    expect(document.body.textContent).toMatch(/Without Worklet/);
+  },
+);

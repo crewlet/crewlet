@@ -115,6 +115,15 @@ var contract = []Entry{
 	{"BackupOutcome", ReadUnion, "internal/api/queries.TestTheBackupsScreenReadsWhatTheAnswerSends"},
 	{"BackupPolicy", ReadUnion, "internal/api/queries.TestTheBackupsScreenReadsWhatTheAnswerSends"},
 
+	// chat.ts
+	{"MAX_CHANNEL_NAME", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
+	{"MAX_BODY_BYTES", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
+	{"MAX_TOPIC_BYTES", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
+	{"MAX_PURPOSE_BYTES", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
+	{"MAX_DIRECT_PARTICIPANTS", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
+	{"CHANNEL_NAME_PATTERN", ReadScalar, "internal/chatlet.TestTheDashboardsChannelNameGrammarIsTheEngines"},
+	{"TYPING_THROTTLE_MS", ReadScalar, "internal/api/stream.TestTheDashboardReassertsTypingInsideTheEnginesExpiry"},
+
 	// audit.ts
 	{"OPERATOR_SOURCE", ReadScalar, "internal/events/types.TestTheAuditLogReadsEveryRuntimeAuditType"},
 	{"RUNTIME_AUDIT_TYPES", ReadLiteral, "internal/events/types.TestTheAuditLogReadsEveryRuntimeAuditType"},
@@ -282,6 +291,7 @@ var contract = []Entry{
 	// wire.ts
 	{"PushKind", ReadUnion, "internal/api/stream.TestTheDashboardKnowsExactlyThePushKindsTheEngineSends"},
 	{"QUERY_TIMEOUT_MS", ReadScalar, "internal/api.TestTheDashboardWaitsPastAReadOfTheGroup"},
+	{"MAX_IN_FLIGHT_QUERIES", ReadScalar, "internal/api/stream.TestTheDashboardAsksNoMoreAtOnceThanTheSocketRuns"},
 	{"MAX_EVENTS", ReadScalar, "internal/api/livestate.TestTheDashboardKeepsTheFeedTheEngineKeeps"},
 	{"LIVE_CALL_DETAIL", ReadLiteral, "internal/api/livestate.TestTheDashboardMergesEveryVersionedField"},
 	{"COLLEAGUE_QUERY_MAX", ReadScalar, "internal/api/queries.TestTheDashboardSendsNoNameTheEngineWouldRefuse"},

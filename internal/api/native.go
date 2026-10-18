@@ -510,6 +510,15 @@ func (l liveChat) Mentions(ctx context.Context, viewer string, q chatlet.Mention
 	return r.Mentions(ctx, viewer, q, fresh)
 }
 
+func (l liveChat) RoomNames(ctx context.Context, viewer string,
+	fresh statelog.Freshness) (chatlet.RoomNames, error) {
+	r, err := l.reader()
+	if err != nil {
+		return chatlet.RoomNames{}, err
+	}
+	return r.RoomNames(ctx, viewer, fresh)
+}
+
 // liveChatSearch is chat's ranked search, resolved per question: the router's,
 // whose serving data node resolves the viewer's rooms beside the index it
 // reads.

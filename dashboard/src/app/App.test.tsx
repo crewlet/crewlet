@@ -36,12 +36,13 @@ class InertWebSocket {
   close(): void {}
 }
 
-/** An admin's `viewer` answer: every screen is theirs to read. */
+/** An admin's `viewer` answer: every screen is theirs to read. EXPANDED, as
+ *  the engine reports an admin's grants: every app with it. */
 const ADMIN_VIEWER = {
   login: "founder",
   owner: "jane",
   handle: "jane",
-  grants: ["admin", "worklet", "doclet"],
+  grants: ["admin", "worklet", "doclet", "chatlet"],
 };
 
 /**
@@ -141,24 +142,15 @@ describe("the shell", () => {
 
   test("every workspace is in the sidebar, Settings included", async () => {
     // A SECTION THAT VANISHES without its grant is indistinguishable from one
-    // that does not exist, so Settings is always a row.
+    // that does not exist, so Settings is always a row. DERIVED FROM THE
+    // TABLE: a list written here was one workspace short the day Chatlet
+    // arrived, and passed.
     mountAs(Promise.resolve({ login: "jane.doe", owner: "jane.doe", grants: [] }));
     const nav = screen.getByRole("navigation", { name: "Navigation" });
-    for (const label of [
-      "Home",
-      "Inbox",
-      "My work",
-      "Principles",
-      "Org chart",
-      "Schedules",
-      "Integrations",
-      "Budgets",
-      "Worklet",
-      "Doclet",
-      "Artifacts",
-      "Live",
-    ]) {
-      expect(nav.textContent, label).toContain(label);
+    const rows = WORKSPACES.filter((ws) => ws.place !== "foot" && ws.place !== "menu");
+    expect(rows.map((ws) => ws.key)).toContain("chatlet");
+    for (const ws of rows) {
+      expect(nav.textContent, ws.label).toContain(ws.label);
     }
     // AT THE FOOT, AS ITS GLYPH beside the reader's own row: a link named in words.
     const foot = document.querySelector<HTMLElement>(".crewlet-app-shell__rail-foot")!;
@@ -346,6 +338,7 @@ describe("routing", () => {
       ["company", "org", "teams", "platform"],
       ["worklet", "ENG-42"],
       ["doclet", "pages", "66666666-6666-4666-8666-666666666666"],
+      ["chatlet", "88888888-8888-4888-8888-888888888888"],
       ["settings", "nodes", "node-a"],
       ["company", "integrations", "slack"],
       ["settings", "secrets", "SLACK_SIGNING_SECRET"],
@@ -665,6 +658,19 @@ describe("a section, for a reader holding none of its grants", () => {
     expect(screen.queryByText("Nodes needs Admin")).toBeNull();
   });
 
+  // AN APP'S WORKSPACE IS CLOSED WHOLE, its every page included — a chat
+  // ROOM too, which is the page a chat reader lives on and sits under no
+  // section's address of its own (`sectionOf` files it under the landing's).
+  // The frame draws its one refusal naming the app in place of the screen,
+  // and the screen mounts nothing: no rail, no room.
+  test("a chat room draws the one refusal naming Chatlet, and not the room", async () => {
+    location.hash = buildHash(["chatlet", "88888888-8888-4888-8888-888888888888"]);
+    const { view } = mountAs(Promise.resolve({ ...reader, grants: ["worklet", "doclet"] }));
+    expect(await screen.findByText("You need Chatlet access")).toBeDefined();
+    expect(view.container.querySelector(".chat-frame")).toBeNull();
+    expect(view.container.querySelector('nav[aria-label="Your rooms"]')).toBeNull();
+  });
+
   // THE CHARTER IS PUBLIC; the tool registry is Admin's, since what each
   // seat may call is how the company is run.
   test("the company's Overview is open to anybody, and MCP Tools is Admin's", async () => {
@@ -678,6 +684,94 @@ describe("a section, for a reader holding none of its grants", () => {
     location.hash = buildHash(["settings", "mcp-tools"]);
     mountAs(Promise.resolve({ login: "reader", owner: "reader", grants: ["worklet"] }));
     expect(await screen.findByText("You need Admin access")).toBeDefined();
+  });
+});
+
+// CHATLET, AS A PERSON. Each of its three pages is one component told which list
+// to draw, so a dispatch that swapped two of them draws the wrong list under a
+// correct trail and title — and "rendered something" passes that. Its
+// sections are drawn by ONE renderer, the screen's rail: a frame strip beside
+// it would be a second set of links to the same places.
+describe("chat, for a person", () => {
+  const served = {
+    read_level: "session",
+    complete: true,
+    position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 3 },
+  };
+
+  /** The frame, as a person bound to `ada` holding Chatlet, recording every question asked. */
+  function mountChat(hash: string) {
+    location.hash = hash;
+    const asked: string[] = [];
+    const store = new Store();
+    store.applyHealth(healthFrame({ nodes: 1, applied_epoch: 2 }));
+    const socket = new LiveSocket(store);
+    (socket as unknown as { query: (what: string) => Promise<unknown> }).query = async (what) => {
+      asked.push(what);
+      switch (what) {
+        case "viewer":
+          return {
+            login: "ada.lovelace",
+            owner: "ada",
+            handle: "ada",
+            name: "Ada",
+            kind: "human",
+            grants: ["chatlet"],
+            acts: [],
+            chat_backend: "chatlet",
+            chat_vendors: [],
+          };
+        case "chat_channels":
+          return { ...served, read_state: true, channels: [] };
+        case "chat_mentions":
+          return { ...served, handle: "ada", mentions: [] };
+        default:
+          // EVERYTHING ELSE IS A QUESTION THIS NODE DOES NOT SERVE: the frame
+          // reads what it is asking for, and an empty object is no answer.
+          throw new QueryError("unknown_query");
+      }
+    };
+    const view = render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
+    return { asked, view };
+  }
+
+  /** The links on the page to `path`, wherever they are drawn. */
+  function linksTo(view: ReturnType<typeof render>, path: string[]): number {
+    return view.container.querySelectorAll(`a[href="${buildHash(path)}"]`).length;
+  }
+
+  test.each(["#/chatlet", "#/chatlet/mentions", "#/chatlet/search"])(
+    "%s draws each chat list once, and no section strip",
+    async (hash) => {
+      const { view } = mountChat(hash);
+      await screen.findByRole("navigation", { name: "Your rooms" });
+      expect(linksTo(view, ["chatlet", "mentions"]), "links to Mentions").toBe(1);
+      expect(linksTo(view, ["chatlet", "search"]), "links to Search chat").toBe(1);
+      expect(view.container.querySelector(".section-tabs")).toBeNull();
+      expect(view.container.querySelector(".crewlet-section-frame__nav")).toBeNull();
+    },
+  );
+
+  test("#/chatlet/mentions draws the mention feed", async () => {
+    const { asked } = mountChat("#/chatlet/mentions");
+    expect(await screen.findByText(/Where you were named/)).toBeDefined();
+    expect(asked).toContain("chat_mentions");
+    expect(screen.queryByRole("searchbox", { name: "Search the company's chat" })).toBeNull();
+  });
+
+  test("#/chatlet/search draws the search, and asks for no mentions", async () => {
+    const { asked } = mountChat("#/chatlet/search");
+    expect(
+      await screen.findByRole("searchbox", { name: "Search the company's chat" }),
+    ).toBeDefined();
+    expect(screen.queryByText(/Where you were named/)).toBeNull();
+    expect(asked).not.toContain("chat_mentions");
   });
 });
 

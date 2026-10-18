@@ -357,31 +357,40 @@ func TestATableDrawsAFewOfItsOwnColumns(t *testing.T) {
 	}
 }
 
-// A RECORD LINK NAMED BY NOTHING IS NAMED BY WHAT IT OPENS, never by the raw
-// value its address carries: a seat's handle ("pm", which a two-letter
-// handle made a near-empty button) or a page's UUID is how the address spells
-// the record, and "Open seat" is what a person reads. A task, a project or a
-// space keeps its key, which people know. Mutation: fall back to the first
-// path value again, and this fails.
-func TestARecordLinkIsNamedByWhatItOpens(t *testing.T) {
+// A RECORD KNOWN ONLY BY ITS UUID IS HEADED BY ITS SPEC'S NAME, never by the
+// id, which reads as nothing to anybody: a direct conversation has no name of
+// its own, so its card is headed "Direct conversation", where a named room is
+// headed by its name after the "#" every screen draws, and a record whose id
+// is a key a person reads is still headed by that key, with no prefix. A
+// column's prefix is drawn before every value and never before nothing.
+// Mutation: head a card by its id whatever the id is, refuse a spec naming
+// both a title and a name, or draw a prefix before an empty value, and this
+// fails.
+func TestARecordKnownOnlyByItsIDIsHeadedByItsName(t *testing.T) {
 	t.Parallel()
-	for screen, params := range map[string]map[string]string{
-		"seat": {"handle": "pm"}, "page": {"id": "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"},
-		"turn": {"id": "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"},
+	spec := cards.Spec{Entity: &cards.Entity{Root: "channel", ID: "id", Title: "name",
+		TitlePrefix: "#", Name: "Direct conversation",
+		Facts: []cards.Fact{{Label: "Kind", Path: "kind", Type: wire.ColumnLabel}}}}
+	const room = "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
+	for answer, want := range map[string]string{
+		`{"channel":{"id":"` + room + `","kind":"dm"}}`:                     "Direct conversation",
+		`{"channel":{"id":"` + room + `","name":"launch","kind":"public"}}`: "#launch",
+		`{"channel":{"id":"ENG-4","kind":"public"}}`:                        "ENG-4",
 	} {
-		link, err := cards.Link(screen, params, "")
-		if err != nil {
-			t.Fatalf("%s: %v", screen, err)
-		}
-		for _, v := range params {
-			if link.Label == v || !strings.HasPrefix(link.Label, "Open ") {
-				t.Errorf("a %s link with no name reads %q", screen, link.Label)
-			}
+		built, err := cards.Build(spec, []byte(answer), evals.Epoch)
+		if err != nil || built.Empty || built.Card.Entity == nil ||
+			built.Card.Entity.Title != want {
+			t.Errorf("%s is headed %+v (%v), want %q", answer, built.Card.Entity, err, want)
 		}
 	}
-	if link, err := cards.Link("project", map[string]string{"key": "FAIR"}, ""); err != nil ||
-		link.Label != "FAIR" {
-		t.Errorf("a project link with no name reads %q (%v), want its key", link.Label, err)
+	rooms := cards.Spec{Table: &cards.Table{Title: "Rooms", Rows: "rooms", Columns: []cards.Column{
+		{Key: "room", Label: "Room", Path: "name", Type: wire.ColumnText, Prefix: "#"},
+		{Key: "unread", Label: "Unread", Path: "unread", Type: wire.ColumnNumber}}}}
+	built, err := cards.Build(rooms, []byte(`{"rooms":[{"name":"launch","unread":2},`+
+		`{"name":"","unread":1}]}`), evals.Epoch)
+	if err != nil || built.Card.Table == nil || len(built.Card.Table.Rows) != 2 ||
+		built.Card.Table.Rows[0][0] != "#launch" || built.Card.Table.Rows[1][0] != "" {
+		t.Errorf("a room column draws %+v (%v), want #launch and nothing", built.Card.Table, err)
 	}
 }
 
@@ -436,8 +445,9 @@ func TestTheModelIsToldARecordsKey(t *testing.T) {
 }
 
 // A SPEC OF A KEYED KIND IS REFUSED WITHOUT ITS KEY, and one of any other kind
-// with one, so a new read can never ship a task the drawer cannot name.
-// Mutation: drop the check from Validate and both specs pass.
+// with one, so a new read can never ship a task or a room the drawer cannot
+// name; and only a room is headed by the room it is. Mutation: drop either
+// check from Validate and its specs pass.
 func TestAKeyedKindNeedsItsKeyAndNoOtherHasOne(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -451,6 +461,11 @@ func TestAKeyedKindNeedsItsKeyAndNoOtherHasOne(t *testing.T) {
 		{"a seat keyed by its handle", cards.Entity{Kind: wire.ResourceSeat, ID: "handle", Key: "handle", Title: "role"}, false},
 		{"a seat with none", cards.Entity{Kind: wire.ResourceSeat, ID: "handle", Title: "role"}, true},
 		{"a record of no kind", cards.Entity{ID: "id", Title: "title"}, true},
+		{"a room keyed by its name", cards.Entity{Kind: wire.ResourceRoom, ID: "id", Key: "name",
+			KeyPrefix: "#", Title: "name", Room: "id", Name: "Direct conversation"}, true},
+		{"a room with none", cards.Entity{Kind: wire.ResourceRoom, ID: "id", Title: "name"}, false},
+		{"a task headed by a room", cards.Entity{Kind: wire.ResourceTask, ID: "key", Key: "key",
+			Title: "title", Room: "id"}, false},
 	} {
 		e := tc.e
 		if err := (cards.Spec{Entity: &e}).Validate(); (err == nil) != tc.ok {

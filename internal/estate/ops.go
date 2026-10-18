@@ -225,6 +225,8 @@ type ChatReader interface {
 		fresh statelog.Freshness) (chatlet.Thread, error)
 	Mentions(ctx context.Context, viewer string, q chatlet.MentionQuery,
 		fresh statelog.Freshness) (chatlet.MentionFeed, error)
+	RoomNames(ctx context.Context, viewer string,
+		fresh statelog.Freshness) (chatlet.RoomNames, error)
 
 	// Readable is every room the viewer may READ, which is wider than the
 	// rooms it is in. It is no operation of its own: it is the
@@ -1784,6 +1786,22 @@ var opChatMentions = define("chat.mentions", opRead, chatDomain, false,
 			return chatlet.MentionFeed{}, errNoHalf
 		}
 		return b.Chat.Mentions(ctx, a.Viewer, a.Query, a.Fresh)
+	})
+
+type chatRoomNamesArgs struct {
+	Viewer string
+	Fresh  statelog.Freshness
+}
+
+// THE NAMES OF THE ROOMS A VIEWER MAY READ, resolved by the serving reader from
+// the viewer that crossed, as every chat read's set is: never a set of rooms a
+// caller could hand over.
+var opChatRoomNames = define("chat.room_names", opRead, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatRoomNamesArgs) (chatlet.RoomNames, error) {
+		if b.Chat == nil {
+			return chatlet.RoomNames{}, errNoHalf
+		}
+		return b.Chat.RoomNames(ctx, a.Viewer, a.Fresh)
 	})
 
 // ChatQuery is one ranked search of the company's chat, as it crosses: the

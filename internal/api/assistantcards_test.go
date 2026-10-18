@@ -18,8 +18,10 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -209,7 +211,7 @@ integrations:
 `
 
 // cardsWorld is the filled company's sources, and the switch that puts its
-// work index in the state of one still building.
+// work and chat indexes in the state of ones still building.
 type cardsWorld struct {
 	paritySources
 	building *atomic.Bool
@@ -225,6 +227,8 @@ func filledWorld(t *testing.T) cardsWorld {
 	building := &atomic.Bool{}
 	work := filledWork{building: building}
 	s.Work, s.WorkSearch, s.Sandbox, s.Pages = work, work, filledRuns{}, filledPages{}
+	talk := filledChat{building: building}
+	s.Chat, s.ChatSearch = talk, talk
 	s.Knowledge = func() knowledge.Searcher { return filledKnowledge{} }
 	s.Budget, s.Backups = filledBudget{}, filledBackups{}
 	// THE MATTERMOST INTEGRATION'S LAST RECONCILE, filled, as the fleet's
@@ -365,6 +369,59 @@ func (w filledWork) Search(context.Context, worklet.SearchQuery) (worklet.Search
 		return worklet.SearchAnswer{}, worklet.ErrIndexBuilding
 	}
 	return filled[worklet.SearchAnswer](), nil
+}
+
+// filledChat is the company's own chat answering every read filled, and its
+// index as one still building while building is set.
+type filledChat struct{ building *atomic.Bool }
+
+func (filledChat) Channels(context.Context, string, chatlet.ChannelsQuery, statelog.Freshness) (
+	chatlet.ChannelListing, error) {
+	return filled[chatlet.ChannelListing](), nil
+}
+
+func (filledChat) Channel(context.Context, string, string, statelog.Freshness) (
+	chatlet.ChannelDetail, error) {
+	return filled[chatlet.ChannelDetail](), nil
+}
+
+func (filledChat) ChannelNamed(context.Context, string, string, statelog.Freshness) (
+	chatlet.ChannelDetail, error) {
+	return filled[chatlet.ChannelDetail](), nil
+}
+
+func (filledChat) Messages(context.Context, string, chatlet.TranscriptQuery, statelog.Freshness) (
+	chatlet.Transcript, error) {
+	return filled[chatlet.Transcript](), nil
+}
+
+func (filledChat) Thread(context.Context, string, chatlet.ThreadQuery, statelog.Freshness) (
+	chatlet.Thread, error) {
+	return filled[chatlet.Thread](), nil
+}
+
+func (filledChat) Mentions(context.Context, string, chatlet.MentionQuery, statelog.Freshness) (
+	chatlet.MentionFeed, error) {
+	return filled[chatlet.MentionFeed](), nil
+}
+
+func (filledChat) RoomNames(context.Context, string, statelog.Freshness) (
+	chatlet.RoomNames, error) {
+	return filled[chatlet.RoomNames](), nil
+}
+
+// Search answers filled hits, each said in a room the answer names, as the
+// serving node names every room its hits were said in.
+func (c filledChat) Search(context.Context, estate.ChatQuery) (estate.ChatSearchAnswer, error) {
+	answer := filled[estate.ChatSearchAnswer]()
+	answer.Rooms = map[string]chatlet.ReadableRoom{}
+	for _, hit := range answer.Hits {
+		room := filled[chatlet.ReadableRoom]()
+		room.ID = hit.ChannelID
+		answer.Rooms[hit.ChannelID] = room
+	}
+	answer.Building = c.building.Load()
+	return answer, nil
 }
 
 // filledRuns is a node running one coding run, filled, parked on a question

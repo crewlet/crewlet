@@ -13,7 +13,7 @@ import (
 // all is the catalogue, built and checked once.
 var all = sync.OnceValues(func() ([]Tool, error) {
 	var out []Tool
-	for _, t := range readTools() {
+	for _, t := range slices.Concat(readTools(), chatReads()) {
 		// EVERY READ IS A ROUTE'S OWN ANSWER, labelled as one, and
 		// colleague unless the tool says its text comes from outside the
 		// company (Trust or TrustOf).
