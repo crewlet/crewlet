@@ -271,11 +271,11 @@ func TestTheRetryOfAMoveThatLandedIsAnsweredByTheMove(t *testing.T) {
 		},
 		"a walk stopped after the root moved": func(opID string) (tracker.WriteResult, error) {
 			return tracker.WriteResult{Result: statelog.Result{
-				Outcome: statelog.OutcomeApplied, OpID: opID,
-			}}, &tracker.MoveStopped{Root: "i1", Key: "OPS-3", Target: "OPS",
-				Followed: 1, Of: 2, OpID: opID, Err: fmt.Errorf("tracker: "+
-					"whether task id-9's move into OPS landed is unknown: %w",
-					tracker.ErrStepUnresolved)}
+					Outcome: statelog.OutcomeApplied, OpID: opID,
+				}}, &tracker.MoveStopped{Root: "i1", Key: "OPS-3", Target: "OPS",
+					Followed: 1, Of: 2, OpID: opID, Err: fmt.Errorf("tracker: "+
+						"whether task id-9's move into OPS landed is unknown: %w",
+						tracker.ErrStepUnresolved)}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
