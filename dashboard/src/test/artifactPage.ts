@@ -19,6 +19,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { runInThisContext } from "node:vm";
 import { FRAME_BRIDGE, FRAME_MESSAGE } from "@crewlethq/ui/FrameProtocol";
 import { RUNTIME_CONTRACT } from "~/contract/artifacts.ts";
 import {
@@ -33,7 +34,7 @@ import {
 } from "~/protocol/index.ts";
 import { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
 import type { KeyedAnswer, KeyedRequest } from "~/lib/keyedWrite.ts";
-import { PageHost } from "~/routes/artifacts/host.ts";
+import type { PageHost, PageHostOptions } from "~/routes/artifacts/host.ts";
 import type {
   BridgePerson,
   BridgeRoster,
@@ -273,6 +274,13 @@ export function pageRuntime(): PageRuntime {
 
 /** What a suite opens a page with. */
 export interface PageOptions {
+  /**
+   * Builds the real host: `(o) => new PageHost(o)`. Handed in by the suite,
+   * because a module outside `routes/` reaches a screen's code only through
+   * the lazy split, and a suite (which no gate counts as the app) may import
+   * it directly.
+   */
+  host: (options: PageHostOptions) => PageHost;
   capabilities: RuntimeCapability[];
   engine: MemoryEngine;
   viewer: BridgeViewer;
@@ -311,7 +319,7 @@ export async function openPage(options: PageOptions): Promise<OpenPage> {
     newKey: () => `key-${++n}`,
   });
   options.engine.attach(store);
-  const host = new PageHost({
+  const host = options.host({
     artifact: ARTIFACT,
     version: 1,
     capabilities: options.capabilities,
@@ -349,8 +357,9 @@ export async function openPage(options: PageOptions): Promise<OpenPage> {
   window.location.hash = `nonce=${NONCE}&theme=light`;
   Object.defineProperty(window, "parent", { value: parent, configurable: true });
   // THE RUNTIME IS A CLASSIC SCRIPT the origin places first in the page: run
-  // as one, against this window's globals.
-  new Function(runtimeScript())();
+  // as one in this context, against this window's globals, by Node's own
+  // script runner (this is a suite's helper, never the dashboard's code).
+  runInThisContext(runtimeScript(), { filename: "runtime.js" });
   await pageRuntime().ready;
   return {
     host,
