@@ -625,17 +625,26 @@ type chatRoomRows struct{ db store.ReplicatedReader }
 // archived a room rather than deleting it did not ask to keep it for ever.
 //
 // A CORRELATED SUBQUERY rather than a join with a GROUP BY, and it is the
-// difference between a seek and a scan of the corpus. `MIN(created_at)` for
-// one channel is the leading edge of `chat_messages_prune_idx` — the index
-// the prune's own range delete drives on — so this is one index seek per room.
-// The rooms are every one the company ever made, archived ones included, so
+// difference between a seek and a scan of the corpus. A room's oldest message
+// is the leading edge of `chat_messages_prune_idx` — the index the prune's own
+// range delete drives on — so the subquery is one index seek per room. The
+// rooms are every one the company ever made, archived ones included, so
 // [chatlet.MaxChannels] — which counts the live ones — does not bound them; a
 // seek per room is what keeps that cheap. The grouped join would read every
 // message row in the company to answer the same question.
+//
+// `ORDER BY created_at LIMIT 1`, NEVER `MIN(created_at)`, though the two mean
+// the same row. This planner DECORRELATES an aggregate subquery: it builds an
+// ephemeral index of every room's minimum by scanning `chat_messages_prune_idx`
+// whole, and then looks each room up in that — so the MIN spelling is the
+// grouped join under another name, every message the company has ever kept
+// read once an hour. The limit is not decorrelated, and stays a seek per room;
+// [TestTheRoomReadSeeksEachRoomsOldestMessage] holds the plan to it.
 const chatPruneRoomsSQL = `
 	SELECT c.id, c.retention_days,
-	       (SELECT MIN(m.created_at) FROM chat_messages m
-	         WHERE m.channel_id = c.id)
+	       (SELECT m.created_at FROM chat_messages m
+	         WHERE m.channel_id = c.id
+	         ORDER BY m.created_at LIMIT 1)
 	  FROM chat_channels c`
 
 // PruneRooms reads the company's rooms in one transaction.
