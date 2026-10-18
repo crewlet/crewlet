@@ -60,7 +60,9 @@ import (
 // the state log trims against, the [Rebases] a retried unit of work inherits
 // its instant from, the [ObjectStores] backend the fleet's files are in, the
 // [TrashReaps] account of the trash reaper's last pass, the
-// [Custody] of a stateless node's event batches, and the [Markers] sweep that
+// [Custody] of a stateless node's event batches, the [UploadReservations]
+// that hold the company's bytes before an artifact's upload moves them, and
+// the [Markers] sweep that
 // keeps every removal from being read again for ever. The list above is the
 // migration, not the estate.
 //
@@ -229,6 +231,24 @@ const (
 	// import the store, so coordtest's retention guard holds the two
 	// together.
 	CustodyRetention = 32 * 24 * time.Hour
+
+	// UploadRetention is how long an upload reservation's records outlive
+	// their last write (see [UploadReservations]), and so the uploads
+	// bucket's age.
+	//
+	// THIRTY HOURS: the longest a reservation must still be readable after
+	// its last write is the hold it keeps on bytes nothing names yet, which
+	// lasts until the object collector could have deleted them: the
+	// collector's grace (a day, objstore/collect.PendingGrace), two of its
+	// passes, and the transfer window an upload is given (an hour at most,
+	// objstore.MaxPresignTerm) with the pace of its largest file. That is
+	// twenty-seven hours and a few minutes; the rest is margin, so a record
+	// the bucket ages out is one whose hold has already lapsed. Shorter would
+	// forget a hold on bytes still in the store, which the ledger would then
+	// stop counting; longer keeps records nobody reads. This package cannot
+	// import the object store, so internal/artifactupload's tests hold the
+	// two together.
+	UploadRetention = 30 * time.Hour
 
 	// SandboxRunRetention is absent for the same reason as the channel
 	// bucket's, one step sharper: a detached coding run can sit parked on
@@ -1431,6 +1451,7 @@ type Fleet interface {
 	MaintenanceRegister
 	Markers
 	Custody
+	UploadReservations
 }
 
 // ErrObjectBackendMoved is a move of the fleet's object backend from a store

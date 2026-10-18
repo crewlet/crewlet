@@ -415,7 +415,7 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why EIGHTEEN buckets and not one
+// # Why NINETEEN buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -484,6 +484,12 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	           batch, and a node that wrote one and never learned whether it
 //	           kept it asks later — so the record has to outlive every row
 //	           it can be asked about, and nothing longer
+//	uploads    the longest hold an upload reservation keeps, thirty hours:
+//	           a reservation holds bytes nothing names until the object
+//	           collector could have deleted them, a day and two passes past
+//	           the upload's last transfer, and a record the bucket ages out
+//	           is one whose hold has lapsed, so an abandoned upload's record
+//	           goes on its own, with no sweep and no index of what to sweep
 //	positions  none at all, and this is the one where an age would be
 //	           worst: a node's position is what the trim reads to decide
 //	           what every other node may delete, and a key that expired
@@ -521,6 +527,7 @@ const (
 	mailboxesSuffix    = "_mailboxes"
 	objectsSuffix      = "_objects"
 	custodySuffix      = "_custody"
+	uploadsSuffix      = "_uploads"
 	// activationKey holds the pointer AND the current revision's sealed
 	// body, in one record — see [activationRecord].
 	activationKey = "activation"
@@ -580,6 +587,13 @@ type FleetConfig struct {
 	// stateless node's batch is kept — see [coord.CustodyRetention].
 	CustodyRetention time.Duration
 
+	// UploadRetention is how long an upload reservation's records outlive
+	// their last write. Zero takes [coord.UploadRetention], the one value a
+	// deployment has any reason to run: the age outlasts the longest hold a
+	// reservation keeps, and a shorter one forgets a hold on bytes still in
+	// the object store.
+	UploadRetention time.Duration
+
 	// Replicas is the JetStream replica count for every bucket.
 	Replicas int
 
@@ -607,6 +621,9 @@ func (c *FleetConfig) normalize() error {
 	if c.Replicas == 0 {
 		c.Replicas = 1
 	}
+	if c.UploadRetention == 0 {
+		c.UploadRetention = coord.UploadRetention
+	}
 	required := []struct {
 		name  string
 		value time.Duration
@@ -619,6 +636,7 @@ func (c *FleetConfig) normalize() error {
 		{"BudgetRetention", c.BudgetRetention},
 		{"StatusFreshness", c.StatusFreshness},
 		{"CustodyRetention", c.CustodyRetention},
+		{"UploadRetention", c.UploadRetention},
 	}
 	for _, field := range required {
 		switch {
@@ -658,6 +676,7 @@ type FleetStore struct {
 	mailboxes    jetstream.KeyValue
 	objects      jetstream.KeyValue
 	custody      jetstream.KeyValue
+	uploads      jetstream.KeyValue
 
 	// positions is the register every ageless key class the fleet still
 	// composes shares: a node's log positions, a trim hold, a backup point,
@@ -717,7 +736,7 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // The buckets below are opened one after another and each takes its own
 // provisioning budget, so without a ceiling the real bound on this call is the
 // PRODUCT rather than the term: a wedged cluster is rediscovered once per
-// bucket, eighteen buckets in a row, and a boot that nobody meant to allow ten
+// bucket, nineteen buckets in a row, and a boot that nobody meant to allow ten
 // minutes gets it. Nothing declared that number, which is the shape of a limit
 // that is not a decision. [jsprovision.SequenceBudget] is the decision,
 // applied once here.
@@ -816,6 +835,9 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 		{&store.custody, custodySuffix,
 			"Crewlet stateless-node event custody; the bucket TTL outlasts the event log's retention",
 			cfg.CustodyRetention},
+		{&store.uploads, uploadsSuffix,
+			"Crewlet artifact upload reservations; the bucket TTL outlasts the longest hold a reservation keeps",
+			cfg.UploadRetention},
 		{&store.positions, positionsSuffix,
 			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0},
 	} {
