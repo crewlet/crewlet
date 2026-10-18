@@ -420,7 +420,9 @@ type Actor struct {
 	// [turnctx.Turn.WorkSince] — and it travels beside WorkKey for the
 	// reason the key does: a re-run must reproduce it exactly, because it
 	// is the instant every operation id derived from the key carries. See
-	// [Actor.OperationSince].
+	// [Actor.OperationSince]. SET BY THE TURN, or for a request's key by
+	// [Actor.Keyed] and nowhere else, so the instant a request's writes
+	// carry is always its key's own.
 	WorkSince time.Time
 
 	// RebasedTo is the instant a derived operation id carries in place of
@@ -489,6 +491,36 @@ func (a Actor) OperationSeed() string {
 		return a.WorkKey
 	}
 	return a.TurnID
+}
+
+// Keyed is this actor carrying a request's operation key: the ONE place a key a
+// transport put on its request goes onto an actor, dated by the key's own
+// instant ([statelog.OpMintedAt]) — which every id the actor's writes derive
+// carries, and which the ledger vouches for a retry by.
+//
+// A KEY THAT CARRIES NO INSTANT IS REFUSED, by the rule a key a caller sends is
+// held to ([statelog.CheckCallerOpID]), rather than dated at the epoch: dated
+// there, every tracker id the request derived read as older than any loss the
+// ledger ever had, and was answered `unknown` on every attempt without being
+// published — while the knowledge base and chat, which derive through
+// [statelog.KeyedOpID], refused the same key outright. The rule was written
+// twice, once per surface, and each copy dropped the instant's second value.
+//
+// AN EMPTY KEY IS NO KEY, and the actor comes back as it was: the operator's
+// assistant over MCP sends none, and names its operation itself
+// ([Actor.Operation]).
+func (a Actor) Keyed(key string) (Actor, error) {
+	if key == "" {
+		return a, nil
+	}
+	if err := statelog.CheckCallerOpID(key); err != nil {
+		return Actor{}, fmt.Errorf("builtin: a request's operation key is an "+
+			"operation id this engine minted, carrying the instant it was "+
+			"minted: %w", err)
+	}
+	at, _ := statelog.OpMintedAt(key)
+	a.WorkKey, a.WorkSince = key, at
+	return a, nil
 }
 
 // keyedRequest reports whether this caller is a REQUEST whose transport carries
