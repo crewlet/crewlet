@@ -274,8 +274,10 @@ is condensed by the seat's auxiliary model unless the call passes `offset`.
 **Publishing delivers nowhere**: no artifact tool counts as a delivery, so a
 seat asked in a chat thread posts the `url` every answer carries with its chat
 tools. The bundled `skill:artifacts` [Tool Skill](../concepts/tool-skills.md)
-teaches the design contract and is enforced on the three tools that write
-bytes; `skills/crewlet-artifacts/SKILL.md` carries the same contract for your
+teaches the design contract and how to shape and fill a datastore (a schema
+before rows, batched writes, blind cells and guarded long text, `humans_only`
+for approvals), and is enforced on the five tools that write bytes, a schema
+or rows; `skills/crewlet-artifacts/SKILL.md` carries the same contract for your
 own assistant, installed as the
 [`company-architect` skill](../getting-started/ai-authoring.md#the-company-architect-skill)
 is (copy the directory into your assistant's skills folder).
