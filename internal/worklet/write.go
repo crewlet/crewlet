@@ -1534,14 +1534,17 @@ func (w *Writer) RecordTurn(ctx context.Context, opID string, turn TurnRecord) (
 	}
 }
 
+// taskProjectStatement is the project one task's row names, read by
+// [Writer.projectOfTask] and [chargeable] and named for the plan test.
+const taskProjectStatement = `SELECT project_key FROM tracker_tasks WHERE id = ?`
+
 // projectOfTask is the project a task's own row names, read ahead of the
 // decide so the record's scope can be formed. Empty for a task this node does
 // not hold, which the decide then refuses with the message that says why.
 func (w *Writer) projectOfTask(ctx context.Context, id string) (string, error) {
 	var project string
 	err := w.db.Read(ctx, func(tx *sql.Tx) error {
-		err := tx.QueryRowContext(ctx,
-			`SELECT project_key FROM tracker_tasks WHERE id = ?`, id).Scan(&project)
+		err := tx.QueryRowContext(ctx, taskProjectStatement, id).Scan(&project)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -1581,8 +1584,7 @@ func (w *Writer) recordTurnIn(ctx context.Context, opID, project string,
 // is a purge — final — or a create this node has not applied yet.
 func chargeable(ctx context.Context, tx *sql.Tx, id, project string) error {
 	var home string
-	switch err := tx.QueryRowContext(ctx,
-		`SELECT project_key FROM tracker_tasks WHERE id = ?`, id).Scan(&home); {
+	switch err := tx.QueryRowContext(ctx, taskProjectStatement, id).Scan(&home); {
 	case errors.Is(err, sql.ErrNoRows):
 		return missingTask(ctx, tx, id, "a turn cannot be charged to rows that "+
 			"no longer exist — the spend is still on the seat's own counters")

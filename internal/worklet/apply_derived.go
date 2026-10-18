@@ -61,6 +61,9 @@ func reopened(from, to Status) bool {
 	return from.Group().Finished() && !to.Group().Finished()
 }
 
+// countReopenStatement is [countReopen]'s write, named for the plan test.
+const countReopenStatement = `UPDATE tracker_tasks SET reopens = reopens + 1 WHERE id = ?`
+
 // countReopen adds one to a task's reopen counter when the history row this
 // apply has just written records a reopen.
 //
@@ -84,8 +87,7 @@ func countReopen(ctx context.Context, tx *sql.Tx, subject Subject, fields string
 	if moved.Status == nil || !reopened(Status(moved.Status.From), Status(moved.Status.To)) {
 		return 0, nil
 	}
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE tracker_tasks SET reopens = reopens + 1 WHERE id = ?`, subject.ID); err != nil {
+	if _, err := tx.ExecContext(ctx, countReopenStatement, subject.ID); err != nil {
 		return 0, fmt.Errorf("worklet: count the reopen of task %s: %w", subject.ID, err)
 	}
 	return 1, nil
@@ -134,6 +136,10 @@ func restampStatement(id string) (string, []any) {
 		       GROUP BY subject_id) h ON h.subject_id = t.id
 		WHERE h.newest > 0 AND t.updated_at <> h.newest`, args
 }
+
+// restampUpdatedStatement is [restampUpdated]'s write of one task's last
+// change, named for the plan test.
+const restampUpdatedStatement = `UPDATE tracker_tasks SET updated_at = ?, document = ? WHERE id = ?`
 
 // restampUpdated is every task's `updated_at` recomputed as the newest
 // `effective_at` among its own history rows — every task's when id is empty,
@@ -193,14 +199,23 @@ func restampUpdated(ctx context.Context, tx *sql.Tx, id string) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("worklet: encode task %s: %w", r.id, err)
 		}
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE tracker_tasks SET updated_at = ?, document = ? WHERE id = ?`,
+		if _, err := tx.ExecContext(ctx, restampUpdatedStatement,
 			r.newest, document, r.id); err != nil {
 			return 0, fmt.Errorf("worklet: stamp task %s's last change: %w", r.id, err)
 		}
 	}
 	return len(repairs), nil
 }
+
+// activeCountsStatement is [rederiveActiveCounts]' recount of every project,
+// named for the plan test.
+const activeCountsStatement = `UPDATE tracker_projects SET active_count = ` +
+	activeRecount + ` WHERE active_count <> ` + activeRecount
+
+// activeRecount is one project's active work, counted from its task rows.
+const activeRecount = `(SELECT COUNT(*) FROM tracker_tasks t
+		WHERE t.project_key = tracker_projects.key
+		  AND t.status_group = ? AND t.removed_at IS NULL)`
 
 // rederiveActiveCounts is every project's `active_count` recounted from its
 // task rows.
@@ -218,18 +233,21 @@ func restampUpdated(ctx context.Context, tx *sql.Tx, id string) (int, error) {
 // company's projects are tens; the count seeks each through the tasks'
 // project index.
 func rederiveActiveCounts(ctx context.Context, tx *sql.Tx) (int, error) {
-	const recount = `(SELECT COUNT(*) FROM tracker_tasks t
-		WHERE t.project_key = tracker_projects.key
-		  AND t.status_group = ? AND t.removed_at IS NULL)`
-	res, err := tx.ExecContext(ctx,
-		`UPDATE tracker_projects SET active_count = `+recount+
-			` WHERE active_count <> `+recount,
+	res, err := tx.ExecContext(ctx, activeCountsStatement,
 		string(GroupActive), string(GroupActive))
 	if err != nil {
 		return 0, fmt.Errorf("worklet: recount the active work of every project: %w", err)
 	}
 	return affected(res)
 }
+
+// clearReopensStatement and setReopensStatement are [rederiveReopens]' two
+// writes, named for the plan test: every counter cleared, a pass over the
+// whole table by definition, and then each task's written by its key.
+const (
+	clearReopensStatement = `UPDATE tracker_tasks SET reopens = 0 WHERE reopens <> 0`
+	setReopensStatement   = `UPDATE tracker_tasks SET reopens = ? WHERE id = ?`
+)
 
 // rederiveReopens is every task's `reopens` recomputed from the status deltas
 // in its history rows.
@@ -247,7 +265,7 @@ func rederiveReopens(ctx context.Context, tx *sql.Tx) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE tracker_tasks SET reopens = 0 WHERE reopens <> 0`)
+	res, err := tx.ExecContext(ctx, clearReopensStatement)
 	if err != nil {
 		return 0, fmt.Errorf("worklet: clear the reopen counters to re-derive them: %w", err)
 	}
@@ -265,8 +283,7 @@ func rederiveReopens(ctx context.Context, tx *sql.Tx) (int, error) {
 	slices.Sort(ids)
 	written := 0
 	for _, id := range ids {
-		res, err := tx.ExecContext(ctx,
-			`UPDATE tracker_tasks SET reopens = ? WHERE id = ?`, counts[id], id)
+		res, err := tx.ExecContext(ctx, setReopensStatement, counts[id], id)
 		if err != nil {
 			return 0, fmt.Errorf("worklet: write the re-derived reopens of task %s: %w", id, err)
 		}

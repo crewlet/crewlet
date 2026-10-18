@@ -114,6 +114,12 @@ var respreadRowsStatement = `
 		WHERE project_key = ? AND removed_at IS NULL AND ` + longRank("rank") + `
 		ORDER BY rank, id`
 
+// lowestRankStatement is [PlanRespread]'s read of the project's lowest live
+// rank, named for the plan test.
+const lowestRankStatement = `
+		SELECT MIN(rank) FROM tracker_tasks
+		WHERE project_key = ? AND removed_at IS NULL`
+
 // PlanRespread mints a project's whole re-spread.
 //
 // It reads ONE snapshot: the rows whose keys are past the threshold, in
@@ -145,9 +151,7 @@ func PlanRespread(ctx context.Context, db store.ReplicatedReader, project string
 			return err
 		}
 		var min sql.NullString
-		if err := tx.QueryRowContext(ctx, `
-			SELECT MIN(rank) FROM tracker_tasks
-			WHERE project_key = ? AND removed_at IS NULL`, project).
+		if err := tx.QueryRowContext(ctx, lowestRankStatement, project).
 			Scan(&min); err != nil {
 			return fmt.Errorf("worklet: read %s's lowest rank: %w", project, err)
 		}

@@ -1961,6 +1961,18 @@ func taskRowsStatement(extraJoin string, extraArgs []any, set taskSet,
 	return query, append(joinArgs, set.args...)
 }
 
+// blockersStatement is [loadBlockers]' read of n tasks' dependency edges,
+// named for the plan test.
+func blockersStatement(n int) string {
+	return `SELECT r.task_id, r.other_id, r.one_sided, r.one_sided_final,
+	                 COALESCE(d.blocker_open, 0)
+	          FROM tracker_relations r
+	          LEFT JOIN tracker_task_deps d
+	                 ON d.task_id = r.task_id AND d.blocker_id = r.other_id
+	          WHERE r.kind = ? AND r.task_id IN (` + placeholders(n) + `)
+	          ORDER BY r.task_id, r.other_id`
+}
+
 // loadBlockers fills [TaskRow.WaitingOn] for one page, in one statement.
 //
 // TWO TABLES, because the edge's two halves live apart and neither alone is
@@ -1982,16 +1994,8 @@ func loadBlockers(ctx context.Context, tx *sql.Tx, rows []TaskRow) error {
 		at[rows[i].ID] = i
 		ids = append(ids, rows[i].ID)
 	}
-	query := `SELECT r.task_id, r.other_id, r.one_sided, r.one_sided_final,
-	                 COALESCE(d.blocker_open, 0)
-	          FROM tracker_relations r
-	          LEFT JOIN tracker_task_deps d
-	                 ON d.task_id = r.task_id AND d.blocker_id = r.other_id
-	          WHERE r.kind = ? AND r.task_id IN (` +
-		strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + `)
-	          ORDER BY r.task_id, r.other_id`
 	args := append([]any{string(RelationWaitingOn)}, ids...)
-	found, err := tx.QueryContext(ctx, query, args...)
+	found, err := tx.QueryContext(ctx, blockersStatement(len(ids)), args...)
 	if err != nil {
 		return fmt.Errorf("worklet: read the dependencies of a page: %w", err)
 	}

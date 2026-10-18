@@ -503,6 +503,14 @@ const (
 	openAsksWhere = `c.ask = ?
 		  AND c.resolved = 0 AND c.answered_by IS NULL
 		  AND c.removed = 0 AND t.removed_at IS NULL`
+
+	// asksPageStatement is [readAsks]' page of them, newest first.
+	asksPageStatement = `
+		SELECT c.id, c.task_id, c.author, c.body, c.created_at, c.document
+		FROM ` + openAsksFrom + `
+		WHERE ` + openAsksWhere + `
+		ORDER BY c.created_at DESC
+		LIMIT ?`
 )
 
 // readAsks reads the questions waiting on this person.
@@ -519,20 +527,15 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 
 	// ONE FROM-AND-WHERE for the page and the count — see [taskBlock] —
 	// and for the oldest ask's instant [Reader.Decisions] reads beside them.
-	from, where := openAsksFrom, openAsksWhere
-	total, capped, err := countCapped(ctx, tx, from, where, []any{handle})
+	total, capped, err := countCapped(ctx, tx, openAsksFrom, openAsksWhere,
+		[]any{handle})
 	if err != nil {
 		return nil, ClaimTotal{}, fmt.Errorf("worklet: count the asks "+
 			"waiting on %s: %w", handle, err)
 	}
 	claim := ClaimTotal{Total: total, Capped: capped}
 
-	rows, err := tx.QueryContext(ctx, `
-		SELECT c.id, c.task_id, c.author, c.body, c.created_at, c.document
-		FROM `+from+`
-		WHERE `+where+`
-		ORDER BY c.created_at DESC
-		LIMIT ?`, handle, limit)
+	rows, err := tx.QueryContext(ctx, asksPageStatement, handle, limit)
 	if err != nil {
 		return nil, ClaimTotal{}, fmt.Errorf("worklet: read the asks waiting on %s: %w",
 			handle, err)
