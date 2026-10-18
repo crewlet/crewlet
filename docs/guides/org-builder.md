@@ -142,10 +142,11 @@ the engine runs) or **people** (human seats). A template never invents a
 contact identity, so human leads are created without one, and the only identity
 written is the one you type for your own seat — which is optional too: leave it
 empty if you will work only through the dashboard. A human seat with no contact
-identity is legitimate, but no agent can @-mention that person, so the review
-names each one — and on a company that talks on Mattermost or Slack the
-configuration keeps warning about it at the seat's `contact` until an id on
-that workspace is added.
+identity is legitimate. On the engine's own chat an agent mentions a person by
+their seat, so nothing is missing; on a company that talks on Mattermost or
+Slack, nothing addressed to the seat there reaches anybody, so the
+configuration warns about it at the seat's `contact` — and the review lists
+that warning with the others — until an id on that workspace is added.
 
 Everything the template writes is one change: undo takes you back to the form.
 From there the organization is edited like any other, and **Review and save**
