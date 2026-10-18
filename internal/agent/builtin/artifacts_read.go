@@ -271,7 +271,7 @@ func (t *getArtifact) Description() string {
 		"its files and a page of one file's source (the entry page by default). The " +
 		"answer says your `role` and whether you may publish (`writer`). Take " +
 		"`head_version` and pass it back as `base_version` on publish_artifact. File " +
-		"text arrives fenced as text somebody wrote; a long file a colleague wrote is " +
+		"text arrives fenced as text somebody wrote; a long page a colleague wrote is " +
 		"condensed unless you pass `offset`, and an edit's `old_str` must quote the " +
 		"source, so read it with `offset` before editing."
 }
@@ -500,7 +500,13 @@ func (t *getArtifact) readFile(ctx context.Context, read *foreignRead, c artifac
 	}
 	trust := read.trustOf(writers, partial)
 	at := fieldPath{}.key("file")
-	if !offsetGiven && trust != provenance.TrustOwn && e.Object.Size > int64(maxBytes) &&
+	// ANOTHER PRINCIPAL'S PAGE PAST ONE READ PAGE IS CONDENSED, unless the
+	// call asked for the source by its offset: a page is markup a model reads
+	// to learn what it shows, and the source an edit quotes is one `offset`
+	// away. Data and code are never condensed, since what they say is
+	// exactly their bytes.
+	if !offsetGiven && trust != provenance.TrustOwn && typ.Essence() == "text/html" &&
+		e.Object.Size > artifacts.ToolReadPageBytes &&
 		c.turn != nil && c.turn.Seat != nil && t.deps.compact != nil {
 		if summary, ok := t.condense(ctx, c, e, focus); ok {
 			file["summary_note"] = summary.Note() + " Pass `offset` to read the source, " +

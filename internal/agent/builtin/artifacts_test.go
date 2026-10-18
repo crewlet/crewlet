@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload"
+	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
@@ -777,5 +778,45 @@ func TestAnAgentDoesNotPublishOverSomebodyElsesWork(t *testing.T) {
 		if !manage && !strings.Contains(got.Output, "does not own") {
 			t.Errorf("the refusal does not say why: %q", got.Output)
 		}
+	}
+}
+
+// A LONG PAGE A COLLEAGUE WROTE IS CONDENSED, FENCED AND ANNOUNCED, and its
+// source is one `offset` away; the agent's own page is never condensed, since
+// it is the text the agent edits.
+func TestALongPageAColleagueWroteIsCondensedUnlessTheSourceIsAsked(t *testing.T) {
+	t.Parallel()
+	f := newFakeArtifacts()
+	chart := artifactChart{}
+	model := &rewriter{answer: "a review table of the release, one row per service"}
+	reg := tools.NewRegistry()
+	if _, err := builtin.Register(reg, builtin.Deps{Artifacts: artifactDeps(f, chart, requesters{}),
+		Compact: compact.New(model, compact.NewCache()), Authorize: builtin.Decide(chart)}); err != nil {
+		t.Fatal(err)
+	}
+	r := artifactRig{f: f, reg: reg}
+	long := "<!doctype html><p>" + strings.Repeat("row ", int(artifacts.ToolReadPageBytes/2)) + "</p>"
+	theirs := f.seed("founder", iam.ActorHuman, founder,
+		[]artifacts.Share{shareWith("agent-cto", artifacts.RoleViewer)}, [2]string{"index.html", long})
+	turn, b := readerTurn(t)
+
+	got := r.call(t, turn, builtin.GetArtifactTool, map[string]any{"artifact": theirs.ID.String()})
+	seen, answer := fencesIn(t, b, got.Output)
+	assertFences(t, seen, []wantFence{
+		{"source=artifact_file trust=colleague authors=human:founder", "one row per service"},
+	})
+	file := answer["file"].(map[string]any)
+	if _, raw := file["content"]; raw || !strings.Contains(file["summary_note"].(string), "condensed by a model") {
+		t.Fatalf("a long colleague page answered %v, want a condensed account and no source", file)
+	}
+	got = r.call(t, turn, builtin.GetArtifactTool, map[string]any{"artifact": theirs.ID.String(), "offset": 0})
+	if file := decode(t, got)["file"].(map[string]any); file["content"] == nil || file["next_offset"] == nil {
+		t.Fatalf("the source asked by offset answered %v", file)
+	}
+
+	mine := f.seed("agent-cto", iam.ActorAgent, cto, nil, [2]string{"index.html", long})
+	got = r.call(t, turn, builtin.GetArtifactTool, map[string]any{"artifact": mine.ID.String()})
+	if file := decode(t, got)["file"].(map[string]any); file["summary"] != nil {
+		t.Fatalf("the agent's own page was condensed: %v", file)
 	}
 }
