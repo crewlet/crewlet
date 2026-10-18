@@ -1581,8 +1581,16 @@ func RetrySeconds(hint time.Duration) int {
 // admitted it — and zero here would read as "do not retry", which is never
 // what a curve means.
 func Throttled(w http.ResponseWriter, retryAfter time.Duration) {
+	ThrottledWith(w, CodeThrottled, retryAfter, nil)
+}
+
+// ThrottledWith is [Throttled] for a limit of a surface's own, under its own
+// code and carrying a detail: the artifact datastore's write budget, which is
+// no sign-in's failed attempts. THE SAME ONE WRITER of a 429 underneath, so
+// the Retry-After every client waits on is carried by every 429 there is.
+func ThrottledWith(w http.ResponseWriter, code Code, retryAfter time.Duration, detail Detail) {
 	w.Header().Set("Retry-After", strconv.Itoa(max(RetrySeconds(retryAfter), 1)))
-	Fail(w, http.StatusTooManyRequests, CodeThrottled)
+	FailWithFields(w, http.StatusTooManyRequests, code, detail)
 }
 
 // UnavailableWith is [Unavailable] carrying a detail: what could not be read,

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -218,9 +217,7 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key, verb string, err e
 		detail["until"] = pending.Until.UTC()
 		// WHEN THE EARLIEST HOLD LAPSES ON ITS OWN is when a retry can
 		// land without anything else finishing.
-		w.Header().Set("Retry-After", strconv.Itoa(max(1,
-			httpjson.RetrySeconds(time.Until(pending.Until)))))
-		fail(http.StatusTooManyRequests, httpjson.CodeUploadsOutstanding)
+		httpjson.ThrottledWith(w, httpjson.CodeUploadsOutstanding, time.Until(pending.Until), detail)
 	case errors.As(err, &content):
 		detail["path"] = content.Path
 		failClient(httpjson.CodeContentRefused)
