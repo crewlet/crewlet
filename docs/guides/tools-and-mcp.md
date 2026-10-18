@@ -218,10 +218,16 @@ artifact excepted, as above, for writes; never for reads). Every row a data
 tool answers is fenced as text its writers wrote (`artifact_row`, naming the
 row's creator and last writer), a conflict's current rows included. A turn
 writes at most **1,000** datastore ops; a retry of a call it lost the answer to
-is not counted again. A seat that reads an artifact's data appears in the
-artifact's room as an agent, viewing, and one that writes it as editing,
-focused on the collection and row the call named, for 45 seconds after its last
-call.
+is not counted again.
+
+**An agent working on an artifact is in its room.** A seat that reads an
+artifact or its data (`get_artifact`, `read_artifact_data`,
+`query_artifact_data`) appears in the artifact's room as an agent, viewing, and
+one that writes it (`publish_artifact`, `update_artifact`,
+`upload_artifact_asset`, `write_artifact_data`, `set_artifact_schema`) as
+editing, focused on the version, collection or row the call named, for 45
+seconds after its last call, and only once the call was allowed. The people
+looking at the artifact see which agent is working on which row.
 
 **A publish names its base.** One over a version somebody published since is
 refused `stale_version` and handed the live version, who published it and
