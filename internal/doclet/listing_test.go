@@ -2,7 +2,9 @@ package doclet_test
 
 import (
 	"errors"
+	"fmt"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -435,6 +437,53 @@ func TestThePageFeedNarrowsByWhoWasWriting(t *testing.T) {
 		Freshness:  statelog.Freshness{Level: statelog.ReadSession},
 	}); err == nil {
 		t.Error("an unknown author kind was accepted")
+	}
+}
+
+// AN AUDIT OF SEVERAL KINDS IS ONE FEED, PAGED IN THE LOG'S ORDER.
+//
+// Each author kind is read as its own arm and the arms are merged, so the
+// claim is about the merge: across pages, every change of every kind named
+// comes back exactly once, newest first, with the kinds interleaved as the log
+// interleaved them — never one kind's page and then the other's, which is what
+// a merge that dropped its own order or limit would answer — and a kind named
+// twice is read once.
+func TestAPageAuditOfSeveralKindsIsOneFeedInTheLogsOrder(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	operator := doclet.Actor{Handle: "ops-1", Kind: doclet.AuthorOperator}
+	for i, writer := range []doclet.Actor{operator, author("jane"), operator,
+		author("jane"), operator} {
+		r.write(writer, doclet.NewPage{Title: fmt.Sprintf("Page %d", i), Body: "prose"})
+		r.drain()
+	}
+	var want []uint64
+	for _, change := range r.activity(doclet.PageActivityQuery{}).Changes {
+		want = append(want, change.LogSeq)
+	}
+	if len(want) < 5 {
+		t.Fatalf("the feed has %d changes, want at least the five creates", len(want))
+	}
+	audit := doclet.PageActivityQuery{Limit: 2, ActorKinds: []doclet.AuthorKind{
+		doclet.AuthorOperator, doclet.AuthorHuman, doclet.AuthorOperator}}
+	var got []uint64
+	for range want {
+		answer := r.activity(audit)
+		for _, change := range answer.Changes {
+			got = append(got, change.LogSeq)
+		}
+		if answer.NextCursor == "" {
+			break
+		}
+		cursor, err := strconv.ParseUint(answer.NextCursor, 10, 64)
+		if err != nil {
+			t.Fatalf("the cursor %q is not a position: %v", answer.NextCursor, err)
+		}
+		audit.Cursor = cursor
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the audit paged as %v, want %v — every change once, newest "+
+			"first, as the log made them", got, want)
 	}
 }
 
