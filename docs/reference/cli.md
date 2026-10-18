@@ -707,14 +707,27 @@ name, is one message and one problem beside each of them, so `problems` can
 hold more entries than the prose output has lines. The prose output prints
 that message once, led by every path it applies to.
 
-Each warning is a reference that resolves to nothing (a unit `lead`, a root
-seat's `unit`, a `manages` entry, a GitLab access level): `{"kind":
-"dangling_reference", "ref": "lead" | "unit" | "manages" |
-"gitlab_access_level", "path", "segments", "seat", "unit", "from", "to",
-"message"}`. The engine runs a company with one, so a warning never fails
-validation; prose output prints each on its own `warning:` line. Warnings are
-reported for any company document that parses, valid or not. Both lists are
-always arrays.
+Each warning is `{"kind", "ref", "path", "segments", "seat", "unit", "from",
+"to", "message"}`, every field always present, and it is one of two kinds
+here:
+
+- **`dangling_reference`** — a reference that resolves to nothing: a unit
+  `lead`, a root seat's `unit`, a `manages` entry, a GitLab access level.
+  `ref` names which (`lead`, `unit`, `manages` or `gitlab_access_level`), and
+  `from` and `to` are what holds it and what it names.
+- **`advisory`** — a setting that is valid and carries a consequence: a
+  declined fsync, a backup nobody owns, a human seat nobody can message, a
+  token ceiling another one leaves idle. `ref`, `from` and `to` are empty. It
+  is the only kind a Tier A document raises.
+
+The third kind a `/config` answer can carry, `admission`, is a rule a stored
+revision breaks, and a document validated here cannot carry one: it is a
+problem instead. The engine runs a document with either kind, so a warning
+never fails validation; prose output prints each on its own line, led by its
+kind — `warning (dangling reference): …` or `warning (advisory): …`. A company
+document that parses is checked for dangling references whether or not it is
+valid; advisories are reported only for a document that validates, because a
+warning printed beside a refusal is noise. Both lists are always arrays.
 
 Exit code is `0` when valid and `1` otherwise, **in both output modes**: a
 `-json` run that printed `{"valid": false}` and exited zero would pass every
