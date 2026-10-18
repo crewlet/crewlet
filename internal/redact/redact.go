@@ -75,33 +75,43 @@ type rule struct {
 	// begins. Nil for a rule that opens with one, which RE2 finds by itself.
 	// Set by [keyed.rule] and never by hand, so it is always pattern's own.
 	keyed *keyed
+
+	// value is, for a rule whose match names what it replaces rather than
+	// being it, where that ends: given where a match ends, the end of the
+	// value after it, or that place itself when there is none — and then
+	// the match is none. Nil for a rule that replaces its match. A value is
+	// replaced PIECE BY PIECE ([rule.write]).
+	value func(text string, at int) int
 }
 
-// in reports whether the rule matches anywhere in text, allocating nothing.
+// in reports whether the rule replaces anything in text, allocating nothing
+// where it matches nothing.
 func (r rule) in(text string) bool {
 	if r.keyed != nil {
-		return r.keyed.index(text) >= 0
+		if r.keyed.index(text) < 0 {
+			return false
+		}
+	} else if !r.pattern.MatchString(text) {
+		return false
 	}
-	return r.pattern.MatchString(text)
+	_, _, found := r.next(text, 0)
+	return found
 }
 
-// apply is text with every match of the rule replaced, or text itself —
-// the same string, nothing copied — when there is none.
+// apply is text with everything the rule replaces replaced, or text itself —
+// the same string, nothing copied — when there is nothing.
 //
-// MATCH BEFORE REPLACING, because ReplaceAllLiteralString allocates even when
-// it changes nothing: with no match it still copies the whole input into a
-// fresh buffer and then converts that buffer to a string. Ten rules over a
+// MATCH BEFORE REPLACING, because a replacement allocates even when it changes
+// nothing: ReplaceAllLiteralString with no match still copies the whole input
+// into a fresh buffer and then converts that buffer to a string. Ten rules over a
 // clean transcript would be twenty full copies of it — and a clean transcript
 // is the overwhelming case, since this runs on every sandbox result and every
 // coding-run transcript whether or not a credential is in it.
 func (r rule) apply(text string) string {
-	if r.keyed == nil {
-		if !r.pattern.MatchString(text) {
-			return text
-		}
-		return r.pattern.ReplaceAllLiteralString(text, r.with)
+	if r.keyed == nil && !r.pattern.MatchString(text) {
+		return text
 	}
-	start, end, found := r.keyed.next(text, 0)
+	start, end, found := r.next(text, 0)
 	if !found {
 		return text
 	}
@@ -110,12 +120,139 @@ func (r rule) apply(text string) string {
 	done := 0
 	for found {
 		b.WriteString(text[done:start])
-		b.WriteString(r.with)
+		r.write(&b, text[start:end])
 		done = end
-		start, end, found = r.keyed.next(text, end)
+		start, end, found = r.next(text, end)
 	}
 	b.WriteString(text[done:])
 	return b.String()
+}
+
+// write writes what the rule makes of replaced, one thing it replaces: its
+// marker — or, for a rule with a value, a marker for each PIECE of the value
+// between the escaped line breaks in it, the breaks written as they stand.
+//
+// A value runs on through an escaped break, as `\S+` read it: a password can
+// hold a backslash and an `n`, and whether the two are one is not the text's to
+// say — `export PASSWORD=Xk9\nQ2#vL8` holds one password, `"pwd=hunter2\nnext"`
+// a password and the next line. Replaced whole, the value took the break into
+// its marker, two lines became one, and a second pass read a key across them
+// that the first had read apart; ended at the break, the rest of a password
+// that holds one was published. In pieces, nothing the whole value's marker
+// covered is published and every line stays where it was — what a second pass
+// reads a key across is what the first did. What it costs is the word after an
+// escaped break that is a line's, which is redacted as the whole value took it
+// before.
+func (r rule) write(b *strings.Builder, replaced string) {
+	if r.value == nil {
+		b.WriteString(r.with)
+		return
+	}
+	for replaced != "" {
+		piece, brk := replaced, ""
+		if i, next := escapedBreak(replaced); i >= 0 {
+			piece, brk = replaced[:i], replaced[i:next]
+		}
+		if piece != "" {
+			b.WriteString(r.with)
+		}
+		b.WriteString(brk)
+		replaced = replaced[len(piece)+len(brk):]
+	}
+}
+
+// escapedBreak is where the first escaped line break in s begins and ends, or
+// -1 and -1: the two characters `\` `n`, as [lineAt] reads one, with the `\r`
+// written before them when there is one — CRLF escaped, a break of its own.
+func escapedBreak(s string) (int, int) {
+	i := strings.Index(s, `\n`)
+	if i < 0 {
+		return -1, -1
+	}
+	if i >= 2 && s[i-2:i] == `\r` {
+		return i - 2, i + 2
+	}
+	return i, i + 2
+}
+
+// next is what the rule replaces first at or after from: where it begins and
+// ends, and whether there is any. Taken one after another, each from the end
+// of the one before, these are the pattern's own leftmost, non-overlapping
+// matches — or, for a rule with a value, the value after each.
+//
+// WHAT A RULE REPLACES NEVER TAKES WHAT A KEY IS READ ACROSS — a line break,
+// an armour line's armour, a key already redacted — because the rules run
+// after the key blocks are read, over text a second pass reads them in again.
+// A replacement that took a line break made two lines one, and one that took
+// an armour or a key's marker took the place a read had stopped at; the
+// second pass then read a key across lines the first had read apart, and
+// redacting twice was not redacting once. So a password's rule replaces its
+// value, never the key or the separator before it, which can run across lines
+// ([passwordValue]), and the value around the escaped breaks in it
+// ([rule.write]); and a match that runs into an armour — a token's dashes can
+// run on into a `-----END` written straight after it — is the pattern's match
+// as if the text ended at the armour.
+func (r rule) next(text string, from int) (int, int, bool) {
+	for from <= len(text) {
+		start, end, found := r.find(text, from)
+		if !found {
+			return 0, 0, false
+		}
+		if r.value != nil {
+			if valueEnd := r.value(text, end); valueEnd > end {
+				return end, valueEnd, true
+			}
+			from = beyond(text, start)
+			continue
+		}
+		at := armourIn(text, start, end)
+		if at == end {
+			return start, end, true
+		}
+		// The match as if the text ended at the armour: the pattern's
+		// first match there, which no place before start has, since none
+		// had one in the whole text. None, and the search goes on past it.
+		if loc := r.pattern.FindStringIndex(text[start:at]); loc != nil {
+			return start + loc[0], start + loc[1], true
+		}
+		from = at + pemArmourAt.FindStringIndex(text[at:])[1]
+	}
+	return 0, 0, false
+}
+
+// find is the pattern's first match at or after from.
+func (r rule) find(text string, from int) (int, int, bool) {
+	if r.keyed != nil {
+		return r.keyed.next(text, from)
+	}
+	loc := r.pattern.FindStringIndex(text[from:])
+	if loc == nil {
+		return 0, 0, false
+	}
+	return from + loc[0], from + loc[1], true
+}
+
+// armourIn is where the first armour line's armour ([pemArmour]) beginning in
+// text[start:end] begins, or end. The armour is read from text whole, past
+// end: it holds spaces, which end every match a rule makes, so a match runs at
+// most into its first word.
+func armourIn(text string, start, end int) int {
+	for i := start; i < end; {
+		d := strings.Index(text[i:end], "-----")
+		if d < 0 {
+			return end
+		}
+		if armourAt(text, i+d) {
+			return i + d
+		}
+		i += d + 1
+	}
+	return end
+}
+
+// armourAt reports whether an armour line's armour ([pemArmour]) begins at i.
+func armourAt(text string, i int) bool {
+	return strings.HasPrefix(text[i:], "-----") && pemArmourAt.MatchString(text[i:])
 }
 
 // rules are applied in order, and order matters where one shape is a prefix of
@@ -133,16 +270,22 @@ func (r rule) apply(text string) string {
 // [keyBlocks] — before every rule below, so a token shape that happens to occur
 // inside a key's body is taken with the block rather than leaving it split.
 var rules = []rule{
-	{regexp.MustCompile(`sk-proj-[A-Za-z0-9_-]{20,}`), Marker + "api-key]", nil},
-	{regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{20,}`), Marker + "api-key]", nil},
-	{regexp.MustCompile(`sk-[A-Za-z0-9_-]{20,}`), Marker + "api-key]", nil},
-	{regexp.MustCompile(`xox[bpsare]-[A-Za-z0-9-]{20,}`), Marker + "slack-token]", nil},
-	{regexp.MustCompile(`AKIA[A-Z0-9]{16}`), Marker + "aws-key]", nil},
-	{regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{36,}`), Marker + "github-token]", nil},
-	{regexp.MustCompile(`github_pat_[A-Za-z0-9_]{50,}`), Marker + "github-token]", nil},
-	{regexp.MustCompile(`glpat-[A-Za-z0-9_-]{20,}`), Marker + "gitlab-token]", nil},
-	{regexp.MustCompile(`gl(?:rt|soat|ptt)-[A-Za-z0-9_-]{20,}`), Marker + "gitlab-token]", nil},
-	passwordRule.rule(Marker + "password]"),
+	token(`sk-proj-[A-Za-z0-9_-]{20,}`, "api-key"),
+	token(`sk-ant-[A-Za-z0-9_-]{20,}`, "api-key"),
+	token(`sk-[A-Za-z0-9_-]{20,}`, "api-key"),
+	token(`xox[bpsare]-[A-Za-z0-9-]{20,}`, "slack-token"),
+	token(`AKIA[A-Z0-9]{16}`, "aws-key"),
+	token(`gh[pousr]_[A-Za-z0-9]{36,}`, "github-token"),
+	token(`github_pat_[A-Za-z0-9_]{50,}`, "github-token"),
+	token(`glpat-[A-Za-z0-9_-]{20,}`, "gitlab-token"),
+	token(`gl(?:rt|soat|ptt)-[A-Za-z0-9_-]{20,}`, "gitlab-token"),
+	passwordRule.valued(Marker+"password]", passwordValue),
+}
+
+// token is the rule that replaces each match of pattern with the marker for
+// what it is.
+func token(pattern, what string) rule {
+	return rule{pattern: regexp.MustCompile(pattern), with: Marker + what + "]"}
 }
 
 // passwordKeys are the words a password's assignment opens with, and THE ONE
@@ -152,15 +295,47 @@ var rules = []rule{
 // to drift from it.
 var passwordKeys = []string{"password", "passwd", "pwd"}
 
-// passwordRule is the one rule besides a private key whose match can cross a
-// line break: `\s` is a newline too, so a key on one line and its value on the
-// next is one match — which [Settled] has to hold back for.
-var passwordRule = keyedOn(passwordKeys, `\s*[:=]\s*\S+`)
+// passwordRule is a password's key and the separator after it: what names the
+// value its rule replaces ([passwordValue]). It is the one rule besides a
+// private key whose match can cross a line break: `\s` is a newline too, and
+// so is an escaped one inside a string (`\n`, or `\r` before it), so a key on
+// one line and its value on the next is one match — which [Settled] has to
+// hold back for ([pendingPassword]).
+//
+// THE VALUE IS WHAT IS REPLACED, and the key and the separator are left as
+// they were, line breaks and all. The rule used to replace the whole match,
+// so a value on the next line took the break with it: two lines became one,
+// and a second pass read a key across them that the first had read apart.
+var passwordRule = keyedOn(passwordKeys, `\s*[:=](?:\s|\\[nr])*`)
 
 // pendingPassword is a password key at the very END of a text, with nothing
 // but whitespace or its separator after it: the start of a [passwordRule]
-// match whose value has not been written yet.
-var pendingPassword = keyedOn(passwordKeys, `\s*(?:[:=]\s*)?\z`)
+// match whose value has not been written yet. Its separator ends as the rule's
+// does, in escaped breaks too: a key whose string goes on to the next line
+// after them (`key: "password:\n` and then `  hunter2\n"`) waits for that line,
+// or the live view shows the value the whole text redacts.
+var pendingPassword = keyedOn(passwordKeys, `\s*(?:[:=](?:\s|\\[nr])*)?\z`)
+
+// passwordValue is where the value named by a [passwordRule] match that ends
+// at at ends, or at itself when the match names none: the text from there to
+// the next space, as the rule's `\S+` read it, ENDED EARLY at what no password
+// holds and a key is read across ([rule.next]) — an armour line's armour, and
+// a marker, a key's or a value's already redacted. Taking an armour or a key's
+// marker took the place a read had stopped at, and taking a value's own marker
+// replaced it again on every pass, so the text never stopped holding something
+// the rule would replace ([Contains]). An escaped line break does not end it:
+// the value is replaced around one ([rule.write]).
+func passwordValue(text string, at int) int {
+	for i := at; i < len(text); i++ {
+		switch c := text[i]; {
+		case c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r':
+			return i
+		case c == '-' && armourAt(text, i), c == '[' && strings.HasPrefix(text[i:], Marker):
+			return i
+		}
+	}
+	return len(text)
+}
 
 // keyed is a case-insensitive pattern every match of which opens with one of a
 // fixed list of words, together with the scan that finds where those words
@@ -232,6 +407,14 @@ func keyedOn(words []string, after string) *keyed {
 // rule is k as a rule that replaces each of its matches with with.
 func (k *keyed) rule(with string) rule {
 	return rule{pattern: k.pattern, with: with, keyed: k}
+}
+
+// valued is k as a rule that replaces with with the value after each of its
+// matches, where value says that ends ([rule.value]).
+func (k *keyed) valued(with string, value func(text string, at int) int) rule {
+	r := k.rule(with)
+	r.value = value
+	return r
 }
 
 // begins is the first place at or after from where one of k's words opens, as
@@ -332,6 +515,9 @@ var (
 // key's.
 var pemArmour = regexp.MustCompile(`-----(?:BEGIN|END) [A-Z0-9][A-Z0-9 ]*-----`)
 
+// pemArmourAt is [pemArmour] held to begin where it is tried.
+var pemArmourAt = regexp.MustCompile(`^` + pemArmour.String())
+
 // keyMarker is what a private key's block reads as once it is redacted, and it
 // stands where the block's armour stood: a block never runs across it either,
 // in either direction ([armoured]). Read as any other line, it let a second
@@ -346,6 +532,24 @@ const keyMarker = Marker + "private-key]"
 func armoured(s string) bool {
 	return strings.Contains(s, keyMarker) || strings.Contains(s, "-----") && pemArmour.MatchString(s)
 }
+
+// marked reports whether s, the text before an armour on its line or after
+// it, holds a marker: an ARMOUR LINE HOLDING ONE HOLDS NO KEY.
+//
+// A marker beside an armour is what a pass leaves around an armour it read no
+// key from — had it read one, the armour would be inside the key's marker — and
+// a second pass has to read none there either: redacting twice is redacting
+// once ([Secrets]). Read again, the line is in a wrapping a rule or another
+// key's redaction has rewritten. Where a password's value or a token stood
+// before the armour, or another key's body and END, is now a marker, so the
+// prefix every line of the wrapping is read under is another text: a line the
+// first pass read as that prefix alone — a blank line in the wrapping — the
+// second read as a line of a body, and redacted a key the first had not.
+// Taking the prefix only as far as the marker was not enough, for the same
+// reason: a shorter prefix leaves fewer lines blank in the wrapping, and more
+// of them lines of a body. A text no pass has redacted holds a marker only
+// where it quotes one, so in a text of a key this reads nothing less.
+func marked(s string) bool { return strings.Contains(s, Marker) }
 
 // keyArmour is what every BEGIN and END line above holds, tested before either
 // pattern runs: almost no text carries a key, and a substring test costs
@@ -370,25 +574,24 @@ const keyArmour = "PRIVATE KEY"
 const MaxKeyBlockBytes = 64 << 10
 
 // minKeyLine is the shortest base64 run read as a FULL line of a key's body.
-// Every encoder wraps the body at 64 (PEM) or 70 (OpenSSH) characters, so a
-// shorter run is a key's last line or no key at all — a single word such as
-// "Done" is base64's alphabet too, and a line of prose is a string of such
-// words.
+// A key's body is wrapped at 64 characters (PEM as OpenSSL and Go write it,
+// PKCS#8, OpenPGP), 70 (OpenSSH) or 76 (MIME's base64), so a shorter run is a
+// key's last line or no key at all — a single word such as "Done" is base64's
+// alphabet too, and a line of prose is a string of such words. Read forward
+// from a BEGIN, a full line is any run this long, whatever wrote it; only a
+// read back from an END asks for a width ([atWidth]).
 const minKeyLine = 40
 
 // Secrets replaces known credential patterns with markers.
 //
 // REDACTING TWICE IS REDACTING ONCE, which matters because this runs at more
-// than one layer and a transcript can pass through both: a marker matches no
-// rule, and a key's marker ends a block where the armour it replaced did
-// ([keyMarker]), so a second pass reads no key the first did not. Not quite
-// everywhere: a rule's replacement can change the lines a key is read across.
-// A password's value taken off the next line takes the line break into its
-// marker, and a value written up to an armour line or a key's marker takes
-// that too; a token redacted in a prefix every line of a wrapping repeats
-// makes two lines' prefixes alike that were not. There an END that read
-// nothing back the first time can read back further the second, and the
-// second pass redacts more than the first — never less.
+// than one layer and a transcript can pass through both — the coordinator
+// redacts what a runner already did. The keys are read before the rules run,
+// so what the rules write has to leave a second pass nothing new to read: no
+// rule replaces a marker; a key's marker ends a block where the armour it
+// replaced did ([keyMarker]); what a rule replaces takes no line break, no
+// armour and no marker ([rule.next]); and an armour line holding a marker,
+// before its armour or after it, holds no key ([marked]).
 func Secrets(text string) string {
 	if text == "" {
 		return text
@@ -475,11 +678,16 @@ func keySpans(text string) [][2]int {
 //     the last full line and the short last one, the short last line and
 //     the END — whether it is a log line another process wrote mid-print or
 //     a stray word. Two in a row end the block, and an END after them is
-//     read back from instead. Each part of the key is then read from its own
-//     armour, which bounds what this can promise: with no BEGIN in the text,
-//     the lines above the two are published, and where the two come just
-//     before the body's short last line, that line is — read back, it is a
-//     short line alone before an END, as a word is.
+//     read back from instead — across them, to a line of the key at an
+//     encoder's width above them ([backReading]), so a key read from inside,
+//     its BEGIN not in the text, is redacted whole broken by two lines as
+//     well, and by two and one more elsewhere. That bounds what this can
+//     promise: where three lines in a row, two whose nearest full line above
+//     is at no encoder's width, or two and two more with nothing of the key
+//     but its short last line between them part a key, the part above them
+//     is published when its BEGIN is not in the text, and the part below
+//     them when it holds no full line — the body's short last line alone,
+//     BEGIN or none.
 //
 // A key reaches text in every WRAPPING there is, and each is allowed for:
 //
@@ -497,7 +705,9 @@ func keySpans(text string) [][2]int {
 //
 // Read forward, a body line that ends in anything else — the `"}` that closes
 // the string a key was written into, the `…` of a cut — ENDS the block at its
-// base64, because what follows is the enclosing text.
+// base64, because what follows is the enclosing text. Except a password's key
+// and its separator (`Password:`), which is a line interrupting the key, so
+// its value is never cut off from it ([wrapping.bodyLine]).
 func keyBlocks(text string) ([][2]int, int) {
 	if !strings.Contains(text, keyArmour) {
 		return nil, -1
@@ -639,8 +849,9 @@ func readKey(text string, b []int) keyBlock {
 	// line: now the wrapping's per-line prefix is needed, so it is read here
 	// rather than above, where a line of many armours would pay for one per
 	// BEGIN.
+	gutter := strings.Trim(text[segmentStart(text, b[0]):b[0]], " \t")
 	r := keyReader{
-		wrapping: wrapping{shape: prefixShape(strings.Trim(text[segmentStart(text, b[0]):b[0]], " \t"))},
+		wrapping: wrapping{shape: prefixShape(gutter)},
 		text:     text,
 		from:     b[1],
 	}
@@ -654,9 +865,12 @@ func readKey(text string, b []int) keyBlock {
 			// The enclosing text resumes on the BEGIN line itself.
 			return keyBlock{end: r.end}
 		}
+	case marked(gutter), marked(trimmed):
+		// A line a pass has already redacted around.
+		return keyBlock{}
 	case trimmed == "":
 	case inBase64(trimmed[0]):
-		// The armour line goes on past the armour, with no key.
+		// The armour line goes on past the armour in base64, with no key.
 		return keyBlock{}
 	default:
 		r.suffix = trimmed
@@ -716,6 +930,16 @@ const (
 // key's body under this wrapping: what kind of line it is, where its base64
 // begins and ends, and whether what follows the base64 is the enclosing text
 // rather than the wrapping's suffix.
+//
+// A line on which a PASSWORD'S KEY ENDS THE BASE64, its separator after it —
+// `Password:`, `pwd :` — is no line of the body, whatever it ends in: read as
+// the body's last line written up to the enclosing text, it put the word the
+// password's rule keys on into the key's block and left the `:` outside it,
+// so an unclosed key followed by `Password:` and a value on the next line
+// published the value, which the same two lines with no key above them
+// redact. Read as a line interrupting the key, it is redacted with the key
+// when a line of the key follows it, the value read as the short last line,
+// and left to the password's rule when none does.
 func (w wrapping) bodyLine(at int, line string) (kind lineKind, start, end int, terminated bool) {
 	core := line
 	if w.suffix != "" && strings.HasSuffix(core, w.suffix) {
@@ -726,7 +950,8 @@ func (w wrapping) bodyLine(at int, line string) (kind lineKind, start, end int, 
 		core, terminated = core[:i+1], true
 	}
 	run := trailingRun(core)
-	if run == 0 || !w.prefixOK(strings.TrimRight(core[:len(core)-run], " \t")) {
+	if run == 0 || !w.prefixOK(strings.TrimRight(core[:len(core)-run], " \t")) ||
+		labelsPassword(line, len(core)-run, len(core)) {
 		return otherLine, 0, 0, false
 	}
 	end = at + len(core)
@@ -734,6 +959,20 @@ func (w wrapping) bodyLine(at int, line string) (kind lineKind, start, end int, 
 		return fullLine, end - run, end, terminated
 	}
 	return shortLine, end - run, end, terminated
+}
+
+// labelsPassword reports whether a [passwordRule] match opens in line's run of
+// base64, from start to end, with its separator past the run: the run ends in
+// a password's key and the `:` after it is the line's. A run's own `=` is
+// base64's padding, so a key's last line ending in `pwd=` stays a line of it,
+// whatever follows it.
+func labelsPassword(line string, start, end int) bool {
+	for at, after, ok := passwordRule.next(line, start); ok && at < end; at, after, ok = passwordRule.next(line, after) {
+		if after > end && strings.ContainsAny(line[end:after], ":=") {
+			return true
+		}
+	}
+	return false
 }
 
 // prefixOK reports whether p — the text before a line's base64, trimmed — is
@@ -927,13 +1166,17 @@ func (r *keyReader) header(line string) bool {
 // closes, BACK from it, where no BEGIN's block reached it: where the span to
 // redact begins, and whether there is a key before the END at all.
 //
-// The same structure as [readKey] reads, from the other end: the body's short
-// last line and its full lines, at most one line that is not the key's between
-// two that are, blank and glue lines anywhere, in the wrapping of the END
-// line's own prefix and suffix. It stops at the first place that structure
-// breaks, at another armour line, and [MaxKeyBlockBytes] before the END; the
-// span begins at the base64 of the earliest full line, so whatever wrapped it
-// — its prefix, the lines before it — is kept.
+// The structure [readKey] reads, from the other end — the body's short last
+// line and its full lines, at most one line that is not the key's between two
+// that are, blank and glue lines anywhere, in the wrapping of the END line's
+// own prefix and suffix — and one thing more, which a read forward never does:
+// it crosses TWO lines in a row that are not the key's to a full line at an
+// encoder's width above them, a BRIDGE ([backReading]), since with the BEGIN
+// not in the text nothing else reads the lines above them. It stops where
+// neither the structure nor a bridge goes on, at another armour line, and
+// [MaxKeyBlockBytes] before the END; the span begins at the base64 of the
+// earliest full line, so whatever wrapped it — its prefix, the lines before it
+// — is kept.
 //
 // THE END'S OWN LINE IS READ AS ITS PREFIX FIRST. What comes before the armour
 // may instead be the body's last line written up to it — a diff's `+` is a
@@ -955,8 +1198,8 @@ func (r *keyReader) header(line string) bool {
 // an END not written yet could read back over ([backHold]), and what that
 // END's prefix will be is not known until it is written. So read back, a key
 // printed double-spaced under such a wrapping and broken by one line as well
-// is broken by two, and with no BEGIN in the text the lines above the break
-// are published ([keyBlocks]).
+// is broken by three, which no bridge crosses ([backReading]), and with no
+// BEGIN in the text the lines above the break are published ([keyBlocks]).
 //
 // READ BACK, A FULL LINE IS ALSO BASE64 THAT READS LIKE A KEY'S ([keyLike]):
 // upper and lower case letters together, as the encoding of random bytes all
@@ -1007,6 +1250,10 @@ func readBack(text string, e []int, prev int) (int, bool) {
 		return 0, false
 	}
 	pre := text[lineS:e[0]]
+	if marked(pre) {
+		// A line a pass has already redacted around.
+		return 0, false
+	}
 	if armoured(pre) {
 		// The line holds another armour: a key on one line is read from
 		// its BEGIN.
@@ -1014,13 +1261,14 @@ func readBack(text string, e []int, prev int) (int, bool) {
 	}
 	restEnd, _ := lineAt(text, e[1])
 	suffix := trimLine(text[e[1]:restEnd])
-	if suffix != "" && inBase64(suffix[0]) {
-		// The armour line goes on past the armour.
+	if marked(suffix) || suffix != "" && inBase64(suffix[0]) {
+		// Redacted around, or going on past the armour in base64, as
+		// [readKey] reads a BEGIN line that does.
 		return 0, false
 	}
 	gutter := strings.Trim(pre, " \t")
 	w := wrapping{shape: prefixShape(gutter), suffix: suffix}
-	if start, ok := w.readBack(text, lineS, e[0], tailNone, -1); ok {
+	if start, ok := w.readBack(text, lineS, e[0]); ok {
 		return start, true
 	}
 	// Nothing above the END's line reads as a key's, so the block is the END's
@@ -1033,10 +1281,10 @@ func readBack(text string, e []int, prev int) (int, bool) {
 }
 
 // readBack reads a block back from the line before the one starting at lineS,
-// whose END armour begins at armour, going on from the readings r and the
-// span's start from (-1 for none yet): where the base64 of the earliest line a
+// whose END armour begins at armour: where the base64 of the earliest line a
 // reading takes as a full one begins, and whether one does.
-func (w wrapping) readBack(text string, lineS, armour int, r backReading, from int) (int, bool) {
+func (w wrapping) readBack(text string, lineS, armour int) (int, bool) {
+	r, from := tailNone|fromEnd0, -1
 	for start := lineS; start > 0 && r != 0; {
 		var end int
 		start, end = lineBefore(text, start)
@@ -1062,16 +1310,54 @@ func (w wrapping) readBack(text string, lineS, armour int, r backReading, from i
 
 // readRun is what a line read back can be, given its kind as
 // [wrapping.bodyLine] reads one and its run of base64: a full line that reads
-// like a key's ([keyLike]) is a full line or a line interrupting the key, and
-// one that does not is a line interrupting it.
+// like a key's ([keyLike]) is a full line — at an encoder's width when it is
+// at one ([atWidth]) — or a line interrupting the key, and one that does not
+// is a line interrupting it; a short line is the body's last or a line
+// interrupting it, and one that may be OpenPGP's checksum is read as that too
+// ([checksumRun]).
 func readRun(kind lineKind, run string) readAs {
 	switch {
+	case kind == shortLine && checksumRun(run):
+		return asShort | asChecksum
 	case kind == shortLine:
 		return asShort
 	case kind == fullLine && keyLike(run):
-		return asFull | asOther
+		return asFull | asOther | atWidth(run)
 	}
 	return asOther
+}
+
+// atWidth is the encoder's width a full line's run is at, as a reading reads
+// it ([asAt64], [asAt70], [asAt76]), or none. A key's body is wrapped at one
+// width, all but its last line: 64 characters as OpenSSL, Go and GnuPG write
+// it (PEM, RFC 7468; PKCS#8; OpenPGP's armour), 70 as OpenSSH does, and 76 as
+// MIME's base64 does — what Java's MIME encoder, Python's
+// base64.encodebytes and .NET's InsertLineBreaks write, and so what a key
+// written by hand with one of them is wrapped at. A diff's `+` before a line
+// is base64, so the run is one longer there, and starts with it.
+func atWidth(run string) readAs {
+	n := len(run)
+	if n == 65 || n == 71 || n == 77 {
+		if run[0] != '+' {
+			return 0
+		}
+		n--
+	}
+	switch n {
+	case 64:
+		return asAt64
+	case 70:
+		return asAt70
+	case 76:
+		return asAt76
+	}
+	return 0
+}
+
+// checksumRun reports whether a short line's run is OpenPGP's armour checksum
+// ([armourChecksum]), under a diff's `+` too.
+func checksumRun(run string) bool {
+	return armourChecksum(run) || len(run) == 6 && run[0] == '+' && armourChecksum(run[1:])
 }
 
 // backReading is the set of places a read back from an END can be in, a bit
@@ -1092,7 +1378,37 @@ func readRun(kind lineKind, run string) readAs {
 // AFTER A FULL LINE a reading is whether the line read last since a full line
 // was not one: the one line interrupting the key a block may carry between two
 // of its own, which a second ends.
-type backReading uint16
+//
+// ACROSS TWO LINES a reading is a BRIDGE. Two lines in a row that are not the
+// key's end every reading above them, so the lines of a key above two another
+// process wrote were read from its BEGIN or not at all: read from inside — a
+// stream's end, a window of a log — they were published, and so was a short
+// last line the two cut off from the body, wherever the BEGIN was. A bridge
+// goes on across exactly two lines, from where a key's lines stand below them,
+// to a FULL LINE AT AN ENCODER'S WIDTH above them ([atWidth]), and lands there:
+// a full line the span reaches back to, which the readings go on from as from
+// any other, so the two are redacted with the key, as one line another process
+// wrote into it is. From a full line it lands on one at that line's width,
+// since all of a key's lines are one width but its last; from the END itself,
+// or from a line that may be the body's last, short or full, on one at any of
+// them. A bridge from the END carries the tail a reading does above it: the
+// body's last line, and one line interrupting the key between that and the
+// line it lands on. It crosses no three lines in a row and lands on no line at
+// another width: a CamelCase name or a path in mixed case as wide as a key's
+// line is all but never exactly as wide as one, so ordinary text is not
+// bridged to, and the live view, which has to hold every line a bridge could
+// land on, holds almost nothing it did not ([backHold]).
+//
+// OPENPGP'S CHECKSUM LINE IS READ AS THE END IS. It is `=` and a CRC-24, the
+// block's line after the body's last and before the END, and no line of the
+// body. Read only as a short line, it was the body's last or a line
+// interrupting the key, and spent the one a block may carry: one line another
+// process wrote between it and the body's last line ended every reading, and
+// two below it cut a bridge off from the body. So a reading that reaches it
+// with nothing of the key read since the END — a line interrupting it, or the
+// two a bridge crossed — also starts again above it, as from the END
+// ([asChecksum]).
+type backReading uint32
 
 const (
 	// tailNone has read nothing since the END.
@@ -1114,8 +1430,45 @@ const (
 	body0
 	body1
 
+	// fromEnd0 is a bridge from the END itself, fromEnd1 and fromEnd2 one and
+	// two lines past it: on any width.
+	fromEnd0
+	fromEnd1
+	fromEnd2
+	// aboveLast0 is a bridge from the END that has crossed its two and read
+	// the body's last line above them, and aboveLast1 one line past that: on
+	// any width.
+	aboveLast0
+	aboveLast1
+	// afterLast0 is a bridge from a line that may be the body's last, short
+	// or full, and afterLast1 and afterLast2 one and two lines past it: on
+	// any width.
+	afterLast0
+	afterLast1
+	afterLast2
+	// across64x0 is a bridge from a full line at 64 characters, and
+	// across64x1 and across64x2 one and two lines past it: on a line at 64.
+	across64x0
+	across64x1
+	across64x2
+	// across70x0, across70x1 and across70x2 are the same at 70, and the
+	// across76 ones at 76.
+	across70x0
+	across70x1
+	across70x2
+	across76x0
+	across76x1
+	across76x2
+
+	// readings are the places a reading proper can be in, tail or body.
+	readings = tailNone | tailS | tailO | tailSS | tailSO | tailOS | tail3 | body0 | body1
+	// bridges are the places a bridge can be in.
+	bridges = fromEnd0 | fromEnd1 | fromEnd2 | aboveLast0 | aboveLast1 | afterLast0 | afterLast1 | afterLast2 |
+		across64x0 | across64x1 | across64x2 | across70x0 | across70x1 | across70x2 |
+		across76x0 | across76x1 | across76x2
+
 	// everyReading is every place a read back can be in.
-	everyReading = tailNone | tailS | tailO | tailSS | tailSO | tailOS | tail3 | body0 | body1
+	everyReading = readings | bridges
 )
 
 // readAs is what one line can be read as, read back: a set, since a line that
@@ -1131,23 +1484,89 @@ const (
 	asOther
 	// asFull is a full line of the body.
 	asFull
+	// asAt64 is a full line at 64 characters, asAt70 one at 70, asAt76 one
+	// at 76 ([atWidth]).
+	asAt64
+	asAt70
+	asAt76
+	// asChecksum is OpenPGP's checksum line ([checksumRun]), which a
+	// reading starts again above.
+	asChecksum
+
+	// asAtWidth is a full line at any encoder's width.
+	asAtWidth = asAt64 | asAt70 | asAt76
 )
+
+// widths are, for each encoder's width, a full line at it and the bridge that
+// starts from one: the bridge's places one and two lines past it are the next
+// two bits.
+var widths = [...]struct {
+	at     readAs
+	across backReading
+}{{asAt64, across64x0}, {asAt70, across70x0}, {asAt76, across76x0}}
 
 // past is the readings r go on to past one more line, read as any of as, and
 // whether one of them takes the line as a full line — one the block's span
 // reaches back to.
 func (r backReading) past(as readAs) (backReading, bool) {
 	var next backReading
+	if as&asChecksum != 0 && r&(tailNone|tailO|tailS|fromEnd2) != 0 {
+		// OpenPGP's checksum, with nothing of the key read since the END
+		// but a line interrupting it, or the two a bridge crossed: the
+		// reading starts again above it, as from the END.
+		next |= tailNone | fromEnd0
+	}
 	if as&asShort != 0 {
 		next |= r.interrupted(true)
 	}
 	if as&asOther != 0 {
 		next |= r.interrupted(false)
 	}
-	if as&asFull != 0 && r != 0 {
-		return next | body0, true
+	bridged, lands := r.across(as)
+	next |= bridged
+	full := lands || as&asFull != 0 && r&readings != 0
+	if as&(asShort|asFull) != 0 && r&(tailNone|tailO|tailS) != 0 {
+		// The line may be the body's last: no short line before it, or
+		// one read as interrupting the key.
+		next |= afterLast0
 	}
-	return next, false
+	if !full {
+		return next, false
+	}
+	next |= body0
+	for _, w := range widths {
+		if as&w.at != 0 {
+			next |= w.across
+		}
+	}
+	return next, true
+}
+
+// across is where the bridges in r go past one more line, read as any of as,
+// and whether one of them lands on it ([backReading]).
+func (r backReading) across(as readAs) (backReading, bool) {
+	var next backReading
+	// Whatever the line is, it is one of the two a bridge goes across, or
+	// the one line interrupting the key above the body's last.
+	for _, step := range [...][2]backReading{
+		{fromEnd0, fromEnd1}, {fromEnd1, fromEnd2}, {aboveLast0, aboveLast1},
+		{afterLast0, afterLast1}, {afterLast1, afterLast2},
+	} {
+		if r&step[0] != 0 {
+			next |= step[1]
+		}
+	}
+	lands := r&(fromEnd2|aboveLast0|aboveLast1|afterLast2) != 0 && as&asAtWidth != 0
+	for _, w := range widths {
+		next |= (r & (w.across | w.across<<1)) << 1
+		lands = lands || r&(w.across<<2) != 0 && as&w.at != 0
+	}
+	if r&fromEnd2 != 0 && as&(asShort|asFull) != 0 {
+		// The body's last line above the two, the line at a width above
+		// it still to come.
+		next |= aboveLast0
+	}
+	return next, lands
 }
 
 // interrupted is the readings r go on to past one more line that is not a full
@@ -1227,16 +1646,25 @@ func keyLike(run string) bool {
 // The same readings over a superset of what every line can be are never a
 // shorter reach than the real read's, whatever is written next.
 //
-// A line it holds is released once two lines in a row holding no such run
-// come after it with two more lines, of any kind, after them; a blank or glue
-// line counts for neither. Every reading has taken two lines by then, and from
-// there none takes more than one further line that is not a full one — a body
-// carries one interruption, and a tail its third line — so the two end every
-// reading short of the held line. Nothing less does: a line holding such a run
-// may be read as one interrupting a key, so it keeps a reading going through
-// it rather than ending one, which is why four lines in a row holding none
-// release a held line where three do not, and why one holding such a run among
-// them holds it longer.
+// A line it holds is released once five lines in a row holding no such run
+// come after it; a blank or glue line counts for none, and a line that may be
+// OpenPGP's checksum with no more than two of the five after it starts the
+// count again above it, since a reading starts again there as from the END.
+// Every reading has taken two of them, and from there none takes more than one
+// further line that is not a full one — a body carries one interruption, and a
+// tail its third line; a bridge from the END or the body's last line has
+// crossed its two by the fourth, and lands on nothing but a full line at an
+// encoder's width, the END's with at most the body's last line and one line
+// interrupting the key above its two — so the five end every reading and every
+// bridge short of the held line. Fewer do where neither the held line nor one
+// after it, above the two, is at an encoder's width: there no bridge has a
+// line to land on, and two lines in a row holding none with two more lines of
+// any kind after them release it, as they did before a read crossed two
+// lines. Nothing less does: a line holding such a run may be read as one
+// interrupting a key, so it keeps a reading going through it rather than
+// ending one, which is why four lines in a row holding none release a held
+// line where three do not, and five one at an encoder's width, which a bridge
+// lands on across the third and fourth.
 func backHold(text string) int {
 	r, hold := everyReading, -1
 	for start := len(text); start > 0 && r != 0; {
@@ -1253,21 +1681,21 @@ func backHold(text string) int {
 		if trimmed == "" || glue(trimmed) {
 			continue
 		}
-		as := asShort | asOther
-		if hasKeyRun(trimmed) {
-			as |= asFull
-		}
 		var full bool
-		if r, full = r.past(as); full {
+		if r, full = r.past(asShort | asOther | keyRuns(trimmed)); full {
 			hold = start
 		}
 	}
 	return hold
 }
 
-// hasKeyRun reports whether a line holds a run of base64 at a body's width
-// ([minKeyLine]) that reads like a key's ([keyLike]).
-func hasKeyRun(line string) bool {
+// keyRuns is what a line can be read as beside the body's short last line and
+// a line interrupting the key, under some wrapping: a full line, at each
+// encoder's width it holds one at ([atWidth]), when it holds a run of base64
+// at a body's width ([minKeyLine]) that reads like a key's ([keyLike]); and
+// OpenPGP's checksum line when it holds a run that is one ([checksumRun]).
+func keyRuns(line string) readAs {
+	var as readAs
 	for i := 0; i < len(line); {
 		if !inBase64(line[i]) {
 			i++
@@ -1277,12 +1705,15 @@ func hasKeyRun(line string) bool {
 		for j < len(line) && inBase64(line[j]) {
 			j++
 		}
-		if j-i >= minKeyLine && keyLike(line[i:j]) {
-			return true
+		switch run := line[i:j]; {
+		case len(run) >= minKeyLine && keyLike(run):
+			as |= asFull | atWidth(run)
+		case checksumRun(run):
+			as |= asChecksum
 		}
 		i = j
 	}
-	return false
+	return as
 }
 
 // prefixShape is a prefix with what a wrapping moves on from line to line made
@@ -1543,9 +1974,11 @@ func inBase64(c byte) bool {
 //     of base64 that reads like a key's, and the lines after it a key's
 //     block could hold before its END — two in a row that are not a key's
 //     release it once two more lines follow them, four in a row being the
-//     commonest case. A hash in hex or a path in lower case is shown at once;
-//     a Go test's name, a CamelCase identifier or a path in mixed case reads
-//     like a key's line and waits as one ([readBack]);
+//     commonest case, and five where a run is exactly as wide as a key's
+//     line, which an END can read back across two lines to ([backReading]).
+//     A hash in hex or a path in lower case is shown at once; a Go test's
+//     name, a CamelCase identifier or a path in mixed case reads like a key's
+//     line and waits as one ([readBack]);
 //   - a key whose block, as written so far, runs across the boundary;
 //   - a password key at the end with its value not written yet, since the
 //     rule takes the value off the next line.

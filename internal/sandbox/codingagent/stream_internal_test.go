@@ -19,7 +19,7 @@ import (
 // widest takes the slack away.
 //
 // Mutation: return the first composition without measuring it redacted, and
-// the key-name case is ten bytes past the bound; leave the mark out of the
+// the key-name case is fifteen bytes past the bound; leave the mark out of the
 // room as well, and the single-line case is three past it.
 //
 // At a bound of 64 KiB with a line half again past it, as the three

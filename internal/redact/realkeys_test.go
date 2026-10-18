@@ -63,8 +63,43 @@ var realKeys = sync.OnceValue(func() map[string][]string {
 			"Proc-Type": "4,ENCRYPTED",
 			"DEK-Info":  "AES-128-CBC," + strings.ToUpper(hex.EncodeToString(random(16))),
 		}, Bytes: random(1232)}),
+		// A PEM file written by hand with MIME's base64 — Java's MIME
+		// encoder, Python's base64.encodebytes — wraps at seventy-six.
+		"RSA, PKCS#1, at MIME's width": wrappedAt(76, "RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(rsaKey)),
+		// A secret-key packet's header (tag 5, a two-byte length) and its
+		// body, which under a passphrase is what random bytes are.
+		"OpenPGP": openPGP(append([]byte{0x95, 0x03, 0xc6}, random(0x3c6)...)),
 	}
 })
+
+// wrappedAt is der as a PEM block of label whose body is wrapped at width.
+func wrappedAt(width int, label string, der []byte) []string {
+	body := base64.StdEncoding.EncodeToString(der)
+	out := []string{"-----BEGIN " + label + "-----"}
+	for len(body) > width {
+		out, body = append(out, body[:width]), body[width:]
+	}
+	return append(out, body, "-----END "+label+"-----")
+}
+
+// openPGP is packets as GnuPG armours a secret key (RFC 4880 §6.2): no armour
+// headers, the blank line that ends them anyway, the body at sixty-four, and
+// the CRC-24 of the packets after it.
+func openPGP(packets []byte) []string {
+	crc := uint32(0xB704CE)
+	for _, b := range packets {
+		crc ^= uint32(b) << 16
+		for range 8 {
+			if crc <<= 1; crc&0x1000000 != 0 {
+				crc ^= 0x1864CFB
+			}
+		}
+	}
+	sum := base64.StdEncoding.EncodeToString([]byte{byte(crc >> 16), byte(crc >> 8), byte(crc)})
+	block := wrappedAt(64, "PGP PRIVATE KEY BLOCK", packets)
+	block = slices.Insert(block, 1, "")
+	return slices.Insert(block, len(block)-1, "="+sum)
+}
 
 // openSSH is an Ed25519 key in OpenSSH's own format, written as ssh-keygen
 // writes it (PROTOCOL.key): unencrypted, its body base64 at seventy.
@@ -92,51 +127,33 @@ func openSSH(pub ed25519.PublicKey, key ed25519.PrivateKey) []string {
 
 // brokenVariants are the ways a key reaches a transcript that a block does not
 // read whole: broken by two lines in a row, broken before its body, broken in
-// two places, broken by two lines just before its last line. Two lines in a
-// row end a block, so each part of the key is read from its own armour, the
-// part before the break forward from its BEGIN and the part after it back from
-// its END.
-func brokenVariants() map[string]brokenVariant {
-	return map[string]brokenVariant{
-		"broken by two lines in a row": {lines: func(l []string) []string {
+// two places, broken by two lines just before its last line or just before its
+// END. Two lines in a row end a block, so the part before the break is read
+// forward from its BEGIN, and an END reads back across them to a line of the
+// key at its encoder's width — from inside, the BEGIN not in the text, the
+// whole key.
+func brokenVariants() map[string]func(lines []string) []string {
+	return map[string]func(lines []string) []string{
+		"broken by two lines in a row": func(l []string) []string {
 			at := bodyAt(l)
 			return inserted(l, at+max(1, (len(l)-1-at)/2), foreignLine, "[worker 4] connected")
-		}},
-		"broken before its body": {lines: func(l []string) []string {
+		},
+		"broken before its body": func(l []string) []string {
 			return inserted(l, 1, foreignLine)
-		}},
-		"broken by two lines, then by one": {lines: func(l []string) []string {
+		},
+		"broken by two lines, then by one": func(l []string) []string {
 			at := bodyAt(l)
 			n := len(l) - 1 - at
 			l = inserted(l, at+max(1, n/3), foreignLine, "[worker 4] connected")
 			return inserted(l, len(l)-1-max(1, n/3), "[worker 5] connected")
-		}},
-		// The part after the break is the body's last line alone, and an
-		// END reading back finds no full line of the key above it: a line
-		// shorter than a key's full one, alone before an END, reads as a
-		// word does.
-		"broken by two lines just before its last line": {
-			lines: func(l []string) []string {
-				return inserted(l, len(l)-2, foreignLine, "[worker 4] connected")
-			},
-			unreached: func(body []string) []string {
-				if last := body[len(body)-1]; len(last) < 40 {
-					return []string{last}
-				}
-				return nil
-			},
+		},
+		"broken by two lines just before its last line": func(l []string) []string {
+			return inserted(l, len(l)-2, foreignLine, "[worker 4] connected")
+		},
+		"broken by two lines just before its END": func(l []string) []string {
+			return inserted(l, len(l)-1, foreignLine, "[worker 4] connected")
 		},
 	}
-}
-
-// brokenVariant is a way a key reaches a transcript broken by lines that are
-// not its own.
-type brokenVariant struct {
-	// lines reads to the variant's lines from the key's.
-	lines func(lines []string) []string
-	// unreached is the lines of the body, given, that no read of the
-	// variant reaches, or nil for none.
-	unreached func(body []string) []string
 }
 
 // NO PIECE OF A REAL KEY SURVIVES, in any wrapping, whole or double-spaced,
@@ -146,19 +163,22 @@ type brokenVariant struct {
 // are the encoders' own output, with their own widths, headers and last lines,
 // and the windows are what a person could copy off a screen.
 //
-// WHAT NO READ REACHES IS NAMED HERE, NOT SKIPPED. Two lines in a row end a
-// block, so each part of a key they break is read from its own armour, and a
-// part with no armour, or with only a short line before its END, has nothing
-// to read: broken by two lines just before a last line shorter than a full
-// one, that last line is published. And a key read from inside — its BEGIN
-// not in the text — is checked whole, double-spaced and broken by one line,
-// never broken by two: the lines above the break have no armour at all. Read
-// back, a blank line under a wrapping that marks every line — a reader's line
-// number, a grep's context mark — is a line interrupting the key, so such a
-// key double-spaced and broken by one line as well is broken by two.
+// WHAT NO READ REACHES IS NAMED HERE, NOT SKIPPED. A key read from inside —
+// its BEGIN not in the text — is checked whole, double-spaced, broken by one
+// line and broken by two, wherever they fall, and never broken by three: the
+// lines above those have no armour at all, and a read crosses two lines and no
+// more. Read back, a blank line under a wrapping that marks every line — a
+// reader's line number, a grep's context mark — is a line interrupting the key,
+// so such a key double-spaced and broken by one line as well is broken by
+// three, and is not checked from inside.
 //
 // Mutation: end a block at a blank line, at the first line that is not the
-// key's, or read nothing back from an END, and pieces of these keys survive.
+// key's, or read nothing back from an END, and pieces of these keys survive;
+// read back across no two lines, and every key read from inside and broken by
+// two loses the lines above them; read OpenPGP's checksum as a short line
+// alone, and its key loses them broken by two on either side of it, and
+// double-spaced under a wrapping that marks every line; leave MIME's width
+// out, and the key wrapped at it loses them wherever two break it.
 func TestNoPieceOfARealKeySurvivesAnyWrapping(t *testing.T) {
 	t.Parallel()
 	for kname, key := range realKeys() {
@@ -169,8 +189,11 @@ func TestNoPieceOfARealKeySurvivesAnyWrapping(t *testing.T) {
 			}
 		}
 		texts := map[string]string{}
-		// unreached is the lines of the body a text leaves to no read.
-		unreached := map[string][]string{}
+		fromInside := func(name, whole string) {
+			if i := strings.IndexByte(whole, '\n'); i >= 0 {
+				texts["read from inside it, "+name] = whole[i+1:]
+			}
+		}
 		for wname, w := range wrappings() {
 			for vname, v := range variants() {
 				if !v.lineByLine || !w.oneLine {
@@ -181,16 +204,14 @@ func TestNoPieceOfARealKeySurvivesAnyWrapping(t *testing.T) {
 				continue
 			}
 			for vname, broken := range brokenVariants() {
-				texts[vname+", "+wname] = w.wrap(broken.lines(key)).text
-				if broken.unreached != nil {
-					unreached[vname+", "+wname] = broken.unreached(body)
+				lines := broken(key)
+				texts[vname+", "+wname] = w.wrap(lines).text
+				if foreignInARow(lines) < 3 {
+					fromInside(vname+", "+wname, texts[vname+", "+wname])
 				}
 			}
 			for vname, v := range variants() {
-				whole := w.wrap(v.lines(key)).text
-				if i := strings.IndexByte(whole, '\n'); i >= 0 {
-					texts["read from inside it, "+vname+", "+wname] = whole[i+1:]
-				}
+				fromInside(vname+", "+wname, w.wrap(v.lines(key)).text)
 			}
 		}
 		// TWO WHOLE KEYS FLATTENED ONTO ONE LINE, each way they get there: a
@@ -215,10 +236,7 @@ func TestNoPieceOfARealKeySurvivesAnyWrapping(t *testing.T) {
 		texts["one-line key whose END follows two words"] = "A=" + noEnd + " two words " + key[len(key)-1] + "\n"
 		for name, text := range texts {
 			got := redact.Secrets(text)
-			reached := slices.DeleteFunc(slices.Clone(body), func(line string) bool {
-				return slices.Contains(unreached[name], line)
-			})
-			if leak := survivor(got, reached); leak != "" {
+			if leak := survivor(got, body); leak != "" {
 				t.Errorf("%s, %s: %q survived in\n%s", kname, name, leak, got)
 				continue
 			}
@@ -232,6 +250,74 @@ func TestNoPieceOfARealKeySurvivesAnyWrapping(t *testing.T) {
 			}
 		}
 	}
+}
+
+// A PASSWORD AFTER A REAL KEY WITH NO END IS REDACTED AS IT IS WITH NONE: in
+// every wrapping, under every encoder's last line, a label and its value on the
+// next line (or after a blank one) redact the value wherever the same lines
+// from the label on do, since the key's block never takes the word the
+// password's rule keys on, and nothing of the key survives. Where the label's
+// lines alone keep their value (an echo's quote stands where a value would
+// be), so do these: that is the password's rule, not the key's read.
+//
+// Mutation: drop the label from bodyLine, and the value is published under
+// most of these keys in most wrappings.
+func TestAPasswordAfterARealKeyWithNoEndIsRedactedAsWithNone(t *testing.T) {
+	t.Parallel()
+	const value = "hunter2x9"
+	for kname, key := range realKeys() {
+		var body []string
+		for _, line := range key[1 : len(key)-1] {
+			if line != "" && !strings.Contains(line, ":") {
+				body = append(body, line)
+			}
+		}
+		for wname, w := range wrappings() {
+			if w.oneLine {
+				continue
+			}
+			for _, label := range []string{"Password:", "  pwd :"} {
+				for _, gap := range []bool{false, true} {
+					lines := append(slices.Clone(key[:len(key)-1]), label)
+					if gap {
+						lines = append(lines, "")
+					}
+					text := w.wrap(append(lines, value)).text
+					word := strings.TrimSpace(strings.TrimRight(label, ": "))
+					alone := text[strings.LastIndexByte(text[:strings.LastIndex(text, word)], '\n')+1:]
+					name := kname + ", " + wname + ", " + label
+					got := redact.Secrets(text)
+					if leak := survivor(got, body); leak != "" {
+						t.Errorf("%s: %q survived in\n%s", name, leak, got)
+					}
+					if strings.Contains(got, value) && !strings.Contains(redact.Secrets(alone), value) {
+						t.Errorf("%s (blank line between: %v): the value was published under the key "+
+							"and redacted without it:\n%s", name, gap, got)
+					}
+					if again := redact.Secrets(got); again != got {
+						t.Errorf("%s: a second pass changed the text", name)
+					}
+					if shown, _ := settle(text, []int{5, 400}); shown != got {
+						t.Errorf("%s in pieces: shown as it settled\n%q\nwant\n%q", name, shown, got)
+					}
+				}
+			}
+		}
+	}
+}
+
+// foreignInARow is the most lines in a row of lines that are none of the key's:
+// a body of one line broken by two lines and then by one is broken by three.
+func foreignInARow(lines []string) int {
+	most, run := 0, 0
+	for _, line := range lines {
+		run++
+		if !strings.Contains(line, "] connected") {
+			run = 0
+		}
+		most = max(most, run)
+	}
+	return most
 }
 
 // survivor is a 24-character window of one of a key's body lines that text
