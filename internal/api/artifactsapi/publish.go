@@ -38,11 +38,17 @@ import (
 // file.
 const MaxBodyBytes = artifacts.MaxEntryBytes
 
-// decode reads a JSON body into out, refusing a field the route does not take:
-// a typo would otherwise read as a request for less. An absent body decodes
-// as nothing where empty allows it.
+// decode reads a JSON body of at most [MaxBodyBytes] into out, refusing a
+// field the route does not take: a typo would otherwise read as a request for
+// less. An absent body decodes as nothing where empty allows it.
 func decode(w http.ResponseWriter, r *http.Request, out any, empty bool) bool {
-	body, err := httpjson.ReadBody(w, r, MaxBodyBytes)
+	return decodeWithin(w, r, out, empty, MaxBodyBytes)
+}
+
+// decodeWithin is [decode] for a route whose body is bounded tighter than a
+// publish's: a body past limit is refused before it is read whole.
+func decodeWithin(w http.ResponseWriter, r *http.Request, out any, empty bool, limit int64) bool {
+	body, err := httpjson.ReadBody(w, r, limit)
 	if err != nil {
 		httpjson.Refuse(w, err)
 		return false

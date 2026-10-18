@@ -347,6 +347,9 @@ func (o *objects) opens() int {
 type framer struct {
 	mu       sync.Mutex
 	requests []artifactserve.FrameRequest
+
+	// minted are the frames [framer.Claims] reads back, by URL.
+	minted map[string]artifacts.TicketClaims
 }
 
 func (f *framer) For(r artifactserve.FrameRequest) (artifacts.Frame, error) {
@@ -355,6 +358,19 @@ func (f *framer) For(r artifactserve.FrameRequest) (artifacts.Frame, error) {
 	f.requests = append(f.requests, r)
 	return artifacts.Frame{URL: "https://" + string(r.Head.Label) + ".artifacts.example.net/t/x/index.html",
 		Version: r.Version.Number, Mode: artifacts.OriginPerArtifact}, nil
+}
+
+// Claims reads a frame back: the frame the rig's claims name, at its own URL,
+// and nothing else.
+func (f *framer) Claims(frameURL string) (artifacts.TicketClaims, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for url, c := range f.minted {
+		if url == frameURL {
+			return c, nil
+		}
+	}
+	return artifacts.TicketClaims{}, artifactserve.ErrNotAFrame
 }
 
 // chart is the company's relations: who sits in ENG, and who leads whom.
@@ -397,18 +413,20 @@ type rig struct {
 	pipeline *pipeline
 	objects  *objects
 	framer   *framer
+	ready    *ready
 	company  config.CompanyArtifacts
 }
 
 func newRig(t *testing.T, framed bool) *rig {
 	t.Helper()
 	g := &rig{t: t, estate: &estate{}, writes: &writes{}, marks: &marks{}, pipeline: &pipeline{},
-		objects: &objects{}, framer: &framer{}}
+		objects: &objects{}, framer: &framer{minted: map[string]artifacts.TicketClaims{}}, ready: &ready{}}
 	opts := artifactsapi.Options{
 		Gate: artifactsapi.Gate{Heads: g.estate, Chart: chart{}, Limits: limits, Marks: g.marks,
 			Roster: roster{}, Company: func() config.CompanyArtifacts { return g.company }},
 		Reads: g.estate, Writes: g.writes, Objects: g.objects,
 		Uploads: func() (artifactsapi.Pipeline, error) { return g.pipeline, nil },
+		Ready:   g.ready,
 	}
 	if framed {
 		opts.Frames = g.framer

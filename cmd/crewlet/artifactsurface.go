@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
@@ -36,8 +37,14 @@ func artifactsSurfaces(e *engine.Engine, boot *config.Bootstrap) (
 		return nil, nil, nil
 	}
 	gate := artifactsGate(e, boot, arts)
+	// THE READY REPORTS ARE COUNTED INTO THE ENGINE'S OWN METER, beside the
+	// events its recording sites count, so the burn alarm judges one ledger.
+	ready, err := objectives.NewBeacon(e.Objectives(), nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("api: the ready beacon: %w", err)
+	}
 	opts := artifactsapi.Options{
-		Gate: gate, Reads: arts, Writes: arts, Objects: engineObjects{e: e},
+		Gate: gate, Reads: arts, Writes: arts, Objects: engineObjects{e: e}, Ready: ready,
 		// THE PIPELINE IS ASKED FOR PER REQUEST: the engine builds it on
 		// first use, and a node that cannot (no object store, no
 		// coordination store) answers the upload routes with why.
