@@ -55,6 +55,7 @@ import (
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Turn is everything a turn's own code needs, and nothing else.
@@ -298,6 +299,35 @@ type Turn struct {
 	// over. Nil outside a turn, and wherever there is no counter to charge
 	// — the seat's spend is then charged, or not, as before.
 	Budget auxspend.Budget
+
+	// Boundary is the token every fence this turn writes carries — around
+	// the chat thread its prompt was handed and around every page body,
+	// comment and file its tools read that somebody else wrote (see
+	// [provenance.Fence]). Minted once per turn segment from crypto/rand,
+	// beside the run's other identities, and read through
+	// [Turn.FenceBoundary].
+	//
+	// ONE TOKEN FOR THE SEGMENT rather than one per read, so the prompt's
+	// thread and every tool answer read in it are fenced alike and a model
+	// pairing an opening line with its closer meets one token, not a dozen.
+	// A resumed segment mints its own: the fences the parked conversation
+	// already holds keep theirs, and their content has had every token
+	// removed either way.
+	Boundary provenance.Boundary
+}
+
+// FenceBoundary is the token this turn's fences carry: [Turn.Boundary], or a
+// fresh one for each call where there is none.
+//
+// FRESH RATHER THAN EMPTY, because a fence written with an empty token is one
+// any guess closes. Nil is a tool surface built outside a turn — an operator's
+// assistant calling a read over the stateless operator surface, where each
+// call is its own reading and a token per call is exactly as strong.
+func (t *Turn) FenceBoundary() provenance.Boundary {
+	if t == nil || !t.Boundary.Valid() {
+		return provenance.NewBoundary()
+	}
+	return t.Boundary
 }
 
 // Aux is the attribution an auxiliary call made for this turn states: the
