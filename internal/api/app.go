@@ -43,6 +43,10 @@ type App struct {
 	state  *livestate.LiveState
 	stream *stream.Service
 
+	// stopRooms unregisters the socket's rooms from the appliers they hear,
+	// before the service stops.
+	stopRooms []func()
+
 	// runtime is the engine this process runs beside. See NodeRuntime.
 	runtime NodeRuntime
 
@@ -484,6 +488,14 @@ type Options struct {
 	// none.
 	ArtifactData guardedMounter
 
+	// Rooms decides and feeds the socket's artifact rooms: who may join one
+	// (the datastore's own admission, asked with the read verb), where an
+	// artifact's datastore stands, this node's presence hub, and what its
+	// appliers commit. Nil serves no room, which is what a node built
+	// without the artifacts domain has and what a suite about something
+	// else leaves out; `crewlet run` always wires it.
+	Rooms *Rooms
+
 	// Secrets serves /secrets, normally a secretsapi.Service: the fleet's
 	// credential store.
 	Secrets guardedMounter
@@ -680,11 +692,24 @@ func New(opts Options) (*App, error) {
 			return seatOf(opts.Sources.Company, name)
 		},
 
+		// THE ARTIFACT ROOMS, every half or none ([Rooms]).
+		Rooms:   opts.Rooms.streamRooms(),
+		Metrics: opts.Rooms.metrics(),
+
 		Now:            now,
 		HealthInterval: opts.HealthInterval,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("api: %w", err)
+	}
+	// AND WHAT EACH ARTIFACT'S APPLIERS COMMITTED, pushed to the sockets in
+	// its room, with every room told to re-read whenever this node's copies
+	// leave or return to service.
+	if r := opts.Rooms; r != nil && r.Feed != nil {
+		a.stopRooms = append(a.stopRooms,
+			r.Feed.OnArtifactsMoved(a.stream.ArtifactsMoved),
+			r.Feed.OnArtifactDataMoved(a.stream.ArtifactDataMoved))
+		r.Feed.SetOnArtifactsServing(a.stream.ArtifactsCopy)
 	}
 	// AND WHOSE INBOX MOVED, pushed to the sockets watching each seat —
 	// and when what this node hears has a gap, every watched inbox read
@@ -1238,7 +1263,12 @@ func (a *App) Start(ctx context.Context) {
 }
 
 // Stop ends the tick and disconnects every client.
-func (a *App) Stop() { a.stream.Stop() }
+func (a *App) Stop() {
+	for _, stop := range a.stopRooms {
+		stop()
+	}
+	a.stream.Stop()
+}
 
 func (a *App) serveHealth(w http.ResponseWriter, r *http.Request) {
 	// ALWAYS 200 while the process is alive, INCLUDING through a drain: an

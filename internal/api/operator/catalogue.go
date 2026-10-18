@@ -141,6 +141,10 @@ type Halves struct {
 	// domain, so they do not follow the company's native halves.
 	Artifacts builtin.ArtifactDeps
 
+	// ArtifactData is the datastore tools' own half, served beside the
+	// artifacts tools and only where they are.
+	ArtifactData builtin.ArtifactDataDeps
+
 	// Company names the company in the MCP server's own title, so an
 	// operator with two of these connected can tell which is which.
 	Company string
@@ -293,7 +297,8 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 	runs.Actor, pauses.Actor, steer.Actor, answer.Actor =
 		workActor, workActor, workActor, workActor
 	callables := builtin.OperatorTools(builtin.OperatorDeps{
-		Work: work, Pages: kb, Knowledge: halves.Knowledge, Artifacts: arts, Org: s.org,
+		Work: work, Pages: kb, Knowledge: halves.Knowledge, Artifacts: arts,
+		ArtifactData: halves.ArtifactData, Org: s.org,
 		Authorize: s.authorize, Runs: runs, Pauses: pauses,
 		Steer: steer, Answer: answer,
 	})

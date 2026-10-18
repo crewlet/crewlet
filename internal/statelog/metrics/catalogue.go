@@ -773,6 +773,34 @@ func Catalogue() []Instrument {
 				"after each committed batch. Read against `artifacts.limits.data_bytes`: " +
 				"a store or a company at its limit refuses every write that grows it.",
 		},
+		// ---- presence and the artifact rooms' pushes ----------------------
+		{
+			Name: PresenceFrames, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"direction"},
+			Shows: "Presence frames this node handled, by `direction`: `client` (a " +
+				"socket's presence frame taken), `peer` (a sealed frame from another " +
+				"node admitted) and `push` (a room's coalesced fan-out to this node's " +
+				"sockets). Presence is told, never stored, so this is the whole of " +
+				"its cost: a `peer` climb with flat `client` is a busy room held on " +
+				"other nodes, and `push` is bounded at five a second per room.",
+		},
+		{
+			Name: PresenceRooms, Kind: KindGauge, Unit: UnitCount,
+			Shows: "Artifact rooms this node holds a member of, a socket's or an agent's. " +
+				"Each costs a map in memory and, while one of this node's sockets is in " +
+				"it, one listen on the broker.",
+		},
+		{
+			Name: ArtifactsPushLag, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"kind"},
+			Shows: "How long after the broker stored a committed datastore batch's newest " +
+				"record its `artifact_data` push was handed to this node's sockets " +
+				"(`kind` `data`): the applier's lag plus the fan-out. A datastore " +
+				"change is held to reach the socket within a second. An artifacts " +
+				"movement carries no broker instant, so `artifact_changed` is not " +
+				"measured here; its lag is the artifacts applier's own, in the state " +
+				"log's apply instruments.",
+		},
 	}
 }
 
