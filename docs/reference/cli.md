@@ -918,6 +918,18 @@ api: damaged, and rebuilt (14 packs, 9 refs); the check before the rebuild found
 api: the rebuilt copy is whole
 ```
 
+Damage the node had **already repaired** when the check began — its sync
+before the check held a file to its checksum and dropped or fetched it again in
+place — is told first and leaves the copy clean: the copy checked no longer
+holds it, so it is neither a problem nor a reason to `-repair`, though a disk
+that damaged one file may hold others damaged:
+
+```
+web: the sync before the check found damage on disk and repaired it in place:
+  the sync before the check found objects/pack/multi-pack-index-3f2a….bitmap failing its checksum and dropped it to be written again
+web: ok (212 packs, 41 refs)
+```
+
 A repository the node holds **no copy of** is passed over: nothing there can be
 damaged, and the node does not build a copy just to check it. A rebuild that
 leaves a problem names where it is — the object store or the rows — since a

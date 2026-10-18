@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -816,5 +818,114 @@ func TestACheckNamesTheDamageItsSyncMeets(t *testing.T) {
 				t.Errorf("%s{reason=verify} = %d, want the repair's one", metrics.CodeCacheRebuilds, got)
 			}
 		})
+	}
+}
+
+// VERIFY NAMES A DERIVED FILE THAT FAILS ITS CHECKSUM. git reads a bitmap, a
+// multi-pack-index and a commit-graph without checking them, and no git
+// command names a damaged bitmap, so the check holds each to its own trailer
+// (step 4) — the one check that can name one. A file dropped between the
+// listing and its hash is no finding: a repair round may run between the two.
+//
+// Mutations: skip the derived files — the damaged bitmap, index and graph are
+// reported clean; read a vanished file as damage — the dropped graph is a
+// problem.
+func TestVerifyNamesADerivedFileThatFailsItsChecksum(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		damage gittest.DamageCase
+		ids    func(history) []string
+		names  string // what the problem names; "" for a sound copy
+		drop   bool   // the graph removed as it is about to be hashed
+	}{
+		"K4":    {damage: gittest.BitmapBody, names: ".bitmap fails its checksum"},
+		"I9":    {damage: gittest.GraphParentSelf, ids: tip, names: "objects/info/commit-graph fails its checksum"},
+		"MO":    {damage: gittest.MidxOffset, ids: tipBlob, names: "objects/pack/multi-pack-index fails its checksum"},
+		"sound": {},
+		"drop":  {drop: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, onMemory)
+			clk := newClock()
+			h := w.measured(t)
+			var checking atomic.Bool
+			c := w.open(t, clk.on, func(o *cache.Options) {
+				cache.WhileHashing(o, func(path string) {
+					if tc.drop && checking.Load() && filepath.Base(path) == "commit-graph" {
+						if err := os.Remove(path); err != nil {
+							t.Error(err)
+						}
+					}
+				})
+			})
+			s := w.sync(t, c, h.repo)
+			clk.Add(cache.MidxDebounce)
+			if ran := cache.MaintainerPass(c); len(ran) != 1 {
+				t.Fatalf("the maintainer ran %v, want %s", ran, h.repo)
+			}
+			if tc.damage != "" {
+				var ids []string
+				if tc.ids != nil {
+					ids = tc.ids(h)
+				}
+				gittest.DamageInPlace(t, s.Dir, tc.damage, ids...)
+			}
+			checking.Store(true)
+			report, err := verify(t.Context(), c, h.repo, false)
+			if err != nil {
+				t.Fatalf("Verify: %v", err)
+			}
+			switch {
+			case tc.names != "":
+				problemsOf(t, "Verify", report.Problems, tc.names)
+			case len(report.Problems) != 0:
+				t.Errorf("Verify of a sound copy reported %q", report.Problems)
+			}
+		})
+	}
+}
+
+// WHAT THE SYNC BEFORE A CHECK REPAIRED IS NO PROBLEM OF THE COPY, AND ASKS NO
+// REBUILD. A previous process left a copy whose bitmap is damaged (K4), and a
+// check asked to repair is this process's first look at it: the sync before
+// the check is the copy's first round, whose own check holds the bitmap to its
+// trailer and drops it in place. The check tells that first and apart
+// (RepairedBySync), finds the copy it was handed whole, and rebuilds nothing:
+// the incarnation stays, its graph with it, and the maintainer writes the
+// index and bitmap again over the same packs, as it would have anyway.
+// Counted among the problems, the repair rebuilt a sound copy into a new
+// incarnation with no index, bitmap or graph until the maintainer wrote them
+// again — minutes to hours of bitmapless clones of a large repository.
+//
+// Mutation: count the sync's repairs among the problems — the check rebuilds
+// the copy (rebuilds{reason=verify} 1, a new incarnation).
+func TestASyncsRepairAsksNoRebuildOfACheck(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	h := w.measured(t)
+	dir := w.served(t, h, clk)
+	gittest.Damage(t, dir, gittest.BitmapBody)
+	c := w.open(t, clk.on)
+	before := cache.Repos(c)[h.repo]
+
+	report, err := verify(t.Context(), c, h.repo, true)
+	if err != nil {
+		t.Fatalf("Verify(repair): %v", err)
+	}
+	problemsOf(t, "what the sync before the check repaired", report.RepairedBySync, ".bitmap failing its checksum")
+	if report.Rebuilt || len(report.Problems) != 0 || len(report.Found) != 0 {
+		t.Errorf("the check = rebuilt %v, problems %q, found %q; want the copy it was handed whole and nothing "+
+			"rebuilt", report.Rebuilt, report.Problems, report.Found)
+	}
+	if got := cache.Repos(c)[h.repo]; got != before {
+		t.Errorf("the check left incarnation %d, want %d kept", got, before)
+	}
+	if got := counter(w.rec, metrics.CodeCacheRebuilds, "reason", string(cache.RebuildVerify)); got != 0 {
+		t.Errorf("rebuilds{reason=verify} = %d, want none: the sync had already repaired the copy", got)
+	}
+	if _, _, graph := cache.Indexed(c, h.repo); !graph {
+		t.Error("the copy's commit-graph is gone: the check rebuilt or dropped what was sound")
 	}
 }

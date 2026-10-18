@@ -18,6 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codefault"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
@@ -183,43 +184,64 @@ const (
 )
 
 // install brings into inc every pack snap names that the directory does not
-// hold, and answers how many it added and whether it removed any files.
+// hold, and answers how many it added and how many it installed again over
+// the files of a pack it held damaged.
 //
 // A pack is installed when its .idx, .pack and .rev all exist — git counts a
 // pack once its .idx does — and, on a FULL round, each at the size its row
 // says: three stats a pack, once per repository per process, so a file a disk
-// fault truncated is caught here rather than by the next client. A pack at the
-// wrong size is REMOVED before any download starts — with the
-// multi-pack-index and the commit-graph, which may name it — and installed
-// again.
+// fault truncated is caught here rather than by the next client.
+//
+// A PACK HELD DAMAGED IS INSTALLED AGAIN BY RENAMING OVER ITS FILES, NEVER
+// REMOVED FIRST: one at the wrong size, and one whose .idx or .rev failed the
+// round's check and is still the file it hashed (checked.still). Removed
+// before its download, its objects were missing for the whole of that
+// download to every git process over the copy that opened the pack
+// meanwhile; renamed over, a process holding the old files reads the inodes
+// it opened, and one that opens the path afterwards reads the new ones. The multi-pack-index and the commit-graph go once,
+// before the first placement over a present pack: either may have been built
+// from the damaged index. Such a reinstall adds no pack to the counts; the
+// incarnation's size moves by the difference.
 //
 // A failure removes every temporary file the round made; the packs installed
 // before it stay, named by rows, and the next round skips them.
-func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap snapshot) (int, bool, error) {
+func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap snapshot, ck checked) (installs,
+	error) {
+
+	var out installs
 	packDir := filepath.Join(inc.dir, "objects", "pack")
-	var todo, damaged []code.PackRow
+	reinstall, _ := ck.still(inc.dir)
+	var todo []code.PackRow
+	// over is every pack this install places over files present, by its
+	// checksum, with what found it damaged.
+	over := map[string]string{}
 	for _, p := range snap.packs {
 		held, err := installed(packDir, p, snap.full)
 		switch {
 		case err != nil:
-			return 0, false, fmt.Errorf("cache: sync %s: install: %w", e.id, err)
+			return out, fmt.Errorf("cache: sync %s: install: %w", e.id, err)
+		case held == packWhole && reinstall[p.GitChecksum]:
+			over[p.GitChecksum] = "trailer"
 		case held == packWhole:
 			continue
 		case held == packWrongSize:
-			damaged = append(damaged, p)
+			over[p.GitChecksum] = "size"
 		}
 		todo = append(todo, p)
 	}
-	removed := false
-	if len(damaged) > 0 {
-		if err := c.removePacks(inc, damaged); err != nil {
-			return 0, false, fmt.Errorf("cache: sync %s: install: %w", e.id, err)
-		}
-		removed = true
-	}
 	if len(todo) == 0 {
-		return 0, removed, nil
+		return out, nil
 	}
+	// dropOnce drops the derived files before the first placement over a
+	// present pack, and answers every later one with its outcome.
+	var droppedOver atomic.Bool
+	dropOnce := sync.OnceValue(func() error {
+		if err := c.dropIndexes(e, inc); err != nil {
+			return fmt.Errorf("cache: sync %s: install: %w", e.id, err)
+		}
+		droppedOver.Store(true)
+		return nil
+	})
 	slices.SortFunc(todo, func(a, b code.PackRow) int {
 		return cmp.Or(cmp.Compare(b.Size, a.Size), cmp.Compare(a.PackID, b.PackID), cmp.Compare(a.Part, b.Part))
 	})
@@ -264,7 +286,7 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 			cancel(err)
 		})
 	}
-	var added atomic.Int64
+	var added, replaced atomic.Int64
 	share := semaphore.NewWeighted(int64(c.fetchConcurrency))
 	inHand := semaphore.NewWeighted(int64(installsPerFetch * c.fetchConcurrency))
 	letGo := func() {
@@ -339,11 +361,24 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 				return
 			}
 			c.hookInstall(installFetched, packDir)
-			if err := c.placePack(e, inc, packDir, staged); err != nil {
+			found := over[staged.p.GitChecksum]
+			if found != "" {
+				if err := dropOnce(); err != nil {
+					fail(err)
+					return
+				}
+			}
+			if err := c.placePack(e, inc, packDir, staged, found != ""); err != nil {
 				fail(err)
 				return
 			}
-			added.Add(1)
+			if found == "" {
+				added.Add(1)
+				return
+			}
+			replaced.Add(1)
+			c.log.Warn("code_cache_pack_reinstalled", "repo", e.id, "incarnation", inc.n,
+				"pack_id", staged.p.PackID, "found", found, "trigger", string(ck.trigger))
 		})
 	}
 	workers.Wait()
@@ -351,13 +386,25 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 	if err == nil && waited != nil {
 		err = fmt.Errorf("cache: sync %s: install: %w", e.id, waited)
 	}
-	if n := added.Load(); n > 0 {
+	out.added, out.replaced = int(added.Load()), int(replaced.Load())
+	if droppedOver.Load() {
+		out.dropped = gitproc.PartMultiPackIndex | gitproc.PartCommitGraph
+	}
+	if out.added+out.replaced > 0 {
 		// The renames are durable before any ref names what they installed.
 		if serr := syncDir(packDir); serr != nil && err == nil {
 			err = fmt.Errorf("cache: sync %s: install: %w", e.id, serr)
 		}
 	}
-	return int(added.Load()), removed, err
+	return out, err
+}
+
+// installs is what one install did: the packs it added, the packs it
+// installed again over their damaged files, and the derived files it dropped
+// before the first of those.
+type installs struct {
+	added, replaced int
+	dropped         gitproc.Part
 }
 
 // packHeld is how much of a pack a directory holds.
@@ -408,13 +455,25 @@ func installed(packDir string, p code.PackRow, sized bool) (packHeld, error) {
 // (BenchmarkColdSync): no faster from the S3 fake, and slower from memory at
 // sixteen (597 bundles a second against 662), its one goroutine's
 // sync-then-rename becoming the round's pace.
-func (c *Cache) placePack(e *entry, inc *incarnation, packDir string, s *stagedPack) error {
+//
+// OVER a pack the directory holds damaged, the renames replace its files in
+// the same order, so the .idx that names the new .pack is the last to land;
+// the pack is counted already, and the incarnation's size moves by what the
+// files it replaced held. What it placed is vouched either way: this process
+// wrote it, from a bundle held to its row (check.go).
+func (c *Cache) placePack(e *entry, inc *incarnation, packDir string, s *stagedPack, over bool) error {
 	defer s.remove(c)
 	if err := c.syncStaged(s); err != nil {
 		return fmt.Errorf("cache: sync %s: install pack %s: %w", e.id, s.p.PackID, err)
 	}
+	var was int64
 	for _, ext := range []string{".pack", ".rev", ".idx"} {
 		dst := filepath.Join(packDir, "pack-"+s.p.GitChecksum+ext)
+		if over {
+			if info, err := os.Lstat(dst); err == nil {
+				was += info.Size()
+			}
+		}
 		if err := os.Rename(s.path(ext), dst); err != nil {
 			return fmt.Errorf("cache: sync %s: install pack %s: renaming %s over %s: %w",
 				e.id, s.p.PackID, s.path(ext), dst, err)
@@ -423,10 +482,13 @@ func (c *Cache) placePack(e *entry, inc *incarnation, packDir string, s *stagedP
 		c.hookInstall(strings.TrimPrefix(ext, "."), packDir)
 	}
 	e.mu.Lock()
-	inc.packs++
-	inc.objects += s.p.Objects
-	c.setSize(inc, inc.diskBytes+s.p.Size, inc.metaBytes)
+	if !over {
+		inc.packs++
+		inc.objects += s.p.Objects
+	}
+	c.setSize(inc, inc.diskBytes+s.p.Size-was, inc.metaBytes)
 	e.mu.Unlock()
+	c.vouchPack(e, inc, s.p.GitChecksum)
 	return nil
 }
 
@@ -452,6 +514,7 @@ func (c *Cache) installHanded(e *entry, inc *incarnation, packDir string, p code
 	inc.objects += p.Objects
 	c.setSize(inc, inc.diskBytes+p.Size, inc.metaBytes)
 	e.mu.Unlock()
+	c.vouchPack(e, inc, p.GitChecksum)
 	return true
 }
 
@@ -766,26 +829,4 @@ func (s *splitter) Write(p []byte) (int, error) {
 		p = p[w:]
 	}
 	return n, nil
-}
-
-// removePacks takes packs out of inc before they are installed again: the
-// multi-pack-index and the commit-graph first — an index naming a missing
-// pack fails every read of the repository — then each pack's three files,
-// moved into trash/. Only a full round removes a pack, and it measures the
-// incarnation's counts afresh at its end (sweepPacks).
-func (c *Cache) removePacks(inc *incarnation, packs []code.PackRow) error {
-	if err := c.dropIndexes(inc); err != nil {
-		return err
-	}
-	packDir := filepath.Join(inc.dir, "objects", "pack")
-	for _, p := range packs {
-		for _, ext := range []string{".idx", ".pack", ".rev"} {
-			path := filepath.Join(packDir, "pack-"+p.GitChecksum+ext)
-			err := toTrash(c.dir, path, newV7()+"-"+filepath.Base(path))
-			if err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return err
-			}
-		}
-	}
-	return syncDir(packDir)
 }

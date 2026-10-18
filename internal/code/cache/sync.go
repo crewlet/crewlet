@@ -45,6 +45,10 @@ type round struct {
 	// their rows, which the rebuild links in rather than downloads
 	// (seedRebuild). Fixed once the round runs.
 	whole []string
+	// found is what the round's check found failing and repaired in place
+	// (check.go), as sentences: a check among its callers names them first
+	// (waiter.found), since the copy it is handed no longer holds them.
+	found []string
 }
 
 // waiter is one caller of a round.
@@ -63,6 +67,9 @@ type waiter struct {
 	got    Synced
 	err    error
 	damage *damaged
+	// found is what the round's own check found and repaired, handed to a
+	// check (round.found).
+	found []string
 	// done is closed once the caller has its answer — and its pin, taken
 	// under the entry's mu before the close, so nothing between the round's
 	// end and the caller's wake can retire what it is handed. The caller's
@@ -92,18 +99,19 @@ func newWaiter(fresh statelog.Freshness) *waiter {
 // answered at once. ctx bounds the caller's own wait and nothing else: the
 // round runs on for everyone else.
 func (c *Cache) Sync(ctx context.Context, repoID string, fresh statelog.Freshness) (Synced, error) {
-	s, _, err := c.sync(ctx, repoID, fresh, false)
+	s, _, _, err := c.sync(ctx, repoID, fresh, false)
 	return s, err
 }
 
 // sync is Sync, and for a CHECK of the copy (checks; Verification.Run) also
 // the damage a round's own git met in the incarnation it answers pinned
-// (waiter.checks, damagedRound) — nil when it met none.
+// (waiter.checks, damagedRound) — nil when it met none — and what the
+// round's own check found failing and repaired in place (round.found).
 func (c *Cache) sync(ctx context.Context, repoID string, fresh statelog.Freshness, checks bool) (Synced, *damaged,
-	error) {
+	[]string, error) {
 
 	if err := c.checkSync(repoID, fresh); err != nil {
-		return Synced{}, nil, err
+		return Synced{}, nil, nil, err
 	}
 	for {
 		e := c.entryFor(repoID)
@@ -115,7 +123,7 @@ func (c *Cache) sync(ctx context.Context, repoID string, fresh statelog.Freshnes
 		}
 		if s, ok := c.atOnce(e, fresh); ok {
 			e.mu.Unlock()
-			return s, nil, nil
+			return s, nil, nil, nil
 		}
 		w := newWaiter(fresh)
 		w.checks = checks
@@ -124,7 +132,7 @@ func (c *Cache) sync(ctx context.Context, repoID string, fresh statelog.Freshnes
 		s, err := c.await(ctx, e, w)
 		// Written before the answer's close, which await waited for, or
 		// never: a caller that left is answered no damage.
-		return s, w.damage, err
+		return s, w.damage, w.found, err
 	}
 }
 
@@ -399,6 +407,9 @@ func (c *Cache) run(e *entry, r *round) {
 			c.queue(e, w)
 			continue
 		}
+		if w.checks {
+			w.found = r.found
+		}
 		c.answer(e, w, inc, kind, err)
 	}
 	if e.running == r {
@@ -461,7 +472,7 @@ func (c *Cache) damagedRound(e *entry, r *round, d *damaged) (*refused, []*waite
 		case w.gone:
 			c.answer(e, w, nil, "", d)
 		case w.checks:
-			w.got, w.damage = c.pin(e, d.inc, SyncNone), d
+			w.got, w.damage, w.found = c.pin(e, d.inc, SyncNone), d, r.found
 			close(w.done)
 		default:
 			asking = append(asking, w)
@@ -553,7 +564,7 @@ func (c *Cache) converging(e *entry, r *round) (*incarnation, SyncKind, error) {
 		return nil, "", ErrStopped
 	}
 	defer c.releaseWrite(e, writeExclusive)
-	return c.converge(e, r.fresh, r.rebuild, r.of, r.whole)
+	return c.converge(e, r.fresh, r.rebuild, r.of, r.whole, &r.found)
 }
 
 // converge is one round's body, in order — every step's name is the field
@@ -603,8 +614,11 @@ func (c *Cache) converging(e *entry, r *round) (*incarnation, SyncKind, error) {
 //
 // A rebuild of `of` is SEEDED with whole, the packs of it its asker has just
 // held to their rows (seedRebuild), before its first install.
+//
+// What each check it runs finds failing and repairs is added to found
+// (round.found).
 func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReason, of *incarnation,
-	whole []string) (_ *incarnation, _ SyncKind, err error) {
+	whole []string, found *[]string) (_ *incarnation, _ SyncKind, err error) {
 
 	if !c.enter() {
 		return nil, "", ErrStopped
@@ -726,6 +740,7 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 			e.mu.Unlock()
 		}
 		res, err = c.apply(ctx, e, inc, snap, epoch, marks)
+		*found = append(*found, res.checked.findings()...)
 		var missing *ErrPackMissing
 		switch {
 		case errors.Is(err, errRefsNotOurs) && !snap.full && !askedFull:
@@ -798,8 +813,11 @@ type applied struct {
 	packsAdded int
 	trashed    bool
 	// dropped is the derived files the round dropped for a mark
-	// (incarnation.drop), taken before anything else the round did.
+	// (incarnation.drop) or for its check, taken before anything else the
+	// round did.
 	dropped gitproc.Part
+	// checked is what the round's check found (check.go); zero for a delta.
+	checked checked
 }
 
 // apply makes inc equal to snap — steps 4 to 8 of converge. epoch is the
@@ -823,13 +841,29 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 			return res, fmt.Errorf("cache: sync %s: sweep: %w", e.id, err)
 		}
 		res.trashed = trashed
+		// THE CHECK (check.go), before anything is answered from what a
+		// previous process left: every index file the snapshot names and
+		// every derived file present, held to its trailer unless this
+		// process wrote or checked it at the identity it has now. A stored
+		// file that fails is reinstalled by the install below, renamed over
+		// in place; a derived one is dropped below. With nothing writing
+		// beside it — the write lock held, the maintainer stopped — what it
+		// hashes is what it repairs.
+		if res.checked, err = c.checkIndexes(ctx, e, inc, snap); err != nil {
+			return res, fmt.Errorf("cache: sync %s: check: %w", e.id, err)
+		}
 	}
-	added, removed, err := c.install(ctx, e, inc, snap)
+	// A pack the check found damaged, or a full round found at the wrong
+	// size, is installed again by renaming over its files (install.go), and
+	// the derived files that may have been built from it go first.
+	ins, err := c.install(ctx, e, inc, snap, res.checked)
 	if err != nil {
 		return res, err
 	}
-	res.packsAdded = added
-	res.trashed = res.trashed || removed
+	res.packsAdded = ins.added
+	if ins.dropped != 0 {
+		res.trashed, res.dropped = true, ins.dropped
+	}
 
 	indexed := false
 	var strays []string
@@ -857,18 +891,39 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		inc.drop = 0
 		e.mu.Unlock()
 		if drop != 0 {
-			if err = c.dropDerived(inc, drop); err != nil {
+			if err = c.dropDerived(e, inc, drop); err != nil {
 				e.mu.Lock()
 				inc.drop |= drop
 				e.mu.Unlock()
 				return res, fmt.Errorf("cache: sync %s: drop derived files: %w", e.id, err)
 			}
-			res.trashed, res.dropped = true, drop
+			res.trashed, res.dropped = true, res.dropped|drop
 			// Derived files git could not read, dropped in place: they were
 			// damaged, not the repository, and the round or the maintainer
 			// writes sound ones over the same packs.
 			c.log.Warn("code_cache_derived_repaired", "repo", e.id, "incarnation", inc.n,
 				"files", derivedFiles(drop))
+		}
+		// The check's own drops: a derived file whose bytes are not its
+		// trailer's, dropped whatever else asked — the bytes decided, and a
+		// rewrite over it would not repair it (git keeps an unchanged
+		// index's bitmap, and writes no index over one whose offsets it
+		// cannot read). Logged file by file by the check. Only while it is
+		// still the file the check hashed (checked.still).
+		_, found := res.checked.still(inc.dir)
+		if more := found &^ res.dropped; more != 0 {
+			if err = c.dropDerived(e, inc, more); err != nil {
+				return res, fmt.Errorf("cache: sync %s: drop derived files: %w", e.id, err)
+			}
+			res.trashed, res.dropped = true, res.dropped|more
+		}
+		if res.dropped&gitproc.PartMultiPackIndex != 0 {
+			// A multi-pack-index dropped as damaged is due at once: every
+			// clone of the copy goes without its bitmap until it is written
+			// again, and nothing but a push would otherwise make it due.
+			e.mu.Lock()
+			inc.indexRepair = true
+			e.mu.Unlock()
 		}
 		// The sweep's pack half is DECIDED here and done once the refs are
 		// in; an index that may name a pack it will remove goes now, and so
@@ -876,7 +931,7 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		// index — over exactly the snapshot's packs — is written before the
 		// refs' peel reads them, with no dead writer's lock to refuse it.
 		var moved bool
-		if strays, moved, err = c.packStrays(inc, snap); err != nil {
+		if strays, moved, err = c.packStrays(e, inc, snap); err != nil {
 			return res, fmt.Errorf("cache: sync %s: sweep: %w", e.id, err)
 		}
 		res.trashed = res.trashed || moved
@@ -904,14 +959,13 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	e.mu.Lock()
 	// wrote: the round wrote into the directory — packs in or out, refs, the
 	// index, a file swept out of it.
-	wrote := added > 0 || removed || refsWritten || indexed || res.trashed
+	wrote := ins.added+ins.replaced > 0 || refsWritten || indexed || res.trashed
 	changed := snap.full || wrote || !snap.streamCreated.Equal(inc.stream) || !sameRepo(inc.repo, snap.repo)
 	prevAt, prevStream, prevRepo := inc.at, inc.stream, inc.repo
 	inc.at, inc.stream, inc.repo = snap.position, snap.streamCreated, snap.repo
 	if snap.full {
 		// The directory holds exactly the snapshot's packs now: their rows'
-		// count, whatever an install that removed and reinstalled a damaged
-		// one added on the way.
+		// count, whatever the incarnation counted before the round.
 		inc.objects = 0
 		for _, p := range snap.packs {
 			inc.objects += p.Objects

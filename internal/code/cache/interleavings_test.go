@@ -50,7 +50,15 @@ import (
 //   - an eviction of every repository (the budget at one byte for one
 //     janitor pass), a rebuild, a maintenance pass with the clock past the
 //     debounce, tombstones swept from the log, and the log recreated holding
-//     an earlier state's rows.
+//     an earlier state's rows;
+//   - DAMAGE A PREVIOUS PROCESS LEFT: a byte of an index file — a pack's .idx
+//     or .rev, a multi-pack-index, its bitmap, the commit-graph — flipped in
+//     place, its identity kept, and the same directory booted again; and a
+//     file replaced under another identity while the check hashes it
+//     (interleavings_check_test.go).
+//
+// Every check also holds each incarnation's index files to their trailers:
+// whatever damage the run left, the round before the check repaired.
 //
 // A failure names the seed, the step and every operation drawn before it.
 //
@@ -97,6 +105,8 @@ var interleavingOps = []struct {
 	{"maintain", 4, (*interleaving).maintain},
 	{"sweep tombstones", 2, (*interleaving).sweepTombstones},
 	{"recreate backwards", 1, (*interleaving).recreateBackwards},
+	{"damage and restart", 4, (*interleaving).damageAndRestart},
+	{"replace while hashed", 3, (*interleaving).replaceWhileHashed},
 }
 
 // interleavingOutcomes is every outcome the seeds must reach between them —
@@ -110,6 +120,8 @@ var interleavingOutcomes = []string{
 	"sync killed at sync.download", "sync killed at sync.refs", "sync killed at sync.state",
 	"crash leaving a maintenance run's files", "evict", "rebuild", "maintain", "maintain over its own index",
 	"sweep tombstones", "recreate backwards", "round index", "round index over a crash's lock",
+	"a first round's check found damage", "a pack reinstalled in place", "a derived file dropped by its check",
+	"a verdict withheld",
 }
 
 // errKilled is what a killed sync's fault point answers.
@@ -144,6 +156,11 @@ type interleaving struct {
 	// crashDir is the incarnation a crash left a maintenance run's files
 	// in, until a round of the next process has swept them.
 	crashDir string
+
+	// swapMu guards swap, the file a replaceWhileHashed renames over while
+	// the check hashes it — told by the cache's check, on its goroutines.
+	swapMu sync.Mutex
+	swap   string
 }
 
 // interleaved is the log and the repositories' work trees at one moment.
@@ -188,6 +205,7 @@ func interleave(t *testing.T, seed uint64) map[string]bool {
 		in.trace = append(in.trace, fmt.Sprintf("%d: %s, repo-%d", step, o.name, slices.Index(in.repos, repo)+1))
 		in.trace[len(in.trace)-1] += ": " + o.run(in, repo)
 		in.noteRoundIndexes()
+		in.noteChecks()
 		in.remember()
 		if step%checkEvery == 0 || step == interleavingSteps {
 			in.check(step)
@@ -224,6 +242,7 @@ func (in *interleaving) options(o *cache.Options) {
 		defer in.indexMu.Unlock()
 		in.indexed[dir] = true
 	})(o)
+	cache.CheckPiecesOf(o, cache.CheckPieceBytes, in.hashed)
 }
 
 // noteRoundIndexes records the outcomes the rounds' own indexes reached: any
@@ -522,6 +541,7 @@ func (in *interleaving) check(step int) {
 	for _, repo := range in.repos {
 		s := in.syncAt(repo, linearizable)
 		got := imageOf(t, s.Dir)
+		in.checkSound(step, repo, s.Dir)
 		s.Release()
 		if want := in.w.rebuilt(t, repo); got != want {
 			t.Fatalf("after step %d, repo-%d's cache:\n%s\nwant a fresh cache's at the same position:\n%s",

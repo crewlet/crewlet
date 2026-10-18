@@ -175,6 +175,69 @@
 // eviction is decided under the cache's lock and its directory moved into
 // trash/ after it, so no sync on the node waits on a rename.
 //
+// # What this process did not write is checked before it serves
+//
+// A CHECKABLE file is one git reads to find an object or a parent — the
+// commit-graph, the multi-pack-index with its bitmap and reverse index, and
+// every pack's .idx and .rev — and git checks none of them as it reads: a
+// damaged one is read with no word and can answer WRONG, where a damaged
+// pack body at least fails. A graph naming another commit as a tip's parent
+// lets a push force a protected branch as a fast-forward (git 2.55 and later
+// answer the force check from the graph); an .idx naming another object's
+// offset makes rev-list count nothing and a clone ship the wrong object; a
+// bitmap missing objects makes every clone incomplete, upload-pack exiting 0.
+// Each is a git HASHFILE, whose last twenty bytes are the SHA-1 of every byte
+// before them, and a .idx and a .rev also carry their pack's checksum — its
+// name — in the twenty before that. So a full round holds every checkable file
+// to its trailer BEFORE it answers (check.go): at an incarnation's first full
+// round in a process, everything a previous process left; at every later full
+// round, whatever this process has neither written nor checked since. No git
+// process runs.
+//
+// What fails is repaired by the same round, in place. A derived file is
+// DROPPED and written again at once — the graph by the maintainer's graph-first
+// run, the index as a repair (maintain.go's INDEX REPAIR) — never written
+// over: git keeps a bitmap beside an index it would write unchanged, damaged
+// or not, and cannot write an index over offsets it cannot read. A pack whose
+// .idx or .rev fails, or that a full round finds at the wrong size, is
+// INSTALLED AGAIN WITH ONE GET, renamed over its files in the same incarnation
+// (install.go), never removed first: a git process that opened the pack reads
+// the files it opened, one that opens it afterwards the new ones, where a
+// removal made its objects missing for the whole download.
+//
+// A file this process wrote or checked is VOUCHED for, in memory and never
+// persisted, by its IDENTITY: device and inode, size and modification time —
+// NO CTIME, since an adoption and a seeded rebuild hard-link files and every
+// link moves an inode's ctime without changing a byte. A maintenance run
+// vouches only for what it changed, so a run over a damaged bitmap git kept
+// vouches nothing of it. A VERDICT HOLDS ONLY FOR THE FILE IT HASHED: the path
+// is Lstat'ed before the open and both the open file and the path after the
+// hash, so a file written in place, renamed over or removed meanwhile gets no
+// verdict; and a repair acts only on a file still at the identity its finding
+// names, so it never undoes the maintainer's rewrite or an earlier repair.
+//
+// Hashing is a request's core — the round's callers wait on it — so it holds
+// ONE SLOT OF THE READ LANE a piece at a time (gitproc.Pool.HoldRead,
+// [CheckPieceBytes]) and none while the round runs git, which waits in the
+// same lane; one slot rather than several, so the largest repository's first
+// round costs that one request seconds rather than taking every core the
+// node's other requests are served with. A slot not had in gitproc.SlotWait
+// fails the round busy, and the next round checks: a refused slot and an
+// ended request decide nothing about a file. A READ THAT FAILS does — a file
+// the disk cannot read is one git cannot serve — so it is counted
+// `unreadable` and repaired as though damaged, never left to fail every round
+// on the copy. What it costs, measured
+// (BenchmarkCheck, this package's 64-pack histories of a source repository on
+// four cores, -count 6): the files read are 23% of the copy's pack bytes
+// (22.9 MB of 99 MB, 228 MB of 1.0 GB), hashed in 0.18–0.23 s a gigabyte of
+// packs from the page cache and 0.24–0.47 s cold on that machine's disk — 95%
+// of a warm first round's time, once a process. Read cold at a volume's
+// throughput, it is the index bytes over it: 1.8 s a gigabyte of packs at a
+// gp3 volume's 125 MB/s baseline, 39 s for the largest repository the
+// defaults admit (code.repo_max_bytes, 20 GiB). [Cache.AdmitVerify]'s check
+// holds each derived file to its trailer too: no git command names a damaged
+// bitmap.
+//
 // # Damage is repaired once, in place where nothing is lost
 //
 // A git process the host ran over a cache that git found damaged — a pack, an

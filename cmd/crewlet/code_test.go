@@ -959,6 +959,41 @@ func TestCodeVerifyChecksTheNodesCache(t *testing.T) {
 	}
 }
 
+// WHAT THE SYNC BEFORE A CHECK REPAIRED IS TOLD FIRST, AND LEAVES THE COPY
+// CLEAN. A node whose first sync of a copy found a file damaged and put it
+// right in place reports it apart from the problems (repaired_by_sync): the
+// copy it then checked holds no such damage, so the command says what was
+// repaired — a disk that damaged one file may hold others damaged — and
+// answers the copy clean, which is no failure for a cron and no reason to run
+// it again with -repair.
+//
+// Mutation: read repaired_by_sync as problems (the copy answered unclean, and
+// told to run again with -repair).
+func TestWhatTheSyncRepairedIsToldAndLeavesTheCopyClean(t *testing.T) {
+	t.Parallel()
+	var v codeVerificationView
+	if err := json.Unmarshal([]byte(`{"id":"v1","repo":"web","state":"done","report":{"packs":3,"refs":2,`+
+		`"repaired_by_sync":["the sync before the check found objects/pack/multi-pack-index-1.bitmap failing `+
+		`its checksum and dropped it to be written again"]}}`), &v); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut strings.Builder
+	clean := renderVerification(&out, &errOut, "web", v, false, false)
+	if !clean {
+		t.Errorf("a copy whose sync repaired a file answered unclean:\n%s", out.String())
+	}
+	want := "web: the sync before the check found damage on disk and repaired it in place:\n" +
+		"  the sync before the check found objects/pack/multi-pack-index-1.bitmap failing its checksum and " +
+		"dropped it to be written again\n" +
+		"web: ok (3 packs, 2 refs)\n"
+	if out.String() != want {
+		t.Errorf("rendered\n%s\nwant\n%s", out.String(), want)
+	}
+	if strings.Contains(out.String(), "-repair") {
+		t.Error("a copy left clean was told to run again with -repair")
+	}
+}
+
 // A VERIFY WAITS FOR THE NODE'S CHECK, AS THE NODE SAYS TO. Against the routes'
 // contract, scripted: a check that ended while its request waited is answered
 // at once, with no read after; a refusal the node says clears by waiting is

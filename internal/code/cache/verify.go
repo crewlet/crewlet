@@ -61,6 +61,13 @@ type VerifyReport struct {
 	// many refs packed-refs holds.
 	Packs int `json:"packs"`
 	Refs  int `json:"refs"`
+	// RepairedBySync is what the sync before the check found failing by its
+	// own check and repaired in place — a derived file dropped, a pack fetched
+	// again over its files — each a sentence naming the file: damage the
+	// copy held when the check began and no longer holds, so no problem of
+	// the copy checked and nothing a repair rebuilds; shown first, because a
+	// disk that damaged one file may hold others damaged.
+	RepairedBySync []string `json:"repaired_by_sync,omitempty"`
 	// Problems is everything the incarnation holds that its rows do not say,
 	// each a sentence naming the file and both values; none is a cache
 	// exactly its rows.
@@ -240,9 +247,23 @@ func (v *Verification) Release() {
 //     row: installed, each section at its row's size, and the three files
 //     back to back — .pack, .idx, .rev, the bundle the push stored — hashing
 //     to the row's Hash; a pack no row names is a stray;
-//  4. packed-refs hashed against the digest this cache wrote with it;
-//  5. git's connectivity check, `fsck --connectivity-only`, in the
+//  4. every derived file the listing found — the multi-pack-index with its
+//     bitmap and reverse index, and the commit-graph — held to its own
+//     trailer (checkDerived): git reads each without checking it, and no git
+//     command names a damaged bitmap;
+//  5. packed-refs hashed against the digest this cache wrote with it;
+//  6. git's connectivity check, `fsck --connectivity-only`, in the
 //     maintenance slot the admission took.
+//
+// What the sync before it found failing by its own check — a full round,
+// the first of a process — and repaired in place (check.go) is named first,
+// apart from the problems (RepairedBySync): the copy the check is handed no
+// longer holds it, so it asks no rebuild. Counted among the problems, an
+// operator's repair after the cache had already put a damaged bitmap right
+// rebuilt a sound copy into a new incarnation — no download, the rebuild
+// seeded, but no multi-pack-index, bitmap or graph either until the
+// maintainer wrote them again: minutes to hours of bitmapless clones of a
+// large repository, for nothing.
 //
 // With repair and any problem, the repository is rebuilt — a whole read at
 // the log's head into the next incarnation (Rebuild), counted under reason
@@ -284,7 +305,7 @@ func (v *Verification) Run(ctx context.Context, how VerifyRun) (VerifyReport, er
 	if fresh.Level == "" {
 		fresh = statelog.Freshness{Level: statelog.ReadLinearizable}
 	}
-	s, damage, err := c.sync(ctx, v.e.id, fresh, true)
+	s, damage, found, err := c.sync(ctx, v.e.id, fresh, true)
 	if err != nil {
 		return VerifyReport{Repo: v.e.id, Name: v.held.Repo.Name},
 			fmt.Errorf("cache: verify %s: %w", v.label, err)
@@ -295,6 +316,11 @@ func (v *Verification) Run(ctx context.Context, how VerifyRun) (VerifyReport, er
 		return report, err
 	}
 	report, whole, err := v.pass(ctx, s, how.Checking)
+	// What the sync's own check found failing — and repaired in place, as
+	// every full round does before it answers (check.go) — is told first,
+	// and is no problem of the copy this check was handed, which no longer
+	// holds it.
+	report.RepairedBySync = slices.Clone(found)
 	if damage != nil {
 		// What the sync's own git met is a finding of the check's, first:
 		// the copy is checked as it stands, never repaired under it.
@@ -316,7 +342,7 @@ func (v *Verification) Run(ctx context.Context, how VerifyRun) (VerifyReport, er
 		return report, err
 	}
 	second, _, err := v.pass(ctx, rebuilt, how.Checking)
-	second.Rebuilt, second.Found = true, report.Problems
+	second.Rebuilt, second.Found, second.RepairedBySync = true, report.Problems, report.RepairedBySync
 	if err == nil && len(second.Problems) == 0 {
 		rebuilt.entry.mu.Lock()
 		rebuilt.inc.rebuilds, rebuilt.inc.unmoved = 0, false
@@ -464,6 +490,11 @@ func (c *Cache) check(ctx context.Context, s Synced, slot *gitproc.Reserved) (Ve
 	if err != nil {
 		return r, whole, fmt.Errorf("cache: verify %s: %w", r.label(), err)
 	}
+	problems, err = c.checkDerived(ctx, inc.dir, l)
+	r.Problems = append(r.Problems, problems...)
+	if err != nil {
+		return r, whole, fmt.Errorf("cache: verify %s: %w", r.label(), err)
+	}
 	refs, problem, err := l.checkRefs()
 	r.Refs = refs
 	if problem != "" {
@@ -492,6 +523,10 @@ type listing struct {
 	// packs is every pack file in objects/pack, by checksum: each
 	// extension's size.
 	packs map[string]map[string]int64
+	// derived is every derived file the grammar admitted — the
+	// multi-pack-index's files and the commit-graph — by its path relative
+	// to the incarnation.
+	derived []string
 	// problems is what the grammar does not admit, and what it requires that
 	// is missing.
 	problems []string
@@ -616,6 +651,9 @@ func (c *Cache) list(ctx context.Context, e *entry, inc *incarnation) (*listing,
 		}
 		m := packFileName.FindStringSubmatch(d.Name())
 		if m == nil {
+			if midxFile.MatchString(d.Name()) {
+				l.derived = append(l.derived, filepath.Join(packRel, d.Name()))
+			}
 			continue // the maintainer's
 		}
 		info, ierr := d.Info()
@@ -629,6 +667,9 @@ func (c *Cache) list(ctx context.Context, e *entry, inc *incarnation) (*listing,
 			l.packs[m[1]] = map[string]int64{}
 		}
 		l.packs[m[1]]["."+m[2]] = info.Size()
+	}
+	if graph := filepath.Join(infoRel, "commit-graph"); admitted[graph] {
+		l.derived = append(l.derived, graph)
 	}
 	// packed-refs, opened while no round can rename another over it: the
 	// file and the digest this cache wrote with it are read together.
@@ -715,6 +756,32 @@ func checkPacks(ctx context.Context, dir string, l *listing, snap snapshot) (int
 		problems = append(problems, "stray pack pack-"+cs+" (no row names it)")
 	}
 	return checked, whole, problems, nil
+}
+
+// checkDerived is step 4: every derived file the listing found held to its
+// trailer (check.go), the one check that names damage in a file git reads
+// without checking — a bitmap no git command verifies, a graph or an index
+// that answers wrong rather than failing. A file replaced or removed since
+// the listing (a repair round may run between the listing and the hash: the
+// check holds rounds off for its listing alone) gives no verdict and is no
+// finding. No read slot is taken a piece at a time: the check holds its
+// maintenance slot across the whole of it.
+func (c *Cache) checkDerived(ctx context.Context, dir string, l *listing) ([]string, error) {
+	var problems []string
+	p := c.pieces(nil)
+	for _, rel := range l.derived {
+		if c.knobs != nil && c.knobs.hashing != nil {
+			c.knobs.hashing(filepath.Join(dir, rel))
+		}
+		v, _, _, err := trailerSound(ctx, filepath.Join(dir, rel), p, derivedExpect(rel))
+		switch {
+		case err != nil:
+			return problems, fmt.Errorf("hashing %s: %w", filepath.ToSlash(rel), err)
+		case v == hashDamaged:
+			problems = append(problems, filepath.ToSlash(rel)+" fails its checksum")
+		}
+	}
+	return problems, nil
 }
 
 // hashBundle is the SHA-256 of the pack at stem as the push stored it: its

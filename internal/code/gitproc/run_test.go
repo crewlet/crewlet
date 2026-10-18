@@ -1051,7 +1051,7 @@ func TestEveryProcessInTheTreeReportsToOneStream(t *testing.T) {
 
 	t.Run("a short push", func(t *testing.T) {
 		d := &damaged{f: f, p: p}
-		stdout, stderr, err := f.client.Try(t, f.wt, strings.NewReader(f.tip()+"\n"),
+		stdout, stderr, err := f.Client.Try(t, f.Work, strings.NewReader(f.tip()+"\n"),
 			"pack-objects", "--revs", "--stdout", "-q")
 		if err != nil {
 			t.Fatalf("pack-objects of the history: %v\n%s", err, stderr)
@@ -1078,8 +1078,7 @@ func TestEveryProcessInTheTreeReportsToOneStream(t *testing.T) {
 		d := &damaged{f: f, p: p}
 		d.dir, d.older, d.newer = f.packed(t)
 		writeMidx(t, d)
-		start, end := gittest.MidxChunk(t, d.midx(), "RIDX")
-		overwrite(t, d.midx(), start, bytes.Repeat([]byte{0xff}, int(end-start)))
+		gittest.Damage(t, d.dir, gittest.MidxRidx)
 		_, err := p.Run(t.Context(), fetchV2(d.dir, f.tip()))
 		var dmg *gitproc.Damage
 		if !errors.Is(err, gitproc.ErrCorrupt) || !errors.As(err, &dmg) || dmg.Parts != gitproc.PartMultiPackIndex {
@@ -1090,7 +1089,7 @@ func TestEveryProcessInTheTreeReportsToOneStream(t *testing.T) {
 		d := &damaged{f: f, p: p}
 		d.dir, d.older, d.newer = f.packed(t)
 		writeGraph(t, d)
-		overwrite(t, d.graph(), gittest.ChunkRow(gittest.GraphHeader, 0), []byte{0, 0, 0, 0})
+		gittest.Damage(t, d.dir, gittest.GraphFirstChunkZeroed)
 		res, err := p.Run(t.Context(), fetchV2(d.dir, f.tip()))
 		var dmg *gitproc.Damage
 		if err != nil || !errors.As(res.Damage, &dmg) || dmg.Parts != gitproc.PartChunk {

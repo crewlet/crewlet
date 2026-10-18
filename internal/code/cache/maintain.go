@@ -91,6 +91,19 @@ import (
 // back by it. One whose graph step fails waits for the ordinary rules
 // (graphFailed), so a step that keeps failing is not asked again every pass.
 //
+// INDEX REPAIR. A multi-pack-index a full round dropped as DAMAGED — its
+// check found a file of it failing its trailer, or one the index may have
+// been built from (a pack's .idx) reinstalled — is due AT ONCE as a graph
+// is: no debounce and no interval (incarnation.indexRepair), sorted with the
+// graph-first runs, since every clone of the copy walks without a bitmap
+// until it is written again, and nothing but a push would otherwise make it
+// due before the interval. Unlike a graph it is admitted only in a slot of
+// the maintainer's own: a bitmap holds its slot for minutes, and the kept
+// slot is a person's. Cleared by the index written; one whose index step
+// fails waits for the ordinary rules, as a graph-first run's does. A drop
+// for a pack's REMOVAL is ordinary and asks nothing at once: the packs moved,
+// and the ordinary debounce is what a move of packs waits for.
+//
 // A FULL ROUND DOES NOT WRITE THE GRAPH ITSELF, as it writes its own index
 // past MidxRoundPacks: the round's index is what the request it was synced
 // for is served from, and pays that request back; the graph serves only a
@@ -211,6 +224,7 @@ func (c *Cache) indexRound(ctx context.Context, e *entry, inc *incarnation, snap
 		return false
 	}
 	defer c.maint.doneOther(mem)
+	before := derivedIDs(inc.dir)
 	_, err := c.git.Run(ctx, gitproc.Cmd{
 		Dir: inc.dir, Args: []string{"multi-pack-index", "write", "--stdin-packs", "--no-progress"},
 		Config: c.ServeConfig(), Class: gitproc.ClassRead, Stdin: &names,
@@ -224,6 +238,7 @@ func (c *Cache) indexRound(ctx context.Context, e *entry, inc *incarnation, snap
 		}
 		return false
 	}
+	c.vouchWritten(e, inc, before)
 	meta, err := metaBytes(inc.dir)
 	e.mu.Lock()
 	// LastRun and Took stay the maintainer's: the round's index is no
@@ -423,7 +438,10 @@ func (c *Cache) maintainerPass(ctx context.Context) []*maintRun {
 				if inc.midx.Bitmap {
 					uncovered -= inc.midx.Packs
 				}
-				candidates = append(candidates, candidate{e: e, first: p.first, uncovered: uncovered})
+				// An index repair is sorted with the graph-first runs: the
+				// copy it repairs has lost what it served clones with.
+				first := p.first || (inc.indexRepair && p.index != 0)
+				candidates = append(candidates, candidate{e: e, first: first, uncovered: uncovered})
 			}
 		}
 		e.mu.Unlock()
@@ -640,10 +658,17 @@ func (c *Cache) runnable(e *entry) bool {
 // due reports whether e's current incarnation's ORDINARY run is due now; e.mu
 // is held. See DUE above: its packs have stood still for MidxDebounce, or the
 // oldest of them has waited MidxMaxWait, and its last run ended at least
-// max(MidxMinInterval, MidxDutyCycle × that run's duration) ago. A
+// max(MidxMinInterval, MidxDutyCycle × that run's duration) ago — or its
+// index is being repaired (INDEX REPAIR above), which is due at once. A
 // graph-first run is due whatever this says (plan).
 func (c *Cache) due(e *entry, now time.Time) bool {
 	inc := e.current
+	if inc.indexRepair {
+		// A multi-pack-index dropped as damaged (sync.go apply): every
+		// clone of the copy walks without a bitmap until it is written
+		// again, so no debounce and no interval hold it back.
+		return true
+	}
 	settled := now.Sub(e.lastAdded) >= MidxDebounce ||
 		(!e.uncoveredSince.IsZero() && now.Sub(e.uncoveredSince) >= MidxMaxWait)
 	return settled && now.Sub(inc.midx.LastRun) >= max(MidxMinInterval, MidxDutyCycle*inc.midx.Took)
@@ -873,7 +898,7 @@ func (c *Cache) maintain(ctx context.Context, m *maintRun, p runPlan) {
 	}()
 
 	began := time.Now()
-	out := c.runMaintenance(ctx, inc, p)
+	out := c.runMaintenance(ctx, e, inc, p)
 	took := time.Since(began)
 	firstStep := procIndex
 	if p.index == 0 || p.first {
@@ -895,6 +920,15 @@ func (c *Cache) maintain(ctx context.Context, m *maintRun, p runPlan) {
 	}
 	meta, merr := metaBytes(inc.dir)
 	e.mu.Lock()
+	switch {
+	case out.indexed:
+		inc.indexRepair = false
+	case inc.indexRepair && out.step == procIndex && out.err != nil && !refused && !stopped:
+		// AN INDEX REPAIR THAT FAILED waits for the ordinary rules, as a
+		// graph-first run that failed does: a write that keeps failing is
+		// not asked again every pass.
+		inc.indexRepair = false
+	}
 	if out.indexed {
 		inc.midx.Packs, inc.midx.Bitmap = p.covered, p.index == stepBitmap
 		// Every pack a delta added while the index was written arrived
@@ -976,8 +1010,9 @@ var (
 // bitmap or without, and then the commit-graph, each when the plan takes it,
 // the graph BEFORE the index on a graph-first run — each in the MAINTENANCE
 // lane with the serve configuration and a deadline proportional to the
-// repository.
-func (c *Cache) runMaintenance(ctx context.Context, inc *incarnation, p runPlan) maintOutcome {
+// repository. What a step that succeeds writes is vouched (check.go): this
+// process wrote it, so no check of this process hashes it again.
+func (c *Cache) runMaintenance(ctx context.Context, e *entry, inc *incarnation, p runPlan) maintOutcome {
 	var out maintOutcome
 	var steps [][]string
 	if p.graph && p.first {
@@ -1001,6 +1036,7 @@ func (c *Cache) runMaintenance(ctx context.Context, inc *incarnation, p runPlan)
 			out.step, out.err = name, context.Cause(ctx)
 			return out
 		}
+		before := derivedIDs(inc.dir)
 		if _, err := c.git.Run(ctx, gitproc.Cmd{
 			Dir: inc.dir, Args: args, Config: c.ServeConfig(), Class: gitproc.ClassMaintenance,
 			Deadline: gitproc.PackWorkDeadline(p.disk),
@@ -1008,6 +1044,7 @@ func (c *Cache) runMaintenance(ctx context.Context, inc *incarnation, p runPlan)
 			out.step, out.err = name, err
 			return out
 		}
+		c.vouchWritten(e, inc, before)
 		switch name {
 		case procIndex:
 			out.indexed = true

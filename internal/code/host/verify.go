@@ -359,11 +359,12 @@ func (s *Server) runVerify(id uuid.UUID, ended chan struct{}, checked *cache.Ver
 	close(ended)
 	if err != nil {
 		s.log.Warn("code_verify_failed", "repo", report.Name, "verify", id, "repair", how.Repair,
-			"problems", len(report.Problems), "error", err)
+			"repaired_by_sync", len(report.RepairedBySync), "problems", len(report.Problems), "error", err)
 		return
 	}
 	s.log.Info("code_verify_finished", "repo", report.Name, "verify", id, "repair", how.Repair,
-		"packs", report.Packs, "problems", len(report.Problems), "rebuilt", report.Rebuilt)
+		"packs", report.Packs, "repaired_by_sync", len(report.RepairedBySync), "problems", len(report.Problems),
+		"rebuilt", report.Rebuilt)
 }
 
 // AwaitVerification answers the verification id of the repository named name

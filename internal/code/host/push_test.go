@@ -1372,3 +1372,60 @@ func oidN(n int) string { return fmt.Sprintf("%040x", n+1) }
 
 // shellWord is s as one POSIX shell word.
 func shellWord(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// A PROTECTED BRANCH IS NOT FORCED THROUGH A DAMAGED GRAPH. The force check
+// asks git whether a push's old commit is an ancestor of its new one, and git
+// answers from the commit-graph without checking it: a graph a previous
+// process left that names another commit as the tip's first parent makes a
+// force look like a fast-forward — 2.55 and 2.56 answer from it, 2.40 to
+// 2.48 read the commit itself here and answer right. The first round of the
+// process that serves the copy holds the graph to its trailer before it
+// answers anything, drops it, and the push is refused as a force, as on a
+// sound copy.
+//
+// Mutation: skip the check (sync.go apply) — on 2.56 the force passes the
+// protection and main moves; on every git the graph is left in place.
+func TestAProtectedBranchIsNotForcedThroughADamagedGraph(t *testing.T) {
+	c := newCase(t, codetest.SoloOptions{}, codetest.Settings())
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	first := p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	side := strings.TrimSpace(p.Git().Run(t, work, "commit-tree", first+"^{tree}", "-p", first, "-m", "side"))
+	c.MustPush(p, work, side+":refs/heads/main")
+	p.Commit(work, map[string]string{"README.md": "two\n"}, "two")
+	tip := p.Commit(work, map[string]string{"b.txt": "three\n"}, "three")
+	c.MustPush(p, work, "HEAD:refs/heads/dev")
+	dir := maintainersBitmap(t, c)
+	graph := filepath.Join(dir, "objects", "info", "commit-graph")
+	eventually(t, "the maintainer's commit-graph", func() bool {
+		_, err := os.Stat(graph)
+		return err == nil
+	})
+
+	// A previous process's copy: its graph says the tip's parent is side.
+	node := c.Fleet.(*codetest.SoloFleet).GitNode(0)
+	node.Stop(t.Context())
+	gittest.Damage(t, dir, gittest.GraphParentOther, tip, side)
+	node.Restart(t)
+
+	body := pkt(side+" "+tip+" refs/heads/main\x00report-status\n") + "0000" + emptyPack(t, p.Git(), work)
+	resp, answer := post(t, c, 0, "ceo", "git-receive-pack", "", body)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(answer, "ng refs/heads/main") ||
+		!strings.Contains(answer, "force") {
+		t.Errorf("a force of protected main from %s to %s over a damaged graph: answered %d %.300q, want it "+
+			"refused as a force", side, tip, resp.StatusCode, answer)
+	}
+	if got := c.Rows().Refs["refs/heads/main"]; got != side {
+		t.Errorf("main is at %s after the force, want %s", got, side)
+	}
+	var damaged uint64
+	for _, s := range node.Node().Metrics().Read() {
+		if s.Name == metrics.CodeCacheChecks && s.Attrs["file"] == "commit-graph" && s.Attrs["outcome"] == "damaged" {
+			damaged += s.Total
+		}
+	}
+	if damaged != 1 {
+		t.Errorf("%s{file=commit-graph,outcome=damaged} = %d, want the one graph the first round found",
+			metrics.CodeCacheChecks, damaged)
+	}
+}

@@ -2,11 +2,14 @@ package cache
 
 import (
 	"context"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"time"
 
@@ -717,4 +720,127 @@ func MarkWhole(c *Cache, repoID string, reason RebuildReason, drops gitproc.Part
 // nothing more: no round is asked.
 func Reread(c *Cache, reason RebuildReason) {
 	c.reread(reason, func(*incarnation) bool { return true })
+}
+
+// WhileHashing makes every check call f with the path of each file as it is
+// about to hash it (check.go).
+func WhileHashing(o *Options, f func(path string)) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.hashing = f
+}
+
+// IndexRepair reports whether repoID's current incarnation's
+// multi-pack-index is due at once as a repair (incarnation.indexRepair).
+func IndexRepair(c *Cache, repoID string) bool {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.current != nil && e.current.indexRepair
+}
+
+// Vouched is the paths, relative to the incarnation, of every file of
+// repoID's current incarnation this process vouches for at the identity it
+// has now (check.go), sorted.
+func Vouched(c *Cache, repoID string) []string {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var out []string
+	for _, rel := range vouchedRels(e.current) {
+		if vouchedAt(e.current, rel, lstatID(filepath.Join(e.current.dir, rel))) {
+			out = append(out, rel)
+		}
+	}
+	return out
+}
+
+// VouchMemory is what holding the vouches of n packs — each pack's .idx and
+// .rev — costs the heap, as an incarnation holds them.
+func VouchMemory(n int) (perPack float64) {
+	inc := &incarnation{}
+	var key [hashTrailer]byte
+	id := fileID{present: true, dev: 1, ino: 1, size: 1, modified: 1}
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for i := range n {
+		binary.BigEndian.PutUint64(key[:], uint64(i))
+		cs := hex.EncodeToString(key[:])
+		vouch(inc, packFileRel(cs, ".idx"), id)
+		vouch(inc, packFileRel(cs, ".rev"), id)
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	runtime.KeepAlive(inc)
+	return float64(after.HeapAlloc-before.HeapAlloc) / float64(n)
+}
+
+// ReadFails makes every hash a check or a scrub makes ask f before each piece
+// it reads, an error f answers being that read's: a disk failing under one
+// file.
+func ReadFails(o *Options, f func(path string) error) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.readFault = f
+}
+
+// CheckPiecesOf makes every hash read a file n bytes a slot, in place of
+// CheckPieceBytes, and tell f each piece's path once it is read, its slot still
+// held (held), and again once the slot is given back.
+func CheckPiecesOf(o *Options, n int64, f func(path string, held bool)) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.checkPiece, o.knobs.pieceRead = n, f
+}
+
+// WantIndex makes repoID's current incarnation want the maintainer's
+// bitmapped index again over the packs it holds — as if its index had been
+// written without a bitmap — and its last run long ago, so the next pass runs
+// the index step over an index that has not changed.
+func WantIndex(c *Cache, repoID string) {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.current.midx.Bitmap = false
+	e.current.midx.LastRun, e.current.midx.Took = time.Time{}, 0
+}
+
+// Unsound is every index file of the incarnation at dir — each pack's .idx
+// and .rev, and every derived file — that fails its trailer (check.go), by
+// its path relative to dir.
+func Unsound(dir string) ([]string, error) {
+	p := pieces{buf: make([]byte, copyBuffer), size: CheckPieceBytes}
+	list, err := os.ReadDir(filepath.Join(dir, packRel))
+	if err != nil {
+		return nil, err
+	}
+	wants := map[string]expect{}
+	for _, d := range list {
+		if m := packFileName.FindStringSubmatch(d.Name()); m != nil && m[2] != "pack" {
+			wants[filepath.Join(packRel, d.Name())] = expect{prior: checksumBytes(m[1])}
+		}
+	}
+	derived, err := derivedPresent(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, rel := range derived {
+		wants[rel] = derivedExpect(rel)
+	}
+	var out []string
+	for rel, want := range wants {
+		v, _, _, err := trailerSound(context.Background(), filepath.Join(dir, rel), p, want)
+		if err != nil {
+			return nil, err
+		}
+		if v == hashDamaged {
+			out = append(out, rel)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
 }

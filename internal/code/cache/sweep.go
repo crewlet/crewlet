@@ -243,7 +243,7 @@ func (t *trashing) dirs(inc string) []string {
 // was refused the index, whose failure removed it from under the sweep that
 // had listed it, and the round failed on the move. It reports whether it
 // moved anything.
-func (c *Cache) packStrays(inc *incarnation, snap snapshot) ([]string, bool, error) {
+func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot) ([]string, bool, error) {
 	packDir := filepath.Join(inc.dir, "objects", "pack")
 	want := map[string]bool{}
 	for _, p := range snap.packs {
@@ -275,7 +275,7 @@ func (c *Cache) packStrays(inc *incarnation, snap snapshot) ([]string, bool, err
 		}
 	}
 	if len(strays) > 0 {
-		if err = c.dropIndexes(inc); err != nil {
+		if err = c.dropIndexes(e, inc); err != nil {
 			return nil, true, err
 		}
 	}
@@ -293,6 +293,9 @@ func (c *Cache) sweepPacks(e *entry, inc *incarnation, strays []string) (bool, e
 		if t.move(filepath.Join(packDir, name)); t.err != nil {
 			return true, t.err
 		}
+		e.mu.Lock()
+		unvouch(inc, filepath.Join(packRel, name))
+		e.mu.Unlock()
 	}
 	if t.moved {
 		if err := syncDir(packDir); err != nil {
@@ -307,23 +310,24 @@ func (c *Cache) sweepPacks(e *entry, inc *incarnation, strays []string) (bool, e
 
 // dropIndexes moves the multi-pack-index files and the commit-graph into
 // trash/ — before a pack they may name is removed.
-func (c *Cache) dropIndexes(inc *incarnation) error {
-	return c.dropDerived(inc, gitproc.PartMultiPackIndex|gitproc.PartCommitGraph)
+func (c *Cache) dropIndexes(e *entry, inc *incarnation) error {
+	return c.dropDerived(e, inc, gitproc.PartMultiPackIndex|gitproc.PartCommitGraph)
 }
 
 // dropDerived moves the derived files drop names into trash/: the
 // multi-pack-index's (gitproc.PartMultiPackIndex) and the commit-graph
 // (gitproc.PartCommitGraph) — what the repair of damaged derived files drops
 // (apply), by the part the damage named, and both when a pack they may name
-// is removed (dropIndexes).
-func (c *Cache) dropDerived(inc *incarnation, drop gitproc.Part) error {
+// is removed (dropIndexes). Their vouches go with them (check.go): a file
+// written there next is vouched as it is written, or checked.
+func (c *Cache) dropDerived(e *entry, inc *incarnation, drop gitproc.Part) error {
 	if drop&gitproc.PartMultiPackIndex != 0 {
-		if err := c.dropMultiPackIndex(inc); err != nil {
+		if err := c.dropMultiPackIndex(e, inc); err != nil {
 			return err
 		}
 	}
 	if drop&gitproc.PartCommitGraph != 0 {
-		return c.dropCommitGraph(inc)
+		return c.dropCommitGraph(e, inc)
 	}
 	return nil
 }
@@ -347,11 +351,14 @@ func derivedFiles(drop gitproc.Part) []string {
 // write. measure then finds the graph missing, and the maintainer writes it
 // first (its graph-first rule), so the window in which walks go by date is
 // that write's.
-func (c *Cache) dropCommitGraph(inc *incarnation) error {
+func (c *Cache) dropCommitGraph(e *entry, inc *incarnation) error {
 	graph := filepath.Join(inc.dir, "objects", "info", "commit-graph")
 	if err := toTrash(c.dir, graph, newV7()+"-"+filepath.Base(graph)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
+	e.mu.Lock()
+	unvouch(inc, filepath.Join(infoRel, "commit-graph"))
+	e.mu.Unlock()
 	return syncDir(filepath.Dir(graph))
 }
 
@@ -361,7 +368,7 @@ func (c *Cache) dropCommitGraph(inc *incarnation) error {
 // of its own that names no position in the index, so it stays: dropped too, a
 // repair of the index would also put every walk of the repository back on
 // commit dates until the maintainer had written the graph again.
-func (c *Cache) dropMultiPackIndex(inc *incarnation) error {
+func (c *Cache) dropMultiPackIndex(e *entry, inc *incarnation) error {
 	packDir := filepath.Join(inc.dir, "objects", "pack")
 	list, err := os.ReadDir(packDir)
 	if err != nil {
@@ -375,6 +382,9 @@ func (c *Cache) dropMultiPackIndex(inc *incarnation) error {
 		if err = toTrash(c.dir, path, newV7()+"-"+d.Name()); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
+		e.mu.Lock()
+		unvouch(inc, filepath.Join(packRel, d.Name()))
+		e.mu.Unlock()
 	}
 	return syncDir(packDir)
 }

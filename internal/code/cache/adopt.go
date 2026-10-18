@@ -347,6 +347,7 @@ func (c *Cache) placeStaging(e *entry, inc *incarnation, st *staging) (adoptOutc
 		return adoptHeld, nil
 	}
 
+	c.vouchPack(e, inc, st.pack.GitChecksum)
 	now := c.now()
 	e.mu.Lock()
 	inc.packs++

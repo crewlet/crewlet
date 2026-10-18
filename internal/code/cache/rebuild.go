@@ -552,6 +552,9 @@ func (c *Cache) seedRebuild(e *entry, replaced, inc *incarnation, whole []string
 		linked, err := linkBundle(filepath.Join(from, "pack-"+cs), into, cs, nil)
 		switch {
 		case linked:
+			// Found whole by the check that seeded it, bundle and all: what
+			// it holds is vouched in the new incarnation as in the old.
+			c.vouchPack(e, inc, cs)
 			seeded++
 		case err != nil && !errors.Is(err, fs.ErrNotExist):
 			c.log.Warn("code_cache_rebuild_seed_failed", "repo", e.id, "pack", "pack-"+cs, "error", err)

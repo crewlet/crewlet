@@ -152,6 +152,18 @@ type knobs struct {
 	// time a full round writes its own multi-pack-index there: the
 	// interleavings are held to reaching it.
 	roundIndexed func(dir string)
+	// hashing runs before a check hashes the file at path: a case counts
+	// what a round hashes, or swaps the file under the hash.
+	hashing func(path string)
+	// checkPiece, when set, is the piece a hash reads in one slot in place
+	// of CheckPieceBytes, so a case's small file is several pieces; and
+	// pieceRead is told each piece's path once it is read, its slot still
+	// held, and again once the slot is given back.
+	checkPiece int64
+	pieceRead  func(path string, held bool)
+	// readFault, when set, is asked before each piece a hash reads, and an
+	// error it answers is that read's: a case's disk failing under a file.
+	readFault func(path string) error
 }
 
 // validate refuses an Options value naming the field and what to set,

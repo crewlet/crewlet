@@ -1162,7 +1162,13 @@ cache on its own disk. What such a node needs from its host:
   milliseconds; on a node that has never served the repository, or whose budget
   evicted it, a **cold** sync downloads one object for every push the
   repository ever took (about 70 to 130 s at 10 000 pushes from S3, which
-  answers each request in about 100 to 200 ms). The second is the hold on a
+  answers each request in about 100 to 200 ms). The first sync of each
+  repository after the node restarts also holds that repository's index files
+  — about a quarter of its pack bytes — to their checksums before it answers:
+  0.2 s a gigabyte of packs from the page cache, and at the volume's own
+  throughput read cold — 39 s for the largest repository the defaults admit
+  (20 GiB) at a gp3 volume's 125 MB/s baseline, shorter in proportion on a
+  volume provisioned faster. The second is the hold on a
   fetch's answer until its pack begins: the host holds upload-pack's answer so
   that a cache its `pack-objects` finds damaged can be repaired and the fetch
   served, rather than failing it past the first byte. For a client using

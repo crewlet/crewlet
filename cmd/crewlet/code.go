@@ -712,11 +712,12 @@ type codeVerificationView struct {
 	State    string    `json:"state"`
 	Deadline time.Time `json:"deadline"`
 	Report   *struct {
-		Packs    int      `json:"packs"`
-		Refs     int      `json:"refs"`
-		Problems []string `json:"problems"`
-		Rebuilt  bool     `json:"rebuilt"`
-		Found    []string `json:"found"`
+		Packs          int      `json:"packs"`
+		Refs           int      `json:"refs"`
+		RepairedBySync []string `json:"repaired_by_sync"`
+		Problems       []string `json:"problems"`
+		Rebuilt        bool     `json:"rebuilt"`
+		Found          []string `json:"found"`
 	} `json:"report"`
 	Error  string `json:"error"`
 	Detail string `json:"detail"`
@@ -1051,17 +1052,20 @@ func awaitVerification(ctx context.Context, client *nodeClient, name string, v *
 
 // renderVerification prints what a verification that ended found, answering
 // whether the copy is clean: no problem left — a repair that rebuilt a copy
-// whole included, with what it had found.
+// whole included, with what it had found. What the sync before the check
+// repaired in place is told first and leaves the copy clean: the copy checked
+// no longer holds it, though the disk that damaged it may hold more.
 func renderVerification(stdout, stderr io.Writer, name string, v codeVerificationView, repair,
 	quiet bool,
 ) bool {
 	var (
-		packs, refs     int
-		problems, found []string
-		rebuilt         bool
+		packs, refs               int
+		repaired, problems, found []string
+		rebuilt                   bool
 	)
 	if r := v.Report; r != nil {
-		packs, refs, problems, found, rebuilt = r.Packs, r.Refs, r.Problems, r.Found, r.Rebuilt
+		packs, refs, repaired, problems, found, rebuilt = r.Packs, r.Refs, r.RepairedBySync, r.Problems, r.Found,
+			r.Rebuilt
 	}
 	out := stdout
 	if quiet {
@@ -1073,6 +1077,9 @@ func renderVerification(stdout, stderr io.Writer, name string, v codeVerificatio
 	case "done":
 	case "failed":
 		fmt.Fprintf(stderr, "%s: the check failed (%s): %s\n", name, v.Error, v.Detail)
+		for _, p := range repaired {
+			fmt.Fprintf(stderr, "  repaired in place by the sync before it: %s\n", p)
+		}
 		for _, p := range problems {
 			fmt.Fprintf(stderr, "  found before it failed: %s\n", p)
 		}
@@ -1081,6 +1088,12 @@ func renderVerification(stdout, stderr io.Writer, name string, v codeVerificatio
 		fmt.Fprintf(stderr, "%s: the node answered a verification state this build does not know (%q)\n",
 			name, v.State)
 		return false
+	}
+	if len(repaired) > 0 {
+		fmt.Fprintf(out, "%s: the sync before the check found damage on disk and repaired it in place:\n", name)
+		for _, p := range repaired {
+			fmt.Fprintf(out, "  %s\n", p)
+		}
 	}
 	if rebuilt {
 		fmt.Fprintf(out, "%s: damaged, and rebuilt (%s); the check before the rebuild found:\n", name, counts)

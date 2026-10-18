@@ -4163,9 +4163,12 @@ Mounted only where git is served.
 ### `GET /code/repos/{name}/verify/{id}`
 
 A verification begun by the `POST` above: `state` is `running`, `done` — with
-`report`, the node's check: `packs` and `refs` checked, every `problems`
-sentence naming the file and both values (none is a copy exactly its rows),
-and after a repair `rebuilt` and, as `found`, what the first check found — or
+`report`, the node's check: `packs` and `refs` checked, as
+`repaired_by_sync` what the node's sync before the check found damaged and
+repaired in place (a file the copy no longer holds, so no problem of it and
+nothing a repair rebuilds), every `problems` sentence naming the file and both
+values (none is a copy exactly its rows), and after a repair `rebuilt` and, as
+`found`, what the first check found — or
 `failed`, with `error` (`unavailable` for what a retry or a restart clears, a
 stop among them; `query_failed` otherwise), `detail`, its sentence — a pack the
 object store does not hold, the stop that cut it short — and `report`, **what

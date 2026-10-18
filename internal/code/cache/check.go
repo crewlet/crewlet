@@ -1,0 +1,732 @@
+package cache
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha1" //nolint:gosec // git's hashfile trailer IS a SHA-1: the check compares what git wrote, it trusts no hash of its own to it
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
+)
+
+// THE CHECK: nothing an index file says is served from a file this process did
+// not write or check (doc.go, "What this process did not write is checked
+// before it serves"). A CHECKABLE file is one git reads to find an object or a
+// parent — the commit-graph, the multi-pack-index with its bitmap and reverse
+// index, and every pack's .idx and .rev — and git checks none of them when it
+// reads: a flipped byte of any is read with no word, and a damaged one can
+// answer WRONG — a parent the force check reads, an object offset a clone
+// ships the wrong bytes from, a bitmap that drops objects from every clone.
+// Each is a git HASHFILE, whose last twenty bytes are the SHA-1 of every byte
+// before them (git's finalize_hashfile), and that is the check: a .idx and a
+// .rev also carry their pack's checksum — the pack's name — in the twenty
+// before it, and a .pack's trailer IS its name. No git process runs: git's
+// own verifiers cost twenty times a trailer for the graph and are blind to
+// the bitmap.
+
+// fileKind is which file of an incarnation a check hashed: the `file`
+// attribute of crewlet.code.cache.checks.
+type fileKind string
+
+const (
+	fileGraph   fileKind = "commit-graph"
+	fileMidx    fileKind = "multi-pack-index"
+	fileBitmap  fileKind = "bitmap"
+	fileMidxRev fileKind = "midx-rev"
+	fileIdx     fileKind = "idx"
+	fileRev     fileKind = "rev"
+)
+
+// checkOutcome is what hashing one file concluded: the `outcome` attribute of
+// crewlet.code.cache.checks.
+type checkOutcome string
+
+const (
+	// checkSound: its trailer is the SHA-1 of the bytes before it, and its
+	// name or row says nothing else of it.
+	checkSound checkOutcome = "sound"
+	// checkDamaged: it is not.
+	checkDamaged checkOutcome = "damaged"
+	// checkUnreadable: a read of it failed — damaged at the identity it had,
+	// and repaired as a file that failed its trailer is: a disk's bad sector
+	// is what a rename over the file, or a drop, replaces. Never a slot the
+	// read lane did not grant, nor a context that ended: those say nothing
+	// of the file and are counted under no outcome.
+	checkUnreadable checkOutcome = "unreadable"
+	// checkReplaced: it was replaced or removed while it was hashed — no
+	// verdict: its successor is unvouched, and the next check reads it.
+	checkReplaced checkOutcome = "replaced"
+)
+
+// checkTrigger is why a check hashed what it hashed: the `trigger` attribute
+// of crewlet.code.cache.checks and crewlet.code.cache.check.duration.
+type checkTrigger string
+
+const (
+	// triggerFirst: the incarnation's first full round in this process,
+	// which holds every file a previous process left to its trailer.
+	triggerFirst checkTrigger = "first"
+	// triggerUnvouched: a later full round, holding the files this process
+	// has neither written nor checked since.
+	triggerUnvouched checkTrigger = "unvouched"
+)
+
+// hashVerdict is what hashing one file concluded: sound, damaged, or NONE — the
+// file was replaced or removed while it was read, so no verdict is its.
+type hashVerdict uint8
+
+const (
+	hashNone hashVerdict = iota
+	hashSound
+	hashDamaged
+)
+
+// hashTrailer is the length of a git hashfile's trailer: a SHA-1, since every
+// repository the engine serves is SHA-1 (code.PackRef.GitChecksum is forty
+// hex digits). A SHA-256 object format would be a trailer of 32, checked the
+// same way, and lands with that format.
+const hashTrailer = sha1.Size
+
+// fileID is a file's identity as a verdict about its bytes is kept by: its
+// device and inode, its size and its modification time — or its absence. NO
+// CTIME: an adoption and a seeded rebuild hard-link files, and every link and
+// unlink moves the inode's ctime without changing a byte. A file renamed in
+// over it, written through its own inode (which moves its modification time)
+// or removed is another identity; a file whose bytes change with NO change of
+// identity — media damage — is the scrub's to find, never a vouch's.
+type fileID struct {
+	present        bool
+	dev, ino       uint64
+	size, modified int64
+}
+
+// idOf is info's identity.
+func idOf(info fs.FileInfo) fileID {
+	f := fileID{present: true, size: info.Size(), modified: info.ModTime().UnixNano()}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		f.dev, f.ino = uint64(st.Dev), st.Ino //nolint:unconvert // Dev is int32 on darwin
+	}
+	return f
+}
+
+// lstatID is the identity of what is at path now, or the zero (absent) one.
+func lstatID(path string) fileID {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fileID{}
+	}
+	return idOf(info)
+}
+
+// checkedFile is one checkable file of an incarnation: its kind, its path
+// relative to the incarnation, and the identity it was hashed at.
+type checkedFile struct {
+	kind fileKind
+	rel  string
+	id   fileID
+}
+
+// expect is what a file's name or its row says of its last forty bytes beside
+// git's own rule: prior is the twenty before the trailer (a .idx's and a
+// .rev's pack checksum), trailer the trailer itself (a .pack's name); nil
+// says nothing.
+type expect struct {
+	prior, trailer []byte
+}
+
+// pieces is how a hash reads a file: through buf, size bytes at a time —
+// CheckPieceBytes, unless a case lowers it — each piece in a slot hold takes
+// and gives back once the piece is read (gitproc.Pool.HoldRead; nil holds
+// nothing), and read, when set, told the file's path after each piece twice:
+// with its slot still held, and once it is given back (a case's hook).
+type pieces struct {
+	buf  []byte
+	size int64
+	hold func(context.Context) (func(), error)
+	read func(path string, held bool)
+	// fault, when set, is asked before each piece is read, and an error it
+	// answers is that read's: a case's disk failing under one file.
+	fault func(path string) error
+}
+
+// pieces is the way this cache's hashes read a file, holding a slot with hold.
+func (c *Cache) pieces(hold func(context.Context) (func(), error)) pieces {
+	p := pieces{buf: make([]byte, copyBuffer), size: CheckPieceBytes, hold: hold}
+	if c.knobs != nil {
+		if c.knobs.checkPiece > 0 {
+			p.size = c.knobs.checkPiece
+		}
+		p.read, p.fault = c.knobs.pieceRead, c.knobs.readFault
+	}
+	return p
+}
+
+// repairAction is what a repair does about the checkable file at rel found
+// failing: a derived file is dropped, a pack's file installed again.
+func repairAction(rel string) string {
+	if _, _, derived := derivedFile(rel); derived {
+		return "dropped"
+	}
+	return "reinstalled"
+}
+
+// noVerdict reports whether a hash's error is no fault of the file's: its
+// context ended, or no read slot was free within gitproc.SlotWait. Such a
+// hash says nothing of the file, and is counted under no outcome; any other
+// error is a read of it that failed.
+func noVerdict(ctx context.Context, err error) bool {
+	return ctx.Err() != nil || errors.Is(err, gitproc.ErrBusy)
+}
+
+// trailerSound holds the file at path to git's hashfile trailer — the SHA-1 of
+// every byte before its last twenty against those twenty — and to want,
+// reading it one PIECE at a time as p says, and checking ctx before every
+// read. A file that is not a regular file, or shorter than its trailer and
+// what want names, is damaged.
+//
+// A VERDICT HOLDS ONLY FOR THE FILE IT HASHED: the path is Lstat'ed before it
+// is opened, and after the hash both the open file and the path again, and
+// when an identity differs — the file written in place, or another renamed
+// in over it, while it was read — or the path is gone, there is no verdict
+// (hashNone): its successor is no file this hash read. Answered beside the verdict: the
+// identity hashed, and the bytes read. An error is a read that failed, never
+// a verdict.
+func trailerSound(ctx context.Context, path string, p pieces, want expect) (hashVerdict, fileID, int64, error) {
+
+	before, err := os.Lstat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return hashNone, fileID{}, 0, nil
+	case err != nil:
+		return hashNone, fileID{}, 0, err
+	case !before.Mode().IsRegular():
+		return hashDamaged, idOf(before), 0, nil
+	}
+	id := idOf(before)
+	need := int64(hashTrailer + len(want.prior))
+	if id.size < need {
+		return hashDamaged, id, 0, nil
+	}
+	f, err := os.Open(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return hashNone, id, 0, nil
+	case err != nil:
+		return hashNone, id, 0, err
+	}
+	defer func() { _ = f.Close() }() // read-only: what was read is the answer
+
+	sum := sha1.New() //nolint:gosec // git's hashfile trailer is a SHA-1
+	body := &io.LimitedReader{R: f, N: id.size - hashTrailer}
+	var read int64
+	for body.N > 0 {
+		release := func() {}
+		if p.hold != nil {
+			if release, err = p.hold(ctx); err != nil {
+				return hashNone, id, read, err
+			}
+		}
+		piece := &io.LimitedReader{R: body, N: p.size}
+		if p.fault != nil {
+			err = p.fault(path)
+		}
+		if err == nil {
+			err = copyChecked(ctx, sum, piece, p.buf)
+		}
+		if p.read != nil {
+			p.read(path, true)
+		}
+		release()
+		if p.read != nil {
+			p.read(path, false)
+		}
+		read += p.size - piece.N
+		if err != nil {
+			return hashNone, id, read, err
+		}
+		if piece.N > 0 {
+			break // the body ended inside this piece: the file is shorter than it was
+		}
+	}
+	tail := make([]byte, need)
+	if _, err = f.ReadAt(tail, id.size-need); err != nil {
+		if errors.Is(err, io.EOF) {
+			// Shorter than when it was Lstat'ed: rewritten while it was read.
+			return hashNone, id, read, nil
+		}
+		return hashNone, id, read, err
+	}
+	read += need
+	after, err := f.Stat()
+	if err != nil {
+		return hashNone, id, read, err
+	}
+	// Both: the open file written through its own inode moves the first,
+	// and another file renamed in over the path — or the path removed —
+	// moves the second while the open file keeps every byte it had.
+	if idOf(after) != id || lstatID(path) != id || body.N > 0 {
+		return hashNone, id, read, nil
+	}
+	trailer := tail[len(tail)-hashTrailer:]
+	switch {
+	case !bytes.Equal(sum.Sum(nil), trailer),
+		want.prior != nil && !bytes.Equal(tail[:len(want.prior)], want.prior),
+		want.trailer != nil && !bytes.Equal(trailer, want.trailer):
+		return hashDamaged, id, read, nil
+	}
+	return hashSound, id, read, nil
+}
+
+// checksumBytes is a pack checksum (forty hex digits) as the twenty bytes a
+// .idx, a .rev and a .pack carry.
+func checksumBytes(cs string) []byte {
+	b, err := hex.DecodeString(cs)
+	if err != nil || len(b) != hashTrailer {
+		return nil
+	}
+	return b
+}
+
+// derivedFile is the kind and the part of a derived file of an incarnation
+// by its path relative to the incarnation — one spelling, sweep.go's grammar
+// (midxFile, inInfo) — and false for any other path.
+func derivedFile(rel string) (fileKind, gitproc.Part, bool) {
+	dir, name := filepath.Split(rel)
+	switch filepath.Clean(dir) {
+	case infoRel:
+		if inInfo(name, false) {
+			return fileGraph, gitproc.PartCommitGraph, true
+		}
+	case packRel:
+		if !midxFile.MatchString(name) {
+			return "", 0, false
+		}
+		switch {
+		case name == "multi-pack-index":
+			return fileMidx, gitproc.PartMultiPackIndex, true
+		case strings.HasSuffix(name, ".bitmap"):
+			return fileBitmap, gitproc.PartMultiPackIndex, true
+		default:
+			return fileMidxRev, gitproc.PartMultiPackIndex, true
+		}
+	}
+	return "", 0, false
+}
+
+// derivedPresent is every derived file in the incarnation at dir — the
+// commit-graph and the multi-pack-index's files — by its path relative to it,
+// sorted; a regular file only, since the sweep moves anything else.
+func derivedPresent(dir string) ([]string, error) {
+	var rels []string
+	list, err := os.ReadDir(filepath.Join(dir, packRel))
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range list {
+		if midxFile.MatchString(d.Name()) && d.Type().IsRegular() {
+			rels = append(rels, filepath.Join(packRel, d.Name()))
+		}
+	}
+	graph := filepath.Join(infoRel, "commit-graph")
+	if info, err := os.Lstat(filepath.Join(dir, graph)); err == nil && info.Mode().IsRegular() {
+		rels = append(rels, graph)
+	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	slices.Sort(rels)
+	return rels, nil
+}
+
+// derivedExpect is what a derived file's name says of its last forty bytes:
+// a multi-pack-index's reverse index carries the index's checksum — the
+// forty hex digits its name carries — before its trailer, as a pack's .rev
+// carries the pack's (git's write_rev_trailer); every other derived file
+// says nothing beside its trailer.
+func derivedExpect(rel string) expect {
+	name := filepath.Base(rel)
+	if kind, _, _ := derivedFile(rel); kind == fileMidxRev {
+		return expect{prior: checksumBytes(strings.TrimSuffix(strings.TrimPrefix(name, "multi-pack-index-"), ".rev"))}
+	}
+	return expect{}
+}
+
+// packRel names one of a pack's files relative to its incarnation.
+func packFileRel(cs, ext string) string { return filepath.Join(packRel, "pack-"+cs+ext) }
+
+// vouches is what of an incarnation's files this process wrote or checked, at
+// which identity (incarnation.vouched): a pack's .idx and .rev in ONE entry
+// keyed by the twenty bytes of the pack's checksum, and the derived files —
+// a handful at most — by their path relative to the incarnation.
+type vouches struct {
+	packs   map[[hashTrailer]byte]packVouch
+	derived map[string]fileStamp
+}
+
+// packVouch is a pack's .idx and .rev as vouched for; a zero stamp is no
+// vouch.
+type packVouch struct {
+	idx, rev fileStamp
+}
+
+// fileStamp is a fileID as a vouch keeps it: always a file that was present,
+// so its presence is not stored, and a zero stamp is no file — no inode is
+// numbered zero.
+type fileStamp struct {
+	dev, ino       uint64
+	size, modified int64
+}
+
+// stampOf is id as a vouch keeps it.
+func stampOf(id fileID) fileStamp {
+	return fileStamp{dev: id.dev, ino: id.ino, size: id.size, modified: id.modified}
+}
+
+// packIndexOf is the checksum, as its twenty bytes, and the extension of the
+// pack index file at rel — objects/pack/pack-<forty hex>.idx or .rev — or
+// false for any other path, a .pack among them.
+func packIndexOf(rel string) ([hashTrailer]byte, string, bool) {
+	var key [hashTrailer]byte
+	dir, name := filepath.Split(rel)
+	if filepath.Clean(dir) != packRel {
+		return key, "", false
+	}
+	m := packFileName.FindStringSubmatch(name)
+	if m == nil || m[2] == "pack" {
+		return key, "", false
+	}
+	if _, err := hex.Decode(key[:], []byte(m[1])); err != nil {
+		return key, "", false
+	}
+	return key, m[2], true
+}
+
+// vouch records that inc's file at rel, at identity id, is one this process
+// wrote or checked; e.mu is held. A pack's own bytes are never vouched for:
+// the check reads no .pack, and the scrub reads every one vouched or not.
+func vouch(inc *incarnation, rel string, id fileID) {
+	if !id.present {
+		return
+	}
+	if key, ext, ok := packIndexOf(rel); ok {
+		if inc.vouched.packs == nil {
+			inc.vouched.packs = map[[hashTrailer]byte]packVouch{}
+		}
+		v := inc.vouched.packs[key]
+		if ext == "idx" {
+			v.idx = stampOf(id)
+		} else {
+			v.rev = stampOf(id)
+		}
+		inc.vouched.packs[key] = v
+		return
+	}
+	if _, _, derived := derivedFile(rel); derived {
+		if inc.vouched.derived == nil {
+			inc.vouched.derived = map[string]fileStamp{}
+		}
+		inc.vouched.derived[rel] = stampOf(id)
+	}
+}
+
+// vouchFiles vouches for inc's files at rels as they are now: files this
+// process has just written there. Called holding no lock but the write's.
+func (c *Cache) vouchFiles(e *entry, inc *incarnation, rels ...string) {
+	ids := make([]fileID, len(rels))
+	for i, rel := range rels {
+		ids[i] = lstatID(filepath.Join(inc.dir, rel))
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for i, rel := range rels {
+		vouch(inc, rel, ids[i])
+	}
+}
+
+// vouchPack vouches for the index files of inc's pack cs as they are now:
+// files this process has just placed there, from a bundle held to its row.
+func (c *Cache) vouchPack(e *entry, inc *incarnation, cs string) {
+	c.vouchFiles(e, inc, packFileRel(cs, ".idx"), packFileRel(cs, ".rev"))
+}
+
+// derivedIDs is the identity of every derived file in the incarnation at dir
+// now, by its path relative to it; a listing that fails reads as none, which
+// vouches nothing afterwards.
+func derivedIDs(dir string) map[string]fileID {
+	rels, err := derivedPresent(dir)
+	if err != nil {
+		return nil
+	}
+	ids := make(map[string]fileID, len(rels))
+	for _, rel := range rels {
+		ids[rel] = lstatID(filepath.Join(dir, rel))
+	}
+	return ids
+}
+
+// vouchWritten vouches for every derived file of inc that a git process of
+// this one has just written: present now at an identity other than the one
+// before held. ONLY WHAT MOVED: git keeps a file it would write again
+// unchanged — a bitmap whose index's checksum did not move is not rewritten —
+// so a step that ran over a damaged bitmap and kept it vouches nothing of it,
+// and the next check still reads it.
+func (c *Cache) vouchWritten(e *entry, inc *incarnation, before map[string]fileID) {
+	var rels []string
+	for rel, id := range derivedIDs(inc.dir) {
+		if id.present && before[rel] != id {
+			rels = append(rels, rel)
+		}
+	}
+	if len(rels) > 0 {
+		c.vouchFiles(e, inc, rels...)
+	}
+}
+
+// unvouch forgets the vouches for inc's files at rels: files dropped or
+// moved out of it. e.mu is held.
+func unvouch(inc *incarnation, rels ...string) {
+	for _, rel := range rels {
+		key, ext, ok := packIndexOf(rel)
+		if !ok {
+			delete(inc.vouched.derived, rel)
+			continue
+		}
+		v, held := inc.vouched.packs[key]
+		if !held {
+			continue
+		}
+		if ext == "idx" {
+			v.idx = fileStamp{}
+		} else {
+			v.rev = fileStamp{}
+		}
+		if v == (packVouch{}) {
+			delete(inc.vouched.packs, key)
+		} else {
+			inc.vouched.packs[key] = v
+		}
+	}
+}
+
+// vouchedAt reports whether inc's file at rel is the one this process wrote
+// or checked at identity id; e.mu is held.
+func vouchedAt(inc *incarnation, rel string, id fileID) bool {
+	if !id.present {
+		return false
+	}
+	if key, ext, ok := packIndexOf(rel); ok {
+		v := inc.vouched.packs[key]
+		have := v.rev
+		if ext == "idx" {
+			have = v.idx
+		}
+		return have != (fileStamp{}) && have == stampOf(id)
+	}
+	have, ok := inc.vouched.derived[rel]
+	return ok && have == stampOf(id)
+}
+
+// vouchedRels is every path, relative to inc, a vouch is held for, sorted;
+// e.mu is held.
+func vouchedRels(inc *incarnation) []string {
+	var out []string
+	for key, v := range inc.vouched.packs {
+		cs := hex.EncodeToString(key[:])
+		if v.idx != (fileStamp{}) {
+			out = append(out, packFileRel(cs, ".idx"))
+		}
+		if v.rev != (fileStamp{}) {
+			out = append(out, packFileRel(cs, ".rev"))
+		}
+	}
+	for rel := range inc.vouched.derived {
+		out = append(out, rel)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// checked is what a check found: why it ran, how many files were sound, every
+// file found damaged at the identity it was hashed at — a pack's .idx or .rev,
+// whose pack the install puts in again, or a derived file, which the round
+// drops (still) — and the bytes read.
+type checked struct {
+	trigger checkTrigger
+	sound   int
+	damaged []checkedFile
+	bytes   int64
+}
+
+// checkIndexes is step 2 of a full round (sync.go apply): every checkable file
+// of inc the snapshot names — the .idx and .rev of every pack present at its
+// row's sizes — and every derived file present, held to its trailer when it
+// is not vouched for at the identity it has now. A read slot of the pool is
+// held for each piece of hashing and none between (D15 of the check's doc:
+// one slot, a piece at a time, none while the round runs git). A pack absent
+// or at the wrong size is not its: the install meets it. Nor is any .pack: a
+// pack is hashed behind the serving, never before it. What passes is vouched.
+// The round holds the entry's write lock and has stopped the maintainer, so
+// nothing else writes a file it hashes.
+//
+// (Not `check`: verify.go's Verify body has that name.)
+func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, snap snapshot) (checked, error) {
+	e.mu.Lock()
+	trigger := triggerUnvouched
+	if !inc.checkedOnce {
+		trigger = triggerFirst
+	}
+	e.mu.Unlock()
+	began := time.Now()
+	var (
+		ck    = checked{trigger: trigger}
+		files []checkedFile
+		wants = map[string]expect{}
+	)
+	packDir := filepath.Join(inc.dir, packRel)
+	for _, p := range snap.packs {
+		held, err := installed(packDir, p, true)
+		if err != nil {
+			return ck, err
+		}
+		if held != packWhole {
+			continue
+		}
+		prior := checksumBytes(p.GitChecksum)
+		for _, f := range []struct {
+			kind fileKind
+			ext  string
+		}{{fileIdx, ".idx"}, {fileRev, ".rev"}} {
+			rel := packFileRel(p.GitChecksum, f.ext)
+			files = append(files, checkedFile{kind: f.kind, rel: rel})
+			wants[rel] = expect{prior: prior}
+		}
+	}
+	derived, err := derivedPresent(inc.dir)
+	if err != nil {
+		return ck, err
+	}
+	for _, rel := range derived {
+		kind, _, _ := derivedFile(rel)
+		files = append(files, checkedFile{kind: kind, rel: rel})
+		wants[rel] = derivedExpect(rel)
+	}
+	slices.SortFunc(files, func(a, b checkedFile) int { return strings.Compare(a.rel, b.rel) })
+
+	p := c.pieces(c.git.HoldRead)
+	defer func() {
+		if c.metrics != nil && ck.bytes > 0 {
+			c.metrics.Observe(metrics.CodeCacheCheckDuration, time.Since(began),
+				metrics.Attrs{"trigger": string(trigger)})
+		}
+	}()
+	for _, f := range files {
+		path := filepath.Join(inc.dir, f.rel)
+		e.mu.Lock()
+		skip := vouchedAt(inc, f.rel, lstatID(path))
+		e.mu.Unlock()
+		if skip {
+			continue
+		}
+		if c.knobs != nil && c.knobs.hashing != nil {
+			c.knobs.hashing(path)
+		}
+		v, id, n, err := trailerSound(ctx, path, p, wants[f.rel])
+		ck.bytes += n
+		f.id = id
+		switch {
+		case err != nil && noVerdict(ctx, err):
+			// No slot in SlotWait, or the round's context ended: nothing
+			// is known of the file. The round fails busy, its callers
+			// answered as any read the lane refuses.
+			return ck, fmt.Errorf("checking %s against its trailer: %w", f.rel, err)
+		case err != nil:
+			// UNREADABLE: damaged at the identity it had, and repaired as
+			// a file that failed its trailer is — a derived file dropped, a
+			// pack's file renamed over, which replaces the inode the disk
+			// cannot read. Failing the round over it left the repository
+			// unserved for good: no full round could ever pass the file,
+			// and the maintainer, whose rewrite would have replaced it,
+			// runs only on a copy a full round has converged.
+			c.countCheck(f.kind, checkUnreadable, trigger)
+			ck.damaged = append(ck.damaged, f)
+			c.log.Warn("code_cache_check_damaged", "repo", e.id, "incarnation", inc.n, "file", f.rel,
+				"trigger", string(trigger), "action", repairAction(f.rel), "error", err)
+			continue
+		case v == hashNone:
+			c.countCheck(f.kind, checkReplaced, trigger)
+			continue
+		case v == hashSound:
+			c.countCheck(f.kind, checkSound, trigger)
+			ck.sound++
+			e.mu.Lock()
+			vouch(inc, f.rel, id)
+			e.mu.Unlock()
+			continue
+		}
+		c.countCheck(f.kind, checkDamaged, trigger)
+		ck.damaged = append(ck.damaged, f)
+		c.log.Warn("code_cache_check_damaged", "repo", e.id, "incarnation", inc.n, "file", f.rel,
+			"trigger", string(trigger), "action", repairAction(f.rel))
+	}
+	e.mu.Lock()
+	inc.checkedOnce = true
+	e.mu.Unlock()
+	return ck, nil
+}
+
+// countCheck counts one file a check hashed.
+func (c *Cache) countCheck(kind fileKind, outcome checkOutcome, trigger checkTrigger) {
+	if c.metrics != nil {
+		c.metrics.Add(metrics.CodeCacheChecks, 1,
+			metrics.Attrs{"file": string(kind), "outcome": string(outcome), "trigger": string(trigger)})
+	}
+}
+
+// still is what of ck's findings the incarnation at dir still holds at the
+// identity each was hashed at: the packs to install again, by checksum, and
+// the derived parts to drop. A REPAIR ACTS ONLY ON THE FILE ITS FINDING NAMES:
+// one replaced or removed since its hash — rewritten by the maintainer, put
+// right by an earlier repair — is no finding any more, and its successor,
+// which no hash of this process read, is checked by the next round.
+func (ck checked) still(dir string) (map[string]bool, gitproc.Part) {
+	packs := map[string]bool{}
+	var drop gitproc.Part
+	for _, f := range ck.damaged {
+		if lstatID(filepath.Join(dir, f.rel)) != f.id {
+			continue
+		}
+		if _, part, derived := derivedFile(f.rel); derived {
+			drop |= part
+			continue
+		}
+		if m := packFileName.FindStringSubmatch(filepath.Base(f.rel)); m != nil {
+			packs[m[1]] = true
+		}
+	}
+	return packs, drop
+}
+
+// findings is the sentences a check's damaged files are reported to a
+// verification as, the sync before it having repaired them in place.
+func (ck checked) findings() []string {
+	out := make([]string, 0, len(ck.damaged))
+	for _, f := range ck.damaged {
+		action := "dropped it to be written again"
+		if _, _, derived := derivedFile(f.rel); !derived {
+			action = "fetched its pack again"
+		}
+		out = append(out, fmt.Sprintf("the sync before the check found %s failing its checksum and %s",
+			filepath.ToSlash(f.rel), action))
+	}
+	return out
+}

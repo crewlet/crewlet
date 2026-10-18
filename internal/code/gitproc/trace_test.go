@@ -365,8 +365,8 @@ func TestARequestCannotNameTheDamage(t *testing.T) {
 	f := newFixture(t)
 	p := realPool(t, gitproc.Options{})
 	dir, _ := f.bare(t)
-	tree := strings.TrimSpace(f.client.Run(t, f.wt, "rev-parse", f.tip()+"^{tree}"))
-	blob := strings.TrimSpace(f.client.Run(t, f.wt, "rev-parse", f.tip()+":big.txt"))
+	tree := strings.TrimSpace(f.Client.Run(t, f.Work, "rev-parse", f.tip()+"^{tree}"))
+	blob := strings.TrimSpace(f.Client.Run(t, f.Work, "rev-parse", f.tip()+":big.txt"))
 	payloads := requestPayloads()
 	// A packed object's own sentence, which 2.56 dies with through "%s":
 	// inside a request it is text, and hints nothing.
@@ -375,7 +375,7 @@ func TestARequestCannotNameTheDamage(t *testing.T) {
 
 	met := map[string]bool{}
 	runs := 0
-	for _, form := range requestForms(f.tip(), f.commits[2], tree, blob) {
+	for _, form := range requestForms(f.tip(), f.Commits[2], tree, blob) {
 		instances := map[string]string{"": ""}
 		if form.payload {
 			instances = payloads

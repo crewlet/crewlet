@@ -60,6 +60,40 @@ func TestEveryRebuildValueIsInTheMetricsReference(t *testing.T) {
 	}
 }
 
+// EVERY VALUE THE CHECK COUNTERS CARRY IS IN THEIR REFERENCE TEXT: every
+// fileKind, checkOutcome and checkTrigger the package declares under
+// crewlet.code.cache.checks, and every checkTrigger under its duration — the
+// rows a collector rule for a damaged file is written from.
+//
+// Mutation: declare another checkOutcome, or drop `midx-rev` from the text,
+// and this fails.
+func TestEveryCheckValueIsInTheMetricsReference(t *testing.T) {
+	shows := map[string]string{}
+	for _, inst := range metrics.Catalogue() {
+		shows[inst.Name] = inst.Shows
+	}
+	kinds, outcomes, triggers := declared(t, "fileKind"), declared(t, "checkOutcome"), declared(t, "checkTrigger")
+	if !slices.Contains(kinds, string(fileBitmap)) || !slices.Contains(outcomes, string(checkReplaced)) ||
+		!slices.Contains(triggers, string(triggerFirst)) {
+		t.Fatalf("the walk found files %q, outcomes %q and triggers %q — it reads what it should not", kinds,
+			outcomes, triggers)
+	}
+	for name, values := range map[string][]string{
+		metrics.CodeCacheChecks:        slices.Concat(kinds, outcomes, triggers),
+		metrics.CodeCacheCheckDuration: triggers,
+	} {
+		text, ok := shows[name]
+		if !ok {
+			t.Fatalf("the catalogue has no %s instrument", name)
+		}
+		for _, v := range values {
+			if !strings.Contains(text, "`"+v+"`") {
+				t.Errorf("%s's reference text never names `%s`, a value it carries", name, v)
+			}
+		}
+	}
+}
+
 // RebuildReasons is the enumeration the reference is held to, so a
 // RebuildReason declared and left out of it would be a reason no surface is
 // checked for — nor accepted by Valid.

@@ -3,10 +3,8 @@ package cache
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -339,15 +337,6 @@ func (c *Cache) countHint(o hintOutcome) {
 	}
 }
 
-// fileID is a file's identity as a verdict about its bytes is kept by: its
-// device and inode, its size and its modification time — or its absence. A
-// file renamed in over it, written in place or removed is another identity.
-type fileID struct {
-	present        bool
-	dev, ino       uint64
-	size, modified int64
-}
-
 // bundleID is a pack's three files' identities: its .pack, .idx and .rev.
 type bundleID [3]fileID
 
@@ -355,15 +344,7 @@ type bundleID [3]fileID
 func identify(stem string) bundleID {
 	var id bundleID
 	for i, ext := range []string{".pack", ".idx", ".rev"} {
-		info, err := os.Stat(stem + ext)
-		if err != nil {
-			continue
-		}
-		f := fileID{present: true, size: info.Size(), modified: info.ModTime().UnixNano()}
-		if st, ok := info.Sys().(*syscall.Stat_t); ok {
-			f.dev, f.ino = uint64(st.Dev), st.Ino //nolint:unconvert // Dev is int32 on darwin
-		}
-		id[i] = f
+		id[i] = lstatID(stem + ext)
 	}
 	return id
 }

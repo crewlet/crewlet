@@ -261,6 +261,30 @@ type incarnation struct {
 	// rather than asked again every pass. Cleared by a graph written; never
 	// persisted, so a boot asks again at once.
 	graphFailed bool
+	// vouched is every checkable file of it this process wrote or checked
+	// (check.go), with the identity it had then: a pack's .idx and .rev by
+	// the pack's checksum, the derived files by their path relative to the
+	// incarnation. NEVER PERSISTED: a new process holds every file a
+	// previous one left to its trailer once, at the incarnation's first full
+	// round. A vouch spares a file the check, never the scrub — and no .pack
+	// is vouched, since the check reads none. KEYED BY THE CHECKSUM'S BYTES,
+	// one entry a pack holding both its identities, because the map lives
+	// in every incarnation the node holds and grows by a pack a push: keyed
+	// by each file's path, three strings of sixty bytes a pack, it cost 528
+	// bytes a pack (measured, a .pack's vouch among them that nothing read),
+	// and it costs 118 to 207 now — 168 at 300 000 packs, the spread the
+	// map's own growth (Go 1.27.2, TestAPacksVouchesFitInAQuarterKilobyte):
+	// 3 000 packs hold about half a megabyte, and a node holding a million
+	// packs about 170 MB, against 530 MB before.
+	vouched vouches
+	// checkedOnce: a full round of this process has held its files to their
+	// trailers — the check's `first` and every later one's `unvouched`.
+	checkedOnce bool
+	// indexRepair: its multi-pack-index was dropped as damaged, so the
+	// maintainer's index is due AT ONCE — no debounce, no interval — in a
+	// slot of the maintainer's own (maintain.go). Cleared by the index
+	// written.
+	indexRepair bool
 	// memoryRefused is the steps the node's memory has refused it — each
 	// one whose charge alone is more than the node can give its background
 	// work — and said so: each logged and counted once an incarnation,

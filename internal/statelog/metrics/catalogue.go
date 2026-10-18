@@ -719,6 +719,46 @@ func Catalogue() []Instrument {
 				"the repositories this node serves.",
 		},
 		{
+			Name: CodeCacheChecks, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"file", "outcome", "trigger"},
+			Shows: "Files of this node's git cache held to their own " +
+				"checksum — the trailer git writes at the end of every " +
+				"index file, the SHA-1 of the bytes before it — before a " +
+				"copy this process did not write answers its first request, " +
+				"because git checks none of them when it reads and a damaged " +
+				"one can answer wrong without a word. By `file` " +
+				"(`commit-graph`, `multi-pack-index`, `bitmap`, `midx-rev`: " +
+				"files the node derives from its packs; `idx`, `rev`: a " +
+				"pack's index and reverse index, stored with its push), " +
+				"`outcome` (`sound`; `damaged` — a derived file dropped to " +
+				"be written again, a stored one fetched again with its pack, " +
+				"one download; `unreadable`, a read of it that failed — " +
+				"repaired as though damaged, since a file the disk cannot " +
+				"read is one git cannot serve, and never a refused read " +
+				"slot or an ended request, which decide nothing and are not " +
+				"counted; `replaced`, the file renamed over or removed while it was " +
+				"read, so no verdict is its) and `trigger` (`first`, a " +
+				"copy's first full sync in this process, which reads every " +
+				"index file a previous process left; `unvouched`, a later " +
+				"full sync reading only what this process has neither " +
+				"written nor checked since). Any `damaged` is a disk losing " +
+				"data, or something outside the engine writing into the " +
+				"cache: the copy repairs it, and a verify of the repository " +
+				"names what else that disk holds damaged.",
+		},
+		{
+			Name: CodeCacheCheckDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"trigger"},
+			Shows: "How long one check of a copy's index files took, by " +
+				"`trigger` (`first` or `unvouched`, as " +
+				"`crewlet.code.cache.checks`), counted only " +
+				"where it read something: what a copy's first request after " +
+				"a restart waited for beside its sync — about a tenth to a " +
+				"quarter of the copy's pack bytes read, one core and a read " +
+				"slot a 64 MiB piece, and at the volume's own throughput when " +
+				"read cold.",
+		},
+		{
 			Name: CodeCacheHints, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"outcome"},
 			Shows: "Packs of this node's git cache that a git process named " +
