@@ -158,7 +158,7 @@ func handPublish(t *testing.T, id, opID string, number int, prune []int, files .
 // newID is a fresh artifact id.
 func newID() string { return artifacts.IDFor(uuid.NewString()).String() }
 
-// A CARRIED OBJECT MUST BE NAMED WHERE IT IS CARRIED FROM (ADR-0036): the apply
+// A CARRIED OBJECT MUST BE NAMED WHERE IT IS CARRIED FROM: the apply
 // writes a carried entry only when its own transaction finds the object named by
 // this artifact, with the digest and size the entry claims; otherwise the
 // record is refused on every node and its writer told the paths to upload.
@@ -211,7 +211,7 @@ func TestACarriedObjectMustBeNamedWhereItIsCarriedFrom(t *testing.T) {
 	}
 }
 
-// NO CARRY CROSSES AN ARTIFACT (ADR-0036): artifact B neither carries A's object
+// NO CARRY CROSSES AN ARTIFACT: artifact B neither carries A's object
 // nor names A's key as its own upload. A company-wide lookup would tell a
 // writer whether an artifact they cannot read holds a file.
 //

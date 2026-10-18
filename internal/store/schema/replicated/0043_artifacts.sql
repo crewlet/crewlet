@@ -189,7 +189,7 @@ CREATE TABLE artifact_assets (
 CREATE INDEX artifact_assets_object_idx ON artifact_assets (object);                        -- the collector, the audit and the backup
 
 -- artifact_shares: one audience's role on one artifact. A share is a
--- RELATION, never a permission (ADR-0034).
+-- RELATION, never a permission.
 CREATE TABLE artifact_shares (
     artifact_id     TEXT    NOT NULL,
     -- seat, unit or company; the id is the seat handle, the unit key, or
