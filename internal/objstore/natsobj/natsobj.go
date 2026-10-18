@@ -167,6 +167,9 @@ type Backend struct {
 	stream jetstream.Stream
 	// leader reads one object's metadata from the stream's leader.
 	leader *jsapi.Leader
+	// js is the JetStream client the bucket was opened through, which a
+	// seal updates the stream through.
+	js jetstream.JetStream
 	// expiry is how long each pull a get or a walk sends waits; zero is
 	// [pullExpiry]. Set by this package's own tests alone, through
 	// export_test.go.
@@ -280,7 +283,7 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 	if err != nil {
 		return nil, fmt.Errorf("natsobj: address the %s stream's leader: %w", Stream, err)
 	}
-	return &Backend{store: store, stream: stream, leader: leader}, nil
+	return &Backend{store: store, stream: stream, leader: leader, js: js}, nil
 }
 
 // checkCeiling judges the ceiling the bucket holds against the one this node
@@ -467,6 +470,33 @@ func (b *Backend) Usage(ctx context.Context) (objstore.Usage, error) {
 		return objstore.Usage{}, fmt.Errorf("natsobj: read the %s stream's usage: %w", Stream, err)
 	}
 	return objstore.Usage{Bytes: int64(info.State.Bytes), MaxBytes: info.Config.MaxBytes}, nil
+}
+
+// Seal makes the bucket read-only for good: the broker refuses every put and
+// every delete after it, and every object stays readable.
+//
+// IT IS THE FENCE A MOVE TO ANOTHER STORE CLOSES BEHIND ITSELF. `crewlet
+// objects migrate --to s3` seals the bucket once its final pass has copied
+// every object and before it moves the fleet's record, so a node still
+// running on this bucket (one not yet restarted onto the new store) has its
+// uploads refused rather than stored where no node will look for them. A
+// sealed stream cannot be unsealed, which is the point: the bucket is kept
+// for an operator to read and delete, never to write again. Sealing a sealed
+// bucket is not an error.
+func (b *Backend) Seal(ctx context.Context) error {
+	info, err := b.stream.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("natsobj: read the %s stream before sealing it: %w", Stream, err)
+	}
+	if info.Config.Sealed {
+		return nil
+	}
+	cfg := info.Config
+	cfg.Sealed = true
+	if _, err := b.js.UpdateStream(ctx, cfg); err != nil {
+		return fmt.Errorf("natsobj: seal the %s stream: %w", Stream, err)
+	}
+	return nil
 }
 
 // filler hands the library only full messages: every Read answers as many

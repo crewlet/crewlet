@@ -33,7 +33,7 @@ var goPackages = map[string]bool{
 	"learning": true, "ledger": true, "ledgerfit": true, "ledgerstore": true,
 	"livestate": true, "llm": true, "logging": true, "maintenance": true,
 	"mattermost": true, "mcp": true, "mcpbridge": true, "memobj": true,
-	"memory": true, "memread": true, "memsync": true, "metrics": true,
+	"memory": true, "memread": true, "memsync": true, "metrics": true, "migrate": true,
 	"natsobj": true, "node": true, "notify": true, "objstore": true,
 	"objstoretest": true, "observe": true, "openai": true, "operator": true,
 	"opkey": true, "org": true, "orgchart": true, "pagepolicy": true,

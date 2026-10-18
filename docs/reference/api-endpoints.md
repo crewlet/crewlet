@@ -612,7 +612,7 @@ is told what they lack, not sent to confirm who they are first.
 
 | Window | Setting (default) | What asks for it |
 |---|---|---|
-| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*`, `/setup`'s writes, `PUT`/`DELETE /secrets/{name}`, `POST /secrets/rekey` and revealing a value (`GET /secrets/{name}?reveal=true`), the deployment's own controls — `POST /backup`, every `POST /work/retention*` and both `POST /fleet/broker/remove*` — the two purges (`POST /work/items/{key}/purge`, `POST /pages/{id}/purge`), and every `/iam` write: `POST /iam/people`, `PATCH /iam/people/{id}`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `DELETE /iam/invitations/{id}`, `POST /iam/people/{id}/mfa/reset`, `POST /iam/people/{id}/password-reset`, `POST /iam/credentials`, `DELETE /iam/credentials/{id}`, ending somebody else's sessions and `POST /iam/invalidate-all`; and your own `POST /auth/totp` and `POST /auth/totp/recovery` |
+| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*`, `/setup`'s writes, `PUT`/`DELETE /secrets/{name}`, `POST /secrets/rekey` and revealing a value (`GET /secrets/{name}?reveal=true`), the deployment's own controls — `POST /backup`, `POST /objects/migrate`, every `POST /work/retention*` and both `POST /fleet/broker/remove*` — the two purges (`POST /work/items/{key}/purge`, `POST /pages/{id}/purge`), and every `/iam` write: `POST /iam/people`, `PATCH /iam/people/{id}`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `DELETE /iam/invitations/{id}`, `POST /iam/people/{id}/mfa/reset`, `POST /iam/people/{id}/password-reset`, `POST /iam/credentials`, `DELETE /iam/credentials/{id}`, ending somebody else's sessions and `POST /iam/invalidate-all`; and your own `POST /auth/totp` and `POST /auth/totp/recovery` |
 | none | | Every read, the two deployment reads (`GET /work/retention/maintenance`, `GET /work/retention/reanchor`) included; ending your own sessions (`DELETE /iam/people/{id}/sessions` naming yourself), which is the first thing to do on finding somebody else in your account — an administrator ending somebody else's asks `step_up`; changing your own password (`POST /auth/password`), whose current password — and code, from somebody who holds a second factor — is itself the proof; and every work and knowledge verb but the two purges — the tools, `/operator/mcp`, `/operator/act` and the rest of the human write surface |
 
 A proof that is too old is **`403 step_up_required`**, the code the sign-in
@@ -6809,6 +6809,54 @@ should give it a long one: `crewlet backup` and the dashboard both wait up to
 store and the stream estate and a client that gave up early would report a
 failure while the engine finishes a good backup. Taking one from the dashboard
 is **Settings › Backups & retention › Take a backup**.
+
+### `POST /objects/migrate`
+
+Copies every object the company's files name from the fleet's object store
+into an S3-compatible bucket, and on the final pass moves the fleet's record
+of where its files are. `crewlet objects migrate --to s3` is a client of this
+route; the procedure is in [Moving the files to a
+bucket](../concepts/object-store.md#moving-the-files-to-a-bucket).
+
+| Parameter | Meaning |
+|-----------|---------|
+| `target` | Required. An absolute path **on the engine's host** to a Tier A file whose `store.objects` block names the bucket (`backend: s3`): the file every node runs with once the move is made. Its `${VAR}` references resolve from the engine's environment, so the bucket's credential never crosses this API. |
+| `final` | `true` runs the final pass, which seals the `nats` bucket and moves the fleet's record. Without it the pass only copies. |
+
+```json
+{
+  "from": "nats",
+  "to": "s3:https://s3.example.com/crewlet-files/acme/",
+  "final": true,
+  "sealed": true,
+  "moved": true,
+  "direct_upload": "available",
+  "pass": {"referenced": 18211, "present": 18190, "copied": 21,
+           "copied_bytes": 4194304, "unreadable": 0, "complete": true},
+  "next": "The fleet's files are in …"
+}
+```
+
+`pass.present` counts objects the bucket already held at their size (and
+digest, where the provider keeps one), so a pass that stopped resumes by
+running again. `pass.unreadable` counts objects the fleet's own store could not
+give back whole, missing or damaged there, named in `pass.unreadable_files`;
+no copy can bring them back, and `objects_missing` already counts them.
+
+It is **synchronous** and runs to its end even if the client gives up, for the
+backup's reason. It needs `admin` and a recent proof of identity, like every
+deployment control. Refusals:
+
+- **409 `objects_migration_refused`**, with the reason in `detail`: a target
+  that is not an absolute path, does not load, names no bucket, names the
+  store the fleet already uses, or fails the bucket's probe; a node holding no
+  copy of the company's records (run it against a data node); and for the
+  final pass, a node not in `maintenance` mode, any node still admitted to
+  publish, an estate this node has not applied to the end, or one it holds
+  incomplete.
+- **503 `objects_migration_failed`**, with a `Retry-After`: the fleet's store
+  or the bucket stopped answering. The body's `report` counts what was copied;
+  the stores' own words are in this node's log. Run it again.
 
 ### `GET /backups`
 

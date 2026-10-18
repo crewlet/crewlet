@@ -238,6 +238,8 @@ Usage:
                               produced and which nothing undoes
   crewlet objects status      Where the company's files are kept, and what the
                               object store's collector last found missing
+  crewlet objects migrate     Move the company's files to an S3 bucket: copy on a
+                              live fleet, then -final in maintenance mode
   crewlet fleet broker <cmd>  The fleet broker's members, as the nodes advertise them
                               and as its metadata group counts them: list, and
                               remove a member that is gone for good
@@ -2125,6 +2127,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// store is locked to this process and the broker binds no
 		// socket. See internal/backup.
 		Backup: backups,
+		// The move of the company's files to an S3 bucket, which only
+		// the engine can make: it reads the objects and the estate that
+		// names them, and ends with the fleet's coordination record.
+		Objects: e,
 		// THE RUNTIME AUDIT goes onto this node's own queue, whose
 		// publish listener writes the event store here — the same
 		// publisher the operator surface audits through.

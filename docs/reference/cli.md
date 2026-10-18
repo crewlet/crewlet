@@ -24,6 +24,7 @@ subcommand below is served by it.
 | `crewlet retention reanchor -stream NAME -confirm <created_at> [-force] [-discard]` | Adopt a recreated stream, or a broker restored from an older copy: move that one log to its next generation, declaring every position below it comparable and safely stale, and resume its applier with no restart. A recreated log is followed from its first surviving record, a restored one from its end, and one continuing in a generation only an evicted peer held from this node's own checkpoint, that generation's records void. A restored log holding records written after the restore that this node's rows do not hold is refused unless `-discard` accepts that they are applied on no node |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
 | `crewlet work purge <item> -reason TEXT -confirm <item-key> [-op-id ID]` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a credential holding `admin`, and never a seat. Its children move onto its own parent rather than being destroyed with it |
+| `crewlet objects migrate -to s3 -target <path> [-final]` | Moves the company's files from the fleet's NATS bucket to an S3-compatible bucket, through a running data node: a copy pass on a live fleet, then `-final` with every node in maintenance mode, which seals the NATS bucket and moves the fleet's record. See [Moving the files to a bucket](../concepts/object-store.md#moving-the-files-to-a-bucket). The token takes `admin` |
 | `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: objects listed and deleted and unfinished uploads abandoned by the last collection; files named, **missing** and **damaged** by the last audit to finish, with those files listed. `-json` prints the fleet view's `objects` block as the node answered it. The token takes `admin` |
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a kind this build does not know) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it. The token takes `admin` |
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it. The token takes `admin` |
@@ -982,6 +983,7 @@ duration to state, and `crewlet retention status` names which nodes those are.
 
 ```
 crewlet objects status [-json] [<config.yaml>] [-url URL]
+crewlet objects migrate -to s3 -target <path> [-final] [-wait D] [-json] [<config.yaml>] [-url URL]
 ```
 
 Where the company's files are kept, and what the
@@ -1024,6 +1026,40 @@ coordination store did not answer, the node runs no object store, or it
 answered a state this build does not know — and zero otherwise, files that
 cannot be read included: a store that lost bytes is an answer, and the
 [`objects_missing`](alarms.md) alarm is what pages for it.
+
+### `crewlet objects migrate`
+
+Moves the company's files from the fleet's own NATS bucket to an
+S3-compatible bucket ([Moving the files to a
+bucket](../concepts/object-store.md#moving-the-files-to-a-bucket) is the whole
+procedure). It asks a **data node** to do it
+([`POST /objects/migrate`](api-endpoints.md#post-objectsmigrate)), because only
+the engine reads the objects, the records naming them and the coordination
+record the move ends with.
+
+- `-to s3` names where the files go; an S3-compatible bucket is the one other
+  store there is.
+- `-target` is an absolute path **on the engine's host** to the Tier A file
+  every node will run with once the move is made: its `store.objects` block
+  names the bucket, and its `${VAR}` references resolve from the engine's
+  environment, so the bucket's credential never crosses the API.
+- Without `-final` it runs a **copy pass** on a live fleet: every object a
+  file names that the bucket does not hold is read from the fleet's store,
+  checked against its row, and written to the bucket. Run it as often as you
+  like; it copies only what is missing.
+- `-final` runs the pass that moves the fleet. Every node must be running
+  with `crewlet run -mode maintenance`, so that no record naming a new file
+  can be written while it runs. It copies what is left, seals the NATS
+  bucket so a node not yet restarted cannot store anything there, and moves
+  the fleet's record to the bucket.
+
+It prints what the pass found: the objects the files name, how many the
+bucket already held and how many were copied, whether the bucket offers
+direct uploads, any file the fleet's own store could not give back (no copy
+can bring those back), and what to do next. `-wait` (six hours) is how long
+it waits for the answer; the node finishes the pass either way, and running
+the command again reports where the copy stands. `-json` prints the node's
+report as it answered it. The token takes `admin`.
 
 ## `crewlet fleet broker`
 

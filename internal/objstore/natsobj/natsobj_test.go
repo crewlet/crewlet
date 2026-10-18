@@ -1538,3 +1538,40 @@ func TestAFullBucketLeavesTheCoordinationRemainder(t *testing.T) {
 		t.Fatalf("a coordination write was refused beside a full object bucket: %v", err)
 	}
 }
+
+// A SEALED BUCKET IS READ AND NEVER WRITTEN: the fence a move to another
+// store closes behind itself refuses every put, keeps every object readable,
+// and sealing it twice is no error.
+func TestASealedBucketRefusesPutsAndKeepsItsObjects(t *testing.T) {
+	t.Parallel()
+	c := memberClient(t)
+	b := open(t, c)
+	store, err := objstore.NewStore(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("kept after the move")
+	o, err := store.Put(t.Context(), bytes.NewReader(body), int64(len(body)), objstore.PutMeta{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := b.Seal(t.Context()); err != nil {
+			t.Fatalf("seal: %v", err)
+		}
+	}
+	if _, err := store.Put(t.Context(), bytes.NewReader(body), int64(len(body)), objstore.PutMeta{}); err == nil {
+		t.Fatal("a sealed bucket stored a put")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	rc, err := store.Open(ctx, o)
+	if err != nil {
+		t.Fatalf("a sealed bucket's object does not open: %v", err)
+	}
+	got, err := io.ReadAll(rc)
+	_ = rc.Close()
+	if err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("a sealed bucket's object reads %q, %v", got, err)
+	}
+}

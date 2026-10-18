@@ -639,6 +639,16 @@ const (
 	// says where to look; the objects themselves are the log's, never the
 	// body's.
 	CodeObjectsUnreachable Code = "objects_unreachable"
+	// CodeMigrationRefused is an object store migration this node will not
+	// run as asked: the target file, the node's mode, a node still
+	// publishing, an estate this node has not applied whole. 409, and the
+	// detail says which and what to change.
+	CodeMigrationRefused Code = "objects_migration_refused"
+	// CodeMigrationFailed is a migration pass that stopped because the
+	// fleet's store or the target bucket did not answer. 503: the pass
+	// resumes where it stopped when run again, and the copies it made are
+	// counted in the body.
+	CodeMigrationFailed Code = "objects_migration_failed"
 	// CodePositionRequired is a backup acknowledgement that named no stream
 	// or no sequence: it moves the floor the trim deletes against, so
 	// neither has a default.
@@ -949,6 +959,10 @@ var codes = map[Code]string{
 		"store did not answer for some of the company's files, so nothing in " +
 		"that directory counts as a backup. The hint says where to look; take " +
 		"the backup again once the store answers.",
+	CodeMigrationRefused: "The object store migration was refused. The detail " +
+		"says why and what to change before running it again.",
+	CodeMigrationFailed: "The object store migration stopped because a store did " +
+		"not answer. Run it again: it copies only what the target does not hold.",
 	CodePositionRequired: "Name the stream and the sequence your copy reaches. " +
 		"An acknowledgement moves what the trim may delete, so neither has a " +
 		"default.",
