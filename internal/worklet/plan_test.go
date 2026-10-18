@@ -91,6 +91,10 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 		}
 	}
 
+	// THE INDEX OF THE TREE (replicated 0058), spelled rather than taken
+	// from [parentIndex], which is what is under test.
+	const tree = "tracker_tasks_parent_idx"
+
 	used := map[string]bool{}
 	for name, params := range registeredQueries() {
 		t.Run(name, func(t *testing.T) {
@@ -132,6 +136,19 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 				}
 			}
 			holdTagFilter(t, plan, q)
+			// ONE ITEM'S SUBTASKS ARE READ THROUGH THE TREE ([taskSource]),
+			// because the planner otherwise answers `parent=` from the
+			// project's board or the listing's order — measured: a
+			// project's whole board sought, and at the workspace every
+			// task in the company walked newest first, to keep one
+			// parent's children.
+			if q.Parent != "" {
+				if others, _ := tasksReadOtherwise(plan, tree); len(others) > 0 {
+					t.Errorf("this listing of one item's subtasks reads the task "+
+						"table other than through %s:\n%s", tree,
+						strings.Join(plan, "\n"))
+				}
+			}
 			// AND NO CHILD TABLE IS WALKED. A walk of the task table
 			// in an order a LIMIT stops is a plan; a walk of a task's
 			// tags, dependencies or field values is every such row in
@@ -146,6 +163,18 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 						t.Errorf("this read walks every row of %s:\n%s",
 							table, strings.Join(plan, "\n"))
 					}
+				}
+				// NOR THE TASK TABLE UNDER ANY ALIAS BUT THE ANSWER'S
+				// OWN. `t` is the rows being listed, and a walk of
+				// them in an order a LIMIT stops is a plan; any other
+				// alias is a probe made once per row, and a walk there
+				// is the company read once per task. Measured:
+				// `has_children` walked every task through the primary
+				// key for each task it filtered, and passed.
+				if strings.HasPrefix(line, "SCAN tracker_tasks AS ") &&
+					!strings.HasPrefix(line, "SCAN tracker_tasks AS t ") {
+					t.Errorf("this read walks the task table once per row it "+
+						"filters:\n%s", strings.Join(plan, "\n"))
 				}
 			}
 		})
@@ -264,6 +293,7 @@ func registeredQueries() map[string]map[string]any {
 		"the workspace":     {"sort": "-updated"},
 		"my queue":          {"assignee": "ana", "status_group": "active"},
 		"the children":      {"container": "project:P01", "parent": "t-00001"},
+		"with subtasks":     {"container": "project:P01", "has_children": "true"},
 		"one subtree":       {"container": "project:P01", "root": "t-00001"},
 		"by spend":          {"container": "project:P01", "sort": "-spend_tokens"},
 		"by estimate":       {"container": "project:P01", "estimate": "gt:30"},
@@ -297,17 +327,18 @@ func registeredQueries() map[string]map[string]any {
 		// already narrows to a thirtieth of the corpus and the residual
 		// predicate rides along, so an index for that predicate is only
 		// ever earned out here.
-		"overdue everywhere":      {"due": "lt:today"},
-		"starting everywhere":     {"start": "gt:today"},
-		"finished everywhere":     {"show_closed": "recent:168h"},
-		"flagged everywhere":      {"flag": "cycle"},
-		"one status everywhere":   {"status": "in_progress"},
-		"unarchived everywhere":   {"archived": "false"},
-		"by estimate everywhere":  {"estimate": "gt:30"},
-		"by points everywhere":    {"points": "gt:1"},
-		"the children everywhere": {"parent": "t-00001"},
-		"one subtree everywhere":  {"root": "t-00001"},
-		"by spend everywhere":     {"sort": "-spend_tokens"},
+		"overdue everywhere":          {"due": "lt:today"},
+		"starting everywhere":         {"start": "gt:today"},
+		"finished everywhere":         {"show_closed": "recent:168h"},
+		"flagged everywhere":          {"flag": "cycle"},
+		"one status everywhere":       {"status": "in_progress"},
+		"unarchived everywhere":       {"archived": "false"},
+		"by estimate everywhere":      {"estimate": "gt:30"},
+		"by points everywhere":        {"points": "gt:1"},
+		"the children everywhere":     {"parent": "t-00001"},
+		"without subtasks everywhere": {"has_children": "false"},
+		"one subtree everywhere":      {"root": "t-00001"},
+		"by spend everywhere":         {"sort": "-spend_tokens"},
 
 		// EVERY TAG MODE AT BOTH SCOPES, each held to the plan its mode
 		// calls for by [holdTagFilter]: `any:` and `all:` seek the tag
@@ -365,6 +396,7 @@ func dutyReads() map[string]indexedRead {
 		moving   = "tracker_tasks_moving_idx"
 		stranded = "tracker_tasks_stranded_idx"
 		ranks    = "tracker_tasks_rank_idx"
+		tree     = "tracker_tasks_parent_idx"
 	)
 	seek := func(index, sql string, args ...any) indexedRead {
 		return indexedRead{plannedRead{sql, args}, index, false}
@@ -399,8 +431,15 @@ func dutyReads() map[string]indexedRead {
 		// the restore read every task.
 		"the subtree restore": seek("tracker_tasks_removed_with_idx",
 			removedWithStatement, "t-00001"),
-		"key resolution":       seek(keys, resolveTaskStatement, "ENG-1", "ENG-1", "ENG-1"),
-		"a point read's scope": seek(keys, taskReadScopeStatement, "ENG-1", "ENG-1", "ENG-1"),
+		// EVERY READ OF A TASK'S SUBTASKS, each a seek on the parent: the
+		// apply's, a move's walk in batches, the subtree a move, a removal
+		// and a restore walk — every level of it — and a purge's reach.
+		"a task's children":           seek(tree, childrenStatement, "t-00001"),
+		"a walk's batch of children":  seek(tree, childBatchStatement, "t-00001", "P01", "", WalkBatch),
+		"a subtree, level by level":   seek(tree, subtreeStatement, "t-00001"),
+		"what a purge writes, by kin": seek(tree, purgeReachStatement, "t-00001", "t-00001", "t-00001", "t-00001", "t-00001", "t-00001", "t-00001"),
+		"key resolution":              seek(keys, resolveTaskStatement, "ENG-1", "ENG-1", "ENG-1"),
+		"a point read's scope":        seek(keys, taskReadScopeStatement, "ENG-1", "ENG-1", "ENG-1"),
 	}
 }
 

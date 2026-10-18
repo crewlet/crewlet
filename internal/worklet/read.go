@@ -639,14 +639,27 @@ func (s taskSet) and(clause string, values []any) taskSet {
 }
 
 // The two indexes the trash is read through (replicated 0056), one per scope
-// a task listing has.
+// a task listing has, and the one a parent's subtasks are (replicated 0058).
 const (
 	removedIndex        = "tracker_tasks_removed_idx"
 	projectRemovedIndex = "tracker_tasks_project_removed_idx"
+	parentIndex         = "tracker_tasks_parent_idx"
 )
 
-// taskSource is where a query's tasks are read from: the task table, and for a
-// listing of the TRASH the index that holds it.
+// taskSource is where a query's tasks are read from: the task table, for a
+// listing of ONE TASK'S SUBTASKS the index of the tree, and for a listing of
+// the TRASH the index that holds it.
+//
+// # Why a parent's subtasks NAME their index
+//
+// `parent=` is the narrowest question a listing asks — one item's subtasks —
+// and the planner answers it from whatever else the statement offers: inside a
+// project the project's board index, which is every task the project holds
+// read to keep a handful, and at the workspace the listing's own order, which
+// is every task in the company walked newest first. Named, it is a seek on the
+// parent and every statement over the listing reads those subtasks alone. It
+// comes FIRST, because a subtask listing narrowed further — to the trash, say —
+// is still never larger than the parent's subtasks.
 //
 // # Why the trash NAMES its index
 //
@@ -679,6 +692,8 @@ const (
 // than as a tab that quietly started reading the company.
 func taskSource(q Query) string {
 	switch {
+	case q.Parent != "":
+		return taskTable + " INDEXED BY " + parentIndex
 	case q.Removed == nil || !*q.Removed:
 		return taskTable
 	case q.Scope.Project != "":

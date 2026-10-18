@@ -287,16 +287,24 @@ func readChildBatch(ctx context.Context, tx *sql.Tx, parent, project, after stri
 	// again and stopped again: a merge with one subtask in the trash could
 	// never finish. It stays under the parent it had, which is where a
 	// restore finds it.
-	rows, err := tx.QueryContext(ctx, `
-		SELECT document, version, 0 FROM tracker_tasks
-		WHERE parent_id = ? AND project_key = ? AND id > ? AND removed_at IS NULL
-		ORDER BY id LIMIT ?`, parent, project, after, limit)
+	rows, err := tx.QueryContext(ctx, childBatchStatement, parent, project, after, limit)
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read the children of %s: %w", parent, err)
 	}
 	defer rows.Close()
 	return scanSubtree(rows, parent)
 }
+
+// childBatchStatement is [readChildBatch]'s read, named for the plan test.
+//
+// IT NAMES THE INDEX OF THE TREE (replicated 0058), because the planner
+// otherwise seeks the project, which every child the walk carries is in, and
+// sorts the project's whole board by id to take one batch of a parent's
+// children.
+const childBatchStatement = `
+		SELECT document, version, 0 FROM tracker_tasks INDEXED BY ` + parentIndex + `
+		WHERE parent_id = ? AND project_key = ? AND id > ? AND removed_at IS NULL
+		ORDER BY id LIMIT ?`
 
 // readSubtree is every descendant of a root task, ORDERED BY (depth, id).
 //
@@ -314,7 +322,17 @@ func readChildBatch(ctx context.Context, tx *sql.Tx, parent, project, after stri
 // is what gives that; the id breaks the tie so every node, and every re-run,
 // walks one subtree in one order.
 func readSubtree(ctx context.Context, tx *sql.Tx, root string) ([]Task, error) {
-	rows, err := tx.QueryContext(ctx, `
+	rows, err := tx.QueryContext(ctx, subtreeStatement, root)
+	if err != nil {
+		return nil, fmt.Errorf("worklet: read the subtree under %s: %w", root, err)
+	}
+	defer rows.Close()
+	return scanSubtree(rows, root)
+}
+
+// subtreeStatement is [readSubtree]'s read, named for the plan test: each level
+// of the tree is a seek on the parent (replicated 0058).
+const subtreeStatement = `
 		WITH RECURSIVE descendants(id, depth) AS (
 			SELECT id, 0 FROM tracker_tasks WHERE parent_id = ?
 			UNION ALL
@@ -323,13 +341,7 @@ func readSubtree(ctx context.Context, tx *sql.Tx, root string) ([]Task, error) {
 		)
 		SELECT t.document, t.version, d.depth
 		FROM descendants d JOIN tracker_tasks t ON t.id = d.id
-		ORDER BY d.depth, t.id`, root)
-	if err != nil {
-		return nil, fmt.Errorf("worklet: read the subtree under %s: %w", root, err)
-	}
-	defer rows.Close()
-	return scanSubtree(rows, root)
-}
+		ORDER BY d.depth, t.id`
 
 // scanSubtree decodes a subtree read's rows.
 func scanSubtree(rows *sql.Rows, root string) ([]Task, error) {

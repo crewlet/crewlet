@@ -1815,14 +1815,17 @@ func idsOf(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]string
 	return out, rows.Err()
 }
 
+// childrenStatement is [childrenOf]'s read, named for the plan test: a seek on
+// the parent in the index of the tree (replicated 0058).
+const childrenStatement = `SELECT id FROM tracker_tasks WHERE parent_id = ? ORDER BY id`
+
 // childrenOf reads a task's DIRECT children.
 //
 // From the parent pointers rather than the closure, because what this needs is
 // the tasks whose own `parent_id` would dangle — and the closure holds every
 // descendant, whose pointers name their own parents and are unaffected.
 func childrenOf(ctx context.Context, tx *sql.Tx, id string) ([]string, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT id FROM tracker_tasks WHERE parent_id = ? ORDER BY id`, id)
+	rows, err := tx.QueryContext(ctx, childrenStatement, id)
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read the children of %s: %w", id, err)
 	}
