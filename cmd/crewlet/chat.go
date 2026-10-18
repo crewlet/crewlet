@@ -847,7 +847,8 @@ func chatRetention(environ config.Source, args []string, stdout, stderr io.Write
 			fs.Var(&days, "days",
 				"how many days the room keeps a message; 0 keeps them for ever")
 			company = fs.Bool("company", false,
-				"return the room to the company's own horizon (chat.native.retention_days)")
+				"return the room to the company's own horizon "+
+					"(chat.native.message_retention_days)")
 			opID = opIDFlag(fs,
 				"retry a change whose outcome is unknown with the id it printed, so the "+
 					"retry is this change rather than another; empty starts a new one")
