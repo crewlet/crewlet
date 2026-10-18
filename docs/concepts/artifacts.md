@@ -418,7 +418,10 @@ flowchart LR
 
 - A browser sends its focus (a version, a region, or a collection, document
   and field) and its activity (`viewing`, `editing`, `idle`), throttled to ten
-  frames a second and coalesced by the node to five a second per artifact.
+  frames a second. The node fans a room out to its sockets at most ten times a
+  second, at most ten members a frame (the change that has waited longest
+  first), and tells the other nodes its own members' moves at most twenty
+  times a second, so a cursor crosses nodes within about 150 ms.
 - Each node rebroadcasts its roster every 15 seconds; an entry expires 45
   seconds after the last frame naming it. A node gaining its first member of a
   room asks its peers once, so a newcomer sees the room at once.

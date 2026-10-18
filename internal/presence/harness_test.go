@@ -65,13 +65,19 @@ type node struct {
 
 func startNode(t *testing.T, broker *memory.Broker, name string, c *clock) *node {
 	t.Helper()
+	return startNodeAsking(t, broker, name, c, 300*time.Millisecond)
+}
+
+// startNodeAsking is [startNode] with the join-time ask given askBudget.
+func startNodeAsking(t *testing.T, broker *memory.Broker, name string, c *clock, askBudget time.Duration) *node {
+	t.Helper()
 	q := broker.Client()
 	if err := q.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
 	h, err := New(Options{Queue: q, Wire: wireFor(t, fleetRing), Node: name,
-		AskBudget: 300 * time.Millisecond, Now: c.Now, Coalesce: testCoalesce})
+		AskBudget: askBudget, Now: c.Now, Coalesce: testCoalesce})
 	if err != nil {
 		t.Fatal(err)
 	}

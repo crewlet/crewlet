@@ -29,7 +29,7 @@ var log = logging.Get("presence")
 type Queue interface {
 	Broadcast(ctx context.Context, subject string, payload []byte) error
 	Listen(ctx context.Context, pattern string, h queue.ListenFunc) (queue.Unsubscribe, error)
-	Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error)
+	AskEach(ctx context.Context, subject string, request []byte, each func(reply []byte) bool) error
 	Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error)
 }
 
@@ -66,11 +66,16 @@ type Options struct {
 	// Metrics records frames and rooms; nil records nothing.
 	Metrics Metrics
 
-	// Coalesce is the shortest interval between two fan-outs of one room.
-	// Zero takes a second divided by [artifacts.PresenceCoalesceRate], the
-	// measured production value; a suite sets a shorter one so it waits
-	// less, never a different rule.
+	// Coalesce is the shortest interval between two fan-outs of one room
+	// to this node's sockets. Zero takes a second divided by
+	// [artifacts.PresenceCoalesceRate], the production value; a suite sets
+	// a shorter one so it waits less, never a different rule.
 	Coalesce time.Duration
+
+	// Broadcast is the shortest interval between two frames this node
+	// sends the fleet about one room. Zero takes a second divided by
+	// [artifacts.PresenceBroadcastRate].
+	Broadcast time.Duration
 }
 
 // Change is what one room's fan-out tells this node's sockets: the members it
@@ -116,6 +121,7 @@ type Hub struct {
 	now       func() time.Time
 	metrics   Metrics
 	coalesce  time.Duration
+	broadcast time.Duration
 
 	mu      sync.Mutex
 	rooms   map[artifacts.ID]*room
@@ -153,7 +159,7 @@ func New(opts Options) (*Hub, error) {
 			"newly opened room waits for its peers")
 	}
 	h := &Hub{queue: opts.Queue, wire: opts.Wire, node: opts.Node, askBudget: opts.AskBudget,
-		now: opts.Now, metrics: opts.Metrics, coalesce: opts.Coalesce,
+		now: opts.Now, metrics: opts.Metrics, coalesce: opts.Coalesce, broadcast: opts.Broadcast,
 		rooms: map[artifacts.ID]*room{}, sinks: map[uint64]func(Change){},
 		listening: map[artifacts.ID]queue.Unsubscribe{}, wake: make(chan struct{}, 1)}
 	if h.now == nil {
@@ -161,6 +167,9 @@ func New(opts Options) (*Hub, error) {
 	}
 	if h.coalesce <= 0 {
 		h.coalesce = time.Second / artifacts.PresenceCoalesceRate
+	}
+	if h.broadcast <= 0 {
+		h.broadcast = time.Second / artifacts.PresenceBroadcastRate
 	}
 	return h, nil
 }
@@ -289,6 +298,7 @@ func (h *Hub) Join(id artifacts.ID, who Local) (string, artifacts.PresenceRoster
 	r.changed(member.Session)
 	roster := r.roster(r.present())
 	h.scheduleLocked(r)
+	h.scheduleSendLocked(r)
 	rooms := len(h.rooms)
 	h.mu.Unlock()
 
@@ -333,6 +343,7 @@ func (h *Hub) Update(id artifacts.ID, session string, activity artifacts.Presenc
 	m.member.Activity, m.member.Focus, m.member.At = activity, focus, now
 	r.changed(session)
 	h.scheduleLocked(r)
+	h.scheduleSendLocked(r)
 	h.mu.Unlock()
 	h.count("client")
 	return nil
@@ -353,6 +364,7 @@ func (h *Hub) Leave(id artifacts.ID, session string) {
 	delete(r.local, session)
 	r.left(session)
 	h.scheduleLocked(r)
+	h.scheduleSendLocked(r)
 	h.pokeLocked()
 }
 
@@ -387,6 +399,7 @@ func (h *Hub) Touch(id artifacts.ID, seat string, activity artifacts.PresenceAct
 		m.member.Activity, m.member.Focus, m.member.At = activity, focus, now
 		r.changed(m.member.Session)
 		h.scheduleLocked(r)
+		h.scheduleSendLocked(r)
 	}
 	m.touched = now
 	rooms := len(h.rooms)
@@ -417,10 +430,10 @@ func (h *Hub) roomLocked(id artifacts.ID) (*room, bool) {
 	return r, true
 }
 
-// scheduleLocked arranges r's next fan-out: at once when the last one is at
-// least [Options.Coalesce] old, and otherwise when it will be, so a room fans
-// out at most [artifacts.PresenceCoalesceRate] times a second however fast its
-// members move. Caller holds mu.
+// scheduleLocked arranges r's next fan-out to this node's sockets: at once
+// when the last one is at least [Options.Coalesce] old, and otherwise when it
+// will be, so a room fans out at most [artifacts.PresenceCoalesceRate] times a
+// second however fast its members move. Caller holds mu.
 func (h *Hub) scheduleLocked(r *room) {
 	if r.timer != nil || h.stopped {
 		return
@@ -430,8 +443,23 @@ func (h *Hub) scheduleLocked(r *room) {
 	r.timer = time.AfterFunc(delay, func() { h.flush(id) })
 }
 
-// flush fans one room out: what changed of its presentation to this node's
-// sockets, and what changed of its local members to the fleet.
+// scheduleSendLocked arranges r's next frame to the fleet, when this node's
+// own members changed since the last: at once when the last frame is at least
+// [Options.Broadcast] old, and otherwise when it will be. Apart from the
+// sockets' fan-out, so a member's move leaves its node within one broadcast
+// window whatever the viewer's node does. Caller holds mu.
+func (h *Hub) scheduleSendLocked(r *room) {
+	if r.sendTimer != nil || h.stopped || len(r.outUpsert)+len(r.outLeave) == 0 {
+		return
+	}
+	delay := max(0, r.sent.Add(h.broadcast).Sub(h.now()))
+	id := r.id
+	r.sendTimer = time.AfterFunc(delay, func() { h.flushSend(id) })
+}
+
+// flush fans one room out to this node's sockets: what changed of its
+// presentation, at most [artifacts.PresenceFrameMembers] members re-presented,
+// and another fan-out arranged for the rest.
 func (h *Hub) flush(id artifacts.ID) {
 	h.mu.Lock()
 	r := h.rooms[id]
@@ -441,7 +469,32 @@ func (h *Hub) flush(id artifacts.ID) {
 	}
 	r.timer = nil
 	r.flushed = h.now()
-	change, pushed := r.diff(r.present())
+	change, pushed, deferred := r.diff(r.present(), r.flushed)
+	if deferred {
+		h.scheduleLocked(r)
+	}
+	sinks := slices.Collect(maps.Values(h.sinks))
+	h.mu.Unlock()
+
+	if pushed {
+		h.count("push")
+		for _, fn := range sinks {
+			fn(change)
+		}
+	}
+}
+
+// flushSend tells the fleet what changed of this node's own members in one
+// room, and forgets the room once the last of them left.
+func (h *Hub) flushSend(id artifacts.ID) {
+	h.mu.Lock()
+	r := h.rooms[id]
+	if r == nil || h.stopped {
+		h.mu.Unlock()
+		return
+	}
+	r.sendTimer = nil
+	r.sent = h.now()
 	var out *Frame
 	if len(r.outUpsert)+len(r.outLeave) > 0 {
 		upsert := make([]artifacts.PresenceMember, 0, len(r.outUpsert))
@@ -460,19 +513,13 @@ func (h *Hub) flush(id artifacts.ID) {
 		// THE LAST OF THIS NODE'S MEMBERS LEFT: what its peers said is
 		// heard by nobody here, and the room goes with them once the
 		// leave above is on its way.
+		r.stopTimer()
 		delete(h.rooms, id)
 		removed = true
 	}
-	sinks := slices.Collect(maps.Values(h.sinks))
 	rooms := len(h.rooms)
 	h.mu.Unlock()
 
-	if pushed {
-		h.count("push")
-		for _, fn := range sinks {
-			fn(change)
-		}
-	}
 	if out != nil {
 		h.send(h.context(), *out)
 	}
@@ -599,22 +646,23 @@ func (h *Hub) ask(ctx context.Context, id artifacts.ID) {
 	}
 	asked, cancel := context.WithTimeout(ctx, h.askBudget)
 	defer cancel()
-	// WANT NOTHING IN PARTICULAR: a scatter has no roster, so the ask waits
-	// out its budget and takes whoever answered.
-	replies, err := h.queue.Ask(asked, topics.ArtifactPresenceAsk, sealed, 0)
+	// EACH ANSWER IS APPLIED AS IT ARRIVES. A scatter has no roster, so the
+	// ask runs out its budget to hear whoever answers; applying the
+	// answers only then showed a join everywhere after the whole budget
+	// (two seconds, spike S6), past the second presence allows for it,
+	// where a peer on the same broker answers in milliseconds.
+	err = h.queue.AskEach(asked, topics.ArtifactPresenceAsk, sealed, func(reply []byte) bool {
+		f, ok := h.open(reply)
+		if ok && f.Node != h.node && f.Kind == FrameState && f.Artifact == id {
+			h.count("peer")
+			h.apply(f)
+		}
+		return true
+	})
 	if err != nil {
 		log.DebugContext(ctx, "presence_ask_failed", "artifact", id.String(),
 			"error", err.Error(),
 			"detail", "the room fills from the peers' next rebroadcast instead")
-		return
-	}
-	for _, reply := range replies {
-		f, ok := h.open(reply)
-		if !ok || f.Node == h.node || f.Kind != FrameState || f.Artifact != id {
-			continue
-		}
-		h.count("peer")
-		h.apply(f)
 	}
 }
 
@@ -646,6 +694,7 @@ func (h *Hub) tick(ctx context.Context, now time.Time) {
 	for id, r := range h.rooms {
 		if r.expire(now) {
 			h.scheduleLocked(r)
+			h.scheduleSendLocked(r)
 		}
 		if members := r.localMembers(); len(members) > 0 {
 			frames = append(frames, h.frameLocked(id, FrameState, members, nil, true))

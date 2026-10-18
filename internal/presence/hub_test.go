@@ -7,6 +7,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -16,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -74,6 +76,59 @@ func TestARoomCrossesTheFleet(t *testing.T) {
 				held, listening)
 		case <-time.After(5 * time.Millisecond):
 		}
+	}
+}
+
+// A JOIN SHOWS THE PEERS' MEMBERS AS THEY ANSWER, not once the ask has run
+// out its budget: a scatter has no roster, so the ask always runs its whole
+// budget, and applying the answers only then showed a join everywhere after two
+// seconds in spike S6, past the second presence allows.
+//
+// Mutation: collect the answers and apply them when the ask returns, and the
+// newcomer waits the whole five seconds.
+func TestAJoinShowsThePeersMembersAsTheyAnswer(t *testing.T) {
+	t.Parallel()
+	broker, c := memory.NewBroker(), newClock()
+	a := startNode(t, broker, "node-a", c)
+	if _, _, err := a.hub.Join(room1, dana); err != nil {
+		t.Fatal(err)
+	}
+	a.seen.waitFor(t, "node-a", room1, "dana:viewing")
+	settle()
+	// A PEER THAT NEVER ANSWERS, as a slow or partitioned node does: the ask
+	// then runs its whole budget, as it always does on the broker, where no
+	// asker knows how many peers there are to wait for.
+	silent := broker.Client()
+	if err := silent.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = silent.Stop(context.Background()) })
+	if _, err := silent.Serve(t.Context(), topics.ArtifactPresenceAsk,
+		func(ctx context.Context, _ []byte) ([]byte, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}); err != nil {
+		t.Fatal(err)
+	}
+	b := startNodeAsking(t, broker, "node-b", c, 5*time.Second)
+	started := time.Now()
+	if _, _, err := b.hub.Join(room1, erin); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(artifacts.PresenceRebroadcast)
+	for {
+		if _, shown := b.seen.member(room1, "dana"); shown {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("the newcomer's node never showed the peer's member")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	if took := time.Since(started); took > time.Second {
+		t.Fatalf("the peer's member was shown %s after the join, against the second a "+
+			"join is allowed: the answer waited for the ask's five-second budget", took)
 	}
 }
 
@@ -352,9 +407,9 @@ func TestALargeRoomPresentsTheMostRecentFifty(t *testing.T) {
 		sessions = append(sessions, s)
 	}
 	waitCounts(t, a.seen, room1, &artifacts.PresenceCounts{Human: 9, Agent: 1})
-	if got := len(a.seen.members(room1)); got != artifacts.PresenceRoomTop {
-		t.Fatalf("a room of 60 presents %d members, want %d", got, artifacts.PresenceRoomTop)
-	}
+	// THE FIFTY ARRIVE OVER SEVERAL FAN-OUTS, at most
+	// [artifacts.PresenceFrameMembers] members each.
+	waitMembers(t, a.seen, room1, artifacts.PresenceRoomTop)
 	if _, shown := a.seen.member(room1, "seat-00"); shown {
 		t.Fatal("the least recent member is presented in a room past the threshold")
 	}
@@ -380,8 +435,124 @@ func TestALargeRoomPresentsTheMostRecentFifty(t *testing.T) {
 		a.hub.Leave(room1, s)
 	}
 	waitCounts(t, a.seen, room1, nil)
-	if got := len(a.seen.members(room1)); got != 39 {
-		t.Fatalf("a room of 39 presents %d members, want all of them", got)
+	waitMembers(t, a.seen, room1, 39)
+}
+
+// A FAN-OUT RE-PRESENTS AT MOST [artifacts.PresenceFrameMembers] MEMBERS, the
+// most recently active first, and the rest follow in the next fan-outs: a large
+// room whose members all move does not send each socket every one of them in
+// every frame.
+//
+// Mutation: drop the cap in room.diff, and the first fan-out after the burst
+// carries all thirty.
+func TestAFanOutRePresentsAtMostItsBoundOfMembers(t *testing.T) {
+	t.Parallel()
+	broker, c := memory.NewBroker(), newClock()
+	a := startNode(t, broker, "node-a", c)
+	var sessions []string
+	for i := range 30 {
+		s, _, err := a.hub.Join(room1, Local{Seat: fmt.Sprintf("seat-%02d", i), Kind: iam.ActorHuman})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sessions = append(sessions, s)
+	}
+	waitMembers(t, a.seen, room1, 30)
+	var largest int
+	a.hub.OnChange(func(ch Change) {
+		a.seen.mu.Lock()
+		largest = max(largest, len(ch.Upsert))
+		a.seen.mu.Unlock()
+	})
+	c.Advance(time.Second)
+	for i, s := range sessions {
+		if err := a.hub.Update(room1, s, artifacts.PresenceEditing,
+			artifacts.Focus{Region: fmt.Sprintf("r%d", i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadline := time.After(10 * time.Second)
+	for {
+		edited := 0
+		for _, m := range a.seen.members(room1) {
+			if strings.HasSuffix(m, ":editing") {
+				edited++
+			}
+		}
+		if edited == len(sessions) {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("%d of %d moves were shown", edited, len(sessions))
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	a.seen.mu.Lock()
+	defer a.seen.mu.Unlock()
+	if largest > artifacts.PresenceFrameMembers {
+		t.Fatalf("one fan-out re-presented %d members, past the bound of %d", largest,
+			artifacts.PresenceFrameMembers)
+	}
+}
+
+// A MEMBER HELD BACK IS TOLD WITHIN A FEW FAN-OUTS however many others keep
+// moving: the change that has waited longest goes first. Ordered by recency
+// alone, a viewer who moved once in a room where more than a frame's worth of
+// others move all the time is never shown (spike S6's probe, missed on most of
+// its moves after the frame bound landed).
+//
+// Mutation: order the held-back members by recency alone, and the probe's move
+// is never shown.
+func TestAHeldBackMemberIsToldWithinAFewFanOuts(t *testing.T) {
+	t.Parallel()
+	broker, c := memory.NewBroker(), newClock()
+	a := startNode(t, broker, "node-a", c)
+	var busy []string
+	for i := range 2 * artifacts.PresenceFrameMembers {
+		s, _, err := a.hub.Join(room1, Local{Seat: fmt.Sprintf("busy-%02d", i), Kind: iam.ActorHuman})
+		if err != nil {
+			t.Fatal(err)
+		}
+		busy = append(busy, s)
+	}
+	probe, _, err := a.hub.Join(room1, Local{Seat: "probe", Kind: iam.ActorHuman})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitMembers(t, a.seen, room1, len(busy)+1)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			c.Advance(time.Millisecond)
+			for _, s := range busy {
+				_ = a.hub.Update(room1, s, artifacts.PresenceEditing, artifacts.Focus{Region: strconv.Itoa(i)})
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	defer func() { close(stop); <-done }()
+	time.Sleep(5 * testCoalesce)
+	if err := a.hub.Update(room1, probe, artifacts.PresenceEditing, artifacts.Focus{Region: "here"}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(100 * testCoalesce)
+	for {
+		if m, ok := a.seen.member(room1, "probe"); ok && m.Focus.Region == "here" {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("the probe's one move was never shown while the room kept moving")
+		case <-time.After(time.Millisecond):
+		}
 	}
 }
 
@@ -464,6 +635,111 @@ func TestARoomFansOutAtMostItsCoalescedRate(t *testing.T) {
 	}
 }
 
+// A MOVE CROSSES NODES IN ONE SHORT WINDOW ON EACH SIDE, at the production
+// rates: the mover's node tells the fleet within a broadcast window and the
+// viewer's node shows it within a fan-out window, however busy the viewer's
+// room is. One window of a fifth of a second on each side measured a median
+// near 240 ms in spike S6, against the 150 ms presence allows.
+//
+// Mutation: send the fleet frame on the sockets' fan-out window again, or set
+// both rates back to five a second, and the median move crosses past 150 ms.
+func TestAMoveCrossesNodesInOneShortWindowOnEachSide(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	hub := func(name string) (*Hub, *screen) {
+		q := broker.Client()
+		if err := q.Start(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = q.Stop(context.Background()) })
+		h, err := New(Options{Queue: q, Wire: wireFor(t, fleetRing), Node: name,
+			AskBudget: 300 * time.Millisecond, Now: time.Now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen := newScreen()
+		h.OnChange(seen.apply)
+		if err := h.Start(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { h.Stop(context.Background()) })
+		return h, seen
+	}
+	mover, _ := hub("node-a")
+	viewer, viewed := hub("node-b")
+	moving, _, err := mover.Join(room1, dana)
+	if err != nil {
+		t.Fatal(err)
+	}
+	busy, _, err := viewer.Join(room1, erin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitListening(t, viewer, room1)
+	waitMembers(t, viewed, room1, 2)
+	// THE VIEWER'S ROOM IS BUSY: its own member moves all the time, so its
+	// fan-out window is always running when the probe arrives.
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			case <-time.After(7 * time.Millisecond):
+			}
+			_ = viewer.Update(room1, busy, artifacts.PresenceEditing, artifacts.Focus{Region: strconv.Itoa(i)})
+		}
+	}()
+	defer func() { close(stop); <-done }()
+	// AND THE MOVER'S IS TOO, so its broadcast window is always running
+	// when the probe moves.
+	other, _, err := mover.Join(room1, Local{Seat: "frank", Kind: iam.ActorHuman})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopOther := make(chan struct{})
+	doneOther := make(chan struct{})
+	go func() {
+		defer close(doneOther)
+		for i := 0; ; i++ {
+			select {
+			case <-stopOther:
+				return
+			case <-time.After(7 * time.Millisecond):
+			}
+			_ = mover.Update(room1, other, artifacts.PresenceEditing, artifacts.Focus{Region: strconv.Itoa(i)})
+		}
+	}()
+	defer func() { close(stopOther); <-doneOther }()
+	var crossings []time.Duration
+	for probe := range 16 {
+		region := "probe-" + strconv.Itoa(probe)
+		started := time.Now()
+		if err := mover.Update(room1, moving, artifacts.PresenceViewing,
+			artifacts.Focus{Region: region}); err != nil {
+			t.Fatal(err)
+		}
+		for {
+			if m, ok := viewed.member(room1, "dana"); ok && m.Focus.Region == region {
+				break
+			}
+			if time.Since(started) > 5*time.Second {
+				t.Fatalf("probe %d never crossed", probe)
+			}
+			time.Sleep(time.Millisecond)
+		}
+		crossings = append(crossings, time.Since(started))
+		time.Sleep(20 * time.Millisecond)
+	}
+	slices.Sort(crossings)
+	if median := crossings[len(crossings)/2]; median > 150*time.Millisecond {
+		t.Fatalf("the median of sixteen moves crossed in %s (all: %v): a broadcast window "+
+			"and a fan-out window are 150 ms between them at their longest", median, crossings)
+	}
+}
+
 // A SOCKET STATES ONLY WHAT IT IS DOING AND WHERE, inside the vocabulary's
 // bounds, for a session it holds.
 func TestAPresenceFrameIsHeldToItsSessionAndBounds(t *testing.T) {
@@ -521,6 +797,23 @@ func waitListening(t *testing.T, h *Hub, id artifacts.ID) {
 		select {
 		case <-deadline:
 			t.Fatal("the hub never listened on the room")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
+// waitMembers waits until the room shows n members.
+func waitMembers(t *testing.T, s *screen, id artifacts.ID, n int) {
+	t.Helper()
+	deadline := time.After(10 * time.Second)
+	for {
+		got := len(s.members(id))
+		if got == n {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("the room shows %d members, want %d", got, n)
 		case <-time.After(5 * time.Millisecond):
 		}
 	}

@@ -235,7 +235,28 @@ const (
 	PresenceRebroadcast   = 15 * time.Second
 	PresenceFrameValidity = 60 * time.Second // inside the seal
 	PresenceClientRate    = 10               // client frames a second per socket
-	PresenceCoalesceRate  = 5                // frames a second per artifact a node fans out
 	PresenceRoomTop       = 50               // members a large room presents individually
 	PresenceRoomFull      = 40               // below this a large room returns to full rosters
+
+	// PresenceCoalesceRate is how many times a second a node fans one
+	// room out to its sockets, and PresenceBroadcastRate how many times a
+	// second it tells the fleet what its own members did there. A cursor
+	// crossing nodes waits one broadcast window on its own node and one
+	// fan-out window on the viewer's: at 20 and 10 that is at most 150 ms
+	// beside the broker's transit, the bound presence is held to, where
+	// one window of 200 ms on each side (5 a second for both) measured a
+	// median near 240 ms in spike S6. Ten frames a second is also what a
+	// socket may send ([PresenceClientRate]).
+	PresenceCoalesceRate  = 10
+	PresenceBroadcastRate = 20
+
+	// PresenceFrameMembers bounds the members one fan-out re-presents to a
+	// socket: the most recently active first, the rest in the frames that
+	// follow. A large room presents its fifty most recent members, and
+	// when everybody moves, the fifty change constantly; spike S6 measured
+	// about 50 KiB a second a socket at 200 viewers moving ten times a
+	// second, each frame naming most of the fifty again. Ten members a
+	// frame at ten frames a second bounds that near 20 KiB, and a room
+	// whose members are still settles within a second.
+	PresenceFrameMembers = 10
 )

@@ -58,7 +58,7 @@ instrument (see [Metrics](metrics.md)).
   publish slows the write-ahead log it shares disks with.
 - **Presence costs memory and frames, never storage**: a map per room on each
   node holding its sockets, and a few hundred bytes per broadcast. Measured
-  (S6), a room of 200 viewers costs the fleet under a tenth of one core.
+  (S6), a room of 200 viewers costs the fleet under a sixth of one core.
 
 ---
 
@@ -88,7 +88,7 @@ citing it, by the change that owns it; the spikes never change a decision.
 
 | | |
 |---|---|
-| Commit | `feat/artifacts-p15` at `2033e8132` (S6 rerun at `21f6024a0`, after the presence fix below; S7 memory at `beb07f219`) |
+| Commit | `feat/artifacts-p15` at `2033e8132` (S6 rerun at `21f6024a0`, after the presence fix below; S7 memory at `beb07f219`). DS-2, S3, S4 and S6 rerun at `feat/artifacts-conformance` after findings 2, 6, 7, 9 and 10 were fixed, as each section says |
 | Machine | Apple M1 Pro, 8 cores, 16 GiB, macOS 27.0.1, internal SSD |
 | Fsync | `sync: always`; on darwin every fsync is a full flush to the medium (`F_FULLFSYNC`), several milliseconds each |
 | Topology | `solo`: one embedded broker and one data node. `fleet3`: a three-member embedded cluster, every stream at three replicas, a data node on each member, all in one process on one disk |
@@ -376,35 +376,53 @@ second and is timed to the moment the last node's sockets are shown it.
 
 | Viewers | Moves/s each | Frames/s per socket | Busiest node to its sockets | Broker per node, sent / heard | Fleet CPU | Join shown everywhere | Cursor across nodes p50 / p95 |
 |---|---|---|---|---|---|---|---|
-| 30 | 1 | 4.8 | 69 KiB/s | 2.7 / 8.1 KiB/s | 0.030 cores | 0.4 s | 274 / 400 ms |
-| 30 | 10 | 4.9 | 306 KiB/s | 10.4 / 31.1 KiB/s | 0.039 cores | 2.0 s | 279 / 402 ms |
-| 50 | 1 | 4.8 | 183 KiB/s | 4.0 / 12.1 KiB/s | 0.036 cores | 2.2 s | 86 / 248 ms |
-| 50 | 10 | 4.9 | 826 KiB/s | 16.7 / 50.2 KiB/s | 0.043 cores | 2.0 s | 258 / 301 ms (7 of 19 probes never shown) |
-| 200 | 1 | 4.9 | 2,587 KiB/s | 13.5 / 40.6 KiB/s | 0.054 cores | 2.2 s | 233 / 288 ms |
-| 200 | 10 | 4.9 | 3,339 KiB/s | 64.2 / 192.6 KiB/s | 0.077 cores | 2.0 s | 19 of 19 probes never shown |
+| 30 | 1 | 9.4 | 78 KiB/s | 3.6 / 10.8 KiB/s | 0.052 cores | 0.3 s | 68 / 118 ms |
+| 30 | 10 | 9.8 | 222 KiB/s | 22.2 / 66.5 KiB/s | 0.082 cores | 0.3 s | 370 / 450 ms |
+| 50 | 1 | 9.4 | 201 KiB/s | 5.5 / 16.4 KiB/s | 0.063 cores | 0.5 s | 70 / 123 ms |
+| 50 | 10 | 9.8 | 371 KiB/s | 34.6 / 103.8 KiB/s | 0.087 cores | 0.5 s | 19 of 19 probes never shown |
+| 200 | 1 | 9.6 | 1,552 KiB/s | 15.9 / 47.5 KiB/s | 0.113 cores | 0.5 s | 201 / 287 ms (8 of 19 probes never shown) |
+| 200 | 10 | 9.8 | 1,509 KiB/s | 128 / 384 KiB/s | 0.145 cores | 0.5 s | 18 of 19 probes never shown |
 
-Before the presence fix below, four of the six runs took 15 seconds (one
+This run is at `feat/artifacts-conformance`, after findings 9 and 10 were
+fixed: a socket's fan-out at ten a second and a node's frames to the fleet at
+twenty, at most ten members re-presented a frame, and each join-time answer
+applied as it arrives. The run recorded before those fixes, at five fan-outs a
+second with no bound on a frame:
+
+| Viewers | Moves/s each | Frames/s per socket | Busiest node to its sockets | Join shown everywhere | Cursor across nodes p50 / p95 |
+|---|---|---|---|---|---|
+| 30 | 1 | 4.8 | 69 KiB/s | 0.4 s | 274 / 400 ms |
+| 30 | 10 | 4.9 | 306 KiB/s | 2.0 s | 279 / 402 ms |
+| 50 | 1 | 4.8 | 183 KiB/s | 2.2 s | 86 / 248 ms |
+| 50 | 10 | 4.9 | 826 KiB/s | 2.0 s | 258 / 301 ms (7 of 19 probes never shown) |
+| 200 | 1 | 4.9 | 2,587 KiB/s | 2.2 s | 233 / 288 ms |
+| 200 | 10 | 4.9 | 3,339 KiB/s | 2.0 s | 19 of 19 probes never shown |
+
+Before the first presence fix below, four of the six runs took 15 seconds (one
 rebroadcast) to show a join on every node.
 
-**Reading.** Coalescing holds every socket to five frames a second whatever
-the room does, and the broker carries tens of KiB a second a node, so
-presence's CPU and broker cost is negligible. What grows with the room is the
-frame: a room past fifty presents its fifty most recent members, and when
-everyone moves, the fifty change constantly, so each frame names most of them
-again (about 10 KiB a frame, 50 KiB a second a socket at 200 viewers), and one
-viewer's move is shown only for the moment it is among the most recent (every
-probe move in the busiest room, and 7 of 19 in a room of 51, were displaced
-before the other node's next frame). A join is
-shown everywhere once the join-time ask has waited out its budget (2 seconds,
-`eventfan.FleetReadBudget`), and a cursor crosses nodes in two coalescing
-windows, one on each node (200 ms each), so its p50 lands anywhere between a
-few tens of ms and 400 ms by where in each window the move falls.
+**Reading.** Presence's CPU and broker cost stays negligible. A join is shown
+everywhere within half a second, each peer's answer applied as it lands. A
+member's move crosses nodes in one broadcast window on its own node (50 ms)
+and one fan-out window on the viewer's (100 ms), so in rooms of active readers
+(one move a second) the cursor's median is near 70 ms and its 95th percentile
+near 120 ms. What a socket receives is bounded by a frame's members: at ten
+frames of at most ten members a second, a socket in the 200-viewer rooms takes
+about 23 KiB a second, against 39 to 50 KiB before. The price of that bound is
+fidelity where everybody moves at once: a room of 30 each moving ten times a
+second needs 300 member updates a second and a socket takes 100, so each
+member is shown every few frames (a median near 370 ms), and in a room past
+fifty, a viewer who moves once a second is often displaced from the fifty most
+recent before its turn comes. Both are what a best-effort signal should give
+up first: the frames and bytes stay bounded, and a still member, or one in an
+ordinary room, is shown at once.
 
-**Target**: the per-artifact coalescing (5 frames a second) and the client
-throttle (10 a second) keep the busiest node's socket traffic bounded, and the
-change visibility objective holds while presence runs. **Holds** for frames;
-the best-effort presence bounds (join within 1 second, cursor within 150 ms)
-are missed by construction, which the findings say how to close.
+**Target**: the per-artifact coalescing and the client throttle keep the
+busiest node's socket traffic bounded, and the change visibility objective
+holds while presence runs. **Holds**, with the best-effort bounds (join within
+1 second, cursor within 150 ms) met in rooms of active readers and the
+cursor's traded for bounded traffic where every member moves ten times a
+second.
 
 ### S7: the object store under a publish
 
@@ -530,18 +548,25 @@ it.
    string timer, a template compiler), handlers written by script, and a form
    that submits by navigating are published and stop working; a warning for
    each, or a sentence in the authoring guide, closes them.
-9. **Presence's best-effort bounds are missed by construction
-   (`internal/presence`, `internal/objectives`).** A join is shown everywhere
-   only when the ask's budget ends (2 seconds), because replies are applied
-   together; applying each as it arrives meets the 1-second bound. A cursor
-   crosses two coalescing windows (one on each node, 200 ms each, so a p50
-   near 240 ms); the 150 ms bound needs remote frames fanned out without a
-   second window, or the coalescing rate (`PresenceCoalesceRate` 5) raised to
-   10.
-10. **A busy large room sends large frames (`internal/presence`).** At 200
-    viewers moving ten times a second, each socket receives about 50 KiB a
-    second; capping how many members one frame may re-present, or presenting
-    a large room's top fifty by join order rather than recency, bounds it.
+9. **Presence's best-effort bounds were missed by construction (fixed,
+   `internal/presence`, `internal/queue`, `internal/artifacts`).** A join was
+   shown everywhere only when the ask's budget ended (2 seconds), because
+   replies were applied together, and a cursor crossed two coalescing windows
+   of 200 ms. The queue gained `AskEach`, which hands each reply over as it
+   arrives, and the hub applies each answer then
+   (`TestAJoinShowsThePeersMembersAsTheyAnswer`); a room's fan-out to its
+   sockets runs at ten a second and its frames to the fleet at twenty, on
+   timers of their own (`PresenceCoalesceRate`, `PresenceBroadcastRate`;
+   `TestAMoveCrossesNodesInOneShortWindowOnEachSide`). Joins now show within
+   half a second and cursors in ordinary rooms within 150 ms.
+10. **A busy large room sent large frames (fixed, `internal/presence`).** At
+    200 viewers moving ten times a second, each socket received about 50 KiB a
+    second, because each frame re-presented most of the fifty. A fan-out now
+    re-presents at most ten members (`PresenceFrameMembers`), the change that
+    has waited longest first so nobody starves
+    (`TestAFanOutRePresentsAtMostItsBoundOfMembers`,
+    `TestAHeldBackMemberIsToldWithinAFewFanOuts`): about 23 KiB a second a
+    socket in the same rooms, at the fidelity cost the S6 reading states.
 
 ---
 
