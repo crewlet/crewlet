@@ -80,10 +80,11 @@ func TestTheWriterRecordsWhatARunWrote(t *testing.T) {
 		t.Fatalf("project write: %v", err)
 	}
 	r.drain()
-	// AND NOT A WRITE THAT DID NOT COMMIT: a create over a task that
-	// already exists is refused, and a refused write is no write.
-	if _, err := w.CreateTask(t.Context(), "op-t-1-again", newTask("t-1"), nil); err == nil {
-		t.Fatal("a second create of t-1 was accepted")
+	// AND NOT A WRITE THAT DID NOT COMMIT: a create whose task is already
+	// filed is answered from its row with nothing published, and a write
+	// that published nothing is no write.
+	if _, err := w.CreateTask(t.Context(), "op-t-1-again", newTask("t-1"), nil); err != nil {
+		t.Fatalf("a create of the filed t-1 made again: %v", err)
 	}
 	if after := log.got(); len(after) != before {
 		t.Errorf("reported %+v for writes that are not a committed task write",
