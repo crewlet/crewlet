@@ -371,7 +371,7 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 			// messages: a seat that took it for what somebody wrote would
 			// quote a model's paraphrase back at them.
 			said.WriteString("\n_(" + strconv.Itoa(len(middle)) + " earlier message(s), condensed by " +
-				"a model — identifiers verbatim, wording not:)_\n" + condensed)
+				"a model (identifiers verbatim, wording not):)_\n" + condensed)
 		}
 		for _, line := range lines[1:] {
 			said.WriteString("\n" + line)

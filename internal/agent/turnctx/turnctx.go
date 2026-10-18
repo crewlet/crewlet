@@ -300,7 +300,7 @@ type Turn struct {
 	// — the seat's spend is then charged, or not, as before.
 	Budget auxspend.Budget
 
-	// Boundary is the token every fence this turn writes carries — around
+	// Boundary is the token every fence this turn writes carries: around
 	// the chat thread its prompt was handed and around every page body,
 	// comment and file its tools read that somebody else wrote (see
 	// [provenance.Fence]). Minted once per turn segment from crypto/rand,
@@ -320,9 +320,9 @@ type Turn struct {
 // fresh one for each call where there is none.
 //
 // FRESH RATHER THAN EMPTY, because a fence written with an empty token is one
-// any guess closes. Nil is a tool surface built outside a turn — an operator's
+// any guess closes. Nil is a tool surface built outside a turn (an operator's
 // assistant calling a read over the stateless operator surface, where each
-// call is its own reading and a token per call is exactly as strong.
+// call is its own reading), and there a token per call is exactly as strong.
 func (t *Turn) FenceBoundary() provenance.Boundary {
 	if t == nil || !t.Boundary.Valid() {
 		return provenance.NewBoundary()
