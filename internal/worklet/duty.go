@@ -1074,6 +1074,18 @@ func (d *duty) opID(job, subject string, now time.Time) string {
 		d.deps.NodeID, job, subject, strconv.FormatInt(tick.Unix(), 10))
 }
 
+// oneSidedSubject names a one-sided edge's repair in its operation id: the
+// dependent and the blocker, joined by a COLON.
+//
+// NOT A DOT, which is the operation-id grammar's step separator
+// (statelog's `<uuidv7>[.<name>][.<step>…]`): joined by one, the repair of
+// `dep → blk` was the name `onesided-dep` with a step `blk`, an id the grammar
+// reads as a step of another operation. Both ends are task ids — uuids, or
+// whatever a test names — so a colon keeps the pair one name of visible ASCII.
+func oneSidedSubject(edge OneSided) string {
+	return edge.Dependent + ":" + edge.Blocker
+}
+
 // pendingOneSided is the gate: one indexed read against the partial index the
 // schema ships for exactly this predicate.
 //
@@ -1116,7 +1128,7 @@ func (d *duty) repairOneSided(ctx context.Context, now, _ time.Time) (int64, err
 	for _, edge := range edges {
 		reason, final := edge.Final()
 		if _, err := d.deps.Writer.RepairOneSided(ctx,
-			d.opID("onesided", edge.Dependent+"."+edge.Blocker, now),
+			d.opID("onesided", oneSidedSubject(edge), now),
 			edge, d.leads()); err != nil {
 			// ONE EDGE'S FAILURE IS NOT THE TICK'S. The rest of this
 			// batch is independent — different subjects, different
