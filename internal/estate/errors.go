@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/crewlet/crewlet/internal/artifactdata"
+	"github.com/crewlet/crewlet/internal/artifactdata/canon"
+	"github.com/crewlet/crewlet/internal/artifactdata/query"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
@@ -160,6 +163,22 @@ var sentinels = []sentinel{
 	{"manifest.ErrReserved", manifest.ErrReserved},
 	{"mediatype.ErrRefused", mediatype.ErrRefused},
 
+	// THE DATASTORE'S, answered by a data node for a node holding no data
+	// ([ArtifactData]), and its encoder's and query compiler's beneath it.
+	{"artifactdata.ErrBadCursor", artifactdata.ErrBadCursor},
+	{"artifactdata.ErrConflict", artifactdata.ErrConflict},
+	{"artifactdata.ErrForbidden", artifactdata.ErrForbidden},
+	{"artifactdata.ErrGone", artifactdata.ErrGone},
+	{"artifactdata.ErrInvalid", artifactdata.ErrInvalid},
+	{"artifactdata.ErrMigrationTooLarge", artifactdata.ErrMigrationTooLarge},
+	{"artifactdata.ErrNotFound", artifactdata.ErrNotFound},
+	{"artifactdata.ErrNotUndoable", artifactdata.ErrNotUndoable},
+	{"canon.ErrDuplicateKey", canon.ErrDuplicateKey},
+	{"canon.ErrInvalid", canon.ErrInvalid},
+	{"canon.ErrTooDeep", canon.ErrTooDeep},
+	{"query.ErrInvalid", query.ErrInvalid},
+	{"query.ErrNotIndexed", query.ErrNotIndexed},
+
 	{"estate.ErrOutcomeUnknown", ErrOutcomeUnknown},
 }
 
@@ -206,6 +225,9 @@ var typedKinds = []typedKind{
 	{"artifactsdomain.ErrFutureVersion", reflect.TypeFor[*artifactsdomain.ErrFutureVersion]()},
 	{"artifactsdomain.QuotaExceeded", reflect.TypeFor[*artifactsdomain.QuotaExceeded]()},
 	{"artifactsdomain.VersionMoved", reflect.TypeFor[*artifactsdomain.VersionMoved]()},
+
+	{"artifactdata.ErrFutureVersion", reflect.TypeFor[*artifactdata.ErrFutureVersion]()},
+	{"artifactdata.RateLimited", reflect.TypeFor[*artifactdata.RateLimited]()},
 
 	{"estate.ErrUnserved", reflect.TypeFor[*ErrUnserved]()},
 }

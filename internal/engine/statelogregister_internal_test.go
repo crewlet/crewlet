@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/config"
@@ -121,6 +122,7 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 		usage.Domain{}.Name():     false,
 
 		artifactsdomain.Domain{}.Name(): true,
+		artifactdata.Domain{}.Name():    true,
 	}
 	for name, want := range shipped {
 		if got, held := stated[name]; !held || got != want {
@@ -362,7 +364,7 @@ func TestEveryRegisteredDomainHasACeilingCase(t *testing.T) {
 // offer's terms are compared in and the order every operator surface reports.
 //
 // AND THE SET: the org chart is part of the company document, applied with
-// every revision, so the core runs exactly these six logs.
+// every revision, so the core runs exactly these seven logs.
 func TestTheRegisteredOrderIsTheDeclaredOrder(t *testing.T) {
 	want := []string{
 		tracker.Domain{}.Name(),
@@ -371,6 +373,7 @@ func TestTheRegisteredOrderIsTheDeclaredOrder(t *testing.T) {
 		iamdomain.Domain{}.Name(),
 		usage.Domain{}.Name(),
 		artifactsdomain.Domain{}.Name(),
+		artifactdata.Domain{}.Name(),
 	}
 	got := []string{}
 	for _, domain := range registeredDomains() {

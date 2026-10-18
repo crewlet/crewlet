@@ -31,8 +31,18 @@ import (
 // exportPage is how many documents one read of an export takes.
 const exportPage = artifacts.MaxQueryLimit
 
+// ExportSource is what an export reads: the store's schema and its pages, from
+// this node's reader or from a data node's through the estate router, which
+// is why the export is a function over the reads rather than a reader's
+// method a router could not carry.
+type ExportSource interface {
+	Schema(ctx context.Context, id artifacts.ID) ([]artifacts.Collection, error)
+	Docs(ctx context.Context, id artifacts.ID, rd Reading, collection string, since int64,
+		cursor string, limit int) (DocPage, error)
+}
+
 // Export writes one collection as CSV to w, under the collection's read rule.
-func (r *Reader) Export(ctx context.Context, id artifacts.ID, rd Reading, collection string, w io.Writer) error {
+func Export(ctx context.Context, r ExportSource, id artifacts.ID, rd Reading, collection string, w io.Writer) error {
 	schema, err := r.Schema(ctx, id)
 	if err != nil {
 		return err
@@ -43,7 +53,7 @@ func (r *Reader) Export(ctx context.Context, id artifacts.ID, rd Reading, collec
 	}
 	spec := schema[i]
 	coll := newCollState(spec, 0, false, true, 0)
-	keys, err := r.exportKeys(ctx, id, rd, coll)
+	keys, err := exportKeys(ctx, r, id, rd, coll)
 	if err != nil {
 		return err
 	}
@@ -82,7 +92,7 @@ func (r *Reader) Export(ctx context.Context, id artifacts.ID, rd Reading, collec
 // exportKeys is the field columns of an export: a schema's columns in their
 // declared order, or a schemaless collection's every top-level field the
 // reader's rows hold, sorted.
-func (r *Reader) exportKeys(ctx context.Context, id artifacts.ID, rd Reading, c *collState) ([]string, error) {
+func exportKeys(ctx context.Context, r ExportSource, id artifacts.ID, rd Reading, c *collState) ([]string, error) {
 	if !c.schemaless() {
 		keys := make([]string, 0, len(c.spec.Columns))
 		for _, col := range c.spec.Columns {

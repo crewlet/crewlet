@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/estate"
@@ -124,6 +125,12 @@ type core struct {
 	artifactsReader *artifactsdomain.Reader
 	artifactsWriter *artifactsdomain.Writer
 
+	// artifactDataReader and artifactDataWriter are the datastore's two
+	// sides, built on every data node for the same reason
+	// ([core.openArtifactData]).
+	artifactDataReader *artifactdata.Reader
+	artifactDataWriter *artifactdata.Writer
+
 	// run is the context the directory trigger runs under, and stop is
 	// what ends it.
 	//
@@ -177,6 +184,9 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 	}
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	c := &core{nodeID: nodeID, run: runCtx, stop: cancel}
+	// THE FOOTPRINT SAMPLER'S SIGNAL, made before any applier exists to
+	// send on it ([Engine.sampleDataFootprint]).
+	e.dataFootprint = make(chan struct{}, 1)
 	// ONE FAILURE PATH FOR EVERYTHING BELOW, armed before the first thing
 	// that outlives this call and stood down once the runtime is the
 	// engine's. The state log's apply loops, its position heartbeat and its
@@ -210,6 +220,9 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 	if err = c.openArtifacts(e, sl); err != nil {
 		return err
 	}
+	if err = c.openArtifactData(e, sl); err != nil {
+		return err
+	}
 
 	// PUBLISHED, whole: every field above is written before the store, which
 	// is what lets every reader load it without a lock.
@@ -238,6 +251,13 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 	go func() {
 		defer c.done.Done()
 		vouch.run(runCtx)
+	}()
+	// AND THE DATASTORE'S FOOTPRINT GAUGE, sampled off the apply loop each
+	// time a committed batch signals.
+	c.done.Add(1)
+	go func() {
+		defer c.done.Done()
+		e.runDataFootprint(runCtx)
 	}()
 	// THE RUNTIME IS THE ENGINE'S FROM HERE, so the cleanup above stands
 	// down and [Engine.stopCore] — the same shutdown — is what ends it.

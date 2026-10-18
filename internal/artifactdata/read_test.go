@@ -155,7 +155,7 @@ func TestARowHiddenFromAReaderIsHiddenFromEveryReadPath(t *testing.T) {
 		t.Fatalf("bob reads the cell history of dana's vote: %+v", cell.Entries)
 	}
 	var out bytes.Buffer
-	if err := n.reader.Export(ctx, sheet, reading("jane", artifacts.RoleEditor), "votes", &out); err != nil {
+	if err := artifactdata.Export(ctx, n.reader, sheet, reading("jane", artifacts.RoleEditor), "votes", &out); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(out.String(), "dana-vote") || strings.Contains(out.String(), "bob-vote") {
@@ -220,7 +220,7 @@ func TestTheExportIsASpreadsheetsAndRunsNoFormula(t *testing.T) {
 	n.applied(jane, set("review", "r1", map[string]string{"title": `"=HYPERLINK(\"http://evil\")"`,
 		"status": `"done"`, "labels": `["copy","design"]`, "score": `-2`}))
 	var out bytes.Buffer
-	if err := n.reader.Export(t.Context(), sheet, reading("jane", artifacts.RoleEditor), "review", &out); err != nil {
+	if err := artifactdata.Export(t.Context(), n.reader, sheet, reading("jane", artifacts.RoleEditor), "review", &out); err != nil {
 		t.Fatal(err)
 	}
 	records, err := csv.NewReader(&out).ReadAll()

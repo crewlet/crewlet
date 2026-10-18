@@ -13,6 +13,7 @@ import (
 	"github.com/nats-io/nats.go"
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -69,7 +70,7 @@ func TestAnEvictionIsWrittenAsWhoPressedItOnEveryLog(t *testing.T) {
 	// EVERY IDENTITY-CLAIMING LOG, named: a log this build adds has to be
 	// added here too, or the gesture answering for it goes unchecked.
 	logs := []evictionLog{tracker.Domain{}, pages.Domain{}, iamdomain.Domain{},
-		artifactsdomain.Domain{}}
+		artifactsdomain.Domain{}, artifactdata.Domain{}}
 	var answered, want []string
 	for _, d := range res.Domains {
 		answered = append(answered, d.Domain)

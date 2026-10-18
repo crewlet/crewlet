@@ -1020,11 +1020,13 @@ func TestAnUnmeasuredVolumeNamesTheCeilingsItDecides(t *testing.T) {
 	}{
 		{"nothing set", config.Stream{}, []string{"stream.tracker_log_max_bytes",
 			"stream.tracker_vectors_max_bytes", "stream.pages_log_max_bytes",
-			"stream.artifacts_log_max_bytes"}},
-		// THE KNOWLEDGE BASE'S LOG AND THE ARTIFACTS LOG FOLLOW THE MUTATION
-		// LOG'S CEILING, set or derived ([config.Stream.PagesMaxBytes],
-		// [config.Stream.ArtifactsMaxBytes]), so once the mutation log is set
-		// the volume decides them no more than it does the mutation log's own.
+			"stream.artifacts_log_max_bytes", "stream.artifact_data_log_max_bytes"}},
+		// THE KNOWLEDGE BASE'S LOG, THE ARTIFACTS LOG AND THE DATASTORE LOG
+		// FOLLOW THE MUTATION LOG'S CEILING, set or derived
+		// ([config.Stream.PagesMaxBytes], [config.Stream.ArtifactsMaxBytes],
+		// [config.Stream.ArtifactDataMaxBytes]), so once the mutation log is
+		// set the volume decides them no more than it does the mutation
+		// log's own.
 		{"the mutation log set", config.Stream{TrackerLogMaxBytes: 8 << 30},
 			[]string{"stream.tracker_vectors_max_bytes"}},
 		{"every volume-derived log set", config.Stream{TrackerLogMaxBytes: 8 << 30,
