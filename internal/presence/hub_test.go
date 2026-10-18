@@ -333,7 +333,7 @@ func TestPresenceWritesNoRowAnywhere(t *testing.T) {
 	if _, _, err := b.hub.Join(room1, erin); err != nil {
 		t.Fatal(err)
 	}
-	b.hub.Touch(room1, "agent-cto", artifacts.PresenceEditing, artifacts.Focus{Collection: "review"})
+	b.hub.Touch(room1, "agent-cto", "run-1", artifacts.PresenceEditing, artifacts.Focus{Collection: "review"})
 	a.seen.waitFor(t, "node-a", room1, "dana:viewing", "erin:viewing", "agent-cto:editing")
 	if err := a.hub.Update(room1, session, artifacts.PresenceIdle, artifacts.Focus{}); err != nil {
 		t.Fatal(err)
@@ -571,10 +571,11 @@ func TestAnAgentIsPresentWhileItWorks(t *testing.T) {
 	waitListening(t, viewer.hub, room1)
 
 	focus := artifacts.Focus{Collection: "review", Doc: "row-3"}
-	worker.hub.Touch(room1, "agent-cto", artifacts.PresenceEditing, focus)
+	worker.hub.Touch(room1, "agent-cto", "run-1", artifacts.PresenceEditing, focus)
 	viewer.seen.waitFor(t, "the viewer's node", room1, "agent-cto:editing", "erin:viewing")
-	if m, _ := viewer.seen.member(room1, "agent-cto"); m.Kind != iam.ActorAgent || m.Focus != focus {
-		t.Fatalf("the agent is shown as %+v", m)
+	if m, _ := viewer.seen.member(room1, "agent-cto"); m.Kind != iam.ActorAgent || m.Focus != focus ||
+		m.Turn != "run-1" {
+		t.Fatalf("the agent is shown as %+v, want editing row-3 in turn run-1", m)
 	}
 	worker.hub.mu.Lock()
 	listening := len(worker.hub.listening)
@@ -584,7 +585,7 @@ func TestAnAgentIsPresentWhileItWorks(t *testing.T) {
 	}
 
 	c.Advance(agentLinger - time.Second)
-	worker.hub.Touch(room1, "agent-cto", artifacts.PresenceViewing, focus)
+	worker.hub.Touch(room1, "agent-cto", "run-1", artifacts.PresenceViewing, focus)
 	viewer.seen.waitFor(t, "the viewer's node", room1, "agent-cto:viewing", "erin:viewing")
 	c.Advance(agentLinger - time.Second)
 	worker.hub.tick(t.Context(), c.Now())

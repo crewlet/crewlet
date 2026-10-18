@@ -369,12 +369,13 @@ func (h *Hub) Leave(id artifacts.ID, session string) {
 }
 
 // Touch is an agent's tool session reading (viewing) or writing (editing) an
-// artifact: the seat appears in the room as an agent, and stays there for
-// [agentLinger] after its last call. One member per seat per room on this node.
-func (h *Hub) Touch(id artifacts.ID, seat string, activity artifacts.PresenceActivity,
+// artifact, in the turn whose run is turn: the seat appears in the room as an
+// agent, naming that turn, and stays there for [agentLinger] after its last
+// call. One member per seat per room on this node.
+func (h *Hub) Touch(id artifacts.ID, seat, turn string, activity artifacts.PresenceActivity,
 	focus artifacts.Focus) {
 
-	if seat == "" || !activity.Valid() || CheckFocus(focus) != nil {
+	if seat == "" || len(turn) > maxTurnBytes || !activity.Valid() || CheckFocus(focus) != nil {
 		// A WIRING FAULT in the tool that touched, never a person's
 		// input: logged and dropped, because presence is a display and a
 		// tool call must not fail over it.
@@ -395,8 +396,9 @@ func (h *Hub) Touch(id artifacts.ID, seat string, activity artifacts.PresenceAct
 			Kind: iam.ActorAgent}}
 		r.local[m.member.Session] = m
 	}
-	if m.member.Activity != activity || m.member.Focus != focus || m.member.At.IsZero() {
-		m.member.Activity, m.member.Focus, m.member.At = activity, focus, now
+	if m.member.Activity != activity || m.member.Focus != focus || m.member.Turn != turn ||
+		m.member.At.IsZero() {
+		m.member.Activity, m.member.Focus, m.member.Turn, m.member.At = activity, focus, turn, now
 		r.changed(m.member.Session)
 		h.scheduleLocked(r)
 		h.scheduleSendLocked(r)

@@ -1,10 +1,12 @@
 package presence
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/signedask"
 )
 
@@ -98,6 +100,10 @@ func checkMember(m artifacts.PresenceMember) error {
 		return fmt.Errorf("presence: a member's session is %d bytes", len(m.Session))
 	case len(m.Seat) > maxSeatBytes:
 		return fmt.Errorf("presence: a member's seat is %d bytes", len(m.Seat))
+	case len(m.Turn) > maxTurnBytes:
+		return fmt.Errorf("presence: a member's turn is %d bytes", len(m.Turn))
+	case m.Turn != "" && m.Kind != iam.ActorAgent:
+		return errors.New("presence: a person's member names a turn, which only an agent's does")
 	case !m.Kind.Valid():
 		return fmt.Errorf("presence: a member of kind %q", m.Kind)
 	case !m.Activity.Valid():
@@ -143,6 +149,9 @@ const (
 	// maxSeatBytes bounds a seat handle, comfortably over the handle
 	// grammar's own length.
 	maxSeatBytes = 128
+
+	// maxTurnBytes bounds an agent's turn: a run id is a few dozen bytes.
+	maxTurnBytes = 128
 
 	// maxFrameMembers bounds one frame's members: a full rebroadcast names
 	// every member a node holds in one room, and a thousand people on one

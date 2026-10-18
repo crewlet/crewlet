@@ -269,6 +269,13 @@ func TestADataCallPutsTheSeatInTheRoom(t *testing.T) {
 	if got := r.presence.all(); !slices.Equal(got, want) {
 		t.Fatalf("the seat was put in the room as %v, want %v", got, want)
 	}
+	// AND NAMING THE TURN IT WORKS IN, which a person opens from the room.
+	r.presence.mu.Lock()
+	defer r.presence.mu.Unlock()
+	if !slices.Equal(r.presence.turns, []string{turn.RunID, turn.RunID}) || turn.RunID == "" {
+		t.Fatalf("the touches named the turns %v, want the call's run %q twice",
+			r.presence.turns, turn.RunID)
+	}
 }
 
 // A CALLER WITH NO RELATION IS TOLD THE ARTIFACT DOES NOT EXIST, and nothing

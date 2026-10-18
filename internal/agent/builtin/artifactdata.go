@@ -83,7 +83,7 @@ type ArtifactDataStore interface {
 
 // ArtifactPresence is this node's presence hub as these tools touch it.
 type ArtifactPresence interface {
-	Touch(id artifacts.ID, seat string, activity artifacts.PresenceActivity, focus artifacts.Focus)
+	Touch(id artifacts.ID, seat, turn string, activity artifacts.PresenceActivity, focus artifacts.Focus)
 }
 
 // ArtifactDataDeps are what the datastore tools act through beyond the

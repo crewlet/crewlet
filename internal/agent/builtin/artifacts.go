@@ -245,7 +245,11 @@ func (d ArtifactDeps) present(c artifactCaller, id artifacts.ID,
 	if d.Presence == nil || !c.agent() || c.principal.Seat == "" {
 		return
 	}
-	d.Presence.Touch(id, c.principal.Seat, activity, focus)
+	turn := ""
+	if c.turn != nil {
+		turn = c.turn.RunID
+	}
+	d.Presence.Touch(id, c.principal.Seat, turn, activity, focus)
 }
 
 // orgFor is the chart a call reads: the turn's, or the surface's own.

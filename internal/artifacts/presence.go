@@ -50,6 +50,11 @@ type PresenceMember struct {
 	Activity PresenceActivity `json:"activity"`
 	Focus    Focus            `json:"focus"`
 	At       time.Time        `json:"at"`
+
+	// Turn is, for an agent, the run of the turn whose tool call last put
+	// it in the room: what a person opens to see what the agent is doing
+	// there. Empty for a person.
+	Turn string `json:"turn,omitempty"`
 }
 
 // PresenceCounts are the members of a large room not presented individually.

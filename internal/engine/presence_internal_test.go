@@ -64,7 +64,7 @@ func TestEveryNodeRunsAPresenceHubTheFleetHears(t *testing.T) {
 		// TOUCHED AGAIN EACH ROUND: the API node's listen is its
 		// reconciler's, and a touch before it holds the listen is heard
 		// by nobody until the rebroadcast.
-		seats.Presence().Touch(room, "agent-cto", artifacts.PresenceEditing,
+		seats.Presence().Touch(room, "agent-cto", "run-1", artifacts.PresenceEditing,
 			artifacts.Focus{Collection: "review"})
 		select {
 		case m := <-shown:

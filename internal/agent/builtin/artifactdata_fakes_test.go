@@ -175,17 +175,19 @@ func (f *fakeData) lastCall() artifactdata.Call {
 
 // touches records every presence touch the tools made.
 type touches struct {
-	mu  sync.Mutex
-	got []string
+	mu    sync.Mutex
+	got   []string
+	turns []string
 }
 
-func (p *touches) Touch(id artifacts.ID, seat string, activity artifacts.PresenceActivity,
+func (p *touches) Touch(id artifacts.ID, seat, turn string, activity artifacts.PresenceActivity,
 	focus artifacts.Focus) {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.got = append(p.got, fmt.Sprintf("%s %s %s %s/%s", id.Label(), seat, activity,
 		focus.Collection, focus.Doc))
+	p.turns = append(p.turns, turn)
 }
 
 func (p *touches) all() []string {
