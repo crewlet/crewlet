@@ -10,6 +10,48 @@
 // structural defences (the requester ceiling, human-only rows and fields, the
 // rule that only a person loosens a rule) hold whatever a model does.
 //
+// # The fence
+//
+// A fence is two lines around the text, each carrying the same [Boundary]:
+//
+//	[untrusted:K7Q2M4XWB3ZP6TNA source=work_comment trust=colleague authors=human:ana]
+//	...the text, exactly as written apart from the two escapes below...
+//	[/untrusted:K7Q2M4XWB3ZP6TNA]
+//
+// SQUARE BRACKETS AND NO QUOTES, because nearly every fenced field reaches the
+// model inside a JSON tool answer: the encoder rewrites `<` and `>` as `<`
+// and `>` and backslashes every quote, so an XML-shaped marker would read
+// as escape soup exactly where it has to be unmistakable. `[REDACTED:` set the
+// precedent for an engine marker inside foreign text (internal/redact).
+//
+// # Why the content cannot close it
+//
+// Two escapes, applied to the text and to every label value before either is
+// written, and each enough on its own:
+//
+//   - Every occurrence of the boundary is replaced with [TokenRemoved]. The
+//     boundary is random per turn and nobody outside the turn has seen it, but
+//     a model can echo it into something it writes and read that back in the
+//     same turn, so secrecy is defence in depth and this removal is the rule.
+//   - Every `[` that opens something shaped like a fence marker (`[untrusted`
+//     or `[/untrusted`, any case, with spaces allowed around the slash) becomes
+//     `[escaped `, so content cannot even forge a marker with a different token
+//     that a model might misread as a closer.
+//
+// Matching is ASCII case-insensitive on purpose: both the marker and the
+// boundary are ASCII, and folding the whole text with strings.ToLower would
+// change the byte length of some non-ASCII runes and misplace every index
+// after them.
+//
+// # Trust
+//
+// [TrustFor] decides from the authors alone: `own` only when every author is
+// the reading seat, `external` when any author is an outside party or nobody
+// could be named, `colleague` otherwise. `page` is never inferred; a caller
+// whose text a page script produced says so. The [Envelope] is the same label
+// for a whole result, beside the fields it fences, and carries the sentence an
+// assistant without the seat prompt needs to read the fences correctly.
+//
 // A LEAF: it imports the identity vocabulary and nothing else from the engine,
 // so every tool and prompt builder can use it.
 package provenance
