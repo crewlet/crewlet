@@ -62,8 +62,17 @@ func seatKinds(_ context.Context, handle string) (iam.ActorKind, error) {
 	return iam.ActorHuman, nil
 }
 
-// openLog stands up a broker and the artifacts log on it, at the smallest
-// ceiling Tier A accepts.
+// harnessCeiling is the byte ceiling every harness provisions its log at.
+//
+// A QUARTER OF TIER A'S FLOOR, and tighter is the honest direction: the broker
+// reserves a stream's whole ceiling on disk the moment it creates it, so a
+// suite that runs a dozen logs at once at the gibibyte floor asks a developer's
+// disk for a dozen gibibytes it never writes. At this ceiling the gate reserve
+// still takes its full fleet term out of the top of the log, so every write here
+// is admitted against an ordinary ceiling smaller than any production log has.
+const harnessCeiling = config.ArtifactsLogMaxBytesFloor / 4
+
+// openLog stands up a broker and the artifacts log on it, at [harnessCeiling].
 func openLog(t *testing.T) *js.DomainLog {
 	t.Helper()
 	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
@@ -77,7 +86,7 @@ func openLog(t *testing.T) *js.DomainLog {
 	})
 	spec := artifactsdomain.Domain{}.Stream()
 	if err := q.EnsureDomainStream(t.Context(), js.DomainStream{
-		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: config.ArtifactsLogMaxBytesFloor,
+		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: harnessCeiling,
 		MaxMessageBytes: spec.MaxAppendBytes(), Duplicates: spec.Duplicates,
 	}); err != nil {
 		t.Fatalf("provision the log: %v", err)
