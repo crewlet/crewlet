@@ -157,6 +157,7 @@ describe("navigation identity", () => {
       agents: "a",
       live: "l",
       knowledge: "k",
+      artifacts: "f",
       spend: "t",
       settings: "s",
       account: "u",
@@ -202,13 +203,13 @@ describe("am I already here", () => {
 });
 
 describe("the navigation grammar", () => {
-  // NINE WORKSPACES ARE SIDEBAR ROWS, and the sidebar draws them and nothing
+  // TEN WORKSPACES ARE SIDEBAR ROWS, and the sidebar draws them and nothing
   // else from the table: a section that became a sidebar row is a second
-  // column of navigation arriving one row at a time. The TENTH is the reader's
-  // own Account, which has no row — the user block at the sidebar's foot is
-  // the reader, and its menu links it — and is a workspace all the same, so
-  // the palette and its chord reach it.
-  test("the sidebar's rows are nine workspaces, in the story's order, and the menu holds the tenth", () => {
+  // column of navigation arriving one row at a time. The ELEVENTH is the
+  // reader's own Account, which has no row (the user block at the sidebar's
+  // foot is the reader, and its menu links it) and is a workspace all the
+  // same, so the palette and its chord reach it.
+  test("the sidebar's rows are ten workspaces, in the story's order, and the menu holds the eleventh", () => {
     const rows = WORKSPACES.filter((w) => w.place !== "menu").map((w) => w.key);
     expect(rows).toEqual([
       "home",
@@ -218,6 +219,7 @@ describe("the navigation grammar", () => {
       "agents",
       "live",
       "knowledge",
+      "artifacts",
       "spend",
       "settings",
     ]);

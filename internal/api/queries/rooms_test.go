@@ -121,6 +121,10 @@ func everySeam(t *testing.T) queries.Sources {
 		CredentialPools: func() []engine.CredentialPool { return nil },
 		// THE FLEET'S BACKUP REGISTER, which every node opens.
 		Backups: register{},
+		// THE ARTIFACTS AND THEIR DATASTORES, each its own seam because a
+		// node is wired with them only where the feature is deployed.
+		Artifacts:    &queries.ArtifactsSource{},
+		ArtifactData: &queries.ArtifactDataSource{},
 	}
 }
 

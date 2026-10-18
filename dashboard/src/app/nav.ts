@@ -55,6 +55,7 @@ export type Workspace =
   | "agents"
   | "live"
   | "knowledge"
+  | "artifacts"
   | "spend"
   | "settings"
   | "account";
@@ -549,6 +550,87 @@ export const WORKSPACES: WorkspaceRow[] = [
     ],
   },
   {
+    // THE COMPANY'S MADE THINGS, after what it knows: pages, documents and
+    // sheets that people and agents publish and share, read and filled in
+    // together. A workspace of its own rather than a section of Knowledge or
+    // Work, because either would gate it by the wrong permission (D32).
+    key: "artifacts",
+    label: "Artifacts",
+    icon: "layers",
+    path: ["artifacts"],
+    hint: "Pages, documents and sheets your company and its agents made",
+    keywords: [
+      "artifact",
+      "page",
+      "document",
+      "sheet",
+      "review sheet",
+      "report",
+      "dashboard",
+      "shared with me",
+    ],
+    chord: "f",
+    place: "workspace",
+    renderer: "tabs",
+    // THE GALLERY'S OWN QUESTION travels between its sections: the kind, the
+    // phrase and the order a reader chose are the same question on every one.
+    keep: ["kind", "q", "sort", "shape"],
+    // NO PERMISSION FOR THE WORKSPACE: the artifacts app gates AUTHORING only
+    // (D01). A share alone admits a person to open, comment on and fill in
+    // what was shared with them, so the gallery and an artifact's page are
+    // open to every signed-in reader, and the engine decides each artifact.
+    // Starting a sheet is the app's, and says so on its own row.
+    sections: [
+      {
+        key: "for-you",
+        label: "For you",
+        icon: "layers",
+        path: ["artifacts"],
+        hint: "What you opened lately and what was shared with you, pinned first",
+      },
+      {
+        key: "mine",
+        label: "Mine",
+        icon: "user",
+        path: ["artifacts", "mine"],
+        hint: "Artifacts you own",
+      },
+      {
+        key: "shared",
+        label: "Shared with you",
+        icon: "share-2",
+        path: ["artifacts", "shared"],
+        hint: "Artifacts somebody shared with you, your team or the whole company",
+      },
+      {
+        key: "company",
+        label: "Company",
+        icon: "building-complex",
+        path: ["artifacts", "company"],
+        hint: "Every artifact shared with the whole company",
+      },
+      {
+        key: "agents",
+        label: "By agents",
+        icon: "bot",
+        path: ["artifacts", "agents"],
+        hint: "What agent seats made that you can open",
+      },
+      {
+        // AN ADDRESS AND A BUTTON, not a tab: the gallery's New starts it, and
+        // a reader arrives at Artifacts to look.
+        key: "new",
+        label: "New sheet",
+        icon: "table",
+        path: ["artifacts", "new"],
+        hint: "Start a sheet: blank, or from the Review sheet template",
+        keywords: ["new sheet", "review sheet", "template", "spreadsheet"],
+        tab: false,
+        grants: ["artifacts"],
+      },
+    ],
+  },
+  {
     key: "spend",
     label: "Spend",
     icon: "coins",
@@ -816,6 +898,11 @@ export const RESERVED_SEGMENTS: string[] = [
   "backups",
   "audit",
   "appearance",
+  "mine",
+  "shared",
+  "company",
+  "agents",
+  "new",
 ];
 
 /**

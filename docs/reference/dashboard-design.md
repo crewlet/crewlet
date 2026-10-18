@@ -46,7 +46,7 @@ phase is one colour on every chart. `contract/spend.ts`' `PHASE_BANDS` is that
 fold written out by phase, and `internal/api/queries` holds it against the
 engine's in both directions.
 
-There are four exceptions, and each is held to exactly what makes it one.
+There are five exceptions, and each is held to exactly what makes it one.
 
 The first is a **third-party app's own mark** on the Integrations
 screen (`VendorMark`, from `@crewlethq/icons`): Slack's four colours,
@@ -96,6 +96,21 @@ something some scanners do and others do not, so a code inverted to suit the
 dark theme is one some authenticator apps will not read. Its two inks are the
 `color.qr` tokens, which are the same in every palette; nothing reads state
 from them and nothing else is painted with them.
+
+The fifth is a **collaborator's presence colour** in an artifact (D22): the
+hue a person or an agent present in it wears on the marks they make on its
+content, so a reader matches an outlined cell to a face in the presence stack
+at a glance. It is held to exactly that. It is drawn only on another
+collaborator's cell outline, name flag and the ring round their badge in the
+stack while they are present (`PresenceRing`, `CursorFlag`, `PresenceStack`
+from `@crewlethq/ui`), always with their name beside it, never on chrome and
+never read as state. An agent wears the hue its profile icon names (the third
+exception); a person is given one of the six node hues for the session, in the
+order they joined, skipping hues already worn in the room, never a hash of a
+name and never stored on them. Past six people hues repeat and the flag tells
+them apart, and the same fact is in words in every cell's description and the
+presence list, so nothing relies on colour alone. The reader's own place is
+the focus ring, as everywhere.
 
 A seat's badge takes one of three **status glyphs**, or none, from what it is DOING,
 and what it is doing is the ENGINE'S word, never the dashboard's. Every seat row carries
@@ -630,7 +645,7 @@ and the code cannot disagree about which addresses exist.
 
 The order is the product's story: you first — what needs you, what reached
 you, what is yours — then the company's work, its agents, what is running,
-what it knows and what it spent, and the machine last.
+what it knows, what it made and what it spent, and the machine last.
 
 | Row | Route | Figure |
 |---|---|---|
@@ -641,6 +656,7 @@ what it knows and what it spent, and the machine last.
 | **Agents** | `#/agents` | — |
 | **Live** | `#/live` | the agents working now, beside the working mark — the chrome's one pulsing dot. On Live because a count says how many of something the DESTINATION holds, and Live › Now running holds the running turns, one row each; on Agents it sent a reader looking for a running turn to the org chart |
 | **Knowledge** | `#/knowledge` | — |
+| **Artifacts** | `#/artifacts` | none, and never a lock: a share alone admits a reader, and starting a sheet is the one thing in it the Artifacts access gates |
 | **Spend** | `#/spend` | — (tokens only; nothing in this product renders money) |
 | **Settings** | `#/settings` | — never a lock: its You group (the reader's Account and Appearance) needs nothing, and a section closed to the reader is locked in Settings' own column |
 
@@ -980,7 +996,7 @@ it; on this screen the company is the subject, and the product is in the mark
 and the tab.
 
 `g` then a letter jumps to a workspace (`g h`, `g i`, `g m`, `g w`, `g a`,
-`g l`, `g k`, `g t`, `g s`, and `g u` for your Account). A chord rather than a
+`g l`, `g k`, `g f` for Artifacts, `g t`, `g s`, and `g u` for your Account). A chord rather than a
 modifier, because every single-modifier combination worth having is already
 the browser's. `g r` is the one `g` sequence that is not a workspace: it
 watches the running turn when exactly one seat is working, and opens Live ›
@@ -1090,6 +1106,9 @@ a screen, and every workspace and section the code declares is below.
 | `#/knowledge/pages/{id}` | **Page**: addressed by its id, which a rename does not change. The document with its outline, its properties, its comments and what it is connected to; edited as you | `edit=1` · `version=` (History: one revision in the document's place) · `lens=diff\|full` |
 | `#/knowledge/skills` | **Agent skills** — the tool skills the engine offers a phase, who loaded each; and what one agent learned | `kind=pages\|learned` · `seat=` (learned) |
 | `#/knowledge/diaries` · `#/knowledge/diaries/{handle}` | **Agent diaries** — every agent's diary at a glance, each counted by the node holding the agent; one agent's diary and episodes *(needs Admin access)*. Handles live here as they do under `seats/` | |
+| `#/artifacts` · `#/artifacts/mine` · `#/artifacts/shared` · `#/artifacts/company` · `#/artifacts/agents` | **Artifacts**: For you (what the reader opened most lately and what was shared with them, their pins first), then Mine, Shared with you, Company and By agents, each the engine's `artifacts` listing under one scope, every row decided by `get_artifact`. A list or cards. No permission opens the workspace: a share alone admits a reader (D01), and the engine decides every artifact. An administrator also sees the company's storage against its quotas | `kind=html\|markdown\|sheet` · `q=` · `sort=updated\|created\|title\|opened` · `shape=list\|cards` (all four kept across the sections) · `status=trashed` (Mine: the reader's own trash) |
+| `#/artifacts/new` | **New sheet**: a native sheet, blank or from the Review sheet template, owned by the reader *(needs Artifacts access)*. A page or a document is published by an agent's tool or the CLI, not typed here | `template=review\|blank` · `item=` (the task it is made for, which lists it on that task's Artifacts card) |
+| `#/artifacts/{id}` | **Artifact**: addressed by its id. A page runs in a sandboxed frame on the artifact origin, a document is rendered here by the dashboard's own Markdown renderer, a sheet is drawn from its schema; who is here, Share, Pin, the version on show, History (versions, Restore, labels and the change record), Data (rows, the schema editor and every write, with Undo) and Settings (details, what it can do, its owner, the trash). A reader with no relation is told it is not there or not theirs, in one card | `tab=view\|data\|history\|settings` · `version=` · `sheet=` (which collection a sheet draws) · `data=rows\|schema\|history` |
 | `#/spend` | **Spend › Overview**: the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent beside by provider and by team, and the three most expensive tasks beside the auxiliary model by purpose (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across the sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
 | `#/spend/tasks` | **Expensive tasks** — the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs *(needs Tracker access)* | `window=7d\|30d\|90d\|<from>/<to>` (kept across the sections) |
 | `#/spend/budgets` | **Budgets** — the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. ONE address: Settings lists it as a cross-link | `window=` is not read here, and is carried through to the other sections |
@@ -3783,6 +3802,17 @@ its author. That refusal, and every other that says the screen is out of date
 (`conflict`, `not_found`, `exists`, `already_answered`), asks the write's
 questions again without raising your read floor, so the page redraws what is
 there now and your next press is made against it.
+
+**One exception: a cell of a sheet (D23).** A native sheet, and a page's
+sheet through the bridge, draw the reader's value at once, MARKED AS PENDING (a
+dashed underline and "Saving" in the cell's description and the sheet's sync
+strip), and make it solid when the engine confirms it; a refusal reverts the
+cell and says why on it, and a write nobody could confirm is kept for Retry
+under its own key. What is drawn solid is what the engine holds. A sheet that
+waited for the engine on every checkbox would be unusable by thirty people at
+once, and the pending mark is what keeps it honest. Everything else an
+artifact's screens write (sharing, a schema change, a version label, the trash)
+is confirmed like every other write.
 
 ### What a screen can change today
 

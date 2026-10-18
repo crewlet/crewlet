@@ -301,6 +301,26 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"agent_episode":   "decided_by:" + string(authz.ActionSeatTrailRead),
 		"memory_overview": "decided_by:" + string(authz.ActionSeatTrailRead),
 		"conversations":   "decided_by:" + string(authz.ActionSeatTrailRead),
+
+		// THE ARTIFACTS: the listing is everybody's and filtered row by row;
+		// every other question is decided per artifact by the artifacts' one
+		// admission, and the usage against the plan is the deployment's.
+		"artifacts":             "everybody",
+		"artifact":              "decided_by:" + string(authz.ActionArtifactRead),
+		"artifact_versions":     "decided_by:" + string(authz.ActionArtifactRead),
+		"artifact_version":      "decided_by:" + string(authz.ActionArtifactRead),
+		"artifact_history":      "decided_by:" + string(authz.ActionArtifactRead),
+		"artifact_assets":       "decided_by:" + string(authz.ActionArtifactRead),
+		"artifact_seen_by":      "decided_by:" + string(authz.ActionArtifactRead),
+		"artifact_access":       "decided_by:" + string(authz.ActionArtifactRead),
+		"artifact_usage":        "decided_by:" + string(authz.ActionArtifactUsage),
+		"artifact_data":         "decided_by:" + string(authz.ActionArtifactDataRead),
+		"artifact_data_doc":     "decided_by:" + string(authz.ActionArtifactDataRead),
+		"artifact_data_query":   "decided_by:" + string(authz.ActionArtifactDataQuery),
+		"artifact_data_history": "decided_by:" + string(authz.ActionArtifactDataRead),
+		"artifact_data_schema":  "decided_by:" + string(authz.ActionArtifactDataRead),
+		"artifact_data_state":   "decided_by:" + string(authz.ActionArtifactDataRead),
+		"artifact_data_usage":   "decided_by:" + string(authz.ActionArtifactUsage),
 	}
 	r := queries.NewRegistry()
 	queries.Register(r, everySeam(t))

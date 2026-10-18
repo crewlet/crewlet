@@ -1,0 +1,243 @@
+/**
+ * A page artifact, embedded: the engine mints a frame for the version on show
+ * (a view ticket bound to this browser's sign-in, the artifact origin's URL
+ * under it, and the sandbox and allow attributes), and the design system's
+ * `SandboxedFrame` embeds it exactly as minted.
+ *
+ * THE FRAME NEVER OPENS A WINDOW. A link the page asks to open reaches the
+ * page's host, which names the destination first (`LinkInterstitial`) and
+ * opens it with no opener and no referrer once the reader says so (D16).
+ *
+ * THE PAGE TALKS TO THIS HOST, never to the engine: once the frame has checked
+ * the page's hello it transfers one port, and every call on it is answered by
+ * the [PageHost] built for this frame, bound to this artifact and version.
+ */
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Button,
+  Callout,
+  LinkInterstitial,
+  SandboxedFrame,
+  Skeleton,
+  type SandboxedFrameState,
+} from "@crewlethq/ui";
+import type { ThemeId } from "@crewlethq/tokens";
+import {
+  newActOpID,
+  RestError,
+  type ArtifactDetail,
+  type ArtifactFrame,
+  type ArtifactVersionSummary,
+} from "~/protocol/index.ts";
+import { useRest } from "~/lib/useRest.ts";
+import { useClient, useConnection } from "~/lib/store-hooks.ts";
+import { useDensity, usePalette, useTheme } from "~/lib/prefs.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { mintFrame, reportReady } from "~/lib/artifacts/api.ts";
+import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
+import { useDataStore } from "~/lib/artifacts/useDataStore.ts";
+import { rowID, type ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
+import type { BridgeRoster, BridgeViewer, RuntimeCapability } from "~/runtime/bridge.ts";
+import { PageHost } from "./host.ts";
+import type { PresenceReport } from "./presence.ts";
+
+/** Why a frame could not be minted, in the reader's words, from the engine's code. */
+function mintRefusal(err: RestError): string {
+  switch (err.code) {
+    case "artifact_origin_unset":
+      return "This deployment serves no artifact origin, so a page cannot be opened here. An operator sets api.artifacts.external_url.";
+    case "artifact_not_framed":
+      return "This version has no page to open.";
+    case "session_revoked":
+      return "Your sign-in is ending. Sign in again to open this page.";
+    case "artifact_trashed":
+      return "This artifact is in the trash.";
+    default:
+      return err.detail || "The engine could not open this page.";
+  }
+}
+
+export function FrameView({
+  detail,
+  version,
+  versions,
+  room,
+  presence,
+  bridgeStores,
+}: {
+  detail: ArtifactDetail;
+  version: number;
+  versions: ArtifactVersionSummary[];
+  room: ArtifactRoom;
+  presence: PresenceReport;
+  bridgeStores: Set<ArtifactDataStore>;
+}) {
+  const [attempt, setAttempt] = useState(0);
+  const frame = useRest<ArtifactFrame>(`${detail.id}:${version}:${attempt}`, () =>
+    mintFrame(detail.id, version),
+  );
+  // WHEN THE FRAME WAS HANDED OVER, by this browser's clock: the ready report
+  // measures from here to the page's hello.
+  const handed = useRef(0);
+  useEffect(() => {
+    if (frame.data) handed.current = performance.now();
+  }, [frame.data]);
+
+  // WHAT THE VERSION DECLARES is what the page may use, read off the version
+  // itself rather than the head, which may be newer.
+  const summary = versions.find((v) => v.number === version);
+  const capabilities = useMemo(
+    () =>
+      (summary?.capabilities ??
+        (version === detail.head_number ? detail.capabilities : undefined) ??
+        []) as RuntimeCapability[],
+    [summary, version, detail.head_number, detail.capabilities],
+  );
+  const needsData = capabilities.includes("db") || capabilities.includes("state");
+  const store = useDataStore(detail.id, { via: "bridge", version }, needsData);
+  // THE PAGE'S STORE HEARS THE ROOM the viewer joined: the page's own store
+  // writes as its version, and reads the same pushes as the sheet's.
+  useEffect(() => {
+    if (!store) return undefined;
+    bridgeStores.add(store);
+    return () => void bridgeStores.delete(store);
+  }, [store, bridgeStores]);
+
+  const [link, setLink] = useState<{ url: URL; answer: (opened: boolean) => void } | null>(null);
+  const { socket } = useClient();
+  const connection = useConnection();
+  const viewer = useViewer();
+  const [clientID] = useState(() => `page-${rowID()}`);
+  const host = useMemo(() => {
+    if (!store && needsData) return null;
+    return new PageHost({
+      artifact: detail.id,
+      version,
+      capabilities,
+      socket,
+      store,
+      clientID,
+      newKey: () => newActOpID(),
+      openLink: (url) => new Promise<boolean>((answer) => setLink({ url, answer })),
+      setPresence: (activity, focus) => {
+        const { version: _v, ...rest } = focus;
+        presence.at(Object.keys(rest).length > 0 ? rest : null, activity === "editing");
+      },
+    });
+    // The presence report is read through its stable `at`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail.id, version, capabilities, socket, store, needsData, clientID]);
+  useEffect(() => () => host?.stop(), [host]);
+
+  // WHO IS VIEWING, to a page that declared it may know: display facts only.
+  const bridgeViewer = useMemo<BridgeViewer | null>(
+    () =>
+      capabilities.includes("identity") && viewer.handle
+        ? {
+            seat: viewer.handle,
+            kind: viewer.kind === "agent" ? "agent" : "human",
+            displayName: viewer.name || viewer.handle,
+            role: detail.role,
+          }
+        : null,
+    [capabilities, viewer.handle, viewer.kind, viewer.name, detail.role],
+  );
+  useEffect(() => host?.setViewer(bridgeViewer), [host, bridgeViewer]);
+  useEffect(
+    () => host?.setConnection(connection.connected ? "live" : "reconnecting"),
+    [host, connection.connected],
+  );
+  const roster = useMemo<BridgeRoster>(
+    () => ({
+      members: [...room.roster.members.values()].map((m) => ({
+        session: m.session,
+        seat: m.seat,
+        kind: m.kind === "agent" ? "agent" : "human",
+        activity: m.activity,
+        focus: m.focus,
+        at: m.at,
+      })),
+      ...(room.roster.counts ? { counts: room.roster.counts } : {}),
+      truncated: room.roster.truncated,
+    }),
+    [room.roster],
+  );
+  useEffect(() => host?.setRoster(roster), [host, roster]);
+
+  const [mode] = useTheme();
+  const [palette] = usePalette();
+  const [density] = useDensity();
+  const theme = useMemo(
+    () => ({ mode, palette: palette as ThemeId, density }),
+    [mode, palette, density],
+  );
+  const [state, setState] = useState<SandboxedFrameState>("loading");
+  const reported = useRef("");
+
+  if (frame.error) {
+    return (
+      <Callout variant="danger" title="This page could not be opened">
+        <p>{mintRefusal(frame.error)}</p>
+        <Button size="small" variant="secondary" onClick={() => setAttempt((n) => n + 1)}>
+          Try again
+        </Button>
+      </Callout>
+    );
+  }
+  if (!frame.data || !host)
+    return (
+      <Skeleton
+        variant="box"
+        label={`Loading ${detail.title}`}
+        className="artifact-frame-skeleton"
+      />
+    );
+  const minted = frame.data;
+  const report = (outcome: "ready" | "failed") => {
+    if (reported.current === minted.frame_url) return;
+    reported.current = minted.frame_url;
+    reportReady(minted.frame_url, outcome, performance.now() - handed.current);
+  };
+  return (
+    <div className="artifact-frame-box">
+      <SandboxedFrame
+        className="artifact-frame"
+        src={minted.frame_url}
+        origin={minted.origin}
+        mode={minted.mode}
+        sandbox={minted.sandbox}
+        allow={minted.allow}
+        title={detail.title}
+        theme={theme}
+        nonce={minted.nonce}
+        onReady={(port) => {
+          report("ready");
+          host.attach(port);
+        }}
+        onMessage={(data, port) => void host.receive(data, port)}
+        onOpenLink={(url) => setLink({ url, answer: () => {} })}
+        onStateChange={(next) => {
+          setState(next);
+          if (next === "failed" || next === "refused" || next === "outdated") report("failed");
+          if (next !== "ready") host.detach();
+        }}
+        onReload={() => setAttempt((n) => n + 1)}
+      />
+      {state === "ready" && version !== detail.head_number && (
+        <p className="artifact-note">Every version shows today's data.</p>
+      )}
+      <LinkInterstitial
+        url={link?.url ?? null}
+        source={detail.title}
+        onOpened={() => {
+          link?.answer(true);
+        }}
+        onClose={() => {
+          link?.answer(false);
+          setLink(null);
+        }}
+      />
+    </div>
+  );
+}

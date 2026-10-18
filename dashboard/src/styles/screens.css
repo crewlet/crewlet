@@ -10133,3 +10133,345 @@ a.live-row:focus-visible {
     max-width: 20rem;
   }
 }
+
+/* ---- Artifacts ------------------------------------------------------- */
+
+/* THE GALLERY'S FIELD is a search box in the page bar, as Agents' finder. */
+.artifacts-find {
+  width: 14rem;
+}
+@container page (width < 640px) {
+  .artifacts-find {
+    width: 100%;
+  }
+}
+
+.artifacts-trash-toggle {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* A ROW'S NAME: the kind's glyph, the title cut to its track, and the pin. */
+.artifacts-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.artifacts-pin {
+  display: inline-flex;
+  color: var(--color-text-tertiary);
+}
+
+/* THE CARDS SHAPE: as many columns as fit at a card's measure, one on a phone. */
+.artifacts-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(16rem, 100%), 1fr));
+  gap: var(--spacing-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.artifacts-more {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  margin-top: var(--spacing-3);
+}
+.artifacts-more-note {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+.artifacts-usage {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
+  gap: var(--spacing-4);
+}
+
+.artifacts-denied {
+  display: flex;
+  justify-content: center;
+  padding-block: var(--spacing-6);
+}
+
+/* AN ARTIFACT'S PAGE is the frame's object page: the header, the tabs, then
+   the body, which a page or a sheet fills to the view's own height so the
+   artifact scrolls inside itself and the document does not. */
+.artifact-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.artifact-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.artifact-presence {
+  margin-inline-end: var(--spacing-1);
+}
+.artifact-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+  padding: var(--spacing-2) var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-compact);
+}
+.artifact-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+.artifact-note {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+.artifact-refusal {
+  margin: 0;
+  color: var(--color-feedback-danger-ink);
+  font-size: var(--font-size-compact);
+}
+
+/* THE FRAME FILLS THE VIEW below the band and the tabs, and never less than
+   a page needs to be usable. */
+.artifact-frame-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.artifact-frame,
+.artifact-frame-skeleton {
+  height: max(28rem, calc(100cqb - var(--sticky-top) - 14rem));
+  min-width: 0;
+}
+
+.artifact-document {
+  max-width: var(--size-measure);
+}
+
+.artifact-sheet,
+.artifact-data {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.artifact-sheet-bar,
+.artifact-data-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+.artifact-grid {
+  height: max(24rem, calc(100cqb - var(--sticky-top) - 16rem));
+}
+
+/* A HISTORY IS ONE LINE PER CHANGE: who, what, when, and its one action. */
+.artifact-history {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.artifact-history-row {
+  display: grid;
+  grid-template-columns: minmax(6rem, 10rem) minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: var(--spacing-3);
+  padding-block: var(--spacing-2);
+  border-bottom: 1px solid var(--color-border-default);
+  font-size: var(--font-size-compact);
+}
+.artifact-history-who {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact-history-what {
+  color: var(--color-text-secondary);
+  min-width: 0;
+}
+.artifact-history-when {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+.artifact-history-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--spacing-3);
+}
+@container page (width < 640px) {
+  .artifact-history-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .artifact-history-what {
+    grid-column: 1 / -1;
+  }
+}
+
+.artifact-history-tab {
+  display: grid;
+  grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr);
+  gap: var(--spacing-5);
+  align-items: start;
+}
+@container page (width < 860px) {
+  .artifact-history-tab {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.artifact-versions {
+  min-width: 0;
+}
+.artifact-version-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+.artifact-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--spacing-1) var(--spacing-4);
+  margin: 0;
+  font-size: var(--font-size-compact);
+}
+.artifact-facts dt {
+  color: var(--color-text-tertiary);
+}
+.artifact-facts dd {
+  margin: 0;
+  color: var(--color-text-primary);
+}
+.artifact-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.artifact-files {
+  display: flex;
+  flex-direction: column;
+  margin: var(--spacing-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.artifact-file {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+  padding-block: var(--spacing-1);
+  border-bottom: 1px solid var(--color-border-default);
+  font-size: var(--font-size-compact);
+  min-width: 0;
+}
+.artifact-file-meta {
+  flex: none;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+/* FORMS ON AN ARTIFACT'S TABS: a column of fields at the reading measure,
+   its actions at the end. */
+.artifact-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+  max-width: var(--size-measure);
+}
+.artifact-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  max-width: var(--size-measure);
+}
+.artifact-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.artifact-inline {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* THE SCHEMA EDITOR: the collections beside the one being edited. */
+.artifact-schema {
+  display: grid;
+  grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr);
+  gap: var(--spacing-5);
+  align-items: start;
+}
+.artifact-schema > .artifact-form-actions {
+  grid-column: 1 / -1;
+}
+@container page (width < 860px) {
+  .artifact-schema {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.artifact-schema-collections,
+.artifact-schema-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.artifact-columns {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.artifact-column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding-block: var(--spacing-3);
+  border-bottom: 1px solid var(--color-border-default);
+}
+.artifact-column-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+.artifact-column-key {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+.artifact-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding-inline-start: var(--spacing-4);
+}
+.artifact-option {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
