@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 )
@@ -137,7 +138,7 @@ func seat(handle string, grants ...iam.Grant) iam.Principal {
 // THE WHOLE TABLE, ONE CASE PER ROW OF IT.
 //
 // Written as a table because the rules ARE a table: what makes this suite
-// worth anything is that a reader can see fifteen classes decided side by side
+// worth anything is that a reader can see sixteen classes decided side by side
 // and spot the row whose answer is wrong for its neighbours.
 func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 	t.Parallel()
@@ -614,6 +615,21 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 		{"a tool skill page is admin's, not the knowledge base's",
 			person("jane.doe", knowledge), authz.ActionSkillPageWrite,
 			authz.Object{Kind: authz.KindPage}, false, authz.ReasonNoGrant},
+
+		// --- shared ----------------------------------------------------- //
+		//
+		// AN ARTIFACT IS ITS SHARES': the SRE sits in the `sre` unit, so a
+		// unit share admits them at its role, and nothing else does.
+		{"a unit share admits who sits in the unit", personLeading("sre"),
+			authz.ActionArtifactRead, authz.Object{Kind: authz.KindArtifact, Owner: "jane",
+				Shares: []artifacts.Share{{Audience: artifacts.Audience{
+					Kind: artifacts.AudienceUnit, ID: "sre"}, Role: artifacts.RoleViewer}}},
+			true, authz.ReasonShared},
+		{"a lead of the unit who sits elsewhere is not in it", personLeading("cto"),
+			authz.ActionArtifactRead, authz.Object{Kind: authz.KindArtifact, Owner: "jane",
+				Shares: []artifacts.Share{{Audience: artifacts.Audience{
+					Kind: artifacts.AudienceUnit, ID: "sre"}, Role: artifacts.RoleViewer}}},
+			false, authz.ReasonNotShared},
 
 		// --- stage --------------------------------------------------------- //
 		{"an invited principal may do nothing yet",

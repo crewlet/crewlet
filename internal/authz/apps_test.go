@@ -67,9 +67,13 @@ func TestEveryAppRowAdmitsAHolderAndRefusesANonHolder(t *testing.T) {
 		// besides, so every relation class admits them.
 		object := authz.Object{Kind: authz.KindProject, Owner: "cto", Author: "cto",
 			Container: "PLATFORM", ContainerKind: authz.KindProject, Asked: ""}
-		if app == iam.GrantKnowledge {
+		switch app {
+		case iam.GrantKnowledge:
 			object = authz.Object{Kind: authz.KindPage, Owner: "cto", Author: "cto",
 				Container: "RUNBOOKS"}
+		case iam.GrantArtifacts:
+			// AN ARTIFACT THE CTO OWNS, which holds every role.
+			object = authz.Object{Kind: authz.KindArtifact, Owner: "cto"}
 		}
 		holder := authz.Decide(t.Context(), personLeading("cto", app), a, object,
 			nimbus(), decidedAt)
