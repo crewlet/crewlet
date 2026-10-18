@@ -608,6 +608,14 @@ var allowedReplicatedWriter = []allowance{
 			"conversation_sessions — every one placed in nodeEstatePlacements " +
 			"one file over. It never names a replicated table.",
 	},
+	{
+		Prefix: "internal/objstore/natsobj/natsobj.go", Kind: notReplicated,
+		Why: "Holds no SQL at all. The bucket ceiling refusal tells the " +
+			"operator to run `nats stream update %s --max-bytes=%d`, the " +
+			"broker's own command, and the case-insensitive verb matcher " +
+			"reads `update %s` as an UPDATE whose table is computed. The file " +
+			"opens no database handle and writes no table of either estate.",
+	},
 
 	// -----------------------------------------------------------------
 	// THE EXCEPTIONS. Two writes that are not a record, each because no
