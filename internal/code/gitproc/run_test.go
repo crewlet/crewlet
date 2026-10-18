@@ -375,27 +375,58 @@ func TestAProcessThatIgnoresTerminateIsKilled(t *testing.T) {
 }
 
 // blockingWriter accepts its first Write and blocks every later one until
-// release closes.
+// release closes; blocked closes as the second begins to block.
 type blockingWriter struct {
 	mu      sync.Mutex
 	writes  int
+	blocked chan struct{}
 	release chan struct{}
 }
 
 func (w *blockingWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	w.writes++
-	first := w.writes == 1
+	n := w.writes
 	w.mu.Unlock()
-	if !first {
-		<-w.release
+	if n == 1 {
+		return len(p), nil
 	}
+	if n == 2 {
+		close(w.blocked)
+	}
+	<-w.release
 	return len(p), nil
+}
+
+// keepalive is a Stdin answering a byte every interval until until closes,
+// and then its end: it keeps a run MOVING, as the stall watch counts what
+// a run reads, for as long as a case needs it to.
+type keepalive struct {
+	until    <-chan struct{}
+	interval time.Duration
+}
+
+func (r *keepalive) Read(p []byte) (int, error) {
+	select {
+	case <-r.until:
+		return 0, io.EOF
+	case <-time.After(r.interval):
+		p[0] = 'x'
+		return 1, nil
+	}
 }
 
 // A STALLED TRANSFER IS KILLED: a process that has stopped, and a CLIENT that
 // has stopped reading — killed with the client's Write still blocked, and
 // answered only once that Write returns.
+//
+// The second case holds only once its client HAS stopped reading, so it
+// waits until it has rather than assuming it by now: the stall is measured
+// from the process's start, and a process starved of CPU for the stall
+// before its first output is the first case's silent process — killed before
+// the client's second Write ever began, which a loaded machine produced. So
+// the run reads a byte every few milliseconds until that Write blocks, which
+// no stall can end, and only then stands still.
 func TestAStalledTransferIsKilled(t *testing.T) {
 	t.Parallel()
 	t.Run("a silent process", func(t *testing.T) {
@@ -411,10 +442,16 @@ func TestAStalledTransferIsKilled(t *testing.T) {
 		t.Parallel()
 		pids := newPIDFile(t)
 		p := fakePool(t, "echo $$ > "+pids.shell()+"; yes", gitproc.Options{})
-		w := &blockingWriter{release: make(chan struct{})}
-		done := start(t.Context(), p, gitproc.Cmd{Args: []string{"x"}, Stdout: w, Class: gitproc.ClassTransfer,
-			Deadline: time.Minute, Stall: 300 * time.Millisecond})
+		w := &blockingWriter{blocked: make(chan struct{}), release: make(chan struct{})}
+		in := &keepalive{until: w.blocked, interval: 10 * time.Millisecond}
+		done := start(t.Context(), p, gitproc.Cmd{Args: []string{"x"}, Stdin: in, Stdout: w,
+			Class: gitproc.ClassTransfer, Deadline: time.Minute, Stall: 300 * time.Millisecond})
 		pid := pids.read(t)
+		select {
+		case <-w.blocked:
+		case o := <-done:
+			t.Fatalf("Run returned (%v) before its client stopped reading, a byte read every 10ms", o.err)
+		}
 		if !procgrouptest.AwaitGone(t, pid, 10*time.Second) {
 			t.Fatalf("the stalled process %d was not killed while its client's Write blocked", pid)
 		}
