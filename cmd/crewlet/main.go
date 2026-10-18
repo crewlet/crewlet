@@ -207,6 +207,8 @@ func runIn(environ config.Source, args []string, stdout, stderr io.Writer) error
 		return runFleet(environ, rest, stdout, stderr)
 	case "seats":
 		return runSeats(environ, rest, stdout, stderr)
+	case "artifacts":
+		return runArtifacts(environ, rest, stdout, stderr)
 	case "llm":
 		return runLLM(environ, rest, stdout, stderr)
 	case "search":
@@ -246,6 +248,8 @@ Usage:
                               remove a member that is gone for good
   crewlet seats <cmd>         Pause a seat (-stop also ends the turn it is on)
                               or resume it: its holder, its lead, or an admin
+  crewlet artifacts <cmd>     List, publish, version, share, trash and purge the
+                              company's artifacts, as the token's principal
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet iam <cmd>           People, seats, invitations, permissions,
@@ -278,10 +282,10 @@ Config:
 Environment:
   %s
             The token for commands that talk to a running node (budgets,
-            backup, retention, work, seats, secrets, config, iam): one of
-            the node's api.auth.tokens values, or an access token from
-            "crewlet iam token". It's never a flag (flags end up in shell
-            history) and never read from the config file.
+            backup, retention, work, seats, artifacts, secrets, config,
+            iam): one of the node's api.auth.tokens values, or an access
+            token from "crewlet iam token". It's never a flag (flags end up
+            in shell history) and never read from the config file.
 `, version.String(), defaultBootstrapPath, defaultCompanyPath, apiTokenEnv)
 }
 
