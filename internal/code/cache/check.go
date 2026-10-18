@@ -476,19 +476,26 @@ func derivedIDs(dir string) map[string]fileID {
 
 // vouchWritten vouches for every derived file of inc that a git process of
 // this one has just written: present now at an identity other than the one
-// before held. ONLY WHAT MOVED: git keeps a file it would write again
+// before held — and stamps its part written (report.go's wrote). ONLY WHAT
+// MOVED: git keeps a file it would write again
 // unchanged — a bitmap whose index's checksum did not move is not rewritten —
 // so a step that ran over a damaged bitmap and kept it vouches nothing of it,
 // and the next check still reads it.
 func (c *Cache) vouchWritten(e *entry, inc *incarnation, before map[string]fileID) {
 	var rels []string
+	var parts gitproc.Part
 	for rel, id := range derivedIDs(inc.dir) {
 		if id.present && before[rel] != id {
 			rels = append(rels, rel)
+			_, part, _ := derivedFile(rel)
+			parts |= part
 		}
 	}
 	if len(rels) > 0 {
 		c.vouchFiles(e, inc, rels...)
+		e.mu.Lock()
+		wrote(inc, parts)
+		e.mu.Unlock()
 	}
 }
 

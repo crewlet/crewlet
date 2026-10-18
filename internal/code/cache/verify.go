@@ -333,7 +333,7 @@ func (v *Verification) Run(ctx context.Context, how VerifyRun) (VerifyReport, er
 	if how.Checking != nil {
 		how.Checking(0)
 	}
-	rebuilt, err := c.rebuild(ctx, s, RebuildVerify, 0, false, whole)
+	rebuilt, err := c.rebuild(ctx, s, Failure{Reason: RebuildVerify}, false, whole)
 	if err != nil {
 		return report, fmt.Errorf("cache: verify %s: a rebuild could not repair it: %w", report.label(), err)
 	}
@@ -442,7 +442,8 @@ func (v *Verification) pass(ctx context.Context, s Synced, checking func(time.Du
 // thrown away for a check is work the maintainer does again at once, and its
 // lock and temporary files are admitted by the listing instead
 // (maintenanceWriting). The check's fsck no longer races it for a slot: the
-// admission holds one.
+// admission holds one. NOTHING IS REPAIRED UNDER A CHECK either: a report
+// recorded meanwhile is repaired by the round its release asks (report.go).
 func (c *Cache) holdMaintainer(e *entry) func() {
 	e.mu.Lock()
 	e.verifying++
@@ -450,6 +451,11 @@ func (c *Cache) holdMaintainer(e *entry) func() {
 	return func() {
 		e.mu.Lock()
 		e.verifying--
+		if e.verifying == 0 && e.current != nil && e.current.repair.pending() {
+			// What runs reported while the check held repairs off
+			// (report.go) is repaired now.
+			c.repairRound(e)
+		}
 		e.mu.Unlock()
 		c.kickMaintainer()
 	}

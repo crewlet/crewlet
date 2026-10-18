@@ -29,6 +29,7 @@ const (
 	CodeCacheMaintenanceRefused      = "crewlet.code.cache.maintenance.refused"
 	CodeCacheRebuildRefusals         = "crewlet.code.cache.rebuild.refusals"
 	CodeCacheRebuilds                = "crewlet.code.cache.rebuilds"
+	CodeCacheReports                 = "crewlet.code.cache.reports"
 	CodeCacheRepos                   = "crewlet.code.cache.repos"
 	CodeCacheSyncDuration            = "crewlet.code.cache.sync.duration"
 	CodeCommitBatchSize              = "crewlet.code.commit.batch.size"

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code/cache"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 )
 
@@ -81,6 +82,41 @@ func TestOpenTakesOnlyALayoutPrepareReturned(t *testing.T) {
 			t.Fatalf("a second Open of one Layout = %v, want ErrOptions naming cache.Prepare", err)
 		}
 	})
+}
+
+// ONE CACHE A POOL. The pool reports every run to one observer, which Open
+// installs last: a second cache opened over a pool another cache observes is
+// refused by name, and once that cache stops — Stop gives its observer back —
+// a cache over the same pool opens.
+//
+// Mutation: Stop keeping its observer (the second cache is refused).
+func TestOneCacheObservesAPool(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	first := w.open(t)
+	pool := w.pool
+	open := func() (*cache.Cache, error) {
+		t.Helper()
+		layout, err := cache.Prepare(t.Context(), filepath.Join(t.TempDir(), "second"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(layout.Release)
+		return cache.Open(t.Context(), w.options(t, func(o *cache.Options) { o.Layout, o.Git = layout, pool }))
+	}
+	if c, err := open(); !errors.Is(err, cache.ErrOptions) || !errors.Is(err, gitproc.ErrInvalid) ||
+		!strings.Contains(err.Error(), "stop that cache first") {
+		if c != nil {
+			c.Stop(context.Background())
+		}
+		t.Fatalf("a second cache over an observed pool = %v, want ErrOptions naming the cache to stop", err)
+	}
+	first.Stop(context.Background())
+	second, err := open()
+	if err != nil {
+		t.Fatalf("a cache over the pool once its first stopped: %v", err)
+	}
+	second.Stop(context.Background())
 }
 
 // ONE PROCESS A CACHE DIRECTORY. Two engines pointed at one git.cache_dir

@@ -141,6 +141,10 @@ type entry struct {
 	verifying int
 	// lastAdded is when a round last added packs: the maintainer's debounce.
 	lastAdded time.Time
+	// maintainerOwed: a full round converged, and the maintainer is to be
+	// woken once no round holds the repository (run), since a pass starts
+	// no run on one a round holds (runnable).
+	maintainerOwed bool
 	// uncoveredSince is when the oldest pack the maintainer's index does not
 	// cover arrived — set by the round that adds packs while none wait, and
 	// cleared by a run whose index covers every pack — and zero when none
@@ -206,7 +210,7 @@ type incarnation struct {
 	// recreated under it, would otherwise be read whole with the damaged
 	// files kept, and the request that asked for the repair meet the same
 	// damage on its retry. Taken by the round that drops them.
-	drop gitproc.Part
+	drop partDrops
 	// packChecks are the hashes of the packs hints named (gitproc.Hint),
 	// by checksum, each in flight or decided (ConfirmHint, hint.go): a hint
 	// about a pack being hashed waits for that hash rather than starting its
@@ -283,8 +287,24 @@ type incarnation struct {
 	// indexRepair: its multi-pack-index was dropped as damaged, so the
 	// maintainer's index is due AT ONCE — no debounce, no interval — in a
 	// slot of the maintainer's own (maintain.go). Cleared by the index
-	// written.
+	// written. A commit-graph dropped as damaged needs no mark: the
+	// maintainer writes a missing graph first, at once, anyway.
 	indexRepair bool
+	// repair is what reports asked its next full round to do (report.go).
+	repair repairMark
+	// written is when this process last changed each derived part's files
+	// — a write that moved a file's identity, the round's own index, or a
+	// drop — a time.Now() reading compared on the monotonic clock with a
+	// report's Began (dropDamaged).
+	written map[gitproc.Part]time.Time
+	// damagedAt is when each derived part was last dropped for damage, on
+	// Options.Now's clock: one dropped again within RebuildQuiet of it is
+	// damaged AGAIN (D13 of report.go's doc), and waits for the ordinary
+	// rules rather than being written again at once — whatever ordinary
+	// writes came between, since a disk that keeps damaging what is written
+	// to it damages those too. againLogged is the parts logged so.
+	damagedAt   map[gitproc.Part]time.Time
+	againLogged gitproc.Part
 	// memoryRefused is the steps the node's memory has refused it — each
 	// one whose charge alone is more than the node can give its background
 	// work — and said so: each logged and counted once an incarnation,

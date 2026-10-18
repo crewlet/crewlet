@@ -52,6 +52,7 @@ func (p *Pool) Run(ctx context.Context, c Cmd) (Result, error) {
 	}
 	res, err := p.run(ctx, c, prep, lent)
 	res.Waited = waited
+	p.report(c, res)
 	return res, err
 }
 
@@ -201,10 +202,11 @@ func (p *Pool) run(ctx context.Context, c Cmd, prep prepared, lent *loan) (Resul
 
 	res := Result{
 		Stderr: errs.tail(),
-		Damage: trace.damage(),
+		Damage: trace.damage(start),
 		Trace:  trace.summary(),
 		Exit:   cmd.ProcessState.ExitCode(),
 		Took:   reaped.Sub(start),
+		Began:  start,
 		CPU:    max(cpuOf(cmd.ProcessState)+stragglers, w.spent),
 	}
 	if capt != nil {

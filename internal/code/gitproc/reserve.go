@@ -90,7 +90,9 @@ func (r *Reserved) Run(ctx context.Context, c Cmd) (Result, error) {
 	if r.p.metrics != nil {
 		r.p.metrics.Observe(metrics.CodeGitWait, 0, metrics.Attrs{"class": string(c.Class)})
 	}
-	return r.p.run(ctx, c, prep, nil)
+	res, err := r.p.run(ctx, c, prep, nil)
+	r.p.report(c, res)
+	return res, err
 }
 
 // Release gives the slot back, once — a later call does nothing — after

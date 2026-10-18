@@ -23,6 +23,12 @@ func newFixture(t *testing.T) *fixture { return &fixture{gittest.NewFixture(t)} 
 
 func (f *fixture) tip() string { return f.Tip() }
 
+// blob is the tip's large blob, which the newer pack holds beside the tip.
+func (f *fixture) blob(t *testing.T) string {
+	t.Helper()
+	return strings.TrimSpace(f.Client.Run(t, f.Work, "rev-parse", f.Tip()+":big.txt"))
+}
+
 // bare is a fresh copy: the repository, and the newer pack's path without
 // its extension.
 func (f *fixture) bare(t *testing.T) (dir, newer string) {
@@ -190,12 +196,19 @@ var printedOver = map[string]span{
 	`multi-pack-index required OID fanout chunk missing or corrupted`:     {v(2, 43), gitproc.Version{}},
 	`multi-pack-index required OID lookup chunk missing or corrupted`:     {v(2, 43), gitproc.Version{}},
 	`multi-pack-index required object offsets chunk missing or corrupted`: {v(2, 43), gitproc.Version{}},
+	// The fanout's size, read off the next chunk's offset, before 2.43
+	// checked the offsets' alignment (measured on 2.40.4 alone).
+	`multi-pack-index OID fanout is of the wrong size`: {v(2, 40), v(2, 43)},
 	// The graph's fanout chunk, reworded at 2.44; its size checked from 2.43.
 	`commit-graph is missing the OID Fanout chunk`:                {v(2, 40), v(2, 44)},
 	`commit-graph oid fanout chunk is wrong size`:                 {v(2, 43), gitproc.Version{}},
 	`commit-graph required OID fanout chunk missing or corrupted`: {v(2, 44), gitproc.Version{}},
 	// A chunk's alignment, checked from 2.43.
 	`chunk id %x not %d-byte aligned`: {v(2, 43), gitproc.Version{}},
+	// The fanouts' order, checked from 2.43 (the graph's) and 2.47 (the
+	// index's: 2.43 reads a fanout out of order without a word).
+	`commit-graph fanout values out of order`:                    {v(2, 43), gitproc.Version{}},
+	`oid fanout out of order: fanout[%d] = %x > %x = fanout[%d]`: {v(2, 47), gitproc.Version{}},
 }
 
 // span is the versions that print format.
@@ -216,6 +229,11 @@ type result struct {
 	parts  gitproc.Part
 	hints  int
 	signal bool
+	// drops, when ownDrops is set, is the derived files a repair of this
+	// arm's damage drops on the running git in place of its case's: a git
+	// that names the damage by another part than the gits after it.
+	drops    gitproc.Part
+	ownDrops bool
 }
 
 // arm is one command over one case's damage, and what it is held to on the
@@ -267,6 +285,57 @@ func mergeBase(_ *testing.T, d *damaged) gitproc.Cmd {
 func catTip(_ *testing.T, d *damaged) gitproc.Cmd { return batchCheck(d.dir, d.f.Tip()) }
 
 func fetchTip(_ *testing.T, d *damaged) gitproc.Cmd { return fetchV2(d.dir, d.f.Tip()) }
+
+// midxWrite is the maintainer's write of the multi-pack-index with its
+// bitmap over d's packs.
+func midxWrite(_ *testing.T, d *damaged) gitproc.Cmd {
+	c := maintenance(d.dir, "multi-pack-index", "write", "--bitmap", "--no-progress")
+	c.Config = []gitproc.KV{{Key: "core.multiPackIndex", Value: "true"}, {Key: "pack.writeBitmapLookupTable", Value: "true"}}
+	return c
+}
+
+// graphFanout is GFO's arms: what every reader of the graph says on each git.
+func graphFanout(answered func(gitproc.Part, ...string) result) []arm {
+	want := func(running gitproc.Version) result {
+		switch {
+		case before(running, v(2, 43)):
+			return result{}
+		case before(running, v(2, 44)):
+			return answered(gitproc.PartCommitGraph, `commit-graph fanout values out of order`)
+		}
+		return answered(gitproc.PartCommitGraph, `commit-graph fanout values out of order`,
+			`commit-graph required OID fanout chunk missing or corrupted`)
+	}
+	return []arm{
+		{name: "rev-list", cmd: revList, want: want},
+		{name: "merge-base", cmd: mergeBase, want: want},
+		{name: "upload-pack v2", cmd: fetchTip, want: want},
+	}
+}
+
+// midxFanout is FO's arms: what every reader of the index, and the
+// maintainer's write over it, say on each git.
+func midxFanout(answered func(gitproc.Part, ...string) result, fatal func(...string) result) []arm {
+	refused := fatal(`oid fanout out of order: fanout[%d] = %x > %x = fanout[%d]`,
+		`multi-pack-index required OID fanout chunk missing or corrupted`)
+	read := func(running gitproc.Version) result {
+		if before(running, v(2, 47)) {
+			return result{}
+		}
+		return refused
+	}
+	return []arm{
+		{name: "rev-list", cmd: revList, want: read},
+		{name: "cat-file --batch-check", cmd: catTip, want: read},
+		{name: "upload-pack v2", cmd: fetchTip, want: read},
+		{name: "multi-pack-index write", cmd: midxWrite, want: func(running gitproc.Version) result {
+			if before(running, v(2, 47)) {
+				return answered(gitproc.PartMultiPackIndex, `ignoring existing multi-pack-index; checksum mismatch`)
+			}
+			return refused
+		}},
+	}
+}
 
 func bitmapWalk(_ *testing.T, d *damaged) gitproc.Cmd {
 	return read(d.dir, "rev-list", "--objects", "--use-bitmap-index", "--count", "--all")
@@ -322,6 +391,7 @@ func formatCases(f *fixture) []damageCase {
 	}
 	packed := `packed object %s (stored in %s) is corrupt`
 	notOurs := `git upload-pack: not our ref %s`
+	ignoring := `ignoring existing multi-pack-index; checksum mismatch`
 	required := func(chunk string) func(gitproc.Version) result {
 		return func(running gitproc.Version) result {
 			if before(running, v(2, 43)) {
@@ -480,7 +550,14 @@ func formatCases(f *fixture) []damageCase {
 		midxCase("F11 a multi-pack-index's chunk misaligned", func(t *testing.T, d *damaged) { gittest.Damage(t, d.dir, gittest.MidxChunkMisaligned) }, gitproc.PartMultiPackIndex|gitproc.PartCommitGraph,
 			arm{name: "rev-list", cmd: revList, want: func(running gitproc.Version) result {
 				if before(running, v(2, 43)) {
-					return answered(gitproc.PartChunk, `improper chunk offset(s) %lx and %lx`)
+					// The fanout's size is read off the offset after it,
+					// and 2.40 checks no alignment: it calls the fanout
+					// the wrong size, finds the tip through it absent and
+					// dies of that — the index's damage, the highest kind
+					// the run named, so the index alone is dropped.
+					return result{rows: rows(`multi-pack-index OID fanout is of the wrong size`, `bad object %s`),
+						kind: gitproc.ErrCorrupt, parts: gitproc.PartMultiPackIndex,
+						drops: gitproc.PartMultiPackIndex, ownDrops: true}
 				}
 				return answered(gitproc.PartChunk, `chunk id %x not %d-byte aligned`)
 			}}),
@@ -575,6 +652,34 @@ func formatCases(f *fixture) []damageCase {
 			}
 			return answered(gitproc.PartCommitGraph, `commit-graph required OID fanout chunk missing or corrupted`)
 		}}),
+		// A FANOUT OUT OF ORDER — one entry raised past the next: 2.43 and
+		// later read the graph around it, and 2.40 without a word.
+		graphCase("GFO a commit-graph's fanout out of order", func(t *testing.T, d *damaged) { gittest.Damage(t, d.dir, gittest.GraphFanout) }, gitproc.PartCommitGraph, graphFanout(answered)...),
+		// The index's fanout out of order: fatal from 2.47, where every
+		// reader that loads the index refuses it; 2.43 and older read it
+		// without a word, and only the maintainer's write over it notices
+		// the index's checksum.
+		midxCase("FO a multi-pack-index's fanout out of order", func(t *testing.T, d *damaged) { gittest.Damage(t, d.dir, gittest.MidxFanout) }, gitproc.PartMultiPackIndex, midxFanout(answered, midxFatal)...),
+		// THE MAINTAINER'S WRITE over an index damaged where its readers
+		// read around it: git says the old index's checksum is wrong and
+		// writes on — the one report of the damage a run that may succeed
+		// makes, which the cache repairs the index on.
+		midxCase("E the maintainer's write over a multi-pack-index whose reverse index is overwritten", func(t *testing.T, d *damaged) { gittest.Damage(t, d.dir, gittest.MidxRidx) }, gitproc.PartMultiPackIndex,
+			arm{name: "multi-pack-index write", cmd: midxWrite, want: func(running gitproc.Version) result {
+				switch {
+				case before(running, gittest.NamesMidxPosition):
+					// It dies of a segmentation fault reading the positions.
+					return result{rows: rows(ignoring), kind: gitproc.ErrCorrupt, parts: gitproc.PartMultiPackIndex,
+						signal: true}
+				case before(running, v(2, 56)):
+					return midxFatal(ignoring, `invalid MIDX object position, MIDX is likely corrupt`)
+				}
+				return answered(gitproc.PartMultiPackIndex, ignoring)
+			}}),
+		midxCase("MO the maintainer's write over a multi-pack-index with one object's offset another's", func(t *testing.T, d *damaged) { gittest.Damage(t, d.dir, gittest.MidxOffset, f.Tip(), f.blob(t)) }, gitproc.PartMultiPackIndex,
+			on("multi-pack-index write", midxWrite, midxFatal(ignoring))),
+		midxCase("MT the maintainer's write over a multi-pack-index with its trailer flipped", func(t *testing.T, d *damaged) { gittest.Damage(t, d.dir, gittest.MidxTrailer) }, gitproc.PartMultiPackIndex,
+			on("multi-pack-index write", midxWrite, answered(gitproc.PartMultiPackIndex, ignoring))),
 		graphCase("I11 a commit-graph's generation past its overflow", func(t *testing.T, d *damaged) { gittest.Damage(t, d.dir, gittest.GraphGeneration, f.Tip()) }, gitproc.PartCommitGraph, on("rev-list", revList, result{
 			rows: rows(`commit-graph requires overflow generation data but has none`),
 			kind: gitproc.ErrCorrupt, parts: gitproc.PartCommitGraph})),
@@ -926,9 +1031,13 @@ func TestTheFormatTableIsWhatGitSays(t *testing.T) {
 					if dmg.Parts != want.parts || !errors.Is(dmg.Kind, wantKind) {
 						t.Errorf("Damage = %v of %v, want %v of %v", dmg.Kind, dmg.Parts, wantKind, want.parts)
 					}
-					if derived := dc.drops != 0; dmg.Derived() != derived || (derived && dmg.Drops() != dc.drops) {
+					drops := dc.drops
+					if want.ownDrops {
+						drops = want.drops
+					}
+					if derived := drops != 0; dmg.Derived() != derived || (derived && dmg.Drops() != drops) {
 						t.Errorf("Damage is derived %v dropping %v, want derived %v dropping %v",
-							dmg.Derived(), dmg.Drops(), derived, dc.drops)
+							dmg.Derived(), dmg.Drops(), derived, drops)
 					}
 				}
 				if len(res.Trace.Hints) != want.hints {

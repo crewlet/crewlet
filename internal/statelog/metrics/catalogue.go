@@ -753,10 +753,32 @@ func Catalogue() []Instrument {
 				"`trigger` (`first` or `unvouched`, as " +
 				"`crewlet.code.cache.checks`), counted only " +
 				"where it read something: what a copy's first request after " +
-				"a restart waited for beside its sync — about a tenth to a " +
-				"quarter of the copy's pack bytes read, one core and a read " +
-				"slot a 64 MiB piece, and at the volume's own throughput when " +
-				"read cold.",
+				"a restart waited for beside its sync — about a quarter of " +
+				"the copy's pack bytes read, one core and a read slot a 64 " +
+				"MiB piece, and at the volume's own throughput when read cold.",
+		},
+		{
+			Name: CodeCacheReports, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"part", "outcome"},
+			Shows: "Damage any git process over this node's git cache " +
+				"named — whether its request failed or git read around the " +
+				"damage and answered — as the cache took it, by the `part` " +
+				"named (`commit-graph`, `multi-pack-index`, `chunk`: a " +
+				"derived file of either, dropped by a repair round with no " +
+				"request waiting and written again at once; `pack`, " +
+				"`object`: stored damage) and its `outcome`: `queued`, a " +
+				"repair round asked; `deferred`, asked while a check of the " +
+				"repository ran, repaired once it ends; `stale`, not dropped " +
+				"— the node wrote the file after the process that named it " +
+				"began, so the report was of the file it replaced; " +
+				"`unrouted`, a pack or object named by a push's own " +
+				"throwaway repository, which may be the client's pack; " +
+				"`again`, a derived file named damaged within a day of its " +
+				"last drop for damage, whatever the node wrote of it between: " +
+				"dropped and left to the ordinary schedule rather than written " +
+				"again at once. " +
+				"`queued` rising is a disk losing data under the cache; " +
+				"`again`, a disk that keeps losing it.",
 		},
 		{
 			Name: CodeCacheHints, Kind: KindCounter, Unit: UnitCount,

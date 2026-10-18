@@ -656,22 +656,38 @@ failing on one damaged copy cost one repair. How depends on the damage:
   copy finish on it.
 - **Its derived files.** The multi-pack-index git builds over the packs (with
   its reverse index and its bitmap) and the commit-graph are DERIVED files,
-  written on the node from the packs it already holds. A clone over an index
-  whose positions are damaged makes git die `invalid MIDX object position,
-  MIDX is likely corrupt` (git 2.47 and later; an older git crashes there
-  without a word) as it starts building the pack, after the answer's first
-  line — so a fetch's answer starts only once its pack does, and a fetch whose
-  git dies before then has shown the client nothing and is run again. Because
-  these files are derived, damage git names in them alone is put right **in
-  place**, by any request that meets it or by the node's own sync: the copy is
-  read whole again in the same directory with the damaged files dropped — the
+  written on the node from the packs it already holds, so damage git names in
+  them alone is put right **in place**: the damaged files are dropped — the
   index, the graph, or both where git's message names a chunk-format file
-  without saying which — so the node writes sound ones over the same packs: no
-  download, no new directory. Only damage that survives that — a pack the
-  index named is itself damaged — falls through to a pack rebuild above.
-  Before, such a clone failed with `aborting due to possible repository
-  corruption on the remote side` on every clone of the copy until an operator
-  repaired it.
+  without saying which — and the node writes sound ones over the same packs
+  at once: no download, no new directory. That happens whenever **any** git
+  process on the node names them damaged, whether or not a request failed:
+  git reads around most damage to a derived file — it warns, answers from the
+  packs and walks by date, slower — and the request that got its answer never
+  looks at the warning, so every git run is reported to the cache, the
+  node's own background indexing included (writing an index over a damaged
+  one fails every time, and its own warning is what has it dropped). A run
+  that merely reported damage takes nothing out of service: the copy keeps
+  answering while a sync of its own, with no request waiting, drops the files.
+  Two things hold it back: a file the node wrote after the reporting process
+  began is kept — that process may have read the file it replaced — and a
+  check of the copy defers the drop until it ends, so a check reports what it
+  found rather than a repair made under it. A derived file named damaged again
+  within a day of its last drop for damage — whatever the node wrote of it
+  between, its own ordinary rewrites included — is dropped and left to the
+  ordinary schedule rather than written again at once, so a disk that keeps
+  damaging what is written to it costs one rewrite at once a day and the
+  ordinary schedule's after it rather than a loop
+  (`code_cache_derived_damaged_again`). A clone over an index whose positions
+  are damaged makes git die `invalid MIDX object position, MIDX is likely
+  corrupt` (git 2.47 and later; an older git crashes there without a word) as
+  it starts building the pack, after the answer's first line — so a fetch's
+  answer starts only once its pack does, and a fetch whose git dies before
+  then has shown the client nothing and is run again, over the repaired copy.
+  Only damage that survives the drop — a pack the index named is itself
+  damaged — falls through to a pack rebuild above. Before, such a clone failed
+  with `aborting due to possible repository corruption on the remote side` on
+  every clone of the copy until an operator repaired it.
 
 Damage is read from git's own report of each failure, by the FORMAT of the
 message — the sentence git's source fixes — and never by its words. Git
@@ -736,7 +752,9 @@ syncs dominating is a cache too small to stay warm),
 `crewlet.code.cache.rebuild.refusals` by `rule` — rising at all, damage no
 rebuild repairs — `crewlet.code.cache.checks` by `outcome` and `file` — any
 `damaged` is a disk losing data, or something outside the engine writing into
-the cache — and `crewlet.code.cache.maintenance.refused`, above zero a
+the cache — `crewlet.code.cache.reports` by `part` and `outcome` — `queued`
+rising is a disk losing data under the cache, `again` one that keeps losing
+it — and `crewlet.code.cache.maintenance.refused`, above zero a
 repository whose bitmap the node's memory cannot hold
 ([metrics reference](../reference/metrics.md)).
 
@@ -1180,7 +1198,8 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 | `code_cache_reshaped` | `WARN` | A repository's copy the node would not run git in because it was not the shape the engine writes was read whole again in place, every pack it holds reused; `moved` is how many files the engine never writes there went to the trash. One is a disk's bad moment or a person's edit; a run of them is something outside the engine writing into the cache's directory. Counted as `crewlet.code.cache.rebuilds{reason=shape}`. |
 | `code_cache_check_damaged` | `WARN` | A repository's copy held an index `file` — its commit-graph, multi-pack-index, bitmap or reverse index, or a pack's index or reverse index — that failed its own checksum, or that the disk could not read (`error`) — repaired the same way, since git cannot serve it either — before the copy answered (`trigger`: `first`, the copy's first sync since the node started; `unvouched`, a later one reading a file replaced since). `action` says what was done: `dropped`, a derived file the node writes again at once over the same packs; `reinstalled`, the pack fetched again (`code_cache_pack_reinstalled`). One is a disk's bad moment; a run of them is a disk losing data, or something outside the engine writing into the cache. Counted as `crewlet.code.cache.checks{outcome=damaged}`. |
 | `code_cache_pack_reinstalled` | `WARN` | A pack of a repository's copy was fetched again and put in over its own files, in the same copy (`pack_id`): `found` says why — `trailer`, its index or reverse index failed its checksum; `size`, a file of it was not the size its row says. One download; a request already reading the pack finishes on the files it opened. |
-| `code_cache_derived_repaired` | `WARN` | A repository's copy whose derived files git could not read — its multi-pack-index (`MIDX is likely corrupt`), its commit-graph, or a chunk-format file of either — named by any git process over the copy, had those files dropped in place (`files`), its packs kept, none downloaded; the node writes sound ones over the same packs, and requests are served meanwhile from the packs themselves. Counted as `crewlet.code.cache.rebuilds{reason=derived}` — or under the reason the copy was already being read whole for. One is a disk's bad moment; damage that survives it is a pack's, and the copy is rebuilt (`code_cache_rebuilt`, `corrupt`). |
+| `code_cache_derived_repaired` | `WARN` | A repository's copy whose derived files git could not read — its multi-pack-index (`MIDX is likely corrupt`), its commit-graph, or a chunk-format file of either — named by any git process over the copy, had those files dropped in place (`files`), its packs kept, none downloaded; the node writes sound ones over the same packs, and requests are served meanwhile from the packs themselves. `trigger` says what named them: `request`, a request's git that failed on them; `round`, the node's own sync's git; `report`, any git run that named them, failing or not — counted as `crewlet.code.cache.reports`; `check`, their own checksum. A request's or a sync's is counted as `crewlet.code.cache.rebuilds{reason=derived}` — or under the reason the copy was already being read whole for. One is a disk's bad moment; damage that survives it is a pack's, and the copy is rebuilt (`code_cache_rebuilt`, `corrupt`). |
+| `code_cache_derived_damaged_again` | `WARN` | A derived file (`part`) was named damaged again within a day of its last drop for damage, whatever the node wrote of it between: it is dropped and left to the ordinary schedule rather than written again at once. Logged once a copy a part; counted as `crewlet.code.cache.reports{outcome=again}`. A disk that keeps losing what is written to it, or a git that rejects its own write — look at the disk. |
 | `code_cache_hint_confirmed` | `WARN` | git named a packed object of a repository's copy corrupt only in words (git 2.56's report of a packed object whose header is wrong), and the pack it named, hashed, is not the one the push stored: the copy is rebuilt (`corrupt`). Counted as `crewlet.code.cache.hints{outcome=confirmed}`. |
 | `code_cache_hint_unknown`, `code_cache_hint_unread` | `INFO` | git named a pack corrupt in words, and it was no pack of the copy's rows (`unknown`), or no verdict was reached (`unread`): its rows could not be read, no read slot was free for the hash, the hash ran past its bound (`bound`: a tenth of a second a mebibyte of the pack, five times the slowest cold disk or CPU the cache allows for), or the pack's files were replaced while it was hashed. Nothing is repaired, and an `unread` pack is hashed again by the next request git fails on it. Counted as `crewlet.code.cache.hints{outcome=unknown}` and `{outcome=unread}`, and each hash as `crewlet.code.cache.hint.hashes`. |
 | `code_cache_hint_gone` | `DEBUG` | A request git failed with such a report ended before the pack's hash did — its client gave up or a balancer cut it. The hash goes on, on the node's own time, and the next request about that pack takes its verdict. Counted as `crewlet.code.cache.hints{outcome=gone}`. |

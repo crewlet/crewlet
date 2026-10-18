@@ -84,6 +84,19 @@ func BeforePeel(o *Options, f func(dir string)) {
 	o.knobs.peeling = f
 }
 
+// BeforeRoundEnds makes every round call f with its repository's id once it
+// has converged and before it lets the repository go (Cache.run).
+func BeforeRoundEnds(o *Options, f func(repo string)) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.roundEnding = f
+}
+
+// KickPending reports whether a kick is waiting for the maintainer, without
+// taking it.
+func KickPending(c *Cache) bool { return len(c.maintKicks) > 0 }
+
 // AfterSweep makes every full round call f with the incarnation's directory
 // once its sweep has made it the image, before what it left is held to the
 // pool's shape check.
@@ -712,7 +725,7 @@ func MarkWhole(c *Cache, repoID string, reason RebuildReason, drops gitproc.Part
 	e := lookup(c, repoID)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	markWhole(e.current, reason, drops)
+	markWhole(e.current, Failure{Reason: reason, Drops: drops}, dropRequest)
 }
 
 // Reread marks every current incarnation to be read whole for reason, as a
@@ -843,4 +856,37 @@ func Unsound(dir string) ([]string, error) {
 	}
 	slices.Sort(out)
 	return out, nil
+}
+
+// Report hands the cache's observer one run, as the pool does after every
+// run (Cache.observe): what a case uses to report a run at the moment it
+// chooses.
+func Report(c *Cache, ran gitproc.Ran) { c.observe(ran) }
+
+// Settled reports whether repoID has no round running or queued, and its
+// current incarnation no report waiting for one (incarnation.repair).
+func Settled(c *Cache, repoID string) bool {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.running == nil && e.next == nil && (e.current == nil || !e.current.repair.pending())
+}
+
+// RepairPending reports whether repoID's current incarnation holds a report
+// no round has taken (incarnation.repair).
+func RepairPending(c *Cache, repoID string) bool {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.current != nil && e.current.repair.pending()
+}
+
+// GraphFailed reports whether repoID's current incarnation's commit-graph
+// waits for the ordinary rules rather than being written first
+// (incarnation.graphFailed).
+func GraphFailed(c *Cache, repoID string) bool {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.current != nil && e.current.graphFailed
 }

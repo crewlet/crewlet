@@ -187,13 +187,13 @@ func TestARebuildVerifyHasShownWholeEndsItsLine(t *testing.T) {
 	w.push(t, repo, "refs/heads/main", nil)
 	c := w.open(t)
 	s := w.sync(t, c, repo)
-	first, err := c.Rebuild(t.Context(), s, cache.RebuildCorrupt, 0)
+	first, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildCorrupt})
 	if err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
 	defer first.Release()
 	write(t, filepath.Join(first.Dir, "refs", "heads", "loose"), "x\n")
-	if _, err := c.Rebuild(t.Context(), first, cache.RebuildCorrupt, 0); !errors.Is(err, cache.ErrRebuildRefused) {
+	if _, err := c.Rebuild(t.Context(), first, cache.Failure{Reason: cache.RebuildCorrupt}); !errors.Is(err, cache.ErrRebuildRefused) {
 		t.Fatalf("a second rebuild of a rebuild's product = %v, want ErrRebuildRefused", err)
 	}
 	repaired, err := verify(t.Context(), c, repo, true)
@@ -202,7 +202,7 @@ func TestARebuildVerifyHasShownWholeEndsItsLine(t *testing.T) {
 			repaired, err)
 	}
 	rebuilt := w.sync(t, c, repo)
-	again, err := c.Rebuild(t.Context(), rebuilt, cache.RebuildCorrupt, 0)
+	again, err := c.Rebuild(t.Context(), rebuilt, cache.Failure{Reason: cache.RebuildCorrupt})
 	if err != nil {
 		t.Fatalf("a rebuild of the incarnation a verified repair made: %v", err)
 	}
@@ -609,7 +609,9 @@ func TestNoMaintenanceRunStartsUnderAVerify(t *testing.T) {
 	}
 	w.sync(t, c, repo)
 	clk.Add(cache.MidxDebounce)
-	cache.MaintainerKicked(c) // the sync's own, answered
+	// The sync's own kick, answered: sent once its round has let the
+	// repository go, which may be just after the sync's answer.
+	eventually(t, "the sync's own kick", func() bool { return cache.MaintainerKicked(c) })
 
 	report, err := verify(t.Context(), c, repo, false)
 	if err != nil {

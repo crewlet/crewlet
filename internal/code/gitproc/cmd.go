@@ -91,6 +91,13 @@ type Cmd struct {
 	// lean on; nothing else the engine runs git in has one.
 	Alternate string
 
+	// Loads, when set, is the chunk-format files the process loads, where
+	// its caller knows it loads only one of them — a cat-file asked about
+	// object ids alone reads objects through the multi-pack-index and never
+	// parses a commit: the pool's observer reads the run's damage narrowed
+	// by it ([Damage.Narrow]), as the caller does. Zero says nothing.
+	Loads Part
+
 	// Args follow "git". Args[0] is a SUBCOMMAND (^[a-z][a-z0-9-]*$): a
 	// global option there (-c, --exec-path, --git-dir, --config-env) would
 	// change what the process is. The engine passes no argument a client
@@ -174,6 +181,13 @@ type Result struct {
 	Exit   int           // the exit status; -1 when a signal ended the process
 	Took   time.Duration // start to reap
 	Waited time.Duration // in the lane, before start
+	// Began is when the process started — after its slot was granted — a
+	// time.Now() reading, so a caller orders it against a time.Now() of its
+	// own on the MONOTONIC clock (Time.Before uses it when both carry one):
+	// the cache compares it with when it last rewrote a file the run may
+	// have read, and a wall-clock step must not make a report look newer
+	// than the rewrite it predates. Zero when no process started.
+	Began time.Time
 	// Damage is a [*Damage] — of kind [ErrCorrupt] or [ErrMissingObject] —
 	// when an error event of the run's process tree names one (trace.go):
 	// the highest kind, as [ExitError.Kind] is chosen, the parts its events

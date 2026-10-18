@@ -94,6 +94,35 @@ func TestEveryCheckValueIsInTheMetricsReference(t *testing.T) {
 	}
 }
 
+// EVERY VALUE THE REPORTS COUNTER CARRIES IS IN ITS REFERENCE TEXT: every
+// reportPart and reportOutcome the package declares under
+// crewlet.code.cache.reports — `again` is what a disk that keeps losing data
+// under the cache reads as, and a value the text does not name is one no
+// collector rule has a row for.
+//
+// Mutation: declare another reportOutcome, or drop `stale` from the text, and
+// this fails.
+func TestEveryReportValueIsInTheMetricsReference(t *testing.T) {
+	var text string
+	for _, inst := range metrics.Catalogue() {
+		if inst.Name == metrics.CodeCacheReports {
+			text = inst.Shows
+		}
+	}
+	if text == "" {
+		t.Fatalf("the catalogue has no %s instrument", metrics.CodeCacheReports)
+	}
+	parts, outcomes := declared(t, "reportPart"), declared(t, "reportOutcome")
+	if !slices.Contains(parts, string(reportChunk)) || !slices.Contains(outcomes, string(reportAgain)) {
+		t.Fatalf("the walk found parts %q and outcomes %q — it reads what it should not", parts, outcomes)
+	}
+	for _, v := range slices.Concat(parts, outcomes) {
+		if !strings.Contains(text, "`"+v+"`") {
+			t.Errorf("%s's reference text never names `%s`, a value it carries", metrics.CodeCacheReports, v)
+		}
+	}
+}
+
 // RebuildReasons is the enumeration the reference is held to, so a
 // RebuildReason declared and left out of it would be a reason no surface is
 // checked for — nor accepted by Valid.

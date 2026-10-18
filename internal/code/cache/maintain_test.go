@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -1365,6 +1366,54 @@ func TestTheMaintainerWaitsForAWholeRead(t *testing.T) {
 	if ran := cache.MaintainerPass(c); len(ran) != 1 {
 		t.Errorf("the maintainer ran %v once a round converged it, want the repository", ran)
 	}
+}
+
+// A FULL ROUND WAKES THE MAINTAINER ONCE IT HAS LET THE REPOSITORY GO. A pass
+// starts no run on a repository a round holds (runnable), so the wake is
+// sent once the round no longer runs: a copy's first round leaves it with no
+// commit-graph, due at once, and the graph is written with no tick at all.
+// Woken from inside the round, as it once was, the pass met the round still
+// running and left the repository to the next tick, MidxDebounce later — the
+// graph-first run, an index repair and a copy's first index each waited for
+// it.
+//
+// Mutation: kick the maintainer from converge (inside the round), and the
+// kick is pending while the round still holds the repository.
+func TestAFullRoundWakesTheMaintainerOnceItLetsTheRepositoryGo(t *testing.T) {
+	t.Parallel()
+	t.Run("not while the round runs", func(t *testing.T) {
+		t.Parallel()
+		w := newSyncWorld(t, onMemory)
+		repo := w.repo(t, 1)
+		w.push(t, repo, "refs/heads/main", nil)
+		var c *cache.Cache
+		var held atomic.Bool
+		c = w.open(t, func(o *cache.Options) {
+			cache.BeforeRoundEnds(o, func(string) {
+				// The cache is never started: a kick stays where it was sent.
+				held.Store(true)
+				if cache.KickPending(c) {
+					t.Error("the round woke the maintainer while it still held the repository")
+				}
+			})
+		})
+		w.sync(t, c, repo)
+		if !held.Load() {
+			t.Fatal("no round reached the knob: the case held nothing")
+		}
+		eventually(t, "the wake once the round let go", func() bool { return cache.KickPending(c) })
+	})
+	t.Run("a started cache", func(t *testing.T) {
+		t.Parallel()
+		w := newSyncWorld(t, onMemory)
+		repo := w.repo(t, 1)
+		w.push(t, repo, "refs/heads/main", nil)
+		c := w.open(t, func(o *cache.Options) { cache.MaintainerTicksFrom(o, make(chan time.Time)) })
+		c.Start(t.Context())
+		s := w.sync(t, c, repo)
+		graph := filepath.Join(s.Dir, "objects", "info", "commit-graph")
+		eventually(t, "the graph-first run the round woke", func() bool { return statOK(t, graph) })
+	})
 }
 
 // A STARTED CACHE MAINTAINS AT ITS TICKS, AND STOP ENDS A RUN: Start runs

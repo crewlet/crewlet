@@ -164,8 +164,8 @@ func TestMissingAnswersTheDamageItRead(t *testing.T) {
 			if got != "" || !errors.Is(err, gitproc.ErrCorrupt) || !strings.Contains(err.Error(), "is too small") {
 				t.Fatalf("Missing = %q, %v; want ErrCorrupt quoting git's line", got, err)
 			}
-			if reason, ok := cache.DamageReason(err); !ok || reason != cache.RebuildCorrupt {
-				t.Errorf("DamageReason(%v) = %q, %v; want %q, a rebuild", err, reason, ok, cache.RebuildCorrupt)
+			if f, ok := cache.DamageReason(err); !ok || f.Reason != cache.RebuildCorrupt {
+				t.Errorf("DamageReason(%v) = %q, %v; want %q, a rebuild", err, f.Reason, ok, cache.RebuildCorrupt)
 			}
 		})
 	}

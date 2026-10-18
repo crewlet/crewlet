@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"strings"
+	"time"
 )
 
 // WHAT A GIT PROCESS SAYS WENT WRONG IS READ FROM ITS TRACE2 FORMAT STRINGS.
@@ -334,12 +335,12 @@ func (s *traceSink) kind() error { return kindOf(s.rank) }
 // damage is the run's *Damage when the highest kind named is damage to the
 // repository — ErrCorrupt or ErrMissingObject — and nil otherwise
 // (Result.Damage).
-func (s *traceSink) damage() error {
+func (s *traceSink) damage(began time.Time) error {
 	if s.rank < rankMissing {
 		return nil
 	}
 	return &Damage{Kind: kindOf(s.rank), Parts: s.parts[s.rank], Format: s.first[s.rank].format,
-		Message: s.first[s.rank].message}
+		Message: s.first[s.rank].message, Began: began}
 }
 
 // summary is what the stream said, as a Result carries it.

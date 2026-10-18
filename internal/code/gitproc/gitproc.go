@@ -210,6 +210,15 @@
 // naming a pack, which decides nothing until that pack's bytes are held to its
 // row (the cache's ConfirmHint).
 //
+// WHAT A RUN NAMED IS REPORTED WHETHER OR NOT IT FAILED. git reads around
+// most damage to a derived file — it warns, and answers from the packs — and
+// a caller that got its answer never looks at the warning; so every run whose
+// process started is handed to the pool's one observer ([Pool.Observe]) with
+// its Result, a reservation's included, and the cache that installed it
+// repairs what the run named. [Result.Began] says when the process started,
+// on the monotonic clock, so a report about a file the cache has rewritten
+// since is told from one about the file it holds now.
+//
 // A run that names two kinds is BOTH: an [ExitError]'s Kind is the highest,
 // and errors.Is reaches every kind the run named ([Trace.Kinds]), so a
 // question about one is never answered by another that outranks it — a force
@@ -285,6 +294,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/hostbox"
@@ -405,6 +415,65 @@ type Pool struct {
 
 	log     *slog.Logger
 	metrics *metrics.Recorder
+
+	// observing is the one observer every run reports to (Observe), or nil.
+	observing atomic.Pointer[observer]
+}
+
+// observer is one Observe call's: its own pointer, so its unobserve removes
+// it and never one installed after it.
+type observer struct{ fn func(Ran) }
+
+// Ran is one run as the pool reports it to its observer ([Pool.Observe]):
+// where its process ran, what it loads, and how it ended. NEVER THE [Cmd]: an
+// observer has no use for a run's arguments, and one handed them could run
+// them again — every Cmd that reaches git is one its call spells, which the
+// cache's writers gate holds (a Cmd handed to a function value is a finding
+// there).
+type Ran struct {
+	// Dir and Alternate are the run's Cmd.Dir and Cmd.Alternate: the
+	// directory it ran in, and the one alternate it was handed, if any.
+	Dir, Alternate string
+	// Loads is the run's Cmd.Loads: the chunk-format files its process
+	// loads, which narrow what its damage names (Damage.Narrow).
+	Loads Part
+	// Result is how it ended.
+	Result Result
+}
+
+// Observe installs fn as the pool's OBSERVER: called with what every run ran
+// and how it ended — [Pool.Run] and [Reserved.Run] alike, success or failure,
+// once its process has run — and never for a call refused before a process
+// started (a refusal of the call itself, a shape among them, or the lane's
+// [ErrBusy]), which no process reported. It is called on the run's own
+// goroutine before the run returns, so it must never block: what it decides
+// it hands to work of its own.
+//
+// ONE OBSERVER AT A TIME, and every run reports to it, because a call site
+// that had to remember to hand its result to the cache would be a call site
+// that forgets: the cache repairs a derived file whatever process named it
+// damaged, and the processes that read around damage — git warns and answers
+// from the packs — are the ones whose callers never look. A second Observe
+// while one is installed is [ErrInvalid]; unobserve removes the one this call
+// installed, once, waiting for no run (a run already past its report keeps
+// the observer it read).
+func (p *Pool) Observe(fn func(Ran)) (unobserve func(), err error) {
+	o := &observer{fn: fn}
+	if !p.observing.CompareAndSwap(nil, o) {
+		return nil, fmt.Errorf("%w: this git pool reports its runs to one observer, and one is installed", ErrInvalid)
+	}
+	return sync.OnceFunc(func() { p.observing.CompareAndSwap(o, nil) }), nil
+}
+
+// report hands the observer where c ran and how it ended, when a process
+// started.
+func (p *Pool) report(c Cmd, res Result) {
+	if res.Began.IsZero() {
+		return
+	}
+	if o := p.observing.Load(); o != nil {
+		o.fn(Ran{Dir: c.Dir, Alternate: c.Alternate, Loads: c.Loads, Result: res})
+	}
 }
 
 // New builds a pool over the node's git, checks it is at least [MinVersion]

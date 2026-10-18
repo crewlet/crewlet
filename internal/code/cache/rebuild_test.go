@@ -31,7 +31,7 @@ func TestARebuildReplacesTheDirectoryUnderItsReaders(t *testing.T) {
 	old := w.sync(t, c, repo)
 	before := read(t, filepath.Join(old.Dir, "packed-refs"))
 
-	rebuilt, err := c.Rebuild(t.Context(), old, cache.RebuildCorrupt, 0)
+	rebuilt, err := c.Rebuild(t.Context(), old, cache.Failure{Reason: cache.RebuildCorrupt})
 	if err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestManyFailuresOnOneCacheCostOneRebuild(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			answers[i], errs[i] = c.Rebuild(context.Background(), failed, cache.RebuildMissing, 0)
+			answers[i], errs[i] = c.Rebuild(context.Background(), failed, cache.Failure{Reason: cache.RebuildMissing})
 		}()
 	}
 	wg.Wait()
@@ -133,7 +133,7 @@ func TestManyFailuresOnOneCacheCostOneRebuild(t *testing.T) {
 	}
 
 	before, opens = wholeReads(), w.objects.total()
-	late, err := c.Rebuild(t.Context(), failed, cache.RebuildMissing, 0)
+	late, err := c.Rebuild(t.Context(), failed, cache.Failure{Reason: cache.RebuildMissing})
 	if err != nil {
 		t.Fatalf("a rebuild of an incarnation already replaced: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestARebuildIsNotRepeatedWhereItCannotHelp(t *testing.T) {
 	c := w.open(t, clk.on)
 	first := w.sync(t, c, repo)
 	began := clk.Now()
-	second, err := c.Rebuild(t.Context(), first, cache.RebuildCorrupt, 0)
+	second, err := c.Rebuild(t.Context(), first, cache.Failure{Reason: cache.RebuildCorrupt})
 	if err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestARebuildIsNotRepeatedWhereItCannotHelp(t *testing.T) {
 
 	refused := func(when string, s cache.Synced, rule string) {
 		t.Helper()
-		_, err := c.Rebuild(t.Context(), s, cache.RebuildCorrupt, 0)
+		_, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildCorrupt})
 		if !errors.Is(err, cache.ErrRebuildRefused) || !strings.Contains(err.Error(), "repo-1") ||
 			!strings.Contains(err.Error(), "crewlet code verify repo-1") {
 			t.Fatalf("a rebuild %s = %v, want ErrRebuildRefused naming repo-1 and crewlet code verify", when, err)
@@ -187,7 +187,7 @@ func TestARebuildIsNotRepeatedWhereItCannotHelp(t *testing.T) {
 	}
 	rebuilt := func(when string, s cache.Synced, n int) cache.Synced {
 		t.Helper()
-		got, err := c.Rebuild(t.Context(), s, cache.RebuildCorrupt, 0)
+		got, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildCorrupt})
 		if err != nil {
 			t.Fatalf("a rebuild %s: %v", when, err)
 		}
@@ -243,7 +243,7 @@ func TestWhatTheMaintainerWritesEndsWhatARebuildRead(t *testing.T) {
 	c := w.open(t, clk.on)
 	first := w.sync(t, c, repo)
 	began := clk.Now()
-	second, err := c.Rebuild(t.Context(), first, cache.RebuildCorrupt, 0)
+	second, err := c.Rebuild(t.Context(), first, cache.Failure{Reason: cache.RebuildCorrupt})
 	if err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestWhatTheMaintainerWritesEndsWhatARebuildRead(t *testing.T) {
 		t.Fatalf("the maintainer ran %v over the rebuilt repository, want it", ran)
 	}
 	clk.Set(began.Add(cache.RebuildCooldown + time.Minute))
-	third, err := c.Rebuild(t.Context(), second, cache.RebuildCorrupt, 0)
+	third, err := c.Rebuild(t.Context(), second, cache.Failure{Reason: cache.RebuildCorrupt})
 	if err != nil {
 		t.Fatalf("a rebuild of a product the maintainer has written into, past the cooldown: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestALineOfRebuildsEndsWhenTheAskingStops(t *testing.T) {
 	c := w.open(t, clk.on)
 	s := w.sync(t, c, repo)
 	for n := 2; n <= 4; n++ {
-		next, err := c.Rebuild(t.Context(), s, cache.RebuildCorrupt, 0)
+		next, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildCorrupt})
 		if err != nil {
 			t.Fatalf("the rebuild of incident %d, a quiet day after the last: %v", n-1, err)
 		}
@@ -297,20 +297,20 @@ func TestALineOfRebuildsEndsWhenTheAskingStops(t *testing.T) {
 	unreachable := errors.New("the estate is unreachable")
 	w.log.set(func(f *fakeLog) { f.hook = func(fakeCall) error { return unreachable } })
 	failedAt := clk.Now()
-	if _, err := c.Rebuild(t.Context(), s, cache.RebuildMissing, 0); !errors.Is(err, unreachable) {
+	if _, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildMissing}); !errors.Is(err, unreachable) {
 		t.Fatalf("a rebuild whose whole read failed = %v, want the read's error", err)
 	}
 	w.log.set(func(f *fakeLog) { f.hook = nil })
 
 	clk.Set(failedAt.Add(cache.RebuildCooldown - time.Minute))
-	if _, err := c.Rebuild(t.Context(), s, cache.RebuildMissing, 0); !errors.Is(err, cache.ErrRebuildRefused) {
+	if _, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildMissing}); !errors.Is(err, cache.ErrRebuildRefused) {
 		t.Fatalf("a rebuild inside the cooldown of a failed first attempt = %v, want ErrRebuildRefused", err)
 	}
 	if got := counter(w.rec, metrics.CodeCacheRebuildRefusals, "rule", "cooldown"); got != 1 {
 		t.Errorf("%s{rule=cooldown} = %d, want the one refusal", metrics.CodeCacheRebuildRefusals, got)
 	}
 	clk.Set(failedAt.Add(cache.RebuildCooldown))
-	again, err := c.Rebuild(t.Context(), s, cache.RebuildMissing, 0)
+	again, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildMissing})
 	if err != nil {
 		t.Fatalf("a rebuild a cooldown after a failed first attempt at new damage: %v", err)
 	}
@@ -336,7 +336,7 @@ func TestDamageNoRebuildEndsIsRetriedOnceADay(t *testing.T) {
 	c := w.open(t, clk.on)
 	first := w.sync(t, c, repo)
 	began := clk.Now()
-	second, err := c.Rebuild(t.Context(), first, cache.RebuildCorrupt, 0)
+	second, err := c.Rebuild(t.Context(), first, cache.Failure{Reason: cache.RebuildCorrupt})
 	if err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestDamageNoRebuildEndsIsRetriedOnceADay(t *testing.T) {
 		cache.RebuildBackoffCap - time.Minute,
 	} {
 		clk.Set(began.Add(after))
-		_, err := c.Rebuild(t.Context(), second, cache.RebuildCorrupt, 0)
+		_, err := c.Rebuild(t.Context(), second, cache.Failure{Reason: cache.RebuildCorrupt})
 		if !errors.Is(err, cache.ErrRebuildRefused) {
 			t.Fatalf("a rebuild of what the last one read, asked %v after it = %v, want ErrRebuildRefused", after, err)
 		}
@@ -358,7 +358,7 @@ func TestDamageNoRebuildEndsIsRetriedOnceADay(t *testing.T) {
 	}
 	retried := began.Add(cache.RebuildBackoffCap)
 	clk.Set(retried)
-	third, err := c.Rebuild(t.Context(), second, cache.RebuildCorrupt, 0)
+	third, err := c.Rebuild(t.Context(), second, cache.Failure{Reason: cache.RebuildCorrupt})
 	if err != nil {
 		t.Fatalf("a rebuild of what the last one read, a day after it: %v", err)
 	}
@@ -373,11 +373,11 @@ func TestDamageNoRebuildEndsIsRetriedOnceADay(t *testing.T) {
 	w.push(t, repo, "refs/heads/main", nil)
 	w.sync(t, c, repo).Release()
 	clk.Set(retried.Add(cache.RebuildCooldown + 5*time.Minute))
-	if _, err := c.Rebuild(t.Context(), third, cache.RebuildCorrupt, 0); !errors.Is(err, cache.ErrRebuildRefused) {
+	if _, err := c.Rebuild(t.Context(), third, cache.Failure{Reason: cache.RebuildCorrupt}); !errors.Is(err, cache.ErrRebuildRefused) {
 		t.Fatalf("a rebuild of the second in a row, inside twice the cooldown = %v, want ErrRebuildRefused", err)
 	}
 	clk.Set(retried.Add(2 * cache.RebuildCooldown))
-	fourth, err := c.Rebuild(t.Context(), third, cache.RebuildCorrupt, 0)
+	fourth, err := c.Rebuild(t.Context(), third, cache.Failure{Reason: cache.RebuildCorrupt})
 	if err != nil {
 		t.Fatalf("a rebuild of the second in a row, at twice the cooldown: %v", err)
 	}
@@ -395,19 +395,19 @@ func TestARefusedRebuildIsLoggedOnceACooldown(t *testing.T) {
 	w.push(t, repo, "refs/heads/main", nil)
 	c := w.open(t, clk.on)
 	first := w.sync(t, c, repo)
-	second, err := c.Rebuild(t.Context(), first, cache.RebuildMissing, 0)
+	second, err := c.Rebuild(t.Context(), first, cache.Failure{Reason: cache.RebuildMissing})
 	if err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
 	defer second.Release()
 	first.Release()
 	for range 5 {
-		if _, err := c.Rebuild(t.Context(), second, cache.RebuildMissing, 0); !errors.Is(err, cache.ErrRebuildRefused) {
+		if _, err := c.Rebuild(t.Context(), second, cache.Failure{Reason: cache.RebuildMissing}); !errors.Is(err, cache.ErrRebuildRefused) {
 			t.Fatalf("a rebuild of what the last one read = %v, want ErrRebuildRefused", err)
 		}
 	}
 	clk.Add(cache.RebuildCooldown)
-	if _, err := c.Rebuild(t.Context(), second, cache.RebuildMissing, 0); !errors.Is(err, cache.ErrRebuildRefused) {
+	if _, err := c.Rebuild(t.Context(), second, cache.Failure{Reason: cache.RebuildMissing}); !errors.Is(err, cache.ErrRebuildRefused) {
 		t.Fatalf("a rebuild of what the last one read = %v, want ErrRebuildRefused", err)
 	}
 	if got := len(w.logs.lines(t, "code_cache_rebuild_refused")); got != 2 {
@@ -434,7 +434,7 @@ func TestAFailedRebuildKeepsTheOldCache(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := c.Rebuild(t.Context(), failed, cache.RebuildMissing, 0)
+	_, err := c.Rebuild(t.Context(), failed, cache.Failure{Reason: cache.RebuildMissing})
 	var missing *cache.ErrPackMissing
 	if !errors.As(err, &missing) || missing.Pack.PackID != lost.PackID {
 		t.Fatalf("a rebuild the store cannot complete = %v, want *ErrPackMissing naming %s", err, lost.PackID)
@@ -454,7 +454,7 @@ func TestAFailedRebuildKeepsTheOldCache(t *testing.T) {
 	if got := trashed(t, w, repo+".2.git"); len(got) != 1 {
 		t.Errorf("trash/ holds %v, want the partial incarnation 2", names(t, w.path("trash")))
 	}
-	if _, err = c.Rebuild(t.Context(), failed, cache.RebuildMissing, 0); !errors.Is(err, cache.ErrRebuildRefused) {
+	if _, err = c.Rebuild(t.Context(), failed, cache.Failure{Reason: cache.RebuildMissing}); !errors.Is(err, cache.ErrRebuildRefused) {
 		t.Errorf("a rebuild straight after a failed one = %v, want ErrRebuildRefused", err)
 	}
 }
@@ -506,7 +506,7 @@ func TestAFailedRebuildAnswersOnlyItsOwnCallers(t *testing.T) {
 	}()
 	eventually(t, "the second sync queues behind the held round", func() bool { return cache.Waiting(c, repo) == 2 })
 	go func() {
-		s, err := c.Rebuild(context.Background(), failed, cache.RebuildMissing, 0)
+		s, err := c.Rebuild(context.Background(), failed, cache.Failure{Reason: cache.RebuildMissing})
 		rebuilt <- answer{s, err}
 	}()
 	eventually(t, "the rebuild joins the queued round", func() bool { return cache.Waiting(c, repo) == 3 })
@@ -557,11 +557,11 @@ func TestARebuildReasonIsTheHostsToGive(t *testing.T) {
 	c := w.open(t)
 	s := w.sync(t, c, repo)
 	for _, reason := range []cache.RebuildReason{cache.RebuildStream, cache.RebuildRewound, cache.RebuildVerify, "x", ""} {
-		if _, err := c.Rebuild(t.Context(), s, reason, 0); !errors.Is(err, cache.ErrInvalid) {
+		if _, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: reason}); !errors.Is(err, cache.ErrInvalid) {
 			t.Errorf("Rebuild(%q) = %v, want ErrInvalid", reason, err)
 		}
 	}
-	if _, err := c.Rebuild(t.Context(), cache.Synced{}, cache.RebuildCorrupt, 0); !errors.Is(err, cache.ErrInvalid) {
+	if _, err := c.Rebuild(t.Context(), cache.Synced{}, cache.Failure{Reason: cache.RebuildCorrupt}); !errors.Is(err, cache.ErrInvalid) {
 		t.Errorf("Rebuild of a zero Synced = %v, want ErrInvalid", err)
 	}
 	// Another cache's Synced names an entry and an incarnation this cache
@@ -572,7 +572,7 @@ func TestARebuildReasonIsTheHostsToGive(t *testing.T) {
 	other.push(t, otherRepo, "refs/heads/main", nil)
 	oc := other.open(t)
 	foreign := other.sync(t, oc, otherRepo)
-	if _, err := c.Rebuild(t.Context(), foreign, cache.RebuildCorrupt, 0); !errors.Is(err, cache.ErrInvalid) {
+	if _, err := c.Rebuild(t.Context(), foreign, cache.Failure{Reason: cache.RebuildCorrupt}); !errors.Is(err, cache.ErrInvalid) {
 		t.Errorf("Rebuild of another cache's Synced = %v, want ErrInvalid", err)
 	}
 	if got := cache.Repos(oc)[otherRepo]; got != 1 {
@@ -599,7 +599,7 @@ func TestARebuildReasonIsTheHostsToGive(t *testing.T) {
 		}
 	}
 	c.Stop(context.Background())
-	if _, err := c.Rebuild(t.Context(), s, cache.RebuildCorrupt, 0); !errors.Is(err, cache.ErrStopped) {
+	if _, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildCorrupt}); !errors.Is(err, cache.ErrStopped) {
 		t.Errorf("Rebuild after Stop = %v, want ErrStopped", err)
 	}
 	s.Release()
@@ -608,7 +608,7 @@ func TestARebuildReasonIsTheHostsToGive(t *testing.T) {
 // DAMAGE REASON READS WHAT GIT NAMED: the parts of the repository a run's
 // trace2 reports named (gitproc.Damage), never its words. Damage in derived
 // files ALONE — a multi-pack-index, a commit-graph, a chunk-format file of
-// either — is RebuildDerived, dropped in place, and DerivedDrops names which:
+// either — is RebuildDerived, dropped in place, and its Drops name which:
 // the index, the graph, or both for a chunk-format message, which names
 // neither file. Derived damage beside a pack's is the pack's (corrupt), an
 // object git could not find is missing — a bare sentinel, the peel's own,
@@ -617,7 +617,7 @@ func TestARebuildReasonIsTheHostsToGive(t *testing.T) {
 //
 // Mutations: Derived() true when ANY part is derived (the index-and-pack row
 // reads derived); Drops() of PartChunk the index alone (the chunk row keeps
-// the graph).
+// the graph); Began not carried (the began row reads zero).
 func TestDamageReasonReadsWhatGitNamed(t *testing.T) {
 	t.Parallel()
 	exit := func(kind error, damage *gitproc.Damage) error {
@@ -630,35 +630,44 @@ func TestDamageReasonReadsWhatGitNamed(t *testing.T) {
 	corrupt := func(parts gitproc.Part) error {
 		return exit(gitproc.ErrCorrupt, &gitproc.Damage{Kind: gitproc.ErrCorrupt, Parts: parts})
 	}
+	began := time.Now()
 	both := gitproc.PartMultiPackIndex | gitproc.PartCommitGraph
 	for _, tc := range []struct {
 		name   string
 		err    error
 		reason cache.RebuildReason // "" for no repair
 		drops  gitproc.Part
+		began  time.Time
 	}{
-		{"a multi-pack-index", corrupt(gitproc.PartMultiPackIndex), cache.RebuildDerived, gitproc.PartMultiPackIndex},
-		{"a commit-graph", corrupt(gitproc.PartCommitGraph), cache.RebuildDerived, gitproc.PartCommitGraph},
-		{"a chunk-format file", corrupt(gitproc.PartChunk), cache.RebuildDerived, both},
-		{"an index and a graph", corrupt(both), cache.RebuildDerived, both},
-		{"an index and a pack", corrupt(gitproc.PartMultiPackIndex | gitproc.PartPack), cache.RebuildCorrupt, 0},
-		{"a pack", corrupt(gitproc.PartPack), cache.RebuildCorrupt, 0},
+		{"a multi-pack-index", corrupt(gitproc.PartMultiPackIndex), cache.RebuildDerived, gitproc.PartMultiPackIndex, time.Time{}},
+		{"a commit-graph", corrupt(gitproc.PartCommitGraph), cache.RebuildDerived, gitproc.PartCommitGraph, time.Time{}},
+		{"a chunk-format file", corrupt(gitproc.PartChunk), cache.RebuildDerived, both, time.Time{}},
+		{"an index and a graph", corrupt(both), cache.RebuildDerived, both, time.Time{}},
+		{"a began run's index", exit(gitproc.ErrCorrupt, &gitproc.Damage{Kind: gitproc.ErrCorrupt,
+			Parts: gitproc.PartMultiPackIndex, Began: began}), cache.RebuildDerived, gitproc.PartMultiPackIndex, began},
+		{"a began run's pack", exit(gitproc.ErrCorrupt, &gitproc.Damage{Kind: gitproc.ErrCorrupt,
+			Parts: gitproc.PartPack, Began: began}), cache.RebuildCorrupt, 0, began},
+		{"an index and a pack", corrupt(gitproc.PartMultiPackIndex | gitproc.PartPack), cache.RebuildCorrupt, 0, time.Time{}},
+		{"a pack", corrupt(gitproc.PartPack), cache.RebuildCorrupt, 0, time.Time{}},
 		{"an object", exit(gitproc.ErrMissingObject,
-			&gitproc.Damage{Kind: gitproc.ErrMissingObject, Parts: gitproc.PartObject}), cache.RebuildMissing, 0},
+			&gitproc.Damage{Kind: gitproc.ErrMissingObject, Parts: gitproc.PartObject}), cache.RebuildMissing, 0, time.Time{}},
 		{"the peel's own absent object", fmt.Errorf("cache: peel: %w", gitproc.ErrMissingObject),
-			cache.RebuildMissing, 0},
+			cache.RebuildMissing, 0, time.Time{}},
 		{"a shape", fmt.Errorf("git cat-file: %w",
-			&gitproc.ShapeError{Rule: gitproc.ShapeConfig, Dir: "/c/repos/r.1.git"}), cache.RebuildShape, 0},
-		{"not our ref", exit(gitproc.ErrNotOurRef, nil), "", 0},
-		{"a failure naming nothing", exit(gitproc.ErrFailed, nil), "", 0},
-		{"no git failure at all", errors.New("cache: the disk refused a write"), "", 0},
+			&gitproc.ShapeError{Rule: gitproc.ShapeConfig, Dir: "/c/repos/r.1.git"}), cache.RebuildShape, 0, time.Time{}},
+		{"not our ref", exit(gitproc.ErrNotOurRef, nil), "", 0, time.Time{}},
+		{"a failure naming nothing", exit(gitproc.ErrFailed, nil), "", 0, time.Time{}},
+		{"no git failure at all", errors.New("cache: the disk refused a write"), "", 0, time.Time{}},
 	} {
-		reason, ok := cache.DamageReason(tc.err)
-		if ok != (tc.reason != "") || reason != tc.reason {
-			t.Errorf("%s: DamageReason = %q, %v; want %q", tc.name, reason, ok, tc.reason)
+		f, ok := cache.DamageReason(tc.err)
+		if ok != (tc.reason != "") || f.Reason != tc.reason {
+			t.Errorf("%s: DamageReason = %q, %v; want %q", tc.name, f.Reason, ok, tc.reason)
 		}
-		if got := cache.DerivedDrops(tc.err); got != tc.drops {
-			t.Errorf("%s: DerivedDrops = %v, want %v", tc.name, got, tc.drops)
+		if f.Drops != tc.drops {
+			t.Errorf("%s: Drops = %v, want %v", tc.name, f.Drops, tc.drops)
+		}
+		if !f.Began.Equal(tc.began) {
+			t.Errorf("%s: Began = %v, want %v", tc.name, f.Began, tc.began)
 		}
 	}
 }

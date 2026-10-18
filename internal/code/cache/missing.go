@@ -73,7 +73,7 @@ func (c *Cache) Missing(ctx context.Context, s Synced, wants iter.Seq2[string, e
 	// the client's connection before upload-pack starts.
 	res, err := c.git.Run(ctx, gitproc.Cmd{
 		Dir: s.Dir, Args: []string{"cat-file", "--batch-check", "--buffer"}, Config: c.ServeConfig(),
-		Stdin: in, Stdout: lines, Class: gitproc.ClassRead,
+		Loads: gitproc.PartMultiPackIndex, Stdin: in, Stdout: lines, Class: gitproc.ClassRead,
 		Deadline: gitproc.PackWorkDeadline(max(inputBytes, 0)),
 	})
 	// The check asks cat-file about object ids alone, which loads the
@@ -102,7 +102,7 @@ func (c *Cache) Missing(ctx context.Context, s Synced, wants iter.Seq2[string, e
 		return missing, nil
 	case damage != nil:
 		// A damage cat-file died of: named FIRST, so a repair reading the
-		// failure (cache.DamageReason, DerivedDrops) meets it as narrowed
+		// failure (cache.DamageReason) meets it as narrowed
 		// before the run's own.
 		return "", fmt.Errorf("cache: which objects of %s are missing: git cat-file read a damaged repository: %w — %w",
 			s.entry.id, damage, err)

@@ -358,6 +358,7 @@ func (c *Cache) dropCommitGraph(e *entry, inc *incarnation) error {
 	}
 	e.mu.Lock()
 	unvouch(inc, filepath.Join(infoRel, "commit-graph"))
+	wrote(inc, gitproc.PartCommitGraph)
 	e.mu.Unlock()
 	return syncDir(filepath.Dir(graph))
 }
@@ -384,6 +385,7 @@ func (c *Cache) dropMultiPackIndex(e *entry, inc *incarnation) error {
 		}
 		e.mu.Lock()
 		unvouch(inc, filepath.Join(packRel, d.Name()))
+		wrote(inc, gitproc.PartMultiPackIndex)
 		e.mu.Unlock()
 	}
 	return syncDir(packDir)

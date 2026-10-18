@@ -129,8 +129,8 @@ func TestEveryShapeThePoolRefusesIsRepairedInPlace(t *testing.T) {
 
 			_, err := runGit(t, w.pool, s.Dir, "", "cat-file", "-e", tip)
 			refusedFor(t, err, d.rule, false)
-			if reason, ok := cache.DamageReason(err); !ok || reason != cache.RebuildShape {
-				t.Fatalf("DamageReason(%v) = %q, %v; want shape", err, reason, ok)
+			if f, ok := cache.DamageReason(err); !ok || f.Reason != cache.RebuildShape {
+				t.Fatalf("DamageReason(%v) = %q, %v; want shape", err, f.Reason, ok)
 			}
 			sc, err := c.NewScratch(t.Context(), s, uuid.Must(uuid.NewV7()).String())
 			if err != nil {
@@ -139,11 +139,11 @@ func TestEveryShapeThePoolRefusesIsRepairedInPlace(t *testing.T) {
 			_, err = runGitOver(t, w.pool, sc, "cat-file", "-e", tip)
 			sc.Remove()
 			refusedFor(t, err, d.rule, true)
-			if reason, ok := cache.ShapeReason(err); !ok || reason != cache.RebuildShape {
-				t.Fatalf("ShapeReason(%v) = %q, %v; want shape", err, reason, ok)
+			if f, ok := cache.ShapeReason(err); !ok || f.Reason != cache.RebuildShape {
+				t.Fatalf("ShapeReason(%v) = %q, %v; want shape", err, f.Reason, ok)
 			}
 
-			repaired, err := c.Rebuild(t.Context(), s, cache.RebuildShape, 0)
+			repaired, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildShape})
 			if err != nil {
 				t.Fatalf("Rebuild(shape): %v", err)
 			}
@@ -311,7 +311,7 @@ func TestAShapeTheSweepDidNotEndIsRebuilt(t *testing.T) {
 
 			armed <- struct{}{}
 			spoil(t, s.Dir)
-			rebuilt, err := c.Rebuild(t.Context(), s, cache.RebuildShape, 0)
+			rebuilt, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildShape})
 			if err != nil {
 				t.Fatalf("Rebuild(shape) of a shape the sweep did not end: %v", err)
 			}
@@ -331,7 +331,7 @@ func TestAShapeTheSweepDidNotEndIsRebuilt(t *testing.T) {
 
 			armed <- struct{}{}
 			spoil(t, rebuilt.Dir)
-			if _, err := c.Rebuild(t.Context(), rebuilt, cache.RebuildShape, 0); !errors.Is(err, cache.ErrRebuildRefused) {
+			if _, err := c.Rebuild(t.Context(), rebuilt, cache.Failure{Reason: cache.RebuildShape}); !errors.Is(err, cache.ErrRebuildRefused) {
 				t.Fatalf("a second shape the sweep did not end, inside the cooldown = %v, want ErrRebuildRefused", err)
 			}
 			if got := counter(w.rec, metrics.CodeCacheRebuildRefusals, "rule", "cooldown"); got != 1 {

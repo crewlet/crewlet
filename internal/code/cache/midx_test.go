@@ -65,7 +65,7 @@ func TestADamagedMidxIsRepairedInPlace(t *testing.T) {
 	overwriteBytes(t, midx, start, bytes.Repeat([]byte{0xff}, int(end-start)))
 
 	before := w.objects.total()
-	repaired, err := c.Rebuild(t.Context(), s, cache.RebuildDerived, gitproc.PartMultiPackIndex)
+	repaired, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildDerived, Drops: gitproc.PartMultiPackIndex})
 	if err != nil {
 		t.Fatalf("Rebuild(derived): %v", err)
 	}
@@ -160,7 +160,7 @@ func TestADamagedMidxIsDroppedWhateverElseItsCopyIsReadWholeFor(t *testing.T) {
 
 			tc.mark(c, repo)
 			before := w.objects.total()
-			repaired, err := c.Rebuild(t.Context(), s, cache.RebuildDerived, gitproc.PartMultiPackIndex)
+			repaired, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildDerived, Drops: gitproc.PartMultiPackIndex})
 			if err != nil {
 				t.Fatalf("Rebuild(derived): %v", err)
 			}
@@ -330,7 +330,7 @@ func TestARoundsOwnGitMeetingADamagedIndexDropsItInPlace(t *testing.T) {
 // repair drops BOTH.
 //
 // Each repair is asked with what a real git run over the damaged copy was
-// classified as (cache.DamageReason, cache.DerivedDrops), so the case holds
+// classified as (cache.DamageReason: its Reason and Drops), so the case holds
 // the classification and the drop together.
 //
 // Mutations: make dropCommitGraph a no-op (the I8 arm keeps its damaged
@@ -377,12 +377,12 @@ func TestADamagedGraphIsDroppedInPlaceAndItsIndexKept(t *testing.T) {
 			if err == nil {
 				err = res.Damage
 			}
-			reason, ok := cache.DamageReason(err)
-			if !ok || reason != cache.RebuildDerived {
-				t.Fatalf("rev-list over the damaged graph read as %q, %v (%v), want derived", reason, ok, err)
+			f, ok := cache.DamageReason(err)
+			if !ok || f.Reason != cache.RebuildDerived {
+				t.Fatalf("rev-list over the damaged graph read as %q, %v (%v), want derived", f.Reason, ok, err)
 			}
 			before := w.objects.total()
-			repaired, err := c.Rebuild(t.Context(), s, reason, cache.DerivedDrops(err))
+			repaired, err := c.Rebuild(t.Context(), s, f)
 			if err != nil {
 				t.Fatalf("Rebuild(derived): %v", err)
 			}

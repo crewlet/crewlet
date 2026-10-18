@@ -56,7 +56,7 @@ func ReadTrace(dir string, stream []byte, piece int) (t Trace, kind, damage erro
 		stream = stream[n:]
 	}
 	s.finish()
-	return s.summary(), s.kind(), s.damage()
+	return s.summary(), s.kind(), s.damage(time.Time{})
 }
 
 // TraceHeld is the most capacity the line a trace sink holds reached while

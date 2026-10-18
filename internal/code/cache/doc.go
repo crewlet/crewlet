@@ -265,11 +265,13 @@
 //     its reverse index) or a commit-graph is written here from the packs
 //     the incarnation already holds, so damage git names in derived files
 //     ALONE ([RebuildDerived]) is repaired in place the same way, the round
-//     DROPPING the files the damage names ([DerivedDrops]: the index, the
-//     graph, or both for a chunk-format message, which names neither) for
-//     the round or the maintainer to write sound ones over the same packs.
-//     A round whose own git meets it marks the same drop; a round that had
-//     dropped those very files and meets the damage again asks a rebuild
+//     DROPPING the files the damage names (the [Failure]'s Drops: the index,
+//     the graph, or both for a chunk-format message, which names neither) for
+//     the round or the maintainer to write sound ones over the same packs —
+//     unless this process wrote one of them after the failing process began
+//     (the Failure's Began), which that process may not have read. A round
+//     whose own git meets it marks the same drop; a round that had dropped
+//     those very files and meets the damage again asks a rebuild
 //     ([RebuildCorrupt]) — the damage was the packs'.
 //   - Everything else is read whole at the log's head into the NEXT
 //     incarnation, beside the one its readers hold, which replaces it once
@@ -329,6 +331,52 @@
 // damaged pack costs one GET — and checks the rebuild the same way; a rebuild
 // it has seen whole has ended the damage it was for, so that incarnation's
 // next failure is rebuilt at once.
+//
+// # What any git process reports damaged is repaired
+//
+// git reads around most damage to a derived file — it warns, answers from the
+// packs and walks by date — and a caller that got its answer never looks at
+// the warning; the maintainer's own write over a damaged index says so and
+// fails, every time. So the pool hands EVERY RUN to the cache's observer
+// (gitproc.Pool.Observe, installed by [Open], given back by [Cache.Stop]; a
+// reservation's runs too), and what a run over one of the cache's
+// incarnations named of its derived files is repaired whether or not the run
+// failed (report.go):
+//
+//   - ROUTED BY THE PROCESS'S DIRECTORY: a process in an incarnation reports
+//     about it; one in a push's scratch or an advertisement view reports
+//     about its alternate only the derived files, since its pack and object
+//     reports may be the client's pack (counted `unrouted`). A chunk-format
+//     report is narrowed to the files its process loads
+//     (gitproc.Cmd.Loads).
+//   - REPAIRED BY A ROUND NO REQUEST WAITS FOR, which the observer queues
+//     under the entry's mutex and never its write lock, so it never holds the
+//     run that reported. The round is FULL and LINEARIZABLE — a full round's
+//     sweep removes every pack its snapshot does not name, and an adoption
+//     installs a pack past the incarnation's own position — and it drops the
+//     files as a request's repair does. The copy is not taken out of service:
+//     it keeps answering at once meanwhile, as git did.
+//   - GUARDED, on the monotonic clock: a file this process wrote after the
+//     reporting run began is kept (`stale`), since that run may have read
+//     the one the write replaced — without it, every long clone that began
+//     over a damaged bitmap would drop each rewrite in turn.
+//   - NEVER UNDER A CHECK: a report recorded while a check of the repository
+//     is admitted is `deferred`, and the check's release asks the round, so a
+//     check reports what it found rather than a repair made between its
+//     listing and its hashing.
+//   - ONCE A RebuildQuiet: a derived part dropped for damage again within
+//     RebuildQuiet of its last drop for damage is dropped and left to the
+//     ordinary schedule (the graph graphFailed, the index its debounce and
+//     interval) — logged code_cache_derived_damaged_again once an incarnation
+//     and counted `again` — however many writes of it came between, the
+//     maintainer's ordinary ones included: they land on the same disk. So a
+//     disk that keeps damaging what is written to it costs one rewrite at once
+//     a RebuildQuiet and the ordinary schedule's after it, never a loop.
+//
+// A dropped file is written again at once because the maintainer is woken
+// as the round lets the repository go — never from inside the round, since a
+// pass starts no run on a repository a round holds: woken from inside, it met
+// the round still running and left the copy to its next tick.
 //
 // # Background work never takes a person's slot
 //

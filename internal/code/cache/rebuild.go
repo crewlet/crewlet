@@ -177,14 +177,29 @@ func inPlace(r RebuildReason) bool { return slices.Contains(inPlaceReasons, r) }
 // Valid reports whether r is one of [RebuildReasons].
 func (r RebuildReason) Valid() bool { return slices.Contains(RebuildReasons, r) }
 
+// Failure is what a git process over a cache failed with, as the cache
+// repairs it ([DamageReason], [ShapeReason]; [Cache.Rebuild]).
+type Failure struct {
+	// Reason is the repair the failure asks.
+	Reason RebuildReason
+	// Drops is the derived files a [RebuildDerived] repair drops
+	// (gitproc.Damage.Drops), and none for any other reason.
+	Drops gitproc.Part
+	// Began is when the failing process began (gitproc.Damage.Began; zero
+	// when nothing says): a drop spares a file this process wrote after it,
+	// which the failing run may not have read.
+	Began time.Time
+}
+
 // DamageReason is the damage a git process whose directory is one of this
 // cache's incarnations failed with names, and whether it is damage the cache
-// repairs ([Cache.Rebuild]): [RebuildShape] for gitproc.ErrRepoShape — the
-// pool's refusal to start one there, which names the incarnation, since a
-// process run in it names no alternate; [RebuildDerived] for a
-// gitproc.Damage of kind gitproc.ErrCorrupt whose parts are all derived files
-// (gitproc.Damage.Derived; the files to drop are its Drops); [RebuildCorrupt]
-// for any other gitproc.ErrCorrupt; [RebuildMissing] for
+// repairs ([Cache.Rebuild]), as a [Failure]: [RebuildShape] for
+// gitproc.ErrRepoShape — the pool's refusal to start one there, which names
+// the incarnation, since a process run in it names no alternate;
+// [RebuildDerived] for a gitproc.Damage of kind gitproc.ErrCorrupt whose
+// parts are all derived files (gitproc.Damage.Derived; the files to drop are
+// its Drops, and Began when its process began); [RebuildCorrupt] for any
+// other gitproc.ErrCorrupt; [RebuildMissing] for
 // gitproc.ErrMissingObject — read with errors.Is, so a bare sentinel (the
 // peel's own, refs.go) reads too. Never gitproc.ErrNotOurRef, which a want the
 // repository never served and a lost pack print alike (the next linearizable
@@ -198,19 +213,23 @@ func (r RebuildReason) Valid() bool { return slices.Contains(RebuildReasons, r) 
 // alternate, and there only its shape is the cache's: the scratch's
 // index-pack reads the CLIENT's pack, so its ErrCorrupt is that pack's
 // (gitproc.ExitError) — such a caller asks [ShapeReason].
-func DamageReason(err error) (RebuildReason, bool) {
+func DamageReason(err error) (Failure, bool) {
 	var dmg *gitproc.Damage
+	var began time.Time
+	if errors.As(err, &dmg) {
+		began = dmg.Began
+	}
 	switch {
 	case errors.Is(err, gitproc.ErrRepoShape):
-		return RebuildShape, true
-	case errors.As(err, &dmg) && errors.Is(dmg.Kind, gitproc.ErrCorrupt) && dmg.Derived():
-		return RebuildDerived, true
+		return Failure{Reason: RebuildShape}, true
+	case dmg != nil && errors.Is(dmg.Kind, gitproc.ErrCorrupt) && dmg.Derived():
+		return Failure{Reason: RebuildDerived, Drops: dmg.Drops(), Began: began}, true
 	case errors.Is(err, gitproc.ErrCorrupt):
-		return RebuildCorrupt, true
+		return Failure{Reason: RebuildCorrupt, Began: began}, true
 	case errors.Is(err, gitproc.ErrMissingObject):
-		return RebuildMissing, true
+		return Failure{Reason: RebuildMissing, Began: began}, true
 	}
-	return "", false
+	return Failure{}, false
 }
 
 // ShapeReason is [DamageReason] for a git process whose directory is a
@@ -220,30 +239,19 @@ func DamageReason(err error) (RebuildReason, bool) {
 // the cache's to repair, and nothing else such a process says is — a refusal
 // of the scratch's own shape is a directory one request made, which the next
 // makes again.
-func ShapeReason(err error) (RebuildReason, bool) {
+func ShapeReason(err error) (Failure, bool) {
 	var shape *gitproc.ShapeError
 	if errors.As(err, &shape) && shape.InAlternate {
-		return RebuildShape, true
+		return Failure{Reason: RebuildShape}, true
 	}
-	return "", false
-}
-
-// DerivedDrops is the derived files a failure's damage names to drop
-// (gitproc.Damage.Drops) — what [Cache.Rebuild] takes beside
-// [RebuildDerived] — and none for any other failure.
-func DerivedDrops(err error) gitproc.Part {
-	var dmg *gitproc.Damage
-	if errors.As(err, &dmg) && dmg.Derived() {
-		return dmg.Drops()
-	}
-	return 0
+	return Failure{}, false
 }
 
 // Rebuild repairs the incarnation failed was handed out of, and answers the
-// repaired directory pinned. reason is what the host's git process over
-// failed.Dir was refused or classified as ([DamageReason], [ShapeReason]),
-// and drops the derived files a [RebuildDerived] drops ([DerivedDrops]) —
-// none for any other reason:
+// repaired directory pinned. f is what the host's git process over
+// failed.Dir was refused or classified as ([DamageReason], [ShapeReason]):
+// its reason, and the derived files a [RebuildDerived] drops — none for any
+// other reason:
 //
 //   - [RebuildShape] reads the incarnation whole IN PLACE (markWhole): the
 //     round that answers is a full one that started after the mark, whose
@@ -252,11 +260,13 @@ func DerivedDrops(err error) gitproc.Part {
 //     rebuild's refusals, since it costs a read of the rows. A shape that
 //     sweep did not end is rebuilt by the round itself (Cache.run).
 //   - [RebuildDerived] reads the incarnation whole IN PLACE the same way,
-//     and its round DROPS the derived files drops names (apply) so it or
+//     and its round DROPS the derived files f.Drops names (apply) so it or
 //     the maintainer writes sound ones over the same packs — no download —
 //     whatever else the incarnation is already marked to be read whole for
 //     (a shape, a log recreated or gone back), which the read is then
-//     counted under instead (incarnation.drop). Damage it does not end (a
+//     counted under instead (incarnation.drop) — unless this process wrote a
+//     file of them after the failing process began (f.Began), which that
+//     process may not have read (dropDamaged). Damage it does not end (a
 //     pack the index named is itself damaged) escalates to
 //     [RebuildCorrupt] on the retry (repair.go).
 //   - [RebuildCorrupt] and [RebuildMissing] replace it with the NEXT
@@ -269,9 +279,8 @@ func DerivedDrops(err error) gitproc.Part {
 // with no repair. failed stays the caller's to release. ctx bounds the
 // caller's wait and nothing else: the repair runs on for anybody else
 // waiting on it.
-func (c *Cache) Rebuild(ctx context.Context, failed Synced, reason RebuildReason, drops gitproc.Part) (Synced,
-	error) {
-
+func (c *Cache) Rebuild(ctx context.Context, failed Synced, f Failure) (Synced, error) {
+	reason, drops := f.Reason, f.Drops
 	if !slices.Contains(rebuildReasons, reason) {
 		return Synced{}, fmt.Errorf("%w: a rebuild's reason is what the host's git process over the cache "+
 			"failed with, one of %v, and %q is not", ErrInvalid, rebuildReasons, reason)
@@ -289,7 +298,7 @@ func (c *Cache) Rebuild(ctx context.Context, failed Synced, reason RebuildReason
 	if c.isStopped() {
 		return Synced{}, ErrStopped
 	}
-	return c.rebuild(ctx, failed, reason, drops, true, nil)
+	return c.rebuild(ctx, failed, f, true, nil)
 }
 
 // rebuild is Rebuild's body, for a failed this cache handed out and a reason
@@ -301,8 +310,10 @@ func (c *Cache) Rebuild(ctx context.Context, failed Synced, reason RebuildReason
 // checksums of the packs of failed's incarnation the caller has just held to
 // their rows (seedRebuild) — Verify's; nil from a git process's failure,
 // which says nothing of which pack is damaged.
-func (c *Cache) rebuild(ctx context.Context, failed Synced, reason RebuildReason, drops gitproc.Part, refuse bool,
-	whole []string) (Synced, error) {
+func (c *Cache) rebuild(ctx context.Context, failed Synced, f Failure, refuse bool, whole []string) (Synced,
+	error) {
+
+	reason := f.Reason
 	e := failed.entry
 	now := c.now()
 	e.mu.Lock()
@@ -320,7 +331,7 @@ func (c *Cache) rebuild(ctx context.Context, failed Synced, reason RebuildReason
 		// derived case dropping the damaged files so the round or the
 		// maintainer rewrites them, with no download and no new incarnation
 		// (apply).
-		markWhole(failed.inc, reason, drops)
+		markWhole(failed.inc, f, dropRequest)
 		w := newWaiter(linearizable)
 		c.join(e, w)
 		e.mu.Unlock()

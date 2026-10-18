@@ -371,15 +371,15 @@ func TestEveryCacheErrorHasADecidedAnswer(t *testing.T) {
 type rebuilds struct {
 	asked []cache.RebuildReason
 	drops []gitproc.Part
+	began []time.Time
 	hints []gitproc.Hint
 	bad   map[string]bool
 }
 
-func (b *rebuilds) Rebuild(_ context.Context, _ cache.Synced, reason cache.RebuildReason,
-	drops gitproc.Part) (cache.Synced, error) {
-
-	b.asked = append(b.asked, reason)
-	b.drops = append(b.drops, drops)
+func (b *rebuilds) Rebuild(_ context.Context, _ cache.Synced, f cache.Failure) (cache.Synced, error) {
+	b.asked = append(b.asked, f.Reason)
+	b.drops = append(b.drops, f.Drops)
+	b.began = append(b.began, f.Began)
 	return cache.Synced{}, nil
 }
 
@@ -471,20 +471,23 @@ func TestDamageARepairDidNotEndSaysSo(t *testing.T) {
 // own failure is the answer. A process in a push's scratch or an
 // advertisement view (asAlternate) never asks — its hint names the scratch's
 // own pack, the client's. And a derived damage's repair is told which files
-// to drop (cache.DerivedDrops), escalating to a whole read when the retry
+// to drop and when the run that named them began (cache.Failure: the cache
+// spares a file it wrote after), escalating to a whole read when the retry
 // still meets damage.
 //
 // Mutations: repair on a hint without confirming it (the sound arm
 // rebuilds); read hints for asAlternate (the scratch arm asks); hand Rebuild
-// no drops (the derived arms' drops are empty).
+// no drops (the derived arms' drops are empty); hand it no Began (their
+// began is zero).
 func TestAHintIsRepairedOnlyWhereItsPackIsNotItsRows(t *testing.T) {
 	const pack = "0123456789abcdef0123456789abcdef01234567"
 	hint := gitproc.Hint{Object: strings.Repeat("ab", 20), Pack: pack}
 	hinted := &gitproc.ExitError{Command: "upload-pack", Kind: gitproc.ErrFailed,
 		Result: gitproc.Result{Exit: 128, Trace: gitproc.Trace{Hints: []gitproc.Hint{hint}}}}
+	began := time.Now()
 	derived := func(parts gitproc.Part) error {
 		return &gitproc.ExitError{Command: "upload-pack", Kind: gitproc.ErrCorrupt, Result: gitproc.Result{Exit: 128,
-			Damage: &gitproc.Damage{Kind: gitproc.ErrCorrupt, Parts: parts}}}
+			Damage: &gitproc.Damage{Kind: gitproc.ErrCorrupt, Parts: parts, Began: began}}}
 	}
 	corrupt := &gitproc.ExitError{Command: "upload-pack", Kind: gitproc.ErrCorrupt, Result: gitproc.Result{Exit: 128,
 		Damage: &gitproc.Damage{Kind: gitproc.ErrCorrupt, Parts: gitproc.PartPack}}}
@@ -524,9 +527,9 @@ func TestAHintIsRepairedOnlyWhereItsPackIsNotItsRows(t *testing.T) {
 		t.Run("derived damage in "+name, func(t *testing.T) {
 			b, err := repairWith(t, &rebuilds{}, inIncarnation, derived(tc.parts))
 			if err != nil || !slices.Equal(b.asked, []cache.RebuildReason{cache.RebuildDerived}) ||
-				!slices.Equal(b.drops, []gitproc.Part{tc.drops}) {
-				t.Errorf("answered %v, the cache asked %v dropping %v; want served after one derived repair "+
-					"dropping %v", err, b.asked, b.drops, tc.drops)
+				!slices.Equal(b.drops, []gitproc.Part{tc.drops}) || len(b.began) != 1 || !b.began[0].Equal(began) {
+				t.Errorf("answered %v, the cache asked %v dropping %v for runs begun %v; want served after one "+
+					"derived repair dropping %v for a run begun %v", err, b.asked, b.drops, b.began, tc.drops, began)
 			}
 		})
 	}

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -214,11 +215,14 @@ func (p Part) String() string {
 // events of that kind named, and the first such event — its format
 // (canonical) and its message, git's arguments filled in, for errors and logs
 // ONLY: the message is never matched, because a request's text lands there.
+// Began is when the process that named it began ([Result.Began]), so a
+// repair carries it wherever the damage goes.
 type Damage struct {
 	Kind    error // ErrCorrupt or ErrMissingObject
 	Parts   Part
 	Format  string
 	Message string
+	Began   time.Time
 }
 
 // Error is "gitproc: <kind>: <the message, at most 512 bytes>".
@@ -344,7 +348,14 @@ var formatTable = map[row][]string{
 		`multi-pack-index required OID fanout chunk missing or corrupted`,     // 2.43 on
 		`multi-pack-index required OID lookup chunk missing or corrupted`,     // 2.43 on
 		`multi-pack-index required object offsets chunk missing or corrupted`, // 2.43 on
+		`multi-pack-index OID fanout is of the wrong size`,                    // 2.40–2.42
 		`multi-pack-index pack names out of order: '%s' before '%s'`,
+		`oid fanout out of order: fanout[%d] = %x > %x = fanout[%d]`, // 2.47 on, beside the required-fanout row
+		// The maintainer's own write over an index whose checksum is not its
+		// bytes: git says so and writes on, keeping whatever of the old index
+		// it could read — the one report of a damaged index a run that
+		// succeeded makes.
+		`ignoring existing multi-pack-index; checksum mismatch`,
 		// The index's bitmap, dropped with it.
 		`corrupted bitmap index file (wrong header)`,
 		`corrupted bitmap index (too small)`,
@@ -358,6 +369,7 @@ var formatTable = map[row][]string{
 		`commit-graph is missing the OID Fanout chunk`,                // 2.40–2.43
 		`commit-graph oid fanout chunk is wrong size`,                 // 2.43 on
 		`commit-graph required OID fanout chunk missing or corrupted`, // 2.44 on
+		`commit-graph fanout values out of order`,                     // 2.43 on
 		`invalid parent position %u`,                                  // fatal
 		`commit-graph requires overflow generation data but has none`, // fatal
 	},

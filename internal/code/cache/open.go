@@ -42,6 +42,8 @@ type Cache struct {
 	// the suite can narrow both before a sync (export_test.go).
 	fetchConcurrency int
 	fetches          *fetchSlots
+	// unobserve gives the pool's observer back (Open, Stop).
+	unobserve func()
 	// roundPacks is how many packs a full round leaves before it writes its
 	// own multi-pack-index (MidxRoundPacks), and midxPacks how many beside
 	// the maintainer's make a repository due again (MidxPacks): fields, so
@@ -228,6 +230,15 @@ func Open(ctx context.Context, o Options) (*Cache, error) {
 		"budget", o.MaxBytes, "trashed", trashed, "memory", c.memory.Bytes, "memory_from", c.memory.From,
 		"memory_reserved", c.memReserve, "maintenance_budget", c.maint.budgetNow())
 	c.setGauges()
+	// THE OBSERVER, last: every run of the pool's from now on reports what
+	// it named to this cache (report.go). One cache a pool, and given back
+	// by Stop, so a cache opened again over the same pool installs its own.
+	unobserve, err := o.Git.Observe(c.observe)
+	if err != nil {
+		return nil, fmt.Errorf("%w: a git pool reports its runs to one cache, and this one already reports to "+
+			"another — stop that cache first: %w", ErrOptions, err)
+	}
+	c.unobserve = unobserve
 	opened = true
 	return c, nil
 }
@@ -399,6 +410,10 @@ func (c *Cache) isStopped() bool {
 // Safe to call more than once; a second call waits again, bounded by its
 // own ctx.
 func (c *Cache) Stop(ctx context.Context) {
+	// The pool goes back last, whatever the wait: a run in flight past the
+	// stop reports to nobody (observe), and another cache over the same pool
+	// may install its own observer.
+	defer c.unobserve()
 	c.lifeMu.Lock()
 	c.stopped = true
 	idle := c.running == 0

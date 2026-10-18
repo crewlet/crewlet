@@ -59,7 +59,7 @@ import (
 // reasonOf the reading, and hints whether a hint the run's trace recorded
 // names one of the incarnation's packs (cache.Cache.ConfirmHint).
 type reading struct {
-	reasonOf func(error) (cache.RebuildReason, bool)
+	reasonOf func(error) (cache.Failure, bool)
 	hints    bool
 }
 
@@ -78,7 +78,9 @@ var (
 // repairing runs run over *synced and, when it fails before the response's
 // first byte (started) with damage read says the cache repairs, has the
 // cache repair it (cache.Cache.Rebuild: a shape or derived files in place, a
-// pack or an object into the next incarnation) and runs it once more over the
+// pack or an object into the next incarnation — handed the failure whole, the
+// derived files to drop and when the failing run began among it, so a file the
+// cache rewrote since the run began is spared) and runs it once more over the
 // repaired one, which replaces *synced — released here, the repaired one the
 // caller's to release as *synced always is. What it answers is the last run's
 // error, or the repair's own: a refused rebuild (cache.ErrRebuildRefused) is
@@ -95,8 +97,7 @@ func (s *Server) repairing(ctx context.Context, r *http.Request, name string, sy
 // rebuilder is the cache's repair as repair asks it (cache.Cache.Rebuild,
 // cache.Cache.ConfirmHint).
 type rebuilder interface {
-	Rebuild(ctx context.Context, failed cache.Synced, reason cache.RebuildReason, drops gitproc.Part) (cache.Synced,
-		error)
+	Rebuild(ctx context.Context, failed cache.Synced, f cache.Failure) (cache.Synced, error)
 	ConfirmHint(ctx context.Context, s cache.Synced, h gitproc.Hint) (cache.RebuildReason, bool)
 }
 
@@ -121,26 +122,22 @@ func repair(ctx context.Context, log *slog.Logger, c rebuilder, r *http.Request,
 		if err == nil || started() {
 			return err
 		}
-		reason, repairs := read.reasonOf(err)
+		f, repairs := read.reasonOf(err)
 		if !repairs && read.hints {
-			reason, repairs = confirmed(ctx, c, *synced, err)
+			f, repairs = confirmed(ctx, c, *synced, err)
 		}
 		switch {
 		case !repairs:
 			return err
-		case done[reason] || len(done) >= maxRepairs:
+		case done[f.Reason] || len(done) >= maxRepairs:
 			// The same damage after its repair, or a line of repairs that
 			// each made way for the next without ending it: the cache's
 			// repair did not end it.
 			return fmt.Errorf("%w: %w", errStillDamaged, err)
 		}
-		done[reason] = true
-		log.Info(retriedLine(r), "repo", name, "reason", string(reason), "error", err)
-		var drops gitproc.Part
-		if reason == cache.RebuildDerived {
-			drops = cache.DerivedDrops(err)
-		}
-		rebuilt, rerr := c.Rebuild(ctx, *synced, reason, drops)
+		done[f.Reason] = true
+		log.Info(retriedLine(r), "repo", name, "reason", string(f.Reason), "error", err)
+		rebuilt, rerr := c.Rebuild(ctx, *synced, f)
 		if rerr != nil {
 			return rerr
 		}
@@ -152,17 +149,17 @@ func repair(ctx context.Context, log *slog.Logger, c rebuilder, r *http.Request,
 // confirmed is the repair a failure's hints ask once their packs are held to
 // their rows (cache.Cache.ConfirmHint): the first hint whose pack is not its
 // row's, or none.
-func confirmed(ctx context.Context, c rebuilder, synced cache.Synced, err error) (cache.RebuildReason, bool) {
+func confirmed(ctx context.Context, c rebuilder, synced cache.Synced, err error) (cache.Failure, bool) {
 	var exit *gitproc.ExitError
 	if !errors.As(err, &exit) {
-		return "", false
+		return cache.Failure{}, false
 	}
 	for _, h := range exit.Result.Trace.Hints {
 		if reason, ok := c.ConfirmHint(ctx, synced, h); ok {
-			return reason, true
+			return cache.Failure{Reason: reason}, true
 		}
 	}
-	return "", false
+	return cache.Failure{}, false
 }
 
 // retriedLine is the line a request whose cache was rebuilt under it is

@@ -96,6 +96,10 @@ type knobs struct {
 	// peeling runs as a round's peel is about to read the incarnation at
 	// dir.
 	peeling func(dir string)
+	// roundEnding runs as a round over repo has converged and before it
+	// lets the repository go: a case holds a round there, its write lock
+	// given back and the round still the repository's.
+	roundEnding func(repo string)
 	// swept runs as the sweep's first half has made the incarnation at dir
 	// its image, before what it left is held to the pool's shape check: a
 	// case writes into it there, as something outside the engine would.

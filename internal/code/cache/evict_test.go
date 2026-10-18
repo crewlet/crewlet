@@ -164,7 +164,7 @@ func TestTrashIsRemovedOffTheRequestPath(t *testing.T) {
 	w.push(t, repo, "refs/heads/main", nil)
 	c := w.open(t)
 	old := w.sync(t, c, repo)
-	rebuilt, err := c.Rebuild(t.Context(), old, cache.RebuildCorrupt, 0)
+	rebuilt, err := c.Rebuild(t.Context(), old, cache.Failure{Reason: cache.RebuildCorrupt})
 	if err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}

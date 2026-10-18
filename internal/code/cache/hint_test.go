@@ -570,7 +570,7 @@ func TestAHintedRoundsCallersFollowTheCopyThatReplacedItsOwn(t *testing.T) {
 	h := holdAHint(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
-	rebuilt, err := h.c.Rebuild(ctx, h.first, cache.RebuildCorrupt, 0)
+	rebuilt, err := h.c.Rebuild(ctx, h.first, cache.Failure{Reason: cache.RebuildCorrupt})
 	if err != nil {
 		t.Fatalf("a rebuild asked while the round's hint was hashed: %v, want it run before the hash ends", err)
 	}
