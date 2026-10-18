@@ -2075,7 +2075,7 @@ func (a *Applier) explodeCatalogue(ctx context.Context, tx *sql.Tx, name string,
 // every filter for ever. `AppliesTo` is not one-way at all: a declaration that
 // adds a type has to bring those tasks' values back into the filterable set.
 //
-// TWO FACTS IN ONE COLUMN, and the statement computes both — a value is hidden
+// TWO FACTS IN ONE COLUMN, and the statements compute both — a value is hidden
 // when its field is ARCHIVED or when the field's `AppliesTo` excludes the TYPE
 // of the task holding it. The type comparison is case-folded because
 // [appliesTo] decides the same thing at explode time and folds too, and the
@@ -2090,51 +2090,88 @@ func (a *Applier) settleFieldVisibility(ctx context.Context, tx *sql.Tx,
 
 	written := 0
 	for _, field := range fields {
-		var res sql.Result
-		var err error
-		switch {
-		case field.Archived || len(field.AppliesTo) == 0:
-			// ONE ANSWER FOR EVERY ROW: an archived field hides all
-			// of its values and an unrestricted one hides none, and
-			// neither needs to know which task a row sits on.
-			want := boolInt(field.Archived)
-			res, err = tx.ExecContext(ctx, `
-				UPDATE tracker_field_values SET hidden = ?
-				WHERE field_id = ? AND kind = ? AND hidden <> ?`,
-				want, field.ID, FieldValueNative, want)
-		default:
-			types := make([]any, 0, len(field.AppliesTo))
-			for _, name := range field.AppliesTo {
-				types = append(types, strings.ToLower(name))
+		for _, write := range settleStatements(field) {
+			res, err := tx.ExecContext(ctx, write.sql, write.args...)
+			if err != nil {
+				return 0, fmt.Errorf("worklet: settle %s's value rows against its "+
+					"declaration: %w", field.Slug, err)
 			}
-			// A ROW WHOSE TASK IS GONE IS HIDDEN, which is what the
-			// COALESCE says: the column is NOT NULL, and a value with
-			// no task to be about cannot be shown to belong to one.
-			expr := `COALESCE((SELECT CASE WHEN LOWER(t.type) IN (` +
-				placeholders(len(types)) + `) THEN 0 ELSE 1 END ` +
-				`FROM tracker_tasks t ` +
-				`WHERE t.id = tracker_field_values.task_id), 1)`
-			// THE SET CLAUSE'S ARGUMENTS BIND FIRST, then the
-			// WHERE's, then the same expression's again: a
-			// placeholder binds in statement order and this
-			// expression appears twice.
-			bound := append(append([]any{}, types...), field.ID, FieldValueNative)
-			bound = append(bound, types...)
-			res, err = tx.ExecContext(ctx, `
-				UPDATE tracker_field_values SET hidden = `+expr+`
-				WHERE field_id = ? AND kind = ? AND hidden <> `+expr, bound...)
+			n, err := affected(res)
+			if err != nil {
+				return 0, err
+			}
+			written += n
 		}
-		if err != nil {
-			return 0, fmt.Errorf("worklet: settle %s's value rows against its "+
-				"declaration: %w", field.Slug, err)
-		}
-		n, err := affected(res)
-		if err != nil {
-			return 0, err
-		}
-		written += n
 	}
 	return written, nil
+}
+
+// The index of the value rows a declaration hides (replicated 0059): the size
+// of what is hidden, which a healthy company keeps small.
+const hiddenFieldValuesIndex = "tracker_field_values_hidden_idx"
+
+// settleWrite is one statement [Applier.settleFieldVisibility] runs, with its
+// arguments.
+type settleWrite struct {
+	sql  string
+	args []any
+}
+
+// settleStatements is what makes one field's value rows agree with its
+// declaration: the visible rows that should be hidden, then the hidden rows
+// that should be visible — each one only where the declaration can produce
+// such a row, and each named for the plan test.
+//
+// # Why two writes, and why each NAMES its index
+//
+// The settle runs for every field on every catalogue apply, and it was one
+// statement per field — `hidden <> <what the declaration says>` — which no
+// index can serve, since a row on either side of the column may be the one
+// that moves. So every catalogue change read every value row in the company
+// from the heap, once per field the company declares, inside the applier's
+// transaction. Split by the side a row is on, each half has an index that
+// holds exactly that side: the VISIBLE rows are every one of the four value
+// indexes, which are partial on `hidden = 0` and on nothing else — the field's
+// own column's is named, the index its filters read — and the HIDDEN rows are
+// [hiddenFieldValuesIndex]. Named, because the planner reaches a partial index
+// only when it chooses to, and the visible half reaches one of four by its
+// own costing; and the clause is a guard, refusing with `no query solution`
+// a write that stopped stating the side its index holds.
+//
+// So a field with nothing to move costs a seek that finds nothing — an
+// unrestricted field's hidden rows, an archived one's visible rows — and only
+// a field that restricts the types it applies to reads every live value it
+// has, because whether each row should be shown is a fact about its task.
+func settleStatements(field FieldDef) []settleWrite {
+	visible := "UPDATE tracker_field_values INDEXED BY " + fieldValueIndex(field.Type) +
+		" SET hidden = 1 WHERE field_id = ? AND kind = ? AND hidden = 0"
+	hidden := "UPDATE tracker_field_values INDEXED BY " + hiddenFieldValuesIndex +
+		" SET hidden = 0 WHERE field_id = ? AND kind = ? AND hidden = 1"
+	bound := []any{field.ID, FieldValueNative}
+	switch {
+	case field.Archived:
+		// AN ARCHIVED FIELD HIDES EVERY VALUE, and has none to show.
+		return []settleWrite{{visible, bound}}
+	case len(field.AppliesTo) == 0:
+		// AN UNRESTRICTED ONE HIDES NONE, so all it does is show.
+		return []settleWrite{{hidden, bound}}
+	}
+	types := make([]any, 0, len(field.AppliesTo))
+	for _, name := range field.AppliesTo {
+		types = append(types, strings.ToLower(name))
+	}
+	// A ROW WHOSE TASK IS GONE IS HIDDEN, which is what the COALESCE says:
+	// the column is NOT NULL, and a value with no task to be about cannot be
+	// shown to belong to one.
+	excluded := ` AND COALESCE((SELECT CASE WHEN LOWER(t.type) IN (` +
+		placeholders(len(types)) + `) THEN 0 ELSE 1 END ` +
+		`FROM tracker_tasks t ` +
+		`WHERE t.id = tracker_field_values.task_id), 1) = `
+	args := append(append([]any{}, bound...), types...)
+	return []settleWrite{
+		{visible + excluded + "1", args},
+		{hidden + excluded + "0", args},
+	}
 }
 
 // writeThread writes the rows a record's own payload carries, as against the
