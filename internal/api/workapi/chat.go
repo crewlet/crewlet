@@ -243,9 +243,10 @@ func pruneArgs(cutoff time.Time) map[string]any {
 //
 // `{"retention_days": n}` keeps the room's messages n days, `0` for ever, and
 // `{"retention_days": null}` returns the room to the company's horizon
-// (`chat.chatlet.retention_days`). REQUIRED, as a value or a null: an absent one
-// would read as the company's horizon, and a request that said nothing would
-// then destroy the past of a room an administrator had set to keep for ever.
+// (`chat.chatlet.message_retention_days`). REQUIRED, as a value or a null: an
+// absent one would read as the company's horizon, and a request that said
+// nothing would then destroy the past of a room an administrator had set to
+// keep for ever.
 // A shorter horizon is a prune on a delay — the duty takes whatever it no
 // longer covers on its next pass — which is why this is decided as a prune is.
 func (s *served) putChatRetention(w http.ResponseWriter, r *http.Request) {
