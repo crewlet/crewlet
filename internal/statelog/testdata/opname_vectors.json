@@ -1,0 +1,62 @@
+[
+  {
+    "value": "ENG-1",
+    "part": "ENG-1"
+  },
+  {
+    "value": "0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b",
+    "part": "0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b"
+  },
+  {
+    "value": "ci:release",
+    "part": "ci:release"
+  },
+  {
+    "value": "nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx9",
+    "part": "nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx9"
+  },
+  {
+    "value": "node-a.b_c-9",
+    "part": "~e7acc27d350a02d62f182992b2ab8b1b"
+  },
+  {
+    "value": "ENG/docs/a.md",
+    "part": "~2e3ee63364dcd16a752c864e512b3f1f"
+  },
+  {
+    "value": "docs/My Notes.md",
+    "part": "~482231f8515299d256f8692d8e132536"
+  },
+  {
+    "value": "ü.md",
+    "part": "~3650542a0304b7d4431a3f49624fb86a"
+  },
+  {
+    "value": "~abc",
+    "part": "~ae4be1ed9894ba5f9418209b6bb44200"
+  },
+  {
+    "value": "",
+    "part": "~e3b0c44298fc1c149afbf4c8996fb924"
+  },
+  {
+    "value": "tab\tseparated",
+    "part": "~737304a727e038b1b7006995771a6087"
+  },
+  {
+    "value": "nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx9",
+    "part": "~369b02b238daa118202b123a74e00806"
+  },
+  {
+    "value": "docs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.md",
+    "part": "~42e6d88049efd50a8a5ebe8936007ece"
+  },
+  {
+    "value": "a.b",
+    "part": "~2e7336dc8eba87ef472df568c35482ab"
+  },
+  {
+    "value": "~2e7336dc8eba87ef472df568c35482ab",
+    "part": "~1884b52255113ee8430030609917befe"
+  }
+]

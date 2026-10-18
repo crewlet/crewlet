@@ -53,7 +53,7 @@ func appliedOn(i int, domain statelog.Domain, gesture, verb, node string) engine
 		seq = uint64(4410 * i)
 	}
 	return engine.DomainGate{Domain: domain.Name(), Stream: stream,
-		OpID:     statelog.StepOpID(gesture, verb, domain.Name()+":"+node),
+		OpID:     statelog.StepOpID(gesture, verb, domain.Name()+":"+statelog.OpNamePart(node)),
 		Outcome:  statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: stream, Generation: 1, Seq: seq}}
 }

@@ -12,6 +12,7 @@
  */
 
 import { GATE_ACTIONS_KEEPING_OPERATION, type GATE_ACTIONS } from "../contract/gate.ts";
+import { sha256 } from "./sha256.ts";
 
 /** One of [GATE_ACTIONS]. A gate answer's `actions` is typed `string[]`, so an
  *  action a newer node sends is a value to show rather than a type error. */
@@ -23,13 +24,55 @@ export function keepsOperation(action: string): boolean {
   return (GATE_ACTIONS_KEEPING_OPERATION as readonly string[]).includes(action);
 }
 
+/** The widest segment of an operation id — its name, or one step — written as
+ *  itself (`statelog.MaxOpSegmentBytes`): what 128 bytes leave after the uuid
+ *  and the dot. */
+const OP_SEGMENT_BYTES = 91;
+
+/** The widest value written into a segment as itself
+ *  (`statelog.MaxOpNamePartBytes`), so a verb, a dash and the value stay one
+ *  readable segment. */
+const OP_NAME_PART_BYTES = 64;
+
+/**
+ * `value` as the engine's grammar writes it into one segment of an operation
+ * id at most `limit` bytes wide: as itself where it is one to `limit` bytes of
+ * visible ASCII with no `.` — which begins the next step — and does not begin
+ * with `~`, and otherwise ESCAPED, as `~` and the first sixteen bytes of the
+ * SHA-256 of its UTF-8 in hex. Injective: a value written as itself never
+ * begins with `~`, so none can spell another's escape.
+ */
+function opPart(value: string, limit: number): string {
+  const bytes = new TextEncoder().encode(value);
+  const asItself =
+    bytes.length > 0 &&
+    bytes.length <= limit &&
+    bytes[0] !== 0x7e &&
+    bytes.every((b) => b > 0x20 && b <= 0x7e && b !== 0x2e);
+  if (asItself) return value;
+  const digest = sha256(bytes).subarray(0, 16);
+  return "~" + Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * A value — a node's id — as it goes into an operation id's name
+ * (`statelog.OpNamePart`): itself where it already is a part, and escaped
+ * otherwise, so `evict-` and a node id that holds dots is one readable
+ * segment rather than a name and a step. Pinned against the engine's by a
+ * vector file both sides read (`internal/statelog/testdata/opname_vectors.json`).
+ */
+export function opNamePart(value: string): string {
+  return opPart(value, OP_NAME_PART_BYTES);
+}
+
 /**
  * An operation id in the engine's grammar (`statelog.NewOpID`), from its parts.
  *
  * The UUIDv7 bit layout — the leading 48 bits the Unix millisecond, big-endian,
  * then the ten tail bytes with the version nibble 7 written into byte 6 and the
- * RFC 9562 variant into byte 8 — then `.` and the name, or the bare uuid for an
- * empty one. The millisecond is clamped to the 48 bits the layout holds, as
+ * RFC 9562 variant into byte 8 — then `.` and the name as one segment (escaped
+ * where it is not one, as the engine's mint writes it), or the bare uuid for
+ * an empty one. The millisecond is clamped to the 48 bits the layout holds, as
  * the engine's is.
  *
  * PURE, so the vector file the engine's own test reads
@@ -55,7 +98,7 @@ export function layoutOpID(unixMs: number, tail: Uint8Array, name: string): stri
     16,
     20,
   )}-${hex.slice(20)}`;
-  return name ? `${uuid}.${name}` : uuid;
+  return name ? `${uuid}.${opPart(name, OP_SEGMENT_BYTES)}` : uuid;
 }
 
 /**
@@ -89,5 +132,5 @@ export function newGateOpID(
   now: number = Date.now(),
   random: (bytes: Uint8Array<ArrayBuffer>) => Uint8Array = (bytes) => crypto.getRandomValues(bytes),
 ): string {
-  return layoutOpID(now, random(new Uint8Array(10)), `${verb}-${node}`);
+  return layoutOpID(now, random(new Uint8Array(10)), `${verb}-${opNamePart(node)}`);
 }
