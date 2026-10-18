@@ -15,11 +15,12 @@ import (
 // wrapping's own punctuation, headers, another block's armour, base64 that is
 // not a key's in one case and in both (a path in mixed case, a Go test's
 // name), prose and a line another process wrote, a key already redacted, a
-// password key and its value, and what a rule writes into a line a key is read
-// across: a password's key with its value on the next line, in a string —
-// broken after its key, its breaks kept — or written up to an armour, a key's
-// line written up to a BEGIN and repeated with a quote after it, and tokens
-// before a key's line or an armour, after one, or written up to one.
+// password key (spaced from its separator too) and its value, and what a rule
+// writes into a line a key is read across: a password's key with its value on
+// the next line, in a string — broken after its key, its breaks kept — or
+// written up to an armour, a key's line written up to a BEGIN and repeated with
+// a quote after it, and tokens before a key's line or an armour, after one, or
+// written up to one.
 var transcriptLines = []string{
 	"-----BEGIN RSA PRIVATE KEY-----",
 	"-----END RSA PRIVATE KEY-----",
@@ -72,6 +73,7 @@ var transcriptLines = []string{
 	marker,
 	"KEY=" + marker + " set",
 	"password:",
+	"Password :",
 	"  hunter2",
 	"token sk-" + strings.Repeat("q", 40),
 	"pwd=",

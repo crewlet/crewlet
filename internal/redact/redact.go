@@ -705,7 +705,9 @@ func keySpans(text string) [][2]int {
 //
 // Read forward, a body line that ends in anything else — the `"}` that closes
 // the string a key was written into, the `…` of a cut — ENDS the block at its
-// base64, because what follows is the enclosing text.
+// base64, because what follows is the enclosing text. Except a password's key
+// and its separator (`Password:`), which is a line interrupting the key, so
+// its value is never cut off from it ([wrapping.bodyLine]).
 func keyBlocks(text string) ([][2]int, int) {
 	if !strings.Contains(text, keyArmour) {
 		return nil, -1
@@ -928,6 +930,16 @@ const (
 // key's body under this wrapping: what kind of line it is, where its base64
 // begins and ends, and whether what follows the base64 is the enclosing text
 // rather than the wrapping's suffix.
+//
+// A line on which a PASSWORD'S KEY ENDS THE BASE64, its separator after it —
+// `Password:`, `pwd :` — is no line of the body, whatever it ends in: read as
+// the body's last line written up to the enclosing text, it put the word the
+// password's rule keys on into the key's block and left the `:` outside it,
+// so an unclosed key followed by `Password:` and a value on the next line
+// published the value, which the same two lines with no key above them
+// redact. Read as a line interrupting the key, it is redacted with the key
+// when a line of the key follows it, the value read as the short last line,
+// and left to the password's rule when none does.
 func (w wrapping) bodyLine(at int, line string) (kind lineKind, start, end int, terminated bool) {
 	core := line
 	if w.suffix != "" && strings.HasSuffix(core, w.suffix) {
@@ -938,7 +950,8 @@ func (w wrapping) bodyLine(at int, line string) (kind lineKind, start, end int, 
 		core, terminated = core[:i+1], true
 	}
 	run := trailingRun(core)
-	if run == 0 || !w.prefixOK(strings.TrimRight(core[:len(core)-run], " \t")) {
+	if run == 0 || !w.prefixOK(strings.TrimRight(core[:len(core)-run], " \t")) ||
+		labelsPassword(line, len(core)-run, len(core)) {
 		return otherLine, 0, 0, false
 	}
 	end = at + len(core)
@@ -946,6 +959,20 @@ func (w wrapping) bodyLine(at int, line string) (kind lineKind, start, end int, 
 		return fullLine, end - run, end, terminated
 	}
 	return shortLine, end - run, end, terminated
+}
+
+// labelsPassword reports whether a [passwordRule] match opens in line's run of
+// base64, from start to end, with its separator past the run: the run ends in
+// a password's key and the `:` after it is the line's. A run's own `=` is
+// base64's padding, so a key's last line ending in `pwd=` stays a line of it,
+// whatever follows it.
+func labelsPassword(line string, start, end int) bool {
+	for at, after, ok := passwordRule.next(line, start); ok && at < end; at, after, ok = passwordRule.next(line, after) {
+		if after > end && strings.ContainsAny(line[end:after], ":=") {
+			return true
+		}
+	}
+	return false
 }
 
 // prefixOK reports whether p — the text before a line's base64, trimmed — is

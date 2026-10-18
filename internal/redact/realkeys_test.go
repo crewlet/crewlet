@@ -252,6 +252,60 @@ func TestNoPieceOfARealKeySurvivesAnyWrapping(t *testing.T) {
 	}
 }
 
+// A PASSWORD AFTER A REAL KEY WITH NO END IS REDACTED AS IT IS WITH NONE: in
+// every wrapping, under every encoder's last line, a label and its value on the
+// next line (or after a blank one) redact the value wherever the same lines
+// from the label on do, since the key's block never takes the word the
+// password's rule keys on, and nothing of the key survives. Where the label's
+// lines alone keep their value (an echo's quote stands where a value would
+// be), so do these: that is the password's rule, not the key's read.
+//
+// Mutation: drop the label from bodyLine, and the value is published under
+// most of these keys in most wrappings.
+func TestAPasswordAfterARealKeyWithNoEndIsRedactedAsWithNone(t *testing.T) {
+	t.Parallel()
+	const value = "hunter2x9"
+	for kname, key := range realKeys() {
+		var body []string
+		for _, line := range key[1 : len(key)-1] {
+			if line != "" && !strings.Contains(line, ":") {
+				body = append(body, line)
+			}
+		}
+		for wname, w := range wrappings() {
+			if w.oneLine {
+				continue
+			}
+			for _, label := range []string{"Password:", "  pwd :"} {
+				for _, gap := range []bool{false, true} {
+					lines := append(slices.Clone(key[:len(key)-1]), label)
+					if gap {
+						lines = append(lines, "")
+					}
+					text := w.wrap(append(lines, value)).text
+					word := strings.TrimSpace(strings.TrimRight(label, ": "))
+					alone := text[strings.LastIndexByte(text[:strings.LastIndex(text, word)], '\n')+1:]
+					name := kname + ", " + wname + ", " + label
+					got := redact.Secrets(text)
+					if leak := survivor(got, body); leak != "" {
+						t.Errorf("%s: %q survived in\n%s", name, leak, got)
+					}
+					if strings.Contains(got, value) && !strings.Contains(redact.Secrets(alone), value) {
+						t.Errorf("%s (blank line between: %v): the value was published under the key "+
+							"and redacted without it:\n%s", name, gap, got)
+					}
+					if again := redact.Secrets(got); again != got {
+						t.Errorf("%s: a second pass changed the text", name)
+					}
+					if shown, _ := settle(text, []int{5, 400}); shown != got {
+						t.Errorf("%s in pieces: shown as it settled\n%q\nwant\n%q", name, shown, got)
+					}
+				}
+			}
+		}
+	}
+}
+
 // foreignInARow is the most lines in a row of lines that are none of the key's:
 // a body of one line broken by two lines and then by one is broken by three.
 func foreignInARow(lines []string) int {

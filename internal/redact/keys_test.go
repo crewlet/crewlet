@@ -1016,6 +1016,76 @@ func TestAKeyWhoseLastLineEndsInTheTextAroundItIsRedacted(t *testing.T) {
 	}
 }
 
+// A PASSWORD'S KEY UNDER A KEY WITH NO END IS NO LINE OF IT. Read as the body's
+// last line written up to the text around it, `Password:` gave the key's block
+// its word and left the `:` outside it, so the value on the next line was
+// published — under a key whose END was never written, which is what a run
+// that crashed mid-print leaves, and in every wrapping a key is read in. Read
+// as a line interrupting the key, the label and its value are redacted with
+// it when the value can be its last line, and left to the password's rule
+// when it cannot. A run's own `=` is base64's padding, so a last line ending
+// in `pwd=` is still the key's.
+//
+// Mutation: drop the label from bodyLine, and the value is published in every
+// case but the last; take a separator inside the run as one, and the last
+// line ending in `pwd=` is published; look at a run's first match alone, and
+// the second key in one is read as a line of the key.
+func TestAPasswordsKeyUnderAKeyWithNoEndIsNoLineOfIt(t *testing.T) {
+	m := marker
+	begin := "-----BEGIN RSA PRIVATE KEY-----\n" + pemBody(2)
+	for name, form := range map[string]keyForm{
+		"after the body's full lines": {
+			begin + "Password:\nhunter2\n",
+			m + "\n",
+		},
+		"after its short last line": {
+			begin + "u1SU1Lf=\nPassword:\nhunter2\n",
+			m + "\nPassword:\n" + redact.Marker + "password]\n",
+		},
+		"spaced from its separator": {
+			begin + "Password :\nhunter2\n",
+			m + "\n",
+		},
+		"indented, in capitals": {
+			begin + "  PASSWD:\n  hunter2\n",
+			m + "\n",
+		},
+		"its value after a blank line": {
+			begin + "Password:\n\nhunter2\n",
+			m + "\n",
+		},
+		"its value no line of the key": {
+			begin + "Password:\nhunter2 is not it\n",
+			m + "\nPassword:\n" + redact.Marker + "password] is not it\n",
+		},
+		"under a reader's line numbers": {
+			"12:-----BEGIN RSA PRIVATE KEY-----\n13:" + keyLine + "\n14:" + keyLine + "\n15:Password:\n16:hunter2\n",
+			"12:" + m + "\n",
+		},
+		"in a string, its breaks escaped": {
+			`"-----BEGIN RSA PRIVATE KEY-----\n` + keyLine + `\n` + keyLine + `\nPassword:\nhunter2\n"`,
+			`"` + m + `\n"`,
+		},
+		"a second key in the run": {
+			begin + "u1pwd=Xpassword:\nhunter2\n",
+			m + "\n",
+		},
+		"a last line ending in pwd=, then a cut's mark": {
+			begin + "u1SU1Lpwd= \u2026",
+			m + " \u2026",
+		},
+	} {
+		got := redact.Secrets(form.text)
+		if strings.Contains(got, "hunter2") || strings.Contains(got, "u1") {
+			t.Errorf("%s: a secret survived: %q", name, got)
+			continue
+		}
+		if got != form.want {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, form.want)
+		}
+	}
+}
+
 // oneLineKey is a whole RSA key written on one line, its breaks turned to
 // spaces — one of the ways two keys end up flattened onto one line (a shell
 // `echo $A $B`, an env dump with the newlines stripped).
