@@ -157,6 +157,20 @@ var namedRoutes = []struct {
 	// identity rather than anything the tracker holds, and a node with no
 	// native tracker still has a viewer.
 	{method: "GET", pattern: "/viewer", what: "viewer"},
+	// THE ARTIFACTS. The literal `/artifacts/usage` beats the `{id}`
+	// wildcard, so it is not read as an artifact of that id; every other
+	// read names the artifact, and a version by its number. The writes, the
+	// downloads and the source are the artifacts surface's own routes
+	// (internal/api/artifactsapi), mounted beside these.
+	{method: "GET", pattern: "/artifacts", what: "artifacts"},
+	{method: "GET", pattern: "/artifacts/usage", what: "artifact_usage"},
+	{method: "GET", pattern: "/artifacts/{id}", what: "artifact", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/artifacts/{id}/versions", what: "artifact_versions", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/artifacts/{id}/versions/{n}", what: "artifact_version", path: map[string]string{"id": "id", "n": "n"}},
+	{method: "GET", pattern: "/artifacts/{id}/history", what: "artifact_history", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/artifacts/{id}/assets", what: "artifact_assets", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/artifacts/{id}/seen-by", what: "artifact_seen_by", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/artifacts/{id}/access", what: "artifact_access", path: map[string]string{"id": "id"}},
 }
 
 // mountReads registers the named read routes.
