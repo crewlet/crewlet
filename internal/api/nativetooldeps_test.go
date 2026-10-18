@@ -7,10 +7,13 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -214,10 +217,24 @@ func TestTheOperatorSurfaceIsHandedEveryHalfItDeclares(t *testing.T) {
 // holds none, which is what a renamed constructor or type would look like.
 func literalKeys(t *testing.T, path, fn, typ string) []string {
 	t.Helper()
+	return literalKeysOf(t, path, fn, "builtin", typ)
+}
+
+// literalKeysOf is [literalKeys] for a literal of pkg's typ, or of this
+// package's own typ where pkg is empty.
+func literalKeysOf(t *testing.T, path, fn, pkg, typ string) []string {
+	t.Helper()
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, path, nil, 0)
 	if err != nil {
 		t.Fatalf("parse %s: %v", path, err)
+	}
+	named := func(expr ast.Expr) bool {
+		if pkg == "" {
+			id, ok := expr.(*ast.Ident)
+			return ok && id.Name == typ
+		}
+		return isSelector(expr, pkg, typ)
 	}
 	var out []string
 	found := false
@@ -228,7 +245,7 @@ func literalKeys(t *testing.T, path, fn, typ string) []string {
 		}
 		ast.Inspect(decl.Body, func(n ast.Node) bool {
 			lit, ok := n.(*ast.CompositeLit)
-			if !ok || !isSelector(lit.Type, "builtin", typ) || len(lit.Elts) == 0 {
+			if !ok || !named(lit.Type) || len(lit.Elts) == 0 {
 				return true
 			}
 			found = true
@@ -248,8 +265,8 @@ func literalKeys(t *testing.T, path, fn, typ string) []string {
 		return false
 	})
 	if !found {
-		t.Fatalf("no builtin.%s literal in %s's %s, so this gate certifies "+
-			"nothing", typ, path, fn)
+		t.Fatalf("no %s literal in %s's %s, so this gate certifies nothing",
+			strings.TrimPrefix(pkg+"."+typ, "."), path, fn)
 	}
 	return out
 }
@@ -336,4 +353,73 @@ func isEngineValue(e ast.Expr) bool {
 		return x.Sel.Name == "engine"
 	}
 	return false
+}
+
+// THE READ SURFACE IS HANDED EVERY NATIVE SOURCE, and under its own name.
+//
+// [api.NativeSources] builds them and [api.NativeReads.Into] hands them over,
+// and both callers — `crewlet run` and the end-to-end suite — go through the
+// pair, so a source one of them forgets is a family of questions answered
+// `unknown_query` on every node, which reads as a company that runs no such
+// app rather than a wiring mistake. The rooms beside the board were the case:
+// the two callers each set the board's five sources field by field, and a
+// sixth would have been a field each had to remember.
+//
+// Asserted over the SOURCE, for [TestAPersonsSurfacesAreHandedEveryWriterSeam]'s
+// reason — a constructor over a running engine is not something a unit test
+// can build — and held to the type by reflection, so a field added to
+// [api.NativeReads] is a field both functions must name.
+func TestTheReadSurfaceIsHandedEveryNativeSource(t *testing.T) {
+	t.Parallel()
+	built := literalKeysOf(t, "native.go", "NativeSources", "", "NativeReads")
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "native.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse native.go: %v", err)
+	}
+	handed := map[string]string{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "Into" {
+			return true
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			assign, ok := n.(*ast.AssignStmt)
+			if !ok || len(assign.Lhs) != len(assign.Rhs) {
+				return true
+			}
+			for i, lhs := range assign.Lhs {
+				to, ok := lhs.(*ast.SelectorExpr)
+				if !ok {
+					continue
+				}
+				if from, ok := assign.Rhs[i].(*ast.SelectorExpr); ok {
+					handed[to.Sel.Name] = from.Sel.Name
+				}
+			}
+			return true
+		})
+		return false
+	})
+	if len(handed) == 0 {
+		t.Fatal("Into assigns nothing, so this gate is not reading the function it is about")
+	}
+	sources := reflect.TypeFor[queries.Sources]()
+	reads := reflect.TypeFor[api.NativeReads]()
+	for i := range reads.NumField() {
+		field := reads.Field(i)
+		if !slices.Contains(built, field.Name) {
+			t.Errorf("NativeSources never builds NativeReads.%s", field.Name)
+		}
+		if handed[field.Name] != field.Name {
+			t.Errorf("Into hands queries.Sources.%s %q, want NativeReads.%s — "+
+				"the source a node builds is not the one its questions read",
+				field.Name, handed[field.Name], field.Name)
+		}
+		target, ok := sources.FieldByName(field.Name)
+		if !ok || target.Type != field.Type {
+			t.Errorf("queries.Sources has no %s of type %s for NativeReads.%s",
+				field.Name, field.Type, field.Name)
+		}
+	}
 }
