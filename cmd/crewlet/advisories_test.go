@@ -206,7 +206,7 @@ func TestTheRunFlagsAreFoldedInBeforeTheAdvisoriesAreJudged(t *testing.T) {
 //
 // And the refusal NORMALIZES what passes, as Tier A's validation always does,
 // so the bind the dev principal is checked against afterwards is the one the
-// engine binds.
+// node binds.
 func TestTheFoldedDocumentIsHeldToEveryTierARule(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

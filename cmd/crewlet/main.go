@@ -1124,9 +1124,10 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// so the lines reach the durable record; and after every flag has been
 	// folded into the document, so they describe the node this run starts
 	// rather than the file it was started from. What can still fail after
-	// them is not Tier A's to refuse: the environment's node id, a company
-	// file the seed writes into the store and holds to the admission rules
-	// then, a store or a broker that will not open.
+	// them is not Tier A's to refuse: the environment's node id, a port
+	// somebody else holds, a company file the seed writes into the store and
+	// holds to the admission rules then, a store or a broker that will not
+	// open.
 	logBootstrapAdvisories(log, boot)
 
 	// The engine owns the process signals exclusively — one handler per
@@ -2997,10 +2998,10 @@ func overrideNode(boot *config.Bootstrap, fs *flag.FlagSet,
 // naming the flag that made the document wrong. Asked here, the refusal names
 // the flags given and comes first.
 //
-// AND BEFORE ANYTHING ACTS ON IT: the listeners bind on its addresses next
-// ([bindListeners]) and [bootOptions] opens and migrates the node's store, so
-// a document a flag broke is refused as the rule it broke rather than as a
-// bind error about an address, and before a store is opened for a
+// AND BEFORE ANYTHING ACTS ON IT: the listeners bind on its addresses soon
+// after ([bindListeners]) and [bootOptions] opens and migrates the node's
+// store, so a document a flag broke is refused as the rule it broke rather
+// than as a bind error about an address, and before a store is opened for a
 // configuration the engine would refuse.
 //
 // IT NORMALIZES in place, as [config.Bootstrap.Validate] always does, so what

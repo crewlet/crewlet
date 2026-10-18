@@ -197,7 +197,8 @@ log file named by `logging.file.path` or `-log-file` is open, so they are in it
 still being read, before any file exists (see
 [Deployment → Logging](../guides/deployment.md#logging)). What can still fail
 after them is not Tier A's to refuse: a `CREWLET_NODE_ID` no node may carry, a
-company file the seed writes into the store and holds to the
+port somebody else holds, a company file the seed writes into the store and
+holds to the
 [admission rules](../concepts/configuration.md#what-a-stored-revision-is-held-to)
 then, a store or a broker that will not open.
 
