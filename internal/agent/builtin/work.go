@@ -3585,18 +3585,17 @@ func unaddressedCaveat(task worklet.Task, actor Actor, comment *worklet.Comment)
 //
 // FROM THE CALL'S KEY ([Actor.callKey]), the one its operation id is derived
 // from ([opIDFor]), so every different call is a different comment: the
-// apply is an upsert of the row the id keys, and an id that stayed put across
-// two calls — a seat's second remark on a task in one turn, a remark made again
-// after another — was the first one's, so the second upserted that comment's
-// row, or never landed inside the log's duplicate window while the tool
-// answered that it had. And over the call's digest beside it, for [opIDFor]'s
+// apply posts a remark only where no row holds its id, and an id that stayed
+// put across two calls — a seat's second remark on a task in one turn, a
+// remark made again after another — was the first one's, so the second never
+// landed while the tool answered that it had. And over the call's digest beside it, for [opIDFor]'s
 // reason: a request's key names the request rather than what it asked.
 //
 // BUT THE KEY AS THE WORK BEGAN ([Actor.asBegun]), never as a rebase re-minted
 // it. A rebased attempt ([Actor.RebasedTo], ADR-0029) mints its operations
 // afresh so the ledger decides them again, and that is all a rebase is about:
 // the ledger, which forgets. The comment's row does not, so a remark the
-// attempt before it posted is found by its id and rewritten in place rather
+// attempt before it posted is found by its id and left as it stands rather
 // than posted a second time beside it — the one write of a rebased attempt
 // that still lands once. Why a UUIDv5 here and an operation id for a page's
 // comment is [callOpKey]'s, "What the tracker's tools derive from it".

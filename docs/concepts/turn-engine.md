@@ -1070,8 +1070,8 @@ it write under two instants, so a write the first made and the second repeats
 is written twice — the cheaper failure by far against every write lost. A
 comment on a work item is spared that: its id is the key of its own row rather
 than an operation, and is derived as the work began even in a rebased attempt,
-so a remark the first attempt posted is rewritten in place rather than posted
-again beside it. The ordinary turn pays nothing for any of this: the
+so a remark the first attempt posted is found by its id and left as it stands
+rather than posted again beside it. The ordinary turn pays nothing for any of this: the
 coordination store is read only by an attempt whose start is past the line,
 since no earlier attempt can have rebased before it. An attempt that needs the
 store and cannot read it does not run; its delivery is handed back and retried.

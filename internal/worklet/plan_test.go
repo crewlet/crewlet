@@ -863,10 +863,10 @@ const historyKey = "sqlite_autoindex_tracker_history_1"
 // historyReads is every statement this package runs that finds rows of
 // `tracker_history` by what it asks — the activity feed in each of its filter
 // families, a task's own history, the company-wide flow and feed, the inbox's
-// join, an asker's next record after an ask closed, the unblocked repair, and
-// the applier's own probes and rewrites — each with arguments of the shape its
-// reader binds and the index it reaches. The ones that read the whole table
-// are [historyPasses].
+// join, what resolved an ask and what its asker did next, the unblocked repair,
+// and the applier's own probes and rewrites — each with arguments of the shape
+// its reader binds and the index it reaches. The ones that read the whole
+// table are [historyPasses].
 //
 // THE STATEMENTS ARE THE READERS' OWN, never a copy: each is a named value of
 // this package, and the gate's completeness walk ([statementLiterals]) is what
@@ -911,6 +911,8 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 		"a task's newest status": seek(subject, newestStatusStatement, task),
 		"an asker's next record after an ask closed": seek(subject, followUpStatement,
 			task, "ana", record),
+		"what resolved an ask": seek(subject, resolvedStatement,
+			task, string(ChangeCommentResolved), record),
 		"the hand-offs before a commit": seek(subject, handOffsBeforeStatement,
 			task, kind, at(9_000)),
 		"a task's hand-offs from a commit on": seek(subject, handOffsFromStatement,

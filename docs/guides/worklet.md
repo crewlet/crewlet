@@ -1834,6 +1834,12 @@ than only in the read before it, so of two answers sent at once exactly one
 lands; the other is refused rather than posted beside it claiming to answer a
 question it did not close.
 
+Its author may correct a question's wording afterwards
+(`PATCH /worklet/items/{key}/comments/{cid}`), and that changes its words and
+nothing else: an answered question stays answered and nobody is asked it
+again, and the person it asks, the answer it closed and the decision it carries
+stay what its post made them.
+
 `my_work` reads both sides: `asked_of_me` is the questions waiting on this
 seat, and the `has_open_asks` filter finds the items carrying any. The board
 asks the other two ways round: `asked_of=` is whose answer an item's open ask
