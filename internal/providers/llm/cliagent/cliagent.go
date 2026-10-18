@@ -38,6 +38,8 @@ package cliagent
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -253,13 +255,17 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		return nil, p.fail(llm.KindTimeout, 0, fmt.Errorf("waiting for a CLI slot: %w", ctx.Err()))
 	}
 
-	checkout, err := p.ws.Acquire(seat, callID)
+	checkout, err := p.ws.Acquire(ctx, seat, callID, p)
 	if err != nil {
 		return nil, p.fail(llm.KindFatal, 0, err)
 	}
 	defer func() {
+		// WITHOUT THE CALL'S CANCELLATION: a release is a teardown, and a
+		// call that ended because its context was cancelled still has a
+		// login the CLI may have refreshed to write back. Bounded by the
+		// export's own timeout rather than by nothing.
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := checkout.Release(); err != nil {
+		if err := checkout.Release(context.WithoutCancel(ctx)); err != nil {
 			// Logged, not returned: the completion already happened
 			// and failing it over a cleanup would throw away work the
 			// operator paid for. The next call into this seat prunes
@@ -301,6 +307,17 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 			// output through as though the model had said it.
 			chunk, _ := textOf(p.profile, doc)
 			req.Send(llm.Delta{Content: chunk})
+		}
+	}
+	// THE CALL'S OWN SESSION, named so the usage command below can ask
+	// about it afterwards — see [cliprofile.Profile.SessionArgs]. After the
+	// model arguments for the same reason they precede everything else: a
+	// CLI taking its prompt on argv reads the first non-flag argument.
+	var session string
+	if len(p.profile.SessionArgs) > 0 {
+		session = newSessionID()
+		for _, arg := range p.profile.SessionArgs {
+			in.args = append(in.args, strings.ReplaceAll(arg, "{session}", session))
 		}
 	}
 	// A USAGE REPORT THE CLI WRITES ITSELF, for a vendor whose one-shot
@@ -394,7 +411,46 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		}
 	}
 
+	// A USAGE REPORT ASKED FOR AFTERWARDS, for a vendor that records the
+	// call's counts and does not print all of them — see
+	// [cliprofile.Profile.UsageArgs]. Asked whatever the call's outcome,
+	// because a refused call may still have spent tokens; and like a usage
+	// file, a report that cannot be had leaves the counts to stdout rather
+	// than failing an answer the operator paid for. In the working directory
+	// the call ran in, before the checkout is released.
+	if len(p.profile.UsageArgs) > 0 && !res.timedOut {
+		args := make([]string, 0, len(p.profile.UsageArgs))
+		for _, arg := range p.profile.UsageArgs {
+			args = append(args, strings.ReplaceAll(arg, "{session}", session))
+		}
+		report, reportErr := p.runAuxiliary(ctx, args, checkout.Work,
+			buildEnv(p.profile, checkout, p.env, p.auth), "")
+		if reportErr != nil {
+			log.WarnContext(ctx, "cli_agent_usage_report_failed", "provider", p.key,
+				"agent", p.agent, "error", reportErr)
+		} else {
+			usageDoc = report
+		}
+	}
+
 	return p.completion(ctx, prompt, res, usageDoc)
+}
+
+// newSessionID mints the id [cliprofile.Profile.SessionArgs] names a call's
+// session with: 32 lowercase hexadecimal characters from crypto/rand.
+//
+// RANDOM rather than derived from the seat and the call, because the id is the
+// key a usage command looks the call up by in a database every concurrent
+// call of the seat shares — and a retried call that reused its predecessor's
+// id would continue that session, carrying the failed attempt's transcript
+// into the retry and its counts into the retry's bill.
+func newSessionID() string {
+	var raw [16]byte
+	// crypto/rand.Read never fails on the platforms this builds for (it
+	// panics rather than return an error since Go 1.24), so there is no
+	// error to handle.
+	_, _ = rand.Read(raw[:])
+	return hex.EncodeToString(raw[:])
 }
 
 // argv is the invocation's arguments: the profile's completion argv, then the
@@ -446,7 +502,7 @@ func (p *Provider) completion(
 	// The CLI's own report wins over anything stdout happened to carry:
 	// a profile only names one when its vendor puts the counts nowhere
 	// else, so a hit here is the only real figure there is.
-	out.applyUsageFile(p.profile, usageDoc)
+	out.applyUsageReport(p.profile, usageDoc)
 
 	// A spent subscription is checked BEFORE the exit code, because it
 	// arrives on a successful one: the process exits 0 and the answer is
@@ -465,7 +521,7 @@ func (p *Provider) completion(
 	// them adds false-positive surface for nothing. When the answer WAS
 	// located it is the only thing the vendor said that matters.
 	said := nonEmpty(out.text, res.stdout)
-	if hit, ok := classifyMarkers(p.profile, said, res.stderr); ok {
+	if hit, ok := classifyMarkers(p.profile, said, res.stdout, res.stderr); ok {
 		return nil, p.fail(hit.Kind, hit.Retry,
 			fmt.Errorf("%s", nonEmpty(hit.Said, firstLine(said, res.stderr))))
 	}
@@ -574,7 +630,9 @@ func (p *Provider) completion(
 		// whatever the cache did. CacheRead and CacheWrite break the same
 		// total down for cost reporting; adding them again double-counts.
 		comp.InputTokens = out.input + out.cacheRead + out.cacheWrite
-		comp.OutputTokens = out.output
+		// Reasoning a CLI reports apart from its output is billed as
+		// output, so it is charged as output — see [cliprofile.UsagePaths].
+		comp.OutputTokens = out.output + out.reasoning
 		comp.CacheRead = out.cacheRead
 		comp.CacheWrite = out.cacheWrite
 	} else {
@@ -609,7 +667,11 @@ func (p *Provider) completion(
 // spent plan looks like is a property of the profile table, and the only way
 // to check a shipped profile's sentinels against the output its CLI actually
 // produces is to be able to ask without a running provider.
-func classifyMarkers(p cliprofile.Profile, text, stderr string) (markerHit, bool) {
+//
+// said is what the CLI said — the located answer, or the whole of stdout when
+// none was located — and stdout is the whole of it, which only the
+// stdout-and-stderr scope searches.
+func classifyMarkers(p cliprofile.Profile, said, stdout, stderr string) (markerHit, bool) {
 	// THE ANSWER IS A HAYSTACK ONLY WHERE A VENDOR PUTS ITS FAILURES IN
 	// ONE — see [cliprofile.MarkerScope]. Searching the model's own words is what
 	// makes a spent Claude Code plan recognisable at all, and it is also
@@ -617,9 +679,14 @@ func classifyMarkers(p cliprofile.Profile, text, stderr string) (markerHit, bool
 	// its own credential. A profile whose CLI reports on stderr and
 	// nowhere else opts out, and then no sentence the model writes can
 	// classify anything.
-	haystacks := []string{text, stderr}
-	if p.EffectiveMarkerScope() == cliprofile.MarkerScopeStderr {
+	var haystacks []string
+	switch p.EffectiveMarkerScope() {
+	case cliprofile.MarkerScopeStderr:
 		haystacks = []string{stderr}
+	case cliprofile.MarkerScopeStdoutAndStderr:
+		haystacks = []string{stdout, stderr}
+	default:
+		haystacks = []string{said, stderr}
 	}
 	for _, marker := range p.LimitMarkers {
 		for _, hay := range haystacks {

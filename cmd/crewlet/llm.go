@@ -455,7 +455,7 @@ func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdo
 	switch {
 	case req.fromHost:
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		taken, err := p.AdoptHostLogin(req.home)
+		taken, err := p.AdoptHostLogin(ctx, req.home)
 		if err != nil {
 			return err
 		}

@@ -97,12 +97,66 @@ func PathList(paths []Path) string {
 // characters a token), and `crewlet llm doctor` reports the profile's token
 // usage as estimated, because a budget built on estimates is a different
 // promise.
+//
+// Reasoning is the one figure that is ADDED rather than reported as itself:
+// every provider bills the tokens a model spends reasoning as output, and a CLI
+// that reports them APART from its output count — OpenCode 2.0's session totals
+// carry `output` as the visible text alone, beside `reasoning` — would otherwise
+// have every thinking model charged for its answer and not its thought. Declared
+// only where the vendor's output count excludes them: OpenAI's own usage, and
+// every CLI that passes it through, counts reasoning INSIDE output already, and
+// adding it there would charge it twice.
 type UsagePaths struct {
 	Input      []Path `yaml:"input,omitempty"`
 	Output     []Path `yaml:"output,omitempty"`
 	CacheRead  []Path `yaml:"cache_read,omitempty"`
 	CacheWrite []Path `yaml:"cache_write,omitempty"`
+	Reasoning  []Path `yaml:"reasoning,omitempty"`
 }
+
+// CredentialStore is a login a CLI keeps in a DATABASE OF ITS OWN rather than
+// in files — and so a login that cannot travel the way [Profile.CredentialPaths]
+// do. It travels as the DOCUMENT the CLI's own export command prints, and
+// reaches a home through the CLI's own import command.
+//
+// THE FILE CANNOT BE THE CREDENTIAL, because it is also the transcript. OpenCode
+// 2.0 keeps its logins in the `credential` table of the same SQLite file it
+// keeps every session in (`opencode.db`), and reads them nowhere else: a v1
+// `auth.json` copied into a fresh home is ignored outright, and imported only
+// once, while a v1 database is being upgraded. Copying the database would carry
+// one seat's conversations into every other seat, syncing it back would carry
+// them into the shared directory, and pruning it after a call — which is what
+// keeps a turn from reaching the next — would delete the login.
+//
+// So the document is the login of record: the shared credential directory keeps
+// it under [CredentialStoreDocument], a seat's home starts every generation from
+// an empty database with the document imported into it, and the generation ends
+// by exporting what the CLI then holds — a token it refreshed mid-call included
+// — and replacing the document when that changed. The database itself is then
+// volatile like any other session store. Measured against OpenCode 2.0.32: an
+// import followed by an export reproduces the document byte for byte, and an
+// import skips a credential id the database already holds rather than updating
+// it, which is why a refresh comes back as a new document and never as an import
+// into an older database.
+type CredentialStore struct {
+	// ExportArgs print every login the CLI holds as one document on stdout.
+	ExportArgs []string `yaml:"export_args,omitempty"`
+
+	// ImportArgs read such a document on STDIN and store every login in it.
+	// Never on argv and never a path the engine invents: the document is a
+	// credential, and stdin is the one channel no other account on the
+	// machine can read.
+	ImportArgs []string `yaml:"import_args,omitempty"`
+}
+
+// CredentialStoreDocument is the name the shared credential directory, a
+// credential bundle and a coding box keep a [CredentialStore]'s document under.
+//
+// ONE NAME FOR EVERY PROFILE, and the engine's rather than the vendor's: no CLI
+// reads this file — it reads the document on stdin — so where it is kept is a
+// fact about this engine, and a profile declaring one would be a second place
+// to keep the same answer. No extension, because the format is the CLI's own.
+const CredentialStoreDocument = "exported-credentials"
 
 // StdinLogin is a credential login a CLI genuinely accepts.
 //
@@ -171,6 +225,20 @@ type LimitMarker struct {
 // to stderr with stdout empty, and hermes writes `hermes -z: agent failed: …`
 // there — all three measured. A profile only narrows this when the vendor's
 // own behaviour makes the answer an impossible place for the report.
+//
+// THE THIRD SCOPE IS THE OTHER DIRECTION, for a CLI that reports a failure as
+// an EVENT OF ITS OWN in a JSON stream: OpenCode 2.0's `--format json` prints
+// `{"type":"error",…,"error":{"type":"provider.quota",…}}` on stdout and nothing
+// on stderr, so the report is neither the answer nor stderr. And it can follow
+// an answer — a call that wrote a sentence, fetched a page and was then refused
+// on its next step has a located answer that does not contain the refusal — so
+// searching the answer finds nothing exactly when a spent plan most needs the
+// chain to carry the seat on. Every line of stdout is searched instead, which is
+// safe ONLY because the model's words are inside those events as JSON strings:
+// a sentinel spelled with its own quotes (`"type":"provider.quota"`) cannot
+// occur in an escaped string, so nothing a model writes can reproduce it.
+// [Profile.Validate] refuses the scope on a text profile, whose stdout IS the
+// model's words.
 type MarkerScope string
 
 const (
@@ -181,11 +249,15 @@ const (
 	// MarkerScopeStderr searches stderr only, for a CLI whose failures
 	// never reach the answer.
 	MarkerScopeStderr MarkerScope = "stderr"
+	// MarkerScopeStdoutAndStderr searches every line the CLI printed on
+	// stdout, not only the answer located in it, and stderr — for a CLI
+	// that reports a failure as an event of its own in a JSON stream.
+	MarkerScopeStdoutAndStderr MarkerScope = "stdout-and-stderr"
 )
 
 // Valid reports whether s is a scope this package knows.
 func (s MarkerScope) Valid() bool {
-	return s == MarkerScopeAnswerAndStderr || s == MarkerScopeStderr
+	return s == MarkerScopeAnswerAndStderr || s == MarkerScopeStderr || s == MarkerScopeStdoutAndStderr
 }
 
 // LocalTools says what a profile does about the CLI's OWN tools — its shell,
@@ -289,16 +361,31 @@ func (f SeedFile) Scope() SeedScope {
 // are two). Passing it only when there is text to put in it would hand the
 // vendor's default agent, and every tool it has, to exactly the calls that
 // exist to prove the tools are off.
+//
+// OpenCode 2.0 is the second, and it takes the file a different way: it is
+// handed no path at all. It DISCOVERS agents by their location in the project it
+// runs in — `.opencode/agents/<name>.md`, with the body as the agent's system
+// prompt — and `--agent <name>` selects one. The per-call working directory is
+// that project, so the file is written there and the channel's argv names the
+// agent rather than carrying `{file}`: see [SystemPromptFile.Discovered].
 type SystemPromptFile struct {
 	// Name is the file to write in the per-call working directory. Empty
-	// takes the default. A bare name, never a path: a vendor that keys on
-	// the extension (`--agent-file` wants `.md`) is the only reason to set
-	// it.
+	// takes the default. A bare name for a file whose path the CLI is
+	// handed: a vendor that keys on the extension (`--agent-file` wants
+	// `.md`) is the only reason to set it. A relative path, staying inside
+	// the working directory, for a [SystemPromptFile.Discovered] one, which
+	// the CLI finds where its vendor says to look.
 	Name string `yaml:"name,omitempty"`
 
 	// Template is the file's content, with `{system}` substituted by the
 	// seat's system prompt. Empty writes the prompt alone.
 	Template string `yaml:"template,omitempty"`
+
+	// Discovered says the CLI FINDS the file by its location in the working
+	// directory rather than being handed its path, so system_prompt_args
+	// select what it found and carry no `{file}`. Written on every call, as
+	// a `{file}` one is, and removed with the working directory on release.
+	Discovered bool `yaml:"discovered,omitempty"`
 }
 
 // Render returns the bytes to write for one call's system prompt.
@@ -493,7 +580,8 @@ type Profile struct {
 	ErrorPaths []Path `yaml:"error_paths,omitempty"`
 
 	// Usage locates the token counts, in the CLI's stdout — or, where
-	// [Profile.UsageFileArgs] is set, in the report that field names.
+	// [Profile.UsageFileArgs] or [Profile.UsageArgs] is set, in the report
+	// that field names.
 	Usage UsagePaths `yaml:"usage,omitempty"`
 
 	// UsageFileArgs asks the CLI to write its token counts to a FILE,
@@ -514,6 +602,41 @@ type Profile struct {
 	// when the run fails" and a broken usage write must never mask the
 	// run's own outcome.
 	UsageFileArgs []string `yaml:"usage_file_args,omitempty"`
+
+	// SessionArgs name the session one call runs in, with `{session}`
+	// substituted by an id the engine mints for that call alone: 32
+	// lowercase hexadecimal characters, so a vendor that wants a prefix of
+	// its own spells it around the placeholder (`ses_{session}`). Appended
+	// with the model arguments, before the system prompt and the prompt.
+	//
+	// It exists for [Profile.UsageArgs], which has to ask the CLI about
+	// THIS call afterwards — and a seat's home is shared by every call
+	// running in it at once, so "the most recent session" would answer
+	// with a sub-agent's.
+	SessionArgs []string `yaml:"session_args,omitempty"`
+
+	// UsageArgs is a command run AFTER the call, in the same home and
+	// working directory and with the same environment, that prints the
+	// call's token counts as one JSON document on stdout — which
+	// [Profile.Usage] is then read out of, as it would be a usage file.
+	// `{session}` is substituted with the id [Profile.SessionArgs] gave the
+	// call.
+	//
+	// It exists because a CLI can record a call's usage exactly and still
+	// not report it where the call prints. OpenCode 2.0's `run --format
+	// json` emits a step's counts in a `step_finish` event, and drops the
+	// FINAL step's: its formatter stops at the session's completion event,
+	// and the last step's end does not reach it first. Measured on 2.0.32,
+	// a text-only call printed no `step_finish` in six runs of six, and a
+	// call that used a tool printed the tool step's counts and not the
+	// answer's. Read from stdout, every call would have been charged for
+	// nothing or for its first step. The session the call ran in holds the
+	// whole total (`opencode api session.get`), so that is asked instead.
+	//
+	// A failed or unreadable report is not a failed call: the counts fall
+	// back to whatever stdout said, as for a usage file, and a warning
+	// names the command.
+	UsageArgs []string `yaml:"usage_args,omitempty"`
 
 	// ConfigEnv maps a vendor's own relocation variable to a directory
 	// under the seat's home. Without it a CLI reads the engine user's real
@@ -590,6 +713,11 @@ type Profile struct {
 
 	// StdinLogin is a real credential login, where one exists.
 	StdinLogin *StdinLogin `yaml:"stdin_login,omitempty"`
+
+	// CredentialStore is set for a CLI that keeps its login in a database of
+	// its own rather than in files — see [CredentialStore]. Nil, the default,
+	// means the login is CredentialPaths, a token, a key, or nothing.
+	CredentialStore *CredentialStore `yaml:"credential_store,omitempty"`
 
 	// LimitMarkers recognise a spent subscription.
 	LimitMarkers []LimitMarker `yaml:"limit_markers,omitempty"`
@@ -731,10 +859,13 @@ func (p *Profile) HasSystemChannel() bool {
 }
 
 // WritesSystemPromptFile reports whether this profile's system-prompt channel
-// puts the text in a FILE — either `{file}` on argv, or the env-var channel,
-// which is a path by construction.
+// puts the text in a FILE — `{file}` on argv, the env-var channel, which is a
+// path by construction, or a file the CLI discovers by its location.
 func (p *Profile) WritesSystemPromptFile() bool {
 	if p.SystemPromptEnv != "" {
+		return true
+	}
+	if p.SystemPromptFile != nil && p.SystemPromptFile.Discovered {
 		return true
 	}
 	return hasPlaceholder(p.SystemPromptArgs, "{file}")
@@ -858,19 +989,25 @@ func (p *Profile) Validate(name string) error {
 		// parameter: the PROFILE's name. Two different names in one
 		// validator whose every message is about the profile is worth a
 		// second word.
-		if fileName := p.SystemPromptFile.Name; fileName != "" && !isBareFileName(fileName) {
+		fileName := p.SystemPromptFile.Name
+		switch {
+		case p.SystemPromptFile.Discovered:
+			p.validateDiscoveredPromptFile(add)
+		case fileName != "" && !isBareFileName(fileName):
 			// The path is joined onto the per-call working directory,
 			// and this field is operator-overridable.
 			add("system_prompt_file.name %q must be a plain file name, with no "+
-				"directory separator", fileName)
+				"directory separator — only a discovered file, which the CLI finds "+
+				"where its vendor says to look, carries a directory", fileName)
 		}
 	}
+	p.validateUsageCommand(add)
 	if len(p.UsageFileArgs) > 0 {
 		if !hasPlaceholder(p.UsageFileArgs, "{usage_file}") {
 			add("usage_file_args carries no {usage_file} placeholder — there is " +
 				`nothing to substitute the path into, e.g. ["--usage-file", "{usage_file}"]`)
 		}
-		// BOTH PROMPT COUNTS, because [extracted.applyUsageFile] accepts a
+		// BOTH PROMPT COUNTS, because [extracted.applyUsageReport] accepts a
 		// report only when both resolve — a partial overlay would pair one
 		// source's input with another's output, and the sum is what a
 		// budget is charged. A profile declaring one of them (or only the
@@ -884,9 +1021,19 @@ func (p *Profile) Validate(name string) error {
 				"call would fall back to an estimate while the doctor reports otherwise")
 		}
 	}
-	if p.MarkerScope != "" && !p.MarkerScope.Valid() {
-		add("marker_scope %q (want %s or %s)",
-			p.MarkerScope, MarkerScopeAnswerAndStderr, MarkerScopeStderr)
+	switch {
+	case p.MarkerScope != "" && !p.MarkerScope.Valid():
+		add("marker_scope %q (want %s, %s or %s)", p.MarkerScope,
+			MarkerScopeAnswerAndStderr, MarkerScopeStderr, MarkerScopeStdoutAndStderr)
+	case p.MarkerScope == MarkerScopeStdoutAndStderr && p.EffectiveOutput() == OutputText:
+		// Refused rather than tolerated: the scope is safe only because a
+		// structured stream carries the model's words as escaped strings, and
+		// on a text profile stdout IS the model's words — so the scope would
+		// match sentinels against the reply itself while claiming not to.
+		add("marker_scope is %s but output is text — on a text profile stdout is "+
+			"the model's own reply, so the scope would match sentinels against what "+
+			"the model wrote; use %s, or a structured output", MarkerScopeStdoutAndStderr,
+			MarkerScopeAnswerAndStderr)
 	}
 	for i, m := range p.LimitMarkers {
 		if problem := sentinelProblem(m.Sentinel); problem != "" {
@@ -906,6 +1053,39 @@ func (p *Profile) Validate(name string) error {
 	}
 	if p.StdinLogin != nil && len(p.StdinLogin.Args) == 0 {
 		add("stdin_login.args is empty")
+	}
+	if store := p.CredentialStore; store != nil {
+		// BOTH HALVES OR NEITHER: an export with no import leaves every seat
+		// home empty, and an import with no export can never write back the
+		// token a call refreshed, which is how a fleet is logged out at the
+		// next expiry.
+		if len(store.ExportArgs) == 0 {
+			add("credential_store.export_args is empty — a login held in the CLI's " +
+				"own database can only leave it through the CLI's export command")
+		}
+		if len(store.ImportArgs) == 0 {
+			add("credential_store.import_args is empty — a seat home starts from an " +
+				"empty database, and only the CLI's import command puts the login in it")
+		}
+		for _, args := range [][]string{store.ExportArgs, store.ImportArgs} {
+			if hasPlaceholder(args, "{file}") {
+				// The document is a credential, so it goes on stdin, which no
+				// other account can read; a path would also have to be a
+				// file the engine wrote and then had to remember to remove.
+				add("credential_store args carry {file} — the document travels on " +
+					"stdin and stdout, never through a path")
+				break
+			}
+		}
+		for _, rel := range p.CredentialPaths {
+			if filepath.Base(rel) == CredentialStoreDocument {
+				// The shared directory keeps both kinds under their base
+				// names, so one would overwrite the other there and in every
+				// bundle.
+				add("credential_paths names %q, whose file name is the one the "+
+					"credential store's document is kept under (%s)", rel, CredentialStoreDocument)
+			}
+		}
 	}
 	if p.LocalTools != "" && !p.LocalTools.Valid() {
 		add("local_tools %q (want denied or vendor-default)", p.LocalTools)
@@ -941,6 +1121,78 @@ func (p *Profile) Validate(name string) error {
 		return nil
 	}
 	return fmt.Errorf("cli-agent profile %q: %s", name, strings.Join(bad, "; "))
+}
+
+// validateUsageCommand holds [Profile.SessionArgs] and [Profile.UsageArgs] to
+// the one shape in which a usage command reports the call it follows.
+func (p *Profile) validateUsageCommand(add func(string, ...any)) {
+	if len(p.SessionArgs) > 0 && !hasPlaceholder(p.SessionArgs, "{session}") {
+		add("session_args carries no {session} placeholder — there is nothing to " +
+			`substitute the call's id into, e.g. ["--session", "ses_{session}"]`)
+	}
+	if len(p.UsageArgs) == 0 {
+		return
+	}
+	switch {
+	case !hasPlaceholder(p.UsageArgs, "{session}"):
+		// Without the id the command can only ask about SOME session, and a
+		// seat's home holds every call running in it at once.
+		add("usage_args carries no {session} placeholder — the report has to be " +
+			"about this call's session, and a seat's home holds every call running in it")
+	case !hasPlaceholder(p.SessionArgs, "{session}"):
+		add("usage_args asks about the call's session but session_args does not name " +
+			"one — declare session_args with {session}, or the CLI picks an id nobody " +
+			"can ask about")
+	}
+	if len(p.UsageFileArgs) > 0 {
+		// Two reports of one call, and whichever was read second would
+		// silently replace the first.
+		add("usage_args and usage_file_args are both set — one call has one usage " +
+			"report; declare the one this CLI writes")
+	}
+	// The same rule, for the same reason, as a usage file's: both prompt
+	// counts or the report is never read.
+	if len(p.Usage.Input) == 0 || len(p.Usage.Output) == 0 {
+		add("usage_args is set but usage.input and usage.output are not both " +
+			"declared — the report is only read when both counts resolve, so every " +
+			"call would fall back to an estimate while the doctor reports otherwise")
+	}
+}
+
+// validateDiscoveredPromptFile holds a [SystemPromptFile.Discovered] channel to
+// the shape that makes it one: a file the CLI finds in the working directory,
+// and an argv that selects it.
+func (p *Profile) validateDiscoveredPromptFile(add func(string, ...any)) {
+	fileName := p.SystemPromptFile.Name
+	if fileName == "" {
+		// The default name is a bare prompt file no vendor looks for, so a
+		// discovered channel without a name of its own writes a file nothing
+		// will ever find — and the argv then selects an agent that does not
+		// exist.
+		add("system_prompt_file is discovered but its name is empty — say where the " +
+			"CLI looks for it, e.g. .opencode/agents/crewlet-seat.md")
+	} else if _, err := UnderRoot(seedValidationRoot, fileName); err != nil {
+		add("system_prompt_file.name %q must be relative and stay inside the per-call "+
+			"working directory", fileName)
+	}
+	switch {
+	case len(p.SystemPromptArgs) == 0:
+		// Found but never selected, the file changes nothing: the CLI runs its
+		// own default agent, and the seat's identity is in neither place.
+		add("system_prompt_file is discovered but system_prompt_args is empty — the " +
+			"CLI finds the file, and nothing tells it to use what it found")
+	case hasPlaceholder(p.SystemPromptArgs, "{file}") || hasPlaceholder(p.SystemPromptArgs, "{system}"):
+		// A discovered file is found by where it is. Handing over its path
+		// too is two channels for one prompt, and {system} would put the
+		// text on argv beside the file.
+		add("system_prompt_file is discovered but system_prompt_args carries {file} or " +
+			"{system} — a discovered file is found by its location, and the argv only " +
+			"selects it")
+	}
+	if p.SystemPromptEnv != "" {
+		add("system_prompt_file is discovered but system_prompt_env is set — the " +
+			"variable hands the CLI a path, and a discovered file needs none")
+	}
 }
 
 // ValidateCredentials reports every place this profile routes a credential
@@ -1063,11 +1315,12 @@ func sentinelProblem(sentinel string) string {
 // is a one-line override, and the JSON paths it inherits from the built-in
 // profile are simply inert afterwards.
 //
-// THE USAGE FILE IS THE EXCEPTION TO THE TEXT RULE, and it is the whole
-// reason that channel exists: a report the CLI writes to a path of its own is
-// decoded whatever stdout carries, so a `text` profile declaring
-// [Profile.UsageFileArgs] reports real counts. Reading the text rule first
-// would answer "estimated" for exactly the profile that went to the trouble.
+// A USAGE REPORT IS THE EXCEPTION TO THE TEXT RULE, and it is the whole reason
+// those channels exist: a report the CLI writes to a path of its own, or prints
+// to a usage command, is decoded whatever stdout carries, so a `text` profile
+// declaring [Profile.UsageFileArgs] or [Profile.UsageArgs] reports real
+// counts. Reading the text rule first would answer "estimated" for exactly the
+// profile that went to the trouble.
 //
 // It exists so `crewlet llm doctor` and the extractor answer the same
 // question. Doctor asked a narrower one — "are usage paths declared" — and so
@@ -1077,10 +1330,34 @@ func (p *Profile) ReadsUsage() bool {
 	if len(p.Usage.Input) == 0 && len(p.Usage.Output) == 0 {
 		return false
 	}
-	if len(p.UsageFileArgs) > 0 {
+	if p.ReadsUsageReport() {
 		return true
 	}
 	return p.EffectiveOutput() != OutputText
+}
+
+// LoginLocation says where this CLI keeps a login, for a message telling an
+// operator to put one there: its credential files, the database a
+// [CredentialStore] reads and writes, or both.
+func (p *Profile) LoginLocation() string {
+	var where []string
+	if len(p.CredentialPaths) > 0 {
+		where = append(where, "its credential files ("+strings.Join(p.CredentialPaths, ", ")+")")
+	}
+	if p.CredentialStore != nil {
+		where = append(where, "the login it keeps in its own database")
+	}
+	if len(where) == 0 {
+		return "a login this profile names no place for"
+	}
+	return strings.Join(where, " and ")
+}
+
+// ReadsUsageReport reports whether this profile takes its counts from a report
+// apart from stdout — a usage file the CLI writes, or a usage command run after
+// the call — rather than from what the call printed.
+func (p *Profile) ReadsUsageReport() bool {
+	return len(p.UsageFileArgs) > 0 || len(p.UsageArgs) > 0
 }
 
 // UnderRoot joins a profile-declared relative path onto a root and refuses

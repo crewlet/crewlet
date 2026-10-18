@@ -313,68 +313,159 @@ qwen-code:
 
 opencode:
   binary: opencode
-  written_for: "OpenCode 1.18.x (`opencode --version`)"
+  # OPENCODE 2 ONLY — the `@opencode/cli` package. 1.x (npm's `opencode-ai`)
+  # cannot run this profile and is not meant to: it rejects `--standalone`
+  # with its usage text, refuses the permissions format below ("V2
+  # permissions are not supported by OpenCode V1"), cannot open a database
+  # 2.0 created, and keeps its login in a file 2.0 ignores.
+  written_for: "OpenCode 2.0.x, the @opencode/cli package (`opencode --version` prints `opencode v2.0.32`)"
   version_args: ["--version"]
-  complete_args: ["run", "--print-logs=false"]
+  # `--standalone` IS THE ISOLATION. Without it every `opencode` command
+  # starts — or reuses — a background service, detached from the call, on a
+  # port compiled into the binary (49374) and shared by every user and every
+  # HOME on the machine. Measured on 2.0.32: the second seat's call failed
+  # after ~20s on the occupied port, a call reusing a running service sent
+  # the key that service was started with rather than the one the call was
+  # given (which defeats auth.mode and every rotation through cli.env), and
+  # the service outlived the call's timeout and process-group kill for as
+  # long as it was watched (29 minutes). With it, each call runs a private
+  # server inside its own process tree, and nothing survives the call.
+  #
+  # `--format json` makes failures STRUCTURED: a refused key or a spent plan
+  # is an `error` event naming its class (marker_scope, below), where the
+  # plain format prints the provider's own sentence, which no sentinel can
+  # match across providers. `--title` names the session, which stops 2.0
+  # making a SECOND billed model call per run to generate a title for a
+  # transcript nobody will ever list.
+  complete_args: ["run", "--standalone", "--print-logs=false", "--format", "json", "--title", "crewlet"]
   # OpenCode takes its tool policy from opencode.json under XDG_CONFIG_HOME,
-  # which the child environment points inside the seat HOME. Every rule is an
-  # explicit allow or deny — never ask, which a headless run cannot answer.
-  # `question` is denied for the same reason: it is the tool that asks a
-  # person. Explicit denies hold in every mode, including --auto.
+  # which the child environment points inside the seat HOME — in 2.0's own
+  # permissions format, an ordered list in which the LAST matching rule wins:
+  # deny every action, then allow the two web tools. Deny-all rather than a
+  # list of the local tools, because 2.0 allows whatever is not denied, and
+  # its new tools (`execute`, Code Mode's JavaScript runtime with `fetch`,
+  # and the session and worktree tools it exposes) passed a v1-style list of
+  # denials — measured: with this seed the model is offered exactly
+  # `webfetch` and `websearch`. Never `ask`, which a headless run cannot
+  # answer.
+  #
+  # `update: disable` keeps a seat's call from checking for, and fetching, a
+  # new release; `share: disabled` keeps it from publishing a transcript;
+  # `snapshots: false` stops it keeping a git snapshot of a working
+  # directory that is empty by construction.
   local_tools: denied
   seed_files:
     - path: .config/opencode/opencode.json
-      content: '{"$schema":"https://opencode.ai/config.json","permission":{"read":"deny","edit":"deny","glob":"deny","grep":"deny","bash":"deny","task":"deny","skill":"deny","lsp":"deny","question":"deny","external_directory":"deny","webfetch":"allow","websearch":"allow"}}'
+      content: '{"$schema":"https://opencode.ai/config.json","update":"disable","share":"disabled","snapshots":false,"permissions":[{"action":"*","resource":"*","effect":"deny"},{"action":"webfetch","resource":"*","effect":"allow"},{"action":"websearch","resource":"*","effect":"allow"}]}'
   model_args: ["--model", "{model}"]
-  # `opencode run --model` takes `provider/model` and splits it at the FIRST
-  # slash (packages/opencode/src/cli/cmd/run.ts: `const [providerID,
-  # ...rest] = value.split("/")`), so `openrouter/anthropic/claude-sonnet-5`
+  # `--model` takes `provider/model` (2.0 adds an optional `#variant`) and
+  # splits it at the FIRST slash, so `openrouter/anthropic/claude-sonnet-5`
   # is the openrouter provider's `anthropic/claude-sonnet-5`, and a bare
-  # `claude-sonnet-5` is a provider with no model, which every call refuses
-  # with "Model not found: claude-sonnet-5/.". Config refuses that on a write.
+  # `claude-sonnet-5` names no provider, which 2.0 refuses as "Invalid model
+  # reference". Config refuses that on a write.
   model_names_provider: true
-  prompt_mode: argv
-  output: text
-  credential_paths: [".local/share/opencode/auth.json"]
-  volatile_paths:
-    - ".local/share/opencode/storage"
-    - ".local/share/opencode/log"
-    - ".local/share/opencode/project"
-  host_credential_paths: [".local/share/opencode/auth.json"]
+  # The call's own session, so the usage command below asks about this call
+  # and no other: 2.0 accepts a session id it does not hold and creates the
+  # session under it, and refuses one that does not begin `ses`.
+  session_args: ["--session", "ses_{session}"]
+  # THE SYSTEM PROMPT AS A PROJECT AGENT. 2.0 has no system-prompt flag and
+  # no variable naming a file; it discovers agents in the project it runs in
+  # — `.opencode/agents/<name>.md`, the body being the agent's system prompt
+  # — and `--agent` selects one. The per-call working directory is that
+  # project. Measured on 2.0.32: the body REPLACES OpenCode's own
+  # coding-agent prompt (2.0 then appends a short block naming the model and
+  # the date), and it is not interpolated — `{env:…}` and `{file:…}` in it
+  # reach the model as written, so nothing a seat's prompt quotes can make
+  # the CLI read a file or a variable into it.
+  system_prompt_args: ["--agent", "crewlet-seat"]
+  system_prompt_file:
+    name: .opencode/agents/crewlet-seat.md
+    discovered: true
+    template: |
+      ---
+      description: The Crewlet seat this run serves. Crewlet drives the model and executes its tools; this CLI is a text model behind that loop.
+      mode: primary
+      ---
+      {system}
+  # On stdin, read verbatim. On argv 2.0 re-quotes the message, so a prompt
+  # carrying quotes reached the model altered — and argv is readable by every
+  # account on the machine and bounded by ARG_MAX, which a long transcript
+  # reaches.
+  prompt_mode: stdin
+  output: jsonl
+  event_type_path: ["type"]
+  text_events: ["text"]
+  text_paths: [["part", "text"]]
+  # USAGE FROM THE SESSION, NOT THE STREAM: `run --format json` drops the
+  # final step's counts (see usage_args in docs/concepts/
+  # subscription-llm-backends.md), and the session the call ran in holds the
+  # whole total. `output` is the visible text alone, beside `reasoning` —
+  # 2.0 subtracts the one from the other — so reasoning is declared and
+  # added back, as every provider bills it.
+  usage_args: ["api", "--standalone", "session.get", "--param", "sessionID=ses_{session}"]
+  usage:
+    input: [["data", "tokens", "input"]]
+    output: [["data", "tokens", "output"]]
+    cache_read: [["data", "tokens", "cache", "read"]]
+    cache_write: [["data", "tokens", "cache", "write"]]
+    reasoning: [["data", "tokens", "reasoning"]]
+  # 2.0 keeps sessions, logs and its LOGINS in one directory: `opencode.db`
+  # holds every transcript beside the `credential` table. The whole of it is
+  # volatile — a seat starts each generation from an empty database with the
+  # shared login imported into it (credential_store), so nothing one
+  # generation said reaches the next, and the login is the shared one.
+  volatile_paths: [".local/share/opencode", ".local/state/opencode"]
+  # THE LOGIN IS 2.0's EXPORT, because there is no file to copy: the
+  # database is the transcript as well, and a v1 `auth.json` copied into a
+  # fresh home is ignored. Measured on 2.0.32: an import into an empty
+  # database followed by an export reproduces the document byte for byte; an
+  # empty database exports `[]`; and an import skips a credential id the
+  # database already holds — which is why a seat's home is pruned before
+  # every import.
+  credential_store:
+    export_args: ["auth", "export", "--standalone"]
+    import_args: ["auth", "import", "--standalone"]
   # NO api_key_env, and env_sign_in instead: OpenCode keys each provider by
   # that provider's own variable — its providers page (opencode.ai/docs/
   # providers) documents NVIDIA_API_KEY, AWS_BEARER_TOKEN_BEDROCK,
   # DIGITALOCEAN_ACCESS_TOKEN and GITLAB_TOKEN as read from the environment
   # in place of a stored login — so there is no one variable to name, exactly
-  # as for hermes and pi. A key goes through `cli.env`; `/connect`'s
-  # auth.json is the other route.
+  # as for hermes and pi. A key goes through `cli.env`; `crewlet llm login`
+  # (`opencode auth login`) is the other route.
   env_sign_in: true
-  login_args: ["auth", "login"]
-  logout_args: ["auth", "logout"]
-  status_args: ["auth", "list"]
-  # The one built-in profile with a real credential login, which is why the
-  # `crewlet llm login --username/--password-stdin` path exists at all.
-  stdin_login:
-    args: ["auth", "login", "--username", "{username}"]
-    stdin_template: "{password}\n"
-  # `429` was here as a third sentinel and is GONE rather than reworded.
-  # A sentinel is matched as a plain substring against whatever the CLI
-  # printed — on a healthy call, the model's own answer — so three digits
-  # match a quoted HTTP status, a stack trace's line number, a token count
-  # or any ten-digit epoch, and a match benches the subscription and hands
-  # the seat to the fallback chain. That is a working company degrading
-  # quietly, and it fires far more often than the spent plan it was for.
+  env:
+    # Every call starts a recursive file watcher on its working directory —
+    # fifteen watchers per call, measured — over a directory that is empty
+    # by construction. Off, a call took ~0.5s less on 2.0.32, and a host
+    # running many seats is not spending inotify watches on nothing.
+    OPENCODE_DISABLE_FILEWATCHER: "1"
+  login_args: ["auth", "login", "--standalone"]
+  status_args: ["auth", "list", "--standalone"]
+  # NO logout_args. 2.0's `auth logout` removes ONE credential from the
+  # database, chosen in an interactive picker, and the database is rebuilt
+  # from the shared document on every command anyway; `crewlet llm logout`
+  # removing the document removes every login this entry holds, which is
+  # what it promises.
   #
-  # Not replaced with a guess: nothing here can be verified without the CLI
-  # in front of it, and an unverified sentinel is the same mistake in a
-  # respectable font. `usage limit` remains, and an operator who sees a
-  # spent OpenCode plan classified FATAL has the CLI's own sentence in that
-  # error — which is what `cli.overrides.limit_markers` is for.
+  # NO stdin_login. 1.x's profile declared `auth login --username`, a flag no
+  # release of either major has — it printed usage and exited 1 — and 2.0's
+  # login is a provider picker and the provider's own flow.
+  marker_scope: stdout-and-stderr
+  # THE CLASS 2.0 NAMES IN ITS `error` EVENT, quoted, so the sentinel can
+  # only match the event's own JSON: inside a model's text the quotes are
+  # escaped. Measured on 2.0.32 against a provider answering 429 with a
+  # quota body, 429 with a rate-limit body, and 401: `provider.quota`,
+  # `provider.rate-limit`, `provider.auth`. 1.x's sentinels ("usage limit",
+  # "not authenticated", "no credentials") were never printed by either
+  # major, so a spent plan or a dead key was classified fatal and the
+  # fallback chain never moved. 2.0 retries a rate limit itself, with no
+  # setting to bound it — ~86s, measured — so a transient one holds the seat
+  # up to cli.timeout_seconds before this sentinel can hand it on.
   limit_markers:
-    - sentinel: "usage limit"
+    - sentinel: '"type":"provider.quota"'
+    - sentinel: '"type":"provider.rate-limit"'
   auth_markers:
-    - sentinel: "not authenticated"
-    - sentinel: "no credentials"
+    - sentinel: '"type":"provider.auth"'
 
 cursor-agent:
   binary: cursor-agent

@@ -1,8 +1,11 @@
 package cliagent
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
@@ -157,6 +161,21 @@ func seatSlug(seat string) string {
 	return slug + "-" + hex.EncodeToString(sum[:])[:16]
 }
 
+// loginStore moves a [cliprofile.CredentialStore]'s document into and out of a
+// home through the CLI's own commands.
+//
+// The PROVIDER implements it, because running the CLI takes what only the
+// provider holds — the environment its calls are given — while the workspace
+// decides WHEN a home is seeded and synced. One interface for the two places
+// that need it, a seat generation and the login home, so neither runs the CLI
+// its own way.
+type loginStore interface {
+	// importLogin stores the document's logins in home's database.
+	importLogin(ctx context.Context, home, cache string, document []byte) error
+	// exportLogin prints every login home's database holds.
+	exportLogin(ctx context.Context, home, cache string) ([]byte, error)
+}
+
 // Checkout is one call's place to run, and the seat share it borrows.
 type Checkout struct {
 	// Home is HOME for the child, and where every XDG and vendor
@@ -168,8 +187,11 @@ type Checkout struct {
 	// Work is the empty per-call working directory, removed on release.
 	Work string
 
-	ws       *Workspace
-	seat     *seatState
+	ws   *Workspace
+	seat *seatState
+	// store is the generation's way back out for a login held in the CLI's
+	// own database: whichever provider seeded the home exports from it.
+	store    loginStore
 	released bool
 }
 
@@ -180,7 +202,11 @@ type Checkout struct {
 // Batched sub-agents belong to the same agent, so sharing memory between an
 // agent and its own sub-agents is harmless by definition — and pruning under
 // them would delete the parent's state mid-call.
-func (w *Workspace) Acquire(seat, callID string) (*Checkout, error) {
+//
+// store imports a login the CLI keeps in its own database ([loginStore]); it is
+// asked only by a profile that declares a [cliprofile.CredentialStore], and the
+// generation's [Checkout.Release] exports through the same one.
+func (w *Workspace) Acquire(ctx context.Context, seat, callID string, store loginStore) (*Checkout, error) {
 	state := w.seatState(seat)
 	dir := w.SeatDir(seat)
 	home := filepath.Join(dir, "home")
@@ -190,17 +216,24 @@ func (w *Workspace) Acquire(seat, callID string) (*Checkout, error) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
+	// The directories exist BEFORE the seed rather than after it, which is
+	// the order a seed that RUNS THE CLI needs: an import is a child whose
+	// HOME is this directory and whose working directory is too.
+	for _, d := range []string{home, cache, work} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			return nil, fmt.Errorf("cli-agent: preparing %q: %w", d, err)
+		}
+	}
 	if state.inflight == 0 {
 		if err := w.prune(home); err != nil {
 			return nil, err
 		}
-		if err := w.seed(home); err != nil {
+		if err := w.seed(ctx, home, cache, store); err != nil {
+			// The call is not run, and it will not have a Release to
+			// clean up after it: its scratch directory goes here, and
+			// whatever the seed got as far as goes with the next prune.
+			_ = os.RemoveAll(work)
 			return nil, err
-		}
-	}
-	for _, d := range []string{home, cache, work} {
-		if err := os.MkdirAll(d, 0o700); err != nil {
-			return nil, fmt.Errorf("cli-agent: preparing %q: %w", d, err)
 		}
 	}
 	// The working directory is this call's own, so its settings files
@@ -209,7 +242,7 @@ func (w *Workspace) Acquire(seat, callID string) (*Checkout, error) {
 		return nil, err
 	}
 	state.inflight++
-	return &Checkout{Home: home, Cache: cache, Work: work, ws: w, seat: state}, nil
+	return &Checkout{Home: home, Cache: cache, Work: work, ws: w, seat: state, store: store}, nil
 }
 
 // Release returns the seat share, and is safe to call twice.
@@ -219,7 +252,12 @@ func (w *Workspace) Acquire(seat, callID string) (*Checkout, error) {
 // tokens expire in hours and most vendors rotate the refresh token with them,
 // so discarding the file the CLI rewrote logs the whole fleet out at the next
 // expiry.
-func (c *Checkout) Release() error {
+//
+// ctx bounds the export a login held in the CLI's own database leaves through.
+// A caller hands it [context.WithoutCancel] of its own: a release is a teardown,
+// and a call that ended BECAUSE its context was cancelled still has a refreshed
+// token to write back.
+func (c *Checkout) Release(ctx context.Context) error {
 	if c == nil || c.released {
 		return nil
 	}
@@ -236,7 +274,10 @@ func (c *Checkout) Release() error {
 	if c.seat.inflight > 0 {
 		return workErr
 	}
-	syncErr := c.ws.syncCredentialsOut(c.Home)
+	// A SEAT NEVER CREATES A LOGIN, it only refreshes one: written back only
+	// over a credential the shared directory still holds, so a seat that was
+	// mid-call while `crewlet llm logout` ran cannot put the login back.
+	syncErr := c.ws.syncCredentialsOut(ctx, c.Home, c.Cache, c.store, false)
 	pruneErr := c.ws.prune(c.Home)
 	for _, err := range []error{workErr, syncErr, pruneErr} {
 		if err != nil {
@@ -278,7 +319,11 @@ func (w *Workspace) prune(home string) error {
 // this file in place when it refreshes, and seven seats sharing one inode
 // would have seven writers on it. The copy back out is [syncCredentialsOut],
 // which runs once, when the seat's last call finishes.
-func (w *Workspace) seed(home string) error {
+//
+// A login held in the CLI's own database is IMPORTED last, once the settings
+// files are in place, because the import is the CLI itself starting in this
+// home and reading them: see [Workspace.importLogin].
+func (w *Workspace) seed(ctx context.Context, home, cache string, store loginStore) error {
 	shared := w.CredentialsDir()
 	for _, rel := range w.profile.CredentialPaths {
 		src := filepath.Join(shared, filepath.Base(rel))
@@ -304,7 +349,47 @@ func (w *Workspace) seed(home string) error {
 			return err
 		}
 	}
-	return w.seedFiles(home, cliprofile.SeedHome)
+	if err := w.seedFiles(home, cliprofile.SeedHome); err != nil {
+		return err
+	}
+	return w.importLogin(ctx, home, cache, store)
+}
+
+// importLogin puts a [cliprofile.CredentialStore]'s document into a home's
+// database, for a profile that declares one.
+//
+// INTO A DATABASE THE PRUNE HAS JUST EMPTIED, which is not incidental: the CLI
+// skips a credential id its database already holds rather than updating it, so
+// importing a refreshed document over an older database would keep the older
+// token. Both callers prune first.
+func (w *Workspace) importLogin(ctx context.Context, home, cache string, store loginStore) error {
+	if w.profile.CredentialStore == nil {
+		return nil
+	}
+	path := w.documentPath()
+	document, err := os.ReadFile(path) //nolint:gosec // path is inside the state dir
+	if os.IsNotExist(err) {
+		// No login yet, exactly as for a credential file above.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("cli-agent: reading the shared login %q: %w", path, err)
+	}
+	if !holdsLogin(document) {
+		return nil
+	}
+	if store == nil {
+		// Every caller in this package hands one; a nil here is a caller
+		// that would otherwise run the seat with no login while the shared
+		// directory plainly holds one.
+		return fmt.Errorf("cli-agent: %q keeps its login in its own database, and this "+
+			"home was prepared with no way to import %q into it", w.agent, path)
+	}
+	if err := store.importLogin(ctx, home, cache, document); err != nil {
+		return fmt.Errorf("cli-agent: importing the shared login %q: %w — if the "+
+			"document is damaged, sign in again with `crewlet llm login`", path, err)
+	}
+	return nil
 }
 
 // seedFiles writes the profile's settings files for one scope into root.
@@ -339,7 +424,20 @@ func (w *Workspace) seedFiles(root string, scope cliprofile.SeedScope) error {
 // as two terminals running the vendor's CLI would. A headless token has no
 // refresh file and sidesteps this entirely, which is why the docs recommend
 // one wherever the vendor mints one.
-func (w *Workspace) syncCredentialsOut(home string) error {
+//
+// create says whether a login the shared directory does not hold may be
+// written there. Only the login home passes true: it is where `crewlet llm
+// login` puts a login, so what it holds afterwards IS the login. A SEAT
+// passes false and only ever refreshes one, because the shared directory
+// losing a file while a seat was mid-call is `crewlet llm logout` having run
+// — and writing the seat's copy back, as this used to, put the login an
+// operator had just removed back on disk with nothing to say so.
+//
+// Every write REPLACES the file rather than rewriting it in place, through a
+// temporary file and a rename: the shared file is what every other seat's
+// next generation is seeded from, and a seed reading it mid-write took a
+// half-written credential — or an empty one — into a seat.
+func (w *Workspace) syncCredentialsOut(ctx context.Context, home, cache string, store loginStore, create bool) error {
 	shared := w.CredentialsDir()
 	for _, rel := range w.profile.CredentialPaths {
 		src, err := cliprofile.UnderRoot(home, rel)
@@ -353,22 +451,85 @@ func (w *Workspace) syncCredentialsOut(home string) error {
 		if err != nil {
 			return fmt.Errorf("cli-agent: reading the refreshed login %q: %w", src, err)
 		}
-		dst := filepath.Join(shared, filepath.Base(rel))
-		current, err := os.ReadFile(dst) //nolint:gosec // path is inside the state dir
-		if err == nil && string(current) == string(updated) {
-			continue
-		}
-		if err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("cli-agent: reading the shared login %q: %w", dst, err)
-		}
-		if err := os.MkdirAll(shared, 0o700); err != nil {
-			return fmt.Errorf("cli-agent: preparing %q: %w", shared, err)
-		}
-		if err := os.WriteFile(dst, updated, 0o600); err != nil {
-			return fmt.Errorf("cli-agent: writing the refreshed login %q: %w", dst, err)
+		if err := w.replaceShared(filepath.Join(shared, filepath.Base(rel)), updated, create); err != nil {
+			return err
 		}
 	}
+	if w.profile.CredentialStore == nil {
+		return nil
+	}
+	if store == nil {
+		return fmt.Errorf("cli-agent: %q keeps its login in its own database, and this "+
+			"home was released with no way to export it", w.agent)
+	}
+	document, err := store.exportLogin(ctx, home, cache)
+	if err != nil {
+		return fmt.Errorf("cli-agent: exporting the login from %q: %w", home, err)
+	}
+	// A database holding NO login is never written over one. It is what a
+	// home whose import found no document exports, and what a CLI that
+	// dropped a credential it could no longer refresh exports — and in
+	// either case the shared login is the better one to keep, exactly as a
+	// credential file a call deleted is not deleted from the shared
+	// directory above.
+	if !holdsLogin(document) {
+		return nil
+	}
+	return w.replaceShared(w.documentPath(), document, create)
+}
+
+// replaceShared puts content at dst in the shared directory when it differs
+// from what is there — and, unless create, only over a file that is there.
+func (w *Workspace) replaceShared(dst string, content []byte, create bool) error {
+	current, err := os.ReadFile(dst) //nolint:gosec // path is inside the state dir
+	switch {
+	case err == nil && bytes.Equal(current, content):
+		return nil
+	case os.IsNotExist(err) && !create:
+		return nil
+	case err != nil && !os.IsNotExist(err):
+		return fmt.Errorf("cli-agent: reading the shared login %q: %w", dst, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return fmt.Errorf("cli-agent: preparing %q: %w", filepath.Dir(dst), err)
+	}
+	if err := hostbox.ReplaceFile(dst, bytes.NewReader(content)); err != nil {
+		return fmt.Errorf("cli-agent: writing the refreshed login %q: %w", dst, err)
+	}
 	return nil
+}
+
+// documentPath is where the shared directory keeps a
+// [cliprofile.CredentialStore]'s document.
+func (w *Workspace) documentPath() string {
+	return filepath.Join(w.CredentialsDir(), cliprofile.CredentialStoreDocument)
+}
+
+// holdsLogin reports whether an exported document carries any login at all.
+//
+// The document's format is the CLI's, so this reads only the one shape every
+// such export shares when it is empty — nothing, or an empty JSON array,
+// object or null — and takes anything else as a login. Guessing harder would
+// mean parsing a vendor's credential format here, and a wrong guess in that
+// direction discards somebody's login.
+func holdsLogin(document []byte) bool {
+	trimmed := bytes.TrimSpace(document)
+	if len(trimmed) == 0 {
+		return false
+	}
+	var empty any
+	if err := json.Unmarshal(trimmed, &empty); err != nil {
+		return true
+	}
+	switch v := empty.(type) {
+	case nil:
+		return false
+	case []any:
+		return len(v) > 0
+	case map[string]any:
+		return len(v) > 0
+	}
+	return true
 }
 
 // HasLogin reports whether the shared directory holds any credential file.
@@ -377,12 +538,20 @@ func (w *Workspace) HasLogin() bool {
 }
 
 // LoginFiles lists the credential files present in the shared directory,
-// as absolute paths, sorted.
+// as absolute paths, sorted — a [cliprofile.CredentialStore]'s document among
+// them, which travels in a bundle and is removed by a logout exactly as a
+// credential file is.
 func (w *Workspace) LoginFiles() []string {
 	shared := w.CredentialsDir()
-	var out []string
+	var candidates []string
 	for _, rel := range w.profile.CredentialPaths {
-		path := filepath.Join(shared, filepath.Base(rel))
+		candidates = append(candidates, filepath.Join(shared, filepath.Base(rel)))
+	}
+	if w.profile.CredentialStore != nil {
+		candidates = append(candidates, w.documentPath())
+	}
+	var out []string
+	for _, path := range candidates {
 		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
 			out = append(out, path)
 		}

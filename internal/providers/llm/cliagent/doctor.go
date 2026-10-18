@@ -182,7 +182,7 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 		d.Credentials = "present"
 	default:
 		d.Credentials = "none on disk"
-		d.HostLogin = p.HostLogin("")
+		d.HostLogin = p.HostLogin(ctx, "")
 	}
 
 	switch {
@@ -657,6 +657,27 @@ func (p *Provider) SandboxCredentials() map[string]string {
 		return nil
 	}
 	return out
+}
+
+// SandboxCredentialDocument is the shared login a CLI keeps in a database of
+// its own ([cliprofile.CredentialStore]) — the document its export printed —
+// as an absolute path on the engine host, or "" when the profile keeps none or
+// nobody has signed the entry in.
+//
+// A PATH, NOT A BOX PATH: where a box keeps it is the coding runner's to say,
+// because the runner is what imports it into the CLI's database before a run
+// and exports back over it after, so the engine maps it there. It travels
+// under the same rule as [Provider.SandboxCredentials] — seeded into a local
+// box and written back from one, never handed to a remote one.
+func (p *Provider) SandboxCredentialDocument() string {
+	if p.profile.CredentialStore == nil {
+		return ""
+	}
+	path := p.ws.documentPath()
+	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+		return ""
+	}
+	return path
 }
 
 // SandboxEnv is the credential a coding run carries in its ENVIRONMENT — the

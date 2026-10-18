@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
@@ -45,9 +46,14 @@ var ErrNoLoginCommand = errors.New("cliagent: this CLI has no such login command
 // this whole backend exists to avoid.
 func (p *Provider) BrokerLogin(ctx context.Context, in io.Reader, out, errOut io.Writer) error {
 	if len(p.profile.LoginArgs) == 0 {
-		return fmt.Errorf("%w: %q authenticates on first use — run "+
-			"`crewlet llm doctor` after a call to confirm the login took",
-			ErrNoLoginCommand, p.agent)
+		// NOT "it authenticates on first use", which this said once: a seat
+		// never creates a login (see [Workspace.syncCredentialsOut]), and a
+		// headless call has nobody to complete a sign-in for it anyway — so
+		// the advice to make a call and then look was advice to watch it fail.
+		return fmt.Errorf("%w: the %q CLI declares no login subcommand — sign in with "+
+			"the CLI itself and adopt that login with `crewlet llm login %s -from-host`, "+
+			"or give the entry a key",
+			ErrNoLoginCommand, p.agent, p.key)
 	}
 	return p.runInCredentialHome(ctx, p.profile.LoginArgs, in, out, errOut)
 }
@@ -207,8 +213,8 @@ func (p *Provider) Status(ctx context.Context, out, errOut io.Writer) error {
 	return p.runInCredentialHome(ctx, p.profile.StatusArgs, nil, out, errOut)
 }
 
-// AdoptHostLogin copies the CLI's credential files out of a human's home
-// directory into this provider's own, and reports what it took.
+// AdoptHostLogin copies the CLI's login out of a human's home directory into
+// this provider's own, and reports what it took.
 //
 // A COPY, not a redirect: agents never write into the operator's personal
 // credential file, so a fleet refreshing a token mid-session is not a
@@ -216,7 +222,11 @@ func (p *Provider) Status(ctx context.Context, out, errOut io.Writer) error {
 // descend from one refresh token, and a vendor that rotates refresh tokens
 // can log out whichever side refreshes second — which is why the caller says
 // so, and recommends a headless token where the vendor mints one.
-func (p *Provider) AdoptHostLogin(home string) ([]string, error) {
+//
+// A login the CLI keeps in a database of its own is taken the only way it can
+// leave one, through the CLI's own export run against that home
+// ([Provider.exportHostLogin]).
+func (p *Provider) AdoptHostLogin(ctx context.Context, home string) ([]string, error) {
 	if home == "" {
 		var err error
 		home, err = os.UserHomeDir()
@@ -225,16 +235,12 @@ func (p *Provider) AdoptHostLogin(home string) ([]string, error) {
 				"(%w) — name one with --home", err)
 		}
 	}
-	sources := p.profile.HostCredentialPaths
-	if len(sources) == 0 {
-		sources = p.profile.CredentialPaths
-	}
 	dest := p.ws.CredentialsDir()
 	if err := os.MkdirAll(dest, 0o700); err != nil {
 		return nil, fmt.Errorf("cliagent: preparing %q: %w", dest, err)
 	}
 	var taken []string
-	for _, rel := range sources {
+	for _, rel := range p.hostSources() {
 		src, err := cliprofile.UnderRoot(home, rel)
 		if err != nil {
 			return nil, err
@@ -249,10 +255,24 @@ func (p *Provider) AdoptHostLogin(home string) ([]string, error) {
 		if !info.Mode().IsRegular() {
 			continue
 		}
-		if err := copyFile(src, filepath.Join(dest, filepath.Base(rel))); err != nil {
-			return nil, err
+		// REPLACED rather than rewritten in place: a seat starting its
+		// generation now is seeded from this very file.
+		if _, err := hostbox.CopyFileAtomic(src, filepath.Join(dest, filepath.Base(rel))); err != nil {
+			return nil, fmt.Errorf("cliagent: copying %q: %w", src, err)
 		}
 		taken = append(taken, src)
+	}
+	if p.profile.CredentialStore != nil {
+		document, err := p.exportHostLogin(ctx, home)
+		if err != nil {
+			return nil, fmt.Errorf("cliagent: reading the %q login in %q: %w", p.agent, home, err)
+		}
+		if holdsLogin(document) {
+			if err := p.ws.replaceShared(p.ws.documentPath(), document, true); err != nil {
+				return nil, err
+			}
+			taken = append(taken, p.hostStoreName(home))
+		}
 	}
 	if len(taken) == 0 {
 		return nil, fmt.Errorf("cliagent: no %q login found under %q — log in with the "+
@@ -267,7 +287,12 @@ func (p *Provider) AdoptHostLogin(home string) ([]string, error) {
 // So that "no sign-in" on a machine where the CLI plainly works explains
 // itself, rather than sending an operator to look for a bug that is a missing
 // `-from-host`.
-func (p *Provider) HostLogin(home string) []string {
+//
+// A login held in the CLI's own database is found by asking the CLI to export
+// it — the one way to tell an empty database from one holding a login — and an
+// export that fails reports nothing rather than an error: this is a hint on a
+// report already explaining that nothing signs the entry in.
+func (p *Provider) HostLogin(ctx context.Context, home string) []string {
 	if home == "" {
 		var err error
 		home, err = os.UserHomeDir()
@@ -275,12 +300,8 @@ func (p *Provider) HostLogin(home string) []string {
 			return nil
 		}
 	}
-	sources := p.profile.HostCredentialPaths
-	if len(sources) == 0 {
-		sources = p.profile.CredentialPaths
-	}
 	var found []string
-	for _, rel := range sources {
+	for _, rel := range p.hostSources() {
 		src, err := cliprofile.UnderRoot(home, rel)
 		if err != nil {
 			continue
@@ -289,7 +310,28 @@ func (p *Provider) HostLogin(home string) []string {
 			found = append(found, src)
 		}
 	}
+	if p.profile.CredentialStore != nil {
+		if document, err := p.exportHostLogin(ctx, home); err == nil && holdsLogin(document) {
+			found = append(found, p.hostStoreName(home))
+		}
+	}
 	return found
+}
+
+// hostSources are the files a human's own login is kept in.
+func (p *Provider) hostSources() []string {
+	if len(p.profile.HostCredentialPaths) > 0 {
+		return p.profile.HostCredentialPaths
+	}
+	return p.profile.CredentialPaths
+}
+
+// hostStoreName names a login found in a human's home through the CLI's own
+// export, for the lines that list where a login was found: there is no file to
+// name, so it names the home and the command that read it.
+func (p *Provider) hostStoreName(home string) string {
+	return fmt.Sprintf("the login %s holds in %s (`%s %s`)", p.agent, home,
+		p.profile.Binary, strings.Join(p.profile.CredentialStore.ExportArgs, " "))
 }
 
 // ExportBundle packs the credential directory into one base64 blob for the
@@ -362,6 +404,9 @@ func (p *Provider) RestoreBundle(blob string) error {
 	for _, rel := range p.profile.CredentialPaths {
 		allowed[filepath.Base(rel)] = true
 	}
+	if p.profile.CredentialStore != nil {
+		allowed[cliprofile.CredentialStoreDocument] = true
+	}
 	if err = os.MkdirAll(dest, 0o700); err != nil {
 		return fmt.Errorf("cliagent: preparing %q: %w", dest, err)
 	}
@@ -420,7 +465,7 @@ func (p *Provider) RestoreBundle(blob string) error {
 	}
 
 	for name, data := range staged {
-		if err := os.WriteFile(filepath.Join(dest, name), data, 0o600); err != nil {
+		if err := hostbox.ReplaceFile(filepath.Join(dest, name), bytes.NewReader(data)); err != nil {
 			return fmt.Errorf("cliagent: writing %q: %w", name, err)
 		}
 	}
@@ -444,10 +489,20 @@ func (p *Provider) runInCredentialHome(
 			return fmt.Errorf("cliagent: preparing %q: %w", dir, err)
 		}
 	}
+	checkout := &Checkout{Home: home, Cache: filepath.Join(p.ws.Root(), "login-cache")}
+	if err := os.MkdirAll(checkout.Cache, 0o700); err != nil {
+		return fmt.Errorf("cliagent: preparing %q: %w", checkout.Cache, err)
+	}
 	// The login home is seeded from and synced back to the shared
 	// directory exactly like a seat's, so re-running a login updates the
-	// one credential every seat reads.
-	if err := p.ws.seed(home); err != nil {
+	// one credential every seat reads — and PRUNED first exactly like one,
+	// so a login the CLI keeps in its own database is imported into an
+	// empty one rather than skipped by a database still holding an older
+	// copy of the same credential.
+	if err := p.ws.prune(home); err != nil {
+		return err
+	}
+	if err := p.ws.seed(ctx, home, checkout.Cache, p); err != nil {
 		return err
 	}
 	env := map[string]string{}
@@ -458,10 +513,6 @@ func (p *Provider) runInCredentialHome(
 		for k, v := range more {
 			env[k] = v
 		}
-	}
-	checkout := &Checkout{Home: home, Cache: filepath.Join(p.ws.Root(), "login-cache")}
-	if err := os.MkdirAll(checkout.Cache, 0o700); err != nil {
-		return fmt.Errorf("cliagent: preparing %q: %w", checkout.Cache, err)
 	}
 
 	cmd := exec.CommandContext(ctx, p.profile.Binary, args...) //nolint:gosec // args come from a validated profile
@@ -485,9 +536,19 @@ func (p *Provider) runInCredentialHome(
 	runErr := cmd.Run()
 
 	// Synced back even on failure: a login that authenticated and then
-	// failed a later step still wrote a credential worth keeping.
-	if err := p.ws.syncCredentialsOut(home); err != nil {
-		return err
+	// failed a later step still wrote a credential worth keeping — and on an
+	// operator's Ctrl+C too, which is why the export does not inherit the
+	// cancellation that ended the command. This is the one sync that may
+	// CREATE the shared login: it is where a login is made.
+	syncErr := p.ws.syncCredentialsOut(context.WithoutCancel(ctx), home, checkout.Cache, p, true)
+	// Pruned after as well, so the login home does not keep a second copy of
+	// a login held in the CLI's own database: the shared directory's document
+	// is the login of record, and the next command here imports it afresh.
+	pruneErr := p.ws.prune(home)
+	for _, err := range []error{syncErr, pruneErr} {
+		if err != nil {
+			return err
+		}
 	}
 	if runErr != nil {
 		return fmt.Errorf("cliagent: %s %s: %w", p.profile.Binary, strings.Join(args, " "), runErr)

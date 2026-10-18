@@ -128,3 +128,52 @@ func TestAProfileCannotDeclareBothSystemPromptChannels(t *testing.T) {
 		t.Errorf("the error does not say what is wrong: %v", err)
 	}
 }
+
+// A DISCOVERED AGENT FILE IS WHERE THE CLI LOOKS, PRIVATE, AND SELECTED — never
+// carried — by the argv.
+//
+// OpenCode 2.0 has no system-prompt flag: it finds `.opencode/agents/<name>.md`
+// in the project it runs in, and `--agent` picks one. So the file has to be in
+// the per-call working directory at exactly that path when the child starts —
+// which only the child can confirm, since the directory is removed on release
+// — and nothing of the text may reach argv.
+func TestADiscoveredAgentFileIsWhereTheCLILooks(t *testing.T) {
+	t.Parallel()
+	const name = ".opencode/agents/crewlet-seat.md"
+	p := fakeProvider(t, map[string]string{"FAKE_READ_DISCOVERED": name}, map[string]any{
+		"system_prompt_args": []any{"--agent", "crewlet-seat"},
+		"system_prompt_file": map[string]any{
+			"name": name, "discovered": true,
+			"template": "---\nmode: primary\n---\n{system}\n",
+		},
+	})
+	comp, err := ask(t, p, llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleSystem, Content: "You are Agent CTO at Nimbus."},
+		{Role: llm.RoleUser, Content: "hello"},
+	}})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	parts := strings.SplitN(comp.Content, "|", 3)
+	if len(parts) != 3 {
+		t.Fatalf("the child could not read the agent file: %s", comp.Content)
+	}
+	argv, mode, encoded := parts[0], parts[1], parts[2]
+	body, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "---\nmode: primary\n---\nYou are Agent CTO at Nimbus.\n" {
+		t.Errorf("the agent file holds %q", body)
+	}
+	if mode != "600" {
+		t.Errorf("mode = %s, want 600: the file is the org chart and the seat's memory", mode)
+	}
+	if !strings.Contains(argv, "--agent crewlet-seat") {
+		t.Errorf("argv = %q, want the agent selected", argv)
+	}
+	if strings.Contains(argv, "Nimbus") || strings.Contains(argv, name) {
+		t.Errorf("argv = %q carries the prompt or its path — a discovered file is "+
+			"found by where it is", argv)
+	}
+}

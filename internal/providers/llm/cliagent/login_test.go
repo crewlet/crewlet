@@ -60,7 +60,7 @@ func TestAdoptingAHostLoginCopiesRatherThanMoves(t *testing.T) {
 	home := t.TempDir()
 	writeHostLogin(t, home, `{"token":"personal"}`)
 
-	taken, err := p.AdoptHostLogin(home)
+	taken, err := p.AdoptHostLogin(t.Context(), home)
 	if err != nil {
 		t.Fatalf("AdoptHostLogin: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestAdoptingWithNoHostLoginSaysWhereItLooked(t *testing.T) {
 	t.Parallel()
 	p := loginProvider(t)
 	home := t.TempDir()
-	_, err := p.AdoptHostLogin(home)
+	_, err := p.AdoptHostLogin(t.Context(), home)
 	if err == nil {
 		t.Fatal("adopting a login that does not exist succeeded")
 	}
@@ -101,7 +101,7 @@ func TestACredentialBundleRoundTrips(t *testing.T) {
 	source := loginProvider(t)
 	home := t.TempDir()
 	writeHostLogin(t, home, `{"token":"exported","refresh":"r1"}`)
-	if _, err := source.AdoptHostLogin(home); err != nil {
+	if _, err := source.AdoptHostLogin(t.Context(), home); err != nil {
 		t.Fatalf("AdoptHostLogin: %v", err)
 	}
 
@@ -213,7 +213,7 @@ func TestABundleDoesNotOverwriteALiveLogin(t *testing.T) {
 	p := loginProvider(t)
 	home := t.TempDir()
 	writeHostLogin(t, home, `{"token":"current"}`)
-	if _, err := p.AdoptHostLogin(home); err != nil {
+	if _, err := p.AdoptHostLogin(t.Context(), home); err != nil {
 		t.Fatalf("AdoptHostLogin: %v", err)
 	}
 	if err := p.RestoreBundle(bundleOf(t, "creds.json", `{"token":"stale"}`)); err != nil {
@@ -249,7 +249,7 @@ func TestLogoutRemovesTheCredentialEvenIfTheVendorCommandFails(t *testing.T) {
 	p := loginProvider(t)
 	home := t.TempDir()
 	writeHostLogin(t, home, `{"token":"x"}`)
-	if _, err := p.AdoptHostLogin(home); err != nil {
+	if _, err := p.AdoptHostLogin(t.Context(), home); err != nil {
 		t.Fatalf("AdoptHostLogin: %v", err)
 	}
 	// A logout command that cannot possibly succeed.
@@ -282,11 +282,12 @@ func TestACLIWithNoCredentialLoginExplainsItself(t *testing.T) {
 	}
 }
 
-// The built-in opencode profile is the one with a credential login, and the
-// three browser-OAuth profiles deliberately leave it unset. A profile that
-// gained one by accident would send operators down a path their CLI cannot
-// serve.
-func TestOnlyOpencodeShipsACredentialLogin(t *testing.T) {
+// NO BUILT-IN PROFILE SHIPS A CREDENTIAL LOGIN, because no shipped CLI has
+// one. opencode's did — `auth login --username`, a flag no release of either
+// OpenCode major accepts, which printed usage and exited 1 — and a declared
+// login a CLI cannot serve sends operators down a path that only fails. The
+// mechanism stays for an operator whose build does accept one.
+func TestNoBuiltinProfileShipsACredentialLogin(t *testing.T) {
 	t.Parallel()
 	for _, name := range cliprofile.BuiltinNames() {
 		if name == "custom" {
@@ -296,9 +297,8 @@ func TestOnlyOpencodeShipsACredentialLogin(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Load(%q): %v", name, err)
 		}
-		hasLogin := p.StdinLogin != nil
-		if want := name == "opencode"; hasLogin != want {
-			t.Errorf("%s: stdin_login present = %v, want %v", name, hasLogin, want)
+		if p.StdinLogin != nil {
+			t.Errorf("%s: ships a stdin_login (%v) its CLI cannot serve", name, p.StdinLogin.Args)
 		}
 	}
 }

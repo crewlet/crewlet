@@ -49,7 +49,7 @@ subcommand below is served by it.
 | `crewlet llm doctor [KEY]` | Verify a subscription backend end to end — the CLI is installed, the login answers, a real completion returns, the CLI's own shell is refused and its web tool reaches the network — and an `anthropic` entry against its model: the Models API's record compared with the request shape the engine sends, and one real round that must come back as a tool call (`-no-smoke` stops before every real completion) |
 | `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
 | `crewlet llm status <KEY>` | Ask the CLI who it is currently logged in as |
-| `crewlet llm logout <KEY>` | Revoke locally and delete the provider's credential files |
+| `crewlet llm logout <KEY>` | Revoke locally and delete the provider's login — its credential files, or the login document a CLI like OpenCode 2 exports |
 | `crewlet llm export <KEY> [-secret-store]` | Pack the login into one portable blob — stdout, or the secret store under the name the engine restores from on a fresh host |
 | `crewlet llm import <KEY>` | Restore a bundle from **stdin** onto this host; refuses to overwrite a login that is already there |
 | `crewlet confluence import <company.yaml> <directory>` | Publish a directory of authored markdown into [Confluence](../integrations/confluence.md) spaces — one space per directory, plus the tool skills the files themselves declare. Every target space is checked before a single page is written |
@@ -1920,7 +1920,8 @@ clock, read by the tool.
 
 Both commands answer "signed in" the same way, from the environment the CLI is
 actually given rather than from the configuration: credential files a login
-wrote, a headless token, an `api_keys` value under `auth.mode: api-key`, a
+wrote (or, for OpenCode 2, which keeps its login in its own database, the
+document its export printed), a headless token, an `api_keys` value under `auth.mode: api-key`, a
 variable `auth.mode: inherit-env` forwards, or — for a CLI whose profile reads
 its provider's key from its own environment (`hermes`, `pi`, `opencode`) — a
 [credential-named](../concepts/subscription-llm-backends.md#5-a-provider-key-in-clienv-hermes-pi-opencode)
@@ -1971,8 +1972,8 @@ others. `openai` entries are not examined.
 | Shape | When |
 |---|---|
 | *(no flag)* | Broker the vendor's own interactive login and keep the result |
-| `-from-host` | Adopt a login this machine already has, e.g. from running the CLI by hand |
-| `-capture-token` | Mint a **headless token** into the secret store — the only shape a remote [code sandbox](../concepts/code-sandbox.md) can use, because a token is one scoped revocable variable and credential *files* never leave the engine host |
+| `-from-host` | Adopt a login this machine already has, e.g. from running the CLI by hand — copied for a login kept in files, exported by the CLI itself (`opencode auth export --standalone`) for one kept in its own database |
+| `-capture-token` | Mint a **headless token** into the secret store — the only shape a remote [code sandbox](../concepts/code-sandbox.md) can use, because a token is one scoped revocable variable and a login (credential files, an exported login) never leaves the engine host |
 | `-capture-token -print-token` | The same mint, written to **stdout** and stored nowhere — for an operator whose secrets live in somebody else's manager. It **refuses to run on a terminal**: this is a credential, and a token in a scrollback outlives the command, while a screen-share or a shell history outlives the scrollback. Pipe it or redirect it. The two-step alternative (`-capture-token`, then `secrets get -reveal`) writes the token into the store on the way past, which is precisely what this avoids. |
 | `-token-stdin` / `-username U -password-stdin` | Store a credential you already hold, where the CLI genuinely has one |
 

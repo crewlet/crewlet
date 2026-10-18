@@ -64,6 +64,8 @@ func (p Profile) Clone() Profile {
 	out.SystemPromptArgs = append([]string(nil), p.SystemPromptArgs...)
 	out.PromptArgs = append([]string(nil), p.PromptArgs...)
 	out.UsageFileArgs = append([]string(nil), p.UsageFileArgs...)
+	out.SessionArgs = append([]string(nil), p.SessionArgs...)
+	out.UsageArgs = append([]string(nil), p.UsageArgs...)
 	out.LoginArgs = append([]string(nil), p.LoginArgs...)
 	out.CaptureTokenArgs = append([]string(nil), p.CaptureTokenArgs...)
 	out.StatusArgs = append([]string(nil), p.StatusArgs...)
@@ -79,6 +81,7 @@ func (p Profile) Clone() Profile {
 		Output:     clonePaths(p.Usage.Output),
 		CacheRead:  clonePaths(p.Usage.CacheRead),
 		CacheWrite: clonePaths(p.Usage.CacheWrite),
+		Reasoning:  clonePaths(p.Usage.Reasoning),
 	}
 	out.EventTypePath = append(Path(nil), p.EventTypePath...)
 	out.TextEvents = append([]string(nil), p.TextEvents...)
@@ -95,6 +98,12 @@ func (p Profile) Clone() Profile {
 		login := *p.StdinLogin
 		login.Args = append([]string(nil), p.StdinLogin.Args...)
 		out.StdinLogin = &login
+	}
+	if p.CredentialStore != nil {
+		out.CredentialStore = &CredentialStore{
+			ExportArgs: append([]string(nil), p.CredentialStore.ExportArgs...),
+			ImportArgs: append([]string(nil), p.CredentialStore.ImportArgs...),
+		}
 	}
 	return out
 }

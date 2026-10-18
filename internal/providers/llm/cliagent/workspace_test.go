@@ -39,11 +39,11 @@ func newWorkspace(t *testing.T) *Workspace {
 func TestSeatsDoNotShareAHome(t *testing.T) {
 	t.Parallel()
 	ws := newWorkspace(t)
-	a, err := ws.Acquire("sarah-chen", "call-1")
+	a, err := ws.Acquire(t.Context(), "sarah-chen", "call-1", nil)
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
-	b, err := ws.Acquire("marcus-rivera", "call-2")
+	b, err := ws.Acquire(t.Context(), "marcus-rivera", "call-2", nil)
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
@@ -53,10 +53,10 @@ func TestSeatsDoNotShareAHome(t *testing.T) {
 	if a.Work == b.Work {
 		t.Fatalf("two calls share the working directory %q", a.Work)
 	}
-	if err := a.Release(); err != nil {
+	if err := a.Release(t.Context()); err != nil {
 		t.Errorf("Release: %v", err)
 	}
-	if err := b.Release(); err != nil {
+	if err := b.Release(t.Context()); err != nil {
 		t.Errorf("Release: %v", err)
 	}
 }
@@ -67,7 +67,7 @@ func TestSeatsDoNotShareAHome(t *testing.T) {
 func TestVolatileStateIsPrunedAroundACall(t *testing.T) {
 	t.Parallel()
 	ws := newWorkspace(t)
-	first, err := ws.Acquire("dev", "call-1")
+	first, err := ws.Acquire(t.Context(), "dev", "call-1", nil)
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestVolatileStateIsPrunedAroundACall(t *testing.T) {
 	if err := os.WriteFile(session, []byte("last turn"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := first.Release(); err != nil {
+	if err := first.Release(t.Context()); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
 	if _, err := os.Stat(session); !os.IsNotExist(err) {
@@ -92,11 +92,11 @@ func TestVolatileStateIsPrunedAroundACall(t *testing.T) {
 	if err := os.WriteFile(session, []byte("crashed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	second, err := ws.Acquire("dev", "call-2")
+	second, err := ws.Acquire(t.Context(), "dev", "call-2", nil)
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
-	defer func() { _ = second.Release() }()
+	defer func() { _ = second.Release(t.Context()) }()
 	if _, err := os.Stat(session); !os.IsNotExist(err) {
 		t.Fatalf("a crashed call's transcript survived the next acquire: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestVolatileStateIsPrunedAroundACall(t *testing.T) {
 func TestASecondCallIntoASeatDoesNotPruneUnderTheFirst(t *testing.T) {
 	t.Parallel()
 	ws := newWorkspace(t)
-	parent, err := ws.Acquire("dev", "parent")
+	parent, err := ws.Acquire(t.Context(), "dev", "parent", nil)
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestASecondCallIntoASeatDoesNotPruneUnderTheFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	child, err := ws.Acquire("dev", "subagent")
+	child, err := ws.Acquire(t.Context(), "dev", "subagent", nil)
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
@@ -132,13 +132,13 @@ func TestASecondCallIntoASeatDoesNotPruneUnderTheFirst(t *testing.T) {
 	}
 
 	// The sub-agent finishing is not the seat going quiet.
-	if err := child.Release(); err != nil {
+	if err := child.Release(t.Context()); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
 	if _, err := os.Stat(live); err != nil {
 		t.Fatalf("the parent's live session was pruned when its sub-agent finished: %v", err)
 	}
-	if err := parent.Release(); err != nil {
+	if err := parent.Release(t.Context()); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
 	if _, err := os.Stat(live); !os.IsNotExist(err) {
@@ -160,7 +160,7 @@ func TestARefreshedLoginIsSyncedBackToTheSharedDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	checkout, err := ws.Acquire("dev", "call")
+	checkout, err := ws.Acquire(t.Context(), "dev", "call", nil)
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestARefreshedLoginIsSyncedBackToTheSharedDirectory(t *testing.T) {
 	if err := os.WriteFile(seeded, []byte(`{"token":"new"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkout.Release(); err != nil {
+	if err := checkout.Release(t.Context()); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
 	after, err := os.ReadFile(shared)
@@ -196,11 +196,11 @@ func TestARefreshedLoginIsSyncedBackToTheSharedDirectory(t *testing.T) {
 func TestAMissingLoginDoesNotRefuseTheCheckout(t *testing.T) {
 	t.Parallel()
 	ws := newWorkspace(t)
-	checkout, err := ws.Acquire("dev", "call")
+	checkout, err := ws.Acquire(t.Context(), "dev", "call", nil)
 	if err != nil {
 		t.Fatalf("Acquire with no login: %v", err)
 	}
-	if err := checkout.Release(); err != nil {
+	if err := checkout.Release(t.Context()); err != nil {
 		t.Errorf("Release: %v", err)
 	}
 	if ws.HasLogin() {
@@ -270,12 +270,12 @@ func TestConcurrentCallsIntoOneSeatAreSafe(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range 16 {
 		wg.Go(func() {
-			checkout, err := ws.Acquire("dev", string(rune('a'+i%16)))
+			checkout, err := ws.Acquire(t.Context(), "dev", string(rune('a'+i%16)), nil)
 			if err != nil {
 				t.Errorf("Acquire: %v", err)
 				return
 			}
-			if err := checkout.Release(); err != nil {
+			if err := checkout.Release(t.Context()); err != nil {
 				t.Errorf("Release: %v", err)
 			}
 		})
@@ -289,21 +289,21 @@ func TestConcurrentCallsIntoOneSeatAreSafe(t *testing.T) {
 func TestReleaseIsIdempotent(t *testing.T) {
 	t.Parallel()
 	ws := newWorkspace(t)
-	checkout, err := ws.Acquire("dev", "call")
+	checkout, err := ws.Acquire(t.Context(), "dev", "call", nil)
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
-	if err := checkout.Release(); err != nil {
+	if err := checkout.Release(t.Context()); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	if err := checkout.Release(); err != nil {
+	if err := checkout.Release(t.Context()); err != nil {
 		t.Fatalf("second Release: %v", err)
 	}
-	live, err := ws.Acquire("dev", "next")
+	live, err := ws.Acquire(t.Context(), "dev", "next", nil)
 	if err != nil {
 		t.Fatalf("Acquire after a double release: %v", err)
 	}
-	if err := live.Release(); err != nil {
+	if err := live.Release(t.Context()); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
 }

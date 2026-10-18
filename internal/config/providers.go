@@ -909,7 +909,8 @@ type CLIAgentAuth struct {
 	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"${VAR} holding a long-lived subscription token."`
 
 	// CredentialBundle is a ${VAR} reference to a bundle exported by
-	// `crewlet llm export` — the CLI's credential files as one blob,
+	// `crewlet llm export` — the CLI's login (its credential files, or the
+	// document its export printed) as one blob,
 	// restored into an empty credential directory at boot so a fresh
 	// container comes up already logged in.
 	CredentialBundle string `secret:"true" yaml:"credential_bundle,omitempty" json:"credential_bundle,omitempty" desc:"${VAR} holding a bundle exported by crewlet llm export."`
@@ -1172,7 +1173,8 @@ func (c *Company) validateCLIAgentModels() error {
 // the first slash into a provider and a model, so a bare `claude-sonnet-5`
 // names the provider "claude-sonnet-5" and no model, and every call the entry
 // makes — the text calls and an agent-mode run alike, which are handed the
-// same value — fails inside the CLI with "Model not found".
+// same value — fails inside the CLI, which OpenCode 2 refuses as "Invalid model
+// reference".
 //
 // JUDGED ON THE VALUE THE CLI IS HANDED, the model rendered through the
 // profile's model_args, so an override that puts the provider in the flag
@@ -1212,8 +1214,8 @@ func (l *LLMProvider) validateCLIModel(path Path) error {
 	// a tool that entry does not run.
 	failure, listing := "with the CLI's own model-not-found error", ""
 	if cli.Name() == string(CLIOpenCode) {
-		failure = `with OpenCode's "Model not found"`
-		listing = " (`opencode models` lists them)"
+		failure = `with OpenCode's "Invalid model reference"`
+		listing = " (`opencode models --standalone` lists them)"
 	}
 	p.add(at(path, "model"), ErrConflict,
 		"the %s CLI reads its model as <provider>/<model> and splits it at the first "+
@@ -1307,11 +1309,11 @@ func (l *LLMProvider) validateCLICredentials(path Path) error {
 			p.add(at(path, "cli.auth.mode"), ErrConflict,
 				"api-key puts the api_keys value in the CLI's key variable, and the "+
 					"%q profile names none (api_key_env), so the key would reach "+
-					"nothing: this CLI reads a key only from its credential files "+
-					"(%s), so put it there — `crewlet llm login`, or a credential "+
-					"bundle — or, if your build of the CLI does read a key variable, "+
-					"name it with cli.overrides.api_key_env",
-				agent, strings.Join(profile.CredentialPaths, ", "))
+					"nothing: this CLI reads a key only from %s, so put it there — "+
+					"`crewlet llm login`, or a credential bundle — or, if your build of "+
+					"the CLI does read a key variable, name it with "+
+					"cli.overrides.api_key_env",
+				agent, profile.LoginLocation())
 		case len(l.APIKeys) == 0:
 			p.add(at(path, "api_keys"), ErrMissing,
 				"auth.mode api-key puts the api_keys value in %s, and this entry "+

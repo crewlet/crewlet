@@ -1,6 +1,7 @@
 package cliagent
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -47,7 +48,7 @@ func TestOnlyAVendorThatFailsIntoItsAnswerHasItSearched(t *testing.T) {
 				MarkerScope:  tc.scope,
 				LimitMarkers: []cliprofile.LimitMarker{{Sentinel: "rate limit"}, {Sentinel: "quota"}},
 			}
-			_, fired := classifyMarkers(p, innocent, "")
+			_, fired := classifyMarkers(p, innocent, innocent, "")
 			if fired != tc.wantFired {
 				t.Errorf("fired = %v, want %v — %s", fired, tc.wantFired, tc.why)
 			}
@@ -68,7 +69,7 @@ func TestOnlyAVendorThatFailsIntoItsAnswerHasItSearched(t *testing.T) {
 		{"error: failed to run prompt: provider.rate_limit: 429 …", llm.KindRateLimit},
 		{"error: failed to run prompt: provider.auth_error: 401 …", llm.KindAuth},
 	} {
-		hit, ok := classifyMarkers(p, "", tc.stderr)
+		hit, ok := classifyMarkers(p, "", "", tc.stderr)
 		if !ok || hit.Kind != tc.want {
 			t.Errorf("stderr %q: fired=%v kind=%v, want %v", tc.stderr, ok, hit.Kind, tc.want)
 		}
@@ -82,17 +83,106 @@ func TestOnlyAVendorThatFailsIntoItsAnswerHasItSearched(t *testing.T) {
 // ever firing on a spent Claude plan.
 func TestTheDefaultMarkerScopeSurvivesForTheVendorsThatNeedIt(t *testing.T) {
 	t.Parallel()
-	narrowed := map[string]bool{"kimi-code": true, "hermes": true, "pi": true}
+	narrowed := map[string]cliprofile.MarkerScope{
+		"kimi-code": cliprofile.MarkerScopeStderr,
+		"hermes":    cliprofile.MarkerScopeStderr,
+		"pi":        cliprofile.MarkerScopeStderr,
+		// The other direction: OpenCode 2.0 reports a failure as an event of
+		// its own on stdout, which may follow an answer it located.
+		"opencode": cliprofile.MarkerScopeStdoutAndStderr,
+	}
 	for _, name := range cliprofile.BuiltinNames() {
 		p, _ := cliprofile.Builtin(name)
 		got := p.EffectiveMarkerScope()
 		want := cliprofile.MarkerScopeAnswerAndStderr
-		if narrowed[name] {
-			want = cliprofile.MarkerScopeStderr
+		if scope, ok := narrowed[name]; ok {
+			want = scope
 		}
 		if got != want {
 			t.Errorf("%s: marker_scope = %q, want %q", name, got, want)
 		}
+	}
+}
+
+// A FAILURE EVENT IS FOUND WHEREVER IT FALLS IN THE STREAM, AND THE MODEL
+// CANNOT FORGE ONE.
+//
+// OpenCode 2.0 prints a refused key or a spent plan as an `error` event on
+// stdout — nothing on stderr — and the event can follow an answer the profile
+// located, so neither the answer nor stderr holds it. The stdout-and-stderr
+// scope searches every line; what keeps that from benching a credential over
+// something the model wrote is that the sentinels are spelled with the
+// event's own quotes, which a model's text only ever reaches the stream as
+// escaped JSON. The error events are the ones 2.0.32 printed, verbatim, for a
+// provider answering 429 with a quota body, 429 with a rate-limit body and
+// 401.
+func TestAStreamFailureIsFoundAndCannotBeSpokenByTheModel(t *testing.T) {
+	t.Parallel()
+	p, ok := cliprofile.Builtin("opencode")
+	if !ok {
+		t.Fatal("no built-in opencode profile")
+	}
+	text := func(said string) string {
+		return `{"type":"text","sessionID":"ses_x","part":{"type":"text","text":` +
+			strconv.Quote(said) + `}}`
+	}
+	answer := text("I fetched the page; the summary follows.")
+	for name, tc := range map[string]struct {
+		event string
+		want  llm.ErrorKind
+	}{
+		"a spent plan": {
+			event: `{"type":"error","sessionID":"ses_x","error":{"type":"provider.quota","message":"You exceeded your current quota, please check your plan and billing details.","status":429}}`,
+			want:  llm.KindRateLimit,
+		},
+		"a rate limit": {
+			event: `{"type":"error","sessionID":"ses_x","error":{"type":"provider.rate-limit","message":"Rate limit reached for requests","status":429}}`,
+			want:  llm.KindRateLimit,
+		},
+		"a refused key": {
+			event: `{"type":"error","sessionID":"ses_x","error":{"type":"provider.auth","message":"Incorrect API key provided: sk-...xyz.","status":401}}`,
+			want:  llm.KindAuth,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			stdout := answer + "\n" + tc.event + "\n"
+			out := extract(p, stdout)
+			if !out.located {
+				t.Fatalf("the answer before the failure was not located — the case " +
+					"this scope exists for is the one where it is")
+			}
+			hit, fired := classifyMarkers(p, nonEmpty(out.text, stdout), stdout, "")
+			if !fired || hit.Kind != tc.want {
+				t.Errorf("fired=%v kind=%v, want %v — the failure followed a located "+
+					"answer, so only a search of the whole stream finds it", fired, hit.Kind, tc.want)
+			}
+		})
+	}
+
+	// The model writing every sentinel verbatim, quotes and all.
+	var spoken []string
+	for _, m := range p.LimitMarkers {
+		spoken = append(spoken, m.Sentinel)
+	}
+	for _, m := range p.AuthMarkers {
+		spoken = append(spoken, m.Sentinel)
+	}
+	stdout := text("A failure looks like "+strings.Join(spoken, " or ")+" in the stream.") + "\n"
+	if hit, fired := classifyMarkers(p, extract(p, stdout).text, stdout, ""); fired {
+		t.Errorf("the model's own words classified as %v: %q — a sentinel must be "+
+			"spelled so that only the CLI's own event can carry it", hit.Kind, hit.Said)
+	}
+}
+
+// The stdout-and-stderr scope is refused on a TEXT profile, whose stdout is the
+// model's reply: there it would match sentinels against what the model wrote,
+// which is the one thing the scope's quoting argument rules out.
+func TestTheStreamScopeIsRefusedOnATextProfile(t *testing.T) {
+	t.Parallel()
+	_, err := cliprofile.Load("opencode", map[string]any{"output": "text"})
+	if err == nil || !strings.Contains(err.Error(), "marker_scope") {
+		t.Fatalf("err = %v, want a refusal naming marker_scope", err)
 	}
 }
 
@@ -148,7 +238,7 @@ func TestAnArgvTemplateNamingBothPlaceholdersIsRefused(t *testing.T) {
 }
 
 // A USAGE-FILE PROFILE MISSING EITHER PROMPT COUNT REPORTS FIGURES IT NEVER
-// READS. [extracted.applyUsageFile] takes the report only when input AND
+// READS. [extracted.applyUsageReport] takes the report only when input AND
 // output resolve — a partial overlay would pair one source's input with
 // another's output, and the sum is what a budget is charged. So a profile
 // declaring one of them estimates on every call while ReadsUsage, and

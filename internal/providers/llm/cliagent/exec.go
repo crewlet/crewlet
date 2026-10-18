@@ -301,6 +301,9 @@ type extracted struct {
 	output     int
 	cacheRead  int
 	cacheWrite int
+	// reasoning is reasoning tokens a CLI reports APART from output, which
+	// the completion adds to the output count — see [cliprofile.UsagePaths].
+	reasoning int
 	// reported is false when no usage path resolved, so the counts are
 	// estimates. `crewlet llm doctor` prints which of the two a provider
 	// gets, because a budget built on estimates is a different promise.
@@ -375,6 +378,7 @@ func extractObject(p cliprofile.Profile, stdout string) extracted {
 	}
 	out.cacheRead, _ = firstInt(doc, p.Usage.CacheRead)
 	out.cacheWrite, _ = firstInt(doc, p.Usage.CacheWrite)
+	out.reasoning, _ = firstInt(doc, p.Usage.Reasoning)
 	return out
 }
 
@@ -425,21 +429,25 @@ func extractStream(p cliprofile.Profile, stdout string) extracted {
 		if got, ok := firstInt(doc, p.Usage.CacheWrite); ok {
 			out.cacheWrite = got
 		}
+		if got, ok := firstInt(doc, p.Usage.Reasoning); ok {
+			out.reasoning = got
+		}
 	}
 	out.text = strings.TrimSpace(text.String())
 	return out
 }
 
-// applyUsageFile overlays a vendor's SEPARATE usage report on what stdout
-// said, for a profile whose CLI writes one — see [cliprofile.Profile.UsageFileArgs].
+// applyUsageReport overlays a vendor's SEPARATE usage report on what stdout
+// said, for a profile whose CLI writes one or prints one to a usage command —
+// see [cliprofile.Profile.UsageFileArgs] and [cliprofile.Profile.UsageArgs].
 //
 // BOTH PROMPT COUNTS COME FROM THE FILE OR NEITHER DOES. A partial overlay
 // would pair one source's input count with another's output count, and the
 // sum is what a budget is charged. The two cache figures are not part of that
 // test: a provider that caches nothing reports neither, and zero is the true
 // answer there.
-func (e *extracted) applyUsageFile(p cliprofile.Profile, raw string) {
-	if len(p.UsageFileArgs) == 0 || strings.TrimSpace(raw) == "" {
+func (e *extracted) applyUsageReport(p cliprofile.Profile, raw string) {
+	if !p.ReadsUsageReport() || strings.TrimSpace(raw) == "" {
 		return
 	}
 	doc, ok := decodeObject(strings.TrimSpace(raw))
@@ -461,6 +469,7 @@ func (e *extracted) applyUsageFile(p cliprofile.Profile, raw string) {
 	e.input, e.output, e.reported = input, output, true
 	e.cacheRead, _ = firstInt(doc, p.Usage.CacheRead)
 	e.cacheWrite, _ = firstInt(doc, p.Usage.CacheWrite)
+	e.reasoning, _ = firstInt(doc, p.Usage.Reasoning)
 }
 
 // textOf reads the assistant's text out of ONE line of a jsonl stream,

@@ -65,6 +65,10 @@ func runFakeCLI() {
 		time.Sleep(time.Duration(delay) * time.Millisecond)
 	}
 	switch {
+	case os.Getenv("FAKE_STORE") == "1":
+		// A CLI that keeps its login, its sessions and their usage in a
+		// database of its own — see credentialstore_test.go.
+		fakeStore()
 	case os.Getenv("FAKE_STUBBORN") == "1":
 		// A CLI that ignores the polite signal and leaves a forking
 		// descendant behind — a Node or Bun runtime under a launcher, which
@@ -125,6 +129,25 @@ func runFakeCLI() {
 			return
 		}
 		fmt.Printf("%s|%s", os.Getenv(os.Getenv("FAKE_READ_SYSTEM_PROMPT")), body)
+	case os.Getenv("FAKE_READ_DISCOVERED") != "":
+		// Reads a file at a path RELATIVE TO ITS WORKING DIRECTORY, FROM
+		// INSIDE THE CHILD, as a CLI that discovers its agents there does —
+		// and prints its argv beside it, so one probe settles that the file
+		// was where the CLI looks and that the argv selected rather than
+		// carried it.
+		path := os.Getenv("FAKE_READ_DISCOVERED")
+		body, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Print("UNREADABLE: ", err)
+			return
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			fmt.Print("UNSTATABLE: ", err)
+			return
+		}
+		fmt.Printf("%s|%o|%s", strings.Join(os.Args[1:], " "), info.Mode().Perm(),
+			base64.StdEncoding.EncodeToString(body))
 	case os.Getenv("FAKE_REPORT_ENV") != "":
 		// Reports whether one named variable reached the child, FROM
 		// INSIDE it. The parent cannot answer this: what an invocation
