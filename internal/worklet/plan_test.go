@@ -1253,6 +1253,7 @@ var planFieldTypes = map[string]FieldType{
 	"effort": FieldNumber,
 	"ship":   FieldDate,
 	"impact": FieldDropdown,
+	"areas":  FieldLabels,
 }
 
 func planFields(q Query) map[string]resolvedField {
@@ -1264,7 +1265,8 @@ func planFields(q Query) map[string]resolvedField {
 		if !known {
 			kind = FieldText
 		}
-		out[ref] = resolvedField{ID: "field-" + ref, Slug: ref, Type: kind}
+		out[ref] = resolvedField{ID: "field-" + ref, Slug: ref, Type: kind,
+			Multi: MultiValued(kind)}
 	}
 	return out
 }
@@ -1680,4 +1682,173 @@ func historyRow(i int) []any {
 		statelog.Position{Generation: 1, Seq: uint64(i + 1)}.Packed(), historyStream,
 		store.EncodeTime(at), store.EncodeTime(at), []byte(`{}`),
 	}
+}
+
+// A FIELD'S VALUES ARE READ BY THEIR TASK, OR BY THEIR FIELD AS A FILTER.
+//
+// `tracker_field_values` is read two ways and each has its own index. A FILTER
+// asks which tasks hold a value, which the field's own column's index answers
+// as one range, so its subquery is driven from there ([fieldClause]); every
+// other read — a sort's join, a grouping's join and its column filter, a
+// total over the answer — asks for the values of tasks the statement already
+// holds, which the table's key answers one task at a time ([fieldValuesKey]).
+//
+// Both are held to it in every statement the reader runs for the query
+// ([queryStatements]), because the four value indexes all lead with
+// `field_id` and are partial on `hidden = 0`, which every one of these reads
+// states: with no statistics the planner took one of them for a per-task
+// probe and sought `field_id` alone — measured, every value the field holds,
+// read once per task on a page sorted by a choice field, on a board grouped
+// by one and in that board's column counts; one column's rows read the
+// field's values and then the project's board once per value; and a total
+// over a number field read the field's every value through the choice
+// column's index. Every one of those plans passed the inventory, which only
+// asks that some plan reach each index.
+//
+// So a line seeking the key must seek it on a task, and a line reading a
+// value index must be a filter's — the index of a field the query filters on,
+// read inside the subquery that finds the filtered tasks.
+func TestAFieldValueIsReadByItsTaskOrByItsFilter(t *testing.T) {
+	t.Parallel()
+	db := planStore(t)
+	for name, params := range map[string]map[string]any{
+		"sorted by a field":            {"container": "project:P01", "sort": "f.impact"},
+		"sorted by a field everywhere": {"sort": "-f.effort"},
+		"a board of a field":           {"container": "project:P01", "group_by": "f.impact"},
+		"a board of a field everywhere": {"group_by": "f.impact",
+			"subtasks": "separate"},
+		"a board of a labels field": {"container": "project:P01",
+			"group_by": "f.areas"},
+		"one column of a field's board": {"container": "project:P01",
+			"group_by": "f.impact", "group": "o-high"},
+		"the unset column of a field's board": {"container": "project:P01",
+			"group_by": "f.impact", "group": ""},
+		"totals of fields": {"container": "project:P01",
+			"totals": "f.effort:sum,f.effort:count,f.effort:median,f.ship:max"},
+		"totals of fields everywhere": {"totals": "f.effort:avg,f.ship:p90"},
+		"a field filtered and another sorted": {"container": "project:P01",
+			"f.owner": "platform", "sort": "f.effort"},
+		"a field filtered, grouped and totalled": {"f.impact": "o-high",
+			"group_by": "f.impact", "totals": "f.effort:sum"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			q := planQuery(t, params)
+			filters := map[string]bool{}
+			for _, filter := range q.Fields {
+				filters["tracker_field_values_"+
+					FieldValueColumn(planFieldTypes[filter.Ref])+"_idx"] = true
+			}
+			for what, statement := range queryStatements(t, q) {
+				holdFieldReads(t, what, explainTree(t, db, statement.sql,
+					statement.args), filters)
+			}
+		})
+	}
+}
+
+// holdFieldReads fails a plan that reads `tracker_field_values` through the
+// key on anything but a task, or through a value index anywhere but inside a
+// filter's own subquery on a field the query filters by.
+func holdFieldReads(t *testing.T, what string, plan []planLine, filters map[string]bool) {
+	t.Helper()
+	const key = "sqlite_autoindex_tracker_field_values_1"
+	byID := map[int]planLine{}
+	for _, line := range plan {
+		byID[line.id] = line
+	}
+	// INSIDE AN IN LIST'S SUBQUERY, which this engine plans once for the
+	// statement rather than once per row.
+	inList := func(line planLine) bool {
+		for at := line.parent; at != 0; at = byID[at].parent {
+			if strings.HasPrefix(byID[at].detail, "LIST SUBQUERY") {
+				return true
+			}
+		}
+		return false
+	}
+	details := make([]string, len(plan))
+	for i, line := range plan {
+		details[i] = line.detail
+	}
+	shown := strings.Join(details, "\n")
+	for _, line := range plan {
+		for _, index := range indexesIn([]string{line.detail}) {
+			switch {
+			case index == key && !strings.Contains(line.detail, "(task_id=?"):
+				t.Errorf("%s reads field values through the key without a "+
+					"task to seek it on:\n%s", what, shown)
+			case index != key && strings.HasPrefix(index, "tracker_field_values_") &&
+				(!filters[index] || !inList(line)):
+				t.Errorf("%s reads field values through %s, which is a "+
+					"filter's index, other than as a filter — every value the "+
+					"field holds, rather than the values of the tasks it "+
+					"reads:\n%s", what, index, shown)
+			}
+		}
+	}
+}
+
+// planQuery is params parsed as a caller's query.
+func planQuery(t *testing.T, params map[string]any) Query {
+	t.Helper()
+	q, err := ParseQuery(MapParams(params), planNow, time.UTC)
+	if err != nil {
+		t.Fatalf("ParseQuery: %v", err)
+	}
+	return q
+}
+
+// queryStatements is every statement the reader runs for one query, each
+// built by the reader's own builder over the query's own compiled set: the
+// page and the count it carries, the totals and each order statistic's read
+// of one value, a board's columns and one column's rows, and the sort values
+// the around read takes of one task — so a plan of each is a plan of what a
+// caller's request issues, never of a copy.
+func queryStatements(t *testing.T, q Query) map[string]plannedRead {
+	t.Helper()
+	fields := planFields(q)
+	set, err := compile(q, planNow, fields)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	terms := sortTerms(q, fields)
+	page, pageArgs := taskRowsStatement("", nil, set, terms)
+	values, valueArgs := sortValuesStatement(terms, "t-00001")
+	out := map[string]plannedRead{
+		"the page": {page, append(pageArgs, 51)},
+		"the count it carries": {cappedCountStatement(set.from, set.where),
+			append(append([]any{}, set.args...), TotalHintCeiling+1)},
+		"the around task's sort values": {values, valueArgs},
+	}
+	if len(q.Totals) > 0 {
+		totals, exprs, totalArgs, err := compileTotals(q.Totals, fields)
+		if err != nil {
+			t.Fatalf("compileTotals: %v", err)
+		}
+		out["its totals"] = plannedRead{totalsStatement(set, exprs),
+			append(append([]any{}, set.args...), totalArgs...)}
+		for _, total := range totals {
+			if total.ranked == "" {
+				continue
+			}
+			statement, args := rankedStatement(set, total, 3)
+			out["its "+total.Op+" of "+total.Column] = plannedRead{statement, args}
+		}
+	}
+	if q.GroupBy != "" {
+		axis, err := compileGroup(q.GroupBy, fields, q.dayWindow(), q.Units)
+		if err != nil {
+			t.Fatalf("compileGroup: %v", err)
+		}
+		columns, columnArgs := groupCountsStatement(axis, set)
+		out["a board's columns"] = plannedRead{columns, append(columnArgs, MaxGroups+1)}
+		for _, key := range []string{"o-high", ""} {
+			clause, bound := axis.joinedFilter(key)
+			rows, rowArgs := taskRowsStatement(axis.Join, axis.JoinArgs,
+				set.and(clause, bound), terms)
+			out[fmt.Sprintf("the rows of column %q", key)] = plannedRead{rows,
+				append(rowArgs, 21)}
+		}
+	}
+	return out
 }
