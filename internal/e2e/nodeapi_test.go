@@ -270,12 +270,20 @@ func wireAPI(
 		stops = append(stops, func() { humans.SignIn.Stop(context.WithoutCancel(ctx)) })
 	}
 
+	// THE PROCESS'S CHAT HUB, through the constructor `crewlet run` attaches
+	// it with — started, attached to the engine, and stopped after the app
+	// and its listener, which the reversed teardown does: it is the first
+	// entry below the human surfaces' and so stops after every later one.
+	chatLive := api.NewEngineChatLive(ctx, e)
+	stops = append(stops, func() { chatLive.Stop(context.WithoutCancel(ctx)) })
+
 	opts := api.Options{
 		Bootstrap:    boot,
 		SeatBindings: auth.SeatBindings{Directory: e, Chart: engine.SeatViewOf(e)},
 		Runtime:      runtime,
 		Inbox:        e,
 		Credentials:  e,
+		ChatLive:     chatLive.Hub(),
 		QueueBackend: backends.Queue.Backend(),
 		Sources: queries.Sources{
 			// THE ENGINE'S OWN fleet reader, as cmd/crewlet wires it, so

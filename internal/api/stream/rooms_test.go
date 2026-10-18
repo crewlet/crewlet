@@ -124,7 +124,7 @@ func newRoomNode(t *testing.T, broker *memory.Broker, name string, acc *access,
 		Directory: watchBindings(bound), Chart: watchSeats(bound)})
 	svc := buildService(t, stream.Options{Rooms: stream.Rooms{Access: acc, Stores: stores{},
 		Presence: hub}})
-	srv := httptest.NewServer(stream.Handler(guard, auth.NewCSRF(&b), svc, nil))
+	srv := httptest.NewServer(stream.Handler(guard, auth.NewCSRF(&b), svc, nil, nil))
 	t.Cleanup(srv.Close)
 	return &roomNode{svc: svc, hub: hub, access: acc,
 		url: "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/stream"}
@@ -673,7 +673,7 @@ func TestPresenceFramesAreHeldToTheirAllowance(t *testing.T) {
 		Grants: []iam.Grant{iam.GrantWorklet}}}
 	guard := auth.New(&b).BindSeats(auth.SeatBindings{
 		Directory: watchBindings(people), Chart: watchSeats(people)})
-	srv := httptest.NewServer(stream.Handler(guard, auth.NewCSRF(&b), svc, nil))
+	srv := httptest.NewServer(stream.Handler(guard, auth.NewCSRF(&b), svc, nil, nil))
 	t.Cleanup(srv.Close)
 	n := &roomNode{svc: svc, url: "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/stream"}
 	dana := n.open(t, "dana")

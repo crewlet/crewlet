@@ -115,7 +115,7 @@ func (p FramePosture) ServesQueries() bool { return p == FrameLive }
 // Route is how a push kind reaches the clients it is for.
 //
 // A CLOSED SET WITH A TOTAL TABLE behind it ([RouteOf]), because the fan-out
-// has three genuinely different shapes and the difference is not inspectable
+// has four genuinely different shapes and the difference is not inspectable
 // from a kind's name. A kind with no route would fall to whichever branch the
 // switch ended on, which, for a per-seat or per-artifact frame, is every tab
 // in the company.
@@ -141,13 +141,25 @@ const (
 	// [Hub.Broadcast] refuses one, because a result carrying another
 	// tab's correlation id is an answer to a question it never asked.
 	RouteDirect Route = "direct"
+
+	// RouteViewer reaches only the clients a per-recipient decision
+	// admits — the chat hub's, which asks the room's own visibility
+	// ([chatlet.Visible]) for each viewer, or the reader's own seat for a
+	// read state — and leaves by the one fan-out every push takes. NEVER
+	// fanned out by [Hub.Broadcast], which refuses one: a chat frame
+	// broadcast is a private room delivered to every open tab.
+	//
+	// NOT [RouteRoom], whose seat rooms are the `watch` frame's: a lead may
+	// watch a report's seat, so a person's read state routed through one
+	// would be handed to their lead.
+	RouteViewer Route = "viewer"
 )
 
 // Valid reports whether r is one of the declared routes. False for the zero
 // value, which is what [RouteOf] answers for a kind with no entry.
 func (r Route) Valid() bool {
 	switch r {
-	case RouteBroadcast, RouteRoom, RouteDirect:
+	case RouteBroadcast, RouteRoom, RouteDirect, RouteViewer:
 		return true
 	default:
 		return false
