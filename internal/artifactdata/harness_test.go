@@ -49,6 +49,47 @@ type node struct {
 	// storedAt overrides the broker's instant for every record this node
 	// applies, for a case about broker time (the history's hot window).
 	storedAt func(seq uint64, broker time.Time) time.Time
+
+	// clock is the writer's: a second further on at every read, so this
+	// node's write budget refills between a case's writes, unless frozen.
+	clock *harnessClock
+}
+
+// harnessClock is a writer's clock that moves a step (a second unless a case
+// sets one) each read.
+type harnessClock struct {
+	mu     sync.Mutex
+	at     time.Time
+	step   time.Duration
+	frozen bool
+}
+
+func (c *harnessClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.frozen {
+		step := c.step
+		if step == 0 {
+			step = time.Second
+		}
+		c.at = c.at.Add(step)
+	}
+	return c.at
+}
+
+// stride makes each read move the clock by d, so a case writing whole
+// batches back to back stays inside its write budget.
+func (c *harnessClock) stride(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.step = d
+}
+
+// freeze stops the clock, so a case can spend a write budget at one instant.
+func (c *harnessClock) freeze() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.frozen = true
 }
 
 // seats is the organisation every harness resolves a person value against.
@@ -147,9 +188,9 @@ func newNode(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle, nodeID 
 	if err != nil {
 		t.Fatalf("build the publisher: %v", err)
 	}
+	clock := &harnessClock{at: monday}
 	writer, err := artifactdata.NewWriter(artifactdata.WriterDeps{
-		Publisher: publisher, DB: db.Reader(), SeatExists: seatExists,
-		Now: func() time.Time { return monday },
+		Publisher: publisher, DB: db.Reader(), SeatExists: seatExists, Now: clock.now,
 	})
 	if err != nil {
 		t.Fatalf("build the writer: %v", err)
@@ -163,7 +204,7 @@ func newNode(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle, nodeID 
 		t.Fatalf("build the reader: %v", err)
 	}
 	n := &node{t: t, id: nodeID, db: db, log: log, writer: writer, publisher: publisher,
-		reader: reader, waiter: waiter, verifier: verifier}
+		reader: reader, waiter: waiter, verifier: verifier, clock: clock}
 	n.applier = artifactdata.NewApplier(nodeID, func(moved []artifactdata.Moved) {
 		n.moved = append(n.moved, moved...)
 	})

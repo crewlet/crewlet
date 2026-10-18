@@ -368,6 +368,7 @@ func TestAWriteOutsideTheGrammarNeverReachesTheLog(t *testing.T) {
 func TestTheWriteBudgetIsWeighedAndSaysWhenToComeBack(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
+	n.clock.freeze()
 	editor := person("jane", artifacts.RoleEditor)
 	wide := map[string]string{}
 	for i := range 40 {
