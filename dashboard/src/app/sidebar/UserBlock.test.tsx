@@ -9,25 +9,26 @@
  * the mode, the density and the theme; the zone and the date's shape are the
  * browser's.
  *
- * The session's own gestures were the page bar's identity menu, and they
- * keep its invariants here: a sign-out ends in a RELOAD at the sign-in —
- * nothing of the last person's company left in the tab — and only once the
- * engine has answered; a revocation nobody can confirm is said rather than
- * reloaded past; the menu links the Account page, where a person's proof
- * gestures live, and holds none of them itself; and a session the viewer never
- * answers for is still offered its sign-outs.
+ * The session's own gestures are the reader's menu, which the row itself
+ * opens, and they keep their invariants: a sign-out ends in a RELOAD at the
+ * sign-in (nothing of the last person's company left in the tab) and only
+ * once the engine has answered; a revocation nobody can confirm is said
+ * rather than reloaded past; the menu opens the Account page, where a
+ * person's proof gestures live, and holds none of them itself; and a session
+ * the viewer never answers for is still offered its sign-outs. The
+ * preferences are their own popover beside the row, holding nothing else.
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { themeRegistry } from "@crewlethq/tokens";
-import { HIGHLIGHT_REST_MS, LayerHost, ToastProvider } from "@crewlethq/ui";
+import { AccountRow, HIGHLIGHT_REST_MS, LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import {
-  AccountActions,
   Preferences,
   UserBlock,
   accountOf,
+  useAccountMenu,
   viaLine,
   whoLine,
   type Account,
@@ -43,7 +44,6 @@ import { STORAGE_KEYS } from "~/lib/storage.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
-import { workspaceRow } from "~/app/nav.ts";
 import { LiveSocket, Store, sessionRestored, type SessionAnswer } from "~/protocol/index.ts";
 import type { ReactNode } from "react";
 
@@ -179,14 +179,14 @@ describe("who the block says this is", () => {
     expect(whoLine(ada, "Founder", own)).toEqual({
       name: "Ada Lovelace",
       detail: "ada.lovelace · Founder",
-      grants: "Access: Tracker",
+      grants: "Tracker",
     });
     // NO NAME OF THEIR OWN: their login, and the seat under it — never the
     // seat's name in their place.
     expect(whoLine(ada, "Founder", { login: "ada.lovelace" })).toEqual({
       name: "ada.lovelace",
       detail: "Founder",
-      grants: "Access: Tracker",
+      grants: "Tracker",
     });
     // A seat named as the person adds nothing to the login.
     expect(whoLine(ada, "Ada Lovelace", own).detail).toBe("ada.lovelace");
@@ -204,7 +204,7 @@ describe("who the block says this is", () => {
   test("a person with no role to show draws their login alone under their name", async () => {
     engine({ "GET /auth/session": { status: 200, body: { ...PERSON, name: "Ada Lovelace" } } });
     render(block(ada, "Ada Lovelace"));
-    const who = await screen.findByRole("link", { name: /Ada Lovelace/ });
+    const who = await screen.findByRole("button", { name: /Ada Lovelace/ });
     expect(who.querySelector(".crewlet-account-row__detail")?.textContent).toBe("ada.lovelace");
     expect(who.textContent).not.toContain("human seat");
   });
@@ -217,7 +217,7 @@ describe("who the block says this is", () => {
     expect(r).toEqual({
       name: "token:ops",
       detail: "No seat",
-      grants: "Access: Overview only",
+      grants: "Overview only",
     });
   });
 
@@ -232,7 +232,7 @@ describe("who the block says this is", () => {
     expect(r).toEqual({
       name: "Bob Smith",
       detail: "bob.smith · No seat",
-      grants: "Access: Overview only",
+      grants: "Overview only",
     });
   });
 
@@ -247,7 +247,7 @@ describe("who the block says this is", () => {
     expect(whoLine(reviewToken, "Miles", session)).toEqual({
       name: "Miles",
       detail: "via API token review",
-      grants: "Access: Admin",
+      grants: "Admin",
     });
     // THE CHART UNREAD, the handle stands in, written as a handle.
     expect(whoLine({ ...reviewToken, name: "" }, "", session).name).toBe("@miles");
@@ -259,7 +259,7 @@ describe("who the block says this is", () => {
     expect(whoLine({ ...nobody, loading: true }, "", { ...session, grants: ["admin"] })).toEqual({
       name: "@miles",
       detail: "via API token review",
-      grants: "Access: Admin",
+      grants: "Admin",
     });
   });
 
@@ -287,7 +287,7 @@ describe("who the block says this is", () => {
   test("a session stands in for a viewer that has not answered", () => {
     expect(
       whoLine({ ...nobody, loading: true }, "", { login: "erin.ng", seat: "erin", grants: [] }),
-    ).toEqual({ name: "erin.ng", detail: "@erin", grants: "Access: Overview only" });
+    ).toEqual({ name: "erin.ng", detail: "@erin", grants: "Overview only" });
     expect(
       whoLine({ ...nobody, loading: true }, "", {
         login: "erin.ng",
@@ -295,7 +295,7 @@ describe("who the block says this is", () => {
         seat: "erin",
         grants: ["tracker"],
       }),
-    ).toEqual({ name: "Erin Ng", detail: "erin.ng · @erin", grants: "Access: Tracker" });
+    ).toEqual({ name: "Erin Ng", detail: "erin.ng · @erin", grants: "Tracker" });
     // A SESSION BOUND TO NO SEAT says so, as the answered arm does.
     expect(whoLine({ ...nobody, loading: true }, "", { login: "token:ops" }).detail).toBe(
       "No seat",
@@ -311,90 +311,115 @@ describe("who the block says this is", () => {
       },
     });
     render(block({ ...nobody, loading: true }));
-    const who = await screen.findByRole("link", { name: /cara\.example/ });
+    const who = await screen.findByRole("button", { name: /cara\.example/ });
     expect(who.querySelector(".crewlet-account-row__detail")?.textContent).toBe("@cara");
     expect(who.textContent).not.toContain("Signed in");
   });
 
-  // THE NAME IS THE WAY TO THE READER'S OWN ACCOUNT, where their password
-  // and second factor are. It went to the SEAT, which has neither, and a
-  // company's people clicking their own name concluded the dashboard had no
-  // two-step verification at all.
-  test("the reader's name opens their own Account, never their seat", () => {
+  // THE NAME OPENS THE READER'S OWN MENU, and the menu opens their Account,
+  // where their password and second factor are. It once went to the SEAT,
+  // which has neither, and a company's people clicking their own name
+  // concluded the dashboard had no two-step verification at all; then it
+  // went straight to the Account, with the sign-outs in a second popover
+  // beside it. Mutation: link the row anywhere and the first line goes red.
+  test("the reader's name opens their own menu, whose Account is theirs, never their seat", async () => {
     render(block(ada, "Founder"));
-    const link = screen.getByRole("link", { name: /ada\.lovelace/ });
-    expect(link.getAttribute("href")).toBe("#/account");
-    cleanup();
-    // UNBOUND HAS AN ACCOUNT TOO — a token's session is told there what it
-    // is — so it is a link to the same page.
-    render(block({ ...nobody, login: "token:ops", unbound: true, grants: [] }));
-    expect(screen.getByRole("link", { name: /token:ops/ }).getAttribute("href")).toBe("#/account");
-    cleanup();
-    // NOBODY has no account to open: the popover offers the sign-in.
-    render(block({ ...nobody, anonymous: true }));
     expect(screen.queryByRole("link")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /ada\.lovelace/ }));
+    const menu = await screen.findByRole("menu", { name: "Your account" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /^Account/ }));
+    await waitFor(() => expect(location.hash).toBe("#/account"));
+    cleanup();
+    // UNBOUND HAS AN ACCOUNT TOO (a token's session is told there what it
+    // is), so its row opens the same menu.
+    render(block({ ...nobody, login: "token:ops", unbound: true, grants: [] }));
+    fireEvent.click(screen.getByRole("button", { name: /token:ops/ }));
+    expect(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: /^Account/ }),
+    ).toBeTruthy();
+    cleanup();
+    // NOBODY has no account to open: the menu offers the sign-in, and nothing else.
+    render(block({ ...nobody, anonymous: true }));
     expect(screen.getByText("Not signed in")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Not signed in/ }));
+    const offered = within(await screen.findByRole("menu")).getAllByRole("menuitem");
+    expect(offered.map((item) => item.textContent)).toEqual(["Sign in"]);
   });
 
   // A SESSION THE VIEWER HAS NOT ANSWERED FOR is somebody: it is named, and
-  // its name opens its Account as a settled viewer's does — while nothing at
-  // all has answered is not a link.
-  test("a session standing in for the viewer opens its Account", async () => {
+  // its row opens its menu as a settled viewer's does, while nothing at all
+  // has answered opens nothing.
+  test("a session standing in for the viewer opens its menu", async () => {
     render(block({ ...nobody, loading: true }));
-    const link = await screen.findByRole("link", { name: /ada\.lovelace/ });
-    expect(link.getAttribute("href")).toBe("#/account");
+    const row = await screen.findByRole("button", { name: /ada\.lovelace/ });
+    expect(row.getAttribute("aria-haspopup")).toBe("menu");
     cleanup();
-    // THE CONTROL: a read still out is nobody yet, and no link.
+    // THE CONTROL: a read still out is nobody yet, and no menu.
     vi.stubGlobal(
       "fetch",
       vi.fn(() => new Promise<Response>(() => {})),
     );
     render(block({ ...nobody, loading: true }));
     expect(screen.getByText("Checking who you are")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /your menu/ })).toBeNull();
     expect(screen.queryByRole("link")).toBeNull();
   });
 
-  // THE LINK SAYS WHERE IT GOES. Its name was the reader and its title their
-  // grants, so `getByRole("link", { name: /account/ })` found nothing on the
-  // page whose way to the Account it was — and at rest it drew no mark that
-  // it could be pressed. Mutation: title it with the grants, drop the spoken
-  // ", your account" or the chevron, and a line here goes red.
-  test("the reader's name says it opens their Account, in words and at rest", () => {
+  // THE ROW SAYS WHAT IT OPENS, in words and at rest: its name ends ", your
+  // menu", it is a menu button, its title says what the menu holds, and it
+  // draws the menu trigger's chevron where it once drew nothing until
+  // hovered. Mutation: drop the spoken suffix, the title or the chevron and a
+  // line here goes red.
+  test("the reader's name says it opens their menu, in words and at rest", () => {
     render(block(ada, "Founder"));
-    const link = screen.getByRole("link", { name: /your account/ });
-    expect(link.getAttribute("href")).toBe("#/account");
-    expect(link.getAttribute("title")).toBe(workspaceRow("account")!.hint);
-    expect(link.querySelector(".crewlet-account-row__go")).not.toBeNull();
-    // THE GRANTS ARE SAID IN THE POPOVER, under the login — never as the
-    // link's title, which answered a question the reader had not asked.
-    expect(link.getAttribute("title")).not.toMatch(/Holds/);
+    const row = screen.getByRole("button", { name: /your menu/ });
+    expect(row.getAttribute("aria-haspopup")).toBe("menu");
+    expect(row.getAttribute("title")).toBe("Your account and signing out");
+    expect(row.querySelector(".crewlet-account-row__go")).not.toBeNull();
+    // THE ACCESS IS SAID IN THE MENU, never as the row's title, which would
+    // answer a question the reader had not asked.
+    expect(row.getAttribute("title")).not.toMatch(/Tracker/);
+  });
+
+  // THE MENU SAYS ONLY WHAT THE ROW DOES NOT: the reader's access above the
+  // actions. It said "Signed in as" over the login the row had just said.
+  // Mutation: put the login back in the header and the last line goes red.
+  test("the menu's header is the reader's access, and repeats nothing the row says", async () => {
+    render(block(ada, "Founder"));
+    fireEvent.click(screen.getByRole("button", { name: /your menu/ }));
+    const menu = await screen.findByRole("menu", { name: "Your account" });
+    const header = menu.querySelector(".crewlet-menu__header")!;
+    expect(header.textContent).toBe("AccessTracker");
+    expect(menu.getAttribute("aria-describedby")).toBe(header.id);
+    expect(menu.textContent).not.toContain("Signed in as");
+    expect(header.textContent).not.toContain("ada.lovelace");
   });
 
   // THE BLOCK IS THE ACCOUNT'S ROW, so on the Account it is current as a
-  // sidebar row is on its own page — the only mark the sidebar can give a
-  // place it draws no row for. Mutation: drop `aria-current` and the Account
-  // is marked nowhere in the sidebar.
+  // sidebar row is on its own page: the only mark the sidebar can give a
+  // place it draws no row for. Mutation: drop the mark and the Account is
+  // marked nowhere in the sidebar.
   test("on the Account the block is marked current, and nowhere else", () => {
     location.hash = "#/account";
     render(block(ada, "Founder"));
-    expect(screen.getByRole("link", { name: /your account/ }).getAttribute("aria-current")).toBe(
-      "page",
+    expect(screen.getByRole("button", { name: /your menu/ }).hasAttribute("data-current")).toBe(
+      true,
     );
     cleanup();
     location.hash = "#/";
     render(block(ada, "Founder"));
-    expect(
-      screen.getByRole("link", { name: /your account/ }).getAttribute("aria-current"),
-    ).toBeNull();
+    expect(screen.getByRole("button", { name: /your menu/ }).hasAttribute("data-current")).toBe(
+      false,
+    );
   });
 
-  // A FAILED READ IS NOT NOBODY. The session read failing — a 503, the
-  // network — says nothing about whether this browser holds a session, and
+  // A FAILED READ IS NOT NOBODY. The session read failing (a 503, the
+  // network) says nothing about whether this browser holds a session, and
   // the block said "Checking who you are" with no way to the Account until
-  // the tab came back. Now it says it could not tell, and still offers the
-  // Account and the sign-out of this browser — never "everywhere", which
-  // needs to know whose. Mutation: read a failure as nothing yet and the link
-  // and the menu's entry go.
+  // the tab came back. Now it says it could not tell, and its menu still
+  // offers the Account and the sign-out of this browser, never "everywhere",
+  // which needs to know whose. Mutation: read a failure as nothing yet and the
+  // menu goes.
   test.each([
     ["a 503", { status: 503, body: { error: "unavailable" } } as Answer],
     ["the network", "offline" as Answer],
@@ -402,13 +427,12 @@ describe("who the block says this is", () => {
     engine({ "GET /auth/session": answer });
     render(block({ ...nobody, loading: true }));
     expect(await screen.findByText("Can’t check who you are")).toBeTruthy();
-    const link = screen.getByRole("link", { name: /your account/ });
-    expect(link.getAttribute("href")).toBe("#/account");
-    fireEvent.click(screen.getByRole("button", { name: "Account and preferences" }));
-    const menu = await screen.findByRole("dialog", { name: "Account and preferences" });
-    expect(within(menu).getByRole("link", { name: "Account" })).toBeTruthy();
-    expect(within(menu).getByRole("button", { name: "Sign out" })).toBeTruthy();
-    expect(within(menu).queryByRole("button", { name: "Sign out everywhere" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /your menu/ }));
+    const menu = await screen.findByRole("menu", { name: "Your account" });
+    expect(within(menu).getByText("We couldn’t check who’s signed in.")).toBeTruthy();
+    expect(within(menu).getByRole("menuitem", { name: /^Account/ })).toBeTruthy();
+    expect(within(menu).getByRole("menuitem", { name: "Sign out" })).toBeTruthy();
+    expect(within(menu).queryByRole("menuitem", { name: /^Sign out everywhere/ })).toBeNull();
   });
 
   // A KEY FOR A FACE, for a principal that is not a person: the initials of
@@ -468,19 +492,23 @@ describe("who the block says this is", () => {
     }
   });
 
-  // ONE CONTROL BESIDE THE NAME: the preferences, the mode among them. The
-  // foot also carried a one-press mode flip, which with the link's chevron
-  // left a name already cut short by the rail's width two glyph buttons to
-  // share it with. Mutation: put the flip back and there are two.
-  test("the row holds one control, the preferences, and the mode is inside it", async () => {
+  // ONE CONTROL BESIDE THE NAME: the preferences, the mode among them, and
+  // nothing of the session's. The foot also carried a one-press mode flip,
+  // which with the row's chevron left a name already cut short by the rail's
+  // width two glyph buttons to share it with; and the popover held the
+  // sign-outs too, under a second "Account" beside the row that is the
+  // account. Mutation: put the flip back and there are two controls; put the
+  // session back in the popover and the last lines go red.
+  test("the row holds one control, the preferences, and it holds only the preferences", async () => {
     render(block(ada, "Founder"));
     const controls = document.querySelectorAll(".crewlet-account-row__actions button");
-    expect([...controls].map((b) => b.getAttribute("aria-label"))).toEqual([
-      "Account and preferences",
-    ]);
-    fireEvent.click(screen.getByRole("button", { name: "Account and preferences" }));
-    const menu = await screen.findByRole("dialog", { name: "Account and preferences" });
-    expect(within(menu).getByRole("radiogroup", { name: "Mode" })).toBeTruthy();
+    expect([...controls].map((b) => b.getAttribute("aria-label"))).toEqual(["Preferences"]);
+    fireEvent.click(screen.getByRole("button", { name: "Preferences" }));
+    const popover = await screen.findByRole("dialog", { name: "Preferences" });
+    expect(within(popover).getByRole("radiogroup", { name: "Mode" })).toBeTruthy();
+    expect(within(popover).queryByText("Sign out")).toBeNull();
+    expect(within(popover).queryByText("Account")).toBeNull();
+    expect(within(popover).queryByText(/Signed in as/)).toBeNull();
   });
 
   // A TAB OPENED WITH A SESSION ALREADY IN THE BROWSER learns who it is read
@@ -522,24 +550,28 @@ describe("what the account offers", () => {
   test("nobody at all is offered a way to sign in, back to where they are", async () => {
     location.hash = "#/work";
     actions({ kind: "nobody" });
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Sign in" }));
     await waitFor(() => expect(location.hash).toBe(`#/login?next=${encodeURIComponent("#/work")}`));
   });
 
-  // THE PROOF GESTURES LIVE ON THE ACCOUNT PAGE, and the menu links it rather
-  // than keeping a second copy of them — a link, so it can open in a tab, that
-  // closes the menu it is in. The CONTROL is the menu still holding both
-  // sign-outs, which stay here for the reader the socket refuses.
-  test("the menu links the Account page and holds no proof gesture of its own", () => {
-    const { onLeave } = actions({ kind: "session", login: "ada.lovelace" });
-    const link = screen.getByRole("link", { name: "Account" });
-    expect(link.getAttribute("href")).toBe("#/account");
-    fireEvent.click(link);
-    expect(onLeave).toHaveBeenCalledOnce();
-    expect(screen.queryByRole("button", { name: /Two-step verification/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: /recovery codes/i })).toBeNull();
-    expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Sign out everywhere" })).toBeTruthy();
+  // THE PROOF GESTURES LIVE ON THE ACCOUNT PAGE, and the menu opens it
+  // rather than keeping a second copy of them; choosing it closes the menu.
+  // The menu's items are exactly the Account and the two sign-outs, which
+  // stay here for the reader the socket refuses. Mutation: add a proof
+  // gesture to the menu and the item list goes red.
+  test("the menu opens the Account page and holds no proof gesture of its own", async () => {
+    actions({ kind: "session", login: "ada.lovelace" });
+    const labels = screen
+      .getAllByRole("menuitem")
+      .map((item) => item.querySelector(".crewlet-menu__label")?.textContent);
+    expect(labels).toEqual(["Account", "Sign out", "Sign out everywhere"]);
+    // SIGNING OUT EVERYWHERE SAYS WHAT IT ENDS, in the danger ink.
+    const everywhere = screen.getByRole("menuitem", { name: /^Sign out everywhere/ });
+    expect(everywhere.textContent).toContain("Every device, and stops your tokens");
+    expect(everywhere.classList.contains("is-danger")).toBe(true);
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Account/ }));
+    await waitFor(() => expect(location.hash).toBe("#/account"));
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 });
 
@@ -557,9 +589,20 @@ function heldSocket() {
   return { asked, value };
 }
 
-/** The account's gestures, drawn on their own with a toaster to report into. */
+/** The reader's menu as `useAccountMenu` builds it, on the kit's row that opens it. */
+function MenuRow({
+  account,
+  onSignOutEverywhere,
+}: {
+  account: Account;
+  onSignOutEverywhere: () => void;
+}) {
+  const menu = useAccountMenu(account, "Tracker", onSignOutEverywhere);
+  return <AccountRow avatar={<span />} name="Ada Lovelace" menu={menu} />;
+}
+
+/** The account's menu, drawn on its own with a toaster to report into, and opened. */
 function actions(account: Account) {
-  const onLeave = vi.fn();
   const onSignOutEverywhere = vi.fn();
   const client = heldSocket();
   render(
@@ -567,18 +610,14 @@ function actions(account: Account) {
       <Router>
         <ToastProvider>
           <LayerHost>
-            <AccountActions
-              account={account}
-              grants="Access: Tracker"
-              onLeave={onLeave}
-              onSignOutEverywhere={onSignOutEverywhere}
-            />
+            <MenuRow account={account} onSignOutEverywhere={onSignOutEverywhere} />
           </LayerHost>
         </ToastProvider>
       </Router>
     </ClientContext.Provider>,
   );
-  return { onLeave, onSignOutEverywhere, asked: client.asked };
+  fireEvent.click(screen.getByRole("button", { name: /Ada Lovelace/ }));
+  return { onSignOutEverywhere, asked: client.asked };
 }
 
 /** The confirmation signing out everywhere asks, drawn on its own. */
@@ -610,7 +649,7 @@ describe("signing out", () => {
       localStorage.setItem(key, "[]");
     }
     const { asked } = actions(signedIn);
-    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Sign out" }));
     await waitFor(() => expect(reloads).toHaveBeenCalledWith("#/login"));
     expect(sent).toContainEqual({ method: "POST", path: "/auth/logout" });
     // THE SOCKET STOPS DIALLING FIRST: the engine closes this session's socket
@@ -631,7 +670,7 @@ describe("signing out", () => {
     sessionStorage.setItem("crewlet_org_draft", "{}");
     localStorage.setItem(recentsKey("p-1"), "[]");
     const { asked } = actions(signedIn);
-    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Sign out" }));
     expect(await screen.findByText(/Signing out didn’t go through/)).toBeDefined();
     expect(reloads).not.toHaveBeenCalled();
     // AND THE SOCKET IT HELD IS GIVEN BACK: the person is still signed in here.
@@ -645,11 +684,21 @@ describe("signing out", () => {
   // Mutation: post from the menu's own click and the revocation is sent.
   test("everywhere: the menu closes and asks, sending nothing", () => {
     const sent = engine({ "POST /auth/logout/all": { status: 200, body: {} } });
-    const { onLeave, onSignOutEverywhere } = actions(signedIn);
-    fireEvent.click(screen.getByRole("button", { name: "Sign out everywhere" }));
-    expect(onLeave).toHaveBeenCalledOnce();
+    const { onSignOutEverywhere } = actions(signedIn);
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Sign out everywhere/ }));
+    expect(screen.queryByRole("menu")).toBeNull();
     expect(onSignOutEverywhere).toHaveBeenCalledOnce();
     expect(sent.filter((s) => s.method === "POST")).toEqual([]);
+  });
+
+  // AND FROM THE ROW ITSELF, the dialog it asks with is opened by the block,
+  // outside the menu that has closed.
+  test("everywhere, from the row: the block opens the dialog that asks", async () => {
+    render(block(ada, "Founder"));
+    fireEvent.click(screen.getByRole("button", { name: /your menu/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /^Sign out everywhere/ }));
+    expect(await screen.findByRole("dialog", { name: "Sign out everywhere?" })).toBeDefined();
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   test("everywhere: a revocation nobody can confirm is said, never reloaded past", async () => {
@@ -710,10 +759,7 @@ describe("the preferences popover, laid out", () => {
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
       this: HTMLElement,
     ) {
-      if (
-        this.getAttribute("aria-label") === "Account and preferences" &&
-        this.tagName === "BUTTON"
-      ) {
+      if (this.getAttribute("aria-label") === "Preferences" && this.tagName === "BUTTON") {
         return rect(202, 860, 26, 26);
       }
       if (this.getAttribute("role") === "dialog") return rect(0, 0, 320, 420);
@@ -728,9 +774,9 @@ describe("the preferences popover, laid out", () => {
 
   test("pressed at the sidebar's foot, it stays open, above the trigger and on screen", async () => {
     render(block(ada, "Founder"));
-    const trigger = screen.getByRole("button", { name: "Account and preferences" });
+    const trigger = screen.getByRole("button", { name: "Preferences" });
     fireEvent.click(trigger);
-    const dialog = await screen.findByRole("dialog", { name: "Account and preferences" });
+    const dialog = await screen.findByRole("dialog", { name: "Preferences" });
     // Still there once placement has run, and the trigger says so.
     await new Promise((r) => setTimeout(r, 20));
     expect(dialog.isConnected).toBe(true);
