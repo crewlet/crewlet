@@ -231,6 +231,21 @@ export function readerHeaders(): Record<string, string> {
 }
 
 /**
+ * Whether this tab is read by somebody it has not learned yet: the application
+ * keeps a reader, and has recorded nobody — a tab opened with a session
+ * already in the browser, before any read of it has answered.
+ *
+ * FALSE WITH NOTHING INSTALLED, which is a client that keeps no reader at all
+ * (the e2e replay, a suite that installs none): there is nobody for it to
+ * learn, and a request it makes is served as the cookie is. The live socket
+ * asks this before it dials, because a dial that names nobody is served as
+ * whoever holds the cookie at that moment — see `socket.ts`'s `learnReader`.
+ */
+export function readerUnlearned(): boolean {
+  return tabReader !== null && tabReader.current() === null;
+}
+
+/**
  * The socket's handshake URL query naming this tab's reader (`READER_PARAM`),
  * or "" where nothing is installed or the tab has learned nobody.
  *

@@ -570,6 +570,85 @@ describe("what a dial presents", () => {
   });
 });
 
+// A TAB THAT HAS RECORDED NOBODY LEARNS WHO BEFORE IT DIALS. The frame dials
+// once its session read has recorded the reader — and when that read failed
+// too, and the socket redials on its own; a dial naming nobody is served as
+// whoever holds the cookie, so a sign-in in another tab before the tab's next
+// session read was adopted as its reader by a tab drawing the company it was
+// served for the last one. The session is read first and taken, and the dial
+// names whoever it recorded; a read that says nothing dials nothing.
+describe("a tab that has recorded nobody", () => {
+  /** A tab reader that records what the app takes, as `lib/reader.ts` does. */
+  function unrecorded(): {
+    socket: LiveSocket;
+    recorded: () => string | null;
+    uninstall: () => void;
+  } {
+    let recorded: string | null = null;
+    const uninstall = setTabReader({ current: () => recorded, moved: () => {} });
+    const socket = new LiveSocket(new Store(), {
+      takeSession: (person) => {
+        recorded ??= person;
+        return true;
+      },
+    });
+    running.push(socket);
+    return { socket, recorded: () => recorded, uninstall };
+  }
+
+  // Mutation: dial before the read and the first dial names nobody, before
+  // any session read went out.
+  test("reads who it is signed in as, records them, and dials naming them", async () => {
+    const tab = unrecorded();
+    try {
+      tab.socket.start();
+      expect(ScriptedWebSocket.dials).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetches).toEqual([expect.stringMatching(/\/auth\/session$/)]);
+      expect(tab.recorded()).toBe("p-1");
+      expect(ScriptedWebSocket.dials).toHaveLength(1);
+      expect(new URL(dial(0).url).searchParams.get(READER_PARAM)).toBe("p-1");
+    } finally {
+      tab.uninstall();
+    }
+  });
+
+  // A READ THAT SAYS NOTHING DIALS NOTHING, and is asked again on the
+  // backoff — a dial would be served as whoever holds the cookie. A `401`
+  // is nobody: the sign-in need, and no dial. Mutation: dial on a failed
+  // read and the first row's dials are not zero.
+  test("dials nothing on a read that failed, until a read answers", async () => {
+    const tab = unrecorded();
+    try {
+      sessionStatus = 503;
+      tab.socket.start();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(ScriptedWebSocket.dials).toHaveLength(0);
+      expect(fetches.filter((u) => u.endsWith("/auth/session")).length).toBeGreaterThan(1);
+      sessionStatus = 200;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(ScriptedWebSocket.dials).toHaveLength(1);
+      expect(new URL(dial(0).url).searchParams.get(READER_PARAM)).toBe("p-1");
+    } finally {
+      tab.uninstall();
+    }
+  });
+
+  test("a read answered 401 dials nothing and asks for the sign-in", async () => {
+    const tab = unrecorded();
+    try {
+      sessionStatus = 401;
+      tab.socket.start();
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(ScriptedWebSocket.dials).toHaveLength(0);
+      expect(fetches.filter((u) => u.endsWith("/auth/session"))).toHaveLength(1);
+      expect(currentSessionNeed()).toBe("sign_in");
+    } finally {
+      tab.uninstall();
+    }
+  });
+});
+
 // THE DEGRADED-MODE POLL WAITS WHAT THE ENGINE SAID, as every other re-ask
 // does. It read the snapshot every five seconds whatever came back, so a node
 // that answered "come back in twelve" was asked twice first, and one whose
