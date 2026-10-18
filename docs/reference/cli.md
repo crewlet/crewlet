@@ -942,7 +942,7 @@ optional. `seats` lists which seats are free.
 | `-all` | open ones only | On `invitations` only: the expired and redeemed invitations too. Refused on every other command rather than ignored |
 | `-seat SEAT` | — | On `invite` and `create`: the human seat they will hold, by its handle — one nobody holds and no open invitation is for, which `seats -unheld` lists. **Required** on `invite` and on a person's `create`, optional on a service account's. Refused on every other command rather than ignored — somebody who already exists is moved with `bind` |
 | `-unheld` | every seat | On `seats` only: the vacant ones. Refused on every other command rather than ignored |
-| `-op-id OP` | a new operation | Retry a write whose outcome was unknown **as the same operation** — the op id its refusal named. Refused on a read, on `token` and on `reset-password` (a retry of either would hand back a record whose value was shown to nobody, so an unknown mint or issue is made again) |
+| `-op-id OP` | a new operation, minted before the command asks | Retry a write whose outcome was unknown **as the same operation** — the op id its refusal named, or the one an unanswered write printed. Refused on a read, on `token` and on `reset-password` (a retry of either would hand back a record whose value was shown to nobody, so an unknown mint or issue is made again) |
 
 **`-grants none` strips and an omitted `-grants` means what the command
 states.** On `grant` they are opposite intentions and an empty flag value
@@ -971,7 +971,11 @@ applied it yet, and carries the position to read at — each with the op id it
 was published under. A link is printed on `pending` too: the record is durable,
 and the link opens on every node that has applied it. `unknown` means nothing
 can be established from here, and it fails naming the op id and the one safe
-retry: the **same** command with `-op-id <op id>`. A fresh attempt
+retry: the **same** command with `-op-id <op id>`. A write the node never
+answered — the connection dropped, or a proxy in front of it answered in its
+place — fails the same way, naming the op id it was sent under: every write that
+takes `-op-id` is sent under one the command mints before it asks, so a lost
+answer never loses the operation with it. A fresh attempt
 would be a second operation — for `create` and `invite` a second person or a
 second invitation, which the first attempt's person or invitation refuses as a
 conflict, since it holds the address and the seat. `token` and

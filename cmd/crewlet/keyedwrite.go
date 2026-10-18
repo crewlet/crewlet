@@ -15,7 +15,7 @@ import (
 //
 // # One rule, written once
 //
-// Every command here whose write carries an operation key — `work purge`,
+// Every command here whose write carries an operation key — `worklet purge`,
 // `seats pause` and `resume`, the retention gestures, every write `crewlet
 // chat` makes and every write `crewlet artifacts` makes — mints that key
 // before it asks and meets the same answers that do not say "done": no
@@ -23,11 +23,18 @@ import (
 // can settle, an unknown it cannot, or a refusal that wrote nothing. What to
 // do about each is the ENGINE's rule rather than any one command's — the retry
 // is the same operation, through this node or another, and never a fresh id —
-// so it is said here. It was written out in `work purge` and again in `seats`,
+// so it is said here. It was written out in `worklet purge` and again in `seats`,
 // and the copies had already parted: `seats` told an operator whose write had
 // been REFUSED, and so had written nothing, to run it again "to find out"
 // whether it landed, and held a pasted -op-id to the rule only after trimming
-// it where `work purge` refused the same id for its trailing newline.
+// it where `worklet purge` refused the same id for its trailing newline.
+//
+// `crewlet iam` mints its writes' operations here too, and finishes an answer
+// that never came with the same retry ([keyedWrite.retry]). The 503s its node
+// answers are read by its own renderer ([iamRefusal]), because the identity
+// directory's answers carry fields no other surface does — the changes that
+// landed before a refusal, a mint whose route reads no key — beside the same
+// rule.
 
 // operationFor is the operation a write is sent under: the -op-id the operator
 // brought, held to the rule the node holds a caller's id to, or one minted
@@ -85,7 +92,7 @@ type keyedWrite struct {
 // build cannot read as `unknown` rather than as applied, and a node newer than
 // this command may answer one THIS build cannot read. Printed and exited zero,
 // as `seats` did, a script read a write nobody could vouch for as one that
-// landed; read as an outcome, `work purge` printed "unknown" where it prints
+// landed; read as an outcome, `worklet purge` printed "unknown" where it prints
 // "applied". So it FAILS, as every open outcome [keyedWrite.settle] reads
 // does, naming the same retry.
 func (k keyedWrite) confirmed(what, outcome string) error {
