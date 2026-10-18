@@ -732,15 +732,56 @@ func TestPagingANullableOrderReturnsEveryRowExactlyOnce(t *testing.T) {
 // of order — each only for a caller who pages, and only where a boundary falls
 // INSIDE a tie, which a fixture of distinct values never reaches.
 //
-// So the fixture is ties: one instant every write is stamped with (the
-// harness's clock does not move), spend that is zero for all but two tasks, a
-// handful of priorities, due dates with repeats and no date at all, and titles
-// with repeats — and in the trash, a subtree removed at one instant beside a
-// task removed alone. Every order is paged two and three rows at a time, so a
-// boundary falls inside a tie and at its end, and the pages concatenated must
-// be one read's answer exactly.
+// So the fixture is ties ([tiedCompany]), read in every order of
+// [tiedOrders] two and three rows at a time, so a boundary falls inside a tie
+// and at its end, and the pages concatenated must be one read's answer
+// exactly.
 func TestPagingAnOrderReturnsEveryRowOnceInItsOrder(t *testing.T) {
 	t.Parallel()
+	r := tiedCompany(t)
+	for name, params := range tiedOrders {
+		t.Run(name, func(t *testing.T) {
+			whole := ids(r.ask(withKey(params, "limit", "100")))
+			if len(whole) < 4 {
+				t.Fatalf("one read answers %v, too few rows for a page "+
+					"boundary to fall inside anything", whole)
+			}
+			for _, size := range []int{2, 3} {
+				if paged := pageThrough(t, r, params, size); !slices.Equal(paged, whole) {
+					t.Errorf("paging %d at a time answers\n%v\nwhere one read "+
+						"answers\n%v", size, paged, whole)
+				}
+			}
+		})
+	}
+}
+
+// tiedOrders is every order [tiedCompany] is read in by the cases that walk
+// an order through its ties: a board's own, the update order in a project and
+// the company's, spend in both, mixed-direction orders of several columns, an
+// order no index serves, and the trash in every subtask mode and by removal.
+var tiedOrders = map[string]map[string]any{
+	"the board":               {"container": "project:ENG"},
+	"recently updated":        {"container": "project:ENG", "sort": "-updated"},
+	"by spend":                {"container": "project:ENG", "sort": "-spend_tokens"},
+	"by priority then update": {"container": "project:ENG", "sort": "priority,-updated"},
+	"by due then title":       {"container": "project:ENG", "sort": "-due,title"},
+	"by title":                {"container": "project:ENG", "sort": "title"},
+	"the workspace":           {},
+	"by spend everywhere":     {"sort": "-spend_tokens"},
+	"the trash":               {"container": "project:ENG", "removed": "true"},
+	"the trash, flat":         {"container": "project:ENG", "removed": "true", "subtasks": "separate"},
+	"the trash everywhere":    {"removed": "true", "subtasks": "separate"},
+	"the trash by removal":    {"removed": "true", "sort": "removed", "subtasks": "separate"},
+}
+
+// tiedCompany is a project whose tasks tie on almost every column an order
+// can sort by: one instant every write is stamped with, spend that is zero for
+// all but two tasks, a handful of priorities, due dates with repeats and none
+// at all, and titles with repeats — and in the trash, a subtree removed at one
+// instant beside a task removed alone.
+func tiedCompany(t *testing.T) *roundTrip {
+	t.Helper()
 	r := newRoundTrip(t)
 	priorities := []worklet.Priority{worklet.PriorityHigh, worklet.PriorityNormal,
 		worklet.PriorityNormal, worklet.PriorityLow}
@@ -797,36 +838,7 @@ func TestPagingAnOrderReturnsEveryRowOnceInItsOrder(t *testing.T) {
 		t.Fatalf("RemoveTask: %v", err)
 	}
 	r.drain()
-
-	cases := map[string]map[string]any{
-		"the board":               {"container": "project:ENG"},
-		"recently updated":        {"container": "project:ENG", "sort": "-updated"},
-		"by spend":                {"container": "project:ENG", "sort": "-spend_tokens"},
-		"by priority then update": {"container": "project:ENG", "sort": "priority,-updated"},
-		"by due then title":       {"container": "project:ENG", "sort": "-due,title"},
-		"by title":                {"container": "project:ENG", "sort": "title"},
-		"the workspace":           {},
-		"by spend everywhere":     {"sort": "-spend_tokens"},
-		"the trash":               {"container": "project:ENG", "removed": "true"},
-		"the trash, flat":         {"container": "project:ENG", "removed": "true", "subtasks": "separate"},
-		"the trash everywhere":    {"removed": "true", "subtasks": "separate"},
-		"the trash by removal":    {"removed": "true", "sort": "removed", "subtasks": "separate"},
-	}
-	for name, params := range cases {
-		t.Run(name, func(t *testing.T) {
-			whole := ids(r.ask(withKey(params, "limit", "100")))
-			if len(whole) < 4 {
-				t.Fatalf("one read answers %v, too few rows for a page "+
-					"boundary to fall inside anything", whole)
-			}
-			for _, size := range []int{2, 3} {
-				if paged := pageThrough(t, r, params, size); !slices.Equal(paged, whole) {
-					t.Errorf("paging %d at a time answers\n%v\nwhere one read "+
-						"answers\n%v", size, paged, whole)
-				}
-			}
-		})
-	}
+	return r
 }
 
 // pageThrough reads a query to its end a page of size rows at a time and

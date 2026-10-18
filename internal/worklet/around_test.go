@@ -258,3 +258,61 @@ func TestAPriorityListPagesInItsOwnOrder(t *testing.T) {
 			"a (%s)", around, keyOf["c"], keyOf["a"])
 	}
 }
+
+// A TASK'S PLACE IS ITS PLACE IN THE ORDER PAGING DRAWS, TIES AND THE TRASH
+// INCLUDED.
+//
+// The neighbours are read from the task outwards ([keyset]'s arms): the rows
+// tied with it on every column and nearer by id first, then those tied on all
+// but the last, and so on — the before side read with the order reversed. A
+// tie arm read out of turn, or reversed the wrong way, names a task two rows
+// away; a count that missed an arm puts the task at the wrong position; and
+// none of it shows on a fixture of distinct values, which is every fixture
+// that is not built of ties.
+//
+// So every task of [tiedCompany], in every order of [tiedOrders], must sit at
+// its place in one read of the answer, with the rows beside it there as its
+// neighbours — the trash read in its own order among them, whose previous
+// neighbour is the trash's index walked backwards.
+func TestAroundMatchesThePagedOrderOnTiesAndTheTrash(t *testing.T) {
+	t.Parallel()
+	r := tiedCompany(t)
+	for name, params := range tiedOrders {
+		t.Run(name, func(t *testing.T) {
+			whole := r.ask(withKey(params, "limit", "100")).Rows
+			if len(whole) < 4 {
+				t.Fatalf("one read answers %d rows, too few to have a middle",
+					len(whole))
+			}
+			for i, row := range whole {
+				got := r.ask(withKey(withKey(params, "limit", "1"), "around",
+					row.ID)).Around
+				if got == nil {
+					t.Fatalf("around=%s is not in the answer it was read from",
+						row.ID)
+				}
+				want := placed{position: i + 1, total: len(whole)}
+				if i > 0 {
+					want.prev = whole[i-1].Address()
+				}
+				if i+1 < len(whole) {
+					want.next = whole[i+1].Address()
+				}
+				have := placed{total: got.TotalHint}
+				if got.Position != nil {
+					have.position = *got.Position
+				}
+				if got.Prev != nil {
+					have.prev = *got.Prev
+				}
+				if got.Next != nil {
+					have.next = *got.Next
+				}
+				if have != want {
+					t.Errorf("around=%s is %+v, want %+v — its place in one "+
+						"read of the answer", row.ID, have, want)
+				}
+			}
+		})
+	}
+}
