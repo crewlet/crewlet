@@ -649,6 +649,32 @@ func Catalogue() []Instrument {
 				"that created the bucket derived): the ceiling the bucket " +
 				"keeps for its life, whatever a node's Tier A says later.",
 		},
+		// ---- the artifact datastore ---------------------------------------
+		{
+			Name: ArtifactsDataWriteDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"verdict"},
+			Shows: "How long a datastore write takes from the request to its verdict " +
+				"read back from this node's rows, by verdict (applied, conflict, " +
+				"invalid, forbidden, quota, gone, or pending where this node had not " +
+				"applied it yet, rate_limited and refused_early before anything was " +
+				"appended). The datastore op objective is a p95 of 250 ms; a rise in " +
+				"pending reads as this node's applier falling behind.",
+		},
+		{
+			Name: ArtifactsDataWrites, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"verdict"},
+			Shows: "Datastore writes by verdict. A climb in conflict is people editing " +
+				"the same rows over each other; in forbidden, a page or an agent writing " +
+				"what its collection's rules refuse; in rate_limited, one client " +
+				"spending this node's write budget.",
+		},
+		{
+			Name: ArtifactsDataFootprintBytes, Kind: KindGauge, Unit: UnitBytes,
+			Shows: "The company's datastore footprint in real bytes held on every data " +
+				"node (canonical bodies, field-index entries and hot history), sampled " +
+				"after each committed batch. Read against `artifacts.limits.data_bytes`: " +
+				"a store or a company at its limit refuses every write that grows it.",
+		},
 	}
 }
 
