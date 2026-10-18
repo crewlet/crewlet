@@ -409,7 +409,7 @@ func dutyReads() map[string]indexedRead {
 	}
 	// The search package's statements come with their arguments.
 	read := func(sql string, args []any) plannedRead { return plannedRead{sql, args} }
-	return map[string]indexedRead{
+	reads := map[string]indexedRead{
 		"the embed duty's selection":    {read(search.TaskSelection("m", 8, 1024)), recent, true},
 		"the embed duty's opening read": {read(search.TaskOpeningRead("t-00001")), key, false},
 		"the embed duty's withdrawals":  {read(search.TaskWithdrawals(1024)), key, false},
@@ -441,6 +441,28 @@ func dutyReads() map[string]indexedRead {
 		"key resolution":              seek(keys, resolveTaskStatement, "ENG-1", "ENG-1", "ENG-1"),
 		"a point read's scope":        seek(keys, taskReadScopeStatement, "ENG-1", "ENG-1", "ENG-1"),
 	}
+	// THE CATALOGUE'S SETTLE, for each shape of declaration: each side of
+	// the column through the index that holds that side — the field's own
+	// value index for the rows it hides, the hidden rows' for the rows it
+	// shows again ([settleStatements]).
+	for name, field := range map[string]FieldDef{
+		"an archived field": {ID: "field-effort", Slug: "effort",
+			Type: FieldNumber, Archived: true},
+		"an unrestricted field": {ID: "field-effort", Slug: "effort",
+			Type: FieldNumber},
+		"a field of some types": {ID: "field-effort", Slug: "effort",
+			Type: FieldNumber, AppliesTo: []string{"Bug", "epic"}},
+	} {
+		for _, write := range settleStatements(field) {
+			side, index := "shows", "tracker_field_values_hidden_idx"
+			if strings.Contains(write.sql, "SET hidden = 1") {
+				side, index = "hides", "tracker_field_values_num_idx"
+			}
+			reads["the settle of "+name+": what it "+side] = seek(index,
+				write.sql, write.args...)
+		}
+	}
+	return reads
 }
 
 // holdTagFilter fails a plan whose tag filter is not read the way its mode
