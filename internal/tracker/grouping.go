@@ -977,7 +977,7 @@ func declaredOrder[T ~string](values []T) []string {
 //
 // ONLY THE COLUMNS THE PREDICATE ADMITS. An empty column is honest exactly
 // where a row could have landed in it, so the same filters that narrow the
-// predicate narrow this set, in the terms [compileWhere] writes them: the
+// predicate narrow this set, in the terms [compilePredicate] writes them: the
 // `status` and `status!` keys, `status_group`, the finished-work default that
 // `show_closed` lifts, and the overdue alias that carries an open-status
 // condition of its own. The `group=` column filter narrows the whole query to
@@ -1182,10 +1182,10 @@ func dueFilterRange(filter DateFilter) dueRange {
 
 // admittedStatuses is every status the query's own predicate could match.
 //
-// THE FINISHED-WORK RULE IS [compileWhere]'S, restated in the same three terms
-// so the two cannot disagree: finished work is excluded unless `show_closed`
-// asks for it, and the overdue alias ANDs the open condition back on whatever
-// `show_closed` said.
+// THE FINISHED-WORK RULE IS [compilePredicate]'S, restated in the same three
+// terms so the two cannot disagree: finished work is excluded unless
+// `show_closed` asks for it, and the overdue alias ANDs the open condition back
+// on whatever `show_closed` said.
 func admittedStatuses(q Query) []Status {
 	finished := q.ShowClosed.Finished()
 	for _, filter := range q.Dates {
