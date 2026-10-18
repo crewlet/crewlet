@@ -116,11 +116,11 @@ Flags:
                  invitation is open)
 
 Every write prints its outcome: "applied" (this node has it) or "pending"
-(saved, not here yet). If the outcome is unknown, or the node never answered,
-run the same command again with -op-id <op id> from the error: every write
-that takes -op-id is sent under one made before it asks. Don't start fresh,
-or it runs twice. If the node can't confirm it, retry through another node
-with -api.
+(saved, not here yet). If the outcome is unknown, is one this build can't read
+(then nothing of the answer is printed), or the node never answered, run the
+same command again with -op-id <op id> from the error: every write that takes
+-op-id is sent under one made before it asks. Don't start fresh, or it runs
+twice. If the node can't confirm it, retry through another node with -api.
 
 A person always holds one human seat. They're invited or created onto a
 vacant one, "iam bind" moves them, and "iam remove" frees it. "iam unbind" is
@@ -234,10 +234,15 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	// left to the node to mint, it was lost with the answer, so the only
 	// retry an operator could run was a fresh operation — a second
 	// invitation, or a create the first attempt's person refuses.
-	var operation string
+	//
+	// ONE VALUE NAMES THE WRITE for both halves that finish it — the client,
+	// for an answer that never came ([iamClient.unanswered]), and the
+	// printer, for a 2xx whose outcome leaves it open ([iamPrinter.settled])
+	// — so the retries the two prescribe are one.
+	write := keyedWrite{gesture: sub}
 	if iamKeyed[sub] {
 		var err error
-		if operation, err = operationFor(sub, *key); err != nil {
+		if write.operation, err = operationFor(sub, *key); err != nil {
 			return err
 		}
 	}
@@ -310,7 +315,8 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 		return fmt.Errorf("read %s: %w", *bootstrapPath, err)
 	}
 	ctx := context.Background()
-	out := &iamPrinter{w: stdout, raw: *asJSON}
+	out := &iamPrinter{w: stdout, raw: *asJSON, write: write,
+		what: strings.TrimSpace(sub + " " + subject)}
 	if sub == "token" && strings.TrimSpace(*login) != "" {
 		// YOUR OWN TOKEN, which only your own session may mint: this
 		// signs in for the one request and never reads
@@ -323,7 +329,7 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	if err != nil {
 		return err
 	}
-	client.gesture, client.key, client.keyed = sub, operation, iamKeyed[sub]
+	client.write, client.keyed = write, iamKeyed[sub]
 
 	switch sub {
 	case "people":
@@ -779,14 +785,13 @@ type iamClient struct {
 	token string
 	http  *http.Client
 
-	// gesture names the command's write in a sentence: "invite", "grant".
-	gesture string
-
-	// key is the operation the command's write is sent under — minted
-	// before it asks, or the op id an earlier answer named ([operationFor])
-	// — sent as the Idempotency-Key on every write this command makes, and
-	// never on a read. Empty on a command whose route reads none.
-	key string
+	// write is the command's write: its gesture, which names it in a
+	// sentence ("invite", "grant"), and the operation it is sent under —
+	// minted before it asks, or the op id an earlier answer named
+	// ([operationFor]) — sent as the Idempotency-Key on every write this
+	// command makes, and never on a read. The operation is empty on a
+	// command whose route reads none.
+	write keyedWrite
 
 	// keyed is whether the route this command writes to reads a key at all
 	// ([iamKeyed]). Only where it does is a refusal's retry spelled as
@@ -856,8 +861,8 @@ func (c *iamClient) call(ctx context.Context, method, path string,
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if c.key != "" && method != http.MethodGet {
-		req.Header.Set(opkey.Header, c.key)
+	if c.write.operation != "" && method != http.MethodGet {
+		req.Header.Set(opkey.Header, c.write.operation)
 	}
 	// NO ORIGIN, deliberately. The node's cross-site check admits a
 	// BEARER with none — a browser cannot make one travel — and refuses a
@@ -897,12 +902,11 @@ func (c *iamClient) call(ctx context.Context, method, path string,
 // answer was lost, and unchanged for a read or a write whose route reads no
 // key.
 func (c *iamClient) unanswered(method string, err error) error {
-	if !c.keyed || c.key == "" || method == http.MethodGet {
+	if !c.keyed || c.write.operation == "" || method == http.MethodGet {
 		return err
 	}
 	return fmt.Errorf("%w\n\nThe node did not answer, so whether the %s landed is "+
-		"unknown: %s", err, c.gesture,
-		keyedWrite{gesture: c.gesture, operation: c.key}.retry())
+		"unknown: %s", err, c.write.gesture, c.write.retry())
 }
 
 // personID is the person a subject names: an id as it is, and a login resolved
@@ -1081,6 +1085,33 @@ func iamRemedy(code string, answer map[string]any) string {
 type iamPrinter struct {
 	w   io.Writer
 	raw bool
+
+	// write is the command's own write, which a write's answer is judged
+	// against before anything of it is printed ([iamPrinter.settled]), and
+	// what names it in a sentence: "suspend p-1", "invalidate-all".
+	write keyedWrite
+	what  string
+}
+
+// settled is nil for a write's 2xx answer whose outcome says where the write
+// stands — applied, or pending — and for any other the error that finishes it.
+//
+// A 2xx CAN LEAVE THE OUTCOME OPEN. The node answers its own `unknown` 503,
+// which [iamRefusal] reads; but a node newer than this command may answer, 2xx,
+// an outcome this build cannot read, and that was printed as `outcome "x"` and
+// exited zero — so a script read a write nobody here could vouch for as one
+// that landed. It FAILS, as every keyed write's open outcome does
+// ([keyedWrite.confirmed]), naming the retry under the operation the command
+// sent.
+//
+// BEFORE ANYTHING OF THE ANSWER IS PRINTED, under -json too: the node hands
+// out no invitation or first password link for a write nobody can confirm —
+// it would be a link that answers 410 the first time somebody follows it — so
+// neither does this, and the retry under -op-id hands back the very link its
+// first attempt issued. A document printed beside a failure is one a script
+// reads before it reads the exit status.
+func (p *iamPrinter) settled(answer map[string]any) error {
+	return p.write.confirmed(p.what, str(answer["outcome"]))
 }
 
 func (p *iamPrinter) dump(answer map[string]any) error {
@@ -1319,9 +1350,13 @@ func (p *iamPrinter) audit(asked url.Values, answer map[string]any, err error) e
 	return nil
 }
 
-// invite prints the link ONCE, which is the only time it exists.
+// invite prints the link ONCE, which is the only time it exists — and none for
+// an invitation nobody can confirm ([iamPrinter.settled]).
 func (p *iamPrinter) invite(answer map[string]any, err error) error {
 	if err != nil {
+		return err
+	}
+	if err := p.settled(answer); err != nil {
 		return err
 	}
 	if p.raw {
@@ -1532,6 +1567,9 @@ func (p *iamPrinter) written(answer map[string]any, err error) error {
 	if err != nil {
 		return err
 	}
+	if err := p.settled(answer); err != nil {
+		return err
+	}
 	if p.raw {
 		return p.dump(answer)
 	}
@@ -1549,18 +1587,13 @@ func (p *iamPrinter) written(answer map[string]any, err error) error {
 //
 // READ OFF THE ANSWER'S `outcome`, never off the status: it printed "applied"
 // for every 2xx, so a write the node had made durable and NOT applied — a 202,
-// whose read here does not show it yet — was reported as applied. The third
-// value never reaches here; it is a 503, and [iamRefusal] says it.
+// whose read here does not show it yet — was reported as applied. Only the two
+// outcomes that say where a write stands reach here: the third is a 503, which
+// [iamRefusal] says, and a 2xx carrying any other has already failed
+// ([iamPrinter.settled]).
 func (p *iamPrinter) outcome(answer map[string]any) {
-	position, op := dash(str(answer["position"])), dash(str(answer["op_id"]))
-	switch outcome := str(answer["outcome"]); outcome {
-	case "applied", "pending":
-		fmt.Fprintf(p.w, "%s at %s (op %s)\n", outcome, position, op)
-	default:
-		// AN OUTCOME THIS BUILD CANNOT NAME is printed as what it is,
-		// never promoted to "applied" — that was the bug.
-		fmt.Fprintf(p.w, "outcome %q at %s (op %s)\n", outcome, position, op)
-	}
+	fmt.Fprintf(p.w, "%s at %s (op %s)\n", str(answer["outcome"]),
+		dash(str(answer["position"])), dash(str(answer["op_id"])))
 }
 
 // created prints a create: who was created, under which login and on which
@@ -1568,7 +1601,9 @@ func (p *iamPrinter) outcome(answer map[string]any) {
 // ONCE, which is the only time this command shows it.
 //
 // THE LINK IS PRINTED ON `pending` TOO: the record is durable, and the link
-// opens on every node that has applied it — this one within moments.
+// opens on every node that has applied it — this one within moments. And on
+// nothing else: a create nobody can confirm prints nothing of itself
+// ([iamPrinter.settled]).
 //
 // THE NODE'S SENTENCE BESIDE THE LINK IS NOT PRINTED, because it names the
 // retry as a header: the flag this command takes is -op-id, and a
@@ -1577,6 +1612,9 @@ func (p *iamPrinter) outcome(answer map[string]any) {
 // and this names the command that issues another.
 func (p *iamPrinter) created(answer map[string]any, err error) error {
 	if err != nil {
+		return err
+	}
+	if err := p.settled(answer); err != nil {
 		return err
 	}
 	if p.raw {

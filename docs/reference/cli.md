@@ -982,7 +982,12 @@ retry: the **same** command with `-op-id <op id>`. A write the node never
 answered — the connection dropped, or a proxy in front of it answered in its
 place — fails the same way, naming the op id it was sent under: every write that
 takes `-op-id` is sent under one the command mints before it asks, so a lost
-answer never loses the operation with it. A fresh attempt
+answer never loses the operation with it. So does a write the node answered
+successfully with an outcome this build cannot read — a node newer than the
+command may answer one — or with none at all: nobody here can vouch for it, so
+it **exits non-zero** naming the op id it was sent under, and prints nothing of
+the answer, under `-json` too — no invitation or first password link, which the
+retry under `-op-id` hands back. A fresh attempt
 would be a second operation — for `create` and `invite` a second person or a
 second invitation, which the first attempt's person or invitation refuses as a
 conflict, since it holds the address and the seat. `token` and

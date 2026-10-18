@@ -29,12 +29,13 @@ import (
 // whether it landed, and held a pasted -op-id to the rule only after trimming
 // it where `worklet purge` refused the same id for its trailing newline.
 //
-// `crewlet iam` mints its writes' operations here too, and finishes an answer
-// that never came with the same retry ([keyedWrite.retry]). The 503s its node
-// answers are read by its own renderer ([iamRefusal]), because the identity
-// directory's answers carry fields no other surface does — the changes that
-// landed before a refusal, a mint whose route reads no key — beside the same
-// rule.
+// `crewlet iam` mints its writes' operations here too, finishes an answer that
+// never came with the same retry ([keyedWrite.retry]), and fails a 2xx whose
+// outcome leaves the write open by the same rule ([keyedWrite.confirmed]). The
+// 503s its node answers are read by its own renderer ([iamRefusal]), because
+// the identity directory's answers carry fields no other surface does — the
+// changes that landed before a refusal, a mint whose route reads no key —
+// beside the same rule.
 
 // operationFor is the operation a write is sent under: the -op-id the operator
 // brought, held to the rule the node holds a caller's id to, or one minted

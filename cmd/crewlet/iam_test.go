@@ -41,7 +41,7 @@ func TestAnIamWritePassesTheNodesCrossSiteCheck(t *testing.T) {
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			reached = true
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"position":"1:1"}`))
+			_, _ = w.Write([]byte(`{"outcome":"applied","position":"1:1"}`))
 		})))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
@@ -780,6 +780,133 @@ func TestAnIamWriteSaysWhetherItLandedHere(t *testing.T) {
 	}
 }
 
+// iamKeyedArgs is every keyed `crewlet iam` write as an operator types it —
+// one row per subcommand [iamKeyed] names, which the case reading it holds it
+// to, so a keyed write added later is a row before it is a write nobody judged.
+var iamKeyedArgs = map[string][]string{
+	"invite":            {"invite", "sam@example.com", "-seat", "founder"},
+	"create":            {"create", "-email", "sam@example.com", "-seat", "founder"},
+	"bind":              {"bind", "p-1", "sre"},
+	"unbind":            {"unbind", "p-1"},
+	"grant":             {"grant", "p-1", "-grants", "worklet"},
+	"suspend":           {"suspend", "p-1"},
+	"activate":          {"activate", "p-1"},
+	"remove":            {"remove", "p-1"},
+	"revoke":            {"revoke", "p-1"},
+	"revoke-credential": {"revoke-credential", "c-1"},
+	"reset-mfa":         {"reset-mfa", "p-1"},
+	"invalidate-all":    {"invalidate-all"},
+	"cancel-invite":     {"cancel-invite", "inv-1"},
+}
+
+// A 2xx WHOSE OUTCOME THIS BUILD CANNOT READ FAILS, NAMING THE RETRY — on every
+// keyed iam write, as a table and as -json, and before anything of the answer
+// is printed.
+//
+// The node answers its own unknown 503; but a node newer than this command may
+// answer, 2xx, an outcome this build cannot read, and the printer printed it
+// as `outcome "x"` and exited zero — so a script read a write nobody here
+// could vouch for as one that landed, and an invitation's link was handed out
+// for an issue nobody could confirm. It fails as every other keyed write's
+// open outcome does, under the operation the command SENT, and prints nothing:
+// no link, and under -json no document a script reads before the exit status.
+// The failure begins with the write it is about — the subcommand and whom it
+// named — because it reaches a terminal or a log beside every other command's.
+// The control: applied and pending still exit zero on every row. Mutation:
+// drop the judgement from the printer of plain writes, of a create or of an
+// invitation, make it after the -json dump, or name nothing of the write in
+// the failure, and rows fail.
+func TestAnIamWriteWhoseOutcomeThisBuildCannotReadFails(t *testing.T) {
+	t.Parallel()
+	if len(iamKeyedArgs) != len(iamKeyed) {
+		t.Fatalf("the case types %d keyed writes, and iamKeyed names %d",
+			len(iamKeyedArgs), len(iamKeyed))
+	}
+	for sub := range iamKeyed {
+		if _, typed := iamKeyedArgs[sub]; !typed {
+			t.Fatalf("iam %s is keyed and the case types no row for it", sub)
+		}
+	}
+	cfg := bootstrapWithKeyring(t, "k1")
+	for _, tc := range []struct {
+		name    string
+		outcome any
+		says    string
+		lands   bool
+	}{
+		{name: "applied", outcome: "applied", lands: true},
+		{name: "pending", outcome: "pending", lands: true},
+		{name: "unknown", outcome: "unknown", says: "could not confirm the write"},
+		{name: "a newer build's", outcome: "deferred",
+			says: `the node answered "deferred", which this build cannot read`},
+		{name: "none at all", outcome: nil, says: "could not confirm the write"},
+	} {
+		for _, asJSON := range []bool{false, true} {
+			name := tc.name
+			if asJSON {
+				name += " as json"
+			}
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				node := newFakeKeyedNode(t)
+				node.status = http.StatusOK
+				node.body = map[string]any{"id": "x-1", "position": "CREWLET_IAM_LOG@0:9",
+					"op_id": "the-scoped-key.k0123456789abcdef",
+					"url":   "https://crewlet.example.com/dashboard#/invite/x-1.s3cr3t"}
+				if tc.outcome != nil {
+					node.body["outcome"] = tc.outcome
+				}
+				for sub, args := range iamKeyedArgs {
+					args = append(slices.Clone(args), "-config", cfg, "-api",
+						node.server.URL)
+					if asJSON {
+						args = append(args, "-json")
+					}
+					var out, errs bytes.Buffer
+					err := runIAM(tokenEnviron("a-tier-a-token"), args, nil, &out, &errs)
+					sent, _ := node.sent()
+					if tc.lands {
+						if err != nil {
+							t.Errorf("iam %s: a %s write failed: %v", sub, tc.name, err)
+						}
+						continue
+					}
+					if err == nil {
+						t.Errorf("iam %s: a 2xx carrying %s outcome exited zero:\n%s",
+							sub, tc.name, out.String())
+						continue
+					}
+					if sent == "" {
+						t.Errorf("iam %s sent no operation key, so no retry it names "+
+							"is this write's", sub)
+					}
+					named := sub
+					if len(args) > 1 && !strings.HasPrefix(args[1], "-") {
+						named += " " + args[1]
+					}
+					if !strings.HasPrefix(err.Error(), named+": ") {
+						t.Errorf("iam %s answered %q, want it to begin with the write "+
+							"it is about, %q", sub, err, named)
+					}
+					if !strings.Contains(err.Error(), tc.says) ||
+						!strings.Contains(err.Error(), "-op-id "+sent) {
+						t.Errorf("iam %s answered %q, want it to say %q and name the "+
+							"retry under %s", sub, err, tc.says, sent)
+					}
+					if strings.Contains(err.Error(), "-op-id the-scoped-key") {
+						t.Errorf("iam %s named the echoed id rather than the one it "+
+							"sent: %v", sub, err)
+					}
+					if out.Len() != 0 {
+						t.Errorf("iam %s printed what nobody can confirm:\n%s", sub,
+							out.String())
+					}
+				}
+			})
+		}
+	}
+}
+
 // AN UNKNOWN WRITE NAMES ITS RETRY, AND THE RETRY CAN BE MADE.
 //
 // The node answers an unknown outcome 503 with `outcome: "unknown"` and the
@@ -912,7 +1039,7 @@ func TestAnIamWriteTheNodeNeverAnsweredNamesTheOperationItWasSentUnder(t *testin
 	var out, errs bytes.Buffer
 
 	for _, args := range [][]string{
-		{"grant", "p-1", "-grants", "tracker"},
+		{"grant", "p-1", "-grants", "worklet"},
 		{"invite", "sam@example.com", "-seat", "founder"},
 	} {
 		err := run(append(append([]string{"iam"}, args...), "-config", cfg,
