@@ -174,7 +174,8 @@ func writeTools() []Tool {
 		out[i].Names = writeNames[out[i].Name]
 	}
 	out = append(out, principlesWrite(), budgetWrite())
-	return append(out, shareTools()...)
+	out = append(out, shareTools()...)
+	return append(out, chatWrites()...)
 }
 
 // writeNames are the arguments of each write that name a seat, a project or a

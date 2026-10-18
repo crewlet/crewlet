@@ -46,7 +46,9 @@
 // and [Resolver.Resolve] replaces a name with the key, reading each directory
 // through the turn's grant, before a read is sent or a write is previewed
 // (names.go). It never decides access: a directory the person cannot read
-// resolves nothing, and the route decides the value as written.
+// resolves nothing, and the route decides the value as written. The call is
+// held to its schema in the same pass ([Resolver.Prepare]), and every fault
+// of both, every name it cannot place included, is one refusal (ADR-0059).
 //
 // # A write is previewed from the object as it is now
 //
@@ -239,8 +241,9 @@ type Tool struct {
 	Scope func(args Args) string
 	// Names are the arguments that name a seat, a unit, a project or a
 	// space, each by its directory: the call takes the record's key or its
-	// name, and the turn resolves a name to the key before the request or
-	// the preview is built ([Resolver.Resolve]).
+	// name, one or a list of them (the people a direct message goes to, a
+	// room's members), and the turn resolves a name to the key before the
+	// request or the preview is built ([Resolver.Resolve]).
 	Names map[string]Directory
 	// Build turns the call's arguments into the one request it sends, on
 	// one of Routes. Call it through [Tool.Request], which checks the
@@ -261,8 +264,9 @@ type Tool struct {
 	// the three inputs a write's tier is derived from.
 	Destructive bool
 	// ChangesVisibility marks a write that changes who can see something (a
-	// share, an unshare): its preview must name the audience (D09), which
-	// proposal.Preview.Check holds when told so.
+	// share, an unshare) or puts something in front of people (every chat
+	// write, read by whoever reads its room): its preview must name the
+	// audience (D09), which proposal.Preview.Check holds when told so.
 	ChangesVisibility bool
 
 	// Preview is a write's or a page action's preview: what the call would

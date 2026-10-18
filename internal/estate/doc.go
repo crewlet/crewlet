@@ -16,11 +16,11 @@
 // something has to answer them. EVERY DATA NODE HOLDS THE WHOLE ESTATE and
 // SERVES it over the broker ([Serve]), and every node's tools are handed
 // facades of one [Router], which answers in-process where this node's copy
-// serves and asks another data node otherwise. So are the operator's surfaces —
-// the API's tracker and knowledge-base routes and the operator's own MCP — for
-// the reason a data node's own seats are: read straight off the node's copy, a
-// node whose copy was out of service answered its operator from the very copy
-// it had stopped serving its seats from.
+// serves and asks another data node otherwise. So are the operator's surfaces
+// — the API's tracker, knowledge-base and chat routes and the operator's own
+// MCP — for the reason a data node's own seats are: read straight off the
+// node's copy, a node whose copy was out of service answered its operator from
+// the very copy it had stopped serving its seats from.
 //
 // # One subject per serving node, never a scatter
 //

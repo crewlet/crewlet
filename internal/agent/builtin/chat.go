@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/chatlet"
@@ -649,16 +647,16 @@ func chatReadFailure(ctx context.Context, name string, err error) tools.Result {
 func (d ChatDeps) channelID(ctx context.Context, name, viewer, ref string) (
 	string, *tools.Result) {
 
-	// A LEADING '#' IS HOW PEOPLE WRITE A ROOM and never part of a name —
-	// [chatlet.ValidName] admits neither it nor any capital — so stripping it
-	// here cannot collide with a room somebody really called that.
-	want := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(ref), "#"))
+	// THE ROOM AS PEOPLE WRITE IT, by the one rule every surface reads a
+	// typed room by ([chatlet.RoomRef]): its id, or its name with or without
+	// the '#' before it.
+	id, want := chatlet.RoomRef(ref)
+	if id != "" {
+		return id, nil
+	}
 	if want == "" {
 		out := failed(name + " needs a `channel` — the room's id, or its name.")
 		return "", &out
-	}
-	if _, err := uuid.Parse(want); err == nil {
-		return want, nil
 	}
 	if d.Reader == nil {
 		// THIS SURFACE HOLDS NOTHING TO RESOLVE A NAME AGAINST, so the

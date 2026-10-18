@@ -522,7 +522,8 @@ func phrased(noun, name string) string {
 // that a tool which replaces or removes what is there only adds to it. The
 // preview reads nothing for a call, so nothing about what it removes is
 // computed here: a write whose effect turns on what is there is a curated
-// write, whose preview reads it.
+// write, whose preview reads it, and a call one of them makes is refused
+// ([curatedCall]).
 func called(tool string) described {
 	verb, _, _ := strings.Cut(tool, "_")
 	return described{Title: RequestTitle(ActRoute, map[string]string{"tool": tool}),

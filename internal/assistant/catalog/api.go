@@ -54,10 +54,12 @@ import (
 // request that was approved.
 
 // GenericBodyBytes is the most a generic change's request body may hold:
-// sixty-four kibibytes, every byte of which the person reads on the card
-// before approving it (the card's own bound is 256 KiB, and the before and
-// after rows share it). What a route takes beyond that (a file's bytes, an
-// artifact's bundle) has its own screen and its own upload path.
+// sixty-four kibibytes. What the person approves is what the body moves, drawn
+// as rows every approver reviews ([diffRows] of them, the rest counted), and
+// the body itself, redacted, is an administrator's technical details, within
+// the card's own bound of 256 KiB, which the before and after rows share. What
+// a route takes beyond that (a file's bytes, an artifact's bundle) has its own
+// screen and its own upload path.
 const GenericBodyBytes = 64 << 10
 
 // GenericPage is the page a generic read asks a list route for when the model
@@ -379,14 +381,15 @@ func (g generic) change() Tool {
 			"states them. Nothing is sent until the person approves: they are shown, in " +
 			"plain words, what the change does to the resource as it is now. " +
 			"Use a dedicated write tool whenever one makes the change (filing or updating a " +
-			"task, a page, a share, the principles), since its preview is shaped for it; use " +
-			"this for everything else. Read the resource first, and send its whole new value " +
-			"where the route replaces it (a PUT): every field it holds now that should stay. " +
-			"A field the body leaves out is removed, so a removal the person did not ask for " +
-			"is refused unless `removes` names it. The body is at most 64 KiB.",
+			"task, a page, a share, the principles, a chat message or room), since its " +
+			"preview is shaped for it: a call on the act route one of them makes is refused " +
+			"here. Use this for everything else. Read the resource first, and send its whole " +
+			"new value where the route replaces it (a PUT): every field it holds now that " +
+			"should stay. A field the body leaves out is removed, so a removal the person did " +
+			"not ask for is refused unless `removes` names it. The body is at most 64 KiB.",
 		schema: object([]string{"route"}, map[string]*schema{
 			"route": routeArgument, "path": pathArgument, "query": queryArgument,
-			"body": bodyArgument, "summary": summaryArgument, "removes": removesArgument,
+			"body": bodyArgument, "summary": summaryArgument, RemovesArgument: removesArgument,
 		}),
 		Routes: g.table.patterns(func(r Route) bool { return !r.reads() }),
 		Build: func(a map[string]any) (exec.Request, error) {
@@ -508,6 +511,20 @@ func (g generic) request(args Args, reading bool) (exec.Request, Route, error) {
 		}
 		req.Body = encoded
 	}
+	if !reading && route.Pattern == ActRoute {
+		// A CALL IS ITS TOOL'S ARGUMENTS, in the one shape the act route
+		// reads, and a call a curated write makes is that write's: its
+		// preview reads what the tool changes and binds the revision it
+		// read, where this card can show only the call ([curatedCall]).
+		sent, err := callArgs(req.Body)
+		if err != nil {
+			return exec.Request{}, Route{}, err
+		}
+		if curated, ok := curatedCall(path["tool"], sent); ok {
+			return exec.Request{}, Route{}, fmt.Errorf("%s has a change of its own: propose "+
+				"it with %s, whose card shows what it changes", path["tool"], curated)
+		}
+	}
 	if !reading && route.Summary {
 		body, summaryErr := summarised(req.Body, args)
 		if summaryErr != nil {
@@ -516,6 +533,61 @@ func (g generic) request(args Args, reading bool) (exec.Request, Route, error) {
 		req.Body = body
 	}
 	return req, route, nil
+}
+
+// actBody is the one body a call on the act route sends
+// (internal/api/operator's act transport, which refuses any other).
+const actBody = `a call on the act route sends one JSON object, {"args": {...}}, ` +
+	`its tool's arguments in args and nothing beside them`
+
+// callArgs are the arguments a call on the act route hands its tool: its body's
+// `args`. A body of any other shape is refused here, before a card is drawn,
+// rather than by the route once the person approved it.
+func callArgs(body []byte) (map[string]any, error) {
+	var call map[string]json.RawMessage
+	if json.Unmarshal(body, &call) != nil || call == nil {
+		return nil, errors.New(actBody)
+	}
+	for field := range call {
+		if field != "args" {
+			return nil, fmt.Errorf("%s, and the body names %q", actBody, field)
+		}
+	}
+	args := map[string]any{}
+	if raw, given := call["args"]; given && string(raw) != "null" {
+		if json.Unmarshal(raw, &args) != nil {
+			return nil, errors.New(actBody)
+		}
+	}
+	return args, nil
+}
+
+// curatedCall is the curated write that makes the act route's call of tool
+// with args, and whether one does: a write executing as tool on the act route
+// whose schema declares every argument the call sends.
+//
+// THE GENERIC CHANGE DEFERS TO IT. A tool on the act route is a call, so the
+// generic card can show what the call sends and never what it does to what is
+// there; a curated write's preview reads that, and binds the revision it read
+// (ADR-0051). A call sending an argument no curated write takes is one only
+// the generic change can make, and stays its, so nothing the person may do is
+// lost to the assistant.
+func curatedCall(tool string, args map[string]any) (string, bool) {
+	for _, t := range Tools() {
+		if t.Kind != KindWrite || t.Act != tool || !slices.Equal(t.Routes, []string{ActRoute}) {
+			continue
+		}
+		takes := true
+		for arg := range args {
+			if _, declared := t.schema.properties[arg]; !declared {
+				takes = false
+			}
+		}
+		if takes {
+			return t.Name, true
+		}
+	}
+	return "", false
 }
 
 // summarised is a [Route.Summary] write's body with its revision summary in

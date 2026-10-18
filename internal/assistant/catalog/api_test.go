@@ -292,20 +292,29 @@ func TestAGenericChangeIsPreviewedFromTheResource(t *testing.T) {
 	}
 }
 
-// A CALL ON THE ACT ROUTE IS TITLED BY ITS TOOL.
+// A CALL ON THE ACT ROUTE IS TITLED BY ITS TOOL, AND ONE A CURATED WRITE
+// MAKES IS THAT WRITE'S.
 //
 // The act route runs one operator tool, which alone decides what changes, so
 // the generic card is the call: titled by the tool, said as a person writes it
 // (an initialism in it included), approved by the tool's verb, and its
 // arguments shown as sent, each by its own name, never as values a create
 // adds. The step it is prepared in names it the same way, and a call sending
-// nothing still has a row saying so. Mutation: title the act route as a
-// create, draw its arguments as added or label them by the `args` they travel
-// in, or spell DM as a word, and a case here fails.
+// nothing still has a row saying so. A call a curated write makes, every
+// argument one that write takes, is refused naming the write, whose preview
+// reads what the tool changes; a call sending an argument no curated write
+// takes stays the generic change's, so nothing the person may do is lost to
+// the assistant; and a body the route would refuse once approved is refused
+// before any card. Mutation: title the act route as a create, draw its
+// arguments as added or label them by the `args` they travel in, spell DM as
+// a word, or let the generic change propose a room's whole membership, and a
+// case here fails.
 func TestACallOnTheActRouteIsTitledByItsTool(t *testing.T) {
 	t.Parallel()
-	react, open := string(authz.ActionChatReact), string(authz.ActionChatOpenDM)
-	_, _, change := generic(t, admin, react, open)
+	react, members, update := string(authz.ActionChatReact), string(authz.ActionChatMembers),
+		string(authz.ActionWorkUpdate)
+	open := string(authz.ActionChatOpenDM)
+	_, _, change := generic(t, admin, react, members, update, open)
 	call := func(tool string, args map[string]any) map[string]any {
 		return map[string]any{"route": catalog.ActRoute, "path": map[string]any{"tool": tool},
 			"body": map[string]any{"args": args}}
@@ -348,6 +357,29 @@ func TestACallOnTheActRouteIsTitledByItsTool(t *testing.T) {
 	if err != nil || len(p.Changes) != 1 || p.Changes[0].Label != "Details" ||
 		p.Changes[0].To != "None" {
 		t.Errorf("a call sending no argument previews %+v (%v)", p.Changes, err)
+	}
+	_, err = change.Request(call(members, map[string]any{"channel": "c1",
+		"members": []any{map[string]any{"handle": "pm"}}}))
+	if !errors.Is(err, catalog.ErrInvalidArguments) ||
+		!strings.Contains(err.Error(), "set_chat_room_members") {
+		t.Errorf("a room's whole membership through the generic change answered %v", err)
+	}
+	if _, err := change.Request(call(update, map[string]any{"item": "ENG-1",
+		"if_match": 3, "status": "done"})); !errors.Is(err, catalog.ErrInvalidArguments) ||
+		!strings.Contains(err.Error(), "update_task") {
+		t.Errorf("a task change update_task makes answered %v", err)
+	}
+	if _, err := change.Request(call(update, map[string]any{"item": "ENG-1",
+		"checklist": []any{"Write it"}})); err != nil {
+		t.Errorf("a task change only the generic change makes was refused: %v", err)
+	}
+	// THE ROUTE'S OWN SHAPE: arguments sent beside `args` rather than in it
+	// are refused before any card, not by the route once approved.
+	if _, err := change.Request(map[string]any{"route": catalog.ActRoute,
+		"path": map[string]any{"tool": react},
+		"body": map[string]any{"channel": "c1", "emoji": "tada"}}); !errors.Is(err,
+		catalog.ErrInvalidArguments) || !strings.Contains(err.Error(), `"args"`) {
+		t.Errorf("a call whose arguments are not its args answered %v", err)
 	}
 }
 

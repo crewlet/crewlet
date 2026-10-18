@@ -173,7 +173,7 @@ func entityOf(record map[string]any, title string) (Spec, any, bool) {
 			// A BOOKKEEPING FACT (an epoch, a hash, a cursor, a page's
 			// completeness) stays for the model and the drawer leaves it out.
 			e.Facts = append(e.Facts, Fact{Label: FieldLabel(f.path), Path: "facts." + key, Type: typ,
-				Detail: Bookkeeping(lastKey(f.path), []any{f.value}, named)})
+				Detail: Bookkeeping(f.path, []any{f.value}, named)})
 		}
 		doc["facts"] = facts
 	}
@@ -461,11 +461,12 @@ func isNumberValue(v any) bool { _, ok := v.(json.Number); return ok }
 
 // bookkeepingKeys are the field names (or their endings) an answer carries
 // for the engine's and its clients' own bookkeeping, which a person does not
-// read: a revision's epoch, a log position, a digest, a page's cursor and
-// whether the page is complete.
+// read: a revision's epoch, a log position, a digest, a page's cursor, whether
+// the page is complete, and the rest of the state log's envelope on every read
+// it serves (the level it was served at, how far behind its log it was).
 var bookkeepingKeys = []string{"epoch", "seq", "position", "etag", "digest", "hash", "sha",
 	"cursor", "next", "next_cursor", "page_token", "complete", "truncated", "has_more",
-	"revision_id"}
+	"revision_id", "read_level", "log_lag"}
 
 // Bookkeeping reports a field of an answer a person is not shown in the
 // drawer: one whose name says it is bookkeeping ([bookkeepingKeys], as the
@@ -473,13 +474,18 @@ var bookkeepingKeys = []string{"epoch", "seq", "position", "etag", "digest", "ha
 // or, beside a field the record is named by, ids. It stays in the card's
 // downloads and in what the model reads. ONE RULE for every inferred table's
 // columns and every inferred record's facts.
+//
+// A DOTTED KEY BENEATH A BOOKKEEPING FIELD is bookkeeping whatever its own
+// name: a log position is an object (its stream, generation and sequence), and
+// read by its last key alone it drew "Position › stream" in the drawer.
 func Bookkeeping(key string, values []any, named bool) bool {
-	lower := strings.ToLower(key)
-	for _, k := range bookkeepingKeys {
-		if lower == k || strings.HasSuffix(lower, "_"+k) || strings.HasSuffix(lower, " "+k) {
+	segments := strings.Split(strings.ToLower(key), ".")
+	for _, segment := range segments {
+		if bookkeepingKey(segment) {
 			return true
 		}
 	}
+	lower := segments[len(segments)-1]
 	if len(values) == 0 {
 		return false
 	}
@@ -493,6 +499,17 @@ func Bookkeeping(key string, values []any, named bool) bool {
 		}
 	}
 	return true
+}
+
+// bookkeepingKey reports one key of a field's path that names bookkeeping
+// ([bookkeepingKeys]), as the key or its last word.
+func bookkeepingKey(key string) bool {
+	for _, k := range bookkeepingKeys {
+		if key == k || strings.HasSuffix(key, "_"+k) || strings.HasSuffix(key, " "+k) {
+			return true
+		}
+	}
+	return false
 }
 
 // opaque reports a value no person reads: a hex digest of 32 or more

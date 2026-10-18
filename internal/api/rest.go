@@ -154,6 +154,49 @@ var namedRoutes = []struct {
 	// and not under /worklet/, since two of its three sources are not
 	// Worklet's.
 	{method: "GET", pattern: "/feed", what: "company_feed"},
+	// THE COMPANY'S OWN CHAT. Reads only — a write is not a question and
+	// the registry answers questions: every ordinary chat write is a tool
+	// the dashboard calls through /operator/act (ADR-0024), and the three
+	// that destroy or set a room's horizon are the human write surface's
+	// (internal/api/workapi/chat.go).
+	//
+	// The path values are named `channel_id` and `root_id`, which are the
+	// names the QUESTIONS take — and those are the domain's own, because
+	// [chatlet.Reader]'s refusals name the field they refused and those
+	// sentences reach the caller unchanged. A shorter spelling here would
+	// send somebody looking for a key this surface does not accept.
+	{method: "GET", pattern: "/chatlet/channels", what: "chat_channels"},
+	// THE LITERAL SEGMENTS BEAT THE WILDCARD, as they do under /worklet/ and
+	// /doclet/pages/: /chatlet/channels/{channel_id}/messages is not read as a room
+	// whose id is "messages", and net/http resolves the more specific
+	// pattern rather than the first registered.
+	{method: "GET", pattern: "/chatlet/channels/{channel_id}/messages", what: "chat_messages",
+		path: map[string]string{"channel_id": "channel_id"}},
+	// ONE THREAD, addressed by the message it hangs off. A thread here is
+	// one level deep by construction, so this is a range in one room
+	// rather than a walk — and it is a route of its own rather than a
+	// filter on the transcript because the two answers have different
+	// shapes: this one carries the root and who has spoken in it.
+	{method: "GET", pattern: "/chatlet/channels/{channel_id}/threads/{root_id}", what: "chat_thread",
+		path: map[string]string{"channel_id": "channel_id", "root_id": "root_id"}},
+	{method: "GET", pattern: "/chatlet/channels/{channel_id}", what: "chat_channel",
+		path: map[string]string{"channel_id": "channel_id"}},
+	// WHAT NAMED ME. About the caller rather than about a room, which is
+	// why it is not under /chatlet/channels/ — and resolved to a seat by the
+	// server, because a caller may never name one.
+	//
+	// THERE IS NO `GET /chatlet/read` beside it. Where somebody has read to
+	// is not a question of its own: it rides the rail, whose every room
+	// carries this viewer's unread count and mute, because a badge and
+	// the room it belongs to are read together or not at all. The WRITE
+	// half is the `mark_chat_read` tool, which the dashboard calls through
+	// /operator/act like every other write.
+	{method: "GET", pattern: "/chatlet/mentions", what: "chat_mentions"},
+	// RANKED, over every room the caller may read. Its own route beside
+	// the transcript for the reason the board's search is one beside the
+	// board: a transcript is a position in one room and keeps that room's
+	// order, while a search ranks a corpus, so its answer IS the order.
+	{method: "GET", pattern: "/chatlet/search", what: "chat_search"},
 	// WHO IS ASKING. Not under /worklet/: the answer is the caller's own
 	// identity rather than anything the tracker holds, and a node with no
 	// Worklet still has a viewer.

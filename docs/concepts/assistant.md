@@ -134,8 +134,10 @@ answer is one chip.
 by its name or its key, through your own reads of the chart, the projects and
 the spaces, and cards name seats by their names. A change that names something
 that is not there, or a name two records share, is refused before any card,
-listing the choices, rather than after you approve it; the assistant never says
-something does not exist without having looked.
+listing the choices, rather than after you approve it; every name the call got
+wrong is named at once, beside anything else wrong with it, so the assistant
+fixes them all in one go. It never says something does not exist without
+having looked.
 
 **Ask or plan when the request is open.** A clear request is acted on at once.
 When what to change, or for whom, is genuinely open, or the request is a matter
@@ -146,8 +148,13 @@ proposes its first step. It says what each proposal does before its card.
 **Prepare changes for you to approve:** filing, changing and commenting on
 tasks, answering a decision, setting your priorities, marking your inbox,
 pausing and resuming an agent, steering a running turn, answering a coding
-run's question, writing and editing knowledge pages, and sharing or unsharing
-an artifact. It only offers the changes your permissions allow.
+run's question, writing and editing knowledge pages, sharing or unsharing an
+artifact, and in chat: posting in a room, replying in a thread, sending a
+direct message, editing your message or deleting a message, changing a room's
+topic, purpose, archive or members, and leaving a room. Each chat card names
+the room and who will read it, and a change to who is in a room shows everyone
+it adds and takes out, and takes out only the people you asked it to. It only
+offers the changes your permissions allow.
 
 **Change what is on your screen**, on screens that accept it: apply a filter,
 fill in a draft in an editor, or select records. These are proposals too, and

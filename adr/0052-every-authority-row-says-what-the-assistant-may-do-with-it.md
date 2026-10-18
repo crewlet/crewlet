@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/authz`
-- **Enforced-by:** `internal/authz.TestEveryRowDecidesTheAssistant`, `internal/authz.TestARowStatesItsNatureAndTheListAloneSaysNever`, `internal/authz.TestTheHumanOnlyListIsExactlyTheIntendedSet`, `internal/authz.TestAHumanOnlyRefusalSaysWhyInPlainWords`, `internal/assistant/catalog.TestAHumanOnlyGestureIsRefusedInThePersonsWords`, `internal/authz.TestAnAssistNeverRowRefusesAnAssistedPrincipal`, `internal/authz.TestAPresenceRowRefusesAReadGrantAndAdmitsAnApprovedOne`, `internal/authz.TestAReadGrantTakesOnlyAssistReadRows`, `internal/agent/builtin.TestAnAssistReadVerbIsAToolThatOnlyReads`, `internal/iamdomain.TestTheAssistantWritesNoSignInCeremony`, `internal/iamdomain.TestATokenIsNeverMintedThroughTheAssistant`, `internal/api.TestEveryGuardedRouteAdmitsTheAssistantAsItsPerson`, `internal/api.TestPermissionParityAcrossFivePrincipals`, `internal/api.TestTheAssistantRouteTableIsTheAppsOwn`, `internal/api.TestAHumanOnlyRouteIsNeverOffered`, `internal/api.TestAnAgentSeatIsAddedThroughTheGenericChange`, `internal/api/queries.TestAnAssistedQuestionIsAnsweredAsItsPersonsOwn`, `internal/api/configapi.TestACharterWriteThroughTheAssistantIsTheAdministratorsOwn`, `internal/api.TestAnApprovedPrinciplesChangeIsThePagesOwnWrite`
+- **Enforced-by:** `internal/authz.TestEveryRowDecidesTheAssistant`, `internal/authz.TestARowStatesItsNatureAndTheListAloneSaysNever`, `internal/authz.TestTheHumanOnlyListIsExactlyTheIntendedSet`, `internal/authz.TestAHumanOnlyRefusalSaysWhyInPlainWords`, `internal/assistant/catalog.TestAHumanOnlyGestureIsRefusedInThePersonsWords`, `internal/authz.TestAnAssistNeverRowRefusesAnAssistedPrincipal`, `internal/authz.TestAPresenceRowRefusesAReadGrantAndAdmitsAnApprovedOne`, `internal/authz.TestAReadGrantTakesOnlyAssistReadRows`, `internal/agent/builtin.TestAnAssistReadVerbIsAToolThatOnlyReads`, `internal/iamdomain.TestTheAssistantWritesNoSignInCeremony`, `internal/iamdomain.TestATokenIsNeverMintedThroughTheAssistant`, `internal/api.TestEveryGuardedRouteAdmitsTheAssistantAsItsPerson`, `internal/api.TestPermissionParityAcrossFivePrincipals`, `internal/api.TestTheAssistantRouteTableIsTheAppsOwn`, `internal/api.TestAHumanOnlyRouteIsNeverOffered`, `internal/api.TestAnAgentSeatIsAddedThroughTheGenericChange`, `internal/api/queries.TestAnAssistedQuestionIsAnsweredAsItsPersonsOwn`, `internal/api/configapi.TestACharterWriteThroughTheAssistantIsTheAdministratorsOwn`, `internal/api.TestAnApprovedPrinciplesChangeIsThePagesOwnWrite`, `internal/assistant/catalog.TestACallOnTheActRouteIsTitledByItsTool`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -85,12 +85,16 @@ curated ones (internal/assistant/catalog): `describe_api` lists the routes the
 person may use and answers one route's documentation from the API reference the
 binary embeds, `api_request` reads any of them, and `propose_api_change`
 proposes a change on any of them, which is always a proposal previewed from the
-resource as it is now, with a request body of at most 64 KiB, every byte of it
-shown on the card. A call names a route of the table the API binds
-(`App.AssistantRoutes`), never a URL; a route whose verb is on the list is not
-in that table, and every call is decided by the route's own row again. The
-descriptions steer the model to a curated tool wherever one fits, since its
-card and preview are shaped for the gesture.
+resource as it is now, with a request body of at most 64 KiB: the card shows the
+fields the change moves, as rows every approver reviews, and the request itself,
+its body redacted, is an administrator's technical details. A call names a route
+of the table the API binds (`App.AssistantRoutes`), never a URL; a route whose
+verb is on the list is not in that table, and every call is decided by the
+route's own row again. The descriptions steer the model to a curated tool
+wherever one fits, since its card and preview are shaped for the gesture, and a
+call on the act route that a curated write makes whole is refused there, naming
+the write: a tool's call shows only what it sends, where the write's preview
+reads what it changes.
 
 **Parity is walked route by route.** For every route the table binds and five
 people, the assistant's admission (a read grant for a GET or a HEAD, an

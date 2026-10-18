@@ -422,6 +422,8 @@ func TestARevisionReadsBackAsWritten(t *testing.T) {
 	for _, r := range []proposal.Revision{
 		{Kind: proposal.RevisionTask, ID: "ENG-142", Version: "7"},
 		{Kind: proposal.RevisionPerson, ID: "ada@home", Version: "3"},
+		{Kind: proposal.RevisionRoom, ID: "0197a6c4-launch", Version: "3f9c1a0e5b7d2c4a"},
+		{Kind: proposal.RevisionMessage, ID: "0197a6c4-launch/0197a6c5.post", Version: "1:42"},
 		{Kind: proposal.RevisionCharter, ID: proposal.CharterID, Version: "charter-0a1b"},
 	} {
 		got, err := proposal.ParseRevision(r.String())
@@ -490,6 +492,9 @@ func TestAWritesPreconditionIsItsRevisions(t *testing.T) {
 			Version: proposal.VersionPresent}: {"", ""},
 		{Kind: proposal.RevisionResource, ID: "/worklet/projects/ENG", Version: "version=4"}: {"", ""},
 		{Kind: proposal.RevisionTask, ID: "ENG-1", Version: "3"}:                             {"", ""},
+		{Kind: proposal.RevisionRoom, ID: "0197a6c4-launch", Version: "3f9c1a0e5b7d2c4a"}:    {"", ""},
+		{Kind: proposal.RevisionMessage, ID: "0197a6c4-launch/0197a6c5.post",
+			Version: "1:42"}: {"", ""},
 	} {
 		parsed, err := proposal.ParseRevision(revision.String())
 		if err != nil {

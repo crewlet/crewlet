@@ -135,6 +135,43 @@ func TestAnEntityNamesAKindOfTheSetOrNone(t *testing.T) {
 	}
 }
 
+// THE STATE LOG'S ENVELOPE IS BOOKKEEPING. Every read the state log serves
+// carries the level it was served at, whether it is complete, how far behind
+// its log it was and the log position it was read through, an object of its
+// own; none of it is something a person reads about the record, so an
+// inferred record keeps it for the model and the drawer leaves it out,
+// position's stream, generation and sequence included, while the record's
+// own fields are drawn. Mutation: drop read_level from the keys, or judge a
+// nested fact by its last key alone, and this fails.
+func TestTheStateLogsEnvelopeIsBookkeeping(t *testing.T) {
+	t.Parallel()
+	answer, err := cards.Decode([]byte(`{"read_level":"stale","complete":true,"log_lag":0,
+		"position":{"stream":"chat","generation":1,"seq":42},
+		"name":"launch","topic":"Friday's release"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, _, ok := cards.Infer(answer, "Room")
+	if !ok || spec.Entity == nil {
+		t.Fatalf("the room inferred %+v", spec)
+	}
+	drawn := map[string]bool{}
+	for _, f := range spec.Entity.Facts {
+		drawn[f.Label] = !f.Detail
+	}
+	for _, label := range []string{"Read level", "Complete", "Log lag", "Position › stream",
+		"Position › generation", "Position › seq"} {
+		if shown, present := drawn[label]; !present || shown {
+			t.Errorf("the drawer draws %q (present %v): %v", label, present, drawn)
+		}
+	}
+	for _, label := range []string{"Name", "Topic"} {
+		if !drawn[label] {
+			t.Errorf("the drawer leaves out the record's own %q: %v", label, drawn)
+		}
+	}
+}
+
 // AN INFERRED TABLE HIDES BOOKKEEPING AND DRAWS INSTANTS AS INSTANTS. A list of
 // containers carrying an epoch, a digest and its timestamps draws its name and
 // key in the drawer, types the timestamps as instants, and keeps the epoch and

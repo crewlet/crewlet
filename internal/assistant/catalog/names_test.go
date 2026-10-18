@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -132,8 +133,8 @@ func TestAnUnreadableDirectoryResolvesNothingAndIsAskedOnce(t *testing.T) {
 // no Names entry would take only the key again, and a person's "the QA
 // Engineer" would be refused or, worse, guessed. Read off each argument's own
 // description, so the rule is the catalogue's words and not a second list.
-// Mutation: drop list_tasks' Names, or add a tool whose argument says it takes
-// a handle and declare nothing, and this fails.
+// Mutation: drop list_tasks' Names or send_direct_message's, or add a tool
+// whose argument says it takes a handle and declare nothing, and this fails.
 func TestEveryArgumentThatNamesARecordIsResolved(t *testing.T) {
 	t.Parallel()
 	for _, tool := range catalog.Tools() {
@@ -142,8 +143,10 @@ func TestEveryArgumentThatNamesARecordIsResolved(t *testing.T) {
 			described, _ := raw.(map[string]any)
 			text, _ := described["description"].(string)
 			lower := strings.ToLower(text)
-			names := strings.Contains(lower, "handle") || strings.Contains(lower, "project's key") ||
-				strings.Contains(lower, "space's key")
+			// A MENTION IS A MESSAGE'S OWN GRAMMAR (`@handle` in its words),
+			// which the room reads; the words name no seat by themselves.
+			names := strings.Contains(strings.ReplaceAll(lower, "@handle", ""), "handle") ||
+				strings.Contains(lower, "project's key") || strings.Contains(lower, "space's key")
 			// AN AUDIENCE IS ITS OWN GRAMMAR (`unit:<key>`, `company`), which
 			// its route reads; a share names no seat by itself.
 			if !names || strings.Contains(lower, "unit:<key>") {
@@ -158,6 +161,138 @@ func TestEveryArgumentThatNamesARecordIsResolved(t *testing.T) {
 					tool.Name, arg)
 			}
 		}
+	}
+}
+
+// A LIST RESOLVES NAME BY NAME, by the rule one name does: the people a direct
+// message goes to, each a seat by its name or its handle, and a room's members,
+// each naming its seat by `handle` beside how they follow the room, which is
+// kept. A membership keeps a handle the chart no longer lists, since a seat
+// removed from the chart is still in the rooms it was in, and the preview,
+// which reads the room, decides it; a direct message refuses one, listing the
+// seats. The call's own lists are never changed. Mutation: resolve strings
+// alone, drop a member's follow_all, hold a member to the chart, or write into
+// the call's own list, and this fails.
+func TestEveryNameInAListResolves(t *testing.T) {
+	t.Parallel()
+	direct, _ := catalog.Lookup("send_direct_message")
+	members, _ := catalog.Lookup("set_chat_room_members")
+	r := catalog.NewResolver(reader(namedWorld()))
+
+	to := []any{"Product Manager", "ada"}
+	got, err := r.Resolve(t.Context(), direct, map[string]any{"to": to, "body": "Hi."})
+	if err != nil || !reflect.DeepEqual(got["to"], []any{"pm", "ada"}) {
+		t.Errorf("the people a message goes to resolve to %v (%v), want pm and ada", got["to"], err)
+	}
+	if to[0] != "Product Manager" {
+		t.Errorf("the call's own list was changed: %v", to)
+	}
+	if _, err := r.Resolve(t.Context(), direct, map[string]any{"to": []any{"former-qa"}}); !errors.Is(err,
+		catalog.ErrInvalidArguments) || !strings.Contains(err.Error(), "The seats are:") {
+		t.Errorf("a message to a seat nobody holds answered %v, want the seats listed", err)
+	}
+
+	stated := []any{map[string]any{"handle": "Product Manager", "follow_all": true},
+		map[string]any{"handle": "former-qa"}}
+	got, err = r.Resolve(t.Context(), members, map[string]any{"channel": assistanttest.RecordID,
+		"members": stated, "removes": []any{"Ada Lovelace"}})
+	want := []any{map[string]any{"handle": "pm", "follow_all": true},
+		map[string]any{"handle": "former-qa"}}
+	if err != nil || !reflect.DeepEqual(got["members"], want) ||
+		!reflect.DeepEqual(got["removes"], []any{"ada"}) {
+		t.Errorf("a membership resolves to %v removing %v (%v), want %v removing ada",
+			got["members"], got["removes"], err, want)
+	}
+	if stated[0].(map[string]any)["handle"] != "Product Manager" {
+		t.Errorf("the call's own member was changed: %v", stated[0])
+	}
+	if _, err := r.Resolve(t.Context(), members, map[string]any{"members": []any{
+		map[string]any{"handle": "Head of Fun"}}}); !errors.Is(err, catalog.ErrInvalidArguments) {
+		t.Errorf("a member named by a name no seat has answered %v", err)
+	}
+}
+
+// EVERY FAULT OF A CALL THAT NAMES RECORDS IS ONE REFUSAL (ADR-0059): every
+// name the turn cannot place, each by its path, beside every fault the tool's
+// schema finds, with each directory's choices listed once after them. A direct
+// message to two people no seat is and an argument the tool does not take, a
+// membership naming a member by a name nobody has beside a removal named the
+// same way, and a list of tasks for a project and an assignee neither of which
+// is there each come back in one answer. Resolving stopped at the first name it
+// could not place, and ran before the schema's check, so three misnamed
+// people, or a misnamed seat and a misspelt argument, cost an attempt each.
+// Mutation: return at the first fault of a list or of a call, resolve before
+// the schema's check, resolve a value the schema refused, or list a
+// directory's choices per fault, and a case here fails.
+func TestEveryFaultOfACallNamingRecordsIsOneRefusal(t *testing.T) {
+	t.Parallel()
+	r := catalog.NewResolver(reader(namedWorld()))
+	for name, tc := range map[string]struct {
+		tool  string
+		args  map[string]any
+		want  []string
+		lists map[string]int
+	}{
+		"two people and an argument": {"send_direct_message", map[string]any{
+			"to": []any{"Head of Fun", "pm", "Chief of Vibes"}, "body": "Hi.", "cc": "ada"},
+			[]string{`send_direct_message.to[0]: "Head of Fun" is not one of the seats you can see`,
+				`send_direct_message.to[2]: "Chief of Vibes" is not one of the seats you can see`,
+				`send_direct_message takes no "cc"`},
+			map[string]int{"The seats are:": 1}},
+		"a member and a removal": {"set_chat_room_members", map[string]any{
+			"channel": assistanttest.RecordID,
+			"members": []any{map[string]any{"handle": "Head of Fun"}, map[string]any{"handle": "pm"}},
+			"removes": []any{"Chief of Vibes", "ada"}},
+			[]string{`set_chat_room_members.members[0].handle: "Head of Fun" is not one of the seats`,
+				`set_chat_room_members.removes[0]: "Chief of Vibes" is not one of the seats`},
+			map[string]int{"The seats are:": 1}},
+		"a project and an assignee": {"list_tasks", map[string]any{
+			"project": "Head office", "assignee": "Head of Fun"},
+			[]string{`list_tasks.project: "Head office" is not one of the projects you can see`,
+				`list_tasks.assignee: "Head of Fun" is not one of the seats you can see`},
+			map[string]int{"The seats are:": 1, "The projects are:": 1}},
+	} {
+		tool := mustTool(t, tc.tool)
+		_, err := r.Prepare(t.Context(), tool, tc.args)
+		if !errors.Is(err, catalog.ErrInvalidArguments) {
+			t.Errorf("%s: answered %v, want one refusal", name, err)
+			continue
+		}
+		for _, want := range tc.want {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: the refusal does not say %q: %v", name, want, err)
+			}
+		}
+		for list, n := range tc.lists {
+			if got := strings.Count(err.Error(), list); got != n {
+				t.Errorf("%s: the refusal says %q %d times, want %d: %v", name, list, got, n, err)
+			}
+		}
+	}
+
+	// A VALUE THE SCHEMA REFUSES IS NOT ALSO RESOLVED: a recipient given as a
+	// number is the schema's fault alone, and the name beside it is still
+	// placed.
+	direct := mustTool(t, "send_direct_message")
+	_, err := r.Prepare(t.Context(), direct, map[string]any{"to": []any{7.0, "Head of Fun"},
+		"body": "Hi."})
+	if err == nil || !strings.Contains(err.Error(), "send_direct_message.to[0] is a string") ||
+		!strings.Contains(err.Error(), `to[1]: "Head of Fun" is not one of the seats`) ||
+		strings.Contains(err.Error(), "to[0]:") {
+		t.Errorf("a recipient of the wrong type beside a misnamed one answered %v", err)
+	}
+	// Nor is a name past the bound every name is held to: it is named once, by
+	// its size, rather than echoed back whole as a seat nobody holds.
+	_, err = r.Prepare(t.Context(), direct, map[string]any{
+		"to": []any{strings.Repeat("Head of Fun ", 40)}, "body": "Hi."})
+	if err == nil || !strings.Contains(err.Error(), "send_direct_message.to[0] is 480 bytes") ||
+		strings.Contains(err.Error(), "to[0]:") {
+		t.Errorf("a recipient past the bound answered %v", err)
+	}
+	got, err := r.Prepare(t.Context(), direct, map[string]any{"to": []any{"Product Manager"},
+		"body": "Hi."})
+	if err != nil || !reflect.DeepEqual(got["to"], []any{"pm"}) {
+		t.Errorf("a call with nothing at fault prepared %v (%v), want pm", got["to"], err)
 	}
 }
 

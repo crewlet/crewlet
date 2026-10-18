@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -52,7 +53,7 @@ type chatDesk struct {
 
 	// readable is the rooms each viewer may read; searched is every room
 	// set the index was handed.
-	readable map[string][]string
+	readable map[string][]chatlet.ReadableRoom
 	searched [][]string
 
 	// building is an index whose walk has not caught up; flips turns it
@@ -124,7 +125,8 @@ func (d *chatDesk) Mentions(_ context.Context, viewer string, q chatlet.MentionQ
 	return chatlet.MentionFeed{Served: served, Handle: viewer, NextCursor: q.Cursor}, nil
 }
 
-func (d *chatDesk) Readable(_ context.Context, viewer string, fresh statelog.Freshness) ([]string, error) {
+func (d *chatDesk) Readable(_ context.Context, viewer string,
+	fresh statelog.Freshness) ([]chatlet.ReadableRoom, error) {
 	d.read("readable", viewer, fresh)
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -264,7 +266,7 @@ func (d *chatDesk) Prune(_ context.Context, actor chatlet.Actor, opID, _ string,
 func withRooms(f *fleet) map[string]*chatDesk {
 	desks := map[string]*chatDesk{}
 	for name, node := range f.nodes {
-		desk := &chatDesk{readable: map[string][]string{}}
+		desk := &chatDesk{readable: map[string][]chatlet.ReadableRoom{}}
 		desks[name] = desk
 		node.set(func(n *fakeNode) { n.rooms = desk })
 	}
@@ -695,15 +697,17 @@ func TestAChatReadCarriesTheChatLogsFloorAndNoOther(t *testing.T) {
 // index is handed that set and nothing a caller supplied: a named room is
 // intersected with it, a room the viewer may not read answers nothing — exactly
 // as a room nobody holds would — and a viewer who may read nothing is answered
-// with no hits rather than handed to an index that refuses an empty set. And an
-// index still catching up says so on the answer it gave, rather than leaving its
+// with no hits rather than handed to an index that refuses an empty set. Each
+// hit is shown under its room's name and kind from that same set. And an index
+// still catching up says so on the answer it gave, rather than leaving its
 // short list to be read as everything anybody said.
 func TestAChatSearchReadsTheViewersRoomsBesideTheIndex(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
 	desk := withRooms(f)["data-a"]
 	desk.at = chatSeen
-	desk.readable["jane"] = []string{"room-1", "room-2"}
+	desk.readable["jane"] = []chatlet.ReadableRoom{{ID: "room-1", Kind: chatlet.KindPublic,
+		Name: "launch"}, {ID: "room-2", Kind: chatlet.KindDM}}
 	s := f.client.ChatSearch()
 
 	all, err := s.Search(t.Context(), ChatQuery{Viewer: "jane", Text: "deploy", Fresh: linear})
@@ -713,6 +717,15 @@ func TestAChatSearchReadsTheViewersRoomsBesideTheIndex(t *testing.T) {
 	if all.Searched != 2 || len(all.Hits) != 2 || all.Position != chatSeen || all.Building {
 		t.Errorf("jane's search answered %+v, want both her rooms searched at the copy's "+
 			"position, over a caught-up index", all)
+	}
+	// EACH HIT IS SHOWN UNDER ITS ROOM as the visible set read it: a named
+	// room by its name, a direct conversation, which has none, by its kind.
+	shown := map[string]chatlet.ReadableRoom{
+		"room-1": {ID: "room-1", Kind: chatlet.KindPublic, Name: "launch"},
+		"room-2": {ID: "room-2", Kind: chatlet.KindDM},
+	}
+	if !maps.Equal(all.Rooms, shown) {
+		t.Errorf("the hits are shown under the rooms %+v, want %+v", all.Rooms, shown)
 	}
 
 	one, err := s.Search(t.Context(), ChatQuery{Viewer: "jane", Text: "deploy", Channel: "room-2"})
@@ -774,7 +787,7 @@ func TestAChatSearchIsBuildingUnlessItsIndexWasReadyThroughout(t *testing.T) {
 			f := newFleet(t, "data-a")
 			desk := withRooms(f)["data-a"]
 			desk.mu.Lock()
-			desk.readable["jane"] = []string{"room-1"}
+			desk.readable["jane"] = []chatlet.ReadableRoom{{ID: "room-1", Kind: chatlet.KindPublic}}
 			desk.building, desk.flips = before, true
 			desk.mu.Unlock()
 			got, err := f.client.ChatSearch().Search(t.Context(),

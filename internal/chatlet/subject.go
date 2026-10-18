@@ -286,6 +286,27 @@ func ChannelToken(name string) string {
 	return hex.EncodeToString(sum[:16])
 }
 
+// RoomRef reads a room as somebody names it: by its id, or by its name, with
+// or without the '#' people write before one ("#launch"). It answers the id
+// when ref is one and otherwise the name, normalised ([NormalizeName]) for
+// [Reader.ChannelNamed]; both are empty for a reference that names nothing.
+//
+// ONE RULE for every surface that takes a room as typed, a seat's tools and
+// the API's questions alike, because a name that resolved on one and not the
+// other would be one room with two addresses. A LEADING '#' is never part of
+// a name ([ValidName] admits neither it nor any capital), so stripping it
+// cannot collide with a room somebody really called that.
+func RoomRef(ref string) (id, name string) {
+	want := NormalizeName(strings.TrimPrefix(strings.TrimSpace(ref), "#"))
+	if want == "" {
+		return "", ""
+	}
+	if _, err := uuid.Parse(want); err == nil {
+		return want, ""
+	}
+	return "", want
+}
+
 // directChannelNamespace is a fixed UUIDv4, chosen once and FROZEN.
 //
 // Changing it re-derives every direct conversation's id and orphans every row
