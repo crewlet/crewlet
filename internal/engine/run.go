@@ -21,6 +21,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/artifactdata"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
@@ -218,7 +220,17 @@ type Engine struct {
 
 	// artifactsListeners is told what each committed artifacts batch moved
 	// on this node; see [Engine.OnArtifactsMoved].
-	artifactsListeners artifactsFanout
+	artifactsListeners moveFanout[artifactsdomain.Moved]
+
+	// artifactDataListeners is told what each committed datastore batch
+	// moved on this node; see [Engine.OnArtifactDataMoved].
+	artifactDataListeners moveFanout[artifactdata.Moved]
+
+	// dataFootprint signals the datastore footprint sampler that a batch
+	// committed ([Engine.runDataFootprint]). Made by [Engine.startCore]
+	// before any applier runs; nil on a node without the estate, where
+	// nothing sends.
+	dataFootprint chan struct{}
 
 	// ownsBackends says whether Stop closes them. Ownership is a separate
 	// fact from use: a borrowed Backends is still the one this engine

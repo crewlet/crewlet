@@ -186,7 +186,7 @@ nothing to commit against.
 
 ## Which logs can be read at `linearizable`
 
-Four of the six state logs grant it; the vectors and the usage log do not.
+Five of the seven state logs grant it; the vectors and the usage log do not.
 
 | Log | `linearizable` | Why |
 |---|---|---|
@@ -194,6 +194,7 @@ Four of the six state logs grant it; the vectors and the usage log do not.
 | The knowledge base (`CREWLET_PAGES_LOG`) | Yes | Likewise. |
 | The identity estate (`CREWLET_IAM_LOG`) | Yes | Likewise. |
 | The artifacts log (`CREWLET_ARTIFACTS_LOG`) | Yes | Likewise: an artifact's head, versions, shares and history are read at a position, and a seat tool reads them at `linearizable`. |
+| The artifact datastore (`CREWLET_ARTIFACT_DATA_LOG`) | Yes | Likewise: a store's rows, history and state digest are read at a position, and every datastore read question takes the same freshness parameters as the other estate reads, so a caller that must see every write acknowledged before it asks at `linearizable`. |
 | The vectors (`CREWLET_TRACKER_VECTORS`) | **No** — declared, not omitted | A compacted changelog keeping one message per source, and every value in it is derived from a source another log owns, so a read of the vectors claims no position a barrier could prove anything about. No surface reads them at a level: a search ranks with them, and what it answers for is the pages and tasks those sources came from. |
 | The usage log (`CREWLET_USAGE_LOG`) | **No** — declared, not omitted | A compacted changelog keeping one message per (node, company day, seat, schedule or person), each written by the one node whose own event log it was derived from — nothing is arbitrated, and no node can vouch for another node's day being whole until that node publishes it. A barrier would prove only that this node holds every record published before it, which a day still being written by its node never makes complete. A spend window reports the days and the `horizon` it answered from instead. |
 

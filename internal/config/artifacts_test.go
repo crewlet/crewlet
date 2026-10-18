@@ -217,8 +217,8 @@ func TestTheArtifactLogCeilingsDeriveFromTheMutationLog(t *testing.T) {
 	if got, derived := s.ArtifactsMaxBytes(0); got != 16<<30 || !derived {
 		t.Fatalf("artifacts log %d (derived %v), want a quarter of 64 GiB", got, derived)
 	}
-	if got, derived := s.ArtifactDataMaxBytes(0); got != 32<<30 || !derived {
-		t.Fatalf("datastore log %d (derived %v), want half of 64 GiB", got, derived)
+	if got, derived := s.ArtifactDataMaxBytes(0); got != 16<<30 || !derived {
+		t.Fatalf("datastore log %d (derived %v), want a quarter of 64 GiB", got, derived)
 	}
 	small := Stream{TrackerLogMaxBytes: 1 << 30}
 	if got, _ := small.ArtifactsMaxBytes(0); got != ArtifactsLogMaxBytesFloor {

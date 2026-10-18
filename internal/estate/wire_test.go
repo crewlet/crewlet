@@ -200,10 +200,11 @@ var floorless = map[string]string{
 func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
 	t.Parallel()
 	logs := map[string]string{
-		trackerDomain:   "CREWLET_TRACKER_LOG",
-		pagesDomain:     "CREWLET_PAGES_LOG",
-		identityDomain:  "CREWLET_IAM_LOG",
-		artifactsDomain: "CREWLET_ARTIFACTS_LOG",
+		trackerDomain:      "CREWLET_TRACKER_LOG",
+		pagesDomain:        "CREWLET_PAGES_LOG",
+		identityDomain:     "CREWLET_IAM_LOG",
+		artifactsDomain:    "CREWLET_ARTIFACTS_LOG",
+		artifactDataDomain: "CREWLET_ARTIFACT_DATA_LOG",
 	}
 	for _, name := range slices.Sorted(maps.Keys(registry)) {
 		spec := registry[name]

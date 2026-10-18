@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -221,6 +222,10 @@ type Backend struct {
 	// only where the node's core runtime is not up yet ([ArtifactsHalf]).
 	Artifacts ArtifactsHalf
 
+	// ArtifactData is the artifact datastore, which every data node runs
+	// from boot beside the artifacts estate ([ArtifactDataHalf]).
+	ArtifactData ArtifactDataHalf
+
 	// Committed waits until this node's applier of the floor's log holds a
 	// position — the floor every request carries, the node's own included.
 	Committed func(ctx context.Context, at statelog.Position) error
@@ -276,16 +281,18 @@ var errNotAdmitting = errors.New("estate: this copy admits no seat yet")
 // domain's own declaration. An operation's floor is on its OWN domain's log and
 // no other: see [ready].
 var (
-	trackerDomain   = tracker.Domain{}.Name()
-	pagesDomain     = pages.Domain{}.Name()
-	identityDomain  = iamdomain.Domain{}.Name()
-	artifactsDomain = artifactsdomain.Domain{}.Name()
+	trackerDomain      = tracker.Domain{}.Name()
+	pagesDomain        = pages.Domain{}.Name()
+	identityDomain     = iamdomain.Domain{}.Name()
+	artifactsDomain    = artifactsdomain.Domain{}.Name()
+	artifactDataDomain = artifactdata.Domain{}.Name()
 
 	floorStreams = map[string]string{
-		trackerDomain:   tracker.Domain{}.Stream().Name,
-		pagesDomain:     pages.Domain{}.Stream().Name,
-		identityDomain:  iamdomain.Domain{}.Stream().Name,
-		artifactsDomain: artifactsdomain.Domain{}.Stream().Name,
+		trackerDomain:      tracker.Domain{}.Stream().Name,
+		pagesDomain:        pages.Domain{}.Stream().Name,
+		identityDomain:     iamdomain.Domain{}.Stream().Name,
+		artifactsDomain:    artifactsdomain.Domain{}.Stream().Name,
+		artifactDataDomain: artifactdata.Domain{}.Stream().Name,
 	}
 )
 

@@ -1683,11 +1683,14 @@ type Stream struct {
 	// ArtifactDataLogMaxBytes is the byte ceiling on the datastore's log,
 	// where every sheet edit is one record.
 	//
-	// UNSET DERIVES HALF the mutation log's ceiling: a datastore write is a
-	// click, and thirty people on one review sheet write five to twenty
-	// records a second for the length of a meeting, so this log outgrows
-	// the knowledge base's by far and the tracker's in a busy week.
-	ArtifactDataLogMaxBytes int64 `yaml:"artifact_data_log_max_bytes,omitempty" json:"artifact_data_log_max_bytes,omitempty" js:"min=1073741824;max=549755813888" desc:"Byte ceiling on the artifact datastore's log; unset derives half of the mutation log's ceiling, set or derived, 1 GiB..32 GiB from a volume alone."`
+	// UNSET DERIVES A QUARTER of the mutation log's ceiling, the largest
+	// share the state logs' one pool can give it beside a vector changelog
+	// that holds a model change ([DerivedArtifactDataLogDivisor]). A
+	// datastore write is a click, and thirty people on one review sheet
+	// write five to twenty records a second for the length of a meeting, so
+	// a company whose pages write heavily sets it, up to twice the
+	// artifacts log's bound.
+	ArtifactDataLogMaxBytes int64 `yaml:"artifact_data_log_max_bytes,omitempty" json:"artifact_data_log_max_bytes,omitempty" js:"min=1073741824;max=549755813888" desc:"Byte ceiling on the artifact datastore's log; unset derives a quarter of the mutation log's ceiling, set or derived, 1 GiB..16 GiB from a volume alone."`
 
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it

@@ -1,7 +1,8 @@
 # Replication
 
-Crewlet's own tracker, knowledge base, identity directory and artifacts are
-**replicated state machines**: six domains on one framework, the embeddings
+Crewlet's own tracker, knowledge base, identity directory, artifacts and
+artifact datastores are **replicated state machines**: seven domains on one
+framework, the embeddings
 and each node's usage history riding it as
 [compacted domains](#two-compacted-domains-the-embeddings-and-each-nodes-day).
 One ordered stream per domain is the write-ahead log; every data node applies it
@@ -814,13 +815,15 @@ The decision is [ADR-0020](https://github.com/crewlet/crewlet/blob/main/adr/0020
    free space bounds their sum, not each of them.
 2. **Each log's byte ceiling**: `stream.tracker_log_max_bytes`,
    `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
+   `stream.artifacts_log_max_bytes`, `stream.artifact_data_log_max_bytes`,
    `stream.iam_log_max_bytes` and `stream.usage_log_max_bytes`, sized together
    as [below](#how-the-byte-ceilings-are-sized). The last two are **not
    derived from the disk** — the identity estate grows with sign-ins and the
    usage log with the node-days it holds, and a volume has an opinion about
    neither — so each takes a flat default and its own floor. A full log **refuses** appends rather than shedding old records; see
    [Retention](retention.md). On every log that claims identity — the
-   tracker's, the knowledge base's and the identity estate's — ordinary writes are refused short of it, the top being
+   tracker's, the knowledge base's, the identity estate's, the artifacts log's
+   and the artifact datastore's, ordinary writes are refused short of it, the top being
    [kept for gate records](retention.md#the-gate-reserve) so that an eviction
    can still unpin a full log.
 3. **The trim floor** — how far back the log can be replayed from, which is
@@ -843,8 +846,9 @@ A byte ceiling is a **reservation**. The broker grants it in full when it
 creates the stream, before a single record is written, and refuses to create a
 stream whose ceiling it could not honour. So the state logs compete for one
 number, and a node sizes them together, once, when it creates their streams —
-**all six** this build registers (the tracker's, the vectors', the knowledge
-base's, the identity estate's, the usage log and the artifacts log). Every data node
+**all seven** this build registers (the tracker's, the vectors', the knowledge
+base's, the identity estate's, the usage log, the artifacts log and the
+artifact datastore's log). Every data node
 runs every one whatever its other roles, and a stream keeps whatever ceiling the
 node that created it gave it, so whichever node creates them first sets the
 ceilings the fleet keeps:
@@ -853,7 +857,7 @@ ceilings the fleet keeps:
 |---|---|
 | **What the broker can grant** | Read from the broker itself. An embedded broker's limit is `stream.store_max_bytes` where you set one, and otherwise three quarters of the free space on the volume holding `stream.store_dir`, counting what its own streams already hold there; an external one's is the NATS account's JetStream limit. What counts against it is the ceilings already granted, not the bytes stored. |
 | **The logs' share** | Half of that, with the ceilings the logs' own streams already hold counted as theirs, so a restart divides the same half the first boot did. Where the broker states no limit, or it cannot be read, the share is half of the stream volume's free space instead, and nothing is added to it: a reservation never spends free space, so that figure already contains what the logs hold. The other half is for everything that reserves nothing: every mailbox, every coordination bucket and the snapshot a joining node reads. |
-| **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB); the knowledge base's log for a quarter of the mutation log's ceiling (the one you set, or the one it derived) because both hold a trailing window of records and the knowledge base's grows at about a quarter of the rate (1..16 GiB from a volume alone); the artifacts log (`stream.artifacts_log_max_bytes`, 1..256 GiB) for the same quarter of the mutation log's ceiling, for the same reason: a publish is a human-scale event whose records are a version's manifest, not its bytes, which the object store keeps; the vector changelog for the same quarter of the volume the mutation log derives, whatever the mutation log is set to, because its peak is the whole corpus rather than a window of it; the identity estate's log a flat 512 MiB (`stream.iam_log_max_bytes`, 64 MiB..16 GiB) and the usage log a flat 1 GiB (`stream.usage_log_max_bytes`, 64 MiB..64 GiB): neither of those two grows with anything the volume has a say in: the identity log grows with headcount and sign-ins, and the usage log is a count of node-days, which more disk does not grow. |
+| **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB); the knowledge base's log for a quarter of the mutation log's ceiling (the one you set, or the one it derived) because both hold a trailing window of records and the knowledge base's grows at about a quarter of the rate (1..16 GiB from a volume alone); the artifacts log (`stream.artifacts_log_max_bytes`, 1..256 GiB) for the same quarter of the mutation log's ceiling, for the same reason: a publish is a human-scale event whose records are a version's manifest, not its bytes, which the object store keeps; the artifact datastore's log (`stream.artifact_data_log_max_bytes`, 1..512 GiB) for the same quarter (1..16 GiB from a volume alone), the largest share the pool can give it beside a vector changelog that holds a model change, although its records carry the rows themselves, every cell an artifact page or a seat writes, and a busy sheet writes at the tracker's rate or above it: a company whose pages write heavily sets the field, which accepts twice the artifacts log's bound for that reason; the vector changelog for the same quarter of the volume the mutation log derives, whatever the mutation log is set to, because its peak is the whole corpus rather than a window of it; the identity estate's log a flat 512 MiB (`stream.iam_log_max_bytes`, 64 MiB..16 GiB) and the usage log a flat 1 GiB (`stream.usage_log_max_bytes`, 64 MiB..64 GiB): neither of those two grows with anything the volume has a say in: the identity log grows with headcount and sign-ins, and the usage log is a count of node-days, which more disk does not grow. |
 | **The fit** | A log whose stream already exists takes the ceiling it **holds** off the logs' half first, whatever its field says now. A ceiling you set for a log being created comes off next, and is never scaled. The unset ones being created share what is left in proportion to what each asked for, none goes below 1 GiB, and none is created above what it would get if no log existed yet — the figure every later boot reports its stream against. The 1 GiB is a floor on scaling DOWN, never a raise: an unset ask already below it, the identity log's, is held at exactly what it asked for, whatever the pool. |
 
 **A stream that already exists keeps its ceiling.** Sizing decides what a
@@ -921,14 +925,17 @@ the identity log's and the usage log's, which do not follow the volume at all.
 
 The remedies are the ones it lists. Give the broker more room: raise
 `stream.store_max_bytes` where you set one, or, where you did not, free space
-on that volume (a first boot needs at least 7.5 GiB free there, three
-quarters of which, 5.6 GiB, holds the 5.5 GiB the six logs reserve at their
-smallest: the four 1 GiB scaling floors, the usage log's 1 GiB default and the
-identity log's 512 MiB), which the broker measures again when
+on that volume (a first boot needs at least 8.7 GiB free there, three
+quarters of which, 6.5 GiB, holds the 6.5 GiB the seven logs reserve at their
+smallest: the five 1 GiB scaling floors, the usage log's 1 GiB default and the
+identity log's 512 MiB; and 11.6 GiB with the object store's bucket on the
+broker, which is reserved first, at a quarter of the broker's limit), which
+the broker measures again when
 the node next starts. Or, when the refused log's ceiling is above the smallest
 value its own field accepts, set that field to a smaller ceiling — the refusal
 offers it only then, and names that floor: 1 GiB for the tracker's, the
-vectors', the knowledge base's and the artifacts log's fields, 64 MiB for
+vectors', the knowledge base's, the artifacts log's and the artifact
+datastore's fields, 64 MiB for
 `stream.iam_log_max_bytes` and `stream.usage_log_max_bytes`. So a refused
 identity log at its 512 MiB default, or a refused usage log at its 1 GiB, is
 offered a smaller one.

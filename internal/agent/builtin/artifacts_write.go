@@ -1,0 +1,933 @@
+package builtin
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/manifest"
+	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/artifactupload"
+	"github.com/crewlet/crewlet/internal/artifactupload/edits"
+	"github.com/crewlet/crewlet/internal/artifactupload/lint"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tools"
+)
+
+// The stale answer's budget for the live version's text: the first
+// [artifacts.ToolReadPageBytes] of each changed text file, until this much
+// text is inlined across them, so the answer stays inside one tool answer
+// ([ToolAnswerBytes]) beside the changed paths and the retry sentence. A
+// changed file past it is named, and read with get_artifact.
+const staleTextBudget = 40 << 10
+
+// ---- the shared parameters ---------------------------------------------- //
+
+func filesParam(patch bool) map[string]any {
+	desc := "Files by published path, each `{content}` (with `encoding`: `text`, the " +
+		"default, or `base64`), `{from_sandbox: \"dist/app.js\"}` (a file your coding run " +
+		"wrote in this turn, relative to its workspace) or `{from_project_file: {project, " +
+		"path}}`. Inline content is at most 1 MiB in all."
+	if patch {
+		desc += " Null removes a file; files you leave out are kept."
+	}
+	return map[string]any{"type": "object", "description": desc}
+}
+
+func sourceParam() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"sandbox": map[string]any{
+				"type": "string",
+				"description": "A directory your coding run built into in this turn, " +
+					"relative to its workspace (e.g. `dist`): its files become the whole " +
+					"file set, each at its path below the directory.",
+			},
+		},
+		"description": "Publish a build's whole output. Not combined with `content`, " +
+			"`edits` or `files`.",
+	}
+}
+
+func capabilitiesParam() map[string]any {
+	caps := make([]any, 0, len(artifacts.Capabilities))
+	for _, c := range artifacts.Capabilities {
+		caps = append(caps, string(c))
+	}
+	return map[string]any{
+		"type": "array", "items": map[string]any{"type": "string", "enum": caps},
+		"description": "The runtime capabilities the page uses: `db` (the shared " +
+			"datastore), `state` (per-viewer state), `assets`, `identity`, `presence`. On " +
+			"a publish, omit to keep the current set; an empty list declares none.",
+	}
+}
+
+// capabilitiesArg reads `capabilities`: nil when absent (keep the head's), an
+// empty set when the caller sent an empty list.
+func capabilitiesArg(tool string, args map[string]any) ([]artifacts.Capability, string) {
+	raw, present := args["capabilities"]
+	if !present || raw == nil {
+		return nil, ""
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return nil, tool + " takes `capabilities` as a list of names."
+	}
+	out := make([]artifacts.Capability, 0, len(list))
+	for _, v := range list {
+		name, _ := v.(string)
+		c := artifacts.Capability(strings.TrimSpace(name))
+		if !c.Valid() {
+			return nil, fmt.Sprintf("%s: %q is not a capability; the page may use %v.",
+				tool, clip(fmt.Sprint(v)), artifacts.Capabilities)
+		}
+		if !slices.Contains(out, c) {
+			out = append(out, c)
+		}
+	}
+	return out, ""
+}
+
+// sourceArg reads `source`: absent, or an object naming the sandbox directory
+// and nothing else.
+func sourceArg(tool string, args map[string]any) (map[string]any, bool, string) {
+	raw, present := args["source"]
+	if !present || raw == nil {
+		return nil, false, ""
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil, false, tool + " takes `source` as `{sandbox: \"<directory>\"}`."
+	}
+	for field := range m {
+		if field != "sandbox" {
+			return nil, false, fmt.Sprintf("%s: `source` takes `sandbox` alone, and "+
+				"carries %q.", tool, field)
+		}
+	}
+	return m, true, ""
+}
+
+// defaultEntry is the entry page a new artifact's `content` lands at.
+func defaultEntry(kind artifacts.Kind) string {
+	if kind == artifacts.KindMarkdown {
+		return "index.md"
+	}
+	return "index.html"
+}
+
+// ---- create_artifact ---------------------------------------------------- //
+
+type createArtifact struct{ deps ArtifactDeps }
+
+var _ tools.SeatCallable = (*createArtifact)(nil)
+
+func (t *createArtifact) Name() string { return CreateArtifactTool }
+
+func (t *createArtifact) Description() string {
+	return "Create a NEW artifact in this Crewlet company (not claude.ai): an " +
+		"interactive HTML page, a Markdown document, or a sheet, shared with the " +
+		"colleagues who must use it. Load the artifacts tool skill first: it is the " +
+		"design contract every page is held to. When a person asked for it, they are " +
+		"made an editor. To change an existing artifact use publish_artifact; the answer " +
+		"carries the `url` to send people."
+}
+
+func (t *createArtifact) Parameters() map[string]any {
+	return t.deps.writeParams(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"kind": map[string]any{
+				"type": "string", "enum": kindEnum(),
+				"description": "`html` runs the page's own code in a sandbox, `markdown` " +
+					"is a document, `sheet` is a table drawn from its datastore.",
+			},
+			"title": map[string]any{
+				"type": "string",
+				"description": fmt.Sprintf("Two to four words, at most %d bytes.",
+					artifacts.MaxTitleBytes),
+			},
+			"description": map[string]any{
+				"type":        "string",
+				"description": "One sentence for the gallery card.",
+			},
+			"icon": map[string]any{
+				"type":        "string",
+				"description": "One generic word, e.g. chart, table, calendar.",
+			},
+			"entry": map[string]any{
+				"type": "string",
+				"description": "The page served at the artifact's root. Default " +
+					"`index.html` (`index.md` for markdown).",
+			},
+			"content": map[string]any{
+				"type":        "string",
+				"description": "The entry page's whole content.",
+			},
+			"files":  filesParam(false),
+			"source": sourceParam(),
+			"label": map[string]any{
+				"type": "string",
+				"description": fmt.Sprintf("Names this first version, at most %d bytes. "+
+					"Labelled versions are kept.", artifacts.MaxLabelBytes),
+			},
+			"contract": map[string]any{
+				"type": "string",
+				"description": "The page runtime contract, an exact version or `latest` " +
+					"(the default).",
+			},
+			"capabilities": capabilitiesParam(),
+			"source_key": map[string]any{
+				"type": "string",
+				"description": "A stable name for what this artifact publishes, e.g. " +
+					"`weekly-review`. Creating again with the same key answers the " +
+					"artifact you already made rather than a second one.",
+			},
+		},
+		"required": []any{"kind", "title"},
+	})
+}
+
+func (t *createArtifact) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	return t.CallForTurn(ctx, nil, args)
+}
+
+func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
+	args map[string]any) (tools.Result, error) {
+
+	c, refusal := t.deps.caller(ctx, turn, t.Name(), args, true)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	kind := artifacts.Kind(strings.TrimSpace(argString(args, "kind")))
+	if !kind.Valid() {
+		return failed(fmt.Sprintf("create_artifact takes `kind` as one of %v.", artifacts.Kinds)), nil
+	}
+	title := strings.TrimSpace(argString(args, "title"))
+	if title == "" {
+		return failed("create_artifact needs a `title`: two to four words."), nil
+	}
+	caps, why := capabilitiesArg(t.Name(), args)
+	if why != "" {
+		return failed(why), nil
+	}
+	owner := iam.RecordOwner(c.principal)
+	// THE CREATOR OWNS IT, so the table asks the app and the ceiling spares
+	// the agent's own new work ([authz.DecideWithin]).
+	dec := authz.DecideWithin(ctx, c.principal, c.ceiling, authz.ActionArtifactCreate,
+		authz.Object{Kind: authz.KindArtifact, Owner: owner}, t.deps.Chart, t.deps.now())
+	if dec.Unknown() || !dec.Allowed {
+		return authorityRefusal(t.Name(), DecisionError(authz.ActionArtifactCreate, dec)), nil
+	}
+
+	files := newFileSources(t.deps, c, t.Name())
+	_, hasContent := args["content"]
+	source, hasSource, why := sourceArg(t.Name(), args)
+	if why != "" {
+		return failed(why), nil
+	}
+	_, hasFiles := args["files"]
+	entry := strings.TrimSpace(argString(args, "entry"))
+	switch {
+	case hasSource && (hasContent || hasFiles):
+		return failed("create_artifact takes `source` alone: a build's output is the " +
+			"whole file set, so `content` and `files` are not combined with it."), nil
+	case kind == artifacts.KindSheet && (hasContent || hasFiles || hasSource):
+		return failed("create_artifact: a sheet's content is its datastore, so it " +
+			"publishes no files. Create it with a title and declare its collections " +
+			"with set_artifact_schema."), nil
+	}
+	if hasContent {
+		p := entry
+		if p == "" {
+			p = defaultEntry(kind)
+		}
+		clean, refusal := files.cleanPath(p)
+		if refusal != nil {
+			return *refusal, nil
+		}
+		entry = clean
+		if refusal := files.addInline(clean, argString(args, "content"), ""); refusal != nil {
+			return *refusal, nil
+		}
+	}
+	if refusal := files.parseFiles(ctx, args, false); refusal != nil {
+		return *refusal, nil
+	}
+	if hasSource {
+		if refusal := files.addBoxDir(ctx, argString(source, "sandbox")); refusal != nil {
+			return *refusal, nil
+		}
+	}
+	if kind != artifacts.KindSheet && len(files.files) == 0 {
+		return failed("create_artifact needs the page: `content` for the entry page, " +
+			"`files`, or a build's `source`."), nil
+	}
+
+	call := t.deps.call(c, artifacts.RoleOwner, false)
+	upload, specs, refusal := files.stage(ctx, call, artifacts.ID{}, false)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	shares := t.requesterShare(c)
+	published, report, err := t.deps.Publisher.Create(ctx, call, artifactupload.CreateRequest{
+		Kind: kind, Title: title, Description: strings.TrimSpace(argString(args, "description")),
+		Icon: strings.TrimSpace(argString(args, "icon")), Owner: owner, OwnerKind: c.actor.Kind,
+		SourceKey: strings.TrimSpace(argString(args, "source_key")), Shares: shares,
+		Upload: upload, Files: specs, Entry: entry,
+		Label:    strings.TrimSpace(argString(args, "label")),
+		Contract: strings.TrimSpace(argString(args, "contract")), Capabilities: caps,
+	})
+	if err != nil {
+		return publishFailure(ctx, t.Name(), c, err), nil
+	}
+	if published.Result.Outcome == statelog.OutcomeUnknown {
+		return artifactUnknown(t.Name(), c, published.Result, "Read your artifacts with "+
+			"list_artifacts before creating it a different way: if it landed, it is there."), nil
+	}
+	t.deps.settle(ctx, published.Result.Position)
+	out := t.deps.publishedAnswer(c, published, report, "created")
+	if len(shares) > 0 {
+		out["shared_with"] = []map[string]any{{"to": shareTarget(shares[0].Audience),
+			"role": string(shares[0].Role)}}
+	}
+	return jsonResult(out)
+}
+
+// requesterShare is the share an agent's new artifact is created with: the
+// person whose request the turn is serving, as an editor, so the story "an
+// agent hands a teammate a review table" needs no second gesture. Only a
+// person, and only on an agent's own create.
+func (t *createArtifact) requesterShare(c artifactCaller) []artifacts.Share {
+	if !c.agent() || c.ceiling.Kind != authz.CeilingRequester || c.turn == nil {
+		return nil
+	}
+	handle := strings.TrimSpace(c.turn.Requester)
+	o := t.deps.orgFor(c.turn)
+	if handle == "" || o == nil {
+		return nil
+	}
+	seat := o.SeatByHandle(handle)
+	if seat == nil || !seat.IsHuman() {
+		return nil
+	}
+	return []artifacts.Share{{
+		Audience: artifacts.Audience{Kind: artifacts.AudienceSeat, ID: handle},
+		Role:     artifacts.RoleEditor,
+	}}
+}
+
+// publishedAnswer is a version that landed, as create and publish answer it.
+func (d ArtifactDeps) publishedAnswer(c artifactCaller, p artifactsdomain.Published,
+	report artifactupload.Report, outcome string) map[string]any {
+
+	out := map[string]any{
+		"outcome": outcome, "artifact": p.Artifact.String(), "version": p.Number,
+		"write": outcomeOf(p.Result), "position": positionOf(p.Result.Position),
+	}
+	if url := d.link(p.Artifact); url != "" {
+		out["url"] = url
+	}
+	if len(report.Warnings) > 0 {
+		out["warnings"] = report.Warnings
+	}
+	return withArtifactOperation(out, c)
+}
+
+// withArtifactOperation puts the call's `op_id` on its answer on the operator
+// surface, where a caller brings it back to repeat the call as the same
+// operation.
+func withArtifactOperation(out map[string]any, c artifactCaller) map[string]any {
+	if c.opID != "" {
+		out[opIDArg] = c.opID
+	}
+	return out
+}
+
+// artifactUnknown explains a write whose outcome is unknown: it may have
+// landed and it may not, so it is reported as neither, with how this caller
+// makes the same write again.
+func artifactUnknown(tool string, c artifactCaller, r statelog.Result, look string) tools.Result {
+	why := "the write's acknowledgement was lost"
+	if r.Unvouched {
+		why = "this node's operation ledger may have lost the record of it, so this " +
+			"node cannot tell"
+	}
+	again := "Make the same call again with exactly the same arguments: it is the same " +
+		"operation and lands once."
+	switch {
+	case c.opID != "":
+		again = fmt.Sprintf("Send the same call again with `op_id` %q and exactly the "+
+			"same arguments: it is the same operation and lands once.", c.opID)
+	case c.turn == nil && c.key != "":
+		again = "Send the same request again, unchanged."
+	case c.key == "":
+		again = look
+	}
+	return failedUnknown(r.OpID, r.Unvouched, fmt.Sprintf("%s: whether this landed is "+
+		"unknown (%s; operation %s). Do not report it as done, and do not report it as "+
+		"failed. %s", tool, why, r.OpID, again))
+}
+
+// publishFailure explains a create, a publish or an asset the pipeline or the
+// domain refused, classed for a reader that is not a model.
+func publishFailure(ctx context.Context, tool string, c artifactCaller, err error) tools.Result {
+	var (
+		turn     *artifactupload.TurnQuota
+		policy   *lint.Refusal
+		edit     *edits.Refused
+		content  *artifactupload.ContentRefused
+		missing  *artifactupload.UploadMissing
+		mismatch *artifactupload.UploadMismatch
+		pending  *artifactupload.UploadsOutstanding
+		quota    *artifactsdomain.QuotaExceeded
+		gone     *artifactsdomain.CarriedObjectGone
+	)
+	said := domainSentence(err)
+	switch {
+	case errors.Is(err, estate.ErrOutcomeUnknown):
+		return tools.Result{Output: fmt.Sprintf("%s: %s. It may have landed and it may "+
+			"not: do not report it as done, and do not report it as failed. Read the "+
+			"artifact with get_artifact before publishing again.", tool, Unanswered),
+			Failed: true, Cause: UnknownCause(c.opID, err)}
+	case errors.As(err, &turn):
+		// THE TURN HAS DONE WHAT IT SHOULD: a thrashing loop of publishes is
+		// what the guardrail is for, and the sentence tells the model to
+		// stop and report rather than look for another way round it.
+		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that "+
+			"(turn_quota): this turn has made %d of its %d %s. Stop publishing, report "+
+			"what was done and what is left, and let the next turn continue.", tool,
+			turn.Used, turn.Limit, strings.ReplaceAll(turn.What, "_", " ")))
+	case errors.As(err, &policy):
+		lines := make([]string, 0, len(policy.Findings))
+		for _, f := range policy.Findings {
+			lines = append(lines, "- "+f.String())
+		}
+		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused the page: "+
+			"it breaks the artifact policy, so nothing was published. Fix every finding "+
+			"and publish again:\n%s", tool, strings.Join(lines, "\n")))
+	case errors.As(err, &edit):
+		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused edit %d on "+
+			"%q (%s), so nothing was published. An `old_str` must be quoted exactly from "+
+			"the version you based on and occur in it exactly once: read the file's "+
+			"source with get_artifact and `offset`, then quote more of it.", tool,
+			edit.Index, edit.Path, edit.Reason))
+	case errors.As(err, &content), errors.As(err, &mismatch),
+		errors.Is(err, artifactupload.ErrMediaType), errors.Is(err, artifactupload.ErrCredential),
+		errors.Is(err, artifactupload.ErrCapabilityUnknown),
+		errors.Is(err, artifactupload.ErrContractUnknown),
+		errors.Is(err, artifactupload.ErrInvalid), errors.Is(err, artifactsdomain.ErrInvalid),
+		errors.Is(err, artifactsdomain.ErrLabelTaken):
+		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused that: %s",
+			tool, said))
+	case errors.As(err, &quota):
+		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that: the "+
+			"company's artifact quota is reached (%d in use of %d, `%s`). Nothing was "+
+			"published. Say so: an operator raises the quota, or somebody removes "+
+			"artifacts the company no longer needs.", tool, quota.Usage, quota.Limit, quota.Key))
+	case errors.As(err, &pending):
+		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s refused that: %s",
+			tool, said))
+	case errors.As(err, &missing), errors.As(err, &gone),
+		errors.Is(err, artifactsdomain.ErrUploadStale),
+		errors.Is(err, artifactupload.ErrUploadExpired),
+		errors.Is(err, artifactupload.ErrUploadConsumed),
+		errors.Is(err, artifactupload.ErrUploadNotFound):
+		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s did not land: %s. "+
+			"Nothing was published; make the call again.", tool, said))
+	case errors.Is(err, artifactsdomain.ErrSourceTaken):
+		return refusedBy(tools.RefusalExists, err, fmt.Sprintf("%s: %s", tool, said))
+	case errors.Is(err, artifactsdomain.ErrAgentCompanyShare),
+		errors.Is(err, artifactsdomain.ErrAboveOwnRole):
+		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that: %s",
+			tool, said))
+	case errors.Is(err, artifactsdomain.ErrTrashed):
+		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s: the artifact is "+
+			"in the trash, and only a person restores it. Nothing was changed.", tool))
+	case errors.Is(err, artifactsdomain.ErrNotFound), errors.Is(err, artifactsdomain.ErrPurged):
+		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: %s", tool, said))
+	case errors.Is(err, artifactsdomain.ErrConflict):
+		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s could not land: "+
+			"somebody else kept changing the artifact. Read it again with get_artifact "+
+			"before retrying.", tool))
+	}
+	if why, ok := Condition(err); ok {
+		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s did not land "+
+			"(%s). Nothing was changed: do not report it as done. Try again shortly.", tool, why))
+	}
+	return faulted(ctx, tool, err, fmt.Sprintf("%s failed: %s. Do not report it as done, "+
+		"and do not make it again by other means: say it could not be made.", tool, faultSaid))
+}
+
+// ---- publish_artifact --------------------------------------------------- //
+
+type publishArtifact struct{ deps ArtifactDeps }
+
+var _ tools.SeatCallable = (*publishArtifact)(nil)
+
+func (t *publishArtifact) Name() string { return PublishArtifactTool }
+
+func (t *publishArtifact) Description() string {
+	return "Publish a new version of an artifact in this Crewlet company. You MUST " +
+		"pass the `base_version` you read with get_artifact: a publish over a version " +
+		"somebody else made since is refused and hands you that version to merge onto. " +
+		"Prefer `edits` (exact old_str and new_str pairs) for a change to an existing " +
+		"page; `content` replaces the entry page whole; `files` adds, replaces or " +
+		"removes files; `source` publishes a build's whole output from your coding run; " +
+		"`restore_version` rolls back. Publishing reaches nobody by itself: send the " +
+		"`url` to whoever is waiting."
+}
+
+func (t *publishArtifact) Parameters() map[string]any {
+	return t.deps.writeParams(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"artifact": artifactParam(),
+			"base_version": map[string]any{
+				"type": "integer",
+				"description": "REQUIRED: the `head_version` you read. A publish over a " +
+					"newer version is refused and hands you that version to merge onto.",
+			},
+			"content": map[string]any{
+				"type":        "string",
+				"description": "Replaces the entry page whole. Prefer `edits`.",
+			},
+			"edits": map[string]any{
+				"type": "array", "maxItems": artifacts.MaxEditsPerPublish,
+				"items": map[string]any{
+					"type":     "object",
+					"required": []any{"old_str", "new_str"},
+					"properties": map[string]any{
+						"path": map[string]any{"type": "string",
+							"description": "The file; default the entry page."},
+						"old_str": map[string]any{"type": "string",
+							"description": "Copied exactly from the file's source at " +
+								"base_version; must occur in it exactly once."},
+						"new_str": map[string]any{"type": "string"},
+					},
+				},
+				"description": "Applied in order, all or none, to the files at base_version.",
+			},
+			"files":  filesParam(true),
+			"source": sourceParam(),
+			"entry": map[string]any{
+				"type":        "string",
+				"description": "Moves the page served at the artifact's root.",
+			},
+			"label": map[string]any{
+				"type": "string",
+				"description": fmt.Sprintf("Names this version, at most %d bytes. "+
+					"Labelled versions are kept.", artifacts.MaxLabelBytes),
+			},
+			"contract": map[string]any{
+				"type": "string",
+				"description": "The page runtime contract, an exact version or `latest`. " +
+					"Omit to keep the current one.",
+			},
+			"capabilities": capabilitiesParam(),
+			"restore_version": map[string]any{
+				"type": "integer",
+				"description": "Roll back: publish this retained version's files as the " +
+					"new version. Takes nothing but `label`, `contract` and `capabilities` " +
+					"beside it.",
+			},
+		},
+		"required": []any{"artifact", "base_version"},
+	})
+}
+
+func (t *publishArtifact) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	return t.CallForTurn(ctx, nil, args)
+}
+
+func (t *publishArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
+	args map[string]any) (tools.Result, error) {
+
+	c, refusal := t.deps.caller(ctx, turn, t.Name(), args, true)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	base := argInt(args, "base_version", 0)
+	if base < 1 {
+		return failed("publish_artifact needs a `base_version`: read the artifact with " +
+			"get_artifact and pass its `head_version` back, so a version somebody else " +
+			"published in the meantime is a refusal rather than a silent overwrite."), nil
+	}
+	caps, why := capabilitiesArg(t.Name(), args)
+	if why != "" {
+		return failed(why), nil
+	}
+	restore := argInt(args, "restore_version", 0)
+	_, hasContent := args["content"]
+	_, hasEdits := args["edits"]
+	_, hasFiles := args["files"]
+	source, hasSource, why := sourceArg(t.Name(), args)
+	if why != "" {
+		return failed(why), nil
+	}
+	entry := strings.TrimSpace(argString(args, "entry"))
+	label := strings.TrimSpace(argString(args, "label"))
+	contract := strings.TrimSpace(argString(args, "contract"))
+	switch {
+	case restore < 0:
+		return failed("publish_artifact takes a `restore_version` of 1 or more."), nil
+	case restore > 0 && (hasContent || hasEdits || hasFiles || hasSource || entry != ""):
+		return failed("publish_artifact: a rollback names the version it restores and " +
+			"nothing else beside `label`, `contract` and `capabilities`."), nil
+	case hasSource && (hasContent || hasEdits || hasFiles):
+		return failed("publish_artifact takes `source` alone: a build's output is the " +
+			"whole file set, so `content`, `edits` and `files` are not combined with it."), nil
+	case restore == 0 && !hasContent && !hasEdits && !hasFiles && !hasSource && entry == "" &&
+		label == "" && contract == "" && caps == nil:
+		return failed("publish_artifact has nothing to publish: send `edits`, `content`, " +
+			"`files`, `source`, `restore_version`, or a change of `entry`, `label`, " +
+			"`contract` or `capabilities`."), nil
+	}
+	list, why := editsArg(args)
+	if why != "" {
+		return failed(why), nil
+	}
+
+	h, ref, refusal := t.deps.head(ctx, t.Name(), args)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	dec, refusal := t.deps.decide(ctx, c, t.Name(), authz.ActionArtifactPublish, h, ref)
+	if refusal != nil {
+		return *refusal, nil
+	}
+
+	files := newFileSources(t.deps, c, t.Name())
+	mode := manifest.ModePatch
+	if hasContent {
+		p := entry
+		if p == "" {
+			if p, refusal = t.baseEntry(ctx, h, base, ref); refusal != nil {
+				return *refusal, nil
+			}
+		}
+		clean, refusal := files.cleanPath(p)
+		if refusal != nil {
+			return *refusal, nil
+		}
+		if refusal := files.addInline(clean, argString(args, "content"), ""); refusal != nil {
+			return *refusal, nil
+		}
+	}
+	if refusal := files.parseFiles(ctx, args, true); refusal != nil {
+		return *refusal, nil
+	}
+	if hasSource {
+		mode = manifest.ModeWhole
+		if refusal := files.addBoxDir(ctx, argString(source, "sandbox")); refusal != nil {
+			return *refusal, nil
+		}
+	}
+
+	call := t.deps.call(c, dec.Standing.Role, dec.Elevated)
+	upload, specs, refusal := files.stage(ctx, call, h.ID, false)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	published, report, err := t.deps.Publisher.Publish(ctx, call, artifactupload.PublishRequest{
+		Artifact: h.ID, Base: base, RestoreFrom: restore, Upload: upload, Mode: mode,
+		Files: specs, Edits: list, Entry: entry, Label: label, Contract: contract,
+		Capabilities: caps,
+	})
+	var moved *artifactsdomain.VersionMoved
+	switch {
+	case errors.As(err, &moved):
+		return t.stale(ctx, turn, c, moved, base, err), nil
+	case err != nil:
+		return publishFailure(ctx, t.Name(), c, err), nil
+	case published.Result.Outcome == statelog.OutcomeUnknown:
+		return artifactUnknown(t.Name(), c, published.Result, "Read the artifact with "+
+			"get_artifact: if its head moved past your base, the publish landed."), nil
+	}
+	t.deps.settle(ctx, published.Result.Position)
+	out := t.deps.publishedAnswer(c, published, report, "published")
+	out["base_version"] = base
+	return jsonResult(out)
+}
+
+// baseEntry is the entry page of the version a publish is based on, which a
+// `content` with no `entry` replaces.
+func (t *publishArtifact) baseEntry(ctx context.Context, h artifactsdomain.Head, base int,
+	ref string) (string, *tools.Result) {
+
+	if base > h.HeadNumber {
+		r := failed(fmt.Sprintf("publish_artifact: artifact %s is at version %d, and "+
+			"`base_version` %d is past it.", h.ID, h.HeadNumber, base))
+		return "", &r
+	}
+	v, err := t.deps.Reader.Version(ctx, h.ID, base)
+	if err != nil {
+		if errors.Is(err, artifactsdomain.ErrNotFound) {
+			r := failed(fmt.Sprintf("publish_artifact: artifact %s no longer keeps "+
+				"version %d. Read the head with get_artifact and publish based on it.",
+				h.ID, base))
+			return "", &r
+		}
+		r := artifactReadFailure(ctx, t.Name(), ref, err)
+		return "", &r
+	}
+	if v.Manifest.Entry == "" {
+		r := failed("publish_artifact: the version has no entry page for `content` to " +
+			"replace; name the file with `entry`.")
+		return "", &r
+	}
+	return v.Manifest.Entry, nil
+}
+
+// editsArg reads `edits`.
+func editsArg(args map[string]any) ([]edits.Edit, string) {
+	raw, present := args["edits"]
+	if !present || raw == nil {
+		return nil, ""
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return nil, "publish_artifact takes `edits` as a list of `{path, old_str, new_str}`."
+	}
+	if len(list) > artifacts.MaxEditsPerPublish {
+		return nil, fmt.Sprintf("publish_artifact takes at most %d `edits`; publish the "+
+			"rest in another version, or replace the page with `content`.",
+			artifacts.MaxEditsPerPublish)
+	}
+	out := make([]edits.Edit, 0, len(list))
+	for i, v := range list {
+		m, ok := v.(map[string]any)
+		if !ok {
+			return nil, fmt.Sprintf("publish_artifact: edit %d is not an object.", i)
+		}
+		old, hasOld := m["old_str"].(string)
+		repl, hasNew := m["new_str"].(string)
+		if !hasOld || !hasNew {
+			return nil, fmt.Sprintf("publish_artifact: edit %d needs `old_str` and "+
+				"`new_str`, both strings.", i)
+		}
+		out = append(out, edits.Edit{Path: strings.TrimSpace(argString(m, "path")),
+			Old: old, New: repl})
+	}
+	return out, ""
+}
+
+// stale is a publish based on a version somebody has moved past: a failed
+// result of class stale_version carrying the live version, who published it
+// and when, the paths that changed since the caller's base, and the first page
+// of each changed text file, fenced as text the live version's author wrote,
+// so the model merges and publishes again on the live number.
+func (t *publishArtifact) stale(ctx context.Context, turn *turnctx.Turn, c artifactCaller,
+	moved *artifactsdomain.VersionMoved, base int, cause error) tools.Result {
+
+	live := moved.Live
+	read := newForeignRead(turn, c.self())
+	author := read.writer(live.Author.Name, live.Author.Kind)
+	changed, baseKept := t.changedPaths(ctx, moved.Head.ID, base, live.Manifest)
+	out := map[string]any{
+		"error": "stale_version", "artifact": moved.Head.ID.String(),
+		"live_version": moved.Head.HeadNumber, "your_base": base,
+		"published_by":  actorJSON(live.Author),
+		"published_at":  live.CreatedAt.UTC().Format(time.RFC3339),
+		"changed_paths": changed,
+		"retry": fmt.Sprintf("Merge your change onto version %d and publish again with "+
+			"base_version %d. Nothing of yours was published.", moved.Head.HeadNumber,
+			moved.Head.HeadNumber),
+	}
+	if !baseKept {
+		out["base_retained"] = false
+	}
+	var inlined []map[string]any
+	var omitted []string
+	budget := staleTextBudget
+	for _, p := range changed {
+		e, ok := manifest.EntryAt(live.Manifest, p)
+		if !ok {
+			continue
+		}
+		typ, err := mediatype.Resolve(e.Path, e.ContentType)
+		if err != nil || !typ.Text {
+			continue
+		}
+		if budget <= 0 {
+			omitted = append(omitted, p)
+			continue
+		}
+		limit := min(int64(artifacts.ToolReadPageBytes), int64(budget))
+		text, complete, err := t.deps.Publisher.SourceText(ctx, e, limit)
+		if err != nil {
+			omitted = append(omitted, p)
+			continue
+		}
+		budget -= len(text)
+		i := len(inlined)
+		read.fence(fieldPath{}.key("live_files").index(i).key("content"),
+			provenance.SourceArtifactFile, []provenance.Author{author}, true, string(text))
+		f := map[string]any{"path": p, "size": e.Object.Size, "content": string(text)}
+		if !complete {
+			f["next_offset"] = len(text)
+		}
+		inlined = append(inlined, f)
+	}
+	if len(inlined) > 0 {
+		out["live_files"] = inlined
+	}
+	if len(omitted) > 0 {
+		out["not_inlined"] = omitted
+	}
+	if url := t.deps.link(moved.Head.ID); url != "" {
+		out["url"] = url
+	}
+	rendered, err := read.answer(ctx, t.Name(), out, "Read the changed files one at a "+
+		"time with get_artifact.")
+	if err != nil || rendered.Failed {
+		return refusedBy(tools.RefusalStaleVersion, cause, fmt.Sprintf("publish_artifact "+
+			"refused: artifact %s is at version %d and you based on %d. Read it with "+
+			"get_artifact, merge your change onto it, and publish again with base_version %d.",
+			moved.Head.ID, moved.Head.HeadNumber, base, moved.Head.HeadNumber))
+	}
+	return tools.Result{Output: rendered.Output, Failed: true,
+		Cause: tools.Classify(tools.RefusalStaleVersion, cause)}
+}
+
+// changedPaths is every path whose bytes differ between the caller's base and
+// the live version, the live entry first, and whether the base is still
+// retained: a base the artifact no longer keeps has every live path changed.
+func (t *publishArtifact) changedPaths(ctx context.Context, id artifacts.ID, base int,
+	live artifacts.Manifest) ([]string, bool) {
+
+	held := map[string]string{}
+	kept := true
+	if v, err := t.deps.Reader.Version(ctx, id, base); err == nil {
+		for _, e := range v.Manifest.Files {
+			held[e.Path] = string(e.Object.Hash)
+		}
+	} else {
+		kept = false
+	}
+	var changed []string
+	seen := map[string]bool{}
+	for _, e := range live.Files {
+		seen[e.Path] = true
+		if !kept || held[e.Path] != string(e.Object.Hash) {
+			changed = append(changed, e.Path)
+		}
+	}
+	for p := range held {
+		if !seen[p] {
+			changed = append(changed, p)
+		}
+	}
+	slices.Sort(changed)
+	if i := slices.Index(changed, live.Entry); i > 0 {
+		changed = append([]string{live.Entry}, slices.Delete(changed, i, i+1)...)
+	}
+	return changed, kept
+}
+
+// ---- update_artifact ---------------------------------------------------- //
+
+type updateArtifact struct{ deps ArtifactDeps }
+
+var _ tools.SeatCallable = (*updateArtifact)(nil)
+
+func (t *updateArtifact) Name() string { return UpdateArtifactTool }
+
+func (t *updateArtifact) Description() string {
+	return "Rename an artifact in this Crewlet company, or change its description, its " +
+		"icon or one version's label. Its content changes with publish_artifact."
+}
+
+func (t *updateArtifact) Parameters() map[string]any {
+	return t.deps.writeParams(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"artifact":    artifactParam(),
+			"title":       map[string]any{"type": "string", "description": "Two to four words."},
+			"description": map[string]any{"type": "string", "description": "One sentence."},
+			"icon":        map[string]any{"type": "string", "description": "One generic word."},
+			"label": map[string]any{
+				"type":        "string",
+				"description": "A label for `version` (default the head); empty removes it.",
+			},
+			"version": map[string]any{
+				"type":        "integer",
+				"description": "The version `label` names. Default the head.",
+			},
+		},
+		"required": []any{"artifact"},
+	})
+}
+
+func (t *updateArtifact) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	return t.CallForTurn(ctx, nil, args)
+}
+
+func (t *updateArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
+	args map[string]any) (tools.Result, error) {
+
+	c, refusal := t.deps.caller(ctx, turn, t.Name(), args, true)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	var p artifactsdomain.Patch
+	text := func(field string) *string {
+		if _, ok := args[field]; !ok {
+			return nil
+		}
+		v := strings.TrimSpace(argString(args, field))
+		return &v
+	}
+	p.Title, p.Description, p.Icon = text("title"), text("description"), text("icon")
+	if _, versioned := args["version"]; versioned {
+		if _, labelled := args["label"]; !labelled {
+			return failed("update_artifact: `version` names the version a `label` is for; " +
+				"send the `label` too."), nil
+		}
+	}
+	if p.Title != nil && *p.Title == "" {
+		return failed("update_artifact: an artifact keeps a title; send two to four words."), nil
+	}
+	h, ref, refusal := t.deps.head(ctx, t.Name(), args)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	if label := text("label"); label != nil {
+		p.Label = &artifactsdomain.VersionLabel{Number: argInt(args, "version", h.HeadNumber),
+			Label: *label}
+	}
+	if p.Title == nil && p.Description == nil && p.Icon == nil && p.Label == nil {
+		return failed("update_artifact has nothing to change: send `title`, " +
+			"`description`, `icon` or `label`."), nil
+	}
+	dec, refusal := t.deps.decide(ctx, c, t.Name(), authz.ActionArtifactUpdate, h, ref)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	written, err := t.deps.Writer.Patch(ctx, t.deps.call(c, dec.Standing.Role, dec.Elevated), h.ID, p)
+	if err != nil {
+		return publishFailure(ctx, t.Name(), c, err), nil
+	}
+	if written.Result.Outcome == statelog.OutcomeUnknown {
+		return artifactUnknown(t.Name(), c, written.Result, "Read the artifact with "+
+			"get_artifact: it says whether the change landed."), nil
+	}
+	t.deps.settle(ctx, written.Result.Position)
+	out := map[string]any{"artifact": h.ID.String(), "outcome": outcomeOf(written.Result),
+		"position": positionOf(written.Result.Position)}
+	if url := t.deps.link(h.ID); url != "" {
+		out["url"] = url
+	}
+	return jsonResult(withArtifactOperation(out, c))
+}

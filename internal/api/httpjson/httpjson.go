@@ -912,6 +912,30 @@ const (
 	CodeArtifactNotFramed Code = "artifact_not_framed"
 )
 
+// THE ARTIFACT DATASTORE'S OWN (`/artifacts/{id}/data`): the verdicts its
+// applier writes that no other surface's refusal names, and the write budget a
+// node keeps per principal and per store. A guarded write that lost is
+// `stale_version`, a rule that refused is `forbidden` and a value that failed
+// is `invalid`, the codes every write surface already answers with.
+const (
+	// CodeDataQuota is a datastore write the stamped plan quota refused:
+	// the store's or the company's footprint would pass its limit. 413,
+	// and the detail names the Tier A key an operator raises.
+	CodeDataQuota Code = "data_quota"
+	// CodeDataGone is a datastore whose artifact was purged, or is in the
+	// trash, so nothing is written to it. 410.
+	CodeDataGone Code = "data_gone"
+	// CodeNotUndoable is an undo of a write the history cannot undo. 409,
+	// and the detail says why.
+	CodeNotUndoable Code = "not_undoable"
+	// CodeMigrationTooLarge is a schema change that would rewrite more
+	// documents than one change may. 422.
+	CodeMigrationTooLarge Code = "migration_too_large"
+	// CodeWriteBudget is a datastore write this node's cost-weighted
+	// budget refused for now. 429 with a Retry-After; never a lockout.
+	CodeWriteBudget Code = "write_budget"
+)
+
 // codes is THE TABLE: every code this engine answers with, each with the one
 // sentence a person is shown for it.
 //
@@ -1230,6 +1254,16 @@ var codes = map[Code]string{
 		"`api.artifacts.external_url`.",
 	CodeArtifactNotFramed: "This artifact is shown here directly rather than " +
 		"opened as a page.",
+	CodeDataQuota: "This would take the data past its size limit, so nothing " +
+		"was written. Delete rows, or ask an operator to raise the limit the " +
+		"detail names.",
+	CodeDataGone: "This artifact's data is gone: the artifact was deleted or is " +
+		"in the trash, so nothing was written.",
+	CodeNotUndoable: "That change can't be undone. The detail says why.",
+	CodeMigrationTooLarge: "This schema change rewrites too many rows at once, so " +
+		"nothing changed. Change fewer columns at a time.",
+	CodeWriteBudget: "Too many changes to this data at once. Wait the moment " +
+		"Retry-After names, then send it again.",
 }
 
 // Codes is every code in the vocabulary, sorted.

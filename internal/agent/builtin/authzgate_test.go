@@ -231,6 +231,7 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 		},
 		Pages:     full.Pages,
 		Knowledge: full.Knowledge,
+		Artifacts: full.Artifacts,
 		Org:       orgOf,
 		// The operator-only verbs: a parked run's answer, a seat's pause
 		// and resume, a note to a running turn and an answer from the

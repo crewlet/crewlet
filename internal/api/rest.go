@@ -171,6 +171,18 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/artifacts/{id}/assets", what: "artifact_assets", path: map[string]string{"id": "id"}},
 	{method: "GET", pattern: "/artifacts/{id}/seen-by", what: "artifact_seen_by", path: map[string]string{"id": "id"}},
 	{method: "GET", pattern: "/artifacts/{id}/access", what: "artifact_access", path: map[string]string{"id": "id"}},
+	// AN ARTIFACT'S DATA. The literal segments beat the collection
+	// wildcard, so none is read as a collection of that name: each is a
+	// name the datastore reserves (internal/artifactdata). The company's
+	// datastore usage sits under /artifacts/data, a literal no artifact id
+	// can be.
+	{method: "GET", pattern: "/artifacts/data/usage", what: "artifact_data_usage"},
+	{method: "GET", pattern: "/artifacts/{id}/data/schema", what: "artifact_data_schema", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/artifacts/{id}/data/history", what: "artifact_data_history", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/artifacts/{id}/data/state", what: "artifact_data_state", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/artifacts/{id}/data/{collection}/query", what: "artifact_data_query", path: map[string]string{"id": "id", "collection": "collection"}},
+	{method: "GET", pattern: "/artifacts/{id}/data/{collection}/{doc}", what: "artifact_data_doc", path: map[string]string{"id": "id", "collection": "collection", "doc": "doc"}},
+	{method: "GET", pattern: "/artifacts/{id}/data/{collection}", what: "artifact_data", path: map[string]string{"id": "id", "collection": "collection"}},
 }
 
 // mountReads registers the named read routes.

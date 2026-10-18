@@ -290,6 +290,17 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		tracker.ReadProjectFileTool:   false,
 		tracker.WriteProjectFileTool:  true,
 		tracker.RemoveProjectFileTool: true,
+
+		// THE ARTIFACTS: the two reads are reads, and every write is read
+		// by the people the artifact is shared with.
+		builtin.ListArtifactsTool:       false,
+		builtin.GetArtifactTool:         false,
+		builtin.CreateArtifactTool:      true,
+		builtin.PublishArtifactTool:     true,
+		builtin.UpdateArtifactTool:      true,
+		builtin.ShareArtifactTool:       true,
+		builtin.UnshareArtifactTool:     true,
+		builtin.UploadArtifactAssetTool: true,
 	}
 
 	reg := tools.NewRegistry()
@@ -1000,6 +1011,9 @@ func fullDeps(t *testing.T) builtin.Deps {
 			Objects:    newFakeObjects(),
 		},
 		Pages: builtin.PageDeps{Reader: &fakeKB{}, Writer: &fakeKB{}},
+		// AND THE ARTIFACTS, all eight of whose tools register only with
+		// every half wired.
+		Artifacts: artifactDeps(newFakeArtifacts(), artifactChart{}, requesters{}),
 	}
 }
 

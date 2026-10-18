@@ -1116,7 +1116,7 @@
               "type": "string"
             }
           ],
-          "description": "Byte ceiling on the artifact datastore's log; unset derives half of the mutation log's ceiling, set or derived, 1 GiB..32 GiB from a volume alone."
+          "description": "Byte ceiling on the artifact datastore's log; unset derives a quarter of the mutation log's ceiling, set or derived, 1 GiB..16 GiB from a volume alone."
         },
         "artifacts_log_max_bytes": {
           "anyOf": [

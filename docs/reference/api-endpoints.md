@@ -279,6 +279,9 @@ node means nothing was done.
 | `GET` | `/containers` | Every knowledge container this node knows about, with how many pages each holds. The engine materialises one per `space:` the org chart names, plus the two reserved ones, on every config apply and every boot; each carries `chart_epoch`, the activation its name and purpose were last written from (Unix milliseconds), so a configuration activated earlier never overwrites them |
 | `POST` | `/work/items` `/pages` | **File an item, write a page** — and the rest of the [write surface](#the-human-write-surface): the same tools a seat and your own assistant hold, as the person you signed in as. Guarded, and absent on a company whose tracker or knowledge base is not native |
 | `PATCH` | `/work/items/{key}` | Change an item — and its `/comments`, `/rank`, `/depend`, `/relate`, `/restore` and `/purge` beside it. See [below](#the-human-write-surface) for every route and the authority each takes |
+| `GET` | `/artifacts/{id}/data/{collection}` `/{collection}/{doc}` `/{collection}/query` `/history` `/schema` `/state` | **An artifact's datastore, read**: a collection's documents, one document, a query over its field index, the store's history, its schema and the caller's own per-viewer state, each decided per artifact and shaped by the collection's read rule (see [below](#artifactsiddata-an-artifacts-datastore-auth-gated)) |
+| `POST` `PUT` | `/artifacts/{id}/data/writes` `/undo` `/state` `/schema` | **An artifact's datastore, written**: one atomic batch of ops, an undo, a per-viewer state key, a schema change. `Idempotency-Key` required; each answers the verdict the applier wrote |
+| `GET` | `/artifacts/{id}/data/export.csv` | One collection as CSV, to an editor of the artifact |
 | `POST` | `/auth/login` | **Sign in.** Login or address, password, and a second factor where one is held. **Unguarded**, and throttled on the login **as typed** from the caller's source: a failure costs the next attempt a wait, never a lockout — see [below](#a-failure-costs-a-wait-never-a-lockout). Every failure answers one code after the same argon2id derivation — see [below](#every-failed-sign-in-is-one-refusal). A node that cannot read the identity estate or record the session answers `503` — and **every `503` under `/auth` carries a `Retry-After`**, so a client can tell "ask again in a moment" from a node that is gone. A write whose outcome nobody can establish — the second factor's spend, the session's own start — is that `503` with the `op_id`, and **never a session**: a code whose spend may not have landed is a code that still works. A success answers `{person, login, seat?, expires_at, position, status}`, and `status` is `signed_in` — or, where `api.auth.totp` is `required` (its default) and the person holds no second factor, `second_factor_enrolment_required`: the session it opened may only enrol one (see [A required second factor is enrolled before anything else](../concepts/identity-and-access.md#a-required-second-factor-is-enrolled-before-anything-else)). `POST /auth/invite/{id}` and a password `POST /auth/step-up` answer the same shape, restricted on the same rule |
 | `GET` | `/auth/config` | What a sign-in page needs to know before anybody has signed in: `{min_password_length, second_factor}` — the deployment's own `api.auth.min_password_length`, never below the engine's twelve, which is exactly the floor every password a person sets is held to, and `required` or `optional` from `api.auth.totp` (unset is `required`). Password sign-in is always served, so there is no backend to report. **Unguarded**, and it carries **no user list and no count of people** |
 | `GET` | `/auth/invite/{id}` | **Renders an invitation and never spends it** — a link is followed by mail clients prefetching, scanners and preview cards, and one spent by a GET is an account created for somebody who never saw it. **Unguarded**: holding the link is the credential — the **secret** it carries after the id, presented in the `X-Crewlet-Invite-Secret` header and never in the URL. The link a person follows is the dashboard's screen, `<api.external_url>/dashboard#/invite/<id>.<secret>`, whose fragment no browser sends to a server; the screen calls this route with the two halves apart. Answers the address it is for, who sent it (`invited_by` — a person by their seat's name as the chart gives it, since a person writes as their seat's handle, and absent for a machine — a Tier A token or a service account — whose coloned login, `token:founder`, is nothing the person holding the link would recognise), the password floor, the `seat` redeeming it binds (**always present**, because every invitation names the human seat its invitee will hold: `{handle, name}` as the chart calls it now, or `{}` where the company this node runs no longer holds it as a human seat, which the redemption refuses as a link that no longer works), a `login` **proposed** from the address in the person grammar (`jane.doe@example.com` → `jane.doe`, `jane@example.com` → `jane.example`) for the form to pre-fill, and `signed_in_as` — the login of the session the browser asking is already signed in with, absent for one signed in as nobody — because redeeming ends that session, and the form says so first. Absent, redeemed, expired and a missing or wrong secret are one `410` — the same bytes, so a guessed secret against a leaked id does not say the id exists — and an id nobody issued or a secret that is not the link's is a **failed attempt**, counted on the audit trail's per-minute failure row (`iam_login_failures`) under the source it came from: walking ids or secrets is guessing at a link, and that source's count climbing is what shows it. It meets no [curve](#a-failure-costs-a-wait-never-a-lockout) — the secret is 256 bits nobody walks, and a curve keyed on the address a link came from is one a stranger there holds shut for everybody else. A link that **proved itself** and is spent — redeemed, expired, its address enrolled — is the same `410` and is not counted: that is the link's holder, or a mail scanner re-reading it, and a guesser who does not hold the link can never reach the difference. A node whose identity rows cannot **vouch** for a link that does not open — behind the identity log, or holding a record it could not apply — answers `503 identity_unavailable` instead, for an id it does not hold and a wrong secret alike, and counts nothing: the link may have been issued through a peer |
@@ -2171,6 +2174,61 @@ build cannot represent that the write does not name.
 - **A renamed MCP server or setup step is a new identity**, so it keeps
   nothing of the old one's unknown settings.
 
+### `/artifacts/{id}/data/*`: an artifact's datastore (auth-gated)
+
+An artifact page published with the `db` capability keeps its rows in the
+artifact's **datastore**: named collections of JSON documents, each collection
+declaring its columns (checkbox, chip, select, person, status, text, long
+text, number, date) and its rules (who reads its rows, who writes them, which
+fields only a person may set, which are written once). Every route here is
+decided **per artifact**: the caller's role on it, through the owner's own
+standing or a share, is read from the artifact's head on every request and
+stamped into the write, and the applier decides the write from that stamp and
+the store's rows alone, so every data node reaches the same verdict. An
+artifact the caller has no relation to is answered `404` `not_found`, exactly
+as one that does not exist.
+
+| Method | Path | What it does |
+|---|---|---|
+| `GET` | `/artifacts/{id}/data/{collection}` | One page of a collection's documents (`limit`, 100 by default and at most 500, and the `cursor` a page answered as `after`), each with its fields, who created and last changed it, and its `version`. `since=` a version answers only what changed after it, deletions included, which is the catch-up a page runs after a reconnect. The query `artifact_data` |
+| `GET` | `/artifacts/{id}/data/{collection}/{doc}` | One document. The query `artifact_data_doc` |
+| `GET` | `/artifacts/{id}/data/{collection}/query` | `q=` a query as JSON: up to 16 filters (`eq`, `ne`, `lt`, `le`, `gt`, `ge`, `in`, `contains`, `prefix`) on declared columns, ANDed, an `order_by` and a `limit`, compiled to the field index rather than run over the rows. Every top-level field is indexed, and a nested path (`a.b`) once the collection lists it in `indexed`; a filter or an order on any other path is `400` `bad_params`, naming it. The query `artifact_data_query` |
+| `GET` | `/artifacts/{id}/data/history` | The store's last seven days of writes, newest first, narrowed by `collection`, `doc`, `field` (one cell's history) or `actor`: who wrote, through which surface, the verdict, each changed field's value before and after (a value over 4 KiB as its hash) and whether it can still be undone. The query `artifact_data_history` |
+| `GET` | `/artifacts/{id}/data/schema` | The store's collections, its footprint against its quota, its state digest and the caller's role. A collection only editors may read is left out for anybody below editor. The query `artifact_data_schema` |
+| `GET` | `/artifacts/{id}/data/state` | The caller's own per-viewer state keys on this artifact, and nobody else's. The query `artifact_data_state` |
+| `GET` | `/artifacts/data/usage` | The company's datastore footprint against `artifacts.limits.data_bytes` *(needs `admin`)*. The query `artifact_data_usage` |
+| `POST` | `/artifacts/{id}/data/writes` | **One atomic batch**: `{"ops": [...]}`, 1 to 100 ops of `set`, `merge`, `delete`, `increment`, `append`, `add` and `remove`, at most 1 MiB, applied all or none. An op carrying `if_version` is refused as a conflict when its document moved since; one without it is a blind write, and where two blind writes meet, each field keeps the value the log ordered last |
+| `POST` | `/artifacts/{id}/data/undo` | `{"seq": N}`: reverts one write of the last seven days, as a write of the caller's own under the same rules, conditioned on every document it changed being where it left them, so a document changed since is `409` `stale_version` naming it. A write older than the history, one that was refused, a schema change and one holding a value the history kept only as its hash are `409` `not_undoable`, and the detail says which |
+| `POST` | `/artifacts/{id}/data/state` | `{"key", "value"}` or `{"key", "delete": true}`: sets or removes one of the caller's own per-viewer state keys, the backing of the page runtime's state API |
+| `PUT` | `/artifacts/{id}/data/schema` | `{"collections": [...]}`, every collection the store keeps after the change *(editor and above)*. Decided against every write before it; a change that would rewrite more documents than one record carries is `422` `migration_too_large` |
+| `GET` | `/artifacts/{id}/data/export.csv` | `collection=` one collection as CSV, streamed a page at a time *(editor and above)*, under the collection's read rule, with any cell a spreadsheet would run as a formula written as text |
+
+Every write route takes an `Idempotency-Key`, refuses a field it does not
+declare, and refuses a write to an artifact in the trash (`410` `data_gone`)
+until it is restored. A write from a browser session states the surface it
+came through as `via`: `dashboard`, or `bridge` with the `version` of the page
+whose script made it, which must declare `db` (or `state`, for a state key) or
+the write is `403`. A bearer credential's write is stamped as the API's
+whatever it says.
+
+**A write answers its verdict**, read back from the node's own rows once it
+has applied the record:
+
+| Status | `error` | When |
+|---|---|---|
+| `200` | | `verdict: "applied"`, with the write's `seq`, which an undo names |
+| `202` | | The record landed and this node has not applied it yet: its verdict is on the `position` answered |
+| `409` | `stale_version` | An `if_version` that no longer matches; `conflict` names the documents |
+| `422` | `invalid` | A value outside its column's type, a field the collection does not declare, a long text written whole without its guard |
+| `403` | `forbidden` | The caller's role, or the column's rule, does not let them write it |
+| `413` | `data_quota` | The write would take the store or the company past its footprint quota. A write that shrinks the store is never refused for it |
+| `410` | `data_gone` | The store was purged |
+| `429` | `write_budget` | This node's write budget for the caller on this store, or for the store, is spent. Weighed by the rows a batch writes rather than by requests (20 a second, a burst of 100, per caller and store; 200 a second per store), with `Retry-After`, `scope` and `retry_after_ms` saying when it holds the cost again. Per node, never a lockout |
+
+Every refused write is still on the log and in the store's history with its
+reason, applied identically on every data node, so `GET .../history` answers
+what was refused as well as what landed.
+
 ## Setting an integration up
 
 Connecting an integration means putting values in two places: a credential
@@ -3898,6 +3956,13 @@ REST route calls, so the two surfaces cannot diverge:
 | `containers` | `{}` | `GET /containers`. A separate question from `pages` rather than a facet of it: a browser draws the container list once and the page list on every navigation |
 | `page_activity` | `{page, container, kinds, actor_kinds, since, cursor, limit}` | What happened to a page, or to everything in a container — the wiki's own change log, mirroring `work_activity`. `kinds` is a CSV of the ten change kinds and `actor_kinds` of the three author kinds (`agent`, `human`, `operator`), the latter refused when it names one this build does not have — `work_activity`'s note says why. `since` bounds the window and `cursor` pages it: the same unit, two parameters, because the cursor moves with every page and the bound does not. The answer carries `log_seq` and `applied_through` as a tracker answer does — this node's checkpoint on the pages log and the prefix of it whose records it applied, read in the transaction that read the changes — so a node holding a record it cannot decode says it is behind |
 | `page_revision` | `{page, version}` | One revision's own body, message and author. Revision N is the body AT version N — including the newest — so a reader comparing two versions asks for both rather than for one and the head |
+| `artifact_data` | `{id, collection, since, cursor, limit}` | `GET /artifacts/{id}/data/{collection}`. One page of a collection's documents under its read rule, or with `since` the documents changed after that version, deletions included |
+| `artifact_data_doc` | `{id, collection, doc}` | `GET /artifacts/{id}/data/{collection}/{doc}` |
+| `artifact_data_query` | `{id, collection, q}` | `GET /artifacts/{id}/data/{collection}/query`. `q` is the query as JSON: `where`, `order_by`, `limit`, `after` |
+| `artifact_data_history` | `{id, collection, doc, field, actor, cursor, limit}` | `GET /artifacts/{id}/data/history`. Seven days of writes, refusals included, with each changed field's values before and after |
+| `artifact_data_schema` | `{id}` | `GET /artifacts/{id}/data/schema`. The collections the caller may read, the store's footprint and state digest, and the caller's role |
+| `artifact_data_state` | `{id}` | `GET /artifacts/{id}/data/state`. The caller's own per-viewer state keys |
+| `artifact_data_usage` | `{}` | `GET /artifacts/data/usage` *(needs `admin`)*. The company's datastore footprint against its quota |
 | `config` | `{}` | `GET /config` *(needs `admin`)* |
 | `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(needs `admin`)* |
 | `config_diff` | `{revision_id}` | [`GET /config/revisions/{id}/diff`](#get-configrevisionsiddiff) — the listing is cut at 500 and `changes_total` is how many there are *(needs `admin`)* |
@@ -4494,8 +4559,13 @@ The **same tools a seat holds**, not a parallel implementation: `list_work_items
 `get_work_item`, `create_work_item`, `update_work_item`, `comment_on_work_item`,
 `merge_work_item`, `move_work_item`, `search_work_items`, `get_work_catalogue`, `list_projects`, `describe_project`, `write_project`,
 `task_activity`, `my_work`,
-`list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`, and
-`search_knowledge`. A schema, a default, a trimmed field and the wording of a
+`list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`,
+`search_knowledge`, and, wherever the node takes artifact uploads,
+`list_artifacts`, `get_artifact`, `create_artifact`, `publish_artifact`,
+`update_artifact`, `share_artifact`, `unshare_artifact` and
+`upload_artifact_asset` (see
+[Artifacts](../guides/tools-and-mcp.md#artifacts)); each artifact write answers
+its `op_id` here as the tracker's do. A schema, a default, a trimmed field and the wording of a
 refusal are each written once — two copies of "file an item" drift on exactly
 the parts nobody looks at, and only one of the two is ever tested.
 
