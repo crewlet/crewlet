@@ -210,6 +210,15 @@ raise, and then the line names that level and never `-debug`. A start with
 nothing to say logs no such line; a warning never stops a node or changes how
 it exits.
 
+**And the company's, at every apply.** The advisories a Tier B document
+raises — a human seat nobody can message, a company nobody can join, an idle
+token ceiling — are logged under the same event with `config=company`, by every
+node, once for each epoch it applies, with the revision, the epoch and the seat
+or unit each is about (see
+[What an applied company is worth knowing](../concepts/configuration.md#what-an-applied-company-is-worth-knowing)).
+That is what reports them for a company `-company` or `-import-company` seeds,
+which no write answers to anybody.
+
 **One fact, one warning.** A node with `api.port` 0 logs `api_disabled` to say
 what it gave up, and that line is `WARN` only on a node whose `node.roles` is
 undeclared — every role, `ingress` among them, which the `api.port` advisory

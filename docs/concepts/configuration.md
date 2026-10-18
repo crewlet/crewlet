@@ -50,7 +50,8 @@ seat, and an invitation or a create names the one they will hold, so a company
 that declares no `kind: human` seat has nowhere to put anybody. That is right
 for a company its agents run alone, administered through the deployment's Tier
 A tokens, so it is never refused: `crewlet validate` and every `/config` write
-name it in an `advisory` warning at `roles`.
+name it in an `advisory` warning at `roles`, and every node logs that warning
+when it applies the company ([`config_advisory`](#what-an-applied-company-is-worth-knowing)).
 
 ### Tier A example (`crewlet.yaml`)
 
@@ -746,6 +747,34 @@ The difference between the last two is the **admission rules**: authoring hygien
 A seat may not be called `none` either — what `integrations.datadog.route_to` means by nobody, so a seat of that name would be silenced by its own handle. That one is a runnable rule.
 
 A written document is refused for breaking one. A revision being applied that breaks one is applied, booted on, reloaded and reverted to like any other, and each node logs `org_admission_warning` once per violation when it applies the epoch. Every other rule is a **runnable** rule, and nothing applies a revision that breaks one.
+
+### What an applied company is worth knowing
+
+A revision can also be valid and carry a consequence: a company with no human
+seat, which can admit nobody; a human seat with no contact, which nobody can
+message on a chat surface; a token ceiling another ceiling leaves unable to
+refuse a turn; a `-e NAME` in `providers.sandbox.local.run_args` that nothing
+supplies; an Anthropic model the capability table does not know. `crewlet
+validate`, a `/config` write and a dry run answer these to whoever asked, as
+`advisory` warnings. **Every node also logs them, once for each epoch it
+applies**, one `config_advisory` line at `WARN` each, and never for a revision
+it refused:
+
+| Field | Meaning |
+|---|---|
+| `config` | `company`: which tier. A node's start logs its Tier A's advisories under the same event with `config=bootstrap` (see [`crewlet run`](../reference/cli.md#every-start-says-what-its-tier-a-is-worth-knowing)) |
+| `revision`, `epoch` | The revision and the activation the node applied |
+| `path` | Where in the document the remedy is written |
+| `seat`, `unit` | The seat's handle or the unit's name the advisory is about — present only when it is about one |
+| `detail` | The whole message: what will happen, then what to do instead |
+
+The log is the only place some companies are told. A `/config` answer goes to
+the person or the system that wrote, but a company a node imports from
+`-company` or `-import-company` is answered to nobody, so before this line it
+ran silent unless somebody ran `crewlet validate` on the file. The two other
+kinds of warning keep their own lines at apply — `org_dangling_reference` for a
+[reference that resolves to nothing](organization-model.md#dangling-references)
+and `org_admission_warning` above — so no fact is logged twice.
 
 ---
 

@@ -399,11 +399,13 @@ func (x *identityIndex) entityOf(path Path) (seat, unit string) {
 // answers them to a caller that never sees a terminal. Each is a moment where
 // the consequence can still change the decision.
 //
-// Tier A's are ALSO log lines, because many deployments have neither moment:
-// a document an image, a chart or an operator renders reaches a node nobody
-// validated by hand, and Tier A is never written through the API. So
-// `crewlet run` logs every Tier A advisory once per start, as
-// `config_advisory`.
+// They are ALSO log lines, because many deployments have neither moment: a
+// document an image, a chart or an operator renders reaches a node nobody
+// validated by hand, Tier A is never written through the API, and a company
+// seeded from a file is answered to nobody. So `crewlet run` logs every Tier A
+// advisory once per start, and every node logs a company's advisories once
+// per epoch it applies — both as `config_advisory`, beside the lines the apply
+// already writes for the other two kinds.
 //
 // # What Kind says
 //
@@ -522,7 +524,8 @@ func (c *Company) ReferenceWarnings() []Warning {
 }
 
 // AdvisoryWarnings is everything valid about this company that its author
-// should still know.
+// should still know: answered by `crewlet validate` and a `/config` write, and
+// logged by every node that applies the company.
 //
 // A UNIT WITH NO ID USED TO BE ONE OF THESE, and it is now an ADMISSION rule
 // instead: a unit is referenced by its key, so a document leaving a team
