@@ -411,6 +411,11 @@ func TestTheHotHistoryKeepsItsWindowAndTellsAStaleClientToResync(t *testing.T) {
 	if c := n.count(`SELECT COUNT(*) FROM artifact_data_docs WHERE body IS NULL`); c != 0 {
 		t.Fatalf("%d tombstones survive past the history floor", c)
 	}
+	if sum, held := n.count(`SELECT COALESCE(SUM(metered), 0) FROM artifact_data_docs`),
+		n.count(`SELECT doc_bytes FROM artifact_data_stores`); sum != held {
+		t.Fatalf("the rows left meter %d bytes and the store still counts %d: a pruned "+
+			"tombstone kept its bytes", sum, held)
+	}
 	page, err := n.reader.Docs(t.Context(), sheet, reading("jane", artifacts.RoleEditor), "tasks", old.Seq-1, "", 0)
 	if err != nil {
 		t.Fatal(err)

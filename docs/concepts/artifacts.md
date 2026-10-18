@@ -387,8 +387,11 @@ changed since is a conflict naming who changed them.
 Writes are rate-limited per node by their cost (ops plus the field rows they
 touch): 20 a second sustained per principal per store with bursts of 100, and
 200 a second per store, answered `429` with `Retry-After`, never a lockout.
-The datastore quotas count real bytes held on every data node: bodies, the
-field index and history.
+The datastore quotas count the bytes a store's rows really take on every data
+node and in every snapshot: each document row with its index and field-index
+entries, and the hot history, measured within a few percent of the file. A
+twelve-column review sheet costs about 3.2 KiB a row with a week of history,
+so the default 32 MiB per store holds about ten thousand rows.
 
 **Exports.** An editor downloads any collection as CSV.
 

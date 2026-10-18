@@ -144,7 +144,15 @@ func writeHistory(ctx context.Context, tx *sql.Tx, c applyContext, s storeRow, h
 	if h.changes == nil {
 		changes = []byte("[]")
 	}
-	bytes := int64(len(changes)+len(h.reason)) + historyRowOverhead + touchBytes*int64(len(h.touches))
+	// WHAT THE ROW AND ITS TOUCHES COST ON DISK (meter.go): every string the
+	// row stores, its changes the largest, and one touch row per document.
+	strs := len(changes) + len(h.reason) + len(c.record.OpID) + len(h.op) + len(c.record.Actor) +
+		len(c.record.ActorKind) + len(c.record.OperatorID) + len(c.authority.Origin) +
+		len(c.authority.WorkItem) + len(h.clientID) + len(h.verdict)
+	bytes := historyRowBytes(strs, c.record.OpID, c.record.Actor)
+	for _, t := range h.touches {
+		bytes += touchBytes(t.doc)
+	}
 	var elevated, undoable int
 	if c.authority.Elevated {
 		elevated = 1
@@ -239,7 +247,7 @@ func pruneHistory(ctx context.Context, tx *sql.Tx, c applyContext, s *storeRow, 
 	// the floor is told to read the store whole, so a delete older than the
 	// floor no longer needs its row.
 	tomb, err := tx.QueryContext(ctx, `
-		SELECT collection_no, doc_id, version FROM artifact_data_docs
+		SELECT collection_no, doc_id, version, metered FROM artifact_data_docs
 		WHERE store_no = ? AND body IS NULL AND version < ?
 		ORDER BY version, collection_no, doc_id LIMIT ?`, s.no, s.historyFloor, pruneBatch)
 	if err != nil {
@@ -249,11 +257,12 @@ func pruneHistory(ctx context.Context, tx *sql.Tx, c applyContext, s *storeRow, 
 		coll    int64
 		doc     string
 		version int64
+		metered int64
 	}
 	var stones []gone
 	for tomb.Next() {
 		var g gone
-		if err := tomb.Scan(&g.coll, &g.doc, &g.version); err != nil {
+		if err := tomb.Scan(&g.coll, &g.doc, &g.version, &g.metered); err != nil {
 			_ = tomb.Close()
 			return 0, fmt.Errorf("artifactdata: read store %s's tombstones: %w", s.artifact, err)
 		}
@@ -269,6 +278,7 @@ func pruneHistory(ctx context.Context, tx *sql.Tx, c applyContext, s *storeRow, 
 			return 0, fmt.Errorf("artifactdata: prune a tombstone of store %s: %w", s.artifact, err)
 		}
 		s.tombstones--
+		s.docBytes -= g.metered
 		s.tombstoneFloor = max(s.tombstoneFloor, g.version)
 		deleted++
 	}

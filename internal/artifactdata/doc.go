@@ -68,10 +68,12 @@
 // Surrogate integer keys (the store's number is the packed position of its
 // first record) keep the field index compact; the digest and the per-row
 // digests let a later build's checkpoint be verified against the store; and
-// the footprint is metered in real bytes (bodies, field-index entries at 48
-// bytes each, hot history), which is what `artifacts.limits.data_store_bytes`
-// and `artifacts.limits.data_bytes` bound. Moving idle stores to object storage
-// is a later build's; nothing here has to be re-derived for it.
+// the footprint is metered in the bytes the store's rows cost on disk (each
+// document row with its index entries and field-index entries, kept on the
+// row, plus hot history and its touches; meter.go), which is what
+// `artifacts.limits.data_store_bytes` and `artifacts.limits.data_bytes` bound.
+// Moving idle stores to object storage is a later build's; nothing here has to
+// be re-derived for it.
 //
 // # Per-viewer state
 //

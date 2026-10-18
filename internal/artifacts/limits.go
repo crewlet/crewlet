@@ -32,7 +32,9 @@ type Limits struct {
 	Artifacts int64 `json:"artifacts"`
 
 	// DataBytes bounds the datastore footprint of every store together:
-	// real bytes held on every data node (bodies, field index, history).
+	// the bytes its rows cost on every data node (document rows and their
+	// field index, and hot history), as internal/artifactdata's meter
+	// counts them.
 	DataBytes int64 `json:"data_bytes"`
 
 	// DataStoreBytes bounds one artifact's datastore footprint.
@@ -67,9 +69,11 @@ const (
 	MinDataBytes     = 64 * miB
 	MaxDataBytes     = 1 * tiB
 
-	// DefaultDataStoreBytes is 32 MiB per store: one sheet a few thousand
-	// rows long with a week of history is a few MiB, so this is an order of
-	// magnitude of headroom before a sheet is really a database.
+	// DefaultDataStoreBytes is 32 MiB per store, in the bytes its rows cost
+	// on disk: spike DS-2 measured a twelve-column review sheet at about
+	// 3.2 KiB a row with a week of history, so a sheet of a few thousand
+	// rows takes a few MiB to ten, and the default holds about ten thousand
+	// before a sheet is really a database.
 	DefaultDataStoreBytes = 32 * miB
 	MinDataStoreBytes     = 1 * miB
 	MaxDataStoreBytes     = 1 * giB

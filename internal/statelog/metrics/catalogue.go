@@ -769,7 +769,8 @@ func Catalogue() []Instrument {
 		{
 			Name: ArtifactsDataFootprintBytes, Kind: KindGauge, Unit: UnitBytes,
 			Shows: "The company's datastore footprint in real bytes held on every data " +
-				"node (canonical bodies, field-index entries and hot history), sampled " +
+				"node (each document row with its index and field-index entries, and hot " +
+				"history, as the applier meters what the rows cost on disk), sampled " +
 				"after each committed batch. Read against `artifacts.limits.data_bytes`: " +
 				"a store or a company at its limit refuses every write that grows it.",
 		},

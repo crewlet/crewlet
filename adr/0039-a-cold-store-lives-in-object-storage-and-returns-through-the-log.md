@@ -45,9 +45,13 @@ What this release builds for it:
 - **Compact keys**: a store, a collection and a field path are each a
   surrogate integer, so the field index is small enough to keep hot and a
   checkpoint is a rewrite of numbers rather than of every path string.
-- **Footprint metered in real bytes**: document bodies, field index entries
-  and history, which is what the per-store and per-company datastore quotas
-  bound, so a quota means the same thing before and after tiering.
+- **Footprint metered in real bytes**: what each document row, its index
+  entries and its field-index entries cost in the file's B-tree pages, and
+  the same for hot history and its touches (`internal/artifactdata`'s meter,
+  held within 10 percent of a snapshot by
+  `TestTheFootprintMeterMatchesTheFile`), which is what the per-store and
+  per-company datastore quotas bound, so a quota means the same thing before
+  and after tiering.
 - **A hot history window** of seven days and at most 8 MiB per store, pruned in
   the write's own transaction from the record's broker time.
 

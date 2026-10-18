@@ -48,8 +48,9 @@ instrument (see [Metrics](metrics.md)).
   small records a second whatever their size; past that, rows cost CPU.
 - **Every datastore byte is held on every data node** and rides every snapshot
   and backup, which is why `artifacts.limits.data_bytes` defaults to 1 GiB and
-  the footprint quota counts real bytes. Measured (DS-2), the file holds about
-  twice what the applier meters today; see the findings below.
+  the footprint quota counts real bytes. Measured (DS-2), a review sheet costs
+  about 3.2 KiB a row with a week of history, ten times its canonical bodies,
+  and the applier's meter is within one percent of the snapshot.
 - **On the `nats` object store every broker member holds every object**, and a
   replaced member re-replicates them all, which is why the bucket has a
   reservation and why large estates belong on `s3`. Measured (S7), each object
@@ -205,27 +206,37 @@ tables one at a time.
 | Documents | 10,000 |
 | Canonical bodies | 3.16 MiB |
 | Field index entries | 130,000 |
-| History (metered) | 6.21 MiB |
-| Metered footprint | 15.32 MiB |
-| Snapshot bytes | 31.62 MiB (3,315 bytes a document) |
-| Live file and log | 32.68 MiB |
-| Snapshot / metered | 2.06 |
+| Documents (metered) | 24.07 MiB |
+| History (metered) | 7.38 MiB |
+| Metered footprint | 31.46 MiB |
+| Snapshot bytes | 31.63 MiB (3,317 bytes a document) |
+| Live file and log | 32.72 MiB |
+| Snapshot / metered | 1.006 |
 | Snapshot bytes per MiB of canonical bodies | 10.0 MiB |
 
 | Table | Snapshot share | Against what is metered |
 |---|---|---|
-| `artifact_data_fields` | 18.89 MiB | 152 bytes an entry, metered at 48 |
-| `artifact_data_writes` and `artifact_data_touches` | 7.21 MiB | 1.16 times the metered history |
-| `artifact_data_docs` | 4.97 MiB | 1.57 times the bodies |
+| `artifact_data_fields` and `artifact_data_docs` | 23.87 MiB | 0.99 times the metered documents (152 bytes a field entry) |
+| `artifact_data_writes` and `artifact_data_touches` | 7.21 MiB | 0.98 times the metered history |
+
+The figures are from the meter that replaced the first one (finding 2), at
+`feat/artifacts-conformance`; the snapshot and its table shares are unchanged
+by it, since the meter writes one integer per document row. Under the first
+meter, which counted bodies, 48 bytes a field entry and history at its
+payload, the same store metered 15.32 MiB: a snapshot of 2.06 times that.
 
 **Reading.** The field index is the store's largest cost: every entry is a row
 keyed by five columns (stored twice, since the estate's tables carry a rowid)
 and appears again in the numeric and text indexes. A store therefore holds
-about 10 bytes on disk for every byte of document, and the metered footprint
-is half the real one.
+about 10 bytes on disk for every byte of document. The meter
+(`internal/artifactdata/meter.go`) charges each row its share of the 4 KiB
+page it sits in, slack included, or its overflow pages, and each index entry
+its key; `TestTheFootprintMeterMatchesTheFile` holds it within 10 percent of a
+snapshot on review rows, half-page rows with long ids, edits, pastes and
+tombstones (within 3 percent on every shape measured).
 
 **Target**: the metered footprint within 10 percent of the measured bytes.
-**Missed** by a factor of two; see the findings.
+**Holds**: 0.6 percent.
 
 ### S3: streaming from a sandbox
 
@@ -458,11 +469,15 @@ it.
    once on three nodes. A frame older than one already heard from its node now
    fills in and never undoes (`TestALateFullFrameFillsInAndNeverUndoes`); the
    same rooms show everybody in 2 seconds.
-2. **The metered footprint is half the real one (`internal/artifactdata`).** A
-   field index entry costs 152 bytes on disk and is metered at 48
-   (`fieldEntryBytes`); document rows cost 1.57 times their bodies and history
-   1.16 times what is metered. Either meter the measured costs, or state the
-   quotas as metered units; `data_bytes` of 1 GiB holds about 2 GiB today.
+2. **The metered footprint was half the real one (fixed, `internal/artifactdata`).**
+   A field index entry cost 152 bytes on disk and was metered at 48, document
+   rows cost 1.57 times their bodies and history 1.16 times what was metered,
+   so `data_bytes` of 1 GiB held about 2 GiB. The applier now meters what each
+   row costs in the file's pages (each document row with its index and
+   field-index entries, kept on the row; each history row with its touches),
+   and the snapshot is 1.006 times the metered footprint. The default
+   `data_store_bytes` of 32 MiB now holds about ten thousand review rows with
+   a week of history, rather than about twenty thousand.
 3. **A changed document rewrites its whole field index (`internal/artifactdata`).**
    A one-cell edit of a twelve-column row writes 21 rows, against the review's
    15 with changed paths re-exploded (review 02, DT-03 and DT-05), and the

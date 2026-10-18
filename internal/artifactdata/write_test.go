@@ -2,6 +2,7 @@ package artifactdata_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -292,10 +293,69 @@ func TestTheStampedLimitBoundsTheStoresFootprint(t *testing.T) {
 	if info.Footprint > tight.Authority.Limits.DataStoreBytes {
 		t.Fatalf("the footprint is %d past the stamped %d", info.Footprint, tight.Authority.Limits.DataStoreBytes)
 	}
-	if want := info.BodyBytes + 48*info.FieldEntries + info.HistoryBytes; info.Footprint != want {
+	if want := info.DocBytes + info.HistoryBytes; info.Footprint != want {
 		t.Fatalf("the footprint is %d, and its parts sum to %d", info.Footprint, want)
 	}
+	// THE QUOTA IS THE ROWS' COST ON DISK, not their bodies: 3 KB bodies cost
+	// a whole page each beside their row and index entries.
+	if info.DocBytes < info.BodyBytes+int64(landed)*1000 {
+		t.Fatalf("%d documents of %d body bytes meter at %d: the meter counts bodies, not rows",
+			landed, info.BodyBytes, info.DocBytes)
+	}
 	n.applied(tight, artifacts.DataOp{Op: artifacts.DataDelete, Collection: "notes", Doc: "naa"})
+}
+
+// THE DOCUMENT METER COUNTS EVERY ROW IT KEEPS, AND NOTHING IT DROPPED: the
+// store's doc_bytes is the sum of its rows' metered bytes through creates,
+// merges, deletes kept as tombstones, a schema change that re-indexes every
+// row, and the drop of an emptied collection with its tombstones, so the
+// quota never drifts from the rows it bounds.
+func TestTheDocumentMeterCountsEveryRowItKeeps(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	owner := person("jane", artifacts.RoleOwner)
+	held := func(when string) int64 {
+		t.Helper()
+		info, err := n.reader.Store(t.Context(), sheet)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sum := n.count(`SELECT COALESCE(SUM(metered), 0) FROM artifact_data_docs`); sum != info.DocBytes {
+			t.Fatalf("%s: the rows meter %d bytes and the store counts %d", when, sum, info.DocBytes)
+		}
+		if info.Footprint != info.DocBytes+info.HistoryBytes {
+			t.Fatalf("%s: the footprint %d is not %d plus %d", when, info.Footprint, info.DocBytes,
+				info.HistoryBytes)
+		}
+		return info.DocBytes
+	}
+	n.configure(owner, artifacts.Collection{Name: "tasks", Columns: []artifacts.Column{
+		{Key: "title", Type: artifacts.ColumnText}, {Key: "n", Type: artifacts.ColumnNumber}}})
+	for i := range 12 {
+		n.applied(owner, set("tasks", fmt.Sprintf("t%02d", i), map[string]string{
+			"title": `"` + strings.Repeat("w", 40*i) + `"`, "n": fmt.Sprint(i)}))
+	}
+	created := held("after the creates")
+	n.applied(person("bob", artifacts.RoleEditor), merge("tasks", "t03", map[string]string{"title": `"short"`}))
+	if merged := held("after a merge"); merged >= created {
+		t.Fatalf("shortening a title left the store at %d bytes from %d", merged, created)
+	}
+	for i := range 12 {
+		n.applied(owner, artifacts.DataOp{Op: artifacts.DataDelete, Collection: "tasks",
+			Doc: fmt.Sprintf("t%02d", i)})
+	}
+	if stones := held("after the deletes"); stones <= 0 || stones >= created {
+		t.Fatalf("twelve tombstones meter %d bytes, against %d for the live rows", stones, created)
+	}
+	n.configure(owner, artifacts.Collection{Name: "kept", Columns: []artifacts.Column{
+		{Key: "title", Type: artifacts.ColumnText}}})
+	n.applied(owner, set("kept", "k1", map[string]string{"title": `"stays"`}))
+	n.configure(owner, artifacts.Collection{Name: "kept", Columns: []artifacts.Column{
+		{Key: "title", Type: artifacts.ColumnText}, {Key: "due", Type: artifacts.ColumnDate}}})
+	held("after a schema change and the drop of an emptied collection")
+	if c := n.count(`SELECT COUNT(*) FROM artifact_data_docs WHERE body IS NULL`); c != 0 {
+		t.Fatalf("%d tombstones of the dropped collection remain", c)
+	}
 }
 
 // THE PER-VIEWER STATE IS THE VIEWER'S ALONE (D15): a key one viewer keeps is

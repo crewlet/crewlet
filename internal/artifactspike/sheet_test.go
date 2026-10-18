@@ -137,10 +137,17 @@ func pasteOps(r *rand.Rand, start, n int) []artifacts.DataOp {
 }
 
 // seedSheet configures the sheet on store id and fills it with rows full rows,
-// through node n, failing the spike on anything but `applied`.
+// through node n as the artifact's owner, failing the spike on anything but
+// `applied`.
 func seedSheet(tb testing.TB, n *dataNode, id artifacts.ID, rows int) {
 	tb.Helper()
-	res, err := n.writer.Configure(tb.Context(), owner(), id, []artifacts.Collection{reviewSheet()})
+	seedSheetAs(tb, n, id, rows, owner())
+}
+
+// seedSheetAs is [seedSheet] as the caller as.
+func seedSheetAs(tb testing.TB, n *dataNode, id artifacts.ID, rows int, as artifactdata.Call) {
+	tb.Helper()
+	res, err := n.writer.Configure(tb.Context(), as, id, []artifacts.Collection{reviewSheet()})
 	mustApply(tb, "configure the sheet", res, err)
 	r := rand.New(rand.NewPCG(uint64(rows), 1))
 	for start := 0; start < rows; start += artifacts.MaxBatchOps {
@@ -151,7 +158,7 @@ func seedSheet(tb testing.TB, n *dataNode, id artifacts.ID, rows int) {
 			ops[i] = artifacts.DataOp{Op: artifacts.DataSet, Collection: sheetCollection,
 				Doc: docID(k), Fields: rowFields(r, k)}
 		}
-		res, err := n.writer.Write(tb.Context(), owner(), id, artifacts.DataWrite{Ops: ops})
+		res, err := n.writer.Write(tb.Context(), as, id, artifacts.DataWrite{Ops: ops})
 		mustApply(tb, fmt.Sprintf("seed rows %d..%d", start, start+count-1), res, err)
 	}
 }

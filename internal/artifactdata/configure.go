@@ -425,10 +425,11 @@ func (a *Applier) writeConfigure(ctx context.Context, tx *sql.Tx, c applyContext
 		if err != nil {
 			return 0, 0, err
 		}
-		var tombstones int64
+		var tombstones, metered int64
 		if err := tx.QueryRowContext(ctx, `
-			SELECT COUNT(*) FROM artifact_data_docs
-			WHERE store_no = ? AND collection_no = ? AND body IS NULL`, s.no, cur.no).Scan(&tombstones); err != nil {
+			SELECT COUNT(*), COALESCE(SUM(metered), 0) FROM artifact_data_docs
+			WHERE store_no = ? AND collection_no = ? AND body IS NULL`, s.no, cur.no).Scan(
+			&tombstones, &metered); err != nil {
 			return 0, 0, fmt.Errorf("artifactdata: count collection %s's tombstones: %w", cur.spec.Name, err)
 		}
 		for _, stmt := range []string{
@@ -444,6 +445,7 @@ func (a *Applier) writeConfigure(ctx context.Context, tx *sql.Tx, c applyContext
 			rows += int(n)
 		}
 		s.tombstones -= tombstones
+		s.docBytes -= metered
 		s.digest = s.digest.Sub(canon.CollectionTerm(cur.spec.Name, spec))
 		h.changes = append(h.changes, Change{Collection: cur.spec.Name, Op: ChangeSchema})
 	}

@@ -21,6 +21,7 @@ type storeRow struct {
 	no                           int64
 	docs, tombstones             int64
 	bodyBytes, fieldEntries      int64
+	docBytes                     int64 // every document row's metered bytes ([meteredDoc])
 	historyBytes, footprint      int64
 	writes                       int64
 	digest                       canon.Digest
@@ -30,21 +31,20 @@ type storeRow struct {
 	version                      int64
 }
 
-// computeFootprint is the store's footprint from its counters.
-func (s storeRow) computeFootprint() int64 {
-	return s.bodyBytes + fieldEntryBytes*s.fieldEntries + s.historyBytes
-}
+// computeFootprint is the store's footprint from its counters: its documents
+// and its hot history, each as the meter counts them (meter.go).
+func (s storeRow) computeFootprint() int64 { return s.docBytes + s.historyBytes }
 
 // readStore reads one store's catalogue row, false where there is none.
 func readStore(ctx context.Context, tx *sql.Tx, artifact string) (storeRow, bool, error) {
 	s := storeRow{artifact: artifact}
 	var digest []byte
 	err := tx.QueryRowContext(ctx, `
-		SELECT store_no, docs, tombstones, body_bytes, field_entries, history_bytes,
+		SELECT store_no, docs, tombstones, body_bytes, field_entries, doc_bytes, history_bytes,
 		       footprint, writes, state_digest, history_floor, tombstones_floor,
 		       next_collection_no, next_path_no, created_at, version
 		FROM artifact_data_stores WHERE artifact_id = ?`, artifact).Scan(
-		&s.no, &s.docs, &s.tombstones, &s.bodyBytes, &s.fieldEntries, &s.historyBytes,
+		&s.no, &s.docs, &s.tombstones, &s.bodyBytes, &s.fieldEntries, &s.docBytes, &s.historyBytes,
 		&s.footprint, &s.writes, &digest, &s.historyFloor, &s.tombstoneFloor,
 		&s.nextCollection, &s.nextPath, &s.createdAt, &s.version)
 	switch {
@@ -134,7 +134,7 @@ func newTxView(ctx context.Context, tx *sql.Tx, store storeRow, present bool) (*
 
 func (v *txView) totals() storeTotals {
 	return storeTotals{
-		docs: v.store.docs, bodyBytes: v.store.bodyBytes, fieldEntries: v.store.fieldEntries,
+		docs: v.store.docs, docBytes: v.store.docBytes,
 		historyBytes: v.store.historyBytes, collections: v.colls, companyFootprint: v.company,
 	}
 }
@@ -173,9 +173,10 @@ func (v *txView) doc(c *collState, id string) (*docState, error) {
 	}
 	var body sql.NullString
 	err := v.tx.QueryRowContext(v.ctx, `
-		SELECT body, created_by, created_by_kind, created_at, version
+		SELECT body, created_by, created_by_kind, created_at, version, metered
 		FROM artifact_data_docs WHERE store_no = ? AND collection_no = ? AND doc_id = ?`,
-		v.store.no, c.no, id).Scan(&body, &d.createdBy, &d.createdByKind, &d.createdAt, &d.version0)
+		v.store.no, c.no, id).Scan(&body, &d.createdBy, &d.createdByKind, &d.createdAt, &d.version0,
+		&d.metered0)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return d, nil

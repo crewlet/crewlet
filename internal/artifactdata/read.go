@@ -802,10 +802,15 @@ type StoreInfo struct {
 	Docs      int64        `json:"docs"`
 	Footprint int64        `json:"footprint"`
 
-	// BodyBytes, FieldEntries and HistoryBytes are what the footprint sums.
+	// DocBytes and HistoryBytes are what the footprint sums, each in the
+	// bytes its rows cost on disk: every document row with its field-index
+	// entries, and the hot history with its touches. BodyBytes and
+	// FieldEntries are the canonical bodies and the entry count inside
+	// DocBytes.
+	DocBytes     int64 `json:"doc_bytes"`
+	HistoryBytes int64 `json:"history_bytes"`
 	BodyBytes    int64 `json:"body_bytes"`
 	FieldEntries int64 `json:"field_entries"`
-	HistoryBytes int64 `json:"history_bytes"`
 
 	Writes int64 `json:"writes"`
 
@@ -829,8 +834,9 @@ func (r *Reader) Store(ctx context.Context, id artifacts.ID) (StoreInfo, error) 
 			return nil
 		}
 		out = StoreInfo{
-			Artifact: id, Docs: s.docs, Footprint: s.footprint, BodyBytes: s.bodyBytes,
-			FieldEntries: s.fieldEntries, HistoryBytes: s.historyBytes, Writes: s.writes,
+			Artifact: id, Docs: s.docs, Footprint: s.footprint, DocBytes: s.docBytes,
+			BodyBytes: s.bodyBytes, FieldEntries: s.fieldEntries, HistoryBytes: s.historyBytes,
+			Writes: s.writes,
 			Digest: s.digest.String(), HistoryFloor: s.historyFloor,
 			TombstonesFloor: s.tombstoneFloor, Version: s.version,
 		}
