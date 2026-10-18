@@ -126,14 +126,15 @@ func Validate(kind artifacts.Kind, m artifacts.Manifest) error {
 	return checkEntry(kind, m)
 }
 
-// checkEntry holds the manifest's entry to its kind.
+// checkEntry holds the manifest's entry to its kind's entry rule.
 func checkEntry(kind artifacts.Kind, m artifacts.Manifest) error {
+	spec, _ := kind.Spec()
 	if m.Entry == "" {
-		if kind == artifacts.KindSheet {
+		if spec.Entry.Optional {
 			return nil
 		}
-		return fmt.Errorf("%w: a %s version names an entry: the file served at its "+
-			"root", ErrInvalid, kind)
+		return fmt.Errorf("%w: a %s version names an entry: the file it opens on",
+			ErrInvalid, kind)
 	}
 	e, ok := EntryAt(m, m.Entry)
 	if !ok {
@@ -144,21 +145,15 @@ func checkEntry(kind artifacts.Kind, m artifacts.Manifest) error {
 		return fmt.Errorf("%w: the entry %q is %d bytes and the maximum is %d",
 			ErrInvalid, e.Path, e.Object.Size, artifacts.MaxEntryBytes)
 	}
+	// AN OPTIONAL ENTRY admits any of the version's files: a sheet that does
+	// name one names a file shown beside the grid.
+	if len(spec.Entry.Essences) == 0 {
+		return nil
+	}
 	typ, _ := mediatype.Resolve(e.Path, e.ContentType)
-	switch kind {
-	case artifacts.KindHTML:
-		if typ.Essence() != "text/html" {
-			return fmt.Errorf("%w: an html artifact's entry is an HTML page, and %q "+
-				"is %s", ErrInvalid, e.Path, typ.Essence())
-		}
-	case artifacts.KindMarkdown:
-		if typ.Essence() != "text/markdown" {
-			return fmt.Errorf("%w: a markdown artifact's entry is a Markdown document, "+
-				"and %q is %s", ErrInvalid, e.Path, typ.Essence())
-		}
-	case artifacts.KindSheet:
-		// A SHEET THAT DOES NAME AN ENTRY names one of its files, which is
-		// all the dashboard needs to show beside the grid.
+	if !spec.Entry.Admits(typ.Essence()) {
+		return fmt.Errorf("%w: a %s artifact's entry is %s, and %q is %s", ErrInvalid, kind,
+			strings.Join(spec.Entry.Essences, " or "), e.Path, typ.Essence())
 	}
 	return nil
 }

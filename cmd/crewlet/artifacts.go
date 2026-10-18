@@ -23,6 +23,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -249,7 +250,7 @@ func artifactsList(environ config.Source, args []string, stdout, stderr io.Write
 	var limit *int
 	client, err := nodeClientFor(environ, args, "artifacts list", stderr, func(fs *flag.FlagSet) {
 		scope = fs.String("scope", "", "mine, shared, company, agents or all (the default)")
-		kind = fs.String("kind", "", "html, markdown or sheet")
+		kind = fs.String("kind", "", kindNames())
 		q = fs.String("q", "", "text the title, the description or the content holds")
 		status = fs.String("status", "", "live (the default) or trashed")
 		item = fs.String("work-item", "", "only the artifacts made for this work item")
@@ -656,9 +657,12 @@ func collectFiles(root string) ([]localFile, error) {
 	return files, err
 }
 
-// entryFor is the entry a publish of files names: the one asked for, or
-// `index.html`, or `index.md`, or the only file.
-func entryFor(files []localFile, asked string) (string, error) {
+// entryFor is the entry a publish of files names: the one asked for, else the
+// one default entry present (the kind's own defaults when -kind names one,
+// every kind's otherwise, from the kind table), else the only file. Two
+// defaults present is refused rather than picked between: which file a
+// directory opens on, and so what kind it is, is the author's to say.
+func entryFor(files []localFile, asked string, kind artifacts.Kind) (string, error) {
 	if asked != "" {
 		for _, f := range files {
 			if f.path == asked {
@@ -667,17 +671,54 @@ func entryFor(files []localFile, asked string) (string, error) {
 		}
 		return "", fmt.Errorf("-entry %s is not one of the files published", asked)
 	}
-	for _, candidate := range []string{"index.html", "index.md"} {
-		for _, f := range files {
-			if f.path == candidate {
-				return candidate, nil
-			}
+	candidates := artifacts.DefaultEntries()
+	if kind != "" {
+		spec, _ := kind.Spec()
+		candidates = spec.Entry.Defaults
+	}
+	var found []string
+	for _, candidate := range candidates {
+		if slices.ContainsFunc(files, func(f localFile) bool { return f.path == candidate }) {
+			found = append(found, candidate)
 		}
 	}
-	if len(files) == 1 {
+	switch {
+	case len(found) == 1:
+		return found[0], nil
+	case len(found) > 1:
+		return "", fmt.Errorf("the files hold %s: name the entry with -entry, or the kind "+
+			"with -kind", strings.Join(found, " and "))
+	case len(files) == 1:
 		return files[0].path, nil
+	case len(candidates) == 0:
+		return "", fmt.Errorf("name the entry with -entry: a %s opens on no default file", kind)
 	}
-	return "", errors.New("name the entry with -entry: there is no index.html or index.md")
+	return "", fmt.Errorf("name the entry with -entry: there is no %s",
+		strings.Join(candidates, " or "))
+}
+
+// kindFor is the kind a new artifact is created as: the one -kind names, else
+// the kind whose entry the entry's type may be, from the kind table.
+func kindFor(asked artifacts.Kind, entry string) (artifacts.Kind, error) {
+	if asked != "" {
+		return asked, nil
+	}
+	typ, ok := mediatype.For(entry)
+	if ok {
+		if kind, ok := artifacts.KindFor(typ.Essence()); ok {
+			return kind, nil
+		}
+	}
+	return "", fmt.Errorf("name the kind with -kind: no kind opens on %s", entry)
+}
+
+// kindNames lists every kind this build serves, for the flags' help.
+func kindNames() string {
+	names := make([]string, len(artifacts.Kinds))
+	for i, k := range artifacts.Kinds {
+		names[i] = string(k)
+	}
+	return strings.Join(names, ", ")
 }
 
 // fileSpec is one file of a publish as the surface takes it.
@@ -698,8 +739,9 @@ func artifactsPublish(environ config.Source, args []string, stdout, stderr io.Wr
 	client, err := nodeClientFor(environ, rest, "artifacts publish", stderr, func(fs *flag.FlagSet) {
 		target = fs.String("artifact", "", "publish a new version of this artifact; empty creates one")
 		title = fs.String("title", "", "the title of a new artifact (default: the entry's name)")
-		kind = fs.String("kind", "", "html or markdown (default: from the entry)")
-		entry = fs.String("entry", "", "the file the artifact opens on (default: index.html, index.md)")
+		kind = fs.String("kind", "", kindNames()+" (default: from the entry)")
+		entry = fs.String("entry", "", "the file the artifact opens on (default: "+
+			strings.Join(artifacts.DefaultEntries(), ", ")+")")
 		label = fs.String("label", "", "a label for the version")
 		contract = fs.String("contract", "", "the runtime contract the page pins: latest or an exact version")
 		fs.Var(&caps, "capabilities", "what the page uses, comma-separated: "+
@@ -719,12 +761,22 @@ func artifactsPublish(environ config.Source, args []string, stdout, stderr io.Wr
 	if err != nil {
 		return err
 	}
-	entryPath, err := entryFor(files, *entry)
+	asked := artifacts.Kind(*kind)
+	if asked != "" && !asked.Valid() {
+		return fmt.Errorf("-kind %s is not a kind; name one of %s", asked, kindNames())
+	}
+	entryPath, err := entryFor(files, *entry, asked)
 	if err != nil {
 		return err
 	}
+	var created artifacts.Kind
+	if *target == "" {
+		if created, err = kindFor(asked, entryPath); err != nil {
+			return err
+		}
+	}
 	p := publishing{client: client, files: files, key: key, stdout: stdout}
-	if err := p.run(*target, entryPath, *title, *kind, *label, *contract, *item, *force, caps.list); err != nil {
+	if err := p.run(*target, entryPath, *title, created, *label, *contract, *item, *force, caps.list); err != nil {
 		return unknownOutcome(err, "publish", key)
 	}
 	return nil
@@ -785,7 +837,7 @@ type publishing struct {
 
 // run declares the files, sends the ones the artifact does not hold, and
 // publishes the version.
-func (p publishing) run(target, entry, title, kind, label, contract, item string, force bool,
+func (p publishing) run(target, entry, title string, kind artifacts.Kind, label, contract, item string, force bool,
 	caps []artifacts.Capability) error {
 
 	ctx := context.Background()
@@ -847,12 +899,6 @@ func (p publishing) run(target, entry, title, kind, label, contract, item string
 	if target == "" {
 		if title == "" {
 			title = strings.TrimSuffix(path.Base(entry), path.Ext(entry))
-		}
-		if kind == "" {
-			kind = string(artifacts.KindHTML)
-			if strings.EqualFold(path.Ext(entry), ".md") {
-				kind = string(artifacts.KindMarkdown)
-			}
 		}
 		body["title"], body["kind"] = title, kind
 		if err := p.client.write(ctx, http.MethodPost, "/artifacts", publishKey, nil, body,

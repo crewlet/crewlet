@@ -282,6 +282,7 @@ var contract = []Entry{
 
 	// artifacts.ts
 	{"ARTIFACT_KINDS", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
+	{"ARTIFACT_KIND_SPECS", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardDrawsEachKindAsTheKindTableSays"},
 	{"ARTIFACT_CAPABILITIES", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
 	{"ARTIFACT_ROLES", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
 	{"SHAREABLE_ROLES", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},

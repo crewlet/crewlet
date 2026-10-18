@@ -41,9 +41,9 @@ import {
 } from "~/lib/artifacts/compare.ts";
 import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
-import { FrameView } from "./FrameView.tsx";
-import { MarkdownView } from "./MarkdownView.tsx";
+import { contentIsData, dataBesideVersions } from "~/lib/artifacts/kinds.ts";
 import type { PresenceReport } from "./presence.ts";
+import { KIND_VIEWS } from "./ViewTab.tsx";
 
 /** How two versions are compared. */
 export type CompareLens = "source" | "visual";
@@ -51,9 +51,9 @@ export type CompareLens = "source" | "visual";
 /** The lenses, as the URL spells them. */
 export const COMPARE_LENSES: readonly CompareLens[] = ["source", "visual"];
 
-/** Whether a kind of artifact can be drawn side by side: a page or a document, never a sheet. */
+/** Whether a kind of artifact can be drawn side by side: one whose versions hold what it draws, never a sheet. */
 export function drawnSideBySide(kind: ArtifactDetail["kind"]): boolean {
-  return kind === "html" || kind === "markdown";
+  return !contentIsData(kind);
 }
 
 /** The most changed runs of lines one file shows before it says how many more there are. */
@@ -84,18 +84,16 @@ export function ArtifactCompare({
   const newer = Math.max(picked, against);
   const visual = drawnSideBySide(detail.kind);
   const side = (n: number) =>
-    detail.kind === "html" ? (
-      <FrameView
-        detail={detail}
-        version={n}
-        versions={versions}
-        room={room}
-        presence={presence}
-        bridgeStores={bridgeStores}
-      />
-    ) : (
-      <MarkdownView detail={detail} version={n} />
-    );
+    KIND_VIEWS[detail.kind]({
+      detail,
+      version: n,
+      versions,
+      store: null,
+      room,
+      presence,
+      drawn: [],
+      bridgeStores,
+    });
   // THE PANES ARE HANDED OVER ONLY FOR A KIND DRAWN SIDE BY SIDE, and uilet
   // mounts them only while that lens is on show, so no frame runs behind the
   // Files lens. Without `onLensChange` a sheet gets no switch and shows Files.
@@ -112,7 +110,7 @@ export function ArtifactCompare({
       labels={{ changes: "Files", versions: "Side by side" }}
       changes={<SourceCompare detail={detail} older={older} newer={newer} />}
       note={
-        detail.kind === "html"
+        dataBesideVersions(detail.kind)
           ? "Both versions show today's data: a page's data is live and is not versioned with it."
           : undefined
       }

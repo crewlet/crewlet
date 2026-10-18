@@ -485,3 +485,22 @@ func TestASourceAddressIsHeldByOneArtifact(t *testing.T) {
 		t.Errorf("a create claiming another address than its subject was %q", reason)
 	}
 }
+
+// A CREATE NAMES A KIND THIS BUILD SERVES, at the apply as at the writer: the
+// kind table is what every reader of the row draws by, so a row whose kind has
+// no row would be an artifact nothing can open. A newer kind arrives under a
+// raised record version, which this build defers rather than applies.
+//
+// Mutation: check only that the kind is non-empty and the unknown kind applies.
+func TestACreateOfAKindThisBuildDoesNotServeIsRefused(t *testing.T) {
+	t.Parallel()
+	e := newEstate(t)
+	id := newID()
+	p := createPayload(id)
+	p.Kind = artifacts.Kind("hologram")
+	e.apply(handRecord(t, artifactsdomain.Subject{Kind: artifactsdomain.KindArtifact, ID: id},
+		artifactsdomain.OpCreate, "op-hologram", artifactsdomain.ScopeSet{Subject: true}, p), monday)
+	if _, reason, _ := e.verdict(id, "op-hologram"); reason != string(artifactsdomain.RefusedInvalid) {
+		t.Fatalf("a create of an unserved kind was %q", reason)
+	}
+}

@@ -108,7 +108,7 @@ func NewFrames(tickets *ticket.Codec, origins Origins, now func() time.Time) (*F
 func (f *Frames) For(r FrameRequest) (artifacts.Frame, error) {
 	head, v := r.Head, r.Version
 	switch {
-	case head.Kind != artifacts.KindHTML:
+	case !head.Kind.Framed():
 		return artifacts.Frame{}, fmt.Errorf("%w: a %s artifact is rendered by the dashboard",
 			ErrNotServed, head.Kind)
 	case head.Status != artifactsdomain.StatusLive:

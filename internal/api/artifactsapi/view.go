@@ -55,7 +55,7 @@ func (s *Service) ticket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
-	case a.Head.Kind != artifacts.KindHTML:
+	case !a.Head.Kind.Framed():
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeArtifactNotFramed, map[string]string{
 			"detail": "a " + string(a.Head.Kind) + " artifact is rendered by the dashboard: read " +
 				"its source, or its data"})
@@ -284,7 +284,9 @@ func (s *Service) source(w http.ResponseWriter, r *http.Request) {
 		contentFailed(w, r, a.Head.ID, entry.Path, err)
 		return
 	}
-	if a.Head.Kind == artifacts.KindMarkdown {
+	// A NATIVE KIND IS OPENED BY READING IT, since no ticket is minted for
+	// it: the open is recorded here, as a frame's ticket records a page's.
+	if !a.Head.Kind.Framed() {
 		s.gate.markOpened(r.Context(), a)
 	}
 	httpjson.Write(w, http.StatusOK, Source{
