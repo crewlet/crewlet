@@ -1625,17 +1625,21 @@ func NoActiveRevision(w http.ResponseWriter, detail Detail) {
 		detail)
 }
 
-// NativeHalvesNotUp is the detail every surface over the company's own tracker
-// and knowledge base answers beside `no_active_revision` — the human write
-// surface, the operator's MCP surface, and the work, page and search questions
-// on both transports.
+// NativeHalvesNotUp is the detail every surface over the company's own tracker,
+// knowledge base and chat answers beside `no_active_revision` — the human write
+// surface, the operator's act and MCP surfaces, and the work, page, chat and
+// search questions on both transports.
 //
 // ONE SENTENCE, for [NoActiveRevision]'s reason: it was written out at each of
 // the four places that answer it, and a client showing a person why a screen
-// is empty reads it from whichever of them it asked.
+// is empty reads it from whichever of them it asked. It NAMES ALL THREE
+// HALVES, because each is the answer for every one of them: written while it
+// named the tracker and the knowledge base alone, a chat verb on such a node —
+// `crewlet chat` prints the node's own words for it — was told that two halves
+// it never asked for were not running, and nothing about the one it had.
 const NativeHalvesNotUp = "this node has not been handed a company yet, so the " +
-	"company's own tracker and knowledge base are not running here; they come up " +
-	"with its first revision, with no restart"
+	"company's own tracker, knowledge base and chat are not running here; those " +
+	"the company runs come up with its first revision, with no restart"
 
 // Unavailable writes a 503 carrying a Retry-After, which is the pair a client
 // needs to tell "come back" from "do not come back".
