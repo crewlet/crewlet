@@ -5231,6 +5231,28 @@ export interface ArtifactHistoryAnswer {
   after?: string;
 }
 
+/**
+ * One row of the company trail (`artifactsdomain.TrailEntry`): a history row
+ * of any artifact, with the artifact it is about and its title and owner now.
+ */
+export interface ArtifactTrailEntry extends ArtifactHistoryEntry {
+  artifact: string;
+  title: string;
+  owner: string;
+}
+
+/**
+ * `artifact_trail{op, cursor, limit}`: every artifact's history across the
+ * company, newest first in the log's order; an administrator's question
+ * (`audit.read`).
+ */
+export interface ArtifactTrailAnswer {
+  entries: ArtifactTrailEntry[];
+  after?: string;
+  position: LogPosition;
+  complete: boolean;
+}
+
 /** `artifact_seen_by{id}`: who has opened it, or `shown: false` where the company withholds it. */
 export interface ArtifactSeenByAnswer {
   shown: boolean;
@@ -5673,6 +5695,7 @@ export interface QueryMap {
   artifact_seen_by: ArtifactSeenByAnswer;
   artifact_access: ArtifactAccessAnswer;
   artifact_usage: ArtifactUsageAnswer;
+  artifact_trail: ArtifactTrailAnswer;
   artifact_data: DataDocPage;
   artifact_data_doc: DataDoc;
   artifact_data_query: DataDocPage;

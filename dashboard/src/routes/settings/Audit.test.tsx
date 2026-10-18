@@ -22,7 +22,7 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { Audit, auditCsv, writerOf } from "./Audit.tsx";
+import { Audit, artifactDetail, auditCsv, writerOf } from "./Audit.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { QueryError, type QueryName } from "~/protocol/index.ts";
@@ -545,6 +545,99 @@ test("runtime calls are merged in, drawn as their author, and narrowed by Where"
   mount();
   await waitFor(() => expect(screen.getByText(/ran update_work_item/)).toBeTruthy());
   expect(screen.queryByText("took it off the board")).toBeNull();
+});
+
+/** One row of the company trail of every artifact, as `artifact_trail` answers it. */
+function trailRow(over: Record<string, unknown> = {}) {
+  return {
+    artifact: "0192f00e-0000-7000-8000-00000000a001",
+    title: "Salary review",
+    owner: "jane",
+    position: 41,
+    op_id: "op-1",
+    op: "read_elevated",
+    outcome: "applied",
+    number: 2,
+    actor: { Name: "root@example.com", Kind: "operator", OperatorID: "session:0192f00e" },
+    elevated: true,
+    at: RECENTLY,
+    summary: {},
+    ...over,
+  };
+}
+
+// EVERY ARTIFACT'S HISTORY IS THE SEVENTH SOURCE (D09). An administrator's
+// read of somebody's private artifact is recorded only in that artifact's own
+// history, which its owner and editors see; here it is found company-wide,
+// said in words, linked to the artifact and narrowed by Where.
+test("every artifact's history is merged in, an administrator's read said in words", async () => {
+  const query = serving({
+    work_activity: { records: [commit()], complete: true },
+    artifact_trail: {
+      entries: [
+        trailRow(),
+        trailRow({
+          position: 40,
+          op: "publish",
+          number: 3,
+          elevated: false,
+          actor: { Name: "jane", Kind: "human" },
+        }),
+      ],
+      complete: true,
+    },
+  });
+  mount();
+  await waitFor(() =>
+    expect(screen.getByText("Read version 2 as an administrator, with no share")).toBeTruthy(),
+  );
+  expect(asked(query, "artifact_trail").limit).toBe(200);
+  expect(screen.getByText("Version 3")).toBeTruthy();
+  expect(screen.getByText("read elevated")).toBeTruthy();
+  const links = screen.getAllByRole("link", { name: "Salary review" });
+  expect(links[0]?.getAttribute("href")).toBe("#/artifacts/0192f00e-0000-7000-8000-00000000a001");
+  expect(screen.getByText("took it off the board")).toBeTruthy();
+
+  // AND `kind=artifacts` IS THE ARTIFACT ROWS ALONE.
+  cleanup();
+  location.hash = "#/settings/audit?kind=artifacts";
+  serving({
+    work_activity: { records: [commit()], complete: true },
+    artifact_trail: { entries: [trailRow()], complete: true },
+  });
+  mount();
+  await waitFor(() =>
+    expect(screen.getByText("Read version 2 as an administrator, with no share")).toBeTruthy(),
+  );
+  expect(screen.queryByText("took it off the board")).toBeNull();
+});
+
+test("artifactDetail: a refusal says why, and an override says it was one", () => {
+  expect(
+    artifactDetail(
+      trailRow({
+        op: "publish",
+        outcome: "refused",
+        reason: "head_moved",
+        number: 0,
+        elevated: false,
+      }) as never,
+    ),
+  ).toBe("Refused: head moved");
+  expect(artifactDetail(trailRow({ op: "trash", elevated: true, number: 0 }) as never)).toBe(
+    "Admitted only as an administrator",
+  );
+  expect(artifactDetail(trailRow({ op: "share", elevated: false, number: 0 }) as never)).toBe("");
+});
+
+test("a refused artifact trail names the grant, and the other sources stand", async () => {
+  serving({
+    work_activity: { records: [commit()], complete: true },
+    artifact_trail: new QueryError("unauthorized", { reason: "no_grant", grants: ["admin"] }),
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("took it off the board")).toBeTruthy());
+  expect(screen.getByText(/Reading every artifact's history needs Admin/)).toBeTruthy();
 });
 
 // A WINDOWED PAGE THAT FILLED IS REPORTED TOO. The runtime audit and the

@@ -31,6 +31,7 @@ var (
 // artifactsEstate is the artifacts estate the questions read.
 type artifactsEstate struct {
 	elevated []int
+	trails   []artifactsdomain.TrailQuery
 }
 
 func (e *artifactsEstate) heads() map[artifacts.ID]artifactsdomain.Head {
@@ -87,6 +88,19 @@ func (e *artifactsEstate) Usage(context.Context) (artifactsdomain.Usage, error) 
 	return artifactsdomain.Usage{Artifacts: 2}, nil
 }
 
+// Trail answers kim's private page's elevated read, as the domain would, and
+// refuses an op the log does not record.
+func (e *artifactsEstate) Trail(_ context.Context, q artifactsdomain.TrailQuery) (artifactsdomain.TrailPage, error) {
+	if q.Op != "" && !q.Op.Valid() {
+		return artifactsdomain.TrailPage{}, artifactsdomain.ErrInvalid
+	}
+	e.trails = append(e.trails, q)
+	return artifactsdomain.TrailPage{Entries: []artifactsdomain.TrailEntry{{Artifact: qaPrivate,
+		Title: "Private", Owner: "kim", HistoryEntry: artifactsdomain.HistoryEntry{
+			Op: string(artifactsdomain.OpReadElevated), Elevated: true,
+			Actor: iam.Actor{Name: "ada", Kind: iam.ActorHuman}}}}}, nil
+}
+
 func (e *artifactsEstate) ReadElevated(_ context.Context, _ artifactsdomain.Call, _ artifacts.ID, version int) (
 	artifactsdomain.Written, error) {
 	e.elevated = append(e.elevated, version)
@@ -139,6 +153,7 @@ func TestEveryArtifactsQuestionDeclaresWhoAsksIt(t *testing.T) {
 		"artifact_seen_by":  "decided_by:" + string(authz.ActionArtifactRead),
 		"artifact_access":   "decided_by:" + string(authz.ActionArtifactRead),
 		"artifact_usage":    "decided_by:" + string(authz.ActionArtifactUsage),
+		"artifact_trail":    "decided_by:" + string(authz.ActionAuditRead),
 	}
 	bare, r := queries.NewRegistry(), queries.NewRegistry()
 	queries.Register(bare, queries.Sources{})
@@ -215,5 +230,39 @@ func TestTheArtifactsQuestionsAnswerThroughTheOneAdmission(t *testing.T) {
 	}
 	if _, err := r.Answer(seated(t, "ada", iam.GrantAdmin), "artifact_usage", nil); err != nil {
 		t.Errorf("an administrator asking the usage: %v", err)
+	}
+}
+
+// THE COMPANY TRAIL LISTS EVERY ARTIFACT'S RECORDS TO AN ADMINISTRATOR (D09): an
+// elevated read of kim's private page, which nobody but kim's editors would
+// otherwise find, is answered to whoever reads the company-wide trail, narrowed
+// by op; a person holding the artifacts app and a share is refused, however
+// many artifacts they hold, and an op the log does not record is a bad
+// parameter. Mutation: decide the question by a relation and bob reads the
+// overrides of artifacts never shared with him.
+func TestTheCompanyTrailListsEveryArtifactsRecordsToAnAdministrator(t *testing.T) {
+	t.Parallel()
+	e := &artifactsEstate{}
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Artifacts: artifactsSeam(e)})
+	if _, err := r.Answer(seated(t, "bob", iam.GrantArtifacts), "artifact_trail", nil); !errors.Is(err,
+		queries.ErrUnauthorized) {
+		t.Errorf("a person asking the company trail: %v, want refused", err)
+	}
+	got, err := r.Answer(seated(t, "ada", iam.GrantAdmin), "artifact_trail",
+		map[string]any{"op": "read_elevated", "limit": "10"})
+	if err != nil {
+		t.Fatalf("an administrator asking the company trail: %v", err)
+	}
+	page := got.(artifactsdomain.TrailPage)
+	if len(page.Entries) != 1 || page.Entries[0].Artifact != qaPrivate || !page.Entries[0].Elevated {
+		t.Errorf("the company trail answered %+v", page)
+	}
+	if len(e.trails) != 1 || e.trails[0].Op != artifactsdomain.OpReadElevated || e.trails[0].Limit != 10 {
+		t.Errorf("the trail was asked %+v", e.trails)
+	}
+	if _, err := r.Answer(seated(t, "ada", iam.GrantAdmin), "artifact_trail",
+		map[string]any{"op": "glance"}); !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("an op the log does not record: %v, want bad params", err)
 	}
 }

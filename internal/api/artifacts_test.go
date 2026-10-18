@@ -82,6 +82,11 @@ func (apiArtifacts) List(context.Context, artifactsdomain.Viewer, artifactsdomai
 	return artifactsdomain.ListPage{}, nil
 }
 
+func (apiArtifacts) Trail(context.Context, artifactsdomain.TrailQuery) (artifactsdomain.TrailPage, error) {
+	return artifactsdomain.TrailPage{Entries: []artifactsdomain.TrailEntry{{Artifact: apiPage,
+		HistoryEntry: artifactsdomain.HistoryEntry{Op: string(artifactsdomain.OpReadElevated)}}}}, nil
+}
+
 func (apiArtifacts) ReadElevated(context.Context, artifactsdomain.Call, artifacts.ID, int) (
 	artifactsdomain.Written, error) {
 	return artifactsdomain.Written{Result: statelog.Result{Outcome: statelog.OutcomeApplied}}, nil
@@ -140,8 +145,8 @@ func (apiArtifacts) Seats(context.Context) ([]artifactsapi.RosterSeat, error) { 
 
 // THE ARTIFACTS' ROUTES AND THEIR READ QUESTIONS SHARE ONE MUX: every route of
 // the surface and every REST mirror registers beside the rest of the API (two
-// overlapping patterns would panic the mux), the literal `/artifacts/usage` is
-// not read as an artifact, and every route answers through the API's guard.
+// overlapping patterns would panic the mux), the literals `/artifacts/usage`
+// and `/artifacts/trail` are not read as artifacts, and every route answers through the API's guard.
 func TestTheArtifactsRoutesAndQuestionsShareOneMux(t *testing.T) {
 	t.Parallel()
 	estate := apiArtifacts{}
@@ -170,6 +175,7 @@ func TestTheArtifactsRoutesAndQuestionsShareOneMux(t *testing.T) {
 	}{
 		{"GET", "/artifacts", `"items"`, http.StatusOK},
 		{"GET", "/artifacts/usage", `"artifacts":7`, http.StatusOK},
+		{"GET", "/artifacts/trail?op=read_elevated", `"read_elevated"`, http.StatusOK},
 		{"GET", page, `"Hello"`, http.StatusOK},
 		{"GET", page + "/versions", `"versions"`, http.StatusOK},
 		{"GET", page + "/versions/1", `"manifest"`, http.StatusOK},

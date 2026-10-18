@@ -93,6 +93,10 @@ func (v *vault) Usage(context.Context) (artifactsdomain.Usage, error) {
 	return artifactsdomain.Usage{Artifacts: 3, Bytes: 42, Complete: true}, nil
 }
 
+func (v *vault) Trail(_ context.Context, q artifactsdomain.TrailQuery) (artifactsdomain.TrailPage, error) {
+	return artifactsdomain.TrailPage{After: string(q.Op) + "+" + q.Cursor, Complete: true}, nil
+}
+
 func (v *vault) TrashedBefore(_ context.Context, _ time.Time, limit int) ([]artifacts.ID, error) {
 	return []artifacts.ID{artifacts.IDFor(fmt.Sprint(limit))}, nil
 }
@@ -238,6 +242,10 @@ func TestEveryArtifactsOperationCrossesWhole(t *testing.T) {
 	}
 	if usage, err := a.Usage(ctx); err != nil || usage.Bytes != 42 || !usage.Complete {
 		t.Errorf("usage = (%+v, %v)", usage, err)
+	}
+	if trail, err := a.Trail(ctx, artifactsdomain.TrailQuery{Op: artifactsdomain.OpReadElevated,
+		Cursor: "c"}); err != nil || trail.After != "read_elevated+c" || !trail.Complete {
+		t.Errorf("trail = (%+v, %v)", trail, err)
 	}
 	if trash, err := a.TrashedBefore(ctx, time.Now(), 11); err != nil || len(trash) != 1 ||
 		trash[0] != artifacts.IDFor("11") {

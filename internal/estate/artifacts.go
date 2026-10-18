@@ -43,6 +43,7 @@ type ArtifactsReader interface {
 		map[objstore.Hash]objstore.Object, error)
 	SeenBy(ctx context.Context, id artifacts.ID) ([]artifactsdomain.Read, error)
 	Usage(ctx context.Context) (artifactsdomain.Usage, error)
+	Trail(ctx context.Context, q artifactsdomain.TrailQuery) (artifactsdomain.TrailPage, error)
 	TrashedBefore(ctx context.Context, cutoff time.Time, limit int) ([]artifacts.ID, error)
 }
 
@@ -226,6 +227,15 @@ var opArtifactUsage = define("artifacts.usage", opRead, artifactsDomain, false,
 			return artifactsdomain.Usage{}, err
 		}
 		return r.Usage(ctx)
+	})
+
+var opArtifactTrail = define("artifacts.trail", opRead, artifactsDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q artifactsdomain.TrailQuery) (artifactsdomain.TrailPage, error) {
+		r, err := b.artifactsReader()
+		if err != nil {
+			return artifactsdomain.TrailPage{}, err
+		}
+		return r.Trail(ctx, q)
 	})
 
 type trashedBeforeArgs struct {
@@ -509,6 +519,11 @@ func (a Artifacts) SeenBy(ctx context.Context, id artifacts.ID) ([]artifactsdoma
 // Usage answers the company's counters.
 func (a Artifacts) Usage(ctx context.Context) (artifactsdomain.Usage, error) {
 	return call(ctx, a.r, opArtifactUsage, nil, artifactUsageArgs{})
+}
+
+// Trail answers a page of the company trail: every artifact's history.
+func (a Artifacts) Trail(ctx context.Context, q artifactsdomain.TrailQuery) (artifactsdomain.TrailPage, error) {
+	return call(ctx, a.r, opArtifactTrail, nil, q)
 }
 
 // TrashedBefore answers the artifacts trashed before cutoff.

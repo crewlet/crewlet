@@ -75,11 +75,23 @@
  * estate records and redrawing it in another vocabulary would claim a reading
  * the record does not make.
  *
+ * # The seventh source: every artifact's history
+ *
+ * An administrator may open any artifact, private ones included, and each
+ * such read is recorded in the artifact's own history, which only its owner
+ * and editors see. An override nobody else can find is one nobody audits when
+ * the owner has left or never looks, so the company trail of every artifact
+ * (`artifact_trail`, the company-wide trail's verb) is read here as
+ * `Artifacts`: every publish, share, trash and transfer of every artifact, and
+ * every administrator's read of somebody's private one, each row naming
+ * whether only the admin path admitted its author.
+ *
  * # What each source can and cannot be asked
  *
  * The tracker's feed and the runtime audit take a wall-clock window, and the
  * identity trail one instant it resolves to a log position; the wiki's pages
- * on a LOG POSITION, and the config and credential reads take neither. So those three are fetched as their newest page and narrowed to the
+ * and the artifacts' trail on a LOG POSITION, and the config and credential
+ * reads take neither. So those three are fetched as their newest page and narrowed to the
  * window HERE — and the screen says so rather than implying its window is the
  * engine's. A row count from a client-side narrowing is a count over what was
  * loaded, never over what exists, which is the rule every list in this product
@@ -122,7 +134,13 @@ import { isLogRefusal, rest, RestError } from "~/protocol/index.ts";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
 import { needsWords } from "~/lib/access.ts";
 import { throughOf } from "~/lib/attribution.ts";
-import type { FeedRow, SecretRow, WorkActivityRecord } from "~/protocol/index.ts";
+import type {
+  ArtifactTrailEntry,
+  FeedRow,
+  SecretRow,
+  WorkActivityRecord,
+} from "~/protocol/index.ts";
+import { artifactPath } from "~/lib/artifacts/api.ts";
 import { itemPath, subjectItem } from "~/lib/work.ts";
 
 /**
@@ -154,14 +172,30 @@ const AUDIT_OFFER: Offer = {
  * was loaded, and a window wider than the page reaches is reported rather than
  * silently cut.
  */
-const PAGE = { work: 200, pages: 100, config: 50, runtime: 200, identity: 200 } as const;
+const PAGE = {
+  work: 200,
+  pages: 100,
+  config: 50,
+  runtime: 200,
+  identity: 200,
+  artifacts: 200,
+} as const;
 
 /** How often the feeds are re-read. An audit is read, not watched. */
 const POLL_MS = 60_000;
 
 /** The places a company's own writes are recorded, the runtime audit of every
- *  call a person made, and the identity estate's own trail. */
-const SOURCES = ["work", "knowledge", "config", "credentials", "runtime", "identity"] as const;
+ *  call a person made, the identity estate's own trail, and every artifact's
+ *  history. */
+const SOURCES = [
+  "work",
+  "knowledge",
+  "config",
+  "credentials",
+  "runtime",
+  "identity",
+  "artifacts",
+] as const;
 type Source = (typeof SOURCES)[number];
 
 const SOURCE_LABEL: Record<Source, string> = {
@@ -171,6 +205,7 @@ const SOURCE_LABEL: Record<Source, string> = {
   credentials: "Credentials",
   runtime: "Runtime",
   identity: "Identity",
+  artifacts: "Artifacts",
 };
 
 type RuntimeType = (typeof RUNTIME_AUDIT_TYPES)[number];
@@ -374,6 +409,29 @@ function identitySubject(entry: IdentityAuditEntry): Pick<AuditEntry, "subject" 
   };
 }
 
+/**
+ * WHAT AN ARTIFACT TRAIL ROW SAYS HAPPENED, beyond its op: an administrator's
+ * read of somebody's private artifact says so in words, since that is the row
+ * this source exists to surface; a write only the admin path admitted says it
+ * was an override; a refused record says why; and a row naming a version says
+ * which.
+ */
+export function artifactDetail(entry: ArtifactTrailEntry): string {
+  if (entry.op === "read_elevated") {
+    return entry.number
+      ? `Read version ${entry.number} as an administrator, with no share`
+      : "Read as an administrator, with no share";
+  }
+  const parts: string[] = [];
+  if (entry.outcome === "refused") {
+    parts.push(entry.reason ? `Refused: ${entry.reason.replaceAll("_", " ")}` : "Refused");
+  }
+  if (entry.elevated) parts.push("admitted only as an administrator");
+  if (entry.number) parts.push(`version ${entry.number}`);
+  const line = parts.join(", ");
+  return line ? line.charAt(0).toUpperCase() + line.slice(1) : "";
+}
+
 /** A case-blind substring match. */
 function includes(value: string, needle: string): boolean {
   return value.toLowerCase().includes(needle.toLowerCase());
@@ -387,16 +445,16 @@ function short(id: string): string {
 /**
  * A source's rows, or none at all.
  *
- * SIX SOURCES AND ONE BAD ANSWER MUST NOT COST THE OTHER FIVE. This screen is
- * the only one that reads six subsystems at once, so what is a blank page
- * anywhere else is five subsystems' worth of history lost here — and the
+ * SEVEN SOURCES AND ONE BAD ANSWER MUST NOT COST THE OTHER SIX. This screen is
+ * the only one that reads seven subsystems at once, so what is a blank page
+ * anywhere else is six subsystems' worth of history lost here, and the
  * failure mode is not hypothetical: `config_audit` is the one question in this
  * set that answers a BARE ARRAY rather than an object, so `?? []` covers a
  * null and does not cover anything else, and iterating whatever arrived is a
  * throw that takes the whole screen with it.
  *
  * It is not a guard against the engine. It is a guard against the SET: a
- * screen that composes six independent reads has six chances at that throw,
+ * screen that composes seven independent reads has seven chances at that throw,
  * and an audit is the last screen that should go blank.
  */
 function list<T>(value: T[] | null | undefined): T[] {
@@ -576,6 +634,9 @@ export function Audit() {
     { source: OPERATOR_SOURCE, since, until, limit: PAGE.runtime },
     { pollMs: POLL_MS },
   );
+  // EVERY ARTIFACT'S HISTORY, the administrators' overrides among it: paged
+  // on a log position, so asked for its newest page and narrowed below.
+  const artifacts = useQuery("artifact_trail", { limit: PAGE.artifacts }, { pollMs: POLL_MS });
   const secrets = useSecrets();
   const identity = useIdentityTrail(windowParam(range.window), since);
   // A REFUSAL ON AUTHORITY WITHHOLDS ONE SOURCE; IT DOES NOT FAIL THE SCREEN.
@@ -593,6 +654,7 @@ export function Audit() {
     { read: knowledge, gesture: "Reading the knowledge base's history" },
     { read: config, gesture: "Reading the configuration's revisions" },
     { read: runtime, gesture: "Reading the runtime audit" },
+    { read: artifacts, gesture: "Reading every artifact's history" },
   ];
   const failed = reads
     .map(({ read }) => read)
@@ -601,6 +663,7 @@ export function Audit() {
   const knowledgeData = held(knowledge);
   const configData = held(config);
   const runtimeData = held(runtime);
+  const artifactsData = held(artifacts);
 
   const rows = useMemo<AuditEntry[]>(() => {
     const out: AuditEntry[] = [];
@@ -714,8 +777,33 @@ export function Audit() {
         detail: entry.summary || entry.reason || "",
       });
     }
+    for (const entry of list(artifactsData?.entries)) {
+      out.push({
+        id: `artifact:${entry.artifact}:${entry.position}`,
+        at: entry.at,
+        source: "artifacts",
+        kind: entry.op,
+        actor: entry.actor.Name,
+        actorKind: entry.actor.Kind,
+        through: throughOf(entry.actor.Name, entry.actor.OperatorID),
+        // A TITLE IS WHAT A PERSON NAMES AN ARTIFACT BY, and the row links to
+        // it; one the head no longer holds is named by its id and links
+        // nowhere, since a purge takes the page with it.
+        subject: entry.title || short(entry.artifact),
+        path: entry.title ? artifactPath(entry.artifact) : undefined,
+        detail: artifactDetail(entry),
+      });
+    }
     return out;
-  }, [workData, knowledgeData, configData, secrets.rows, runtimeData, identity.page]);
+  }, [
+    workData,
+    knowledgeData,
+    configData,
+    secrets.rows,
+    runtimeData,
+    identity.page,
+    artifactsData,
+  ]);
 
   /** Newest first, narrowed to the window and to what the reader asked. */
   const shown = useMemo(() => {
@@ -766,8 +854,9 @@ export function Audit() {
       PAGE.config,
       "Configuration",
     );
+    oldest(list(artifactsData?.entries), PAGE.artifacts, "Artifacts");
     return short;
-  }, [workData, identity.page, runtimeData, knowledgeData, configData, since]);
+  }, [workData, identity.page, runtimeData, knowledgeData, configData, artifactsData, since]);
 
   const columns = useMemo<GridColumn<AuditEntry>[]>(
     () => [
@@ -889,7 +978,8 @@ export function Audit() {
     identity.withheld,
   ].filter((sentence) => sentence !== "");
 
-  const loading = work.loading || knowledge.loading || config.loading || runtime.loading;
+  const loading =
+    work.loading || knowledge.loading || config.loading || runtime.loading || artifacts.loading;
   return (
     <>
       <PageActions>
@@ -972,7 +1062,7 @@ export function Audit() {
           <Card.Header
             icon={<FileTextGlyph size="sm" />}
             count={shown.length}
-            subtitle="Writes, runtime calls, access changes and configuration revisions"
+            subtitle="Writes, runtime calls, access changes, artifact overrides and configuration revisions"
           >
             <Card.Title>What was done</Card.Title>
           </Card.Header>

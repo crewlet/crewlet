@@ -372,8 +372,11 @@ Three answers sit around it:
   marked as **elevated**: every read of the artifact's content it makes (a
   version's files, its datastore, the export, a room's join, the live version
   a stale publish answers with) writes an elevated-read record before anything
-  is shown, which the artifact's own history shows its owner and editors, and
-  a read whose record cannot be written is not answered. On a node that
+  is shown, which the artifact's own history shows its owner and editors and
+  the company trail of every artifact (`artifact_trail`, `audit.read`) shows
+  every administrator, so an override is found even when its owner has left
+  or never opens the history. A read whose record cannot be written is not
+  answered. On a node that
   [refuses admin](#access-admin-and-one-permission-per-app) the path does not
   exist, and an administrator there opens only what is shared with them.
 - **The trash stops serving at once.** A trashed artifact keeps its head, its

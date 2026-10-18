@@ -678,9 +678,7 @@ func (r *Reader) History(ctx context.Context, id artifacts.ID, cursor string, li
 		if _, err := mustHead(ctx, tx, id.String()); err != nil {
 			return err
 		}
-		query := `SELECT position, op_id, op, outcome, reason, number, actor,
-			actor_kind, operator_id, elevated, origin, work_item, at, summary
-			FROM artifact_history WHERE artifact_id = ?`
+		query := `SELECT ` + historyColumns + ` FROM artifact_history WHERE artifact_id = ?`
 		args := []any{id.String()}
 		if before > 0 {
 			query += ` AND position < ?`
@@ -694,22 +692,9 @@ func (r *Reader) History(ctx context.Context, id artifacts.ID, cursor string, li
 		defer func() { _ = rows.Close() }()
 		page = HistoryPage{Entries: []HistoryEntry{}}
 		for rows.Next() {
-			var (
-				e                     HistoryEntry
-				outcome, reason, kind string
-				summary               string
-				elevated              int
-				at                    int64
-			)
-			if err := rows.Scan(&e.Position, &e.OpID, &e.Op, &outcome, &reason, &e.Number,
-				&e.Actor.Name, &kind, &e.Actor.OperatorID, &elevated, &e.Origin,
-				&e.WorkItem, &at, &summary); err != nil {
+			e, err := scanHistory(rows)
+			if err != nil {
 				return fmt.Errorf("artifactsdomain: read %s's history: %w", id, err)
-			}
-			e.Outcome, e.Reason = Outcome(outcome), Refusal(reason)
-			e.Actor.Kind, e.Elevated, e.At = iam.ActorKind(kind), elevated != 0, store.DecodeTime(at)
-			if err := json.Unmarshal([]byte(summary), &e.Summary); err != nil {
-				return fmt.Errorf("artifactsdomain: decode a history summary of %s: %w", id, err)
 			}
 			page.Entries = append(page.Entries, e)
 		}
@@ -723,6 +708,159 @@ func (r *Reader) History(ctx context.Context, id artifacts.ID, cursor string, li
 		return nil
 	})
 	return page, err
+}
+
+// historyColumns are the columns of one history row every history read
+// selects, in the order [scanHistory] reads them.
+const historyColumns = `position, op_id, op, outcome, reason, number, actor, actor_kind,
+	operator_id, elevated, origin, work_item, at, summary`
+
+// scanHistory reads one history row, after the columns lead scans into: the
+// one decoding every history read shares, so the artifact's own history and
+// the company trail cannot read a row two ways.
+func scanHistory(rows *sql.Rows, lead ...any) (HistoryEntry, error) {
+	var (
+		e                     HistoryEntry
+		outcome, reason, kind string
+		summary               string
+		elevated              int
+		at                    int64
+	)
+	dest := append(append(make([]any, 0, len(lead)+14), lead...), &e.Position, &e.OpID, &e.Op, &outcome, &reason, &e.Number,
+		&e.Actor.Name, &kind, &e.Actor.OperatorID, &elevated, &e.Origin, &e.WorkItem, &at,
+		&summary)
+	if err := rows.Scan(dest...); err != nil {
+		return HistoryEntry{}, err
+	}
+	e.Outcome, e.Reason = Outcome(outcome), Refusal(reason)
+	e.Actor.Kind, e.Elevated, e.At = iam.ActorKind(kind), elevated != 0, store.DecodeTime(at)
+	if err := json.Unmarshal([]byte(summary), &e.Summary); err != nil {
+		return HistoryEntry{}, fmt.Errorf("decode a history summary: %w", err)
+	}
+	return e, nil
+}
+
+// TrailQuery narrows the company trail: one op (`read_elevated` for the
+// administrators' overrides alone, empty for every record), the cursor a page
+// answered as `After`, and the page size.
+type TrailQuery struct {
+	Op     OpKind
+	Cursor string
+	Limit  int
+}
+
+// TrailEntry is one history row of the company trail: the artifact it is
+// about, its title and owner as the head holds them now, and the row.
+type TrailEntry struct {
+	Artifact artifacts.ID `json:"artifact"`
+	Title    string       `json:"title"`
+	Owner    string       `json:"owner"`
+	HistoryEntry
+}
+
+// TrailPage is one page of the company trail, newest first, with the position
+// this node's copy answered at and whether that copy is complete.
+type TrailPage struct {
+	Entries  []TrailEntry      `json:"entries"`
+	After    string            `json:"after,omitempty"`
+	Position statelog.Position `json:"position"`
+	Complete bool              `json:"complete"`
+}
+
+// trailCursor is where one trail page ended: the last row's position and
+// artifact, the trail's total order.
+type trailCursor struct {
+	Position int64  `json:"p"`
+	Artifact string `json:"a"`
+}
+
+// Trail answers a page of THE COMPANY TRAIL: every artifact's history rows
+// across the company, newest first in the log's own order (position, then
+// artifact), private artifacts included. It is the administrators' record of
+// what happened to every artifact, the elevated reads above all (D09): an
+// override recorded only in an artifact's own history is one nobody finds when
+// its owner has left or never looks. The caller decides who may ask
+// (`audit.read`); this read answers whoever it is asked for.
+func (r *Reader) Trail(ctx context.Context, q TrailQuery) (TrailPage, error) {
+	if q.Op != "" && !q.Op.Valid() {
+		return TrailPage{}, fmt.Errorf("%w: %q is not an op the artifacts log records", ErrInvalid, q.Op)
+	}
+	var after trailCursor
+	if q.Cursor != "" {
+		data, err := base64.RawURLEncoding.DecodeString(q.Cursor)
+		if err != nil {
+			return TrailPage{}, fmt.Errorf("%w: %v", ErrBadCursor, err)
+		}
+		if err := json.Unmarshal(data, &after); err != nil || after.Position <= 0 ||
+			after.Artifact == "" {
+			return TrailPage{}, ErrBadCursor
+		}
+	}
+	limit := pageLimit(q.Limit)
+	var page TrailPage
+	served, err := r.log.Read(ctx, staleFresh(statelog.Freshness{}).Query(DomainScope(), true),
+		func(tx *sql.Tx) error {
+			query := `SELECT h.artifact_id, COALESCE(a.title, ''), COALESCE(a.owner, ''), ` +
+				prefixed("h.", historyColumns) + `
+				FROM artifact_history h LEFT JOIN artifacts a ON a.id = h.artifact_id`
+			var where []string
+			var args []any
+			if q.Op != "" {
+				where = append(where, `h.op = ?`)
+				args = append(args, string(q.Op))
+			}
+			if after.Position > 0 {
+				where = append(where, `(h.position < ? OR (h.position = ? AND h.artifact_id < ?))`)
+				args = append(args, after.Position, after.Position, after.Artifact)
+			}
+			if len(where) > 0 {
+				query += ` WHERE ` + strings.Join(where, ` AND `)
+			}
+			rows, err := tx.QueryContext(ctx,
+				query+` ORDER BY h.position DESC, h.artifact_id DESC LIMIT ?`,
+				append(args, limit+1)...)
+			if err != nil {
+				return fmt.Errorf("artifactsdomain: read the company trail: %w", err)
+			}
+			defer func() { _ = rows.Close() }()
+			page = TrailPage{Entries: []TrailEntry{}}
+			for rows.Next() {
+				var id string
+				var t TrailEntry
+				if t.HistoryEntry, err = scanHistory(rows, &id, &t.Title, &t.Owner); err != nil {
+					return fmt.Errorf("artifactsdomain: read the company trail: %w", err)
+				}
+				if t.Artifact, err = artifacts.ParseID(id); err != nil {
+					return fmt.Errorf("artifactsdomain: a trail row names artifact %q: %w", id, err)
+				}
+				page.Entries = append(page.Entries, t)
+			}
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			if len(page.Entries) > limit {
+				page.Entries = page.Entries[:limit]
+				last := page.Entries[limit-1]
+				data, _ := json.Marshal(trailCursor{Position: last.Position,
+					Artifact: last.Artifact.String()})
+				page.After = base64.RawURLEncoding.EncodeToString(data)
+			}
+			return nil
+		})
+	if err != nil {
+		return TrailPage{}, err
+	}
+	page.Position, page.Complete = served.Position, served.Complete
+	return page, nil
+}
+
+// prefixed is a column list with every column qualified by prefix.
+func prefixed(prefix, columns string) string {
+	parts := strings.Split(columns, ",")
+	for i, c := range parts {
+		parts[i] = prefix + strings.TrimSpace(c)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // HeldObjects answers which of the digests asked about THIS artifact already

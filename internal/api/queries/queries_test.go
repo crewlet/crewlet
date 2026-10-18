@@ -304,7 +304,8 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 
 		// THE ARTIFACTS: the listing is everybody's and filtered row by row;
 		// every other question is decided per artifact by the artifacts' one
-		// admission, and the usage against the plan is the deployment's.
+		// admission, the usage against the plan is the deployment's, and the
+		// company trail of every artifact is the company-wide trail's.
 		"artifacts":             "everybody",
 		"artifact":              "decided_by:" + string(authz.ActionArtifactRead),
 		"artifact_versions":     "decided_by:" + string(authz.ActionArtifactRead),
@@ -314,6 +315,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"artifact_seen_by":      "decided_by:" + string(authz.ActionArtifactRead),
 		"artifact_access":       "decided_by:" + string(authz.ActionArtifactRead),
 		"artifact_usage":        "decided_by:" + string(authz.ActionArtifactUsage),
+		"artifact_trail":        "decided_by:" + string(authz.ActionAuditRead),
 		"artifact_data":         "decided_by:" + string(authz.ActionArtifactDataRead),
 		"artifact_data_doc":     "decided_by:" + string(authz.ActionArtifactDataRead),
 		"artifact_data_query":   "decided_by:" + string(authz.ActionArtifactDataQuery),

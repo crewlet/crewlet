@@ -14,7 +14,8 @@ import (
 
 // THE ARTIFACTS' READ QUESTIONS: the gallery's listing, one artifact's head,
 // its versions, one version's manifest, its history, its assets, who has
-// opened it, who holds it, and the company's usage against its quota. Each is
+// opened it, who holds it, the company's usage against its quota, and the
+// company trail of every artifact's history. Each about one artifact is
 // DECIDED PER ARTIFACT through the one admission the artifacts' write routes
 // take ([artifactsapi.Gate]), which records the admin path's override before
 // it answers, and each is SHAPED by the reader's role as those routes shape
@@ -34,6 +35,7 @@ type ArtifactsReader interface {
 		artifactsdomain.HistoryPage, error)
 	Assets(ctx context.Context, id artifacts.ID) ([]artifactsdomain.Asset, error)
 	Usage(ctx context.Context) (artifactsdomain.Usage, error)
+	Trail(ctx context.Context, q artifactsdomain.TrailQuery) (artifactsdomain.TrailPage, error)
 }
 
 // ArtifactsSource is what the artifacts' questions read: the admission and the
@@ -65,6 +67,10 @@ func registerArtifacts(r *Registry, src ArtifactsSource, now func() time.Time) {
 	// THE COMPANY'S ARTIFACTS against its plan quota: the deployment's own
 	// machinery, so the usage verb's (admin's).
 	r.Register("artifact_usage", DecidedBy(authz.ActionArtifactUsage), s.usage)
+	// THE COMPANY TRAIL OF EVERY ARTIFACT, private ones included: the
+	// administrators' record of what happened to all of them, the elevated
+	// reads above all (D09), decided by the company-wide trail's verb.
+	r.Register("artifact_trail", DecidedBy(authz.ActionAuditRead), s.trail)
 }
 
 // artifactFailure is an admission's or an artifacts read's failure in this
@@ -274,4 +280,33 @@ func (s artifactsAnswers) usage(ctx context.Context, _ Params) (any, error) {
 		return nil, artifactFailure("artifact_usage", err)
 	}
 	return map[string]any{"usage": usage, "limits": s.Gate.Limits()}, nil
+}
+
+// trail answers one page of the company trail, every artifact's history across
+// the company, newest first: `op=` one op (`read_elevated` for the
+// administrators' overrides), `cursor=` and `limit=`. The company-wide
+// trail's question ([authz.ActionAuditRead], an administrator's): it lists
+// private artifacts' records, which is the point of it, and no relation to an
+// artifact reaches it.
+func (s artifactsAnswers) trail(ctx context.Context, p Params) (any, error) {
+	asking, err := caller(ctx, "artifact_trail")
+	if err != nil {
+		return nil, err
+	}
+	d := authz.Decide(ctx, asking, authz.ActionAuditRead,
+		authz.Object{Kind: authz.KindCompany}, s.Gate.Chart, s.now())
+	switch {
+	case d.Unknown():
+		return nil, fmt.Errorf("%w: %w", ErrUnavailable, d.Err)
+	case !d.Allowed:
+		return nil, refused("artifact_trail", d)
+	}
+	page, err := s.Reads.Trail(ctx, artifactsdomain.TrailQuery{
+		Op: artifactsdomain.OpKind(p.String("op")), Cursor: p.String("cursor"),
+		Limit: Clamp(p.Int("limit", 0), artifactsdomain.DefaultListLimit, artifactsdomain.MaxListLimit),
+	})
+	if err != nil {
+		return nil, artifactFailure("artifact_trail", err)
+	}
+	return page, nil
 }

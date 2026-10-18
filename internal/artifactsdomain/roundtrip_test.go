@@ -719,3 +719,71 @@ func TestANativeSheetHoldsNoFile(t *testing.T) {
 			"as the domain's", err)
 	}
 }
+
+// THE COMPANY TRAIL READS EVERY ARTIFACT'S HISTORY (D09): an administrator's
+// elevated read of bob's private page is found company-wide, beside every
+// other record, newest first in the log's order; narrowed to `read_elevated`
+// it is the overrides alone; a page and its cursor walk the whole trail with
+// nothing repeated or skipped; an op the log does not record and a cursor it
+// never minted are refused. Mutation: drop the op filter, or resume a page
+// at the cursor's row rather than after it, and this goes red.
+func TestTheCompanyTrailReadsEveryArtifactsHistory(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	jane, bob := person("jane", artifacts.RoleOwner), person("bob", artifacts.RoleOwner)
+	mine := n.create(jane, "Mine", upload(t, "index.html", "<p>1</p>")).Artifact
+	private := n.create(bob, "Bob's own", upload(t, "index.html", "<p>2</p>")).Artifact
+	ada := person("ada", artifacts.RoleOwner)
+	ada.Authority.Elevated = true
+	if _, err := n.writer.ReadElevated(t.Context(), ada, private, 1); err != nil {
+		t.Fatalf("elevated read: %v", err)
+	}
+
+	all, err := n.reader.Trail(t.Context(), artifactsdomain.TrailQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var walked []string
+	for _, e := range all.Entries {
+		walked = append(walked, e.Op+" "+e.Title)
+	}
+	if want := []string{"read_elevated Bob's own", "create Bob's own", "create Mine"}; !slices.Equal(walked, want) {
+		t.Errorf("the company trail is %v, want %v", walked, want)
+	}
+	overrides, err := n.reader.Trail(t.Context(), artifactsdomain.TrailQuery{Op: artifactsdomain.OpReadElevated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(overrides.Entries) != 1 || overrides.Entries[0].Artifact != private ||
+		overrides.Entries[0].Actor.Name != "ada" || !overrides.Entries[0].Elevated ||
+		overrides.Entries[0].Owner != "bob" || overrides.Entries[0].Number != 1 {
+		t.Errorf("the overrides are %+v", overrides.Entries)
+	}
+
+	var paged []artifacts.ID
+	cursor := ""
+	for range 4 {
+		page, err := n.reader.Trail(t.Context(), artifactsdomain.TrailQuery{Cursor: cursor, Limit: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range page.Entries {
+			paged = append(paged, e.Artifact)
+		}
+		if cursor = page.After; cursor == "" {
+			break
+		}
+	}
+	if want := []artifacts.ID{private, private, mine}; !slices.Equal(paged, want) {
+		t.Errorf("paging one row at a time walked %v, want %v", paged, want)
+	}
+
+	if _, err := n.reader.Trail(t.Context(), artifactsdomain.TrailQuery{Op: "glance"}); !errors.Is(err,
+		artifactsdomain.ErrInvalid) {
+		t.Errorf("an op the log does not record: %v, want ErrInvalid", err)
+	}
+	if _, err := n.reader.Trail(t.Context(), artifactsdomain.TrailQuery{Cursor: "not-a-cursor"}); !errors.Is(err,
+		artifactsdomain.ErrBadCursor) {
+		t.Errorf("a cursor nothing minted: %v, want ErrBadCursor", err)
+	}
+}
