@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -824,9 +825,13 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 	}
 	_ = run([]string{"iam", "bind", "p-1", "sre", "-op-id",
 		op, "-config", cfg, "-api", node.URL}, &out, &errs)
-	if len(keys) != 2 || keys[0] != "" || keys[1] != op {
-		t.Errorf("the node saw keys %q, want none and then the retried op id",
-			keys)
+	if len(keys) != 2 || keys[1] != op {
+		t.Fatalf("the node saw keys %q, want the first attempt's and then the "+
+			"retried op id", keys)
+	}
+	if _, minted := statelog.OpMintedAt(keys[0]); !minted || keys[0] == op {
+		t.Errorf("the first attempt was sent under %q, want an operation this "+
+			"command minted before it asked", keys[0])
 	}
 
 	// A KEY ON A COMMAND THAT READS NONE is refused before anything is
@@ -858,6 +863,98 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 		refused.URL}, &out, &errs)
 	if err == nil || strings.Contains(err.Error(), "could not establish") {
 		t.Errorf("a refusal that wrote nothing reads %v, want no unknown outcome", err)
+	}
+}
+
+// AN IAM WRITE THE NODE NEVER ANSWERED NAMES THE OPERATION IT WAS SENT UNDER.
+//
+// A write whose answer was lost — the connection dropped, or something in
+// front of the node answered in its place — may well have landed, and the key
+// it was sent under is the only handle on it. Left to the node to mint, that
+// key was lost with the answer, so the only retry an operator could run was a
+// fresh operation: a second invitation, or a create the first attempt's person
+// refuses. So every write whose route reads a key is sent under one minted
+// before it asks ([operationFor]) — a pasted one trimmed and sent as given —
+// and a lost answer names it. A read, and a mint whose route reads no key,
+// are offered no retry under one. Mutation: send no key until the operator
+// names one, drop the retry from a lost answer or from a proxy's, or offer it
+// on a read, and this fails.
+func TestAnIamWriteTheNodeNeverAnsweredNamesTheOperationItWasSentUnder(t *testing.T) {
+	var mu sync.Mutex
+	var keys []string
+	proxied := false
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		keys = append(keys, r.Header.Get("Idempotency-Key"))
+		viaProxy := proxied
+		mu.Unlock()
+		if viaProxy {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusGatewayTimeout)
+			_, _ = w.Write([]byte("<html><title>504 Gateway Time-out</title></html>"))
+			return
+		}
+		if conn, _, err := http.NewResponseController(w).Hijack(); err == nil {
+			_ = conn.Close()
+		}
+	}))
+	defer node.Close()
+	t.Setenv(apiTokenEnv, "a-tier-a-token")
+	cfg := bootstrapWithKeyring(t, "k1")
+	last := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		if len(keys) == 0 {
+			return ""
+		}
+		return keys[len(keys)-1]
+	}
+	var out, errs bytes.Buffer
+
+	for _, args := range [][]string{
+		{"grant", "p-1", "-grants", "tracker"},
+		{"invite", "sam@example.com", "-seat", "founder"},
+	} {
+		err := run(append(append([]string{"iam"}, args...), "-config", cfg,
+			"-api", node.URL), &out, &errs)
+		key := last()
+		if _, minted := statelog.OpMintedAt(key); !minted {
+			t.Fatalf("iam %s was sent under %q, which no ledger could vouch for", args[0],
+				key)
+		}
+		if err == nil || !strings.Contains(err.Error(), "-op-id "+key) ||
+			!strings.Contains(err.Error(), "whether the "+args[0]+" landed is unknown") {
+			t.Errorf("an unanswered iam %s reads %v, want the retry under %s", args[0],
+				err, key)
+		}
+	}
+
+	mu.Lock()
+	proxied = true
+	mu.Unlock()
+	err := run([]string{"iam", "suspend", "p-1", "-config", cfg, "-api", node.URL},
+		&out, &errs)
+	if key := last(); err == nil || !strings.Contains(err.Error(), "-op-id "+key) {
+		t.Errorf("a proxy's 504 to iam suspend reads %v, want the retry under %s",
+			err, key)
+	}
+	pasted := statelog.NewOpID(time.Now(), "earlier")
+	_ = run([]string{"iam", "suspend", "p-1", "-op-id", pasted + "\n", "-config", cfg,
+		"-api", node.URL}, &out, &errs)
+	if key := last(); key != pasted {
+		t.Errorf("a pasted -op-id was sent as %q, want %q", key, pasted)
+	}
+	mu.Lock()
+	proxied = false
+	mu.Unlock()
+
+	for _, args := range [][]string{{"people"}, {"token", "-person", "svc-1"}} {
+		err := run(append(append([]string{"iam"}, args...), "-config", cfg,
+			"-api", node.URL), &out, &errs)
+		if err == nil || strings.Contains(err.Error(), "-op-id") || last() != "" {
+			t.Errorf("an unanswered iam %s reads %v under the key %q, want no "+
+				"key and no retry under one", args[0], err, last())
+		}
 	}
 }
 
@@ -1164,7 +1261,7 @@ func TestAnUnknownCreateIsRetriedUnderItsKeyForTheSameLink(t *testing.T) {
 	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := r.Header.Get("Idempotency-Key")
 		keys = append(keys, key)
-		if key == "" {
+		if key != op {
 			httpjson.UnknownOutcome(w, 2, op, false, httpjson.Detail{
 				"detail": "this node cannot establish what happened to this change",
 				"id":     "p-1"})
@@ -1193,8 +1290,9 @@ func TestAnUnknownCreateIsRetriedUnderItsKeyForTheSameLink(t *testing.T) {
 	if err := run(append(args, "-op-id", op), &out, &errs); err != nil {
 		t.Fatalf("the retry under the key: %v", err)
 	}
-	if len(keys) != 2 || keys[1] != op {
-		t.Errorf("the node saw keys %q, want none and then %s", keys, op)
+	if len(keys) != 2 || keys[0] == "" || keys[1] != op {
+		t.Errorf("the node saw keys %q, want the first attempt's own and then %s",
+			keys, op)
 	}
 	if !strings.Contains(out.String(), "#/reset/c-1.same") {
 		t.Errorf("the retry printed no link:\n%s", out.String())
