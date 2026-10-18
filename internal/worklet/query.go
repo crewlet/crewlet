@@ -153,8 +153,11 @@ type SubtaskMode string
 
 const (
 	// SubtasksCollapsed hides a subtree behind its root. It and
-	// SubtasksExpanded filter ROOT tasks and let their subtrees ride along
-	// unfiltered; SubtasksSeparate filters every task on its own.
+	// SubtasksExpanded filter each task's ANCHOR and let what hangs from
+	// it ride along unfiltered — on the live side a tree's root, and in
+	// the trash the removal that took the task ([anchorOf]), so a task
+	// removed on its own is listed on its own; SubtasksSeparate filters
+	// every task on its own.
 	SubtasksCollapsed SubtaskMode = "collapsed"
 
 	// SubtasksExpanded shows a subtree under the root it rides along with,
@@ -322,7 +325,9 @@ type Query struct {
 	// Without it there is no way to list what a removal hid, so nothing
 	// could reach [OpRestore] — `tracker_tasks_removed_idx` was declared
 	// for a `work_trash` reader that did not exist. A listing of the trash
-	// is read through the trash's own indexes ([taskSource]).
+	// is read through the trash's own indexes ([taskSource]), and in the
+	// default subtask mode it lists each REMOVAL with what it took riding
+	// along ([anchorOf]).
 	Removed *bool
 
 	// Dates are keyed by the column they filter, so a compiler walks them
