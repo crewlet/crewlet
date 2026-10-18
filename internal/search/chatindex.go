@@ -138,12 +138,6 @@ type ChatIndexer struct {
 	// so a process that stops halfway through a drop finishes it on its next
 	// start rather than resuming a walk over an index it half emptied.
 	rebuild atomic.Bool
-
-	// caught is whether the transcript walk has reached the transcript's end
-	// since this process started or last rebuilt — half of what
-	// [ChatIndexer.Ready] answers. ATOMIC because any search may ask it,
-	// from whichever goroutine is serving one.
-	caught atomic.Bool
 }
 
 // NewChatIndexer builds one over this node's own store and the replicated
@@ -171,19 +165,74 @@ func NewChatIndexer(db *store.DB, estate store.ReplicatedReader) *ChatIndexer {
 // sweep.
 func (x *ChatIndexer) RequestRebuild() { x.rebuild.Store(true) }
 
-// Ready reports whether the transcript walk has caught up with the transcript
-// since this process started or last rebuilt, with no rebuild asked for since:
-// whether a search is answered over every message this node holds, rather than
-// over the part of it the walk has reached.
+// Ready reports whether this index holds everything the transcript beside it
+// does: whether a search is answered over every message this node holds,
+// rather than over the part of it the walk has reached.
+//
+// MEASURED, NEVER REMEMBERED. It is the index's own durable watermarks against
+// the transcript, read now: no `chat_messages` row past the transcript walk's
+// (a post, an edit and a tombstone each move a row's version) and no
+// `chat_deletions` marker past the erase walk's, with no drop under way and the
+// index built from the copy of the estate beside it.
+// A flag set the first time the walk reached the end said nothing about the
+// messages posted after it — a node whose walk had once caught up answered
+// every later search as caught up, through any backlog, until a rebuild.
 //
 // A STANDING REQUEST IS NOT READY, from the instant it is made: the index it
 // would drop was built from the estate that was replaced, so a search answered
 // before the loop takes the request is answered over the wrong copy.
 //
-// NO I/O, because it is asked beside a search: it is a fact about this
-// process's walk, and the walk sets it.
-func (x *ChatIndexer) Ready() bool {
-	return x != nil && !x.rebuild.Load() && x.caught.Load()
+// WHAT IT DOES NOT MEASURE is the prune follower, which has no watermark: a
+// document whose message the retention prune took stays in the index for up
+// to one rotation, and costs only its weight in the statistics — a search
+// re-reads every hit from the transcript and skips one that is gone.
+//
+// THREE-VALUED: an error is "this node could not tell", which is neither
+// answer, and the caller decides what that makes a search.
+func (x *ChatIndexer) Ready(ctx context.Context) (bool, error) {
+	if x == nil || x.rebuild.Load() {
+		return false, nil
+	}
+	state, err := x.indexState(ctx)
+	if err != nil {
+		return false, err
+	}
+	if state.rebuilding {
+		return false, nil
+	}
+	var (
+		instance string
+		behind   bool
+	)
+	err = x.estate.Read(ctx, func(tx *sql.Tx) error {
+		var readErr error
+		if instance, readErr = statelog.EstateInstance(ctx, tx); readErr != nil {
+			return readErr
+		}
+		behind = false
+		for _, past := range []struct {
+			statement string
+			through   int64
+		}{
+			{chatPastWatermarkStatement, state.through},
+			{chatPastErasedStatement, state.erased},
+		} {
+			var one int
+			switch scanErr := tx.QueryRowContext(ctx, past.statement, past.through).Scan(&one); {
+			case errors.Is(scanErr, sql.ErrNoRows):
+			case scanErr != nil:
+				return scanErr
+			default:
+				behind = true
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return false, fmt.Errorf("search: read how far the chat transcript "+
+			"reaches: %w", err)
+	}
+	return state.builtFrom == instance && !behind, nil
 }
 
 // chatDoc is one message on its way into the index.
@@ -221,18 +270,18 @@ func (x *ChatIndexer) Sweep(ctx context.Context, now time.Time) (int, error) {
 		return 0, err
 	}
 	if x.rebuild.Load() {
-		// NOT CAUGHT UP FROM HERE ON, before the request is taken, so no
-		// instant between the request and the mark's commit reads as
-		// ready ([ChatIndexer.Ready]).
-		x.caught.Store(false)
-		x.rebuild.Store(false)
 		if beginErr := x.beginRebuild(ctx, now, "requested"); beginErr != nil {
 			// THE REQUEST STANDS until its mark commits: dropped with
 			// the failure, it would leave the replaced estate's rows
 			// unread for good.
-			x.rebuild.Store(true)
 			return 0, beginErr
 		}
+		// THE REQUEST IS TAKEN ONCE ITS MARK COMMITS, and not before, so
+		// no instant between the two reads as ready ([ChatIndexer.Ready]):
+		// the flag answers until the durable mark does. A request made
+		// while the mark was committing is answered by the same rebuild,
+		// whose drop has not begun.
+		x.rebuild.Store(false)
 	}
 	state, err := x.indexState(ctx)
 	if err != nil {
@@ -305,6 +354,15 @@ const (
 	chatHeldOldestStatement = `
 		SELECT created_at FROM chat_docs
 		 WHERE channel_id = ? ORDER BY created_at LIMIT 1`
+
+	// chatPastWatermarkStatement and chatPastErasedStatement ask whether
+	// the transcript, or its erase markers, hold a row past a watermark —
+	// what [ChatIndexer.Ready] asks of the index's two. A SEEK to the
+	// watermark on the index the walk drives on, answered by its first row:
+	// `MAX(version)` is the same question and this planner answers it with a
+	// walk of the whole index, on every search.
+	chatPastWatermarkStatement = `SELECT 1 FROM chat_messages WHERE version > ? LIMIT 1`
+	chatPastErasedStatement    = `SELECT 1 FROM chat_deletions WHERE version > ? LIMIT 1`
 
 	// chatRoomRotationStatement is the next step of the prune follower's
 	// rotation over the rooms this index holds documents for.
@@ -435,8 +493,7 @@ func (x *ChatIndexer) advance(ctx context.Context, now time.Time) (int, error) {
 	}
 	if len(docs) == 0 {
 		// NOTHING PAST THE WATERMARK: every message this node holds is
-		// indexed, which is the moment a search stops being partial.
-		x.caught.Store(true)
+		// indexed — which [ChatIndexer.Ready] measures for itself.
 		return 0, nil
 	}
 
@@ -1057,7 +1114,6 @@ func (x *ChatIndexer) followInstance(ctx context.Context, now time.Time,
 			return false, nil
 		}
 	}
-	x.caught.Store(false)
 	log.InfoContext(ctx, "chat_index_estate_replaced",
 		"built_from", state.builtFrom, "estate_instance", instance,
 		"detail", "the chat index was built from another copy of the replicated "+
