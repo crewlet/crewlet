@@ -1893,6 +1893,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, err
 	}
 	workSource, pageSource, backlinkSource, searchSource, fileSource := api.NativeSources(e)
+	// THE ARTIFACTS: their routes and their read questions, each deciding
+	// through the one admission they share, over the estate router so a
+	// node whose own copy is out of service answers through a peer's.
+	artifactsSurface, artifactsSource, err := artifactsSurfaces(e, boot)
+	if err != nil {
+		return nil, err
+	}
 	// The contextcheck exemption is for the two PUSH TICKS this constructor
 	// registers — the roster re-send and the health frame. Both manufacture
 	// a bounded context of their own instead of inheriting one, which is
@@ -2117,6 +2124,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Backups:     e.Backends().Fleet,
 			BackupFloor: boot.Stream.TrackerRetention.Floor(),
 			NodeID:      nodeID,
+			// THE ARTIFACTS, decided per artifact and shaped by the
+			// reader's role; nil on an engine with no router.
+			Artifacts: artifactsSource,
 		},
 		// The fleet's record of what the log may delete, for the one
 		// retention gesture the engine cannot make on its own: an
@@ -2209,6 +2219,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// than mounting its routes over a nil service. See
 	// [api.HumanSurfaces.Mount].
 	humans.Mount(&opts)
+	// THE ARTIFACTS' ROUTES, each stating its authority where it is
+	// mounted. Set only where it was built, so an absent surface is a nil
+	// interface rather than a nil service mounted.
+	if artifactsSurface != nil {
+		opts.Artifacts = artifactsSurface
+	}
 	app, err := api.New(opts) //nolint:contextcheck // see the paragraph above the options
 	if err != nil {
 		return nil, err
