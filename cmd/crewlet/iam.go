@@ -116,9 +116,11 @@ Flags:
                  invitation is open)
 
 Every write prints its outcome: "applied" (this node has it) or "pending"
-(saved, not here yet). If the outcome is unknown, run the same command again
-with -op-id <op id> from the error. Don't start fresh, or it runs twice. If
-the node can't confirm it, retry through another node with -api.
+(saved, not here yet). If the outcome is unknown, or the node never answered,
+run the same command again with -op-id <op id> from the error: every write
+that takes -op-id is sent under one made before it asks. Don't start fresh,
+or it runs twice. If the node can't confirm it, retry through another node
+with -api.
 
 A person always holds one human seat. They're invited or created onto a
 vacant one, "iam bind" moves them, and "iam remove" frees it. "iam unbind" is
@@ -224,14 +226,19 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	if strings.TrimSpace(*key) != "" && !iamKeyed[sub] {
 		return iamUnkeyed(sub)
 	}
-	// A KEY IS THE OP ID AN EARLIER ANSWER NAMED, held to the rule every
-	// surface holds a caller's operation id to ([statelog.CheckCallerOpID])
-	// before anything is read or sent, and sent as given: the node refuses
-	// any other `400 op_id_invalid`, and refused here the error names this
-	// command's flag rather than a header it composed.
-	if *key != "" {
-		if err := statelog.CheckCallerOpID(*key); err != nil {
-			return fmt.Errorf("-op-id: %w", err)
+	// A KEYED WRITE'S OPERATION IS MINTED HERE, BEFORE IT ASKS, as every
+	// keyed write this binary makes mints its own ([operationFor]) — or it
+	// is the op id an earlier answer named, held to the node's rule before
+	// anything is read or sent. A write whose answer never came may well
+	// have landed, and the key it was sent under is the only handle on it:
+	// left to the node to mint, it was lost with the answer, so the only
+	// retry an operator could run was a fresh operation — a second
+	// invitation, or a create the first attempt's person refuses.
+	var operation string
+	if iamKeyed[sub] {
+		var err error
+		if operation, err = operationFor(sub, *key); err != nil {
+			return err
 		}
 	}
 	// -seat IS invite's AND create's — the seat somebody new takes — and
@@ -316,7 +323,7 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	if err != nil {
 		return err
 	}
-	client.key, client.keyed = *key, iamKeyed[sub]
+	client.gesture, client.key, client.keyed = sub, operation, iamKeyed[sub]
 
 	switch sub {
 	case "people":
@@ -772,9 +779,13 @@ type iamClient struct {
 	token string
 	http  *http.Client
 
-	// key is the operation a write RETRIES — the op id an unknown answer
-	// named — sent as the Idempotency-Key on every write this command
-	// makes, and never on a read.
+	// gesture names the command's write in a sentence: "invite", "grant".
+	gesture string
+
+	// key is the operation the command's write is sent under — minted
+	// before it asks, or the op id an earlier answer named ([operationFor])
+	// — sent as the Idempotency-Key on every write this command makes, and
+	// never on a read. Empty on a command whose route reads none.
 	key string
 
 	// keyed is whether the route this command writes to reads a key at all
@@ -856,20 +867,42 @@ func (c *iamClient) call(ctx context.Context, method, path string,
 	// it made to a deployment behind a proxy was refused as cross-site.
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("reach %s: %w", target, err)
+		return nil, c.unanswered(method, fmt.Errorf("reach %s: %w", target, err))
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, iamMaxAnswer))
 	if err != nil {
-		return nil, fmt.Errorf("read the answer from %s: %w", target, err)
+		return nil, c.unanswered(method,
+			fmt.Errorf("read the answer from %s: %w", target, err))
 	}
 	var answer map[string]any
 	_ = json.Unmarshal(raw, &answer)
 	if resp.StatusCode >= 400 {
-		return answer, iamRefusal(resp.StatusCode, resp.Header.Get("Content-Type"),
+		refusal := iamRefusal(resp.StatusCode, resp.Header.Get("Content-Type"),
 			answer, raw, c.keyed)
+		if engineCode(raw) == "" {
+			// NOT THE NODE'S OWN ANSWER — no engine code, so something in
+			// front of it answered, most often a proxy's read timeout — and
+			// the node may still have done what was asked ([notTheNode]).
+			return answer, c.unanswered(method, refusal)
+		}
+		return answer, refusal
 	}
 	return answer, nil
+}
+
+// unanswered is err for a request whose outcome the node never told this
+// command: for a keyed write, with the one safe retry — the same command under
+// the operation it was sent with — because the write may have landed after the
+// answer was lost, and unchanged for a read or a write whose route reads no
+// key.
+func (c *iamClient) unanswered(method string, err error) error {
+	if !c.keyed || c.key == "" || method == http.MethodGet {
+		return err
+	}
+	return fmt.Errorf("%w\n\nThe node did not answer, so whether the %s landed is "+
+		"unknown: %s", err, c.gesture,
+		keyedWrite{gesture: c.gesture, operation: c.key}.retry())
 }
 
 // personID is the person a subject names: an id as it is, and a login resolved
