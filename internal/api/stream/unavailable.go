@@ -58,9 +58,9 @@ type Unavailable struct {
 	RetryAfter int `json:"retry_after"`
 }
 
-// ErrNoCompany is a question only Worklet and Doclet
-// answer, asked of a node that has not been handed a company yet — so neither
-// half is running there. It is an `unavailable` answer whose refusal is
+// ErrNoCompany is a question only Worklet, Doclet or
+// Chatlet answers, asked of a node that has not been handed a company yet — so no
+// such half is running there. It is an `unavailable` answer whose refusal is
 // `no_active_revision` and whose hint is the reconcile poll that brings the
 // company ([httpjson.NoActiveRevisionRetry]), on the socket as over REST.
 //
