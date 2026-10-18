@@ -201,7 +201,7 @@ func TestEveryWriteNamesItsOperation(t *testing.T) {
 	}
 }
 
-// THE API ORIGIN NEVER RENDERS AN ARTIFACT (ADR-0035's gate): a version's file
+// THE API ORIGIN NEVER RENDERS AN ARTIFACT: a version's file
 // is an attachment, any text and anything a browser could run is plain text,
 // and the API's own policy forbids it loading or being framed; a page is
 // opened only in a frame on the artifact origin, and a Markdown document only
