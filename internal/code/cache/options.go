@@ -168,6 +168,10 @@ type knobs struct {
 	// readFault, when set, is asked before each piece a hash reads, and an
 	// error it answers is that read's: a case's disk failing under a file.
 	readFault func(path string) error
+	// scrubWake, when set, is the scrubber's wake for the next interval's
+	// end, next on the cache's clock, in place of a timer: a case on a clock
+	// of its own sees when the scrubber means to wake, and wakes it.
+	scrubWake func(next time.Time) <-chan time.Time
 }
 
 // validate refuses an Options value naming the field and what to set,

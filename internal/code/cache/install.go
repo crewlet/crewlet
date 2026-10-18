@@ -193,18 +193,40 @@ const (
 // fault truncated is caught here rather than by the next client.
 //
 // A PACK HELD DAMAGED IS INSTALLED AGAIN BY RENAMING OVER ITS FILES, NEVER
-// REMOVED FIRST: one at the wrong size, and one whose .idx or .rev failed the
-// round's check and is still the file it hashed (checked.still). Removed
-// before its download, its objects were missing for the whole of that
-// download to every git process over the copy that opened the pack
-// meanwhile; renamed over, a process holding the old files reads the inodes
-// it opened, and one that opens the path afterwards reads the new ones. The multi-pack-index and the commit-graph go once,
-// before the first placement over a present pack: either may have been built
-// from the damaged index. Such a reinstall adds no pack to the counts; the
-// incarnation's size moves by the difference.
+// REMOVED FIRST: one at the wrong size, and one whose .idx, .rev or .pack a
+// check or a scrub found failing and that is still the file found so
+// (checked.still). Removed before its download, its objects were missing for
+// the whole of that download to every git process over the copy that opened
+// the pack meanwhile; renamed over, a process holding the old files reads the
+// inodes it opened, and one that opens the path afterwards reads the new
+// ones. Such a reinstall adds no pack to the counts; the incarnation's size
+// moves by the difference.
 //
-// A failure removes every temporary file the round made; the packs installed
-// before it stay, named by rows, and the next round skips them.
+// THE DERIVED FILES GO ONLY WHERE THEY MAY HAVE BEEN BUILT FROM THE DAMAGE —
+// once, before the first such placement: a pack whose .idx failed, or a pack
+// at the wrong size. The multi-pack-index and its bitmap record each object's
+// offset as the pack's .idx placed it, and the commit-graph was built reading
+// commits through it; a pack whose .pack or .rev alone failed is installed
+// again byte for byte — its name is its checksum, its bundle held to its row
+// — so every offset the index and the bitmap record, and every commit the
+// graph does, is the same over the new files. Dropped for a .pack's body, a
+// copy lost its bitmap for the whole rewrite over its history — and for good
+// where the node's memory no longer holds the bitmap's charge.
+//
+// A REINSTALL IS A REPAIR, NEVER THE ROUND'S PRECONDITION: one whose download
+// fails — the object store unreachable, or a bundle it no longer holds — is
+// logged, its pack left as it stands, and the round goes on and converges,
+// installing every other pack, the pushes it was asked for among them. The
+// finding stays on the repair mark, held off for a backoff that doubles from
+// RebuildCooldown to RebuildBackoffCap (repairMark.fetchFailed), during which
+// no round tries that pack again; failing the round instead failed every
+// later one of the repository — each one full, since the mark asks for a
+// full round — and every advertisement of it with them, for as long as the
+// store could not hand the pack over.
+//
+// A failure of anything else removes every temporary file the round made; the
+// packs installed before it stay, named by rows, and the next round skips
+// them.
 func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap snapshot, ck checked) (installs,
 	error) {
 
@@ -213,19 +235,28 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 	reinstall, _ := ck.still(inc.dir)
 	var todo []code.PackRow
 	// over is every pack this install places over files present, by its
-	// checksum, with what found it damaged.
-	over := map[string]string{}
+	// checksum, with what found it damaged and why that looked.
+	over := map[string]reinstallWhy{}
+	now := c.now()
+	e.mu.Lock()
+	heldOff := inc.repair.heldOff(now)
+	e.mu.Unlock()
 	for _, p := range snap.packs {
-		held, err := installed(packDir, p, snap.full)
+		have, err := installed(packDir, p, snap.full)
+		f, failed := reinstall[p.GitChecksum]
 		switch {
 		case err != nil:
 			return out, fmt.Errorf("cache: sync %s: install: %w", e.id, err)
-		case held == packWhole && reinstall[p.GitChecksum]:
-			over[p.GitChecksum] = "trailer"
-		case held == packWhole:
+		case have == packWhole && !failed:
 			continue
-		case held == packWrongSize:
-			over[p.GitChecksum] = "size"
+		case have != packAbsent && heldOff[p.GitChecksum]:
+			// Its last download to install it again failed, and its backoff
+			// has not passed: left as it stands, its finding on the mark.
+			continue
+		case have == packWhole:
+			over[p.GitChecksum] = reinstallWhy{found: "trailer", trigger: f.trigger, drops: f.index}
+		case have == packWrongSize:
+			over[p.GitChecksum] = reinstallWhy{found: "size", trigger: ck.trigger, drops: true}
 		}
 		todo = append(todo, p)
 	}
@@ -287,6 +318,7 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 		})
 	}
 	var added, replaced atomic.Int64
+	var failedMu sync.Mutex
 	share := semaphore.NewWeighted(int64(c.fetchConcurrency))
 	inHand := semaphore.NewWeighted(int64(installsPerFetch * c.fetchConcurrency))
 	letGo := func() {
@@ -356,29 +388,39 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 			err := c.download(rctx, e.id, staged, func(ctx context.Context) ([]byte, func(), error) {
 				return getSlot(ctx, mine, pass)
 			})
-			if err != nil {
+			why, present := over[staged.p.GitChecksum]
+			switch {
+			case err != nil && present && rctx.Err() == nil:
+				// A REPAIR THAT COULD NOT DOWNLOAD: the pack stays as it
+				// stands, and the round goes on without it.
+				failedMu.Lock()
+				out.failed = append(out.failed, staged.p.GitChecksum)
+				failedMu.Unlock()
+				c.log.Warn("code_cache_pack_reinstall_failed", "repo", e.id, "incarnation", inc.n,
+					"pack_id", staged.p.PackID, "found", why.found, "error", err)
+				return
+			case err != nil:
 				fail(err)
 				return
 			}
 			c.hookInstall(installFetched, packDir)
-			found := over[staged.p.GitChecksum]
-			if found != "" {
+			if present && why.drops {
 				if err := dropOnce(); err != nil {
 					fail(err)
 					return
 				}
 			}
-			if err := c.placePack(e, inc, packDir, staged, found != ""); err != nil {
+			if err := c.placePack(e, inc, packDir, staged, present); err != nil {
 				fail(err)
 				return
 			}
-			if found == "" {
+			if !present {
 				added.Add(1)
 				return
 			}
 			replaced.Add(1)
 			c.log.Warn("code_cache_pack_reinstalled", "repo", e.id, "incarnation", inc.n,
-				"pack_id", staged.p.PackID, "found", found, "trigger", string(ck.trigger))
+				"pack_id", staged.p.PackID, "found", why.found, "trigger", string(why.trigger))
 		})
 	}
 	workers.Wait()
@@ -399,12 +441,27 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 	return out, err
 }
 
+// reinstallWhy is why an install places a pack over files the directory
+// holds: what found them damaged — `trailer` (a check or a scrub held one to
+// its checksum) or `size` (a full round found one at another size than its
+// row's) — and the trigger of the check or scrub that looked, both logged
+// with code_cache_pack_reinstalled. drops: the derived files may have been
+// built from the damage, so they go before it is placed (install's doc).
+type reinstallWhy struct {
+	found   string
+	trigger checkTrigger
+	drops   bool
+}
+
 // installs is what one install did: the packs it added, the packs it
 // installed again over their damaged files, and the derived files it dropped
 // before the first of those.
 type installs struct {
 	added, replaced int
 	dropped         gitproc.Part
+	// failed is the packs, by checksum, it was to install again over their
+	// files and could not download: left as they stand.
+	failed []string
 }
 
 // packHeld is how much of a pack a directory holds.
@@ -487,6 +544,9 @@ func (c *Cache) placePack(e *entry, inc *incarnation, packDir string, s *stagedP
 		inc.objects += s.p.Objects
 	}
 	c.setSize(inc, inc.diskBytes+s.p.Size-was, inc.metaBytes)
+	// In place: a backoff its download earned while it could not be fetched
+	// is over (repairMark.fetchFailed).
+	delete(inc.repair.fetchFailed, s.p.GitChecksum)
 	e.mu.Unlock()
 	c.vouchPack(e, inc, s.p.GitChecksum)
 	return nil

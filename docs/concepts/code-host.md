@@ -635,6 +635,37 @@ failing on one damaged copy cost one repair. How depends on the damage:
   download, renamed over its files in the same copy, so a request already
   reading the pack is not cut off. What the node's current process wrote, or
   has checked since, is not read again until it changes.
+- **Every byte, behind the serving.** Each copy a node uses is read whole
+  again — every pack against its own checksum, and every index file — once
+  after its first request when a previous run of the node left it (its packs,
+  and nothing that request's own check had just read), then once a day while
+  it is used, and at once when a git process reports a pack or an object of it
+  unreadable or dies of a crash. That is the one way two kinds of damage are
+  ever found: a damaged pack is sent to clients byte for byte (git's pack
+  reuse copies what the bitmap names without reading it, so no git on the node
+  notices while every clone of it fails at the client), and a file damaged in
+  place after it was checked — a bitmap missing an object fails every clone of
+  its branch — is reported by nothing. What fails its checksum, or what the
+  disk cannot read, is fetched again or dropped as above, one download a pack;
+  a pack fetched again for its body alone keeps the multi-pack-index, bitmap
+  and commit-graph built over it, since it is the same pack byte for byte. A
+  download that fails leaves the copy serving as it is and is tried again ten
+  minutes later, then twice as long each time up to a day
+  (`code_cache_pack_reinstall_failed`). It runs one copy at a time on a node,
+  a core and a read slot a 64 MiB piece, and reads nothing of a copy nobody
+  uses; scrubs go in the order of their evidence — one a report asked, then a
+  copy's first, then the daily ones — and a report stops a first or daily
+  scrub at its next piece rather than waiting behind it. A request on a node
+  whose every other read slot is busy waits for one piece at most: 51 to 59
+  ms from the page cache, and the piece read at the volume's own throughput
+  when the copy is cold — about half a second at a gp3 volume's 125 MB/s
+  baseline. A report within an hour of a scrub that found nothing asks for no
+  other, whatever was written to the copy meanwhile; one within an hour of a
+  scrub whose findings still wait for their repair — a download the object
+  store refused, say — asks for none either, since that repair is its answer;
+  past that hour such a report scrubs the copy again, at most once an hour, so
+  damage that landed elsewhere in the copy meanwhile is not left to the daily
+  scrub.
 - **Its shape.** The node will not run git in a copy that is not the shape the
   engine writes — its config edited, a `commondir`, an objects directory that
   is not its own, or an alternates file planted in it (by a disk, or by
@@ -750,11 +781,13 @@ check goes to the git nodes that serve the repository.
 syncs dominating is a cache too small to stay warm),
 `crewlet.code.cache.rebuilds` by `reason`,
 `crewlet.code.cache.rebuild.refusals` by `rule` — rising at all, damage no
-rebuild repairs — `crewlet.code.cache.checks` by `outcome` and `file` — any
-`damaged` is a disk losing data, or something outside the engine writing into
-the cache — `crewlet.code.cache.reports` by `part` and `outcome` — `queued`
-rising is a disk losing data under the cache, `again` one that keeps losing
-it — and `crewlet.code.cache.maintenance.refused`, above zero a
+rebuild repairs — `crewlet.code.cache.checks` by `outcome`, `file` and
+`trigger` — any `damaged` is a disk losing data, or something outside the
+engine writing into the cache, and `damaged` under `file=pack` or
+`trigger=scrub` damage only the scrub could have found —
+`crewlet.code.cache.reports` by `part` and `outcome` — `queued` rising is a
+disk losing data under the cache, `again` one that keeps losing it, `crash` a
+git process dying on something in a copy — and `crewlet.code.cache.maintenance.refused`, above zero a
 repository whose bitmap the node's memory cannot hold
 ([metrics reference](../reference/metrics.md)).
 
@@ -1196,9 +1229,11 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 | `code_sync_restarted` | `INFO` | A repository's rows moved under a read that spans pages — the log under it re-anchored — and the read began again from its first page (`restart`); it begins again at most three times, and a sync whose history moves a fourth time fails. |
 | `code_sync_damaged` | `INFO` | The node's own sync of a repository — peeling the tags it sets, in the repository's copy — found the copy damaged, or the node would not run git in it for its shape, or still would not once the sync had read it whole (`reason`: `corrupt`, `derived`, `missing`, `shape`, with git's `error`; `swept` true when the sync had read the copy whole); the copy is repaired as a request's would be — a shape the sync did not read whole, and a damaged derived file the sync did not just drop, in place, anything else by a rebuild — and the sync answered by the repair. A check's own sync repairs nothing: what it met is the check's first finding. |
 | `code_cache_reshaped` | `WARN` | A repository's copy the node would not run git in because it was not the shape the engine writes was read whole again in place, every pack it holds reused; `moved` is how many files the engine never writes there went to the trash. One is a disk's bad moment or a person's edit; a run of them is something outside the engine writing into the cache's directory. Counted as `crewlet.code.cache.rebuilds{reason=shape}`. |
-| `code_cache_check_damaged` | `WARN` | A repository's copy held an index `file` — its commit-graph, multi-pack-index, bitmap or reverse index, or a pack's index or reverse index — that failed its own checksum, or that the disk could not read (`error`) — repaired the same way, since git cannot serve it either — before the copy answered (`trigger`: `first`, the copy's first sync since the node started; `unvouched`, a later one reading a file replaced since). `action` says what was done: `dropped`, a derived file the node writes again at once over the same packs; `reinstalled`, the pack fetched again (`code_cache_pack_reinstalled`). One is a disk's bad moment; a run of them is a disk losing data, or something outside the engine writing into the cache. Counted as `crewlet.code.cache.checks{outcome=damaged}`. |
-| `code_cache_pack_reinstalled` | `WARN` | A pack of a repository's copy was fetched again and put in over its own files, in the same copy (`pack_id`): `found` says why — `trailer`, its index or reverse index failed its checksum; `size`, a file of it was not the size its row says. One download; a request already reading the pack finishes on the files it opened. |
-| `code_cache_derived_repaired` | `WARN` | A repository's copy whose derived files git could not read — its multi-pack-index (`MIDX is likely corrupt`), its commit-graph, or a chunk-format file of either — named by any git process over the copy, had those files dropped in place (`files`), its packs kept, none downloaded; the node writes sound ones over the same packs, and requests are served meanwhile from the packs themselves. `trigger` says what named them: `request`, a request's git that failed on them; `round`, the node's own sync's git; `report`, any git run that named them, failing or not — counted as `crewlet.code.cache.reports`; `check`, their own checksum. A request's or a sync's is counted as `crewlet.code.cache.rebuilds{reason=derived}` — or under the reason the copy was already being read whole for. One is a disk's bad moment; damage that survives it is a pack's, and the copy is rebuilt (`code_cache_rebuilt`, `corrupt`). |
+| `code_cache_check_damaged` | `WARN` | A repository's copy held a `file` — its commit-graph, multi-pack-index, bitmap or reverse index, or a pack, its index or its reverse index — that failed its own checksum, or that the disk could not read (`error`) — repaired the same way, since git cannot serve it either: before the copy answered, or in a scrub behind the serving (`trigger`: `first`, the copy's first sync since the node started, or the scrub after it; `unvouched`, a later sync reading a file replaced since; `scrub`, a used copy's daily scrub; `report`, a scrub a git process's report or crash asked for). `action` says what was done: `dropped`, a derived file the node writes again at once over the same packs; `reinstalled`, the pack fetched again (`code_cache_pack_reinstalled`). One is a disk's bad moment; a run of them is a disk losing data, or something outside the engine writing into the cache. Counted as `crewlet.code.cache.checks{outcome=damaged}`. |
+| `code_cache_pack_reinstalled` | `WARN` | A pack of a repository's copy was fetched again and put in over its own files, in the same copy (`pack_id`): `found` says why — `trailer`, the pack, its index or its reverse index failed its checksum; `size`, a file of it was not the size its row says — and `trigger` what looked, as `code_cache_check_damaged`. One download, counted as `crewlet.code.cache.rebuilds{reason=stored}`; a request already reading the pack finishes on the files it opened. |
+| `code_cache_scrub_failed` | `WARN` | A scrub of a repository's copy could not list its files (`error`): it decides nothing, and the next scrub, a day later or at a report's word, lists them again. A disk refusing reads under the cache. A file the scrub lists and cannot read is no failure of the scrub's: it is `code_cache_check_damaged`, with its `error`, and repaired. |
+| `code_cache_pack_reinstall_failed` | `WARN` | A pack of a repository's copy that failed its checksum or could not be read (`found`, as `code_cache_pack_reinstalled`) could not be fetched again (`error`): the copy keeps serving as it is, its other repairs go on, and the pack is tried again ten minutes later, then twice as long each time up to a day. The `error` says why — most often the object store not answering ([the object store](object-store.md)). |
+| `code_cache_derived_repaired` | `WARN` | A repository's copy whose derived files git could not read — its multi-pack-index (`MIDX is likely corrupt`), its commit-graph, or a chunk-format file of either — named by any git process over the copy, had those files dropped in place (`files`), its packs kept, none downloaded; the node writes sound ones over the same packs, and requests are served meanwhile from the packs themselves. `trigger` says what named them: `request`, a request's git that failed on them; `round`, the node's own sync's git; `report`, any git run that named them, failing or not — counted as `crewlet.code.cache.reports`; `check`, their own checksum, before the copy answered; `scrub`, their own checksum, in a scrub behind the serving. A request's or a sync's is counted as `crewlet.code.cache.rebuilds{reason=derived}` — or under the reason the copy was already being read whole for. One is a disk's bad moment; damage that survives it is a pack's, and the copy is rebuilt (`code_cache_rebuilt`, `corrupt`). |
 | `code_cache_derived_damaged_again` | `WARN` | A derived file (`part`) was named damaged again within a day of its last drop for damage, whatever the node wrote of it between: it is dropped and left to the ordinary schedule rather than written again at once. Logged once a copy a part; counted as `crewlet.code.cache.reports{outcome=again}`. A disk that keeps losing what is written to it, or a git that rejects its own write — look at the disk. |
 | `code_cache_hint_confirmed` | `WARN` | git named a packed object of a repository's copy corrupt only in words (git 2.56's report of a packed object whose header is wrong), and the pack it named, hashed, is not the one the push stored: the copy is rebuilt (`corrupt`). Counted as `crewlet.code.cache.hints{outcome=confirmed}`. |
 | `code_cache_hint_unknown`, `code_cache_hint_unread` | `INFO` | git named a pack corrupt in words, and it was no pack of the copy's rows (`unknown`), or no verdict was reached (`unread`): its rows could not be read, no read slot was free for the hash, the hash ran past its bound (`bound`: a tenth of a second a mebibyte of the pack, five times the slowest cold disk or CPU the cache allows for), or the pack's files were replaced while it was hashed. Nothing is repaired, and an `unread` pack is hashed again by the next request git fails on it. Counted as `crewlet.code.cache.hints{outcome=unknown}` and `{outcome=unread}`, and each hash as `crewlet.code.cache.hint.hashes`. |

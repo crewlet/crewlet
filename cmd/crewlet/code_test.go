@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha1" //nolint:gosec // a git object id IS a SHA-1: the case names the blob git stored, it trusts no hash of its own to it
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -895,6 +897,13 @@ func TestCodeCommandsSayWhenNothingIsDeclared(t *testing.T) {
 // every problem and the command exits non-zero — the hook a cron runs on each
 // git node — and -repair rebuilds it whole. A name nobody declared is refused
 // in the node's words, naming code.repos, and counted.
+//
+// The damage is to the README's blob, whose bytes no git process on the node
+// reads on its own — not the maintainer's graph or bitmap, nor the check's
+// connectivity-only fsck — so the node's scrub is never asked and only the
+// verify finds it: damage a git process does read, reported, is repaired by
+// the node behind the serving before an operator could ask, and a case
+// damaging the middle of the pack met that repair first in five runs of five.
 func TestCodeVerifyChecksTheNodesCache(t *testing.T) {
 	t.Parallel()
 	h := codeNode(t, "    - name: web\n      owner: {seat: founder}\n    - name: docs\n      owner: {seat: founder}\n")
@@ -906,7 +915,7 @@ func TestCodeVerifyChecksTheNodesCache(t *testing.T) {
 		t.Fatalf("code verify = %v\nstdout:\n%s\nstderr:\n%s\nwant web ok and docs passed over", err, out, errOut)
 	}
 
-	// DAMAGE: one byte of web's one pack, as a disk would.
+	// DAMAGE: the compressed bytes of web's README blob, as a disk would.
 	status, body := h.node.get(t, "/code/repos/web")
 	var detail struct {
 		Repo struct {
@@ -917,18 +926,13 @@ func TestCodeVerifyChecksTheNodesCache(t *testing.T) {
 		t.Fatalf("GET /code/repos/web = %d %s", status, body)
 	}
 	cacheDir := h.node.boot.Git.CacheDirFor(h.node.boot.Store.Path)
-	packs, err := filepath.Glob(filepath.Join(cacheDir, "repos", detail.Repo.ID+".*.git", "objects", "pack", "*.pack"))
-	if err != nil || len(packs) != 1 {
-		t.Fatalf("web's cached packs are %v (%v), want one", packs, err)
+	copies, err := filepath.Glob(filepath.Join(cacheDir, "repos", detail.Repo.ID+".*.git"))
+	if err != nil || len(copies) != 1 {
+		t.Fatalf("web's cached copies are %v (%v), want one", copies, err)
 	}
-	raw, err := os.ReadFile(packs[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw[len(raw)/2] ^= 0xff
-	if err := os.WriteFile(packs[0], raw, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	readme := []byte("# web\n")
+	blob := sha1.Sum(append([]byte(fmt.Sprintf("blob %d\x00", len(readme))), readme...))
+	gittest.Damage(t, copies[0], gittest.EntryBytes, hex.EncodeToString(blob[:]))
 
 	out, _, err = cli(t, "code", "verify", h.cfg, "-repo", "web")
 	if err == nil || !strings.Contains(err.Error(), "1 of 1 repositories did not verify clean") ||

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 	"math/rand/v2"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -55,10 +54,18 @@ import (
 //     or .rev, a multi-pack-index, its bitmap, the commit-graph — flipped in
 //     place, its identity kept, and the same directory booted again; and a
 //     file replaced under another identity while the check hashes it
-//     (interleavings_check_test.go).
+//     (interleavings_check_test.go);
+//   - DAMAGE AFTER THE VOUCH: a byte of any file of a held copy — a pack
+//     itself among them — flipped in place while the cache runs; a run's
+//     REPORT of a derived file, a pack, an object, or a crash, begun now or
+//     before anything this process wrote, a third of them with a check
+//     admitted around it; and a SCRUB with the clock past ScrubInterval
+//     (interleavings_scrub_test.go).
 //
-// Every check also holds each incarnation's index files to their trailers:
-// whatever damage the run left, the round before the check repaired.
+// Every check first scrubs every copy — the clock past ScrubInterval and
+// each repository used — and then holds every file a scrub reads to its
+// checksum: whatever damage the run left, the scrub found and the round
+// before the check repaired.
 //
 // A failure names the seed, the step and every operation drawn before it.
 //
@@ -70,14 +77,17 @@ import (
 // interleaving that showed the sweep moving the lock only after the round's
 // index had been refused over it. A round indexes from
 // interleavingRoundPacks packs here, not MidxRoundPacks, which two
-// repositories over forty steps never reach; seeds 6, 12, 14 and 16 draw
+// repositories over forty steps never reach; seeds 1, 9 and 11 draw
 // that crash and that round, and putting the round's index back before the
 // sweep turns the outcome — and the run — red. The maintainer is due again
 // from interleavingMidxPacks packs beside its index rather than MidxPacks,
 // at whose production count no seed maintains a repository over its own
-// index and bitmap. interleavingOutcomes holds the seeds to reaching every
-// outcome; sixteen reach them all, in about nine seconds under the race
-// detector, the seeds in parallel. Forty steps a seed, a check every ten:
+// index and bitmap; and it is drawn at a weight of six, since a report's
+// repair drops the index it would run over — at four, once the reports were
+// drawn, no seed maintained a repository over its own index.
+// interleavingOutcomes holds the seeds to reaching every outcome; sixteen
+// reach them all, in about ten seconds under the race detector, the
+// seeds in parallel. Forty steps a seed, a check every ten:
 // enough history for a recreation to go back to and short enough that a
 // failure's trace reads in one screen.
 const (
@@ -102,11 +112,14 @@ var interleavingOps = []struct {
 	{"restart", 4, (*interleaving).restart},
 	{"evict", 4, (*interleaving).evict},
 	{"rebuild", 3, (*interleaving).rebuild},
-	{"maintain", 4, (*interleaving).maintain},
+	{"maintain", 6, (*interleaving).maintain},
 	{"sweep tombstones", 2, (*interleaving).sweepTombstones},
 	{"recreate backwards", 1, (*interleaving).recreateBackwards},
 	{"damage and restart", 4, (*interleaving).damageAndRestart},
 	{"replace while hashed", 3, (*interleaving).replaceWhileHashed},
+	{"damage in place", 4, (*interleaving).damageInPlace},
+	{"report", 6, (*interleaving).report},
+	{"scrub", 2, (*interleaving).scrub},
 }
 
 // interleavingOutcomes is every outcome the seeds must reach between them —
@@ -122,6 +135,8 @@ var interleavingOutcomes = []string{
 	"sweep tombstones", "recreate backwards", "round index", "round index over a crash's lock",
 	"a first round's check found damage", "a pack reinstalled in place", "a derived file dropped by its check",
 	"a verdict withheld",
+	"a report queued a repair round", "a stale report", "a deferred report", "a report in its scrub's cooldown",
+	"a crash made the scrub due", "scrub", "a scrub found damage", "a pack body found damaged",
 }
 
 // errKilled is what a killed sync's fault point answers.
@@ -150,12 +165,18 @@ type interleaving struct {
 	trace   []string
 
 	// indexMu guards indexed, every incarnation a full round wrote its own
-	// index in — told by the cache's round, on the cache's goroutines.
+	// index in, and the crash's fields below — told by the cache's rounds,
+	// on the cache's goroutines.
 	indexMu sync.Mutex
 	indexed map[string]bool
-	// crashDir is the incarnation a crash left a maintenance run's files
-	// in, until a round of the next process has swept them.
-	crashDir string
+	// crashDir is the incarnation the last crash left a maintenance run's
+	// files in; crashRounds, how many full rounds of the next process have
+	// swept it since; crashIndexed, whether the FIRST of them wrote its
+	// index there — between its own sweep and the next round's, rounds of
+	// an incarnation running one at a time.
+	crashDir     string
+	crashRounds  int
+	crashIndexed bool
 
 	// swapMu guards swap, the file a replaceWhileHashed renames over while
 	// the check hashes it — told by the cache's check, on its goroutines.
@@ -206,6 +227,7 @@ func interleave(t *testing.T, seed uint64) map[string]bool {
 		in.trace[len(in.trace)-1] += ": " + o.run(in, repo)
 		in.noteRoundIndexes()
 		in.noteChecks()
+		in.noteReports()
 		in.remember()
 		if step%checkEvery == 0 || step == interleavingSteps {
 			in.check(step)
@@ -241,31 +263,35 @@ func (in *interleaving) options(o *cache.Options) {
 		in.indexMu.Lock()
 		defer in.indexMu.Unlock()
 		in.indexed[dir] = true
+		if dir == in.crashDir && in.crashRounds == 1 {
+			in.crashIndexed = true
+		}
 	})(o)
+	cache.AfterSweep(o, func(dir string) {
+		in.indexMu.Lock()
+		defer in.indexMu.Unlock()
+		if dir == in.crashDir {
+			in.crashRounds++
+		}
+	})
 	cache.CheckPiecesOf(o, cache.CheckPieceBytes, in.hashed)
 }
 
 // noteRoundIndexes records the outcomes the rounds' own indexes reached: any
-// round's, and the first round after a crash writing its index in the
+// round's, and the FIRST round after a crash writing its index in the
 // incarnation the crash left a maintenance run's lock in — the lock its sweep
-// must move before git will write the index over it.
+// must move before git will write the index over it. Judged at that round
+// alone (crashIndexed): a later round of the same step — a repair a report
+// queued, the check's own — finds the lock gone whatever the first did.
 func (in *interleaving) noteRoundIndexes() {
 	in.indexMu.Lock()
 	defer in.indexMu.Unlock()
 	if len(in.indexed) > 0 {
 		in.saw("round index")
 	}
-	if in.crashDir == "" {
-		return
-	}
-	lock := filepath.Join(in.crashDir, "objects", "pack", "multi-pack-index.lock")
-	if _, err := os.Lstat(lock); err == nil {
-		return // no round has swept the crash's files yet
-	}
-	if in.indexed[in.crashDir] {
+	if in.crashIndexed {
 		in.saw("round index over a crash's lock")
 	}
-	in.crashDir = ""
 }
 
 // remember records the log and the work trees as they stand.
@@ -444,7 +470,7 @@ func (in *interleaving) restart(string) string {
 		write(in.t, filepath.Join(dir, "objects", "info", "commit-graph.lock"), "half a graph")
 		in.saw("crash leaving a maintenance run's files")
 		in.indexMu.Lock()
-		in.crashDir = dir
+		in.crashDir, in.crashRounds = dir, 0
 		delete(in.indexed, dir)
 		in.indexMu.Unlock()
 	}
@@ -535,9 +561,12 @@ func (in *interleaving) recreateBackwards(string) string {
 }
 
 // check holds every repository's cache to a fresh cache's at the log's
-// position now, and repos/ to holding no refused push's pack.
+// position now, and repos/ to holding no refused push's pack — after a scrub
+// of every copy, whose findings the linearizable sync's round repairs.
 func (in *interleaving) check(step int) {
 	t := in.t
+	in.scrubAll()
+	in.noteReports()
 	for _, repo := range in.repos {
 		s := in.syncAt(repo, linearizable)
 		got := imageOf(t, s.Dir)

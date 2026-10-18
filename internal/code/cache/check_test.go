@@ -870,21 +870,24 @@ func (f *failOnce) at(path string) error {
 // verdict — and a full round that failed over it left the repository unserved
 // on the node for good: no round could ever pass the file, and the
 // maintainer, whose rewrite would have replaced a derived one, runs only on a
-// copy a round has converged. So the check counts it `unreadable` and takes
-// it as damaged at the identity it had: a pack's index is installed again
-// over its files — one GET, a new inode where the bad sector was — and a
-// derived file dropped and written again. Every arm then answers whole.
+// copy a round has converged. So the check, and the scrub, count it
+// `unreadable` and take it as damaged at the identity it had: a pack's index
+// is installed again over its files — one GET, a new inode where the bad
+// sector was — a derived file dropped and written again, a pack's body
+// fetched again by the scrub's repair round. Every arm then answers whole.
 //
 // Mutation: fail the round over an unreadable file (the arms' syncs fail, and
-// keep failing).
+// keep failing); pass it over in the scrub (the pack is never fetched again).
 func TestAFileTheDiskCannotReadIsRepaired(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, suffix, file string
 		gets               int
+		scrub              bool
 	}{
-		{"a pack's index, at the first round's check", ".idx", "idx", 1},
-		{"a bitmap, at the first round's check", ".bitmap", "bitmap", 0},
+		{"a pack's index, at the first round's check", ".idx", "idx", 1, false},
+		{"a bitmap, at the first round's check", ".bitmap", "bitmap", 0, false},
+		{"a pack, at a scrub", ".pack", "pack", 1, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -896,17 +899,33 @@ func TestAFileTheDiskCannotReadIsRepaired(t *testing.T) {
 			disk.suffix.Store("")
 			c := w.open(t, clk.on, func(o *cache.Options) { cache.ReadFails(o, disk.at) })
 			trigger := "first"
+			if tc.scrub {
+				w.sync(t, c, h.repo)
+				if done := cache.ScrubPass(c); len(done) != 1 {
+					t.Fatalf("the copy's first scrub ran for %v", done)
+				}
+				clk.Add(cache.ScrubInterval)
+				trigger = "scrub"
+			}
 			disk.suffix.Store("pack-" + h.newer.GitChecksum + tc.suffix)
 			if tc.suffix == ".bitmap" {
 				disk.suffix.Store(tc.suffix)
 			}
 			before, gets := cache.Repos(c)[h.repo], w.objects.total()
 			s := w.sync(t, c, h.repo)
+			if tc.scrub {
+				if done := cache.ScrubPass(c); len(done) != 1 {
+					t.Fatalf("the used copy's scrub ran for %v", done)
+				}
+				eventually(t, "the scrub's findings repaired", func() bool {
+					return cache.Settled(c, h.repo) && len(cache.ScrubFindings(c, h.repo)) == 0
+				})
+				s = w.sync(t, c, h.repo)
+			}
 			if !disk.failed.Load() {
 				t.Fatal("no read of the file failed: the case tested nothing")
 			}
-			if got := counterOf(w.rec, metrics.CodeCacheChecks, map[string]string{"file": tc.file,
-				"outcome": "unreadable", "trigger": trigger}); got != 1 {
+			if got := checks(w, tc.file, "unreadable", trigger); got != 1 {
 				t.Errorf("checks{file=%s,outcome=unreadable,trigger=%s} = %d, want 1", tc.file, trigger, got)
 			}
 			if got := w.objects.total() - gets; got != tc.gets {

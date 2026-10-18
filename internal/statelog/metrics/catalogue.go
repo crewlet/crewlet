@@ -723,39 +723,53 @@ func Catalogue() []Instrument {
 			Attributes: []string{"file", "outcome", "trigger"},
 			Shows: "Files of this node's git cache held to their own " +
 				"checksum — the trailer git writes at the end of every " +
-				"index file, the SHA-1 of the bytes before it — before a " +
-				"copy this process did not write answers its first request, " +
-				"because git checks none of them when it reads and a damaged " +
-				"one can answer wrong without a word. By `file` " +
+				"pack and index file, the SHA-1 of the bytes before it — " +
+				"because git checks none of them when it reads: a damaged " +
+				"index file can answer wrong without a word, and a damaged " +
+				"pack is sent to clients byte for byte. Before a copy this " +
+				"process did not write answers its first request, every " +
+				"index file it holds; and behind the serving, a SCRUB of " +
+				"every file a copy holds, packs included — once after a " +
+				"copy a previous process left first answers, daily while it " +
+				"is used, and at once when a git process over it reports a " +
+				"pack it could not read or crashes. By `file` " +
 				"(`commit-graph`, `multi-pack-index`, `bitmap`, `midx-rev`: " +
 				"files the node derives from its packs; `idx`, `rev`: a " +
-				"pack's index and reverse index, stored with its push), " +
-				"`outcome` (`sound`; `damaged` — a derived file dropped to " +
-				"be written again, a stored one fetched again with its pack, " +
-				"one download; `unreadable`, a read of it that failed — " +
+				"pack's index and reverse index, stored with its push; " +
+				"`pack`, the pack itself, read only by a scrub), `outcome` " +
+				"(`sound`; `damaged` — a derived file dropped to be written " +
+				"again, a stored one fetched again with its pack, one " +
+				"download; `unreadable`, a read of it that failed — " +
 				"repaired as though damaged, since a file the disk cannot " +
 				"read is one git cannot serve, and never a refused read " +
 				"slot or an ended request, which decide nothing and are not " +
-				"counted; `replaced`, the file renamed over or removed while it was " +
-				"read, so no verdict is its) and `trigger` (`first`, a " +
-				"copy's first full sync in this process, which reads every " +
-				"index file a previous process left; `unvouched`, a later " +
-				"full sync reading only what this process has neither " +
-				"written nor checked since). Any `damaged` is a disk losing " +
-				"data, or something outside the engine writing into the " +
-				"cache: the copy repairs it, and a verify of the repository " +
-				"names what else that disk holds damaged.",
+				"counted; `replaced`, " +
+				"the file renamed over or removed while it was read, so no " +
+				"verdict is its) and `trigger` (`first`, a copy's first full " +
+				"sync in this process, which reads every index file a " +
+				"previous process left, or the scrub after it, which reads " +
+				"every pack and every file that sync did not; `unvouched`, a " +
+				"later full sync reading only what this process has neither " +
+				"written nor checked since; `scrub`, a used copy's daily " +
+				"scrub; `report`, a scrub a git process's report or crash " +
+				"made due). Any `damaged` is a disk losing data, or something " +
+				"outside the engine writing into the cache: the copy repairs " +
+				"it, and a verify of the repository names what else that " +
+				"disk holds damaged.",
 		},
 		{
 			Name: CodeCacheCheckDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"trigger"},
-			Shows: "How long one check of a copy's index files took, by " +
-				"`trigger` (`first` or `unvouched`, as " +
-				"`crewlet.code.cache.checks`), counted only " +
-				"where it read something: what a copy's first request after " +
-				"a restart waited for beside its sync — about a quarter of " +
-				"the copy's pack bytes read, one core and a read slot a 64 " +
-				"MiB piece, and at the volume's own throughput when read cold.",
+			Shows: "How long one check of a copy's index files, or one scrub " +
+				"of every file it holds, took, by `trigger` (`first`, " +
+				"`unvouched`, `scrub` or `report`, as " +
+				"`crewlet.code.cache.checks`), counted only where it read " +
+				"something. A check is what a copy's first request after a " +
+				"restart waited for beside its sync — about a quarter of the " +
+				"copy's pack bytes read; a scrub runs behind the serving and " +
+				"nobody waits for it, reading every byte the copy holds. " +
+				"Both hash on one core, a read slot a 64 MiB piece, and at " +
+				"the volume's own throughput when read cold.",
 		},
 		{
 			Name: CodeCacheReports, Kind: KindCounter, Unit: UnitCount,
@@ -766,19 +780,30 @@ func Catalogue() []Instrument {
 				"named (`commit-graph`, `multi-pack-index`, `chunk`: a " +
 				"derived file of either, dropped by a repair round with no " +
 				"request waiting and written again at once; `pack`, " +
-				"`object`: stored damage) and its `outcome`: `queued`, a " +
-				"repair round asked; `deferred`, asked while a check of the " +
-				"repository ran, repaired once it ends; `stale`, not dropped " +
-				"— the node wrote the file after the process that named it " +
-				"began, so the report was of the file it replaced; " +
-				"`unrouted`, a pack or object named by a push's own " +
-				"throwaway repository, which may be the client's pack; " +
-				"`again`, a derived file named damaged within a day of its " +
-				"last drop for damage, whatever the node wrote of it between: " +
-				"dropped and left to the ordinary schedule rather than written " +
-				"again at once. " +
-				"`queued` rising is a disk losing data under the cache; " +
-				"`again`, a disk that keeps losing it.",
+				"`object`: stored damage, and `hint`, a pack git named in " +
+				"words alone, each making the copy's scrub due at once, " +
+				"which holds every file it holds to its checksum and fetches " +
+				"again what fails; `crash`, a git process dying of a signal " +
+				"the node did not send — what a damaged reverse index or " +
+				"bitmap does to a clone, naming nothing — which makes the " +
+				"scrub due the same way) and its `outcome`: `queued`, a " +
+				"repair asked — a round, or the scrub; `deferred`, asked " +
+				"while a check of the repository ran, repaired once it ends; " +
+				"`stale`, not dropped — the node wrote the file after the " +
+				"process that named it began, so the report was of the file " +
+				"it replaced; `unrouted`, a pack, an object or a hint named " +
+				"by a push's own throwaway repository, which may be the " +
+				"client's pack; `again`, a derived file named damaged within " +
+				"a day of its last drop for damage, whatever the node wrote " +
+				"of it between: dropped and left to the ordinary schedule " +
+				"rather than written again at once; `cooldown`, a stored report or a " +
+				"crash within an hour of a scrub of the copy that found " +
+				"nothing, which makes no other; `covered`, one within an " +
+				"hour of a scrub whose findings still wait for their repair, " +
+				"which is its answer. `queued` rising is a disk " +
+				"losing data under the cache; `again`, a disk that keeps " +
+				"losing it; `cooldown` rising, a git process failing on " +
+				"something the copy's checksums do not show.",
 		},
 		{
 			Name: CodeCacheHints, Kind: KindCounter, Unit: UnitCount,
@@ -919,7 +944,15 @@ func Catalogue() []Instrument {
 				"with it, the directory's shape, " +
 				"and git's connectivity check. `verify` is that check, asked " +
 				"to repair what it " +
-				"found, rebuilding the repository the same way. `stream` is " +
+				"found, rebuilding the repository the same way. `stored` is " +
+				"no read of the rows' history at all: a pack whose stored " +
+				"files — the pack, its index or its reverse index — a check " +
+				"before serving or a scrub behind it found failing their " +
+				"own checksum, or a full sync found at another size than " +
+				"their row's, fetched again IN PLACE with one download a " +
+				"pack, renamed over the damaged files, counted once a sync " +
+				"that did it; rising is a disk losing data under the cache. " +
+				"`stream` is " +
 				"the code log " +
 				"RECREATED under the cache (provisioned anew, its stamp not " +
 				"the one the cache read under); `rewound` is the log gone " +

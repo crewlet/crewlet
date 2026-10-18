@@ -166,6 +166,14 @@ const (
 	// BitmapTrailer flips one byte of the multi-pack-index's bitmap's
 	// trailer.
 	BitmapTrailer DamageCase = "KT"
+	// BitmapEntries flips the lowest bit of the first literal word of every
+	// commit bitmap the multi-pack-index's bitmap stores whole (one stored
+	// as the XOR of another changes through that one): a well-formed bitmap
+	// naming one object more or fewer for every commit it covers, so every
+	// walk that reads it answers wrong — what BitmapBody does where its
+	// flipped bytes land in a bitmap a walk reads, which in a small history
+	// they need not.
+	BitmapEntries DamageCase = "K5"
 )
 
 // The damage of a commit-graph — derived by the node from its packs.
@@ -218,7 +226,7 @@ var DamageCases = []DamageCase{
 	MidxRidx, MidxSignature, MidxTruncated, MidxVersion, MidxHashVersion, MidxNoChunks, MidxFirstChunkZeroed,
 	MidxPackNamesMissing, MidxFanoutMissing, MidxLookupMissing, MidxOffsetsMissing, MidxPackNamesOrder,
 	MidxChunkPastEnd, MidxChunkMisaligned, MidxChunkTwice, MidxFanout, MidxOffset, MidxTrailer,
-	BitmapSignature, BitmapTruncated, BitmapVersion, BitmapBody, BitmapTrailer,
+	BitmapSignature, BitmapTruncated, BitmapVersion, BitmapBody, BitmapTrailer, BitmapEntries,
 	GraphSignature, GraphTruncated, GraphVersion, GraphHashVersion, GraphFirstChunkZeroed, GraphNoChunks,
 	GraphChunkShifted, GraphParentPast, GraphParentSelf, GraphParentOther, GraphFanoutMissing, GraphGeneration,
 	GraphDate, GraphFanout, GraphTrailer,
@@ -464,6 +472,13 @@ func (d *damager) derived(c DamageCase, oids []string) {
 		d.overwrite(bitmap, mid, mangled(d.bytesAt(bitmap, mid, 8)))
 	case BitmapTrailer:
 		d.flipTrailer(d.bitmap())
+	case BitmapEntries:
+		bitmap := d.bitmap()
+		for _, at := range d.bitmapEntryWords(bitmap) {
+			// A literal word is stored big-endian: its lowest bit is in its
+			// last byte.
+			d.overwrite(bitmap, at+7, []byte{d.bytesAt(bitmap, at+7, 1)[0] ^ 0x01})
+		}
 	case GraphSignature:
 		d.overwrite(graph, 0, []byte{0xde, 0xad, 0xbe, 0xef})
 	case GraphTruncated:
@@ -658,6 +673,53 @@ func (d *damager) bitmap() string {
 		d.tb.Fatalf("%s's multi-pack-index has %d bitmaps, want one", d.repo, len(found))
 	}
 	return found[0]
+}
+
+// bitmapEntryWords is the offset of the first literal word of every commit
+// bitmap the .bitmap at path stores whole — those whose XOR offset is zero —
+// read from the file's own header: its signature, version, options, entry
+// count and the index's checksum (32 bytes), the four type bitmaps, then each
+// entry's commit position, XOR offset and flags (six bytes) before its EWAH
+// bitmap. An EWAH bitmap is its bit size and word count (four bytes each),
+// its words — the first a running-length word, whose top 31 bits count the
+// literal words after it — and the position of its last running-length word
+// (four bytes).
+func (d *damager) bitmapEntryWords(path string) []int64 {
+	d.tb.Helper()
+	b := d.read(path)
+	if len(b) < 32 || string(b[:4]) != "BITM" {
+		d.tb.Fatalf("%s is no bitmap: its header is %q", path, b[:min(len(b), 4)])
+	}
+	entries := binary.BigEndian.Uint32(b[8:12])
+	at := int64(32)
+	ewah := func() (words uint32, first int64) {
+		if at+8 > int64(len(b)) {
+			d.tb.Fatalf("%s ends inside an EWAH bitmap's header at %d", path, at)
+		}
+		words, first = binary.BigEndian.Uint32(b[at+4:at+8]), at+8
+		at += 8 + 8*int64(words) + 4
+		return words, first
+	}
+	for range 4 {
+		ewah()
+	}
+	var out []int64
+	for range entries {
+		xor := b[at+4]
+		at += 6
+		words, first := ewah()
+		if xor != 0 {
+			continue
+		}
+		if words < 2 || binary.BigEndian.Uint64(b[first:first+8])>>33 == 0 {
+			d.tb.Fatalf("%s's entry at %d holds no literal word after its first run", path, first-14)
+		}
+		out = append(out, first+8)
+	}
+	if len(out) == 0 {
+		d.tb.Fatalf("%s stores no commit bitmap whole", path)
+	}
+	return out
 }
 
 // renameChunk writes to over the id of chunk from in the table of contents of

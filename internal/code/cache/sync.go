@@ -652,7 +652,7 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 	inc := e.current
 	// A REPAIR MARK asks a full round too (report.go) — unless a check of
 	// the repository is admitted, whose release asks it again.
-	full := inc == nil || inc.state == nil || !inc.converged || (inc.repair.pending() && e.verifying == 0)
+	full := inc == nil || inc.state == nil || !inc.converged || (inc.repair.due(c.now()) && e.verifying == 0)
 	// marks is the in-place marks this round's convergence must still find
 	// (markWhole), as epoch is the cache's.
 	var marks uint64
@@ -847,7 +847,10 @@ type applied struct {
 func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snapshot, epoch, marks uint64) (applied,
 	error) {
 
-	var res applied
+	var (
+		res   applied
+		found []checkedFile
+	)
 	if snap.full {
 		// The sweep lists the directory and moves whatever lies outside the
 		// image — a running maintenance's lock and temporary files among
@@ -872,11 +875,22 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		if res.checked, err = c.checkIndexes(ctx, e, inc, snap); err != nil {
 			return res, fmt.Errorf("cache: sync %s: check: %w", e.id, err)
 		}
+		// What a scrub found failing (scrub.go) is repaired with what the
+		// check found — a pack installed again, a derived file dropped — each
+		// only while it is still the file that failed (checked.still), and
+		// taken off the repair mark once the round has converged.
+		found = c.foundByScrub(e, inc)
+		res.checked.damaged = append(res.checked.damaged, found...)
 	}
-	// A pack the check found damaged, or a full round found at the wrong
-	// size, is installed again by renaming over its files (install.go), and
-	// the derived files that may have been built from it go first.
+	// A pack the check or a scrub found damaged, or a full round found at the
+	// wrong size, is installed again by renaming over its files (install.go),
+	// and the derived files that may have been built from it go first.
 	ins, err := c.install(ctx, e, inc, snap, res.checked)
+	if ins.replaced > 0 && c.metrics != nil {
+		// COUNTED BY THE ROUND THAT DID IT, once a round: a pack's stored
+		// files repaired in place, one GET a pack (RebuildStored).
+		c.metrics.Add(metrics.CodeCacheRebuilds, 1, metrics.Attrs{"reason": string(RebuildStored)})
+	}
 	if err != nil {
 		return res, err
 	}
@@ -884,6 +898,17 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	if ins.dropped != 0 {
 		res.trashed, res.dropped = true, ins.dropped
 	}
+	// A pack whose download to install it again failed is left as it stands,
+	// its findings on the mark and its next attempt held off (install.go):
+	// neither it nor a pack still held off is settled as repaired.
+	now := c.now()
+	e.mu.Lock()
+	unrepaired := inc.repair.heldOff(now)
+	for _, cs := range ins.failed {
+		inc.repair.fetchFailedAt(cs, now)
+		unrepaired[cs] = true
+	}
+	e.mu.Unlock()
 
 	indexed := false
 	var strays []string
@@ -968,11 +993,16 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		}
 	}
 	if snap.full {
+		c.settleFound(e, inc, found, unrepaired)
 		e.mu.Lock()
 		inc.converged = c.rereads.Load() == epoch && inc.marks == marks
 		var reason RebuildReason
 		if inc.converged {
 			reason, inc.reread = inc.reread, ""
+			// Its bytes held to their checksums: an inherited copy's first
+			// scrub due at once, a copy this process built its interval
+			// begun (scrub.go).
+			c.firstScrub(inc)
 		}
 		e.mu.Unlock()
 		if reason != "" && c.metrics != nil {

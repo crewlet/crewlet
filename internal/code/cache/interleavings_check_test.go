@@ -16,10 +16,10 @@ import (
 // and a file replaced while the check hashes it.
 
 // heldFile picks a repository the cache holds and one of its incarnation's
-// index files — a pack's .idx or .rev, or a derived file — answering the
-// repository, the incarnation's directory and the file's path relative to
-// it, or "" when the cache holds nothing.
-func (in *interleaving) heldFile() (repo, dir, rel string) {
+// index files — a pack's .idx or .rev, or a derived file, and with packs a
+// pack's .pack too — answering the repository, the incarnation's directory
+// and the file's path relative to it, or "" when the cache holds nothing.
+func (in *interleaving) heldFile(packs bool) (repo, dir, rel string) {
 	held := cache.Repos(in.c)
 	var repos []string
 	for _, r := range in.repos {
@@ -35,7 +35,7 @@ func (in *interleaving) heldFile() (repo, dir, rel string) {
 	var files []string
 	for _, name := range names(in.t, filepath.Join(dir, "objects", "pack")) {
 		if strings.HasSuffix(name, ".idx") || strings.HasSuffix(name, ".rev") || strings.HasSuffix(name, ".bitmap") ||
-			name == "multi-pack-index" {
+			name == "multi-pack-index" || packs && strings.HasSuffix(name, ".pack") {
 			files = append(files, filepath.Join("objects", "pack", name))
 		}
 	}
@@ -55,7 +55,7 @@ func (in *interleaving) heldFile() (repo, dir, rel string) {
 // again. The next process vouches for nothing, so its first round of the
 // repository holds the file to its trailer and repairs it before it answers.
 func (in *interleaving) damageAndRestart(string) string {
-	repo, dir, rel := in.heldFile()
+	repo, dir, rel := in.heldFile(false)
 	in.c.Stop(in.t.Context())
 	detail := "nothing held"
 	if rel != "" {
@@ -72,7 +72,7 @@ func (in *interleaving) damageAndRestart(string) string {
 // in over it (hashed): that hash gives no verdict and the round repairs
 // nothing, and the next full round hashes the successor.
 func (in *interleaving) replaceWhileHashed(string) string {
-	repo, dir, rel := in.heldFile()
+	repo, dir, rel := in.heldFile(false)
 	if rel == "" {
 		return "nothing held"
 	}
@@ -123,7 +123,9 @@ func (in *interleaving) noteChecks() {
 }
 
 // checkSound fails the run when a file of repo's incarnation at dir fails its
-// trailer: whatever damage the run left, the round before it repaired.
+// checksum — a pack, its index, its reverse index or a derived file:
+// whatever damage the run left, the scrub found and the round before it
+// repaired.
 func (in *interleaving) checkSound(step int, repo, dir string) {
 	bad, err := cache.Unsound(dir)
 	if err != nil {

@@ -204,6 +204,16 @@ type Result struct {
 	// formats named (what an ExitError matches through errors.Is), the
 	// formats themselves, the hints, and how much of it was read.
 	Trace Trace
+	// Crashed is that a process of the run's tree died of a signal the pool
+	// did not send: the leader, with no kill of the pool's (a deadline, a
+	// stall, the caller's context), no failure of the caller's own input or
+	// output, and a signal other than SIGPIPE — a consumer that hung up — or
+	// a child the tree reported dying (Trace.Crashes: git's own reports,
+	// which leave SIGPIPE out). Never set for a run the pool ended. Nothing
+	// a crash names is a part: a git that dies reading a damaged reverse
+	// index or bitmap says nothing else, so the cache reads it as a reason
+	// to hash what the process read (cache's scrub), never as damage.
+	Crashed bool
 	// CPU is the user and system time the process tree spent, the whole of
 	// it, counted when the run ends: the process and every descendant it
 	// waited for (upload-pack's pack-objects, receive-pack's index-pack), as

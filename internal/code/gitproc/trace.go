@@ -88,6 +88,24 @@ type Trace struct {
 	// Hints is the packs a bare-"%s" event nominated as holding a corrupt
 	// object (trace.go), each once, at most maxHints.
 	Hints []Hint
+	// Crashes is the error events reporting a process of the run's tree
+	// dying of a signal (crashFormats): upload-pack's report of its
+	// pack-objects, run-command's of any child it waited for. Never a row
+	// and never a kind — a crash says something read the repository and
+	// died, not what it could not read — but Result.Crashed reads it.
+	Crashes int
+}
+
+// crashFormats are git's reports of a process of the run's tree dying of a
+// signal, by canonical format: run-command's wait_or_whine for any child a
+// git process waited for (every git), and 2.56's own for the pack-objects
+// upload-pack runs. Both leave SIGPIPE out — a consumer that hung up — and
+// run-command SIGINT and SIGQUIT too. Recognised by their formats and never
+// their messages: the first's "%s" is the child's argv[0], never a request's
+// text, but nothing here needs to trust that.
+var crashFormats = map[string]bool{
+	canonicalFormat(`%s died of signal %d`):           true,
+	canonicalFormat(`pack-objects died of signal %d`): true,
 }
 
 // Hint is a pack git named as holding a corrupt object in words a request
@@ -252,6 +270,10 @@ func (s *traceSink) classify(format, message string) {
 			s.first[rank].format, s.first[rank].message = c, message
 		}
 		s.rank = max(s.rank, rank)
+		return
+	}
+	if crashFormats[c] {
+		s.t.Crashes++
 		return
 	}
 	if c == "%_" {

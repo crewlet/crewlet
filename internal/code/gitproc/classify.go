@@ -307,7 +307,13 @@ type row struct {
 //     needs a generation-overflow chunk, which a repository of a test's size
 //     never has, and building one by hand is building the file;
 //   - `unable to read index` (show-index's), `missing %s %s` and `broken link
-//     from` (fsck's findings, written to its stdout, not reported).
+//     from` (fsck's findings, written to its stdout, not reported);
+//   - `could not find object in pack %s at offset %lu in MIDX` (2.47 on): a
+//     BUG pack-objects reports, dying of SIGABRT, only beside `bad offset
+//     for revindex`, which is a row — and the run's crash (Result.Crashed);
+//   - `object %s is a %s, not a %s` and `unable to parse object: %s`: a
+//     healthy repository prints both, for an id of the wrong type and for a
+//     name that is no object.
 var formatTable = map[row][]string{
 	{ErrCorrupt, PartPack}: {
 		`index file %s is too small`,
@@ -333,6 +339,17 @@ var formatTable = map[row][]string{
 		`reverse-index file %s has unknown signature`,
 		`reverse-index file %s has unsupported version %u`,
 		`reverse-index file %s has unsupported hash id %u`,
+		// What a pack-objects says where the bytes a pack's .idx or .rev
+		// place an object at are not that object's entry: its reuse of a
+		// stored entry reads the pack's own indexes, which a multi-pack-index
+		// above them answers every other lookup past — so on a copy holding
+		// one, a damaged .idx is named only here.
+		`bad offset for revindex`,
+		`write_reuse_object: could not locate %s, expected at offset %lu in pack %s`,
+		// The bytes git read for an object are not its name: the pack, its
+		// index or the multi-pack-index placed it there, and only the bytes
+		// say which (the cache's scrub).
+		`hash mismatch %s`,
 	},
 	{ErrCorrupt, PartMultiPackIndex}: {
 		`multi-pack-index signature 0x%08x does not match signature 0x%08x`,

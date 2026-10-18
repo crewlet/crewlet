@@ -282,7 +282,7 @@ func TestAReportedDerivedFileIsDroppedAndRewrittenAtOnce(t *testing.T) {
 // nothing.
 //
 // Mutation: route a scratch's pack parts to its alternate (the unrouted count
-// stays zero).
+// stays zero, and the incarnation's scrub is made due).
 func TestAScratchsDerivedReportIsItsAlternates(t *testing.T) {
 	t.Parallel()
 	r := newReportedCopy(t, nil)
@@ -328,6 +328,9 @@ func TestAScratchsDerivedReportIsItsAlternates(t *testing.T) {
 	}
 	if cache.RepairPending(r.c, r.repo) || !cache.Settled(r.c, r.repo) {
 		t.Error("a scratch's pack report asked the incarnation for a round")
+	}
+	if why, _ := cache.ScrubDue(r.c, r.repo); why != "" {
+		t.Errorf("a scratch's pack report made the incarnation's scrub due for %q", why)
 	}
 }
 

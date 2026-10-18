@@ -175,7 +175,7 @@
 // eviction is decided under the cache's lock and its directory moved into
 // trash/ after it, so no sync on the node waits on a rename.
 //
-// # What this process did not write is checked before it serves
+// # What this process did not write is checked before it serves, and every byte is scrubbed behind it
 //
 // A CHECKABLE file is one git reads to find an object or a parent — the
 // commit-graph, the multi-pack-index with its bitmap and reverse index, and
@@ -237,6 +237,74 @@
 // defaults admit (code.repo_max_bytes, 20 GiB). [Cache.AdmitVerify]'s check
 // holds each derived file to its trailer too: no git command names a damaged
 // bitmap.
+//
+// The check reads index files alone, and only those this process has neither
+// written nor checked, so two kinds of damage pass it, and a SCRUB behind the
+// serving is what finds them (scrub.go). A PACK BODY: on a copy the
+// maintainer has served from, upload-pack's bitmap pack reuse sends a damaged
+// entry to the client byte for byte and exits 0, and the commit-graph spares
+// every walk the commit's parse, so no git process on the node names it while
+// every clone of it fails at the client (measured from git 2.40.4 to 2.56.0);
+// and holding the packs before a copy first answered would hold the largest
+// repository's first request for as long as reading twenty gigabytes takes.
+// And damage that lands in a file AFTER this process vouched for it, with no
+// change of its identity — media damage — which no vouch can see: a bitmap
+// damaged so drops an object from every clone of its branch, upload-pack
+// saying nothing. A scrub hashes EVERY file the copy holds, vouched or not —
+// each .pack against its own trailer, which is its name, and every index file
+// by the check's rule — once after the first round of a copy a previous
+// process left (one this process built was held to its rows file by file as
+// it was placed, so its interval starts there instead; and that first scrub
+// reads every pack but no index file the round just checked, which would be
+// a fifth of what it reads for a verdict minutes old), every [ScrubInterval]
+// while the copy is used (the first use since its last scrub — a reader
+// taking it, letting it go, or making a push's scratch over it — wakes the
+// scrubber, which has no other reason to wake for it, wherever in the
+// interval that use falls), and at once when a git process over it reports a
+// pack or an object it could not read, names a pack in words, or crashes —
+// but not within a [ScrubCooldown] of a scrub that found nothing, whatever is
+// written meanwhile (`cooldown`), nor within one of a scrub whose findings
+// still wait for their repair (`covered`: that repair is the report's
+// answer); past it such a report scrubs the copy again, at most once a
+// [ScrubCooldown], so damage that landed elsewhere in the copy meanwhile is
+// not left to the interval. ONE SCRUB ON THE NODE AT A TIME, IN THE ORDER OF
+// ITS EVIDENCE: a report's first, then a copy's first, then the interval's,
+// the least recently held to its checksums first among equals — and evidence
+// does not wait behind a routine scrub: a report stops the first or interval
+// scrub running at its next piece, which is due again after it, where it once
+// waited minutes behind a twenty-gigabyte copy nobody had reported. A read
+// slot a piece, the slot waited for however long, since no caller waits on a
+// scrub; and NO LOCK of the repository, so the copy keeps answering and its
+// rounds and maintenance run beside it. Its pin keeps the copy from the
+// budget and a retire, and is no use: a scrub never makes the next one due.
+// What it finds — a file failing its checksum, or one the disk could not
+// read — goes on the copy's repair mark at the identity it failed at, and the
+// repair round installs a pack again over its files with one GET
+// ([RebuildStored]), or drops a derived file to be written again at once —
+// only while the file is still the one that failed, and never under a check.
+// A pack whose .pack alone failed is the same pack fetched again, byte for
+// byte, so the derived files built over it stay; one whose .idx failed takes
+// them with it, since they may have been built from it. A GET that fails is
+// logged (code_cache_pack_reinstall_failed) and ends nothing: the round goes
+// on, the copy keeps serving, and that pack is asked again after
+// [RebuildCooldown] doubling to [RebuildBackoffCap], so an object store that
+// is down neither wedges the copy's rounds nor is asked once a round.
+// What it costs, measured (BenchmarkScrub, the same histories, six runs
+// each): it reads 1.13 times the copy's pack bytes, 0.86 to 1.38 s a gigabyte
+// of packs from the page cache — 18 to 30 s for the largest repository the
+// defaults admit — and at the volume's own throughput read cold (194 s for
+// that repository at a gp3 volume's 125 MB/s baseline). A request beside it
+// waits for a read slot only when every other one is busy, and then for one
+// piece at most: on a pool with one free slot shared with the scrub, the
+// waits were 0.2 to 9.8 ms at the median and 51 to 59 ms at the most from the
+// page cache (a whole 64 MiB piece hashes in 51 to 82 ms). COLD — a copy
+// whose files have left the page cache, as a daily scrub of a large one
+// mostly finds them — a piece is read at the volume's throughput while its
+// slot is held: on this machine's disk, whose cold reads ran the scrub at 1.07
+// to 1.41 s a gigabyte of packs, the waits were 0.4 to 12.5 ms at the median
+// and 21 to 22 ms at the most (beside=read,cache=cold, three runs each of the
+// 100 MB and 1 GB histories); at a gp3 volume's 125 MB/s baseline a whole
+// piece takes 0.54 s to read, which is the longest such a request waits.
 //
 // # Damage is repaired once, in place where nothing is lost
 //
@@ -372,6 +440,19 @@
 //     maintainer's ordinary ones included: they land on the same disk. So a
 //     disk that keeps damaging what is written to it costs one rewrite at once
 //     a RebuildQuiet and the ordinary schedule's after it, never a loop.
+//
+// A PACK, AN OBJECT, A HINT OR A CRASH MAKES THE COPY'S SCRUB DUE AT ONCE, and
+// drops nothing: a report of stored damage names no file it can be trusted
+// about (`hash mismatch` does not say whether the pack, its index or the
+// multi-pack-index placed the wrong bytes; a hint is words a request may
+// reach; a pack-objects dying of a damaged reverse index says only that it
+// died), so the bytes decide — the scrub hashes every file, and the repair
+// round installs again what fails. A crash in a scratch or a view is its
+// alternate's, like a derived report; its pack, object and hint reports may
+// be the client's pack (`unrouted`). Within [ScrubCooldown] of a scrub that
+// found nothing, a report makes nothing due (`cooldown`), whatever was written
+// since: a request that can provoke a report beside a busy repository is
+// bounded by that and nothing else.
 //
 // A dropped file is written again at once because the maintainer is woken
 // as the round lets the repository go — never from inside the round, since a

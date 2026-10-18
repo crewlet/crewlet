@@ -116,10 +116,12 @@ type Cache struct {
 	life   context.Context
 	cancel context.CancelFunc
 
-	// kicks wakes the janitor at once, and maintKicks the maintainer:
-	// buffered one, sent without blocking, so any number of kicks before a
-	// pass are one pass.
-	kicks, maintKicks chan struct{}
+	// kicks wakes the janitor at once, maintKicks the maintainer and
+	// scrubKicks the scrubber: buffered one, sent without blocking, so any
+	// number of kicks before a pass are one pass.
+	kicks, maintKicks, scrubKicks chan struct{}
+	// scrubs is the node's one scrub, given by evidence (scrub.go).
+	scrubs *scrubSlot
 
 	// mu guards entries. Lock order: Cache.mu, then entry.mu.
 	mu      sync.Mutex
@@ -192,7 +194,8 @@ func Open(ctx context.Context, o Options) (*Cache, error) {
 		fetchConcurrency: FetchConcurrency, fetches: newFetchSlots(NodeFetches), roundPacks: MidxRoundPacks,
 		midxPacks:    MidxPacks,
 		releaseClaim: sync.OnceFunc(b.claim.Release),
-		kicks:        make(chan struct{}, 1), maintKicks: make(chan struct{}, 1),
+		kicks:        make(chan struct{}, 1), maintKicks: make(chan struct{}, 1), scrubKicks: make(chan struct{}, 1),
+		scrubs:  newScrubSlot(),
 		entries: map[string]*entry{}, idle: make(chan struct{}),
 	}
 	if o.knobs != nil && o.knobs.roundPacks > 0 {
@@ -324,7 +327,8 @@ func (c *Cache) index(b *boot) (int, error) {
 		c.log.Warn("code_cache_trashed", "path", path, "why", a.why)
 	}
 	for _, k := range b.keep {
-		inc := &incarnation{n: k.n, dir: filepath.Join(repos, k.name), lastUsed: k.lastUsed, stamped: k.lastUsed}
+		inc := &incarnation{n: k.n, dir: filepath.Join(repos, k.name), lastUsed: k.lastUsed, stamped: k.lastUsed,
+			inherited: true}
 		if k.stateErr != nil {
 			c.log.Warn("code_cache_state_unreadable", "repo", k.id, "error", k.stateErr)
 		}
@@ -372,11 +376,11 @@ func (c *Cache) leave() {
 	}
 }
 
-// Start starts the cache's background work — the janitor and the
-// maintainer — under ctx: each ends with ctx or with [Cache.Stop], whichever
-// comes first. A second call, or a call after Stop, does nothing. A cache
-// that is never started still opens, syncs and pins; nothing is removed from
-// trash/, evicted or maintained until it is.
+// Start starts the cache's background work — the janitor, the maintainer and
+// the scrubber — under ctx: each ends with ctx or with [Cache.Stop],
+// whichever comes first. A second call, or a call after Stop, does nothing. A
+// cache that is never started still opens, syncs and pins; nothing is removed
+// from trash/, evicted, maintained or scrubbed until it is.
 func (c *Cache) Start(ctx context.Context) {
 	c.lifeMu.Lock()
 	defer c.lifeMu.Unlock()
@@ -386,6 +390,7 @@ func (c *Cache) Start(ctx context.Context) {
 	c.started = true
 	go c.janitor(ctx)
 	go c.maintainer(ctx)
+	go c.scrubber(ctx)
 }
 
 // isStopped reports whether Stop has begun.

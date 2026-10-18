@@ -446,11 +446,15 @@ esac`)
 	}
 }
 
-// A damaged cache is rebuilt once, under the fetch that found it, and the
-// fetch retried over the same request — under either protocol, whose wants
-// are object ids: the check of missing wants is what meets the damage, since
-// upload-pack refuses a want it cannot read IN BAND, past the first byte a
-// retry can be made under.
+// A damaged cache is repaired and the fetch served — under either protocol,
+// whose wants are object ids. When the fetch is the first process to meet
+// the damage, the check of its missing wants does — upload-pack would refuse
+// a want it cannot read IN BAND, past the first byte a retry can be made
+// under — and the cache is repaired under the fetch, which is retried over
+// the same request, once. But any git process over the copy before it — the
+// protocol-0 advertisement, the maintainer — reads around an index it cannot
+// load and reports it, and the scrub that report makes due may repair the
+// copy first, in place: then the fetch meets nothing and retries nothing.
 func TestACorruptCacheIsRebuiltAndTheFetchRetried(t *testing.T) {
 	for _, v := range []int{0, 2} {
 		t.Run(fmt.Sprintf("protocol=%d", v), func(t *testing.T) {
@@ -468,8 +472,12 @@ func TestACorruptCacheIsRebuiltAndTheFetchRetried(t *testing.T) {
 			if got := p.Head(clone); got != head {
 				t.Errorf("the clone after the rebuild is at %s, want %s", got, head)
 			}
-			if n := l.count("code_fetch_retried", `"reason":"corrupt"`); n != 1 {
-				t.Errorf("code_fetch_retried reason=corrupt was logged %d times, want once", n)
+			retried := l.count("code_fetch_retried", `"reason":"corrupt"`)
+			switch {
+			case retried > 1:
+				t.Errorf("code_fetch_retried reason=corrupt was logged %d times, want at most once", retried)
+			case retried == 0 && l.count("code_cache_pack_reinstalled") == 0:
+				t.Errorf("nothing was retried and no pack installed again: the damaged index was never repaired")
 			}
 		})
 	}

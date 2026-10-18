@@ -822,40 +822,44 @@ func WantIndex(c *Cache, repoID string) {
 	e.current.midx.LastRun, e.current.midx.Took = time.Time{}, 0
 }
 
-// Unsound is every index file of the incarnation at dir — each pack's .idx
-// and .rev, and every derived file — that fails its trailer (check.go), by
-// its path relative to dir.
+// Unsound is every file of the incarnation at dir a scrub holds to its
+// checksum — each pack's .idx, .pack and .rev, and every derived file
+// (scrub.go) — that fails it, by its path relative to dir.
 func Unsound(dir string) ([]string, error) {
 	p := pieces{buf: make([]byte, copyBuffer), size: CheckPieceBytes}
-	list, err := os.ReadDir(filepath.Join(dir, packRel))
+	files, wants, err := scrubFiles(dir)
 	if err != nil {
 		return nil, err
-	}
-	wants := map[string]expect{}
-	for _, d := range list {
-		if m := packFileName.FindStringSubmatch(d.Name()); m != nil && m[2] != "pack" {
-			wants[filepath.Join(packRel, d.Name())] = expect{prior: checksumBytes(m[1])}
-		}
-	}
-	derived, err := derivedPresent(dir)
-	if err != nil {
-		return nil, err
-	}
-	for _, rel := range derived {
-		wants[rel] = derivedExpect(rel)
 	}
 	var out []string
-	for rel, want := range wants {
-		v, _, _, err := trailerSound(context.Background(), filepath.Join(dir, rel), p, want)
+	for _, f := range files {
+		v, _, _, err := trailerSound(context.Background(), filepath.Join(dir, f.rel), p, wants[f.rel])
 		if err != nil {
 			return nil, err
 		}
 		if v == hashDamaged {
-			out = append(out, rel)
+			out = append(out, f.rel)
 		}
 	}
-	slices.Sort(out)
 	return out, nil
+}
+
+// ScrubbedFiles is the bytes and the pieces of every file a scrub of the
+// incarnation at dir hashes (scrubFiles), as it holds them now.
+func ScrubbedFiles(dir string) (bytes int64, pieces int, err error) {
+	files, _, err := scrubFiles(dir)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, f := range files {
+		info, err := os.Lstat(filepath.Join(dir, f.rel))
+		if err != nil {
+			return 0, 0, err
+		}
+		bytes += info.Size()
+		pieces += int((info.Size() + CheckPieceBytes - 1) / CheckPieceBytes)
+	}
+	return bytes, pieces, nil
 }
 
 // Report hands the cache's observer one run, as the pool does after every
@@ -870,6 +874,17 @@ func Settled(c *Cache, repoID string) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.running == nil && e.next == nil && (e.current == nil || !e.current.repair.pending())
+}
+
+// HeldOff reports whether repoID has no round running or queued, and its
+// current incarnation's repair mark asks nothing a round can do now: every
+// finding left is a pack whose download is held off (repairMark.fetchFailed).
+func HeldOff(c *Cache, repoID string) bool {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.running == nil && e.next == nil && e.current != nil && e.current.repair.pending() &&
+		!e.current.repair.due(c.now())
 }
 
 // RepairPending reports whether repoID's current incarnation holds a report
@@ -889,4 +904,91 @@ func GraphFailed(c *Cache, repoID string) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.current != nil && e.current.graphFailed
+}
+
+// ScrubPass runs every scrub due now, one after another, as the scrubber's
+// pass does, and answers the repositories it scrubbed in order: what a case
+// runs instead of starting the scrubber, whose wake it would otherwise wait
+// for.
+func ScrubPass(c *Cache) []string {
+	if !c.enter() {
+		return nil
+	}
+	defer c.leave()
+	done, _ := c.scrubPass(c.life)
+	return done
+}
+
+// ScrubDue is why repoID's current incarnation's scrub is due at once —
+// "first", "report", or "" when only its interval can make it due — and
+// whether one is running.
+func ScrubDue(c *Cache, repoID string) (why string, running bool) {
+	e := lookup(c, repoID)
+	if e == nil {
+		return "", false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.current == nil {
+		return "", false
+	}
+	if w := e.current.scrubDue; w != 0 {
+		why = string(w.trigger())
+	}
+	return why, e.current.scrubbing
+}
+
+// Scrubbed is when repoID's current incarnation's last scrub ended and
+// whether it found anything (zero and false before its first), and when its
+// bytes were last held to their checksums, which its interval runs from.
+func Scrubbed(c *Cache, repoID string) (at time.Time, found bool, base time.Time) {
+	e := lookup(c, repoID)
+	if e == nil {
+		return time.Time{}, false, time.Time{}
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.current == nil {
+		return time.Time{}, false, time.Time{}
+	}
+	return e.current.scrubbedAt, e.current.scrubFound, e.current.scrubBase
+}
+
+// ScrubFindings is the files scrubs found failing that repoID's repair mark
+// still holds, by their paths relative to the incarnation.
+func ScrubFindings(c *Cache, repoID string) []string {
+	e := lookup(c, repoID)
+	if e == nil {
+		return nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.current == nil {
+		return nil
+	}
+	var out []string
+	for rel := range e.current.repair.found {
+		out = append(out, rel)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// ScrubWakesWith makes the scrubber ask f for its wake at the next interval's
+// end — next, on the cache's clock — in place of a timer: a case on a clock of
+// its own sees when the scrubber means to wake, and wakes it.
+func ScrubWakesWith(o *Options, f func(next time.Time) <-chan time.Time) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.scrubWake = f
+}
+
+// Quiet reports whether repoID has no round running or queued, whatever its
+// repair mark still holds.
+func Quiet(c *Cache, repoID string) bool {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.running == nil && e.next == nil
 }

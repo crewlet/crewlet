@@ -58,6 +58,23 @@ import (
 //     schedule's after it, never a loop. (Cleared by the maintainer's next
 //     ordinary write, the mark let every other damage be written again at
 //     once: one rewrite at once and one ordinary, alternating for ever.)
+//   - A STORED REPORT, AN OBJECT REPORT, A HINT OR A CRASH MAKES THE SCRUB DUE
+//     AT ONCE (scrub.go), and drops nothing: a stored file is never dropped on
+//     a report. `hash mismatch` names no file — the pack, its index or the
+//     multi-pack-index placed the wrong bytes — a hint names a pack in words a
+//     request may reach, and a crash names nothing at all (a pack-objects
+//     dying of a damaged reverse index or bitmap says only that it died), so
+//     what decides is the bytes: the scrub hashes every pack and index file of
+//     the copy, vouched or not, and what fails its checksum is reinstalled in
+//     place or dropped by the repair round. A crash in a scratch or a view is
+//     its alternate's like a derived part — neither ever holds a reverse index
+//     or a bitmap of its own — and its pack, object and hint reports may be the
+//     client's pack: `unrouted`. BOUNDED by ScrubCooldown: within an hour of a
+//     scrub that found nothing, a report makes nothing due (`cooldown`),
+//     whatever was written meanwhile — a push resetting it would leave a
+//     request that can provoke a crash beside a busy repository bounded by
+//     nothing — and within an hour of one whose findings still wait for
+//     their repair, the repair is the answer (`covered`).
 
 // reportPart is what a report names: the `part` attribute of
 // crewlet.code.cache.reports.
@@ -69,6 +86,11 @@ const (
 	reportChunk  reportPart = "chunk"
 	reportPack   reportPart = "pack"
 	reportObject reportPart = "object"
+	// reportCrash: a process of the run's tree died of a signal the pool
+	// did not send (gitproc.Result.Crashed).
+	reportCrash reportPart = "crash"
+	// reportHint: a pack a run named in words alone (gitproc.Hint).
+	reportHint reportPart = "hint"
 )
 
 // reportOutcome is what became of a report: the `outcome` attribute of
@@ -76,8 +98,10 @@ const (
 type reportOutcome string
 
 const (
-	// reportQueued: recorded on the incarnation's repair mark, a round
-	// queued to repair it.
+	// reportQueued: a repair asked — a derived part recorded on the
+	// incarnation's repair mark with a round queued to drop it; any other
+	// part, a hint or a crash, the incarnation's scrub made due, or answered
+	// by the one already due or running (scrub.go).
 	reportQueued reportOutcome = "queued"
 	// reportDeferred: recorded while a check of the repository is
 	// admitted; the check's release queues the round.
@@ -85,12 +109,19 @@ const (
 	// reportStale: not dropped — this process wrote the part's current file
 	// after the reporting run began.
 	reportStale reportOutcome = "stale"
-	// reportUnrouted: a pack or object part from a process in a scratch or
-	// a view, which may be the client's pack; nothing recorded.
+	// reportUnrouted: a pack or object part, or a hint, from a process in a
+	// scratch or a view, which may be the client's pack; nothing recorded.
 	reportUnrouted reportOutcome = "unrouted"
 	// reportAgain: a part dropped for damage again within RebuildQuiet of
 	// its last drop for damage: dropped, not due at once.
 	reportAgain reportOutcome = "again"
+	// reportCooldown: a stored, object, hint or crash report within
+	// ScrubCooldown of a scrub that found nothing: no scrub made due.
+	reportCooldown reportOutcome = "cooldown"
+	// reportCovered: a stored, object, hint or crash report within
+	// ScrubCooldown of a scrub whose findings still wait for their repair:
+	// the repair is the answer, and no scrub is made due.
+	reportCovered reportOutcome = "covered"
 )
 
 // dropAsk is one part's drop as asked: the latest Began of a run that asked
@@ -108,6 +139,7 @@ const (
 	dropRound   = "round"   // a round's own git failed on it (damagedRound)
 	dropReport  = "report"  // a run reported it, failing or not (observe)
 	dropCheck   = "check"   // the round's check found it failing its trailer
+	dropScrub   = "scrub"   // a scrub found it failing its trailer
 )
 
 // partDrops is the derived parts to drop, each with what asked it: one entry
@@ -137,46 +169,138 @@ func (d *partDrops) merge(o partDrops) {
 	}
 }
 
-// repairMark is what reports asked an incarnation's next full round to do.
+// repairMark is what reports and scrubs asked an incarnation's next full
+// round to do.
 type repairMark struct {
 	// drops is the derived parts reports named.
 	drops partDrops
+	// found is every file a scrub found failing its checksum, by its path
+	// relative to the incarnation, at the identity it failed at: the round
+	// reinstalls a pack, or drops a derived file, only while it still has
+	// that identity (checked.still).
+	found map[string]checkedFile
+	// fetchFailed is the packs, by checksum, whose last download to install
+	// them again failed (install.go), each held off until its backoff has
+	// passed: RebuildCooldown after the first failure, twice as long after
+	// each one after it, up to RebuildBackoffCap — the store being down, or
+	// no longer holding the bundle, is not ended by asking it again every
+	// round. Taken off with the pack's findings once it is installed.
+	fetchFailed map[string]fetchBackoff
+}
+
+// fetchBackoff is a pack's download failures in a row, and when the next
+// attempt may be made (Options.Now's clock).
+type fetchBackoff struct {
+	failures int
+	until    time.Time
 }
 
 // pending reports whether the mark asks anything.
-func (m repairMark) pending() bool { return len(m.drops) > 0 }
+func (m repairMark) pending() bool { return len(m.drops) > 0 || len(m.found) > 0 }
+
+// due reports whether the mark asks a full round anything it can do at now:
+// a drop, or a finding that is a derived file's or a pack's not held off. A
+// mark whose every finding is a pack held off asks nothing, so the copy's
+// rounds stay deltas and keep answering until the backoff passes.
+func (m repairMark) due(now time.Time) bool {
+	if len(m.drops) > 0 {
+		return true
+	}
+	held := m.heldOff(now)
+	for _, f := range m.found {
+		if cs, ok := packOfRel(f.rel); !ok || !held[cs] {
+			return true
+		}
+	}
+	return false
+}
+
+// heldOff is the packs whose download is held off at now, by checksum.
+func (m repairMark) heldOff(now time.Time) map[string]bool {
+	held := map[string]bool{}
+	for cs, b := range m.fetchFailed {
+		if now.Before(b.until) {
+			held[cs] = true
+		}
+	}
+	return held
+}
+
+// fetchFailedAt records that a download of pack cs to install it again failed
+// at now, and holds the next one off.
+func (m *repairMark) fetchFailedAt(cs string, now time.Time) {
+	if m.fetchFailed == nil {
+		m.fetchFailed = map[string]fetchBackoff{}
+	}
+	b := m.fetchFailed[cs]
+	b.failures++
+	b.until = now.Add(rebuildWindow(b.failures))
+	m.fetchFailed[cs] = b
+}
+
+// packOfRel is the checksum of the pack whose file rel is, or false.
+func packOfRel(rel string) (string, bool) {
+	m := packFileName.FindStringSubmatch(filepath.Base(rel))
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
+}
 
 // observe is the pool's observer (gitproc.Pool.Observe): called after every
 // git run with where it ran and how it ended, on the run's own goroutine. It
-// reads the derived parts the run's damage names, finds the incarnation they
-// are about by the process's directory, records them on its repair mark and
-// queues a round — under the entry's mu, never its write lock, and doing no
-// I/O, so it never holds its run.
+// reads the parts the run's damage names, its hints and whether it crashed,
+// finds the incarnation they are about by the process's directory, records a
+// derived part on its repair mark and queues a round, and makes its scrub due
+// for the rest — under the entry's mu, never its write lock, and doing no I/O,
+// so it never holds its run.
 func (c *Cache) observe(ran gitproc.Ran) {
-	var dmg *gitproc.Damage
-	if !errors.As(ran.Result.Damage, &dmg) || c.isStopped() {
+	if c.isStopped() {
 		return
 	}
-	dmg = dmg.Narrow(ran.Loads)
-	derived := derivedOf(dmg)
-	stored := dmg.Parts &^ (gitproc.PartMultiPackIndex | gitproc.PartCommitGraph | gitproc.PartChunk)
+	var dmg *gitproc.Damage
+	var derived, stored gitproc.Part
+	if errors.As(ran.Result.Damage, &dmg) {
+		dmg = dmg.Narrow(ran.Loads)
+		derived = derivedOf(dmg)
+		stored = dmg.Parts & (gitproc.PartPack | gitproc.PartObject)
+	}
+	hinted, crashed := len(ran.Result.Trace.Hints) > 0, ran.Result.Crashed
+	if derived == 0 && stored == 0 && !hinted && !crashed {
+		return
+	}
 	e, inc := c.incarnationAt(ran.Dir)
 	if e == nil {
-		// A scratch or a view: only its alternate's derived parts are the
-		// cache's; its pack and object parts may be the client's.
+		// A scratch or a view: only its alternate's derived parts and a
+		// crash are the cache's; its pack and object parts, and the packs
+		// its hints name, may be the client's.
 		if e, inc = c.incarnationAt(ran.Alternate); e == nil {
 			return
 		}
 		if stored != 0 {
 			c.countReports(stored, reportUnrouted)
 		}
-	}
-	if derived == 0 {
-		return
+		if hinted {
+			c.countPart(reportHint, reportUnrouted)
+		}
+		stored, hinted = 0, false
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.current != inc || e.dead {
+		return
+	}
+	if stored != 0 || hinted || crashed {
+		outcome := c.scrubAsked(inc)
+		c.countReports(stored, outcome)
+		if hinted {
+			c.countPart(reportHint, outcome)
+		}
+		if crashed {
+			c.countPart(reportCrash, outcome)
+		}
+	}
+	if derived == 0 {
 		return
 	}
 	inc.repair.drops.add(dmg.Drops(), ran.Result.Began, dropReport)
@@ -194,6 +318,13 @@ func derivedOf(d *gitproc.Damage) gitproc.Part {
 	return d.Parts & (gitproc.PartMultiPackIndex | gitproc.PartCommitGraph | gitproc.PartChunk)
 }
 
+// countPart counts one report of part with outcome.
+func (c *Cache) countPart(part reportPart, outcome reportOutcome) {
+	if c.metrics != nil {
+		c.metrics.Add(metrics.CodeCacheReports, 1, metrics.Attrs{"part": string(part), "outcome": string(outcome)})
+	}
+}
+
 // countReports counts one report of each part of parts with outcome.
 func (c *Cache) countReports(parts gitproc.Part, outcome reportOutcome) {
 	if c.metrics == nil {
@@ -207,8 +338,7 @@ func (c *Cache) countReports(parts gitproc.Part, outcome reportOutcome) {
 		{gitproc.PartChunk, reportChunk}, {gitproc.PartPack, reportPack}, {gitproc.PartObject, reportObject},
 	} {
 		if parts&p.bit != 0 {
-			c.metrics.Add(metrics.CodeCacheReports, 1, metrics.Attrs{"part": string(p.name),
-				"outcome": string(outcome)})
+			c.countPart(p.name, outcome)
 		}
 	}
 }
@@ -259,7 +389,7 @@ func (c *Cache) repairRound(e *entry) {
 // dropDamaged is a full round's drop of damaged derived files, before its own
 // index decides: what a failed request or the round's own git asked
 // (incarnation.drop), what reports asked (incarnation.repair, unless a check
-// of the repository is admitted), and what the round's check found
+// of the repository is admitted), and what the round's check or a scrub found
 // (ck.still). Each asked part is TAKEN before the drop, so a run that names
 // it while the round runs marks it again for the next; a drop that fails
 // puts it back.
@@ -296,9 +426,13 @@ func (c *Cache) dropDamaged(e *entry, inc *incarnation, res *applied) error {
 		c.countReports(stale, reportStale)
 	}
 
-	_, found := res.checked.still(inc.dir)
-	if found &^= drop | res.dropped; found != 0 {
-		byTrigger[dropCheck] |= found
+	_, checks := res.checked.still(inc.dir)
+	var found gitproc.Part
+	for p, a := range checks {
+		if p&(drop|res.dropped) == 0 {
+			found |= p
+			byTrigger[a.by] |= p
+		}
 	}
 	if all := drop | found; all&^res.dropped != 0 {
 		if err := c.dropDerived(e, inc, all&^res.dropped); err != nil {

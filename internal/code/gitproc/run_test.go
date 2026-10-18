@@ -1098,3 +1098,68 @@ func TestEveryProcessInTheTreeReportsToOneStream(t *testing.T) {
 		}
 	})
 }
+
+// A CRASH IS A SIGNAL THE POOL DID NOT SEND. A clone over a reverse index
+// whose every position is past its pack's objects (L) has its pack-objects
+// die of SIGSEGV on every git, and upload-pack says so in a report of its own
+// (`%s died of signal %d`; 2.56 also `pack-objects died of signal %d`) and
+// exits with an error, its own death no signal: the crash is the CHILD's,
+// known only from the tree's reports. A leader that raises SIGSEGV itself is
+// one too. What is never one: a run the pool ended — its deadline is the
+// pool's SIGTERM — a run whose caller's output failed, whatever it died of
+// after, and a leader dying of SIGPIPE, the consumer of its output hanging
+// up, which git itself never reports.
+func TestACrashIsASignalThePoolDidNotSend(t *testing.T) {
+	t.Parallel()
+	t.Run("a clone whose pack-objects dies of a damaged reverse index", func(t *testing.T) {
+		t.Parallel()
+		f := gittest.NewFixture(t)
+		s := gittest.Bare(t, f)
+		gittest.Damage(t, s.Dir, gittest.RevOverwritten, f.Tip())
+		res, err := realPool(t, gitproc.Options{}).Run(t.Context(), fetchV2(s.Dir, f.Tip()))
+		if err == nil || res.Exit < 0 {
+			t.Fatalf("the clone: exit %d, %v; want upload-pack to fail by itself", res.Exit, err)
+		}
+		if !res.Crashed || res.Trace.Crashes == 0 {
+			t.Errorf("Crashed %v with %d crash reports (formats %q), want its pack-objects' crash",
+				res.Crashed, res.Trace.Crashes, res.Trace.Formats)
+		}
+	})
+	for _, c := range []struct {
+		name, body string
+		stdout     io.Writer
+		crashed    bool
+	}{
+		{name: "a leader that raises SIGSEGV", body: "kill -SEGV $$", crashed: true},
+		{name: "a leader that dies of SIGPIPE", body: "kill -PIPE $$"},
+		// The writer fails, yes ignores the SIGPIPE it would have died of and
+		// fails its write, and the leader then dies of SIGSEGV: the caller's
+		// own failure came first.
+		{name: "a run whose caller's output failed", body: "trap '' PIPE; yes; kill -SEGV $$", stdout: failingWriter{}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			p := fakePool(t, c.body, gitproc.Options{})
+			res, _ := p.Run(t.Context(), gitproc.Cmd{Args: []string{"x"}, Stdout: c.stdout, Class: gitproc.ClassTransfer,
+				Deadline: time.Minute})
+			if res.Exit >= 0 {
+				t.Fatalf("exit %d, want the leader dead of a signal", res.Exit)
+			}
+			if res.Crashed != c.crashed {
+				t.Errorf("Crashed %v, want %v", res.Crashed, c.crashed)
+			}
+		})
+	}
+	t.Run("a run the pool ended at its deadline", func(t *testing.T) {
+		t.Parallel()
+		pids := newPIDFile(t)
+		p := fakePool(t, treeBody(pids), gitproc.Options{})
+		o, _, _, _ := pastItsDeadline(t, p, pids, 300*time.Millisecond)
+		if !errors.Is(o.err, gitproc.ErrDeadline) || o.res.Exit >= 0 {
+			t.Fatalf("exit %d, %v; want ErrDeadline and a signal", o.res.Exit, o.err)
+		}
+		if o.res.Crashed {
+			t.Error("a run the pool killed at its deadline reads as crashed")
+		}
+	})
+}

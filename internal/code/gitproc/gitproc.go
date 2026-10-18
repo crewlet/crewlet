@@ -219,6 +219,18 @@
 // on the monotonic clock, so a report about a file the cache has rewritten
 // since is told from one about the file it holds now.
 //
+// A CRASH IS REPORTED TOO, and is no kind. A pack-objects reusing entries by
+// a damaged reverse index dies of SIGSEGV on every git, and its upload-pack
+// says only that it died ("%s died of signal %d", run-command's report of any
+// child; 2.56 also "pack-objects died of signal %d") — no format names the
+// file. [Result.Crashed] is that a process of the run's tree died of a signal
+// the POOL DID NOT SEND: the leader, never for a run the pool killed (its
+// deadline, a stall, the caller's context) or one whose caller's own input or
+// output failed first, and never of SIGPIPE, a consumer hanging up, which git
+// itself leaves out of both reports; or a child, by those two formats
+// ([Trace.Crashes]). The cache reads it as a reason to hash what the process
+// read, never as damage of a part.
+//
 // A run that names two kinds is BOTH: an [ExitError]'s Kind is the highest,
 // and errors.Is reaches every kind the run named ([Trace.Kinds]), so a
 // question about one is never answered by another that outranks it — a force

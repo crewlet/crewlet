@@ -310,7 +310,34 @@ type incarnation struct {
 	// work — and said so: each logged and counted once an incarnation,
 	// however many passes, rounds and checks find it again.
 	memoryRefused maintStep
-	// lastUsed is when a reader last took or released it.
+	// inherited: a previous process left it — Open indexed it from the disk
+	// — so its bytes are none this process held to their rows as it placed
+	// them, and its first full round in this process makes its first scrub
+	// due (scrub.go).
+	inherited bool
+	// scrubbing: its scrub is running now, asked at scrubRunning: a report
+	// meanwhile is answered by one a report asked for, which hashes every
+	// file it holds, and ends a routine one to run as a report's in its
+	// place (scrub.go). scrubDue is why its next scrub is due AT ONCE — zero
+	// when only its interval makes it due — and scrubAsked when it was made
+	// so: the scrubber takes the due-at-once by evidence, and within each
+	// the oldest first.
+	scrubbing    bool
+	scrubRunning scrubPrio
+	scrubDue     scrubWhy
+	scrubAsked   time.Time
+	// scrubBase is when every byte it holds was last held to its checksum —
+	// its last scrub's end, or, for one this process built, its first full
+	// round's, every file of which this process placed after holding it to
+	// its row — and zero until then: ScrubInterval runs from it. scrubbedAt
+	// is when its last scrub ended and scrubFound whether that scrub found
+	// anything: ScrubCooldown runs from them. All on Options.Now's clock.
+	scrubBase, scrubbedAt time.Time
+	scrubFound            bool
+	// lastUsed is when a reader last took or released it, or made a push's
+	// scratch over it: set as the incarnation is made or read at boot, and
+	// moved only by used, which wakes the scrubber at the first use since
+	// scrubBase.
 	lastUsed time.Time
 	// stamped is the last use the disk records (lastUsedOn): read at boot,
 	// moved forward by the janitor's recordUse.
@@ -350,10 +377,32 @@ func (inc *incarnation) stateValue(id string) state {
 	}
 }
 
-// pin hands inc to a reader; the entry's mu is held.
+// used records a reader's use of inc — taking it (pin), letting it go
+// (release), or making a push's scratch over it (newScratch) — on the cache's
+// clock; the entry's mu is held. EVERY USE GOES THROUGH HERE, because the
+// FIRST use since its bytes were last held to their checksums wakes the
+// scrubber, wherever in the interval it falls and whichever kind of use it
+// is: only a use makes a copy's interval count (a copy nobody uses is never
+// due), so the scrubber reads it and arms its wake for the interval's end
+// (scrub.go), and it has no other reason to wake for the copy. Woken only
+// once the interval had passed, a copy used within it — every busy
+// repository, right after its first scrub — was never woken for again; woken
+// only by a reader taking it, a copy whose first use after a scrub was the
+// RELEASE of a reader held across the scrub's end — a clone of a large
+// repository, one long request at a time — was not either, since every
+// reader taken after that release found the copy used already. Either way its
+// next scrub waited for something unrelated to wake the scrubber.
+func (c *Cache) used(inc *incarnation) {
+	if !inc.scrubBase.IsZero() && !inc.lastUsed.After(inc.scrubBase) {
+		c.kickScrubber()
+	}
+	inc.lastUsed = c.now()
+}
+
+// pin hands inc to a reader — a use (used); the entry's mu is held.
 func (c *Cache) pin(e *entry, inc *incarnation, kind SyncKind) Synced {
 	inc.pins++
-	inc.lastUsed = c.now()
+	c.used(inc)
 	return Synced{
 		Dir:      inc.dir,
 		Repo:     inc.repo,
@@ -366,16 +415,16 @@ func (c *Cache) pin(e *entry, inc *incarnation, kind SyncKind) Synced {
 	}
 }
 
-// release is a reader letting inc go. The last release of a RETIRED
-// incarnation moves its directory into trash/ and kicks the janitor; the
-// removal itself is the janitor's, so a request that lets go of a 20 GiB
+// release is a reader letting inc go — a use (used). The last release of a
+// RETIRED incarnation moves its directory into trash/ and kicks the janitor;
+// the removal itself is the janitor's, so a request that lets go of a 20 GiB
 // directory returns at once. The last release of a current incarnation while
 // the cache is over its budget kicks the janitor too: a repository too large
 // to keep is served while a request holds it, and evicted as soon as none
 // does rather than at the next tick. Safe after Stop.
 func (c *Cache) release(e *entry, inc *incarnation) {
 	e.mu.Lock()
-	inc.lastUsed = c.now()
+	c.used(inc)
 	gone := c.unpin(e, inc)
 	e.mu.Unlock()
 	c.trash(gone)

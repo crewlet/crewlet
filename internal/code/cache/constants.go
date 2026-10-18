@@ -480,3 +480,41 @@ const RebuildBackoffCap = 24 * time.Hour
 // the last ask is met as the first attempt it is, ten minutes from a retry,
 // rather than at the window an earlier, repaired incident grew.
 const RebuildQuiet = RebuildBackoffCap
+
+// ScrubInterval is how long after its bytes were last held to their
+// checksums a USED copy is scrubbed again (scrub.go): every .pack against its
+// own trailer and every index file by the check's rule, behind the serving.
+// Damage that lands on a disk after this process checked a file, and that no
+// git process reports — a pack body upload-pack sends verbatim, a bitmap
+// that fails every clone silently — is served until the next scrub: at most
+// this long for a repository used meanwhile, and from its first use after it
+// for one idle meanwhile.
+//
+// A DAY: RebuildQuiet's, the window the cache already treats as the one in
+// which "a disk can damage what a rebuild wrote", so one figure governs both.
+// A JUDGMENT CALL between how long such damage fails every clone of its
+// repository and what the scrub costs the node. A scrub reads 1.13 times a
+// copy's pack bytes, at 0.86 to 1.38 s a gigabyte of packs from the page
+// cache (BenchmarkScrub, 100 MB and 1 GB histories, six runs each) and at the
+// volume's throughput read cold — so for 1 TB of packs all used every day, 14
+// to 23 minutes of one core a day from the page cache, and at most 2.5 hours
+// of a 125 MB/s volume's baseline (10.5% of its day) for the share read cold;
+// nothing for a repository nobody reads. Half the interval doubles that
+// share; what a shorter one finds sooner is only damage arriving after a
+// check that nothing else reaches, which a restart, a report and an
+// operator's `crewlet code verify` each reach as well.
+const ScrubInterval = RebuildQuiet
+
+// ScrubCooldown is how long after a scrub that found nothing a report — a
+// pack or an object a git process could not read, a pack named in words, a
+// crash — makes no scrub due (report.go), WHATEVER IS WRITTEN MEANWHILE: a
+// request that can provoke a report (a git that crashes on what it is asked)
+// beside a busy repository is bounded by this and nothing else.
+//
+// AN HOUR: the largest repository the defaults admit (20 GiB, 21.5 GB of
+// packs) then costs at most one scrub an hour at a report's word — 18 to 30 s
+// of one core from the page cache (0.5 to 0.8% of it), or 194 s of a 125 MB/s
+// volume read cold (5.4% of its hour) — whatever a request provokes, while a
+// report about damage the last scrub could not have seen waits at most an
+// hour for the scrub that finds it, beside the copy's daily one.
+const ScrubCooldown = time.Hour

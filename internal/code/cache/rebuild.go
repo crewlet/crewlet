@@ -143,11 +143,20 @@ const (
 	// to repair it.
 	// The cache's own, never a git process's: Rebuild refuses it.
 	RebuildVerify RebuildReason = "verify"
+	// RebuildStored is a pack's STORED files — its .pack, .idx or .rev —
+	// installed again from its bundle IN PLACE, one GET a pack, renamed over
+	// the files a check before serving or a scrub behind it found failing
+	// their checksums, or a full round found at another size than their row's
+	// (install.go): no new incarnation, and no other pack downloaded. Counted
+	// by the round that did it, once a round; never refused, since a check
+	// holds only what this process has not vouched for and a scrub runs at
+	// most once a ScrubCooldown at a report's word.
+	RebuildStored RebuildReason = "stored"
 )
 
 // RebuildReasons is every [RebuildReason].
 var RebuildReasons = []RebuildReason{RebuildCorrupt, RebuildDerived, RebuildMissing, RebuildShape, RebuildStream,
-	RebuildRewound, RebuildVerify}
+	RebuildRewound, RebuildVerify, RebuildStored}
 
 // gitReasons are the reasons a git process's failure gives through
 // [DamageReason] and [ShapeReason] and that reach [askRebuild] — so the ones
@@ -161,10 +170,12 @@ var gitReasons = []RebuildReason{RebuildCorrupt, RebuildMissing, RebuildShape}
 var rebuildReasons = append(append([]RebuildReason{}, gitReasons...), RebuildDerived)
 
 // inPlaceReasons are the damage a WHOLE READ IN PLACE repairs — no new
-// incarnation, no download: a shape its sweep puts right (RebuildShape), and
-// derived files its round drops and the round or the maintainer rewrites
-// over the same packs (RebuildDerived). The others replace the incarnation.
-var inPlaceReasons = []RebuildReason{RebuildShape, RebuildDerived}
+// incarnation: a shape its sweep puts right (RebuildShape), derived files its
+// round drops and the round or the maintainer rewrites over the same packs
+// (RebuildDerived), both with no download, and a pack's stored files its
+// round installs again over themselves, one GET a pack (RebuildStored). The
+// others replace the incarnation.
+var inPlaceReasons = []RebuildReason{RebuildShape, RebuildDerived, RebuildStored}
 
 // derivedParts are the parts a derived repair may drop: the
 // multi-pack-index's files and the commit-graph.

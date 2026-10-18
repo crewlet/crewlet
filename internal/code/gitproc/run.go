@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/procgroup"
@@ -212,6 +213,12 @@ func (p *Pool) run(ctx context.Context, c Cmd, prep prepared, lent *loan) (Resul
 	if capt != nil {
 		res.Stdout = capt.buf
 	}
+	// A CRASH IS A SIGNAL NOBODY HERE SENT. The pool's own kill (w.ended)
+	// is the pool's judgement of a run, and a caller whose input or output
+	// failed is the reason its git died of SIGPIPE or of whatever its next
+	// read met: neither says anything about what the process read.
+	res.Crashed = w.ended == endNone && (in == nil || in.callerErr == nil) && out.callerErr == nil &&
+		(diedOfSignal(cmd.ProcessState) || res.Trace.Crashes > 0)
 	if p.metrics != nil {
 		p.metrics.Observe(metrics.CodeGitCPU, res.CPU, metrics.Attrs{"class": string(c.Class)})
 	}
@@ -240,6 +247,18 @@ func (p *Pool) run(ctx context.Context, c Cmd, prep prepared, lent *loan) (Resul
 		return res, nil
 	}
 	return res, &ExitError{Command: c.Args[0], Result: res, Kind: trace.kind()}
+}
+
+// diedOfSignal reports whether the reaped leader died of a signal other than
+// SIGPIPE — git's own rule for what a dead child is worth reporting
+// (run-command's wait_or_whine): a SIGPIPE is the reader of its output
+// hanging up, which is the consumer's doing, never the repository's.
+func diedOfSignal(s *os.ProcessState) bool {
+	if s == nil {
+		return false
+	}
+	ws, ok := s.Sys().(syscall.WaitStatus)
+	return ok && ws.Signaled() && ws.Signal() != syscall.SIGPIPE
 }
 
 // cpuOf is the CPU the reap reports for a process: the user and system time

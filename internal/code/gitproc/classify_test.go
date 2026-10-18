@@ -392,6 +392,22 @@ func formatCases(f *fixture) []damageCase {
 	packed := `packed object %s (stored in %s) is corrupt`
 	notOurs := `git upload-pack: not our ref %s`
 	ignoring := `ignoring existing multi-pack-index; checksum mismatch`
+	hashMismatch := `hash mismatch %s`
+	// What a clone's pack-objects says where a pack's own .idx or .rev
+	// place an entry its reuse cannot find.
+	reuseLost := []string{`bad offset for revindex`,
+		`write_reuse_object: could not locate %s, expected at offset %lu in pack %s`}
+	// wrongObject is a merge-base that read the blob where the tip's commit
+	// should be: before 2.55 git hashes what it read and says so; from 2.55
+	// it reads the object's type first, and calls the commit no commit.
+	wrongObject := func(running gitproc.Version) result {
+		r := missing(`Not a valid commit name %s`)
+		if before(running, v(2, 55)) {
+			r = corrupt(hashMismatch, `Not a valid commit name %s`)
+		}
+		r.ownDrops = true
+		return r
+	}
 	required := func(chunk string) func(gitproc.Version) result {
 		return func(running gitproc.Version) result {
 			if before(running, v(2, 43)) {
@@ -676,8 +692,18 @@ func formatCases(f *fixture) []damageCase {
 				}
 				return answered(gitproc.PartMultiPackIndex, ignoring)
 			}}),
+		// AN INDEX'S OFFSET FOR ONE OBJECT ANOTHER'S: the bytes read for an
+		// id are not that id's. The maintainer's write ignores the old
+		// index's entries yet still reads objects through it, so it fails
+		// on every git (and keeps the damaged index: only a drop repairs
+		// it); a merge-base reads the tip's commit through it and fails too.
+		// Neither process names which file placed the wrong bytes there —
+		// `hash mismatch` is a pack part, which the cache's scrub decides —
+		// so neither failure is a derived damage on its own.
 		midxCase("MO the maintainer's write over a multi-pack-index with one object's offset another's", func(t *testing.T, d *damaged) { gittest.Damage(t, d.dir, gittest.MidxOffset, f.Tip(), f.blob(t)) }, gitproc.PartMultiPackIndex,
-			on("multi-pack-index write", midxWrite, midxFatal(ignoring))),
+			on("multi-pack-index write", midxWrite, result{rows: rows(ignoring, hashMismatch), kind: gitproc.ErrCorrupt,
+				parts: gitproc.PartMultiPackIndex | gitproc.PartPack, ownDrops: true}),
+			arm{name: "merge-base", cmd: mergeBase, want: wrongObject}),
 		midxCase("MT the maintainer's write over a multi-pack-index with its trailer flipped", func(t *testing.T, d *damaged) { gittest.Damage(t, d.dir, gittest.MidxTrailer) }, gitproc.PartMultiPackIndex,
 			on("multi-pack-index write", midxWrite, answered(gitproc.PartMultiPackIndex, ignoring))),
 		graphCase("I11 a commit-graph's generation past its overflow", func(t *testing.T, d *damaged) { gittest.Damage(t, d.dir, gittest.GraphGeneration, f.Tip()) }, gitproc.PartCommitGraph, on("rev-list", revList, result{
@@ -693,6 +719,41 @@ func formatCases(f *fixture) []damageCase {
 			on("rev-list", revList, corrupt(`offset beyond end of packfile (truncated pack?)`)),
 			on("upload-pack v2", fetchTip, corrupt(`offset beyond end of packfile (truncated pack?)`)),
 			on("cat-file --batch-check", catTip, corrupt(`offset beyond end of packfile (truncated pack?)`)),
+		}},
+		// THE SAME DAMAGE UNDER A MULTI-PACK-INDEX: every lookup goes through
+		// the index, which still places each object right, and only a clone's
+		// pack-objects — whose reuse of a stored entry reads the pack's own
+		// .idx and .rev — names it.
+		{name: "M every index offset past the pack, under a multi-pack-index", setup: writeMidx, damage: func(t *testing.T, d *damaged) { gittest.Damage(t, d.dir, gittest.IdxOffsetsPastPack) }, arms: []arm{
+			{name: "upload-pack v2", cmd: fetchTip, want: func(running gitproc.Version) result {
+				if before(running, v(2, 47)) {
+					return corrupt(`offset beyond end of packfile (truncated pack?)`)
+				}
+				// Beside it a BUG, "could not find object in pack %s at
+				// offset %lu in MIDX", and pack-objects dies of SIGABRT.
+				return corrupt(`bad offset for revindex`)
+			}},
+		}},
+		// ONE OBJECT'S INDEX OFFSET ANOTHER'S, with no multi-pack-index: a
+		// lookup of the tip reads the blob. Readers that only list ids answer
+		// wrong without a word (the trailer check before serving is what
+		// sees it); a merge-base parses the commit it was given and fails.
+		{name: "IO the tip's index offset another object's", damage: func(t *testing.T, d *damaged) { gittest.Damage(t, d.dir, gittest.IdxOffset, f.Tip(), f.blob(t)) }, arms: []arm{
+			{name: "merge-base", cmd: mergeBase, want: wrongObject},
+			on("upload-pack v2", fetchTip, result{}),
+		}},
+		{name: "IO the tip's index offset another object's, under a multi-pack-index", setup: writeMidx, damage: func(t *testing.T, d *damaged) { gittest.Damage(t, d.dir, gittest.IdxOffset, f.Tip(), f.blob(t)) }, arms: []arm{
+			on("rev-list", revList, result{}),
+			on("merge-base", mergeBase, result{}),
+			on("cat-file --batch-check", catTip, result{}),
+			on("upload-pack v2", fetchTip, corrupt(reuseLost...)),
+		}},
+		// TWO OF A REVERSE INDEX'S POSITIONS SWAPPED, every value still in
+		// range: readers look objects up through the .idx and answer; a
+		// clone's pack-objects reuses entries by the .rev and names it.
+		{name: "R6 two positions of the newer pack's reverse index swapped", damage: func(t *testing.T, d *damaged) { gittest.Damage(t, d.dir, gittest.RevSwapped, f.Tip()) }, arms: []arm{
+			on("upload-pack v2", fetchTip, corrupt(reuseLost...)),
+			on("rev-list", revList, result{}),
 		}},
 		// A DELTA'S OWN BYTES: its zlib header mangled, so the delta cannot
 		// be inflated over a base git read whole.

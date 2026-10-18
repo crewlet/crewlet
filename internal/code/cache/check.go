@@ -46,6 +46,9 @@ const (
 	fileMidxRev fileKind = "midx-rev"
 	fileIdx     fileKind = "idx"
 	fileRev     fileKind = "rev"
+	// filePack is a pack's own bytes, held to the trailer that is its name:
+	// only the scrub reads one (scrub.go), behind the serving.
+	filePack fileKind = "pack"
 )
 
 // checkOutcome is what hashing one file concluded: the `outcome` attribute of
@@ -80,6 +83,13 @@ const (
 	// triggerUnvouched: a later full round, holding the files this process
 	// has neither written nor checked since.
 	triggerUnvouched checkTrigger = "unvouched"
+	// triggerScrub: a scrub its interval made due — a used copy's every file
+	// re-hashed a ScrubInterval after its last (scrub.go). A scrub after a
+	// copy's first full round is `first`, as that round's check is.
+	triggerScrub checkTrigger = "scrub"
+	// triggerReport: a scrub a git process's report made due — a pack or an
+	// object it could not read, a pack it named in words, or a crash.
+	triggerReport checkTrigger = "report"
 )
 
 // hashVerdict is what hashing one file concluded: sound, damaged, or NONE — the
@@ -130,11 +140,25 @@ func lstatID(path string) fileID {
 }
 
 // checkedFile is one checkable file of an incarnation: its kind, its path
-// relative to the incarnation, and the identity it was hashed at.
+// relative to the incarnation, the identity it was hashed at, and — for one
+// found damaged — why it was hashed.
 type checkedFile struct {
-	kind fileKind
-	rel  string
-	id   fileID
+	kind    fileKind
+	rel     string
+	id      fileID
+	trigger checkTrigger
+	// scrubbed: a scrub found it (scrub.go), not a round's check — the two
+	// share the trigger `first`.
+	scrubbed bool
+}
+
+// by is what a derived file's drop for this finding is logged as asked by:
+// the round's check, or a scrub (code_cache_derived_repaired's trigger).
+func (f checkedFile) by() string {
+	if f.scrubbed {
+		return dropScrub
+	}
+	return dropCheck
 }
 
 // expect is what a file's name or its row says of its last forty bytes beside
@@ -665,6 +689,7 @@ func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, sn
 			// and the maintainer, whose rewrite would have replaced it,
 			// runs only on a copy a full round has converged.
 			c.countCheck(f.kind, checkUnreadable, trigger)
+			f.trigger = trigger
 			ck.damaged = append(ck.damaged, f)
 			c.log.Warn("code_cache_check_damaged", "repo", e.id, "incarnation", inc.n, "file", f.rel,
 				"trigger", string(trigger), "action", repairAction(f.rel), "error", err)
@@ -681,6 +706,7 @@ func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, sn
 			continue
 		}
 		c.countCheck(f.kind, checkDamaged, trigger)
+		f.trigger = trigger
 		ck.damaged = append(ck.damaged, f)
 		c.log.Warn("code_cache_check_damaged", "repo", e.id, "incarnation", inc.n, "file", f.rel,
 			"trigger", string(trigger), "action", repairAction(f.rel))
@@ -699,28 +725,45 @@ func (c *Cache) countCheck(kind fileKind, outcome checkOutcome, trigger checkTri
 	}
 }
 
-// still is what of ck's findings the incarnation at dir still holds at the
-// identity each was hashed at: the packs to install again, by checksum, and
-// the derived parts to drop. A REPAIR ACTS ONLY ON THE FILE ITS FINDING NAMES:
-// one replaced or removed since its hash — rewritten by the maintainer, put
-// right by an earlier repair — is no finding any more, and its successor,
-// which no hash of this process read, is checked by the next round.
-func (ck checked) still(dir string) (map[string]bool, gitproc.Part) {
-	packs := map[string]bool{}
-	var drop gitproc.Part
+// still is what of ck's findings — its own and a scrub's (repairMark.found)
+// — the incarnation at dir still holds at the identity each was hashed at:
+// the packs to install again, by checksum, each with what found it, and the
+// derived parts to drop, each with what asked. A REPAIR ACTS ONLY ON THE FILE
+// ITS FINDING NAMES: one replaced or removed since its hash — rewritten by the
+// maintainer, put right by an earlier repair — is no finding any more, and its
+// successor, which no hash of this process read, is checked by the next round
+// or the next scrub.
+func (ck checked) still(dir string) (map[string]packFinding, partDrops) {
+	packs := map[string]packFinding{}
+	var drops partDrops
 	for _, f := range ck.damaged {
 		if lstatID(filepath.Join(dir, f.rel)) != f.id {
 			continue
 		}
 		if _, part, derived := derivedFile(f.rel); derived {
-			drop |= part
+			drops.add(part, time.Time{}, f.by())
 			continue
 		}
-		if m := packFileName.FindStringSubmatch(filepath.Base(f.rel)); m != nil {
-			packs[m[1]] = true
+		m := packFileName.FindStringSubmatch(filepath.Base(f.rel))
+		if m == nil {
+			continue
 		}
+		p, ok := packs[m[1]]
+		if !ok {
+			p.trigger = f.trigger
+		}
+		p.index = p.index || f.kind == fileIdx
+		packs[m[1]] = p
 	}
-	return packs, drop
+	return packs, drops
+}
+
+// packFinding is what of one pack's files the findings still true of it say:
+// the trigger of the first that found it, and whether its .idx failed — the
+// derived files may have been built from that index (install).
+type packFinding struct {
+	trigger checkTrigger
+	index   bool
 }
 
 // findings is the sentences a check's damaged files are reported to a

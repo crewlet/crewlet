@@ -1143,7 +1143,16 @@ cache on its own disk. What such a node needs from its host:
   — on that layout, a cold cache whose quarter of the free space is no more
   than the spools, as under 16 GiB free on a sixteen-core node — the node
   refuses to host code rather than fill the volume the store lives on, and the
-  error names the figures and each setting that gives the cache room. It is
+  error names the figures and each setting that gives the cache room. Behind
+  the serving, the node also reads every byte of each repository it serves
+  against its checksums — once after it restarts, then once a day while the
+  repository is used, one repository at a time — which is what finds a pack or
+  an index the disk damaged after it was written. It reads 1.13 times the
+  repository's pack bytes — about a second a gigabyte from the page cache, and
+  at the volume's own throughput read cold — so for 1 TB of packs all used
+  every day, at most 2.5 hours of a gp3 volume's 125 MB/s baseline a day
+  (10.5% of it) for the share read cold, and nothing for a repository nobody
+  reads. It is
   never backed up, and a backup tool of your own skips it with
   `--exclude-caches`.
 - **A writable `$TMPDIR` short enough for a socket.** Every push's git hands its
