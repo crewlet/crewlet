@@ -136,6 +136,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 				}
 			}
 			holdTagFilter(t, plan, q)
+			holdPeopleFilter(t, plan, q)
 			// ONE ITEM'S SUBTASKS ARE READ THROUGH THE TREE ([taskSource]),
 			// because the planner otherwise answers `parent=` from the
 			// project's board or the listing's order — measured: a
@@ -355,6 +356,15 @@ func registeredQueries() map[string]map[string]any {
 			"tag": "any:tag-1,tag-2", "subtasks": "separate"},
 		"tagged everywhere, flat": {"tag": "tag-1", "subtasks": "separate"},
 
+		// A PERSON'S WORK, each held by [holdPeopleFilter] to the person's
+		// own rows — at the workspace read flat, which is how
+		// `list_work_items` reads every filter, and their tasks by key.
+		"a collaborator's work": {"collaborator": "h-1", "subtasks": "separate"},
+		"two watchers' work":    {"watcher": "h-1,h-2", "subtasks": "separate"},
+		"a checklist owner's work": {"checklist_assignee": "h-1",
+			"subtasks": "separate"},
+		"a watcher's work in a project": {"container": "project:P01", "watcher": "h-1"},
+
 		// THE TRASH AS ITS TAB ASKS FOR IT ([ViewKeyTrash]), and with every
 		// row filtered on its own, which is how the dashboard and
 		// `list_work_items` run any view — at both scopes, because each is
@@ -470,7 +480,72 @@ func dutyReads() map[string]indexedRead {
 				write.sql, write.args...)
 		}
 	}
+	// A PERSON'S OWN WORK AS EVERY TURN OPENS ON IT: the four task blocks
+	// of my work, each its page and its count, and the checklist items the
+	// person owns — every one read from the person's own rows.
+	const person = "h-7"
+	for name, block := range map[string]struct {
+		query blockQuery
+		index string
+	}{
+		"assigned":      {assignedBlock(person), "tracker_tasks_queue_idx"},
+		"collaborating": {collaboratingBlock(person), "tracker_collaborators_handle_idx"},
+		"watching":      {watchingBlock(person), "tracker_watchers_handle_idx"},
+		"unblocked":     {unblockedBlock(person), "tracker_tasks_queue_idx"},
+	} {
+		set := tasksWhere(block.query.where, block.query.args)
+		page, args := taskRowsStatement("", nil, set, block.query.terms)
+		reads["my work's "+name+" block"] = seek(block.index, page, append(args, 21)...)
+		reads["my work's "+name+" count"] = seek(block.index,
+			cappedCountStatement(set.from, set.where),
+			append(append([]any{}, set.args...), TotalHintCeiling+1)...)
+	}
+	reads["the checklist items owned"] = seek("tracker_checklist_items_assignee_idx",
+		claimsPageStatement, person, 21)
+	reads["the checklist items counted"] = seek("tracker_checklist_items_assignee_idx",
+		cappedCountStatement(claimsFrom, claimsWhere), person, TotalHintCeiling+1)
 	return reads
+}
+
+// holdPeopleFilter fails a plan whose filter on a person — `collaborator=`,
+// `watcher=`, `checklist_assignee=` — is not read from the person's own rows
+// ([peopleClause]): a seek of the person's index, and then each of their tasks
+// by its key, with the task table read no other way. Measured: written as a
+// probe of each task, the filter walked every live task in the company and
+// sought the person's index for each — which seeks the index, so a check of
+// the seek alone passed it.
+//
+// THE TASK TABLE'S RULE HOLDS A FLAT LISTING AT THE WORKSPACE, which is where
+// the probe it replaced read every live task in the company. Inside a project
+// the planner may page the project's board in its own order and keep the
+// person's tasks, which is bounded by the board; and collapsed, the filter
+// becomes the subtree rollup's inner set and the outer statement reads the
+// rows whose root is in it in the listing's own order ([compileWhere]) — a
+// read of the rollup's rather than of the filter's. The person's index is
+// sought in all of them.
+func holdPeopleFilter(t *testing.T, plan []string, q Query) {
+	t.Helper()
+	shown := strings.Join(plan, "\n")
+	for _, filter := range []struct {
+		named int
+		index string
+	}{
+		{len(q.Collaborator), "tracker_collaborators_handle_idx"},
+		{len(q.Watcher), "tracker_watchers_handle_idx"},
+		{len(q.ChecklistAssignee), "tracker_checklist_items_assignee_idx"},
+	} {
+		if filter.named == 0 {
+			continue
+		}
+		if !seeks(plan, filter.index) {
+			t.Errorf("this filter on a person does not seek %s:\n%s", filter.index, shown)
+		}
+		others, _ := tasksReadOtherwise(plan, "sqlite_autoindex_tracker_tasks_1")
+		if q.Scope.Project == "" && q.Subtasks == SubtasksSeparate && len(others) > 0 {
+			t.Errorf("this filter on a person reads the task table other than "+
+				"by the key of each task the person is on:\n%s", shown)
+		}
+	}
 }
 
 // holdTagFilter fails a plan whose tag filter is not read the way its mode
