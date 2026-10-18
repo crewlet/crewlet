@@ -23,7 +23,10 @@
 // A source may keep a term of its own ([Termed]), asked at every pass: the
 // Dashboard Assistant's conversations are purged their retention after they were
 // last used rather than thirty days after a trash. The floor ([MinTerm]) holds
-// for every term, whichever source states it.
+// for every term, whichever source states it, and a term the source cannot
+// state at a pass (the assistant's, on a node that does not run the revision
+// the fleet's activation pointer names) purges nothing of that source rather
+// than a guess at it.
 //
 // # Why nothing is purged twice, or wrongly
 //

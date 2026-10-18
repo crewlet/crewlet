@@ -614,13 +614,15 @@ func TestAnUnreadableReportRunsThePass(t *testing.T) {
 	}
 }
 
-// termed is a source that keeps a term of its own.
+// termed is a source that keeps a term of its own, or cannot say what it is
+// (err).
 type termed struct {
 	*trash
 	term time.Duration
+	err  error
 }
 
-func (t termed) Term() time.Duration { return t.term }
+func (t termed) Term(context.Context) (time.Duration, error) { return t.term, t.err }
 
 // A SOURCE THAT KEEPS ITS OWN TERM IS REAPED AT IT, beside a source that keeps
 // the reaper's: each is listed against its own cutoff, and the report names the
@@ -678,5 +680,45 @@ func TestATermUnderTheFloorPurgesNothing(t *testing.T) {
 	}
 	if got := pages.purgedIDs(); !slices.Equal(got, []string{"old"}) {
 		t.Errorf("the other source purged %v", got)
+	}
+}
+
+// AN UNKNOWN TERM PURGES NOTHING OF ITS SOURCE, and says why: the term is the
+// promise of how long an item is kept, and one the source cannot read at this
+// pass (the assistant's, on a node that does not run the revision the fleet's
+// activation pointer names) leaves nothing to purge by, since a term guessed in
+// its place may be shorter than the one the company keeps. The other sources
+// are reaped as ever, and the pass is retried as a failed one is, so what
+// waited is purged by the first pass that can read the term. Mutation: reap a
+// source whose term is unknown at the reaper's own term and the conversation a
+// year old is purged.
+func TestAnUnknownTermPurgesNothingOfItsSource(t *testing.T) {
+	t.Parallel()
+	pages := newTrash("pages")
+	unknown := errors.New("this node does not run the revision the fleet's pointer names")
+	assistant := termed{trash: newTrash("assistant"), err: unknown}
+	assistant.put("a-year-unused", noon.Add(-365*24*time.Hour))
+	pages.put("old", slotOf(noon).Add(-term-time.Hour))
+	r := newRig(t, "node-a", memory.NewFleet(), &clock{at: noon}, assistant, pages)
+
+	report, err := r.reaper.Pass(t.Context())
+	if !errors.Is(err, unknown) {
+		t.Errorf("a pass over a source whose term is unknown answers %v, want "+
+			"the reason it is unknown", err)
+	}
+	if assistant.remaining() != 1 || assistant.listed != 0 {
+		t.Errorf("a source whose term is unknown was listed %d times and kept %d "+
+			"of its 1 item", assistant.listed, assistant.remaining())
+	}
+	if s := report.Sources[0]; !strings.Contains(s.Error, unknown.Error()) {
+		t.Errorf("the report says %q of the source it would not reap, want why", s.Error)
+	}
+	if got := pages.purgedIDs(); !slices.Equal(got, []string{"old"}) {
+		t.Errorf("the other source purged %v, want the page past its term", got)
+	}
+	if want := noon.Add(trashreap.RetryInterval); !report.Next.Equal(want) {
+		t.Errorf("the next pass is due at %s, want %s: a term unknown now may be "+
+			"read in minutes, so the pass is retried as a failed one is",
+			report.Next, want)
 	}
 }

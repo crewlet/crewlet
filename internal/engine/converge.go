@@ -24,10 +24,11 @@ import "context"
 //
 // Each step is written to notice for itself that it has nothing to do — the
 // registry compares the company it was built from, the mailbox pass compares
-// its own set against the broker's, the tracker and the knowledge containers
-// compare the row against what the company says, the scheduler arms or
-// disarms rather than rebuilding — so re-applying an unchanged revision, which
-// is the credential-rotation gesture, costs a comparison per step.
+// its own set against the broker's, the tracker, the knowledge containers and
+// the unit rooms compare the row against what the company says, the scheduler
+// arms or disarms rather than rebuilding — so re-applying an unchanged
+// revision, which is the credential-rotation gesture, costs a comparison per
+// step.
 //
 // # The order is not arbitrary
 //
@@ -88,13 +89,15 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 	e.reconcileSeatServers(ctx)
 	steps = append(steps, "seat_tools")
 
-	// THE TRACKER'S PROJECTS AND THE KNOWLEDGE CONTAINERS, before any mail
-	// is released: the first thing the seats in a new unit do is file work
-	// into its project.
+	// THE TRACKER'S PROJECTS, THE KNOWLEDGE CONTAINERS AND THE UNIT ROOMS,
+	// before any mail is released: the first thing the seats in a new unit
+	// do is file work into its project and talk in its room.
 	e.applyChart(ctx, c)
 	steps = append(steps, "tracker_projects")
 	e.applyContainers(ctx, c)
 	steps = append(steps, "knowledge_containers")
+	e.applyUnitRooms(ctx, c)
+	steps = append(steps, "chat_unit_rooms")
 
 	if e.node != nil {
 		// A CONVERGENCE RATHER THAN A WALK, which is what makes it right

@@ -43,7 +43,7 @@ func TestTheChatApplierTheRegisterBuildsFeedsTheAttachedHub(t *testing.T) {
 		t.Fatalf("build the applier: %v", err)
 	}
 	hub := newHeardLive()
-	e.SetChatLive(hub)
+	e.SetChatLive(t.Context(), hub)
 
 	at := time.Unix(1_700_000_000, 0).UTC()
 	create, err := json.Marshal(chatlet.ChannelCreate{

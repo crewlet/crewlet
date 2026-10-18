@@ -124,6 +124,11 @@ func WorkSearcher(e *Engine) builtin.WorkSearcher {
 // IT FOLLOWS THE BACKENDS rather than covering both unconditionally: a company
 // on Jira has no `tracker_tasks` worth walking, and a walk over a table its
 // backend never fills is a cursor cycling over nothing on every tick.
+//
+// CHAT IS NEVER ONE OF THEM: a conversation has an index of its own
+// ([search.ChatIndexer]) with a forward-only walk and statistics it maintains
+// rather than counts (ADR-0069), so a room's chatter never moves the BM25
+// statistics a page or a work item is ranked by.
 func indexedCorpora(runTracker, wiki bool) []string {
 	var out []string
 	if runTracker {

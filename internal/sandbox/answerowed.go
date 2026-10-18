@@ -236,8 +236,12 @@ type Reply struct {
 	// Conv is where the delivery came from — see [ConversationRef].
 	Conv ConversationRef
 
-	// Text is the delivery as a turn would be asked it: the reply the
-	// resumed run is handed.
+	// Text is what the delivery says, in its writers' own words: each
+	// message as it was written, under its writer's name where the delivery
+	// holds more than one writer's. It is the reply the resumed run is
+	// handed, and what the person who gave it reads back as their answer
+	// ([AnswerWords.Text]), so never the prompt the delivery would wake the
+	// seat with, which the engine writes for the seat's own turn.
 	Text string
 
 	// Events are the delivery's events, oldest first.

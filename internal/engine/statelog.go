@@ -568,6 +568,15 @@ type applyHooks struct {
 	// chat applier halted would otherwise go quiet until its socket moved
 	// elsewhere. It must not block.
 	chatApplied func([]chatlet.Applied)
+
+	// replaced is what the state log calls once its replicated estate was
+	// REPLACED under a running node — an adoption, or a reopen of the file
+	// a failed join installed ([stateLog.estateReplaced]) — for whatever
+	// this node keeps derived from those rows by a walk that only moves
+	// forward: the chat index ([search.ChatIndexer.RequestRebuild]). Not a
+	// post-commit hook, since no batch says it; beside them because it is
+	// the same kind of signal, handed down the same way. It must not block.
+	replaced func()
 }
 
 // applyHooks is every post-commit hook this engine hands its appliers.
@@ -579,6 +588,7 @@ func (e *Engine) applyHooks() applyHooks {
 		artifactsMoved:    e.artifactsMoved,
 		artifactDataMoved: e.artifactDataMoved,
 		chatApplied:       e.chatApplied,
+		replaced:          e.estateReplaced,
 	}
 }
 

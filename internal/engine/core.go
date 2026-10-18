@@ -600,14 +600,16 @@ func (e *Engine) NodeGate() *NodeGate {
 //     only once its own copy is established — the same gate, one hop away. A
 //     node whose own copy is WRONG serves nothing ([localEstate.For]), so it
 //     is answered on a sound data node's word, like a node holding no data;
-//     both halves the company runs natively must be served there, since a
-//     seat's tools reach both. And the router's view must have listed the
-//     fleet at least once: a node that must ask a data node is refused by the
-//     router itself when its view cannot name one.
+//     every half the company runs natively — the tracker, the knowledge base
+//     and chat — must be served there, since a seat's tools reach each of
+//     them, and a company whose only native half is chat gates on chat alone
+//     rather than admitting every seat unconditionally. And the router's view
+//     must have listed the fleet at least once: a node that must ask a data
+//     node is refused by the router itself when its view cannot name one.
 //
-// A node running no native half — no company yet, or one on Jira and
-// Confluence — has nothing for the second half to ask, and an engine with
-// neither is trivially hydrated.
+// A node running no native half — no company yet, or one on Jira, Confluence
+// and a vendor's chat — has nothing for the second half to ask, and an engine
+// with neither is trivially hydrated.
 //
 // IT TAKES A CONTEXT because where this node's copy does not serve the answer
 // is a request, and a sweep that is shutting down must not wait on it.
@@ -621,8 +623,8 @@ func (e *Engine) StateLogHydrated(ctx context.Context) bool {
 			return false
 		}
 	}
-	runTracker, wiki, ok := e.nativeHalves()
-	if !ok || (!runTracker && !wiki) || e.router == nil {
+	runs, ok := e.nativeHalves()
+	if !ok || !runs.any() || e.router == nil {
 		return true
 	}
 	if e.dataView != nil && e.dataView.ListedAt().IsZero() {
@@ -631,7 +633,8 @@ func (e *Engine) StateLogHydrated(ctx context.Context) bool {
 		return false
 	}
 	served, err := e.router.Serves(ctx)
-	if err != nil || (runTracker && !served.Tracker) || (wiki && !served.Pages) {
+	if err != nil || (runs.tracker && !served.Tracker) || (runs.wiki && !served.Pages) ||
+		(runs.chat && !served.Chat) {
 		detail := "no copy of the estate admits a seat yet"
 		if err != nil {
 			detail = err.Error()
@@ -679,7 +682,7 @@ func (e *Engine) StateLogHydrated(ctx context.Context) bool {
 // from a cached coordination fact, so no node sheds sooner than any other
 // decider stops trusting the same view — is a node that can no longer say
 // where its seats' calls go, which no copy of its own makes up for; its seats
-// go to a peer that can. A company whose halves are both on a vendor routes
+// go to a peer that can. A company whose halves are all on a vendor routes
 // nothing, and a view that has never listed sheds nothing: admission claims no
 // seat before it does.
 //
@@ -695,8 +698,8 @@ func (e *Engine) SeatsServiceable(ctx context.Context) (bool, string) {
 
 // serviceable is [Engine.SeatsServiceable] at now.
 func (e *Engine) serviceable(ctx context.Context, now time.Time) (bool, string) {
-	runTracker, wiki, ok := e.nativeHalves()
-	if !ok || (!runTracker && !wiki) {
+	runs, ok := e.nativeHalves()
+	if !ok || !runs.any() {
 		return true, ""
 	}
 	if e.local != nil && e.local.servesUnasked(ctx) {

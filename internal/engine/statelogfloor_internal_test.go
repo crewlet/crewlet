@@ -5,15 +5,22 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifactdata"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/search"
@@ -786,7 +793,7 @@ func TestAWriteFenceReadsTheFloorAtTheGenerationItNames(t *testing.T) {
 }
 
 // THE WRITE FENCES AS THE ENGINE WIRES THEM REFUSE ON THE PUBLISHED FLOOR
-// ALONE, in both identity-claiming domains, while the log still holds
+// ALONE, in every identity-claiming domain, while the log still holds
 // everything.
 //
 // The fence takes the higher of two witnesses, and every other case here that
@@ -798,12 +805,23 @@ func TestAWriteFenceReadsTheFloorAtTheGenerationItNames(t *testing.T) {
 // asked here with a floor one past its next record and a log that has lost
 // nothing, which the floor alone refuses, and then with the floor AT its next
 // record, which clears — the boundary [statelog.Replayable] draws.
+//
+// EVERY IDENTITY-CLAIMING LOG THE NODE RUNS, read off the running set: a
+// domain whose fence is wired and has no zero write here fails the case, so a
+// log added to the register is held to its own floor the day it is added — a
+// fence bound to ANOTHER log's floor reads a number in the wrong sequence
+// space, refuses nothing this log needs refused, and is caught by nothing but
+// this case. The identity estate's fence was wired that way and asked by
+// nobody until the list here stopped being typed.
 func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	s := e.core.Load().log
-	if e.native.Load().writer == nil || e.native.Load().pages == nil {
-		t.Fatal("the node runs no tracker writer or no page store")
+	n, c := e.native.Load(), e.core.Load()
+	s := c.log
+	if n.writer == nil || n.pages == nil || n.chat == nil || c.iamWriter == nil ||
+		c.artifactsWriter == nil || c.artifactDataWriter == nil || c.assistantWriter == nil {
+		t.Fatal("the node runs no tracker writer, page store, chat store, identity " +
+			"writer, artifacts writer, datastore writer or assistant writer")
 	}
 	// THE HEARTBEAT IS WATCHED RATHER THAN OBEYED: a node below a
 	// published floor may ask the fleet for a snapshot, and an adoption
@@ -812,21 +830,70 @@ func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 	s.rejoin = func(context.Context) error { return nil }
 	s.rejoinMu.Unlock()
 
-	for _, tc := range []struct {
+	// zero is, per domain, a write on a subject nobody has written, which
+	// is a write at an expectation of zero.
+	zero := map[string]func(ctx context.Context, key string) error{
+		worklet.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, err := n.writer.EvictNode(ctx, "op-"+key, "node-"+key)
+			return err
+		},
+		doclet.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, _, err := n.pages.EnsureContainer(ctx, testActivation, key, key, "")
+			return err
+		},
+		iamdomain.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, err := c.iamWriter.EvictNode(ctx,
+				statelog.NewOpID(time.Now(), "op-"+key), "node-"+key)
+			return err
+		},
+		// A ROOM'S NAME IS ITS ADDRESS, so a create on a name nobody holds
+		// arbitrates on a subject nobody has written.
+		chatlet.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, err := n.chat.CreateChannel(ctx,
+				chatlet.Actor{Handle: "ceo", Kind: chatlet.AuthorAgent},
+				chatlet.NewChannel{Name: "floor-" + strings.ToLower(key), Kind: chatlet.KindPublic})
+			return err
+		},
+		// AN EVICTION OF A NODE NOBODY HAS EVICTED is a write on its own
+		// subject, which nobody has written, on each of the artifacts logs.
+		artifactsdomain.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, err := c.artifactsWriter.EvictNode(ctx, iam.ActorFor(gateOperator),
+				statelog.NewOpID(time.Now(), "op-"+key), "node-"+key)
+			return err
+		},
+		artifactdata.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, err := c.artifactDataWriter.EvictNode(ctx, iam.ActorFor(gateOperator),
+				statelog.NewOpID(time.Now(), "op-"+key), "node-"+key)
+			return err
+		},
+		// A CONVERSATION NOBODY HAS STARTED is a subject nobody has written,
+		// so a person starting one through the writer the dashboard's
+		// assistant records with is a write at zero.
+		assistantdomain.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, err := createConversation(ctx, c.assistantWriter, key)
+			return err
+		},
+	}
+	var cases []struct {
 		domain string
-		// zero is a write on a subject nobody has written, which is a
-		// write at an expectation of zero.
-		zero func(ctx context.Context, key string) error
-	}{
-		{domain: worklet.Domain{}.Name(), zero: func(ctx context.Context, key string) error {
-			_, err := e.native.Load().writer.EvictNode(ctx, "op-"+key, "node-"+key)
-			return err
-		}},
-		{domain: doclet.Domain{}.Name(), zero: func(ctx context.Context, key string) error {
-			_, _, err := e.native.Load().pages.EnsureContainer(ctx, testActivation, key, key, "")
-			return err
-		}},
-	} {
+		zero   func(ctx context.Context, key string) error
+	}
+	for _, running := range s.running() {
+		if !running.domain.ClaimsIdentity() {
+			continue
+		}
+		name := running.domain.Name()
+		if zero[name] == nil {
+			t.Fatalf("%s claims identity and this case holds no zero write for it, "+
+				"so the floor its write fence reads is certified by nothing: add "+
+				"its row", name)
+		}
+		cases = append(cases, struct {
+			domain string
+			zero   func(ctx context.Context, key string) error
+		}{name, zero[name]})
+	}
+	for _, tc := range cases {
 		running := s.Domain(tc.domain)
 		if running == nil {
 			t.Fatalf("the %s domain is not running", tc.domain)

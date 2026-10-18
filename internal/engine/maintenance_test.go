@@ -400,13 +400,14 @@ func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 		"counterparty_profiles": maintenance.CounterpartyRetention,
 		"seat_mailboxes":        maintenance.MailboxRetirementGrace,
 		"chat_read_state":       maintenance.ChatReadForgetGrace,
-		// NEITHER NATIVE BACKEND HAS A ROW-SWEEP ENTRY, and the
-		// absence is the point rather than an omission. Both are
-		// state-log domains: their records are a log the retention gate
-		// trims, and their durable rows are written by an applier — so
-		// there is no per-node sweep of ROWS to give a horizon to, and
-		// a delete on one node's own authority is what the identity
-		// claim forbids.
+		// NO NATIVE BACKEND HAS A ROW-SWEEP ENTRY, and the absence is
+		// the point rather than an omission. Every one is a state-log
+		// domain: its records are a log the retention gate trims, and
+		// its durable rows are written by an applier — so there is no
+		// per-node sweep of ROWS to give a horizon to, and a delete on
+		// one node's own authority is what the identity claim forbids.
+		// Chat's message horizon is no exception: it is a prune RECORD
+		// a fleet duty publishes to the log, applied on every node.
 		//
 		// Their OPERATION LEDGERS are the exception, and they are here
 		// under one entry because every domain takes the same horizon:

@@ -1183,6 +1183,11 @@ func (d *Dispatcher) mayOfferAnswer(ctx context.Context, handle string, evs []*e
 // the same reason they travel in: a NAK carries a cause, and the cause a
 // caller would otherwise invent is the one thing it does not know.
 //
+// WHAT IS OFFERED IS WHAT THE DELIVERY SAYS, in its writers' own words
+// ([replyWords]), never the prompt it would wake the seat with: the run reads
+// it as its question's answer, and the person who gave it reads it back as
+// their reply.
+//
 // AN UNUSABLE DISPOSITION FALLS BACK TO [sandbox.AnswerNotMine], not to a
 // requeue. Nothing in this build produces one — the seam has a single
 // implementation — so it means a wiring that answered nothing, and the honest
@@ -1202,7 +1207,7 @@ func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.
 		return sandbox.AnswerNotMine, nil
 	}
 	disposition, err := d.Answer(ctx, handle, sandbox.Reply{
-		Conv: conv, Text: DescribeTrigger(evs), Events: evs,
+		Conv: conv, Text: replyWords(evs), Events: evs,
 	})
 	if err != nil {
 		// BOTH KEYS, for the reason the offer carries both: a line naming

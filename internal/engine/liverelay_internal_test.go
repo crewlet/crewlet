@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -18,14 +19,19 @@ import (
 
 // heardLive is what one node's sockets were handed, per domain: every inbox
 // movement and every chat effect, and how many times each domain was told to
-// read again.
+// read again. Its working-indicator half raises nothing ([quietPoster]): the
+// relay never touches it.
 type heardLive struct {
+	quietPoster
 	mu        sync.Mutex
 	moved     []worklet.InboxMovement
 	chat      []chatlet.Applied
 	inboxGaps int
 	chatGaps  int
 	ping      chan struct{}
+	// socketless is a hub attached for the working indicator alone, on a
+	// node that serves no API ([ChatLive.ServesSockets]).
+	socketless bool
 }
 
 func newHeardLive() *heardLive { return &heardLive{ping: make(chan struct{}, 256)} }
@@ -58,6 +64,18 @@ func (h *heardLive) Reread() {
 	h.mu.Unlock()
 	h.ping <- struct{}{}
 }
+
+func (h *heardLive) ServesSockets() bool { return !h.socketless }
+
+// quietPoster is a [notify.StatusPoster] that shows nothing.
+type quietPoster struct{}
+
+func (quietPoster) StatusBackend() string                                          { return chatlet.Source }
+func (quietPoster) SupportsStatusText() bool                                       { return true }
+func (quietPoster) StatusRefresh() time.Duration                                   { return time.Minute }
+func (quietPoster) AddressRule() notify.AddressRule                                { return chatlet.AddressRule() }
+func (quietPoster) SetStatus(context.Context, string, string, string, string) bool { return true }
+func (quietPoster) ClearStatus(context.Context, string, string, string) bool       { return true }
 
 // heard is one snapshot of what a node's sockets were handed.
 type heard struct {
@@ -141,7 +159,7 @@ func newRelayNode(t *testing.T, broker *memory.Broker, self string,
 	n := &relayNode{engine: &Engine{}, heard: newHeardLive()}
 	n.engine.SetOnInboxMoved(n.heard.deliver)
 	n.engine.SetOnInboxGap(n.heard.gap)
-	n.engine.SetChatLive(n.heard)
+	n.engine.SetChatLive(t.Context(), n.heard)
 	n.relay = newLiveRelay(self, q,
 		func(context.Context) ([]string, error) { return fleet, nil },
 		func(context.Context) bool { return n.faulted.Load() },
@@ -382,21 +400,30 @@ func sizeOf(t *testing.T, b liveBatch) int {
 // A NODE NOBODY LISTENS ON RELAYS NOTHING, AND ONE LISTENER IS ENOUGH. A data
 // node with nothing attached has no sockets to tell, so a follower there would
 // be a loop asking a peer every few seconds for batches it hands to nobody —
-// and logging that it relays. But a node whose only listener is the chat hub
-// is one whose rooms would otherwise go quiet.
+// and logging that it relays. So is a node whose only attachment is a chat hub
+// that serves no socket: the process attaches its hub on EVERY node, for the
+// working indicator, and a data node without `ingress` is one of them. But a
+// node whose only listener is a chat hub serving its sockets is one whose
+// rooms would otherwise go quiet.
 //
 // Mutation: drop the listening check from follow, and b starts relaying; drop
-// chat from liveListening, and c never does.
+// chat from liveListening, and c never does; let chatListening take any
+// attached hub, and d starts relaying.
 func TestANodeNobodyListensOnRelaysNothing(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()
-	fleet := []string{"a", "b", "c"}
+	fleet := []string{"a", "b", "c", "d"}
 	newRelayNode(t, broker, "a", fleet)
 	b := newRelayNode(t, broker, "b", fleet)
 	b.engine.onInbox.Store(nil)
-	b.engine.SetChatLive(nil)
+	b.engine.SetChatLive(t.Context(), nil)
 	b.faulted.Store(true)
 	b.follow(t)
+	d := newRelayNode(t, broker, "d", fleet)
+	d.engine.onInbox.Store(nil)
+	d.heard.socketless = true
+	d.faulted.Store(true)
+	d.follow(t)
 	c := newRelayNode(t, broker, "c", fleet)
 	c.engine.onInbox.Store(nil)
 	c.faulted.Store(true)
@@ -407,5 +434,9 @@ func TestANodeNobodyListensOnRelaysNothing(t *testing.T) {
 	if b.relay.relaying.Load() {
 		t.Fatal("a node with nothing listening for what its appliers announce is " +
 			"relaying a peer's")
+	}
+	if d.relay.relaying.Load() {
+		t.Fatal("a node whose only attachment is a chat hub serving no socket is " +
+			"relaying a peer's batches to nobody")
 	}
 }
