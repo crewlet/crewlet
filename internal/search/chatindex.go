@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/textindex"
 )
@@ -66,9 +67,15 @@ import (
 //
 // And a whole estate that was REPLACED: an adoption puts a donor's file in
 // place, whose rows below the watermark this walk will never read again. The
-// index cannot see that either, so whoever replaced the estate says so
-// ([ChatIndexer.RequestRebuild]) and the index starts over — dropped a batch
-// at a time from a durable mark, never in one transaction, for the reason
+// rows cannot say so, but the FILE can: a join that installs a copy names it
+// with a freshly minted instance ([statelog.EstateInstance]) before it is in
+// place, the index records the instance it was built from, and every sweep
+// compares the two — so a replacement is seen whenever it happened, a restart
+// between the install and the next sweep included. The engine also says so the
+// moment it replaces the estate under a running node
+// ([ChatIndexer.RequestRebuild]), which only makes a search stop trusting the
+// index sooner. Either way the index starts over — dropped a batch at a time
+// from a durable mark, never in one transaction, for the reason
 // [ChatIndexer.Sweep] takes one batch per call.
 //
 // # Statistics per room, maintained
@@ -155,6 +162,13 @@ func NewChatIndexer(db *store.DB, estate store.ReplicatedReader) *ChatIndexer {
 // was WRONG would answer searches for as long as the deployment lived. Search
 // is partial from this call until the walk catches up again, and
 // [ChatIndexer.Ready] says so meanwhile.
+//
+// THE NUDGE, NOT THE GUARANTEE. The request is held in memory, and a process
+// that stops before its next sweep loses it; what survives that is the estate's
+// own instance, which every sweep compares with the one the index was built
+// from ([ChatIndexer.Sweep]). This call is what makes the index stop answering
+// as caught up from the instant the engine knows, rather than from the next
+// sweep.
 func (x *ChatIndexer) RequestRebuild() { x.rebuild.Store(true) }
 
 // Ready reports whether the transcript walk has caught up with the transcript
@@ -200,25 +214,40 @@ type chatDoc struct {
 // erasures, or a stretch of tombstones for messages the index never held, is
 // work the caller's loop must come straight back for, not an idle tick's.
 func (x *ChatIndexer) Sweep(ctx context.Context, now time.Time) (int, error) {
+	// WHICH COPY OF THE ESTATE THIS IS, read before anything is decided, so
+	// a rebuild begun below records the copy it will walk.
+	instance, err := x.estateInstance(ctx)
+	if err != nil {
+		return 0, err
+	}
 	if x.rebuild.Load() {
 		// NOT CAUGHT UP FROM HERE ON, before the request is taken, so no
 		// instant between the request and the mark's commit reads as
 		// ready ([ChatIndexer.Ready]).
 		x.caught.Store(false)
 		x.rebuild.Store(false)
-		if err := x.beginRebuild(ctx, now); err != nil {
+		if beginErr := x.beginRebuild(ctx, now, "requested"); beginErr != nil {
 			// THE REQUEST STANDS until its mark commits: dropped with
 			// the failure, it would leave the replaced estate's rows
 			// unread for good.
 			x.rebuild.Store(true)
-			return 0, err
+			return 0, beginErr
 		}
 	}
-	dropping, err := x.rebuilding(ctx)
+	state, err := x.indexState(ctx)
 	if err != nil {
 		return 0, err
 	}
-	if dropping {
+	// THE ESTATE WAS REPLACED SINCE THIS INDEX BEGAN, whether or not the
+	// process that replaced it lived to say so. Not asked while a drop is
+	// under way: whatever the estate is called by the time it ends, the walk
+	// that follows starts from nothing and records the copy it starts on.
+	if !state.rebuilding && state.builtFrom != instance {
+		if state.rebuilding, err = x.followInstance(ctx, now, state, instance); err != nil {
+			return 0, err
+		}
+	}
+	if state.rebuilding {
 		return x.dropStep(ctx, now)
 	}
 	pruned, err := x.followPrunes(ctx)
@@ -327,11 +356,14 @@ const (
 		DELETE FROM chat_docs WHERE channel_id = ? AND created_at < ?`
 
 	// chatWatermarkStatement and chatErasedThroughStatement read the two
-	// walks' positions, and chatRebuildingStatement whether a rebuild is
-	// dropping the index.
+	// walks' positions, and chatStateStatement the whole row: which copy of
+	// the estate the index was built from, both positions and whether a
+	// rebuild is dropping it.
 	chatWatermarkStatement     = `SELECT through_rev FROM chat_index_state WHERE id = 1`
 	chatErasedThroughStatement = `SELECT erased_through FROM chat_index_state WHERE id = 1`
-	chatRebuildingStatement    = `SELECT rebuilding FROM chat_index_state WHERE id = 1`
+	chatStateStatement         = `
+		SELECT built_from, through_rev, erased_through, rebuilding
+		  FROM chat_index_state WHERE id = 1`
 
 	// chatAdvanceWatermarkStatement and chatAdvanceErasedStatement move the
 	// two walks' positions, never backwards.
@@ -352,6 +384,16 @@ const (
 		UPDATE chat_index_state
 		   SET rebuilding = 1, through_rev = 0, erased_through = 0, updated_at = ?
 		 WHERE id = 1`
+
+	// chatRecordInstanceStatement names the copy an index that has indexed
+	// NOTHING is about to be built from — a fresh node's, or one whose
+	// rebuild's drop has just ended — and it is the ONE writer of
+	// `built_from`, so what the column names is always the copy the walk
+	// began on. Conditional on the row being that index, so it can never
+	// stand in for the rebuild an index that holds documents owes.
+	chatRecordInstanceStatement = `
+		UPDATE chat_index_state SET built_from = ?, updated_at = ?
+		 WHERE id = 1 AND through_rev = 0 AND erased_through = 0 AND rebuilding = 0`
 
 	// chatDropBatchStatement is the next batch of documents a rebuild drops.
 	// A WALK by design, taken from the front of the table a batch at a time:
@@ -911,7 +953,7 @@ func (x *ChatIndexer) followErasures(ctx context.Context, now time.Time) (int, e
 // behind it. And DURABLE, because a drop that lived in memory and stopped
 // halfway would leave the walk to resume from a watermark over an index it
 // had half emptied.
-func (x *ChatIndexer) beginRebuild(ctx context.Context, now time.Time) error {
+func (x *ChatIndexer) beginRebuild(ctx context.Context, now time.Time, reason string) error {
 	err := x.db.Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, chatBeginRebuildStatement, now.UTC().UnixMilli())
 		return err
@@ -920,7 +962,7 @@ func (x *ChatIndexer) beginRebuild(ctx context.Context, now time.Time) error {
 		return fmt.Errorf("search: mark the chat index for a rebuild: %w", err)
 	}
 	x.pruneCursor = ""
-	log.InfoContext(ctx, "chat_index_rebuilding",
+	log.InfoContext(ctx, "chat_index_rebuilding", "reason", reason,
 		"detail", "the chat index is being dropped and walked again because "+
 			"the replicated estate under it was replaced; search_messages "+
 			"answers over what is indexed meanwhile, and Ready says false "+
@@ -928,10 +970,102 @@ func (x *ChatIndexer) beginRebuild(ctx context.Context, now time.Time) error {
 	return nil
 }
 
-// rebuilding reports whether a rebuild's drop is under way.
-func (x *ChatIndexer) rebuilding(ctx context.Context) (bool, error) {
-	mark, err := x.position(ctx, chatRebuildingStatement, "whether the chat index is rebuilding")
-	return mark != 0, err
+// chatIndexState is the index's one state row, as a sweep decides from it.
+type chatIndexState struct {
+	// builtFrom is the estate instance the index was built from, empty
+	// for one that has never recorded any.
+	builtFrom string
+
+	// through and erased are the two walks' positions.
+	through, erased int64
+
+	// rebuilding is whether a rebuild's drop is under way.
+	rebuilding bool
+}
+
+// pristine reports whether the index has indexed nothing at all — which is
+// what lets it adopt a copy's instance without dropping anything, since it
+// holds nothing built from another one. Every document is written by the
+// transcript walk in the transaction that moves its watermark, so a walk at
+// zero with no drop under way holds none.
+func (s chatIndexState) pristine() bool {
+	return s.through == 0 && s.erased == 0 && !s.rebuilding
+}
+
+// indexState reads the index's one state row.
+func (x *ChatIndexer) indexState(ctx context.Context) (chatIndexState, error) {
+	var state chatIndexState
+	var rebuilding int64
+	err := x.db.SQL().QueryRowContext(ctx, chatStateStatement).
+		Scan(&state.builtFrom, &state.through, &state.erased, &rebuilding)
+	if errors.Is(err, sql.ErrNoRows) {
+		return chatIndexState{}, errors.New("search: the chat index has no state " +
+			"row; the node estate is behind its migrations")
+	}
+	if err != nil {
+		return chatIndexState{}, fmt.Errorf("search: read the chat index's state: %w", err)
+	}
+	state.rebuilding = rebuilding != 0
+	return state, nil
+}
+
+// estateInstance reads which copy of the replicated estate the index walks.
+func (x *ChatIndexer) estateInstance(ctx context.Context) (string, error) {
+	var instance string
+	err := x.estate.Read(ctx, func(tx *sql.Tx) error {
+		var readErr error
+		instance, readErr = statelog.EstateInstance(ctx, tx)
+		return readErr
+	})
+	if err != nil {
+		return "", fmt.Errorf("search: read which copy of the replicated estate "+
+			"the chat index walks: %w", err)
+	}
+	return instance, nil
+}
+
+// followInstance answers an index built from another copy of the estate than
+// the one it now walks, and reports whether a rebuild's drop is now under way.
+//
+// AN INDEX THAT HOLDS NOTHING RECORDS THE COPY AND WALKS IT, since there is
+// nothing to drop — the first sweep of a fresh node, or the first after a
+// rebuild's drop ended. ANY OTHER IS REBUILT: the copy it was built from is
+// gone, and every document below its watermark may describe a row the new copy
+// holds differently or not at all. The rebuild records nothing itself; its drop
+// ends with an index that holds nothing, and the sweep after it records the copy
+// the walk then begins on.
+func (x *ChatIndexer) followInstance(ctx context.Context, now time.Time,
+	state chatIndexState, instance string) (bool, error) {
+
+	if state.pristine() {
+		recorded := false
+		err := x.db.Tx(ctx, func(tx *sql.Tx) error {
+			res, err := tx.ExecContext(ctx, chatRecordInstanceStatement, instance,
+				now.UTC().UnixMilli())
+			if err != nil {
+				return err
+			}
+			n, err := res.RowsAffected()
+			recorded = n == 1
+			return err
+		})
+		if err != nil {
+			return false, fmt.Errorf("search: record the copy of the estate the "+
+				"chat index walks: %w", err)
+		}
+		if recorded {
+			return false, nil
+		}
+	}
+	x.caught.Store(false)
+	log.InfoContext(ctx, "chat_index_estate_replaced",
+		"built_from", state.builtFrom, "estate_instance", instance,
+		"detail", "the chat index was built from another copy of the replicated "+
+			"estate than the one under it now, so it is rebuilt from this one")
+	if err := x.beginRebuild(ctx, now, "estate_instance_moved"); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // dropStep removes the next batch of documents a rebuild drops, and reports
@@ -1177,12 +1311,13 @@ func anys(values []string) []any {
 //
 // THE CADENCE IS THE SAME [indexIdle] THE KNOWLEDGE INDEXER USES, and a sweep
 // that did nothing is what earns the sleep: a cold start and a rebuild's drop
-// run flat out, and a steady state costs three reads of the one state row —
-// the rebuild mark and the two watermarks — and one step of the prune
-// rotation per idle tick. Two loops rather than one over both corpora because the walks
-// are not alike — this one is forward over `chat_messages.version` with a
-// durable watermark, and the other is a lap by id that repairs a drifted row —
-// so a shared loop would have to pick one of the two shapes for both.
+// run flat out, and a steady state costs one read of the estate's instance,
+// three of the one state row — the whole row and the two watermarks — and one
+// step of the prune rotation per idle tick. Two loops rather than one over both
+// corpora because the walks are not alike — this one is forward over
+// `chat_messages.version` with a durable watermark, and the other is a lap by
+// id that repairs a drifted row — so a shared loop would have to pick one of
+// the two shapes for both.
 //
 // A FAILED SWEEP IS LOGGED AND RETRIED rather than ending the loop. The index
 // is this node's own and is rebuilt from rows that are still there, so the
