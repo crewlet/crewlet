@@ -69,14 +69,18 @@ through the dashboard is on none of them: they act as their seat through the
 seat with no `contact` block is a legitimate seat rather than a mistake. It is
 not refused. On the engine's [own chat](chatlet.md) nothing changes for them: a
 room addresses a person by their seat's handle, so an agent mentions them there
-like anybody else and they read it on the dashboard. On a vendor's surface no
-agent can @-mention them: a lead's roster tells its agents to hand that person
-work by assigning it in the tracker, and on a company that talks on Mattermost
-or Slack the configuration names the seat in a **warning** at its `contact` —
-printed by `crewlet validate` and carried on every `/config` write's answer —
-the one place the engine says so, and a warning because the state is
-legitimate. Add a contact identity when the person joins a surface the company
-runs, and the warning clears.
+like anybody else — a lead's roster gives each human report as `@handle` and
+tells it to mention them in the company's chat or send them a direct message,
+whatever contact identities they hold, unless the seat's holder is
+[withheld](#a-suspended-holder-is-withdrawn-with-no-configuration-change) —
+and they read it on the dashboard. On a vendor's surface no agent can
+@-mention them: a lead's roster tells its agents to hand that person work by
+assigning it in the tracker, and on a company that talks on Mattermost or Slack
+the configuration names the seat in a **warning** at its `contact` — printed by
+`crewlet validate` and carried on every `/config` write's answer — the one
+place the engine says so, and a warning because the state is legitimate. Add a
+contact identity when the person joins a surface the company runs, and the
+warning clears.
 
 **And no two seats may claim one identity.** Each of these fields is an
 external account, and an account belongs to one person. A duplicate is
