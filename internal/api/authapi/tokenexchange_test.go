@@ -166,10 +166,13 @@ func TestAnExchangedTierATokenIsASessionThatWorks(t *testing.T) {
 	// THE ENTRY'S GRANTS AS THIS NODE'S POSTURE LETS IT CARRY THEM, on
 	// this request: the token lists admin, this node serves it, and admin
 	// includes every app — composed by the one function the bearer is.
+	// The apps are read from iam.Apps, the one place an app is declared, so
+	// an app added there is expected here with no second edit.
 	got, _ := json.Marshal(who["grants"])
-	if string(got) != `["admin","tracker","knowledge"]` {
+	want, _ := json.Marshal(append([]iam.Grant{iam.GrantAdmin}, iam.Apps...))
+	if string(got) != string(want) {
 		t.Errorf("the session carries grants %s, want the entry's admin and "+
-			"every app it includes", got)
+			"every app it includes, %s", got, want)
 	}
 	// STEPPED UP BY CONSTRUCTION, as the bearer is.
 	if who["fresh"] != true {
