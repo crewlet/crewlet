@@ -178,6 +178,12 @@ func (c *heldChart) LeadsAnyone(context.Context, string) (bool, error) {
 	return false, nil
 }
 
+// MemberOf answers that nobody sits in any unit: no case here shares an
+// artifact with a team.
+func (*heldChart) MemberOf(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
 // mutableChart answers the one lead question the case asks, changeably,
 // counting how often it was asked.
 type mutableChart struct {
@@ -223,6 +229,14 @@ func (c *mutableChart) LeadsAnyone(_ context.Context, actor string) (bool, error
 		return false, c.err
 	}
 	return c.leads && actor == "platform-lead", nil
+}
+
+// MemberOf answers that nobody sits in any unit: no case here shares an
+// artifact with a team.
+func (c *mutableChart) MemberOf(context.Context, string, string) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return false, c.err
 }
 
 // waitUntil polls cond for up to ten seconds.

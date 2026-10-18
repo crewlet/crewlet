@@ -34,8 +34,8 @@ const (
 	// AdminRefuse clamps admin away and keeps every app: a node published
 	// to the people who use the company, where nobody should be able to
 	// run it however their row reads. An administrator signed in here
-	// keeps the tracker and the knowledge base — [Expand] runs before the
-	// clamp — and is told what they lack by the authority table.
+	// keeps every app ([Expand] runs before the clamp) and is told what
+	// they lack by the authority table.
 	AdminRefuse AdminPosture = "refuse"
 )
 

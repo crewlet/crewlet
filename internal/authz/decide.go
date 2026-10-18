@@ -13,8 +13,8 @@ import (
 // Class is one authority rule, shared by every action that obeys it.
 //
 // THE RULES ARE THE CLOSED SET, NOT THE VERBS. There are dozens of verbs and
-// fifteen ways to decide one, so a table keyed on the verb would state
-// fifteen rules dozens of times and drift on whichever copy somebody edited.
+// sixteen ways to decide one, so a table keyed on the verb would state
+// sixteen rules dozens of times and drift on whichever copy somebody edited.
 // A verb picks its class in [rules] and the class is written once, here.
 type Class string
 
@@ -180,22 +180,34 @@ const (
 	// beside the people manager, and a directory GESTURE did not, and with
 	// both of those folded into admin the two rules said the same thing.
 	ClassDirectory Class = "directory"
+
+	// ClassShared: one artifact, decided by the caller's ROLE on it, the
+	// best of owning it, a share naming their seat, a unit they sit in or
+	// the whole company, and leading the agent that owns it. The row names
+	// the least role it admits ([rule.minRole]); the owner holds every role.
+	// See "An artifact is decided per object, by its shares" in the package
+	// doc, and [decideShared] for the order of its arms.
+	//
+	// A RELATION CLASS, so a row that also names the `artifacts` app asks it
+	// beside the role ([withApp]): an editor without the app writes the
+	// artifact's data and does not publish it.
+	ClassShared Class = "shared"
 )
 
-// Classes are the fifteen, in declaration order.
+// Classes are the sixteen, in declaration order.
 var Classes = []Class{
 	ClassEverybody, ClassApp, ClassAnyApp, ClassAppOrAsked, ClassSelf,
 	ClassOwnRecord, ClassOwnOrLead, ClassSavedView, ClassContainer,
 	ClassTidy, ClassSubtree, ClassDestructive, ClassAuthored, ClassAdmin,
-	ClassDirectory,
+	ClassDirectory, ClassShared,
 }
 
 // relationClasses are the classes that decide on the principal's RELATION to
-// the object — its owner, its lead, its author — and that ask the row's app
-// beside the relation ([withApp]).
+// the object (its owner, its lead, its author, a share) and that ask the
+// row's app beside the relation ([withApp]).
 var relationClasses = []Class{
 	ClassOwnRecord, ClassOwnOrLead, ClassSavedView, ClassContainer,
-	ClassTidy, ClassDestructive, ClassAuthored,
+	ClassTidy, ClassDestructive, ClassAuthored, ClassShared,
 }
 
 // Decide answers whether p may do a to o.
@@ -230,7 +242,10 @@ var relationClasses = []Class{
 //
 // THE ADMIN PATH IS CHECKED BEFORE THE CHART, on every class that has one,
 // because the chart can fail and the permission cannot: an administrator must
-// not be told "I cannot tell" by a node that is behind.
+// not be told "I cannot tell" by a node that is behind. [ClassShared] asks an
+// administrator's relations first, so an admission a share already makes is
+// not recorded as an override, and still decides the admin path before any
+// chart failure could reach the answer.
 //
 // THE ROW'S APP IS ASKED AFTER THE RELATION ([withApp]), so a refusal names
 // what would actually admit: a lead short of the app is told the app, and a
@@ -536,6 +551,9 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 		// exception — telling somebody without admin that they "are not
 		// that person" sends them to the wrong fix.
 		return consulting(Decision{Reason: ReasonNoGrant}, adminGrant)
+
+	case ClassShared:
+		return decideShared(ctx, p, r, o, chart)
 	}
 	// UNREACHABLE WHILE Classes AND THIS SWITCH AGREE, which a test in
 	// this package asserts in both directions. It is a refusal rather

@@ -242,6 +242,15 @@ func (c *leadChart) LeadsAnyone(_ context.Context, actor string) (bool, error) {
 	return false, nil
 }
 
+// MemberOf answers that nobody sits in any unit: no case here shares an
+// artifact with a team.
+func (c *leadChart) MemberOf(context.Context, string, string) (bool, error) {
+	if c.err != nil {
+		return false, c.err
+	}
+	return false, nil
+}
+
 var _ authz.Chart = (*leadChart)(nil)
 
 // watchFixture is a socket server whose tokens are bound to seats.

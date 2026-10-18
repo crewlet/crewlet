@@ -185,10 +185,16 @@ const RetryUndecidedSeconds = 2
 //     and no grant on a token would admit it. It was that code with a
 //     sentence of its own as `detail`, so the envelope's `message` and its
 //     `detail` contradicted each other.
+//   - A CALLER WITH NO RELATION to an artifact is `404 not_found` with
+//     nothing beside it ([Decision.NotFound]): no reason and no grants, the
+//     answer a surface gives for an id nothing holds, so the refusal cannot
+//     say whether the artifact exists.
 func EnvelopeRefusal(w http.ResponseWriter, _ *http.Request, _ Policy, d Decision) {
 	switch {
 	case d.Unknown():
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, RetryUndecidedSeconds)
+	case d.NotFound():
+		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
 	case d.Reason == ReasonStepUp:
 		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeStepUpRequired,
 			StepUpDetail(d))

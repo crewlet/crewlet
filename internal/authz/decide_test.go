@@ -19,6 +19,7 @@ type chart struct {
 	projects   map[[2]string]bool
 	units      map[[2]string]bool
 	containers map[[2]string]bool
+	members    map[[2]string]bool
 	err        error
 }
 
@@ -72,14 +73,26 @@ func (c chart) LeadsAnyone(_ context.Context, actor string) (bool, error) {
 	return false, nil
 }
 
+// MemberOf answers unit membership, a FIFTH map: sitting in a unit is not
+// leading it, and a fake that read either for the other would agree with a
+// rule that asked the wrong one.
+func (c chart) MemberOf(_ context.Context, actor, unit string) (bool, error) {
+	if c.err != nil {
+		return false, c.err
+	}
+	return c.members[[2]string{actor, unit}], nil
+}
+
 // nimbus is the fixture every case below decides against: the CTO leads the
-// SRE, leads the PLATFORM project, and leads the `sre` unit.
+// SRE, leads the PLATFORM project, and leads the `sre` unit, in which the SRE
+// sits (the CTO does not: leading a unit is not sitting in it).
 func nimbus() chart {
 	return chart{
 		leads:      map[[2]string]bool{{"cto", "sre"}: true},
 		projects:   map[[2]string]bool{{"cto", "PLATFORM"}: true},
 		units:      map[[2]string]bool{{"cto", "sre"}: true},
 		containers: map[[2]string]bool{{"cto", "RUNBOOKS"}: true},
+		members:    map[[2]string]bool{{"sre", "sre"}: true},
 	}
 }
 

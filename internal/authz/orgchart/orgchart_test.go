@@ -205,6 +205,42 @@ func TestLeadsUnitIsTheSubtree(t *testing.T) {
 	}
 }
 
+// A SEAT IS A MEMBER OF THE UNIT IT SITS IN AND OF EVERY UNIT ABOVE IT, AND
+// LEADING A UNIT IS NOT SITTING IN IT.
+//
+// The relation a share with a team admits: the SRE sits in Reliability and so
+// in Engineering above it; the CTO leads Engineering from the root and sits in
+// neither, so a share with the division does not reach them through
+// membership; a seat of a sibling tree is in nothing of this one. Mutation:
+// answer from the lead relation and the CTO is admitted; compare only the
+// seat's own unit and the SRE is refused the division.
+func TestMemberOfIsTheSeatsOwnUnitChain(t *testing.T) {
+	t.Parallel()
+	chart := orgchart.Of(treeOf(t))
+	for _, c := range []struct {
+		actor, unit string
+		want        bool
+	}{
+		{"sre", "reliability", true},
+		{"sre", "engineering", true},
+		{"sre-lead", "reliability", true},
+		{"sre-lead", "engineering", true},
+		{"designer", "design", true},
+		{"designer", "engineering", false},
+		{"sre", "design", false},
+		{"cto", "engineering", false}, // leads it, and sits at the root
+		{"ceo", "reliability", false}, // manages the SRE, sits in no unit
+		{"sre", "ghost", false},
+		{"sre", "", false},
+		{"nobody", "reliability", false},
+		{"", "reliability", false},
+	} {
+		if got, err := chart.MemberOf(t.Context(), c.actor, c.unit); err != nil || got != c.want {
+			t.Errorf("MemberOf(%q, %q) = %v, %v; want %v", c.actor, c.unit, got, err, c.want)
+		}
+	}
+}
+
 // NO TREE IS UNKNOWN, NEVER "YOU LEAD NOTHING", on every relation.
 func TestNoTreeIsUnknownRatherThanFalse(t *testing.T) {
 	t.Parallel()
@@ -216,6 +252,7 @@ func TestNoTreeIsUnknownRatherThanFalse(t *testing.T) {
 		"LeadsProject":   func() (bool, error) { return chart.LeadsProject(ctx, "cto", "PLATFORM") },
 		"LeadsContainer": func() (bool, error) { return chart.LeadsContainer(ctx, "cto", "RUNBOOKS") },
 		"LeadsUnit":      func() (bool, error) { return chart.LeadsUnit(ctx, "cto", "engineering") },
+		"MemberOf":       func() (bool, error) { return chart.MemberOf(ctx, "sre", "engineering") },
 	} {
 		if _, err := ask(); !errors.Is(err, authz.ErrNoChart) {
 			t.Errorf("%s with no tree: err = %v, want authz.ErrNoChart", name, err)

@@ -42,6 +42,12 @@ func (handleChart) LeadsAnyone(_ context.Context, actor string) (bool, error) {
 	return actor == "lead", nil
 }
 
+// MemberOf answers that nobody sits in any unit: no case here shares an
+// artifact with a team.
+func (handleChart) MemberOf(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
 // A LEAD NAMES A REPORT THE WAY A MODEL TYPES THEM, and is admitted.
 //
 // `set_priorities` resolves its `handle` against the chart — a model types

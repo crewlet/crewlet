@@ -251,10 +251,15 @@ func TestAnUnresolvedTidyAsksForTheRow(t *testing.T) {
 // everybody — admin seeing everything through the apps it includes. Held over
 // every kind, so a kind added later is decided here rather than shown to
 // everybody by default; and every app is some kind's, or no row of it could
-// ever be filtered. Mutation: map a view to no app and the tracker-less reader
-// is shown it.
+// ever be filtered, except an app that gates AUTHORING a kind decided per
+// object, which filters no row by design (its rows are [authz.Visible]'s, held
+// by the walk below). Mutation: map a view to no app and the tracker-less
+// reader is shown it.
 func TestShowsFollowsTheKindsApp(t *testing.T) {
 	t.Parallel()
+	// THE ARTIFACTS APP GATES AUTHORING AND NEVER READING: an artifact is
+	// shown by its shares, so no kind belongs to it.
+	authoringOnly := map[iam.Grant]bool{iam.GrantArtifacts: true}
 	used := map[iam.Grant]bool{}
 	for _, k := range authz.ObjectKinds {
 		app := authz.AppFor(k)
@@ -266,25 +271,32 @@ func TestShowsFollowsTheKindsApp(t *testing.T) {
 			person("jane.doe"),
 			person("jane.doe", iam.GrantTracker),
 			person("jane.doe", iam.GrantKnowledge),
+			person("jane.doe", iam.GrantArtifacts),
 			person("jane.doe", iam.GrantAdmin),
 		} {
-			want := app == "" || p.Can(app)
+			want := k != authz.KindArtifact && (app == "" || p.Can(app))
 			if got := authz.Shows(p, k); got != want {
 				t.Errorf("Shows(%v, %s) = %v, want %v", p.Grants, k, got, want)
 			}
 		}
 	}
 	for _, app := range iam.Apps {
-		if !used[app] {
+		if !used[app] && !authoringOnly[app] {
 			t.Errorf("no kind of object belongs to %q, so no row of it is ever "+
 				"filtered", app)
+		}
+	}
+	for app := range authoringOnly {
+		if used[app] {
+			t.Errorf("%q gates authoring only, and a kind belongs to it, so a "+
+				"row of that kind is shown to whoever holds it", app)
 		}
 	}
 	for k, want := range map[authz.ObjectKind]iam.Grant{
 		authz.KindTask: iam.GrantTracker, authz.KindProject: iam.GrantTracker,
 		authz.KindView: iam.GrantTracker, authz.KindPage: iam.GrantKnowledge,
 		authz.KindContainer: iam.GrantKnowledge, authz.KindPerson: "",
-		authz.KindUnit: "", authz.KindCompany: "",
+		authz.KindUnit: "", authz.KindCompany: "", authz.KindArtifact: "",
 	} {
 		if got := authz.AppFor(k); got != want {
 			t.Errorf("AppFor(%s) = %q, want %q", k, got, want)

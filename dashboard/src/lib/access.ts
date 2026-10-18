@@ -1,11 +1,12 @@
 /**
  * ACCESS, as the dashboard reads it: admin and one permission per app.
  *
- * The engine's whole vocabulary is three names (`contract/identity.ts`'s
+ * The engine's whole vocabulary is admin and the apps (`contract/identity.ts`'s
  * GRANTS, held to `iam.AllGrants`): `admin`, which runs the company and the
- * engine and INCLUDES EVERY APP, and one permission per app — `tracker` for
- * the work tracker and `knowledge` for the knowledge base (APPS, held to
- * `iam.Apps`, the one place an app is declared). Everything a signed-in
+ * engine and INCLUDES EVERY APP, and one permission per app: `tracker` for
+ * the work tracker, `knowledge` for the knowledge base and `artifacts` for
+ * authoring artifacts (APPS, held to `iam.Apps`, the one place an app is
+ * declared). Everything a signed-in
  * principal may do beyond its own account and the read-only overview comes
  * from these, so this module is the one place a screen asks "does the reader
  * hold this?" and the one place the dashboard says a permission in words.
@@ -114,6 +115,11 @@ export const ACCESS_WORDS: Record<Grant, { label: string; description: string }>
   knowledge: {
     label: "Knowledge",
     description: "Read, search and write pages.",
+  },
+  artifacts: {
+    label: "Artifacts",
+    description:
+      "Create and publish pages, sheets and dashboards. Anything shared with them opens without it.",
   },
 };
 

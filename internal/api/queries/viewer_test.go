@@ -89,6 +89,12 @@ func (flatChart) LeadsAnyone(context.Context, string) (bool, error) {
 	return false, nil
 }
 
+// MemberOf answers that nobody sits in any unit: no case here shares an
+// artifact with a team.
+func (flatChart) MemberOf(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
 // answer runs one question and insists it succeeded, so a case about a VALUE
 // never quietly becomes a case about a refusal.
 func answerMap(t *testing.T, got any, err error) map[string]any {
@@ -367,6 +373,12 @@ func (c leadsChart) Leads(_ context.Context, actor, subject string) (bool, error
 // lead before their report's login was ever looked up.
 func (c leadsChart) LeadsAnyone(_ context.Context, actor string) (bool, error) {
 	return actor == c.lead, nil
+}
+
+// MemberOf answers that nobody sits in any unit: no case here shares an
+// artifact with a team.
+func (leadsChart) MemberOf(context.Context, string, string) (bool, error) {
+	return false, nil
 }
 
 // A CALLER'S OWN RECORD IS READ UNDER THE NAME IT IS WRITTEN UNDER.
