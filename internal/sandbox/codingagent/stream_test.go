@@ -67,21 +67,32 @@ func TestADeadJobWithAStreamPastTheCapIsDone(t *testing.T) {
 	}
 }
 
-// A FINISHED-BUT-HUNG JOB WITH A STREAM PAST THE CAP IS DONE. Its terminal
-// event is the stream's last line, which is all the poll reads.
-func TestAFinishedButHungJobWithAStreamPastTheCapIsDone(t *testing.T) {
+// A STREAM'S END NEVER ENDS A RUN. Every CLI this build drives exits, so the
+// done marker its wrapper writes after it is the end — and an OpenCode run
+// whose final step printed its finish has not yet had its script add the
+// session's usage or write the box's refreshed login back. A live wrapper is
+// a running job, whatever its stream last said.
+func TestAStreamsEndNeverEndsARun(t *testing.T) {
 	t.Parallel()
-	runner := codingagent.NewOpenCode()
-	b := box(t, runner)
-	handle := start(t, runner, b)
-	b.Put(paths(b).Result(), pastTheCap(b,
-		`{"type":"text","part":{"text":"Fixed it."}}`,
-		`{"type":"step_finish","part":{"reason":"stop"}}`))
-	b.ExecFunc = alive(true) // hung: the wrapper never returns
-
-	done, err := runner.Poll(t.Context(), b, handle)
-	if err != nil || !done {
-		t.Fatalf("Poll = %v, %v; want the terminal event at the stream's end found", done, err)
+	for name, runner := range map[string]*codingagent.Runner{
+		"opencode":    codingagent.NewOpenCode(),
+		"claude-code": codingagent.NewClaudeCode(),
+	} {
+		b := box(t, runner)
+		handle := start(t, runner, b)
+		out := paths(b).Result()
+		if name == "claude-code" {
+			out = paths(b).Stream()
+		}
+		b.Put(out, strings.Join([]string{
+			`{"type":"text","part":{"text":"Fixed it."}}`,
+			`{"type":"step_finish","part":{"reason":"stop"}}`,
+			`{"type":"result","subtype":"success","result":"Fixed it."}`,
+		}, "\n"))
+		b.ExecFunc = alive(true)
+		if done, err := runner.Poll(t.Context(), b, handle); done || err != nil {
+			t.Errorf("%s: Poll = %v, %v; want a live wrapper still running", name, done, err)
+		}
 	}
 }
 
@@ -105,24 +116,28 @@ func TestAReadThatFailsNeverSkipsTheLivenessProbe(t *testing.T) {
 	}
 }
 
-// A CLI THAT EXITS CLEANLY HAS NO STREAM TO POLL. The done marker is its only
-// signal, and reading its output on every tick was a transfer per box per
-// tick that could never change the answer.
-func TestACLIThatExitsCleanlyIsNotPolledThroughItsOutput(t *testing.T) {
+// A CLI THAT EXITS HAS NO STREAM TO POLL. The done marker is its only signal,
+// and reading its output on every tick was a transfer per box per tick that
+// could never change the answer.
+func TestACLIThatExitsIsNotPolledThroughItsOutput(t *testing.T) {
 	t.Parallel()
-	runner := codingagent.NewClaudeCode()
-	b := box(t, runner)
-	handle := start(t, runner, b)
-	p := paths(b)
-	b.ReadErr = func(path string) error {
-		if path != p.Done() {
-			return errors.New("the poll read " + path)
+	for name, runner := range map[string]*codingagent.Runner{
+		"opencode":    codingagent.NewOpenCode(),
+		"claude-code": codingagent.NewClaudeCode(),
+	} {
+		b := box(t, runner)
+		handle := start(t, runner, b)
+		p := paths(b)
+		b.ReadErr = func(path string) error {
+			if path != p.Done() {
+				return errors.New("the poll read " + path)
+			}
+			return nil
 		}
-		return nil
-	}
-	b.ExecFunc = alive(true)
-	if done, err := runner.Poll(t.Context(), b, handle); done || err != nil {
-		t.Errorf("Poll = %v, %v; want only the marker and the probe asked", done, err)
+		b.ExecFunc = alive(true)
+		if done, err := runner.Poll(t.Context(), b, handle); done || err != nil {
+			t.Errorf("%s: Poll = %v, %v; want only the marker and the probe asked", name, done, err)
+		}
 	}
 }
 

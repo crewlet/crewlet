@@ -138,8 +138,8 @@ func AskInstruction(roster []string, manager string) string {
 //
 // The coding agent is NOT the last step: its findings go back to the Crewlet
 // agent, which continues the same task. The streamed final message can be lost
-// when an agent finishes but never exits, and a tool-only run leaves no parsed
-// text at all — so a durable structured report at a known path is required,
+// when a run's process group dies before it is written, and a tool-only run
+// leaves no parsed text at all — so a durable structured report at a known path is required,
 // and Collect always reads it.
 //
 // WHAT THE RUN DELIVERED IS NAMED, one `Delivered:` line per branch pushed and

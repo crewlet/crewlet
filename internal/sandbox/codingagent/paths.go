@@ -3,8 +3,8 @@
 //
 // Both supported CLIs run headless in a box and follow the same shape: a
 // background process redirects its output to a file and drops a done marker,
-// Poll checks that marker (and, for a CLI that can finish without exiting,
-// the end of its stream), Collect decodes the stream and reads the result,
+// Poll checks that marker and whether the process is still alive, Collect
+// decodes the stream and reads the result,
 // and an ask overlay surfaces a mid-run clarification. This package owns that
 // plumbing so each runner supplies only what is its own: its invocation, its
 // config, where its output lands, and how its stream and result are read.
@@ -62,6 +62,26 @@ func (p Paths) Result() string { return p.WorkDir() + "/result.json" }
 // read as a stream and from its end, never whole.
 func (p Paths) Stream() string { return p.WorkDir() + "/stream.jsonl" }
 
+// Brief is where the brief is written for a CLI that reads it on stdin
+// ([Output.BriefOnStdin]) rather than on its argv.
+func (p Paths) Brief() string { return p.WorkDir() + "/brief.md" }
+
+// CredentialDocument is where a box keeps the login a CLI holds in a database
+// of its own: the CLI's own export of it, which the engine seeds a local box
+// with and writes back from when the box closes ([CredentialDocument]).
+func (p Paths) CredentialDocument() string { return p.Home + "/" + CredentialDocument }
+
+// CredentialDocument is [Paths.CredentialDocument] relative to the box home —
+// the key a run's credential files map it under, because a provider seeds
+// those relative to the box's home ([sandbox.Spec.CredentialFiles]).
+//
+// Under the artefact directory rather than the CLI's own data directory: no
+// CLI reads this file on its own — the runner imports it into the CLI's
+// database before the run and exports the database back into it after — so it
+// lives with the rest of what the engine keeps in a box, where a `git clean` in
+// the brief cannot reach it.
+const CredentialDocument = ".crewlet/exported-credentials"
+
 // Err is where its stderr goes — the transcript's fallback source.
 func (p Paths) Err() string { return p.WorkDir() + "/err.log" }
 
@@ -84,9 +104,9 @@ func (p Paths) MCPConfig() string { return p.WorkDir() + "/mcp.json" }
 
 // Findings is the agent's authoritative final report.
 //
-// THE RESULT CARRIER OF RECORD. A run that finishes but never exits can lose
-// its streamed final message, and a tool-only run parses to no text at all —
-// but this file survives both, so Collect prefers it for the result text and
+// THE RESULT CARRIER OF RECORD. A run whose process group died can lose its
+// streamed final message, and a tool-only run parses to no text at all — but
+// this file survives both, so Collect prefers it for the result text and
 // treats its presence as the success signal. Under WorkDir for the same reason
 // the rest is.
 func (p Paths) Findings() string { return p.WorkDir() + "/findings.md" }

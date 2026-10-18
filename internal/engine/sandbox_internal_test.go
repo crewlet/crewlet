@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
@@ -365,9 +366,63 @@ roles:
 	if text != "openrouter/anthropic/claude-sonnet-5" {
 		t.Fatalf("the text calls' model = %q, want the resolved model as written", text)
 	}
+	// The run is a script quoted for `sh -c`; its quoting undone, the model
+	// is an argument of its own.
 	cmd := codingagent.OpenCode{}.Command(sandbox.RunRequest{Brief: "x", LLM: got}, codingagent.Paths{}, "")
-	if !strings.Contains(cmd, "--model '"+text+"'") {
+	if script := strings.ReplaceAll(cmd, `'\''`, "'"); !strings.Contains(script, "--model '"+text+"'") {
 		t.Errorf("the agent run gave:\n%s\nwant --model %q, the value every text call passes", cmd, text)
+	}
+}
+
+// A LOGIN OPENCODE KEEPS IN ITS OWN DATABASE FOLLOWS A RUN INTO A LOCAL BOX: the
+// entry's exported login, mapped where the runner imports it from — and an
+// entry nobody has signed in maps nothing, rather than a path that is not there.
+func TestAnOpenCodeLoginTravelsAsItsExportedDocument(t *testing.T) {
+	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	c := companyFor(t, `
+name: Acme
+providers:
+  sandbox: {fake: true}
+  llm:
+    oc:
+      type: cli-agent
+      model: anthropic/claude-sonnet-5
+      cli:
+        agent: opencode
+        mode: agent
+roles:
+  - name: Engineer
+    handle: eng
+    llm: oc
+`)
+	seat := seatNamed(t, c, "Engineer")
+	run, err := newCodingRun(c, seat, phase.Execute, codingagent.OpenCodeName, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(run.files) != 0 {
+		t.Errorf("an entry nobody signed in mapped %v into the box", run.files)
+	}
+
+	member, err := c.Models.Head(seat, phase.Execute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared := member.Provider.(*cliagent.Provider).Workspace().CredentialsDir()
+	doc := filepath.Join(shared, cliprofile.CredentialStoreDocument)
+	if err := os.MkdirAll(shared, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(doc, []byte(`[{"id":"cred_1"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run, err = newCodingRun(c, seat, phase.Execute, codingagent.OpenCodeName, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := run.files[codingagent.CredentialDocument]; got != doc {
+		t.Errorf("the box is seeded with %q at %s, want the shared login %q (files %v)",
+			got, codingagent.CredentialDocument, doc, run.files)
 	}
 }
 
