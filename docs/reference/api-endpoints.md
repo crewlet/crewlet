@@ -168,9 +168,9 @@ the dashboard shell, the Slack OAuth landing — answer as what they are.
 
 ## While a node is starting
 
-`crewlet run` binds `api.port` — and `api.public`, where the node serves one —
-as soon as it has read and checked its Tier A, before it opens its store, and
-logs `api_bound`. A port somebody else holds therefore fails the boot at once,
+`crewlet run` binds `api.port` — and `api.public` and `api.artifacts`, where
+the node serves them — as soon as it has read and checked its Tier A, before it
+opens its store, and logs `api_bound`. A port somebody else holds therefore fails the boot at once,
 naming the address. Until the node's own surface takes the socket over (logged
 as `api_listening`, or `api_probes_listening` on a node without `ingress`), it
 answers its probes and tells a caller to come back for any route it will
@@ -181,6 +181,7 @@ serve — and only for one it will serve:
 | `GET /health`, on `api.port` | `503` while the node recovers what it holds, then `200`, `status: "starting"` both times | The `503` is what a startup probe sized for the node's store bounds; nothing after the recovery holds it. See the phases below. |
 | `GET /ready`, on `api.port` | `503`, `reason: "starting"` | The node does no work and takes no traffic until it serves, so no load balancer and no rollout counts it. |
 | A route this listener will serve | `503 starting`, with `Retry-After: 10` | The caller is told to come back rather than meeting a refused connection, which reads as a node that is not there. On an `ingress` node that is every route of [Which listener serves what](#which-listener-serves-what) on the listener that serves it; on a node without `ingress` it is its agent-mode tool bridge (`/mcp/{token}`), on `api.public` when that is set and beside the probes otherwise. |
+| A request on the artifact origin (`api.artifacts`) | An empty `503` with `Retry-After: 10` for a ticketed path, the runtime or the kit, and the empty `404` or `405` the origin gives anything else | The origin's own refusal under its own inert headers, never a JSON body, which would be a document an artifact page could read. |
 | Anything else | The `404` that listener answers once the node serves | So a socket says no more while the node starts than it does afterwards, and nobody is sent back to wait for a route this node will never serve. On `api.public` that is the router's own `404 no_route`, the probes included; on `api.port` of an `ingress` node with `api.public` set, the `404` naming `api.public` for a route outside parties call; and on `api.port` of a node without `ingress`, the router's own `404` for every path but the two above (once it serves, its guard answers `401` for a path that asks for a credential, and a `404` says no more than that). |
 
 Nothing here asks for a credential, since nothing is served that one could

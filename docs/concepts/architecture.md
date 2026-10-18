@@ -295,8 +295,9 @@ count, seats, posture and applied epoch rather than reporting them as
 unknowable.
 
 **The listener binds before the boot, and the HTTP surface serves before the
-engine starts.** `crewlet run` binds `api.port` (and `api.public`) as soon as
-it has checked its Tier A, and until the node serves, that socket answers what
+engine starts.** `crewlet run` binds `api.port` (and `api.public` and
+`api.artifacts`, where the node serves them) as soon as it has checked its
+Tier A, and until the node serves, that socket answers what
 a starting node answers: `/health` `503` while the node recovers what it holds
 — its store, its broker, its copy of the estate, which only the deployment can
 bound — and `200` from then on, while what the company configures comes up;

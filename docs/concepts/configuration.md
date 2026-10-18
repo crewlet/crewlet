@@ -247,7 +247,8 @@ The engine boots in this order:
    [what every start says](../reference/cli.md#every-start-says-what-its-tier-a-is-worth-knowing))
 5. Bind `api.host:api.port` — and `api.public.port`, on a node that serves one
    (an `ingress` node with it set, or a seats node serving its agent-mode tool
-   bridge there) — and log `api_bound`. A port somebody holds fails the boot
+   bridge there), and `api.artifacts.port` on an `ingress` node that sets
+   it — and log `api_bound`. A port somebody holds fails the boot
    here, before anything slow has run. From now until step 13 the sockets
    answer what a starting node answers: `/health` `503` with
    `"phase": "recovering"` until step 11 and `200` with

@@ -52,7 +52,15 @@ api:
     external_url: https://{artifact}.example-usercontent.net
 ```
 
-The listener is bound on **ingress** nodes only, like `api.port`. In a fleet,
+The listener is bound on **ingress** nodes only, like `api.port`, and with it:
+before the boot, so a port somebody else holds fails the start at once, and
+`api_bound` names it as `artifacts_addr`. Until the node serves, the listener
+answers what a starting origin answers (an empty `503` with a `Retry-After` for
+every route it will serve, see
+[While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting)),
+and from the handover the origin itself, logged as `api_artifacts_listening`
+with the origin mode. A node without `ingress` binds nothing there and says so
+at `INFO` (`api_artifacts_not_bound`). In a fleet,
 every ingress node that serves the dashboard should serve artifacts too, behind
 the same load balancer, so a viewer's dashboard and its frames reach a node
 either way. A node serving artifacts needs nothing else: it reads artifact rows
