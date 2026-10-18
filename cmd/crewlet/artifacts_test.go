@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -28,6 +29,7 @@ type fakeArtifactsNode struct {
 	puts      map[string]string
 	creates   []map[string]any
 	publishes []map[string]any
+	patches   []map[string]any
 	ifMatch   []string
 	shares    []map[string]any
 	purges    int
@@ -91,6 +93,7 @@ func newFakeArtifactsNode(t *testing.T) *fakeArtifactsNode {
 	mux.HandleFunc("POST /artifacts", record(&n.creates, 1))
 	mux.HandleFunc("POST /artifacts/{id}/versions", record(&n.publishes, 4))
 	mux.HandleFunc("PUT /artifacts/{id}/shares", record(&n.shares, 0))
+	mux.HandleFunc("PATCH /artifacts/{id}", record(&n.patches, 0))
 	mux.HandleFunc("GET /artifacts/{id}", func(w http.ResponseWriter, r *http.Request) {
 		answer(w, http.StatusOK, map[string]any{"id": r.PathValue("id"), "head_number": 3})
 	})
@@ -160,6 +163,91 @@ func TestArtifactsPublishCreatesFromADirectory(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "version 1") {
 		t.Errorf("printed %q", stdout)
+	}
+}
+
+// A NEW ARTIFACT CARRIES ITS DESCRIPTION AND ICON in the create, beside its
+// title.
+func TestArtifactsPublishDescribesANewArtifact(t *testing.T) {
+	t.Parallel()
+	node := newFakeArtifactsNode(t)
+	if _, stderr, err := cli(t, "artifacts", "publish", site(t), "-description", "The Q3 launch plan",
+		"-icon", "rocket", bootstrapForURL(t, node.server.URL)); err != nil {
+		t.Fatalf("publish: %v\n%s", err, stderr)
+	}
+	create := node.creates[0]
+	if create["title"] != "index" || create["description"] != "The Q3 launch plan" || create["icon"] != "rocket" {
+		t.Errorf("created %v", create)
+	}
+}
+
+// A NEW VERSION DESCRIBES NOTHING BUT ITSELF: a head field or the kind named
+// beside -artifact is refused before anything is sent, pointing at `update`,
+// rather than dropped as if it had landed.
+func TestArtifactsPublishRefusesHeadFieldsOnANewVersion(t *testing.T) {
+	t.Parallel()
+	for _, flag := range []string{"-title", "-description", "-icon", "-kind"} {
+		t.Run(flag, func(t *testing.T) {
+			t.Parallel()
+			node := newFakeArtifactsNode(t)
+			_, _, err := cli(t, "artifacts", "publish", site(t), "-artifact", cliArtifact, flag, "html",
+				bootstrapForURL(t, node.server.URL))
+			if err == nil || !strings.Contains(err.Error(), flag) {
+				t.Fatalf("publish %s on a new version = %v, want it refused by name", flag, err)
+			}
+			if flag != "-kind" && !strings.Contains(err.Error(), "crewlet artifacts update") {
+				t.Errorf("the refusal %q does not point at update", err)
+			}
+			if len(node.intents) != 0 || len(node.publishes) != 0 {
+				t.Errorf("sent %d intents and %d publishes before refusing", len(node.intents),
+					len(node.publishes))
+			}
+		})
+	}
+}
+
+// AN UPDATE SENDS EXACTLY THE FIELDS IT NAMES, an empty one included (which
+// clears it), and refuses a call that names none before anything is sent.
+func TestArtifactsUpdateSendsOnlyTheNamedFields(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		args []string
+		want map[string]any
+		says string
+	}{
+		{"title", []string{"-title", "Launch plan"}, map[string]any{"title": "Launch plan"},
+			"updated the title of " + cliArtifact},
+		{"clear the description", []string{"-description", "", "-icon", "rocket"},
+			map[string]any{"description": "", "icon": "rocket"},
+			"updated the description and icon of " + cliArtifact},
+		{"every field", []string{"-icon", "chart", "-title", "T", "-description", "D"},
+			map[string]any{"title": "T", "description": "D", "icon": "chart"},
+			"updated the title, description and icon of " + cliArtifact},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			node := newFakeArtifactsNode(t)
+			args := append([]string{"artifacts", "update", cliArtifact}, tc.args...)
+			stdout, stderr, err := cli(t, append(args, bootstrapForURL(t, node.server.URL))...)
+			if err != nil {
+				t.Fatalf("update: %v\n%s", err, stderr)
+			}
+			if len(node.patches) != 1 || !maps.Equal(node.patches[0], tc.want) {
+				t.Errorf("patched %v, want %v", node.patches, tc.want)
+			}
+			if len(node.keys) != 1 || node.keys[0] == "" {
+				t.Errorf("the update was keyed %v", node.keys)
+			}
+			if !strings.Contains(stdout, tc.says) {
+				t.Errorf("printed %q, want %q", stdout, tc.says)
+			}
+		})
+	}
+	node := newFakeArtifactsNode(t)
+	_, _, err := cli(t, "artifacts", "update", cliArtifact, bootstrapForURL(t, node.server.URL))
+	if err == nil || !strings.Contains(err.Error(), "name what to change") || len(node.patches) != 0 {
+		t.Errorf("an update naming nothing = %v, %d sent", err, len(node.patches))
 	}
 }
 

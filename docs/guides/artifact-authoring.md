@@ -226,7 +226,7 @@ write Markdown; every save is a version.
 crewlet artifacts publish ./dist
 ```
 
-`crewlet artifacts` also lists, reads, versions, restores, labels, shares,
+`crewlet artifacts` also lists, reads, updates, versions, restores, labels, shares,
 unshares, trashes, untrashes and purges artifacts, manages assets and reports
 usage. It always asks for an upload intent first and sends only files the
 artifact does not already hold. See [CLI](../reference/cli.md).

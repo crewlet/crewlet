@@ -58,9 +58,10 @@ const artifactsUsage = `usage: crewlet artifacts <command> [arguments] [<config.
   list [-scope mine|shared|company|agents|all] [-kind html|markdown|sheet]
        [-q TEXT] [-status live|trashed] [-work-item KEY] [-limit N]
   get <id>
-  publish <dir|file> [-artifact ID] [-title TEXT] [-kind html|markdown]
-       [-entry PATH] [-label TEXT] [-contract VERSION] [-capabilities a,b]
-       [-work-item KEY] [-force] [-op-id ID]
+  publish <dir|file> [-artifact ID] [-title TEXT] [-description TEXT] [-icon NAME]
+       [-kind html|markdown] [-entry PATH] [-label TEXT] [-contract VERSION]
+       [-capabilities a,b] [-work-item KEY] [-force] [-op-id ID]
+  update <id> [-title TEXT] [-description TEXT] [-icon NAME] [-op-id ID]
   versions <id>
   restore <id> <version> [-label TEXT] [-op-id ID]
   label <id> <version> <label> [-op-id ID]
@@ -79,7 +80,7 @@ func runArtifacts(environ config.Source, args []string, stdout, stderr io.Writer
 	sub, rest := splitSubject(args)
 	run, known := map[string]func(config.Source, []string, io.Writer, io.Writer) error{
 		"list": artifactsList, "get": artifactsGet, "publish": artifactsPublish,
-		"versions": artifactsVersions, "restore": artifactsRestore, "label": artifactsLabel,
+		"update": artifactsUpdate, "versions": artifactsVersions, "restore": artifactsRestore, "label": artifactsLabel,
 		"share": artifactsShare, "unshare": artifactsUnshare, "trash": artifactsTrash,
 		"untrash": artifactsUntrash, "purge": artifactsPurge, "assets": artifactsAssets,
 		"usage": artifactsUsageCmd,
@@ -496,6 +497,72 @@ func artifactsLabel(environ config.Source, args []string, stdout, stderr io.Writ
 		}, nil)
 }
 
+// headFields are the flags that describe an artifact's head rather than one of
+// its versions, in the order an outcome names them: what `update` changes and
+// what `publish` sets on a new artifact.
+var headFields = []string{"title", "description", "icon"}
+
+// headFlags registers the head's fields on fs, each described as what it
+// sets (`to set`, `of a new artifact`), the title with its default after.
+func headFlags(fs *flag.FlagSet, what, titleDefault string) (title, description, icon *string) {
+	title = fs.String("title", "", "the title "+what+titleDefault)
+	description = fs.String("description", "", "the one-sentence description "+what)
+	icon = fs.String("icon", "", "the icon "+what+": one short word")
+	return title, description, icon
+}
+
+// namedHeadFields is every head field fs was given, in [headFields] order.
+func namedHeadFields(fs *flag.FlagSet) []string {
+	var named []string
+	for _, name := range headFields {
+		if isFlagSet(fs, name) {
+			named = append(named, name)
+		}
+	}
+	return named
+}
+
+// artifactsUpdate changes an artifact's title, description or icon. Only the
+// flags named are sent, so `-description ""` clears the description while an
+// update that does not name it leaves it as it is.
+func artifactsUpdate(environ config.Source, args []string, stdout, stderr io.Writer) error {
+	var fs *flag.FlagSet
+	var title, description, icon *string
+	return gesture(environ, args, stdout, stderr, "update", 1, "the artifact",
+		func(c *nodeClient, pos []string, key string) (string, error) {
+			id, err := artifactID(pos[0])
+			if err != nil {
+				return "", err
+			}
+			named := namedHeadFields(fs)
+			if len(named) == 0 {
+				return "", errors.New("name what to change: -title, -description or -icon")
+			}
+			values := map[string]*string{"title": title, "description": description, "icon": icon}
+			body := map[string]string{}
+			for _, name := range named {
+				body[name] = *values[name]
+			}
+			var answer writtenAnswer
+			if err := c.write(context.Background(), http.MethodPatch, "/artifacts/"+id.String(),
+				key, nil, body, &answer); err != nil {
+				return "", err
+			}
+			return outcomeLine(fmt.Sprintf("updated the %s of %s", fieldList(named), id), answer), nil
+		}, func(set *flag.FlagSet) {
+			fs = set
+			title, description, icon = headFlags(set, "to set", "")
+		})
+}
+
+// fieldList names fields as a sentence does: `a`, `a and b`, `a, b and c`.
+func fieldList(fields []string) string {
+	if len(fields) < 2 {
+		return strings.Join(fields, "")
+	}
+	return strings.Join(fields[:len(fields)-1], ", ") + " and " + fields[len(fields)-1]
+}
+
 func artifactsShare(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	return gesture(environ, args, stdout, stderr, "share", 3, "the artifact, the audience and the role",
 		func(c *nodeClient, pos []string, key string) (string, error) {
@@ -692,13 +759,15 @@ func artifactsPublish(environ config.Source, args []string, stdout, stderr io.Wr
 	if err != nil {
 		return err
 	}
-	var target, title, kind, entry, label, contract, item, opID *string
+	var flags *flag.FlagSet
+	var target, title, description, icon, kind, entry, label, contract, item, opID *string
 	var force *bool
 	var caps capabilitiesFlag
 	client, err := nodeClientFor(environ, rest, "artifacts publish", stderr, func(fs *flag.FlagSet) {
+		flags = fs
 		target = fs.String("artifact", "", "publish a new version of this artifact; empty creates one")
-		title = fs.String("title", "", "the title of a new artifact (default: the entry's name)")
-		kind = fs.String("kind", "", "html or markdown (default: from the entry)")
+		title, description, icon = headFlags(fs, "of a new artifact", " (default: the entry's name)")
+		kind = fs.String("kind", "", "html or markdown, for a new artifact (default: from the entry)")
 		entry = fs.String("entry", "", "the file the artifact opens on (default: index.html, index.md)")
 		label = fs.String("label", "", "a label for the version")
 		contract = fs.String("contract", "", "the runtime contract the page pins: latest or an exact version")
@@ -710,6 +779,19 @@ func artifactsPublish(environ config.Source, args []string, stdout, stderr io.Wr
 	})
 	if err != nil {
 		return err
+	}
+	// A NEW VERSION DESCRIBES NOTHING BUT ITSELF: the head's fields and the
+	// kind are the artifact's, so naming one beside -artifact is refused
+	// rather than dropped, which would read as a change that never landed.
+	if *target != "" {
+		named := namedHeadFields(flags)
+		if isFlagSet(flags, "kind") {
+			return errors.New("-kind describes a new artifact; a new version keeps the artifact's kind")
+		}
+		if len(named) > 0 {
+			return fmt.Errorf("-%s describes a new artifact; change an existing one's with "+
+				"`crewlet artifacts update %s -%s ...`", named[0], *target, named[0])
+		}
 	}
 	key, err := operation(*opID, "publish")
 	if err != nil {
@@ -724,7 +806,8 @@ func artifactsPublish(environ config.Source, args []string, stdout, stderr io.Wr
 		return err
 	}
 	p := publishing{client: client, files: files, key: key, stdout: stdout}
-	if err := p.run(*target, entryPath, *title, *kind, *label, *contract, *item, *force, caps.list); err != nil {
+	head := newHead{title: *title, description: *description, icon: *icon, kind: *kind}
+	if err := p.run(*target, entryPath, head, *label, *contract, *item, *force, caps.list); err != nil {
 		return unknownOutcome(err, "publish", key)
 	}
 	return nil
@@ -783,9 +866,15 @@ type publishing struct {
 	stdout io.Writer
 }
 
+// newHead is what a publish that creates an artifact says about it; a new
+// version of an existing one sends none of it.
+type newHead struct {
+	title, description, icon, kind string
+}
+
 // run declares the files, sends the ones the artifact does not hold, and
 // publishes the version.
-func (p publishing) run(target, entry, title, kind, label, contract, item string, force bool,
+func (p publishing) run(target, entry string, head newHead, label, contract, item string, force bool,
 	caps []artifacts.Capability) error {
 
 	ctx := context.Background()
@@ -845,16 +934,17 @@ func (p publishing) run(target, entry, title, kind, label, contract, item string
 		body["capabilities"] = caps
 	}
 	if target == "" {
-		if title == "" {
-			title = strings.TrimSuffix(path.Base(entry), path.Ext(entry))
+		if head.title == "" {
+			head.title = strings.TrimSuffix(path.Base(entry), path.Ext(entry))
 		}
-		if kind == "" {
-			kind = string(artifacts.KindHTML)
+		if head.kind == "" {
+			head.kind = string(artifacts.KindHTML)
 			if strings.EqualFold(path.Ext(entry), ".md") {
-				kind = string(artifacts.KindMarkdown)
+				head.kind = string(artifacts.KindMarkdown)
 			}
 		}
-		body["title"], body["kind"] = title, kind
+		body["title"], body["kind"] = head.title, head.kind
+		body["description"], body["icon"] = head.description, head.icon
 		if err := p.client.write(ctx, http.MethodPost, "/artifacts", publishKey, nil, body,
 			&answer); err != nil {
 			return err

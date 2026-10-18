@@ -32,7 +32,7 @@ subcommand below is served by it.
 | `crewlet seats resume <handle> [-op-id ID]` | Lift the pause; what waited is delivered first, in order. The same authority as `pause` |
 | `crewlet artifacts list\|get\|versions\|assets\|usage` | Read the company's artifacts through a running node, as the token's principal: the listing it may see (`-scope`, `-kind`, `-q`, `-status`, `-work-item`), one artifact's head and audience, its versions, its assets, and the company's usage against its quota (an administrator's). See [`crewlet artifacts`](#crewlet-artifacts) |
 | `crewlet artifacts publish <dir\|file> [-artifact ID] [-op-id ID]` | Publish a directory or a file as a new artifact, or as the next version of one: an upload intent first, then only the files the artifact does not already hold are sent, then the version is published against the head it read |
-| `crewlet artifacts restore\|label\|share\|unshare\|trash\|untrash\|purge` | Roll back to a version, label one, share with a seat, a unit or the company, withdraw a share, move to and from the trash, and purge for good (an administrator's, with a person present; the id is asked twice) |
+| `crewlet artifacts update\|restore\|label\|share\|unshare\|trash\|untrash\|purge` | Change the title, description or icon, roll back to a version, label one, share with a seat, a unit or the company, withdraw a share, move to and from the trash, and purge for good (an administrator's, with a person present; the id is asked twice) |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load a company file as a new active `company_config` revision — through a running node's `PUT /config`, which activates it fleet-wide, or offline into this node's store, which the node publishes at its next start; the line it prints says which it did |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -1270,9 +1270,10 @@ to decide whether it can still vouch for a retry.
 crewlet artifacts list [-scope mine|shared|company|agents|all] [-kind html|markdown|sheet]
     [-q TEXT] [-status live|trashed] [-work-item KEY] [-limit N]
 crewlet artifacts get <id>
-crewlet artifacts publish <dir|file> [-artifact ID] [-title TEXT] [-kind html|markdown]
-    [-entry PATH] [-label TEXT] [-contract VERSION] [-capabilities a,b]
-    [-work-item KEY] [-force] [-op-id ID]
+crewlet artifacts publish <dir|file> [-artifact ID] [-title TEXT] [-description TEXT]
+    [-icon NAME] [-kind html|markdown] [-entry PATH] [-label TEXT] [-contract VERSION]
+    [-capabilities a,b] [-work-item KEY] [-force] [-op-id ID]
+crewlet artifacts update <id> [-title TEXT] [-description TEXT] [-icon NAME] [-op-id ID]
 crewlet artifacts versions <id>
 crewlet artifacts restore <id> <version> [-label TEXT] [-op-id ID]
 crewlet artifacts label <id> <version> <label> [-op-id ID]
@@ -1304,14 +1305,23 @@ the bucket on a presigned put where the object store offers one, through the
 node otherwise. Then the version is published. A new artifact opens on
 `index.html`, else `index.md`, else the only file, unless `-entry` names
 another; its title defaults to the entry's name and its kind to `markdown`
-for a `.md` entry and `html` otherwise. A new version of `-artifact` names the
-head it read as its base, so a version somebody else published meanwhile is
+for a `.md` entry and `html` otherwise, and `-description` and `-icon` set the
+gallery card's subtitle and the tab's icon word. Those four describe a new
+artifact only: naming `-title`, `-description`, `-icon` or `-kind` beside
+`-artifact` is refused before any byte moves, since a version keeps the
+artifact's kind and `update` is what changes the rest. A new version of
+`-artifact` names the head it read as its base, so a version somebody else published meanwhile is
 refused rather than overwritten; `-force` publishes over it, a person's
 gesture. A new version keeps the head's runtime contract and capabilities
 unless `-contract` or `-capabilities` names others: `-capabilities db,state`
 declares exactly that set, `-capabilities none` declares none, and a name this
 build does not serve is refused before any byte moves. The publish policy's
 warnings are printed beneath the result.
+
+**`update` changes the title, the description or the icon** (`PATCH
+/artifacts/{id}`, an editor's) and sends exactly the flags it names: an
+empty value clears the description or the icon, a field it does not name is
+left as it is, and a call that names none is refused before anything is sent.
 
 Every write sends an operation id as the request's `Idempotency-Key`: `-op-id`
 takes one in the engine's operation-id grammar, and without it the command
