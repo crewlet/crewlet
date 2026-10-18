@@ -259,6 +259,11 @@ node: the fleet row is three members' worth. The transfer leg itself never
 holds a file whole (the bucket is filled 128 KiB a message); the rise is the
 broker's message block cache and its replication buffers, which expire.
 
+After finding 6's fix (a put holds a mebibyte in flight rather than a whole
+object), a rerun at `feat/artifacts-conformance` streamed the same publish at
+29.2 MiB/s solo and 14.7 MiB/s on the fleet, with a heap rise of 32 and
+155 MiB settling to 8 and 48 MiB: no slower, and a smaller peak.
+
 **Target**: the transfer finishes far inside the twelve hours a key may wait
 for its record, and memory on the node stays flat (nothing buffered whole).
 **Holds**: under a third of one percent of the allowance, and the settled heap
@@ -500,13 +505,16 @@ it.
    (`internal/objectives`, `DataRoundTripWithin` 250 ms).** The review's peak
    on the three-member fleet answered 18 to 20 percent of writes within
    250 ms (p95 near 950 ms). Whether it holds is the reference run's to say.
-6. **A large put can fail under load (`internal/objstore/natsobj`).** The
-   library's object put sends every 128 KiB chunk of an object at once (128
-   for a 16 MiB file) and gives each acknowledgement the client's default five
+6. **A large put could fail under load (fixed, `internal/objstore/natsobj`).**
+   The library's object put sent every 128 KiB chunk of an object at once (128
+   for a 16 MiB file) and gave each acknowledgement the client's default five
    seconds, with no flow control; on slow flushes with the log busy, the last
-   acknowledgement came later and the put failed. Bounding the chunks in
-   flight, or giving the put a deadline from its pace allowance, makes a put's
-   success independent of the disk's flush time.
+   acknowledgement came later and the put failed. The backend now writes the
+   bucket's layout itself: at most a mebibyte in flight, each mebibyte given
+   the object store's pace (30 seconds) for its acknowledgements, and a failed
+   put waits for what it has in flight before it purges its pieces
+   (`TestAPutWhoseAcknowledgementsComeLateStillLands`, with every
+   acknowledgement six seconds late).
 7. **An import map escaped the copy-in (fixed, `internal/artifactupload/lint`).**
    A page whose import map named a module on another origin was published, and
    the module loaded in the viewer's browser from wherever the map pointed

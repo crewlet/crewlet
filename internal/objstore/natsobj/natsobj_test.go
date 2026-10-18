@@ -140,6 +140,66 @@ func TestAFailedPutLeavesNoMessages(t *testing.T) {
 	}
 }
 
+// A PUT WHOSE ACKNOWLEDGEMENTS COME LATE STILL LANDS, inside the object
+// store's pace. Spike S7 lost a 16 MiB put to "timeout waiting for ack": the
+// library's put sent all 128 pieces at once and gave each acknowledgement the
+// client's five seconds, so slow flushes with the logs busy failed it. Here
+// every acknowledgement arrives six seconds after the broker sends it, and
+// the put holds at most a mebibyte in flight and gives each mebibyte its
+// pace.
+//
+// Mutation: publish every piece before waiting (no window), or wait five
+// seconds a window, and this goes red.
+func TestAPutWhoseAcknowledgementsComeLateStillLands(t *testing.T) {
+	t.Parallel()
+	client := memberClient(t)
+	b := open(t, client)
+	natsobj.SetPace(b, 10*time.Second)
+	peak := natsobj.DelayAcks(b, 6*time.Second)
+	data := make([]byte, 2*natsobj.PutWindow*natsobj.MessageBytes+100)
+	_, _ = rand.Read(data)
+	started := time.Now()
+	if err := b.Put(t.Context(), "late", bytes.NewReader(data), objstore.PutMeta{}); err != nil {
+		t.Fatalf("a put whose acknowledgements each came six seconds late failed: %v", err)
+	}
+	if took := time.Since(started); took > 30*time.Second {
+		t.Errorf("the put took %s: each window should wait out one delay, not a delay a piece", took)
+	}
+	if got := peak(); got > natsobj.PutWindow {
+		t.Errorf("%d pieces were in flight at once, past the window of %d", got, natsobj.PutWindow)
+	}
+	r, err := b.Get(deadline(t), "late", 0, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if got, err := io.ReadAll(r); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("the object read back %d of %d bytes, %v", len(got), len(data), err)
+	}
+}
+
+// A PUT WHOSE ACKNOWLEDGEMENTS OUTLAST THE PACE FAILS AND LEAVES NOTHING: the
+// window's wait is bounded, and the cleanup waits for what is still in
+// flight before it purges, so no piece lands behind it.
+func TestAPutPastItsPaceFailsAndLeavesNoMessages(t *testing.T) {
+	t.Parallel()
+	client := memberClient(t)
+	b := open(t, client)
+	natsobj.SetPace(b, time.Second)
+	natsobj.DelayAcks(b, 1500*time.Millisecond)
+	err := b.Put(t.Context(), "slow", bytes.NewReader(make([]byte, 3*natsobj.MessageBytes)),
+		objstore.PutMeta{})
+	if !errors.Is(err, nats.ErrTimeout) {
+		t.Fatalf("Put = %v, want a timeout naming the pace", err)
+	}
+	if got := messages(t, client); got != 0 {
+		t.Fatalf("the failed put left %d messages in %s", got, natsobj.Stream)
+	}
+	if _, err := b.Stat(deadline(t), "slow"); !errors.Is(err, objstore.ErrNotFound) {
+		t.Fatalf("Stat of the failed put = %v, want ErrNotFound", err)
+	}
+}
+
 // cancelAfter cancels its context once it has yielded after bytes, and keeps
 // yielding.
 type cancelAfter struct {
