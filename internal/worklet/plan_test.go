@@ -95,28 +95,39 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	// from [parentIndex], which is what is under test.
 	const tree = "tracker_tasks_parent_idx"
 
+	// EVERY STATEMENT THE GATE PLANS, which is what the completeness walks at
+	// the end hold the source to.
+	var planned []string
+
 	used := map[string]bool{}
 	for name, params := range registeredQueries() {
+		q := planQuery(t, params)
+		// EVERY STATEMENT THE READER RUNS FOR IT ([queryStatements]): the
+		// page with every check below, and the count, the totals, the
+		// board and the around read held to the ones that apply to any
+		// read of the answer's set.
+		statements := queryStatements(t, q)
+		for _, statement := range statements {
+			planned = append(planned, statement.sql)
+		}
 		t.Run(name, func(t *testing.T) {
-			q, err := ParseQuery(MapParams(params), planNow, time.UTC)
-			if err != nil {
-				t.Fatalf("ParseQuery: %v", err)
-			}
-			set, err := compile(q, planNow, planFields(q))
-			if err != nil {
-				t.Fatalf("compile: %v", err)
-			}
 			// THE SAME STATEMENT THE READER RUNS ([taskRowsStatement]).
 			// Explaining the WHERE clause alone would explain a query
 			// nobody issues — and the FROM and the ORDER BY are half of
 			// what decides which index the planner reaches for.
-			statement, args := taskRowsStatement("", nil, set,
-				sortTerms(q, planFields(q)))
-			plan := explain(t, db, statement, append(args, 51))
-			for _, index := range indexesIn(plan) {
-				used[index] = true
+			page := statements["the page"]
+			plan := explain(t, db, page.sql, page.args)
+			for what, statement := range statements {
+				other := plan
+				if what != "the page" {
+					other = explain(t, db, statement.sql, statement.args)
+				}
+				for _, index := range indexesIn(other) {
+					used[index] = true
+				}
+				refuseHeapScans(t, other)
+				refuseSetWalks(t, what, other)
 			}
-			refuseHeapScans(t, plan)
 			// A CUSTOM-FIELD FILTER SEEKS ITS OWN COLUMN'S INDEX,
 			// which the inventory below cannot see: the four lead
 			// with `field_id` alike, so a filter seeking another
@@ -127,8 +138,12 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 			// statistics this fixture used to take, and passed,
 			// because the number filter claimed the number index.
 			// Spelled from the column rather than through
-			// [fieldValueIndex], which is what is under test.
-			for _, field := range planFields(q) {
+			// [fieldValueIndex], which is what is under test. A
+			// FILTER'S, because a sort, a board or a total over a
+			// field reads each task's own value by the key instead
+			// ([TestAFieldValueIsReadByItsTaskOrByItsFilter]).
+			for _, filter := range q.Fields {
+				field := planFields(q)[filter.Ref]
 				index := "tracker_field_values_" + FieldValueColumn(field.Type) + "_idx"
 				if !seeks(plan, index) {
 					t.Errorf("this filter on a %s field does not SEEK %s:\n%s",
@@ -150,34 +165,6 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 						strings.Join(plan, "\n"))
 				}
 			}
-			// AND NO CHILD TABLE IS WALKED. A walk of the task table
-			// in an order a LIMIT stops is a plan; a walk of a task's
-			// tags, dependencies or field values is every such row in
-			// the company read to answer about some of them, and it
-			// is an index scan, so the heap check above cannot see
-			// it. Measured: `tag=all:` walked every tag row through
-			// the primary key, and passed.
-			for _, line := range plan {
-				for _, table := range covered[1:4] {
-					if strings.HasPrefix(line, "SCAN "+table+" ") ||
-						line == "SCAN "+table {
-						t.Errorf("this read walks every row of %s:\n%s",
-							table, strings.Join(plan, "\n"))
-					}
-				}
-				// NOR THE TASK TABLE UNDER ANY ALIAS BUT THE ANSWER'S
-				// OWN. `t` is the rows being listed, and a walk of
-				// them in an order a LIMIT stops is a plan; any other
-				// alias is a probe made once per row, and a walk there
-				// is the company read once per task. Measured:
-				// `has_children` walked every task through the primary
-				// key for each task it filtered, and passed.
-				if strings.HasPrefix(line, "SCAN tracker_tasks AS ") &&
-					!strings.HasPrefix(line, "SCAN tracker_tasks AS t ") {
-					t.Errorf("this read walks the task table once per row it "+
-						"filters:\n%s", strings.Join(plan, "\n"))
-				}
-			}
 		})
 	}
 
@@ -192,7 +179,8 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	// neighbour still reaches the index. Measured: the straggler gate,
 	// whose comment promises one probe of its partial index, walked every
 	// live task as a root through `tracker_tasks_type_idx` on every tick.
-	for name, read := range dutyReads() {
+	for name, read := range taskReads() {
+		planned = append(planned, read.sql)
 		t.Run(name, func(t *testing.T) {
 			plan := explain(t, db, read.sql, read.args)
 			for _, index := range indexesIn(plan) {
@@ -200,6 +188,31 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 			}
 			refuseHeapScans(t, plan)
 			holdToIndex(t, plan, read, covered)
+		})
+	}
+
+	// THE CENSUSES AND THE WHOLE-TABLE PASSES. A census reads every live
+	// task in its scope by definition ([taskCensuses]) and is held to no
+	// heap scan; a pass reads the whole table by definition
+	// ([taskPasses]) and justifies nothing, as the history's passes below
+	// do not.
+	for name, census := range taskCensuses() {
+		planned = append(planned, census.sql)
+		t.Run(name, func(t *testing.T) {
+			plan := explain(t, db, census.sql, census.args)
+			for _, index := range indexesIn(plan) {
+				used[index] = true
+			}
+			refuseHeapScans(t, plan)
+		})
+	}
+	for name, pass := range taskPasses() {
+		planned = append(planned, pass.sql)
+		t.Run(name, func(t *testing.T) {
+			if plan := explain(t, db, pass.sql, pass.args); sorts(plan) {
+				t.Errorf("this pass sorts the table it reads, holding every "+
+					"row before the first is used:\n%s", strings.Join(plan, "\n"))
+			}
 		})
 	}
 
@@ -260,7 +273,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	for _, statement := range passes {
 		registered = append(registered, statement.sql)
 	}
-	for _, literal := range historyLiterals(t) {
+	for _, literal := range statementLiterals(t, "tracker_history") {
 		if !slices.ContainsFunc(registered, func(statement string) bool {
 			return strings.Contains(statement, literal)
 		}) {
@@ -271,12 +284,64 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 		}
 	}
 
+	// AND THE SAME FOR THE TASK TABLES, against every statement planned
+	// here: the grammar's, through the registered queries; the readers
+	// outside it, the censuses and the passes; and the history's, several
+	// of which join a task. Until this walk existed most of the task
+	// tables' readers were planned by nobody — and among them were the
+	// apply's own read of a task's children, which walked the company
+	// through the primary key, the catalogue's settle, which read every
+	// field value from the heap once per field, and the subtree walk,
+	// which read the table from the heap once per level.
+	planned = append(planned, registered...)
+	for _, literal := range statementLiterals(t, covered[:4]...) {
+		if !slices.ContainsFunc(planned, func(statement string) bool {
+			return strings.Contains(statement, literal)
+		}) {
+			t.Errorf("this statement reads a task table and no statement this "+
+				"test plans holds it, so no plan of it is taken — name it, as "+
+				"every other is named, and register it in taskReads, "+
+				"taskCensuses or taskPasses, or as a query in "+
+				"registeredQueries:\n%s", literal)
+		}
+	}
+
 	for _, index := range indexesOn(t, db, covered) {
 		if !used[index] {
 			t.Errorf("no registered query's plan reaches %s — an index is a "+
 				"write cost on every commit on every node for ever, so one no "+
 				"plan uses is deleted rather than kept for a reader somebody "+
 				"might add", index)
+		}
+	}
+}
+
+// refuseSetWalks fails a plan over a compiled task set that walks a task's
+// child table, or the task table under any alias but the answer's own.
+//
+// A WALK OF THE TASK TABLE in an order a LIMIT stops is a plan; a walk of a
+// task's tags, dependencies or field values is every such row in the company
+// read to answer about some of them, and it is an index scan, so the heap
+// check cannot see it. Measured: `tag=all:` walked every tag row through the
+// primary key, and passed. NOR THE TASK TABLE UNDER ANY ALIAS BUT THE
+// ANSWER'S OWN: `t` is the rows being read, and any other alias is a probe made
+// once per row, so a walk there is the company read once per task. Measured:
+// `has_children` walked every task through the primary key for each task it
+// filtered, and passed.
+func refuseSetWalks(t *testing.T, what string, plan []string) {
+	t.Helper()
+	for _, line := range plan {
+		for _, table := range []string{"tracker_task_tags", "tracker_task_deps",
+			"tracker_field_values"} {
+			if strings.HasPrefix(line, "SCAN "+table+" ") || line == "SCAN "+table {
+				t.Errorf("%s walks every row of %s:\n%s", what, table,
+					strings.Join(plan, "\n"))
+			}
+		}
+		if strings.HasPrefix(line, "SCAN tracker_tasks AS ") &&
+			!strings.HasPrefix(line, "SCAN tracker_tasks AS t ") {
+			t.Errorf("%s walks the task table once per row it filters:\n%s",
+				what, strings.Join(plan, "\n"))
 		}
 	}
 }
@@ -365,6 +430,19 @@ func registeredQueries() map[string]map[string]any {
 			"subtasks": "separate"},
 		"a watcher's work in a project": {"container": "project:P01", "watcher": "h-1"},
 
+		// THE GRAMMAR'S OTHER SHAPES, each for the statements only it
+		// builds ([queryStatements]): a sort by a field and the around
+		// read's values, a board of a field and of the tags with one
+		// column of each, the work an item blocks, and totals over fields.
+		"by a field":             {"container": "project:P01", "sort": "f.impact"},
+		"a board of a field":     {"container": "project:P01", "group_by": "f.impact"},
+		"a field's one column":   {"container": "project:P01", "group_by": "f.impact", "group": "o-high"},
+		"a tag board everywhere": {"group_by": "tag"},
+		"one tag's column":       {"container": "project:P01", "group_by": "tag", "group": "tag-1"},
+		"blocking everywhere":    {"blocking": "true"},
+		"totals of fields": {"container": "project:P01",
+			"totals": "f.effort:sum,f.effort:count,f.effort:median,f.ship:max"},
+
 		// THE TRASH AS ITS TAB ASKS FOR IT ([ViewKeyTrash]), and with every
 		// row filtered on its own, which is how the dashboard and
 		// `list_work_items` run any view — at both scopes, because each is
@@ -381,21 +459,31 @@ func registeredQueries() map[string]map[string]any {
 	}
 }
 
-// dutyReads is every statement outside the query grammar that this schema's
-// indexes claim a reader for — the duty selections and the apply-path probes —
-// each with the index its plan must reach ([indexedRead]).
+// taskReads is every statement outside the query grammar that reads a covered
+// task table — the duty selections, the apply path's probes and writes, the
+// write path's decides, the detail and decoration reads — each with arguments
+// of the shape its reader binds and the index its plan must reach
+// ([indexedRead]). The whole-table passes are [taskPasses] and the censuses,
+// which read every live task in their scope by definition, [taskCensuses].
 //
 // THEY ARE PLANNED, NOT DECLARED. An index kept because "a duty uses it" is an
 // index nobody has checked: the duty's statement is as much a reader as a
 // board's, and the planner is the only thing that knows whether it reaches
 // what its comment names.
 //
-// AND THEY ARE THE STATEMENTS THE DUTY RUNS, never a copy written here. The
+// AND THEY ARE THE STATEMENTS THE READERS RUN, never a copy written here. The
 // embed duty's entry used to be one — `embed_rev < ? ORDER BY embed_rev`, over
 // a column the applier only ever wrote a zero into — and it kept an index on
 // that column certified for a selection nothing ran, while the selection the
-// duty does run was certified by nothing. The search package exports its own.
-func dutyReads() map[string]indexedRead {
+// duty does run was certified by nothing; the trash and one tag's tasks were
+// two more, each a statement no reader issued. Every one is a named value of
+// this package (the search package exports its own), and the completeness
+// walk ([statementLiterals]) is what stops a reader being written inline where
+// no plan of it is taken.
+//
+// AN UPDATE, A DELETE OR AN INSERT … SELECT IS A READER TOO: it finds its rows
+// by its WHERE exactly as a SELECT does.
+func taskReads() map[string]indexedRead {
 	const (
 		key      = "sqlite_autoindex_tracker_tasks_1"
 		keys     = "tracker_tasks_key_idx"
@@ -451,6 +539,118 @@ func dutyReads() map[string]indexedRead {
 		"key resolution":              seek(keys, resolveTaskStatement, "ENG-1", "ENG-1", "ENG-1"),
 		"a point read's scope":        seek(keys, taskReadScopeStatement, "ENG-1", "ENG-1", "ENG-1"),
 	}
+	const (
+		task, other = "t-00001", "t-00002"
+		person      = "h-7"
+		tags        = "sqlite_autoindex_tracker_task_tags_1"
+		values      = "sqlite_autoindex_tracker_field_values_1"
+		blockers    = "sqlite_autoindex_tracker_task_deps_1"
+		dependents  = "tracker_task_deps_task_idx"
+		open        = "tracker_task_deps_open_idx"
+		board       = "tracker_tasks_board_idx"
+		queue       = "tracker_tasks_queue_idx"
+	)
+	for name, read := range map[string]indexedRead{
+		// THE APPLY PATH: a task read and rewritten by its key, its
+		// collections cleared by it, and what its commit settles on
+		// others — each blocker's state read by the blocker's key, every
+		// edge naming it as the blocker by the blocker, a key's holders by
+		// the key.
+		"an applied task read":         seek(key, readTaskStatement, task),
+		"a turn's spend added":         seek(key, turnSpendStatement, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, task),
+		"an ancestry stamped":          seek(key, ancestryStampStatement, task, 0, 0, 0, 0, task),
+		"a task against its root":      seek(key, rootsProjectStatement, other, task),
+		"a task's parent":              seek(key, parentStatement, task),
+		"a reopen counted":             seek(key, countReopenStatement, task),
+		"a status's entered instant":   seek(key, statusEnteredStatement, 1, task),
+		"an unblocked dependent told":  seek(key, unblockedToldStatement, 1, task, 1),
+		"another task rewritten":       seek(key, rewriteOtherStatement(movedColumns{parent: true, rank: true}), []byte(`{}`), 1, other, "a1", task, 1),
+		"another task's document only": seek(key, rewriteOtherStatement(movedColumns{}), []byte(`{}`), 1, task, 1),
+		"a task's values cleared":      seek(values, clearFieldValuesStatement, task),
+		"a task's tags cleared":        seek(tags, childClearStatement("tracker_task_tags"), task),
+		"a task's edges cleared":       seek(dependents, clearDepsStatement, task),
+		"a task's edges written": seek(key, store.InsertStatement(depsInsertPrefix,
+			depsInsertRow, depsInsertConflict, 1), other, task, other, other),
+		"a blocker's edges settled": seek(blockers, clearDependentsStatement, "done", 1, task),
+		"a key's holders flagged":   seek(keys, keyCollisionStatement, "ENG-1"),
+		"a key handed on":           seek(keys, handOnKeyStatement, "ENG-1"),
+		"a re-derived last change":  seek(key, restampUpdatedStatement, 1, []byte(`{}`), task),
+		"a re-derived reopen count": seek(key, setReopensStatement, 1, task),
+		// THE WRITE PATH'S DECIDES.
+		"a create's guarding row":    seek(key, taskPresentStatement, task),
+		"a write's guards":           seek(key, taskGuardsStatement, task, task),
+		"a task's project":           seek(key, taskProjectStatement, task),
+		"where dependents are filed": seek(key, tasksFiledStatement(3), task, other, "t-00003"),
+		"an ancestor mid-move":       seek(moving, movingAwayStatement, task, "P01"),
+		"a descendant left behind":   seek(key, uncarriedStatement, task, "P01"),
+		// THE RANK DUTY'S PROJECT WALK, which reads a flagged project's
+		// live board and probes each card's rank; the next rank above a
+		// shared one; and the probe the duty clears behind it.
+		"a project's shared ranks":      seek(ranks, duplicateRanksStatement, "P01", WalkBatch),
+		"the rank above a shared one":   seek(ranks, rankAboveStatement, "P01", "a000001"),
+		"a duplicate probe cleared":     seek(ranks, clearDuplicateProbeStatement, "P01", "P01"),
+		"a project's lowest rank":       seek(board, lowestRankStatement, "P01"),
+		"a dependency's missing mirror": seek(key, oneSidedStatement, 1, WalkBatch),
+		// THE DETAIL AND THE DECORATIONS: one task by its key, and a
+		// page's rows each by theirs.
+		"a task named":               seek(key, taskRefStatement, task),
+		"a task's badges":            seek(open, detailFlagsStatement, task, task),
+		"a task's document":          seek(key, taskDocumentStatement, task),
+		"a task's foreign values":    seek(values, foreignFieldsStatement, task, FieldValueForeign),
+		"a task's own links":         seek(key, linksStatement(false), task),
+		"the links to a task":        seek(key, linksStatement(true), task),
+		"the task a turn list is on": seek(key, turnsTaskStatement, task),
+		"a task's flow state":        seek(key, taskStateStatement, task),
+		"a page's edges":             seek(dependents, blockersStatement(3), string(RelationWaitingOn), task, other, "t-00003"),
+		"what each row blocks":       seek(blockers, dependentsCountStatement(3), task, other, "t-00003"),
+		"each row's labels":          seek(tags, rowTagsStatement(3), task, other, "t-00003"),
+		"each row's spend":           seek(key, rowSpendStatement(3), task, other, "t-00003"),
+		"ranked hits":                seek(key, rankedItemsStatement(3), task, other, "t-00003"),
+		"an activity page's keys":    seek(key, taskKeysStatement(3), task, other, "t-00003"),
+		"the tasks of runs":          seek(key, turnPlacesStatement(3), "r-1", "r-2", "r-3"),
+		// A PERSON'S OWN WORK: the asks put to them, waiting and closed
+		// lately, and the checklist items they own, each probing its task
+		// by its key.
+		"the oldest ask waiting": seek(key, oldestAskStatement, person),
+		"the asks waiting":       seek(key, asksPageStatement, person, 21),
+		"the asks closed lately": seek(key, answeredStatement, person,
+			store.EncodeTime(planNow), MaxAnswered+1),
+		"the checklist items owned": seek("tracker_checklist_items_assignee_idx",
+			claimsPageStatement, person, 21),
+		"the checklist items counted": seek("tracker_checklist_items_assignee_idx",
+			cappedCountStatement(claimsFrom, claimsWhere), person, TotalHintCeiling+1),
+	} {
+		reads[name] = read
+	}
+	// THE FOUR TASK BLOCKS OF MY WORK, each its page and its count.
+	for name, block := range map[string]struct {
+		query blockQuery
+		index string
+	}{
+		"assigned":      {assignedBlock(person), queue},
+		"collaborating": {collaboratingBlock(person), "tracker_collaborators_handle_idx"},
+		"watching":      {watchingBlock(person), "tracker_watchers_handle_idx"},
+		"unblocked":     {unblockedBlock(person), queue},
+	} {
+		set := tasksWhere(block.query.where, block.query.args)
+		page, args := taskRowsStatement("", nil, set, block.query.terms)
+		reads["my work's "+name+" block"] = seek(block.index, page, append(args, 21)...)
+		reads["my work's "+name+" count"] = seek(block.index,
+			cappedCountStatement(set.from, set.where),
+			append(append([]any{}, set.args...), TotalHintCeiling+1)...)
+	}
+	// A PURGE'S DELETES OF THE COVERED TABLES, each by the purged task.
+	for _, statement := range purgeDeletes(task) {
+		for _, table := range []struct{ name, index string }{
+			{"tracker_task_tags ", tags}, {"tracker_task_deps ", dependents},
+			{"tracker_field_values ", values}, {"tracker_tasks ", key},
+		} {
+			if strings.HasPrefix(statement.sql, "DELETE FROM "+table.name) {
+				reads["a purge's delete from "+strings.TrimSpace(table.name)] =
+					seek(table.index, statement.sql, statement.args...)
+			}
+		}
+	}
 	// A DROP'S TWO SIDES, every way a drop reads them ([gapSideStatement]).
 	for _, above := range []bool{false, true} {
 		for _, inclusive := range []bool{false, true} {
@@ -480,71 +680,41 @@ func dutyReads() map[string]indexedRead {
 				write.sql, write.args...)
 		}
 	}
-	// A PERSON'S OWN WORK AS EVERY TURN OPENS ON IT: the four task blocks
-	// of my work, each its page and its count, and the checklist items the
-	// person owns — every one read from the person's own rows.
-	const person = "h-7"
-	for name, block := range map[string]struct {
-		query blockQuery
-		index string
-	}{
-		"assigned":      {assignedBlock(person), "tracker_tasks_queue_idx"},
-		"collaborating": {collaboratingBlock(person), "tracker_collaborators_handle_idx"},
-		"watching":      {watchingBlock(person), "tracker_watchers_handle_idx"},
-		"unblocked":     {unblockedBlock(person), "tracker_tasks_queue_idx"},
-	} {
-		set := tasksWhere(block.query.where, block.query.args)
-		page, args := taskRowsStatement("", nil, set, block.query.terms)
-		reads["my work's "+name+" block"] = seek(block.index, page, append(args, 21)...)
-		reads["my work's "+name+" count"] = seek(block.index,
-			cappedCountStatement(set.from, set.where),
-			append(append([]any{}, set.args...), TotalHintCeiling+1)...)
-	}
-	reads["the checklist items owned"] = seek("tracker_checklist_items_assignee_idx",
-		claimsPageStatement, person, 21)
-	reads["the checklist items counted"] = seek("tracker_checklist_items_assignee_idx",
-		cappedCountStatement(claimsFrom, claimsWhere), person, TotalHintCeiling+1)
 	return reads
 }
 
-// holdPeopleFilter fails a plan whose filter on a person — `collaborator=`,
-// `watcher=`, `checklist_assignee=` — is not read from the person's own rows
-// ([peopleClause]): a seek of the person's index, and then each of their tasks
-// by its key, with the task table read no other way. Measured: written as a
-// probe of each task, the filter walked every live task in the company and
-// sought the person's index for each — which seeks the index, so a check of
-// the seek alone passed it.
+// taskCensuses is every statement that counts the live work in its scope —
+// today's census of the flow, its blocked and overdue counts, and the
+// company's workload by person — each a function of every live task in the
+// scope by definition, at the workspace and inside a project or a team.
 //
-// THE TASK TABLE'S RULE HOLDS A FLAT LISTING AT THE WORKSPACE, which is where
-// the probe it replaced read every live task in the company. Inside a project
-// the planner may page the project's board in its own order and keep the
-// person's tasks, which is bounded by the board; and collapsed, the filter
-// becomes the subtree rollup's inner set and the outer statement reads the
-// rows whose root is in it in the listing's own order ([compileWhere]) — a
-// read of the rollup's rather than of the filter's. The person's index is
-// sought in all of them.
-func holdPeopleFilter(t *testing.T, plan []string, q Query) {
-	t.Helper()
-	shown := strings.Join(plan, "\n")
-	for _, filter := range []struct {
-		named int
-		index string
-	}{
-		{len(q.Collaborator), "tracker_collaborators_handle_idx"},
-		{len(q.Watcher), "tracker_watchers_handle_idx"},
-		{len(q.ChecklistAssignee), "tracker_checklist_items_assignee_idx"},
-	} {
-		if filter.named == 0 {
-			continue
-		}
-		if !seeks(plan, filter.index) {
-			t.Errorf("this filter on a person does not seek %s:\n%s", filter.index, shown)
-		}
-		others, _ := tasksReadOtherwise(plan, "sqlite_autoindex_tracker_tasks_1")
-		if q.Scope.Project == "" && q.Subtasks == SubtasksSeparate && len(others) > 0 {
-			t.Errorf("this filter on a person reads the task table other than "+
-				"by the key of each task the person is on:\n%s", shown)
-		}
+// A CENSUS IS PLANNED AND HELD TO NO HEAP SCAN, and to nothing else: its walk
+// of the task table is the whole of its scope, which is the question it
+// answers, and the sort it ends with is of its groups rather than its rows.
+// The indexes it reaches count as read, because it does read them.
+func taskCensuses() map[string]plannedRead {
+	out := map[string]plannedRead{}
+	for scope, project := range map[string]string{"the company": "", "a project": "P01"} {
+		census, censusArgs := flowCensusStatement(project)
+		out["the flow's census of "+scope] = plannedRead{census, censusArgs}
+		now, nowArgs := flowNowStatement(project, planNow)
+		out["the flow's blocked and overdue in "+scope] = plannedRead{now, nowArgs}
+	}
+	for scope, units := range map[string][]string{"the company": nil,
+		"two teams": {"eng", "ops"}} {
+		statement, args := workloadStatement(units, store.EncodeTime(planNow))
+		out["the workload of "+scope] = plannedRead{statement, args}
+	}
+	return out
+}
+
+// taskPasses is every statement that reads the WHOLE task table: the
+// re-derivations [Applier.Rederive] runs when a node's derivation rules differ
+// from this build's, each a function of every row by definition.
+func taskPasses() map[string]plannedRead {
+	return map[string]plannedRead{
+		"every reopen count cleared":     {clearReopensStatement, nil},
+		"every project's active recount": {activeCountsStatement, []any{string(GroupActive), string(GroupActive)}},
 	}
 }
 
@@ -586,6 +756,47 @@ func holdTagFilter(t *testing.T, plan []string, q Query) {
 	if sought != len(q.Tags.Tags) {
 		t.Errorf("tag=%s:%v seeks %s %d times, want once per slug:\n%s",
 			q.Tags.Mode, q.Tags.Tags, slugs, sought, shown)
+	}
+}
+
+// holdPeopleFilter fails a plan whose filter on a person — `collaborator=`,
+// `watcher=`, `checklist_assignee=` — is not read from the person's own rows
+// ([peopleClause]): a seek of the person's index, and then each of their tasks
+// by its key, with the task table read no other way. Measured: written as a
+// probe of each task, the filter walked every live task in the company and
+// sought the person's index for each — which seeks the index, so a check of
+// the seek alone passed it.
+//
+// THE TASK TABLE'S RULE HOLDS A FLAT LISTING AT THE WORKSPACE, which is where
+// the probe it replaced read every live task in the company. Inside a project
+// the planner may page the project's board in its own order and keep the
+// person's tasks, which is bounded by the board; and collapsed, the filter
+// becomes the subtree rollup's inner set and the outer statement reads the
+// rows whose root is in it in the listing's own order ([compileWhere]) — a
+// read of the rollup's rather than of the filter's. The person's index is
+// sought in all of them.
+func holdPeopleFilter(t *testing.T, plan []string, q Query) {
+	t.Helper()
+	shown := strings.Join(plan, "\n")
+	for _, filter := range []struct {
+		named int
+		index string
+	}{
+		{len(q.Collaborator), "tracker_collaborators_handle_idx"},
+		{len(q.Watcher), "tracker_watchers_handle_idx"},
+		{len(q.ChecklistAssignee), "tracker_checklist_items_assignee_idx"},
+	} {
+		if filter.named == 0 {
+			continue
+		}
+		if !seeks(plan, filter.index) {
+			t.Errorf("this filter on a person does not seek %s:\n%s", filter.index, shown)
+		}
+		others, _ := tasksReadOtherwise(plan, "sqlite_autoindex_tracker_tasks_1")
+		if q.Scope.Project == "" && q.Subtasks == SubtasksSeparate && len(others) > 0 {
+			t.Errorf("this filter on a person reads the task table other than "+
+				"by the key of each task the person is on:\n%s", shown)
+		}
 	}
 }
 
@@ -658,7 +869,7 @@ const historyKey = "sqlite_autoindex_tracker_history_1"
 // are [historyPasses].
 //
 // THE STATEMENTS ARE THE READERS' OWN, never a copy: each is a named value of
-// this package, and the gate's completeness walk ([historyLiterals]) is what
+// this package, and the gate's completeness walk ([statementLiterals]) is what
 // stops one being written inline where no plan of it is taken.
 //
 // AN UPDATE OR A DELETE IS A READER TOO. It finds its rows by its WHERE exactly
@@ -933,17 +1144,34 @@ func historyPasses() map[string]plannedRead {
 	}
 }
 
-// historyLiterals is every string literal of this package's own source that
-// names `tracker_history` as a source of rows — after FROM, JOIN or UPDATE —
-// which is every statement fragment that reads it.
+// statementLiterals is every statement fragment of this package's own source
+// that names one of tables as a source of rows — after FROM, JOIN or UPDATE —
+// which is every fragment of every statement that reads them.
 //
-// THE SOURCE RATHER THAN A LIST, for the reason [dutyReads] gives against a
+// THE SOURCE RATHER THAN A LIST, for the reason [taskReads] gives against a
 // copy: a list beside the readers is one a new reader is added to by memory.
-// A literal is matched whole, so a statement assembled from several literals
-// is held by each of them.
-func historyLiterals(t *testing.T) []string {
+//
+// A FRAGMENT IS A RUN OF ADJACENT LITERALS, folded: `"… FROM " +
+// "tracker_task_deps d …"` is one fragment, because a statement written across
+// two literals reads the table exactly as one written in one does, and matched
+// literal by literal neither half names it — which is how the unblocked block
+// of `my_work` read the dependency table unseen. A run ends wherever the
+// expression stops being literal (a placeholder list, a compiled clause, a
+// named constant), and the fragment is matched WHOLE against the registered
+// statements, so a statement assembled from several runs is held by each of
+// them. A table name that is not spelled in any literal — a statement over a
+// table the code chooses at run time, or over a compiled set, whose source is
+// the set's own — is invisible here, which is why every such builder is
+// registered by hand ([childClearStatement], and [queryStatements] for every
+// statement over a set).
+func statementLiterals(t *testing.T, tables ...string) []string {
 	t.Helper()
-	reads := regexp.MustCompile(`(?i)\b(FROM|JOIN|UPDATE)\s+tracker_history\b`)
+	names := make([]string, len(tables))
+	for i, table := range tables {
+		names[i] = regexp.QuoteMeta(table)
+	}
+	reads := regexp.MustCompile(`(?i)\b(FROM|JOIN|UPDATE)\s+(` +
+		strings.Join(names, "|") + `)\b`)
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatalf("read this package's directory: %v", err)
@@ -959,19 +1187,81 @@ func historyLiterals(t *testing.T) []string {
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)
 		}
-		ast.Inspect(file, func(n ast.Node) bool {
-			if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.STRING {
-				if value, err := strconv.Unquote(lit.Value); err == nil && reads.MatchString(value) {
-					out = append(out, value)
-				}
+		for _, run := range literalRuns(file) {
+			if reads.MatchString(run) {
+				out = append(out, run)
 			}
-			return true
-		})
+		}
 	}
 	if len(out) == 0 {
-		t.Fatal("no literal of this package reads tracker_history, so this walk " +
-			"is reading nothing")
+		t.Fatalf("no literal of this package reads %v, so this walk is reading "+
+			"nothing", tables)
 	}
+	return out
+}
+
+// literalRuns is every maximal run of adjacent string literals in a file's
+// concatenations, each folded into the one string it spells.
+func literalRuns(file *ast.File) []string {
+	var out []string
+	var visit func(ast.Node) bool
+	visit = func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.BinaryExpr:
+			if x.Op != token.ADD {
+				return true
+			}
+		case *ast.BasicLit:
+			if x.Kind != token.STRING {
+				return true
+			}
+		default:
+			return true
+		}
+		// A CONCATENATION, flattened left to right: each run of literals
+		// is one fragment, and every other operand is visited on its own,
+		// because a call inside a concatenation can hold a statement too.
+		var operands []ast.Expr
+		var flatten func(ast.Expr)
+		flatten = func(e ast.Expr) {
+			switch y := e.(type) {
+			case *ast.BinaryExpr:
+				if y.Op == token.ADD {
+					flatten(y.X)
+					flatten(y.Y)
+					return
+				}
+			case *ast.ParenExpr:
+				flatten(y.X)
+				return
+			}
+			operands = append(operands, e)
+		}
+		flatten(n.(ast.Expr))
+		var run strings.Builder
+		held := false
+		end := func() {
+			if held {
+				out = append(out, run.String())
+			}
+			run.Reset()
+			held = false
+		}
+		for _, operand := range operands {
+			if lit, ok := operand.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+				if value, err := strconv.Unquote(lit.Value); err == nil {
+					run.WriteString(value)
+					held = true
+				}
+				continue
+			}
+			end()
+			ast.Inspect(operand, visit)
+		}
+		end()
+		return false
+	}
+	ast.Inspect(file, visit)
 	return out
 }
 
@@ -1206,7 +1496,8 @@ func explainTree(t *testing.T, db store.ReplicatedHandle, statement string,
 	t.Helper()
 	in := db.Read
 	if words := strings.Fields(statement); len(words) > 0 &&
-		(strings.EqualFold(words[0], "UPDATE") || strings.EqualFold(words[0], "DELETE")) {
+		(strings.EqualFold(words[0], "UPDATE") || strings.EqualFold(words[0], "DELETE") ||
+			strings.EqualFold(words[0], "INSERT")) {
 		in = db.Tx
 	}
 	var plan []planLine
@@ -1236,11 +1527,16 @@ func explainTree(t *testing.T, db store.ReplicatedHandle, statement string,
 //
 // AN INTERSECTION NAMES SEVERAL: this engine plans two equality terms on two
 // indexes as `MULTI-INDEX AND h (a, b)`, a seek on each and the row ids they
-// share, so both are read.
+// share, so both are read — and a disjunction of two as `MULTI-INDEX OR`, a
+// seek on each and the row ids of either.
 func indexesIn(plan []string) []string {
 	var found []string
 	for _, line := range plan {
-		if _, tail, ok := strings.Cut(line, "MULTI-INDEX AND "); ok {
+		_, tail, ok := strings.Cut(line, "MULTI-INDEX AND ")
+		if !ok {
+			_, tail, ok = strings.Cut(line, "MULTI-INDEX OR ")
+		}
+		if ok {
 			_, list, _ := strings.Cut(tail, "(")
 			list, _, _ = strings.Cut(list, ")")
 			for _, name := range strings.Split(list, ",") {
@@ -1248,7 +1544,7 @@ func indexesIn(plan []string) []string {
 			}
 			continue
 		}
-		_, tail, ok := strings.Cut(line, "USING INDEX ")
+		_, tail, ok = strings.Cut(line, "USING INDEX ")
 		if !ok {
 			_, tail, ok = strings.Cut(line, "USING COVERING INDEX ")
 		}
@@ -1462,38 +1758,13 @@ func TestTheTrashIsReadThroughItsOwnIndex(t *testing.T) {
 				if sort != "" {
 					params["sort"] = sort
 				}
-				q, err := ParseQuery(MapParams(params), planNow, time.UTC)
-				if err != nil {
-					t.Fatalf("ParseQuery: %v", err)
-				}
-				fields := planFields(q)
-				set, err := compile(q, planNow, fields)
-				if err != nil {
-					t.Fatalf("compile: %v", err)
-				}
-				terms := sortTerms(q, fields)
-				page, pageArgs := taskRowsStatement("", nil, set, terms)
-				_, exprs, totalArgs, err := compileTotals(q.Totals, fields)
-				if err != nil {
-					t.Fatalf("compileTotals: %v", err)
-				}
-				axis, err := compileGroup(q.GroupBy, fields, q.dayWindow(), q.Units)
-				if err != nil {
-					t.Fatalf("compileGroup: %v", err)
-				}
-				columns, columnArgs := groupCountsStatement(axis, set)
-				clause, values := axis.joinedFilter(string(StatusTodo))
-				column, columnRowArgs := taskRowsStatement(axis.Join, axis.JoinArgs,
-					set.and(clause, values), terms)
-				statements := map[string]plannedRead{
-					"the page": {page, append(pageArgs, 51)},
-					"the count it carries": {cappedCountStatement(set.from, set.where),
-						append(append([]any{}, set.args...), TotalHintCeiling+1)},
-					"its totals": {totalsStatement(set, exprs),
-						append(append([]any{}, set.args...), totalArgs...)},
-					"a board's columns": {columns, append(columnArgs, MaxGroups+1)},
-					"one column's rows": {column, append(columnRowArgs, 21)},
-				}
+				// EVERY STATEMENT THE READER RUNS FOR IT but the around
+				// read's two of one task, which read it by its key — the
+				// probe of which run holds it is held to that by
+				// [TestWhereATaskSitsIsAskedByItsKey].
+				statements := queryStatements(t, planQuery(t, params))
+				delete(statements, "the around task's sort values")
+				delete(statements, "the around task's run")
 				for what, statement := range statements {
 					plan := explain(t, db, statement.sql, statement.args)
 					shown := strings.Join(plan, "\n")
@@ -1884,9 +2155,9 @@ func planQuery(t *testing.T, params map[string]any) Query {
 // queryStatements is every statement the reader runs for one query, each
 // built by the reader's own builder over the query's own compiled set: the
 // page and the count it carries, the totals and each order statistic's read
-// of one value, a board's columns and one column's rows, and the sort values
-// the around read takes of one task — so a plan of each is a plan of what a
-// caller's request issues, never of a copy.
+// of one value, a board's columns and one column's rows, and the around read's
+// sort values of one task and its four reads of where that task sits — so a
+// plan of each is a plan of what a caller's request issues, never of a copy.
 func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 	t.Helper()
 	fields := planFields(q)
@@ -1903,6 +2174,36 @@ func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 			append(append([]any{}, set.args...), TotalHintCeiling+1)},
 		"the around task's sort values": {values, valueArgs},
 	}
+	// WHERE ONE TASK SITS ([readAround]), over the run that holds it — the
+	// whole answer, or one column of a board ([groupAxis.run]): which run it
+	// is, how many of the run's rows are ahead of it, and its neighbour on
+	// either side. Built over the answer's set, these name no table of their
+	// own, so the completeness walk below cannot see them and only this
+	// can. The task's sort values bind as values, and plan alike whatever
+	// they are.
+	run := segment{}
+	if q.GroupBy != "" {
+		axis, err := compileGroup(q.GroupBy, fields, q.dayWindow(), q.Units)
+		if err != nil {
+			t.Fatalf("compileGroup: %v", err)
+		}
+		run = axis.run("o-high", 1)
+	}
+	keys := make([]any, len(terms))
+	for i := range keys {
+		keys[i] = "a000100"
+	}
+	after, afterArgs, before, beforeArgs := aroundSides(terms, keys, "t-00001")
+	holds, holdsArgs := segmentHoldsStatement(run, set, "t-00001")
+	ahead, aheadArgs := segmentCountStatement(run, terms, set, before, beforeArgs)
+	next, nextArgs := segmentFirstStatement(run, terms, set, after, afterArgs,
+		renderOrder(terms))
+	previous, previousArgs := segmentFirstStatement(run, terms, set, before,
+		beforeArgs, renderReverse(terms))
+	out["the around task's run"] = plannedRead{holds, holdsArgs}
+	out["the rows ahead of the around task"] = plannedRead{ahead, aheadArgs}
+	out["the around task's next"] = plannedRead{next, nextArgs}
+	out["the around task's previous"] = plannedRead{previous, previousArgs}
 	if len(q.Totals) > 0 {
 		totals, exprs, totalArgs, err := compileTotals(q.Totals, fields)
 		if err != nil {
@@ -1945,7 +2246,7 @@ func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 // seek, and the plan read the project's rank index from the far end of the
 // board towards the pivot, filtering every card on the way: a drop near the
 // bottom of a long board read the whole board. That plan SEEKS the index the
-// gate's dutyReads names for it, so it passed there; the claim this holds is
+// gate's taskReads names for it, so it passed there; the claim this holds is
 // that the rank is part of the seek.
 func TestADropReadsTheGapItOpened(t *testing.T) {
 	t.Parallel()
