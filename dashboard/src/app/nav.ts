@@ -1237,6 +1237,13 @@ export const RESERVED_SEGMENTS: string[] = [
  * section moves. A section whose path IS its workspace's landing page is one
  * destination under the workspace's name, found by that section's words too:
  * Settings opens on Models & keys, and "models" finds it.
+ *
+ * IT CARRIES NO GRANTS: what closes one is its ADDRESS's, decided by
+ * [closedBy] — the workspace's permissions first, then the section's — the
+ * rule the frame's refusal and the sidebar's locks read. A section's own
+ * list said nothing of the workspace around it, so every section of Worklet,
+ * My work and Chatlet was offered with no lock to a reader its workspace was
+ * closed to, and the press opened onto the refusal.
  */
 export interface Destination {
   key: string;
@@ -1250,8 +1257,6 @@ export interface Destination {
    * own for its landing, the section's for a section ([Section.keywords]).
    */
   keywords?: readonly string[];
-  /** What opens it, as [Section.grants]. */
-  grants?: readonly Grant[];
   /** The service built into Crewlet it reads, as [Section.service]: hidden where it is not run. */
   service?: Service;
 }
@@ -1266,12 +1271,10 @@ export const DESTINATIONS: Destination[] = WORKSPACES.flatMap((row) => {
     path: row.path,
     hint: row.hint,
     // A LANDING PAGE IS ALSO ITS LANDING SECTION, so it is found by that
-    // section's words as well as the workspace's, and its grants are what
-    // opens THAT PAGE (a Home widget summarising it reads them). The
-    // palette's entry for the workspace is locked as the workspace is, and
-    // opens where the reader may read ([landingPath], `palette/hits.ts`).
+    // section's words as well as the workspace's. The palette's entry for the
+    // workspace is locked as the workspace is, and opens where the reader may
+    // read ([landingPath], `palette/hits.ts`).
     ...keywordsOf([...(row.keywords ?? []), ...(own?.keywords ?? [])]),
-    ...grantsOf(row.grants ?? own?.grants),
     ...serviceOf(row.service ?? own?.service),
   };
   const sections = row.sections
@@ -1284,7 +1287,6 @@ export const DESTINATIONS: Destination[] = WORKSPACES.flatMap((row) => {
       path: s.path,
       hint: s.hint,
       ...keywordsOf(s.keywords),
-      ...grantsOf(s.grants),
       ...serviceOf(row.service ?? s.service),
     }));
   return [landing, ...sections];
@@ -1307,10 +1309,6 @@ export function sectionOf(path: readonly string[]): Section | undefined {
     if (!best || section.path.length > best.path.length) best = section;
   }
   return best;
-}
-
-function grantsOf(needs: readonly Grant[] | undefined): { grants?: readonly Grant[] } {
-  return needs && needs.length > 0 ? { grants: needs } : {};
 }
 
 function keywordsOf(words: readonly string[] | undefined): { keywords?: readonly string[] } {

@@ -26,12 +26,13 @@ import { Card, type NodeHue } from "@crewlethq/ui";
 import {
   DESTINATIONS,
   WORKSPACES,
+  closedBy,
   serviceShown,
   type Destination,
   type Service,
   type ServicesRun,
 } from "~/app/nav.ts";
-import { holdsAny, type Grant } from "~/lib/access.ts";
+import type { Grant } from "~/lib/access.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { DEFAULT_RANGE, rangeOf } from "~/routes/home/model.ts";
 
@@ -162,10 +163,15 @@ export function widgetShown(
   return widgetMissing(def, params, runs) === undefined;
 }
 
-/** Whether a reader holding `grants` may open a page: its workspace's grants and its own, as the sidebar locks them. */
+/**
+ * Whether a reader holding `grants` may open a page: nothing closes its
+ * ADDRESS, by the one rule the frame's refusal, the sidebar's locks and the
+ * palette read (`closedBy` in `nav.ts`) — the workspace's permissions first,
+ * then the section's. A destination carries no grants of its own to read, and
+ * a second rule here would offer a widget whose Open meets the frame's refusal.
+ */
 export function pageOpens(dest: Destination, grants: readonly string[]): boolean {
-  const row = WORKSPACES.find((w) => w.key === dest.workspace);
-  return holdsAny(grants, row?.grants) && holdsAny(grants, dest.grants);
+  return closedBy(dest.path, grants) === null;
 }
 
 /** A page's name with its workspace's, for a list of every page: "Settings › Backups & retention". */

@@ -834,7 +834,11 @@ READING, `useHeldReading` in `lib/viewer.ts` — who the reader is and what they
 hold, from one source — which the sidebar's rows, Settings' column and the
 frame's refusal of a section all take, so the column and the sidebar can never
 lock one reader differently. The command palette says the same of a guarded
-destination in the same words — "Needs Admin access" beside its hint. There is
+destination in the same words — "needs Admin access" beside its hint — read
+off its address by the rule the frame's refusal reads (`nav.ts`'s `closedBy`),
+the workspace's access first: every section of Worklet, My work or Chatlet is
+offered to a reader without that app saying what opens the workspace, where
+a lock read off the section alone offered them unlocked. There is
 NO "no access yet" state: a person somebody gave no app still reads the
 overview, so the socket is dialled for every signed-in principal and the
 frame never replaces the company with a panel saying they hold nothing — they
