@@ -197,6 +197,13 @@ func TestAGenerationRecordNamesItsAuthorAndCarriesItsStamp(t *testing.T) {
 			facts: statelog.GenerationFacts{},
 			actor: "node-a", kind: iam.KindMachine,
 		},
+		// AND A NAME OF SPACES NAMES NOBODY, as it does on every other
+		// log's generation record ([statelog.GenerationFacts.Author]):
+		// this one read it as a person called "  ".
+		"a name of spaces": {
+			facts: statelog.GenerationFacts{By: "  ", ByKind: string(iam.ActorHuman)},
+			actor: "node-a", kind: iam.KindMachine,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

@@ -374,6 +374,13 @@ func TestAGenerationRecordNamesItsOperatorsKindAndCredential(t *testing.T) {
 			facts:  statelog.GenerationFacts{},
 			author: "node-a", kind: "system",
 		},
+		// A NAME OF SPACES NAMES NOBODY, as it does on every other log's
+		// generation record ([statelog.GenerationFacts.Author]): this one
+		// read it as a person called "  ".
+		"a name of spaces": {
+			facts:  statelog.GenerationFacts{By: "  ", ByKind: "human"},
+			author: "node-a", kind: "system",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
