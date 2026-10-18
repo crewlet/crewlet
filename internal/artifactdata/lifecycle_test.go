@@ -201,6 +201,19 @@ func TestAnAgentNeverLoosensASchema(t *testing.T) {
 		"opening the collection to contributors": func(c *artifacts.Collection) {
 			c.Preset = artifacts.PresetContribute
 		},
+		// THE ASSIGNEE REPOINTED: `done` admits whoever `reviewer` names;
+		// pointing it at a person column any contributor fills hands the
+		// write to anybody who puts their own handle there.
+		"repointing the assignee of an assigned column": func(c *artifacts.Collection) {
+			c.Columns = append(c.Columns, artifacts.Column{Key: "helper",
+				Type: artifacts.ColumnPerson, Write: artifacts.RoleContributor})
+			for i, col := range c.Columns {
+				if col.Key == "done" {
+					col.AssignedField = "helper"
+					c.Columns[i] = col
+				}
+			}
+		},
 	} {
 		loose := tighter
 		loose.Columns = append([]artifacts.Column(nil), tighter.Columns...)

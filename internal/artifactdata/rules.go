@@ -373,7 +373,8 @@ type Loosening struct {
 
 // Loosenings is every authority control new loosens relative to old: a read
 // rule that admits more readers, a create, delete or column write role that
-// admits lower roles, a condition removed, `humans_only` removed, a column's
+// admits lower roles, a condition removed or an `assigned_to_viewer` column
+// repointed at another assignee, `humans_only` removed, a column's
 // append mode or immutability removed, and a collection dropped (its rows'
 // protection with it). A collection new adds is not a loosening: it protects
 // nothing yet.
@@ -423,6 +424,16 @@ func Loosenings(old, new []artifacts.Collection) []Loosening {
 			if oc.When != "" && nc.When != oc.When {
 				out = append(out, Loosening{o.Name, fmt.Sprintf("column %s loses its %s condition",
 					oc.Key, oc.When)})
+			}
+			// THE ASSIGNEE IS THE CONDITION: `assigned_to_viewer` admits
+			// whoever the assigned person column names, so pointing it at
+			// another column hands the write to whoever may fill that one
+			// (and to everybody it already names), whatever the condition's
+			// name still says.
+			if oc.When == artifacts.WhenAssignedToViewer && nc.When == oc.When &&
+				nc.AssignedField != oc.AssignedField {
+				out = append(out, Loosening{o.Name, fmt.Sprintf("column %s takes its assignee "+
+					"from %s rather than %s", oc.Key, nc.AssignedField, oc.AssignedField)})
 			}
 			if oc.HumansOnly && !nc.HumansOnly {
 				out = append(out, Loosening{o.Name, fmt.Sprintf("column %s is no longer humans only",
