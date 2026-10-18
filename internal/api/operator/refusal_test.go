@@ -17,7 +17,9 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -163,6 +165,72 @@ func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 			after := rec.Header().Get("Retry-After")
 			if seconds, err := strconv.Atoi(after); tc.retry != (err == nil && seconds > 0) {
 				t.Errorf("Retry-After = %q, want one only for a condition", after)
+			}
+		})
+	}
+}
+
+// A REFUSAL A DOMAIN WROTE IS TOLD IN ITS CODE'S OWN WORDS on a verb with no
+// tool, and never in its error's. The human write surface's purge, rename and
+// destructions answered the error's own text, so a person read "chatlet:
+// invalid: reason: …" — the package the error came from, before what to
+// change. Without that prefix it is the domain's own sentence
+// ([builtin.WriterSentence]), the one its tools word the same refusal with,
+// and that is written for a model: nobody has worded these refusals for a
+// person yet, so each is answered in the class its domain decided with no
+// detail, and its code's own message stands alone (ADR-0060), as the same
+// refusal through a tool is.
+//
+// Mutation: answer err.Error(), or the domain's sentence, as a classified
+// refusal's detail again and every row goes red; word chat's refusal with
+// another domain's sentence function and its row does.
+func TestADomainsRefusalIsToldInItsCodesOwnWords(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		err    error
+		status int
+		code   httpjson.Code
+		model  string
+	}{
+		"the tracker's": {&worklet.Refusal{Mark: worklet.ErrForbidden,
+			Err: errors.New("only its author may rewrite a remark")},
+			http.StatusForbidden, httpjson.CodeForbidden,
+			"only its author may rewrite a remark"},
+		"the knowledge base's": {&doclet.InvalidError{Field: "title",
+			Why: "a title is at most 200 bytes"},
+			http.StatusUnprocessableEntity, httpjson.CodeInvalid,
+			"`title`: a title is at most 200 bytes"},
+		"chat's": {&chatlet.InvalidError{Field: "reason",
+			Why: "an erase's reason is 700 bytes against a 600 cap"},
+			http.StatusUnprocessableEntity, httpjson.CodeInvalid,
+			"`reason`: an erase's reason is 700 bytes against a 600 cap"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			// THE MODEL'S WORDS ARE THE DOMAIN'S OWN, so what this row holds
+			// the answer clear of is what a model is really told.
+			if said, ok := builtin.WriterSentence(tc.err); !ok || said != tc.model {
+				t.Errorf("the domain words it %q for a model, want %q", said, tc.model)
+			}
+			rec := httptest.NewRecorder()
+			operator.FailWrite(t.Context(), rec, tc.err, newKey(), nil)
+			body := decode(t, rec)
+			if rec.Code != tc.status || body["error"] != string(tc.code) {
+				t.Fatalf("answered %d %v, want %d %s", rec.Code, body, tc.status, tc.code)
+			}
+			if detail, has := body["detail"]; has || body["message"] != tc.code.Message() {
+				t.Errorf("answered %v with detail %v, want its code's own message alone",
+					body, detail)
+			}
+			// CASE-BLIND, since a sentence that opens with the clause
+			// capitalizes it.
+			answer := strings.ToLower(fmt.Sprint(body))
+			for _, never := range []string{tc.model, tc.err.Error(), "worklet", "doclet",
+				"chatlet"} {
+
+				if strings.Contains(answer, strings.ToLower(never)) {
+					t.Errorf("the answer %v carries the error's own %q", body, never)
+				}
 			}
 		})
 	}

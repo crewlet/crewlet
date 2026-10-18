@@ -23,6 +23,17 @@ type nativeDomain struct {
 	// outcome that is not a refusal at all.
 	class func(error) (tools.Refusal, bool)
 
+	// sentence is a refusal this domain decided as its tools word it: the
+	// writer's own words, without the package prefix a Go error opens with
+	// ("worklet: invalid: …"), which says where the error came from and
+	// nothing about what to change. The function the domain's tools word
+	// every refusal with: the domain's own Sentence, or for the artifacts
+	// and their datastores this package's [domainSentence] and
+	// [dataSentence], which strip the prefix of every package a publish or
+	// a write passes through — a Sentence of the domain's own beside them
+	// would be a second wording of the same refusal.
+	sentence func(error) string
+
 	// objects are the argument names that name one of the domain's objects,
 	// as the tools take them.
 	objects []string
@@ -50,25 +61,29 @@ type nativeDomain struct {
 // TestEveryWriteNamesTheObjectItWrites).
 var nativeDomains = map[string]nativeDomain{
 	artifactsdomain.Domain{}.Name(): {
-		class: artifactClass,
+		class:    artifactClass,
+		sentence: domainSentence,
 		// An artifact is named by its `artifact` id on every tool that
 		// changes one; create_artifact names none, because the artifact
 		// it makes has no id until it lands.
 		objects: []string{"artifact"},
 	},
 	artifactdata.Domain{}.Name(): {
-		class: artifactDataClass,
+		class:    artifactDataClass,
+		sentence: dataSentence,
 		// A datastore is its artifact's, named by the same `artifact`.
 		objects: []string{"artifact"},
 	},
 	worklet.Domain{}.Name(): {
-		class: trackerClass,
+		class:    trackerClass,
+		sentence: worklet.Sentence,
 		// A person's record is the tracker's, kept under the name a
 		// `handle` resolves to.
 		objects: []string{"item", "project", "handle"},
 	},
 	doclet.Domain{}.Name(): {
-		class: pageClass,
+		class:    pageClass,
+		sentence: doclet.Sentence,
 		// A new page has no id to name yet: write_page addresses it by its
 		// `container` and its title, so the container is the object a
 		// failed create points at. The title is not declared, because a
@@ -77,7 +92,8 @@ var nativeDomains = map[string]nativeDomain{
 		objects: []string{"container", "page"},
 	},
 	chatlet.Domain{}.Name(): {
-		class: chatClass,
+		class:    chatClass,
+		sentence: chatlet.Sentence,
 		// A room is named by `channel` — its id or its name, which is
 		// its address, a new room's included — and a message by
 		// `message_id`, never `message`, which on the knowledge base's
@@ -119,6 +135,32 @@ func WriterClass(err error) (tools.Refusal, bool) {
 		return tools.RefusalExists, true
 	case errors.Is(err, statelog.ErrConflict):
 		return tools.RefusalConflict, true
+	}
+	return "", false
+}
+
+// WriterSentence is a native domain writer's refusal in the sentence the
+// domain that decided it composed, which its own tools word the same refusal
+// with for a model — and false for an error no domain decided: a
+// condition, a fault, an outcome nobody can vouch for, or one of the state
+// log's own refusals, which [WriterClass] classes and which keeps the words
+// the framework wrote it in, as the tools keep them.
+//
+// A MODEL'S WORDS, and the human write surface's tool-less verbs do not
+// answer them: a purge's or a rename's refusal is told to a person in the
+// words its writer put beside it, or in its code's own sentence, never in a
+// tool's or the error's own, which opens with the package it came from
+// (internal/api/operator's FailWrite, ADR-0060). EXPORTED for that surface's
+// suite, which holds its answers clear of these words.
+func WriterSentence(err error) (string, bool) {
+	if err == nil || errors.Is(UnknownCause("", err), ErrOutcomeUnknown) {
+		return "", false
+	}
+	for _, name := range slices.Sorted(maps.Keys(nativeDomains)) {
+		d := nativeDomains[name]
+		if _, ok := d.class(err); ok {
+			return d.sentence(err), true
+		}
 	}
 	return "", false
 }

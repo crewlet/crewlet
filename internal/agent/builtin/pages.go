@@ -1055,7 +1055,7 @@ func pageWriteFailure(ctx context.Context, name string, err error, next string) 
 			Failed: true, Cause: UnknownCause("", err)}
 	case errors.Is(err, doclet.ErrInvalid):
 		// THE WRITER'S SENTENCE ALONE, for the reason writeFailure gives:
-		// a person's surface prints this class as it stands.
+		// it names what the caller changes its call by.
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused that: %s",
 			name, doclet.Sentence(err)))
 	case errors.Is(err, doclet.ErrReserved):

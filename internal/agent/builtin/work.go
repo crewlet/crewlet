@@ -3887,9 +3887,10 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 		// what to change. NOT the node-failure wording below: "did not
 		// land … do not report it as done" is an instruction to a model
 		// about a failure it could not see, and this class — with the
-		// forbidden one above — is what a person's surface prints as it
-		// stands (`contract/errors.ts`), so it carries the writer's
-		// sentence alone rather than the Go error's "worklet:" in front.
+		// forbidden one above — is the one a caller corrects its call by,
+		// so it carries the writer's sentence alone rather than the Go
+		// error's "worklet:" in front. A person's surface answers it in
+		// the words beside the refusal, or its code's own (ADR-0060).
 		return out(tools.RefusalInvalid, fmt.Sprintf("%s refused that: %s",
 			name, worklet.Sentence(err)))
 	}
