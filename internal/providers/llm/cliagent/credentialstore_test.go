@@ -305,11 +305,16 @@ func TestADatabaseWithNoLoginNeverReplacesTheSharedOne(t *testing.T) {
 // login while the shared directory holds one would fail with a vendor's "not
 // authenticated" that points at nothing — and never repeats the document: a
 // CLI that rejects one may quote it, and it is a credential.
+//
+// The fake quotes the WHOLE document, and the failure carries none of it: not
+// the secret, which the redaction rules would have caught anyway, and not the
+// words around it, which only the scrub of what the import was handed does.
 func TestAnImportThatFailsFailsTheCallWithoutRepeatingTheDocument(t *testing.T) {
 	t.Parallel()
 	p := storeProvider(t, nil, nil)
 	secret := "sk-ant-" + strings.Repeat("Q", 40)
-	writeDocument(t, p, "not a document "+secret)
+	document := "not a document " + secret
+	writeDocument(t, p, document)
 	_, err := ask(t, p, llm.Request{})
 	if err == nil {
 		t.Fatal("a call whose login could not be imported ran anyway")
@@ -317,8 +322,10 @@ func TestAnImportThatFailsFailsTheCallWithoutRepeatingTheDocument(t *testing.T) 
 	if !strings.Contains(err.Error(), "crewlet llm login") {
 		t.Errorf("the failure does not name the remedy: %v", err)
 	}
-	if strings.Contains(err.Error(), secret) {
-		t.Errorf("the failure repeats the document's secret: %v", err)
+	for _, repeated := range []string{secret, "not a document"} {
+		if strings.Contains(err.Error(), repeated) {
+			t.Errorf("the failure repeats the document (%q): %v", repeated, err)
+		}
 	}
 }
 

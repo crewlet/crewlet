@@ -257,7 +257,11 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 
 	checkout, err := p.ws.Acquire(ctx, seat, callID, p)
 	if err != nil {
-		return nil, p.fail(llm.KindFatal, 0, err)
+		// CLASSIFIED, not fatal outright: a seat's generation runs the CLI
+		// itself now, so what failed may be a slow host or an unusable
+		// login rather than this host's filesystem — see
+		// [acquireFailureKind].
+		return nil, p.fail(acquireFailureKind(err), 0, err)
 	}
 	defer func() {
 		// WITHOUT THE CALL'S CANCELLATION: a release is a teardown, and a

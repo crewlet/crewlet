@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/hostbox"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
@@ -259,7 +260,8 @@ type Checkout struct {
 // have refreshed — and with most vendors rotating the refresh token, that
 // home is the only place the working one exists. A seat whose old login
 // cannot be carried out does not run on it, and does not discard it: the call
-// is refused, and the next call tries again.
+// is refused, classified so the fallback chain can move on, and the next
+// call tries again.
 //
 // store imports a login the CLI keeps in its own database ([loginStore]); it is
 // asked only by a profile that declares a [cliprofile.CredentialStore], and the
@@ -511,10 +513,60 @@ func (w *Workspace) importLogin(
 			"home was prepared with no way to import %q into it", w.agent, path)
 	}
 	if err := store.importLogin(ctx, home, cache, document); err != nil {
-		return fmt.Errorf("cli-agent: importing the shared login %q: %w — if the "+
-			"document is damaged, sign in again with `crewlet llm login`", path, err)
+		var exit *auxiliaryExitError
+		if errors.As(err, &exit) {
+			return &loginRefusedError{path: path, err: err}
+		}
+		return fmt.Errorf("cli-agent: importing the shared login %q: %w", path, err)
 	}
 	return nil
+}
+
+// loginRefusedError is a shared login the CLI ran and REFUSED to import: a
+// document it cannot read, which the same call made again would be refused
+// identically — what [acquireFailureKind] reads as an unusable login.
+type loginRefusedError struct {
+	path string
+	err  error
+}
+
+func (e *loginRefusedError) Error() string {
+	return fmt.Sprintf("cli-agent: the CLI refused to import the shared login %q: %v — if "+
+		"the document is damaged, sign in again with `crewlet llm login`", e.path, e.err)
+}
+
+func (e *loginRefusedError) Unwrap() error { return e.err }
+
+// acquireFailureKind classifies a seat that could not be made ready to run,
+// which since a seat's generation began running the CLI is no longer only a
+// filesystem fact.
+//
+//   - A command that ran out of time — the auxiliary bound, or the call's own
+//     deadline — is a TIMEOUT, as the call's own is in [Provider.completion]:
+//     a busy host, not a request nobody can serve, so the chain may try
+//     another member and the credential is not benched.
+//   - A shared login the CLI refused to import is AUTH: this entry's login is
+//     unusable until somebody signs in again, which is what an auth failure
+//     says, so the chain moves on and the credential's cooldown applies
+//     rather than every call retrying a document that cannot be read.
+//   - Any other command that exited non-zero — the export a previous
+//     generation's login is carried out through — is a SERVER failure: the
+//     local CLI failed to answer, as a 5xx is a vendor failing to, and the
+//     login it holds is fine, merely not out yet.
+//   - Everything else is a filesystem failure on this host and stays FATAL.
+func acquireFailureKind(err error) llm.ErrorKind {
+	var refused *loginRefusedError
+	var exit *auxiliaryExitError
+	switch {
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		return llm.KindTimeout
+	case errors.As(err, &refused):
+		return llm.KindAuth
+	case errors.As(err, &exit):
+		return llm.KindServer
+	default:
+		return llm.KindFatal
+	}
 }
 
 // seedFiles writes the profile's settings files for one scope into root.
@@ -885,7 +937,7 @@ func (e *loginHomeBusyError) Error() string {
 }
 
 // lockWaitError is a lock another writer held for longer than the wait: a
-// TIMEOUT, so it unwraps to [context.DeadlineExceeded].
+// TIMEOUT, so a seat refused over it is one the fallback chain may move past.
 type lockWaitError struct {
 	path string
 	wait time.Duration

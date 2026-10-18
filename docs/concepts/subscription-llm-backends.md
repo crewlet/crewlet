@@ -1289,8 +1289,9 @@ login is the one you asked for.
 export fails — a host too busy to finish it inside its 30-second bound, a CLI
 killed mid-export — the home is left exactly as it is, with its generation
 recorded beside it, and the seat's next call carries the login out before it
-prunes anything; a call that cannot carry it out either is refused, naming
-the export, rather than run on the stale database or discard it. The record is on disk, so an engine
+prunes anything; a call that cannot carry it out either is refused with a
+retryable error naming the export (the fallback chain moves on), rather than
+run on the stale database or discard it. The record is on disk, so an engine
 that stopped mid-call is covered too: the next process's first call into that
 seat finishes the generation first. The login home works the same way — a
 `crewlet llm login` whose export failed after you finished the browser flow

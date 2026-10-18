@@ -1,8 +1,12 @@
 package cliagent
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -30,11 +34,26 @@ const auxiliaryTimeout = 30 * time.Second
 
 // runAuxiliary runs one auxiliary command and returns its stdout.
 //
-// Its stdout is NEVER part of an error. A credential store's export prints
-// every secret the CLI holds, and nothing an auxiliary command prints is worth
-// that risk, so a failure names the command, its exit and its stderr —
-// redacted all the same, because a CLI that rejects a document may well quote
-// the part it rejected.
+// NOTHING IT WAS HANDED OR PRINTED IS EVER PART OF AN ERROR. A credential
+// store's export prints every secret the CLI holds, and its import is handed
+// them on stdin, so a failure names the command, its exit and its stderr —
+// and the stderr is SCRUBBED of what stdin and stdout carried first
+// ([scrubAuxiliary]), because a CLI that rejects a document may well quote the
+// part it rejected, and the shape-based [redact.Secrets] recognises none of
+// an OAuth access token, a refresh token or a Google key by sight.
+//
+// TYPED, because what failed decides what the caller does about it — see
+// [acquireFailureKind]:
+//
+//   - the CALLER's context ending is checked FIRST and wrapped as itself. The
+//     child's own bound is derived from that context, so a parent deadline
+//     also reads as the child timing out, and checked second it reported
+//     "did not finish within 30s" for an import the call's own deadline had
+//     stopped in under a second;
+//   - running out of [auxiliaryTimeout] is an [auxiliaryTimeoutError], which
+//     is a [context.DeadlineExceeded] to errors.Is;
+//   - exiting non-zero is an [auxiliaryExitError];
+//   - a child that could not be started at all is the error [run] gave.
 func (p *Provider) runAuxiliary(
 	ctx context.Context, args []string, dir string, env []string, stdin string,
 ) (string, error) {
@@ -49,21 +68,153 @@ func (p *Provider) runAuxiliary(
 		grace:   p.termGrace,
 	})
 	switch {
+	case err == nil && !res.timedOut && res.exitCode == 0:
+		// Ran to the end — whatever the caller's context did meanwhile,
+		// since what it was waiting for is done.
+	case ctx.Err() != nil:
+		return "", fmt.Errorf("%s was stopped by its caller before it finished: %w", command, ctx.Err())
 	case err != nil:
 		return "", err
-	case res.timedOut:
-		return "", fmt.Errorf("%s did not finish within %s%s",
-			command, auxiliaryTimeout, stderrDetail(redact.Secrets(res.stderr)))
-	case ctx.Err() != nil:
-		return "", fmt.Errorf("%s: %w", command, ctx.Err())
-	case res.exitCode != 0:
-		return "", fmt.Errorf("%s exited %d%s",
-			command, res.exitCode, stderrDetail(redact.Secrets(res.stderr)))
-	case res.droppedStdout > 0:
+	default:
+		return "", auxiliaryFailure(command, res, stdin)
+	}
+	if res.droppedStdout > 0 {
 		// A clipped document is a login with its end missing, or a report
 		// with its counts cut off, and either read as whole is wrong.
 		return "", fmt.Errorf("%s printed more than %d bytes, so what it printed is "+
 			"incomplete", command, maxOutput)
 	}
 	return res.stdout, nil
+}
+
+// auxiliaryFailure is the error for a command that ran and did not succeed —
+// timed out or exited non-zero — with its stderr scrubbed of what it was
+// handed on stdin and what it printed ([scrubAuxiliary]).
+func auxiliaryFailure(command string, res *rawResult, stdin string) error {
+	stderr := scrubAuxiliary(res.stderr, stdin, res.stdout)
+	if res.timedOut {
+		return &auxiliaryTimeoutError{command: command, stderr: stderr}
+	}
+	return &auxiliaryExitError{command: command, code: res.exitCode, stderr: stderr}
+}
+
+// auxiliaryTimeoutError is an auxiliary command that ran past
+// [auxiliaryTimeout] and was stopped.
+type auxiliaryTimeoutError struct {
+	command string
+	// stderr is already scrubbed.
+	stderr string
+}
+
+func (e *auxiliaryTimeoutError) Error() string {
+	return fmt.Sprintf("%s did not finish within %s%s", e.command, auxiliaryTimeout, stderrDetail(e.stderr))
+}
+
+// Unwrap makes the timeout a [context.DeadlineExceeded], the one fact every
+// classifier above this package already reads as a timeout ([llm.KindOf]).
+func (e *auxiliaryTimeoutError) Unwrap() error { return context.DeadlineExceeded }
+
+// auxiliaryExitError is an auxiliary command that ran and exited non-zero —
+// a CLI that answered, and refused.
+type auxiliaryExitError struct {
+	command string
+	code    int
+	// stderr is already scrubbed.
+	stderr string
+}
+
+func (e *auxiliaryExitError) Error() string {
+	return fmt.Sprintf("%s exited %d%s", e.command, e.code, stderrDetail(e.stderr))
+}
+
+// scrubMarker replaces what [scrubAuxiliary] takes out, in [redact]'s marker
+// form, so a second redaction pass recognises its work and a reader can tell
+// a removal from the CLI's own words.
+const scrubMarker = redact.Marker + "credential]"
+
+// minScrubbedValue is the shortest JSON string value [scrubAuxiliary] takes
+// out: eight characters, below which a value in a login document is an id, a
+// type or a flag — `oauth`, `key`, `cred_1` — rather than a credential, which
+// no vendor issues that short. Taking those out too would leave a CLI's own
+// account of what it rejected unreadable for nothing.
+const minScrubbedValue = 8
+
+// tokenRun is a run of the characters a credential is spelled in — letters,
+// digits and the URL-safe and base64 punctuation a JWT, an OAuth token or an
+// API key carries — at least sixteen long: shorter, and a run is a word or a
+// path segment rather than a key, and every credential a shipped CLI keeps is
+// far longer.
+var tokenRun = regexp.MustCompile(`[A-Za-z0-9_\-.+/=~]{16,}`)
+
+// scrubAuxiliary takes out of stderr everything the command was handed and
+// printed — handed being its stdin and its stdout — and then runs
+// [redact.Secrets] over what is left.
+//
+// THE MATERIAL THE ENGINE ALREADY KNOWS IS SECRET, rather than shapes it hopes
+// to recognise: an import is handed every credential the shared login holds,
+// and an export prints every one the database does, so what a CLI quoting
+// either could repeat is exactly what those two texts contain. From each:
+//
+//   - the whole of it, so a CLI echoing a document entire leaves one marker;
+//   - where it is JSON, every string value at least [minScrubbedValue] long,
+//     at any depth, and every [tokenRun] inside one (a CLI may quote a token
+//     out of a longer value, `Bearer …`);
+//   - where it is not — a truncated document, a timed-out export's partial
+//     output — every [tokenRun] in it.
+//
+// Longest first, so a value never leaves part of a longer one behind.
+// [redact.Secrets] stays as the second layer for anything this did not know.
+func scrubAuxiliary(stderr string, handed ...string) string {
+	if strings.TrimSpace(stderr) == "" {
+		return stderr
+	}
+	var secrets []string
+	for _, text := range handed {
+		secrets = append(secrets, secretsIn(text)...)
+	}
+	slices.SortFunc(secrets, func(a, b string) int {
+		return cmp.Or(cmp.Compare(len(b), len(a)), strings.Compare(a, b))
+	})
+	secrets = slices.Compact(secrets)
+	pairs := make([]string, 0, 2*len(secrets))
+	for _, s := range secrets {
+		pairs = append(pairs, s, scrubMarker)
+	}
+	if len(pairs) > 0 {
+		stderr = strings.NewReplacer(pairs...).Replace(stderr)
+	}
+	return redact.Secrets(stderr)
+}
+
+// secretsIn is what [scrubAuxiliary] takes out of a text it was handed.
+func secretsIn(text string) []string {
+	trimmed := strings.TrimSpace(text)
+	if len(trimmed) < minScrubbedValue {
+		return nil
+	}
+	found := []string{trimmed}
+	var doc any
+	if err := json.Unmarshal([]byte(trimmed), &doc); err != nil {
+		return append(found, tokenRun.FindAllString(trimmed, -1)...)
+	}
+	var walk func(any)
+	walk = func(v any) {
+		switch v := v.(type) {
+		case string:
+			if len(v) >= minScrubbedValue {
+				found = append(found, v)
+				found = append(found, tokenRun.FindAllString(v, -1)...)
+			}
+		case []any:
+			for _, item := range v {
+				walk(item)
+			}
+		case map[string]any:
+			for _, item := range v {
+				walk(item)
+			}
+		}
+	}
+	walk(doc)
+	return found
 }

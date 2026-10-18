@@ -426,8 +426,9 @@ func TestALoginWhoseExportFailedIsCarriedOutByTheNextGeneration(t *testing.T) {
 }
 
 // A SEAT WHOSE OLD LOGIN STILL CANNOT BE CARRIED OUT DOES NOT RUN — not on the
-// stale database, and not by discarding it.
-func TestASeatWhoseLoginCannotBeCarriedOutIsRefused(t *testing.T) {
+// stale database, and not by discarding it — and says so in a kind the
+// fallback chain moves past: the login is fine, the CLI did not answer.
+func TestASeatWhoseLoginCannotBeCarriedOutIsRefusedRetryably(t *testing.T) {
 	t.Parallel()
 	p := storeProvider(t, map[string]string{"FAKE_STORE_REFRESH": "k-new", "FAKE_STORE_EXPORT_FAIL": "1"}, nil)
 	writeDocument(t, p, `[{"id":"cred_1","key":"k-old"}]`+"\n")
@@ -437,6 +438,9 @@ func TestASeatWhoseLoginCannotBeCarriedOutIsRefused(t *testing.T) {
 	_, err := ask(t, p, llm.Request{})
 	if err == nil {
 		t.Fatal("a seat ran on top of a login it could not carry out")
+	}
+	if kind := llm.KindOf(err); kind != llm.KindServer {
+		t.Errorf("kind = %v, want server — retryable, and no fault of the credential: %v", kind, err)
 	}
 	if strings.Contains(err.Error(), "k-new") {
 		t.Errorf("the refusal repeats what the export printed: %v", err)
