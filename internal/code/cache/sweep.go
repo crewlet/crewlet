@@ -32,6 +32,10 @@ import (
 //	                multi-pack-index's files in objects/pack — unless a change
 //	                it is built over drops it (dropFor)
 //
+// Every FILE named here is a REGULAR file, and every directory a directory:
+// a symbolic link, or anything else, at one of their names is outside the
+// image (image.imaged), whatever it points at.
+//
 // It runs in TWO HALVES around the install. Everything but the pack files
 // first (tidy), because a git process — the round's peel, its index — runs
 // in the directory before the packs' half could: the pool refuses one whose
@@ -61,7 +65,7 @@ import (
 // file is added to the image by adding its declaration.
 
 // rootFiles are the root's fixed files: the repository's HEAD, config and
-// packed-refs, and the cache's state.
+// packed-refs, and the cache's state — each a regular file (image.imaged).
 var rootFiles = []string{"HEAD", "config", "packed-refs", stateName}
 
 // requiredDirs are the image's directories below its root that every
@@ -189,24 +193,39 @@ func (d *Derived) holds() []FilePattern {
 
 // imaged reports whether name, an entry of the image directory rel, is part
 // of the image whatever the rows say: one of the image's directories as a
-// directory, one of the root's fixed files, or a file a declaration owns. A
-// fixed file of the root, and an owned file outside objects/pack, is admitted
-// as anything but a directory, and an owned file in objects/pack only as a
-// regular file — the kinds each directory admitted before the grammar was one
-// predicate. The rows' pack files are judged apart (packFileName): against
-// the snapshot by the sweep, against the listing by Verify.
+// directory, or — as a REGULAR file, and as nothing else — one of the root's
+// fixed files or a file a declaration owns. The rows' pack files are judged
+// apart (packFileName): against the snapshot by the sweep, against the
+// listing by Verify, and there too only a regular file is one.
+//
+// EVERY FILE OF THE IMAGE IS A REGULAR FILE (ADR-0038). git reads through a
+// link at a derived file's name, at config or at packed-refs: a symbolic link
+// named commit-graph had git read the graph it pointed at, outside the
+// incarnation, and one named config over a file holding gitproc.RepoConfig
+// passed the sweep's replace and the pool's shape check alike — both read
+// through it — so the repository's configuration lived wherever the link
+// pointed, outside the budget and outside what a rebuild replaces. A link at
+// HEAD git does not read through: it refuses the whole repository unless the
+// link's text begins refs/ (setup.c's validate_headref checks only that
+// prefix, so text that climbs back out of refs/ has git read the file it
+// leads to), and with a target holding a HEAD tidy's replace accepts — it
+// reads through the link — every git process in the copy failed, a request's
+// and the round's own alike, through every full round. Admitted as anything
+// but a directory, as the root and objects/info each admitted before the
+// grammar was one predicate, each was kept by the sweep and admitted by
+// Verify. Outside the image, it is moved into trash/ by a full round — never
+// followed: trash/ takes the link itself — whose tidy then writes config and
+// HEAD afresh, writeRefs packed-refs and persist the state, and named by
+// Verify.
 func (im *image) imaged(rel, name string, kind entryKind) bool {
 	if im.dir[filepath.Join(rel, name)] {
 		return kind == dirEntry
 	}
 	if rel == "." && slices.Contains(rootFiles, name) {
-		return kind != dirEntry
+		return kind == fileEntry
 	}
 	if i, _ := im.ownerOf(rel, name); i >= 0 {
-		if rel == packRel {
-			return kind == fileEntry
-		}
-		return kind != dirEntry
+		return kind == fileEntry
 	}
 	return false
 }

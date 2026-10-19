@@ -556,9 +556,18 @@ names a pack that is gone; one the node has not written since it started is
 held to its checksum before it serves, and every file of a copy is checked
 again behind the serving. Anything else in the directory that is neither one
 of them nor the repository's own files is moved aside the next time the node
-reads the repository whole. Each is declared once in the engine, and this
-table is that list; the steps are what `code_cache_maintenance_refused` and
-its counter name when the node's memory refuses one.
+reads the repository whole — and so is a symbolic link, or anything but a
+regular file, at one of their names or at the repository's own `HEAD`,
+`config` or `packed-refs`, whatever it points at. git reads the file a link at
+`config`, `packed-refs` or one of those files leads to, outside the directory.
+A link at `HEAD` it refuses outright, the copy then being no repository to it,
+so every request on the copy fails until the link is gone — unless the link's
+own text begins `refs/`, which git reads as the ref named there, or, where the
+rest of that text climbs back out of `refs/`, as the file it leads to.
+`crewlet code verify` names any of them. Each is declared once in the engine,
+and this table is that list; the steps are what
+`code_cache_maintenance_refused` and its counter name when the node's memory
+refuses one.
 
 | Declared file | Its files, in the repository's directory | Written by | When a pack leaves |
 |---|---|---|---|

@@ -4,7 +4,7 @@
 - **Authority:** `internal/code/cache`
 - **Enforced-by:** `internal/code/cache.TestEveryDerivedFileIsDeclared`, `internal/code/cache.TestValidateRefusesAnUnsaidDeclaration`, `internal/code/cache.TestTheSweepKeepsExactlyTheDeclaredImage`, `internal/code/cache.TestADerivedFileFollowsItsDeclarationOnEveryEvent`, `internal/code/cache.TestTheCodeReadsTheDeclarations`, `internal/code/cache.TestEveryPackAddedReadsItsDeclaration`, `internal/code/cache.TestEveryHoldOfADerivedFileReadsItsDeclarationsCheck`, `internal/code/cache.TestADropStopsARunWritingWhatItDrops`, `internal/code/cache.TestAReportADeclarationKeepsItsFilesOnRecordsNoDrop`, `internal/code/cache.TestARequestsDamageNoDropRepairsIsRepairedAsAPacks`, `internal/code/cache.TestTheMaintainersStepsAreTheDeclaredWrites`, `internal/code/cache.TestNothingButSyncWritesACache` (its declared-writers half, held able to fail by its control), `internal/code/cache.TestTheConceptPageNamesEveryDerivedFile`
 - **Measured:** at 1152ca322 the two derived files a cache writes — the multi-pack-index (a full round's without a bitmap, the maintainer's with its bitmap or without one) and the commit-graph — were spelled in eighteen of the cache's non-test files (`multi-pack-index`, `commit-graph` or `tmp_bitmap` 122 times): their file names in the sweep, Verify, the check, the scrub and the size measure; their argument lists, charges, lanes and deadlines beside each writer; what a removed pack, rewritten refs and a damage report do to them in the install, the refs' write, the sync and the reports; and the state's own struct. They agreed only because nothing had changed them apart, and M3 adds more kinds.
-- **Cost-when-tried:** the sweep's image grammar and Verify's listing were made one predicate a directory because two copies of the grammar had disagreed about what a cache is, and the derived files were the part still spelled beside it — a file a writer leaves that the grammar does not admit is trashed under a running reader, and a file the grammar admits that no writer makes is a hole anyone may fill.
+- **Cost-when-tried:** the sweep's image grammar and Verify's listing were made one predicate a directory because two copies of the grammar had disagreed about what a cache is, and the derived files were the part still spelled beside it — a file a writer leaves that the grammar does not admit is trashed under a running reader, and a file the grammar admits that no writer makes is a hole anyone may fill. And each directory's grammar admitted a file of the root, and one in `objects/info`, as anything but a directory: a symbolic link named `commit-graph`, or named `config` over a file holding the configuration the pool requires, was kept by the sweep and admitted by Verify, and git read the file it pointed at, outside the incarnation, its budget and what a rebuild replaces — the link at `config` passing the pool's shape check too, which reads through it.
 - **Tag-status:** unreleased
 
 ## The decision
@@ -26,7 +26,8 @@ every file a copy holds is scrubbed behind the serving. A damage report — git'
 file what its declaration says of one, and every reader of a report (a git process's, a request's, a
 round's) asks only that: a file kept on a report is held to its check by the scrub instead. A file that
 FAILS its check is dropped whatever its declaration says of a report, since the bytes decided. Open
-refuses a build whose declarations leave anything unsaid.
+refuses a build whose declarations leave anything unsaid. Every file of the image, a declared file or one of
+the root's fixed files, is a regular file; anything else at its name is outside the image.
 
 ## Why the obvious alternative is wrong
 
@@ -41,6 +42,5 @@ real git writes.
 ## What this does not decide
 
 Which derived files exist after this (later parts add their own, each by a declaration), what any one of
-them costs or when it is due (the maintainer's and each part's own measurements), what kind of directory
-entry the image admits at a declared name, or anything outside one node's cache — a derived object published
-for every node is a decision of its own.
+them costs or when it is due (the maintainer's and each part's own measurements), or anything outside one
+node's cache — a derived object published for every node is a decision of its own.

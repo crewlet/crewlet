@@ -191,7 +191,22 @@
 // memory holds one and without one where it does not) and the COMMIT-GRAPH
 // (the maintainer's, written first on a copy that has none). Their files live
 // inside the incarnation, so the budget counts them, they leave with the
-// repository and a rebuild writes them again over its packs.
+// repository and a rebuild writes them again over its packs. Each is a REGULAR
+// file, as every file of the image is — the root's HEAD, config, packed-refs
+// and state too: a symbolic link, or anything else, at one of their names is
+// outside the image, so the next full round moves it into trash/ without
+// following it — a fixed file is then written afresh, as a full round writes
+// each that is not what it would write, and a derived file is left to its
+// writer — and Verify names it. git reads through a link at a derived file's
+// name, at config or at packed-refs, so a link named commit-graph, or named
+// config over a file holding the configuration the pool requires, had git
+// read a file outside the incarnation, outside the budget and outside what a
+// rebuild replaces. A link at HEAD git does not read through: it refuses the
+// whole repository unless the link's text begins refs/ (setup.c's
+// validate_headref, which checks only that prefix — text that climbs back out
+// of refs/ has git read the file it leads to), so every git process in the
+// copy failed, a request's and the round's own alike, and a link whose target
+// held a HEAD the sweep accepts was kept by every full round.
 //
 // Every reader reads the declarations and nothing spells a derived file
 // beside them: the IMAGE — one predicate a directory, by which the full

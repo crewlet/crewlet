@@ -2,7 +2,6 @@ package cache_test
 
 import (
 	"context"
-	"io/fs"
 	"maps"
 	"os"
 	"path"
@@ -127,21 +126,33 @@ func TestAFullRoundSweepsADeadWritersFilesBeforeItsIndex(t *testing.T) {
 // beside each declaration's files held only while a write runs, with no write
 // running. Verify names every one of them unexpected and nothing else; the
 // first round of a new process moves every one of them into trash/ and
-// nothing else, keeping the real index, its bitmap and the graph; and git
-// reads the copy whole after.
+// nothing else, keeping the real index and its bitmap; and git reads the copy
+// whole after.
 //
-// A symbolic link at a file of the image — the commit-graph's, and config's
-// over a file holding the configuration the pool requires — is KEPT and
-// admitted, as each directory's grammar kept it before the grammar was one
-// predicate: what the declarations' grammar admits of a file's kind is the
-// kinds each directory admitted, a regular file in objects/pack and anything
-// but a directory elsewhere.
+// EVERY FILE OF THE IMAGE IS A REGULAR FILE (ADR-0038): a symbolic link at
+// the commit-graph's name, at config's, at packed-refs', at HEAD's and at the
+// state's, each to a file holding exactly what the cache keeps there, is
+// outside the image whatever it points at. git reads the graph, the
+// configuration or the refs wherever such a link leads, outside the
+// incarnation, the budget and what a rebuild replaces; and it refuses the
+// whole repository when HEAD is a link whose own text is no ref (setup.c,
+// validate_headref) — Verify's fsck says so, every git process in the copy
+// failing until the link is gone. Verify names each link unexpected, and
+// config, HEAD and packed-refs missing; the round moves each into trash/
+// without following it, leaving the file it points at as it was, writes
+// config, HEAD, packed-refs and the state afresh as regular files, and git
+// reads the copy again; and the incarnation records no graph, so the
+// maintainer's next pass writes a regular one in the link's place, after which
+// Verify finds nothing.
 //
 // Mutations: drop the multi-pack-index's owned files from its declaration, and
 // the round trashes the real index and its bitmap; make imaged admit an owned
 // name whatever its kind, and the directory planted at an owned name is kept;
-// give Verify a predicate of its own for objects/info, and the two sets
-// differ.
+// make imaged admit a fixed or declared file as anything but a directory, as
+// each directory's grammar did before the grammar was one predicate, and every
+// link is kept and admitted — HEAD's with it, so the copy's fsck fails after
+// the round; give Verify a predicate of its own for objects/info, and the two
+// sets differ.
 func TestTheSweepKeepsExactlyTheDeclaredImage(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -193,22 +204,32 @@ func TestTheSweepKeepsExactlyTheDeclaredImage(t *testing.T) {
 		}
 		write(t, path, "a stray\n")
 	}
-	// The links: the graph and config, each to a file outside the
-	// incarnation holding what the cache keeps there.
+	// The links: the graph's, config's, packed-refs', HEAD's and the state's,
+	// each to a file outside the incarnation holding exactly what the cache
+	// keeps at its name — the graph's own bytes, the configuration the pool
+	// requires, the copy's refs, its HEAD and its state — so nothing but the
+	// entry's KIND puts any of them outside the image.
 	outside := t.TempDir()
-	graph := derived[2]
-	link := func(path, content string) {
-		target := filepath.Join(outside, filepath.Base(path))
+	links := map[string]string{
+		"objects/info/commit-graph": read(t, derived[2]),
+		"config":                    gitproc.RepoConfig,
+		"packed-refs":               read(t, filepath.Join(dir, "packed-refs")),
+		"HEAD":                      read(t, filepath.Join(dir, "HEAD")),
+		"crewlet-state.json":        read(t, filepath.Join(dir, "crewlet-state.json")),
+	}
+	for rel, content := range links {
+		at := filepath.Join(dir, filepath.FromSlash(rel))
+		target := filepath.Join(outside, path.Base(rel))
 		write(t, target, content)
-		if err := os.Remove(path); err != nil {
+		if err := os.Remove(at); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Symlink(target, path); err != nil {
+		if err := os.Symlink(target, at); err != nil {
 			t.Fatal(err)
 		}
 	}
-	link(graph, read(t, graph))
-	link(filepath.Join(dir, "config"), gitproc.RepoConfig)
+	outsideImage := slices.Concat(slices.Collect(maps.Keys(planted)), slices.Collect(maps.Keys(links)))
+	slices.Sort(outsideImage)
 
 	report, err := verify(t.Context(), c, repo, false)
 	if err != nil {
@@ -221,10 +242,19 @@ func TestTheSweepKeepsExactlyTheDeclaredImage(t *testing.T) {
 		}
 	}
 	slices.Sort(unexpected)
-	if want := slices.Sorted(maps.Keys(planted)); !slices.Equal(unexpected, want) {
-		t.Errorf("Verify named unexpected\n\t%v\nwant exactly what was planted outside the image\n\t%v\n(all its "+
-			"problems: %q)", unexpected, want, report.Problems)
+	if !slices.Equal(unexpected, outsideImage) {
+		t.Errorf("Verify named unexpected\n\t%v\nwant exactly what was planted outside the image, the links "+
+			"among it\n\t%v\n(all its problems: %q)", unexpected, outsideImage, report.Problems)
 	}
+	for _, fixed := range []string{"config", "HEAD", "packed-refs"} {
+		if !slices.Contains(report.Problems, "missing "+fixed) {
+			t.Errorf("Verify of a copy whose %s is a link named %q, want %s missing: a link is no file of the "+
+				"image", fixed, report.Problems, fixed)
+		}
+	}
+	// git itself refuses the copy: a HEAD that is a link whose text is no
+	// ref is no repository to it, so the connectivity check never ran.
+	problemsOf(t, "Verify of a copy whose HEAD is a link", report.Problems, "not a git repository")
 
 	c = w.reopen(t, c, clk.on)
 	before := map[string]bool{}
@@ -245,7 +275,7 @@ func TestTheSweepKeepsExactlyTheDeclaredImage(t *testing.T) {
 	}
 	slices.Sort(moved)
 	var want []string
-	for rel := range planted {
+	for _, rel := range outsideImage {
 		want = append(want, path.Base(rel))
 	}
 	slices.Sort(want)
@@ -253,19 +283,47 @@ func TestTheSweepKeepsExactlyTheDeclaredImage(t *testing.T) {
 		t.Errorf("the first round of a new process moved into trash/\n\t%v\nwant exactly what Verify named "+
 			"unexpected\n\t%v", moved, want)
 	}
-	for _, path := range derived {
-		if _, err := os.Lstat(path); err != nil {
-			t.Errorf("the sweep took %s, a declared derived file: %v", path, err)
+	at := func(rel string) string { return filepath.Join(s.Dir, filepath.FromSlash(rel)) }
+	kept := []string{"objects/pack/multi-pack-index", "objects/pack/" + filepath.Base(derived[1])}
+	for _, rel := range kept {
+		if info, err := os.Lstat(at(rel)); err != nil || !info.Mode().IsRegular() {
+			t.Errorf("%s after the sweep: %v, %v — want the declared derived file kept, a regular file", rel, info, err)
 		}
 	}
-	for _, path := range []string{graph, filepath.Join(s.Dir, "config")} {
-		if info, err := os.Lstat(path); err != nil || info.Mode()&fs.ModeSymlink == 0 {
-			t.Errorf("%s after the sweep: %v, %v — a link at a file of the image is kept, as each directory's "+
-				"grammar kept it", path, info, err)
+	if _, err := os.Lstat(at("objects/info/commit-graph")); !os.IsNotExist(err) {
+		t.Errorf("the sweep left an entry at the commit-graph's name (%v), where it moved the link", err)
+	}
+	for _, fixed := range []string{"config", "HEAD", "packed-refs", "crewlet-state.json"} {
+		if info, err := os.Lstat(at(fixed)); err != nil || !info.Mode().IsRegular() {
+			t.Errorf("%s after the sweep: %v, %v — want the regular file the round writes in the link's place",
+				fixed, info, err)
+		}
+	}
+	if got := read(t, at("config")); got != gitproc.RepoConfig {
+		t.Errorf("config after the sweep reads %q, want gitproc.RepoConfig", got)
+	}
+	if got, want := read(t, at("HEAD")), links["HEAD"]; got != want {
+		t.Errorf("HEAD after the sweep reads %q, want %q", got, want)
+	}
+	for rel, content := range links {
+		if got := read(t, filepath.Join(outside, path.Base(rel))); got != content {
+			t.Errorf("the file the %s link pointed at reads %q after the sweep, want it untouched", rel, got)
 		}
 	}
 	if _, err := runGit(t, w.pool, s.Dir, "", "fsck", "--connectivity-only", "--no-progress"); err != nil {
 		t.Errorf("fsck after the sweep: %v", err)
+	}
+	// The incarnation records what the sweep left — no graph — so the
+	// maintainer writes one at once (a copy with no graph gets it first).
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Fatalf("the maintainer ran %v after the sweep, want the repository: it holds no graph", ran)
+	}
+	if info, err := os.Lstat(at("objects/info/commit-graph")); err != nil || !info.Mode().IsRegular() {
+		t.Errorf("the commit-graph after the maintainer's pass: %v, %v — want the regular file it writes", info, err)
+	}
+	if report, err := verify(t.Context(), c, repo, false); err != nil || len(report.Problems) != 0 {
+		t.Errorf("Verify after the round and the maintainer's pass = %q, %v; want a copy exactly its image",
+			report.Problems, err)
 	}
 }
 
