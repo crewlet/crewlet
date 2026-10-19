@@ -217,6 +217,64 @@
         "null"
       ]
     },
+    "Chat": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "description": "Which chat surface: chatlet, vendor, or none. Empty derives from integrations.mattermost, integrations.slack and the seats' Slack apps.",
+          "enum": [
+            "chatlet",
+            "vendor",
+            "none",
+            "",
+            null
+          ]
+        },
+        "chatlet": {
+          "$ref": "#/$defs/ChatletConfig"
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "ChatletConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "default_channel_private": {
+          "description": "Create channels private when the caller names no visibility. Default false: a company's rooms are readable by its seats.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "message_retention_days": {
+          "description": "How long a message lives (default 365, 30..3650). 0 keeps messages for ever.",
+          "maximum": 3650,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "typing_status": {
+          "description": "When to show the working indicator (default always).",
+          "enum": [
+            "always",
+            "addressed",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "CompanyArtifacts": {
       "additionalProperties": false,
       "properties": {
@@ -3526,7 +3584,15 @@
       "additionalProperties": false,
       "properties": {
         "channel": {
-          "description": "Unit channel on the company's chat surface; inherited by child units.",
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "Unit channel on the company's chat surface, e.g. engineering; inherited by child units. Lowercase letters, digits, - and _.",
           "type": [
             "string",
             "number",
@@ -3795,6 +3861,9 @@
     },
     "assistant": {
       "$ref": "#/$defs/Assistant"
+    },
+    "chat": {
+      "$ref": "#/$defs/Chat"
     },
     "integrations": {
       "$ref": "#/$defs/Integrations"

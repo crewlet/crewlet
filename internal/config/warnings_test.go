@@ -337,6 +337,10 @@ func TestAVerboseBrokerIsToldOnlyTheRemediesThatWork(t *testing.T) {
 // one mistake in front of an operator twice.
 func TestAUnitWithNoIDIsRefusedAndWarnedAbout(t *testing.T) {
 	t.Parallel()
+	// THE CHANNEL IS HERE SO THIS CASE STAYS ABOUT THE ID. A Chatlet
+	// company whose units declare no channel raises an advisory of its own,
+	// and a fixture that collected it would assert two warnings while
+	// naming one rule.
 	c := &config.Company{
 		Name: "Acme",
 		// A REACHABLE PERSON'S SEAT, so the one warning counted is the
@@ -344,8 +348,9 @@ func TestAUnitWithNoIDIsRefusedAndWarnedAbout(t *testing.T) {
 		// own ([config.Company.AdvisoryWarnings]).
 		Roles: []config.Role{founderSeat()},
 		Units: []config.Unit{{
-			Name:  "Platform",
-			Roles: []config.Role{{Name: "SWE", Handle: "swe"}},
+			Name:    "Platform",
+			Channel: "platform",
+			Roles:   []config.Role{{Name: "SWE", Handle: "swe"}},
 		}},
 	}
 	// A SUBMITTED DOCUMENT IS REFUSED, and a running one is not: the key
@@ -408,9 +413,14 @@ func TestANestedUnitWithNoIDIsWarnedAboutWhereItWasWritten(t *testing.T) {
 	c := &config.Company{
 		Name:  "Acme",
 		Roles: []config.Role{founderSeat()},
+		// The channels keep this case about the id, as above — and the
+		// child deliberately declares none, which is inheritance working
+		// rather than an omission: a unit that takes its parent's channel
+		// raises nothing.
 		Units: []config.Unit{
-			{Name: "Product", ID: "product", Roles: []config.Role{{Name: "PM", Handle: "pm"}}},
-			{Name: "Engineering", ID: "engineering", Children: []config.Unit{
+			{Name: "Product", ID: "product", Channel: "product",
+				Roles: []config.Role{{Name: "PM", Handle: "pm"}}},
+			{Name: "Engineering", ID: "engineering", Channel: "engineering", Children: []config.Unit{
 				{Name: "Platform", Roles: []config.Role{{Name: "SWE", Handle: "swe"}}},
 			}},
 		},
@@ -521,10 +531,11 @@ func TestAnOperatorFloorNamesEveryCeilingThatWillRefuse(t *testing.T) {
 			ceilings = append(ceilings, "`stream."+name+"`")
 		}
 	}
-	// A FLOOR: eight logs today, the Dashboard Assistant's among them, and
-	// a reflection that matched nothing would let any message pass.
-	if len(ceilings) < 8 {
-		t.Fatalf("config.Stream declares %v, fewer than the eight state logs' "+
+	// A FLOOR: nine logs' ceilings today, the Dashboard Assistant's and
+	// chat's among them, and a reflection that matched nothing would let any
+	// message pass.
+	if len(ceilings) < 9 {
+		t.Fatalf("config.Stream declares %v, fewer than the nine state logs' "+
 			"ceilings, so this compares nothing", ceilings)
 	}
 	for _, want := range append(ceilings, "`backup_age`") {
