@@ -11,6 +11,7 @@ import {
   BRIDGE_METHODS,
   capabilityOf,
   readCall,
+  readDeclaredCapabilities,
   readDoc,
   readEvent,
   readInit,
@@ -55,6 +56,22 @@ describe("a call", () => {
     }
     expect(readCall({ type: BRIDGE_MESSAGE.result, id: 1, method: "identity.me" })).toBeNull();
     expect(readCall("bridge.call")).toBeNull();
+  });
+});
+
+describe("the capabilities on the runtime's element", () => {
+  test("are read as the names a version may declare, once each", () => {
+    expect(readDeclaredCapabilities("db identity presence")).toEqual([
+      "db",
+      "identity",
+      "presence",
+    ]);
+    expect(readDeclaredCapabilities("  db\tdb  assets ")).toEqual(["db", "assets"]);
+  });
+  test("leave out anything that is not one, and read nothing from no attribute", () => {
+    expect(readDeclaredCapabilities("db cookies <script>")).toEqual(["db"]);
+    expect(readDeclaredCapabilities("")).toEqual([]);
+    expect(readDeclaredCapabilities(null)).toEqual([]);
   });
 });
 
