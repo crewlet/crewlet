@@ -2,11 +2,11 @@
 // budget, through the seat's auxiliary model.
 //
 // It is the half [github.com/crewlet/crewlet/internal/agent/ledger] cannot
-// hold: that package imports nothing from crewlet, so it can only NAME the
-// payloads a render needs fitted. This package fits them and says, per kind,
-// what a reader is shown when no rewrite can be had — which is the decision
-// that matters, because the obvious fallback is the cut the ledger used to
-// make and must never make again.
+// hold: that package imports nothing from crewlet but a standard-library leaf,
+// so it can only NAME the payloads a render needs fitted. This package fits
+// them and says, per kind, what a reader is shown when no rewrite can be had —
+// which is the decision that matters, because the obvious fallback is the cut
+// the ledger used to make and must never make again.
 //
 //   - AN ARGUMENT OR AN ERROR that cannot be rewritten is OMITTED by size and
 //     digest ([compact.Omitted]). It is a payload: the call line beside it
