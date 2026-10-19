@@ -10993,14 +10993,14 @@ a.live-row:focus-visible {
 }
 
 /* PRESENT: the slide as large as fits; full screen on the reader's press. */
-/* THE SHOW IS SEEN WHOLE: its height is measured (`useFitInView`) from the
-   room between its top and the foot of the view, and its scroll margins are
-   what that room keeps clear, so the slide's foot and the count under it are
-   never below the fold. */
+/* THE SHOW IS SEEN WHOLE: its stage (`SlideStage fit="view"`) is as tall as
+   the room between the show's top and the foot of the view allows, less the
+   bar, so the slide's foot and the count under it are never below the fold.
+   The show's height follows its content, and its scroll margins are what that
+   room keeps clear. */
 .slides-show {
   display: flex;
   flex-direction: column;
-  height: var(--slides-show-height, calc(100cqb - var(--sticky-top)));
   scroll-margin-top: var(--sticky-top);
   scroll-margin-bottom: var(--spacing-4);
   background: var(--color-surface-inset);
@@ -11008,14 +11008,10 @@ a.live-row:focus-visible {
 .slides-show:fullscreen {
   height: 100%;
 }
-.slides-show-stage {
-  flex: 1;
-  min-height: 0;
-}
-.slides-show-stage[data-transition="fade"] {
+.slides-show-slide[data-transition="fade"] {
   animation: slides-fade var(--motion-duration-moderate) var(--motion-easing-out);
 }
-.slides-show-stage[data-transition="push"] {
+.slides-show-slide[data-transition="push"] {
   animation: slides-push var(--motion-duration-moderate) var(--motion-easing-out);
 }
 @keyframes slides-fade {
