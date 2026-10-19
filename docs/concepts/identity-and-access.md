@@ -2503,11 +2503,17 @@ each a coding CLI on the engine host — exist, and which cell each entry runs
 its executors in (`run_in`, or the default), is the administrator's decision,
 and a lead who points a seat at an entry takes its cell with it.
 
-A refused write is `403 unauthorized` naming `admin` — the permission that
-would admit all of it — and a `refused` list of every part that is not the
-caller's, each with the place it reaches; a dry run (`?dry_run=true`) answers
-the same, so a lead learns before saving. A lead reads what they may write the
-same way: `GET /config/roles/{handle}` and `GET /config/units/{id}` serve a seat
+A refused write is answered by the rule that refused it, folded from its parts
+in the order a single decision asks its own checks. A write that reaches outside
+the caller's subtree, or changes what is never a lead's, is `403 unauthorized`
+with a `refused` list of every such part, each with the place it reaches and
+its own `reason` and `grants`; the top-level `reason` is the parts' own where
+they agree and `no_grant` where they do not, and `grants` names the permission
+that would admit every part — `admin`. An agent's seat is refused
+`seat_refused` with no list, since no part is what shut it, and a write
+refused only because the caller's proof lapsed is `403 step_up_required`. A
+dry run (`?dry_run=true`) answers the same, so a lead learns before saving. A
+lead reads what they may write the same way: `GET /config/roles/{handle}` and `GET /config/units/{id}` serve a seat
 or unit of their subtree, masked as every read of the document is, while the
 whole document stays admin's. A read or a write of one seat or unit
 is decided where it sits **before** it is looked up or its body is read — at

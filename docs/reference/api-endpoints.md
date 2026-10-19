@@ -1943,24 +1943,36 @@ contact identity, a credential, a `${VAR}` in any field and a setting are
 never a lead's. The rule, change by change, is in [Identity and
 Access](../concepts/identity-and-access.md#a-lead-edits-their-own-team).
 
-A write any part of which is not the caller's is refused whole —
-`403 unauthorized` naming `admin`, the permission that would admit all of
-it, and a `refused` list naming every part, so a client can show each beside
-what it is about. A [dry run](#dry-runs) answers the same before anything is
-stored.
+A write any part of which is not the caller's is refused whole, by the rule
+that refused it. On authority — a part outside the caller's subtree, or one
+that is never a lead's — it is `403 unauthorized` with a `refused` list naming
+every such part, so a client can show each beside what it is about. The
+top-level `reason` is the parts' own where they agree and `no_grant` where they
+do not, and `grants` names the permission that would admit **every** part,
+today `admin`; each part carries its own `reason` and `grants` too. A bar on
+the caller — an agent's seat on the org chart's routes — is `403 unauthorized`
+with that reason, no permission named and no list, since no part is what shut
+it. A write refused only because the caller's proof of who they are lapsed is
+`403 step_up_required` naming the window, exactly as the route answers it — and
+since every check of one request is judged at the instant it arrived, a proof
+the route accepted never lapses half-way through the write. A
+[dry run](#dry-runs) answers the same before anything is stored.
 
 ```json
 {
   "error": "unauthorized", "message": "...",
-  "reason": "not_lead", "grants": ["admin"],
+  "reason": "no_grant", "grants": ["admin"],
   "refused": [
     {"kind": "unit", "id": "platform", "op": "changed", "side": "after",
-     "place": "platform", "why": "self", "reason": "not_lead"},
+     "place": "platform", "why": "self", "reason": "not_lead", "grants": ["admin"]},
     {"kind": "unit", "id": "platform", "op": "changed", "side": "after",
-     "place": "data", "why": "lead", "value": "data-lead", "reason": "not_lead"},
+     "place": "data", "why": "lead", "value": "data-lead", "reason": "not_lead",
+     "grants": ["admin"]},
     {"kind": "seat", "id": "staff-eng", "op": "changed", "place": "",
-     "why": "credential", "value": "mcp_env", "reason": "no_grant"},
-    {"kind": "setting", "id": "mission", "place": "", "reason": "no_grant"}
+     "why": "credential", "value": "mcp_env", "reason": "no_grant",
+     "grants": ["admin"]},
+    {"kind": "setting", "id": "mission", "place": "", "reason": "no_grant",
+     "grants": ["admin"]}
   ]
 }
 ```
@@ -1973,6 +1985,7 @@ stored.
 | `place` | The key of the unit the change reaches; `""` is the company root, which is nobody's subtree |
 | `why` | What reaches it: `place` (where the object sits), `self` (a unit's own fields), `lead` or `manages` (a new reference, with the name in `value`), `named` (another object's `lead:` or `manages:` entry that already states the id an added seat or unit takes, with the id in `value`), `duplicate` (two objects on one id, which only `admin` may write), `credential` (a credential field, compared whole so an `mcp_env` key with nothing under it counts, or a `${VAR}` in any other field, with the field's path in `value`), `key` (a `project`, `space`, `channel`, `email` or `contact` set, cleared or changed, with the field in `value`), or `unchanged` (the `document` itself) |
 | `reason` | The authority table's reason: `not_lead` for a place outside the caller's subtree, the company root included, or `no_grant` for a credential, a key, a setting or an unchanged document |
+| `grants` | The permissions any one of which would admit this part — `admin` for every part a lead is refused |
 
 A lead reads what they may write the same way: `GET /config/roles/{handle}`
 and `GET /config/units/{id}` serve a seat or a unit of their subtree, masked
@@ -2392,7 +2405,7 @@ On a `409`, re-read `/config` and send the edit again.
 - `201 Created`: a write produced a new revision; the body is `{"revision_id", "epoch", "warnings", "derived"}` (see [What a write answers](#what-a-write-answers)). A per-entity write, a reload and a revert return this too: each created one revision.
 - `400 Bad Request`: `invalid_body`, `invalid_patch` or `validation_error`, each with `detail` (the field path and what to change) and [`problems`](#refusals-carry-located-problems); `summary_required` when a write has neither an `X-Summary` header nor a `_summary` body key — asked last, once the write is admitted and its document checked, so a caller who may not make the change is answered the `403` first; `invalid_query` when `dry_run` is anything but `true` or `false`; `identity_mismatch` when a per-entity body renames what the path addresses
 - `401 Unauthorized`: missing or invalid bearer token — `invalid_token`, in the same [refusal envelope](#every-refusal-is-one-envelope) every route answers with, written by the guard itself before any route runs
-- `403 Forbidden`: `unauthorized` when the credential holds neither the grant nor, on the org chart, the lead relation — with a `refused` list for [a lead's write](#a-lead-edits-their-own-team) — and `step_up_required` for a write whose proof of identity is older than `step_up`; and `config_managed` when `api.auth.company_writers` names the document's writers and this credential is not one of them — a person's session, a machine token and a lead's write among them — with `managed_by`, `detail` and `hint`, a write and its dry run alike, never a read or a reload, and asked before the body is read (see [Managed configuration](../concepts/configuration.md#managed-configuration))
+- `403 Forbidden`: `unauthorized` when the credential holds neither the grant nor, on the org chart, the lead relation — its `reason` the rule that refused the write, with a `refused` list for [a lead's write](#a-lead-edits-their-own-team) — and `step_up_required` for a write whose proof of identity is older than `step_up`, whether the route or the write's parts found it; and `config_managed` when `api.auth.company_writers` names the document's writers and this credential is not one of them — a person's session, a machine token and a lead's write among them — with `managed_by`, `detail` and `hint`, a write and its dry run alike, never a read or a reload, and asked before the body is read (see [Managed configuration](../concepts/configuration.md#managed-configuration))
 - `404 Not Found`: a revision that is not there, `no_active_revision` on a read when nothing is configured (the fleet has no activation and this node knows no company), `no_such_entity` on a per-entity read or write naming an id the active revision does not carry (of a seat or a unit, told only to `admin`, and anybody else is refused `403` as for one outside their team), or `no_route` for a path under `/config` this surface does not serve
 - `405 Method Not Allowed`: `method_not_allowed` for a `/config` path under a method it does not take, with `Allow`
 - `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer or with the pointer's removal) or `no_active_revision` (a `PATCH`, a charter write, a per-entity write or a reload when nothing is configured). A `revision_advanced` from a write that lost at its activation names the revision it kept as `stored_revision_id` and the node holding it as `node` — see [Concurrent writes](#concurrent-writes)
