@@ -102,7 +102,8 @@ type SetupError struct {
 	// Command is the failed command's 1-based position within the step.
 	Command int
 	// Exited is whether the command reported an exit status, which Exit
-	// then holds. A command the box could not start has none, and neither
+	// then holds — a signal that ended it as a shell reports one, 128 plus
+	// its number. A command the box could not start has none, and neither
 	// does one whose box went away before it reported.
 	Exited bool
 	Exit   int

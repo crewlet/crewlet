@@ -65,6 +65,32 @@ func TestASetupFailureSaysWhatFailed(t *testing.T) {
 		}
 	})
 
+	// A SIGNAL IS A STATUS TOO, read as a shell reads one. The process a
+	// direct box starts is the command's own shell, and when a signal ends
+	// that shell itself — an OOM kill, a command that execs into a program
+	// that dies of one — the host reported -1, which read "failed (exit -1)":
+	// a status no process exits with, and nothing naming the signal.
+	t.Run("a command whose own shell a signal ends", func(t *testing.T) {
+		t.Parallel()
+		box := mustCreate(t, newDirect(t), Spec{Placement: Direct})
+		err := ApplySetup(t.Context(), box, []SetupStep{{
+			Name:     "deps",
+			Commands: []string{"echo out of memory >&2; kill -TERM $$"},
+		}}, nil)
+		var setup *SetupError
+		if !errors.As(err, &setup) {
+			t.Fatalf("a signalled command is not a SetupError: %v", err)
+		}
+		if !setup.Exited || setup.Exit != 128+15 || setup.Command != 1 {
+			t.Errorf("a command its shell's SIGTERM ended reads as %+v, want exit 143", setup)
+		}
+		want := `setup step "deps" command #1 failed (exit 143) — out of memory` + "\n" +
+			`killed by signal 15 (terminated)`
+		if msg := err.Error(); msg != want {
+			t.Errorf("message = %q, want %q", msg, want)
+		}
+	})
+
 	t.Run("a command that reports no exit status", func(t *testing.T) {
 		t.Parallel()
 		box := NewFakeSandbox("unreachable")
