@@ -240,6 +240,16 @@ export function audienceKey(audience: ArtifactAudience): string {
 }
 
 /**
+ * Why a stored share reaches nobody, as its row in the share dialog says it:
+ * the engine marks it `invalid` (a sign-in named as a seat, which a build
+ * before the grant rule wrote), and its owner is told what it is and what to
+ * do instead. The sign-in is named as written, since that is what was stored.
+ */
+export function invalidShareWords(audience: ArtifactAudience): string {
+  return `${audience.id ?? ""} is a sign-in, not a seat. Remove it and share with their seat.`;
+}
+
+/**
  * One history row as a sentence after its actor's name. A refused row says it
  * was refused, so the record reads as what was tried and what came of it, and
  * a change an administrator made with no share of their own says so once: an
