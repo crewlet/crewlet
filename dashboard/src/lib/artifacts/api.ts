@@ -243,7 +243,10 @@ export async function readDeck(
   version: number,
   signal: AbortSignal,
 ): Promise<ArtifactDeckAnswer> {
-  return (await rest.get(`${base(id)}/versions/${version}/deck`, signal)) as ArtifactDeckAnswer;
+  return (await rest.get(
+    `/artifacts/${encodeURIComponent(id)}/versions/${version}/deck`,
+    signal,
+  )) as ArtifactDeckAnswer;
 }
 
 /** A version's outline (`GET …/versions/{n}/outline`): what the gallery draws a native cover from. */
@@ -252,7 +255,10 @@ export async function readOutline(
   version: number,
   signal: AbortSignal,
 ): Promise<ArtifactOutline> {
-  return (await rest.get(`${base(id)}/versions/${version}/outline`, signal)) as ArtifactOutline;
+  return (await rest.get(
+    `/artifacts/${encodeURIComponent(id)}/versions/${version}/outline`,
+    signal,
+  )) as ArtifactOutline;
 }
 
 /**

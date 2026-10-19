@@ -74,6 +74,7 @@ import {
   type DeckMerge,
 } from "~/lib/artifacts/deck.ts";
 import { renderSlide, withText, type SlideRenderContext } from "~/lib/slides.tsx";
+import { SLIDE_TRANSITIONS } from "~/contract/artifacts.ts";
 import type { PresenceReport } from "./presence.ts";
 
 /** The views of a deck, as `mode=` names them; "" is the editor (or the reader's slides). */
@@ -668,7 +669,9 @@ function DeckShow({
   const prefix = useId().replace(/:/g, "");
   // HOW THE LAST SLIDE LEFT is how the next one enters: its transition.
   const previous = useRef(current);
-  const transition = previous.current.id !== current.id ? (previous.current.transition ?? "") : "";
+  const left = previous.current.id !== current.id ? (previous.current.transition ?? "") : "";
+  // ONLY A TRANSITION THE FORMAT NAMES is played; anything else is a cut.
+  const transition = (SLIDE_TRANSITIONS as readonly string[]).includes(left) ? left : "";
   useEffect(() => {
     previous.current = current;
   }, [current]);
