@@ -267,6 +267,10 @@ function Figure({
       const { series, buckets, from, to } = seriesOf(w, rows, label, column(w.by));
       const days = allDays(rows.map((r) => r[w.x ?? ""] ?? null));
       const time = days ? { formatTime: (at: number) => formatDay(at) } : {};
+      // ONE NAMED COLUMN IS NAMED BY THE TITLE ("Deploys per day"), so it
+      // draws no key; a split names its bands nowhere else, so it keeps one
+      // even when it answered a single band.
+      const legend = !w.by && series.length === 1 ? ("none" as const) : ("below" as const);
       if (w.type === "timeseries") {
         return (
           <TimeSeries
@@ -275,6 +279,7 @@ function Figure({
             to={to}
             format={(v) => num(v)}
             emptyLabel={NO_ROWS}
+            legend={legend}
             {...time}
             series={series.map((s) => ({
               id: s.id,
@@ -292,6 +297,7 @@ function Figure({
           format={(v) => num(v)}
           formatScale={scaleFormat(w)}
           emptyLabel={NO_ROWS}
+          legend={legend}
           {...time}
         />
       );

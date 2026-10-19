@@ -217,3 +217,62 @@ test("a table draws every absent value as the empty mark, a priority of none inc
   expect(screen.queryByText("None")).toBeNull();
   expect(document.querySelectorAll(".dashboard-rows .crewlet-empty-value")).toHaveLength(2);
 });
+
+test("a chart of one named column draws no key, and a split of one band names it", () => {
+  const columns = [
+    { key: "day", type: "date" as const },
+    { key: "n", type: "number" as const, label: "Deploys" },
+    { key: "team", type: "text" as const },
+  ];
+  const rows = [
+    { day: "2026-10-01", n: 3, team: "Platform" },
+    { day: "2026-10-02", n: 5, team: "Platform" },
+  ];
+  draw(
+    { id: "c", type: "columns", title: "Deploys per day", x: "day", y: ["n"], w: 6 },
+    columns,
+    rows,
+  );
+  expect(document.querySelector(".crewlet-legend")).toBeNull();
+  cleanup();
+  draw(
+    { id: "c", type: "columns", title: "Deploys per day", x: "day", y: ["n"], by: "team", w: 6 },
+    columns,
+    rows,
+  );
+  expect(
+    within(document.querySelector(".crewlet-legend") as HTMLElement).getByText("Platform"),
+  ).toBeTruthy();
+});
+
+test("in a row, a stat's and a meter's frame hold their title at two lines", () => {
+  render(
+    <ToastProvider>
+      <DashboardWidget
+        boardTitle="Pulse"
+        widget={{ id: "s", type: "stat", title: "Open", dataset: "ds", agg: "count", w: 3 }}
+        dataset={{
+          id: "ds",
+          title: "Deploys",
+          source: "store",
+          shape: { columns: [] },
+          freshness: { mode: "live", collection: "ds" },
+        }}
+        answer={{
+          artifact: "a",
+          version: 1,
+          dataset: "ds",
+          status: "ready",
+          table: { columns: [], rows: [{}] },
+        }}
+        status="ready"
+        detail={undefined}
+        asOf={undefined}
+        onCite={undefined}
+        onFocus={() => {}}
+        inRow
+      />
+    </ToastProvider>,
+  );
+  expect(document.querySelector(".crewlet-widget-frame--hold-title")).not.toBeNull();
+});

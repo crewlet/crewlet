@@ -79,8 +79,11 @@ export function DataTab({ detail, store }: { detail: ArtifactDetail; store: Arti
       <Skeleton variant="text" rows={4} label="Loading the data" />
     );
   }
+  // The view is read before the markup: compared inside `className`, its
+  // value read to the stylesheet check as a class named "rows".
+  const asRows = view === "rows";
   return (
-    <div className={view === "rows" ? "artifact-data artifact-data--rows" : "artifact-data"}>
+    <div className={asRows ? "artifact-data artifact-data--rows" : "artifact-data"}>
       <div className="artifact-data-bar">
         <SegmentedControl
           semantics="radio"

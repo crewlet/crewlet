@@ -11591,9 +11591,6 @@ a.live-row:focus-visible {
   flex-direction: column;
   min-width: 0;
 }
-.dashboard-figure {
-  min-width: 0;
-}
 /* A FIGURE FILLS ITS FRAME'S BODY, so a chart with nothing to draw says so
    in the middle of the area its plot would have filled.
 
@@ -11603,6 +11600,7 @@ a.live-row:focus-visible {
    stat has the air before its citation. Stood on the foot of the frame, a
    meter's number rode its bar a line above the stats beside it. */
 .dashboard-figure {
+  min-width: 0;
   height: 100%;
 }
 /* A DATASET'S ROWS ARE A LIST TABLE: 32px rows over the 13px cells, the
@@ -11610,8 +11608,10 @@ a.live-row:focus-visible {
    compact table's own hooks: the inset is what the row leaves around a line
    of text and its 1px rule, so the row is the token's height and no more
    (the header takes the same inset). At the list row's 36px a widget's table
-   was the one table of the artifacts screens that stood taller. */
-.dashboard-rows.crewlet-data-table--compact {
+   was the one table of the artifacts screens that stood taller. Our sheets
+   load after the design system's, so this binding outranks the table's own
+   at equal weight. */
+.dashboard-rows {
   --crewlet-data-table-row-height: var(--size-sheet-row);
   --crewlet-data-table-cell-pad-y: calc((var(--size-sheet-row) - 1lh - 1px) / 2);
 }
