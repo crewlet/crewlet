@@ -47,16 +47,25 @@ export interface ArtifactPeople {
   pagePeople: BridgePerson[];
 }
 
-/** A unit as a principal: everybody in it and below it. */
+/**
+ * A unit as a principal: everybody in it and below it.
+ *
+ * A COUNT OF NONE IS LEFT OUT. "0 people, 2 agents" spends half its line on
+ * what the team does not hold; "2 agents" says the same.
+ */
 export function principalOfUnit(unit: Unit | undefined, key: string): Principal {
   if (!unit) return { id: key, kind: "team", name: key };
   const people = unit.allSeats.filter((s) => s.kind === "human").length;
   const agents = unit.allSeats.length - people;
+  const counts = [
+    people > 0 ? plural(people, "person", "people") : "",
+    agents > 0 ? plural(agents, "agent") : "",
+  ].filter(Boolean);
   return {
     id: unit.id,
     kind: "team",
     name: unit.name,
-    detail: `${plural(people, "person", "people")}, ${plural(agents, "agent")}`,
+    detail: counts.length > 0 ? counts.join(", ") : "No seats yet",
   };
 }
 
