@@ -10,6 +10,12 @@ import (
 // authority writes them and a client reads them from all of them: a screen
 // that learned `missing_grant` from one route and `grants` from another would
 // branch twice on one fact.
+//
+// AND THE ENVELOPE READS THEM TOO: `unauthorized`'s sentence follows the
+// reason, and names the grants only where a permission is a way past the rule
+// and an artifact's share is not what clears it (internal/api/httpjson, which
+// spells both keys once, for its decoder and its sentence table alike, and
+// whose tests build every refusal they read through [RefusalDetail]).
 const (
 	// DetailReason is the rule's own [Reason]. The envelope's key,
 	// spelled once in internal/api/httpjson, whose decoder reads it back.
@@ -36,7 +42,7 @@ const (
 // second statement of the rule, and it is the one that goes stale the day the
 // rule's permission moves; the grants here are what the deciding rule actually
 // consulted. The sentence a person reads is the envelope's `message`, which
-// belongs to the code.
+// belongs to the code and is chosen by the reason this carries.
 //
 // A pair rather than a [Decision], because not every refusal is one: a
 // question's own declared permission is checked by internal/api/queries'

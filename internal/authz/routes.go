@@ -482,8 +482,10 @@ const RetryUndecidedSeconds = 2
 //     `detail` contradicted each other.
 //   - THE DASHBOARD ASSISTANT on a verb of the human-only list is `403
 //     unauthorized` with the `assist_refused` reason, and its `detail` is the
-//     sentence the list gives that verb's family ([AssistNeverSentence]), so
-//     the person reads why it stays with them and where they do it.
+//     sentence the list gives that verb's family ([AssistNeverSentence]): the
+//     assistant's model reads it to tell the person why it stays with them
+//     and where they do it, while the card they read says the reason's own
+//     sentence, since a route's `detail` is the model's alone.
 //   - A CALLER WITH NO RELATION to an artifact is `404 not_found` with
 //     nothing beside it ([Decision.NotFound]): no reason and no grants, the
 //     answer a surface gives for an id nothing holds, so the refusal cannot
@@ -503,7 +505,7 @@ func EnvelopeRefusal(w http.ResponseWriter, _ *http.Request, p Policy, d Decisio
 	case d.Reason == ReasonAssistRefused:
 		// THE PERSON IS TOLD WHY IT STAYS WITH THEM, and where they do it,
 		// in the sentence the human-only list gives the verb's family: the
-		// drawer shows `detail` as the refusal's words.
+		// assistant hands `detail` to its model, which tells them in its reply.
 		detail := RefusalDetail(d.Reason, d.Grants)
 		if tell := AssistNeverSentence(p.Action); tell != "" {
 			detail["detail"] = tell

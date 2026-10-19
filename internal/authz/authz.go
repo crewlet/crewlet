@@ -606,8 +606,12 @@ const (
 	// TOKEN gets and the person it acts as would not: the verb needs a
 	// person present, and a token proves nobody is. See [Presence].
 	ReasonTokenRefused Reason = "token_refused"
-	// ReasonStage is a refusal: this principal is not through enrolment,
-	// so nothing it asks for is granted yet.
+	// ReasonStage is a refusal: this principal's stage may not act —
+	// invited, enrolling, suspended or retired ([iam.Stage.MayAct]) — so
+	// nothing it asks for is granted, whatever it holds. An administrator
+	// activating the record is what clears it; a sign-in that has yet to
+	// enrol a second factor is not this — that person is active, holding a
+	// session the guard refuses `second_factor_enrolment_required`.
 	ReasonStage Reason = "stage"
 	// ReasonUnnamed is a refusal: the action named an object the rule
 	// needs a field of, and the field is empty. A rule that guessed here

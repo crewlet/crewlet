@@ -90,7 +90,10 @@ one JSON object, and it always has the same three parts in the same places:
 - **`message` is one sentence for a person**, written as product copy and
   rendered verbatim by the dashboard. It belongs to the *code*, not to the call
   site, so a refusal reads the same wherever it came from — and a route with
-  more to say says it in the detail rather than rewording the sentence.
+  more to say says it in the detail rather than rewording the sentence. A code
+  whose refusals have different remedies picks its sentence by the facts the
+  detail carries, never by which route wrote it: `unauthorized` says the rule
+  its `reason` names ([below](#which-permission-a-route-needs)).
   Never match on it: the wording is copy and can be improved at any time. Every
   refusal carries one — `/config`, `/secrets` and `/setup` included,
   which used to build their own bodies with the code alone, and every
@@ -780,6 +783,26 @@ a seat-only verb, a verb made as a seat asked by a credential bound to none, or
 a relation the org chart does not hold. The [human write
 surface](#the-human-write-surface) answers its own refusals `403 forbidden` in
 its tools' wording instead.
+
+The `message` follows the `reason`, and names a permission only where one is
+the remedy. `no_grant` names the permissions in `grants` ("You don't have the
+access this needs (Worklet)"); a refused relation (`not_self`, `not_lead`,
+`not_author` or `unnamed`) says what the rule asked and names the `grants`
+beside it as what would admit you anyway, or says that no access would; and
+every other reason says what does clear it, whatever `grants` holds: `role`, a
+share of an artifact below the role the verb asks, that its owner can share it
+with you at a higher one (the admin path admits whatever the shares say, but
+the share is what to ask for), `unseated` a credential bound to a human seat
+(`crewlet iam bind`),
+`stage` an account an admin activates (`crewlet iam activate`), `step_up` a
+fresh proof of who you are, `seat_refused` and `seat_only` that the verb is a
+person's or an agent's, `ceiling` that the person an agent is working for
+could not do it either, `assist_refused` that the Dashboard Assistant never
+takes the gesture, which stays with you, and `assist_scope` that the assistant
+makes the change only as one you approve. (`not_shared` is never seen here: an
+artifact nothing relates you to is answered `404 not_found`.) A refusal
+carrying no `reason` is told the code's own sentence, which names every
+permission there is.
 
 A request the node **cannot decide** — it holds no company yet — is
 `503 unavailable` with a `Retry-After`, never a `403`: a lead
@@ -7688,6 +7711,18 @@ any prose hangs on an empty message opened for it (a `delta` with no text).
 A turn never streams a raw tool argument, a raw answer, a prompt, a token count
 or a grant: a step carries a label the engine renders and the route pattern it
 asked, and a card is built by the engine from the route's own answer.
+
+A step or a card a request was refused on carries the refusal as a person
+reads it, `{code, message, hint?, reason?, grants?}`. `message` is the
+engine's sentence for that kind of refusal, never the route's `detail`, which
+names tools and fields and goes to the model alone: where the [authority
+table](#which-permission-a-route-needs) refused, the sentence the envelope
+says for the rule its `reason` names; otherwise one chosen by the code and
+the status. `hint` is the engine's own next step where it has one. `reason`
+and `grants` (the rule that refused, and the permissions any one of which
+would have admitted you) are there where the authority table refused, and
+the grants alone never say whether access is the way past: a
+`step_up_required` refusal names the grants that admitted you.
 
 | Status | Code | Meaning |
 |---|---|---|

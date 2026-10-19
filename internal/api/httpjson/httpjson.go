@@ -23,7 +23,10 @@
 //     verbatim, so each one is product copy rather than a log line, and it
 //     belongs to the CODE rather than to the call site: the same refusal reads
 //     the same wherever it came from, and a route with more to say says it in
-//     the detail rather than rewording the sentence.
+//     the detail rather than rewording the sentence. A code covering refusals
+//     with different remedies chooses among its sentences by the facts its
+//     detail carries — never by who wrote it — which is how `unauthorized`
+//     says the authority table's own reason ([messageFor]).
 //   - the [Detail] — the machine-readable facts about THIS refusal, as typed
 //     JSON: `{"missing_grant": "secrets.reveal"}`, `{"retry_after_ms": 4000}`,
 //     `{"relation": "leads", "subject": "sarah-chen"}`. Its `detail` and
@@ -1061,27 +1064,6 @@ const (
 	CodeActionAlreadyClaimed Code = "action_already_claimed"
 )
 
-// unauthorizedSentence is [CodeUnauthorized]'s sentence, naming every
-// permission in grants as a person reads it: each word capitalised, in the
-// list's own order, joined by commas with "or" before the last, the words
-// People & access gives the permissions.
-func unauthorizedSentence(grants []iam.Grant) string {
-	words := make([]string, 0, len(grants))
-	for _, g := range grants {
-		word := string(g)
-		if word != "" {
-			word = strings.ToUpper(word[:1]) + word[1:]
-		}
-		words = append(words, word)
-	}
-	named := strings.Join(words, ", ")
-	if n := len(words); n > 1 {
-		named = strings.Join(words[:n-1], ", ") + " or " + words[n-1]
-	}
-	return "You don't have the access this needs (" + named + "). Ask an admin " +
-		"for it."
-}
-
 // codes is THE TABLE: every code this engine answers with, each with the one
 // sentence a person is shown for it.
 //
@@ -1120,12 +1102,16 @@ var codes = map[Code]string{
 	// ABOUT THE ACCESS, NOT A TOKEN. It said "that query needs an operator
 	// token", which was true while an operator token was the only credential
 	// and authority a single yes-or-no; a person signed in with a session
-	// and refused one permission was told to go and find a token. It NAMES
-	// EVERY PERMISSION there is (ADR-0033), because a person reading it on a
-	// screen has to know what to ask an admin for, and the refusal's `grants`
-	// beside it says which one — read off [iam.AllGrants] rather than typed
-	// here, so a permission the next app adds is named the day it exists.
-	CodeUnauthorized: unauthorizedSentence(iam.AllGrants),
+	// and refused one permission was told to go and find a token.
+	//
+	// THIS IS THE SENTENCE FOR A REFUSAL THAT SAYS NOTHING MORE about itself
+	// — no `reason` beside it — and it NAMES EVERY PERMISSION there is
+	// (ADR-0033), read off [iam.AllGrants], because a person reading it has
+	// to know what to ask an admin for. A refusal that carries the deciding
+	// rule's reason is told that rule's own sentence instead
+	// ([unauthorizedMessage]), since most of the rules it covers are ones
+	// no permission would change.
+	CodeUnauthorized: lacksSentence(grantWords(grantNames(iam.AllGrants))),
 	CodeQueryFailed: "That query could not be answered. The reason is in " +
 		"this node's log.",
 	CodeNotFound:  "There is no such record here.",
@@ -1481,7 +1467,9 @@ func (c Code) Valid() bool {
 }
 
 // Message is the sentence a person is shown for c, or "" for a code the table
-// does not carry.
+// does not carry — for a refusal under c that says nothing more about itself.
+// One that does may be shown a sentence chosen by what it says ([Envelope]):
+// `unauthorized` follows the deciding rule's reason.
 //
 // A code with no sentence still ANSWERS: `error` is what a client branches on,
 // and refusing over missing copy would turn a refusal into a failure. What it
@@ -1574,7 +1562,9 @@ func FailWithFields(w http.ResponseWriter, status int, code Code, detail Detail)
 }
 
 // Envelope is the refusal body [FailWithFields] writes, as a value: the
-// detail with `error` and `message` over it.
+// detail with `error` and `message` over it — the message the code's, chosen
+// by what the detail says where the code's sentence depends on it
+// ([messageFor]).
 //
 // EXPORTED FOR A RENDERING THAT IS ALSO A FIXTURE — the node gate's refusals,
 // whose bodies a golden file pins and the dashboard's suite reads — so the
@@ -1589,7 +1579,7 @@ func Envelope(code Code, detail Detail) map[string]any {
 		}
 	}
 	body[keyError] = string(code)
-	if message := code.Message(); message != "" {
+	if message := messageFor(code, detail); message != "" {
 		body[keyMessage] = message
 	} else {
 		// A refusal a person is shown nothing for. Not a failure of this

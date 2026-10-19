@@ -24,8 +24,20 @@ import (
 // through [PersonRefusal]. What to do next is the assistant's to say in plain
 // words, from the detail it was handed, which the prompt asks of it.
 //
-// THE GRANTS STAY: they are closed-set names the dashboard turns into "You
-// need Worklet access", the one fact about a refusal a person acts on alone.
+// A REFUSAL ON AUTHORITY SAYS ITS RULE. The authority table answers most of
+// its refusals `403 unauthorized`, and few of them are a missing permission: a
+// verb the assistant never takes, a change it can only propose, a role on an
+// artifact below the verb's, a verb only an agent makes. Worded by their code
+// and status, every one of them read "You do not have the access this
+// needs.", an administrator's among them. So a refusal carrying the table's
+// reason says the sentence the envelope says for that rule
+// ([httpjson.RefusalMessage]), the words every reader of the API is told, and
+// only the rest are worded here by their code and status.
+//
+// THE RULE AND THE GRANTS STAY: closed-set words a client decides by, the
+// reason that refused and the permissions it names. The grants alone cannot
+// say whether a permission is the way past (a stale proof's are the ones that
+// admitted the person), and the reason can.
 
 // The sentences a person reads, by kind of refusal. Each is whole on its own,
 // says nothing about what changed (a failed proposal's card adds "Nothing
@@ -93,20 +105,27 @@ func RefusalHint(code string) string {
 	return RefusalResumes
 }
 
-// PersonRefusal is r as a person reads it: its code and grants, and the
-// engine's own sentence for its kind ([personSentence]) in place of the route's
-// or the model's words. status is the route's answer, zero for a call refused
-// before anything was sent. The detail is left behind: it is the model's.
+// PersonRefusal is r as a person reads it: its code, its rule's reason and its
+// grants, and the engine's own sentence for its kind ([personSentence]) in
+// place of the route's or the model's words. status is the route's answer,
+// zero for a call refused before anything was sent. The detail is left
+// behind: it is the model's.
 func PersonRefusal(r wire.Refusal, status int) wire.Refusal {
-	return wire.Refusal{Code: r.Code, Message: personSentence(r.Code, status),
+	return wire.Refusal{Code: r.Code, Message: personSentence(r, status), Reason: r.Reason,
 		Grants: slices.Clone(r.Grants)}
 }
 
-// personSentence is the sentence for a refusal of code at status: the code
-// where it says more than its status (a 409 that is an existing record, a full
-// or spent turn, a turn that ended, rather than a race), else the status's
-// class.
-func personSentence(code string, status int) string {
+// personSentence is the sentence for refusal r, answered at status: its
+// rule's, where the authority table refused; else its code's, where that says
+// more than its status (a 409 that is an existing record, a full or spent
+// turn, a turn that ended, rather than a race); else its status's class.
+func personSentence(r wire.Refusal, status int) string {
+	if r.Reason != "" {
+		if said := httpjson.RefusalMessage(httpjson.Code(r.Code), r.Reason, r.Grants); said != "" {
+			return said
+		}
+	}
+	code := r.Code
 	switch code {
 	case "step_up_required":
 		return refusedStepUp

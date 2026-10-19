@@ -131,8 +131,9 @@ type StepRequest struct {
 }
 
 // Refusal is a refusal in the engine's own words: the API's code, its
-// sentence, what to do about it where the route said, and the grants that
-// would have admitted the caller where the authority table names them.
+// sentence, what to do about it where the route said, and, where the
+// authority table refused, the rule that decided and the grants that would
+// have admitted the caller.
 //
 // TWO READERS, TWO CHANNELS. Message and Hint are what a person reads, and
 // Detail is the route's own account of this one refusal (the envelope's
@@ -145,7 +146,15 @@ type Refusal struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	// Hint is the next step, shown on its own line.
-	Hint   string   `json:"hint,omitempty"`
+	Hint string `json:"hint,omitempty"`
+	// Reason is the deciding rule's own word (the envelope's `reason`, an
+	// authz.Reason) where the authority table refused, and empty for any
+	// other refusal. THE GRANTS ALONE CANNOT SAY WHETHER ACCESS IS THE WAY
+	// PAST: a stale proof names the grants that admitted the caller. So the
+	// sentence a person reads follows the rule rather than the grants, and
+	// the rule travels with them: they are a way past it only where it says
+	// so.
+	Reason string   `json:"reason,omitempty"`
 	Grants []string `json:"grants,omitempty"`
 	// Detail is the route's own account of the refusal, for the model only.
 	Detail string `json:"-"`

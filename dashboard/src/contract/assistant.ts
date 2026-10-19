@@ -294,11 +294,17 @@ interface AssistantStepRequest {
   route: string;
 }
 
-/** A refusal in the engine's own words. */
+/**
+ * A refusal in the engine's own words. `reason` is the deciding rule's own word
+ * where the authority table refused: `grants` alone cannot say whether access
+ * is the way past it (a stale proof names the access that admitted the person),
+ * and the rule can.
+ */
 interface AssistantRefusal {
   code: string;
   message: string;
   hint?: string;
+  reason?: string;
   grants?: string[];
 }
 

@@ -40,7 +40,8 @@ func TestEveryEnvelopeDecodesBackToItsValues(t *testing.T) {
 				authz.RefusalDetail(authz.ReasonAssistScope, []iam.Grant{iam.GrantWorklet, iam.GrantAdmin}))
 		},
 		want: httpjson.Refused{Code: httpjson.CodeUnauthorized,
-			Reason: string(authz.ReasonAssistScope), Grants: []string{"worklet", "admin"}},
+			Message: unauthorizedSays(authz.ReasonAssistScope, iam.GrantWorklet, iam.GrantAdmin),
+			Reason:  string(authz.ReasonAssistScope), Grants: []string{"worklet", "admin"}},
 	}, {
 		name: "a step-up",
 		write: func(w http.ResponseWriter) {
@@ -54,7 +55,11 @@ func TestEveryEnvelopeDecodesBackToItsValues(t *testing.T) {
 		rec := httptest.NewRecorder()
 		tc.write(rec)
 		got, ok := httpjson.Decode(rec.Body.Bytes())
-		tc.want.Message = tc.want.Code.Message()
+		// THE CODE'S OWN SENTENCE, but where a case names the one its
+		// refusal chose: `unauthorized` says the rule its reason names.
+		if tc.want.Message == "" {
+			tc.want.Message = tc.want.Code.Message()
+		}
 		if !ok || got.Code != tc.want.Code || got.Message != tc.want.Message ||
 			got.Detail != tc.want.Detail || got.Hint != tc.want.Hint ||
 			got.Reason != tc.want.Reason || !slices.Equal(got.Grants, tc.want.Grants) {
