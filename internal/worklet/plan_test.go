@@ -7,16 +7,18 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
+	"io/fs"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -54,8 +56,8 @@ import (
 // was maintained on every commit for nobody until replicated 0054 dropped it.
 // The table's readers are every statement this package runs that finds
 // history rows ([historyReads]), each planned over a company's history, and
-// the set is held COMPLETE: every statement in this package's source that
-// reads the table is one of them.
+// the set is held COMPLETE: every statement in the module's source that reads
+// the table is one of them ([statementLiterals]).
 func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
 	db := planStore(t)
@@ -261,7 +263,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	// AND THE SET IS COMPLETE. A statement that reads the history and is
 	// in neither list is a reader this test cannot see, and an index kept
 	// for it — or a scan it makes — would pass here unread. Every literal
-	// of this package's source that names the table as a source of rows
+	// of the module's source that names the table as a source of rows
 	// has to be part of a registered statement. An INSERT finds no rows,
 	// which is why the history's own is not among them.
 	registered := make([]string, 0, len(reads)+len(passes))
@@ -273,19 +275,19 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	}
 	for _, literal := range statementLiterals(t, "tracker_history") {
 		if !slices.ContainsFunc(registered, func(statement string) bool {
-			return strings.Contains(statement, literal)
+			return strings.Contains(statement, literal.text)
 		}) {
-			t.Errorf("this statement reads tracker_history and is registered in "+
-				"neither historyReads nor historyPasses, so no plan of it is "+
-				"taken — name it, as every other is named, and register it:\n%s",
-				literal)
+			t.Errorf("this statement in %s reads tracker_history and is "+
+				"registered in neither historyReads nor historyPasses, so no plan "+
+				"of it is taken — name it, as every other is named, and register "+
+				"it:\n%s", literal.file, literal.text)
 		}
 	}
 
 	// AND THE SAME FOR THE TASK TABLES, against every statement planned
 	// here: the grammar's, through the registered queries; the readers
-	// outside it, the censuses and the passes; and the history's, several
-	// of which join a task. Until this walk existed most of the task
+	// outside it, the censuses and the passes — the search package's
+	// among them; and the history's, several of which join a task. Until this walk existed most of the task
 	// tables' readers were planned by nobody — and among them were the
 	// apply's own read of a task's children, which walked the company
 	// through the primary key, the catalogue's settle, which read every
@@ -294,13 +296,14 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	planned = append(planned, registered...)
 	for _, literal := range statementLiterals(t, covered[:4]...) {
 		if !slices.ContainsFunc(planned, func(statement string) bool {
-			return strings.Contains(statement, literal)
+			return strings.Contains(statement, literal.text)
 		}) {
-			t.Errorf("this statement reads a task table and no statement this "+
-				"test plans holds it, so no plan of it is taken — name it, as "+
-				"every other is named, and register it in taskReads, "+
-				"taskCensuses or taskPasses, or as a query in "+
-				"registeredQueries:\n%s", literal)
+			t.Errorf("this statement in %s reads a task table and no statement "+
+				"this test plans holds it, so no plan of it is taken — name it, "+
+				"as every other is named (from outside this package, as an "+
+				"exported function returning the statement and its arguments), "+
+				"and register it in taskReads, taskCensuses or taskPasses, or "+
+				"as a query in registeredQueries:\n%s", literal.file, literal.text)
 		}
 	}
 
@@ -632,8 +635,15 @@ func taskReads() map[string]indexedRead {
 
 		// THE LEXICAL INDEX'S WALK OF THE LIVE TASKS, a batch at a time by
 		// id from a cursor — a seek of the key, which every partial index
-		// on the live tasks would otherwise take from it.
+		// on the live tasks would otherwise take from it — and its other
+		// reads, and the backlinks', each a batch of tasks by their key.
 		"the lexical index's walk": {read(search.TaskVersionsRead("t-00010", 500)), key, false},
+		"the lexical index's fetch": {read(search.TaskFetchRead(
+			[]string{"t-00001", "t-00002", "t-00003"})), key, false},
+		"the lexical index's live check": {read(search.TaskLiveRead(
+			[]string{"t-00001", "t-00002", "t-00003"})), key, false},
+		"a page's backlinked tasks": {read(search.LinkedTasksRead(
+			[]string{"t-00001", "t-00002", "t-00003"})), key, false},
 	}
 	const (
 		task, other = "t-00001", "t-00002"
@@ -784,6 +794,10 @@ func taskReads() map[string]indexedRead {
 // company's workload by person — each a function of every live task in the
 // scope by definition, at the workspace and inside a project or a team.
 //
+// AND THE SEARCH PACKAGE'S TWO: the lexical index's count of the live tasks,
+// and the window report's read of every live task's text, which an operator
+// runs against a backup's copy.
+//
 // A CENSUS IS PLANNED AND HELD TO NO HEAP SCAN, and to nothing else: its walk
 // of the task table is the whole of its scope, which is the question it
 // answers, and the sort it ends with is of its groups rather than its rows.
@@ -801,6 +815,12 @@ func taskCensuses() map[string]plannedRead {
 		statement, args := workloadStatement(units, store.EncodeTime(planNow))
 		out["the workload of "+scope] = plannedRead{statement, args}
 	}
+	// AND THE SEARCH PACKAGE'S: the lexical index's count of the live
+	// tasks, and the window report's read of every live task's text.
+	statement, args := search.TaskCountRead()
+	out["the lexical index's count"] = plannedRead{statement, args}
+	statement, args = search.TaskTextRead()
+	out["the window report's read of every task"] = plannedRead{statement, args}
 	return out
 }
 
@@ -1242,12 +1262,25 @@ func historyPasses() map[string]plannedRead {
 	}
 }
 
-// statementLiterals is every statement fragment of this package's own source
-// that names one of tables as a source of rows — after FROM, JOIN or UPDATE —
-// which is every fragment of every statement that reads them.
+// statementLiterals is every statement fragment of this module's non-test Go
+// source that names one of tables as a source of rows — after FROM, JOIN or
+// UPDATE — which is every fragment of every statement that reads them.
 //
 // THE SOURCE RATHER THAN A LIST, for the reason [taskReads] gives against a
 // copy: a list beside the readers is one a new reader is added to by memory.
+//
+// THE WHOLE TREE RATHER THAN THIS PACKAGE, because the tables are read from
+// outside it: the search package walks, fetches and counts the live tasks for
+// its lexical index, names the tasks a page's backlinks cite and reads every
+// task's body for the window report — and walked over this directory alone,
+// none of those was a reader this gate could see, so the lexical index's walk
+// read every live task in the company and sorted it for each batch while the
+// gate passed. A package that starts reading a task table fails here until
+// its statement is named, exported and registered, as search's are
+// ([search.TaskVersionsRead] and the rest). The walk is [sourcetree.Walk]'s,
+// so a nested checkout's copy of a file is never read as this tree's, and a
+// walk that read no file outside this package fails rather than passing on
+// this package alone.
 //
 // A FRAGMENT IS A RUN OF ADJACENT LITERALS, folded: `"… FROM " +
 // "tracker_task_deps d …"` is one fragment, because a statement written across
@@ -1262,7 +1295,7 @@ func historyPasses() map[string]plannedRead {
 // the set's own — is invisible here, which is why every such builder is
 // registered by hand ([childClearStatement], and [queryStatements] for every
 // statement over a set).
-func statementLiterals(t *testing.T, tables ...string) []string {
+func statementLiterals(t *testing.T, tables ...string) []sourceLiteral {
 	t.Helper()
 	names := make([]string, len(tables))
 	for i, table := range tables {
@@ -1270,32 +1303,78 @@ func statementLiterals(t *testing.T, tables ...string) []string {
 	}
 	reads := regexp.MustCompile(`(?i)\b(FROM|JOIN|UPDATE)\s+(` +
 		strings.Join(names, "|") + `)\b`)
-	entries, err := os.ReadDir(".")
+	tree, err := moduleLiterals()
 	if err != nil {
-		t.Fatalf("read this package's directory: %v", err)
+		t.Fatalf("read the module's source: %v", err)
 	}
-	fset := token.NewFileSet()
-	var out []string
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatalf("parse %s: %v", name, err)
-		}
-		for _, run := range literalRuns(file) {
-			if reads.MatchString(run) {
-				out = append(out, run)
-			}
+	if tree.outside == 0 {
+		t.Fatalf("the walk read no Go file outside internal/tracker, so it "+
+			"holds only this package's readers of %v", tables)
+	}
+	var out []sourceLiteral
+	for _, literal := range tree.literals {
+		if reads.MatchString(literal.text) {
+			out = append(out, literal)
 		}
 	}
 	if len(out) == 0 {
-		t.Fatalf("no literal of this package reads %v, so this walk is reading "+
+		t.Fatalf("no literal of the module reads %v, so this walk is reading "+
 			"nothing", tables)
 	}
 	return out
+}
+
+// sourceLiteral is one fragment [statementLiterals] found, and the file it is
+// in, relative to the module's root.
+type sourceLiteral struct {
+	file, text string
+}
+
+// moduleLiterals is every literal run of the module's non-test Go source, and
+// how many of the files it read are outside this package — read once for the
+// test binary, since every walk asks the same tree.
+var moduleLiterals = sync.OnceValues(func() (moduleSource, error) {
+	root, err := sourcetree.ModuleRoot()
+	if err != nil {
+		return moduleSource{}, err
+	}
+	own := filepath.Join("internal", "tracker")
+	fset := token.NewFileSet()
+	var out moduleSource
+	err = sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return err
+		case d.IsDir() && d.Name() == "testdata":
+			// NOT THE MODULE'S CODE: nothing compiles it.
+			return fs.SkipDir
+		case d.IsDir() || !strings.HasSuffix(path, ".go") ||
+			strings.HasSuffix(path, "_test.go"):
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", rel, err)
+		}
+		if filepath.Dir(rel) != own {
+			out.outside++
+		}
+		for _, run := range literalRuns(file) {
+			out.literals = append(out.literals, sourceLiteral{rel, run})
+		}
+		return nil
+	})
+	return out, err
+})
+
+// moduleSource is what [moduleLiterals] read.
+type moduleSource struct {
+	literals []sourceLiteral
+	outside  int
 }
 
 // literalRuns is every maximal run of adjacent string literals in a file's
