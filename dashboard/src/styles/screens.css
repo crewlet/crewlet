@@ -11630,6 +11630,16 @@ a.live-row:focus-visible {
   justify-content: flex-end;
   height: 100%;
 }
+/* A DATASET'S ROWS ARE A LIST TABLE: 32px rows over the 13px cells, the
+   rhythm every table of an artifact keeps (a sheet's row), set through the
+   compact table's own hooks: the inset is what the row leaves around a line
+   of text and its 1px rule, so the row is the token's height and no more
+   (the header takes the same inset). At the list row's 36px a widget's table
+   was the one table of the artifacts screens that stood taller. */
+.dashboard-rows.crewlet-data-table--compact {
+  --crewlet-data-table-row-height: var(--size-sheet-row);
+  --crewlet-data-table-cell-pad-y: calc((var(--size-sheet-row) - 1lh - 1px) / 2);
+}
 /* A meter: the number as a stat draws it, and the bar a step under it. */
 .dashboard-meter {
   display: flex;

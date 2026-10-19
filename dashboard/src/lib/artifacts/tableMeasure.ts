@@ -41,8 +41,13 @@ export function tableMeasure(): TableMeasure {
   cached = (text, heading) => {
     const f = heading ? head : cell;
     context.font = f.font;
-    // A heading is tracked: each character carries the spacing after it.
-    return context.measureText(text).width + (heading ? f.tracking * text.length : 0);
+    // FIGURES ARE TABULAR in a table, each a zero's width, which a canvas
+    // does not set: measured as proportional figures, "123,456,789.12" was
+    // held a few pixels short and cut. A heading is tracked: each character
+    // carries the spacing after it.
+    return (
+      context.measureText(text.replace(/\d/g, "0")).width + (heading ? f.tracking * text.length : 0)
+    );
   };
   return cached;
 }

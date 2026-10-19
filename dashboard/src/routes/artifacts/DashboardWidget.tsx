@@ -60,11 +60,11 @@ import { tableMeasure } from "~/lib/artifacts/tableMeasure.ts";
 const CHARTS = new Set<Widget["type"]>(["timeseries", "columns", "activity", "bars", "share"]);
 
 /**
- * What a figure says when its dataset answered no rows, the same on every
- * chart: the design system's own default speaks of "this window", and a board's
- * dataset may be a file, a collection or a filtered calculation with none.
+ * What a figure says when its dataset answered no rows: one phrase for every
+ * widget kind, a table's included, where the board said "No rows." under one
+ * figure and "Nothing recorded in this window" under the next.
  */
-const NO_ROWS = "No data to show.";
+const NO_ROWS = "Nothing in this window";
 
 /** Why a chart could not be saved as an image, in a reader's words. */
 const PNG_REFUSALS: Record<ElementToPngError["reason"], string> = {
@@ -413,10 +413,15 @@ export function RowsTable({
       // ellipsis, and only the prose column is ever narrower than what it
       // holds; a table wider than its box scrolls sideways.
       defaultWrapLines={false}
+      // NO RESIZE HANDLES: the widths are the content's, and a width dragged
+      // in a read-only figure was kept nowhere; the handles stood in the
+      // header as a row of 37px rules between headings.
+      resizable={false}
+      className="dashboard-rows"
       columns={table}
       data={rows.map((r, i) => ({ ...r, __row: i }))}
       getRowKey={(r) => Number(r.__row)}
-      emptyMessage="No rows."
+      emptyMessage={NO_ROWS}
     />
   );
 }
