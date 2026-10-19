@@ -569,6 +569,7 @@ func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
 		t.Fatalf("the restore after a logout brought the login back: %v", p.Workspace().LoginFiles())
 	}
 	for _, want := range []string{"`crewlet llm login sub`", "-from-host", "`crewlet llm import sub`",
+		"a headless token signs the entry in without ending the logout",
 		"fresh volume", "crewlet secrets unset " + BundleVarName("sub")} {
 		if err != nil && !strings.Contains(err.Error(), want) {
 			t.Errorf("the decline does not name %q: %v", want, err)
@@ -582,9 +583,11 @@ func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
 		t.Errorf("the logout's record is in the credentials directory, where a bundle carries it (%v)", statErr)
 	}
 	// What the operator is told about the bundle, naming where it came
-	// from: the conventional secret here, the field where one is set.
+	// from: the conventional secret here, the field where one is set — and
+	// that a headless token, which writes no login there, does not end it.
 	notice := logoutNotice(t, p)
-	for _, want := range []string{BundleVarName("sub"), "fresh volume", "`crewlet llm login sub`"} {
+	for _, want := range []string{BundleVarName("sub"), "fresh volume", "`crewlet llm login sub`",
+		"`-token-stdin` signs it in without ending this"} {
 		if !strings.Contains(notice, want) {
 			t.Errorf("the logout notice does not name %q: %s", want, notice)
 		}
@@ -632,6 +635,59 @@ func TestTheLogoutNoticeSpeaksForTheRecord(t *testing.T) {
 	if notice := logoutNotice(t, p); !strings.Contains(notice, BundleVarName("sub")) {
 		t.Errorf("after a logout whose vendor half failed, the notice says nothing of the bundle "+
 			"it holds back: %q", notice)
+	}
+}
+
+// A HEADLESS TOKEN DOES NOT END A LOGOUT; A LOGIN THE CAPTURE LEFT DOES. What
+// ends a logout is a login written into the credential directory, and a token
+// is not one: it signs the entry in through its environment. So a
+// `-capture-token` that only printed a token leaves the logout standing and the
+// bundle out — as the docs, the decline and the logout's notice all say — while
+// one whose sign-in also left a login file has written the login of record and
+// ended it like any other login.
+//
+// Mutation: clear the record on every carry of a login command, whether or not
+// it wrote anything, and the first half is red; drop the clear from the carry,
+// and the second is.
+func TestAHeadlessTokenDoesNotEndALogout(t *testing.T) {
+	t.Parallel()
+	p := loginProvider(t)
+	p.bundle = bundleOf(t, "creds.json", `{"token":"k-bundled"}`)
+	if err := p.RestoreConfiguredBundle(t.Context()); err != nil {
+		t.Fatalf("the boot's restore: %v", err)
+	}
+	if err := p.Logout(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("Logout: %v", err)
+	}
+	p.profile.Binary = "sh"
+
+	p.profile.CaptureTokenArgs = []string{"-c", "echo sk-ant-oat01-PRINTED"}
+	if token, err := p.CaptureToken(t.Context(), nil, &bytes.Buffer{}); err != nil || token != "sk-ant-oat01-PRINTED" {
+		t.Fatalf("CaptureToken = %q, %v", token, err)
+	}
+	if err := p.RestoreConfiguredBundle(t.Context()); !errors.Is(err, ErrLoggedOut) {
+		t.Errorf("a token-only capture ended the logout: the restore = %v, want ErrLoggedOut", err)
+	}
+	if p.Workspace().HasLogin() {
+		t.Fatalf("a token-only capture brought the bundle back: %v", p.Workspace().LoginFiles())
+	}
+
+	p.profile.CaptureTokenArgs = []string{"-c",
+		`mkdir -p .fake && printf '{"token":"captured"}' > .fake/creds.json && echo sk-ant-oat01-FILED`}
+	if token, err := p.CaptureToken(t.Context(), nil, &bytes.Buffer{}); err != nil || token != "sk-ant-oat01-FILED" {
+		t.Fatalf("CaptureToken = %q, %v", token, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(p.Workspace().CredentialsDir(), "creds.json")); err != nil ||
+		string(got) != `{"token":"captured"}` {
+		t.Fatalf("the premise: the capture's login file was not carried out (%q, %v)", got, err)
+	}
+	// The login of record is the capture's now; emptied later, the directory
+	// is one the bundle restores into again.
+	if err := os.Remove(filepath.Join(p.Workspace().CredentialsDir(), "creds.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RestoreConfiguredBundle(t.Context()); err != nil {
+		t.Errorf("after a capture that left a login, the restore = %v, want the logout over", err)
 	}
 }
 

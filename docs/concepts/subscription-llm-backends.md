@@ -1217,10 +1217,14 @@ it), and while that record stands the entry's configured
 the logout emptied — not at the engine's next boot or apply, and not by
 `list`, `status`, `export` or `doctor`, each of which says so, naming the
 logout and how to sign in again (the engine as a `cli_agent_bundle_withheld`
-warning). The next `crewlet llm login`, `-from-host` or `import` ends it. A
-**fresh** state directory holds no such record, so a container that comes up
-on an empty volume restores the bundle as it always did: to retire a bundle
-for good, remove `cli.auth.credential_bundle` or the
+warning). What ends it is a login **written into the credential directory**:
+`crewlet llm login` (brokered, or `-username`), `-from-host` or `import` — or a
+`-capture-token` whose sign-in also left a login file there. A headless token
+on its own (`-token-stdin`, or the token `-capture-token` mints) signs the
+entry in through its environment and writes nothing there, so the logout stands
+and the bundle stays out. A **fresh** state directory holds no such record, so
+a container that comes up on an empty volume restores the bundle as it always
+did: to retire a bundle for good, remove `cli.auth.credential_bundle` or the
 `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` secret it was exported to, which `logout`
 reminds you of when the entry has one — even when the CLI's own logout fails,
 since the login is removed and the logout recorded either way.

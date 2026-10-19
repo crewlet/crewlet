@@ -2018,11 +2018,14 @@ mean to replace it.
 has a logout of its own), and **records the logout** in the state directory,
 so the configured bundle below is not restored into the directory it emptied —
 not by the engine's next boot or apply, and not by `list`, `status`, `export`
-or `doctor`, which each say why instead — until a login is written again with
-`login`, `-from-host` or `import`. A fresh state directory holds no such record
-and restores the bundle as before, so `logout` names the field or secret that
-retires it when the entry has one — even when the CLI's own logout fails, since
-the login is removed and the logout recorded either way.
+or `doctor`, which each say why instead — until a login is written into that
+directory again: `login` (brokered or `-username`), `-from-host` or `import`. A
+headless token (`-token-stdin`, or the one `-capture-token` mints, unless its
+sign-in also left a login file) signs the entry in without ending the logout. A
+fresh state directory holds no such record and restores the bundle as before,
+so `logout` names the field or secret that retires it when the entry has one —
+even when the CLI's own logout fails, since the login is removed and the logout
+recorded either way.
 
 The engine also restores a bundle **itself**, at boot and at every apply it
 publishes (never for a revision it refuses), from

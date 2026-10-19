@@ -578,22 +578,29 @@ var ErrLoggedOut = errors.New("cliagent: the entry was logged out, so its config
 	"bundle was not restored")
 
 // loggedOutError is [ErrLoggedOut] for this entry.
+//
+// It names the three commands that WRITE A LOGIN into the credential directory,
+// which is what ends a logout, and says that a headless token does not: a
+// token signs the entry in through its environment and writes nothing there,
+// so after `-token-stdin`, or a `-capture-token` whose sign-in left no login
+// file, the logout stands and the bundle stays out.
 func (p *Provider) loggedOutError() error {
 	return fmt.Errorf("%w: `crewlet llm logout` removed the login in %s, and the bundle stays out "+
 		"until a login is written there again — sign in with `crewlet llm login %s`, "+
-		"`crewlet llm login %s -from-host` or `crewlet llm import %s`; a state directory with no "+
-		"record of the logout (a fresh volume) restores it, so to retire the bundle %s",
+		"`crewlet llm login %s -from-host` or `crewlet llm import %s` (a headless token signs the "+
+		"entry in without ending the logout); a state directory with no record of the logout "+
+		"(a fresh volume) restores it, so to retire the bundle %s",
 		ErrLoggedOut, p.ws.CredentialsDir(), p.key, p.key, p.key, p.retireBundle())
 }
 
 // LogoutNotice is what `crewlet llm logout` tells the operator about the
 // entry's configured credential bundle while the logout's record stands
 // ([Workspace.markLoggedOut]): that nothing restores the bundle onto this host
-// until a login is written again, that a state directory with no record of the
-// logout, a fresh volume, still does, and what retires it. It is "" for an
-// entry that configures no bundle, and while no record stands: a logout that
-// stopped before writing one leaves a directory the next restore does refill,
-// and saying otherwise would be false.
+// until a login is written again — which a headless token is not — that a
+// state directory with no record of the logout, a fresh volume, still does,
+// and what retires it. It is "" for an entry that configures no bundle, and
+// while no record stands: a logout that stopped before writing one leaves a
+// directory the next restore does refill, and saying otherwise would be false.
 //
 // READ OFF THE RECORD, never off whether [Provider.Logout] returned an error: a
 // vendor logout that fails after the login was removed fails the command with
@@ -609,10 +616,11 @@ func (p *Provider) LogoutNotice() (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("Its configured credential bundle (%s) is not restored onto this host until "+
-		"a login is written again (`crewlet llm login %s`, `-from-host` or `crewlet llm import %s`) — "+
-		"not at the engine's next boot or apply, and not by `crewlet llm status`, `export`, `doctor` "+
-		"or `list`. A state directory with no record of this logout, such as a fresh volume, still "+
-		"restores it; to retire the bundle, %s.",
+		"a login is written into its credential directory again (`crewlet llm login %s`, "+
+		"`-from-host` or `crewlet llm import %s`; a headless token from `-capture-token` or "+
+		"`-token-stdin` signs it in without ending this) — not at the engine's next boot or apply, "+
+		"and not by `crewlet llm status`, `export`, `doctor` or `list`. A state directory with no "+
+		"record of this logout, such as a fresh volume, still restores it; to retire the bundle, %s.",
 		p.bundleSource(), p.key, p.key, p.retireBundle()), nil
 }
 
