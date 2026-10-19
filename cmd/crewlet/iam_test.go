@@ -122,6 +122,57 @@ func TestEveryIamSubcommandIsDispatchedAndAdvertised(t *testing.T) {
 	}
 }
 
+// THE HELP NAMES THE ONE COMMAND THAT READS NO TOKEN, beside the rule it is the
+// exception to.
+//
+// "Every iam command needs it, reads included" was false for `iam token
+// -login`, which signs in as its caller and never reads CREWLET_API_TOKEN — so
+// a person minting their first token was told to export a credential they did
+// not have yet, by the very help whose later paragraph said -login signs them
+// in. The paragraph stating the rule is read out of the help, and the
+// behaviour it describes is held beside it: an ordinary read with no variable
+// set is refused naming it, and `token -login` with no variable set mints.
+// Mutation: drop the exception from the paragraph and the first half fails;
+// make the -login path build its client from the environment first and the
+// last half fails.
+func TestTheIamHelpNamesTheOneCommandThatReadsNoToken(t *testing.T) {
+	var rule string
+	for _, para := range strings.Split(iamHelp(), "\n\n") {
+		if strings.HasPrefix(para, "Set "+apiTokenEnv+" to authenticate") {
+			rule = strings.Join(strings.Fields(para), " ")
+		}
+	}
+	if rule == "" {
+		t.Fatalf("no paragraph of the iam help says to set %s to "+
+			"authenticate:\n%s", apiTokenEnv, iamHelp())
+	}
+	if !strings.Contains(rule, `"iam token -login"`) {
+		t.Errorf("the paragraph stating the credential rule is %q, which "+
+			"never names `iam token -login`, the one command that reads no "+
+			"token", rule)
+	}
+
+	var out, errs bytes.Buffer
+	err := runIAM(noEnviron, []string{"people", "-config",
+		bootstrapWithKeyring(t, "k1"), "-api", "http://127.0.0.1:1"},
+		nil, &out, &errs)
+	if err == nil || !strings.Contains(err.Error(), apiTokenEnv) {
+		t.Errorf("`iam people` with no %s set answered %v, want a refusal "+
+			"naming the variable, as the help says", apiTokenEnv, err)
+	}
+
+	n := newSelfNode(t)
+	minted, stderr, err := runSelf(t, n, "a long pass phrase\n")
+	if err != nil {
+		t.Fatalf("`iam token -login` with no %s set: %v\n%s", apiTokenEnv,
+			err, stderr)
+	}
+	if !strings.Contains(minted, "cwl_pat_the-value") {
+		t.Errorf("`iam token -login` with no %s set printed no token:\n%s",
+			apiTokenEnv, minted)
+	}
+}
+
 // AN INVITATION AND A CREATE ARE TOLD WHAT THEY LACK BEFORE ANYTHING IS SENT,
 // naming the flag — before a config file is read, so the operator hears about
 // the flag rather than about a file they were never going to need.
