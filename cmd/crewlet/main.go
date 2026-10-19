@@ -315,9 +315,9 @@ Usage:
                               or resume it: its holder, its lead, or an admin
   crewlet artifacts <cmd>     List, publish, version, share, trash and purge the
                               company's artifacts, as the token's principal
-  crewlet chatlet <cmd>       The company's own chat, as the seat your credential
-                              acts as: list and read rooms, say something, search;
-                              and an admin's erase, prune and room horizon
+  crewlet chatlet <cmd>       Read, post and search the company's chat as your
+                              seat. Admins can also delete messages and set how
+                              long a room keeps them
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet iam <cmd>           People, seats, invitations, permissions,

@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -154,6 +157,69 @@ func TestEveryChatletVerbIsDispatchedAndAdvertised(t *testing.T) {
 	}
 }
 
+// WHAT `crewlet chatlet` SAYS IS SAID PLAINLY: every string it prints, refuses
+// with or offers as flag help reads as short sentences in the words of the
+// person running it, as the iam command's do. No em dash, and none of the
+// engine's own terms for how chat is kept — a data node, the coordination
+// store, arbitration, an inverse — which describe the machinery to somebody
+// who asked about a room. reportDestruction is read too, since it prints what
+// an erase and a prune did. Mutation: an em dash back in any refusal, or "on
+// every data node" back in the erase's, is red.
+func TestTheChatletCommandSpeaksPlainly(t *testing.T) {
+	t.Parallel()
+	refused := []string{"\u2014", "data node", "coordination store", "arbitrat",
+		"inverse"}
+	read := 0
+	for _, src := range []struct{ file, fn string }{
+		{"chatlet.go", ""}, {"main.go", "usage"}, {"worklet.go", "reportDestruction"},
+	} {
+		fset := token.NewFileSet()
+		parsed, err := parser.ParseFile(fset, src.file, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", src.file, err)
+		}
+		var within ast.Node = parsed
+		if src.fn != "" {
+			within = nil
+			for _, decl := range parsed.Decls {
+				if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == src.fn {
+					within = fn
+				}
+			}
+			if within == nil {
+				t.Fatalf("%s declares no %s, so its strings are not read", src.file, src.fn)
+			}
+		}
+		for _, built := range stringsBuilt(parsed) {
+			if built.pos < within.Pos() || built.pos >= within.End() {
+				continue
+			}
+			text := built.text
+			if src.file == "main.go" {
+				// the top-level usage speaks for every command: only chatlet's
+				// line is this test's
+				at := strings.Index(text, "crewlet chatlet <cmd>")
+				if at < 0 {
+					continue
+				}
+				end := strings.Index(text[at:], "\n  crewlet ")
+				text = text[at : at+end]
+			}
+			read++
+			for _, term := range refused {
+				if strings.Contains(strings.ToLower(text), term) {
+					t.Errorf("%s: %q carries %q: say it in short sentences, in "+
+						"the words of the person reading it", fset.Position(built.pos),
+						text, term)
+				}
+			}
+		}
+	}
+	if read < 50 {
+		t.Fatalf("read %d strings, so this guard asserts nothing", read)
+	}
+}
+
 // A POST IS THE COMPOSER'S TOOL, OVER THE ROUTE THE DASHBOARD WRITES THROUGH.
 //
 // `post_message` through `POST /operator/act/{tool}` (ADR-0024): the tool's own
@@ -207,7 +273,7 @@ func TestAChatletPostIsTheComposersToolOverTheActTransport(t *testing.T) {
 	}
 	for _, said := range []string{
 		"post m-1 in #eng: applied at CREWLET_CHAT_LOG@1:7 (operation " + asked.key + ")",
-		"@channel: this addresses the whole room", "mentions: @cto",
+		"@channel: this mentions the whole room", "mentions: @cto",
 	} {
 		if !strings.Contains(out, said) {
 			t.Errorf("the post printed:\n%s\nwant %q", out, said)
@@ -228,7 +294,7 @@ func TestAChatletPostSaysAPendingAndAnUnknownOutcomeForWhatTheyAre(t *testing.T)
 	if err != nil {
 		t.Fatalf("a pending post came back as a failure: %v", err)
 	}
-	if !strings.Contains(out, "pending") || !strings.Contains(out, "Do not run this again") {
+	if !strings.Contains(out, "pending") || !strings.Contains(out, "Don't run this again") {
 		t.Errorf("a pending post printed:\n%s", out)
 	}
 
@@ -525,7 +591,7 @@ func TestAChatletRetentionSaysExactlyOneHorizon(t *testing.T) {
 		{[]string{"-days", "30", "-confirm", "30"}, `{"retention_days":30}`, "30", "30 day(s)"},
 		{[]string{"-days", "0", "-confirm", "0"}, `{"retention_days":0}`, "0", "kept for ever"},
 		{[]string{"-company", "-confirm", "company"}, `{"retention_days":null}`, "company",
-			"the company's horizon"},
+			"the company's setting"},
 	} {
 		out, _, err := chatletCLI(t, node.server.URL,
 			append([]string{"retention", "c-eng"}, tc.args...)...)
@@ -595,7 +661,7 @@ func TestAChatletTranscriptIsPrintedAsItIsReadAndSaysWhatItLacked(t *testing.T) 
 		t.Errorf("a message's link is not printed under it:\n%s", out)
 	}
 	for _, said := range []string{"older: -before 40", "incomplete",
-		"stale at CREWLET_CHAT_LOG@1:9, 12 record(s) behind the log"} {
+		"stale at CREWLET_CHAT_LOG@1:9, 12 change(s) behind"} {
 		if !strings.Contains(out, said) {
 			t.Errorf("the transcript printed:\n%s\nwant %q", out, said)
 		}
@@ -726,7 +792,7 @@ func TestAChatletSearchSaysWhatItRanOverAndWhenItsIndexIsBehind(t *testing.T) {
 		asked.query.Get("limit") != "5" {
 		t.Errorf("the search asked %s?%s", asked.path, asked.query.Encode())
 	}
-	if !strings.Contains(out, "No hits across 3 room(s)") ||
+	if !strings.Contains(out, "No results in 3 room(s)") ||
 		!strings.Contains(out, "still building") {
 		t.Errorf("an empty search over a building index printed:\n%s", out)
 	}
