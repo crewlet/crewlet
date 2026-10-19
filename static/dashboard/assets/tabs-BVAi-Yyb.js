@@ -1,1 +1,0 @@
-import{On as e}from"./waiting-DGVb5oh4.js";import{T as t}from"./common-C29KaLNi.js";function n(n,r,i=`section`,a=r[0]){let[o,s]=e(n,a,i),c=r.includes(o)?o:a;return t({tab:{run:(e,t)=>s(r[t]),when:e=>i===`section`&&e<r.length}}),[c,s]}export{n as t};
