@@ -10,7 +10,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
-import { ArtifactGallery } from "./Gallery.tsx";
+import { ArtifactGallery, noMatch } from "./Gallery.tsx";
 import { Router } from "~/app/router.tsx";
 import type { ArtifactSection } from "~/app/routes.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -154,4 +154,19 @@ test("a card names no owner on the reader's own, and its changer only when that 
   const theirs = screen.getByRole("link", { name: "Vendor scorecard" });
   expect(theirs.textContent).toContain("maya");
   expect(theirs.textContent).toContain("by you");
+});
+
+// IT SAID "Change the phrase or the type" with no type chosen.
+test("a search that found nothing names the phrase, and only the change that could find more", () => {
+  expect(noMatch("zzz", "")).toEqual({
+    title: "Nothing matches “zzz”",
+    hint: "Try another phrase.",
+  });
+  expect(noMatch("zzz", "sheet").hint).toBe(
+    "Only Sheet artifacts were searched. Try another phrase, or choose Every type.",
+  );
+  expect(noMatch("", "design")).toEqual({
+    title: "No Design artifacts here",
+    hint: "Choose Every type to see the rest.",
+  });
 });

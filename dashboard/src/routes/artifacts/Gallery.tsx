@@ -88,6 +88,7 @@ import {
 import { ListedArtifactCard, copyAddress } from "./parts.tsx";
 import { ARTIFACT_LIST_SORTS } from "~/contract/artifacts.ts";
 import {
+  type ArtifactKind,
   type ArtifactListAnswer,
   type ArtifactListItem,
   type ArtifactListScope,
@@ -149,6 +150,29 @@ const EMPTY: Readonly<Record<ArtifactSection, { title: string; hint: string }>> 
     hint: "When an agent shares a page, a document or a sheet with you, it appears here.",
   },
 };
+
+/**
+ * What a search or a type that found nothing says: the phrase it looked for,
+ * and only the change that could find more. It said "Change the phrase or the
+ * type" with no type chosen.
+ */
+export function noMatch(q: string, kind: ArtifactKind | ""): { title: string; hint: string } {
+  if (q) {
+    return {
+      title: `Nothing matches “${q}”`,
+      hint: kind
+        ? `Only ${KIND_WORDS[kind]} artifacts were searched. Try another phrase, or choose Every type.`
+        : "Try another phrase.",
+    };
+  }
+  if (kind) {
+    return {
+      title: `No ${KIND_WORDS[kind]} artifacts here`,
+      hint: "Choose Every type to see the rest.",
+    };
+  }
+  return { title: "Nothing matches", hint: "Try another phrase." };
+}
 
 /** The listing's parameters as the engine reads them. */
 function listParams(
@@ -332,7 +356,7 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
                   hint: `An artifact you trash stays here for ${TRASH_KEPT}, then is deleted.`,
                 }
               : q || kind
-                ? { title: "Nothing matches", hint: "Change the phrase or the type to see more." }
+                ? noMatch(q.trim(), kind)
                 : EMPTY[section]
             : undefined
         }
@@ -462,32 +486,40 @@ function GalleryToolbar({
         options={ARTIFACT_LIST_SORTS.map((s) => ({ value: s, label: SORT_WORDS[s] }))}
         ariaLabel="Order"
       />
-      <span className="spacer" />
-      {trash && (
-        // A TOGGLE, SO ONE NAME: pressed, it is the trash's listing, and
-        // pressed again the reader's own. "Back to your artifacts" beside a
-        // trash glyph named the way out with the way in's picture.
-        <Button
-          size="small"
-          variant="ghost"
-          leadingIcon={<TrashGlyph size="sm" />}
-          pressed={trash.on}
-          onClick={() => trash.onChange(!trash.on)}
-        >
-          Trash
-        </Button>
-      )}
-      <SegmentedControl<Shape>
-        semantics="radio"
-        size="sm"
-        label="Show as"
-        value={shape}
-        onValueChange={onShape}
-        options={[
-          { value: "list", icon: <ListGlyph size="sm" />, srLabel: "List", title: "List" },
-          { value: "cards", icon: <LayoutGridGlyph size="sm" />, srLabel: "Cards", title: "Cards" },
-        ]}
-      />
+      {/* THE TRASH AND THE SHAPE ARE ONE CLUSTER at the far end, so a narrow
+          row moves them down together and keeps them at the end. */}
+      <span className="artifacts-bar-end">
+        {trash && (
+          // A TOGGLE, SO ONE NAME: pressed, it is the trash's listing, and
+          // pressed again the reader's own. "Back to your artifacts" beside a
+          // trash glyph named the way out with the way in's picture.
+          <Button
+            size="small"
+            variant="ghost"
+            leadingIcon={<TrashGlyph size="sm" />}
+            pressed={trash.on}
+            onClick={() => trash.onChange(!trash.on)}
+          >
+            Trash
+          </Button>
+        )}
+        <SegmentedControl<Shape>
+          semantics="radio"
+          size="sm"
+          label="Show as"
+          value={shape}
+          onValueChange={onShape}
+          options={[
+            { value: "list", icon: <ListGlyph size="sm" />, srLabel: "List", title: "List" },
+            {
+              value: "cards",
+              icon: <LayoutGridGlyph size="sm" />,
+              srLabel: "Cards",
+              title: "Cards",
+            },
+          ]}
+        />
+      </span>
     </div>
   );
 }

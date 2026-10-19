@@ -10420,6 +10420,15 @@ a.live-row:focus-visible {
   }
 }
 
+/* THE TOOLBAR'S END: the trash and the shape, kept together at the far end
+   of whichever line they land on. */
+.artifacts-bar-end {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-inline-start: auto;
+}
+
 /* A ROW'S NAME: the kind's glyph, the title cut to its track, and the pin. */
 .artifacts-name {
   display: inline-flex;
