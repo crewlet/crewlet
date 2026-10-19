@@ -196,6 +196,7 @@ func TestOnlyTheApplierWritesTheReplicatedEstate(t *testing.T) {
 	// THE COMPUTED-TABLE MATCHER, which is the half that was missing.
 	for _, positive := range []string{
 		`UPDATE %s SET version = ?`,
+		`UPDATE OR IGNORE %s SET version = ?`,
 		"DELETE FROM " + unresolved + " WHERE id = ?",
 		"INSERT INTO " + unresolved + " (a) VALUES (?)",
 	} {
@@ -208,6 +209,8 @@ func TestOnlyTheApplierWritesTheReplicatedEstate(t *testing.T) {
 		`UPDATE tracker_tasks SET rank = ?`,
 		"SELECT * FROM " + unresolved,
 		`a sentence that merely says %s somewhere`,
+		"nats stream update %s --max-bytes=%d",
+		"change it with `crewlet artifacts update %s -%s ...`",
 	} {
 		if writesComputedTable(negative) {
 			t.Errorf("control: %q is not a write to a computed table and the "+
@@ -630,23 +633,6 @@ var allowedReplicatedWriter = []allowance{
 			"conversation_sessions — every one placed in nodeEstatePlacements " +
 			"one file over. It never names a replicated table.",
 	},
-	{
-		Prefix: "internal/objstore/natsobj/natsobj.go", Kind: notReplicated,
-		Why: "Holds no SQL at all. The bucket ceiling refusal tells the " +
-			"operator to run `nats stream update %s --max-bytes=%d`, the " +
-			"broker's own command, and the case-insensitive verb matcher " +
-			"reads `update %s` as an UPDATE whose table is computed. The file " +
-			"opens no database handle and writes no table of either estate.",
-	},
-	{
-		Prefix: "cmd/crewlet/artifacts.go", Kind: notReplicated,
-		Why: "Holds no SQL at all: it is the `crewlet artifacts` client, which " +
-			"reaches the engine over its HTTP API. Its publish refusal points " +
-			"at `crewlet artifacts update %s -%s ...`, the CLI's own command, " +
-			"and the case-insensitive verb matcher reads `update %s` as an " +
-			"UPDATE whose table is computed. The file opens no database " +
-			"handle and writes no table of either estate.",
-	},
 
 	// -----------------------------------------------------------------
 	// THE EXCEPTIONS. Two writes that are not a record, each because no
@@ -987,9 +973,15 @@ func stringConsts(file *ast.File) map[string]string {
 }
 
 // computedDML matches a write whose table this walk could not resolve.
+//
+// AN UPDATE IS ONE ONLY WITH ITS SET: the verb alone is an ordinary English
+// and command-line word, and `update %s` in an operator's command (`nats
+// stream update %s`, `crewlet artifacts update %s`) read as an UPDATE of a
+// computed table, which every such string then needed an allowance to pass.
+// INSERT INTO and DELETE FROM are SQL by their second word already.
 var computedDML = regexp.MustCompile(
-	`(?is)\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+(?:` +
-		unresolved + `|%[a-zA-Z])`)
+	`(?is)\b(?:(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|DELETE\s+FROM)\s+(?:` + unresolved + `|%[a-zA-Z])` +
+		`|UPDATE\s+(?:OR\s+\w+\s+)?(?:` + unresolved + `|%[a-zA-Z])\s+SET\b)`)
 
 // writesComputedTable reports a write whose table name is not in the source.
 func writesComputedTable(text string) bool { return computedDML.MatchString(text) }
