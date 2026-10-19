@@ -348,3 +348,10 @@ test("a table is sized by the text as the measure draws it", () => {
   const wide = tableLayout(shown, rows, (text) => text.length * 10);
   expect(wide.widths.key).toBe(80 + 28 + 8);
 });
+
+test("an absent value and a priority of none are written as nothing, which a table marks", () => {
+  expect(cellText({ key: "d", type: "date" }, null)).toBe("");
+  expect(cellText({ key: "t", type: "text" }, "")).toBe("");
+  expect(cellText({ key: "p", type: "text", words: "tracker_priority" }, "none")).toBe("");
+  expect(cellText({ key: "p", type: "text", words: "tracker_priority" }, "high")).toBe("High");
+});

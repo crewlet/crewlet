@@ -11620,14 +11620,15 @@ a.live-row:focus-visible {
 .dashboard-figure {
   min-width: 0;
 }
-/* A STAT OR A METER STANDS ON THE FOOT OF ITS FRAME, over the citation, so
-   the values of a row share one baseline whether a title or a label above
-   them took one line or two, and a frame the board makes taller than its
-   figure holds its air above the figure, never as a gap under it. */
-.dashboard-figure:is([data-figure="stat"], [data-figure="meter"]) {
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
+/* A FIGURE FILLS ITS FRAME'S BODY, so a chart with nothing to draw says so
+   in the middle of the area its plot would have filled.
+
+   A STAT OR A METER STANDS AT THE HEAD OF ITS BODY, under a title held at two
+   lines in a row (WidgetFrame's holdTitle), so every number of a row shares
+   one baseline: a meter's maximum and bar hang under its number where a
+   stat has the air before its citation. Stood on the foot of the frame, a
+   meter's number rode its bar a line above the stats beside it. */
+.dashboard-figure {
   height: 100%;
 }
 /* A DATASET'S ROWS ARE A LIST TABLE: 32px rows over the 13px cells, the
