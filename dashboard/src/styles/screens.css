@@ -3471,11 +3471,6 @@ a.knowledge-reader-how:hover {
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
-/* THE TITLE IS SET AS THE PAGE WILL WEAR IT. */
-.knowledge-composer-title input {
-  font-size: var(--font-size-xl);
-  font-weight: var(--font-weight-semibold);
-}
 .knowledge-composer-count {
   display: flex;
   flex-wrap: wrap;
