@@ -136,9 +136,9 @@ var catalogue = []EngineSource{
 		Columns: []Column{
 			{Key: "key", Type: ColumnText, Label: "Key"},
 			{Key: "title", Type: ColumnText, Label: "Title"},
-			{Key: "status", Type: ColumnText, Label: "Status"},
-			{Key: "status_group", Type: ColumnText, Label: "Status group"},
-			{Key: "priority", Type: ColumnText, Label: "Priority"},
+			{Key: "status", Type: ColumnText, Label: "Status", Words: WordsTrackerStatus},
+			{Key: "status_group", Type: ColumnText, Label: "Status group", Words: WordsTrackerStatusGroup},
+			{Key: "priority", Type: ColumnText, Label: "Priority", Words: WordsTrackerPriority},
 			{Key: "assignee", Type: ColumnText, Label: "Assignee"},
 			{Key: "project", Type: ColumnText, Label: "Project"},
 			{Key: "due", Type: ColumnDate, Label: "Due"},
@@ -222,7 +222,7 @@ var catalogue = []EngineSource{
 		Columns: []Column{
 			{Key: "handle", Type: ColumnText, Label: "Seat"},
 			{Key: "name", Type: ColumnText, Label: "Name"},
-			{Key: "activity", Type: ColumnText, Label: "Activity"},
+			{Key: "activity", Type: ColumnText, Label: "Activity", Words: WordsAgentActivity},
 			{Key: "phase", Type: ColumnText, Label: "Phase"},
 			{Key: "paused", Type: ColumnBoolean, Label: "Paused"},
 			{Key: "last_turn_at", Type: ColumnDate, Label: "Last turn"},

@@ -197,6 +197,7 @@ func TestTheDashboardDrawsTheBoardFormat(t *testing.T) {
 		"DASHBOARD_AGGS":             names(dashspec.Aggs),
 		"DASHBOARD_NUMBER_FORMATS":   names(dashspec.Formats),
 		"DASHBOARD_COLUMN_TYPES":     names(dashspec.ColumnTypes),
+		"DASHBOARD_COLUMN_WORDS":     names(dashspec.WordSets),
 	} {
 		body, err := clientsource.Literal(tree, name)
 		if err != nil {

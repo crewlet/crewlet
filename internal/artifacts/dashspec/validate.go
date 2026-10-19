@@ -236,6 +236,12 @@ func (c *checker) declared(f string, d Dataset, implicit []Column, defaultKey st
 			c.add(cf+".type", "%q is not one of %s", col.Type, quoteList(stringsOf(ColumnTypes)))
 		}
 		c.text(cf+".label", col.Label, false, int(artifacts.MaxTitleBytes))
+		switch {
+		case !col.Words.Valid():
+			c.add(cf+".words", "%q is not one of %s", col.Words, quoteList(stringsOf(WordSets)))
+		case col.Words != WordsNone && col.Type != ColumnText:
+			c.add(cf+".words", "names a text column's vocabulary, and %q is a %s", col.Key, col.Type)
+		}
 		cols = append(cols, col)
 	}
 	key := d.Key

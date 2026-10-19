@@ -7872,18 +7872,14 @@ a.work-cal-chip {
 
 /* ---- Home's board ------------------------------------------------------ */
 
-/* THE READER'S BOARD (`routes/home/board/`): blocks on twelve columns, each
-   spanning its own width, in groups or on the page. Measured from the page
-   column; below Home's stacking width every block spans the page
-   (`data-stacked`, set from the page's own width in `Home.tsx`). The chrome
-   of a block being arranged (its ring, toolbar, resize handles and the column
-   lanes) is the design system's ArrangeFrame and ArrangeBoard. */
-.home-board-grid {
-  display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  gap: var(--spacing-4);
-  align-items: stretch;
-}
+/* A BOARD'S PAGE GRID is the design system's ArrangeGrid: blocks on twelve
+   columns, each spanning its own width (`grid-column: span N`, which
+   ArrangeFrame sets), on the page as in a group, whose body is the same grid.
+   ONE GRID FOR EVERY BOARD, Home's and a dashboard's, so a widget is laid out
+   at one width wherever it stands; the rows open a step while the board is
+   arranged, for each block's toolbar. The chrome of a block being arranged
+   (its ring, toolbar, resize handles and the column lanes) is the design
+   system's ArrangeFrame and ArrangeBoard. */
 .home-board-cell {
   display: flex;
   flex-direction: column;
@@ -7955,15 +7951,6 @@ a.work-cal-chip {
   width: 1px;
   height: var(--spacing-5);
   background: var(--color-border-default);
-}
-
-/* The board while it is arranged. */
-
-/* More room between rows while editing: each toolbar sits on its widget's
-   top edge, half in the gap above it. */
-.home-board.is-editing .home-board-grid,
-.home-group-body {
-  row-gap: var(--spacing-5);
 }
 
 /* Widgets. */
@@ -11034,14 +11021,14 @@ a.live-row:focus-visible {
 }
 
 /* PRESENT: the slide as large as fits; full screen on the reader's press. */
-/* THE SHOW IS SEEN WHOLE: its height is measured (`useFitInView`) from the
-   room between its top and the foot of the view, and its scroll margins are
-   what that room keeps clear, so the slide's foot and the count under it are
-   never below the fold. */
+/* THE SHOW IS SEEN WHOLE: its stage (`SlideStage fit="view"`) is as tall as
+   the room between the show's top and the foot of the view allows, less the
+   bar, so the slide's foot and the count under it are never below the fold.
+   The show's height follows its content, and its scroll margins are what that
+   room keeps clear. */
 .slides-show {
   display: flex;
   flex-direction: column;
-  height: var(--slides-show-height, calc(100cqb - var(--sticky-top)));
   scroll-margin-top: var(--sticky-top);
   scroll-margin-bottom: var(--spacing-4);
   background: var(--color-surface-inset);
@@ -11049,14 +11036,10 @@ a.live-row:focus-visible {
 .slides-show:fullscreen {
   height: 100%;
 }
-.slides-show-stage {
-  flex: 1;
-  min-height: 0;
-}
-.slides-show-stage[data-transition="fade"] {
+.slides-show-slide[data-transition="fade"] {
   animation: slides-fade var(--motion-duration-moderate) var(--motion-easing-out);
 }
-.slides-show-stage[data-transition="push"] {
+.slides-show-slide[data-transition="push"] {
   animation: slides-push var(--motion-duration-moderate) var(--motion-easing-out);
 }
 @keyframes slides-fade {
@@ -11318,10 +11301,23 @@ a.live-row:focus-visible {
 :is(.design-board-frame, .design-opened-frame, .design-print-frame) .artifact-note {
   display: none;
 }
-/* The dialog's own body bounds the height; a board wider than the dialog
-   scrolls sideways inside it. */
+/* An opened board: fitted into the dialog by its stage, or at its own size
+   with scroll both ways. The dialog is portaled outside the page, so the
+   bound is the window's, never the page scroller's. */
 .design-opened {
-  overflow-x: auto;
+  min-width: 0;
+}
+.design-opened--fit {
+  display: grid;
+  height: 70vh;
+}
+.design-opened--actual {
+  height: 70vh;
+  overflow: auto;
+}
+.design-opened--actual:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
 }
 
 /* PRINT: one board over the whole window, at its corner and its own size,
@@ -11372,7 +11368,7 @@ a.live-row:focus-visible {
 .dashboard-view {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-3);
+  gap: var(--spacing-4);
   min-width: 0;
 }
 .dashboard-bar {
@@ -11406,15 +11402,32 @@ a.live-row:focus-visible {
 .dashboard-figure {
   min-width: 0;
 }
-.dashboard-sources {
+/* A STAT OR A METER STANDS ON THE FOOT OF ITS FRAME, over the citation, so
+   the values of a row share one baseline whether a title or a label above
+   them took one line or two, and a frame the board makes taller than its
+   figure holds its air above the figure, never as a gap under it. */
+.dashboard-figure:is([data-figure="stat"], [data-figure="meter"]) {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-2);
+  justify-content: flex-end;
+  height: 100%;
+}
+/* A share: the bar, and under it the legend naming each part and its value. */
+.dashboard-share {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+/* The rail is one card; its entries are rows on the card's inset, each
+   entry's own 12px plus this 4px putting its words under the card's title. */
+.dashboard-sources {
   min-width: 0;
 }
-.dashboard-sources-title {
-  margin: 0;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
+.dashboard-sources-list {
+  padding: var(--spacing-2) var(--spacing-1);
+}
+/* A note fills its cell, as a figure's frame does, so a row of blocks ends
+   on one line. */
+.dashboard-note {
+  height: 100%;
 }

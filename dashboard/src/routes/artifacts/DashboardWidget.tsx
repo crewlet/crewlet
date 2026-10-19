@@ -13,6 +13,7 @@ import {
   BarList,
   DataTable,
   downloadBlob,
+  Legend,
   elementToPng,
   ElementToPngError,
   Menu,
@@ -38,12 +39,16 @@ import type {
   DashboardWidget as Widget,
 } from "~/protocol/index.ts";
 import {
+  allDays,
+  chartTimeOf,
   csvOf,
   effectiveAgg,
   exportName,
   fold,
+  formatDay,
   formatNumber,
-  instantOf,
+  tableLayout,
+  wordsOf,
 } from "~/lib/artifacts/dashboard.ts";
 
 /** The widget types drawn as a chart, which a reader may save as an image. */
@@ -85,7 +90,13 @@ export function DashboardWidget({
 
   if (widget.type === "note") {
     return (
-      <Note tone="none" onFocus={onFocus} tabIndex={-1}>
+      <Note
+        tone="none"
+        heading={title || undefined}
+        className="dashboard-note"
+        onFocus={onFocus}
+        tabIndex={-1}
+      >
         {(widget.text ?? "").split(/\n{2,}/).map((para, i) => (
           <p key={i}>{para}</p>
         ))}
@@ -136,11 +147,21 @@ export function DashboardWidget({
       source={{ label: dataset?.title ?? widget.dataset ?? "", status, asOf, detail }}
       onCite={onCite}
       actions={actions}
+      // A TABLE REACHES THE FRAME'S SIDES, its row rules meeting the border
+      // and its first column under the title, as a table in any card does.
+      flush={widget.type === "table"}
       onFocus={onFocus}
       data-widget={widget.id}
     >
-      <div ref={figure} className="dashboard-figure">
-        {ready ? <Figure widget={widget} columns={ready.columns} rows={ready.rows} /> : null}
+      <div ref={figure} className="dashboard-figure" data-figure={widget.type}>
+        {ready ? (
+          <Figure
+            widget={widget}
+            columns={ready.columns}
+            rows={ready.rows}
+            datasetTitle={dataset?.title ?? widget.dataset ?? ""}
+          />
+        ) : null}
       </div>
     </WidgetFrame>
   );
@@ -151,10 +172,13 @@ function Figure({
   widget: w,
   columns,
   rows,
+  datasetTitle,
 }: {
   widget: Widget;
   columns: readonly DashboardColumn[];
   rows: readonly DashboardRow[];
+  /** What the figure counts when it names no column: its dataset. */
+  datasetTitle: string;
 }): ReactNode {
   const column = (key: string | undefined) => columns.find((c) => c.key === key);
   const label = (key: string | undefined) => column(key)?.label ?? key ?? "";
@@ -164,7 +188,7 @@ function Figure({
     case "stat": {
       const agg = effectiveAgg(w);
       const value = fold(agg, column(w.value)?.type ?? "number", rows, w.value ?? "");
-      return <StatCard flush label={w.value ? label(w.value) : "Rows"} value={num(value)} />;
+      return <StatCard flush label={w.value ? label(w.value) : datasetTitle} value={num(value)} />;
     }
     case "meter": {
       const agg = effectiveAgg(w);
@@ -176,15 +200,16 @@ function Figure({
         <Meter
           value={v}
           max={m}
-          label={title}
-          hideLabel
+          label={w.value ? label(w.value) : datasetTitle}
           valueText={`${num(value)} of ${num(max)}`}
         />
       );
     }
     case "timeseries":
     case "columns": {
-      const { series, buckets, from, to } = seriesOf(w, rows, label);
+      const { series, buckets, from, to } = seriesOf(w, rows, label, column(w.by));
+      const days = allDays(rows.map((r) => r[w.x ?? ""] ?? null));
+      const time = days ? { formatTime: formatDay } : {};
       if (w.type === "timeseries") {
         return (
           <TimeSeries
@@ -192,6 +217,7 @@ function Figure({
             from={from}
             to={to}
             format={(v) => num(v)}
+            {...time}
             series={series.map((s) => ({
               id: s.id,
               name: s.name,
@@ -201,7 +227,13 @@ function Figure({
         );
       }
       return (
-        <StackedColumns label={title} series={series} buckets={buckets} format={(v) => num(v)} />
+        <StackedColumns
+          label={title}
+          series={series}
+          buckets={buckets}
+          format={(v) => num(v)}
+          {...time}
+        />
       );
     }
     case "activity": {
@@ -210,7 +242,7 @@ function Figure({
         <ActivityStrip
           label={title}
           buckets={timed(rows, w.x ?? "").map((r) => ({
-            t: instantOf(r[w.x ?? ""] ?? null),
+            t: chartTimeOf(r[w.x ?? ""] ?? null),
             v: numberOr0(r[y]),
           }))}
         />
@@ -222,30 +254,56 @@ function Figure({
           limit={w.limit ?? 10}
           data={rows.map((r, i) => ({
             id: String(i),
-            label: String(r[w.label ?? ""] ?? ""),
+            label: wordsOf(column(w.label), r[w.label ?? ""] ?? null),
             value: numberOr0(r[w.value ?? ""]),
             display: num(r[w.value ?? ""] ?? null),
           }))}
         />
       );
-    case "share":
+    case "share": {
+      // A SHARE IS NEVER DRAWN WITHOUT ITS LEGEND: the bar names none of its
+      // parts, so the legend, keyed from the same list, says which part is
+      // which and how much it holds.
+      const parts = rows.slice(0, w.limit ?? 8).map((r, i) => ({
+        id: String(i),
+        label: wordsOf(column(w.label), r[w.label ?? ""] ?? null),
+        value: numberOr0(r[w.value ?? ""]),
+        shown: num(r[w.value ?? ""] ?? null),
+      }));
       return (
-        <StackedBar
-          format={(v) => num(v)}
-          segments={rows.slice(0, w.limit ?? 8).map((r, i) => ({
-            id: String(i),
-            label: String(r[w.label ?? ""] ?? ""),
-            value: numberOr0(r[w.value ?? ""]),
-          }))}
-        />
+        <div className="dashboard-share">
+          <StackedBar
+            format={(v) => num(v)}
+            segments={parts.map(({ id, label, value }) => ({ id, label, value }))}
+          />
+          <Legend items={parts.map((p) => ({ id: p.id, label: p.label, value: p.shown }))} />
+        </div>
       );
+    }
     case "table": {
       const shown = w.columns ?? columns.map((c) => c.key);
+      const drawn = rows.slice(0, w.limit ?? 100);
+      const { widths, flex, flexMin } = tableLayout(
+        shown.map((key) => ({ key, label: label(key), column: column(key) })),
+        drawn,
+      );
       const table: Record<string, DataTableColumn> = {};
       for (const key of shown) {
         const c = column(key);
         table[key] = {
           label: label(key),
+          // HELD, BUT FOR THE PROSE: a held `width` the table leaves alone,
+          // so a short column keeps its words whole; the one column given a
+          // `defaultWidth` is fitted to the room the others leave (see
+          // tableLayout).
+          ...(key === flex
+            ? { defaultWidth: widths[key] ?? 0, minWidth: flexMin }
+            : { width: widths[key] ?? 0 }),
+          // A WIDGET'S ROWS ARE IN ITS DATASET'S ORDER: the dataset sorts
+          // and cuts them ("sort by day descending; keep the first 8"), and
+          // sorting what is left by another column would read as an order
+          // over every row.
+          sortable: false,
           ...(c?.type === "number" ? { align: "right" as const } : {}),
           render: (_row, value) => cell(value as DashboardValue, c),
         };
@@ -253,8 +311,17 @@ function Figure({
       return (
         <DataTable
           variant="compact"
+          // NO CHROME ROW: the rows are the widget's, already cut to its
+          // limit, so a pager and a settings control over two rows were a
+          // band of controls with nothing to do.
+          paginated={false}
+          showSettings={false}
+          // NEVER BROKEN MID-WORD: a value too long for its column ends in
+          // an ellipsis, and only the prose column is ever narrower than
+          // what it holds.
+          defaultWrapLines={false}
           columns={table}
-          data={rows.slice(0, w.limit ?? 100).map((r, i) => ({ ...r, __row: i }))}
+          data={drawn.map((r, i) => ({ ...r, __row: i }))}
           getRowKey={(r) => Number(r.__row)}
           emptyMessage="No rows."
         />
@@ -269,18 +336,18 @@ function cell(v: DashboardValue, c: DashboardColumn | undefined): ReactNode {
   if (v === null) return "";
   if (typeof v === "boolean") return v ? "Yes" : "No";
   if (c?.type === "number" && typeof v === "number") return formatNumber(v, "number");
-  return String(v);
+  return wordsOf(c, v);
 }
 
 function numberOr0(v: DashboardValue | undefined): number {
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
-/** Rows with an instant at `x`, oldest first. */
+/** Rows with a place on the time axis at `x`, oldest first. */
 function timed(rows: readonly DashboardRow[], x: string): DashboardRow[] {
   return rows
-    .filter((r) => !Number.isNaN(instantOf(r[x] ?? null)))
-    .sort((a, b) => instantOf(a[x] ?? null) - instantOf(b[x] ?? null));
+    .filter((r) => !Number.isNaN(chartTimeOf(r[x] ?? null)))
+    .sort((a, b) => chartTimeOf(a[x] ?? null) - chartTimeOf(b[x] ?? null));
 }
 
 /** A chart over time: one series per `y`, or one per value of `by` over its one `y`. */
@@ -288,6 +355,7 @@ function seriesOf(
   w: Widget,
   rows: readonly DashboardRow[],
   label: (key: string) => string,
+  byColumn: DashboardColumn | undefined,
 ): {
   series: { id: string; name: string }[];
   buckets: { t: number; values: Record<string, number> }[];
@@ -299,11 +367,11 @@ function seriesOf(
   const byT = new Map<number, Record<string, number>>();
   const names = new Map<string, string>();
   for (const r of timed(rows, x)) {
-    const t = instantOf(r[x] ?? null);
+    const t = chartTimeOf(r[x] ?? null);
     const values = byT.get(t) ?? {};
     if (w.by) {
       const band = String(r[w.by] ?? "");
-      names.set(band, band);
+      names.set(band, wordsOf(byColumn, r[w.by] ?? null));
       values[band] = (values[band] ?? 0) + numberOr0(r[ys[0] ?? ""]);
     } else {
       for (const y of ys) {

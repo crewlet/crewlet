@@ -69,8 +69,16 @@ its source names.
 | `calc` | `"calc": {"from": "...", "steps": [...]}` | Rows derived from another dataset by [steps](#calculations) | Whenever an input is read again |
 
 A `store` or `file` dataset declares its `columns`, each `{"key", "type",
-"label"}` with a type of `text`, `number`, `date` (a `YYYY-MM-DD` day or an
-RFC 3339 instant) or `boolean`, and optionally the `key` column naming a row.
+"label", "words"}` with a type of `text`, `number`, `date` (a `YYYY-MM-DD` day
+or an RFC 3339 instant) or `boolean`, and optionally the `key` column naming a
+row. A text column may name the vocabulary its ids are drawn in (`words`):
+`tracker_status`, `tracker_status_group`, `tracker_priority` or
+`agent_activity`. The values stay the ids (`in_progress`), which a filter or a
+calculation compares, and a reader sees the words the domain's own screens use
+(In progress). The catalogue's own columns already name theirs.
+
+A day is drawn on a chart as that calendar day wherever the reader is, and a
+chart over days labels its axis with dates.
 A store dataset always carries `_id`, the document id, and is keyed by it
 unless it names another key. An engine dataset's columns are the catalogue's
 and a calculation's are its steps', so neither declares any.
@@ -174,6 +182,13 @@ any other is refused.
 
 `format` is `number` (grouped, up to two decimals), `integer`, `percent` (a
 ratio: 0.25 is 25%) or `compact` (12.3k). `unit` is at most 16 bytes.
+
+A `table` draws its rows in the order its dataset answers them, and a reader
+does not re-sort them: sort and cut the rows in the dataset (a calculation's
+`sort` and `limit`), since sorting the first eight rows by another column would
+read as an order over every row. Each column is as wide as what it holds; the
+one column of free text in words, the longest such (a title), takes the room
+the others leave and ends in an ellipsis when there is less.
 
 ## Reading a board
 

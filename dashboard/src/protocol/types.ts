@@ -62,6 +62,7 @@ import type {
   COLUMN_TYPES,
   DASHBOARD_AGGS,
   DASHBOARD_COLUMN_TYPES,
+  DASHBOARD_COLUMN_WORDS,
   DASHBOARD_DATASET_STATUSES,
   DASHBOARD_NUMBER_FORMATS,
   DASHBOARD_REFRESH_MODES,
@@ -5474,12 +5475,15 @@ export type DashboardDatasetStatus = (typeof DASHBOARD_DATASET_STATUSES)[number]
 export type DashboardAgg = (typeof DASHBOARD_AGGS)[number];
 export type DashboardNumberFormat = (typeof DASHBOARD_NUMBER_FORMATS)[number];
 export type DashboardColumnType = (typeof DASHBOARD_COLUMN_TYPES)[number];
+export type DashboardColumnWords = (typeof DASHBOARD_COLUMN_WORDS)[number];
 
 /** One column of a dataset (`dashspec.Column`). */
 export interface DashboardColumn {
   key: string;
   type: DashboardColumnType;
   label?: string;
+  /** The vocabulary the column's ids are drawn in, if any. */
+  words?: DashboardColumnWords;
 }
 
 /** A value of a row: text, a number, a boolean, a date as its canonical text, or none. */

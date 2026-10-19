@@ -164,7 +164,7 @@ async function settle() {
 }
 
 /** The blocks on the page, outside any group. */
-const blocks = () => [...document.querySelectorAll(".home-board-grid > [data-widget]")];
+const blocks = () => [...document.querySelectorAll(".crewlet-arrange-grid > [data-widget]")];
 const notes = () => document.querySelectorAll(".crewlet-note").length;
 const editBar = () => screen.getByRole("group", { name: "Editing Home" });
 const tray = () => screen.getByRole("dialog", { name: "Add to Home" });

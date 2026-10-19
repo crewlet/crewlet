@@ -300,6 +300,7 @@ var contract = []Entry{
 	{"DASHBOARD_AGGS", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardDrawsTheBoardFormat"},
 	{"DASHBOARD_NUMBER_FORMATS", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardDrawsTheBoardFormat"},
 	{"DASHBOARD_COLUMN_TYPES", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardDrawsTheBoardFormat"},
+	{"DASHBOARD_COLUMN_WORDS", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardDrawsTheBoardFormat"},
 	{"DASHBOARD_COLUMNS", ReadScalar, "internal/api/artifactsapi.TestTheDashboardDrawsTheBoardFormat"},
 	{"DASHBOARD_MIN_REFRESH_SECONDS", ReadScalar, "internal/api/artifactsapi.TestTheDashboardDrawsTheBoardFormat"},
 	{"ARTIFACT_CAPABILITIES", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},

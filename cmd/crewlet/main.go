@@ -677,7 +677,7 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 		// [config.Bootstrap.Warnings] answers nil when a document has
 		// none, and assigning that would put `null` where the payload
 		// promises an array.
-		res.Warnings = append(res.Warnings, boot.Warnings()...)
+		res.Warnings = append(res.Warnings, engine.BootstrapWarnings(boot)...)
 		res.Summary = map[string]any{
 			"stream": boot.Stream.Type, "coordination": boot.Coordination.Type,
 			"store": boot.Store.Path, "roles": boot.Node.Roles,
@@ -779,7 +779,7 @@ func validateBoth(cfg configFlags, asJSON bool, stdout io.Writer) error {
 	// Inserted rather than appended onto Tier A's own list, which is nil
 	// for a document with no warnings at all: the payload promises both
 	// lists are arrays, and `append(nil)` of nothing stays nil.
-	res.Warnings = slices.Insert(res.Warnings, 0, boot.Warnings()...)
+	res.Warnings = slices.Insert(res.Warnings, 0, engine.BootstrapWarnings(boot)...)
 	res.Summary = map[string]any{
 		"company": company.Name, "seats": len(company.epoch.Seats()),
 		"llm_providers": len(company.epoch.Models.Keys()),
@@ -3221,7 +3221,7 @@ func validateFolded(boot *config.Bootstrap, fs *flag.FlagSet) error {
 // second, because a field cut from it would name a problem without its fix.
 // No `kind`: every Tier A warning is an advisory.
 func logBootstrapAdvisories(log *slog.Logger, boot *config.Bootstrap) {
-	for _, w := range boot.Warnings() {
+	for _, w := range engine.BootstrapWarnings(boot) {
 		log.Warn("config_advisory", "config", "bootstrap", "path", w.Path, "detail", w.Message)
 	}
 }

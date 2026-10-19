@@ -914,8 +914,11 @@ counting what the broker's streams already hold there.
 stream.pages_log_max_bytes is unset, so the ceiling was derived and scaled
 into what the state logs that already exist leave of their share of the
 broker, and it goes no lower than 1073741824 bytes. Give the broker more room;
-the state logs that already exist keep the ceilings they were created with,
-and no Tier A setting changes them: …
+a fresh node of this configuration reserves at least 9305762474 bytes of the
+broker: 6979321856 for the state logs at their floors and 2326440618 for the
+nats object bucket, a quarter of the broker's limit unless
+store.objects.nats_max_bytes sets it; the state logs that already exist keep
+the ceilings they were created with, and no Tier A setting changes them: …
 ```
 
 The sentence about the Tier A field says which of three things the ceiling
@@ -925,13 +928,11 @@ the identity log's and the usage log's, which do not follow the volume at all.
 
 The remedies are the ones it lists. Give the broker more room: raise
 `stream.store_max_bytes` where you set one, or, where you did not, free space
-on that volume (a first boot needs at least 8.7 GiB free there, three
-quarters of which, 6.5 GiB, holds the 6.5 GiB the seven logs reserve at their
-smallest: the five 1 GiB scaling floors, the usage log's 1 GiB default and the
-identity log's 512 MiB; and 11.6 GiB with the object store's bucket on the
-broker, which is reserved first, at a quarter of the broker's limit), which
-the broker measures again when
-the node next starts. Or, when the refused log's ceiling is above the smallest
+on that volume, which the broker measures again when the node next starts.
+The refusal quotes how much a fresh node of its configuration reserves, and
+[Deployment](deployment.md#the-minimum-room-for-a-fresh-node) breaks that
+figure down and names the settings that lower it on a small host
+(`store.objects.nats_max_bytes` above all). Or, when the refused log's ceiling is above the smallest
 value its own field accepts, set that field to a smaller ceiling — the refusal
 offers it only then, and names that floor: 1 GiB for the tracker's, the
 vectors', the knowledge base's, the artifacts log's and the artifact

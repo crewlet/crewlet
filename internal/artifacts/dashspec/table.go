@@ -40,7 +40,32 @@ type Column struct {
 	Key   string     `json:"key"`
 	Type  ColumnType `json:"type"`
 	Label string     `json:"label,omitempty"`
+
+	// Words is the vocabulary a text column's values are drawn in: its
+	// values stay the domain's ids (`in_progress`), which a filter or a
+	// calculation compares, and a reader is shown the words the domain's
+	// own screens show for them (In progress).
+	Words Words `json:"words,omitempty"`
 }
+
+// Words is a closed vocabulary a column's values are named in.
+type Words string
+
+// The vocabularies a column may be drawn in.
+const (
+	WordsNone               Words = ""
+	WordsTrackerStatus      Words = "tracker_status"
+	WordsTrackerStatusGroup Words = "tracker_status_group"
+	WordsTrackerPriority    Words = "tracker_priority"
+	WordsAgentActivity      Words = "agent_activity"
+)
+
+// WordSets are every vocabulary a column may name.
+var WordSets = []Words{WordsTrackerStatus, WordsTrackerStatusGroup, WordsTrackerPriority,
+	WordsAgentActivity}
+
+// Valid reports whether w is no vocabulary or one this build draws.
+func (w Words) Valid() bool { return w == WordsNone || slices.Contains(WordSets, w) }
 
 // Row is one row of a dataset: each value nil, a string, a float64 or a bool,
 // a date held as its canonical text ([Coerce]).

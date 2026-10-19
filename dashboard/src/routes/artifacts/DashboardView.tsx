@@ -20,8 +20,10 @@ import { useRef, useState } from "react";
 import {
   ArrangeBoard,
   ArrangeFrame,
+  ArrangeGrid,
   ArrangeGroup,
   Button,
+  Card,
   DataTable,
   DatasetSource,
   DatasetSourceList,
@@ -136,91 +138,103 @@ export function DashboardView({
             />
           </FormField>
         ))}
-        <Button variant="secondary" size="small" onClick={() => data.refresh()}>
+        <Button variant="secondary" onClick={() => data.refresh()}>
           Refresh
         </Button>
       </div>
       <div className="dashboard-body">
         <ArrangeBoard editing={false} columns={DASHBOARD_COLUMNS} className="dashboard-board">
-          {spec.widgets.map((w) =>
-            w.type === "group" ? (
-              <ArrangeFrame
-                key={w.id}
-                name={w.title ?? w.id}
-                editing={false}
-                container
-                columns={stacked ? DASHBOARD_COLUMNS : w.w}
-                rows={null}
-                rowHeight={ROW}
-                className="dashboard-cell"
-              >
-                <ArrangeGroup
-                  title={w.title ?? ""}
-                  tone={(w.tone ?? "none") as SurfaceTone}
-                  collapsed={collapsed.has(w.id)}
-                  onCollapsedChange={(c) =>
-                    setCollapsed((prev) => {
-                      const next = new Set(prev);
-                      if (c) next.add(w.id);
-                      else next.delete(w.id);
-                      return next;
-                    })
-                  }
-                  count={w.children?.length ?? 0}
-                  columns={DASHBOARD_COLUMNS}
-                  empty="This group holds no widgets."
+          <ArrangeGrid>
+            {spec.widgets.map((w) =>
+              w.type === "group" ? (
+                <ArrangeFrame
+                  key={w.id}
+                  name={w.title ?? w.id}
+                  editing={false}
+                  container
+                  columns={stacked ? DASHBOARD_COLUMNS : w.w}
+                  rows={null}
+                  rowHeight={ROW}
+                  className="dashboard-cell"
                 >
-                  {(w.children ?? []).map(renderLeaf)}
-                </ArrangeGroup>
-              </ArrangeFrame>
-            ) : (
-              renderLeaf(w)
-            ),
-          )}
+                  <ArrangeGroup
+                    title={w.title ?? ""}
+                    tone={(w.tone ?? "none") as SurfaceTone}
+                    collapsed={collapsed.has(w.id)}
+                    onCollapsedChange={(c) =>
+                      setCollapsed((prev) => {
+                        const next = new Set(prev);
+                        if (c) next.add(w.id);
+                        else next.delete(w.id);
+                        return next;
+                      })
+                    }
+                    count={w.children?.length ?? 0}
+                    columns={DASHBOARD_COLUMNS}
+                    empty="This group holds no widgets."
+                  >
+                    {(w.children ?? []).map(renderLeaf)}
+                  </ArrangeGroup>
+                </ArrangeFrame>
+              ) : (
+                renderLeaf(w)
+              ),
+            )}
+          </ArrangeGrid>
         </ArrangeBoard>
+        {/* ONE CARD, as every panel beside a board is: the rail's heading is
+            the card's, and the entries are rows of it rather than loose
+            blocks on the page, its top level with the board's first row. */}
         <aside className="dashboard-sources" aria-label="Sources">
-          <h2 className="dashboard-sources-title">Sources</h2>
-          <DatasetSourceList label="Datasets on this dashboard">
-            {spec.datasets.map((spec) => {
-              const d = byId.get(spec.id);
-              const state = data.datasets.get(spec.id);
-              const got = state?.answer ?? null;
-              const isSelected = selected === spec.id;
-              return (
-                <DatasetSource
-                  key={spec.id}
-                  title={spec.title}
-                  kind={spec.source}
-                  definition={definitionWords(spec)}
-                  refresh={d ? refreshWords(d.freshness) : undefined}
-                  asOf={got?.as_of}
-                  status={statusOf(d)}
-                  detail={state?.failure ?? got?.detail}
-                  rows={rowsWords(got)}
-                  selected={isSelected}
-                  onSelect={() => setSelected(isSelected ? null : spec.id)}
-                  now={now}
-                >
-                  {isSelected && got?.status === "ready" && got.table ? (
-                    <DataTable
-                      variant="compact"
-                      columns={Object.fromEntries(
-                        got.table.columns.map((c): [string, DataTableColumn] => [
-                          c.key,
-                          { label: c.label ?? c.key },
-                        ]),
-                      )}
-                      data={got.table.rows
-                        .slice(0, PREVIEW_ROWS)
-                        .map((r, i) => ({ ...r, __row: i }))}
-                      getRowKey={(r) => Number(r.__row)}
-                      emptyMessage="No rows."
-                    />
-                  ) : null}
-                </DatasetSource>
-              );
-            })}
-          </DatasetSourceList>
+          <Card padding="none">
+            <Card.Header>
+              <Card.Title as="h2">Sources</Card.Title>
+            </Card.Header>
+            <DatasetSourceList
+              label="Datasets on this dashboard"
+              className="dashboard-sources-list"
+            >
+              {spec.datasets.map((spec) => {
+                const d = byId.get(spec.id);
+                const state = data.datasets.get(spec.id);
+                const got = state?.answer ?? null;
+                const isSelected = selected === spec.id;
+                return (
+                  <DatasetSource
+                    key={spec.id}
+                    title={spec.title}
+                    kind={spec.source}
+                    definition={definitionWords(spec)}
+                    refresh={d ? refreshWords(d.freshness) : undefined}
+                    asOf={got?.as_of}
+                    status={statusOf(d)}
+                    detail={state?.failure ?? got?.detail}
+                    rows={rowsWords(got)}
+                    selected={isSelected}
+                    onSelect={() => setSelected(isSelected ? null : spec.id)}
+                    now={now}
+                  >
+                    {isSelected && got?.status === "ready" && got.table ? (
+                      <DataTable
+                        variant="compact"
+                        columns={Object.fromEntries(
+                          got.table.columns.map((c): [string, DataTableColumn] => [
+                            c.key,
+                            { label: c.label ?? c.key },
+                          ]),
+                        )}
+                        data={got.table.rows
+                          .slice(0, PREVIEW_ROWS)
+                          .map((r, i) => ({ ...r, __row: i }))}
+                        getRowKey={(r) => Number(r.__row)}
+                        emptyMessage="No rows."
+                      />
+                    ) : null}
+                  </DatasetSource>
+                );
+              })}
+            </DatasetSourceList>
+          </Card>
         </aside>
       </div>
     </div>

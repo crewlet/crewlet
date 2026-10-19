@@ -26,11 +26,71 @@ import type {
 } from "~/protocol/index.ts";
 import { EMPTY_VALUE, type DatasetStatus } from "@crewlethq/ui";
 import { fmtCount, fmtExact, plural } from "~/lib/format.ts";
+import { axisLabel } from "~/lib/work.ts";
+import { stateWord, type SeatState } from "~/lib/seats.ts";
+import type { DashboardColumn } from "~/protocol/index.ts";
 
 /** A day (`YYYY-MM-DD`) or an instant as milliseconds, NaN for anything else. */
 export function instantOf(v: DashboardValue): number {
   if (typeof v !== "string") return Number.NaN;
   return Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(v) ? `${v}T00:00:00Z` : v);
+}
+
+/** A calendar day, `YYYY-MM-DD`, with no time and no zone. */
+const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * Where a value falls on a chart's time axis, in milliseconds: a calendar day
+ * at its MIDNIGHT IN THE READER'S ZONE, an instant as itself, NaN for anything
+ * else.
+ *
+ * NOT [instantOf], which orders days as the engine does (midnight UTC): drawn
+ * at that instant, a day east of Greenwich is placed, and labelled, on the
+ * evening before it. A day has no time to convert; it is the day it names
+ * wherever the reader is.
+ */
+export function chartTimeOf(v: DashboardValue): number {
+  if (typeof v !== "string") return Number.NaN;
+  const day = DAY.exec(v);
+  if (day) return new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3])).getTime();
+  return Date.parse(v);
+}
+
+/** Whether every value a chart's time axis is drawn from is a calendar day. */
+export function allDays(values: readonly DashboardValue[]): boolean {
+  return values.length > 0 && values.every((v) => typeof v === "string" && DAY.test(v));
+}
+
+/** A day on a chart's axis or in its tooltip: the date, never a time of day. */
+export function formatDay(at: number): string {
+  return new Date(at).toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+/**
+ * A value in its column's own words: a tracker status, status group or
+ * priority as Work names it, an agent's activity as the Agents page does, and
+ * any other value as its text. The id is what a filter compared; this is what
+ * a reader is shown.
+ */
+export function wordsOf(column: DashboardColumn | undefined, v: DashboardValue): string {
+  if (v === null) return "";
+  const text = String(v);
+  switch (column?.words) {
+    case "tracker_status":
+      return axisLabel("status", text);
+    case "tracker_status_group":
+      return axisLabel("status_group", text);
+    case "tracker_priority":
+      return axisLabel("priority", text);
+    case "agent_activity":
+      return stateWord(text as SeatState);
+    case undefined:
+      return text;
+  }
 }
 
 /**
@@ -198,11 +258,14 @@ export function datasetStatus(
   return "loading";
 }
 
-/** How a dataset is kept current, in the rail's words. */
+/**
+ * How a dataset is kept current, in the rail's words. A live store says how,
+ * not "Live" again: the line above it already says the rows are live.
+ */
 export function refreshWords(f: DashboardFreshness): string {
   switch (f.mode) {
     case "live":
-      return "Live";
+      return "As its rows are written";
     case "signal":
       return f.every_seconds ? `On change, and every ${minutes(f.every_seconds)}` : "On change";
     case "interval":
@@ -306,4 +369,97 @@ export function eachWidget(
     for (const c of w.children ?? []) out.push({ widget: c, group: w.id });
   }
   return out;
+}
+
+/**
+ * What one character of a compact table's text takes, in pixels, and a cell's
+ * padding: the widget frame's 16px inset each side (a widget's table is
+ * flush, its cells on the frame's inset) and 4px of air.
+ */
+const TABLE_CHAR_PX = 7.5;
+const TABLE_CELL_PAD_PX = 36;
+
+/**
+ * A heading's character: a heading is set in capitals and spaced wider than a
+ * value, so a column sized for its values alone cut its heading short
+ * (`SERVI…`). It carries no sort control (a widget's rows are in the order
+ * its dataset gives them), so its padding is a cell's.
+ */
+const TABLE_HEAD_CHAR_PX = 8.5;
+const TABLE_HEAD_PAD_PX = TABLE_CELL_PAD_PX;
+
+/** The narrowest and widest a table column starts at, in pixels. */
+const TABLE_MIN_PX = 72;
+const TABLE_MAX_PX = 320;
+
+/**
+ * The narrowest the prose column is fitted to, about twenty characters: what
+ * still reads as the start of a title. Past it the table scrolls sideways.
+ */
+const TABLE_PROSE_MIN_PX = 180;
+
+/** How a dashboard table's columns are laid out: see [tableLayout]. */
+export interface TableLayout {
+  /** Each column's width from what it holds. */
+  widths: Record<string, number>;
+  /** The one column that takes the table's leftover room, or none. */
+  flex: string | undefined;
+  /** The narrowest the flexing column is fitted to. */
+  flexMin: number;
+}
+
+/**
+ * Each column's width, from what it holds: the wider of its heading (with its
+ * sort control) and its longest value as shown, at least [TABLE_MIN_PX] and at
+ * most [TABLE_MAX_PX]; and the one column that gives or takes the room left
+ * in the widget.
+ *
+ * WHY A TABLE IS SIZED BY ITS CONTENT: a column the design system's compact
+ * table may fit is shrunk to its box, so on a narrow widget a heading is cut
+ * to its first letters and a value is broken mid-word (`succeed|ed`). Held at
+ * what it holds (a column's `width`), a column keeps its words whole.
+ *
+ * WHY ONE COLUMN FLEXES: held at their content every column, a table either
+ * stopped short of its widget's side or ran past it and scrolled. The column
+ * of prose (a free text column whose values are words with spaces between
+ * them, the longest such, a title) is the one a reader reads by its start, so
+ * it alone is fitted: it takes what is left of the widget's width, and gives
+ * up its tail behind an ellipsis when there is less, down to
+ * [TABLE_PROSE_MIN_PX], while every other column
+ * (a key, a version, a state, a date, a number) keeps its value whole. A table
+ * whose held columns alone are wider than its widget scrolls sideways.
+ */
+export function tableLayout(
+  shown: readonly { key: string; label: string; column: DashboardColumn | undefined }[],
+  rows: readonly DashboardRow[],
+): TableLayout {
+  const widths: Record<string, number> = {};
+  let flex: string | undefined;
+  let flexChars = 0;
+  for (const { key, label, column } of shown) {
+    let chars = 0;
+    let spaced = false;
+    for (const r of rows) {
+      const v = r[key] ?? null;
+      const text =
+        column?.type === "number" && typeof v === "number"
+          ? formatNumber(v, "number")
+          : wordsOf(column, v);
+      chars = Math.max(chars, text.length);
+      spaced ||= /\s/.test(text.trim());
+    }
+    const head = label.length * TABLE_HEAD_CHAR_PX + TABLE_HEAD_PAD_PX;
+    const body = chars * TABLE_CHAR_PX + TABLE_CELL_PAD_PX;
+    widths[key] = Math.round(Math.min(TABLE_MAX_PX, Math.max(TABLE_MIN_PX, head, body)));
+    // Prose is free text in words: a column of a closed vocabulary is a
+    // state, and one value with no space in it an identifier, each read
+    // whole, whatever its length.
+    const prose = (column?.type ?? "text") === "text" && !column?.words && spaced;
+    if (prose && chars > flexChars) {
+      flex = key;
+      flexChars = chars;
+    }
+  }
+  const flexMin = flex ? Math.min(widths[flex] ?? 0, TABLE_PROSE_MIN_PX) : 0;
+  return { widths, flex, flexMin };
 }
