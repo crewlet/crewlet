@@ -134,7 +134,7 @@ person uses it to set their first password. Retry with -op-id <op id> to see
 the same link, or use "iam reset-password" if it stopped working.
 
 Set CREWLET_API_TOKEN to authenticate. Every iam command needs it, reads
-included.
+included, except "iam token -login", which signs you in and reads none.
 
 A link from "iam reset-password" lets the person set a new password once. It
 signs them out everywhere, ends their tokens, and doesn't sign them in. Their
