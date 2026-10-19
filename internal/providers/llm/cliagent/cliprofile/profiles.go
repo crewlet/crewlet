@@ -148,23 +148,31 @@ var ErrOverrides = errors.New("cli.overrides does not decode into a profile")
 // `crewlet validate` instead of a field silently ignored until an agent's
 // first turn: the re-decode runs with KnownFields, so `complete_arg` is an
 // error naming itself.
+//
+// Validated as [Profile.Validate] validates any profile, and against the
+// built-in it was merged into besides: an override that moves a relocation
+// directory must move what the built-in keeps under it ([Profile.strandedBy]),
+// which only the pair can show.
 func Load(name string, overrides map[string]any) (Profile, error) {
-	base, ok := Builtin(name)
+	builtin, ok := Builtin(name)
 	if !ok {
 		return Profile{}, fmt.Errorf("cli-agent: unknown agent %q (want %s)",
 			name, strings.Join(BuiltinNames(), ", "))
 	}
-	if len(overrides) > 0 {
-		merged, err := applyOverrides(base, overrides)
-		if err != nil {
-			return Profile{}, fmt.Errorf("cli-agent %q: %w: %w", name, ErrOverrides, err)
+	if len(overrides) == 0 {
+		if err := builtin.Validate(name); err != nil {
+			return Profile{}, err
 		}
-		base = merged
+		return builtin, nil
 	}
-	if err := base.Validate(name); err != nil {
+	merged, err := applyOverrides(builtin, overrides)
+	if err != nil {
+		return Profile{}, fmt.Errorf("cli-agent %q: %w: %w", name, ErrOverrides, err)
+	}
+	if err := profileError(name, append(merged.problems(), merged.strandedBy(&builtin)...)); err != nil {
 		return Profile{}, err
 	}
-	return base, nil
+	return merged, nil
 }
 
 // applyOverrides merges an operator's override map into a profile.

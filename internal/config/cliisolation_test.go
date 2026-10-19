@@ -93,8 +93,9 @@ func TestACLIEnvIsolationRefusalNamesTheFieldThatTakesIt(t *testing.T) {
 		},
 		"a config_env relocation": {
 			agent: "codex", model: "m", variable: "CODEX_HOME",
-			names:  "cli.overrides.config_env",
-			follow: "cli: {agent: codex, overrides: {config_env: {CODEX_HOME: .codex-elsewhere}}}",
+			names: "cli.overrides.config_env",
+			follow: "cli: {agent: codex, overrides: {config_env: {CODEX_HOME: .codex-elsewhere}, " +
+				"credential_paths: [.codex-elsewhere/auth.json], volatile_paths: [.codex-elsewhere/sessions]}}",
 		},
 		"a work_config_env relocation": {
 			agent: "opencode", model: "anthropic/claude-sonnet-5", variable: "OPENCODE_CONFIG_DIR",

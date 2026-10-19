@@ -1015,8 +1015,10 @@ type IsolationLayer string
 // The layers, each but the engine's own named by the profile field that sets
 // it, which is what an operator overrides it with (cli.overrides.<field>).
 const (
-	// IsolationHome is [HomeIsolation]: set by the engine for every CLI,
-	// whatever its profile says, and changed by no field at all.
+	// IsolationHome is [HomeIsolation]: HOME, the XDG homes and TMPDIR, set
+	// by the engine for every CLI, whatever its profile says, and changed by
+	// no field at all — config_env, work_config_env and isolation_env each
+	// refuse every one of them.
 	IsolationHome IsolationLayer = "home"
 	// IsolationConfigEnv is a [Profile.ConfigEnv] relocation under the
 	// seat's home.
@@ -1031,11 +1033,11 @@ const (
 // IsolationLayerOf reports which layer sets name, and false when none does:
 // when name is not one of [Profile.IsolationVariables].
 //
-// THE LAYER THE CHILD IS GIVEN, which is the last one applied: its environment
-// sets [HomeIsolation], then config_env, then work_config_env, then
-// isolation_env, so a variable two of them name is the later one's — and the
-// one overlap [Profile.Validate] admits, config_env relocating an XDG home, is
-// config_env's.
+// ONE LAYER PER VARIABLE in a profile that loaded, because each field refuses
+// the others' names ([Profile.Validate]): config_env refuses [HomeIsolation],
+// work_config_env refuses it and config_env's variables, and isolation_env
+// refuses all three. So the answer is the layer whose value the child is
+// given, with no precedence to decide.
 //
 // For the refusals that have to say WHERE a variable's value is changed,
 // rather than a second copy of the lists beside each of them: an entry's
@@ -1044,19 +1046,102 @@ const (
 // variable as work_config_env's, and naming OPENCODE_CONFIG_PROJECT_DISABLE
 // to the same field, refused there as an isolation_env switch.
 func (p *Profile) IsolationLayerOf(name string) (IsolationLayer, bool) {
-	if _, ok := p.IsolationEnv[name]; ok {
+	switch {
+	case slices.Contains(HomeIsolation, name):
+		return IsolationHome, true
+	case hasKey(p.ConfigEnv, name):
+		return IsolationConfigEnv, true
+	case hasKey(p.WorkConfigEnv, name):
+		return IsolationWorkConfigEnv, true
+	case hasKey(p.IsolationEnv, name):
 		return IsolationSwitch, true
 	}
-	if _, ok := p.WorkConfigEnv[name]; ok {
-		return IsolationWorkConfigEnv, true
-	}
-	if _, ok := p.ConfigEnv[name]; ok {
-		return IsolationConfigEnv, true
-	}
-	if slices.Contains(HomeIsolation, name) {
-		return IsolationHome, true
-	}
 	return "", false
+}
+
+// hasKey reports whether a map names key, whatever its value.
+func hasKey(m map[string]string, key string) bool {
+	_, ok := m[key]
+	return ok
+}
+
+// KeptUnder names the fields whose paths this profile keeps inside the
+// directory one of its relocation variables points at — a [Profile.ConfigEnv]
+// directory under the seat's home, a [Profile.WorkConfigEnv] one under the
+// call's working directory — each once, in field order; nil for a variable
+// neither relocates, or one under which the profile keeps nothing.
+//
+// WHAT HAS TO MOVE WITH THE DIRECTORY. The CLI finds each of those paths
+// THROUGH the variable — CODEX_HOME's login and sessions, the policy and the
+// agent file under OPENCODE_CONFIG_DIR — so pointing the variable somewhere
+// else and leaving them where they were is a CLI that never reads its login,
+// never has its sessions pruned, or never sees the tool policy that denies it
+// a shell. The refusal of an entry's cli.env naming the variable says which
+// fields move with it; a profile that moves the directory without them does
+// not load ([Load]).
+func (p *Profile) KeptUnder(name string) []string {
+	var dir string
+	var scope SeedScope
+	switch {
+	case hasKey(p.ConfigEnv, name):
+		dir, scope = p.ConfigEnv[name], SeedHome
+	case hasKey(p.WorkConfigEnv, name):
+		dir, scope = p.WorkConfigEnv[name], SeedWork
+	default:
+		return nil
+	}
+	var fields []string
+	for _, k := range p.kept(scope) {
+		if within(k.path, dir) && !slices.Contains(fields, k.field) {
+			fields = append(fields, k.field)
+		}
+	}
+	return fields
+}
+
+// keptPath is one path a profile keeps for its CLI in a scope: the field it
+// is set with, the entry as an operator would find it, and the path as
+// written.
+type keptPath struct {
+	field, label, path string
+}
+
+// kept lists the paths this profile keeps for its CLI in one scope — the ones
+// a relocation of that scope can strand. Under the seat's home: the login
+// files, the volatile paths and the home's seed files. Under the call's
+// working directory: its seed files and a discovered system prompt file, which
+// the CLI finds by where it is; a `{file}` one is handed to the CLI by its
+// path, wherever it is.
+func (p *Profile) kept(scope SeedScope) []keptPath {
+	var out []keptPath
+	add := func(field, label, path string) {
+		out = append(out, keptPath{field: field, label: label, path: path})
+	}
+	if scope == SeedHome {
+		for i, rel := range p.CredentialPaths {
+			add("credential_paths", fmt.Sprintf("credential_paths[%d]", i), rel)
+		}
+		for i, rel := range p.VolatilePaths {
+			add("volatile_paths", fmt.Sprintf("volatile_paths[%d]", i), rel)
+		}
+	}
+	for i, f := range p.SeedFiles {
+		if f.Scope() == scope {
+			add("seed_files", fmt.Sprintf("seed_files[%d].path", i), f.Path)
+		}
+	}
+	if spf := p.SystemPromptFile; scope == SeedWork && spf != nil && spf.Discovered {
+		add("system_prompt_file.name", "system_prompt_file.name", spf.Name)
+	}
+	return out
+}
+
+// within reports whether rel is dir or lies under it, both relative to one
+// root and compared clean: `.codex/auth.json` is within `.codex/`, and every
+// path is within `.`, the root itself.
+func within(rel, dir string) bool {
+	rel, dir = filepath.Clean(rel), filepath.Clean(dir)
+	return dir == "." || rel == dir || strings.HasPrefix(rel, dir+string(filepath.Separator))
 }
 
 // HasSystemChannel reports whether this profile carries the system prompt on
@@ -1113,6 +1198,20 @@ func namesAFile(rel string) bool {
 // Validate reports what is wrong with a profile, naming the override field an
 // operator would edit rather than the Go field they cannot see.
 func (p *Profile) Validate(name string) error {
+	return profileError(name, p.problems())
+}
+
+// profileError is the one error a profile's problems are reported as, or nil
+// for none.
+func profileError(name string, bad []string) error {
+	if len(bad) == 0 {
+		return nil
+	}
+	return fmt.Errorf("cli-agent profile %q: %s", name, strings.Join(bad, "; "))
+}
+
+// problems is what [Profile.Validate] reports, one sentence each.
+func (p *Profile) problems() []string {
 	var bad []string
 	add := func(format string, args ...any) {
 		bad = append(bad, fmt.Sprintf(format, args...))
@@ -1204,10 +1303,9 @@ func (p *Profile) Validate(name string) error {
 			add("system_prompt_file.template has no {system} placeholder — every " +
 				"call would hand the CLI the same fixed file and no seat's identity")
 		}
-		// `fileName` rather than `name`, which is this function's own
-		// parameter: the PROFILE's name. Two different names in one
-		// validator whose every message is about the profile is worth a
-		// second word.
+		// `fileName` rather than `name`, which is Validate's own parameter:
+		// the PROFILE's name. Two different names in one validator whose
+		// every message is about the profile is worth a second word.
 		fileName := p.SystemPromptFile.Name
 		switch {
 		case p.SystemPromptFile.Discovered:
@@ -1352,10 +1450,7 @@ func (p *Profile) Validate(name string) error {
 				"configures nothing", i)
 		}
 	}
-	if len(bad) == 0 {
-		return nil
-	}
-	return fmt.Errorf("cli-agent profile %q: %s", name, strings.Join(bad, "; "))
+	return bad
 }
 
 // validateHomePaths holds the paths a login and a prune are made of —
@@ -1431,8 +1526,20 @@ func (p *Profile) validateRelocations(add func(string, ...any)) {
 	for _, name := range slices.Sorted(maps.Keys(p.ConfigEnv)) {
 		rel := p.ConfigEnv[name]
 		switch {
-		case name == "HOME":
-			add("config_env may not name HOME — it is set from the seat home already")
+		case slices.Contains(HomeIsolation, name):
+			// The engine's own, for every CLI, and never a vendor's: HOME
+			// is the seat's home, and the XDG homes and TMPDIR already
+			// point inside it (the cache beside it). Relocating one moved
+			// nothing out of the home that was not in it, and stranded
+			// whatever the profile keeps at the engine's location — on
+			// muse-code, `XDG_CONFIG_HOME: .x` left the seeded tool policy
+			// in a `.config` the CLI no longer read, handing every seat
+			// its default tools. It was also the one overlap between the
+			// isolation layers, so an entry's cli.env naming XDG_CONFIG_HOME
+			// could not be told that no field changes it.
+			add("config_env may not name %s — the engine points it at or inside the "+
+				"seat home for every CLI already; config_env relocates a variable of "+
+				"the vendor's own", name)
 		case strings.TrimSpace(rel) == "":
 			add("config_env.%s is empty — name the directory under the seat home it points at", name)
 		case !staysInside(rel):
@@ -1498,6 +1605,75 @@ func (p *Profile) validateRelocations(add func(string, ...any)) {
 				"own would hand the CLI the engine user's directories", name)
 		}
 	}
+}
+
+// strandedBy reports every relocation an override MOVED that left behind a
+// path the built-in kept under it: a [Profile.ConfigEnv] or
+// [Profile.WorkConfigEnv] variable pointed at a different directory than
+// builtin points it at, while a path this profile keeps in that scope
+// ([Profile.kept]) still lies under the built-in's directory and under none of
+// this profile's.
+//
+// The CLI finds those paths through the variable ([Profile.KeptUnder]), so a
+// moved directory with the paths left where they were loaded and was admitted
+// by every write path while every call ran without them:
+// `work_config_env: {OPENCODE_CONFIG_DIR: .elsewhere}` left the deny-all
+// policy and the seat's agent file in a `.crewlet-config` OpenCode no longer
+// read — "Agent not found" on every run, and with the agent file alone moved,
+// a model handed OpenCode's default tools — and `config_env: {CODEX_HOME:
+// .codex-elsewhere}` left the login and every session path behind, so no seat
+// was signed in and no session was ever pruned.
+//
+// Judged against the BUILT-IN, and only for a directory it relocates, because
+// the built-in's own layout is the one statement of which paths the CLI reads
+// through which variable: a path a `custom` profile keeps beside its relocation
+// may be one its CLI reads from a fixed place, and nothing here can say
+// otherwise. A variable whose new value is itself refused
+// ([Profile.validateRelocations]) is left to that refusal.
+func (p *Profile) strandedBy(builtin *Profile) []string {
+	var bad []string
+	for _, r := range []struct {
+		field    string
+		scope    SeedScope
+		was, now map[string]string
+	}{
+		{"config_env", SeedHome, builtin.ConfigEnv, p.ConfigEnv},
+		{"work_config_env", SeedWork, builtin.WorkConfigEnv, p.WorkConfigEnv},
+	} {
+		var dirs []string
+		for _, rel := range r.now {
+			if strings.TrimSpace(rel) != "" && staysInside(rel) {
+				dirs = append(dirs, rel)
+			}
+		}
+		for _, name := range slices.Sorted(maps.Keys(r.was)) {
+			// An override merges into the built-in's map key by key, so the
+			// variable is still there; empty (a YAML null) or escaping its
+			// root, it is refused on its own. The same directory, however
+			// spelled, strands nothing: every path under it is under one of
+			// this profile's directories below.
+			was, now := filepath.Clean(r.was[name]), r.now[name]
+			if strings.TrimSpace(now) == "" || !staysInside(now) {
+				continue
+			}
+			var left []string
+			for _, k := range p.kept(r.scope) {
+				if within(k.path, was) && !slices.ContainsFunc(dirs, func(dir string) bool {
+					return within(k.path, dir)
+				}) {
+					left = append(left, fmt.Sprintf("%s %q", k.label, k.path))
+				}
+			}
+			if len(left) == 0 {
+				continue
+			}
+			bad = append(bad, fmt.Sprintf("%s moves %s from %s to %s, and %s still lie "+
+				"under %s, where the CLI no longer looks for them — move them under %s in "+
+				"the same override", r.field, name, was, filepath.Clean(now),
+				strings.Join(left, ", "), was, filepath.Clean(now)))
+		}
+	}
+	return bad
 }
 
 // validateEventMarkers holds a [MarkerScopeEvents] profile to the shape in

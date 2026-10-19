@@ -30,6 +30,12 @@ func TestARelocationStaysInsideItsRoot(t *testing.T) {
 		"work_config_env naming an XDG home": {
 			map[string]any{"work_config_env": map[string]any{"XDG_CONFIG_HOME": ".x"}}, "may not name XDG_CONFIG_HOME",
 		},
+		"config_env naming an XDG home": {
+			map[string]any{"config_env": map[string]any{"XDG_CONFIG_HOME": ".x"}}, "config_env may not name XDG_CONFIG_HOME",
+		},
+		"config_env naming TMPDIR": {
+			map[string]any{"config_env": map[string]any{"TMPDIR": ".tmp"}}, "config_env may not name TMPDIR",
+		},
 		"one variable, two roots": {map[string]any{
 			"config_env":      map[string]any{"VENDOR_DIR": ".vendor"},
 			"work_config_env": map[string]any{"VENDOR_DIR": ".vendor"},
@@ -86,15 +92,14 @@ func TestTheProfilesEnvMayNotReplaceTheIsolation(t *testing.T) {
 
 // AN ISOLATION VARIABLE'S LAYER IS THE ONE THE CHILD IS GIVEN. A refusal that
 // tells an operator where a variable's value is changed reads it here, and the
-// three profile fields refuse each other's variables, so the answer must be the
-// layer whose value the child's environment ends up with: the last applied —
-// config_env over the engine's own XDG home it relocates, the one overlap a
-// loaded profile can carry — and a layer for exactly the names
+// three profile fields refuse each other's variables, so every variable has
+// exactly one layer — the engine's own for HOME, the XDG homes and TMPDIR,
+// which no field may relocate — and a layer for exactly the names
 // IsolationVariables lists, so the two can never describe different sets.
 func TestAnIsolationVariablesLayerIsTheOneTheChildIsGiven(t *testing.T) {
 	t.Parallel()
 	p, err := loadCustom(map[string]any{
-		"config_env":      map[string]any{"VENDOR_HOME": ".vendor", "XDG_CONFIG_HOME": ".vendor-xdg"},
+		"config_env":      map[string]any{"VENDOR_HOME": ".vendor"},
 		"work_config_env": map[string]any{"VENDOR_CONFIG": ".vendor-config"},
 		"isolation_env":   map[string]any{"VENDOR_NO_WALK": "1"},
 	})
@@ -105,12 +110,13 @@ func TestAnIsolationVariablesLayerIsTheOneTheChildIsGiven(t *testing.T) {
 		"HOME":            IsolationHome,
 		"TMPDIR":          IsolationHome,
 		"XDG_CACHE_HOME":  IsolationHome,
-		"XDG_CONFIG_HOME": IsolationConfigEnv,
+		"XDG_CONFIG_HOME": IsolationHome,
 		"VENDOR_HOME":     IsolationConfigEnv,
 		"VENDOR_CONFIG":   IsolationWorkConfigEnv,
 		"VENDOR_NO_WALK":  IsolationSwitch,
 	}
-	for _, name := range p.IsolationVariables() {
+	names := p.IsolationVariables()
+	for _, name := range names {
 		layer, ok := p.IsolationLayerOf(name)
 		if !ok {
 			t.Errorf("%s is an isolation variable with no layer", name)
@@ -121,12 +127,159 @@ func TestAnIsolationVariablesLayerIsTheOneTheChildIsGiven(t *testing.T) {
 		}
 	}
 	for name := range want {
-		if !slices.Contains(p.IsolationVariables(), name) {
+		if !slices.Contains(names, name) {
 			t.Errorf("%s has a layer but is not an isolation variable", name)
 		}
 	}
+	if len(names) != len(slices.Compact(slices.Sorted(slices.Values(names)))) {
+		t.Errorf("IsolationVariables lists a name twice, so two layers set it: %v", names)
+	}
 	if layer, ok := p.IsolationLayerOf("VENDOR_LOG_LEVEL"); ok {
 		t.Errorf("an ordinary variable is reported as set by %s", layer)
+	}
+}
+
+// A RELOCATION TAKES WHAT THE PROFILE KEEPS UNDER IT, OR IT DOES NOT LOAD. The
+// CLI finds a login, a session store, a tool policy or a discovered agent file
+// through the variable that points at the directory holding it, so an override
+// moving the directory and leaving those paths behind loaded and ran every
+// call without them: OpenCode answered "Agent not found" with its agent file
+// and policy left in `.crewlet-config` — and with the agent file alone moved,
+// ran with its own default tools — and Codex ran signed in to nothing, never
+// pruning a session. Judged against the built-in's layout, so a custom
+// profile keeping a path beside its relocation is its own business.
+func TestAMovedRelocationTakesWhatItKeepsWithIt(t *testing.T) {
+	t.Parallel()
+	const agent = "---\ndescription: d\n---\n{system}\n"
+	opencodePrompt := func(dir string) map[string]any {
+		return map[string]any{"name": dir + "/agents/crewlet-seat.md", "discovered": true, "template": agent}
+	}
+	opencodeSeed := func(dir string) []any {
+		return []any{map[string]any{"path": dir + "/opencode.json", "in": "work", "content": "{}"}}
+	}
+	for name, tc := range map[string]struct {
+		agent     string
+		overrides map[string]any
+		left      []string // nil: loads
+	}{
+		"opencode's directory moved alone": {
+			agent:     "opencode",
+			overrides: map[string]any{"work_config_env": map[string]any{"OPENCODE_CONFIG_DIR": ".elsewhere"}},
+			left: []string{
+				`work_config_env moves OPENCODE_CONFIG_DIR from .crewlet-config to .elsewhere`,
+				`seed_files[0].path ".crewlet-config/opencode.json"`,
+				`system_prompt_file.name ".crewlet-config/agents/crewlet-seat.md"`,
+				"move them under .elsewhere",
+			},
+		},
+		"opencode's directory moved with its agent file but not its policy": {
+			agent: "opencode",
+			overrides: map[string]any{
+				"work_config_env":    map[string]any{"OPENCODE_CONFIG_DIR": ".elsewhere"},
+				"system_prompt_file": opencodePrompt(".elsewhere"),
+			},
+			left: []string{`seed_files[0].path ".crewlet-config/opencode.json"`},
+		},
+		"opencode's directory moved with everything under it": {
+			agent: "opencode",
+			overrides: map[string]any{
+				"work_config_env":    map[string]any{"OPENCODE_CONFIG_DIR": ".elsewhere"},
+				"system_prompt_file": opencodePrompt(".elsewhere"),
+				"seed_files":         opencodeSeed(".elsewhere"),
+			},
+		},
+		"codex's home moved alone": {
+			agent:     "codex",
+			overrides: map[string]any{"config_env": map[string]any{"CODEX_HOME": ".codex-elsewhere"}},
+			left: []string{
+				`config_env moves CODEX_HOME from .codex to .codex-elsewhere`,
+				`credential_paths[0] ".codex/auth.json"`,
+				`volatile_paths[0] ".codex/sessions"`,
+				`volatile_paths[2] ".codex/log"`,
+			},
+		},
+		"codex's home moved with its login but not its sessions": {
+			agent: "codex",
+			overrides: map[string]any{
+				"config_env":       map[string]any{"CODEX_HOME": ".codex-elsewhere"},
+				"credential_paths": []any{".codex-elsewhere/auth.json"},
+			},
+			left: []string{`volatile_paths[1] ".codex/history.jsonl"`},
+		},
+		"codex's home moved with everything under it": {
+			agent: "codex",
+			overrides: map[string]any{
+				"config_env":       map[string]any{"CODEX_HOME": ".codex-elsewhere"},
+				"credential_paths": []any{".codex-elsewhere/auth.json"},
+				"volatile_paths":   []any{".codex-elsewhere/sessions"},
+			},
+		},
+		"codex's home spelled with a trailing separator": {
+			agent:     "codex",
+			overrides: map[string]any{"config_env": map[string]any{"CODEX_HOME": ".codex/"}},
+		},
+		"codex's home moved to a directory still holding its paths": {
+			agent:     "codex",
+			overrides: map[string]any{"config_env": map[string]any{"CODEX_HOME": ".", "CODEX_EXTRA": ".codex"}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Load(tc.agent, tc.overrides)
+			if tc.left == nil {
+				if err != nil {
+					t.Fatalf("a relocation that took its paths with it was refused: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("accepted %v", tc.overrides)
+			}
+			for _, want := range tc.left {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not mention %q: %v", want, err)
+				}
+			}
+		})
+	}
+
+	// A null is the empty value config_env already refuses, not a move that
+	// strands anything: one refusal, not two.
+	_, err := Load("codex", map[string]any{"config_env": map[string]any{"CODEX_HOME": nil}})
+	if err == nil || !strings.Contains(err.Error(), "config_env.CODEX_HOME is empty") ||
+		strings.Contains(err.Error(), "still lie under") {
+		t.Errorf("a null CODEX_HOME: %v, want the empty value refused and nothing else", err)
+	}
+	// A custom profile has no built-in layout to strand anything from.
+	if _, err := loadCustom(map[string]any{
+		"config_env":       map[string]any{"VENDOR_HOME": ".vendor"},
+		"credential_paths": []any{".vendor-login/auth.json"},
+	}); err != nil {
+		t.Errorf("a custom profile keeping its login beside its relocation was refused: %v", err)
+	}
+}
+
+// WHAT MOVES WITH A DIRECTORY IS WHAT THE PROFILE KEEPS UNDER IT. The refusal
+// of an entry's cli.env naming a relocation variable says which fields have to
+// move with a different directory, read from here.
+func TestKeptUnderNamesTheFieldsThatMoveWithADirectory(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		agent, variable string
+		want            []string
+	}{
+		{"codex", "CODEX_HOME", []string{"credential_paths", "volatile_paths"}},
+		{"opencode", "OPENCODE_CONFIG_DIR", []string{"seed_files", "system_prompt_file.name"}},
+		{"opencode", "OPENCODE_CONFIG_PROJECT_DISABLE", nil},
+		{"codex", "HOME", nil},
+	} {
+		p, err := Load(tc.agent, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := p.KeptUnder(tc.variable); !slices.Equal(got, tc.want) {
+			t.Errorf("%s KeptUnder(%s) = %v, want %v", tc.agent, tc.variable, got, tc.want)
+		}
 	}
 }
 
