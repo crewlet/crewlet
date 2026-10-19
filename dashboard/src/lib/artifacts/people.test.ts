@@ -81,3 +81,22 @@ test("only an agent at work offers its turn", () => {
   const { members } = presenceMembers(room, artifactPeople(null), new Map());
   expect(members.map((m) => memberTurn(roster, m))).toEqual(["", "run-7", ""]);
 });
+
+// A LOGIN IS NOT A SEAT. An owner who acts as no seat is recorded under their
+// login (`iam.RecordOwner`), and a Tier A token's is `token:<id>`: the
+// credential's spelling, which the gallery's Owner column showed as is.
+test("a login the chart holds no seat for is said in its words, as a person", () => {
+  const people = artifactPeople(null);
+  expect(people.seatName("token:review")).toBe("review (API token)");
+  expect(people.seatPrincipal("token:review")).toEqual({
+    id: "token:review",
+    kind: "person",
+    name: "review (API token)",
+  });
+  expect(people.seatName("maya.ortiz")).toBe("maya.ortiz");
+  expect(people.seatPrincipal("maya.ortiz").kind).toBe("person");
+  expect(people.seatPrincipal("ci:release").kind).toBe("person");
+  // A handle the chart does not hold is not a login: it keeps the chart's default.
+  expect(people.seatName("cto")).toBe("cto");
+  expect(people.seatPrincipal("cto").kind).toBe("agent");
+});
