@@ -730,6 +730,10 @@ func taskReads() map[string]indexedRead {
 		// so not sorted, or every waiting edge is read for each batch.
 		"a dependency's missing mirror": walk("tracker_relations_repair_idx",
 			oneSidedStatement, 1, WalkBatch),
+		// AND THE BATCH'S BLOCKERS' DEPENDENTS, counted by the blockers'
+		// keys in one grouped read rather than once per edge.
+		"a missing mirror's blockers counted": seek(mirrorKey,
+			blockerDependentsStatement(2), task, other),
 		// THE DETAIL AND THE DECORATIONS: one task by its key, and a
 		// page's rows each by theirs.
 		"a task named":               seek(key, taskRefStatement, task),
