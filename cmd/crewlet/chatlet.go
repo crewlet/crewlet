@@ -60,41 +60,42 @@ import (
 // they were not invited to, and what they confirm is what the request itself
 // destroys: an erase's count of messages, a prune's cutoff, a horizon's days.
 
-const chatletUsage = `crewlet chatlet — the company's own chat, as the seat your credential acts as
+const chatletUsage = `crewlet chatlet: read and post in the company's chat, as your seat
 
 Usage:
-  crewlet chatlet channels [-archived]              The rooms you are in, and what
-                                                    you have not read in each
+  crewlet chatlet channels [-archived]              List your rooms and what's
+                                                    unread in each
   crewlet chatlet read ROOM-ID [-limit N] [-before CURSOR]
-                                                    One room's transcript, oldest
-                                                    first, threads marked
+                                                    Show a room's messages, oldest
+                                                    first
   crewlet chatlet post ROOM -body TEXT [-link URL]...
-                                                    Say something; the room by its
-                                                    id or its name
+                                                    Post a message. ROOM is the
+                                                    room's id or name
   crewlet chatlet search TEXT [-channel ROOM-ID] [-author HANDLE] [-limit N]
-                                                    Rank every room you may read
+                                                    Search every room you can read
   crewlet chatlet erase ROOM-ID -message ID... -reason TEXT -confirm N
-                                                    Destroy the messages named, on
-                                                    every data node; no inverse
+                                                    Delete the messages you name.
+                                                    This can't be undone
   crewlet chatlet prune ROOM-ID -cutoff TIME -confirm TIME
-                                                    Destroy everything a room said
-                                                    before an instant, now; no inverse
+                                                    Delete everything said in a
+                                                    room before a time. This
+                                                    can't be undone
   crewlet chatlet retention ROOM-ID -days N | -company -confirm N|company
-                                                    Set how long one room keeps what
-                                                    is said in it, or return it to
-                                                    the company's horizon
+                                                    Set how long a room keeps
+                                                    messages, or use the
+                                                    company's setting
 
-Every command also takes [<config.yaml>] and -api URL, the running node; every
-write takes -op-id ID, the operation an earlier unknown answer named. The
-credential is ` + apiTokenEnv + `.
+Every command also takes [<config.yaml>] and -api URL, the running node. Every
+write takes -op-id ID to retry a write whose outcome was unknown. Set
+` + apiTokenEnv + ` to authenticate.
 
-Who you are:
-  A chatlet verb is made AS A SEAT: your own token ("crewlet iam token -login
-  LOGIN") reads and speaks as your seat, and a service account or a Tier A
-  token row bound to a human seat ("crewlet iam bind ID SEAT") as that one. A
-  credential bound to no seat is refused every room, reads included. erase,
-  prune and retention are the exception: an administrator's, made under their
-  own name, and none of them reads the room it acts on.
+You read and post as the seat your token acts as. Your own token ("crewlet iam
+token -login LOGIN") acts as your seat. A service account or API token bound to
+a human seat ("crewlet iam bind ID SEAT") acts as that seat. A token bound to no
+seat can't read or post in any room.
+
+erase, prune and retention are for admins. They're made under your own name,
+and none of them shows you the room's messages.
 `
 
 // runChatlet dispatches `crewlet chatlet`.
@@ -154,13 +155,12 @@ func chatletUnserved(err error, what string) error {
 	}
 	switch httpjson.Code(refusal.Code) {
 	case httpjson.CodeUnknownQuery, httpjson.CodeUnknownTool, httpjson.CodeNoRoute:
-		return fmt.Errorf("%s is not served by this node: the company's own chat "+
-			"is served only where its `chat.backend` is `chatlet` — the default for a "+
-			"company that declares no vendor chat — its writes only by a node that may "+
-			"publish, not one started in a maintenance mode (`crewlet run -mode`), and "+
-			"every chat route only by a node with the ingress role. Check the company "+
-			"document and the node, or -api if it names another deployment (%w)",
-			what, err)
+		return fmt.Errorf("%s isn't available on this node. The company's own chat "+
+			"needs `chat.backend: chatlet`, the default when the company has no "+
+			"Mattermost or Slack. Writes also need a node that isn't in maintenance "+
+			"mode (`crewlet run -mode`), and every chatlet command needs a node with the "+
+			"ingress role. Check the company config and the node, or use -api to "+
+			"reach another node (%w)", what, err)
 	}
 	return err
 }
@@ -192,13 +192,13 @@ func reportServed(stdout io.Writer, s chatletServed) {
 	}
 	fmt.Fprintf(stdout, "\n%s%s", s.ReadLevel, at)
 	if s.LogLag != nil {
-		fmt.Fprintf(stdout, ", %d record(s) behind the log", *s.LogLag)
+		fmt.Fprintf(stdout, ", %d change(s) behind", *s.LogLag)
 	}
 	fmt.Fprintln(stdout)
 	if !s.Complete {
-		fmt.Fprintln(stdout, "incomplete: the copy that answered could not "+
-			"present every row — a record it has deferred, or a document a "+
-			"newer build wrote. Run this again once it has caught up.")
+		fmt.Fprintln(stdout, "incomplete: the node that answered couldn't show "+
+			"everything. It's still catching up, or it's older than the node that "+
+			"wrote some of it. Try again in a moment, or use -api to ask another node.")
 	}
 }
 
@@ -245,7 +245,7 @@ func chatletChannels(environ config.Source, args []string, stdout, stderr io.Wri
 	client, err := nodeClientFor(environ, args, "chatlet channels", stderr,
 		func(fs *flag.FlagSet) {
 			archived = fs.Bool("archived", false,
-				"include archived rooms, which take no new messages and stay readable")
+				"include archived rooms, which you can read but not post in")
 		})
 	if err != nil {
 		return err
@@ -259,7 +259,7 @@ func chatletChannels(environ config.Source, args []string, stdout, stderr io.Wri
 		return chatletUnserved(err, "the room list")
 	}
 	if len(answer.Channels) == 0 {
-		fmt.Fprintln(stdout, "No rooms: this seat is in none, or the company has "+
+		fmt.Fprintln(stdout, "No rooms. Your seat isn't in any, or the company has "+
 			"none yet.")
 		reportServed(stdout, answer.chatletServed)
 		return nil
@@ -301,18 +301,17 @@ func chatletChannels(environ config.Source, args []string, stdout, stderr io.Wri
 		return fmt.Errorf("writing the room list: %w", err)
 	}
 	if answer.Truncated {
-		fmt.Fprintln(stdout, "\ntruncated: this seat is in more rooms than one "+
-			"rail carries.")
+		fmt.Fprintln(stdout, "\ntruncated: your seat is in more rooms than one "+
+			"list can show.")
 	}
 	if answer.Unreadable > 0 {
-		fmt.Fprintf(stdout, "%d room(s) this build could not present.\n",
-			answer.Unreadable)
+		fmt.Fprintf(stdout, "%d room(s) couldn't be shown, because the node that "+
+			"answered is older than the node that wrote them.\n", answer.Unreadable)
 	}
 	if !answer.ReadState {
-		fmt.Fprintln(stdout, "unread: unknown — the node could not read where this "+
-			"seat has read to, so the counts are unknown rather than zero. The rooms "+
-			"are the log's and are still true; run this again once the coordination "+
-			"store answers.")
+		fmt.Fprintln(stdout, "unread: unknown. The node couldn't read how far you've "+
+			"read, so the counts are unknown, not zero. The rooms listed are correct. "+
+			"Try again in a moment.")
 	}
 	reportServed(stdout, answer.chatletServed)
 	return nil
@@ -349,9 +348,9 @@ func chatletRead(environ config.Source, args []string, stdout, stderr io.Writer)
 	client, err := nodeClientFor(environ, rest, "chatlet read", stderr,
 		func(fs *flag.FlagSet) {
 			limit = fs.Int("limit", 0,
-				"how many messages to print; 0 takes the node's own page size")
+				"how many messages to show; 0 uses the node's default")
 			before = fs.String("before", "",
-				"the cursor a previous page printed; reads the page before it")
+				"the cursor printed under a page; shows the messages before it")
 		})
 	if err != nil {
 		return err
@@ -359,8 +358,8 @@ func chatletRead(environ config.Source, args []string, stdout, stderr io.Writer)
 	room := strings.TrimSpace(channel)
 	if room == "" {
 		fmt.Fprintln(stderr, "usage: crewlet chatlet read ROOM-ID [-limit N] [-before CURSOR]")
-		return errors.New("name the room to read: `crewlet chatlet channels` lists the " +
-			"ids this seat can use")
+		return errors.New("name the room to read. `crewlet chatlet channels` lists " +
+			"your rooms and their ids")
 	}
 	// THE PAGE SIZE IS THE DOMAIN'S unless the operator names one, as
 	// `chatlet search` leaves its own to the surface: a number held here would
@@ -378,16 +377,15 @@ func chatletRead(environ config.Source, args []string, stdout, stderr io.Writer)
 	}
 	var answer chatletTranscript
 	if err := client.get(context.Background(), path, &answer); err != nil {
-		return chatletUnserved(err, "a room's transcript")
+		return chatletUnserved(err, "a room's messages")
 	}
 	switch {
 	case len(answer.Messages) > 0:
 	case query.Has("cursor"):
-		fmt.Fprintln(stdout, "No older messages: the page before that cursor is "+
-			"the start of the room.")
+		fmt.Fprintln(stdout, "No older messages. That's the start of the room.")
 	default:
-		fmt.Fprintln(stdout, "No messages: nothing has been said in this room, or "+
-			"everything said in it has been destroyed.")
+		fmt.Fprintln(stdout, "No messages. Nothing has been said in this room yet, "+
+			"or it was all deleted.")
 	}
 	// OLDEST FIRST. The route answers newest-first because that is what a
 	// screen renders and pages backwards from; a terminal transcript is
@@ -399,8 +397,8 @@ func chatletRead(environ config.Source, args []string, stdout, stderr io.Writer)
 		fmt.Fprintf(stdout, "\nolder: -before %s\n", answer.NextCursor)
 	}
 	if answer.Unreadable > 0 {
-		fmt.Fprintf(stdout, "%d message(s) this build could not present.\n",
-			answer.Unreadable)
+		fmt.Fprintf(stdout, "%d message(s) couldn't be shown, because the node "+
+			"that answered is older than the node that wrote them.\n", answer.Unreadable)
 	}
 	reportServed(stdout, answer.chatletServed)
 	return nil
@@ -455,9 +453,10 @@ func chatletSearch(environ config.Source, args []string, stdout, stderr io.Write
 	client, err := nodeClientFor(environ, rest, "chatlet search", stderr,
 		func(fs *flag.FlagSet) {
 			channel = fs.String("channel", "",
-				"narrow to one room's id; empty searches every room this seat may read")
+				"search only the room with this id; leave it out to search every "+
+					"room you can read")
 			author = fs.String("author", "", "only messages by this handle")
-			limit = fs.Int("limit", 0, "how many hits; 0 takes the index's own default")
+			limit = fs.Int("limit", 0, "how many results to show; 0 uses the default")
 		})
 	if err != nil {
 		return err
@@ -501,15 +500,14 @@ func chatletSearch(environ config.Source, args []string, stdout, stderr io.Write
 	// below means: the hits are drawn from part of the transcript, and "nobody
 	// said that" is not yet an answer this node can give.
 	if answer.Building {
-		fmt.Fprintln(stdout, "the index is still building on the node that "+
-			"answered: these hits are drawn from part of the transcript, and a "+
-			"message it has not reached yet is not among them.")
+		fmt.Fprintln(stdout, "The search index on the node that answered is still "+
+			"building, so these results may miss some messages.")
 	}
 	if len(answer.Hits) == 0 {
 		// THE ROOM COUNT IS THE HALF THAT MATTERS on an empty answer.
 		// "Nothing matched" and "this seat may read nothing" look identical
 		// without it, and only one of them is about the query.
-		fmt.Fprintf(stdout, "No hits across %d room(s), read %s.\n", answer.Searched,
+		fmt.Fprintf(stdout, "No results in %d room(s), read %s.\n", answer.Searched,
 			answer.ReadLevel)
 		return nil
 	}
@@ -526,7 +524,7 @@ func chatletSearch(environ config.Source, args []string, stdout, stderr io.Write
 	if err := w.Flush(); err != nil {
 		return fmt.Errorf("writing the hits: %w", err)
 	}
-	fmt.Fprintf(stdout, "\n%d hit(s) across %d room(s), read %s.\n",
+	fmt.Fprintf(stdout, "\n%d result(s) in %d room(s), read %s.\n",
 		len(answer.Hits), answer.Searched, answer.ReadLevel)
 	return nil
 }
@@ -555,14 +553,15 @@ func chatletPost(environ config.Source, args []string, stdout, stderr io.Writer)
 	var links chatletRepeated
 	client, err := nodeClientFor(environ, rest, "chatlet post", stderr,
 		func(fs *flag.FlagSet) {
-			body = fs.String("body", "", "what to say, in markdown; @handle reaches "+
-				"one colleague and @channel the whole room")
+			body = fs.String("body", "", "the message, in markdown. @handle mentions "+
+				"one person and @channel the whole room")
 			fs.Var(&links, "link",
-				"an absolute http, https or mailto address the message points at; "+
-					"repeat for more. A message links to a file rather than carrying one")
+				"a link to add to the message, written in full as an http, https or "+
+					"mailto address; repeat for more. Messages link to files rather "+
+					"than attaching them")
 			opID = opIDFlag(fs,
-				"retry a post whose outcome is unknown with the id it printed, so the "+
-					"retry cannot say the same thing twice; empty starts a new one")
+				"retry a post whose outcome was unknown, with the op id it printed, "+
+					"so it isn't posted twice")
 		})
 	if err != nil {
 		return err
@@ -572,11 +571,10 @@ func chatletPost(environ config.Source, args []string, stdout, stderr io.Writer)
 	case room == "":
 		fmt.Fprintln(stderr, "usage: crewlet chatlet post ROOM -body TEXT [-link URL]... "+
 			"[-op-id ID]")
-		return errors.New("name the room to post in, by its id or its name: " +
-			"`crewlet chatlet channels` lists the rooms this seat is in")
+		return errors.New("name the room to post in, by id or name. " +
+			"`crewlet chatlet channels` lists your rooms")
 	case strings.TrimSpace(*body) == "":
-		return errors.New("say something in -body: a message with nothing in it is " +
-			"a notice about nothing")
+		return errors.New("write the message with -body")
 	}
 	operation, err := operationFor("post", *opID)
 	if err != nil {
@@ -618,7 +616,7 @@ func chatletPost(environ config.Source, args []string, stdout, stderr io.Writer)
 		// the body and the node read it as an address, so this is where the
 		// operator learns that the room's agents are about to be woken — the
 		// people in it are told, and never woken.
-		fmt.Fprintln(stdout, "  @channel: this addresses the whole room, and wakes "+
+		fmt.Fprintln(stdout, "  @channel: this mentions the whole room and wakes "+
 			"the agents in it.")
 	}
 	if len(answer.Receipt.Mentioned) > 0 {
@@ -628,9 +626,7 @@ func chatletPost(environ config.Source, args []string, stdout, stderr io.Writer)
 		// THE THREE-VALUED OUTCOME, said plainly and NOT as a failure: the
 		// record is on the log and every data node applies it as it reaches
 		// it, so posting again would say the same thing twice.
-		fmt.Fprintln(stdout, "  The record is durable and the node that took it has "+
-			"not applied it yet; every data node applies it as it reaches it. Do not "+
-			"run this again.")
+		fmt.Fprintln(stdout, "  Saved, but not on this node yet. Don't run this again.")
 	}
 	return nil
 }
@@ -643,7 +639,7 @@ func (r *chatletRepeated) String() string { return strings.Join(*r, ", ") }
 func (r *chatletRepeated) Set(value string) error {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return errors.New("an empty value; name one or leave the flag off")
+		return errors.New("give a value, or leave the flag off")
 	}
 	*r = append(*r, value)
 	return nil
@@ -682,15 +678,15 @@ func chatletErase(environ config.Source, args []string, stdout, stderr io.Writer
 	var reason, confirm, opID *string
 	client, err := nodeClientFor(environ, rest, "chatlet erase", stderr,
 		func(fs *flag.FlagSet) {
-			fs.Var(&messages, "message", "a message id to destroy, as `chatlet read` and "+
-				"`chatlet search` print it; repeat for each one")
+			fs.Var(&messages, "message", "the id of a message to delete, as `chatlet "+
+				"read` and `chatlet search` show it; repeat for each one")
 			reason = fs.String("reason", "",
-				"why; required, and the erase record's account of the rows it destroys")
+				"why you're deleting them. Required, and kept with the erase")
 			confirm = fs.String("confirm", "",
-				"how many messages -message names — this destroys them on every data node")
+				"the number of messages you named, to confirm. They can't be restored")
 			opID = opIDFlag(fs,
-				"retry an erase whose outcome is unknown with the id it printed, so the "+
-					"retry cannot append a second erase; empty starts a new one")
+				"retry an erase whose outcome was unknown, with the op id it printed, "+
+					"so it doesn't run twice")
 		})
 	if err != nil {
 		return err
@@ -701,14 +697,14 @@ func chatletErase(environ config.Source, args []string, stdout, stderr io.Writer
 	case room == "" || len(set) == 0:
 		fmt.Fprintln(stderr, "usage: crewlet chatlet erase ROOM-ID -message ID... "+
 			"-reason TEXT -confirm N [-op-id ID]")
-		return errors.New("name the room and the messages: an erase destroys those " +
-			"rows on every data node, and nothing undoes it")
+		return errors.New("name the room and the messages to delete. This can't " +
+			"be undone")
 	case strings.TrimSpace(*reason) == "":
-		return errors.New("state why in -reason: the rows are destroyed on every node, " +
-			"and the reason is the erase record's account of them")
+		return errors.New("say why with -reason. It's kept with the erase, after " +
+			"the messages are gone")
 	case strings.TrimSpace(*confirm) != strconv.Itoa(len(set)):
-		return fmt.Errorf("repeat the number of messages in -confirm: %d message(s) "+
-			"in %s are destroyed on every data node, with no inverse", len(set), room)
+		return fmt.Errorf("confirm with -confirm %d. This deletes %d message(s) in "+
+			"%s, and it can't be undone", len(set), len(set), room)
 	}
 	operation, err := operationFor("erase", *opID)
 	if err != nil {
@@ -723,7 +719,7 @@ func chatletErase(environ config.Source, args []string, stdout, stderr io.Writer
 	// PATIENTLY, for the purge's reason ([logWriteTimeout]).
 	if err := write.settle(stderr, client.patiently(logWriteTimeout).postKeyed(
 		context.Background(), path, operation, body, &answer)); err != nil {
-		return chatletUnserved(err, "an erase")
+		return chatletUnserved(err, "erasing")
 	}
 	if err := write.confirmed(fmt.Sprintf("erase in %s", room), answer.Outcome); err != nil {
 		return err
@@ -757,12 +753,12 @@ func chatletPrune(environ config.Source, args []string, stdout, stderr io.Writer
 	client, err := nodeClientFor(environ, rest, "chatlet prune", stderr,
 		func(fs *flag.FlagSet) {
 			cutoff = fs.String("cutoff", "",
-				"RFC 3339 instant; everything the room said before it is destroyed")
+				"an RFC 3339 time. Everything said in the room before it is deleted")
 			confirm = fs.String("confirm", "",
-				"the cutoff again — this destroys messages on every data node")
+				"the -cutoff time again, to confirm")
 			opID = opIDFlag(fs,
-				"retry a prune whose outcome is unknown with the id it printed, so the "+
-					"retry cannot append a second prune; empty starts a new one")
+				"retry a prune whose outcome was unknown, with the op id it printed, "+
+					"so it doesn't run twice")
 		})
 	if err != nil {
 		return err
@@ -771,22 +767,22 @@ func chatletPrune(environ config.Source, args []string, stdout, stderr io.Writer
 	if room == "" || when == "" {
 		fmt.Fprintln(stderr, "usage: crewlet chatlet prune ROOM-ID -cutoff TIME "+
 			"-confirm TIME [-op-id ID]")
-		return errors.New("name the room and the instant: a prune destroys everything " +
-			"said before it, on every data node, and nothing undoes it")
+		return errors.New("name the room and the -cutoff time. Everything said " +
+			"before it is deleted, and it can't be undone")
 	}
 	// PARSED HERE AS WELL AS AT THE ROUTE, so a typo costs nothing — no
 	// request is sent — and the message names RFC 3339 rather than repeating
 	// the node's own words.
 	instant, err := time.Parse(time.RFC3339Nano, when)
 	if err != nil {
-		return fmt.Errorf("-cutoff %q is not an RFC 3339 instant "+
-			"(2031-04-02T03:14:00Z): %w", when, err)
+		return fmt.Errorf("-cutoff %q isn't an RFC 3339 time, like "+
+			"2031-04-02T03:14:00Z: %w", when, err)
 	}
 	again, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(*confirm))
 	if err != nil || !again.Equal(instant) {
-		return fmt.Errorf("repeat the cutoff in -confirm: everything %s said before "+
-			"%s is destroyed on every data node, with no inverse", room,
-			instant.UTC().Format(time.RFC3339Nano))
+		return fmt.Errorf("confirm with -confirm %s. This deletes everything said "+
+			"in %s before then, and it can't be undone",
+			instant.UTC().Format(time.RFC3339Nano), room)
 	}
 	operation, err := operationFor("prune", *opID)
 	if err != nil {
@@ -800,7 +796,7 @@ func chatletPrune(environ config.Source, args []string, stdout, stderr io.Writer
 	// PATIENTLY, for the purge's reason ([logWriteTimeout]).
 	if err := write.settle(stderr, client.patiently(logWriteTimeout).postKeyed(
 		context.Background(), path, operation, nil, &answer)); err != nil {
-		return chatletUnserved(err, "a prune")
+		return chatletUnserved(err, "pruning")
 	}
 	if err := write.confirmed("prune "+room, answer.Outcome); err != nil {
 		return err
@@ -856,16 +852,15 @@ func chatletRetention(environ config.Source, args []string, stdout, stderr io.Wr
 	client, err := nodeClientFor(environ, rest, "chatlet retention", stderr,
 		func(fs *flag.FlagSet) {
 			fs.Var(&days, "days",
-				"how many days the room keeps a message; 0 keeps them for ever")
+				"how many days the room keeps messages; 0 keeps them for ever")
 			company = fs.Bool("company", false,
-				"return the room to the company's own horizon "+
-					"(chat.chatlet.message_retention_days)")
+				"use the company's setting (chat.chatlet.message_retention_days)")
 			confirm = fs.String("confirm", "",
-				"the horizon again — the days, or company — since a shorter one is a "+
-					"prune on a delay on every data node")
+				"the -days value, or company, again to confirm. A shorter setting "+
+					"deletes older messages")
 			opID = opIDFlag(fs,
-				"retry a change whose outcome is unknown with the id it printed, so the "+
-					"retry is this change rather than another; empty starts a new one")
+				"retry a change whose outcome was unknown, with the op id it printed, "+
+					"so it doesn't run twice")
 		})
 	if err != nil {
 		return err
@@ -874,8 +869,8 @@ func chatletRetention(environ config.Source, args []string, stdout, stderr io.Wr
 	if room == "" || days.set == *company {
 		fmt.Fprintln(stderr, "usage: crewlet chatlet retention ROOM-ID -days N | -company "+
 			"-confirm N|company [-op-id ID]")
-		return errors.New("name the room and exactly one horizon: -days N (0 keeps " +
-			"it for ever) or -company for the company's own")
+		return errors.New("name the room, and either -days N (0 keeps messages " +
+			"for ever) or -company to use the company's setting")
 	}
 	var stated *int
 	if days.set {
@@ -883,9 +878,9 @@ func chatletRetention(environ config.Source, args []string, stdout, stderr io.Wr
 	}
 	repeat := chatlet.HorizonConfirmation(stated)
 	if strings.TrimSpace(*confirm) != repeat {
-		return fmt.Errorf("repeat the horizon in -confirm %s: a shorter one is a "+
-			"prune on a delay — everything %s said before it is destroyed on every "+
-			"data node at the retention duty's next pass, with no inverse", repeat, room)
+		return fmt.Errorf("confirm with -confirm %s. If that's shorter than %s "+
+			"keeps now, older messages are deleted at the next retention pass, and "+
+			"that can't be undone", repeat, room)
 	}
 	operation, err := operationFor("retention", *opID)
 	if err != nil {
@@ -894,7 +889,7 @@ func chatletRetention(environ config.Source, args []string, stdout, stderr io.Wr
 	write := keyedWrite{gesture: "change", operation: operation,
 		check: "the room's settings"}
 	var horizon any
-	said := "the company's horizon"
+	said := "the company's setting"
 	if days.set {
 		horizon = days.n
 		said = fmt.Sprintf("%d day(s)", days.n)
@@ -910,7 +905,7 @@ func chatletRetention(environ config.Source, args []string, stdout, stderr io.Wr
 	if err := write.settle(stderr, client.patiently(logWriteTimeout).putKeyed(
 		context.Background(), path, operation,
 		map[string]any{"retention_days": horizon}, &answer)); err != nil {
-		return chatletUnserved(err, "a room's horizon")
+		return chatletUnserved(err, "changing a room's retention")
 	}
 	if err := write.confirmed("retention of "+room, answer.Outcome); err != nil {
 		return err
@@ -922,14 +917,13 @@ func chatletRetention(environ config.Source, args []string, stdout, stderr io.Wr
 	fmt.Fprintf(stdout, "retention of %s: %s, %s%s (operation %s)\n", room, said,
 		answer.Outcome, at, firstNonEmpty(answer.OpID, operation))
 	if answer.Outcome == string(statelog.OutcomePending) {
-		fmt.Fprintln(stdout, "  The record is durable and this node has not applied "+
-			"it yet; every data node applies it as it reaches it. Do not run this again.")
+		fmt.Fprintln(stdout, "  Saved, but not on this node yet. Don't run this again.")
 	}
 	// WHAT A SHORTER HORIZON DOES, said where it is set: nothing is destroyed
 	// by this record, and the next pass of the retention duty destroys what
 	// it no longer covers, with no inverse.
-	fmt.Fprintln(stdout, "  The retention duty prunes what this horizon no longer "+
-		"covers on its next pass, on every data node, with no inverse.")
+	fmt.Fprintln(stdout, "  Messages this no longer keeps are deleted at the next "+
+		"retention pass. That can't be undone.")
 	return nil
 }
 
@@ -956,7 +950,7 @@ func (d *chatletDays) Set(value string) error {
 	// refusal for a person yet (ADR-0060's floor), so it names no field.
 	n, err := strconv.Atoi(strings.TrimSpace(value))
 	if err != nil {
-		return fmt.Errorf("a whole number of days, 0 to keep the room for ever: %w", err)
+		return fmt.Errorf("use a whole number of days, or 0 to keep messages for ever: %w", err)
 	}
 	d.n, d.set = n, true
 	return nil
