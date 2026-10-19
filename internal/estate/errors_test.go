@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -111,6 +112,41 @@ func TestATypedRefusalCrossesWithItsFieldsAndItsCause(t *testing.T) {
 	}
 	if !errors.Is(got, statelog.ErrUnavailable) || !errors.Is(got, statelog.ErrStreamRecreated) {
 		t.Error("the chain's sentinels did not survive beside the typed value")
+	}
+}
+
+// AN IDENTITY RECORD'S REFUSAL CROSSES SAYING WHETHER A PERMISSION LIFTS IT.
+//
+// A node holding no data asks a data node to publish an identity record, and a
+// refusal is answered by its kind: one a permission lifts names it, one the
+// record's own rule made names none, and one asked through a machine token
+// says a person must be present. All three are read off the refusal's fields
+// and its chain, so all three must survive the wire. Mutation: drop the
+// refusal's typed row and errors.As finds nothing on the far side.
+func TestAnIdentityRefusalCrossesWithWhatLiftsIt(t *testing.T) {
+	t.Parallel()
+	for _, original := range []*iamdomain.Refusal{
+		{Grants: []iam.Grant{iam.GrantAdmin},
+			Err: errors.New("enrol needs admin, and you have [tracker]")},
+		{Grants: []iam.Grant{},
+			Err: fmt.Errorf("%w: sign in and do it yourself", iamdomain.ErrTokenRefused)},
+	} {
+		got := throughWire(t, fmt.Errorf("write: %w", original))
+		var refusal *iamdomain.Refusal
+		if !errors.As(got, &refusal) {
+			t.Fatalf("errors.As(*iamdomain.Refusal) is false after the wire: %v", got)
+		}
+		if !reflect.DeepEqual(refusal.Grants, original.Grants) {
+			t.Errorf("the refusal names %v after the wire, want %v", refusal.Grants,
+				original.Grants)
+		}
+		if !errors.Is(got, iamdomain.ErrRefused) {
+			t.Error("the refusal is no longer ErrRefused after the wire")
+		}
+		if errors.Is(original, iamdomain.ErrTokenRefused) !=
+			errors.Is(got, iamdomain.ErrTokenRefused) {
+			t.Errorf("the token refusal's identity did not cross: %v", got)
+		}
 	}
 }
 

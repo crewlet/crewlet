@@ -393,6 +393,6 @@ func (w *Writer) mayOperate(op OpKind) error {
 	if w.Can(iam.GrantAdmin) {
 		return nil
 	}
-	return fmt.Errorf("%w: %s needs %s, and you have %v", ErrRefused,
+	return needs([]iam.Grant{iam.GrantAdmin}, "%s needs %s, and you have %v",
 		op, iam.GrantAdmin, w.Grants)
 }
