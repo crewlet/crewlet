@@ -699,6 +699,9 @@ func TestAMergedNodeSeedsItsDashboardFromItsStore(t *testing.T) {
 func TestANodeNamedByTheEnvironmentAnswersAsItself(t *testing.T) {
 	const name = "node-from-env"
 	t.Setenv(config.NodeIDEnvVar, name)
+	// THE BACKUP'S REASON IS THE LOG'S ALONE (the body says backup_failed),
+	// so a red run prints it rather than discarding it.
+	keepProcessLog(t)
 	e := testEngine(t)
 	boot := bootstrapFor(t, 0)
 	boot.API.Port = reservePort(t)

@@ -245,7 +245,7 @@ func TestUnrecognisedLogNamesAreReported(t *testing.T) {
 			var sink bytes.Buffer
 			logging.Configure(slog.LevelWarn, logging.FormatText, &sink)
 			t.Cleanup(func() {
-				logging.Configure(slog.LevelError+1, logging.FormatText, io.Discard)
+				silenceProcessLog()
 			})
 
 			warnUnrecognisedLogNames(logging.Get("cli"), "flag",
