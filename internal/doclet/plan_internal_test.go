@@ -450,3 +450,30 @@ func TestAPagesRevisionsAreListedInTheirKeysOrder(t *testing.T) {
 			"holds them in order:\n%s", shown)
 	}
 }
+
+// THE TRASH IS LISTED IN ITS OWN ORDER.
+//
+// The trash reaper lists the pages trashed before the term's cutoff oldest
+// first and then by id, a pass's cap at a time ([Store.TrashedBefore]). The
+// partial index it reads is on (trashed_at, id) since replicated 0066, which is
+// that order, so the listing is one seek of it up to the cutoff that its LIMIT
+// stops. On `trashed_at` alone, as 0005 declared it, the id ties sorted: the
+// seek read every page in the trash past the cutoff and sorted them all before
+// the first was returned, on exactly the pass that runs when a trash has piled
+// up.
+//
+// Mutation: rebuild the index on `trashed_at` alone, and the listing sorts.
+func TestTheTrashIsListedInItsOrder(t *testing.T) {
+	t.Parallel()
+	db := pagePlanStore(t)
+	plan := storetest.Plan(t, db, trashedBeforeStatement,
+		[]any{int64(1), string(StatusTrashed), 100})
+	shown := strings.Join(plan, "\n")
+	if !storetest.Seeks(plan, "pages_heads_trashed_idx") {
+		t.Errorf("the trash listing does not seek the trash's index:\n%s", shown)
+	}
+	if storetest.Sorts(plan) {
+		t.Errorf("the trash listing sorts the trash it read, where its index "+
+			"holds it in order:\n%s", shown)
+	}
+}
