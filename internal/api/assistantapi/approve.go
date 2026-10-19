@@ -204,9 +204,9 @@ func (s *Decisions) refuse(w http.ResponseWriter, r *http.Request, key string, e
 		// THE STEP-UP THE WRITE'S OWN VERB, OR A SHARE TO THE WHOLE
 		// COMPANY, ASKS (D09), answered on the approval itself: nothing was
 		// recorded, and the dashboard's step-up dialog replays this request.
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeStepUpRequired,
-			authz.StepUpDetail(authz.Decision{Reason: authz.ReasonStepUp,
-				Recency: iam.RecencyStepUp}))
+		status, code, fields := authz.RefusalFields(authz.Decision{
+			Reason: authz.ReasonStepUp, Recency: iam.RecencyStepUp})
+		httpjson.FailWithFields(w, status, code, fields)
 	case errors.Is(err, approval.ErrNotAPerson):
 		s.log.InfoContext(r.Context(), "assistant_decision_not_a_person", "path", r.URL.Path,
 			"error", err)

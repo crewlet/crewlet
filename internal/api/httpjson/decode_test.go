@@ -36,8 +36,9 @@ func TestEveryEnvelopeDecodesBackToItsValues(t *testing.T) {
 	}, {
 		name: "an authority refusal",
 		write: func(w http.ResponseWriter) {
-			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-				authz.RefusalDetail(authz.ReasonAssistScope, []iam.Grant{iam.GrantWorklet, iam.GrantAdmin}))
+			status, code, fields := authz.RefusalFields(authz.Decision{Reason: authz.ReasonAssistScope,
+				Grants: []iam.Grant{iam.GrantWorklet, iam.GrantAdmin}})
+			httpjson.FailWithFields(w, status, code, fields)
 		},
 		want: httpjson.Refused{Code: httpjson.CodeUnauthorized,
 			Message: unauthorizedSays(authz.ReasonAssistScope, iam.GrantWorklet, iam.GrantAdmin),
@@ -45,8 +46,9 @@ func TestEveryEnvelopeDecodesBackToItsValues(t *testing.T) {
 	}, {
 		name: "a step-up",
 		write: func(w http.ResponseWriter) {
-			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeStepUpRequired,
-				authz.StepUpDetail(authz.Decision{Reason: authz.ReasonStepUp, Recency: iam.RecencyStepUp}))
+			status, code, fields := authz.RefusalFields(authz.Decision{Reason: authz.ReasonStepUp,
+				Recency: iam.RecencyStepUp})
+			httpjson.FailWithFields(w, status, code, fields)
 		},
 		want: httpjson.Refused{Code: httpjson.CodeStepUpRequired,
 			Reason: string(authz.ReasonStepUp), Grants: []string{}},

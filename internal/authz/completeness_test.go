@@ -347,8 +347,8 @@ func TestTheRoutersOwnRefusalIsTheEnvelope(t *testing.T) {
 			// THE SENTENCE FOR THIS REFUSAL, which for `unauthorized` is
 			// the one its reason chooses — built the way the envelope
 			// builds it rather than typed here.
-			sentence := httpjson.Envelope(c.code,
-				authz.RefusalDetail(c.d.Reason, c.d.Grants))["message"]
+			_, _, detail := authz.RefusalFields(c.d)
+			sentence := httpjson.Envelope(c.code, detail)["message"]
 			if body["error"] != string(c.code) || body["message"] != sentence ||
 				sentence == "" {
 				t.Errorf("answered %v, want %s with its sentence", body, c.code)

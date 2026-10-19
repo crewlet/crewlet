@@ -316,12 +316,11 @@ func (a *App) serveFrom(kind stream.Kind, build func(stream.Audience) any) http.
 		out, err := a.overview(r.Context(), principal, kind, build)
 		var refusal *queries.Refusal
 		if errors.As(err, &refusal) {
-			// THE SAME TWO FIELDS every refusal on authority carries,
+			// THE ENVELOPE every refusal on authority is answered in,
 			// rather than a sentence naming the permission: a client
 			// reading `grants` off a refused question reads it off this
-			// too.
-			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-				authz.RefusalDetail(refusal.Reason, refusal.Grants))
+			// too, worded by the table's one mapping.
+			authz.EnvelopeRefusal(w, r, authz.Policy{}, refusal.Decision)
 			return
 		}
 		writeJSON(w, http.StatusOK, out)

@@ -17,7 +17,7 @@ import (
 // reason, and names the grants only where a permission is a way past the rule
 // and an artifact's share is not what clears it (internal/api/httpjson, which
 // spells both keys once, for its decoder and its sentence table alike, and
-// whose tests build every refusal they read through [RefusalDetail]).
+// whose tests build every refusal they read through [RefusalFields]).
 const (
 	// DetailReason is the rule's own [Reason]. The envelope's key,
 	// spelled once in internal/api/httpjson, whose decoder reads it back.
@@ -40,7 +40,7 @@ const (
 	DetailRole = "role"
 )
 
-// RefusalDetail is the machine-readable half of a refusal the authority table
+// refusalDetail is the machine-readable half of a refusal the authority table
 // made: the reason and the grants, under the keys every surface answers them
 // with.
 //
@@ -50,11 +50,14 @@ const (
 // consulted. The sentence a person reads is the envelope's `message`, which
 // belongs to the code and is chosen by the reason this carries.
 //
-// A pair rather than a [Decision], because not every refusal is one: a
-// question's own declared permission is checked by internal/api/queries'
-// registry, which has a reason and a permission to report and no decision to
-// hand over.
-func RefusalDetail(reason Reason, grants []iam.Grant) httpjson.Detail {
+// UNEXPORTED, with [stepUpDetail], so the only way to the fields is
+// [RefusalFields], which picks the CODE in the same breath. Exported, each half
+// was a way to write a refusal's fields beside a code spelled at the call site
+// — and every surface that did so answered `unauthorized`, whatever the
+// mapping would have said: a question's REST answer, the socket's frames, the
+// overview's mirrors, the sign-in surface's step-up. Every refusal reaches a
+// surface as a [Decision] now, so a call site has nothing to hand a pair to.
+func refusalDetail(reason Reason, grants []iam.Grant) httpjson.Detail {
 	names := make([]string, 0, len(grants))
 	for _, g := range grants {
 		names = append(names, string(g))
@@ -62,7 +65,7 @@ func RefusalDetail(reason Reason, grants []iam.Grant) httpjson.Detail {
 	return httpjson.Detail{DetailReason: string(reason), DetailGrants: names}
 }
 
-// StepUpDetail is the machine-readable half of a [ReasonStepUp] refusal: the
+// stepUpDetail is the machine-readable half of a [ReasonStepUp] refusal: the
 // reason, the window the verb asks a proof inside, and the grants the rule
 // admitted the caller on — under the same keys every refusal uses, plus the
 // one that names the window.
@@ -74,8 +77,8 @@ func RefusalDetail(reason Reason, grants []iam.Grant) httpjson.Detail {
 // missing. It deliberately does not carry the deadline the proof passed: that
 // is the session's own `reauth_at`, which `GET /auth/session` already serves,
 // and a second copy here is a second clock a screen could disagree with.
-func StepUpDetail(d Decision) httpjson.Detail {
-	detail := RefusalDetail(ReasonStepUp, d.Grants)
+func stepUpDetail(d Decision) httpjson.Detail {
+	detail := refusalDetail(ReasonStepUp, d.Grants)
 	detail[DetailWindow] = string(d.Recency)
 	return detail
 }
@@ -84,7 +87,7 @@ func StepUpDetail(d Decision) httpjson.Detail {
 // status, its code and the machine-readable fields that say why.
 //
 //   - A STALE PROOF is `step_up_required`, carrying the window it needs
-//     ([StepUpDetail]): the rule admitted the caller, and confirming who they
+//     ([stepUpDetail]): the rule admitted the caller, and confirming who they
 //     are and replaying the request is the whole remedy.
 //   - A MACHINE TOKEN on a verb that needs a person present is
 //     `token_refused`: no permission on the token would admit it.
@@ -92,7 +95,7 @@ func StepUpDetail(d Decision) httpjson.Detail {
 //     `unauthorized` naming the role it needs ([DetailRole]) beside the
 //     reason and the grants.
 //   - Every other refusal is `unauthorized`, carrying the rule's reason and
-//     the grants that would have admitted the caller ([RefusalDetail]).
+//     the grants that would have admitted the caller ([refusalDetail]).
 //   - Except a caller with NO RELATION to an artifact ([Decision.NotFound]),
 //     which is `404 not_found` with no detail at all: byte for byte the
 //     answer for an id nothing holds, so it cannot say whether the artifact
@@ -104,7 +107,9 @@ func StepUpDetail(d Decision) httpjson.Detail {
 // tool's gate worded — used to spell the code itself, and the copies drifted:
 // the operator surface answered a token's refusal `unauthorized`, whose
 // sentence sends a caller to ask for a permission no token could carry. Such a
-// surface takes the three values here and adds its fields to the detail.
+// surface takes the three values here and adds its fields to the detail. A
+// walk in internal/api refuses any of the three codes handed to a call
+// anywhere under it, so a surface cannot spell one beside this.
 //
 // FOR A REFUSAL, never an unknown: a decision this node could not reach is not
 // a 403 at all, and every caller answers [Decision.Unknown] first — see
@@ -115,18 +120,18 @@ func RefusalFields(d Decision) (status int, code httpjson.Code, detail httpjson.
 	}
 	switch d.Reason {
 	case ReasonStepUp:
-		return http.StatusForbidden, httpjson.CodeStepUpRequired, StepUpDetail(d)
+		return http.StatusForbidden, httpjson.CodeStepUpRequired, stepUpDetail(d)
 	case ReasonTokenRefused:
 		return http.StatusForbidden, httpjson.CodeTokenRefused,
-			RefusalDetail(d.Reason, d.Grants)
+			refusalDetail(d.Reason, d.Grants)
 	case ReasonRole:
-		detail := RefusalDetail(d.Reason, d.Grants)
+		detail := refusalDetail(d.Reason, d.Grants)
 		if d.Role.Valid() {
 			detail[DetailRole] = string(d.Role)
 		}
 		return http.StatusForbidden, httpjson.CodeUnauthorized, detail
 	default:
 		return http.StatusForbidden, httpjson.CodeUnauthorized,
-			RefusalDetail(d.Reason, d.Grants)
+			refusalDetail(d.Reason, d.Grants)
 	}
 }

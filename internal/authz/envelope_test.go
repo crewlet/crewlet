@@ -49,8 +49,8 @@ func TestATokenRefusedForWantOfAPersonIsToldSo(t *testing.T) {
 			}
 			message, _ := body["message"].(string)
 			_, second := body["detail"]
-			sentence := httpjson.Envelope(tc.code,
-				authz.RefusalDetail(tc.d.Reason, tc.d.Grants))["message"]
+			_, _, detail := authz.RefusalFields(tc.d)
+			sentence := httpjson.Envelope(tc.code, detail)["message"]
 			if rec.Code != http.StatusForbidden || body["error"] != string(tc.code) ||
 				body[authz.DetailReason] != string(tc.d.Reason) ||
 				message != sentence || !strings.Contains(message, tc.want) ||
