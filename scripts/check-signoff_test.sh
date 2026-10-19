@@ -34,6 +34,12 @@ for name in $(compgen -e); do
 	esac
 done
 
+# AND CDPATH, before the cd that finds this suite's own directory. Run by a path
+# relative to the tree, as `make signoff-test` runs it, `cd scripts` searches
+# an exported CDPATH's entries first: one holding a scripts/ of its own made
+# that directory the suite's, and its check-signoff.sh — or none — the gate
+# every case judged.
+unset CDPATH
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECK="$SCRIPT_DIR/check-signoff.sh"
 
@@ -313,6 +319,32 @@ EOF
 		fail=$((fail + 1))
 		echo "FAIL from a hook's environment (exit $status) the suite must pass and touch nothing of the hook's"
 		echo "     repository; the sentinel's files changed: $([ "$before" = "$after" ] && echo no || echo yes)"
+		sed 's/^/     | /' <<<"$nested"
+	fi
+fi
+
+# --- the suite finds its own directory whatever CDPATH holds ----------------
+
+# This suite started again as `make signoff-test` starts it, by a path
+# relative to the tree, under a CDPATH whose one entry holds a scripts/ of its
+# own, empty. The nested run must pass, having run its cases.
+#
+# Mutation: drop the CDPATH unset at the top -> the nested run takes the
+# decoy for its own directory, finds no gate there, and fails its cases (red).
+if [ -z "${CHECK_SIGNOFF_TEST_NESTED-}" ]; then
+	decoy="$TMPROOT/cdpath"
+	mkdir -p "$decoy/$(basename "$SCRIPT_DIR")"
+	nested="$(cd "$(dirname "$SCRIPT_DIR")" &&
+		CHECK_SIGNOFF_TEST_NESTED=1 CDPATH="$decoy" \
+			"$(basename "$SCRIPT_DIR")/$(basename "${BASH_SOURCE[0]}")" 2>&1)" && status=0 || status=$?
+	if [ "$status" -eq 0 ] && grep -q '^ok   a signed commit passes$' <<<"$nested" &&
+		grep -q ' 0 failed$' <<<"$nested"; then
+		pass=$((pass + 1))
+		echo "ok   run by a relative path the suite finds its own directory whatever CDPATH holds"
+	else
+		fail=$((fail + 1))
+		echo "FAIL run by a relative path (exit $status) the suite must find its own directory whatever"
+		echo "     CDPATH holds"
 		sed 's/^/     | /' <<<"$nested"
 	fi
 fi

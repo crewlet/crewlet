@@ -280,6 +280,19 @@ run env CREWLET_GIT_CACHE="$TMPROOT/intact/cache" GIT_PIN_DOWNLOADS="file://$TMP
 expect "git.sh hands back an intact build and downloads nothing" 0 "$build/bin"
 [ "$out" = "$build/bin" ] || bad "git.sh prints the build's bin and nothing else on stdout" "stdout: $out"
 
+# The recipe finds its own directory whatever CDPATH holds. Run by a path relative to the tree, as `make git` and the
+# one-package loop run it, its `cd scripts` searched an exported CDPATH's entries first, and one holding a scripts/
+# of its own made that directory the recipe's: its pin the one built. Mutation: drop the recipe's `unset CDPATH` ->
+# it finds no pin beside itself in the decoy's empty scripts/ and refuses (2, red).
+s="$(scripts cdpath-recipe)"
+pin "$s" 2.56.0 "$zero" 2.55.0 "$zero" 2.40.4 "$zero"
+build="$(plant "$TMPROOT/cdpath-recipe/cache" 2.56.0 complete)"
+mkdir -p "$TMPROOT/cdpath-recipe/decoy/scripts"
+run within "$TMPROOT/cdpath-recipe" env CDPATH="$TMPROOT/cdpath-recipe/decoy" \
+	CREWLET_GIT_CACHE="$TMPROOT/cdpath-recipe/cache" GIT_PIN_DOWNLOADS="file://$TMPROOT/cdpath-recipe/nowhere" \
+	scripts/git.sh node
+expect "git.sh run by a relative path reads its own directory whatever CDPATH holds" 0 "$build/bin"
+
 s="$(scripts incomplete)"
 pin "$s" 2.56.0 "$zero" 2.55.0 "$zero" 2.40.4 "$zero"
 plant "$TMPROOT/incomplete/cache" 2.56.0 >/dev/null

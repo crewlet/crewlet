@@ -98,7 +98,12 @@ client-floor) var=GIT_CLIENT_FLOOR ;;
 *) usage ;;
 esac
 
-# The pin is read BESIDE this script, in the tree and in the image's build stage alike.
+# The pin is read BESIDE this script, in the tree and in the image's build stage alike — whatever CDPATH holds. Run by
+# a path relative to the tree, as `make git` and the one-package loop run it, the recipe's `cd scripts` searches an
+# exported CDPATH's entries first: one holding a scripts/ of its own made that directory the recipe's, its pin the
+# one built and its copy of this script the one hashed for the build's name, and an entry of `.` makes cd print the
+# directory it chose, which $here takes as a second line. Nothing here wants CDPATH, so it is gone before the cd.
+unset CDPATH
 here=$(cd "$(dirname "$0")" && pwd)
 pin=$here/git-pin.env
 if [ ! -r "$pin" ]; then
