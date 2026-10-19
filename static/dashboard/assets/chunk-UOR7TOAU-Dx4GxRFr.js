@@ -1,2 +1,0 @@
-var e=/^[=+\-@\t\r]/;function t(e,t){let r=[e.map(e=>n(e)).join(`,`)];for(let e of t)r.push(e.map(e=>n(e)).join(`,`));return r.map(e=>`${e}\r
-`).join(``)}function n(e){return i(r(e))}function r(t){if(t==null)return``;if(typeof t==`number`||typeof t==`bigint`)return String(t);if(typeof t==`boolean`)return t?`true`:`false`;if(t instanceof Date)return Number.isNaN(t.getTime())?``:t.toISOString();let n=typeof t==`string`?t:JSON.stringify(t)??``;return e.test(n)?`'${n}`:n}function i(e){return/[",\r\n]/.test(e)?`"${e.replace(/"/g,`""`)}"`:e}export{t};

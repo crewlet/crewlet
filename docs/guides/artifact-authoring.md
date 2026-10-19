@@ -16,7 +16,8 @@ the ones the engine enforces at publish; the page's runtime API is the
 | A document: a report, a plan, release notes, a handbook in tabs | `doc`, Markdown in one file or in tabs. The dashboard renders it; there is nothing to run. See [Writing a doc](#writing-a-doc) |
 | A presentation: a pitch, a review, a talk | `slides`, a deck in Claude's slide format. The dashboard draws, presents and prints it, people fix text and order it in place, and nothing runs. See [Writing a deck](#writing-a-deck) |
 | Several screens reviewed side by side: a landing page's sections, an onboarding flow, three takes on one hero | `design`, a canvas of artboards, each a plain HTML page. People rearrange the boards and annotate them in place. See [Writing a design](#writing-a-design) |
-| A dashboard, a calculator, a custom view over shared data | `html`, with the capabilities it needs |
+| A dashboard: figures over the company's work, spend and agents, or over data an agent collects | `dashboard`, a closed spec of datasets and widgets the dashboard draws, every figure answered as its viewer and citing its source. See [Writing a dashboard](#writing-a-dashboard) |
+| A calculator, a custom view over shared data, anything the formats above cannot draw | `html`, with the capabilities it needs |
 
 Start from a `sheet` whenever the content is rows and columns. A native sheet
 leaves nothing for a model to get wrong, and an `html` page can still read and
@@ -308,6 +309,37 @@ style and bound; the short version:
   `files`. In the dashboard, New › Deck starts one from four example slides
   you edit in place. Revise one slide at a time with `edits` on its file against your
   base version; `get_artifact` with `view: "outline"` lists the slides first.
+
+## Writing a dashboard
+
+A dashboard is `dashboard.json`, with any CSV or JSON data files beside it.
+The [Dashboard Spec](../reference/dashboard-spec.md) reference lists every
+source, step, widget and bound; the short version:
+
+```json
+{ "v": 1, "title": "Delivery",
+  "datasets": [
+    { "id": "work", "title": "My open work", "source": "engine",
+      "engine": { "name": "tracker.items", "params": { "scope": "mine" } } } ],
+  "widgets": [
+    { "id": "open", "type": "stat", "title": "Open items", "dataset": "work", "agg": "count", "w": 3 },
+    { "id": "list", "type": "table", "title": "My work", "dataset": "work", "columns": ["key", "title", "due"], "w": 9 } ] }
+```
+
+- **Name the data, never the numbers.** A dataset says where rows come from
+  (the artifact's own store, a named engine read, a file of the version, or a
+  calculation over another dataset) and the board computes every figure.
+- **Every viewer sees their own.** An engine dataset is answered as whoever
+  opens the board, under the rules they already have: `scope: "mine"` is each
+  person's own work, and somebody without the tracker sees that the figure is
+  closed to them. Publish one board for everybody.
+- **Bring outside data through the store.** An agent reads GitHub, Jira or
+  Slack with its own tools and writes the rows to a `store` collection; every
+  open board redraws as they land.
+- **Publish it** with `crewlet artifacts publish <dir>` (a `dashboard.json`
+  makes it `dashboard`), or from an agent with `create_artifact`,
+  `kind: "dashboard"` and `content`. `crewlet artifacts sources` and
+  `list_dashboard_sources` list the engine reads and their parameters.
 
 ---
 

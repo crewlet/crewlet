@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata/canon"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/costlimit"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -120,7 +121,7 @@ type Writer struct {
 	now        func() time.Time
 	metrics    Metrics
 	judged     Objectives
-	limits     *limiter
+	limits     *costlimit.Limiter
 }
 
 // NewWriter builds the write path.
@@ -285,7 +286,7 @@ func (w *Writer) write(ctx context.Context, c Call, id artifacts.ID, in artifact
 	if err != nil {
 		return WriteResult{}, err
 	}
-	if limited := w.limits.take(id.String(), c.Authority.Actor.Name, cost); limited != nil {
+	if limited := takeWrite(w.limits, id.String(), c.Authority.Actor.Name, cost); limited != nil {
 		return WriteResult{}, limited
 	}
 	opID, err := w.operation(c, string(OpWrite), id.String(), in)
@@ -602,7 +603,7 @@ func (w *Writer) undo(ctx context.Context, c Call, id artifacts.ID, seq int64) (
 	if err != nil {
 		return WriteResult{}, err
 	}
-	if limited := w.limits.take(id.String(), c.Authority.Actor.Name, cost); limited != nil {
+	if limited := takeWrite(w.limits, id.String(), c.Authority.Actor.Name, cost); limited != nil {
 		return WriteResult{}, limited
 	}
 	opID, err := w.operation(c, string(OpUndo), id.String(), seq)

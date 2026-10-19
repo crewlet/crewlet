@@ -17,6 +17,7 @@ import { href } from "~/app/router.tsx";
 import { queryErrorCode, type ArtifactKind, type ArtifactListItem } from "~/protocol/index.ts";
 import { artifactPath } from "~/lib/artifacts/api.ts";
 import type { ArtifactPeople } from "~/lib/artifacts/people.ts";
+import { DashboardCardCover } from "./DashboardCardCover.tsx";
 import { DocCover } from "./DocCover.tsx";
 import { SheetCover } from "./SheetCover.tsx";
 import { SlidesCover } from "./SlidesCover.tsx";
@@ -34,6 +35,7 @@ import { DesignCover } from "./DesignCover.tsx";
 const KIND_COVERS: Partial<Record<ArtifactKind, (item: ArtifactListItem) => ReactNode>> = {
   doc: (item) => <DocCover item={item} />,
   slides: (item) => <SlidesCover item={item} />,
+  dashboard: (item) => <DashboardCardCover item={item} />,
   sheet: (item) => <SheetCover item={item} />,
   design: (item) => <DesignCover item={item} />,
 };

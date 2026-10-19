@@ -61,13 +61,20 @@ const (
 	// files at create.
 	StoreContent Store = "content"
 
+	// StoreImplied is a native kind's own datastore beside its files: a
+	// dashboard's store datasets, which agents and people write and every
+	// open board reads live. It declares nothing, since a native kind has
+	// no page to grant a capability to, and it is never versioned with the
+	// files.
+	StoreImplied Store = "implied"
+
 	// StoreNone is a kind whose content is its files alone, which keeps no
 	// datastore.
 	StoreNone Store = "none"
 )
 
 // Stores are every relation a kind has to its datastore.
-var Stores = []Store{StoreDeclared, StoreContent, StoreNone}
+var Stores = []Store{StoreDeclared, StoreContent, StoreImplied, StoreNone}
 
 // Valid reports whether s is a store relation this build knows.
 func (s Store) Valid() bool { return slices.Contains(Stores, s) }
@@ -82,7 +89,8 @@ const (
 
 	// SearchFormat indexes the readable text the kind's own format extracts
 	// from every file it holds (a deck's slides and their speaker notes, a
-	// doc's tabs), not the entry alone, which may be only the index.
+	// doc's tabs, a board's titles and notes, never a figure), not the entry
+	// alone, which may be only the index.
 	SearchFormat Search = "format"
 )
 
@@ -113,6 +121,12 @@ const (
 	// not resolve.
 	FormatDoc Format = "doc"
 
+	// FormatDashboard is the board format (internal/artifacts/dashspec):
+	// the spec's filters, datasets and widgets held to their closed sets,
+	// every file dataset read against its declared columns, refused at
+	// publish with every finding.
+	FormatDashboard Format = "dashboard"
+
 	// FormatDesign is a design's canvas (internal/artifacts/canvasformat):
 	// `canvas.json` laying out one board per HTML page of the version, and
 	// the notes beside them, refused at publish when outside its schema or
@@ -121,7 +135,7 @@ const (
 )
 
 // Formats are every format this build validates.
-var Formats = []Format{FormatNone, FormatSlides, FormatDoc, FormatDesign}
+var Formats = []Format{FormatNone, FormatSlides, FormatDoc, FormatDashboard, FormatDesign}
 
 // Valid reports whether f is a format this build validates.
 func (f Format) Valid() bool { return slices.Contains(Formats, f) }
@@ -299,6 +313,18 @@ var kindSpecs = []KindSpec{
 			Defaults: []string{"deck.json"}},
 		Store:  StoreNone,
 		Format: FormatSlides,
+		Search: SearchFormat,
+
+		Documents: DocumentsNone,
+	},
+	{
+		Kind:    KindDashboard,
+		Summary: "is a board of figures over live data the dashboard draws, each answered as its viewer",
+		Render:  RenderNative,
+		Entry: EntryRule{Indexes: []EntryIndex{{Path: "dashboard.json", Essence: "application/json"}},
+			Defaults: []string{"dashboard.json"}},
+		Store:  StoreImplied,
+		Format: FormatDashboard,
 		Search: SearchFormat,
 
 		Documents: DocumentsNone,

@@ -1,0 +1,236 @@
+package datasetsapi
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"maps"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/artifactdata"
+	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/tokens"
+	"github.com/crewlet/crewlet/internal/tracker"
+)
+
+// sampleAnswers are each bound question's answer built from the domain's OWN
+// types, so a projection is held to the JSON names those types really carry:
+// a binding reading a field the answer does not hold answers nil for it, which
+// a typed sample catches and a hand-written JSON string would not.
+func sampleAnswers(t *testing.T) map[string]any {
+	t.Helper()
+	due := time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)
+	return map[string]any{
+		"tracker.items": map[string]any{"items": []tracker.TaskRow{{
+			Key: "ENG-1", Title: "Ship it", Status: "in_progress", StatusGroup: "active",
+			Priority: "high", Assignee: "ana", Project: "ENG", Due: &due, Updated: due,
+			Points: 3, Blocked: true, Overdue: true,
+		}}},
+		"tracker.workload": tracker.WorkloadAnswer{Rows: []tracker.WorkloadRow{{
+			Handle: "ana", Open: 4, Points: 9, Blocked: 1, Overdue: 2, Unscheduled: 1}}},
+		"spend.seats": tokens.Rollup{ByAgent: []tokens.AgentRow{{Role: "Ana", Handle: "ana",
+			Person: true, Bucket: tokens.Bucket{TotalTokens: 30, InputTokens: 20, OutputTokens: 10, Calls: 2}}}},
+		"spend.daily": tokens.Series{
+			Points: []tokens.SeriesPoint{{Window: "2026-10-18",
+				Groups: map[string]tokens.Bucket{"a1": {TotalTokens: 7}}, Residual: tokens.Bucket{TotalTokens: 2}}},
+			ByGroup: []tokens.GroupRow{{Group: "a1", Label: "Ana"}, {Group: ""}},
+		},
+		"agents.status": []map[string]any{{"id": "ana", "handle": "ana", "role": "Ana", "activity": "working",
+			"current_phase": "act", "paused": map[string]any{"by": "jo"},
+			"last_turn": map[string]any{"ended_at": "2026-10-18T10:00:00Z", "outcome": "completed"}}},
+	}
+}
+
+// EVERY BINDING ANSWERS EXACTLY ITS SOURCE'S COLUMNS, each with a value, from
+// an answer of the domain's own types: the catalogue promises the columns a
+// widget is validated against at publish, and a binding that read a renamed
+// field would answer an empty column with nothing to say so.
+func TestEveryBindingAnswersExactlyItsSourcesColumns(t *testing.T) {
+	samples := sampleAnswers(t)
+	for _, src := range dashspec.Catalogue() {
+		raw, err := json.Marshal(samples[src.Name])
+		if err != nil {
+			t.Fatal(err)
+		}
+		table, err := project(src, raw)
+		if err != nil {
+			t.Fatalf("%s: %v", src.Name, err)
+		}
+		if len(table.Rows) == 0 {
+			t.Fatalf("%s answered no row from its sample", src.Name)
+		}
+		var want []string
+		for _, c := range src.Columns {
+			want = append(want, c.Key)
+		}
+		for i, row := range table.Rows {
+			got := slices.Sorted(maps.Keys(row))
+			if !slices.Equal(got, slices.Sorted(slices.Values(want))) {
+				t.Errorf("%s row %d holds %v, want exactly %v", src.Name, i, got, want)
+			}
+			for k, v := range row {
+				if v == nil {
+					t.Errorf("%s row %d: %q is empty: the binding reads a field the answer does not hold",
+						src.Name, i, k)
+				}
+			}
+		}
+	}
+}
+
+func TestADailySeriesIsOneRowPerDayAndBandWithTheRestAsOther(t *testing.T) {
+	raw, _ := json.Marshal(sampleAnswers(t)["spend.daily"])
+	rows, _, err := dailyRows(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0]["band"] != "Ana" || rows[1]["band"] != "Other" {
+		t.Errorf("rows = %v", rows)
+	}
+}
+
+// fakeQuestions answers postures, and records the parameters each question
+// was asked with.
+type fakeQuestions struct {
+	postures map[string]queries.Posture
+	asked    map[string]map[string]any
+}
+
+func (f *fakeQuestions) AnswerWith(_ context.Context, what string, p queries.Params) (any, error) {
+	f.asked[what] = p.Values()
+	return map[string]any{"items": []any{}}, nil
+}
+
+func (f *fakeQuestions) PostureOf(what string) queries.Posture { return f.postures[what] }
+
+// A BINDING TO A QUESTION DECIDED PER RECORD IS REFUSED AT WIRING: its answer
+// depends on a relation the per-principal cache key does not carry.
+func TestABindingToAPerRecordQuestionIsRefused(t *testing.T) {
+	q := &fakeQuestions{postures: map[string]queries.Posture{
+		"work_items": queries.DecidedBy(authz.ActionWorkRead)}}
+	_, err := New(Options{Boards: nopBoards{}, Chart: authz.NoChart{}, Questions: q, Data: nopData{}})
+	if err == nil || !strings.Contains(err.Error(), "work_items") {
+		t.Fatalf("a per-record question was bound: %v", err)
+	}
+	q.postures["work_items"] = queries.Requires(iam.GrantTracker)
+	if _, err := New(Options{Boards: nopBoards{}, Chart: authz.NoChart{}, Questions: q, Data: nopData{}}); err != nil {
+		t.Fatalf("a grant-decided question is bound: %v", err)
+	}
+}
+
+// A PERSONAL SCOPE NAMES THE VIEWER'S RECORD, never a parameter: whoever reads
+// `scope: mine` is the one whose assignments are listed.
+func TestMineIsTheViewersOwnRecord(t *testing.T) {
+	ana := iam.Principal{ID: uuid.New(), Login: "ana.lee", Kind: iam.KindPerson, Seat: "ana"}
+	got := bindings["tracker.items"].params(map[string]string{"scope": "mine"}, ana)
+	if got["assignee"] != "ana" || got["status_group"] != openStatusGroups {
+		t.Errorf("mine for ana asks %v", got)
+	}
+	got = bindings["tracker.items"].params(map[string]string{"scope": "triage"}, ana)
+	if got["preset"] != "triage" || got["assignee"] != nil {
+		t.Errorf("a preset scope asks %v", got)
+	}
+}
+
+// THE CACHE KEY CHANGES WITH EVERY FACT ABOUT THE PRINCIPAL A QUESTION READS,
+// so a grant revoked, a seat rebound or a stage suspended is a new key at once.
+func TestThePrincipalKeyChangesWithEveryAuthorityFact(t *testing.T) {
+	base := iam.Principal{ID: uuid.New(), Login: "ana.lee", Kind: iam.KindPerson, Seat: "ana",
+		Grants: []iam.Grant{iam.GrantTracker}, Position: "eng", Stage: iam.StageActive}
+	k := principalKey(base)
+	for name, change := range map[string]func(p *iam.Principal){
+		"id":       func(p *iam.Principal) { p.ID = uuid.New() },
+		"login":    func(p *iam.Principal) { p.Login = "ana.b" },
+		"seat":     func(p *iam.Principal) { p.Seat = "bo" },
+		"grants":   func(p *iam.Principal) { p.Grants = nil },
+		"position": func(p *iam.Principal) { p.Position = "ops" },
+		"stage":    func(p *iam.Principal) { p.Stage = iam.StageSuspended },
+	} {
+		p := base
+		p.Grants = slices.Clone(base.Grants)
+		change(&p)
+		if principalKey(p) == k {
+			t.Errorf("a principal differing in %s shares the cache key", name)
+		}
+	}
+	reordered := base
+	reordered.Grants = []iam.Grant{iam.GrantTracker, iam.GrantTracker}
+	if principalKey(reordered) != k {
+		t.Error("the same effective grants made a second key")
+	}
+}
+
+func TestACachedAnswerExpires(t *testing.T) {
+	c := newAnswerCache()
+	now := time.Unix(1_700_000_000, 0)
+	c.put("k", result{asOf: now}, now)
+	if _, ok := c.get("k", now.Add(artifacts.DatasetCacheTTL-time.Millisecond)); !ok {
+		t.Error("an answer inside its life was forgotten")
+	}
+	if _, ok := c.get("k", now.Add(artifacts.DatasetCacheTTL)); ok {
+		t.Error("an answer past its life was answered")
+	}
+}
+
+// THE CATALOGUE'S SPEND WINDOW IS THE USAGE DOMAIN'S: a source validated to
+// take a window the domain refuses would publish and never draw.
+func TestTheCataloguesSpendBoundsAreTheUsageDomains(t *testing.T) {
+	if dashspec.MaxSpendDays != tokens.MaxSpendRangeDays {
+		t.Errorf("the catalogue reads %d spend days and the domain answers %d", dashspec.MaxSpendDays,
+			tokens.MaxSpendRangeDays)
+	}
+	if dashspec.MaxSpendBands != tokens.DefaultSeriesGroups {
+		t.Errorf("the catalogue bounds %d bands and the series names %d", dashspec.MaxSpendBands,
+			tokens.DefaultSeriesGroups)
+	}
+	for _, src := range dashspec.Catalogue() {
+		if src.Domain == dashspec.DomainTracker && src.MaxRows > tracker.PageMax {
+			t.Errorf("%s answers %d rows and the tracker pages %d", src.Name, src.MaxRows, tracker.PageMax)
+		}
+	}
+}
+
+// A VIEWER'S LIVE READS ARE BUDGETED, and the refusal says when to come back.
+func TestAViewersLiveReadsAreBudgeted(t *testing.T) {
+	q := &fakeQuestions{postures: map[string]queries.Posture{}, asked: map[string]map[string]any{}}
+	now := time.Unix(1_700_000_000, 0)
+	s, err := New(Options{Boards: nopBoards{}, Chart: authz.NoChart{}, Questions: q, Data: nopData{},
+		Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rd := &read{a: admission(iam.Principal{ID: uuid.New(), Login: "ana.lee"})}
+	for range artifacts.DatasetReadsViewerBurst {
+		if err := s.charge(rd); err != nil {
+			t.Fatalf("a read inside the burst was refused: %v", err)
+		}
+	}
+	var spent *overBudget
+	if err := s.charge(rd); !errors.As(err, &spent) || spent.refusal.RetryAfter <= 0 {
+		t.Errorf("the read past the burst = %v, want a budget refusal with a wait", err)
+	}
+	other := &read{a: admission(iam.Principal{ID: uuid.New(), Login: "bo.k"})}
+	if err := s.charge(other); err != nil {
+		t.Errorf("one viewer's spent budget refused another's read: %v", err)
+	}
+}
+
+// A store document is a row of its declared columns, a value of another type
+// answered as none rather than refusing the whole dataset.
+func TestAStoreDocumentIsARowOfItsDeclaredColumns(t *testing.T) {
+	shape := dashspec.Shape{Columns: []dashspec.Column{{Key: dashspec.StoreIDColumn, Type: dashspec.ColumnText},
+		{Key: "amount", Type: dashspec.ColumnNumber}, {Key: "stage", Type: dashspec.ColumnText}}}
+	row := storeRow(artifactdata.Doc{ID: "d1", Fields: json.RawMessage(`{"amount":"lots","stage":"won","x":1}`)}, shape)
+	if row[dashspec.StoreIDColumn] != "d1" || row["amount"] != nil || row["stage"] != "won" || len(row) != 3 {
+		t.Errorf("row = %v", row)
+	}
+}

@@ -2,11 +2,10 @@ package artifactdata
 
 import (
 	"encoding/json"
-	"math"
-	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/costlimit"
 )
 
 // THE COST-WEIGHTED WRITE LIMITS (D28): per node, per principal on a store and
@@ -25,21 +24,17 @@ import (
 // op by them. A count read from a copy a little behind the log is still the
 // right order of magnitude, which is all a guard needs.
 //
-// PER NODE, AND SAID SO: a bucket protects this node's applier queue and the
-// fleet's one log from one client. It is not a fleet quota (that is the
-// stamped footprint), it is not shared across nodes, and it never locks
-// anybody out: a refusal names when the bucket holds the cost again.
+// PER NODE, AND SAID SO: a bucket (internal/costlimit's, which the dashboard's
+// live source reads share) protects this node's applier queue and the fleet's
+// one log from one client. It is not a fleet quota (that is the stamped
+// footprint), it is not shared across nodes, and it never locks anybody out: a
+// refusal names when the bucket holds the cost again.
 
 // rowsPerUnit is how many rows one unit of cost covers: a cell edit on a
 // twelve-column row (about thirty rows: the document, its index deleted and
 // written again, a touch and the history row) is two units, and a pasted
 // block of a hundred such rows is about two hundred.
 const rowsPerUnit = 16
-
-// maxBuckets bounds the buckets one node keeps. Past it, every bucket that has
-// refilled (one nobody has written through for a while) is forgotten, which
-// changes no answer: a full bucket and an absent one admit alike.
-const maxBuckets = 16_384
 
 // Cost is what a batch weighs, given held, how many field-index entries a
 // named document holds now (zero for one that does not exist): the rows its
@@ -84,103 +79,25 @@ func fieldEntries(fields map[string]json.RawMessage) int {
 	return n
 }
 
-// limiter is the node's buckets.
-type limiter struct {
-	mu         sync.Mutex
-	now        func() time.Time
-	principals map[[2]string]*bucket
-	stores     map[string]*bucket
+// newLimiter builds the node's write buckets on a clock: a principal on a
+// store and the store itself, at the rates the limits table names.
+func newLimiter(now func() time.Time) *costlimit.Limiter {
+	return costlimit.New(costlimit.Rates{
+		PrincipalRate: artifacts.DataWritesPerPrincipalPerSecond, PrincipalBurst: artifacts.DataWritesBurst,
+		ScopeRate: artifacts.DataWritesPerStorePerSecond, ScopeBurst: artifacts.DataWritesStoreBurst,
+	}, now)
 }
 
-// bucket is one token bucket: tokens held at last, earned at rate up to
-// burst. Each bucket carries its own rate and burst, so the principal's and
-// the store's buckets are told apart by what they hold, never by the caller.
-type bucket struct {
-	tokens, rate, burst float64
-	last                time.Time
-}
-
-// newBucket is a full bucket at now.
-func newBucket(rate, burst float64, now time.Time) *bucket {
-	return &bucket{tokens: burst, rate: rate, burst: burst, last: now}
-}
-
-// newLimiter builds the node's buckets on a clock.
-func newLimiter(now func() time.Time) *limiter {
-	return &limiter{now: now, principals: map[[2]string]*bucket{}, stores: map[string]*bucket{}}
-}
-
-// take charges cost to the principal's bucket on the store and the store's own,
-// both or neither, and answers the refusal naming the bucket that could not
-// pay and when it can.
-func (l *limiter) take(store, principal string, cost int) *RateLimited {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := l.now()
-	if len(l.principals)+len(l.stores) > maxBuckets {
-		l.forgetFull(now)
+// takeWrite charges a write's cost to the caller's bucket on the store and to
+// the store's own, and answers the refusal naming which could not pay.
+func takeWrite(l *costlimit.Limiter, store, principal string, cost int) *RateLimited {
+	r := l.Take(store, principal, cost)
+	if r == nil {
+		return nil
 	}
-	pb := l.principals[[2]string{store, principal}]
-	if pb == nil {
-		pb = newBucket(artifacts.DataWritesPerPrincipalPerSecond, artifacts.DataWritesBurst, now)
-		l.principals[[2]string{store, principal}] = pb
+	scope := "principal"
+	if r.Scope == costlimit.ScopeShared {
+		scope = "store"
 	}
-	sb := l.stores[store]
-	if sb == nil {
-		sb = newBucket(artifacts.DataWritesPerStorePerSecond, artifacts.DataWritesStoreBurst, now)
-		l.stores[store] = sb
-	}
-	pb.refill(now)
-	sb.refill(now)
-	// A WRITE HEAVIER THAN A WHOLE BUCKET weighs a whole bucket: it is
-	// admitted when the bucket is full and empties it, rather than being a
-	// write no wait could ever admit.
-	pc, sc := pb.weigh(cost), sb.weigh(cost)
-	if pb.tokens < pc {
-		return &RateLimited{Scope: "principal", Cost: cost, RetryAfter: pb.wait(pc)}
-	}
-	if sb.tokens < sc {
-		return &RateLimited{Scope: "store", Cost: cost, RetryAfter: sb.wait(sc)}
-	}
-	pb.tokens -= pc
-	sb.tokens -= sc
-	return nil
-}
-
-// refill adds what the time since last earned, up to the burst.
-func (b *bucket) refill(now time.Time) {
-	if elapsed := now.Sub(b.last).Seconds(); elapsed > 0 {
-		b.tokens = math.Min(b.burst, b.tokens+elapsed*b.rate)
-	}
-	b.last = now
-}
-
-// weigh is what cost takes from the bucket: the cost, at most a whole bucket.
-func (b *bucket) weigh(cost int) float64 { return math.Min(float64(cost), b.burst) }
-
-// full reports a bucket that has refilled, which admits exactly as an absent
-// one does.
-func (b *bucket) full() bool { return b.tokens >= b.burst }
-
-// wait is how long the bucket takes to hold need again, rounded up to a whole
-// millisecond so a Retry-After is never zero.
-func (b *bucket) wait(need float64) time.Duration {
-	d := time.Duration(math.Ceil((need - b.tokens) / b.rate * float64(time.Second)))
-	return max(d.Round(time.Millisecond), time.Millisecond)
-}
-
-// forgetFull drops every bucket that has refilled.
-func (l *limiter) forgetFull(now time.Time) {
-	for k, b := range l.principals {
-		b.refill(now)
-		if b.full() {
-			delete(l.principals, k)
-		}
-	}
-	for k, b := range l.stores {
-		b.refill(now)
-		if b.full() {
-			delete(l.stores, k)
-		}
-	}
+	return &RateLimited{Scope: scope, Cost: cost, RetryAfter: r.RetryAfter}
 }

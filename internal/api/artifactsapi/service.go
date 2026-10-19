@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
+	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
@@ -134,10 +135,11 @@ type Service struct {
 	ready   Beacon
 	pace    func() time.Time
 
-	// decks, docs and canvases are what this node read of each version for
-	// the dashboard, through the kind's format.
+	// decks, docs, boards and canvases are what this node read of each
+	// version for the dashboard, through the kind's format.
 	decks    *formatCache[slideformat.Deck]
 	docs     *formatCache[docindex.Doc]
+	boards   *formatCache[*dashspec.Board]
 	canvases *formatCache[canvasformat.Canvas]
 }
 
@@ -168,7 +170,7 @@ func New(opts Options) (*Service, error) {
 	return &Service{gate: opts.Gate, reads: opts.Reads, writes: opts.Writes, uploads: opts.Uploads,
 		objects: opts.Objects, frames: opts.Frames, ready: opts.Ready, pace: pace,
 		decks: newDeckCache(opts.Objects), docs: newDocCache(opts.Objects),
-		canvases: newCanvasCache(opts.Objects)}, nil
+		boards: newBoardCache(opts.Objects), canvases: newCanvasCache(opts.Objects)}, nil
 }
 
 // Gate is the surface's admission, which the read questions take too.
@@ -236,6 +238,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 		{"GET /artifacts/{id}/versions/{n}/deck", pre, s.deck},
 		{"GET /artifacts/{id}/versions/{n}/doc", pre, s.doc},
 		{"GET /artifacts/{id}/versions/{n}/outline", pre, s.outline},
+		{"GET /artifacts/{id}/versions/{n}/dashboard", pre, s.board},
 		{"POST /artifacts/ready", ready, s.reportReady},
 	} {
 		if err := router.Handle(route.pattern, route.policy, route.handler); err != nil {

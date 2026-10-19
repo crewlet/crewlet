@@ -291,10 +291,11 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		tracker.WriteProjectFileTool:  true,
 		tracker.RemoveProjectFileTool: true,
 
-		// THE ARTIFACTS: the two reads are reads, and every write is read
+		// THE ARTIFACTS: the three reads are reads, and every write is read
 		// by the people the artifact is shared with.
 		builtin.ListArtifactsTool:       false,
 		builtin.GetArtifactTool:         false,
+		builtin.DashboardSourcesTool:    false,
 		builtin.CreateArtifactTool:      true,
 		builtin.PublishArtifactTool:     true,
 		builtin.UpdateArtifactTool:      true,

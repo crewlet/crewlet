@@ -1,0 +1,303 @@
+/**
+ * A dashboard as a reader sees it, over a fake engine that answers the board
+ * and each dataset as the datasets route would.
+ *
+ * THE LIVE EXIT TEST: an agent writes a row into the board's store collection,
+ * the room pushes the change, and the store dataset and the calculation that
+ * stands on it are read again (once each, and nothing else is), so the stat
+ * drawn from the calculation shows the new total without the reader doing
+ * anything.
+ */
+
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { ToastProvider } from "@crewlethq/ui";
+
+import { DashboardView } from "./DashboardView.tsx";
+import { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
+import type {
+  ArtifactDetail,
+  DashboardBoardAnswer,
+  DashboardDatasetAnswer,
+  LiveSocket,
+} from "~/protocol/index.ts";
+
+vi.mock("~/lib/store-hooks.ts", async () => {
+  const actual =
+    await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
+  return { ...actual, useAgents: () => [], useTokens: () => null };
+});
+
+const ID = "0192f2c4-2222-7000-8000-000000000002";
+
+const detail = {
+  id: ID,
+  kind: "dashboard",
+  title: "Delivery",
+  head_number: 1,
+  role: "viewer",
+} as unknown as ArtifactDetail;
+
+const board: DashboardBoardAnswer = {
+  artifact: ID,
+  version: 1,
+  board: {
+    v: 1,
+    title: "Delivery",
+    datasets: [
+      { id: "deals", title: "Pipeline", source: "store", store: { collection: "deals" } },
+      { id: "total", title: "Pipeline total", source: "calc", calc: { from: "deals", steps: [] } },
+      { id: "work", title: "My open work", source: "engine", engine: { name: "tracker.items" } },
+      { id: "spend", title: "Spend by seat", source: "engine", engine: { name: "spend.seats" } },
+    ],
+    widgets: [
+      { id: "pipeline", type: "stat", title: "Pipeline", dataset: "total", value: "amount", w: 4 },
+      { id: "mine", type: "table", title: "My work", dataset: "work", columns: ["key"], w: 8 },
+      {
+        id: "seats",
+        type: "bars",
+        title: "Tokens by seat",
+        dataset: "spend",
+        label: "handle",
+        value: "total_tokens",
+        w: 6,
+      },
+    ],
+  },
+  datasets: [
+    {
+      id: "deals",
+      title: "Pipeline",
+      source: "store",
+      shape: { columns: [{ key: "amount", type: "number" }] },
+      freshness: { mode: "live", collection: "deals" },
+    },
+    {
+      id: "total",
+      title: "Pipeline total",
+      source: "calc",
+      shape: { columns: [{ key: "amount", type: "number", label: "Amount" }] },
+      freshness: { mode: "derived", inputs: ["deals"] },
+    },
+    {
+      id: "work",
+      title: "My open work",
+      source: "engine",
+      shape: { columns: [{ key: "key", type: "text" }] },
+      freshness: { mode: "manual" },
+    },
+    {
+      id: "spend",
+      title: "Spend by seat",
+      source: "engine",
+      shape: {
+        columns: [
+          { key: "handle", type: "text" },
+          { key: "total_tokens", type: "number" },
+        ],
+      },
+      freshness: { mode: "manual" },
+    },
+  ],
+  outline: { widgets: [], stats: [], datasets: [] },
+};
+
+/** The board's store collection, as an agent writes it. */
+let amounts: number[];
+/** How many times each dataset was read. */
+let reads: Record<string, number>;
+/** Whether the next spend read is refused by the read budget. */
+let budgetSpent: boolean;
+
+const ready = (dataset: string, rows: DashboardDatasetAnswer["table"]): DashboardDatasetAnswer => ({
+  artifact: ID,
+  version: 1,
+  dataset,
+  status: "ready",
+  as_of: "2026-10-18T10:00:00Z",
+  table: rows,
+});
+
+function answer(dataset: string): {
+  status: number;
+  body: unknown;
+  headers?: Record<string, string>;
+} {
+  switch (dataset) {
+    case "deals":
+      return {
+        status: 200,
+        body: ready("deals", {
+          columns: board.datasets[0]!.shape.columns,
+          rows: amounts.map((amount) => ({ amount })),
+        }),
+      };
+    case "total":
+      return {
+        status: 200,
+        body: ready("total", {
+          columns: board.datasets[1]!.shape.columns,
+          rows: [{ amount: amounts.reduce((a, b) => a + b, 0) }],
+        }),
+      };
+    case "work":
+      return {
+        status: 200,
+        body: {
+          artifact: ID,
+          version: 1,
+          dataset: "work",
+          status: "refused",
+          refusal: { dataset: "work", reason: "no_grant", grants: ["tracker"] },
+          detail: "You cannot read tracker: people and agents holding the tracker.",
+        },
+      };
+    case "spend":
+      if (budgetSpent) {
+        budgetSpent = false;
+        return {
+          status: 429,
+          body: { error: "read_budget", detail: "slow down" },
+          headers: { "Retry-After": "1" },
+        };
+      }
+      return {
+        status: 200,
+        body: ready("spend", {
+          columns: board.datasets[3]!.shape.columns,
+          rows: [{ handle: "ana", total_tokens: 4200 }],
+        }),
+      };
+  }
+  return { status: 404, body: { error: "not_found" } };
+}
+
+beforeEach(() => {
+  amounts = [100, 250];
+  reads = {};
+  budgetSpent = false;
+  Object.defineProperty(globalThis, "fetch", {
+    writable: true,
+    value: vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), "http://engine.test").pathname;
+      if (path === `/artifacts/${ID}/versions/1/dashboard`) {
+        return new Response(JSON.stringify(board), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      const dataset = /\/sources\/([a-z_]+)$/.exec(path)?.[1] ?? "";
+      reads[dataset] = (reads[dataset] ?? 0) + 1;
+      const got = answer(dataset);
+      return new Response(JSON.stringify(got.body), {
+        status: got.status,
+        headers: { "Content-Type": "application/json", ...(got.headers ?? {}) },
+      });
+    }),
+  });
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+function dataStore(): ArtifactDataStore {
+  return new ArtifactDataStore({
+    artifact: ID,
+    socket: { query: vi.fn(async () => ({})) } as unknown as LiveSocket,
+    via: { via: "dashboard" },
+    clientID: "client-1",
+    newKey: () => "key-1",
+    write: async () => {
+      throw new Error("a board writes nothing");
+    },
+  });
+}
+
+const mount = (store: ArtifactDataStore) =>
+  render(
+    <ToastProvider>
+      <DashboardView detail={detail} version={1} store={store} options={{ gatherMs: 10 }} />
+    </ToastProvider>,
+  );
+
+/** The figure a widget draws, by its id. */
+const widget = (id: string) => document.querySelector<HTMLElement>(`[data-widget="${id}"]`)!;
+
+test("an agent's write to the board's store dataset reaches the stat drawn from it, live", async () => {
+  const store = dataStore();
+  mount(store);
+  await waitFor(() =>
+    expect(within(widget("pipeline")).getByText((350).toLocaleString())).toBeTruthy(),
+  );
+  const before = { ...reads };
+
+  // THE AGENT'S WRITE, as the room pushes it.
+  amounts.push(650);
+  store.applyPush({
+    artifact: ID,
+    deltas: [
+      {
+        collection: "deals",
+        doc: "d3",
+        version: 3,
+        body: { amount: 650 },
+        read: "all",
+        created_by: "closer",
+        updated_by: { name: "closer", kind: "agent" },
+        updated_at: "2026-10-18T10:01:00Z",
+      },
+    ],
+  });
+
+  await waitFor(() =>
+    expect(within(widget("pipeline")).getByText((1000).toLocaleString())).toBeTruthy(),
+  );
+  expect(reads.deals).toBe(before.deals! + 1);
+  expect(reads.total).toBe(before.total! + 1);
+  expect(reads.work).toBe(before.work);
+  expect(reads.spend).toBe(before.spend);
+});
+
+test("a push naming another collection reads nothing again", async () => {
+  const store = dataStore();
+  mount(store);
+  await waitFor(() => expect(reads.total).toBe(1));
+  store.applyPush({
+    artifact: ID,
+    keys: [{ collection: "notes", doc: "n1", version: 2 }],
+    reread: true,
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  expect(reads.deals).toBe(1);
+  expect(reads.total).toBe(1);
+});
+
+test("a dataset the reader may not read draws the refusal and no row", async () => {
+  mount(dataStore());
+  await waitFor(() =>
+    expect(within(widget("mine")).getByText(/You cannot read tracker/)).toBeTruthy(),
+  );
+  expect(within(widget("mine")).queryByRole("table")).toBeNull();
+});
+
+test("a read the budget refused is asked again once the wait it named is over", async () => {
+  budgetSpent = true;
+  mount(dataStore());
+  await waitFor(() => expect(reads.spend).toBe(1));
+  expect(within(widget("seats")).queryByText("ana")).toBeNull();
+  await waitFor(() => expect(within(widget("seats")).getByText("ana")).toBeTruthy(), {
+    timeout: 3000,
+  });
+  expect(reads.spend).toBe(2);
+});
+
+test("the Sources rail lists every dataset with how it is kept current", async () => {
+  mount(dataStore());
+  const rail = await screen.findByRole("complementary", { name: "Sources" });
+  await waitFor(() => expect(within(rail).getByText("Pipeline total")).toBeTruthy());
+  expect(within(rail).getAllByText("Live").length).toBeGreaterThan(0);
+  expect(within(rail).getByText("When its inputs change")).toBeTruthy();
+  expect(within(rail).getByText("The deals collection of this dashboard's data")).toBeTruthy();
+});

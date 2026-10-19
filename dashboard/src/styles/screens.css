@@ -11331,3 +11331,56 @@ a.live-row:focus-visible {
   color: var(--color-text-secondary);
   font-size: var(--font-size-2xs);
 }
+
+/* A DASHBOARD: its filters, its board of widgets and the Sources rail beside
+   it. The board is the Home board's grid; the rail folds under the board on a
+   narrow page, so every figure keeps the width it was laid out at. */
+.dashboard-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.dashboard-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+.dashboard-filter {
+  min-width: 12rem;
+}
+.dashboard-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(16rem, 20rem);
+  align-items: start;
+  gap: var(--spacing-4);
+}
+@container (max-width: 60rem) {
+  .dashboard-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.dashboard-board {
+  min-width: 0;
+}
+.dashboard-cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.dashboard-figure {
+  min-width: 0;
+}
+.dashboard-sources {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.dashboard-sources-title {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}

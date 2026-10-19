@@ -13,6 +13,7 @@ Five kinds ship in this release:
 | `html` | A page of HTML, CSS and script, with any files it references | The page itself, inside a sandboxed frame on an origin of its own |
 | `doc` | A document of one Markdown file, or of several tabs ordered by a `doc.json` index | The dashboard's own renderer; it carries no author code |
 | `slides` | A deck of 16:9 slides in Claude's slide format | The dashboard, from the deck's canonical tree |
+| `dashboard` | A board of figures over datasets: the artifact's own store, the engine's own domains, files and calculations | The dashboard's own widgets, every live figure answered as its viewer |
 | `sheet` | A native sheet: rows and typed columns, with no page at all | The dashboard, from the sheet's schema alone |
 | `design` | A canvas of artboards (`canvas.json`), each an HTML page, with titles and stickies beside them | The dashboard draws the canvas and the notes; each artboard runs in a sandboxed frame of its own |
 
@@ -95,7 +96,7 @@ store** and, when a version declares it, a **datastore**.
 **A kind is native or framed.** An `html` page and a `design`'s artboards run
 their author's code, and only on the artifact origin, in sandboxed frames (see
 [Serving](#serving)); a design's canvas and notes are drawn natively. A
-`doc`, a `slides` deck and a `sheet` carry no author code: the
+`doc`, a `slides` deck, a `dashboard` and a `sheet` carry no author code: the
 dashboard draws each from a closed format with its own components, so nothing
 one holds can become script on the dashboard's origin, and a publish outside
 the format is refused with a named error rather than silently dropped on read.
@@ -650,6 +651,33 @@ whole contract.
 - **Covered natively in the gallery**: the cover slide drawn at card size from
   the version's outline, never a screenshot.
 
+## Dashboards
+
+A `dashboard` artifact is a native widget board over declared datasets, in the
+closed [Dashboard Spec](../reference/dashboard-spec.md): stats, meters, charts
+over time, ranked bars, shares, tables and notes on the twelve-column grid the
+Home board uses, each widget citing its dataset and when its rows were true,
+with a Sources rail that shows every dataset's definition, freshness and rows.
+
+- **Read as the viewer.** An `engine` dataset is answered by the question the
+  dashboard's own screens ask (the tracker's, spend's, the agents' status), on
+  the viewer's own request, so two people opening one board each see what
+  they may read and nothing more; a figure over a source somebody may not read
+  says so and names the permission that would open it
+  ([ADR-0043](../../adr/0043-a-dashboards-live-data-is-read-as-its-viewer.md)).
+  The board itself and its gallery cover carry no row.
+- **Live where the data is live.** A `store` dataset redraws whenever the
+  artifact's datastore pushes a change, so rows an agent writes appear on every
+  open board; an engine dataset refreshes on its domain's own push (spend, the
+  agents) or on the interval it declares, never under a minute; a file dataset
+  is fixed with its version.
+- **Held to the format at publish**, every finding named, and data files
+  parsed against their declared columns.
+- **Exported in the browser**: a widget's rows as CSV and a chart as PNG,
+  each the viewer's own view.
+- **Covered natively in the gallery** from the version's outline: the first
+  stats' labels and their datasets' titles, never a figure.
+
 ---
 
 ## Designs
@@ -699,7 +727,8 @@ has the format.
 
 Comments, mentions and reviews; watches that wake an agent when data changes;
 decisions inside a sheet; a design's live board layer of shapes, connectors
-and images; slide builds, magic moves, live
+and images; a dashboard dataset an agent refreshes on a schedule, and
+integration sources a viewer's own connector answers; slide builds, magic moves, live
 embeds and connectors on a slide, and PowerPoint or Google Slides export of a
 deck; live tracker and knowledge data inside
 a page; a page asking a model a question; viewer uploads and device features;

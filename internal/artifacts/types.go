@@ -66,6 +66,14 @@ const (
 	// It carries no author code.
 	KindSlides Kind = "slides"
 
+	// KindDashboard is a board of figures: a spec (`dashboard.json`, in the
+	// closed board format of internal/artifacts/dashspec) naming datasets
+	// over the artifact's own datastore, the engine's own domains, version
+	// files and calculations, which the dashboard draws with its own
+	// primitives, every live figure answered as its viewer (adr/0043). It
+	// carries no author code.
+	KindDashboard Kind = "dashboard"
+
 	// KindSheet is a native sheet: its content is its datastore and the
 	// dashboard draws it from the schema alone, so there is nothing for a
 	// model to get wrong and no page script at all.

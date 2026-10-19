@@ -33,6 +33,7 @@ export const KIND_WORDS: Readonly<Record<ArtifactKind, string>> = {
   html: "Page",
   doc: "Doc",
   slides: "Slides",
+  dashboard: "Dashboard",
   sheet: "Sheet",
   design: "Design",
 };
