@@ -6135,7 +6135,7 @@ appends a generation record, and the window's mode appends nothing.
 
 ## Artifacts
 
-An **artifact** is a page, a Markdown document or a native sheet a person or a
+An **artifact** is a page, a doc or a native sheet a person or a
 seat publishes for others to open: immutable numbered versions of its files,
 shared with seats, units or the whole company at a role (`viewer`,
 `commenter`, `contributor`, `editor`; the owner holds every role). Its records
@@ -6308,13 +6308,13 @@ The API origin **never renders an artifact**:
   then opens that page and no other as a document. A `document` that is not
   an HTML page of the version (a design's `canvas.json`, a stylesheet, a path
   the version does not hold, or none for a design) is `422 invalid`. A
-  Markdown document, a deck or a sheet is `409 artifact_not_framed`, and
+  doc, a deck or a sheet is `409 artifact_not_framed`, and
   a deployment with no `api.artifacts.external_url` is
   `409 artifact_origin_unset`. Minting a frame records that the caller opened
   the artifact, at most once in fifteen minutes.
 - `GET /artifacts/{id}/versions/{n}/source` answers a version's entry as JSON
   (`text`, `content_type`, `size`), read back and checked against its digest:
-  how the dashboard renders a Markdown document, which runs no author code,
+  how the dashboard renders a doc, which runs no author code,
   and reads a design's `canvas.json`, which it draws natively. Reading the
   source of a native kind or a design records that the caller opened it (a
   design's canvas is drawn whether or not any artboard is framed).

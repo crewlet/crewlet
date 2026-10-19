@@ -13,7 +13,7 @@ the ones the engine enforces at publish; the page's runtime API is the
 | You want | Kind |
 |---|---|
 | A table people fill in together: a review, a sign-up, a tracker of decisions | `sheet`. Declare the schema and the dashboard draws it, with presence, per-cell history and accessibility, and no page code at all |
-| A document: a report, a plan, release notes | `markdown`. The dashboard renders it; there is nothing to run |
+| A document: a report, a plan, release notes | `doc`. The dashboard renders it; there is nothing to run |
 | A presentation: a pitch, a review, a talk | `slides`, a deck in Claude's slide format. The dashboard draws, presents and prints it, people fix text and order it in place, and nothing runs. See [Writing a deck](#writing-a-deck) |
 | Several screens reviewed side by side: a landing page's sections, an onboarding flow, three takes on one hero | `design`, a canvas of artboards, each a plain HTML page. People rearrange the boards and annotate them in place. See [Writing a design](#writing-a-design) |
 | A dashboard, a calculator, a custom view over shared data | `html`, with the capabilities it needs |

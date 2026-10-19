@@ -17,7 +17,7 @@
  */
 
 /** Every kind of artifact (`artifacts.Kinds`): a page that runs code, a document, a deck, a native sheet, a design's canvas of framed artboards. */
-export const ARTIFACT_KINDS = ["html", "markdown", "slides", "sheet", "design"] as const;
+export const ARTIFACT_KINDS = ["html", "doc", "slides", "sheet", "design"] as const;
 
 /**
  * What the engine decides by kind (`artifacts.KindSpecs`), the half a screen
@@ -28,7 +28,7 @@ export const ARTIFACT_KINDS = ["html", "markdown", "slides", "sheet", "design"] 
  */
 export const ARTIFACT_KIND_SPECS = {
   html: { render: "framed", store: "declared" },
-  markdown: { render: "native", store: "none" },
+  doc: { render: "native", store: "none" },
   slides: { render: "native", store: "none" },
   sheet: { render: "native", store: "content" },
   design: { render: "framed", store: "declared" },

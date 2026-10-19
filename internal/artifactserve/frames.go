@@ -23,7 +23,7 @@ import (
 // VERBATIM, so the policy has one implementation.
 
 // ErrNotServed reports an artifact the artifact origin does not serve: a
-// Markdown document or a native sheet, which the dashboard renders itself and
+// doc or a native sheet, which the dashboard renders itself and
 // which carry no author code, or one in the trash.
 var ErrNotServed = errors.New("artifactserve: this artifact is not opened in a frame")
 

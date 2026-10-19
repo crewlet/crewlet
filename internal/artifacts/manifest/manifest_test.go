@@ -106,9 +106,9 @@ func TestAManifestIsValidatedAgainstItsKind(t *testing.T) {
 	if err := Validate(artifacts.KindSheet, artifacts.Manifest{}); err != nil {
 		t.Fatalf("an empty sheet manifest was refused: %v", err)
 	}
-	if err := Validate(artifacts.KindMarkdown, artifacts.Manifest{Entry: "README.md",
+	if err := Validate(artifacts.KindDoc, artifacts.Manifest{Entry: "README.md",
 		Files: []artifacts.Entry{doc}}); err != nil {
-		t.Fatalf("a good markdown manifest was refused: %v", err)
+		t.Fatalf("a good doc manifest was refused: %v", err)
 	}
 	cases := map[string]struct {
 		kind artifacts.Kind
@@ -118,7 +118,7 @@ func TestAManifestIsValidatedAgainstItsKind(t *testing.T) {
 		"repeated":       {artifacts.KindHTML, artifacts.Manifest{Entry: "index.html", Files: []artifacts.Entry{page, page}}},
 		"no entry":       {artifacts.KindHTML, artifacts.Manifest{Files: []artifacts.Entry{page}}},
 		"absent entry":   {artifacts.KindHTML, artifacts.Manifest{Entry: "home.html", Files: []artifacts.Entry{page}}},
-		"wrong kind":     {artifacts.KindMarkdown, good},
+		"wrong kind":     {artifacts.KindDoc, good},
 		"css entry":      {artifacts.KindHTML, artifacts.Manifest{Entry: "site.css", Files: []artifacts.Entry{page, css}}},
 		"client type":    {artifacts.KindHTML, artifacts.Manifest{Entry: "index.html", Files: []artifacts.Entry{withType(page, "text/plain")}}},
 		"script on css":  {artifacts.KindHTML, artifacts.Manifest{Entry: "index.html", Files: []artifacts.Entry{page, withScript(css)}}},
