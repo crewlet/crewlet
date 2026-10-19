@@ -872,6 +872,12 @@ stricter end of it. `GET /auth/session` answers the deadline the table judges
 against (`reauth_at`) and whether it is already due (`step_up_due`), so a
 screen can say so before somebody starts rather than after they submit.
 
+**A request is judged at the instant it arrived.** Every check one request
+makes — its route's, and whatever the handler decides once it has read the
+body, such as each part of a `/config` write or `?reveal=true` on a secret —
+asks the proof at the instant the route decided, so a proof that was fresh
+when the request arrived never lapses half-way through it.
+
 **A credential with nobody at a keyboard is fresh by construction** — a Tier A
 token (and a session exchanged from one), the development principal, and a
 personal access or service token. There is nothing else any of them could
