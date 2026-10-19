@@ -227,3 +227,33 @@ func TestADeckDeclaresNoCapability(t *testing.T) {
 		t.Errorf("a deck declaring db answered %v", err)
 	}
 }
+
+// A DECK BEGUN FROM ITS STARTER is published by the engine from its own
+// files, inline, held to the format like any version; a kind with no starter,
+// or a starter that also names files, is refused before a byte moves.
+func TestADeckBeginsFromItsStarter(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{})
+	c := h.person("ada", h.opKey("start"))
+	got, _, err := h.svc.Create(t.Context(), c, artifactupload.CreateRequest{
+		Kind: artifacts.KindSlides, Title: "Board review", Owner: "ada",
+		OwnerKind: c.Authority.Actor.Kind, Starter: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := h.version(got.Artifact, 1)
+	if v.Manifest.Entry != "deck.json" || len(v.Manifest.Files) != 5 ||
+		!strings.Contains(h.file(v, "slides/cover.html"), "Board review") {
+		t.Fatalf("the starter published %d files opening on %q", len(v.Manifest.Files), v.Manifest.Entry)
+	}
+	for _, req := range []artifactupload.CreateRequest{
+		{Kind: artifacts.KindSheet, Title: "Sheet", Owner: "ada", Starter: true},
+		{Kind: artifacts.KindSlides, Title: "Deck", Owner: "ada", Starter: true, Entry: "deck.json"},
+	} {
+		req.OwnerKind = c.Authority.Actor.Kind
+		if _, _, err := h.svc.Create(t.Context(), h.person("ada", h.opKey("again")), req); !errors.Is(err, artifactupload.ErrInvalid) {
+			t.Errorf("a %s starter with entry %q answered %v", req.Kind, req.Entry, err)
+		}
+	}
+}

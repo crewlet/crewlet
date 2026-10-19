@@ -317,3 +317,23 @@ func FuzzParseSlide(f *testing.F) {
 		_, _ = ParseSlide("slides/a.html", "a", []byte(body), files)
 	})
 }
+
+// THE STARTER IS IN THE FORMAT, whatever its title: it reads whole with no
+// finding, its title escaped as text on the cover and as JSON in the index.
+func TestTheStarterDeckIsInTheFormat(t *testing.T) {
+	t.Parallel()
+	const title = `Q3 <plan> & "more"`
+	src := dirSource{files: map[string][]byte{}}
+	for p, b := range Starter(title) {
+		src.files[p] = b
+	}
+	deck, err := Read(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deck.Title != title || len(deck.Slides) != 4 || deck.Slides[0].Title != title ||
+		len(deck.Sections) != 3 || deck.Slides[1].Notes == "" {
+		t.Errorf("the starter read as %q with %d slides, cover %q", deck.Title, len(deck.Slides),
+			deck.Slides[0].Title)
+	}
+}

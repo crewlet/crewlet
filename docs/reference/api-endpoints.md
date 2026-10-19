@@ -6204,7 +6204,7 @@ for. The domain's applier decides from the record alone.
 | `POST /artifacts/uploads` | `create_artifact` | An upload intent for a new artifact |
 | `POST /artifacts/{id}/uploads` | `publish_artifact`, or `upload_artifact_asset` with `asset: true` | An upload intent for the next version, or into the asset store |
 | `PUT /artifacts/uploads/{upload}/files/{path}` | the intent's own verb, decided again | One file's bytes, streamed through the engine |
-| `POST /artifacts` | `create_artifact` | A new artifact and its first version, owned by the caller |
+| `POST /artifacts` | `create_artifact` | A new artifact and its first version, owned by the caller. `"starter": true` begins it from its kind's starter content, which the engine holds and publishes inline (a deck's four example slides), naming no upload, files or entry; a kind with no starter is `422 invalid` |
 | `POST /artifacts/{id}/versions` | `publish_artifact`; `artifacts.publish.force` beside it when forced | The next version, based on `If-Match: "<n>"` |
 | `POST /artifacts/{id}/versions/{n}/restore` | `publish_artifact` | Version `n` again as a new version, every file carried, based on `If-Match` |
 | `PATCH /artifacts/{id}` | `update_artifact` | The title, the description or the icon |
