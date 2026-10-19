@@ -394,21 +394,24 @@
 // TestBloblessCheckoutsBehindOneTokenAllSucceed is what holds that every
 // checkout behind one token is served.
 //
-// A WARM CLONE (BenchmarkCloneWarm), the same tree from a node holding its
-// bitmap — on 2.47.3, reused from the bitmap's preferred pack alone
-// (gitproc.MultiPackReuse) — is 1.50–1.57 s full and 0.91–0.98 s of the
-// node's CPU a clone however many arrive: eight at once 3.5–3.6 s at the
-// median, thirty-two 8.4–9.0 s (p99 14–15 s) and 29–30 s of CPU for
-// thirty-two identical answers. depth1+blobless+cone is 0.87–0.89 s and
-// 0.37–0.38 s of CPU a clone, thirty-two at once 12 s of CPU. So identical
-// clones cost the node their count in CPU, which a cache of identical
-// answers would make one: the figure a pack-objects response cache is decided
-// on, and it is the same with MULTI-PACK REUSE. With the pools on 2.48.0,
-// which reuses from every pack of the bitmap verbatim, a full clone is
-// 1.51–1.52 s alone and 1.03–1.04 s of CPU, 0.98–0.99 s a clone at
-// thirty-two at once (31–32 s of CPU), and depth1+blobless+cone the same
-// 0.37 s: reuse from the preferred pack alone costs this repository's
-// clones nothing measurable — 2.48 spends some 6% more CPU on a full one —
-// so the image's 2.47 gives up nothing, and the response cache's figure is
-// the single-pack one.
+// A WARM CLONE (BenchmarkCloneWarm) is from a node holding the repository's
+// bitmap, every push adopted as it landed, the pools on the node pin (2.56.0)
+// serving with multi-pack reuse (cache.ServeConfig). The tree history's full
+// clone is sent 43.9 MB and takes 1.62–1.63 s at the median and 0.96–0.99 s
+// of the node's CPU alone, 4.8–4.9 s and 1.10 s a clone eight at once; the
+// edits history's — 26 files of 4 KiB edited over 200 pushes — is sent
+// 40.4 MB and takes 3.1–3.2 s and 2.38–2.39 s of CPU alone, 8.3–8.6 s and
+// 2.49–2.60 s a clone eight at once; and thirty-two full clones at once of
+// either were not all served, a clone refused 503 once it had queued for a
+// transfer slot past gitproc.SlotWait on four cores. depth1+blobless+cone is
+// 3.4 MB and 0.41–0.50 s of CPU a clone of the tree, 111 KB and 44–50 ms of
+// the edits, however many arrive (p50 10.5–12.5 s and 1.5–1.6 s at
+// thirty-two at once). So identical clones cost the node their count in
+// CPU, which a cache of identical answers would make one: the figure a
+// pack-objects response cache is decided on. And the reuse mode is a large
+// share of what a full clone costs: cache's BenchmarkPackReuse, the two
+// values side by side over one copy of each history, puts multi at 9% more
+// bytes and 9–27% more CPU than single over the tree's layout, and at 57%
+// more bytes for 3.5–3.6 times the CPU over the edits' (cache/serve.go says
+// why).
 package host

@@ -276,9 +276,10 @@ var baseKeys = []KV{
 // needs is added here in the commit that adds the call site.
 var allowedConfig = map[string]string{
 	"core.multipackindex": "the cache's serve configuration and its maintainer",
-	"pack.allowpackreuse": "the cache's serve configuration, valued Pool.PackReuse",
-	"pack.windowmemory":   "the cache's serve configuration",
-	"pack.usebitmaps":     "the cache's serve configuration",
+	"pack.allowpackreuse": "the cache's serve configuration: `multi` — every pack a cache holds reused whole, " +
+		"which every git at the node floor sends correctly (2.48 fixed overlapping packs)",
+	"pack.windowmemory": "the cache's serve configuration",
+	"pack.usebitmaps":   "the cache's serve configuration",
 	// Read only by a bitmap write (the maintainer's multi-pack-index), so
 	// it rides the serve configuration and changes no other process.
 	"pack.writebitmaplookuptable": "the maintainer's bitmap write: a table of its commits, so a reader loads " +

@@ -24,13 +24,23 @@ var ClientMinVersion = Version{2, 40, 0}
 // --base=<checksum> --no-write-chain-file`, 2.55: `write` offers neither
 // option in v2.54.0's documentation and both in v2.55.0's), which is how a
 // repository's maintainer publishes the layers every git node installs; and
-// pack.allowPackReuse=multi sending a cache's overlapping packs whole (fixed
-// in 2.48, tb/multi-pack-reuse-dupfix: 2.44 to 2.47 sent an object twice or a
-// delta without its base, and every full clone of a bitmapped repository
-// failed on 2.47.3, Debian trixie's git). Everything else a git node runs is
-// older: proc-receive (2.29), index-pack --rev-index (2.31), object-type
-// filters (2.32), multi-pack-index bitmaps (2.34) and merge-tree
-// --write-tree --merge-base (2.40).
+// pack.allowPackReuse=multi sending a cache's overlapping packs whole, which
+// is why every cache serves with that value and nothing chooses it per binary
+// (cache.ServeConfig; TestMultiPackReuseSendsOverlappingPacksWhole, on the
+// node pin and on the floor's own build). That was fixed in 2.48.0
+// (tb/multi-pack-reuse-dupfix, "Object reuse code based on multi-pack-index
+// sent an unwanted copy of object"): 2.43 refuses the value outright ("bad
+// boolean config value 'multi'"), and 2.44 to 2.47 accept it and, reusing
+// from several packs that hold one object — which a cache's are, since
+// receive-pack completes each thin push with the bases it borrowed from the
+// packs before it — sent that object twice or a delta without its base, so
+// the client's index-pack refused the whole pack ("REF_DELTA … already
+// resolved", "pack has N unresolved deltas") and every full clone of a
+// repository the maintainer had written a bitmap for failed on 2.47.3,
+// Debian trixie's git. Everything else a git node runs is older:
+// proc-receive (2.29), index-pack --rev-index (2.31), object-type filters
+// (2.32), multi-pack-index bitmaps (2.34) and merge-tree --write-tree
+// --merge-base (2.40).
 //
 // THE FLOOR FOLLOWS THE COMMANDS, never the reverse:
 // TestTheNodeFloorWritesALayerOverANamedBase runs the layer on the floor's
@@ -66,25 +76,6 @@ func (f Floor) Min() Version {
 	}
 	return Version{}
 }
-
-// MultiPackReuse is the first git whose pack.allowPackReuse=multi sends a
-// pack its client can read, so the value a cache serves with is chosen per
-// binary ([Pool.PackReuse]). 2.43 refuses the value outright ("bad boolean
-// config value 'multi'"); 2.44 to 2.47 accept it, and reusing from several
-// packs that hold one object — which a cache's are, since receive-pack
-// completes each thin push with the bases it borrowed from the packs before
-// it — send that object twice or a delta without its base, and the client's
-// index-pack refuses the whole pack: every full clone of a repository the
-// maintainer had written a bitmap for failed on 2.47.3, Debian trixie's git
-// ("REF_DELTA … already resolved", "pack has N unresolved
-// deltas"). 2.48.0 is the release that fixed it (tb/multi-pack-reuse-dupfix,
-// "Object reuse code based on multi-pack-index sent an unwanted copy of
-// object"), measured against the same repositories. An older git reuses from
-// the bitmap's preferred pack alone, which costs a clone nothing measurable
-// and never its pack: a warm full clone of two hundred pushes of a 10 000-file
-// tree is 0.91–0.98 s of the node's CPU on 2.47.3 and 1.03–1.04 s with
-// multi-pack reuse on 2.48.0 (internal/code/host's BenchmarkCloneWarm).
-var MultiPackReuse = Version{2, 48, 0}
 
 // Version is a git release, compared on (Major, Minor, Patch).
 type Version struct{ Major, Minor, Patch int }

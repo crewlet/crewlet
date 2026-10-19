@@ -301,60 +301,29 @@ func TestEveryNodeGitClaimRunsOnBothEnds(t *testing.T) {
 	}
 }
 
-// EVERY POOL THE NODE FLOOR ADMITS ASKS FOR MULTI-PACK REUSE: the value is
-// still chosen from the binary, and every git at or above the node floor is
-// past 2.48, the release that made "multi" send overlapping packs whole
-// (TestThePackReuseValueSendsOverlappingPacksWhole).
-func TestPackReuseFollowsTheVersion(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct{ version, want string }{
-		{"2.55.0", "multi"},
-		{"2.56.0", "multi"},
-	} {
-		if got := newPool(t, gitproc.Options{Path: gittest.Fake(t, "git version "+tc.version, "")}).PackReuse(); got != tc.want {
-			t.Errorf("PackReuse on %s = %q, want %s", tc.version, got, tc.want)
-		}
-	}
-}
-
-// THE POOL NEVER HANDS A GIT A VALUE IT REFUSES: the real git accepts the
-// pack.allowPackReuse value the pool chose for it.
-func TestThePackReuseValueIsOneThisGitAccepts(t *testing.T) {
-	t.Parallel()
-	c := gittest.NewClient(t)
-	wt := c.Init(t)
-	tip := c.Commit(t, wt, map[string]string{"a.txt": "a\n"}, "one")
-	bare := gittest.Empty(t)
-	gittest.Pack(t, c, bare, wt, tip)
-	gittest.SetRefs(t, bare, map[string]string{"refs/heads/main": tip})
-
-	p := realPool(t, gitproc.Options{})
-	var sent countingWriter
-	_, err := p.Run(t.Context(), gitproc.Cmd{
-		Dir: bare, Args: []string{"pack-objects", "--revs", "--stdout", "-q"},
-		Config: []gitproc.KV{{Key: "pack.allowPackReuse", Value: p.PackReuse()}},
-		Stdin:  strings.NewReader("main\n"), Stdout: &sent,
-		Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline,
-	})
-	if err != nil || sent.n == 0 {
-		t.Fatalf("pack-objects with pack.allowPackReuse=%s: %d bytes, %v", p.PackReuse(), sent.n, err)
-	}
-}
-
-// THE POOL'S PACK REUSE SENDS EVERY OBJECT ONCE, AND EVERY DELTA WITH ITS
-// BASE, when one object sits in many packs — which is a cache's every
-// repository: each push is a pack of its own, and receive-pack completes a
-// thin push with the bases it borrowed from the packs before it. Reuse reads
-// the multi-pack-index bitmap over all of them, as a warm cache's clone does.
-// git 2.44 to 2.47 accept pack.allowPackReuse=multi and, reusing from
-// several such packs, sent an object twice or a delta whose base they never
-// sent, and the client's index-pack refused the whole pack ("REF_DELTA …
-// already resolved", "pack has N unresolved deltas" — measured on 2.47.3,
-// the engine image's git, which fails this case at forty pushes); 2.48.0
-// fixed it (tb/multi-pack-reuse-dupfix). So the value the pool chose for its
-// git serves such a repository whole, or a clone of every repository a cache
-// holds a bitmap for fails.
-func TestThePackReuseValueSendsOverlappingPacksWhole(t *testing.T) {
+// EVERY GIT A NODE MAY RUN SENDS A CACHE'S OVERLAPPING PACKS WHOLE under
+// pack.allowPackReuse=multi, the value every cache serves with
+// (cache.ServeConfig): every object once, and every delta with its base,
+// when one object sits in many packs — which is a cache's every repository:
+// each push is a pack of its own, and receive-pack completes a thin push with
+// the bases it borrowed from the packs before it. Reuse reads the
+// multi-pack-index bitmap over all of them, as a warm cache's clone does,
+// the index and its bitmap written by the node's own git, as its maintainer
+// writes them. git 2.44 to 2.47 accept the value and, reusing from several
+// such packs, sent an object twice or a delta whose base they never sent, and
+// the client's index-pack refused the whole pack ("REF_DELTA … already
+// resolved", "pack has N unresolved deltas" — measured on 2.47.3, Debian
+// trixie's git, which fails this case at forty pushes); 2.48.0 fixed it
+// (tb/multi-pack-reuse-dupfix), and 2.43 refuses the value outright ("bad
+// boolean config value 'multi'"). So nothing chooses the value per binary
+// any more: it is safe because gitproc.NodeMinVersion is past 2.48, and this
+// case runs on both ends of what a pool admits — the node pin and the node
+// floor's own build (onNodeGits) — since the claim is about every git at the
+// floor, not the one a make target puts first on PATH.
+//
+// Mutation: lower gitproc.NodeMinVersion to 2.47.0 and name a 2.47.3 build
+// as CREWLET_TEST_GIT_NODE_FLOOR, and the floor's arm is red.
+func TestMultiPackReuseSendsOverlappingPacksWhole(t *testing.T) {
 	t.Parallel()
 	c := gittest.NewClient(t)
 	src := c.Init(t)
@@ -380,44 +349,51 @@ func TestThePackReuseValueSendsOverlappingPacksWhole(t *testing.T) {
 		}
 		return nil
 	})
-	bare := gittest.Empty(t)
+	packs := gittest.Empty(t)
 	for _, commit := range strings.Fields(c.Run(t, src, "rev-list", "--reverse", "main")) {
 		// A PACK A PUSH, as the cache keeps them: never unpacked into loose
 		// objects, never repacked. Named on receive-pack's own command line,
 		// because a local push clears GIT_CONFIG_PARAMETERS for the process
-		// it runs in another repository, and bare's config is the engine's.
+		// it runs in another repository, and the repository's config is the
+		// engine's.
 		c.Run(t, src, "push", "--quiet",
 			"--receive-pack=git -c transfer.unpackLimit=1 -c receive.autogc=false receive-pack",
-			bare, commit+":refs/heads/main")
+			packs, commit+":refs/heads/main")
 	}
-	c.Run(t, bare, "-c", "pack.writeBitmapLookupTable=true", "multi-pack-index", "write", "--bitmap", "--no-progress")
 
-	p := realPool(t, gitproc.Options{})
-	var pack bytes.Buffer
-	// THE CLONE'S PACK AS upload-pack ASKS FOR IT.
-	if _, err := p.Run(t.Context(), gitproc.Cmd{
-		Dir:  bare,
-		Args: []string{"pack-objects", "--revs", "--thin", "--stdout", "--delta-base-offset", "-q"},
-		Config: []gitproc.KV{{Key: "core.multiPackIndex", Value: "true"}, {Key: "pack.useBitmaps", Value: "true"},
-			{Key: "pack.allowPackReuse", Value: p.PackReuse()}},
-		Stdin: strings.NewReader("refs/heads/main\n"), Stdout: &pack,
-		Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline,
-	}); err != nil {
-		t.Fatalf("pack-objects of every object with pack.allowPackReuse=%s: %v", p.PackReuse(), err)
-	}
-	clone := c.Init(t)
-	if _, stderr, err := c.Try(t, clone, &pack, "index-pack", "--stdin"); err != nil {
-		t.Fatalf("git %s with pack.allowPackReuse=%s sent a pack the client refuses: %v\n%s",
-			p.Version(), p.PackReuse(), err, stderr)
-	}
-}
-
-// countingWriter counts what it is given and keeps none of it.
-type countingWriter struct{ n int64 }
-
-func (w *countingWriter) Write(p []byte) (int, error) {
-	w.n += int64(len(p))
-	return len(p), nil
+	onNodeGits(t, func(t *testing.T, git string) {
+		p := poolOn(t, git, gitproc.Options{})
+		// The node's own copy of the packs, and its maintainer's index and
+		// bitmap over them, written by the git that then serves them.
+		bare := filepath.Join(t.TempDir(), "repo.git")
+		if err := os.CopyFS(bare, os.DirFS(packs)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := p.Run(t.Context(), gitproc.Cmd{
+			Dir: bare, Args: []string{"multi-pack-index", "write", "--bitmap", "--no-progress"},
+			Config: []gitproc.KV{{Key: "pack.writeBitmapLookupTable", Value: "true"}},
+			Class:  gitproc.ClassMaintenance, Deadline: gitproc.ReadDeadline,
+		}); err != nil {
+			t.Fatalf("git %s wrote no multi-pack-index bitmap over the %d packs: %v", p.Version(), pushes, err)
+		}
+		var pack bytes.Buffer
+		// THE CLONE'S PACK AS upload-pack ASKS FOR IT.
+		if _, err := p.Run(t.Context(), gitproc.Cmd{
+			Dir:  bare,
+			Args: []string{"pack-objects", "--revs", "--thin", "--stdout", "--delta-base-offset", "-q"},
+			Config: []gitproc.KV{{Key: "core.multiPackIndex", Value: "true"}, {Key: "pack.useBitmaps", Value: "true"},
+				{Key: "pack.allowPackReuse", Value: "multi"}},
+			Stdin: strings.NewReader("refs/heads/main\n"), Stdout: &pack,
+			Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline,
+		}); err != nil {
+			t.Fatalf("git %s: pack-objects of every object with pack.allowPackReuse=multi: %v", p.Version(), err)
+		}
+		clone := c.Init(t)
+		if _, stderr, err := c.Try(t, clone, &pack, "index-pack", "--stdin"); err != nil {
+			t.Fatalf("git %s with pack.allowPackReuse=multi sent a pack the client refuses: %v\n%s",
+				p.Version(), err, stderr)
+		}
+	})
 }
 
 func TestAPathThatIsNotAbsoluteIsRefused(t *testing.T) {

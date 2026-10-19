@@ -877,4 +877,14 @@
 // the check again — 30 ms, 1.5 s and 18.4 s. CheckBudget gives a pass about
 // 1.1 s a mebibyte, the connectivity check's gitproc.PackWorkDeadline and the
 // hashing's VerifyHashPerMiB.
+//
+// What a CLONE IS SENT, and what its pack-objects costs the node, under each
+// value of ServeConfig's pack.allowPackReuse (BenchmarkPackReuse: pushes
+// received thin, a cold round's install and the maintainer's bitmap, three
+// runs of five on 2.56.0 and on 2.55.0, which agree): over 200 pushes adding
+// files 38.4 MB and 0.85–0.87 s of CPU with single, 41.8 MB and 0.96–1.10 s
+// with multi; over 200 pushes of gittest.History's edits 21.7 MB and
+// 0.53–0.55 s, 34.0 MB and 1.89–1.97 s; and over those edits once all but
+// their last 20 pushes are one compacted pack 17.3 MB and 0.20–0.22 s,
+// 19.1 MB and 0.31–0.33 s.
 package cache

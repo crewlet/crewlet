@@ -13,10 +13,35 @@ import (
 // another idea of it.
 //
 //   - core.multiPackIndex: the multi-pack-index is read when present.
-//   - pack.allowPackReuse: Pool.PackReuse — `multi` on a git that serves
-//     it correctly (2.48, gitproc.MultiPackReuse), so a clone sends the
-//     packs a cache holds verbatim; `true` before, reusing from the
-//     bitmap's preferred pack alone.
+//   - pack.allowPackReuse: `multi` — a clone sends verbatim what it can of
+//     EVERY pack the multi-pack-index bitmap covers, rather than of its
+//     preferred pack alone (`single`). One value on every node, with no
+//     version branch and no knob: every git at the node floor
+//     (gitproc.NodeMinVersion) sends a cache's overlapping packs whole,
+//     which 2.44 to 2.47 did not — they sent an object twice or a delta
+//     without its base, and the client refused the clone (gitproc's
+//     TestMultiPackReuseSendsOverlappingPacksWhole, on the node pin and on
+//     the floor's own build). What it COSTS a clone, against `single`, is
+//     measured by BenchmarkPackReuse over copies this cache made — pushes
+//     received thin, a cold round's install, the maintainer's bitmap — and
+//     it is more bytes and more of the node's CPU on every layout measured,
+//     on the node pin and the floor alike: 200 pushes adding files sent 9%
+//     more for 9–27% more CPU, 200 pushes of a history of edits 57% more
+//     for 3.5–3.6 times the CPU, and those edits once all but their last
+//     20 pushes are one compacted pack 10% more for 43–65% more. The bytes
+//     are the layout's: a cache keeps a pack a push, and receive-pack
+//     completes a thin push by appending WHOLE every base its deltas
+//     borrowed from the packs before it, so an edited object sits in two
+//     packs, a delta in its own push's and whole in the next one's. The
+//     multi-pack-index keeps ONE copy, in the order git's midx_oid_compare
+//     puts them: the preferred pack's; else the copy in the pack whose .pack
+//     is newer to the second; and among one second's packs — a cold round
+//     installs nearly every pack within one — the first in the write's own
+//     listing of the pack directory, the filesystem's order, never the
+//     pushes'. So the listing chooses which edited objects the index keeps
+//     whole, and `multi` sends as stored the whole copies it keeps, where
+//     `single` packs each as it packs any object outside the preferred pack
+//     and finds it a delta.
 //   - pack.windowMemory: twice the epoch's largest blob (100 MiB at the
 //     defaults) — the delta window must hold the largest blob a push may
 //     carry and one base for it — which bounds a transfer's memory
@@ -80,7 +105,7 @@ import (
 func (c *Cache) ServeConfig() []gitproc.KV {
 	return []gitproc.KV{
 		{Key: "core.multiPackIndex", Value: "true"},
-		{Key: "pack.allowPackReuse", Value: c.git.PackReuse()},
+		{Key: "pack.allowPackReuse", Value: "multi"},
 		{Key: "pack.windowMemory", Value: strconv.FormatInt(2*c.limits().MaxBlobBytes, 10)},
 		{Key: "pack.useBitmaps", Value: "true"},
 		{Key: "pack.writeBitmapLookupTable", Value: strconv.FormatBool(!c.noLookupTable.Load())},

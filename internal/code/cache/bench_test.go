@@ -467,6 +467,7 @@ const (
 	drawsPushes byte = iota + 1
 	drawsNext
 	drawsFiles
+	drawsReuse
 )
 
 // pushStream is a fast-import stream of n commits on main, the i'th adding

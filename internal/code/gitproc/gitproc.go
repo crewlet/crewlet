@@ -424,7 +424,6 @@ type Pool struct {
 	// package's one exec of git by the word git in its first argument.
 	git     string
 	version Version
-	reuse   string
 
 	home    string // resolved
 	ceiling string // filepath.Dir(home): GIT_CEILING_DIRECTORIES for a run with no repository
@@ -662,13 +661,9 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 			ErrNoTrace, git, found)
 	}
 	p.version = found
-	p.reuse = "true"
-	if found.AtLeast(MultiPackReuse) {
-		p.reuse = "multi"
-	}
 	p.log.Info("code_git_ready", "path", git, "version", found.String(),
 		"read_slots", p.read.size, "maintenance_slots", p.maint.size, "transfer_slots", p.transfer.size,
-		"pack_reuse", p.reuse, "home", home, "memory", memory.Bytes, "memory_from", memory.From,
+		"home", home, "memory", memory.Bytes, "memory_from", memory.From,
 		"trace_evt", res.Trace.EventVersion)
 	return p, nil
 }
@@ -716,11 +711,6 @@ func prepareHome(home string) (string, error) {
 
 // Version is the git this pool runs.
 func (p *Pool) Version() Version { return p.version }
-
-// PackReuse is the pack.allowPackReuse value this binary serves a whole
-// pack with: "multi" at [MultiPackReuse] or newer, "true" before — chosen
-// once, so the cache's serve configuration has one source.
-func (p *Pool) PackReuse() string { return p.reuse }
 
 // Slots is the size of the lane class c waits in (an unknown class: 0).
 //

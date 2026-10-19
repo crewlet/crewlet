@@ -607,12 +607,12 @@ func fake(t testing.TB, version, onVersion, body string) string {
 // "git", "$real_git" the path of the git [Require] finds — and then execs the
 // real git with the same arguments, unless body exited first. `git version`
 // is the real git's own answer, never one a test spelled: a pool over the
-// stand-in decides what it decides from a version (the pack reuse it asks for,
-// a git it refuses) from the git that runs, and a test that held a fault at
-// one step of real git's work needs no exec of its own to ask what that git
-// is. Its path, for gitproc.Options.Path — where the test holds the git it
-// wraps to the node floor as every pool's builder does ([RequireNode]) — or
-// for an operator's git, a client's, which is all [Require] holds it to.
+// stand-in decides what it decides from a version (a git it refuses) from the
+// git that runs, and a test that held a fault at one step of real git's work
+// needs no exec of its own to ask what that git is. Its path, for
+// gitproc.Options.Path — where the test holds the git it wraps to the node
+// floor as every pool's builder does ([RequireNode]) — or for an operator's
+// git, a client's, which is all [Require] holds it to.
 func Wrap(t testing.TB, body string) string {
 	t.Helper()
 	git := Require(t)

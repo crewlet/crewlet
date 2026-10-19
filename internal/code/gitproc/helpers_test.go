@@ -101,6 +101,14 @@ func quote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// countingWriter counts what it is given and keeps none of it.
+type countingWriter struct{ n int64 }
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	w.n += int64(len(p))
+	return len(p), nil
+}
+
 // outcome is one Run's answer.
 type outcome struct {
 	res gitproc.Result

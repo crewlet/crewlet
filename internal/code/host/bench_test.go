@@ -1253,69 +1253,123 @@ func lazyBlobs(b *testing.B, f *codetest.SoloFleet, p *codetest.Person, tip stri
 // BenchmarkCloneWarm is IDENTICAL CLONES OF ONE SHA AT ONCE FROM A WARM
 // CACHE — a CI fleet, or a run of boxes for one change — each its own
 // upload-pack counting and packing the same objects: what a response cache
-// for identical requests would save is this figure's to decide. The
-// repository is the 200-push tree fixture, on a node whose maintainer has
-// written its bitmap (warmBitmap).
+// for identical requests would save is this figure's to decide. The node's
+// maintainer has written the repository's bitmap (warmBitmap), and every
+// push was received as a person's git pushes — thin, completed by
+// receive-pack with the whole bases it borrowed — so what a clone is sent
+// follows cache.ServeConfig's pack.allowPackReuse (cache's
+// BenchmarkPackReuse holds both values side by side over the same layout).
 //
-// Each reports the p50 and p99 of one clone, and the serving node's git CPU
-// (serverCPU) a round of clients clones and a clone.
+//   - history=tree is the 200-push tree fixture (treeFixture): every push
+//     ADDS fifty files.
+//   - history=edits is gittest.History's seeded history of edits — every
+//     commit four files of one directory, each version a window of its file
+//     rewritten — pushed as 200 pushes (pushEdits), so every push edits
+//     files an earlier one wrote, as a team's pushes do.
+//
+// Each reports the p50 and p99 of one clone, the serving node's git CPU
+// (serverCPU) a round of clients clones and a clone, and bytes, every pack
+// byte a clone stored.
 func BenchmarkCloneWarm(b *testing.B) {
 	codetest.Quiet(b)
-	f, p := benchFleet(b, memobj.New(), 1)
-	node := f.Nodes()[0]
-	_, cone := treeFixture(b, p, repoURL(node), 200)
-	rows, err := f.Rows(b.Context(), codetest.RepoName, codetest.Linearizable)
-	if err != nil {
+	for _, history := range []string{"tree", "edits"} {
+		b.Run("history="+history, func(b *testing.B) {
+			f, p := benchFleet(b, memobj.New(), 1)
+			node := f.Nodes()[0]
+			var cone []string
+			switch history {
+			case "tree":
+				_, cone = treeFixture(b, p, repoURL(node), 200)
+			case "edits":
+				cone = pushEdits(b, p, repoURL(node), editsPushes)
+			}
+			rows, err := f.Rows(b.Context(), codetest.RepoName, codetest.Linearizable)
+			if err != nil {
+				b.Fatal(err)
+			}
+			warmBitmap(b, node, rows.Repo.ID)
+			for _, shape := range []int{0, 2} {
+				for _, clients := range []int{1, 8, 32} {
+					b.Run(fmt.Sprintf("shape=%s/clients=%d", cloneShapes[shape].name, clients), func(b *testing.B) {
+						warmClones(b, node, p, shape, clients, cone)
+					})
+				}
+			}
+		})
+	}
+}
+
+// editsBytes and editsPushes are BenchmarkCloneWarm's history=edits: a
+// gittest.History of 20 MB — 26 files of 4 KiB, 8 960 commits — in 200
+// pushes, as many as the tree fixture's.
+const (
+	editsBytes  = 20_000_000
+	editsPushes = 200
+)
+
+// pushEdits pushes gittest.History's history of editsBytes to url as pushes
+// pushes of consecutive commits, main moved to each one's last in turn, and
+// answers the cone a sparse checkout takes: the history's one directory.
+func pushEdits(b *testing.B, p *codetest.Person, url string, pushes int) []string {
+	b.Helper()
+	src, commits := gittest.History(b, p.Git(), editsBytes)
+	for k := 1; k <= pushes; k++ {
+		mustPush(b, p, src, url, commits[k*len(commits)/pushes-1]+":refs/heads/main")
+	}
+	if err := os.RemoveAll(src); err != nil {
 		b.Fatal(err)
 	}
-	warmBitmap(b, node, rows.Repo.ID)
-	for _, shape := range []int{0, 2} {
-		for _, clients := range []int{1, 8, 32} {
-			b.Run(fmt.Sprintf("shape=%s/clients=%d", cloneShapes[shape].name, clients), func(b *testing.B) {
-				root := b.TempDir()
-				var (
-					took []time.Duration
-					cpu  float64
-				)
-				rounds := 0
-				for b.Loop() {
-					b.StopTimer()
-					before := serverCPU(node.Metrics())
-					dirs := make([]string, clients)
-					errs := make([]error, clients)
-					times := make([]time.Duration, clients)
-					b.StartTimer()
-					var wg sync.WaitGroup
-					for c := range clients {
-						wg.Go(func() {
-							at := time.Now()
-							dirs[c], errs[c] = cloneInto(b.Context(), p, root, repoURL(node), shape, cone)
-							times[c] = time.Since(at)
-						})
-					}
-					wg.Wait()
-					b.StopTimer()
-					for _, err := range errs {
-						if err != nil {
-							b.Fatal(err)
-						}
-					}
-					cpu += serverCPU(node.Metrics()) - before
-					took = append(took, times...)
-					for _, dir := range dirs {
-						if err := os.RemoveAll(dir); err != nil {
-							b.Fatal(err)
-						}
-					}
-					rounds++
-					b.StartTimer()
-				}
-				slices.Sort(took)
-				b.ReportMetric(quantile(took, 0.50), "p50-ms")
-				b.ReportMetric(quantile(took, 0.99), "p99-ms")
-				b.ReportMetric(cpu/float64(rounds), "server-cpu-ms/round")
-				b.ReportMetric(cpu/float64(rounds*clients), "server-cpu-ms/clone")
+	return []string{"d000"}
+}
+
+// warmClones is one BenchmarkCloneWarm arm: rounds of clients identical
+// clones of shape from node at once.
+func warmClones(b *testing.B, node codetest.Node, p *codetest.Person, shape, clients int, cone []string) {
+	b.Helper()
+	root := b.TempDir()
+	var (
+		took   []time.Duration
+		cpu    float64
+		stored int64
+	)
+	rounds := 0
+	for b.Loop() {
+		b.StopTimer()
+		before := serverCPU(node.Metrics())
+		dirs := make([]string, clients)
+		errs := make([]error, clients)
+		times := make([]time.Duration, clients)
+		b.StartTimer()
+		var wg sync.WaitGroup
+		for c := range clients {
+			wg.Go(func() {
+				at := time.Now()
+				dirs[c], errs[c] = cloneInto(b.Context(), p, root, repoURL(node), shape, cone)
+				times[c] = time.Since(at)
 			})
 		}
+		wg.Wait()
+		b.StopTimer()
+		for _, err := range errs {
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+		cpu += serverCPU(node.Metrics()) - before
+		took = append(took, times...)
+		for _, dir := range dirs {
+			stored += packBytes(b, dir)
+			if err := os.RemoveAll(dir); err != nil {
+				b.Fatal(err)
+			}
+		}
+		rounds++
+		b.StartTimer()
 	}
+	slices.Sort(took)
+	b.ReportMetric(quantile(took, 0.50), "p50-ms")
+	b.ReportMetric(quantile(took, 0.99), "p99-ms")
+	b.ReportMetric(cpu/float64(rounds), "server-cpu-ms/round")
+	b.ReportMetric(cpu/float64(rounds*clients), "server-cpu-ms/clone")
+	b.ReportMetric(float64(stored)/float64(rounds*clients), "bytes")
 }
