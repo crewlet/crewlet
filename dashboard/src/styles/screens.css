@@ -3393,8 +3393,7 @@ a.knowledge-reader-how:hover {
   gap: var(--spacing-4);
 }
 .knowledge-editor-foot,
-.knowledge-callout-actions,
-.knowledge-resolve-foot {
+.knowledge-callout-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -3406,54 +3405,6 @@ a.knowledge-reader-how:hover {
 }
 .knowledge-theirs {
   min-width: 0;
-}
-.knowledge-resolve {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  padding: var(--spacing-4);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-lg);
-}
-.knowledge-resolve-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-4);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.knowledge-resolve-item {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-}
-.knowledge-resolve-sides {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--spacing-3);
-}
-.knowledge-resolve-side {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
-  margin: 0;
-}
-.knowledge-resolve-side figcaption {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.knowledge-resolve-side pre {
-  margin: 0;
-  padding: var(--spacing-2);
-  overflow-x: auto;
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-inset);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  white-space: pre-wrap;
 }
 .knowledge-picker {
   display: flex;
@@ -10572,8 +10523,79 @@ a.live-row:focus-visible {
   min-width: 0;
 }
 
-.artifact-document {
+/* A DOC: its tabs and actions in one bar, then the outline beside the tab on
+   show, as a Knowledge page reads; one column on a narrow page. */
+.doc-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+.doc-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-4);
+  min-width: 0;
+}
+.doc-bar > [role="tablist"] {
+  flex: 1 1 20rem;
+  min-width: 0;
+}
+.doc-bar-actions {
+  display: flex;
+  gap: var(--spacing-2);
+  margin-left: auto;
+}
+.doc-read {
+  display: grid;
+  grid-template-columns: var(--size-shell-rail) minmax(0, var(--size-content-max));
+  gap: var(--spacing-6);
+  align-items: start;
+  min-width: 0;
+}
+.doc-read-side {
+  position: sticky;
+  top: var(--sticky-top);
+  max-height: calc(100cqb - var(--sticky-top) - 2 * var(--spacing-5));
+  overflow-y: auto;
+  min-width: 0;
+}
+@container page (width < 760px) {
+  .doc-read {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .doc-read-side {
+    display: none;
+  }
+}
+.doc-read-page {
+  min-width: 0;
   max-width: var(--size-measure);
+}
+.doc-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+.doc-editor-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.doc-note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+/* A doc prints its tabs in order, each from a new page under its title. */
+.doc-print-tab + .doc-print-tab {
+  break-before: page;
+}
+.doc-print-title {
+  margin: 0 0 var(--spacing-4);
+  font-size: var(--font-size-2xl);
 }
 
 .artifact-sheet,
@@ -11094,22 +11116,26 @@ a.live-row:focus-visible {
   outline-offset: 2px;
 }
 
-/* PRINT: one slide to a 16:9 page, nothing else of the dashboard. Drawn
-   always and shown only in print, and only while a deck is open. */
-.slides-print {
+/* PRINT: what a `PrintOnly` holds, and nothing else of the dashboard. Drawn
+   always and shown only in print, and only while a deck or a doc is open. */
+.print-only {
   display: none;
 }
+@media print {
+  body:has(> .print-only) > :not(.print-only) {
+    display: none;
+  }
+  .print-only {
+    display: block;
+  }
+}
+
+/* A deck prints one slide to a 16:9 page. */
 @page deck {
   size: 1920px 1080px;
   margin: 0;
 }
 @media print {
-  body:has(> .slides-print) > :not(.slides-print) {
-    display: none;
-  }
-  .slides-print {
-    display: block;
-  }
   .slides-print-page {
     page: deck;
     break-after: page;

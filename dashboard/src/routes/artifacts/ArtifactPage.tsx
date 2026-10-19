@@ -263,6 +263,7 @@ function Loaded({
   const [follow, setFollow] = useParam("follow", "");
   const [sheetParam] = useParam("sheet", "");
   const [slideParam] = useParam("slide", "");
+  const [doctabParam] = useParam("doctab", "");
   // WHO IS FOLLOWED is somebody else in the room: following oneself moves
   // nothing, and a seat that left is said once and then let go.
   const followed = follow && follow !== viewer.handle ? follow : "";
@@ -292,6 +293,7 @@ function Loaded({
       tab,
       sheet: sheetParam,
       slide: slideParam,
+      doctab: doctabParam,
     });
     if (!moves(move)) return;
     // ONE REPLACE FOR THE WHOLE MOVE: following is not a place the reader
@@ -300,6 +302,7 @@ function Loaded({
       ...(move.version !== undefined ? { version: move.version || null } : {}),
       ...(move.sheet !== undefined ? { sheet: move.sheet } : {}),
       ...(move.slide !== undefined ? { slide: move.slide } : {}),
+      ...(move.doctab !== undefined ? { doctab: move.doctab } : {}),
       ...(move.tab !== undefined ? { tab: null } : {}),
     });
   }, [
@@ -312,6 +315,7 @@ function Loaded({
     tab,
     sheetParam,
     slideParam,
+    doctabParam,
     nav,
     setFollow,
   ]);

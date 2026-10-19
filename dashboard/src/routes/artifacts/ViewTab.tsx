@@ -2,7 +2,7 @@
  * The View tab: an artifact drawn as its kind is drawn, from the dashboard's
  * half of the kind table ([KIND_VIEWS]). A framed kind runs in a sandboxed
  * frame on the artifact origin; a native kind is drawn here from its closed
- * format (a document by the element-constructing Markdown renderer, a deck by
+ * format (a doc by the element-constructing Markdown renderer, a deck by
  * the slide renderer, a sheet from its schema), since it runs no author code.
  */
 
@@ -48,7 +48,14 @@ export const KIND_VIEWS: Readonly<Record<ArtifactKind, (props: KindViewProps) =>
       bridgeStores={bridgeStores}
     />
   ),
-  doc: ({ detail, version }) => <DocView detail={detail} version={version} />,
+  doc: ({ detail, version, presence, onPublished }) => (
+    <DocView
+      detail={detail}
+      version={version}
+      presence={presence}
+      {...(onPublished ? { onPublished } : {})}
+    />
+  ),
   slides: ({ detail, version, presence, onPublished }) => (
     <SlidesView
       detail={detail}

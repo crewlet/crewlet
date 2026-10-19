@@ -583,8 +583,19 @@ contract.
   also decides what a heading is, so the outline and the page it points into
   cannot disagree.
 - **Searched by every tab**, each title and its text, not by the index.
+- **Edited in place, each save a version.** A person who may publish presses
+  Edit on a tab, and Save publishes the passage they changed as one exact
+  edit of the tab's file, based on the version they opened. A save that raced
+  somebody else's publish is merged onto theirs by line, as a Knowledge page's
+  is, and where both changed the same lines the person keeps theirs, their
+  own or both before saving again. Print prints every tab in order.
+- **Started from a template.** New › Doc begins a doc from the engine's
+  starter, one tab under its title, held to the format like any version.
+- **Followed by tab**: a reader's tab is said to the room as the region
+  `tab:<path>`, so following somebody opens the tab they are on.
 - **Covered natively in the gallery**: the first tab's opening, from the
-  version's outline, drawn at card size.
+  version's outline, drawn at card size. A sheet's cover is its first columns
+  and rows, read as the viewer.
 
 ---
 

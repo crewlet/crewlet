@@ -1,7 +1,7 @@
 /**
  * The artifacts' REST surface, as the requests a screen sends: every write
  * (`internal/api/artifactsapi`, `internal/api/artifactdataapi`), the frame a
- * page is embedded in, a document's source, and the ready report a frame
+ * page is embedded in, a native kind's content, and the ready report a frame
  * makes. The reads are the socket's questions (`artifacts`, `artifact`, …),
  * asked through `useQuery`; what is here is what no question answers.
  *
@@ -15,9 +15,9 @@ import { rest } from "~/protocol/index.ts";
 import type {
   ArtifactAudience,
   ArtifactDeckAnswer,
+  ArtifactDocAnswer,
   ArtifactFrame,
   ArtifactOutline,
-  ArtifactSource,
   DataCollection,
   DataOp,
   ShareableRole,
@@ -131,11 +131,12 @@ export function createSheet(fields: {
 }
 
 /**
- * Start a slide deck from the engine's starter (`POST /artifacts` with
- * `starter`): four example slides the person edits in place. The engine holds
- * the starter's files, so the dashboard sends no upload.
+ * Create a doc or a deck from the engine's starter (`POST /artifacts` with
+ * `starter`): the engine publishes its own first version, held to the kind's
+ * format, so the dashboard sends no upload.
  */
-export function createDeck(fields: {
+export function createFromStarter(fields: {
+  kind: "doc" | "slides";
   title: string;
   workItem?: string;
 }): Omit<KeyedRequest, "key"> {
@@ -143,7 +144,7 @@ export function createDeck(fields: {
     method: "POST",
     path: "/artifacts",
     body: {
-      kind: "slides",
+      kind: fields.kind,
       title: fields.title,
       starter: true,
       ...(fields.workItem ? { work_item: fields.workItem } : {}),
@@ -294,16 +295,16 @@ export function publishVersion(
   return { method: "POST", path: `${base(id)}/versions`, body, headers: ifMatch(head) };
 }
 
-/** A version's entry as text, for a doc the dashboard renders itself. */
-export async function readSource(
+/** A doc's version tab by tab (`GET …/versions/{n}/doc`): what the dashboard draws it from. */
+export async function readDoc(
   id: string,
   version: number,
   signal: AbortSignal,
-): Promise<ArtifactSource> {
+): Promise<ArtifactDocAnswer> {
   return (await rest.get(
-    `/artifacts/${encodeURIComponent(id)}/versions/${version}/source`,
+    `/artifacts/${encodeURIComponent(id)}/versions/${version}/doc`,
     signal,
-  )) as ArtifactSource;
+  )) as ArtifactDocAnswer;
 }
 
 /**
