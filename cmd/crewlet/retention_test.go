@@ -818,7 +818,7 @@ func TestAGateGestureThatMissedALogSaysHowToFinishIt(t *testing.T) {
 	}
 	for _, want := range []string{
 		"pages: unknown (this node cannot tell",
-		"run it through another node the fleet still counts: -url <that node> -op-id " + gesture,
+		"run it through another node the fleet still counts: -api <that node> -op-id " + gesture,
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the unvouched log's output never says %q:\n%s", want, stdout)
@@ -1080,7 +1080,7 @@ func TestReadmittingANodeBelowTheFloorIsRefused(t *testing.T) {
 	base := "http://127.0.0.1:" + strconv.Itoa(boot.API.Port)
 	// THE FIXTURE'S OWN CREDENTIAL, through the environment [cli] sets:
 	// the command takes one there and nowhere else.
-	node := []string{"-url", base}
+	node := []string{"-api", base}
 	deadline := time.Now().Add(20 * time.Second)
 	for !e.StateLogHydrated(t.Context()) {
 		if time.Now().After(deadline) {
