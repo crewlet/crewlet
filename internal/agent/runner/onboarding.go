@@ -138,9 +138,9 @@ type Onboarding struct {
 
 // Onboard runs the first-turn pass if this seat still needs it.
 //
-// It reports whether the pass RAN, which the caller uses to suppress the
-// executor prompt's onboarding hint for the turn: a seat that has just been
-// through the pass should not also be told to onboard.
+// It reports whether the pass RAN, which the turn logs. Nothing else reads
+// it: onboarding is this pass alone, and the executor neither reaches
+// mark_onboarded nor is told to onboard.
 //
 // FIVE GATES, and every one of them exists because onboarding must run until
 // it marks and then never again for the same chain:
@@ -232,7 +232,12 @@ func (r *Runner) Onboard(ctx context.Context) (bool, error) {
 // executor and the reviewer use, which is what stops onboarding drifting into
 // a second turn engine.
 func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error) {
-	snapshot := r.cfg.Registry.Snapshot()
+	// WITHOUT run_sandbox: a call of it launches a box and starts a coding
+	// job, and this pass cannot suspend to record that run, so the loop
+	// marks the call failed only after the job has started — leaving a run
+	// nothing collects. A tool in the snapshot is one the catalogue lists
+	// and activate_tool reaches.
+	snapshot := r.cfg.Registry.Snapshot().Without(RunSandboxTool)
 	surface, err := r.surfaceWith(ctx, r.ownMeter(), phase.Onboarding, 0, snapshot, nil,
 		onboardingAlwaysOn)
 	if err != nil {
@@ -240,7 +245,7 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 	}
 	system := prompts.BuildOnboarding(r.cfg.Seat, prompts.OnboardingInput{
 		Hint:          learning.Hint(r.cfg.Seat.Org, r.cfg.Seat.Role),
-		ToolCatalogue: r.cfg.Registry.Catalogue(),
+		ToolCatalogue: snapshot.Catalogue(),
 	})
 	user := prompts.BuildOnboardingUserMessage()
 
@@ -280,16 +285,6 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 	onboardingLog.InfoContext(ctx, "onboarding_phase_complete",
 		"agent", r.cfg.Seat.Role.Handle(), "turn_id", r.cfg.Turn.RunID,
 		"marked", marked, "rounds", res.Rounds, "chain", chain)
-	// RECORDED HERE, not left to the caller. The executor's prompt carries an
-	// onboarding hint rendered BEFORE this pass ran — the prefetch is
-	// frozen at turn start, and at that moment the seat genuinely had not
-	// onboarded — so without this a seat that onboards on this very turn
-	// is then told to go and read the pages it has just read. The rule
-	// belongs where the fact is, because a caller can forget it and this
-	// cannot.
-	r.mu.Lock()
-	r.onboardedThisTurn = true
-	r.mu.Unlock()
 	return marked, nil
 }
 

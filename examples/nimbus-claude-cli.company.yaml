@@ -1078,9 +1078,13 @@ units:
               # the one the turn cannot see. `run_sandbox` is not offered
               # to a seat in this shape at all.
               #
-              # The gate still earns its place: it is what says this seat
-              # does code work, and it is where this seat's own setup
-              # steps, env, pause TTL and round cap would go.
+              # This gate is where the setup steps, env, MCP servers, pause
+              # TTL and round cap of this seat's executor box would go — the
+              # box reads them whether or not `enabled` is set. As written it
+              # carries none of them and changes nothing: `enabled` offers
+              # an agent-mode seat no tool, and `run_in: self` only records
+              # that the seat's code work rides its executor's run, which
+              # agent mode does with or without it.
               run_in: self
               # THERE IS NO `mcp:` SCOPE HERE, deliberately. An agent-mode
               # box gets the seat's own scoped servers PLUS the bridge, and
@@ -1152,9 +1156,13 @@ units:
               # the one the turn cannot see. `run_sandbox` is not offered
               # to a seat in this shape at all.
               #
-              # The gate still earns its place: it is what says this seat
-              # does code work, and it is where this seat's own setup
-              # steps, env, pause TTL and round cap would go.
+              # This gate is where the setup steps, env, MCP servers, pause
+              # TTL and round cap of this seat's executor box would go — the
+              # box reads them whether or not `enabled` is set. As written it
+              # carries none of them and changes nothing: `enabled` offers
+              # an agent-mode seat no tool, and `run_in: self` only records
+              # that the seat's code work rides its executor's run, which
+              # agent mode does with or without it.
               run_in: self
               # THERE IS NO `mcp:` SCOPE HERE, deliberately. An agent-mode
               # box gets the seat's own scoped servers PLUS the bridge, and
@@ -1230,9 +1238,13 @@ units:
               # the one the turn cannot see. `run_sandbox` is not offered
               # to a seat in this shape at all.
               #
-              # The gate still earns its place: it is what says this seat
-              # does code work, and it is where this seat's own setup
-              # steps, env, pause TTL and round cap would go.
+              # This gate is where the setup steps, env, MCP servers, pause
+              # TTL and round cap of this seat's executor box would go — the
+              # box reads them whether or not `enabled` is set. As written it
+              # carries none of them and changes nothing: `enabled` offers
+              # an agent-mode seat no tool, and `run_in: self` only records
+              # that the seat's code work rides its executor's run, which
+              # agent mode does with or without it.
               run_in: self
               # THERE IS NO `mcp:` SCOPE HERE, deliberately. An agent-mode
               # box gets the seat's own scoped servers PLUS the bridge, and

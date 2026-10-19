@@ -16,7 +16,7 @@ The moving parts live in `internal/sandbox/` — the provider, the manager, the 
 
 ## How a coding task runs
 
-For a role gated with `role.sandbox.enabled` (and an engine-level `providers.sandbox`), the [turn engine](turn-engine.md) exposes `run_sandbox` on the executor's tool surface. The executor calls it with a `brief` — the concrete task, naming the repository and the exact change or investigation — and reports the result in the same turn.
+For a role gated with `role.sandbox.enabled` (and an engine-level `providers.sandbox`) whose executor is not in [agent mode](subscription-llm-backends.md#agent-mode), the [turn engine](turn-engine.md) exposes `run_sandbox` on the executor's tool surface. The executor calls it with a `brief` — the concrete task, naming the repository and the exact change or investigation — and reports the result in the same turn. An agent-mode executor is never offered it: it does its code work in its own run, whose box reads the gate's `setup`, `env` and `mcp` (see [Where code work runs](#where-code-work-runs)).
 
 ```mermaid
 sequenceDiagram
@@ -121,7 +121,7 @@ The one thing an ambiguous catalogue may not do is reach **nothing at all**: a d
 
 ### Per-role gate — `role.sandbox`
 
-Absent → the role never sees the sandbox option. Present with `enabled: true` → the `run_sandbox` tool appears in the role's Execute surface (and the executor is taught when to use it).
+Absent → the role never sees the sandbox option. Present with `enabled: true` → the `run_sandbox` tool appears in the role's Execute surface, and the executor is taught when to use it — unless the executor runs in [agent mode](subscription-llm-backends.md#agent-mode), which is never offered `run_sandbox` and is not taught it: there the gate only feeds the executor's own box.
 
 ```yaml
 roles:
@@ -169,13 +169,16 @@ roles:
 executor's box. A seat whose executor is a coding CLI in agent mode
 already holds a shell, an editor and a checkout; provisioning a second
 box beside it would give the seat two filesystems with the work in the
-one the turn cannot see. So `run_sandbox` refuses on such a seat with a
-message saying to use the shell it already has, and nothing is
-provisioned. It is refused on any other runtime — there the seat has no
-shell of its own, and `self` would read as a working choice while
-quietly turning code work off — and it cannot be a company-wide
-`default_run_in`, which would do exactly that to every seat that is not
-in agent mode.
+one the turn cannot see. So such a seat is never offered `run_sandbox`:
+the tool is not on its surface, not in its catalogue and not one
+`activate_tool` reaches, and no second box is provisioned. `self` is
+what documents that; a seat that leaves `run_in` empty, or names no
+gate at all, behaves the same, and the launcher's own refusal of `self`
+is only a guard behind it. `self` is refused on any other runtime —
+there the seat has no shell of its own, and `self` would read as a
+working choice while quietly turning code work off — and it cannot be a
+company-wide `default_run_in`, which would do exactly that to every
+seat that is not in agent mode.
 
 An **agent-mode executor** is placed by its own entry's `cli.run_in` rather than by the seat's, because where that runtime runs is a property of the runtime: the CLI's subscription login is on the engine host, so a local cell reaches it directly while a remote one needs the headless token instead. A seat that names none takes `providers.sandbox.default_run_in`, resolved at **launch** rather than at config time, so changing the catalogue reaches every seat that wrote nothing without rewriting their blocks. The entry's cell is **reached** exactly as a seat's is: the backend behind it is built for it, and `run_in: container` there needs `local.image` just as it would on a seat. Such a seat's own gate therefore places nothing: it is never offered `run_sandbox`, so its `role.sandbox.run_in` may be `self` or nothing, and any other cell — which would read as a choice and reach no box — is refused on the write, naming the entry that places the box, as is a `coding_agent` other than that entry's own CLI. What the executor's box does read off the gate — its `setup`, `env` and `mcp`, and its `pause_ttl_seconds` and `max_turns` — it reads whether or not the gate says `enabled`. Beyond refusing what a seat would never read — those two, and a gate that is off with `run_in`, `setup`, `env` or `mcp` under it on a seat not in agent mode — validation refuses the impossible and nothing else: a `run_in` whose backend is not configured — on a seat or on an agent-mode entry — a company default naming an unconfigured backend, a sandbox-enabled seat whose executor is not in agent mode, or an agent-mode entry, that names no cell against a catalogue with no default, an agent-mode entry in a company with no catalogue at all, and a seat with an enabled gate in such a company — each of which otherwise reads as working configuration and fails inside a turn.
 

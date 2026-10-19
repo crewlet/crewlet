@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
@@ -20,7 +21,11 @@ import (
 // by calling it: a round spent, on a tool the catalogue vouched for, and
 // sometimes a whole turn planned around a box that was never coming.
 //
-// Mutate `offersSandbox` to return true and the first two cases go red.
+// Out of the UNIVERSE, not only the active list: a surface activates anything
+// in its snapshot by name, and the catalogue is read off the same snapshot, so
+// a tool kept off the active list alone was still listed and one call away.
+//
+// Mutate `offersSandbox` to return true and the first three cases go red.
 func TestExecutorSurfaceHidesRunSandboxFromSeatsThatCannotUseIt(t *testing.T) {
 	t.Parallel()
 
@@ -76,11 +81,50 @@ func TestExecutorSurfaceHidesRunSandboxFromSeatsThatCannotUseIt(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := slices.Contains(r.executorActive(snapshot), RunSandboxTool)
-			if got != tc.want {
+			universe := r.executorUniverse(snapshot, tc.agentRun != nil)
+			if got := slices.Contains(executorActive(universe), RunSandboxTool); got != tc.want {
 				t.Errorf("run_sandbox offered = %v, want %v", got, tc.want)
 			}
+			if _, got := universe.Lookup(RunSandboxTool); got != tc.want {
+				t.Errorf("run_sandbox reachable by activation = %v, want %v", got, tc.want)
+			}
+			if got := strings.Contains(universe.Catalogue(), RunSandboxTool); got != tc.want {
+				t.Errorf("run_sandbox in the catalogue = %v, want %v", got, tc.want)
+			}
 		})
+	}
+}
+
+// THE EXECUTOR NEVER REACHES mark_onboarded, by activation or by catalogue.
+//
+// A seat that marked itself onboarded from inside the executor would skip
+// orientation for ever. It was kept off the executor's active list only, so
+// the catalogue the prompt rendered listed it and activate_tool reached it.
+// Every executor, gated or not and on either runtime, is held to it.
+func TestTheExecutorCannotReachThePhaseScopedTools(t *testing.T) {
+	t.Parallel()
+	for _, agentRun := range []bool{false, true} {
+		r, err := New(Config{
+			Registry: tools.NewRegistry(),
+			Models:   &phase.Registry{},
+			Seat: prompts.Seat{Org: &org.Organization{Name: "Acme"},
+				Role: &org.Role{Name: "Engineer", Sandbox: &org.RoleSandbox{Enabled: true}}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshot, err := tools.NewRegistry().Snapshot().
+			With(tools.Entry{Tool: stubTool(MarkOnboardedTool), Origin: tools.OriginBuiltin})
+		if err != nil {
+			t.Fatal(err)
+		}
+		universe := r.executorUniverse(snapshot, agentRun)
+		if _, held := universe.Lookup(MarkOnboardedTool); held {
+			t.Errorf("agent run %v: mark_onboarded is in the executor's snapshot, one activation away", agentRun)
+		}
+		if strings.Contains(universe.Catalogue(), MarkOnboardedTool) {
+			t.Errorf("agent run %v: the executor's catalogue lists mark_onboarded", agentRun)
+		}
 	}
 }
 

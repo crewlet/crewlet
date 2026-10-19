@@ -710,8 +710,9 @@ func (t *markOnboarded) Name() string { return MarkOnboardedTool }
 func (t *markOnboarded) Description() string {
 	return "Record that you have finished orienting yourself — you have " +
 		"read what you needed and know how this company works. Call it " +
-		"once, when the onboarding block stops being useful to you. It " +
-		"will not appear again."
+		"once, when you have read the pages and kept what matters: it " +
+		"ends this onboarding pass, which does not run again for this " +
+		"team configuration."
 }
 
 func (t *markOnboarded) Parameters() map[string]any {
@@ -764,7 +765,8 @@ func (t *markOnboarded) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if err != nil {
 		return nodeFailure(ctx, MarkOnboardedTool, err, "Could not record that", ""), nil
 	}
-	return tools.Result{Output: "Recorded. The onboarding block will not appear again."}, nil
+	return tools.Result{Output: "Recorded. This onboarding pass ends here and will not run " +
+		"again for this team configuration."}, nil
 }
 
 // seatAgentID resolves the DERIVED agent id for the acting seat.
