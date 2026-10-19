@@ -284,15 +284,25 @@ func compileListing(f Filter) (spec, child listSpec) {
 		}
 		where = append(where, "p.status IN ("+strings.Join(marks, ",")+")")
 	}
+	// A LABEL AND A WATCHER NARROW FROM THEIR OWN ROWS: the pages carrying
+	// one label, through `pages_labels_label_idx`, and the pages one person
+	// watches, through `pages_watchers_handle_idx`, each read by a seek of the
+	// filter's own index, with every page it names then read by its key and
+	// the window sorted from those alone. Written as a probe of each listed
+	// page's own rows, the filter walked the listing's order and asked every
+	// page in it, and the total counted the same way — measured, one person's
+	// watched pages read, and counted, every page in the company to find the
+	// few they follow, on every load. The cost is now the filter's own
+	// matches, and a sort of them, whatever the knowledge base holds.
 	if f.Label != "" {
 		where = append(where,
-			"EXISTS (SELECT 1 FROM pages_labels l WHERE l.page_id = p.id AND l.label = ?)")
+			"p.id IN (SELECT l.page_id FROM pages_labels l WHERE l.label = ?)")
 		args = append(args, f.Label)
 	}
 	if f.Watcher != "" {
 		where = append(where,
-			"EXISTS (SELECT 1 FROM pages_watchers w WHERE w.page_id = p.id "+
-				"AND w.handle = ? AND w.muted = 0)")
+			"p.id IN (SELECT w.page_id FROM pages_watchers w "+
+				"WHERE w.handle = ? AND w.muted = 0)")
 		args = append(args, f.Watcher)
 	}
 	if title := strings.TrimSpace(f.Title); title != "" {

@@ -675,7 +675,9 @@ func TestASaveExcerptIsItsMessageAndNothingElse(t *testing.T) {
 // here is read whole and then one, two and three pages at a time, so a window
 // stops at every row of it: at the boundary between two containers in the
 // workspace, beside a title another container also holds, past a trashed page
-// a listing of the live ones leaves out, and inside a tree level.
+// a listing of the live ones leaves out, inside a tree level, and inside a
+// listing a label or a watcher narrows, which is read from the filter's own
+// rows and sorted rather than walked in the order's index.
 //
 // Mutation: drop the id bound from the resume's first arm, and the row a
 // window stopped on is read again at the top of the next; read the arms
@@ -688,17 +690,27 @@ func TestPagingAListingReturnsEveryPageOnceInItsOrder(t *testing.T) {
 		t.Fatalf("Trash: %v", err)
 	}
 	r.drain()
+	// LABELLED ACROSS EVERY LEVEL AND CONTAINER, so the listings a label
+	// narrows have rows to page through on either side of a boundary.
+	runbook := []string{"runbook"}
 	for _, title := range []string{"Alpha", "Oncall", "Zeta", "Runbook"} {
-		r.write(author("jane"), doclet.NewPage{Title: title, Body: "prose"})
+		page := doclet.NewPage{Title: title, Body: "prose"}
+		if title != "Oncall" {
+			page.Labels = runbook
+		}
+		r.write(author("jane"), page)
 	}
 	handbook := r.write(author("jane"), doclet.NewPage{Title: "Handbook", Body: "index"})
 	for _, title := range []string{"Travel", "Expenses", "Leave"} {
-		r.write(author("jane"), doclet.NewPage{
-			Title: title, Body: "prose", ParentID: handbook.Page.ID,
-		})
+		page := doclet.NewPage{Title: title, Body: "prose", ParentID: handbook.Page.ID}
+		if title == "Travel" {
+			page.Labels = runbook
+		}
+		r.write(author("jane"), page)
 	}
 	for _, title := range []string{"Deploys", "Alpha"} {
-		r.write(author("jane"), doclet.NewPage{Container: "OPS", Title: title, Body: "prose"})
+		r.write(author("jane"), doclet.NewPage{Container: "OPS", Title: title,
+			Body: "prose", Labels: runbook})
 	}
 	r.write(author("jane"), doclet.NewPage{Container: "PROD", Title: "Roadmap", Body: "prose"})
 
@@ -709,6 +721,12 @@ func TestPagingAListingReturnsEveryPageOnceInItsOrder(t *testing.T) {
 		"its live pages":      {Container: "ENG", Status: live},
 		"its top level":       {Container: "ENG", Roots: true},
 		"one page's children": {ParentID: handbook.Page.ID},
+		// READ FROM THE FILTER'S OWN ROWS AND SORTED, so the windows are
+		// sorts of those rows rather than walks of the order's index, and
+		// the arms must page them all the same.
+		"a label's pages":                 {Label: "runbook"},
+		"a label's live pages in a space": {Container: "ENG", Label: "runbook", Status: live},
+		"one person's watched pages":      {Watcher: "jane", Status: live},
 	} {
 		t.Run(name, func(t *testing.T) {
 			whole := f
