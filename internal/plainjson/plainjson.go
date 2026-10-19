@@ -1,7 +1,7 @@
 // Package plainjson writes JSON for a reader who reads it AS TEXT — a person
 // shown a record of what a tool was called with, a model handed what a tool
-// answered, reminded what it has already done or shown the tools it may call
-// — with `<`, `>` and `&` written as themselves.
+// answered, reminded what it has already done, or shown the tools it may call
+// and the calls it made — with `<`, `>` and `&` written as themselves.
 //
 // # Not json.Marshal
 //
@@ -26,7 +26,12 @@
 //   - a TEXT-MODE PROMPT ([github.com/crewlet/crewlet/internal/providers/llm/cliagent])
 //     carries the tool catalogue and the model's own earlier calls as fenced
 //     JSON in place of a tool channel, which the model reads as written and
-//     REPLIES IN — shown a `<` it typed as an escape, it writes the escape.
+//     REPLIES IN — shown a `<` it typed as an escape, it writes the escape;
+//   - a REPLAYED CALL on an OpenAI-compatible wire
+//     ([github.com/crewlet/crewlet/internal/providers/llm/httpapi.EncodeArgs])
+//     carries its arguments as a JSON STRING, which the host hands the model
+//     as the text it holds rather than decoding it, every later round of the
+//     turn.
 //
 // # The text ends where its value does
 //
