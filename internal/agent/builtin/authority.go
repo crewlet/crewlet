@@ -8,7 +8,6 @@ import (
 	"maps"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
@@ -118,8 +117,18 @@ func Decide(chart authz.Chart) Authorizer {
 		case iam.Anonymous:
 			return ErrUnauthenticated
 		}
+		// AT THE INSTANT THE REQUEST WAS ROUTED ([authz.DecidedAt]): a tool
+		// a routed request calls on its own behalf — the work surface's
+		// tool-backed routes, which dispatch into this gate — is one more
+		// check of that request, so it is judged at the instant its route
+		// was, as every other check of it is. Judged at its own clock, a
+		// proof the route admitted could lapse while the body was read and
+		// the call be refused as stale on the request the route had just
+		// let through. A turn, and an operator call no route decided (the
+		// MCP surface, the act route), carry no such instant and are judged
+		// now.
 		return DecisionError(action,
-			authz.Decide(ctx, principal, action, object, chart, time.Now()))
+			authz.Decide(ctx, principal, action, object, chart, authz.DecidedAt(ctx)))
 	}
 }
 
