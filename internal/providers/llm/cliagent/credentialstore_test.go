@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -386,6 +387,59 @@ func TestALoginIsMadeInTheLoginHomeAndRemovedByLogout(t *testing.T) {
 	}
 	if p.ws.HasLogin() || readDocument(t, p) != "" {
 		t.Error("the login survived a logout")
+	}
+}
+
+// A LOGIN REPLACES A SHARED LOGIN THE CLI REFUSES TO IMPORT. The refusal sends
+// the operator to `crewlet llm login`, and the login began by importing the very
+// document that was refused, stopped at the same refusal and never started the
+// vendor's sign-in — so the one remedy named was a loop, with the fleet signed
+// out. A bundle exported by another build of the CLI, whose shapes this one
+// decodes strictly, is how a document gets here. A status still refuses: it
+// makes no login to put in the document's place.
+//
+// Mutation: return the seed's refusal from runInCredentialHome whatever the
+// mode, and the login is refused here.
+func TestALoginReplacesASharedLoginTheCLIRefusesToImport(t *testing.T) {
+	t.Parallel()
+	p := storeProvider(t, map[string]string{"FAKE_LOGIN_KEY": "k-login"}, nil)
+	damaged := `[{"id":"cred_1","key":"k-old"`
+	writeDocument(t, p, damaged)
+
+	_, err := ask(t, p, llm.Request{})
+	if kind := llm.KindOf(err); kind != llm.KindAuth {
+		t.Fatalf("a seat seeded from a refused document = %v (kind %v), want an auth failure", err, kind)
+	}
+	for _, way := range []string{"`crewlet llm login sub`", "`crewlet llm login sub -from-host`", "`crewlet llm logout sub`"} {
+		if !strings.Contains(err.Error(), way) {
+			t.Errorf("the refusal does not name %s: %v", way, err)
+		}
+	}
+	err = p.Status(t.Context(), &bytes.Buffer{}, &bytes.Buffer{})
+	var refused *loginRefusedError
+	if !errors.As(err, &refused) {
+		t.Errorf("Status over a refused document = %v, want the refusal", err)
+	}
+	if got := readDocument(t, p); got != damaged {
+		t.Fatalf("a status changed the refused document: %q", got)
+	}
+
+	var errOut bytes.Buffer
+	if err := p.BrokerLogin(t.Context(), nil, &bytes.Buffer{}, &errOut); err != nil {
+		t.Fatalf("BrokerLogin over a refused document: %v (%s)", err, errOut.String())
+	}
+	if got := readDocument(t, p); !strings.Contains(got, "k-login") || strings.Contains(got, "k-old") {
+		t.Errorf("the login did not replace the refused document: %q", got)
+	}
+	if !strings.Contains(errOut.String(), "signing in afresh replaces it") {
+		t.Errorf("the login replaced the shared document without saying so: %q", errOut.String())
+	}
+	comp, err := ask(t, p, llm.Request{})
+	if err != nil {
+		t.Fatalf("a seat after the login: %v", err)
+	}
+	if comp.Content != "key=k-login" {
+		t.Errorf("a seat after the login held %q, want the new login", comp.Content)
 	}
 }
 

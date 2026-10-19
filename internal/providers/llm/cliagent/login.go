@@ -745,7 +745,29 @@ func (p *Provider) runInCredentialHome(
 		return false, err
 	}
 	seeded, err := p.ws.seed(ctx, home, cache, p)
-	if err != nil {
+	var refused *loginRefusedError
+	switch {
+	case err == nil:
+	case mode == syncLogin && errors.As(err, &refused):
+		// A LOGIN REPLACES A SHARED LOGIN THE CLI CANNOT READ, for the reason
+		// it replaces one it cannot carry out: the refusal names `crewlet llm
+		// login` as the remedy, and a login that stopped at the same refusal
+		// left the operator in a loop with the fleet signed out. It starts
+		// from an empty home, and the refused document stays the baseline
+		// ([Workspace.seed]), so the login it stores is written over it.
+		// Said on the terminal and in the log, because what was refused is
+		// gone once the login lands. A status and a vendor's own logout still
+		// refuse: neither makes a login to put in its place.
+		log.WarnContext(ctx, "cli_agent_shared_login_refused", "provider", p.key, "agent", p.agent,
+			"path", refused.path, "error", refused.err)
+		if errOut != nil {
+			_, _ = fmt.Fprintf(errOut, "crewlet: the CLI refused to import the shared login %s "+
+				"(%v), so it cannot be read; signing in afresh replaces it\n", refused.path, refused.err)
+		}
+		if emptyErr := p.ws.emptyLoginHome(); emptyErr != nil {
+			return false, emptyErr
+		}
+	default:
 		return false, err
 	}
 	gen := generation{Mode: mode, Seeded: seeded}

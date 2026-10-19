@@ -540,6 +540,12 @@ func (w *Workspace) emptyLoginHome() error {
 // OpenCode, seeds nothing in the home — its settings are each call's own
 // ([cliprofile.Profile.WorkConfigEnv]) — so its import reads only the
 // database location the home's variables name.
+//
+// AN IMPORT THE CLI REFUSED ([*loginRefusedError]) still returns the baseline,
+// the refused document's digest included, beside the error: a seat stops there,
+// but a command that MAKES a login replaces a document the CLI cannot read, and
+// what it stores is judged against — and written over — exactly that document
+// ([Provider.runInCredentialHome]). Every other failure returns none.
 func (w *Workspace) seed(ctx context.Context, home, cache string, store loginStore) (map[string]string, error) {
 	shared := w.CredentialsDir()
 	seeded := map[string]string{}
@@ -578,6 +584,10 @@ func (w *Workspace) seed(ctx context.Context, home, cache string, store loginSto
 		return nil, err
 	}
 	if err := w.importLogin(ctx, home, cache, store, seeded); err != nil {
+		var refused *loginRefusedError
+		if errors.As(err, &refused) {
+			return seeded, err
+		}
 		return nil, err
 	}
 	return seeded, nil
@@ -620,7 +630,7 @@ func (w *Workspace) importLogin(
 	if err := store.importLogin(ctx, home, cache, document); err != nil {
 		var exit *auxiliaryExitError
 		if errors.As(err, &exit) {
-			return &loginRefusedError{path: path, err: err}
+			return &loginRefusedError{key: store.providerKey(), path: path, err: err}
 		}
 		return fmt.Errorf("cli-agent: importing the shared login %q: %w", path, err)
 	}
@@ -630,14 +640,22 @@ func (w *Workspace) importLogin(
 // loginRefusedError is a shared login the CLI ran and REFUSED to import: a
 // document it cannot read, which the same call made again would be refused
 // identically — what [acquireFailureKind] reads as an unusable login.
+//
+// It NAMES THE WAYS OUT, every one of which works on a document the CLI cannot
+// read: a login replaces it ([Provider.runInCredentialHome]), `-from-host`
+// adopts a working one over it without importing it, and a logout removes it.
+// A bundle exported by another build of the CLI — one whose shapes this build
+// decodes strictly — is the usual way to get here.
 type loginRefusedError struct {
-	path string
-	err  error
+	key, path string
+	err       error
 }
 
 func (e *loginRefusedError) Error() string {
-	return fmt.Sprintf("cli-agent: the CLI refused to import the shared login %q: %v — if "+
-		"the document is damaged, sign in again with `crewlet llm login`", e.path, e.err)
+	return fmt.Sprintf("cli-agent: the CLI refused to import the shared login %q: %v — sign "+
+		"in again with `crewlet llm login %s`, which replaces it, adopt a login that works "+
+		"with `crewlet llm login %s -from-host`, or remove it with `crewlet llm logout %s`",
+		e.path, e.err, e.key, e.key, e.key)
 }
 
 func (e *loginRefusedError) Unwrap() error { return e.err }

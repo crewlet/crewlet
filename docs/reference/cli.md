@@ -1989,7 +1989,9 @@ login nor brings back one `logout` removed. A login whose export failed after
 you signed in is kept and written by the next command — unless you replaced
 the login since with `-from-host`, `import` or `logout`; a `login` that cannot
 carry such a kept login out replaces it, saying so — see [token refresh across
-seats](../concepts/subscription-llm-backends.md#token-refresh-across-seats).
+seats](../concepts/subscription-llm-backends.md#token-refresh-across-seats). A
+`login` likewise replaces a shared login the CLI refuses to import (OpenCode's
+document from another build, say), saying so, where `status` keeps refusing it.
 
 **`export`** packs a login into one portable blob so another host can come up
 already authenticated. `-secret-store` writes it to the [secret

@@ -1190,6 +1190,17 @@ imports it before a run and exports it back after. Measured on 2.0.32, an
 import followed by an export reproduces the document byte for byte, and an
 empty database exports `[]`.
 
+**A login replaces a shared login the CLI cannot read.** If OpenCode refuses
+to import the document — a bundle exported by another 2.x build, whose shapes
+this one decodes strictly, is the usual way to get there — every seat's call
+fails as an authentication failure naming the three ways out. `crewlet llm
+login <KEY>` starts its sign-in from an empty database and writes what you sign
+in with over the unreadable document, saying so on your terminal (and as
+`cli_agent_shared_login_refused` in the log); `-from-host` adopts a working
+login without importing the old one; `crewlet llm logout <KEY>` removes it.
+`status` keeps refusing, since it makes no login to put in the document's
+place.
+
 **Only a login creates the shared login, and nothing brings back one you
 removed.** `crewlet llm login` (with `-capture-token` and `-username`), and
 `-from-host` and a bundle restored into an empty directory, are what create
