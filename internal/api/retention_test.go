@@ -886,6 +886,32 @@ func TestAGateRefusesAnOperationIDTheEngineDidNotMint(t *testing.T) {
 	}
 }
 
+// A GESTURE'S OPERATION NAMES ITS NODE IN ONE STEP OF THE GRAMMAR, whatever
+// the node's id holds.
+//
+// A node id may hold dots, and in the grammar a dot begins a step, so an id
+// the route minted for `node-a.b` read as the name `evict-node-a` with a step
+// `b`. The node goes into the name through [statelog.OpNamePart], as the
+// command line's and the dashboard's do.
+//
+// Mutation: compose the name from the bare node and the id the route mints is
+// named another way.
+func TestAGateNamesADottedNodeInOneStep(t *testing.T) {
+	t.Parallel()
+	b := closedPosture()
+	gate := &fakeNodeGate{}
+	code, body := postAck(t, newApp(t, api.Options{Bootstrap: &b, Nodes: gate}),
+		"/worklet/retention/evict/node-a.b?confirm=node-a.b")
+	if code != http.StatusOK || len(gate.asked) != 1 {
+		t.Fatalf("an eviction of a dotted node answered %d %v and ran as %+v",
+			code, body, gate.asked)
+	}
+	if want := "evict-" + statelog.OpNamePart("node-a.b"); !statelog.OpNamed(gate.asked[0].OpID, want) {
+		t.Errorf("the route minted %q, want an id named %q — the node's own dot "+
+			"read as a step of the gesture", gate.asked[0].OpID, want)
+	}
+}
+
 // AN OPERATION ID THE BROKER WOULD CARRY AS ANOTHER IS REFUSED BEFORE ANYTHING
 // IS WRITTEN — minted by the engine or not.
 //

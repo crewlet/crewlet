@@ -3271,6 +3271,156 @@ var GATE_ACTIONS_KEEPING_OPERATION = [
 	"set_capacity"
 ];
 //#endregion
+//#region src/protocol/sha256.ts
+/**
+* SHA-256 (FIPS 180-4) over bytes: synchronous, and with no dependency.
+*
+* The dashboard needs it for one thing — writing a value into an operation
+* id's name the way the engine does (`opNamePart` in `./gate.ts`,
+* `statelog.OpNamePart`), which writes a value that is not one segment of the
+* grammar as a prefix of its digest. The browser's own digest
+* (`crypto.subtle.digest`) cannot serve it: it exists only in a secure
+* context, and the dashboard is served over plain HTTP wherever the engine is;
+* and it is asynchronous, while a gesture's id is minted synchronously, before
+* the first request. Certified against the standard's own vectors and against
+* Node's implementation over every padding boundary (`sha256.test.ts`).
+*/
+/** The first 32 bits of the fractional parts of the cube roots of the first
+*  64 primes (FIPS 180-4, 4.2.2). */
+var K = new Uint32Array([
+	1116352408,
+	1899447441,
+	3049323471,
+	3921009573,
+	961987163,
+	1508970993,
+	2453635748,
+	2870763221,
+	3624381080,
+	310598401,
+	607225278,
+	1426881987,
+	1925078388,
+	2162078206,
+	2614888103,
+	3248222580,
+	3835390401,
+	4022224774,
+	264347078,
+	604807628,
+	770255983,
+	1249150122,
+	1555081692,
+	1996064986,
+	2554220882,
+	2821834349,
+	2952996808,
+	3210313671,
+	3336571891,
+	3584528711,
+	113926993,
+	338241895,
+	666307205,
+	773529912,
+	1294757372,
+	1396182291,
+	1695183700,
+	1986661051,
+	2177026350,
+	2456956037,
+	2730485921,
+	2820302411,
+	3259730800,
+	3345764771,
+	3516065817,
+	3600352804,
+	4094571909,
+	275423344,
+	430227734,
+	506948616,
+	659060556,
+	883997877,
+	958139571,
+	1322822218,
+	1537002063,
+	1747873779,
+	1955562222,
+	2024104815,
+	2227730452,
+	2361852424,
+	2428436474,
+	2756734187,
+	3204031479,
+	3329325298
+]);
+/** The first 32 bits of the fractional parts of the square roots of the first
+*  eight primes (FIPS 180-4, 5.3.3). */
+var H0 = [
+	1779033703,
+	3144134277,
+	1013904242,
+	2773480762,
+	1359893119,
+	2600822924,
+	528734635,
+	1541459225
+];
+var rotr = (x, n) => x >>> n | x << 32 - n;
+/** The SHA-256 digest of `data`, as 32 bytes. */
+function sha256(data) {
+	const padded = new Uint8Array(Math.ceil((data.length + 9) / 64) * 64);
+	padded.set(data);
+	padded[data.length] = 128;
+	const view = new DataView(padded.buffer);
+	const bits = data.length * 8;
+	view.setUint32(padded.length - 8, Math.floor(bits / 2 ** 32));
+	view.setUint32(padded.length - 4, bits >>> 0);
+	const h = Uint32Array.from(H0);
+	const w = /* @__PURE__ */ new Uint32Array(64);
+	for (let block = 0; block < padded.length; block += 64) {
+		for (let i = 0; i < 16; i++) w[i] = view.getUint32(block + i * 4);
+		for (let i = 16; i < 64; i++) {
+			const w15 = w[i - 15];
+			const w2 = w[i - 2];
+			const s0 = rotr(w15, 7) ^ rotr(w15, 18) ^ w15 >>> 3;
+			const s1 = rotr(w2, 17) ^ rotr(w2, 19) ^ w2 >>> 10;
+			w[i] = w[i - 16] + s0 + w[i - 7] + s1 >>> 0;
+		}
+		let a = h[0];
+		let b = h[1];
+		let c = h[2];
+		let d = h[3];
+		let e = h[4];
+		let f = h[5];
+		let g = h[6];
+		let hh = h[7];
+		for (let i = 0; i < 64; i++) {
+			const t1 = hh + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + (e & f ^ ~e & g) + K[i] + w[i] >>> 0;
+			const t2 = (rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + (a & b ^ a & c ^ b & c) >>> 0;
+			hh = g;
+			g = f;
+			f = e;
+			e = d + t1 >>> 0;
+			d = c;
+			c = b;
+			b = a;
+			a = t1 + t2 >>> 0;
+		}
+		h[0] = h[0] + a >>> 0;
+		h[1] = h[1] + b >>> 0;
+		h[2] = h[2] + c >>> 0;
+		h[3] = h[3] + d >>> 0;
+		h[4] = h[4] + e >>> 0;
+		h[5] = h[5] + f >>> 0;
+		h[6] = h[6] + g >>> 0;
+		h[7] = h[7] + hh >>> 0;
+	}
+	const out = /* @__PURE__ */ new Uint8Array(32);
+	const outView = new DataView(out.buffer);
+	for (let i = 0; i < 8; i++) outView.setUint32(i * 4, h[i]);
+	return out;
+}
+//#endregion
 //#region src/protocol/gate.ts
 /**
 * The node gate — evicting a node and readmitting one — as the wire knows it:
@@ -3289,13 +3439,46 @@ var GATE_ACTIONS_KEEPING_OPERATION = [
 function keepsOperation(action) {
 	return GATE_ACTIONS_KEEPING_OPERATION.includes(action);
 }
+/** The widest segment of an operation id — its name, or one step — written as
+*  itself (`statelog.MaxOpSegmentBytes`): what 128 bytes leave after the uuid
+*  and the dot. */
+var OP_SEGMENT_BYTES = 91;
+/** The widest value written into a segment as itself
+*  (`statelog.MaxOpNamePartBytes`), so a verb, a dash and the value stay one
+*  readable segment. */
+var OP_NAME_PART_BYTES = 64;
+/**
+* `value` as the engine's grammar writes it into one segment of an operation
+* id at most `limit` bytes wide: as itself where it is one to `limit` bytes of
+* visible ASCII with no `.` — which begins the next step — and does not begin
+* with `~`, and otherwise ESCAPED, as `~` and the first sixteen bytes of the
+* SHA-256 of its UTF-8 in hex. Injective: a value written as itself never
+* begins with `~`, so none can spell another's escape.
+*/
+function opPart(value, limit) {
+	const bytes = new TextEncoder().encode(value);
+	if (bytes.length > 0 && bytes.length <= limit && bytes[0] !== 126 && bytes.every((b) => b > 32 && b <= 126 && b !== 46)) return value;
+	const digest = sha256(bytes).subarray(0, 16);
+	return "~" + Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+/**
+* A value — a node's id — as it goes into an operation id's name
+* (`statelog.OpNamePart`): itself where it already is a part, and escaped
+* otherwise, so `evict-` and a node id that holds dots is one readable
+* segment rather than a name and a step. Pinned against the engine's by a
+* vector file both sides read (`internal/statelog/testdata/opname_vectors.json`).
+*/
+function opNamePart(value) {
+	return opPart(value, OP_NAME_PART_BYTES);
+}
 /**
 * An operation id in the engine's grammar (`statelog.NewOpID`), from its parts.
 *
 * The UUIDv7 bit layout — the leading 48 bits the Unix millisecond, big-endian,
 * then the ten tail bytes with the version nibble 7 written into byte 6 and the
-* RFC 9562 variant into byte 8 — then `.` and the name, or the bare uuid for an
-* empty one. The millisecond is clamped to the 48 bits the layout holds, as
+* RFC 9562 variant into byte 8 — then `.` and the name as one segment (escaped
+* where it is not one, as the engine's mint writes it), or the bare uuid for
+* an empty one. The millisecond is clamped to the 48 bits the layout holds, as
 * the engine's is.
 *
 * PURE, so the vector file the engine's own test reads
@@ -3317,7 +3500,7 @@ function layoutOpID(unixMs, tail, name) {
 	bytes[8] = 128 | bytes[8] & 63;
 	const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 	const uuid = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-	return name ? `${uuid}.${name}` : uuid;
+	return name ? `${uuid}.${opPart(name, OP_SEGMENT_BYTES)}` : uuid;
 }
 /**
 * A FRESH gesture's operation id, minted in the browser BEFORE the first
@@ -3345,7 +3528,7 @@ function layoutOpID(unixMs, tail, name) {
 * in a secure context.
 */
 function newGateOpID(verb, node, now = Date.now(), random = (bytes) => crypto.getRandomValues(bytes)) {
-	return layoutOpID(now, random(/* @__PURE__ */ new Uint8Array(10)), `${verb}-${node}`);
+	return layoutOpID(now, random(/* @__PURE__ */ new Uint8Array(10)), `${verb}-${opNamePart(node)}`);
 }
 //#endregion
 //#region src/contract/fleet.ts

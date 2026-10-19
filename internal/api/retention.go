@@ -297,7 +297,9 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 			return
 		}
 		by := iam.ActorFor(caller)
-		opID, ok := callerOpID(w, r, gateVerb(evict)+"-"+node)
+		// The node through [statelog.OpNamePart], because a node id may hold
+		// the dot that begins a step in the grammar.
+		opID, ok := callerOpID(w, r, gateVerb(evict)+"-"+statelog.OpNamePart(node))
 		if !ok {
 			return
 		}

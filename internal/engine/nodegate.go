@@ -727,22 +727,23 @@ func livePresences(ctx context.Context, leases liveLeases) ([]statelog.Presence,
 // sweep ever lost a row. The sign is one step, and the log and the node
 // together the last.
 //
-// INJECTIVE, which a plain join of four steps is not: a gesture id may carry
-// a tail of its own and a node id may hold dots, so gesture `x` on node
-// `y.evict.tracker.z` and gesture `x.evict.tracker.y` on node `z` would
-// otherwise spell one id. A node id never holds a colon
-// ([config.ValidNodeID]) and the sign and the log hold neither separator, so
-// reading from the right — the node after the last colon, then the log and
-// the sign after the last two dots — recovers every part. (A collision would
-// still be refused rather than answered, its ledger row being on another
-// node's subject ([statelog.ReasonOpReused]); an id that cannot collide is
-// one whose refusal nobody has to read.)
+// INJECTIVE, which a plain join of the parts is not: a gesture id may carry a
+// tail of its own and a node id may hold dots, so written as itself gesture
+// `x` on node `y.evict.tracker.z` and gesture `x.evict.tracker.y` on node `z`
+// would spell one id. The grammar writes every step as ONE SEGMENT, with no
+// dot in it, so reading from the right recovers the last two steps and leaves
+// the gesture; the node goes into its step through [statelog.OpNamePart],
+// which writes a dotted node escaped — injectively, and alone, so the log
+// beside it stays readable; and the log holds no colon, so the colon after it
+// ends it. (A collision would still be refused rather than answered, its
+// ledger row being on another node's subject ([statelog.ReasonOpReused]); an
+// id that cannot collide is one whose refusal nobody has to read.)
 func domainOpID(gesture string, readmit bool, domain, node string) string {
 	verb := "evict"
 	if readmit {
 		verb = "readmit"
 	}
-	return statelog.StepOpID(gesture, verb, domain+":"+node)
+	return statelog.StepOpID(gesture, verb, domain+":"+statelog.OpNamePart(node))
 }
 
 // newNodeGate builds the gesture over every identity-claiming log this node

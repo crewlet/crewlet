@@ -1034,6 +1034,32 @@ func TestAGateTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
 	}
 }
 
+// A GESTURE'S OPERATION NAMES ITS NODE IN ONE STEP OF THE GRAMMAR, whatever
+// the node's id holds.
+//
+// A node id may hold dots, and in the grammar a dot begins a step, so the
+// name `evict-node-a.b` read as the name `evict-node-a` with a step `b`. The
+// node goes into the name the way the route's does ([statelog.OpNamePart]).
+//
+// Mutation: compose the name from the bare node and the id is named another
+// way than the route's.
+func TestAGestureNamesADottedNodeInOneStep(t *testing.T) {
+	t.Parallel()
+	node := newFakeRetentionNode(t)
+	base := bootstrapForURL(t, node.server.URL)
+	node.hangUp = true
+
+	if _, _, err := cli(t, "retention", "evict", "node-a.b", base,
+		"-confirm", "node-a.b", "-force"); err == nil {
+		t.Fatal("a gesture the node never answered exited zero")
+	}
+	sent := node.lastGate().Get("op_id")
+	if want := "evict-" + statelog.OpNamePart("node-a.b"); !statelog.OpNamed(sent, want) {
+		t.Errorf("the command sent op_id %q, want one named %q — the node's own "+
+			"dot read as a step of the gesture", sent, want)
+	}
+}
+
 // AN ANSWER THE NODE DID NOT WRITE IS NOT A REFUSAL. A reverse proxy's read
 // timeout — a 504 with an HTML page, from a proxy set shorter than the fifty
 // seconds the node takes to answer a gesture — and a 200 cut off part way

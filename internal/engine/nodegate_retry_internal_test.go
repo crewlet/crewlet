@@ -493,7 +493,9 @@ func TestAGestureIsFinishedWhenItsCallerGoesAway(t *testing.T) {
 // A node id may hold dots and a gesture id may hold anything, so a plain dotted
 // join spelled gesture `x` on node `y.evict.tracker.z` and gesture
 // `x.evict.tracker.y` on node `z` as the same operation — one ledger row
-// answering two gestures.
+// answering two gestures. And every id is the grammar's: the steps after the
+// gesture are two segments, whatever the node holds, the second naming its
+// log readably however the node had to be written.
 func TestADomainOperationIDNamesOneOperation(t *testing.T) {
 	t.Parallel()
 	type parts struct {
@@ -514,6 +516,11 @@ func TestADomainOperationIDNamesOneOperation(t *testing.T) {
 		{"a", false, "tracker", "b"},
 	} {
 		id := domainOpID(p.gesture, p.readmit, p.domain, p.node)
+		steps := strings.Split(strings.TrimPrefix(id, p.gesture+"."), ".")
+		if len(steps) != 2 || !strings.HasPrefix(steps[1], p.domain+":") {
+			t.Errorf("%+v derives %q, whose steps after the gesture are %q — "+
+				"not the sign and a step naming the log", p, id, steps)
+		}
 		if other, dup := seen[id]; dup {
 			t.Fatalf("%+v and %+v both derive %q", p, other, id)
 		}

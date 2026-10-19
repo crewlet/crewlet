@@ -763,12 +763,14 @@ func retentionGate(environ config.Source, args []string, stdout, stderr io.Write
 	// THROUGH THE STATE LOG'S OWN MINT ([statelog.NewOpID]), under the name
 	// the route itself mints with, so the id carries its instant — the node
 	// refuses one that does not, since no ledger could vouch for it — and
-	// reads in the ledger exactly as a node-minted one would.
+	// reads in the ledger exactly as a node-minted one would. The node goes
+	// into that name through [statelog.OpNamePart], as the route's does,
+	// because a node id may hold the dot that begins a step.
 	//
 	// AND ONE THE OPERATOR BROUGHT IS HELD TO THE RULE EVERY SURFACE HOLDS
 	// IT TO before anything is asked — [operationFor], which every keyed
 	// write here mints and checks its id through.
-	gesture, err := operationFor(verb+"-"+node, *opID)
+	gesture, err := operationFor(verb+"-"+statelog.OpNamePart(node), *opID)
 	if err != nil {
 		return err
 	}
