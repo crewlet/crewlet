@@ -389,6 +389,108 @@ func TestASeedPathMustNameAFile(t *testing.T) {
 	}
 }
 
+// A FILE THE ENGINE WRITES IS NO PATH ANOTHER FIELD NEEDS. Each path's own
+// shape cannot show it, because the conflict is between two fields:
+// `.crewlet-config` names a file, and opencode needs that name as
+// OPENCODE_CONFIG_DIR's directory, so a seed there made the agent file's write
+// under it fail with ENOTDIR on every call — as did `.crewlet-config/agents`,
+// and in the seat's home codex's `.codex`, which CODEX_HOME and its login
+// need as a directory. Two writes of one file are refused for the same reason
+// one of them is never read: a seed at the login path was carried back out as
+// the login, and one at the system prompt's path replaced before the call.
+func TestAFileTheProfileWritesIsNoPathAnotherFieldNeeds(t *testing.T) {
+	t.Parallel()
+	seed := func(in string, paths ...string) map[string]any {
+		var files []any
+		for _, path := range paths {
+			files = append(files, map[string]any{"path": path, "in": in, "content": "{}"})
+		}
+		return map[string]any{"seed_files": files}
+	}
+	for name, tc := range map[string]struct {
+		agent     string
+		overrides map[string]any
+		want      []string // nil: loads
+	}{
+		"opencode's configuration directory": {
+			agent: "opencode", overrides: seed("work", ".crewlet-config"),
+			want: []string{`seed_files[0].path ".crewlet-config" is the directory ` +
+				`work_config_env.OPENCODE_CONFIG_DIR points the CLI at, in the work directory`},
+		},
+		"the directory opencode's agent file goes in": {
+			agent: "opencode", overrides: seed("work", ".crewlet-config/agents"),
+			want: []string{`seed_files[0].path ".crewlet-config/agents" is a FILE where ` +
+				`system_prompt_file.name needs a directory`},
+		},
+		"opencode's agent file": {
+			agent: "opencode", overrides: seed("work", ".crewlet-config/agents/crewlet-seat.md"),
+			want: []string{"system_prompt_file.name", `is the file seed_files[0].path names too`},
+		},
+		"a file handed to the CLI by its path": {
+			agent: "kimi-code", overrides: seed("work", "crewlet-seat.md"),
+			want: []string{"system_prompt_file.name", `is the file seed_files[0].path names too`},
+		},
+		"codex's home": {
+			agent: "codex", overrides: seed("home", ".codex"),
+			want: []string{`seed_files[0].path ".codex" is the directory config_env.CODEX_HOME ` +
+				`points the CLI at, in the home directory`},
+		},
+		"codex's login": {
+			agent: "codex", overrides: seed("home", ".codex/auth.json"),
+			want: []string{`seed_files[0].path ".codex/auth.json" is the file credential_paths[0] names too`},
+		},
+		"one seed under another": {
+			agent: "codex", overrides: seed("home", ".codex/config.toml", ".codex/config.toml/x"),
+			want: []string{`seed_files[0].path ".codex/config.toml" is a FILE where ` +
+				`seed_files[1].path needs a directory`},
+		},
+		"one seed twice, spelled two ways": {
+			agent: "codex", overrides: seed("home", ".codex/config.toml", ".codex/./config.toml"),
+			want: []string{`seed_files[1].path ".codex/config.toml" is the file seed_files[0].path names too`},
+		},
+		"a seed where a relocation needs a directory": {
+			agent: "custom",
+			overrides: map[string]any{
+				"binary": "my-cli", "complete_args": []any{"run"}, "output": "text",
+				"config_env": map[string]any{"VENDOR_HOME": ".vendor/home"},
+				"seed_files": []any{map[string]any{"path": ".vendor", "content": "{}"}},
+			},
+			want: []string{`seed_files[0].path ".vendor" is a FILE where config_env.VENDOR_HOME needs a directory`},
+		},
+		"settings beside opencode's policy": {
+			agent:     "opencode",
+			overrides: seed("work", ".crewlet-config/opencode.json", ".crewlet-config/tui.json"),
+		},
+		"settings in codex's home": {agent: "codex", overrides: seed("home", ".codex/config.toml")},
+		"one name in each scope": {
+			agent: "codex",
+			overrides: map[string]any{"seed_files": []any{
+				map[string]any{"path": "settings.json", "in": "home", "content": "{}"},
+				map[string]any{"path": "settings.json", "in": "work", "content": "{}"},
+			}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Load(tc.agent, tc.overrides)
+			if tc.want == nil {
+				if err != nil {
+					t.Fatalf("paths that collide with nothing were refused: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("accepted %v", tc.overrides)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not mention %q: %v", want, err)
+				}
+			}
+		})
+	}
+}
+
 // THE OPENCODE PROFILE READS ONLY THE CALL'S OWN CONFIGURATION, AND WRITES
 // EVERYTHING IT READS THERE. OpenCode 2 read `opencode.json`, agents and
 // plugins from every ancestor of the working directory, so an allow-all config

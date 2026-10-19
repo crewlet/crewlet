@@ -1440,6 +1440,9 @@ func (p *Profile) problems() []string {
 			// the engine need a directory, so the system prompt's write
 			// under it fails ENOTDIR on every call. The rule
 			// system_prompt_file.name is held to, for the same reason.
+			// The same directory spelled as a file name, `.crewlet-config`,
+			// is a conflict between two fields rather than a shape, and
+			// [Profile.validateCollisions] refuses it.
 			add("seed_files[%d].path %q must name a FILE inside the %s directory — not "+
 				"the directory itself, not a path ending in a separator, and not one "+
 				"whose last element is . or .. — e.g. .vendor/settings.json",
@@ -1450,7 +1453,123 @@ func (p *Profile) problems() []string {
 				"configures nothing", i)
 		}
 	}
+	p.validateCollisions(add)
 	return bad
+}
+
+// pathClaim is one path a profile has the engine WRITE a file at, or has the
+// CLI read a DIRECTORY at, inside one scope: the field that names it, and the
+// path clean.
+type pathClaim struct {
+	label, path string
+	dir         bool
+}
+
+// claims lists every path this profile claims in one scope whose own shape is
+// valid — a path its shape check refuses is reported there and not again.
+// Under the seat's home: the login files and the home's seed files are
+// written, and each config_env directory is read. Under the call's working
+// directory: its seed files and the system prompt file are written, and each
+// work_config_env directory is read.
+func (p *Profile) claims(scope SeedScope) []pathClaim {
+	var out []pathClaim
+	file := func(label, rel string) {
+		out = append(out, pathClaim{label: label, path: filepath.Clean(rel)})
+	}
+	if scope == SeedHome {
+		for i, rel := range p.CredentialPaths {
+			if staysInside(rel) && namesAFile(rel) {
+				file(fmt.Sprintf("credential_paths[%d]", i), rel)
+			}
+		}
+	}
+	for i, f := range p.SeedFiles {
+		if f.Scope() == scope && staysInside(f.Path) && namesAFile(f.Path) {
+			file(fmt.Sprintf("seed_files[%d].path", i), f.Path)
+		}
+	}
+	if scope == SeedWork && p.WritesSystemPromptFile() {
+		// Written by every call that has a file channel, discovered or
+		// handed over by path, so a seed at the same path is overwritten
+		// before the CLI ever reads it.
+		name := p.SystemPromptFile.FileName()
+		discovered := p.SystemPromptFile != nil && p.SystemPromptFile.Discovered
+		if (discovered && staysInside(name) && namesAFile(name)) || (!discovered && isBareFileName(name)) {
+			file("system_prompt_file.name", name)
+		}
+	}
+	field, relocations := "config_env", p.ConfigEnv
+	if scope == SeedWork {
+		field, relocations = "work_config_env", p.WorkConfigEnv
+	}
+	for _, name := range slices.Sorted(maps.Keys(relocations)) {
+		rel := relocations[name]
+		if strings.TrimSpace(rel) != "" && staysInside(rel) {
+			out = append(out, pathClaim{label: field + "." + name, path: filepath.Clean(rel), dir: true})
+		}
+	}
+	return out
+}
+
+// validateCollisions holds the paths a profile claims in each scope
+// ([Profile.claims]) apart: no file the engine writes may be a path another
+// claim needs as a DIRECTORY — the same path as a relocated directory, or an
+// ancestor of any other claim — and no two writes may name one file.
+//
+// The shape of one path ([namesAFile]) cannot see this, because the conflict
+// is between two fields: `.crewlet-config` is a file name, and opencode needs
+// that name as OPENCODE_CONFIG_DIR's directory, so seeding a file there failed
+// the agent file's write under it with ENOTDIR on every call — as did
+// `.crewlet-config/agents` and, in the seat's home, codex's `.codex`, which
+// both CODEX_HOME and its login need as a directory. And a file written twice
+// is one write the CLI never sees: a seed at a login path replaces the seeded
+// login and is then carried back out over the shared one, and a seed at the
+// system prompt's path is replaced before the CLI starts.
+//
+// One refusal per file, naming the first claim it collides with.
+func (p *Profile) validateCollisions(add func(string, ...any)) {
+	for _, scope := range []SeedScope{SeedHome, SeedWork} {
+		claims := p.claims(scope)
+		for i, a := range claims {
+			if a.dir {
+				continue
+			}
+			if problem := collision(claims, i, scope); problem != "" {
+				add("%s", problem)
+			}
+		}
+	}
+}
+
+// collision is what is wrong with the file claims[i] beside the other claims
+// of its scope, or "" for nothing: a relocated directory at its very path
+// first, as the plainest statement of the conflict, then an earlier write of
+// the same file, then the first claim that needs it as a directory above
+// itself.
+func collision(claims []pathClaim, i int, scope SeedScope) string {
+	a := claims[i]
+	for _, b := range claims {
+		if b.dir && b.path == a.path {
+			return fmt.Sprintf("%s %q is the directory %s points the CLI at, in the %s "+
+				"directory — a file there leaves it no directory to read, and every call "+
+				"fails; name a file inside it", a.label, a.path, b.label, scope)
+		}
+	}
+	for _, b := range claims[:i] {
+		if b.path == a.path {
+			return fmt.Sprintf("%s %q is the file %s names too, in the %s directory — one "+
+				"of the two writes replaces the other on every call; give each its own path",
+				a.label, a.path, b.label, scope)
+		}
+	}
+	for _, b := range claims {
+		if strings.HasPrefix(b.path, a.path+string(filepath.Separator)) {
+			return fmt.Sprintf("%s %q is a FILE where %s needs a directory (%q lies under "+
+				"it, in the %s directory), so every call fails with ENOTDIR; name a file that "+
+				"is no other path's directory", a.label, a.path, b.label, b.path, scope)
+		}
+	}
+	return ""
 }
 
 // validateHomePaths holds the paths a login and a prune are made of —
