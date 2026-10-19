@@ -1435,9 +1435,9 @@ func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round
 	surface = tools.NewSurface(ph.String(), snapshot, active).
 		ForTurn(m.turn.InPhase(types.Phase(ph)))
 	// THE GUARD IS BUILT FROM THE FINISHED SURFACE, so what it enforces and
-	// what the catalogue showed cannot disagree: both are derived from the
-	// same active list, at the same moment, and the catalogue's "required"
-	// marker is the promise this keeps.
+	// what the catalogue showed cannot disagree: both match the skills
+	// against the surface's universe (catalogueSurface), and the catalogue's
+	// "required" marker is the promise this keeps.
 	guard := r.guardFor(ph, surface, loaded)
 	// RECORDED ONLY HERE, which is what keeps it the TURN's guard: this is
 	// the funnel every phase of the turn goes through, and a sub-agent's
@@ -1494,7 +1494,10 @@ func (a armedGuard) tools() tools.Guard    { return a.wrap }
 // in front of the model and a guard rebuilt empty would block the tools that
 // session already unlocked. Empty for every other phase.
 func (r *Runner) guardFor(ph phase.Phase, surface *tools.Surface, loaded []string) armedGuard {
-	if r.cfg.Skills == nil {
+	// THE LOADER MUST BE ACTIVE, not merely in the universe the triggers are
+	// matched over: a guard is armed only where the session can satisfy it,
+	// and a loader the phase never activated is one its model may not reach.
+	if r.cfg.Skills == nil || !slices.Contains(surface.Active(), skills.LoaderTool) {
 		return armedGuard{}
 	}
 	guard := skills.NewGuard(r.cfg.Skills, promptPhase(ph), catalogueSurface(surface))
@@ -1530,10 +1533,15 @@ func promptPhase(ph phase.Phase) prompts.Phase {
 	}
 }
 
-// catalogueSurface is the tool surface as the skill triggers see it.
+// catalogueSurface is the tool surface as the skill triggers see it: every
+// tool in the surface's UNIVERSE, the names the executor's catalogue lists
+// skills for, and never its active list alone. A surface activates anything in
+// its universe by name, and an executor starts with no MCP tool active, so a
+// guard armed over the active list let an activated MCP tool through without
+// the skill its prompt had called required.
 func catalogueSurface(surface *tools.Surface) prompts.Surface {
-	active := surface.Active()
-	return prompts.Surface{Tools: active, MCPServers: surface.Universe().MCPServers()}
+	universe := surface.Universe()
+	return prompts.Surface{Tools: universe.Names(), MCPServers: universe.MCPServers()}
 }
 
 // executorUniverse is the snapshot an executor's surface is built from: the

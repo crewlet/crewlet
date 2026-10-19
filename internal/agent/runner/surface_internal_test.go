@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
+	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -214,5 +215,40 @@ func TestTheSurfaceHandedToTheTurnSaysWhichToolsSitBehindDiscovery(t *testing.T)
 	if slices.Contains(got.Discoverable, "comment_on_work_item") {
 		t.Error("a first-party tool the executor already holds was reported as one " +
 			"it has to discover")
+	}
+}
+
+// A GUARD IS ARMED ONLY WHERE ITS LOADER IS ACTIVE. The triggers are matched
+// over the surface's whole universe, so the catalogue and the guard agree on
+// an MCP tool the executor activates later — but a loader that sits in the
+// universe without being active is one the phase's model may never reach, and
+// a guard armed there would refuse a covered tool it had no way to unlock.
+//
+// Drop the active-list check in guardFor and the first case goes red.
+func TestASkillGuardNeedsItsLoaderActive(t *testing.T) {
+	t.Parallel()
+	registry := skills.NewRegistry()
+	if _, err := registry.PutPage(skills.Skill{
+		Key: "chat-conventions", Title: "Chat conventions", Summary: "how to post",
+		Trigger: skills.Trigger{Tool: "slack_post"}, Required: true,
+		SourcePageID: "chat-conventions-page",
+	}); err != nil {
+		t.Fatalf("PutPage: %v", err)
+	}
+	reg := tools.NewRegistry()
+	for _, name := range []string{"slack_post", skills.LoaderTool} {
+		if err := reg.Register(stubTool(name), tools.OriginBuiltin); err != nil {
+			t.Fatalf("Register %s: %v", name, err)
+		}
+	}
+	r := &Runner{cfg: Config{Skills: registry, Seat: prompts.Seat{Role: &org.Role{Name: "CTO", DeclaredHandle: "cto"}}}}
+
+	inactive := tools.NewSurface(phase.Execute.String(), reg.Snapshot(), []string{"slack_post"})
+	if g := r.guardFor(phase.Execute, inactive, nil); g.guard != nil {
+		t.Error("a guard was armed over a loader the phase never activated")
+	}
+	active := tools.NewSurface(phase.Execute.String(), reg.Snapshot(), []string{skills.LoaderTool})
+	if g := r.guardFor(phase.Execute, active, nil); g.guard == nil {
+		t.Error("no guard was armed although the loader is active and slack_post is in the universe")
 	}
 }
