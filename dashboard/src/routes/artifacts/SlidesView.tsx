@@ -48,6 +48,7 @@ import {
   useSlideKeys,
   useToast,
   type SlideGridSection,
+  useMediaMatch,
 } from "@crewlethq/ui";
 import type {
   ArtifactDeck,
@@ -85,7 +86,6 @@ import {
   MinimizeGlyph,
   MonitorGlyph,
 } from "@crewlethq/icons/glyphs";
-import { useMediaQuery } from "~/lib/media.ts";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import type { PresenceReport } from "./presence.ts";
 import { useKindControls, useRegionNames } from "~/lib/artifacts/kindControls.ts";
@@ -388,7 +388,7 @@ function DeckEditor({
   const position = slides.findIndex((s) => s.id === current.id);
   // ON A PHONE THE STRIP IS A ROW UNDER THE STAGE, where the next slide is a
   // swipe away, rather than a column of full-width slides under the notes.
-  const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
+  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
 
   const change = onChange;
   const edit: SlideRenderContext["edit"] = editable

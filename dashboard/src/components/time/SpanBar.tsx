@@ -18,8 +18,7 @@
  */
 
 import type { CSSProperties } from "react";
-import { cx } from "@crewlethq/ui";
-import { useMediaQuery } from "~/lib/media.ts";
+import { cx, useMediaMatch } from "@crewlethq/ui";
 import type { SpanKind } from "~/lib/waterfall.ts";
 
 /** The query a reader's "less motion" setting answers. */
@@ -39,7 +38,7 @@ export interface SpanBarProps {
 const MIN_WIDTH = "2px";
 
 export function SpanBar({ kind, left, width, open, failed, selected }: SpanBarProps) {
-  const still = useMediaQuery(REDUCED_MOTION);
+  const still = useMediaMatch(REDUCED_MOTION);
   const style: CSSProperties = {
     insetInlineStart: `${(left * 100).toFixed(3)}%`,
     inlineSize: `max(${MIN_WIDTH}, ${(width * 100).toFixed(3)}%)`,

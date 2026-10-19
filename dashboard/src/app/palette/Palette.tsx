@@ -90,7 +90,7 @@ import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useRecents, forgetAll } from "~/lib/recents.ts";
 import { previewPalette, useViewerPrefs } from "~/lib/prefs.ts";
-import { useKeyHints } from "~/lib/media.ts";
+import { useKeyHints } from "~/app/layout.ts";
 import { themeEntry, useApplyTheme } from "../appearance.tsx";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { useAgents, useConnection, useOrg, useTools } from "~/lib/store-hooks.ts";
