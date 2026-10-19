@@ -1,4 +1,4 @@
-# ADR-0013 — A seat's identity is derived, never looked up
+# ADR-0013: A seat's identity is derived, never looked up
 
 - **Status:** accepted
 - **Authority:** `internal/org`

@@ -1,4 +1,4 @@
-# ADR-0025 — A node without data reaches the estate through a node that holds it
+# ADR-0025: A node without data reaches the estate through a node that holds it
 
 - **Status:** accepted
 - **Authority:** `internal/estate`

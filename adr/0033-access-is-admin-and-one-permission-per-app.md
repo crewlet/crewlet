@@ -1,4 +1,4 @@
-# ADR-0033 — Access is admin and one permission per app
+# ADR-0033: Access is admin and one permission per app
 
 - **Status:** accepted
 - **Authority:** `internal/authz`

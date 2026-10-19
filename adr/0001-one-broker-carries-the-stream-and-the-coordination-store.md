@@ -1,4 +1,4 @@
-# ADR-0001 — One broker carries both the stream and the coordination store
+# ADR-0001: One broker carries both the stream and the coordination store
 
 - **Status:** accepted
 - **Authority:** `internal/queue`

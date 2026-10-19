@@ -1,4 +1,4 @@
-# ADR-0040 — Content a model reads carries its provenance
+# ADR-0040: Content a model reads carries its provenance
 
 - **Status:** accepted
 - **Authority:** `internal/provenance`

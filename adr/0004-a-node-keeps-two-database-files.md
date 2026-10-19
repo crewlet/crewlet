@@ -1,4 +1,4 @@
-# ADR-0004 — A node keeps two database files, and nothing spans them
+# ADR-0004: A node keeps two database files, and nothing spans them
 
 - **Status:** accepted
 - **Authority:** `internal/store`

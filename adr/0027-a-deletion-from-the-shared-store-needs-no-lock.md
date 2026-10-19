@@ -1,4 +1,4 @@
-# ADR-0027 — A deletion from the shared store needs no lock
+# ADR-0027: A deletion from the shared store needs no lock
 
 - **Status:** accepted
 - **Authority:** `internal/objstore/collect`
