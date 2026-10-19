@@ -26,16 +26,7 @@
  * next at the lectern moves the room's screen.
  */
 
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   announce,
   Button,
@@ -44,7 +35,6 @@ import {
   FormField,
   Input,
   PresenterView,
-  SegmentedControl,
   Skeleton,
   SlideFilmstrip,
   SlideGrid,
@@ -83,9 +73,10 @@ import {
   type DeckMerge,
 } from "~/lib/artifacts/deck.ts";
 import { renderSlide, withText, type SlideRenderContext } from "~/lib/slides.tsx";
-import { SLIDE_STAGE_HEIGHT, SLIDE_STAGE_WIDTH, SLIDE_TRANSITIONS } from "~/contract/artifacts.ts";
-import { useFitInView } from "~/lib/useFitInView.ts";
+import { SLIDE_TRANSITIONS } from "~/contract/artifacts.ts";
+import { FileTextGlyph, MonitorGlyph } from "@crewlethq/icons/glyphs";
 import type { PresenceReport } from "./presence.ts";
+import { useKindControls } from "~/lib/artifacts/kindControls.ts";
 
 /** The views of a deck, as `mode=` names them; "" is the editor (or the reader's slides). */
 type DeckMode = "" | "grid" | "present" | "presenter";
@@ -186,28 +177,42 @@ function Deck({
     [go, channel],
   );
 
+  // THE DECK'S VIEWS AND ITS TWO ACTIONS ARE THE PAGE BAR'S (`lib/artifacts/kindControls.ts`):
+  // Edit, Grid and Present in its middle, the presenter's window and Print in
+  // its More. A side of a comparison publishes none.
+  useKindControls(
+    primary
+      ? {
+          modes: {
+            label: "View",
+            value: mode === "presenter" ? "present" : mode,
+            options: [
+              { value: "", label: editable ? "Edit" : "Slides" },
+              { value: "grid", label: "Grid" },
+              { value: "present", label: "Present" },
+            ],
+            onValueChange: (v: string) => setMode(v),
+          },
+          menu: [
+            {
+              key: "presenter",
+              label: "Open the presenter view",
+              icon: <MonitorGlyph size="sm" />,
+              onSelect: () => openPresenter(current.id),
+            },
+            {
+              key: "print",
+              label: "Print or save as PDF",
+              icon: <FileTextGlyph size="sm" />,
+              onSelect: () => window.print(),
+            },
+          ],
+        }
+      : null,
+  );
+
   return (
     <div className="slides-view">
-      <div className="slides-bar">
-        <SegmentedControl
-          label="View"
-          semantics="radio"
-          size="sm"
-          options={[
-            { value: "", label: editable ? "Edit" : "Slides" },
-            { value: "grid", label: "Grid" },
-            { value: "present", label: "Present" },
-          ]}
-          value={mode === "presenter" ? "present" : mode}
-          onValueChange={(v: string) => setMode(v)}
-        />
-        <Button size="small" variant="ghost" onClick={() => openPresenter(current.id)}>
-          Presenter view
-        </Button>
-        <Button size="small" variant="ghost" onClick={() => window.print()}>
-          Print
-        </Button>
-      </div>
       {mode === "" && (
         <DeckEditor
           detail={detail}
@@ -656,12 +661,6 @@ function useShowKeys(
   return { shown, at, to };
 }
 
-/** What a show asks for at its width: the slide at that width, and the bar under it. */
-function showNeed(el: HTMLElement): number {
-  const bar = el.querySelector<HTMLElement>(".slides-show-bar")?.offsetHeight ?? 0;
-  return (el.clientWidth * SLIDE_STAGE_HEIGHT) / SLIDE_STAGE_WIDTH + bar;
-}
-
 /**
  * Present, in this window: the slide as large as fits in the view, its foot
  * and the count under it on screen, and full screen on the reader's press.
@@ -681,7 +680,6 @@ function DeckShow({
 }) {
   const box = useRef<HTMLDivElement>(null);
   const fullscreen = useFullscreen(box);
-  const height = useFitInView(box, showNeed);
   // THE SHOW TAKES THE KEYS as it opens: focus left on the control that
   // opened it would spend the arrows on that control instead of the slides.
   useEffect(() => {
@@ -701,24 +699,21 @@ function DeckShow({
     previous.current = current;
   }, [current]);
   return (
-    <div
-      className="slides-show"
-      ref={box}
-      role="region"
-      aria-label="Slide show"
-      tabIndex={-1}
-      style={
-        height === null ? undefined : ({ "--slides-show-height": `${height}px` } as CSSProperties)
-      }
-    >
-      <div className="slides-show-stage" key={current.id} data-transition={transition || undefined}>
-        <SlideStage
-          fit="contain"
-          label={`Slide ${at + 1} of ${shown.length}, ${current.title || "Untitled"}`}
+    <div className="slides-show" ref={box} role="region" aria-label="Slide show" tabIndex={-1}>
+      {/* THE STAGE STAYS as the slides change, so the room it measured holds;
+          only the slide inside it is new, and plays its entrance. */}
+      <SlideStage
+        fit="view"
+        label={`Slide ${at + 1} of ${shown.length}, ${current.title || "Untitled"}`}
+      >
+        <div
+          className="slides-show-slide"
+          key={current.id}
+          data-transition={transition || undefined}
         >
           {renderSlide(current, { prefix: `${prefix}-p-`, image })}
-        </SlideStage>
-      </div>
+        </div>
+      </SlideStage>
       <div className="slides-show-bar">
         <Button size="small" variant="ghost" onClick={() => to(at - 1)}>
           Previous

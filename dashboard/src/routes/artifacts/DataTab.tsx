@@ -1,5 +1,5 @@
 /**
- * The Data tab: an artifact's datastore as its authors inspect it, the human
+ * The Data panel: an artifact's datastore as its authors inspect it, the human
  * mirror of what an agent reads through its tools.
  *
  * Rows draws a collection whole, every column the schema declares (hidden ones
@@ -63,7 +63,7 @@ export function DataTab({ detail, store }: { detail: ArtifactDetail; store: Arti
     : "rows";
   const schema = store.schema;
   const collections = useMemo(() => sheetCollections(schema?.collections ?? []), [schema]);
-  // THE COLLECTION IS IN THE ADDRESS (`sheet=`), the same one the View tab
+  // THE COLLECTION IS IN THE ADDRESS (`sheet=`), the same one the artifact's view
   // draws, so a link or a reload keeps it.
   const [collection, setCollection] = useSheetParam(collections);
   const role = schema?.role ?? detail.role;

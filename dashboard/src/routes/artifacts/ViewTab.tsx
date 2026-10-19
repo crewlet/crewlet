@@ -1,5 +1,5 @@
 /**
- * The View tab: an artifact drawn as its kind is drawn, from the dashboard's
+ * The artifact's view: an artifact drawn as its kind is drawn, from the dashboard's
  * half of the kind table ([KIND_VIEWS]). A framed kind runs in a sandboxed
  * frame on the artifact origin (a page in one, a design's artboards in one
  * each, on a canvas drawn here); a native kind is drawn here from its closed

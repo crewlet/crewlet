@@ -15,10 +15,10 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
-    "@crewlethq/artifact-kit": "0.26.0",
-    "@crewlethq/icons": "0.26.0",
-    "@crewlethq/tokens": "0.26.0",
-    "@crewlethq/ui": "0.26.0",
+    "@crewlethq/artifact-kit": "0.29.0",
+    "@crewlethq/icons": "0.29.0",
+    "@crewlethq/tokens": "0.29.0",
+    "@crewlethq/ui": "0.29.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "uqr": "0.1.3"

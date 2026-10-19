@@ -223,8 +223,9 @@ refused at publish naming every field to fix, never dropped.
   `agg`: `sum`, `avg`, `min`, `max`, `count`, `first` or `last`, the last row's
   by default), `timeseries`, `columns` and `activity` (`x` a date column, `y`
   number columns, `by` to split one), `bars` and `share` (`label` and
-  `value`), `table` (`columns`), `note` (`text`, no dataset) and `group`
-  (a `title`, a `tone` and `children`). A widget names only fields its type
+  `value`), `table` (`columns`, its rows in its dataset's order, so sort and
+  cut them in the dataset), `note` (`text`, no dataset) and `group` (a
+  `title`, a `tone` and `children`). A widget names only fields its type
   reads, and only columns its dataset has.
 - **Filters** are closed choice sets: `{"key": "scope", "label": "Whose work",
   "default": "mine", "options": [{"value": "mine", "label": "Mine"}]}`. Bind

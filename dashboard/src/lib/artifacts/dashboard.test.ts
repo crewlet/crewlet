@@ -84,6 +84,8 @@ test("an interval is never shorter than the engine's minute", () => {
   expect(intervalMs({ mode: "interval", every_seconds: 5 })).toBe(60_000);
   expect(intervalMs({ mode: "manual" })).toBe(0);
   expect(refreshWords({ mode: "interval", every_seconds: 60 })).toBe("Every minute");
+  // The state line says "Live"; the refresh line says how, never "Live" twice.
+  expect(refreshWords({ mode: "live", collection: "deploys" })).toBe("As its rows are written");
   expect(refreshWords({ mode: "signal", signal: "tokens", every_seconds: 7200 })).toBe(
     "On change, and every 2 hours",
   );
@@ -160,7 +162,7 @@ test("the rail says what a dataset reads", () => {
   ).toBe("From deals; group by all rows: amount = sum(amount)");
 });
 
-import { allDays, chartTimeOf, formatDay, tableWidths, wordsOf } from "./dashboard.ts";
+import { allDays, chartTimeOf, formatDay, tableLayout, wordsOf } from "./dashboard.ts";
 
 test("a calendar day is drawn at its own midnight in the reader's zone, never the evening before", () => {
   // The suite runs in Europe/Berlin (vitest.config.ts): midnight UTC there is
@@ -196,10 +198,10 @@ test("an id is shown in its column's own words, as the domain's own screens show
 
 test("a table column starts as wide as what it holds, within its bounds", () => {
   const rows: DashboardRow[] = [
-    { outcome: "succeeded", n: 4, notes: "x".repeat(200) },
+    { outcome: "succeeded", n: 4, notes: "x ".repeat(100) },
     { outcome: "failed", n: 12, notes: "short" },
   ];
-  const widths = tableWidths(
+  const { widths, flex, flexMin } = tableLayout(
     [
       { key: "outcome", label: "Outcome", column: { key: "outcome", type: "text" } },
       { key: "n", label: "N", column: { key: "n", type: "number" } },
@@ -207,9 +209,38 @@ test("a table column starts as wide as what it holds, within its bounds", () => 
     ],
     rows,
   );
-  // "OUTCOME" with its sort control is wider than "succeeded": 7 x 8.5 + 52.
-  expect(widths.outcome).toBe(112);
-  expect(widths.outcome).toBeGreaterThanOrEqual(9 * 7.5 + 28);
+  // "succeeded" is wider than its heading "OUTCOME": 9 x 7.5 + 36.
+  expect(widths.outcome).toBe(104);
+  expect(widths.outcome).toBeGreaterThan(7 * 8.5 + 36);
   expect(widths.n).toBe(72);
   expect(widths.notes).toBe(320);
+  // The prose column, the text with the longest values, takes the room left.
+  expect(flex).toBe("notes");
+  // Fitted no narrower than about twenty characters, or its own width if less.
+  expect(flexMin).toBe(180);
+});
+
+test("a column of a closed vocabulary, of identifiers or of numbers never flexes, however long", () => {
+  const rows: DashboardRow[] = [
+    { status: "in_progress", n: 123456789, key: "FAIR-2", version: "2026.10.19", note: "a b" },
+  ];
+  const { flex } = tableLayout(
+    [
+      {
+        key: "status",
+        label: "Status",
+        column: { key: "status", type: "text", words: "tracker_status" },
+      },
+      { key: "n", label: "N", column: { key: "n", type: "number" } },
+      { key: "key", label: "Key", column: { key: "key", type: "text" } },
+      { key: "version", label: "Version", column: { key: "version", type: "text" } },
+      { key: "note", label: "Note", column: { key: "note", type: "text" } },
+    ],
+    rows,
+  );
+  // An identifier, however long, is held whole; only words with spaces flex.
+  expect(flex).toBe("note");
+  expect(
+    tableLayout([{ key: "n", label: "N", column: { key: "n", type: "number" } }], rows).flex,
+  ).toBeUndefined();
 });

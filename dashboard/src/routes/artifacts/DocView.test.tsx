@@ -9,6 +9,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { DocView } from "./DocView.tsx";
+import { WithKindBar } from "~/test/kindControls.tsx";
 import { Router } from "~/app/router.tsx";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
@@ -139,12 +140,14 @@ function show(onPublished = vi.fn()) {
     <ToastProvider>
       <LayerHost>
         <Router>
-          <DocView
-            detail={detail}
-            version={2}
-            presence={{ at: vi.fn() } as never}
-            onPublished={onPublished}
-          />
+          <WithKindBar>
+            <DocView
+              detail={detail}
+              version={2}
+              presence={{ at: vi.fn() } as never}
+              onPublished={onPublished}
+            />
+          </WithKindBar>
         </Router>
       </LayerHost>
     </ToastProvider>,
@@ -154,7 +157,7 @@ function show(onPublished = vi.fn()) {
 
 /** Opens the editor on the tab on show and replaces its text. */
 async function editTo(text: string) {
-  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.click((await screen.findAllByRole("button", { name: "Edit" }))[0]!);
   const box = screen.getByRole("textbox", { name: /in Markdown/ });
   fireEvent.change(box, { target: { value: text } });
 }
@@ -238,7 +241,7 @@ test("where both changed the same lines, the person settles each before saving",
 
 test("adds, renames, moves and removes tabs, and saves them as one version", async () => {
   const onPublished = show();
-  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.click((await screen.findAllByRole("button", { name: "Edit" }))[0]!);
   const tabs = screen.getByRole("list", { name: "Tabs of On-call handbook" });
   fireEvent.change(within(tabs).getByRole("textbox", { name: "Title of tab 1" }), {
     target: { value: "Start here" },
@@ -300,7 +303,7 @@ test("a tab both renamed is the person's to keep or take, and the save waits for
   };
   publishAnswer = () => json(412, { error: "version_moved", detail: "moved", live: { number: 3 } });
   show();
-  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.click((await screen.findAllByRole("button", { name: "Edit" }))[0]!);
   fireEvent.change(screen.getByRole("textbox", { name: "Title of tab 1" }), {
     target: { value: "Start here" },
   });

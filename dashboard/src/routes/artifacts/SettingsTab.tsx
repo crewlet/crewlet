@@ -1,5 +1,5 @@
 /**
- * The Settings tab: what an artifact is called and says about itself, what its
+ * The Settings panel: what an artifact is called and says about itself, what its
  * latest version lets its page do, who owns it, who has opened it, and the
  * trash.
  *
@@ -10,7 +10,7 @@
  * (D07), which the REST transport asks for and replays.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Button,
   ConfirmField,
@@ -58,13 +58,16 @@ function overBy(text: string, max: number): string | undefined {
 export function SettingsTab({
   detail,
   onChanged,
+  focus,
 }: {
   detail: ArtifactDetail;
   onChanged: () => void;
+  /** A field to put the reader in on opening: the icon, from More's "Change icon". */
+  focus?: "icon" | undefined;
 }) {
   return (
     <div className="artifact-settings">
-      <Details detail={detail} onChanged={onChanged} />
+      <Details detail={detail} onChanged={onChanged} focus={focus} />
       <Capabilities detail={detail} />
       <Ownership detail={detail} onChanged={onChanged} />
       {roleIncludes(detail.role, "editor") && <SeenBy detail={detail} />}
@@ -82,8 +85,22 @@ export function SettingsTab({
 }
 
 /** The title, description and icon word. */
-function Details({ detail, onChanged }: { detail: ArtifactDetail; onChanged: () => void }) {
+function Details({
+  detail,
+  onChanged,
+  focus,
+}: {
+  detail: ArtifactDetail;
+  onChanged: () => void;
+  focus: "icon" | undefined;
+}) {
   const access = useArtifactAccess({ role: "editor", held: detail.role });
+  // AN ORDINARY EFFECT, so it runs after the panel's own layout effect has
+  // put focus on its heading: the field asked for is where the reader lands.
+  const iconField = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (focus === "icon") iconField.current?.focus();
+  }, [focus]);
   const gesture = useKeyedGesture();
   const toast = useToast();
   const [title, setTitle] = useState(detail.title);
@@ -158,6 +175,7 @@ function Details({ detail, onChanged }: { detail: ArtifactDetail; onChanged: () 
         >
           {(field) => (
             <Input
+              ref={iconField}
               id={field.id}
               aria-describedby={field.describedBy}
               aria-invalid={field.invalid}
@@ -331,17 +349,6 @@ function SeenBy({ detail }: { detail: ArtifactDetail }) {
 export function TrashControl({ detail }: { detail: ArtifactDetail }) {
   const access = useArtifactAccess({ role: "owner", held: detail.role, person: true });
   const [open, setOpen] = useState(false);
-  const gesture = useKeyedGesture();
-  const toast = useToast();
-  const nav = useNavigator();
-  const trash = async () => {
-    const answer = await gesture.run(trashArtifact(detail.id));
-    if (answer?.kind === "done") {
-      toast.ok(`Moved “${detail.title}” to the trash`);
-      setOpen(false);
-      nav.to(["artifacts", "mine"]);
-    }
-  };
   return (
     <>
       <Button
@@ -352,40 +359,64 @@ export function TrashControl({ detail }: { detail: ArtifactDetail }) {
       >
         Move to the trash
       </Button>
-      <Modal
-        open={open}
-        onClose={() => setOpen(false)}
-        title={`Move “${detail.title}” to the trash?`}
-        placement="top"
-        footer={
-          <>
-            <Button size="small" variant="ghost" onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              size="small"
-              variant="danger"
-              loading={gesture.busy}
-              onClick={() => void trash()}
-            >
-              Move to the trash
-            </Button>
-          </>
-        }
-      >
-        <p>
-          It stops opening for everybody it is shared with, at once.{" "}
-          {purgeSentence(new Date().toISOString())} After that every version and its data are gone.
-        </p>
-        {gesture.answer && gesture.answer.kind !== "done" && (
-          <p className="artifact-refusal">{gesture.answer.text}</p>
-        )}
-      </Modal>
+      <TrashDialog detail={detail} open={open} onClose={() => setOpen(false)} />
     </>
   );
 }
 
-/** Deleting a trashed artifact for good: an administrator's, typed back to confirm. */
+/**
+ * Moving an artifact to the trash, said before it is done: from Settings'
+ * own button and from the artifact bar's More. Its owner's, and a person's;
+ * the caller offers it only to whoever may.
+ */
+export function TrashDialog({
+  detail,
+  open,
+  onClose,
+}: {
+  detail: ArtifactDetail;
+  open: boolean;
+  onClose: () => void;
+}) {
+  const gesture = useKeyedGesture();
+  const toast = useToast();
+  const nav = useNavigator();
+  const trash = async () => {
+    const answer = await gesture.run(trashArtifact(detail.id));
+    if (answer?.kind === "done") {
+      toast.ok(`Moved “${detail.title}” to the trash`);
+      onClose();
+      nav.to(["artifacts", "mine"]);
+    }
+  };
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={`Move “${detail.title}” to the trash?`}
+      placement="top"
+      footer={
+        <>
+          <Button size="small" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button size="small" variant="danger" loading={gesture.busy} onClick={() => void trash()}>
+            Move to the trash
+          </Button>
+        </>
+      }
+    >
+      <p>
+        It stops opening for everybody it is shared with, at once.{" "}
+        {purgeSentence(new Date().toISOString())} After that every version and its data are gone.
+      </p>
+      {gesture.answer && gesture.answer.kind !== "done" && (
+        <p className="artifact-refusal">{gesture.answer.text}</p>
+      )}
+    </Modal>
+  );
+}
+
 export function PurgeControl({ detail }: { detail: ArtifactDetail }) {
   const access = useArtifactAccess({ admin: true, person: true });
   const [open, setOpen] = useState(false);

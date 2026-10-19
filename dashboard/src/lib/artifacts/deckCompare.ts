@@ -1,5 +1,5 @@
 /**
- * Two versions of a deck, paired slide by slide: what the History tab's By
+ * Two versions of a deck, paired slide by slide: what the History panel's By
  * slide lens draws.
  *
  * PAIRED BY ID, the slide's own name in both versions, so an edited slide is

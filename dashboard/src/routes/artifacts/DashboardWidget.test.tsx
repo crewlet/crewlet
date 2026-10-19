@@ -98,6 +98,39 @@ test("a note shows its title above its words", () => {
     [],
   );
   expect(screen.getByRole("heading", { name: "How to read this board" })).toBeTruthy();
+  // The note's own heading names it, as a frame's title names a figure: a
+  // card on the board, never a label over loose prose.
+  expect(screen.getByRole("region", { name: "How to read this board" })).toBeTruthy();
+});
+
+test("a table reaches its frame's sides, with no pager or settings over its rows", () => {
+  draw(
+    { id: "w", type: "table", title: "Open work", columns: ["key"], w: 8 },
+    [{ key: "key", type: "text" }],
+    [{ key: "FAIR-1" }, { key: "FAIR-2" }],
+  );
+  const frame = screen.getByRole("region", { name: "Open work" });
+  expect(frame.classList.contains("crewlet-widget-frame--flush")).toBe(true);
+  expect(frame.querySelector(".crewlet-data-table__toolbar")).toBeNull();
+  expect(screen.queryByRole("button", { name: /settings/i })).toBeNull();
+  expect(screen.queryByRole("button", { name: /sort/i })).toBeNull();
+});
+
+test("a figure says its type, which the stylesheet stands a stat and a meter on", () => {
+  draw({ id: "n", type: "stat", title: "Deploys", agg: "count", w: 3 }, [], [{}]);
+  expect(document.querySelector(".dashboard-figure")?.getAttribute("data-figure")).toBe("stat");
+  cleanup();
+  draw(
+    { id: "w", type: "table", title: "Open work", columns: ["key"], w: 8 },
+    [{ key: "key", type: "text" }],
+    [{ key: "FAIR-1" }],
+  );
+  expect(
+    screen
+      .getByRole("region", { name: "Open work" })
+      .classList.contains("crewlet-widget-frame--flush"),
+  ).toBe(true);
+  expect(document.querySelector(".dashboard-figure")?.getAttribute("data-figure")).toBe("table");
 });
 
 test("a table shows a tracker status in Work's words, never its id", () => {
@@ -112,11 +145,11 @@ test("a table shows a tracker status in Work's words, never its id", () => {
   expect(screen.getByText("In progress")).toBeTruthy();
   expect(screen.queryByText("in_progress")).toBeNull();
   // Each column is held at what it holds, so the table never fits it narrower.
-  // "In progress" is eleven characters: 11 x 7.5 + 28 = 110.5, held at 111px.
+  // "In progress" is eleven characters: 11 x 7.5 + 36 = 118.5, held at 119px.
   const heading = screen
     .getAllByRole("columnheader")
     .find((h) => /status/i.test(h.textContent ?? ""));
-  expect(heading?.style.width).toBe("111px");
+  expect(heading?.style.width).toBe("119px");
 });
 
 test("a chart over days labels its axis with dates and no time of day", () => {

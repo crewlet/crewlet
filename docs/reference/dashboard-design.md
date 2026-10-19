@@ -1112,7 +1112,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/knowledge/diaries` · `#/knowledge/diaries/{handle}` | **Agent diaries** — every agent's diary at a glance, each counted by the node holding the agent; one agent's diary and episodes *(needs Admin access)*. Handles live here as they do under `seats/` | |
 | `#/artifacts` · `#/artifacts/mine` · `#/artifacts/shared` · `#/artifacts/company` · `#/artifacts/agents` | **Artifacts**: For you (what the reader opened most lately and what was shared with them, their pins first), then Mine, Shared with you, Company and By agents, each the engine's `artifacts` listing under one scope, every row decided by `get_artifact`. A list or cards. No permission opens the workspace: a share alone admits a reader (D01), and the engine decides every artifact. An administrator also sees the company's storage against its quotas | `kind=html\|doc\|slides\|sheet` · `q=` · `sort=updated\|created\|title\|opened` · `shape=list\|cards` (all four kept across the sections) · `status=trashed` (Mine: the reader's own trash) |
 | `#/artifacts/new` | **New artifact**: a native sheet, blank or from the Review sheet template, or a doc or a deck from the engine's starter, owned by the reader *(needs Artifacts access)*. A page is published by an agent's tool or the CLI, not typed here | `kind=sheet\|doc\|slides` · `template=review\|blank` · `item=` (the task it is made for, which lists it on that task's Artifacts card) |
-| `#/artifacts/{id}` | **Artifact**: addressed by its id. A page runs in a sandboxed frame on the artifact origin, a doc is rendered here tab by tab by the dashboard's own Markdown renderer with its outline beside it, Edit (text and tabs: add, rename, reorder, remove; each save a version, a raced save merged onto the newer one) and Print, a deck is drawn from its canonical tree, a sheet is drawn from its schema; who is here, Share, Pin, the version on show, History (versions, Restore, labels and the change record), Data (rows, the schema editor and every write, with Undo) and Settings (details, what it can do, its owner, the trash). A reader with no relation is told it is not there or not theirs, in one card | `tab=view\|data\|history\|settings` · `version=` · `sheet=` (which collection a sheet draws) · `doctab=` (which tab of a doc is on show) · `data=rows\|schema\|history` |
+| `#/artifacts/{id}` | **Artifact**: addressed by its id, drawn under ONE slim bar in the frame's place ([An open artifact is the screen](#an-open-artifact-is-the-screen)). A page runs in a sandboxed frame on the artifact origin, edge to edge, a doc is rendered here tab by tab by the dashboard's own Markdown renderer with its outline beside it, Edit (text and tabs: add, rename, reorder, remove; each save a version, a raced save merged onto the newer one) and Print, a deck is drawn from its canonical tree with Edit, Grid and Present in the bar, a sheet is drawn from its schema. The bar holds the way back, the title (renamed in place by an editor), the version chip, the kind's views, who is here, and the controls that open a panel at the side: Details (what the page header and its fact line used to say), History (versions, Compare, Restore, labels and the change record), Data where it keeps any (rows, the schema editor and every write, with Undo), People (who is here, with Follow) and, from More, Settings (details, what it can do, its owner, the trash); Share and More close the bar. A reader with no relation is told it is not there or not theirs, in one card | `panel=details\|history\|data\|people\|settings` (pushes; the old `tab=` and `rail=people` are read as the panel they became and rewritten) · `expand=1` (the panel takes the workspace) · `version=` · `against=` · `lens=` · `sheet=` (which collection a sheet draws) · `doctab=` (which tab of a doc is on show) · `data=rows\|schema\|history` · `mode=grid\|present\|presenter` · `slide=` · `follow=` |
 | `#/spend` | **Spend › Overview**: the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent beside by provider and by team, and the three most expensive tasks beside the auxiliary model by purpose (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across the sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
 | `#/spend/tasks` | **Expensive tasks** — the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs *(needs Tracker access)* | `window=7d\|30d\|90d\|<from>/<to>` (kept across the sections) |
 | `#/spend/budgets` | **Budgets** — the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. ONE address: Settings lists it as a cross-link | `window=` is not read here, and is carried through to the other sections |
@@ -1859,6 +1859,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the one width the dashboard derives itself — where the peek becomes a column |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied. The two positions that last one compares (`applied_through` against `log_seq`) are PACKED on the wire — (generation × 2^40) + sequence, so they compare with a plain `<` across a re-anchor — and are printed unpacked (`positionWords` in `components/work.tsx`): the bare sequence in a log's first generation and `generation:sequence` past it. The stride is the engine's `statelog.GenerationStride`, and a gate in internal/api holds the dashboard's copy (`GENERATION_STRIDE`) to it |
 | `ObjectHeader` | an object's eyebrow, title (a level-two heading in every frame: on a page the last crumb is the `h1` and already names the object, and a peek sits inside a page that has one), state marks and up to six facts, in the same order wherever the object appears — though a peek whose body is a properties rail passes none, because a header and a rail stacked in one column are [one reading](#an-objects-own-facts). A fact may carry a `note` saying where its value came from, for the facts a reader can reasonably doubt, and only those. A fact that is one token (an id, a build) or a set of chips (a node's roles) takes two tracks, so it is never broken mid-token or stacked chip over chip. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
+| `OwnPageHeader` | a screen that draws its own head in the frame's place: the frame draws the slot it is portalled into, with the state bar under it, instead of the page bar. ONE screen does, an open artifact, for the reason [An open artifact is the screen](#an-open-artifact-is-the-screen) gives; `FrameNavToggle` is the frame's navigation toggle for that head to place first |
 | `useTab` | which OBJECT tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has six — so the hook resolves the parameter against the tabs this object HAS. It binds `1`–`9`; the strip itself is `@crewlethq/ui`'s `Tabs` |
 | `ObjectTabs` + `tabFit` | an object's own tabs as the kit's underline row, drawing the tabs that FIT and folding the rest into a "More" menu at its end — the tab the reader is on always drawn — by the same arithmetic (`foldTabs`) the section strip folds with; the widths are read off a hidden, inert twin of the row |
 | `DetailRail` | the peek's chrome: resizable, a column of the sheet where the frame leaves the list beside it its floor (1160 px on most screens, 1396 beside Settings' column), a drawer under that |
@@ -1975,6 +1976,7 @@ for the keys is the reader who does not know `?` yet.
 | In a list | `j` and `k` walk the rows — on a task opened from a list, they open the next and the previous task — `Enter` opens one |
 | With a peek open | `[` and `]` step through the list it was opened from, `Esc` closes it |
 | On a page with tabs | `1`–`9` go to that tab |
+| On an open artifact | `i` its details, `h` its versions and history, `d` its data (where it keeps any), `p` who is here, each pressed again to close what it opened; `s` Share. `Esc` from inside a panel closes it (bound by the design system's `ArtifactPanel`, and listed with the layer's Escape) |
 | On a chart | `+`, `-` zoom and `0` fits, with focus in the chart (bound by the design system's canvas) |
 | In the org builder | `Mod+Z` undo, `Mod+Shift+Z` redo |
 | Writing a reply | `Mod+Enter` sends it (the Inbox's composer; `Enter` alone is a new line) |
@@ -2124,6 +2126,67 @@ show its ancestry beside the controls takes a line of its own.
   and has no row, so it is kept like any other page. Knowledge's landing and
   its pages are the exception: a page is starred from its own More menu, so
   neither draws the frame's star (`useOwnStar`).
+
+### An open artifact is the screen
+
+Every object page in the frame is read the same way: the page bar with its
+trail, then the object's header (its eyebrow, title, facts and actions), then
+its tabs. An open artifact is the one deliberate exception, and it draws ONE
+slim bar instead, the height of a large row (`size.row.lg`, 48 px), with the
+artifact at full size under it.
+
+**Why.** An artifact is not read the way a task or a seat is. A task's page is
+its facts; an artifact's page is the artifact, a deck, a page, a sheet, a
+canvas, and every pixel of chrome above it is a pixel it is drawn smaller in.
+The frame's bar, an object header with a fact line and a tab strip stacked
+over it cost about 280 px at 1440 (a deck's slide was drawn a third smaller
+for it) and most of a phone's first screen, to say things a reader asks after
+once: who owns it, when it changed, their role. And the tabs split one object
+into four places the reader had to leave the artifact to visit. A document
+application draws one bar and opens the rest on demand, and so does this.
+
+**The bar** is the kit's `ArtifactBar`, drawn in the frame's place
+(`OwnPageHeader`, so the frame draws no page bar and no trail under it):
+
+| Where | What |
+|---|---|
+| Start | the frame's navigation toggle on a narrow window, the way back to the gallery, the kind's glyph, the title as the page's `h1` (an editor renames it in place: Enter takes it, Escape puts it back, and a refusal is said at the field), and the version chip (`v3`, or `v2 of 3` in the accent while an older version is on show) whose menu picks a version |
+| Middle | the kind's own views, as one segmented control: a deck's Edit, Grid and Present. A view PUBLISHES them (`lib/artifacts/kindControls.ts`), with its own tools (a doc's Edit) and its rows in More (Print, the presenter's window), so no kind draws a second row of chrome over itself |
+| End | who is here (the presence stack), Details, History, Data where the artifact keeps any, People, then Share and More (Rename, Change icon, Settings, the kind's rows, Open in a new tab, Copy link, Pin, Move to the trash) |
+
+Every control is an icon with its name and its key in a tooltip, and its
+name is the button's accessible name; a panel's control is pressed while its
+panel is open.
+
+**It folds by its own width**, a container query, since the sidebar or a
+panel beside it decides its room: under 860 px the presence stack folds (the
+People control counts who is here instead), under 720 px Share's word goes
+and it stays as its glyph, and under 640 px the views and every unlabelled
+control fold into More as rows with their keys, and the kind's glyph gives
+the title its room. Both arrangements are drawn and the stylesheet shows one,
+as the page bar's phone More does, so no control is in two places a reader
+can see at once.
+
+**The panels** are the kit's `ArtifactPanel` in its `ArtifactWorkspace`: one
+at a time at the artifact's side, named by its heading, `panel=` in the
+address (opening one pushes, so Back closes it). Beside the artifact where
+the workspace holds two useful columns (960 px), over its end edge where it
+does not, and the whole screen on a phone. Data and History can take the
+whole workspace (`expand=1`, and a comparison always does), with the
+artifact kept mounted behind them. Opening a panel moves focus to its
+heading; closing it from inside hands focus back to the control that opened
+it; a panel a link opened takes no focus. The old addresses still open:
+`tab=data`, `tab=history`, `tab=settings` and `rail=people` are read as the
+panel each became and rewritten in place.
+
+**What did not move**: the notices (an administrator's opening, a room that
+could not be joined, offline, a newer version published) are one-line
+banners across the top of the workspace, and following somebody is the
+`FollowBanner` there. The page still asks the frame for the window's height
+(`useFillScreen`), so the body scrolls inside itself and a panel beside it
+stays in view however far the artifact is read; a kind's view measures the
+body (`--artifact-view`) rather than reserving room for a header that is not
+there.
 
 ### Moving, and going back
 

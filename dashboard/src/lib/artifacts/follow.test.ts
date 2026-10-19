@@ -60,7 +60,7 @@ describe("following somebody", () => {
     });
   });
 
-  test("brings the reader back to the View tab to see it", () => {
+  test("brings the reader back to the artifact to see it", () => {
     expect(followMoves(member({ focus: { version: 7 } }), { ...page, tab: "history" })).toEqual({
       version: "7",
       tab: "view",

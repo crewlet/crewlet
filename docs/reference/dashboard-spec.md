@@ -183,6 +183,13 @@ any other is refused.
 `format` is `number` (grouped, up to two decimals), `integer`, `percent` (a
 ratio: 0.25 is 25%) or `compact` (12.3k). `unit` is at most 16 bytes.
 
+A `table` draws its rows in the order its dataset answers them, and a reader
+does not re-sort them: sort and cut the rows in the dataset (a calculation's
+`sort` and `limit`), since sorting the first eight rows by another column would
+read as an order over every row. Each column is as wide as what it holds; the
+one column of free text in words, the longest such (a title), takes the room
+the others leave and ends in an ellipsis when there is less.
+
 ## Reading a board
 
 - `GET /artifacts/{id}/versions/{n}/dashboard` answers the board: the spec,

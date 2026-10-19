@@ -1,5 +1,5 @@
 /**
- * Two versions compared, by their files: what the History tab shows a reader
+ * Two versions compared, by their files: what the History panel shows a reader
  * told "the agent republished it". The files are compared by digest, the
  * changed text file line by line, and the older version is always the "from"
  * half whichever version the reader picked first.

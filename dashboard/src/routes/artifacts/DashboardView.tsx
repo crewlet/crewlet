@@ -20,8 +20,10 @@ import { useRef, useState } from "react";
 import {
   ArrangeBoard,
   ArrangeFrame,
+  ArrangeGrid,
   ArrangeGroup,
   Button,
+  Card,
   DataTable,
   DatasetSource,
   DatasetSourceList,
@@ -136,13 +138,13 @@ export function DashboardView({
             />
           </FormField>
         ))}
-        <Button variant="secondary" size="small" onClick={() => data.refresh()}>
+        <Button variant="secondary" onClick={() => data.refresh()}>
           Refresh
         </Button>
       </div>
       <div className="dashboard-body">
         <ArrangeBoard editing={false} columns={DASHBOARD_COLUMNS} className="dashboard-board">
-          <div className="board-grid">
+          <ArrangeGrid>
             {spec.widgets.map((w) =>
               w.type === "group" ? (
                 <ArrangeFrame
@@ -178,51 +180,61 @@ export function DashboardView({
                 renderLeaf(w)
               ),
             )}
-          </div>
+          </ArrangeGrid>
         </ArrangeBoard>
+        {/* ONE CARD, as every panel beside a board is: the rail's heading is
+            the card's, and the entries are rows of it rather than loose
+            blocks on the page, its top level with the board's first row. */}
         <aside className="dashboard-sources" aria-label="Sources">
-          <h2 className="dashboard-sources-title">Sources</h2>
-          <DatasetSourceList label="Datasets on this dashboard">
-            {spec.datasets.map((spec) => {
-              const d = byId.get(spec.id);
-              const state = data.datasets.get(spec.id);
-              const got = state?.answer ?? null;
-              const isSelected = selected === spec.id;
-              return (
-                <DatasetSource
-                  key={spec.id}
-                  title={spec.title}
-                  kind={spec.source}
-                  definition={definitionWords(spec)}
-                  refresh={d ? refreshWords(d.freshness) : undefined}
-                  asOf={got?.as_of}
-                  status={statusOf(d)}
-                  detail={state?.failure ?? got?.detail}
-                  rows={rowsWords(got)}
-                  selected={isSelected}
-                  onSelect={() => setSelected(isSelected ? null : spec.id)}
-                  now={now}
-                >
-                  {isSelected && got?.status === "ready" && got.table ? (
-                    <DataTable
-                      variant="compact"
-                      columns={Object.fromEntries(
-                        got.table.columns.map((c): [string, DataTableColumn] => [
-                          c.key,
-                          { label: c.label ?? c.key },
-                        ]),
-                      )}
-                      data={got.table.rows
-                        .slice(0, PREVIEW_ROWS)
-                        .map((r, i) => ({ ...r, __row: i }))}
-                      getRowKey={(r) => Number(r.__row)}
-                      emptyMessage="No rows."
-                    />
-                  ) : null}
-                </DatasetSource>
-              );
-            })}
-          </DatasetSourceList>
+          <Card padding="none">
+            <Card.Header>
+              <Card.Title as="h2">Sources</Card.Title>
+            </Card.Header>
+            <DatasetSourceList
+              label="Datasets on this dashboard"
+              className="dashboard-sources-list"
+            >
+              {spec.datasets.map((spec) => {
+                const d = byId.get(spec.id);
+                const state = data.datasets.get(spec.id);
+                const got = state?.answer ?? null;
+                const isSelected = selected === spec.id;
+                return (
+                  <DatasetSource
+                    key={spec.id}
+                    title={spec.title}
+                    kind={spec.source}
+                    definition={definitionWords(spec)}
+                    refresh={d ? refreshWords(d.freshness) : undefined}
+                    asOf={got?.as_of}
+                    status={statusOf(d)}
+                    detail={state?.failure ?? got?.detail}
+                    rows={rowsWords(got)}
+                    selected={isSelected}
+                    onSelect={() => setSelected(isSelected ? null : spec.id)}
+                    now={now}
+                  >
+                    {isSelected && got?.status === "ready" && got.table ? (
+                      <DataTable
+                        variant="compact"
+                        columns={Object.fromEntries(
+                          got.table.columns.map((c): [string, DataTableColumn] => [
+                            c.key,
+                            { label: c.label ?? c.key },
+                          ]),
+                        )}
+                        data={got.table.rows
+                          .slice(0, PREVIEW_ROWS)
+                          .map((r, i) => ({ ...r, __row: i }))}
+                        getRowKey={(r) => Number(r.__row)}
+                        emptyMessage="No rows."
+                      />
+                    ) : null}
+                  </DatasetSource>
+                );
+              })}
+            </DatasetSourceList>
+          </Card>
         </aside>
       </div>
     </div>

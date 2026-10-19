@@ -2,8 +2,9 @@
  * A dashboard table's columns are HELD at what they hold. The design system's
  * table fits every column it was given only a default width for to its box,
  * which on a narrow widget cut headings to their first letters and broke
- * values mid-word; a held width it leaves alone, and the table scrolls. jsdom
- * runs no fit, so the columns the table is handed are what is asserted.
+ * values mid-word; a held width it leaves alone. Only the prose column is
+ * given a default width, so it alone takes or gives the room left. jsdom runs
+ * no fit, so the columns the table is handed are what is asserted.
  */
 
 import { cleanup, render } from "@testing-library/react";
@@ -28,10 +29,11 @@ const { ToastProvider } = await import("@crewlethq/ui");
 
 afterEach(cleanup);
 
-test("every column is held at the width its content needs, never fitted narrower", () => {
+test("every column is held at the width its content needs but the prose, which is fitted", () => {
   const columns = [
     { key: "outcome", type: "text" as const },
     { key: "status", type: "text" as const, words: "tracker_status" as const },
+    { key: "title", type: "text" as const },
   ];
   render(
     <ToastProvider>
@@ -42,7 +44,7 @@ test("every column is held at the width its content needs, never fitted narrower
           type: "table",
           title: "Latest",
           dataset: "ds",
-          columns: ["outcome", "status"],
+          columns: ["outcome", "status", "title"],
           w: 8,
         }}
         dataset={{
@@ -57,7 +59,16 @@ test("every column is held at the width its content needs, never fitted narrower
           version: 1,
           dataset: "ds",
           status: "ready",
-          table: { columns, rows: [{ outcome: "succeeded", status: "in_progress" }] },
+          table: {
+            columns,
+            rows: [
+              {
+                outcome: "succeeded",
+                status: "in_progress",
+                title: "README and MVP acceptance run-through",
+              },
+            ],
+          },
         }}
         status="ready"
         detail={undefined}
@@ -68,7 +79,14 @@ test("every column is held at the width its content needs, never fitted narrower
     </ToastProvider>,
   );
   const cols = handed.at(-1)!;
-  expect(cols.outcome?.width).toBe(112);
-  expect(cols.status?.width).toBe(111);
+  expect(cols.outcome?.width).toBe(104);
+  expect(cols.status?.width).toBe(119);
   expect(cols.outcome?.defaultWidth).toBeUndefined();
+  expect(cols.status?.defaultWidth).toBeUndefined();
+  // 37 characters at 7.5 px and the cell's 36 px of padding, fitted no
+  // narrower than about twenty characters.
+  expect(cols.title?.defaultWidth).toBe(314);
+  expect(cols.title?.minWidth).toBe(180);
+  expect(Object.values(cols).every((c) => c.sortable === false)).toBe(true);
+  expect(cols.title?.width).toBeUndefined();
 });

@@ -8,10 +8,12 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
+import { LayerHost } from "@crewlethq/ui";
 import { SlidesView } from "./SlidesView.tsx";
+import { WithKindBar } from "~/test/kindControls.tsx";
 import { Router } from "~/app/router.tsx";
 import type { ArtifactDeck, ArtifactDetail } from "~/protocol/index.ts";
 
@@ -60,11 +62,23 @@ afterEach(() => {
 const mount = () =>
   render(
     <Router>
-      <main style={{ overflowY: "auto" }}>
-        <SlidesView detail={detail} version={1} presence={{ at: () => {} }} />
-      </main>
+      <LayerHost>
+        <WithKindBar>
+          <main style={{ overflowY: "auto" }}>
+            <SlidesView
+              detail={detail}
+              version={1}
+              presence={{ at: () => {} }}
+              onPublished={() => {}}
+            />
+          </main>
+        </WithKindBar>
+      </LayerHost>
     </Router>,
   );
+
+/** The show's stage: the slide, letterboxed into the room the stage measured. */
+const stageOf = (show: HTMLElement) => within(show).getByRole("group", { name: /^Slide 1 of / });
 
 /** The reader's press on Present: focus on the radio, then the click. */
 async function present() {
@@ -100,7 +114,7 @@ test("Present is never taller than the view: the slide is letterboxed into the r
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (
     this: HTMLElement,
   ) {
-    return this.classList.contains("slides-show") ? 1143 : 0;
+    return this.classList.contains("crewlet-slide-stage") ? 1143 : 0;
   });
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
     this: HTMLElement,
@@ -110,7 +124,7 @@ test("Present is never taller than the view: the slide is letterboxed into the r
   });
   mount();
   const show = await present();
-  expect(show.style.getPropertyValue("--slides-show-height")).toBe("516px");
+  expect(stageOf(show).style.height).toBe("516px");
 });
 
 test("a show with room to spare asks only for the slide at its width", async () => {
@@ -123,7 +137,7 @@ test("a show with room to spare asks only for the slide at its width", async () 
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (
     this: HTMLElement,
   ) {
-    return this.classList.contains("slides-show") ? 358 : 0;
+    return this.classList.contains("crewlet-slide-stage") ? 358 : 0;
   });
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
     this: HTMLElement,
@@ -132,5 +146,5 @@ test("a show with room to spare asks only for the slide at its width", async () 
   });
   mount();
   const show = await present();
-  expect(show.style.getPropertyValue("--slides-show-height")).toBe("201px");
+  expect(stageOf(show).style.height).toBe("201px");
 });
