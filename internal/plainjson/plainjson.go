@@ -1,7 +1,7 @@
 // Package plainjson writes JSON for a reader who reads it AS TEXT — a person
 // shown a record of what a tool was called with, a model handed what a tool
-// answered or reminded what it has already done — with `<`, `>` and `&`
-// written as themselves.
+// answered, reminded what it has already done or shown the tools it may call
+// — with `<`, `>` and `&` written as themselves.
 //
 // # Not json.Marshal
 //
@@ -22,7 +22,11 @@
 //     and of whatever ceiling the answer is held to;
 //   - a PRIOR-WORK LINE ([github.com/crewlet/crewlet/internal/agent/ledger])
 //     is re-read by the model every round and shown to a person on the seat
-//     screen as the conversation ledger, and is neither kind of document.
+//     screen as the conversation ledger, and is neither kind of document;
+//   - a TEXT-MODE PROMPT ([github.com/crewlet/crewlet/internal/providers/llm/cliagent])
+//     carries the tool catalogue and the model's own earlier calls as fenced
+//     JSON in place of a tool channel, which the model reads as written and
+//     REPLIES IN — shown a `<` it typed as an escape, it writes the escape.
 //
 // # The text ends where its value does
 //
