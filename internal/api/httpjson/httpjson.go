@@ -77,6 +77,7 @@ import (
 	"encoding/json"
 
 	"github.com/crewlet/crewlet/internal/configplane"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // Code is the machine-readable `error` value a failed request carries.
@@ -552,7 +553,8 @@ const (
 	//
 	// The wire value is internal/iam/session's own `CodeNoSeat`; the two
 	// are held equal by a test in internal/api/auth, since this package
-	// is a leaf and cannot import that one to share the constant.
+	// imports no engine machinery — only the vocabularies its sentences
+	// name, iam's permissions and configplane's interval — and that one is.
 	CodeSeatUnavailable Code = "seat_unavailable"
 
 	// CodeReaderChanged is a request that names the principal it was made
@@ -1056,6 +1058,27 @@ const (
 	CodeActionAlreadyClaimed Code = "action_already_claimed"
 )
 
+// unauthorizedSentence is [CodeUnauthorized]'s sentence, naming every
+// permission in grants as a person reads it: each word capitalised, in the
+// list's own order, joined by commas with "or" before the last, the words
+// People & access gives the permissions.
+func unauthorizedSentence(grants []iam.Grant) string {
+	words := make([]string, 0, len(grants))
+	for _, g := range grants {
+		word := string(g)
+		if word != "" {
+			word = strings.ToUpper(word[:1]) + word[1:]
+		}
+		words = append(words, word)
+	}
+	named := strings.Join(words, ", ")
+	if n := len(words); n > 1 {
+		named = strings.Join(words[:n-1], ", ") + " or " + words[n-1]
+	}
+	return "You don't have the access this needs (" + named + "). Ask an admin " +
+		"for it."
+}
+
 // codes is THE TABLE: every code this engine answers with, each with the one
 // sentence a person is shown for it.
 //
@@ -1095,11 +1118,11 @@ var codes = map[Code]string{
 	// token", which was true while an operator token was the only credential
 	// and authority a single yes-or-no; a person signed in with a session
 	// and refused one permission was told to go and find a token. It NAMES
-	// THE PERMISSIONS there are (ADR-0033), because a person reading it on a
-	// screen has to know what to ask an admin for, and the refusal's
-	// `grants` beside it says which one.
-	CodeUnauthorized: "You don't have the access this needs (Admin, Worklet, " +
-		"Doclet or Artifacts). Ask an admin for it.",
+	// EVERY PERMISSION there is (ADR-0033), because a person reading it on a
+	// screen has to know what to ask an admin for, and the refusal's `grants`
+	// beside it says which one — read off [iam.AllGrants] rather than typed
+	// here, so a permission the next app adds is named the day it exists.
+	CodeUnauthorized: unauthorizedSentence(iam.AllGrants),
 	CodeQueryFailed: "That query could not be answered. The reason is in " +
 		"this node's log.",
 	CodeNotFound:  "There is no such record here.",
@@ -1811,8 +1834,9 @@ func UnavailableWith(w http.ResponseWriter, code Code, retryAfterSeconds int, de
 
 // OutcomeUnknown is the `outcome` a write nobody on this node can account for
 // answers with — the state log's own word for the third of its three outcomes
-// (statelog.OutcomeUnknown), spelled here because this package imports
-// nothing of the engine's; a test holds the two equal.
+// (statelog.OutcomeUnknown), spelled here because this package imports no
+// engine machinery, only the vocabularies its sentences name; a test holds
+// the two equal.
 const OutcomeUnknown = "unknown"
 
 // The keys an unknown outcome reserves, for [UnknownOutcome]'s rule that they
