@@ -241,7 +241,7 @@ func newWriteRigWith(t *testing.T,
 	nodeDeps := iamdomain.WriterDeps{
 		Publisher: publisher, DB: db.Reader(), Blinds: blinder, Sealer: sealer,
 		Seats:  seats,
-		Events: announced, Actor: "node-a", ActorKind: iam.KindMachine,
+		Events: announced, Actor: "node-a", ActorKind: iamdomain.NodeKind,
 		// AS THE ENGINE GIVES IT: admin, and nothing a row could add.
 		Grants: []iam.Grant{iam.GrantAdmin},
 		Now:    func() time.Time { return brokerAt },
