@@ -10564,6 +10564,11 @@ a.live-row:focus-visible {
   flex-direction: column;
   gap: var(--spacing-4);
 }
+/* THE LINK UNDER THE FACTS, at their start edge: it is the panel's one action
+   and reads with the facts above it, not as a form's submit at the end. */
+.artifact-details-actions {
+  display: flex;
+}
 .artifact-details-description {
   margin: 0;
   color: var(--color-text-secondary);

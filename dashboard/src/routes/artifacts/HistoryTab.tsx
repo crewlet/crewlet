@@ -243,8 +243,11 @@ function VersionFiles({
           {files.map((f) => (
             <li key={f.path} className="artifact-file">
               <span className="mono truncate">{f.path}</span>
+              {/* THE SIZE, AND WHETHER IT IS THE ENTRY: the path already says
+                  what kind of file it is, and a media type ("text/markdown")
+                  said it again in the engine's words. */}
               <span className="artifact-file-meta">
-                {f.content_type.split(";")[0]}, {fmtBytes(f.object.size)}
+                {fmtBytes(f.object.size)}
                 {f.path === answer.data?.manifest.entry ? ", the entry" : ""}
               </span>
             </li>
