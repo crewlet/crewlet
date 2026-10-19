@@ -102,14 +102,18 @@ export function wordsOf(column: DashboardColumn | undefined, v: DashboardValue):
 
 /**
  * A table cell's words, the one rule a widget's table, its column widths and
- * the Sources rail's preview all read: none as nothing, a boolean as Yes or
+ * the Sources rail's preview all read: none (and no priority) as nothing,
+ * which a table draws as the empty mark, a boolean as Yes or
  * No, a number grouped to two decimals, a date as a reader writes one (a day
  * as `Sep 1`, an instant with its time), and any other value in its column's
  * own words. A date drawn as the engine stores it (`2026-09-01`,
  * `2026-09-01T10:00:00Z`) is a machine's spelling of a fact a reader reads.
  */
 export function cellText(column: DashboardColumn | undefined, v: DashboardValue): string {
-  if (v === null) return "";
+  if (v === null || v === "") return "";
+  // A priority of none is no priority: drawn as the absence it is, as an
+  // empty due date is, never as the word "None".
+  if (column?.words === "tracker_priority" && v === "none") return "";
   if (typeof v === "boolean") return v ? "Yes" : "No";
   if (column?.type === "number" && typeof v === "number") return formatNumber(v, "number");
   if (column?.type === "date" && typeof v === "string") {

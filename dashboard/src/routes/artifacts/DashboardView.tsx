@@ -102,18 +102,16 @@ export function DashboardView({
   const spec = answer.board;
   const byId = new Map(answer.datasets.map((d) => [d.id, d]));
   /*
-   * A widget's span on this board's width (see boardSpan). A group's children
-   * stand on the group's own twelve columns, inside its inset, which is the
-   * board's gap a side.
+   * A widget's span on this board's width (see boardSpan). A group is a
+   * section of the board with no inset of its own, so its children stand on
+   * the board's own columns.
    */
-  const spanOf = (w: Widget, inGroup: boolean) =>
-    stacked
-      ? DASHBOARD_COLUMNS
-      : boardSpan(w.w, inGroup ? boardWidth - 2 * gap : boardWidth, gap, DASHBOARD_COLUMNS);
+  const spanOf = (w: Widget) =>
+    stacked ? DASHBOARD_COLUMNS : boardSpan(w.w, boardWidth, gap, DASHBOARD_COLUMNS);
   const statusOf = (d: DashboardBoardDataset | undefined) =>
     d ? datasetStatus(d, data.datasets.get(d.id), now) : "loading";
 
-  const renderLeaf = (w: Widget, inGroup = false) => {
+  const renderLeaf = (w: Widget) => {
     const d = w.dataset ? byId.get(w.dataset) : undefined;
     const state = d ? data.datasets.get(d.id) : undefined;
     const got = state?.answer ?? null;
@@ -123,7 +121,7 @@ export function DashboardView({
         name={w.title ?? w.id}
         editing={false}
         bare={w.type === "note"}
-        columns={spanOf(w, inGroup)}
+        columns={spanOf(w)}
         rows={w.h ?? null}
         rowHeight={ROW}
         selected={d !== undefined && selected === d.id}
@@ -139,6 +137,7 @@ export function DashboardView({
           asOf={got?.as_of}
           onCite={d ? () => setSelected(d.id) : undefined}
           onFocus={() => presence?.at({ region: `widget:${w.id}` }, false)}
+          inRow={!stacked}
         />
       </ArrangeFrame>
     );
@@ -171,12 +170,16 @@ export function DashboardView({
                     name={w.title ?? w.id}
                     editing={false}
                     container
-                    columns={spanOf(w, false)}
+                    columns={spanOf(w)}
                     rows={null}
                     rowHeight={ROW}
                     className="dashboard-cell"
                   >
                     <ArrangeGroup
+                      // A SECTION OF THE BOARD, read rather than arranged: a
+                      // quiet header over a hairline, its widgets on the
+                      // board's own columns.
+                      variant="section"
                       title={w.title ?? ""}
                       tone={(w.tone ?? "none") as SurfaceTone}
                       collapsed={collapsed.has(w.id)}
@@ -192,7 +195,7 @@ export function DashboardView({
                       columns={DASHBOARD_COLUMNS}
                       empty="This group holds no widgets."
                     >
-                      {(w.children ?? []).map((c) => renderLeaf(c, true))}
+                      {(w.children ?? []).map(renderLeaf)}
                     </ArrangeGroup>
                   </ArrangeFrame>
                 ) : (

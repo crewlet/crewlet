@@ -185,9 +185,9 @@ ratio: 0.25 is 25%) or `compact` (12.3k). `unit` is at most 16 bytes. A stat's
 or a meter's number is read at a glance, so it is `compact` unless `format`
 says otherwise; a chart's scale is shortened from a thousand (`7.5k`), without
 the unit, and its tooltip reads each value in the widget's format and unit. A
-meter is drawn as the number, what it is out of, and a bar in the data hue: the
-spec does not say whether a full bar is a fault or a goal, so the bar is never
-painted as a warning.
+meter is drawn as the number, what it is out of, and a bar against the maximum
+that turns to the warning hue from three quarters of it and to the danger hue
+at it.
 
 A chart tells four series apart by hue and draws a fifth in the residual grey.
 Past five, the first four keep their hues and the rest are summed into one

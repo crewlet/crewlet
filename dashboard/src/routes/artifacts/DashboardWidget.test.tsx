@@ -203,3 +203,17 @@ test("a widget's table offers no column resizing, its widths being its content's
   expect(document.querySelector(".crewlet-data-table__resizer")).toBeNull();
   expect(document.querySelector(".dashboard-rows")).not.toBeNull();
 });
+
+test("a table draws every absent value as the empty mark, a priority of none included", () => {
+  draw(
+    { id: "w", type: "table", title: "Open work", columns: ["key", "priority", "due"], w: 8 },
+    [
+      { key: "key", type: "text" },
+      { key: "priority", type: "text", words: "tracker_priority" },
+      { key: "due", type: "date" },
+    ],
+    [{ key: "ENG-1", priority: "none", due: null }],
+  );
+  expect(screen.queryByText("None")).toBeNull();
+  expect(document.querySelectorAll(".dashboard-rows .crewlet-empty-value")).toHaveLength(2);
+});
