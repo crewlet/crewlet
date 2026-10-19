@@ -130,15 +130,32 @@ func (d WorkDeps) notAsked(ctx context.Context, action authz.Action) *tools.Resu
 	return d.mayWrite(ctx, action, authz.Object{Kind: authz.KindTask})
 }
 
+// errAuthorityContradicted is an authority decision that admitted, on the bare
+// kind, a caller it had just admitted only as the person an ask names — two
+// answers to one question about one principal within one call.
+var errAuthorityContradicted = errors.New("builtin: the authority decision " +
+	"admitted the tracker to a caller it had just admitted only as the person " +
+	"an ask names")
+
 // answerOnly is [WorkDeps.notAsked] for a comment from somebody admitted as the
 // person an ask names that is not an answer to it, with what they may do
 // instead: the table admits them to the answer and nothing else, and a
 // refusal that said only "you need the tracker" would leave them guessing
 // which part of the call was the problem.
+//
+// AN AUTHORIZER THAT ADMITS THE BARE KIND HERE CONTRADICTS ITSELF: the caller
+// reached this only because it would not admit them as a tracker holder, and
+// [authz.ClassAppOrAsked] decides one principal the same way every time. That
+// is a FAULT of this node ([faulted]), its words in the log. It used to be a
+// refusal made up on the spot, [ErrRefused] with no decision behind it, which
+// every surface had to render as `unauthorized` naming no reason and no
+// permission — a refusal nothing could lift, presented as one a grant would.
 func (d WorkDeps) answerOnly(ctx context.Context, why string) *tools.Result {
 	refused := d.notAsked(ctx, authz.ActionWorkComment)
 	if refused == nil {
-		refused = refusalOf(authorityRefusal(string(authz.ActionWorkComment), ErrRefused))
+		fault := faulted(ctx, string(authz.ActionWorkComment), errAuthorityContradicted,
+			string(authz.ActionWorkComment)+" didn't run: "+faultSaid+".")
+		return &fault
 	}
 	refused.Output += " Without Worklet you may only answer a question on " +
 		"this item that is addressed to you: " + why
