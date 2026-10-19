@@ -130,6 +130,27 @@ export function createSheet(fields: {
   };
 }
 
+/**
+ * Start a slide deck from the engine's starter (`POST /artifacts` with
+ * `starter`): four example slides the person edits in place. The engine holds
+ * the starter's files, so the dashboard sends no upload.
+ */
+export function createDeck(fields: {
+  title: string;
+  workItem?: string;
+}): Omit<KeyedRequest, "key"> {
+  return {
+    method: "POST",
+    path: "/artifacts",
+    body: {
+      kind: "slides",
+      title: fields.title,
+      starter: true,
+      ...(fields.workItem ? { work_item: fields.workItem } : {}),
+    },
+  };
+}
+
 /** Replace a store's collections (`PUT /artifacts/{id}/data/schema`). Every collection kept is named. */
 export function configureSchema(
   id: string,
