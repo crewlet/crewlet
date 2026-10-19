@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -72,11 +73,11 @@ func TestExecutorSurfaceHidesRunSandboxFromSeatsThatCannotUseIt(t *testing.T) {
 				t.Fatal(err)
 			}
 			snapshot, err := tools.NewRegistry().Snapshot().
-				With(tools.Entry{Tool: stubTool(RunSandboxTool), Origin: tools.OriginBuiltin})
+				With(tools.Entry{Tool: stubTool(toolname.RunSandbox), Origin: tools.OriginBuiltin})
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := slices.Contains(r.executorActive(snapshot), RunSandboxTool)
+			got := slices.Contains(r.executorActive(snapshot), toolname.RunSandbox)
 			if got != tc.want {
 				t.Errorf("run_sandbox offered = %v, want %v", got, tc.want)
 			}

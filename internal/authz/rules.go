@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // The verbs this engine authorizes.
@@ -45,22 +46,22 @@ const (
 
 	// --- the caller's own working state ----------------------------- //
 	ActionSkillUse      Action = "use_skill"
-	ActionSkillLoad     Action = "load_tool_skill"
+	ActionSkillLoad     Action = toolname.LoadToolSkill
 	ActionSkillRefine   Action = "refine_skill"
 	ActionEpisodesQuery Action = "query_episodes"
 	ActionMemoryRefresh Action = "refresh_memory"
-	ActionMemoryPersist Action = "reflect_and_persist"
-	ActionOnboardedMark Action = "mark_onboarded"
+	ActionMemoryPersist Action = toolname.ReflectAndPersist
+	ActionOnboardedMark Action = toolname.MarkOnboarded
 
 	// --- a colleague's ordinary work -------------------------------- //
 	//
 	// AN ASK IS AN AGENT'S, and the only one in this block: a seat whose
 	// role offers it puts a question to a colleague seat, spending that
 	// seat's turn — see [rule.seatOnly].
-	ActionColleagueAsk Action = "a2a_ask"
-	ActionWorkCreate   Action = "create_work_item"
+	ActionColleagueAsk Action = toolname.A2AAsk
+	ActionWorkCreate   Action = toolname.CreateWorkItem
 	ActionWorkUpdate   Action = "update_work_item"
-	ActionWorkComment  Action = "comment_on_work_item"
+	ActionWorkComment  Action = toolname.CommentOnWorkItem
 	ActionWorkMerge    Action = "merge_work_item"
 	ActionPageCreate   Action = "write_page"
 	ActionPageSave     Action = "save_page"
@@ -201,7 +202,7 @@ const (
 	ActionChatSearch Action = "search_messages"
 	ActionChatPost   Action = "post_message"
 	ActionChatReply  Action = "reply_in_thread"
-	ActionChatDirect Action = "send_dm"
+	ActionChatDirect Action = toolname.SendDM
 	ActionChatReact  Action = "react_to_message"
 	ActionChatJoin   Action = "join_channel"
 	ActionChatLeave  Action = "leave_channel"
@@ -245,7 +246,7 @@ const (
 	ActionAuditRead Action = "audit.read"
 	// ActionSandboxRun starts a detached coding run: an agent's, and only
 	// one whose role offers the tool — see [rule.seatOnly].
-	ActionSandboxRun Action = "run_sandbox"
+	ActionSandboxRun Action = toolname.RunSandbox
 
 	// --- one seat's own trail, read by somebody else ----------------- //
 	//

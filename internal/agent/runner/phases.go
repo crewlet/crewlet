@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
@@ -1556,7 +1557,7 @@ func (r *Runner) executorActive(snapshot tools.Snapshot) []string {
 		if phaseScoped[e.Name()] {
 			continue
 		}
-		if e.Name() == RunSandboxTool && !r.offersSandbox() {
+		if e.Name() == toolname.RunSandbox && !r.offersSandbox() {
 			continue
 		}
 		out = append(out, e.Name())
@@ -1613,7 +1614,7 @@ func (r *Runner) offersSandbox() bool {
 // query_episodes and refresh_memory are recon, which the executor now does
 // itself; reflect_and_persist is deliberate too — an agent that learns
 // something mid-turn should be able to keep it.
-var phaseScoped = map[string]bool{MarkOnboardedTool: true}
+var phaseScoped = map[string]bool{toolname.MarkOnboarded: true}
 
 // taskFor prefixes the reviewer's correction to the ask.
 //

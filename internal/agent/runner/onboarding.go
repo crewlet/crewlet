@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -42,18 +43,7 @@ var onboardingLog = logging.Get("agent.onboarding")
 // mark_onboarded is what ENDS the pass, so it is also the terminator: without
 // it the loop asks again after the model has already marked, and the pass
 // spends its remaining budget re-deciding something it has decided.
-var onboardingAlwaysOn = []string{ReflectAndPersistTool, MarkOnboardedTool}
-
-// The two builtin names this phase depends on. Named here rather than imported
-// from internal/agent/builtin because that package imports tools, which
-// imports turnctx — and the runner is what builds the surface both sit on.
-// tests/… pins them against the builtin package's own constants, so a rename
-// there fails the build here rather than silently emptying this surface.
-const (
-	ReflectAndPersistTool = "reflect_and_persist"
-	MarkOnboardedTool     = "mark_onboarded"
-	RunSandboxTool        = "run_sandbox"
-)
+var onboardingAlwaysOn = []string{toolname.ReflectAndPersist, toolname.MarkOnboarded}
 
 // Markers is what the onboarding pass needs from the learning store.
 type Markers interface {
@@ -255,7 +245,7 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 		// names this tool rather than the whole catalogue the pass carries.
 		// Never forced, like every phase: see phaseRun.terminateAfter for
 		// why a forced tool choice is not asked for as well.
-		terminateAfter: []string{MarkOnboardedTool},
+		terminateAfter: []string{toolname.MarkOnboarded},
 	})
 	if err != nil {
 		return false, fmt.Errorf("runner: onboarding: %w", err)
@@ -265,7 +255,7 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 	// pass that said it was done without calling the tool has not marked,
 	// and treating its claim as the fact would leave a seat permanently
 	// unmarked in the store while never onboarding again in this process.
-	marked := calledSuccessfully(surface, MarkOnboardedTool)
+	marked := calledSuccessfully(surface, toolname.MarkOnboarded)
 	notes := "did not mark (will retry next turn)"
 	decision := ""
 	if marked {

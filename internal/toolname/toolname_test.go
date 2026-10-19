@@ -147,7 +147,17 @@ func TestNoSharedToolNameIsSpelledTwice(t *testing.T) {
 // spells reports whether text carries name as a word of its own: a name
 // inside a longer identifier (`activate_tools`, `xactivate_tool`) is another
 // word, and a check that matched it would refuse names nobody shares.
+//
+// A NAME WITH NO UNDERSCORE IS ALSO AN ENGLISH WORD ("delegate"), so it counts
+// only where the text marks it as code: the whole literal, in backticks, or
+// called with a parenthesis. "Do not delegate further" is prose about the act,
+// and a walk that refused it would make every sentence about delegating spell
+// the tool's name. A snake_case name is never prose, so any word of it counts.
 func spells(text, name string) bool {
+	if !strings.Contains(name, "_") {
+		return text == name || strings.Contains(text, "`"+name+"`") ||
+			strings.Contains(text, "`"+name+"(") || strings.Contains(text, name+"(")
+	}
 	for from := 0; ; {
 		at := strings.Index(text[from:], name)
 		if at < 0 {
@@ -179,6 +189,19 @@ func TestANameIsMatchedAsAWordOfItsOwn(t *testing.T) {
 		"":                             false,
 	} {
 		if got := spells(text, toolname.Activate); got != want {
+			t.Errorf("spells(%q) = %v, want %v", text, got, want)
+		}
+	}
+	// AND A NAME THAT IS ALSO A WORD COUNTS ONLY AS CODE.
+	for text, want := range map[string]bool{
+		"delegate":                    true,
+		"call `delegate` with tasks":  true,
+		"`delegate(tasks=...)`":       true,
+		"Do not delegate further.":    false,
+		"delegate: two tasks share":   false,
+		"one delegate call may carry": false,
+	} {
+		if got := spells(text, toolname.Delegate); got != want {
 			t.Errorf("spells(%q) = %v, want %v", text, got, want)
 		}
 	}

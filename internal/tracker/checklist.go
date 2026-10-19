@@ -310,15 +310,16 @@ func checkChecklistCaps(lists []Checklist) error {
 		if len(list.Items) > MaxChecklistItems {
 			return invalid("checklist %q would hold %d items and a "+
 				"list holds at most %d — split it, or file some of them as "+
-				"subtasks with create_work_item and remove those lines", list.Name, len(list.Items), MaxChecklistItems)
+				"subtasks with %s and remove those lines", list.Name,
+				len(list.Items), MaxChecklistItems, CreateWorkItemTool)
 		}
 		total += len(list.Items)
 	}
 	if total > MaxChecklistItemsTotal {
 		return invalid("a task carries at most %d checklist items "+
 			"across its lists and this change would leave %d — file some of "+
-			"them as subtasks with create_work_item and remove those lines",
-			MaxChecklistItemsTotal, total)
+			"them as subtasks with %s and remove those lines",
+			MaxChecklistItemsTotal, total, CreateWorkItemTool)
 	}
 	return nil
 }
