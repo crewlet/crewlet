@@ -11421,7 +11421,7 @@ a.live-row:focus-visible {
   overflow: hidden;
   padding: var(--spacing-1) var(--spacing-2);
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--color-text-secondary);
   font: inherit;
