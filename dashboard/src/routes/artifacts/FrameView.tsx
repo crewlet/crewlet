@@ -20,10 +20,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Button,
-  Callout,
   LinkInterstitial,
   SandboxedFrame,
-  Skeleton,
+  SandboxedFrameNotice,
+  SandboxedFramePlaceholder,
   type SandboxedFrameState,
 } from "@crewlethq/ui";
 import type { ThemeId } from "@crewlethq/tokens";
@@ -50,17 +50,21 @@ import type { PresenceReport } from "./presence.ts";
 
 /** Why a frame could not be minted, in the reader's words, from the engine's code. */
 function mintRefusal(err: RestError): string {
+  // NOTHING ANSWERED: the client's own words for a deadline or a dropped
+  // connection describe the transport, not the page.
+  if (err.status === 0)
+    return "The engine could not be reached. Check your connection, then try again.";
   switch (err.code) {
     case "artifact_origin_unset":
-      return "This deployment serves no artifact origin, so a page cannot be opened here. An operator sets api.artifacts.external_url.";
+      return "This deployment is not set up to show pages yet. Ask an operator to give it an artifact origin (api.artifacts.external_url).";
     case "artifact_not_framed":
-      return "This version has no page to open.";
+      return "This version has no page to show.";
     case "session_revoked":
       return "Your sign-in is ending. Sign in again to open this page.";
     case "artifact_trashed":
-      return "This artifact is in the trash.";
+      return "This artifact is in the trash. Restore it to open its page.";
     default:
-      return err.detail || "The engine could not open this page.";
+      return err.detail || "The engine could not open this page. Try again in a moment.";
   }
 }
 
@@ -210,23 +214,35 @@ export function FrameView({
   const [state, setState] = useState<SandboxedFrameState>("loading");
   const reported = useRef("");
 
+  // EVERY STATE IS DRAWN IN THE ONE BOX the page will fill, by the frame's own
+  // parts: the placeholder while the ticket is minted is the one the frame
+  // shows until the page says hello, and a refused ticket is said exactly as
+  // a page that failed to start is.
+  const box = className ? `artifact-frame-box ${className}` : "artifact-frame-box";
+  const name = title ?? detail.title;
   if (frame.error) {
     return (
-      <Callout variant="danger" title="This page could not be opened">
-        <p>{mintRefusal(frame.error)}</p>
-        <Button size="small" variant="secondary" onClick={() => setAttempt((n) => n + 1)}>
-          Try again
-        </Button>
-      </Callout>
+      <div className={box}>
+        <SandboxedFrameNotice
+          className="artifact-frame"
+          title={name}
+          heading="This page could not be opened"
+          action={
+            <Button variant="outline" size="small" onClick={() => setAttempt((n) => n + 1)}>
+              Try again
+            </Button>
+          }
+        >
+          {mintRefusal(frame.error)}
+        </SandboxedFrameNotice>
+      </div>
     );
   }
   if (!frame.data || !host)
     return (
-      <Skeleton
-        variant="box"
-        label={`Loading ${title ?? detail.title}`}
-        className="artifact-frame-skeleton"
-      />
+      <div className={box}>
+        <SandboxedFramePlaceholder className="artifact-frame" title={name} />
+      </div>
     );
   const minted = frame.data;
   const report = (outcome: "ready" | "failed") => {
@@ -235,7 +251,7 @@ export function FrameView({
     reportReady(minted.frame_url, outcome, performance.now() - handed.current);
   };
   return (
-    <div className={className ? `artifact-frame-box ${className}` : "artifact-frame-box"}>
+    <div className={box}>
       <SandboxedFrame
         className="artifact-frame"
         src={minted.frame_url}
@@ -243,7 +259,7 @@ export function FrameView({
         mode={minted.mode}
         sandbox={minted.sandbox}
         allow={minted.allow}
-        title={title ?? detail.title}
+        title={name}
         theme={theme}
         nonce={minted.nonce}
         onReady={(port) => {
