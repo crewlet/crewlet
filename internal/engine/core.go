@@ -378,7 +378,9 @@ func (c *core) shutdown() {
 // acting as the node is what the node itself does: redeeming an invitation
 // into a person who does not exist yet, the duty that sweeps, and the re-seal
 // a keyring rotation moves every person's values with. A person's own sign-in
-// acts as that person.
+// acts as that person. What the node writes for itself names it under its id
+// as the ENGINE ([iamdomain.NodeKind]), so the trail draws it as the system
+// rather than as a credential's login.
 func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 	running := sl.Domain(iamdomain.Domain{}.Name())
 	if running == nil {
@@ -427,9 +429,12 @@ func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 		// WHAT A LANDED RECORD DECIDED — a grant delta, a session
 		// generation — goes on the node's audit feed from here, since
 		// only the decide holds it. Every surface's [Writer.As] keeps it.
-		Events:    e.authEvents,
+		Events: e.authEvents,
+		// AS THE ENGINE, under the node's id: what this writer authors
+		// for itself is the engine's housekeeping, never a credential's
+		// ([iamdomain.NodeKind]).
 		Actor:     nodeID,
-		ActorKind: iam.KindMachine,
+		ActorKind: iamdomain.NodeKind,
 		// THE NODE IS THE DEPLOYMENT, so it writes as an administrator:
 		// the sweeps and evictions, the re-seal a keyring rotation moves
 		// everybody's values with, and the two writes about people with

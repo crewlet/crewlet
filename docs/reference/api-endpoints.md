@@ -1705,8 +1705,8 @@ theirs: the node writes it down under its own authority, and the entry names
 the person as `actor` and the session it opened or closed as `operator_id`
 (their login, where it came through no session yet). An entry the engine
 decided for itself — a sweep, a re-seal, a password re-hashed at the current
-cost — names the node and no `operator_id`: the node acts on nobody's
-credential.
+cost, a company-wide invalidation — names the node, with `actor_kind`
+`engine`, and no `operator_id`: the node acts on nobody's credential.
 
 An entry about somebody names them by `person`, their id, and by `login`, the
 login their row holds when the trail is read — absent once they are removed,

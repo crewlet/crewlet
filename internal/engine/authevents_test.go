@@ -11,7 +11,9 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -75,6 +77,46 @@ func TestTheNodesIdentityWriterAnnouncesOnItsFeed(t *testing.T) {
 	}
 	if row.Generation != 1 || row.Reason != "restored from a backup" || ev.Source == "" {
 		t.Errorf("heard %+v from %q", row, ev.Source)
+	}
+}
+
+// WHAT THE NODE WRITES FOR ITSELF IS THE ENGINE'S IN THE IDENTITY TRAIL.
+//
+// The node's own writer authors the sweeps, a re-seal, a password re-hashed at
+// this build's cost and a company-wide invalidation, and every one of them
+// reaches `iam_history` under the kind the writer was built with. Built as a
+// machine, each of those rows was drawn as the login of a service account
+// named after the node id; the engine is its own principal kind so that its
+// housekeeping is never read as somebody's decision. The row names the node,
+// as the engine, through no credential.
+//
+// Mutation: build the engine's identity writer as [iam.KindMachine] again and
+// the row's kind is a machine.
+func TestTheNodesOwnIdentityWritesAreRecordedAsTheEngine(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{})
+	result, err := e.IAMWriter().InvalidateAll(t.Context(),
+		statelog.NewOpID(time.Now(), "restore"), "restored from a backup")
+	if err != nil {
+		t.Fatalf("invalidate: %v", err)
+	}
+	if err := e.IAM().AwaitApplied(t.Context(), uint64(result.Position.Packed())); err != nil {
+		t.Fatalf("wait for the invalidation to apply here: %v", err)
+	}
+	page, err := e.IAM().History(t.Context(), iamdomain.HistoryQuery{
+		Op: iamdomain.OpInvalidate, Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("read the identity trail: %v", err)
+	}
+	if len(page.Entries) != 1 {
+		t.Fatalf("the trail holds %d invalidations, want the one written", len(page.Entries))
+	}
+	row := page.Entries[0]
+	if row.Actor != e.Node().ID() || row.ActorKind != iam.KindEngine || row.OperatorID != "" {
+		t.Errorf("the invalidation is authored (%q, %s, %q), want the node %q as "+
+			"the engine through no credential", row.Actor, row.ActorKind,
+			row.OperatorID, e.Node().ID())
 	}
 }
 
