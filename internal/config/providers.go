@@ -1406,12 +1406,11 @@ func (l *LLMProvider) validateCLICredentials(path Path) error {
 func isolationRemedy(name string, layer cliprofile.IsolationLayer, profile cliprofile.Profile) string {
 	switch layer {
 	case cliprofile.IsolationConfigEnv:
-		return "the profile relocates a vendor directory under the seat's home with it, " +
-			"and a different directory there is set with cli.overrides.config_env"
+		return relocationRemedy("config_env", "the seat's home", profile.ConfigEnv[name],
+			profile.KeptUnder(name))
 	case cliprofile.IsolationWorkConfigEnv:
-		return "the profile relocates a vendor directory under the call's working " +
-			"directory with it, and a different directory there is set with " +
-			"cli.overrides.work_config_env"
+		return relocationRemedy("work_config_env", "the call's working directory",
+			profile.WorkConfigEnv[name], profile.KeptUnder(name))
 	case cliprofile.IsolationSwitch:
 		// Not refused there: an override is the profile itself, written on
 		// purpose. Turning the switch off is a decision about every seat's
@@ -1420,10 +1419,34 @@ func isolationRemedy(name string, layer cliprofile.IsolationLayer, profile clipr
 		return fmt.Sprintf("it is the profile's isolation switch (%s=%q), changed only "+
 			"deliberately, with cli.overrides.isolation_env, since a value that turns it "+
 			"off undoes the isolation it is there for", name, profile.IsolationEnv[name])
-	default: // cliprofile.IsolationHome, the one layer no field sets
-		return "the engine sets it for every CLI, whatever the profile says, and no " +
-			"field changes it"
+	default: // cliprofile.IsolationHome, which every profile field refuses
+		return "the engine points it at or inside the seat's own home for every CLI, " +
+			"and no field changes it"
 	}
+}
+
+// relocationRemedy is the remedy for a variable a profile relocates: the
+// field that does it, and what has to move with a different directory.
+//
+// WITH THE PATHS KEPT UNDER IT, because the directory alone is not a remedy
+// that works: the CLI finds the profile's login, sessions, tool policy or
+// agent file through the variable ([cliprofile.Profile.KeptUnder]), so "a
+// different directory is set with cli.overrides.work_config_env", followed as
+// written, was an entry every write path accepted whose OpenCode found no
+// agent and no policy. The profile refuses such a move now; the remedy says
+// what makes one load.
+func relocationRemedy(field, root, dir string, kept []string) string {
+	remedy := fmt.Sprintf("the profile points it at %s under %s with %s", dir, root, field)
+	if len(kept) == 0 {
+		return remedy + "; a different directory is set with cli.overrides." + field
+	}
+	fields := strings.Join(kept, ", ")
+	if n := len(kept); n > 1 {
+		fields = strings.Join(kept[:n-1], ", ") + " and " + kept[n-1]
+	}
+	return fmt.Sprintf("%s; a different directory is set with cli.overrides.%s, moving the "+
+		"%s kept under %s beneath it in the same override, since the CLI finds them "+
+		"through this variable", remedy, field, fields, dir)
 }
 
 // AgentMode reports whether this entry runs the executor as the CLI's own
