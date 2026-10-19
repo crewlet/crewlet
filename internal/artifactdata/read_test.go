@@ -170,6 +170,36 @@ func TestARowHiddenFromAReaderIsHiddenFromEveryReadPath(t *testing.T) {
 	}
 }
 
+// AN EMPTY COLLECTION ANSWERS AN EMPTY LIST: a collection configured with
+// no rows yet, read whole or caught up, encodes its page's docs as `[]`. It
+// encoded them as `null`, and a reader that iterates the array (the
+// dashboard's sheet) failed on every new sheet's first state.
+func TestAnEmptyCollectionAnswersAnEmptyList(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	ctx := t.Context()
+	jane := person("jane", artifacts.RoleOwner)
+	n.configure(jane, artifacts.Collection{Name: "tasks", Preset: artifacts.PresetShared})
+	rd := reading("jane", artifacts.RoleOwner)
+	whole, err := n.reader.Docs(ctx, sheet, rd, "tasks", 0, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caught, err := n.reader.Docs(ctx, sheet, rd, "tasks", whole.Through, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, page := range map[string]artifactdata.DocPage{"whole": whole, "catch-up": caught} {
+		encoded, err := json.Marshal(page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(encoded, []byte(`"docs":[]`)) {
+			t.Fatalf("the %s read of an empty collection encodes %s, want docs as []", name, encoded)
+		}
+	}
+}
+
 // A PAGED READ ANSWERS A THROUGH THAT COVERS ONLY WHAT IT RETURNED: a whole
 // read's pages each run in their own snapshot, so a document whose id sorts
 // before the cursor and changes between two pages is in neither, and the

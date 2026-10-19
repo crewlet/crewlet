@@ -1393,7 +1393,20 @@ describe("artifacts", () => {
       scope: "all",
     });
     const row = await screen.findByText("Q4 launch review");
-    expect(row.closest('[role="option"]')?.textContent).toContain("Sheet");
+    // THE KIND AT THE ROW'S END, never cut away with a long title.
+    expect(
+      row.closest('[role="option"]')?.querySelector(".crewlet-palette__meta")?.textContent,
+    ).toBe("Sheet");
+  });
+
+  // A RECENT ARTIFACT SAYS ITS WORKSPACE BY NAME: the stored key read
+  // "Q4 roadmap artifacts", as if it were one phrase.
+  test("a recent artifact names its workspace as the sidebar does", () => {
+    remember({ path: ["artifacts", "a-1"], label: "Q4 roadmap", workspace: "artifacts" }, true);
+    mount();
+    const row = within(screen.getByRole("group", { name: "Recent" })).getAllByRole("option")[0];
+    expect(row?.textContent).toContain("Artifacts");
+    expect(row?.textContent).not.toContain("artifacts");
   });
 
   test("the engine's own agent tools are not offered, and a connected tool is", async () => {

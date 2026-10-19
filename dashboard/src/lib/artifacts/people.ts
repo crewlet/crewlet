@@ -25,6 +25,8 @@ import type { BridgePerson } from "~/runtime/bridge.ts";
 import { indexOrg, principalOfSeat, type OrgIndex, type Unit } from "../seats.ts";
 import { useOrg } from "../store-hooks.ts";
 import { plural } from "../format.ts";
+import { tabOfRegion } from "./doc.ts";
+import { slideOfRegion } from "./follow.ts";
 
 /** The chart, indexed, with the lookups an artifact's surfaces make. */
 export interface ArtifactPeople {
@@ -123,6 +125,20 @@ export function useArtifactPeople(): ArtifactPeople {
   return useMemo(() => artifactPeople(org), [org]);
 }
 
+/**
+ * A share's audience as the engine spells it in a history row (`seat:pm`,
+ * `unit:ops`, `company`), named the way a reader knows it, for
+ * [historyWords]' `audience`.
+ */
+export function audienceName(raw: string, people: ArtifactPeople): string {
+  if (raw === "company") return `everyone in ${people.company}`;
+  // AT THE FIRST COLON ONLY: a seat handle may carry its own (`token:maya`).
+  const at = raw.indexOf(":");
+  const kind = raw.slice(0, at);
+  const id = raw.slice(at + 1);
+  return kind === "unit" ? people.unitName(id) : people.seatName(id);
+}
+
 /** A share's audience as a principal, for the share dialog's row. */
 export function audiencePrincipal(audience: ArtifactAudience, people: ArtifactPeople): Principal {
   switch (audience.kind) {
@@ -152,9 +168,11 @@ export interface PresencePlace {
   row: (collection: string, doc: string) => string | null;
   /** "Gate". */
   field: (collection: string, field: string) => string | null;
+  /** A view's own region by the name its view gives it: "Overview", "slide 3". */
+  region: (region: string) => string | null;
 }
 
-const NO_PLACE: PresencePlace = { row: () => null, field: () => null };
+const NO_PLACE: PresencePlace = { row: () => null, field: () => null, region: () => null };
 
 /**
  * Where a member is, in words, after the verb: "row 4, Gate", "version 3".
@@ -170,9 +188,21 @@ export function memberLocation(
     if (!f.field) return row;
     return `${row}, ${place.field(f.collection, f.field) ?? "a column"}`;
   }
-  if (f.region) return `in ${f.region}`;
+  if (f.region) {
+    const named = place.region(f.region);
+    if (named) return named;
+    // A DOC'S TAB OR A DECK'S SLIDE IS AN ADDRESS ("tab:index.md"), never
+    // words: unnamed, it is left unsaid and the version stands in for it. A
+    // page's own region is the page author's words, and is said as written.
+    if (!isViewRegion(f.region)) return `in ${f.region}`;
+  }
   if (f.version) return `version ${f.version}`;
   return "";
+}
+
+/** Whether a region is one of the views' own addresses: a doc's tab or a deck's slide. */
+export function isViewRegion(region: string): boolean {
+  return slideOfRegion(region) !== "" || tabOfRegion(region) !== "";
 }
 
 /**

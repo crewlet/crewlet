@@ -31,6 +31,7 @@
  */
 
 import { APPS, GRANTS } from "~/contract/identity.ts";
+import { KIND_LIST } from "~/lib/artifacts/words.ts";
 
 /**
  * A permission a principal carries — the engine's `iam.Grant` vocabulary, as
@@ -118,8 +119,7 @@ export const ACCESS_WORDS: Record<Grant, { label: string; description: string }>
   },
   artifacts: {
     label: "Artifacts",
-    description:
-      "Create and publish pages, sheets and dashboards. Anything shared with them opens without it.",
+    description: `Create and publish ${KIND_LIST}. Anything shared with them opens without it.`,
   },
 };
 

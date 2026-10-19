@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Outline, scrollToHeading, useActiveHeading } from "@crewlethq/ui";
 import { outline } from "~/lib/markdown.ts";
-import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
+import { scrollerOf } from "~/lib/scroller.ts";
 
 /**
  * Where a heading counts as the one being read: a fifth of the way down the
@@ -25,8 +25,12 @@ export function OnThisPage({ body }: { body: string }) {
     const top = Math.min(...all.map((h) => h.level));
     return all.filter((h) => h.level <= top + 1);
   }, [body]);
+  // THE SCROLLER IS THE ONE THAT MOVES THE HEADINGS, found from the first of
+  // them once they are drawn: a Knowledge page scrolls the shell, a doc
+  // scrolls its artifact's own body.
   const [root, setRoot] = useState<HTMLElement | null>(null);
-  useEffect(() => setRoot(document.getElementById(SCREEN_SCROLL_ID)), []);
+  const first = headings[0]?.id;
+  useEffect(() => setRoot(scrollerOf(first ? document.getElementById(first) : null)), [first]);
   const ids = useMemo(() => headings.map((h) => h.id), [headings]);
   const active = useActiveHeading(ids, {
     root,
