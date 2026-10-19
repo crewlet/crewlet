@@ -321,11 +321,11 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 // in a person's grammar is never recorded as a service account's.
 //
 // NOBODY NAMED IS THE NODE, recorded as the node's own writer records itself —
-// its id, a machine — rather than as an empty author column.
+// its id, the engine ([NodeKind]) — rather than as an empty author column.
 func generationActor(f statelog.GenerationFacts) (string, iam.Kind) {
 	party, named := f.Author()
 	if !named {
-		return f.Writer, iam.KindMachine
+		return f.Writer, NodeKind
 	}
 	switch party.Kind {
 	case iam.ActorAgent:
