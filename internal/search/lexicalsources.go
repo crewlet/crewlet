@@ -271,8 +271,15 @@ func TaskVersionsRead(after string, limit int) (string, []any) {
 	return taskVersionsStatement, []any{after, limit}
 }
 
+// taskVersionsStatement walks the live tasks in id order from a cursor, a
+// batch at a time, THROUGH THE TABLE'S KEY — named, because the planner will
+// not choose it: every live task also satisfies the partial indexes the
+// tracker keeps `WHERE removed_at IS NULL`, and with no statistics it took one
+// of them, read every live task in the company and sorted them by id for each
+// batch, so one lap of the index over N tasks read N²/batch rows. Through the
+// key each batch is one seek past the cursor that its LIMIT stops.
 const taskVersionsStatement = `
-		SELECT id, version FROM tracker_tasks
+		SELECT id, version FROM tracker_tasks INDEXED BY sqlite_autoindex_tracker_tasks_1
 		 WHERE removed_at IS NULL AND id > ?
 		 ORDER BY id
 		 LIMIT ?`
