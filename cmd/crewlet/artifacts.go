@@ -53,13 +53,14 @@ import (
 // prints it, and `-op-id` sends it again, so a retry is the first attempt's
 // operation rather than a second one.
 
-// artifactsUsage is the command's usage.
-const artifactsUsage = `usage: crewlet artifacts <command> [arguments] [<config.yaml>] [-url URL]
+// artifactsUsage is the command's usage. The kinds are the kind table's, so a
+// kind the engine grows is one the usage names.
+var artifactsUsage = `usage: crewlet artifacts <command> [arguments] [<config.yaml>] [-url URL]
 
-  list [-scope mine|shared|company|agents|all] [-kind html|markdown|sheet]
+  list [-scope mine|shared|company|agents|all] [-kind ` + kindList("|") + `]
        [-q TEXT] [-status live|trashed] [-work-item KEY] [-limit N]
   get <id>
-  publish <dir|file> [-artifact ID] [-title TEXT] [-kind html|markdown]
+  publish <dir|file> [-artifact ID] [-title TEXT] [-kind ` + kindList("|") + `]
        [-entry PATH] [-label TEXT] [-contract VERSION] [-capabilities a,b]
        [-work-item KEY] [-force] [-op-id ID]
   versions <id>
@@ -714,12 +715,15 @@ func kindFor(asked artifacts.Kind, entry string) (artifacts.Kind, error) {
 }
 
 // kindNames lists every kind this build serves, for the flags' help.
-func kindNames() string {
+func kindNames() string { return kindList(", ") }
+
+// kindList is every kind this build serves, in the table's order, joined by sep.
+func kindList(sep string) string {
 	names := make([]string, len(artifacts.Kinds))
 	for i, k := range artifacts.Kinds {
 		names[i] = string(k)
 	}
-	return strings.Join(names, ", ")
+	return strings.Join(names, sep)
 }
 
 // fileSpec is one file of a publish as the surface takes it.
