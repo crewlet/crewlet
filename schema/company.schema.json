@@ -2856,7 +2856,7 @@
           ]
         },
         "default_run_in": {
-          "description": "Where a sandbox-enabled seat that names none runs. Required unless the catalogue names exactly one cell, or every sandbox-enabled seat and agent-mode entry names its own run_in.",
+          "description": "Where a box whose placer names no cell runs: a sandbox-enabled seat whose executor is not in agent mode and names no run_in, or an agent-mode providers.llm entry with no cli.run_in. Required unless the catalogue names exactly one cell, or every such seat and entry names its own.",
           "enum": [
             "direct",
             "container",

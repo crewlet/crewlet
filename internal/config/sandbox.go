@@ -162,12 +162,13 @@ type SandboxProvider struct {
 	// Only `e2b:` alone, and the double, resolve on their own.
 	//
 	// REQUIRED ONLY WHERE SOMETHING WOULD READ IT. A catalogue whose every
-	// sandbox-enabled seat, and every agent-mode entry a seat's executor
-	// runs on, names its own cell has nothing left to default — that is
+	// sandbox-enabled seat not in agent mode, and every agent-mode entry a
+	// seat's executor runs on, names its own cell has nothing left to
+	// default — an agent-mode seat's own gate places nothing — that is
 	// the shape the catalogue exists for — so the refusal is written at
 	// the seat or entry that named none, never on this field alone. See
 	// [Company.validateSandboxPlacement].
-	DefaultRunIn Placement `yaml:"default_run_in,omitempty" json:"default_run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a sandbox-enabled seat that names none runs. Required unless the catalogue names exactly one cell, or every sandbox-enabled seat and agent-mode entry names its own run_in."`
+	DefaultRunIn Placement `yaml:"default_run_in,omitempty" json:"default_run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a box whose placer names no cell runs: a sandbox-enabled seat whose executor is not in agent mode and names no run_in, or an agent-mode providers.llm entry with no cli.run_in. Required unless the catalogue names exactly one cell, or every such seat and entry names its own."`
 
 	// DefaultCodingAgent is what a seat that names none runs.
 	DefaultCodingAgent CodingAgent `yaml:"default_coding_agent,omitempty" json:"default_coding_agent,omitempty" js:"enum=claude-code|opencode" desc:"Coding agent for seats that name none."`

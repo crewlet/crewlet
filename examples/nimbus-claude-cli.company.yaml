@@ -349,13 +349,19 @@ providers:
   # refuses such a run up front rather than provisioning a box that
   # cannot authenticate.)
   sandbox:
-    # THE PROVIDER BLOCK IS A CATALOGUE: it says which boxes EXIST, and
-    # each seat picks one with `role.sandbox.run_in`.  This company
+    # THE PROVIDER BLOCK IS A CATALOGUE: it says which boxes EXIST.  In
+    # general a seat picks one with `role.sandbox.run_in` — but not here:
+    # every sandbox seat in this company runs its executor in AGENT MODE,
+    # and such a seat's box is placed by its ENTRY, `cli.run_in` on
+    # providers.llm.coding above, while its own `run_in` stays `self` (any
+    # other cell there is refused, naming that entry).  This company
     # configures the ENGINE HOST only — each coding job runs as a process
     # tree on the machine running `crewlet run`, with no remote account,
     # no API key and nothing to provision.
     local:
-      # The local backend serves two cells, chosen per seat:
+      # The local backend serves two cells, chosen by the coding entry's
+      # `cli.run_in` (or, on a seat not in agent mode, by the seat's own
+      # `run_in`):
       #
       #   run_in: direct     state isolation only — each box gets its own
       #                      HOME, XDG directories and an allowlisted
@@ -389,10 +395,11 @@ providers:
     # CLI a `run_sandbox` launch runs, and every sandbox-enabled seat in
     # this company is an AGENT-MODE seat whose CLI comes from its own
     # providers.llm entry instead — so a value here would be read by
-    # nothing.  Add one the day a seat runs code the other way (a gate
-    # without `run_in: self`), and `crewlet validate` will not remind you:
-    # it is optional, and its absence is only visible at that seat's
-    # first coding run.
+    # nothing.  Add one the day a seat runs code the other way (one whose
+    # executor is not in agent mode, with an enabled gate: an agent-mode
+    # seat is never offered run_sandbox, whatever its gate says), and
+    # `crewlet validate` will not remind you: it is optional, and its
+    # absence is only visible at that seat's first coding run.
     default_timeout_seconds: 1200                # box TTL / keepalive window — NOT a run cap: the waiter refreshes it every tick so a job runs as long as it needs; this is just the orphan-reclaim grace if the engine stops heart-beating
     default_pause_ttl_seconds: 1800              # a sandbox blocked on a person's answer is PAUSED (exact resume if they reply soon); on a local cell that costs disk rather than a provider's snapshot bill, but it is still held, so the engine reaps it after this long and re-seeds. 0 = never pause, always re-seed; omit the key entirely for this 1800s default.
     # THE ONLY ENGINE-SIDE BOUND ON A RUNAWAY CODING AGENT.  A coding job
@@ -420,7 +427,8 @@ providers:
     # toolchain for a remote box would install it on the engine host
     # instead.  A `direct` box inherits whatever toolchains the machine
     # already has, which is the point of choosing it.  Provision
-    # deliberately with `run_in: container` and an image, or with `e2b`.
+    # deliberately with `cli.run_in: container` on the coding entry and an
+    # image (an `e2b` cell would also need the headless token, above).
     # (File steps are not merely discouraged here: a step writing a system
     # path is REFUSED under `direct`, naming the mode.)
 
