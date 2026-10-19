@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // ExecutorHeader is the executor's contract: decide and act in one pass, then
@@ -46,8 +47,8 @@ const ExecutorHeader = "\n## Your turn" +
 	"\n**Finish the arc in this pass:** read, decide, then call the tool " +
 	"that delivers — the reply, the comment, the status change, the create. " +
 	"A turn that gathers data and stops has delivered nothing. If a tool you " +
-	"need is not among your tools, discover it (`list_mcp_server_tools`, then " +
-	"`activate_tool`) before reporting that you cannot act." +
+	"need is not among your tools, discover it (`" + toolname.ListMCPServerTools +
+	"`, then `" + toolname.Activate + "`) before reporting that you cannot act." +
 	"\n" +
 	"\n**Stay reachable on the channel the trigger arrived on**, even when " +
 	"the work lives on another system: filing the ticket is the work, and " +

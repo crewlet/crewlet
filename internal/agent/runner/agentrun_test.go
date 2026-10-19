@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -782,11 +783,11 @@ func TestACollectedRunListsTheToolsItActivated(t *testing.T) {
 				ActiveTools: []string{"lookup_colleague", "reflect"}},
 			Answer: "filed the flaky test",
 			Bridged: []runner.BridgedCall{
-				{Call: ledger.Call{Name: runner.ActivateTool, Args: map[string]any{"name": "jira_create"},
+				{Call: ledger.Call{Name: toolname.Activate, Args: map[string]any{"name": "jira_create"},
 					Result: "jira_create is active"}, Seq: 1},
 				{Call: ledger.Call{Name: "jira_create", Args: map[string]any{"summary": "flaky test"},
 					Result: "created"}, Seq: 2},
-				{Call: ledger.Call{Name: runner.ActivateTool, Args: map[string]any{"name": "slack_history"},
+				{Call: ledger.Call{Name: toolname.Activate, Args: map[string]any{"name": "slack_history"},
 					Result: "no", Failed: true}, Seq: 3},
 				{Call: ledger.Call{Name: runner.SubmitWorkTool, Args: map[string]any{
 					"outcome": "delivered", "summary": "filed the flaky test",

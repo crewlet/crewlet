@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -526,7 +527,7 @@ func (r *Runner) rebuiltSurface(ctx context.Context, m meter, state execstate.St
 func replayedActive(state execstate.State, called []ledger.Call) []string {
 	active := slices.Clone(state.ActiveTools)
 	for _, call := range called {
-		if call.Name == ActivateTool && !call.Failed {
+		if call.Name == toolname.Activate && !call.Failed {
 			active = append(active, activationTarget(call.Args))
 		}
 	}

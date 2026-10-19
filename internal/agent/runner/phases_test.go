@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -247,7 +248,7 @@ func activate(name string) llm.ToolCall {
 
 // activating is [activate] as a response of an engine-driven phase.
 func activating(name string) llmtest.Response {
-	return calling(llmtest.Call{Name: runner.ActivateTool, Args: `{"name":"` + name + `"}`})
+	return calling(llmtest.Call{Name: toolname.Activate, Args: `{"name":"` + name + `"}`})
 }
 
 // deliver is the ordinary delivery a run makes: discover, call, report.
