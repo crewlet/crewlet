@@ -310,7 +310,14 @@ roles:
 // operator asked — and says so as what it is, naming the logout and the way
 // back, rather than as a bundle that failed to restore.
 //
-// NOT PARALLEL: it sets the conventional variable and swaps the process's log.
+// NOT PARALLEL: it sets the conventional variable and PATH, and swaps the
+// process's log.
+//
+// claude-code's logout runs the vendor's own `claude auth logout`, so the test
+// puts a `claude` that only exits 0 first on PATH: what is under test is the
+// engine's rule, never the vendor's binary, and a test that used whichever
+// `claude` the machine happened to have passed where one was installed and
+// failed on a runner with none.
 //
 // Mutation: treat cliagent.ErrLoggedOut as a bundle to restore anyway, and the
 // login is back here; warn it as a failed restore, and the warning is wrong.
@@ -319,6 +326,7 @@ func TestAnEpochDoesNotUndoALogout(t *testing.T) {
 	logging.Configure(slog.LevelInfo, logging.FormatJSON, logs)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
 	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	stubVendorCLI(t, "claude")
 	profile, err := cliprofile.Load("claude-code", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -367,6 +375,17 @@ func TestAnEpochDoesNotUndoALogout(t *testing.T) {
 	if strings.Contains(got, "cli_agent_bundle_restore_failed") {
 		t.Errorf("a logout was warned as a bundle that failed to restore:\n%s", got)
 	}
+}
+
+// stubVendorCLI puts an executable named name, which only exits 0, first on
+// PATH for the rest of the test.
+func stubVendorCLI(t *testing.T, name string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { //nolint:gosec // the test's own stub
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 // bundleLog is a log sink the logger may write to from any goroutine.
