@@ -205,7 +205,8 @@ func refinerOptions(cfg config.SkillRefinement) learning.RefinerOptions {
 	}
 }
 
-// reconfigureReflection points the dispatcher at this epoch.
+// prepareReflection readies the reflect dispatcher for an apply of c, and
+// returns what points it at c, which the apply calls later ([Engine.Apply]).
 //
 // The dispatcher itself is built once and outlives every apply (see
 // [learning.Reflector] for why its redelivery ring must not reset). Once is at
@@ -218,28 +219,46 @@ func refinerOptions(cfg config.SkillRefinement) learning.RefinerOptions {
 //
 // An error is a dispatcher that could not be built, which fails the apply for
 // the reason it fails a boot: a company served without the write side learns
-// nothing while nothing says so, and the retry builds it again.
-// Swapping the workers of a running dispatcher never fails the apply.
-func (e *Engine) reconfigureReflection(ctx context.Context, c *Company) error {
+// nothing while nothing says so, and the retry builds it again. A first
+// company's dispatcher is built pointing at c already, and it serves nothing
+// until a seat of c is acquired — which only a published c is — so what this
+// returns for it does nothing.
+//
+// On a node already running a dispatcher it builds c's workers and SWAPS
+// NOTHING: the swap is what it returns, and it never fails the apply. The
+// running seats' reflections are served by the dispatcher's live workers from
+// the instant they are swapped in, so swapped here — as they were — every
+// pass ran on the revision's models before the revision's configured
+// credential bundles were restored ([Company.restoreBundles]), so a pass on a
+// cli-agent entry the revision signs in from its bundle ran signed out — and a
+// revision a later stage refused left its workers behind the epoch that stayed
+// current. The apply swaps them once nothing can refuse the revision and its
+// bundles are in place.
+func (e *Engine) prepareReflection(ctx context.Context, c *Company) (install func(), err error) {
 	reflector := e.reflector.Load()
 	if reflector == nil {
-		return e.attachReflection(ctx, c)
+		if err := e.attachReflection(ctx, c); err != nil {
+			return nil, err
+		}
+		return func() {}, nil
 	}
-	workers := e.buildReflectionWorkers(c)
-	if err := reflector.Reconfigure(c.Org, workers, e.learningBudget(c)); err != nil {
-		// The previous epoch's workers keep serving. Reflecting with a
-		// stale org is a far smaller wrong than not reflecting at all,
-		// and this is a bug in the wiring above rather than in the
-		// operator's config — which is why it is an error, not a warn.
-		log.Error("reflection_reconfigure_failed", "error", err)
-		return nil
-	}
-	if len(workers) == 0 {
-		log.Info("learning_write_side_idle",
-			"detail", "no learning worker is wired for this revision; "+
-				"nothing will be written and every prefetch block stays empty")
-	}
-	return nil
+	workers, budget := e.buildReflectionWorkers(c), e.learningBudget(c)
+	return func() {
+		if err := reflector.Reconfigure(c.Org, workers, budget); err != nil {
+			// The previous epoch's workers keep serving. Reflecting with
+			// a stale org is a far smaller wrong than not reflecting at
+			// all, and this is a bug in the wiring above rather than in
+			// the operator's config — which is why it is an error, not a
+			// warn.
+			log.Error("reflection_reconfigure_failed", "error", err)
+			return
+		}
+		if len(workers) == 0 {
+			log.Info("learning_write_side_idle",
+				"detail", "no learning worker is wired for this revision; "+
+					"nothing will be written and every prefetch block stays empty")
+		}
+	}, nil
 }
 
 // startReflection builds the dispatcher, for the company this node booted
@@ -249,7 +268,7 @@ func (e *Engine) reconfigureReflection(ctx context.Context, c *Company) error {
 // for the life of the process and an apply only ever swaps what runs behind
 // it. A node that booted with no company has no org to resolve seats against
 // and no models to run a pass on, so it builds nothing here and its first
-// apply does instead (see [Engine.reconfigureReflection]).
+// apply does instead (see [Engine.prepareReflection]).
 func (e *Engine) startReflection(ctx context.Context) error {
 	return e.attachReflection(ctx, e.Company())
 }

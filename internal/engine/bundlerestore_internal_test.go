@@ -145,11 +145,16 @@ func TestAnApplyRestoresTheBundleOnlyForARevisionItPublishes(t *testing.T) {
 // nothing can refuse the revision. A turn can start the moment the pointer
 // moves, so a restore made after it lets the epoch's first call run signed out;
 // one made before a stage that can still refuse writes a login for a revision
-// that is never published. Neither order is visible from outside a running
-// node, so the two calls are read out of the source.
+// that is never published. And on an apply the revision's reflection workers
+// are swapped in behind the running seats only after the restore too: they
+// serve those seats' reflections from the moment they are swapped, so a swap
+// ahead of it ran a pass on the revision's models signed out. None of these
+// orders is visible from outside a running node, so the calls are read out of
+// the source.
 //
 // Mutation: move the restore below installEpoch in New or in Apply, or above
-// any `return configplane.StatusError` in Apply, and this is red.
+// any `return configplane.StatusError` in Apply, or move Apply's
+// installReflection above the restore or below installEpoch, and this is red.
 func TestTheBundleIsRestoredBeforeTheEpochIsCurrent(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"New", "Apply"} {
@@ -163,6 +168,16 @@ func TestTheBundleIsRestoredBeforeTheEpochIsCurrent(t *testing.T) {
 		}
 		if name != "Apply" {
 			continue
+		}
+		switch swap := firstCall(fn, "installReflection"); {
+		case swap == token.NoPos:
+			t.Error("Apply never swaps the revision's reflection workers in")
+		case swap < restore:
+			t.Error("Apply swaps the revision's reflection workers in before its bundles are restored, " +
+				"so a pass on the revision's models runs signed out")
+		case swap > install:
+			t.Error("Apply swaps the revision's reflection workers in after the epoch is current, so " +
+				"the epoch's seats reflect on the previous revision's org and models meanwhile")
 		}
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
 			ret, ok := n.(*ast.ReturnStmt)
@@ -194,16 +209,24 @@ func engineFunction(t *testing.T, name string) *ast.FuncDecl {
 	return nil
 }
 
-// firstCall is where fn first calls a method of the given name, or NoPos.
-func firstCall(fn *ast.FuncDecl, method string) token.Pos {
+// firstCall is where fn first calls a method, or a function value, of the
+// given name, or NoPos.
+func firstCall(fn *ast.FuncDecl, name string) token.Pos {
 	at := token.NoPos
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok || at != token.NoPos {
 			return at == token.NoPos
 		}
-		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == method {
-			at = call.Pos()
+		switch callee := call.Fun.(type) {
+		case *ast.SelectorExpr:
+			if callee.Sel.Name == name {
+				at = call.Pos()
+			}
+		case *ast.Ident:
+			if callee.Name == name {
+				at = call.Pos()
+			}
 		}
 		return true
 	})

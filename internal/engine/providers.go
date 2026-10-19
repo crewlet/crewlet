@@ -276,11 +276,14 @@ var log = logging.Get("engine")
 // A STEP OF ITS OWN, made by the paths that build an epoch to RUN it — a node's
 // boot and every apply — and not by building one: [NewCompany] is also what
 // `crewlet validate` calls, and validating a document must neither write a
-// login onto the host nor wait on the shared login's lock. It runs before the
-// epoch is published, so the epoch's first call already finds the login — and
-// on an apply only after every stage that can refuse the revision
-// ([Engine.Apply]), because the state directory it writes is the running
-// epoch's too, and a refused revision must leave no login behind.
+// login onto the host nor wait on the shared login's lock. It runs before
+// anything calls the epoch's models — before the epoch is published, and on an
+// apply before the revision's reflection workers are swapped in behind the
+// running seats ([Engine.prepareReflection]) — so the epoch's first call
+// already finds the login. And on an apply only after every stage that can
+// refuse the revision ([Engine.Apply]), because the state directory it writes
+// is the running epoch's too, and a refused revision must leave no login
+// behind.
 //
 // A failed restore is WARNED and never refuses the epoch: a node with a broken
 // bundle can still be logged in by hand, and refusing a whole revision over one
