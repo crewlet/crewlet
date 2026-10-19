@@ -132,12 +132,20 @@ type UsagePaths struct {
 // it under [CredentialStoreDocument], a seat's home starts every generation from
 // an empty database with the document imported into it, and the generation ends
 // by exporting what the CLI then holds — a token it refreshed mid-call included
-// — and replacing the document when that changed. The database itself is then
-// volatile like any other session store. Measured against OpenCode 2.0.32: an
-// import followed by an export reproduces the document byte for byte, and an
-// import skips a credential id the database already holds rather than updating
-// it, which is why a refresh comes back as a new document and never as an import
-// into an older database.
+// — and carrying it back only where it differs from the document the home was
+// seeded with, and only over that same document. A compare-and-swap, under the
+// shared login's lock (hostbox.LockCredentials), and never "replace when it
+// changed": where the shared document has moved on since the home's seed —
+// another seat's refresh, an operator's new login, a logout — the shared
+// directory keeps what it now holds and the home's export is dropped, and a
+// home that exports what it was seeded with writes nothing at all, whatever
+// the shared document holds (the backend's Workspace.syncCredentialsOut).
+//
+// The database itself is then volatile like any other session store. Measured
+// against OpenCode 2.0.32: an import followed by an export reproduces the
+// document byte for byte, and an import skips a credential id the database
+// already holds rather than updating it, which is why a refresh comes back as a
+// new document and never as an import into an older database.
 type CredentialStore struct {
 	// ExportArgs print every login the CLI holds as one document on stdout.
 	ExportArgs []string `yaml:"export_args,omitempty"`
