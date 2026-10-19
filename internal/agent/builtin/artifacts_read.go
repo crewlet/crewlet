@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
@@ -275,7 +276,9 @@ func (t *getArtifact) Description() string {
 		"condensed unless you pass `offset`, and an edit's `old_str` must quote the " +
 		"source, so read it with `offset` before editing. For a slide deck, pass " +
 		"`view: \"outline\"` for its slides in order (id, file, title) and its " +
-		"sections, then read only the slide files you change by `path`."
+		"sections, then read only the slide files you change by `path`. For a " +
+		"dashboard, the outline is its filters, datasets and widgets; its figures " +
+		"are each viewer's and are never in the answer."
 }
 
 func (t *getArtifact) Parameters() map[string]any {
@@ -311,7 +314,8 @@ func (t *getArtifact) Parameters() map[string]any {
 				"type": "string", "enum": []any{viewOutline},
 				"description": "`outline` answers a slide deck's structure (each slide's " +
 					"id, file and title in order, its notes flag, the sections and the " +
-					"cover) instead of a file.",
+					"cover) or a dashboard's (its filters, datasets and widgets) instead " +
+					"of a file.",
 			},
 		},
 		"required": []any{"artifact"},
@@ -558,7 +562,11 @@ const viewOutline = "outline"
 func (t *getArtifact) outline(ctx context.Context, read *foreignRead, h artifactsdomain.Head,
 	v artifactsdomain.Version, writers []provenance.Author, partial bool) (map[string]any, *tools.Result) {
 
-	if spec, _ := h.Kind.Spec(); spec.Format != artifacts.FormatSlides {
+	switch spec, _ := h.Kind.Spec(); spec.Format {
+	case artifacts.FormatDashboard:
+		return t.boardOutline(ctx, read, v, writers, partial)
+	case artifacts.FormatSlides:
+	default:
 		r := failed(fmt.Sprintf("get_artifact: a %s artifact has no outline; read its files "+
 			"by `path`.", h.Kind))
 		return nil, &r
@@ -589,8 +597,67 @@ func (t *getArtifact) outline(ctx context.Context, read *foreignRead, h artifact
 	return map[string]any{"slides": o.Count, "text": text}, nil
 }
 
-// toolDeckSource is a version as the slide format reads it, through the
-// publisher's verified reads.
+// boardOutline is a dashboard's structure as one text an agent reads: its
+// filters, its datasets with their sources and columns, and its widgets in
+// order, fenced under the version's writers. It holds NO ROW: a dashboard's
+// figures are each viewer's, and an agent reads the data behind one through
+// the data tools or the domains' own tools, under its own authority.
+func (t *getArtifact) boardOutline(ctx context.Context, read *foreignRead, v artifactsdomain.Version,
+	writers []provenance.Author, partial bool) (map[string]any, *tools.Result) {
+
+	b, err := dashspec.Read(toolDeckSource{ctx: ctx, m: v.Manifest, deps: t.deps})
+	if err != nil {
+		r := sourceFailure(ctx, t.Name(), dashspec.EntryPath, err)
+		return nil, &r
+	}
+	var out strings.Builder
+	fmt.Fprintf(&out, "Dashboard: %s\n", b.Spec.Title)
+	for _, p := range b.Spec.Params {
+		values := make([]string, len(p.Options))
+		for i, o := range p.Options {
+			values[i] = o.Value
+		}
+		fmt.Fprintf(&out, "Filter %s (%s): %s, default %q\n", p.Key, p.Label, strings.Join(values, " | "),
+			p.Default)
+	}
+	for _, d := range b.Spec.Datasets {
+		cols := make([]string, len(b.Shapes[d.ID].Columns))
+		for i, c := range b.Shapes[d.ID].Columns {
+			cols[i] = c.Key + ":" + string(c.Type)
+		}
+		fmt.Fprintf(&out, "Dataset %s (%s, %s): %s [%s]\n", d.ID, d.Source, datasetReads(d), d.Title,
+			strings.Join(cols, ", "))
+	}
+	b.Spec.EachWidget(func(w dashspec.Widget, _ string) bool {
+		fmt.Fprintf(&out, "Widget %s (%s, w %d", w.ID, w.Type, w.W)
+		if w.Dataset != "" {
+			fmt.Fprintf(&out, ", dataset %s", w.Dataset)
+		}
+		fmt.Fprintf(&out, "): %s\n", w.Title)
+		return true
+	})
+	text := out.String()
+	read.fence(fieldPath{}.key("outline").key("text"), provenance.SourceArtifactFile, writers, partial, text)
+	return map[string]any{"widgets": len(b.Spec.Widgets), "datasets": len(b.Spec.Datasets), "text": text}, nil
+}
+
+// datasetReads is what a dataset reads, in a few words.
+func datasetReads(d dashspec.Dataset) string {
+	switch {
+	case d.Store != nil:
+		return "collection " + d.Store.Collection
+	case d.File != nil:
+		return "file " + d.File.Path
+	case d.Engine != nil:
+		return d.Engine.Name
+	case d.Calc != nil:
+		return "from " + strings.Join(dashspec.CalcInputs(d), ", ")
+	}
+	return string(d.Source)
+}
+
+// toolDeckSource is a version as a native format (a deck, a board) reads it,
+// through the publisher's verified reads.
 type toolDeckSource struct {
 	ctx  context.Context
 	m    artifacts.Manifest

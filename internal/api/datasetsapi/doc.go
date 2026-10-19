@@ -2,7 +2,7 @@
 // (`GET /artifacts/{id}/versions/{n}/sources/{dataset}`), and lists the engine
 // source catalogue (`GET /artifacts/sources`).
 //
-// # The rule (adr/0043)
+// # The rule (ADR-0043)
 //
 // No row leaves the engine that its viewer could not read directly. A board is
 // one spec for every reader, and every figure on it is each reader's own:

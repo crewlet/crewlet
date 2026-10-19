@@ -71,6 +71,7 @@ import (
 const (
 	ListArtifactsTool       = string(authz.ActionArtifactList)
 	GetArtifactTool         = string(authz.ActionArtifactRead)
+	DashboardSourcesTool    = string(authz.ActionDashboardSources)
 	CreateArtifactTool      = string(authz.ActionArtifactCreate)
 	PublishArtifactTool     = string(authz.ActionArtifactPublish)
 	UpdateArtifactTool      = string(authz.ActionArtifactUpdate)
@@ -79,9 +80,9 @@ const (
 	UploadArtifactAssetTool = string(authz.ActionArtifactAsset)
 )
 
-// ArtifactTools are the eight, reads first.
+// ArtifactTools are the nine, reads first.
 func ArtifactTools() []string {
-	return []string{ListArtifactsTool, GetArtifactTool, CreateArtifactTool,
+	return []string{ListArtifactsTool, GetArtifactTool, DashboardSourcesTool, CreateArtifactTool,
 		PublishArtifactTool, UpdateArtifactTool, ShareArtifactTool,
 		UnshareArtifactTool, UploadArtifactAssetTool}
 }
@@ -290,6 +291,7 @@ func artifactToolSet(a ArtifactDeps) []candidate {
 	return []candidate{
 		{&listArtifacts{deps: a}, on},
 		{&getArtifact{deps: a}, on},
+		{&dashboardSources{}, on},
 		{&createArtifact{deps: a}, on},
 		{&publishArtifact{deps: a}, on},
 		{&updateArtifact{deps: a}, on},
@@ -304,10 +306,10 @@ func artifactToolSet(a ArtifactDeps) []candidate {
 //
 // EVERY WRITE IS OPEN-WORLD: an artifact is read by the people it is shared
 // with, so a worker acting under its parent's name is kept off every one of
-// them ([mcp.WritesToSharedSurface]), and handed the two reads.
+// them ([mcp.WritesToSharedSurface]), and handed the three reads.
 func artifactAnnotations(name string) (tools.Annotations, bool) {
 	switch name {
-	case ListArtifactsTool, GetArtifactTool:
+	case ListArtifactsTool, GetArtifactTool, DashboardSourcesTool:
 		// Reads, and idempotent. get_artifact may condense a long file a
 		// colleague wrote through the auxiliary model, which is a read's
 		// cost the way query_episodes' condensing is, and writes nothing a

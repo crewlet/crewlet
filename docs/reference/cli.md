@@ -1267,10 +1267,10 @@ to decide whether it can still vouch for a retry.
 ## `crewlet artifacts`
 
 ```
-crewlet artifacts list [-scope mine|shared|company|agents|all] [-kind html|markdown|slides|sheet]
+crewlet artifacts list [-scope mine|shared|company|agents|all] [-kind html|markdown|slides|dashboard|sheet]
     [-q TEXT] [-status live|trashed] [-work-item KEY] [-limit N]
 crewlet artifacts get <id>
-crewlet artifacts publish <dir|file> [-artifact ID] [-title TEXT] [-kind html|markdown|slides|sheet]
+crewlet artifacts publish <dir|file> [-artifact ID] [-title TEXT] [-kind html|markdown|slides|dashboard|sheet]
     [-entry PATH] [-label TEXT] [-contract VERSION] [-capabilities a,b]
     [-work-item KEY] [-force] [-op-id ID]
 crewlet artifacts versions <id>
@@ -1282,6 +1282,7 @@ crewlet artifacts trash <id> [-op-id ID]
 crewlet artifacts untrash <id> [-op-id ID]
 crewlet artifacts purge <id> -confirm <id> [-op-id ID]
 crewlet artifacts assets <id>
+crewlet artifacts sources [<name>]
 crewlet artifacts usage
     ... [<config.yaml>] [-url URL]
 ```
@@ -1302,12 +1303,13 @@ the node answers which files the artifact already holds, which are carried by
 their digest and move no byte, and how each of the rest is sent: straight to
 the bucket on a presigned put where the object store offers one, through the
 node otherwise. Then the version is published. A new artifact opens on the
-one default entry it holds, `index.html`, `index.md` or `deck.json`, else the
+one default entry it holds, `index.html`, `index.md`, `deck.json` or
+`dashboard.json`, else the
 only file, unless `-entry` names another; a directory holding two default
 entries is refused until `-entry` or `-kind` settles which it is. Its kind is
 the one whose entry that file is: `html` for a page, `markdown` for a `.md`
-file, `slides` for `deck.json` (a deck is told by that path, never by JSON
-alone), and `-kind` names it outright. Its title defaults to the entry's name. A new version of `-artifact` names the
+file, `slides` for `deck.json` and `dashboard` for `dashboard.json` (each told
+by its path, never by JSON alone), and `-kind` names it outright. Its title defaults to the entry's name. A new version of `-artifact` names the
 head it read as its base, so a version somebody else published meanwhile is
 refused rather than overwritten; `-force` publishes over it, a person's
 gesture. A new version keeps the head's runtime contract and capabilities
@@ -1322,6 +1324,13 @@ mints one. An `unknown` outcome, or no answer at all, prints it; send it again
 with `-op-id` so the retry is the same operation rather than a second one. A
 publish keys its upload intent with the id and its version with a step of it,
 so a retried publish reuses the upload and lands one version.
+
+**`sources` lists the dashboard source catalogue** the node answers: each
+engine source a `dashboard`'s datasets may read, what it reads, who may read
+it, its parameters (with their choices and defaults), its columns and the push
+it refreshes on, or one source whole when named. A source is answered as each
+board's viewer, so the list holds no row; see the
+[Dashboard Spec](dashboard-spec.md#the-engine-source-catalogue).
 
 ## `crewlet retention`
 

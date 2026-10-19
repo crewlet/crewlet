@@ -710,7 +710,7 @@ func TestAnArtifactWriteWhoseOutcomeIsUnknownIsNotReportedDone(t *testing.T) {
 	}
 }
 
-// EVERY WRITE IS A SHARED ONE TO THE SUB-AGENT GUARD, and the two reads are
+// EVERY WRITE IS A SHARED ONE TO THE SUB-AGENT GUARD, and the three reads are
 // reads, so a worker reads artifacts and writes none.
 func TestAWorkerReadsArtifactsAndWritesNone(t *testing.T) {
 	t.Parallel()
@@ -720,7 +720,8 @@ func TestAWorkerReadsArtifactsAndWritesNone(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s is not registered", name)
 		}
-		read := name == builtin.ListArtifactsTool || name == builtin.GetArtifactTool
+		read := name == builtin.ListArtifactsTool || name == builtin.GetArtifactTool ||
+			name == builtin.DashboardSourcesTool
 		if mcp.WritesToSharedSurface(entry.Annotations) == read {
 			t.Errorf("%s: WritesToSharedSurface = %v", name, !read)
 		}
