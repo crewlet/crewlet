@@ -66,10 +66,12 @@ func TestTheDashboardPolicyLetsTheManifestFormReachACodeHost(t *testing.T) {
 		directives[name] = value
 	}
 	for name, want := range map[string]string{
-		"default-src":     "'self'",
-		"script-src":      "'self'",
-		"style-src":       "'self'",
-		"img-src":         "'self' data:",
+		"default-src": "'self'",
+		"script-src":  "'self'",
+		"style-src":   "'self'",
+		// blob: is the object URL the dashboard makes of a native deck's
+		// image, which only script on this origin can mint.
+		"img-src":         "'self' data: blob:",
 		"font-src":        "'self'",
 		"connect-src":     "'self'",
 		"object-src":      "'none'",
