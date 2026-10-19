@@ -53,11 +53,7 @@ func (s *Store) TrashedBefore(ctx context.Context, cutoff time.Time, limit int) 
 	}
 	var out []string
 	err := s.db.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx,
-			`SELECT id FROM pages_heads
-			  WHERE trashed_at IS NOT NULL AND trashed_at < ? AND status = ?
-			  ORDER BY trashed_at, id
-			  LIMIT ?`,
+		rows, err := tx.QueryContext(ctx, trashedBeforeStatement,
 			store.EncodeTime(cutoff), string(StatusTrashed), limit)
 		if err != nil {
 			return err
@@ -78,6 +74,14 @@ func (s *Store) TrashedBefore(ctx context.Context, cutoff time.Time, limit int) 
 	}
 	return out, nil
 }
+
+// trashedBeforeStatement is the trash listing [Store.TrashedBefore] makes,
+// named for the plan gate. It restates the partial index's predicate
+// (`trashed_at IS NOT NULL`), which is what lets the planner choose it.
+const trashedBeforeStatement = `SELECT id FROM pages_heads
+	  WHERE trashed_at IS NOT NULL AND trashed_at < ? AND status = ?
+	  ORDER BY trashed_at, id
+	  LIMIT ?`
 
 // PurgeTrashed destroys a page that has been in the trash since before cutoff,
 // as [Store.Purge] does, and refuses one that has not ([ErrNotInTrash]).

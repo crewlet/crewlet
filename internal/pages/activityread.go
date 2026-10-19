@@ -407,10 +407,7 @@ func (r *Reader) Revision(ctx context.Context, pageID string, version int,
 	held := false
 	_, err := r.log.Read(ctx, fresh.Query(ReadScope(""), false), func(tx *sql.Tx) error {
 		var at int64
-		err := tx.QueryRowContext(ctx, `
-			SELECT title, body, message, author, created_at
-			  FROM pages_revisions
-			 WHERE page_id = ? AND edit_version = ?`, pageID, version).
+		err := tx.QueryRowContext(ctx, revisionStatement, pageID, version).
 			Scan(&out.Title, &out.Body, &out.Message, &out.Author, &at)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
