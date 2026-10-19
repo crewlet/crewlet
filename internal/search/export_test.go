@@ -106,3 +106,46 @@ const (
 	StaleRowsStatement     = staleRowsStatement
 	StoredVectorStatement  = storedVectorStatement
 )
+
+// The chat index's statements, for its plan gate: it explains what the index
+// issues rather than copies that can drift from it.
+var (
+	ChatChangedReachStatement     = chatChangedReachStatement
+	ChatChangedRowsStatement      = chatChangedRowsStatement
+	ChatErasedReachStatement      = chatErasedReachStatement
+	ChatErasedRowsStatement       = chatErasedRowsStatement
+	ChatLiveOldestStatement       = chatLiveOldestStatement
+	ChatHeldOldestStatement       = chatHeldOldestStatement
+	ChatRoomRotationStatement     = chatRoomRotationStatement
+	ChatHeldDocStatement          = chatHeldDocStatement
+	ChatDocTermsStatement         = chatDocTermsStatement
+	ChatClearPostingsStatement    = chatClearPostingsStatement
+	ChatRemoveDocStatement        = chatRemoveDocStatement
+	ChatDocUpsertStatement        = chatDocUpsertStatement
+	ChatRangeSizeStatement        = chatRangeSizeStatement
+	ChatRangeTermsStatement       = chatRangeTermsStatement
+	ChatRangeDropStatement        = chatRangeDropStatement
+	ChatWatermarkStatement        = chatWatermarkStatement
+	ChatErasedThroughStatement    = chatErasedThroughStatement
+	ChatAdvanceWatermarkStatement = chatAdvanceWatermarkStatement
+	ChatAdvanceErasedStatement    = chatAdvanceErasedStatement
+	ChatBeginRebuildStatement     = chatBeginRebuildStatement
+	ChatRebuildingStatement       = chatRebuildingStatement
+	ChatDropBatchStatement        = chatDropBatchStatement
+	ChatRebuiltStatement          = chatRebuiltStatement
+	ChatCorpusStatement           = chatCorpusStatement
+	ChatRebuiltDrops              = chatRebuiltDrops
+	ChatRoomsCorpusStatement      = chatRoomsCorpusStatement
+	ChatTermDocsStatement         = chatTermDocsStatement
+	ChatPostingScanStatement      = chatPostingScanStatement
+	ChatHydrateStatement          = chatHydrateStatement
+	ChatEmptiedRoomsStatement     = chatEmptiedRoomsStatement
+	ChatEmptiedTermsStatement     = chatEmptiedTermsStatement
+)
+
+// MaxPostingScan is [maxPostingScan], for the gate that holds which postings a
+// frequent chat term keeps.
+const MaxPostingScan = maxPostingScan
+
+// ChatSnippetBytes is [chatSnippetBytes].
+const ChatSnippetBytes = chatSnippetBytes

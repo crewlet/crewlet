@@ -1,7 +1,9 @@
 package chatlet_test
 
 import (
+	"database/sql"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -89,6 +91,50 @@ func TestAnArchivedRoomIsStillSearchable(t *testing.T) {
 		t.Errorf("an archived room is missing from the readable set %v — "+
 			"archiving closes a room to new messages, not to reading it, "+
 			"and a search is exactly where a closed room is wanted", got)
+	}
+}
+
+// THE SET IS WHOLE PAST THE LIVE-ROOM CAP.
+//
+// [chatlet.MaxChannels] counts LIVE rooms, and archived ones accumulate — nothing
+// deletes a room — so a company that archived its way past the cap can read
+// more rooms than it. A set cut at the cap left the rooms sorting last out of
+// every search, silently: an empty answer reads as "nobody said that", not as
+// "this search could not see the room".
+func TestTheReadableSetIsWholePastTheLiveRoomCap(t *testing.T) {
+	h := newReadHarness(t)
+	err := h.db.Tx(t.Context(), func(tx *sql.Tx) error {
+		for i := range chatlet.MaxChannels {
+			id := fmt.Sprintf("arch-%04d", i)
+			if _, err := tx.ExecContext(t.Context(), `
+				INSERT INTO chat_channels
+					(id, name, name_norm, kind, private, topic, purpose, unit,
+					 retention_days, message_seq, created_at, created_by,
+					 created_by_kind, archived_at, version, scoped_through, document)
+				VALUES (?, ?, ?, 'public', 0, '', '', '', NULL, 0, 1, 'ada',
+				        'human', 1, ?, 0, X'')`,
+				id, id, id, int64(i+1)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("fill the company with archived rooms: %v", err)
+	}
+	// THE ROOM THAT SORTS LAST, and the one a person is talking in today.
+	h.apply(readCreateRoom("room-zz-live", "today", chatlet.KindPublic, "ada"))
+	reader := h.reader()
+
+	got, err := reader.Readable(t.Context(), "car", h.session())
+	if err != nil {
+		t.Fatalf("read the set car may search: %v", err)
+	}
+	if len(got) != chatlet.MaxChannels+1 || !slices.Contains(got, "room-zz-live") {
+		t.Fatalf("car may read %d rooms and the set handed a search holds %d "+
+			"(the live room sorting last included: %v) — a set cut at the "+
+			"live-room cap leaves the rest out of every search without saying so",
+			chatlet.MaxChannels+1, len(got), slices.Contains(got, "room-zz-live"))
 	}
 }
 
