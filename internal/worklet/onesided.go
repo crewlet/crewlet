@@ -104,13 +104,19 @@ const pendingOneSidedStatement = `
 			               WHERE one_sided = 1 AND one_sided_final = 0)`
 
 // oneSidedStatement is [ScanOneSided]'s read, named for the plan test.
+//
+// IT DOES NOT COUNT THE BLOCKER'S DEPENDENTS, which [blockerDependentsStatement]
+// reads for the batch: as a correlated `COUNT(*)` here it was a seek of the
+// mirror per edge only for as long as the planner chose not to unnest it, and
+// unnested it is one grouped read of every mirror row in the company per batch
+// — and whether it is unnested is the planner's cost guess over a database
+// nobody has ANALYZEd, which no line of this statement decides (the rule is
+// stated at Decorrelated in internal/store/storetest).
 const oneSidedStatement = `
 		SELECT r.task_id, r.other_id,
 		       COALESCE(t.key, ''), t.project_key, COALESCE(t.assignee, ''),
 		       COALESCE(b.project_key, ''), COALESCE(b.key, ''),
 		       COALESCE(b.assignee, ''),
-		       (SELECT COUNT(*) FROM tracker_task_dependents d
-		        WHERE d.task_id = r.other_id),
 		       CASE WHEN b.removed_at IS NULL THEN 0 ELSE 1 END,
 		       CASE WHEN b.id IS NULL THEN 1 ELSE 0 END
 		FROM tracker_relations r
@@ -131,6 +137,17 @@ const oneSidedStatement = `
 		  AND r.created_at <= ?
 		ORDER BY r.task_id, r.other_id
 		LIMIT ?`
+
+// blockerDependentsStatement counts the mirror rows of n blockers — how many
+// dependents each already lists — by the blockers' keys, the leading column of
+// the mirror's primary key, for the batch [oneSidedStatement] scanned. A
+// blocker listing none has no row, and counts zero.
+func blockerDependentsStatement(n int) string {
+	return `
+		SELECT task_id, COUNT(*) FROM tracker_task_dependents
+		WHERE task_id IN (` + placeholders(n) + `)
+		GROUP BY task_id`
+}
 
 // ScanOneSided reads the edges whose mirror has not been written.
 //
@@ -156,15 +173,59 @@ func ScanOneSided(ctx context.Context, db store.ReplicatedReader, before time.Ti
 			if err := rows.Scan(&edge.Dependent, &edge.Blocker,
 				&edge.DependentKey, &edge.DependentProject, &edge.DependentAssignee,
 				&edge.BlockerProject, &edge.BlockerKey, &edge.BlockerAssignee,
-				&edge.BlockerDependents, &removed, &missing); err != nil {
+				&removed, &missing); err != nil {
 				return fmt.Errorf("worklet: read a one-sided edge: %w", err)
 			}
 			edge.BlockerRemoved, edge.BlockerMissing = removed == 1, missing == 1
 			out = append(out, edge)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("worklet: read the one-sided dependency edges: %w", err)
+		}
+		_ = rows.Close()
+		return countBlockerDependents(ctx, tx, out)
 	})
 	return out, err
+}
+
+// countBlockerDependents fills each edge's [OneSided.BlockerDependents] from
+// one grouped read of the batch's distinct blockers, IN THE SCAN'S OWN
+// TRANSACTION, so the count is of the same snapshot the edges were read from.
+// A batch is at most the scan's limit, so its blockers are a bounded list of
+// bound keys.
+func countBlockerDependents(ctx context.Context, tx *sql.Tx, edges []OneSided) error {
+	var blockers []any
+	seen := map[string]bool{}
+	for _, edge := range edges {
+		if !seen[edge.Blocker] {
+			seen[edge.Blocker] = true
+			blockers = append(blockers, edge.Blocker)
+		}
+	}
+	if len(blockers) == 0 {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, blockerDependentsStatement(len(blockers)), blockers...)
+	if err != nil {
+		return fmt.Errorf("worklet: count the one-sided edges' blockers' dependents: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	counts := make(map[string]int, len(blockers))
+	for rows.Next() {
+		var blocker string
+		var n int
+		if err := rows.Scan(&blocker, &n); err != nil {
+			return fmt.Errorf("worklet: read a blocker's dependent count: %w", err)
+		}
+		counts[blocker] = n
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("worklet: count the one-sided edges' blockers' dependents: %w", err)
+	}
+	for i := range edges {
+		edges[i].BlockerDependents = counts[edges[i].Blocker]
+	}
+	return nil
 }
 
 // RepairOneSided writes the mirror commit a dependency gesture never reached,
