@@ -1758,6 +1758,72 @@ type Stream struct {
 	// not depend on this.
 	AssistantLogMaxBytes int64 `yaml:"assistant_log_max_bytes,omitempty" json:"assistant_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the Dashboard Assistant's log; unset takes 512 MiB, scaled down to 64 MiB where the broker is short, 64 MiB..64 GiB."`
 
+	// ChatLogMaxBytes is the byte ceiling on the chat log, the ordered
+	// stream every Chatlet message, reaction and membership change goes
+	// through.
+	//
+	// UNSET ASKS FOR 8 GiB, capped at a quarter of what an unset mutation
+	// log derives from the stream volume ([DerivedChatLogDivisor]) — a
+	// sixteenth of its free space, so 4 GiB is asked on a 64 GiB volume
+	// and the whole 8 GiB from 128 GiB free, never below
+	// [ChatLogMaxBytesFloor]. What is asked is then scaled with every other
+	// derived ask to fit the one budget, so a 64 GiB first boot creates the
+	// log at about 1.4 GiB and the whole 8 GiB is created only where the
+	// broker can back every derived ask unscaled (about 662 GiB free under
+	// an embedded broker that sizes itself). The cap is what keeps this
+	// log's ask from taking more of the vector changelog's room for a model
+	// change than it must; the constant states the figures and what it
+	// costs this log.
+	//
+	// IT DOES NOT FOLLOW THE MUTATION LOG'S CEILING, and that is a
+	// departure, not an oversight. This log holds what the mutation log and
+	// the knowledge base's hold — a trailing window of records, as long as
+	// a blocked trim lasts — and the knowledge base's follows the mutation
+	// log's ceiling, set or derived, so that a blocked trim fills both in
+	// the same time. Chat does not, because of the ONE BUDGET: it grows
+	// faster than the mutation log (about 30 MB a day at the census below,
+	// against the reference company's 22), so following it at that ratio
+	// makes this the largest ask of the nine — about four thirds of the
+	// mutation log's, 85 GiB beside its 64 GiB clamp — and the budget
+	// scales every derived ask in proportion. On a 64 GiB volume that
+	// creates the vector changelog at 4.0 GiB, half the 7.9 GiB the
+	// reference company's fifth-year model change puts in it, which is the
+	// one failure that log is sized to rule out, and a first boot gives it
+	// room for that change clear of the headroom alarm only from about
+	// 133 GiB free; with this log's ask capped as above it is created at
+	// 5.4 GiB on that volume, and has the room from about 100 GiB free.
+	//
+	// WHAT THAT COSTS, stated: an operator who sizes tracker_log_max_bytes
+	// for a long blocked trim has to size this field for the same horizon,
+	// or this log refuses first — beside a 512 GiB mutation log, which
+	// outlasts decades of blocked trim, an unset chat log lasts about nine
+	// months, and on a small volume less ([DerivedChatLogDivisor]).
+	//
+	// WHY EIGHT GIBIBYTES, when the steady state is two orders below it.
+	// At the declared census (`chatlet.ChatMessagesPerDay`, 20 000 messages a
+	// day) and a mean record near a kibibyte and a half, the log grows
+	// about 30 MB a day — so a healthily-trimming fleet holds roughly
+	// 210 MB, one `min_age` window's worth, the same order as the mutation
+	// log's own. This ceiling is therefore not sized for the steady state:
+	// it is what a COMPLETELY BLOCKED TRIM may spend before appends start
+	// being refused — at fifteen sixteenths of it, since the log keeps the
+	// gate reserve every identity-claiming log keeps — which is about nine
+	// months at the declared census and about three and a half at the
+	// 50 000/day supported ceiling, on a volume that creates the whole of
+	// it. Both are far past any backup gap or donor outage the retention
+	// gates tolerate, which is what makes a blocked trim here an alarm
+	// somebody answers rather than a company that cannot talk to itself.
+	//
+	// It shares the state logs' one budget, and everything the mutation
+	// log's field says about that holds here unchanged: the value is what
+	// the stream is CREATED with, a derived value is scaled with the
+	// others to fit the broker and a set one is not, and crossing it
+	// refuses the append rather than shedding history — which for a
+	// transcript is the only acceptable direction, since the pruning of
+	// old messages is a RECORD every data node applies and never a stream
+	// bound.
+	ChatLogMaxBytes int64 `yaml:"chat_log_max_bytes,omitempty" json:"chat_log_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the chat log; unset asks for 8 GiB, capped at a sixteenth of the stream volume's free space (a quarter of what an unset tracker_log_max_bytes derives, so the whole 8 GiB is asked from 128 GiB free), 1 GiB..256 GiB, and does not follow tracker_log_max_bytes - size it for the same blocked-trim horizon, about 30 MB a day at the declared census."`
+
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it
 	// trimming at all, deliberately, when a term it depends on is unknown.
@@ -2235,6 +2301,8 @@ func (s *Stream) validate(path Path) error {
 		ArtifactDataLogMaxBytesFloor, ArtifactDataLogMaxBytesCeiling)
 	bytesInRange(&p, path, "assistant_log_max_bytes", s.AssistantLogMaxBytes,
 		AssistantLogMaxBytesFloor, AssistantLogMaxBytesCeiling)
+	bytesInRange(&p, path, "chat_log_max_bytes", s.ChatLogMaxBytes,
+		ChatLogMaxBytesFloor, ChatLogMaxBytesCeiling)
 	bytesInRange(&p, path, "store_max_bytes", s.StoreMaxBytes,
 		StoreMaxBytesFloor, StoreMaxBytesCeiling)
 	// A LIMIT SMALLER THAN THE CEILINGS DECLARED INSIDE IT is a refusal
@@ -2243,6 +2311,12 @@ func (s *Stream) validate(path Path) error {
 	// node fails naming whichever one it reached last. Every value is the
 	// operator's own, on the same page of the same file, so the honest
 	// moment to say so is now.
+	//
+	// EVERY STATE LOG IS IN THE SUM, the identity, usage and chat logs
+	// included. The sum is what the broker will be asked to back, so a log
+	// left out of it is a limit this check passes and the boot refuses —
+	// which is the one outcome the check exists to prevent, arriving with a
+	// message that says the configuration was fine.
 	//
 	// ONLY THE EXPLICIT ONES ARE SUMMED. A derived ceiling is already
 	// scaled to fit inside whatever limit is in force (see
@@ -2265,17 +2339,17 @@ func (s *Stream) validate(path Path) error {
 				"(tracker_log_max_bytes %d + tracker_vectors_max_bytes %d + "+
 				"pages_log_max_bytes %d + iam_log_max_bytes %d + "+
 				"usage_log_max_bytes %d + artifacts_log_max_bytes %d + "+
-				"artifact_data_log_max_bytes %d + assistant_log_max_bytes %d = %d): "+
-				"the broker "+
-				"refuses a stream whose ceiling it cannot back, so this node would "+
-				"fail to provision one of them. Raise store_max_bytes, or lower the "+
+				"artifact_data_log_max_bytes %d + assistant_log_max_bytes %d + "+
+				"chat_log_max_bytes %d = %d): the broker refuses a stream whose "+
+				"ceiling it cannot back, so this node would fail to provision one "+
+				"of them. Raise store_max_bytes, or lower the "+
 				"ceilings — and leave headroom, because the state logs reserve only "+
 				"a share of this limit and every other stream on the broker grows "+
 				"inside it",
 			s.StoreMaxBytes, s.TrackerLogMaxBytes, s.TrackerVectorsMaxBytes,
 			s.PagesLogMaxBytes, s.IamLogMaxBytes, s.UsageLogMaxBytes,
 			s.ArtifactsLogMaxBytes, s.ArtifactDataLogMaxBytes, s.AssistantLogMaxBytes,
-			declared)
+			s.ChatLogMaxBytes, declared)
 	}
 	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
 	// Refused here rather than at the broker. nats-server validates an

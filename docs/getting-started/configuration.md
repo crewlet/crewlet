@@ -974,23 +974,26 @@ stream:
                                     #   stream, so a full log drops no history —
                                     #   the append is refused, loudly, naming
                                     #   whatever is blocking the trim. ONE
-                                    #   BUDGET FOR ALL FIVE LOGS: the broker
+                                    #   BUDGET FOR EVERY STATE LOG: the broker
                                     #   reserves each ceiling in full when it
                                     #   creates the stream, so this field and
-                                    #   the four below share half of what the
-                                    #   broker can grant them, less the ceiling
-                                    #   any of them that already exists holds.
-                                    #   The unset ones are scaled down together
-                                    #   to fit, never below 1 GiB each — and an
-                                    #   unset ask already below it (the
-                                    #   identity log's) is kept as asked. A value you set is never scaled,
+                                    #   every ceiling below it share half of
+                                    #   what the broker can grant them, less
+                                    #   the ceiling any of them that already
+                                    #   exists holds. The unset ones are scaled
+                                    #   down together to fit, never below 1 GiB
+                                    #   each but the Dashboard Assistant's,
+                                    #   which gives way down to its own 64 MiB
+                                    #   floor; any other unset ask already below
+                                    #   1 GiB (the identity log's) is kept as
+                                    #   asked. A value you set is never scaled,
                                     #   and a boot that cannot reserve it fails
                                     #   naming the field, the bytes it needed
                                     #   and the bytes the broker had. Every one
-                                    #   of the five is the value a stream is
-                                    #   CREATED with: editing it
-                                    #   later changes nothing until
-                                    #   `crewlet retention set-capacity` does.
+                                    #   of them is the value a stream is
+                                    #   CREATED with: editing it later changes
+                                    #   nothing until `crewlet retention
+                                    #   set-capacity` does.
                                     #   WHAT THE BROKER CAN GRANT is
                                     #   `store_max_bytes` wherever you set one,
                                     #   and Tier A refuses a limit smaller than
@@ -1114,6 +1117,46 @@ stream:
                                     #   for gate records. How long a
                                     #   conversation is kept is the company
                                     #   document's `assistant.retention_days`
+  # chat_log_max_bytes: 8589934592  #   the chat log, the ordered stream every
+                                    #   Chatlet message, reaction and membership
+                                    #   change goes through (1..256 GiB). UNSET
+                                    #   ASKS FOR 8 GiB, capped at a sixteenth of
+                                    #   the volume's free space (a quarter of
+                                    #   what an unset mutation log derives, so
+                                    #   4 GiB on 64 GiB free and the whole 8 GiB
+                                    #   from 128): a larger ask on a small
+                                    #   volume comes out of the vector
+                                    #   changelog's room for a model change.
+                                    #   What is asked is scaled with the others,
+                                    #   so a 64 GiB first boot creates it at
+                                    #   about 1.4 GiB. It does NOT follow the
+                                    #   mutation log's ceiling as the knowledge
+                                    #   base's does: chat grows faster (~30 MB a
+                                    #   day against ~22), so following it would
+                                    #   make chat the largest ask in the one
+                                    #   budget, and a first boot would need
+                                    #   ~133 GiB free rather than ~100 before the
+                                    #   vector changelog holds a fifth-year
+                                    #   model change clear of the headroom
+                                    #   alarm. So if you size
+                                    #   tracker_log_max_bytes for a long blocked
+                                    #   trim, size this for the same horizon, or
+                                    #   chat refuses first. WHY 8 GiB: at the
+                                    #   declared census of 20 000 messages a day
+                                    #   and a mean record near 1.5 KiB the log
+                                    #   grows ~30 MB a day, so a healthy fleet
+                                    #   holds ~210 MB — one min_age window, not
+                                    #   a year. This ceiling is what a
+                                    #   COMPLETELY BLOCKED trim may spend first:
+                                    #   ~9 months at that census, ~3½ at the
+                                    #   supported 50 000/day (on 64 GiB free,
+                                    #   capped and scaled: ~6 weeks and ~2½).
+                                    #   Crossing it refuses the append, which
+                                    #   for a transcript is the only acceptable
+                                    #   direction — old messages go by a prune
+                                    #   RECORD all data nodes apply
+                                    #   (chat.chatlet.message_retention_days),
+                                    #   never by a stream bound
   # tracker_retention:              # when the log may be trimmed. Every term
                                     #   here is a statement about the OPERATOR's
                                     #   estate rather than the company's policy,
@@ -1732,6 +1775,17 @@ units:
         goals:                          # optional
           - "Ship features on 2-week cadence"
         channel: backend                # optional — the team's chat channel, inherited
+                                        #   by children that name none. It is an
+                                        #   ADDRESS: lowercase letters, digits, `-`
+                                        #   and `_`, starting with a letter or a
+                                        #   digit, up to 64 characters, and a name
+                                        #   rather than a rendering or an id —
+                                        #   `backend`, not `#backend` and not
+                                        #   `C_BACKEND`. On Chatlet the engine
+                                        #   opens this room and hands the name to
+                                        #   agents to type into their own tools; on
+                                        #   Slack and Mattermost the same grammar is
+                                        #   what both accept as a channel name
         project: "BACK"                 # optional — the unit's tracker "home": routing +
         space: "BACK"                   #   write target. NOT read scope, NOT a credential,
                                         #   and NOT vendor-specific — the same keys name a
@@ -2012,6 +2066,52 @@ Everything else a tracker could be told is either a fact about the **operator** 
 **Every broker member needs a stream that survives a restart.** A state-log domain's write-ahead log lives on the stream, and an embedded member with no `stream.store_dir` — a single node included — keeps its streams in memory, so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses it from the Tier A file alone, and so does the engine at boot. A node without `data` is no member: it joins the members' broker as a leaf and keeps no stream of its own, so it is refused a `store_dir` instead, and a node dialling an external cluster keeps nothing either — that cluster's storage is its operator's.
 
 It applies whatever backends a company names, and whether the node has a company at all. Worklet or Doclet puts its items or its pages there, but the **identity estate** (the people who can sign in) is a domain too, and every node that holds the estate runs it from boot. This rule used to be judged on the two files together and ask about the backends: it let a company on Jira and Confluence through, and then a node started with no company, both of which started logs in memory and lost them on the first restart with nothing having warned.
+
+---
+
+## Chat
+
+```yaml
+chat:
+  backend: chatlet                       # chatlet (default) | vendor | none
+```
+
+Which **chat surface** this company talks on, the third axis and the same shape as the two above. Unset derives `vendor` when the company declares a vendor chat surface and `chatlet` otherwise — and for chat "declares" means `integrations.mattermost`, `integrations.slack`, **or any seat's own `integrations.slack` app**, because Slack's credentials are per seat and a company with seven working Slack apps may never have written the org-level block at all. Naming `chatlet` beside any of them is refused: conversations would live in two places, a person would reply in one of them, and nothing anywhere could say which thread was the real one. Naming `vendor` with none of them declared is refused too, since there is no surface to talk on. `none` is a company whose seats are woken by the tracker, the code host and schedules only.
+
+The value is `vendor` rather than a product name — the other two axes name theirs — because a company legitimately runs **both** Mattermost and Slack: they are different workspaces with different people in them, and an org migrating between them runs the pair for months.
+
+### Chatlet's own policy
+
+```yaml
+chat:
+  backend: chatlet
+  chatlet:                               # ONLY on a Chatlet company — a retention
+                                         #   horizon on a company whose messages
+                                         #   live in Slack describes nothing, and
+                                         #   is refused
+    message_retention_days: 365          # how long a message lives (default 365,
+                                         #   30..3650). 0 KEEPS MESSAGES FOR EVER,
+                                         #   which is a different setting from
+                                         #   leaving the field out — chat is the
+                                         #   highest-volume thing the engine
+                                         #   stores, and every message sits in
+                                         #   every snapshot and every node join
+    default_channel_private: false       # create a channel private when the caller
+                                         #   names no visibility. Default false:
+                                         #   a company's rooms are readable by its
+                                         #   own seats
+    typing_status: always                # always (default) | addressed — the same
+                                         #   closed set, and the same meaning, as
+                                         #   integrations.slack.typing_status
+```
+
+`message_retention_days` is **three-valued**, and the difference matters: leaving it out takes a year, `0` keeps messages for ever, and a number between 30 and 3650 is that horizon. Note that `tracker.worklet.inbox_retention_days` reads `0` the other way — as "take the default" — because an inbox row is derived from history that answers for ever, while a message is the only copy of what somebody said.
+
+Everything else Chatlet could be told is either the operator's — how big the log may grow (Tier A's `stream.chat_log_max_bytes`) and how long its replay window is kept — or a decision the engine makes once for everybody. How much of a thread a woken seat is shown is one of those: the engine reads the thread at turn start for every chat surface alike and bounds it at one byte budget, keeping whole messages and condensing the middle of a long thread (see [the thread a turn was woken in](../concepts/agent-runtime.md#the-thread-a-turn-was-woken-in)).
+
+**A channel two units both declare is refused on Chatlet.** A unit's room belongs to the one unit that names it — its members are that unit's subtree, and its lead answers what nobody else did — so a second unit naming the same channel would be left out of a room its seats are told is theirs. `crewlet validate` reports it beside each of the units: give each its own channel, or leave a child unit's empty so it inherits its parent's room. It is an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to), so a stored revision that carries the shape still runs, with the refusal reported as a warning instead. On Mattermost or Slack the same shape is only a warning, because there it is one a real company writes on purpose: everything scoped to one unit lands in the other's room, and every seat in both is told that channel is its team's own.
+
+**A Chatlet company where no unit declares a `channel` at all** is warned about at the first unit: a unit's room is the one kind whose members the org chart keeps, so without one no team has a room of its own until somebody opens one by hand and adds its seats. A child unit that names none and inherits its parent's is neither a warning nor a refusal — that is the field working as intended.
 
 ---
 

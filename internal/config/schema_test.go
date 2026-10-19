@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"reflect"
 	"slices"
@@ -126,8 +127,16 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		{"RoleAvatar", "color", strs(AvatarColors)},
 		{"LocalSandbox", "runtime", strs(ContainerRuntimes)},
 		{"MCPServer", "transport", strs(MCPTransports)},
+		{"Chat", "backend", strs(ChatBackends)},
+		// THE SAME CLOSED SET ON ALL THREE CHAT SURFACES, which is why it
+		// is one type — and why all three rows are here: "is somebody
+		// waiting on this seat" is a property of the message rather than of
+		// the product carrying it, and a rename that updated two of these
+		// tags and not the third would leave enums that agree today and
+		// drift on the next value.
 		{"Slack", "typing_status", strs(WorkingStatuses)},
 		{"Mattermost", "typing_status", strs(WorkingStatuses)},
+		{"ChatletConfig", "typing_status", strs(WorkingStatuses)},
 		{"GitLabProvisioning", "access_level", strs(GitLabAccessLevels)},
 		{"GitLabProvisioning", "group_webhook", strs(ContainerWebhookModes)},
 		// The same closed set on both code hosts, which is why it is one
@@ -230,6 +239,29 @@ func TestNodeIDPatternIsOneRule(t *testing.T) {
 			t.Fatalf("%s.%s pattern = %v, the validator's nodeIDPattern is %q",
 				tc.def, tc.field, got, want)
 		}
+	}
+}
+
+// A UNIT'S CHANNEL PATTERN IS ONE RULE: the validator's unitChannel and the
+// js tag on Unit.channel, which is a second spelling of the same regexp for
+// the reason the node id's is. Drift one way red-underlines a channel the
+// engine opens a room under; the other lets an editor pass a name the engine
+// refuses on apply. The single parity case for a `#` catches only the one
+// character it names.
+func TestUnitChannelPatternIsOneRule(t *testing.T) {
+	t.Parallel()
+	defs, _ := schemaDoc(t, TierCompany)["$defs"].(map[string]any)
+	def, ok := defs["Unit"].(map[string]any)
+	if !ok {
+		t.Fatal("the company schema's $defs has no Unit")
+	}
+	props, _ := def["properties"].(map[string]any)
+	field, ok := props["channel"].(map[string]any)
+	if !ok {
+		t.Fatal("Unit has no channel")
+	}
+	if got, want := ownPattern(t, field), unitChannel.String(); got != want {
+		t.Fatalf("Unit.channel pattern = %v, the validator's unitChannel is %q", got, want)
 	}
 }
 
@@ -371,7 +403,7 @@ func TestSchemaNeverRejectsWhatTheValidatorAccepts(t *testing.T) {
 }
 
 func parityCases() []parityCase {
-	return []parityCase{
+	return append([]parityCase{
 		// Valid documents. Every one of these must survive BOTH layers, or
 		// the schema is stricter than the engine.
 		{name: "minimal company", tier: TierCompany, yaml: "name: Acme\n"},
@@ -979,6 +1011,49 @@ units:
 			tier: TierCompany, validatorOnly: true,
 			yaml: "name: Acme\nknowledge:\n  backend: none\n  scope: [HANDBOOK]\n",
 		},
+		// Chatlet's policy, every knob written — including
+		// `message_retention_days: 0`, which is the setting that is its own
+		// type's zero value ("keep messages for ever") and must survive
+		// BOTH layers: a schema or a validator reading it as "unset" would
+		// delete a company's history a year after somebody asked for it to
+		// be kept.
+		{
+			name: "a Chatlet policy", tier: TierCompany,
+			yaml: "name: Acme\nchat:\n  chatlet:\n    message_retention_days: 0\n" +
+				"    default_channel_private: true\n    typing_status: addressed\n",
+		},
+		{
+			name: "a chat backend that is a product name", tier: TierCompany,
+			editorCatches: true,
+			yaml:          "name: Acme\nchat: {backend: mattermost}\n",
+		},
+		// A UNIT CHANNEL IS AN ADDRESS, and the pattern is on the field, so
+		// an editor catches the `#` an author renders it with before the
+		// engine does.
+		{
+			name: "a unit channel written as a mention", tier: TierCompany,
+			editorCatches: true,
+			yaml:          "name: Acme\nunits:\n  - {name: Core, channel: \"#core\"}\n",
+		},
+		// A HORIZON BELOW THE FLOOR: the field's real set is "0, or
+		// 30..3650", which a minimum/maximum pair cannot state — the schema
+		// would have to carve a hole out of its own range. So it carries
+		// the outer bounds, lets 14 through, and the validator is the only
+		// layer that refuses it.
+		{
+			name: "a message horizon below the floor", tier: TierCompany,
+			validatorOnly: true,
+			yaml:          "name: Acme\nchat:\n  chatlet: {message_retention_days: 14}\n",
+		},
+		// CHATLET BESIDE THE VENDOR IT WOULD DUPLICATE, which turns on
+		// a block's mere presence — the same shape of rule the knowledge
+		// and tracker axes leave to the validator alone.
+		{
+			name: "Chatlet beside a mattermost workspace", tier: TierCompany,
+			validatorOnly: true,
+			yaml: "name: Acme\nchat: {backend: chatlet}\nintegrations:\n" +
+				"  mattermost: {enabled: true, url: \"https://chat.example.com\", team: acme}\n",
+		},
 		{
 			name: "unknown bootstrap key", tier: TierBootstrap, editorCatches: true,
 			yaml: "stroe:\n  path: x.db\n",
@@ -1084,7 +1159,7 @@ units:
 			yaml: tokenDoc(strings.Repeat("a", tokenIDBound))},
 		{name: "a token id past its bound", tier: TierBootstrap, editorCatches: true,
 			yaml: tokenDoc(strings.Repeat("a", tokenIDBound+1))},
-	}
+	}, byteBoundCases()...)
 }
 
 // tokenIDBound is how long a Tier A token's id may be: the width of a login,
@@ -1227,4 +1302,91 @@ func schemaDoc(t *testing.T, tier Tier) map[string]any {
 		t.Fatal(err)
 	}
 	return doc
+}
+
+// byteBoundCases holds every byte ceiling's schema bounds to the validator's,
+// on both sides of both edges.
+//
+// THE TWO ARE WRITTEN APART — a js tag on the field and a constant in
+// retention.go — and nothing else compares them. A floor raised without its
+// tag leaves an editor accepting a limit the engine refuses; a tag raised
+// without its floor red-underlines a working file. StoreMaxBytesFloor moved
+// as state logs joined the broker, once per domain, and the identity and
+// usage logs took floors of their own, which is exactly how the two drift.
+// The bounds come from the CONSTANTS, so a case here cannot agree with a
+// stale tag by having been written from it.
+//
+// EVERY CASE STATES A STORE DIRECTORY, because a `stream:` block the case
+// writes is one [Runnable] leaves as written, and an embedded member with no
+// store directory is refused for that before its ceilings are read.
+func byteBoundCases() []parityCase {
+	bounds := byteBounds()
+	var out []parityCase
+	for _, field := range slices.Sorted(maps.Keys(bounds)) {
+		lo, hi := bounds[field][0], bounds[field][1]
+		doc := func(v int64) string {
+			return fmt.Sprintf("stream:\n  store_dir: %s\n  %s: %d\n", TestStoreDir, field, v)
+		}
+		out = append(out,
+			parityCase{name: field + " below its floor", tier: TierBootstrap,
+				editorCatches: true, yaml: doc(lo - 1)},
+			parityCase{name: field + " at its floor", tier: TierBootstrap,
+				yaml: doc(lo)},
+			parityCase{name: field + " at its ceiling", tier: TierBootstrap,
+				yaml: doc(hi)},
+			parityCase{name: field + " past its ceiling", tier: TierBootstrap,
+				editorCatches: true, yaml: doc(hi + 1)},
+		)
+	}
+	return out
+}
+
+// byteBounds is each byte ceiling's floor and ceiling as the validator holds
+// them, keyed by the field's yaml name under `stream`.
+func byteBounds() map[string][2]int64 {
+	return map[string][2]int64{
+		"tracker_log_max_bytes":       {TrackerLogMaxBytesFloor, TrackerLogMaxBytesCeiling},
+		"tracker_vectors_max_bytes":   {TrackerVectorsMaxBytesFloor, TrackerVectorsMaxBytesCeiling},
+		"pages_log_max_bytes":         {PagesLogMaxBytesFloor, PagesLogMaxBytesCeiling},
+		"iam_log_max_bytes":           {IamLogMaxBytesFloor, IamLogMaxBytesCeiling},
+		"usage_log_max_bytes":         {UsageLogMaxBytesFloor, UsageLogMaxBytesCeiling},
+		"artifacts_log_max_bytes":     {ArtifactsLogMaxBytesFloor, ArtifactsLogMaxBytesCeiling},
+		"artifact_data_log_max_bytes": {ArtifactDataLogMaxBytesFloor, ArtifactDataLogMaxBytesCeiling},
+		"assistant_log_max_bytes":     {AssistantLogMaxBytesFloor, AssistantLogMaxBytesCeiling},
+		"chat_log_max_bytes":          {ChatLogMaxBytesFloor, ChatLogMaxBytesCeiling},
+		"store_max_bytes":             {StoreMaxBytesFloor, StoreMaxBytesCeiling},
+	}
+}
+
+// EVERY BYTE CEILING TIER A DECLARES HAS ITS BOUNDS HELD, and the table above
+// cannot fall behind the struct it describes.
+//
+// The table is written by hand, because a bound is a constant and nothing
+// reflectable names which one belongs to which field. What that leaves open
+// is a ceiling nobody added a row for: a log that joins the broker as the
+// chat log did gets a `*_max_bytes` field, a js tag and a constant, and the
+// one comparison between the last two silently skips it. So the field set is
+// READ from config.Stream and the two sets must be equal — a field with no row
+// is a bound nothing holds, and a row with no field certifies a field that is
+// gone.
+func TestEveryByteCeilingHasItsBoundsHeld(t *testing.T) {
+	t.Parallel()
+	var declared []string
+	stream := reflect.TypeFor[Stream]()
+	for i := range stream.NumField() {
+		name, _, _ := strings.Cut(stream.Field(i).Tag.Get("yaml"), ",")
+		if strings.HasSuffix(name, "_max_bytes") {
+			declared = append(declared, name)
+		}
+	}
+	slices.Sort(declared)
+	held := slices.Sorted(maps.Keys(byteBounds()))
+	if len(declared) == 0 {
+		t.Fatal("config.Stream declares no *_max_bytes field, so this case is measuring nothing")
+	}
+	if !slices.Equal(declared, held) {
+		t.Errorf("config.Stream declares the byte ceilings %v, and byteBounds "+
+			"holds %v — every *_max_bytes field needs a row there, and every "+
+			"row a field", declared, held)
+	}
 }

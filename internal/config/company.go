@@ -67,6 +67,9 @@ type Company struct {
 	// search.
 	Knowledge Knowledge `yaml:"knowledge,omitempty" json:"knowledge"`
 
+	// Chat is which chat surface this company talks on.
+	Chat Chat `yaml:"chat,omitempty" json:"chat,omitempty"`
+
 	// Artifacts is the company's artifacts policy. See [CompanyArtifacts].
 	Artifacts CompanyArtifacts `yaml:"artifacts,omitempty" json:"artifacts,omitzero"`
 
@@ -274,6 +277,7 @@ func (c *Company) ValidateRunnable() error {
 // reads ([Company.validateSandboxGates]), a setup step writing a file a box
 // it reaches refuses ([Company.validateSetupFileHomes]), a coding run's
 // `optional_keys` entry leaving nothing out ([Company.validateRunOptionalKeys]),
+// two units declaring one channel on Chatlet ([Company.validateUnitRooms]),
 // and the five WHOLE-DOCUMENT rules in [Company.validateFileRules] — an
 // `mcp_env` key naming no server, an `optional_keys` entry leaving nothing
 // out, one http header spelled two ways where nothing says which is sent, two
@@ -292,7 +296,7 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 		c.validateSetupStepNames(), c.validateHumanSeatApps(), c.validateAvatars(),
 		c.validateLLMCredentials(), c.validateLLMModels(),
 		c.validateSandboxCodingAgents(), c.validateSandboxGates(), c.validateSetupFileHomes(),
-		c.validateRunOptionalKeys(), c.validateFileRules(), c.validateAssistant())
+		c.validateRunOptionalKeys(), c.validateUnitRooms(), c.validateFileRules(), c.validateAssistant())
 }
 
 // validateUnitIDs requires an id on every authored unit, at any depth. See
@@ -557,6 +561,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	p.wrap(c.Scheduling.validate(field("scheduling")))
 	p.wrap(c.Integrations.validate(field("integrations")))
 	p.wrap(c.validateKnowledgeBackend())
+	p.wrap(c.validateChat())
 	p.wrap(c.validateContainerKeys())
 	p.wrap(c.validateProviderKeys())
 	p.wrap(c.validateWorkers())
@@ -598,6 +603,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 		p.wrap(c.Units[i].validate(idx(field("units"), i)))
 	}
 	p.wrap(c.Tracker.Worklet.validate(field("tracker.worklet")))
+	p.wrap(c.Chat.Chatlet.validate(field("chat.chatlet")))
 	// A WORKLET BLOCK ON A COMPANY THAT DOES NOT RUN WORKLET describes
 	// nothing, and the failure that produces is silence: an operator sets an
 	// inbox horizon for inbox rows somebody else's tracker will never write.
@@ -1118,14 +1124,18 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 	if c == nil {
 		return false
 	}
+	// A CHAT VENDOR IS DECLARED WHERE [chatVendors] SAYS, which is the one
+	// statement of it the chat backend is derived from too: Slack counts on
+	// a seat's own app as well as on the org block.
+	if vendor, ok := chatVendorNamed(surface); ok {
+		return vendor.declaredAt(c) != ""
+	}
 	in := c.Integrations
 	switch surface {
 	case "jira":
 		return in.Jira != nil
 	case "confluence":
 		return in.Confluence != nil
-	case "mattermost":
-		return in.Mattermost != nil
 	case "github":
 		return in.GitHub != nil
 	case "gitlab":
@@ -1134,16 +1144,6 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 		return in.Datadog != nil
 	case "atlassian":
 		return in.Atlassian != nil
-	case "slack":
-		if in.Slack != nil {
-			return true
-		}
-		for role := range c.EachRole() {
-			if role.Integrations.Slack != nil {
-				return true
-			}
-		}
-		return false
 	default:
 		// A SURFACE THIS BUILD DOES NOT KNOW, which on a rolling upgrade is
 		// a peer's. True rather than false, because the only caller deletes

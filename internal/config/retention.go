@@ -115,6 +115,30 @@ const (
 	NatsObjectsMaxBytesFloor   int64 = 1 << 30
 	NatsObjectsMaxBytesCeiling int64 = 64 << 40
 
+	// ChatLogMaxBytesFloor and ChatLogMaxBytesCeiling bound the chat log's.
+	//
+	// THE FLOOR IS THE GIBIBYTE every corpus-sized log takes, because this
+	// is one: it grows with what the company says, as the mutation log
+	// grows with what it files, and below a gibibyte it is a window that
+	// refuses a message somebody typed within a month of a blocked trim at
+	// the declared census. Not the identity and usage logs' 64 MiB, which
+	// size a headcount and a census of objects a small company has few of.
+	//
+	// THE CEILING IS A TYPO GUARD rather than a sizing: at the supported
+	// fifty thousand messages a day (about 75 MB of log a day at a
+	// kibibyte and a half a record) 256 GiB is about a decade of a
+	// COMPLETELY BLOCKED trim, which no backup gap or donor outage a
+	// retention gate tolerates comes near, and far above anything an unset
+	// value asks for.
+	//
+	// THE SAME NUMBER AS THE KNOWLEDGE BASE'S, NOT FOR ITS REASON. That one
+	// is a quarter of the mutation log's for the corpus ratio
+	// DerivedPagesLogDivisor states; this one follows from the census and a
+	// window, so the two are separate constants and either may move without
+	// the other.
+	ChatLogMaxBytesFloor   int64 = 1 << 30
+	ChatLogMaxBytesCeiling int64 = 256 << 30
+
 	// IamLogMaxBytesFloor and IamLogMaxBytesCeiling bound the identity
 	// estate's log, and DefaultIamLogMaxBytes is what an unset value takes.
 	//
@@ -299,6 +323,43 @@ const (
 	// `linearizable`, about 639 MB a year at the reference company.
 	DerivedArtifactDataLogDivisor = 4
 
+	// DerivedChatLogDivisor caps an unset ChatLogMaxBytes on a small
+	// volume: the chat log asks for its domain's excursion budget
+	// (`chatlet.ChatLogMaxBytes`, 8 GiB), but never for more than this
+	// fraction of what an unset mutation log derives from the same volume
+	// ([DerivedLogMaxBytes]) — a sixteenth of the free space, so the whole
+	// ask from 128 GiB free and 4 GiB on a 64 GiB volume.
+	//
+	// FOUR, MEASURED rather than borrowed from the knowledge base's ratio,
+	// although it is the same number. Every derived ask is scaled into one
+	// budget in proportion, so what the chat log asks for comes out of the
+	// vector changelog's room for a model change — the excursion that log
+	// is sized for, and one designed not to alarm. The reference company's
+	// fifth-year model change puts 7.9 GiB in the changelog, and
+	// `log_headroom` fires below a tenth of headroom, so the changelog has
+	// to be created at 8.8 GiB or more. A first boot under an embedded
+	// broker creates it there from about 100 GiB free with chat's ask
+	// capped at a quarter, from 102 at a third or with the whole 8 GiB
+	// asked, and from 92 with no chat log at all: of the three, the quarter
+	// costs the changelog least. None of them reaches it on a 64 GiB volume.
+	// The logs share 18 GiB there — half of what the broker's three quarters
+	// of the volume leave once the object bucket has reserved a quarter of
+	// them — and the changelog is created at 5.4 GiB with the quarter, 5.3
+	// at a third and 5.0 with the whole ask (5.9 with no chat log), under
+	// the change itself, so a volume that size sets
+	// `stream.tracker_vectors_max_bytes` (docs/guides/retention.md says to
+	// what).
+	//
+	// WHAT IT COSTS the chat log, stated: its horizon under a completely
+	// blocked trim on a small volume. Created at 1.4 GiB on that 64 GiB
+	// first boot, rather than 2.5 with the whole ask, it refuses ordinary
+	// writes after about 45 days of a fully blocked trim at the declared
+	// census rather than 82, and after about 18 at the supported 50 000
+	// messages a day rather than 33. The log_headroom alarm names the log a
+	// tenth of the way before either, and from 128 GiB free the cap no
+	// longer binds.
+	DerivedChatLogDivisor = 4
+
 	// DerivedLogMaxBytesFraction is the share of a volume's free space an
 	// unset TrackerLogMaxBytes takes, and DerivedLogMaxBytesFloor /
 	// DerivedLogMaxBytesCeiling clamp the result.
@@ -337,11 +398,11 @@ const (
 	// THE CEILING IS A TYPO GUARD rather than a policy: 64 TiB is more than
 	// an order of magnitude above the largest estate the domain ceilings can
 	// describe (1 TiB of mutation log, 2 TiB of vectors, 512 GiB of artifact
-	// datastore, 256 GiB each of knowledge base and artifacts, 64 GiB each of
-	// usage and assistant, and 16 GiB of identity — about 4.1 TiB together),
-	// so anything past it is a unit mistake rather than a deployment. The
-	// object bucket's own bound is this one, and its reservation has to fit
-	// inside whatever limit is set, beside the logs'.
+	// datastore, 256 GiB each of knowledge base, artifacts and chat, 64 GiB
+	// each of usage and assistant, and 16 GiB of identity — about 4.4 TiB
+	// together), so anything past it is a unit mistake rather than a
+	// deployment. The object bucket's own bound is this one, and its
+	// reservation has to fit inside whatever limit is set, beside the logs'.
 	StoreMaxBytesFloor   int64 = 6 << 30
 	StoreMaxBytesCeiling int64 = 64 << 40
 )
@@ -555,7 +616,7 @@ func (s Stream) ArtifactDataMaxBytes(free int64) (int64, bool) {
 func (s Stream) DeclaredLogCeilings() int64 {
 	return s.TrackerLogMaxBytes + s.TrackerVectorsMaxBytes + s.PagesLogMaxBytes +
 		s.IamLogMaxBytes + s.UsageLogMaxBytes + s.ArtifactsLogMaxBytes +
-		s.ArtifactDataLogMaxBytes + s.AssistantLogMaxBytes
+		s.ArtifactDataLogMaxBytes + s.AssistantLogMaxBytes + s.ChatLogMaxBytes
 }
 
 // IamMaxBytes is the identity estate's log ceiling, and whether it was derived.

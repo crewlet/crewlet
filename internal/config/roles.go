@@ -864,7 +864,13 @@ type Unit struct {
 	// app this build refuses, and put "Team Slack channel" into the prompt
 	// of every agent in a company that talks on Mattermost. A unit's
 	// channel is a fact about the unit, not about who hosts it.
-	Channel string `yaml:"channel,omitempty" json:"channel,omitempty" desc:"Unit channel on the company's chat surface; inherited by child units."`
+	//
+	// IT IS AN ADDRESS, which is what the grammar is for — see
+	// [unitChannel]. THE PATTERN IS ON THE FIELD as well as in the
+	// validator, for the reason [Unit.ID] gives: the generator emits it
+	// into the published schema, and a schema accepting channels the engine
+	// refuses is exactly the drift the schema-diff test cannot see.
+	Channel string `yaml:"channel,omitempty" json:"channel,omitempty" js:"pattern=^[a-z0-9][a-z0-9_-]{0,63}$" desc:"Unit channel on the company's chat surface, e.g. engineering; inherited by child units. Lowercase letters, digits, - and _."`
 
 	// Knowledge is free-text knowledge references for this unit. NOT a
 	// read scope — org-wide read scope is the knowledge block.
@@ -938,6 +944,22 @@ func (u *Unit) validate(path Path) error {
 				"starting with a letter, up to 64 characters. It is chosen once "+
 				"and read by nobody, so it can be short and dull", id)
 	}
+	// THE RAW VALUE, deliberately unlike the id above: that one is trimmed
+	// here and trimmed again by [Unit.Unit], so a padded id normalises
+	// end to end, while a channel is copied VERBATIM into the organization
+	// and from there into a prompt and a room name. Trimming it here would
+	// accept `" ops"` and leave a room named with a leading space — and it
+	// would also make the published schema, which carries this same pattern
+	// and cannot trim anything, stricter than the engine. That is the one
+	// direction the schema must never take.
+	if u.Channel != "" && !unitChannel.MatchString(u.Channel) {
+		p.add(at(path, "channel"), ErrShape,
+			"%q is not a channel name: lowercase letters, digits, `-` and `_`, "+
+				"starting with a letter or a digit, up to 64 characters, and no "+
+				"surrounding whitespace. Write the name rather than an id or a "+
+				"rendering of one — `engineering`, not `#engineering` and not "+
+				"`C_ENG`", u.Channel)
+	}
 	for i := range u.Roles {
 		p.wrap(u.Roles[i].validate(idx(at(path, "roles"), i)))
 	}
@@ -958,6 +980,46 @@ func (u *Unit) validate(path Path) error {
 // regexp differing by one character is how a schema starts accepting what the
 // engine refuses.
 var entityID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+
+// unitChannel is what a unit's channel may look like.
+//
+// # A channel is an ADDRESS now, and it had no rule at all
+//
+// The field shipped with no validation of any kind and two consumers — a line
+// in the prompt, and the list a structured ask's `inform` channel is checked
+// against — so anything an author typed was passed through to a model as
+// prose: `#eng`, `C_BACKEND`, `Engineering (private)`. With
+// `chat.backend: chatlet` the engine MINTS the room this names, routes a
+// unit's wakes to it, and hands the name to a model as something to type back
+// into a tool call, which makes every one of those three a different failure:
+// a name nobody can address, a rendering of an id Chatlet has no
+// concept of, and a name no vendor would accept either.
+//
+// The set is the INTERSECTION of the three surfaces rather than Chatlet's own:
+// Mattermost's channel URL names are lowercase alphanumerics with
+// `-` and `_` up to 64 characters, Slack's are lowercase letters, digits, `-`
+// and `_` up to 80, and the engine's own name admits exactly that set too,
+// reaching a broker subject only as a digest. So one grammar serves all
+// three, a company can switch backends without rewriting its org chart — a
+// vendor company's `dev_ops` validates — and the characters an author is most
+// likely to add — the `#` that is a rendering rather than a name, an upper
+// case, a space — are refused where they are written rather than printed into
+// a prompt.
+//
+// 64 characters because that is the shortest of the three limits, and the one
+// that truncates rather than refusing is the one that would give two units the
+// same room.
+//
+// # And why it is not [entityID]
+//
+// The two look alike and differ in the first character on purpose. An id is
+// a KEY this engine mints and nobody reads, so it may as well start with a
+// letter everywhere it lands; a channel is an ADDRESS on somebody's chat
+// surface, where `2fa-rollout` is an ordinary room name a vendor company
+// already has. Folding the two into one pattern would either refuse that
+// company's real channel or let an id start with a digit, and the second is
+// a key [MintUnitID] would then have to stop prefixing.
+var unitChannel = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
 // MintUnitID is the id a unit gets when its document declares none: its name,
 // reduced to the key grammar [entityID] accepts.
