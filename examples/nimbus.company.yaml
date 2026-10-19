@@ -218,9 +218,10 @@ providers:
         # runs `direct` (default_run_in above), and a direct box has no
         # filesystem of its own, so a path outside its home would be the
         # engine host itself; a container box mounts only its home.  A
-        # system path therefore fails every seat's first run at setup.  A
-        # setup COMMAND is not confined the same way — under `direct` it
-        # runs on the engine host, as the engine's user.
+        # system path would fail every seat's box at setup, so validation
+        # refuses this document if a file names one.  A setup COMMAND is
+        # not confined the same way — under `direct` it runs on the engine
+        # host, as the engine's user.
         #
         # A `files:` entry named relative to the home (.local/bin/...)
         # would land in the same place; the helper is written by a command

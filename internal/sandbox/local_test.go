@@ -197,6 +197,31 @@ func TestDirectModeRefusesToWriteOutsideTheBox(t *testing.T) {
 	}
 }
 
+// A TILDE IS THE BOX'S HOME, in a direct box as in a remote one, whose own
+// agent expands it when it writes a setup file: "~/.npmrc" used to be written
+// to a directory named "~" inside the home here, so one step put its file in
+// two places depending on the cell. Another account's home is refused, as the
+// remote agent refuses it.
+func TestADirectBoxWritesATildePathInItsHome(t *testing.T) {
+	t.Parallel()
+	box := mustCreate(t, newDirect(t), Spec{})
+	if err := box.WriteFile(t.Context(), "~/.npmrc", []byte("registry=x\n")); err != nil {
+		t.Fatalf("WriteFile(~/.npmrc): %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(box.Home(), ".npmrc"))
+	if err != nil || string(got) != "registry=x\n" {
+		t.Fatalf("the home's .npmrc reads %q, %v; want the file written as ~/.npmrc", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(box.Home(), "~")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a directory named ~ was made in the home: %v", err)
+	}
+	for _, path := range []string{"~", "~bob/.npmrc"} {
+		if err := box.WriteFile(t.Context(), path, []byte("x")); err == nil {
+			t.Errorf("WriteFile(%q) succeeded; it names the home itself or another account's", path)
+		}
+	}
+}
+
 // A LOCAL BOX'S REFUSAL NAMES A REMEDY THAT WORKS IN EVERY LOCAL CELL.
 //
 // The direct box's used to end "or use run_in container", and a container box
@@ -1368,17 +1393,31 @@ func TestTheContainerMapsInBoxPathsOntoItsSideOfTheMount(t *testing.T) {
 	// also holds the engine's records about the box.
 	home := box.layout.home()
 
+	want := filepath.Join(home, "workspace", "notes.md")
+	resolved, _ := filepath.EvalSymlinks(root)
+	notes := func(got string) bool {
+		return got == want || got == filepath.Join(resolved, "home", "workspace", "notes.md")
+	}
 	got, err := box.hostPath(DefaultHome + "/workspace/notes.md")
 	if err != nil {
 		t.Fatalf("hostPath: %v", err)
 	}
-	if want := filepath.Join(home, "workspace", "notes.md"); got != want {
-		if resolved, _ := filepath.EvalSymlinks(root); got != filepath.Join(resolved, "home", "workspace", "notes.md") {
-			t.Fatalf("hostPath = %q, want %q", got, want)
+	if !notes(got) {
+		t.Fatalf("hostPath = %q, want %q", got, want)
+	}
+	// The mount compared as a path rather than as a prefix of one: a doubled
+	// separator and a climb that comes back are both still under it, and so is
+	// a tilde, which is the home in every cell.
+	for _, path := range []string{DefaultHome + "//workspace/notes.md", DefaultHome + "/../user/workspace/notes.md",
+		"~/workspace/notes.md"} {
+		if got, err := box.hostPath(path); err != nil || !notes(got) {
+			t.Errorf("hostPath(%q) = %q, %v; want %q", path, got, err, want)
 		}
 	}
-	if got, err := box.hostPath(DefaultHome); err != nil || got != home {
-		t.Fatalf("hostPath(home) = %q, %v; want %q", got, err, home)
+	// The home itself is no file in the box, which is how a direct box has
+	// always read it ([hostbox.SafeJoin] refuses a root).
+	if got, err := box.hostPath(DefaultHome); err == nil {
+		t.Fatalf("hostPath(home) = %q; want a refusal: the home is no file in the box", got)
 	}
 }
 

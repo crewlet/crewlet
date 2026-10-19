@@ -257,7 +257,9 @@ func (c *Company) ValidateRunnable() error {
 // ([LLMProvider.validateCLICredentials]), a cli-agent model with no provider
 // segment on a CLI that reads one ([LLMProvider.validateCLIModel]), a seat
 // whose code work hands a cli-agent entry to another CLI's coding agent
-// ([Company.validateSandboxCodingAgents]), and the four WHOLE-DOCUMENT rules
+// ([Company.validateSandboxCodingAgents]), a setup step writing a file a box
+// it reaches refuses ([Company.validateSetupFileHomes]), and the four
+// WHOLE-DOCUMENT rules
 // in [Company.validateFileRules] — an `mcp_env` key naming no server, two
 // seats declaring one email, a reference that is shaped like neither a handle
 // nor a key, and a unit key or a seat handle the org chart reserves.
@@ -272,7 +274,7 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 	return errors.Join(o.ValidateAdmission(), c.validateUnitIDs(),
 		c.validateSetupStepNames(), c.validateHumanSeatApps(), c.validateAvatars(),
 		c.validateCLIAgentCredentials(), c.validateCLIAgentModels(),
-		c.validateSandboxCodingAgents(), c.validateFileRules())
+		c.validateSandboxCodingAgents(), c.validateSetupFileHomes(), c.validateFileRules())
 }
 
 // validateUnitIDs requires an id on every authored unit, at any depth. See

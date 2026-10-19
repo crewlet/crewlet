@@ -334,24 +334,22 @@ func reap(proc *exec.Cmd) { _ = proc.Wait() }
 // it once said so: it writes files only under its mount and refuses the same
 // path ([containerBox.hostPath]). What works in every cell is the box's home:
 // a file named relative to it, or a setup command writing under "$HOME".
+//
+// Where a path lands is [hostbox.InHome]'s answer, the one config validation
+// gives a setup step's files before any box exists, so the two cannot
+// disagree about which file a box refuses.
 func (b *directBox) resolve(path string) (string, error) {
-	rel := path
-	if filepath.IsAbs(path) {
-		root, err := filepath.EvalSymlinks(b.layout.home())
-		if err != nil {
-			root = filepath.Clean(b.layout.home())
+	// An absolute path that already names somewhere in the box is the
+	// ordinary case: a brief and a setup step both speak in the home the box
+	// reports. It may name that home as written or as its links resolve.
+	rel, inside := hostbox.InHome(b.layout.home(), path)
+	if !inside && filepath.IsAbs(path) {
+		if root, err := filepath.EvalSymlinks(b.layout.home()); err == nil {
+			rel, inside = hostbox.InHome(root, path)
 		}
-		clean := filepath.Clean(path)
-		// An absolute path that already names somewhere in the box is the
-		// ordinary case: a brief and a setup step both speak in the home the
-		// box reports.
-		if within, err := filepath.Rel(root, clean); err == nil && !strings.HasPrefix(within, "..") {
-			rel = within
-		} else if within, err := filepath.Rel(filepath.Clean(b.layout.home()), clean); err == nil && !strings.HasPrefix(within, "..") {
-			rel = within
-		} else {
-			return "", b.escapeError(path)
-		}
+	}
+	if !inside {
+		return "", b.escapeError(path)
 	}
 	resolved, err := hostbox.SafeJoin(b.layout.home(), rel)
 	switch {
@@ -512,27 +510,21 @@ func (b *containerBox) workdir() string { return DefaultHome + "/" + WorkspaceSu
 // alone does not prevent that: "/home/user/../../etc/cron.d/x" starts with the
 // mount point and still resolves outside it, and setup-step file paths are
 // operator config. The final check is the same one direct mode makes, for the
-// same reason.
+// same reason, and so is the first: where a path lands under the mount is
+// [hostbox.InHome]'s answer, which config validation gives a setup step's
+// files too.
 func (b *containerBox) hostPath(path string) (string, error) {
-	clean := filepath.Clean(path)
-	if clean == DefaultHome {
-		return b.layout.home(), nil
-	}
-	prefix := DefaultHome + "/"
-	rel := path
-	switch {
-	case strings.HasPrefix(path, prefix):
-		rel = path[len(prefix):]
-	case filepath.IsAbs(path):
-		// Outside the mount, so a write from out here cannot reach it. A
-		// command inside the container might, but only as whatever user the
-		// container runs as — the engine's own uid on a rootful runtime
-		// ([containerUserArgs]), which an image's system directories
-		// usually refuse — so the remedy that holds is the home.
-		return "", localErrorf("%q is outside the sandbox home mount at %s, the only place "+
-			"a file can be written into this box; name it relative to the home "+
-			"(\".npmrc\", \".local/bin/tool\"), which every cell writes under its home, or "+
-			"have a setup command write it under \"$HOME\"", path, DefaultHome)
+	rel, inside := hostbox.InHome(DefaultHome, path)
+	if !inside {
+		// Not a file under the mount, so a write from out here cannot reach
+		// it. A command inside the container might, but only as whatever
+		// user the container runs as — the engine's own uid on a rootful
+		// runtime ([containerUserArgs]), which an image's system
+		// directories usually refuse — so the remedy that holds is the home.
+		return "", localErrorf("%q is not a file under the sandbox home mount at %s, the only "+
+			"place a file can be written into this box; name it relative to the home "+
+			"(\".npmrc\", \".local/bin/tool\"), which every cell writes under its home, or have a "+
+			"setup command write it under \"$HOME\"", path, DefaultHome)
 	}
 	resolved, err := hostbox.SafeJoin(b.layout.home(), rel)
 	switch {

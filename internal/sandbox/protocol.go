@@ -86,6 +86,7 @@ import (
 	"io"
 	"strconv"
 
+	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -108,7 +109,13 @@ var log = logging.Get("sandbox")
 // than a constant, which it was for as long as a remote VM was the only
 // backend: many local boxes share one filesystem, and a shared home would have
 // every run reading its neighbour's done marker.
-const DefaultHome = "/home/user"
+//
+// It is [hostbox.ContainerHome], declared there beside [hostbox.InHome],
+// which judges a container box's paths against it — for both local boxes and
+// for config validation, all of which already import that leaf package: the
+// remote templates' one account has it as its home, and a container box
+// mounts its own there so a path reads the same in both.
+const DefaultHome = hostbox.ContainerHome
 
 // ExecResult is one shell command's outcome inside a box.
 type ExecResult struct {

@@ -12,6 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
@@ -535,10 +536,12 @@ func TestTheDocumentedGitAuthRecipeStaysScoped(t *testing.T) {
 
 	var helper string
 	for path, content := range step.Files {
-		if filepath.IsAbs(path) {
-			t.Errorf("the git-auth step writes %s as a setup file, an absolute path, which "+
-				"no direct box takes: its home is minted per box. Name the file relative "+
-				"to the box's home, or write it under \"$HOME\" with a command", path)
+		// The boxes' own rule, judged for a direct box's minted home, which
+		// is the strictest any local cell holds a file to.
+		if _, inside := hostbox.InHome("", path); !inside {
+			t.Errorf("the git-auth step writes %s as a setup file, which no direct box "+
+				"takes: its home is minted per box. Name the file relative to the box's "+
+				"home, or write it under \"$HOME\" with a command", path)
 		}
 		if strings.Contains(path, "git-credential-") {
 			helper = content
