@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signups map (d3)</title>
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<style>
+:root { --bg: #ffffff; --fg: #1d1d1f; --muted: #6b6b70; --accent: #3b5bdb; --card: #f5f5f7; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111114; --fg: #f2f2f5; --muted: #a0a0a8; --accent: #7b93ff; --card: #1c1c21; }
+}
+body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+main { max-width: 960px; margin: 0 auto; padding: 16px; }
+.card { background: var(--card); border-radius: 12px; padding: 16px; margin: 12px 0; }
+button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--muted); background: var(--card); color: var(--fg); cursor: pointer; }
+
+</style>
+</head>
+<body>
+<main>
+<h1>Weekly signups</h1><svg id="chart" width="640" height="320"></svg>
+</main>
+<script>
+d3.csv("https://raw.githubusercontent.com/example/data/main/signups.csv").then(rows => {
+  const svg = d3.select("#chart");
+  const x = d3.scaleLinear().domain([0, rows.length]).range([40, 620]);
+  const y = d3.scaleLinear().domain([0, d3.max(rows, r => +r.count)]).range([300, 20]);
+  svg.append("path").datum(rows).attr("fill", "none").attr("stroke", "#3b5bdb")
+    .attr("d", d3.line().x((r, i) => x(i)).y(r => y(+r.count)));
+});
+fetch("https://raw.githubusercontent.com/example/data/main/meta.json").then(r => r.json());
+</script>
+</body>
+</html>

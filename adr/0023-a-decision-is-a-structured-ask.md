@@ -1,4 +1,4 @@
-# ADR-0023 — A decision is a structured ask, and the engine enforces only its shape, its answer and its promise
+# ADR-0023: A decision is a structured ask, and the engine enforces only its shape, its answer and its promise
 
 - **Status:** accepted
 - **Authority:** `internal/tracker`

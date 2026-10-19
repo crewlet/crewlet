@@ -15,6 +15,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"github.com/crewlet/crewlet/internal/artifactdata"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -348,6 +350,11 @@ type stateLog struct {
 	// broker.
 	volume string
 
+	// floor is the least the broker must reserve for a fresh node of this
+	// Tier A ([BrokerFloorFor]), which a refused reservation quotes. Zero
+	// says nothing.
+	floor BrokerFloor
+
 	// ring is the Tier A keyring every record on every log is signed
 	// under and verified against. Read once at construction: only a
 	// restart changes it, which is the same restart that changes every
@@ -505,14 +512,32 @@ type applyHooks struct {
 	// instead (inboxrelay.go), which this same hook feeds on that peer. It
 	// must not block.
 	inboxMoved func([]tracker.InboxMovement)
+
+	// artifactsMoved is what the ARTIFACTS APPLIER calls after a committed
+	// batch, with what it moved ([artifactsdomain.Moved]): a new version, a
+	// narrowing's access epoch, a trash, a purge. Threaded down for
+	// identityMoved's reason: the serving origin's authorization cache and
+	// the socket hub serve only this node's own requests, and the apply is
+	// the only thing that sees every record on every data node. It must not
+	// block. See [Engine.OnArtifactsMoved].
+	artifactsMoved func([]artifactsdomain.Moved)
+
+	// artifactDataMoved is what the DATASTORE APPLIER calls after a
+	// committed batch, with the documents it moved ([artifactdata.Moved]),
+	// for artifactsMoved's reason: the socket hub serves only this node's
+	// own sockets. It must not block. See [Engine.OnArtifactDataMoved].
+	artifactDataMoved func([]artifactdata.Moved)
 }
 
 // applyHooks is every post-commit hook this engine hands its appliers.
 func (e *Engine) applyHooks() applyHooks {
 	return applyHooks{
-		nudgeSkills:   e.nudgeSkills,
-		identityMoved: e.identityMoved,
-		inboxMoved:    e.inboxMoved,
+		nudgeSkills:    e.nudgeSkills,
+		identityMoved:  e.identityMoved,
+		inboxMoved:     e.inboxMoved,
+		artifactsMoved: e.artifactsMoved,
+
+		artifactDataMoved: e.artifactDataMoved,
 	}
 }
 
@@ -745,7 +770,7 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		metrics: e.metrics,
 		witness: e.stateLogWitness(),
 		skills:  skillDetector{}, applyHooks: e.applyHooks(),
-		ceilings: ceilings, volume: streamVolume(boot),
+		ceilings: ceilings, volume: streamVolume(boot), floor: BrokerFloorFor(boot),
 		clustered: host.Clustered(),
 		run:       runCtx, stop: cancel,
 		snapshotNudge:  make(chan struct{}, 1),

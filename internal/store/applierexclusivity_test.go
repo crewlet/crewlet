@@ -196,6 +196,7 @@ func TestOnlyTheApplierWritesTheReplicatedEstate(t *testing.T) {
 	// THE COMPUTED-TABLE MATCHER, which is the half that was missing.
 	for _, positive := range []string{
 		`UPDATE %s SET version = ?`,
+		`UPDATE OR IGNORE %s SET version = ?`,
 		"DELETE FROM " + unresolved + " WHERE id = ?",
 		"INSERT INTO " + unresolved + " (a) VALUES (?)",
 	} {
@@ -208,6 +209,8 @@ func TestOnlyTheApplierWritesTheReplicatedEstate(t *testing.T) {
 		`UPDATE tracker_tasks SET rank = ?`,
 		"SELECT * FROM " + unresolved,
 		`a sentence that merely says %s somewhere`,
+		"nats stream update %s --max-bytes=%d",
+		"change it with `crewlet artifacts update %s -%s ...`",
 	} {
 		if writesComputedTable(negative) {
 			t.Errorf("control: %q is not a write to a computed table and the "+
@@ -579,6 +582,37 @@ var allowedReplicatedWriter = []allowance{
 			"by its envelope's shape, so no apply depends on a keyring.",
 	},
 	{
+		Prefix: "internal/artifactdata/apply.go", Kind: mechanism,
+		Why: "The datastore's applier: it decides every write from the record's " +
+			"stamped authority and same-log rows and writes the verdict row for " +
+			"every record, a refusal included; the store, collection, path, " +
+			"document, field-index and counter rows it writes are pure functions " +
+			"of the record, and a purge removes a store's rows in its own " +
+			"statement list.",
+	},
+	{
+		Prefix: "internal/artifactdata/configure.go", Kind: mechanism,
+		Why: "The datastore applier's schema change: the collections and the " +
+			"bounded migration it rewrites are decided from the record and the " +
+			"store's own rows, in log order, identically on every node.",
+	},
+	{
+		Prefix: "internal/artifactdata/history.go", Kind: mechanism,
+		Why: "The datastore applier's history row and its prune: the rows past " +
+			"the hot window or the store's byte bound are chosen in one total " +
+			"order from the record's own broker instant, so every delete is a " +
+			"record's rather than a sweep.",
+	},
+	{
+		Prefix: "internal/artifactsdomain/apply", Kind: mechanism,
+		Why: "The artifacts domain's applier, across the artifact's own " +
+			"records, its assets and a reader's state: every row is a pure " +
+			"function of a committed record and same-log rows, a refusal " +
+			"is a history row rather than an error, and the year-old history " +
+			"it prunes is chosen in one total order from the record's own " +
+			"broker instant, so every delete is a record's rather than a sweep.",
+	},
+	{
 		Prefix: "internal/iamdomain/sweep.go", Kind: mechanism,
 		Why: "The identity estate's retention sweep, which is applier code " +
 			"in a file the apply* prefix does not cover — named rather than " +
@@ -939,9 +973,15 @@ func stringConsts(file *ast.File) map[string]string {
 }
 
 // computedDML matches a write whose table this walk could not resolve.
+//
+// AN UPDATE IS ONE ONLY WITH ITS SET: the verb alone is an ordinary English
+// and command-line word, and `update %s` in an operator's command (`nats
+// stream update %s`, `crewlet artifacts update %s`) read as an UPDATE of a
+// computed table, which every such string then needed an allowance to pass.
+// INSERT INTO and DELETE FROM are SQL by their second word already.
 var computedDML = regexp.MustCompile(
-	`(?is)\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+(?:` +
-		unresolved + `|%[a-zA-Z])`)
+	`(?is)\b(?:(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|DELETE\s+FROM)\s+(?:` + unresolved + `|%[a-zA-Z])` +
+		`|UPDATE\s+(?:OR\s+\w+\s+)?(?:` + unresolved + `|%[a-zA-Z])\s+SET\b)`)
 
 // writesComputedTable reports a write whose table name is not in the source.
 func writesComputedTable(text string) bool { return computedDML.MatchString(text) }

@@ -54,6 +54,21 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// every recall scanned, forever.
 		"agent_diary",
 		"agent_diary_long",
+		// THE DATASTORE LOG'S TWO, the per-node operation ledger and
+		// arbitration anchors every strict state log keeps, swept for the
+		// pages log's reason below. Its documents, history and tombstones
+		// are NOT here: all Replicated, their retention rides each record
+		// (the hot history's week and byte bound, pruned in the write's own
+		// transaction).
+		"artifactdata_anchors",
+		"artifactdata_ops",
+		// THE ARTIFACTS LOG'S TWO, for the same reason. The artifacts' own
+		// history and their trashed rows are NOT here: both are Replicated,
+		// so their retention rides a record (the history's term in the
+		// applier, the trash through the trash reaper) rather than a local
+		// delete.
+		"artifacts_anchors",
+		"artifacts_ops",
 		// THE CONFIGURATION ARCHIVE, which had no horizon at all: every
 		// node adopts its own copy of every revision it has ever met,
 		// one row per config write holding the whole document, and

@@ -1,4 +1,4 @@
-# ADR-0029 — A derived operation id older than the ledger is rebased, by every attempt, onto an instant the fleet records
+# ADR-0029: A derived operation id older than the ledger is rebased, by every attempt, onto an instant the fleet records
 
 - **Status:** accepted
 - **Authority:** `internal/statelog`

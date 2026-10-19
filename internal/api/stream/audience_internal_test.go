@@ -416,3 +416,135 @@ func runningName(rows SandboxRows, audience Audience) string {
 	name, _ := rows.For(audience)
 	return name
 }
+
+// THE AUDIENCE HOLDS EXACTLY THE APPS THE PRINCIPAL CAN.
+//
+// It held one field per app and a switch over them, so an app added to the
+// vocabulary reached no socket reader until somebody remembered a second edit
+// here. Walked over EVERY combination of the vocabulary, a name this build
+// does not know included: the audience uses exactly the apps
+// [iam.Principal.Can] says (an administrator every one), uses nothing that is
+// not an app, and receives the tracker's kinds exactly when it uses the
+// tracker. And two readers whose apps differ never share a variant nor
+// compare equal, so a broadcast encoded once per variant never hands one the
+// other's frame and a reader who lost an app is closed for the reconnect.
+//
+// Mutation: drop an app from NewAudience's loop, or answer Has from the admin
+// flag alone for an unknown name, and this fails.
+func TestTheAudienceHoldsExactlyTheAppsThePrincipalCan(t *testing.T) {
+	t.Parallel()
+	vocab := append(slices.Clone(iam.AllGrants), iam.Grant("future"))
+	seen := map[string]Audience{}
+	for mask := range 1 << len(vocab) {
+		var grants []iam.Grant
+		for i, g := range vocab {
+			if mask&(1<<i) != 0 {
+				grants = append(grants, g)
+			}
+		}
+		p := iam.Principal{Login: "sam.lee", Kind: iam.KindPerson, Stage: iam.StageActive,
+			Seat: "analyst", Grants: grants}
+		a := NewAudience(p, nil)
+		for _, g := range vocab {
+			if got, want := a.Has(g), g.IsApp() && p.Can(g); got != want {
+				t.Errorf("%v: Has(%q) = %v, want %v", grants, g, got, want)
+			}
+		}
+		if a.Admin() != p.Can(iam.GrantAdmin) {
+			t.Errorf("%v: Admin() = %v", grants, a.Admin())
+		}
+		if got := a.Receives(KindInboxChanged); got != p.Can(iam.GrantTracker) {
+			t.Errorf("%v: receives the tracker's inbox movement = %v", grants, got)
+		}
+		var held []string
+		for _, app := range iam.Apps {
+			if p.Can(app) {
+				held = append(held, string(app))
+			}
+		}
+		key := strings.Join(held, ",")
+		if p.Can(iam.GrantAdmin) {
+			key = "admin"
+		}
+		for other, b := range seen {
+			if other == key {
+				continue
+			}
+			if a.variant(false) == b.variant(false) {
+				t.Errorf("readers using %q and %q share the variant %q", key, other,
+					a.variant(false))
+			}
+			if a.Equal(b) {
+				t.Errorf("readers using %q and %q compare equal", key, other)
+			}
+		}
+		seen[key] = a
+	}
+	// EVERY APP ON ITS OWN reaches the audience, which is the half that
+	// proves the set is the vocabulary's and not a list kept here.
+	for _, app := range iam.Apps {
+		a := NewAudience(iam.Principal{Login: "sam.lee", Stage: iam.StageActive,
+			Grants: []iam.Grant{app}}, nil)
+		for _, other := range iam.Apps {
+			if got := a.Has(other); got != (other == app) {
+				t.Errorf("holding only %q: Has(%q) = %v", app, other, got)
+			}
+		}
+	}
+	if (Audience{}).Has(iam.GrantTracker) {
+		t.Error("the zero audience uses an app")
+	}
+}
+
+// THE AUDIENCE KEEPS WHO IT WAS DESCRIBED FOR, AND NEVER SHARES IT.
+//
+// An artifact room is decided for the principal a socket was opened by, so
+// the audience carries it and compares it: a reader re-bound to another seat
+// is a different reader even where every app is the same, and a step-up that
+// only moved how recently they proved who they are is the same reader. The
+// grants handed out are a copy, so a caller appending to them reaches no
+// other client. Mutation: drop the principal from Equal, or return the
+// principal without cloning its grants, and this fails.
+func TestTheAudienceKeepsItsPrincipalAndComparesIt(t *testing.T) {
+	t.Parallel()
+	p := iam.Principal{Login: "sam.lee", Kind: iam.KindPerson, Stage: iam.StageActive,
+		Seat: "analyst", Grants: []iam.Grant{iam.GrantTracker}}
+	a := NewAudience(p, nil)
+	if got := a.Principal(); got.Login != p.Login || got.Seat != p.Seat ||
+		!slices.Equal(got.Grants, p.Grants) {
+		t.Fatalf("the audience describes %+v, want %+v", got, p)
+	}
+	held := a.Principal()
+	held.Grants = append(held.Grants[:0], iam.GrantAdmin)
+	if a.Principal().Grants[0] != iam.GrantTracker {
+		t.Error("editing the grants a caller was handed reached the audience")
+	}
+	p.Grants[0] = iam.GrantAdmin
+	if a.Principal().Grants[0] != iam.GrantTracker {
+		t.Error("editing the caller's own principal reached the audience it built")
+	}
+	p.Grants[0] = iam.GrantTracker
+
+	stepped := p
+	stepped.ReauthAt = time.Date(2026, 6, 14, 13, 0, 0, 0, time.UTC)
+	if !NewAudience(stepped, nil).Equal(a) {
+		t.Error("a step-up changed the audience, so a socket would close on every " +
+			"proof of identity")
+	}
+	moved := p
+	moved.Seat = "auditor"
+	if NewAudience(moved, nil).Equal(a) {
+		t.Error("a reader re-bound to another seat compares equal, so the rooms " +
+			"decided for the old seat would stay open")
+	}
+	// THE SAME SEAT, SOMEBODY ELSE: the record and the apps are one, so only
+	// the principal tells the two apart.
+	other := p
+	other.Login = "kim.ray"
+	if NewAudience(other, nil).Equal(a) {
+		t.Error("another person on the same seat compares equal")
+	}
+	if (Audience{}).Principal().Kind != "" {
+		t.Error("the zero audience describes somebody")
+	}
+}

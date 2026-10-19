@@ -56,6 +56,15 @@ eighteen in full.
 | `save_page` | Edit one, stating the version you read: there is no per-field merge that makes overwriting prose safe. A `parent` moves it, and may not be the page itself or one beneath it; an empty one moves it to the container's top. `watch` is `true` to follow the page or `false` to stop, and anything else is refused rather than read as no change |
 | `comment_on_page` | Remark on a page, or replace one of your own with `edit` |
 
+What `get_page`, `get_work_item` and `read_project_file` hand back that
+somebody wrote (a page body and its comments, a description and its thread,
+a file's text) arrives **fenced** and labelled with its writers and how far
+the reader may rely on them, beside a `provenance` envelope that labels the
+whole answer; see
+[text somebody else wrote](../concepts/agent-runtime.md#text-somebody-else-wrote).
+A body sent back to a write still wrapped in the fence it was read in is
+stored without it.
+
 The writes on each side count as a **delivery** for the turn's own
 did-this-reach-anybody gate, and each waits for its own write to reach this
 node's projection before answering — so a turn that files an item and then
@@ -164,6 +173,115 @@ Note the deliberate split between personal and shared writes: `reflect_and_persi
 or GitLab issues — an agent works those through the vendor's own MCP tools, so
 the engine mirrors no state it would have to keep in step. See
 [The Tracker](../concepts/task-engine.md).
+
+### Artifacts
+
+Twelve more, registered on every node that takes artifact uploads (one with an
+object store, a coordination store and a data node to reach), whatever tracker
+or knowledge base the company runs: nine for the artifact and four for its
+datastore. Each tool is named for its authority row, and the operator catalogue
+serves the same thirteen, so an operator's own assistant publishes and writes
+rows exactly as a seat does.
+
+| Tool | Description |
+|------|-------------|
+| `list_artifacts` | The artifacts the caller can open, by `scope` (`mine`, `shared`, `company`, `agents`, `all`), `kind` and `query`, a page at a time |
+| `get_artifact` | One artifact: its head, its newest versions, its files and a page of one file's source. The answer says the caller's `role` and whether they may publish (`writer`) |
+| `list_dashboard_sources` | The engine sources a dashboard's `engine` datasets may read: each one's parameters, columns, who may read it and how it refreshes. Holds no row; a source is answered as each board's viewer |
+| `create_artifact` | A new artifact of any kind (`html`, `doc`, `slides`, `dashboard`, `sheet`), from inline `content` and `files`, a project file, or a build in the turn's coding run (`source.sandbox`). When a person asked for it, they are made its editor |
+| `publish_artifact` | A new version on a stated `base_version`: `edits` (exact `old_str` and `new_str` pairs), `content`, `files` (null removes one), a build's whole `source`, or `restore_version` |
+| `update_artifact` | The title, description, icon or one version's label |
+| `share_artifact` / `unshare_artifact` | Grant a seat, a unit (`unit:<key>`) or the company (`company`) one role up to editor, or withdraw it. The owner's |
+| `upload_artifact_asset` | Add an image, data file or font to the asset store of an artifact that declares the `assets` capability; the answer's `reference` is the path the page uses |
+| `read_artifact_data` | An artifact's datastore: with no `collection`, its schema (every collection, its columns and who may read and write it); with one, a page of rows (`since` for what changed after an earlier `through`) or one row by `doc` |
+| `query_artifact_data` | Rows of one collection whose indexed fields match every filter in `where`, ordered by `order_by` and paged |
+| `write_artifact_data` | A batch of 1 to 100 ops (`set`, `merge`, `delete`, `increment`, `append`, `add`, `remove`), all or none, each decided by its collection's rules; `if_version` writes a row only if nobody changed it since, and a conflict hands back the rows as they are now |
+| `set_artifact_schema` | Every collection the datastore keeps after a change, with its columns and rules. An agent may tighten a collection's rules and never loosen them: lowering a role, lifting `humans_only`, an append mode or immutability, removing a condition, pointing an `assigned_to_viewer` column at another assignee, or dropping a protected column or a collection is refused to an agent and left to a person |
+
+**Every verb is decided twice inside a turn somebody woke.** The tool reads the
+stored artifact and asks the authority table for the seat, then for whoever the
+turn is acting for (the **requester ceiling**): an agent never shows an
+artifact to a requester who could not open it, and never writes for one what
+they could not write. The exception is an artifact the agent owns, which
+anybody who can message the agent may ask it to edit, as with all other agent
+work; reading and sharing are never exempt. A turn woken by somebody the
+company does not know opens no artifact at all. A caller with no relation to an
+artifact is told it does not exist, in exactly the words an id nothing holds is
+answered with. An agent is held to `contributor` on artifacts it does not own
+unless `artifacts.agents_manage_others` lifts it.
+
+**The datastore's rows are the ceiling too.** A row is answered only when the
+person the turn is acting for could read it as well, by the collection's own
+read rule over their role and their record, and a datastore write is stamped
+with the lower of the agent's role and theirs, so the applier's column rules
+refuse for them exactly what they could not write themselves (an agent's own
+artifact excepted, as above, for writes; never for reads). What a write hands
+back is a read, and is bounded like one even where the write itself was not: a
+conflict's current rows are only those the requester could read, so an edit to
+the agent's own artifact asked by somebody it is not shared with answers the
+conflict with no rows at all. Every row a data tool answers is fenced as text
+its writers wrote (`artifact_row`, naming the row's creator and last writer), a
+conflict's current rows included. A turn writes at most **1,000** datastore
+ops; a retry of a call it lost the answer to is not counted again.
+
+**An artifact in the trash serves no content.** `get_artifact`,
+`read_artifact_data` and `query_artifact_data` refuse it, naming the trash and
+its owner, and read nothing, exactly as the dashboard's file and data routes
+do; a write to it is refused until a person restores it.
+
+**An administrator's override is recorded before anything is shown.** On the
+operator surface, a person holding `admin` reads any artifact through the admin
+path, and every such read (`get_artifact`, `read_artifact_data`,
+`query_artifact_data`, and the live files a stale publish answers with) writes
+the elevated-read record first, which the artifact's history shows its owner
+and editors. A read whose record cannot be written shows nothing. An
+administrator who holds a share reads and writes as that share.
+
+**An agent working on an artifact is in its room.** A seat that reads an
+artifact or its data (`get_artifact`, `read_artifact_data`,
+`query_artifact_data`) appears in the artifact's room as an agent, viewing, and
+one that writes it (`publish_artifact`, `update_artifact`,
+`upload_artifact_asset`, `write_artifact_data`, `set_artifact_schema`) as
+editing, focused on the version, collection or row the call named, for 45
+seconds after its last call, and only once the call was allowed. The people
+looking at the artifact see which agent is working on which row.
+
+**A publish names its base.** One over a version somebody published since is
+refused `stale_version` and handed the live version, who published it and
+when, the paths that changed since the caller's base and the first page of each
+changed text file, fenced as text that author wrote. The text is a read of the
+live version: where this turn could not read the artifact (a publish to the
+agent's own work asked by somebody it is not shared with, or an
+administrator's read whose record could not be written), the refusal carries
+the numbers, the author and the paths alone, and says so in
+`live_files_withheld`. No tool takes `force`:
+discarding a colleague's newer version is a present person's decision in the
+dashboard. Trash, restore, purge, transfer and pins are not tools either.
+
+**Where the bytes come from.** Inline content is at most 1 MiB decoded per
+call. A coding run's build and a project's file are streamed: their digests
+are declared to an upload the publish pipeline reserves first, each file is put
+through the engine, and the version is decided only after every byte is read
+back verified. A sandbox is never handed an upload URL; the engine lists the
+directory through the box itself, holds every path to the workspace, and
+refuses one file more than a version holds rather than truncating. A box is
+readable after `run_sandbox` returns and until the Execute phase ends.
+
+**Per turn**, an agent makes at most 20 publishes, 10 of them on one artifact,
+and writes at most 128 MiB; past either the call is refused `turn_quota` and
+told to stop and report. File text another principal wrote is
+[fenced](../concepts/agent-runtime.md#text-somebody-else-wrote), and a long one
+is condensed by the seat's auxiliary model unless the call passes `offset`.
+**Publishing delivers nowhere**: no artifact tool counts as a delivery, so a
+seat asked in a chat thread posts the `url` every answer carries with its chat
+tools. The bundled `skill:artifacts` [Tool Skill](../concepts/tool-skills.md)
+teaches the design contract and how to shape and fill a datastore (a schema
+before rows, batched writes, blind cells and guarded long text, `humans_only`
+for approvals), and is enforced on the five tools that write bytes, a schema
+or rows; `skills/crewlet-artifacts/SKILL.md` carries the same contract for your
+own assistant, installed as the
+[`company-architect` skill](../getting-started/ai-authoring.md#the-company-architect-skill)
+is (copy the directory into your assistant's skills folder).
 
 ### Per-Role MCP Servers (GitHub)
 

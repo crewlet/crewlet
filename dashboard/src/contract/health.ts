@@ -20,6 +20,21 @@ interface HealthAlarms {
 }
 
 /**
+ * The object store's half of a health body: `api.HealthObjects` in Go, held
+ * member for member by the same gate as `EngineHealth`.
+ */
+interface HealthObjects {
+  /**
+   * `available` where an upload may go straight to the S3 bucket on a
+   * presigned put, or `unavailable (<reason>)`: the broker's own bucket, or a
+   * provider the boot probe could not prove enforces the checksum and the
+   * If-None-Match condition. Unavailable is no fault: every upload then
+   * streams through the engine.
+   */
+  direct_upload: string;
+}
+
+/**
  * What a node says about itself: the `health` push, which is `api.Health` in
  * Go, WHOLE — in the snapshot and on every five-second tick. There is no query
  * for it any more; read it with `useEngineHealth()`.
@@ -132,4 +147,9 @@ export interface EngineHealth {
    * Absent until the seed has run.
    */
   seeded_from?: Coverage;
+  /**
+   * What this node's object store offers beyond streaming bytes through the
+   * engine. Absent on a node running no object store.
+   */
+  objects?: HealthObjects;
 }

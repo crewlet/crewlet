@@ -22,8 +22,9 @@ import (
 // for ever would hold a request open against a write storm.
 const casRounds = 16
 
-// Pattern is how a write arbitrates, and there are three because there are
-// three different questions the broker can be asked.
+// Pattern is how a write arbitrates. There are four, and they ask the broker
+// three different questions: the last two ask it none, and differ in WHO
+// decides a record's effect once it is ordered.
 type Pattern int
 
 const (
@@ -42,7 +43,43 @@ const (
 	// because a commutative fold needs no arbitration and paying for one
 	// would serialize the hottest subject in the domain for nothing.
 	PatternAdditive
+
+	// PatternSequenced carries NO expectation either, and its records do
+	// NOT commute: the log ORDERS them and the APPLIER DECIDES each one, as
+	// a pure function of the record and the rows it holds at that position,
+	// writing a verdict for every record it consumes (applied, or refused
+	// and why). The writer decides nothing from a snapshot beyond what
+	// must be refused before anything is appended, and learns its verdict
+	// by reading its own row back once its applier has reached the record.
+	//
+	// # Why a fourth pattern rather than an additive write
+	//
+	// Additive is correct only where records commute, and its doc says so;
+	// a write whose effect depends on what came before it (a guarded
+	// datastore batch, a row a collection rule admits only to its creator)
+	// does not commute, so filing it as additive would be a claim the
+	// pattern's own definition contradicts. And it is not arbitrated: a
+	// batch touching many objects cannot carry one expectation per object,
+	// and putting a shared object's every writer on one arbitrated subject
+	// turns a burst of clicks into compare-and-set rounds that exhaust
+	// [casRounds] into "it kept changing". Ordering on the log and deciding
+	// at the applier gives every node the same verdict, because every node
+	// applies the same records in the same order with the same code.
+	//
+	// What the publisher does differently from an additive write is
+	// nothing: no expectation, no anchor read, no rejection to
+	// discriminate. The difference is the domain's contract, stated here so
+	// a reader choosing a pattern sees both: a sequenced record's applier
+	// owes a verdict row for every record, and its writer owes the read of
+	// that row before it reports what the write did.
+	PatternSequenced
 )
+
+// expects reports whether a write of this pattern carries a per-subject
+// expectation the broker arbitrates.
+func (p Pattern) expects() bool {
+	return p != PatternAdditive && p != PatternSequenced
+}
 
 // Waiter is this node's own applier, as the publisher needs it.
 type Waiter interface {
@@ -1360,7 +1397,7 @@ func (p *Publisher) refuseFromSnapshot(req Request, snap Snap) error {
 // its expectation from the row re-reads the number that produced its own
 // rejection until it runs out of rounds.
 func (p *Publisher) expectation(ctx context.Context, req Request, snap Snap, gen uint32) (*uint64, *Position, error) {
-	if req.Pattern == PatternAdditive {
+	if !req.Pattern.expects() {
 		return nil, nil, nil
 	}
 	// AN ANCHOR AT THE CURRENT GENERATION, and SEQ IS WHAT MAKES IT ONE.
@@ -2092,7 +2129,9 @@ func (p *Publisher) checkTruncated(req Request) error {
 // additive record needs no such luck and does land — but it is the one kind
 // that commutes, so a history it was never arbitrated in is one it cannot
 // contradict; what is wrong about it is its resolution, and only for the
-// seconds until the next beat. Checking the instant on every append would put
+// seconds until the next beat. A sequenced record lands too, and is judged by
+// the applier against whatever the log holds where it lands, so it claims no
+// history either: what is wrong about it is likewise only its resolution. Checking the instant on every append would put
 // a broker round trip on the hottest path the write authority has, to close a
 // window that bounded. A checkpoint past the end has no such window at boot,
 // which is when a restored broker is met: the engine's boot hands the applier

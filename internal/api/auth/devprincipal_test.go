@@ -241,8 +241,8 @@ func TestTheDevPrincipalCarriesAdminOnlyWhereTheNodeServesIt(t *testing.T) {
 		posture iam.AdminPosture
 		want    []iam.Grant
 	}{
-		{iam.AdminServe, []iam.Grant{iam.GrantAdmin, iam.GrantTracker, iam.GrantKnowledge}},
-		{iam.AdminRefuse, []iam.Grant{iam.GrantTracker, iam.GrantKnowledge}},
+		{iam.AdminServe, append([]iam.Grant{iam.GrantAdmin}, iam.Apps...)},
+		{iam.AdminRefuse, slices.Clone(iam.Apps)},
 		{"sometimes", []iam.Grant{}},
 	} {
 		b := devBootstrap(t)

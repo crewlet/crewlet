@@ -320,17 +320,19 @@ jobs:
       # file) is a path the diff cannot see: `git ls-files --others` is the
       # half that catches it, and without `--exclude-standard` because the
       # embed is `all:dashboard`, which ships an ignored file too.
+      # Both trees the build writes: the dashboard, and the artifact tree
+      # (the page runtime and the artifact kit) the third target emits.
       - name: the committed bundle is what this source builds
         run: |
           npm --prefix dashboard run build
-          untracked="$(git ls-files --others -- static/dashboard)"
-          if ! git diff --exit-code -- static/dashboard || [ -n "$untracked" ]; then
-            echo "::error::static/dashboard is not what dashboard/ builds."
+          untracked="$(git ls-files --others -- static/dashboard static/artifacts)"
+          if ! git diff --exit-code -- static/dashboard static/artifacts || [ -n "$untracked" ]; then
+            echo "::error::static/dashboard or static/artifacts is not what dashboard/ builds."
             echo "What a rebuild changed or wrote that the commit does not carry:"
             git status --porcelain --untracked-files=all --ignored=matching \
-              -- static/dashboard | grep -v '^. ' || true
+              -- static/dashboard static/artifacts | grep -v '^. ' || true
             echo "Run:"
-            echo "  make dashboard && git add -A -- static/dashboard"
+            echo "  make dashboard && git add -A -- static/dashboard static/artifacts"
             exit 1
           fi
 

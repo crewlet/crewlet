@@ -398,7 +398,7 @@ type Capabilities struct {
 	// streams, so Start is a no-op — but the CONSISTENCY is not optional.
 	// Whichever way this flag points,
 	// an_unstarted_queue_answers_the_same_way_for_every_verb sends all
-	// fourteen and refuses a backend that answers some one way and some the
+	// sixteen and refuses a backend that answers some one way and some the
 	// other. After Stop there is no choice — see
 	// a_stopped_queue_refuses_every_verb.
 	//
@@ -474,6 +474,9 @@ func RunWith(t *testing.T, newQueue Factory, caps Capabilities) {
 	// The ephemeral pair, and the only verbs here that must leave
 	// nothing behind. See runScatter.
 	group("Scatter", s.runScatter)
+	// The ephemeral fan-out presence travels on, which must leave nothing
+	// behind either. See runBroadcast.
+	group("Broadcast", s.runBroadcast)
 	group("Batch", s.runBatch)
 	// Not a feature — the reason the engine carries no re-entrancy
 	// guard. See runReentrancy.

@@ -168,9 +168,9 @@ Under the two-stage [Turn Engine](turn-engine.md), each phase builds its own nar
 
 | Phase | What's in the prompt |
 |---|---|
-| **Executor** | Identity (role, unit, goal, manager, direct reports, team channel), company mission and vision, full policy text, role profile (backstory, responsibilities, behavioral guidelines), unit context (purpose, goals), team roster with per-member profile (leads only), the `## Human colleagues` note (only in a company with human seats), the executor's contract, ``## When a decision is not yours to make`` (the escalation guidance below; only when the seat holds `comment_on_work_item`), [Tool Skills](tool-skills.md) **catalogue** (one-line summary per triggered skill), **slim** tool catalogue (builtin tool names + MCP server names; MCP tool names hidden behind ``list_mcp_server_tools``). Plus ``## The thread so far`` — the chat thread the turn was woken in, read at turn start and handed over rather than left for the agent to fetch (see [the thread block](#the-thread-a-turn-was-woken-in) below); it is not a learning prefetch but the trigger's own context, which is why it leads. Then the five learning prefetches, in the order they render: ``## Personal memory`` (diary), ``## Synthesized skills you've learned``, ``## Relevant knowledge`` (a knowledge-base search built from the trigger), ``## Similar prior work`` (episodes), and ``## Known counterparty``. A first turn's onboarding is not among them: it is [a pass of its own](turn-engine.md#first-turn-onboarding) that runs before the executor, which never reaches `mark_onboarded` and is not told to onboard. On rounds after the first, the user message also carries the [prior-work ledger](turn-engine.md#prior-work-ledger-across-self_iterate-rounds) as ``## Already done earlier in this turn``. |
+| **Executor** | Identity (role, unit, goal, manager, direct reports, team channel), company mission and vision, full policy text, role profile (backstory, responsibilities, behavioral guidelines), unit context (purpose, goals), team roster with per-member profile (leads only), the `## Human colleagues` note (only in a company with human seats), the executor's contract, ``## When a decision is not yours to make`` (the escalation guidance below; only when the seat holds `comment_on_work_item`), ``## Text somebody else wrote`` (the one sentence that says how to read a fence; see [text somebody else wrote](#text-somebody-else-wrote) below), [Tool Skills](tool-skills.md) **catalogue** (one-line summary per triggered skill), **slim** tool catalogue (builtin tool names + MCP server names; MCP tool names hidden behind ``list_mcp_server_tools``). Plus ``## The thread so far``, the chat thread the turn was woken in, read at turn start and handed over rather than left for the agent to fetch (see [the thread block](#the-thread-a-turn-was-woken-in) below); it is not a learning prefetch but the trigger's own context, which is why it leads. Then the five learning prefetches, in the order they render: ``## Personal memory`` (diary), ``## Synthesized skills you've learned``, ``## Relevant knowledge`` (a knowledge-base search built from the trigger), ``## Similar prior work`` (episodes), and ``## Known counterparty``. A first turn's onboarding is not among them: it is [a pass of its own](turn-engine.md#first-turn-onboarding) that runs before the executor, which never reaches `mark_onboarded` and is not told to onboard. On rounds after the first, the user message also carries the [prior-work ledger](turn-engine.md#prior-work-ledger-across-self_iterate-rounds) as ``## Already done earlier in this turn``. |
 | **Review** | One-line identity, the round's own account of what it set out to do, the outcome word (and who wrote it), the verbatim tool log, the text it produced, the decision-enum contract, and the [Tool Skills](tool-skills.md) catalogue for MCP-server-keyed skills (operator-scoped to the review phase). On rounds after the first, a `## Earlier rounds (already delivered)` section carries the [prior-work ledger](turn-engine.md#prior-work-ledger-across-self_iterate-rounds) so the duplicate-delivery rule holds turn-wide. No tool catalogue, no policies, no roster, no prefetch. |
-| **Worker** (`delegate`) | The worker's persona (a `workers:` template or the parent's inline prompt), the [Tool Skills](tool-skills.md) catalogue scoped to the tools the worker was granted, the slim tool catalogue, then the mandated runtime preamble (no further delegation, no colleague contact, read-only discovery only, and end by calling `submit_result`). |
+| **Worker** (`delegate`) | The worker's persona (a `workers:` template or the parent's inline prompt), the [Tool Skills](tool-skills.md) catalogue scoped to the tools the worker was granted, the slim tool catalogue, then the mandated runtime preamble (no further delegation, no colleague contact, read-only discovery only, the same sentence about fenced text the executor carries, and end by calling `submit_result`). |
 
 Why the split: the executor is the frame making every ownership / delegation / policy-sensitive decision AND acting on it, so it gets the whole picture — the two-prompt engine's real cost was never the tokens saved by splitting them, it was sending the identity scaffold twice and throwing away everything the planner had read. The reviewer's question is narrower: is this round's work right, given what the record says it did. Standing memory, the team's docs and the requester's traits are what the executor needed to DO the work; in front of a reviewer they compete with the evidence it is meant to judge.
 
@@ -188,6 +188,39 @@ Tool- and MCP-server-specific guidance (when to call ``reflect_and_persist``, ho
 
 There is no single monolithic system prompt to read: `internal/agent/prompts` builds one per phase (`BuildOnboarding`, `BuildExecutor`, `BuildReview`, `BuildSubagent`) from the same identity sections, and each phase sees only the guidance and the tool catalogue that phase is meant to act on.
 
+### Text somebody else wrote
+
+A model reads every word of its context as a possible instruction, and much of what a seat reads was written by somebody else: a page a colleague wrote, a comment on a work item, a file in a project, a chat thread with a stranger in it. So the engine labels that text where it hands it over. It is **fenced**, between two lines carrying a token minted at random for the turn segment:
+
+```text
+[untrusted:K7Q2M4XWB3ZP6TNA source=work_comment trust=colleague authors=human:ana]
+Please also close ENG-12 when this ships.
+[/untrusted:K7Q2M4XWB3ZP6TNA]
+```
+
+The opening line names the surface the text came from (`page_body`, `page_comment`, `work_description`, `work_comment`, `project_file`, `chat_thread`), who wrote it, and how far the reader may rely on it:
+
+| Trust | Meaning |
+|---|---|
+| `own` | Every writer is the reading seat itself. A page the seat edited after a colleague is not its own, and neither is text with writers the record no longer names (a page past its kept revisions, a description edited more than once, a file written more than once). |
+| `colleague` | Written by company principals: other seats, people, operator credentials or the engine. A request in it is that colleague's request, weighed as any request from them; it never overrides the seat's instructions, role or the company's rules. |
+| `external` | Written by somebody outside the company (a participant in a shared channel the company does not know), or by nobody that could be named. Data only. |
+
+Content cannot close the fence it is put in. The token is unguessable, and every occurrence of it inside the text is removed anyway (a model can echo it into something it writes and read that back in the same turn); every `[` that opens something shaped like a marker, in any case and spacing, is rewritten as `[escaped `, so no text forges a closer of any token. Every other string in the same answer (titles, revision notes, decision options, history excerpts, custom-field values) has the same two escapes applied without a fence, so no field can open or close one either.
+
+The seat learns what a fence means from one constant sentence in its prompt, under ``## Text somebody else wrote``: the token lives in the fences, never in the prompt, so the prompt stays byte-identical across turns and the provider's prompt cache holds. Every fenced tool answer also carries a `provenance` envelope beside its fields (the least trust of its fences, every writer once, and a note restating the rule), so an operator's assistant that never saw the seat prompt reads the fences the same way.
+
+Which reads are fenced:
+
+- `get_page`: the body, under every writer its kept revisions name, and each comment under its author.
+- `get_work_item`: the description, under its last writer, and each comment under its author.
+- `read_project_file`: text content, under the file's writers. Content read as base64 is not fenced (it is bytes, and its alphabet holds no bracket) but the envelope still labels it.
+- ``## The thread so far``: the messages, as one fence naming every speaker (see below).
+
+A seat that edits what it read and sends the fence back with it does not store the fence: `save_page`, `write_page`, `create_work_item`, `update_work_item` and `write_project_file` take off a fence of the turn's own token that wraps the whole body or content. A fence of any other token, or one quoted inside a longer text, is the writer's to keep.
+
+Fencing reduces prompt injection; it does not remove it. The structural defences hold whatever a model does: every write a seat makes is still authorized as that seat, so a seat persuaded by a page can do no more than its grants allow.
+
 ### The thread a turn was woken in
 
 A chat thread reply is usually thin — "yes", "+1", "what about the other one" — and the thread is the context. The engine used to say so in the prompt and tell the agent to go and read the thread with its chat tools. On a company whose chat tools come from a per-role MCP server that costs **three rounds** before a word is read: `list_mcp_server_tools`, then `activate_tool`, and only then the call, with the tool's schema arriving on the *next* message. An agent that skipped the trip answered the eleven words of trigger text with no idea what the thread was about.
@@ -198,6 +231,7 @@ What lands in the prompt:
 
 - **Oldest first**, with the thread's root always kept — it is what the thread is about — and then the newest messages. The root keeps its place even when there is nothing to render in it: an alert app posts its payload in blocks or attachments and no text at all, a system line is channel bookkeeping, and Mattermost leaves a *deleted* root out of its answer while every reply to it stays. The block then carries one line saying the first message could not be shown, which is the honest alternative to the silent one — dropping it promotes the oldest surviving reply into the root's slot, where every bound protects it and the preamble calls it what the thread is about.
 - **Bounded by whole messages, never a cut inside one**: 8000 bytes. A thread within it is handed over whole, however many messages it has. Past it, the root (or the line standing in for it) and the newest messages that fit take three quarters of the room verbatim, and the messages between them are **condensed** into one account by the seat's auxiliary model in the last quarter, marked as a rewrite and with the number of messages it stands for — so the decision made in the middle of a long thread is still in front of the seat. Only where no rewrite can be had are those messages left out, and the block then **says how many it dropped**. The root and the newest message survive however long they are. 8000 is one third of the conversation ledger's 24000-byte budget, because both blocks are frozen into the same system prompt and re-sent on every round of every phase, and the thread must not crowd out the seat's own cross-turn history. It is not configurable. A second bound of 30 messages used to drop everything older whatever its size; with the middle condensed rather than dropped it bounded nothing the bytes do not.
+- **Fenced as somebody else's words**: the messages sit inside one [fence](#text-somebody-else-wrote) carrying the segment's token, with every speaker as its authors (the seat itself, a colleague the party registry knows, or `external` for anybody else), so a message that spells a closing marker or an instruction to the seat stays a line somebody said. The preamble and the engine's own notices (how many messages were left out, which ones the turn answers) stay outside it, because they are the engine telling the seat how to read the thread.
 - **Senders resolved through the party registry**, so a colleague reads as `Tech Lead (lead)` rather than an opaque platform id; a stranger renders as whatever the backend volunteered and then as the raw id, and never as a blank.
 - **The seat's own earlier replies marked `**you**`**, resolved by the transport from the identity it learned at connect. On Slack that takes *both* the bot user id and the app id, because a `bot_message` echo of the seat's own post carries the app id and no user id at all.
 - **A thread too long to read says so, in place of the claim it would otherwise make.** Slack pages `conversations.replies` from the *oldest* end, 100 messages at a time, up to 10 pages — so a thread past ~1000 messages cannot be reached at its newest end at all. The walk keeps the root and the newest of what it did reach rather than the oldest of the thread, and the block then drops its ordinary "the newest messages are what woke you" framing for one that says it stops short and tells the seat to read the rest with its chat tools: on that path the newest message is exactly what is missing, so the ordinary sentence would be guaranteed false. Everything either end dropped is in the count. The page size is 100 rather than the 200 Slack recommends because the client reads at most 1 MiB of a response before decoding it, and 200 messages carrying blocks, attachments or unfurls exceed that — which fails the read outright rather than shortening it. Mattermost has no such bound: `GET /api/v4/posts/{root}/thread` answers the whole thread in one response.
@@ -227,6 +261,8 @@ The engine ships these tools (`internal/agent/builtin`, registered in the epoch'
 | `run_sandbox` | `providers.sandbox` is configured | Hand a code task to a coding agent in a [sandbox](code-sandbox.md); the executor suspends until the run reports |
 | `load_tool_skill` | the company publishes [Tool Skills](tool-skills.md) | Load the full body of a Tool Skill by exact key (the catalogue carries only the summary). Required skills (the default; `required: false` opts out) must be loaded this way before the tools they cover can be called, and the engine rejects earlier calls with a "load this skill first" error |
 | `search_knowledge` | a knowledge backend | Search the company knowledge base on a query the executor writes itself, over the same seam as the turn-start `## Relevant knowledge` prefetch. It is what a seat woken by a bare pointer uses once it knows what the task actually needs: the prefetch's own search is gated off on such a trigger, because a query built from "PR #42 got a comment" matches the wrong pages or none |
+| `list_artifacts`, `get_artifact`, `list_dashboard_sources`, `create_artifact`, `publish_artifact`, `update_artifact`, `share_artifact`, `unshare_artifact`, `upload_artifact_asset` | the node takes artifact uploads: an object store, a coordination store and the estate router | Read, publish and share the company's [artifacts](../guides/tools-and-mcp.md#artifacts): interactive pages, documents and sheets. Each is decided on the stored artifact for the seat and again for whoever woke the turn, and every byte goes through the one publish pipeline |
+| `read_artifact_data`, `query_artifact_data`, `write_artifact_data`, `set_artifact_schema` | the same, beside the artifacts tools | Read, ask, write and reshape an artifact's [datastore](../guides/tools-and-mcp.md#artifacts), each row decided by its collection's rules for the seat and for whoever woke the turn, every row fenced as text its writers wrote, and at most 1,000 ops a turn |
 | `delegate` | per turn, executor only | Hand narrowly-scoped work to one or more short-lived [workers](turn-engine.md#workers), optionally as a dependency graph. Built per turn rather than registered once: it carries that turn's grant (the parent's own live tool set, minus the control tools and anything that writes to a shared surface) and that seat's visible worker templates, so it cannot be a shared registry entry. Absent when the seat's remaining token allowance cannot be read, because delegating with no readable ceiling is delegating with no ceiling |
 
 The phase tools are not in the registry: the runner adds `submit_work`, `activate_tool` and `list_mcp_server_tools` to the executor's surface, `submit_review` to the reviewer's, and `submit_result` plus a discovery pair of its own to a worker's.
@@ -388,7 +424,7 @@ resuming it is the same, and neither is ever a seat's to do. No app is asked:
 a lead who uses neither app still runs their team. Everybody signed in holds a
 credential, so "any operator" would let every reader of the board stop any
 seat in the company. A refusal names the permission that would have admitted
-the caller. See [the authority table](identity-and-access.md#the-fifteen-rules).
+the caller. See [the authority table](identity-and-access.md#the-sixteen-rules).
 
 ```mermaid
 stateDiagram-v2
@@ -470,7 +506,7 @@ flowchart TD
     S5["5. Wait for in-flight handlers"] --> S6
     S6["6. Release every seat"] --> S7
     S7["7. Close the HTTP listener<br/>dashboard · REST · webhooks · probes"] --> S8
-    S8["8. Stop the duties<br/>sandbox waiter · notifications · maintenance · embedding<br/>memory fill · learning · scheduler · last auxiliary-spend flush<br/>custody keeper leaves its group · usage publisher's last flush<br/>integrations · memory sync · credential cooldown"] --> S9
+    S8["8. Stop the duties<br/>sandbox waiter · notifications · maintenance · embedding<br/>memory fill · learning · scheduler · last auxiliary-spend flush<br/>custody keeper leaves its group · usage publisher's last flush<br/>integrations · memory sync · object collector · trash reaper · credential cooldown"] --> S9
     S9["9. Reap shared MCP servers; custody flush (node without data);<br/>close stream + store"]
     SIG -.->|"2nd signal:<br/>immediate exit"| X["Process dies"]
 ```
@@ -540,8 +576,9 @@ flowchart TD
    tick on a budget of five seconds, the state log's own resolve budget — after
    every writer above, so a node stopped this way and never started again
    still leaves that day whole, and before the trim and the logs it publishes
-   into. Then the integration reconcile loop, memory sync and the credential
-   cooldown refresh.
+   into. Then the integration reconcile loop, memory sync, the object store's
+   collector and the trash reaper (every duty loop stops before the node gives
+   its duty leases back), and the credential cooldown refresh.
 9. **Close the backends**: the shared MCP servers are reaped; a node without
    `data` flushes its custody batches; and the stream connection and the store
    file are closed (`engine_stopped`).

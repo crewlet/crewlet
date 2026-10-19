@@ -119,7 +119,7 @@ const removal = (over: Partial<WorkActivityRecord> = {}): WorkActivityRecord => 
 
 /** The `removed_by` cell: the seat link's own container, and nothing else. */
 function whoCell(): HTMLElement {
-  const link = screen.getByTitle("@ada").closest(".cell-seat");
+  const link = screen.getByTitle("@ada").closest(".crewlet-table-cell__entity");
   const cell = link?.parentElement;
   if (!cell) throw new Error("the removed_by cell drew no seat");
   return cell;
@@ -236,7 +236,7 @@ test("a removal a bound person made names the seat they write as, not the creden
 
 // ONE SEAT LOOKS LIKE ONE SEAT ON BOTH COLUMN SETS. The outline is the only
 // variant an identity badge has and it is STRUCTURAL — who holds the seat — so
-// it cannot depend on which set is drawing. It did: `SeatCell` took a kind and
+// it cannot depend on which set is drawing. It did: `linkedSeat` took a kind and
 // the compact `Assignee` had no way to be handed one, so the same person was
 // drawn two ways on one grid.
 test("a human seat is drawn as a person on both column sets", () => {

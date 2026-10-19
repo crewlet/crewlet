@@ -171,10 +171,9 @@ test("a diff line carries the kind the server sends", async () => {
 });
 
 // A DIFF IS DRAWN IN ITS OWN TRACKS, and nothing in it is cut. The config
-// list spelled `.diff-line`, which the knowledge page's line diff also spells
-// later in the sheet, so the cascade handed every change the page diff's
-// line-number tracks (`3.5ch 3.5ch 2ch`): at 1440 the path got 23px and the
-// value 13px, and every change read "− mc… {…". jsdom lays nothing out, so
+// list once shared a class with the knowledge page's line diff, so the
+// cascade handed every change that diff's line-number tracks: at 1440 the
+// path got 23px and the value 13px. jsdom lays nothing out, so
 // the cascade over the rendered lines is what is read — with every sheet the
 // dashboard loads, in the order it loads them.
 test("a diff's path and value are drawn whole, in the diff's own tracks", async () => {

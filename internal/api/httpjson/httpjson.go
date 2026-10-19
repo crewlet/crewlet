@@ -648,6 +648,16 @@ const (
 	// says where to look; the objects themselves are the log's, never the
 	// body's.
 	CodeObjectsUnreachable Code = "objects_unreachable"
+	// CodeMigrationRefused is an object store migration this node will not
+	// run as asked: the target file, the node's mode, a node still
+	// publishing, an estate this node has not applied whole. 409, and the
+	// detail says which and what to change.
+	CodeMigrationRefused Code = "objects_migration_refused"
+	// CodeMigrationFailed is a migration pass that stopped because the
+	// fleet's store or the target bucket did not answer. 503: the pass
+	// resumes where it stopped when run again, and the copies it made are
+	// counted in the body.
+	CodeMigrationFailed Code = "objects_migration_failed"
 	// CodePositionRequired is a backup acknowledgement that named no stream
 	// or no sequence: it moves the floor the trim deletes against, so
 	// neither has a default.
@@ -780,15 +790,20 @@ const (
 	// under — an empty segment, a dot segment, too long. 400, the detail
 	// naming what is wrong with it.
 	CodeBadPath Code = "bad_path"
-	// CodeBadIfMatch is an If-Match header that is not a file's version as
-	// its ETag carries it. 400.
+	// CodeBadIfMatch is an If-Match header that is not a version as its
+	// ETag carries it: a project file's, or an artifact's head (`"<n>"`).
+	// 400.
 	CodeBadIfMatch Code = "bad_if_match"
-	// CodeVersionMoved is a file write whose If-Match names a version the
-	// file has moved past. 412: read it again and decide again.
+	// CodeVersionMoved is a write whose If-Match names a version the thing
+	// it writes has moved past: a project file, or an artifact whose head
+	// is past the version a publish was based on. 412: read it again and
+	// decide again. An artifact's carries the live head and its entry's
+	// text to merge onto.
 	CodeVersionMoved Code = "version_moved"
-	// CodeUploadExpired is an upload whose bytes were stored and took
-	// longer to arrive than a write may name its object after. 409: sending
-	// it again is the one thing that lands.
+	// CodeUploadExpired is an upload whose bytes cannot be recorded any
+	// more: stored, and older than a write may name its object after (409),
+	// or an artifact upload whose window closed before it was finished
+	// (410). Sending the bytes again is the one thing that lands.
 	CodeUploadExpired Code = "upload_expired"
 	// CodeContentCorrupt is a file whose object the store answered with
 	// content that is not what the file records. 500: a retry reads the
@@ -830,6 +845,112 @@ const (
 	// a delivery — under its own code because the fix is not: an operator
 	// told no secret is set goes looking for one they can see.
 	CodeUnusableWebhookSecret Code = "unusable_webhook_secret"
+)
+
+// THE ARTIFACTS SURFACE'S OWN (`/artifacts`): the refusals of an upload, a
+// publish and the pipeline between them that no other surface answers. A
+// publish based on a moved head is [CodeVersionMoved], an upload past its
+// window [CodeUploadExpired], a role below the verb's `unauthorized` naming
+// the role, and a value the domain refuses `invalid`, the codes every write
+// surface already answers with.
+const (
+	// CodeArtifactTrashed is a write to, or an open of, an artifact in the
+	// trash. 409: its owner restores it first.
+	CodeArtifactTrashed Code = "artifact_trashed"
+	// CodeArtifactPurging is a restore of an artifact whose purge has begun:
+	// its data may already be gone for good. 409: the purge finishes on its
+	// retry, an administrator's purge or the trash reaper's next pass.
+	CodeArtifactPurging Code = "artifact_purging"
+	// CodeQuotaExceeded is a write the company's plan quota refuses. 413,
+	// the detail naming the limit, the usage and the Tier A key an operator
+	// raises.
+	CodeQuotaExceeded Code = "quota_exceeded"
+	// CodeCarriedObjectGone is a publish carrying files the artifact no
+	// longer holds the bytes of. 409, the detail naming the paths to upload
+	// again.
+	CodeCarriedObjectGone Code = "carried_object_gone"
+	// CodeUploadMismatch is a file whose stored bytes are not the ones its
+	// upload declared. 422: upload that path again in a new upload.
+	CodeUploadMismatch Code = "upload_mismatch"
+	// CodeUploadMissing is a publish naming files whose bytes have not
+	// arrived. 409: transfer them, then publish again.
+	CodeUploadMissing Code = "upload_missing"
+	// CodeUploadsOutstanding is an upload the reservation budget refuses.
+	// 429, the detail naming whose budget, the figure and when the
+	// earliest hold lapses.
+	CodeUploadsOutstanding Code = "uploads_outstanding"
+	// CodeUploadNotFound is an upload this caller never began, or one whose
+	// record is gone; another caller's answers exactly this. 404.
+	CodeUploadNotFound Code = "upload_not_found"
+	// CodeUploadConsumed is an upload a publish has used or is using, or a
+	// file already transferred. 409.
+	CodeUploadConsumed Code = "upload_consumed"
+	// CodeMediaTypeRefused is a file whose type an artifact may not publish.
+	// 415, the detail naming the path.
+	CodeMediaTypeRefused Code = "media_type_refused"
+	// CodeCapabilityUnknown is a publish declaring a capability this build
+	// does not serve. 422.
+	CodeCapabilityUnknown Code = "capability_unknown"
+	// CodeContractUnknown is a publish pinning a runtime contract this
+	// build does not serve. 422.
+	CodeContractUnknown Code = "contract_unknown"
+	// CodeCredentialRefused is content an agent published that carries a
+	// credential's shape. 422: never redacted, which would ship a broken
+	// page.
+	CodeCredentialRefused Code = "credential_refused"
+	// CodeContentRefused is a file whose bytes are not what its type
+	// promises: text that is not UTF-8, binary bytes that do not begin as
+	// their type's do. 422.
+	CodeContentRefused Code = "content_refused"
+	// CodeEditRefused is an edit that could not be applied exactly once.
+	// 422, the detail naming the edit and how often its text matched.
+	CodeEditRefused Code = "edit_refused"
+	// CodePolicyRefused is a page the publish policy refuses: a script or a
+	// stylesheet from a host it does not allow, an unpinned version, a form
+	// posting off the page. 422, the detail listing every finding.
+	CodePolicyRefused Code = "policy_refused"
+	// CodeSourceTaken is a create naming a source address another artifact
+	// of the same owner holds. 409.
+	CodeSourceTaken Code = "source_taken"
+	// CodeLabelTaken is a label another version of the artifact holds, or
+	// one past the labelled versions an artifact keeps. 409.
+	CodeLabelTaken Code = "label_taken"
+	// CodeArtifactOriginUnset is a frame asked of a deployment that serves
+	// no artifact origin (`api.artifacts.external_url` unset). 409: an
+	// operator sets one; no retry here changes it.
+	CodeArtifactOriginUnset Code = "artifact_origin_unset"
+	// CodeArtifactNotFramed is a frame asked for an artifact the dashboard
+	// renders itself (a doc, a native sheet), which runs no
+	// author code and so is never opened on the artifact origin. 409.
+	CodeArtifactNotFramed Code = "artifact_not_framed"
+)
+
+// THE ARTIFACT DATASTORE'S OWN (`/artifacts/{id}/data`): the verdicts its
+// applier writes that no other surface's refusal names, and the write budget a
+// node keeps per principal and per store. A guarded write that lost is
+// `stale_version`, a rule that refused is `forbidden` and a value that failed
+// is `invalid`, the codes every write surface already answers with.
+const (
+	// CodeDataQuota is a datastore write the stamped plan quota refused:
+	// the store's or the company's footprint would pass its limit. 413,
+	// and the detail names the Tier A key an operator raises.
+	CodeDataQuota Code = "data_quota"
+	// CodeDataGone is a datastore whose artifact was purged, or is in the
+	// trash, so nothing is written to it. 410.
+	CodeDataGone Code = "data_gone"
+	// CodeNotUndoable is an undo of a write the history cannot undo. 409,
+	// and the detail says why.
+	CodeNotUndoable Code = "not_undoable"
+	// CodeMigrationTooLarge is a schema change that would rewrite more
+	// documents than one change may. 422.
+	CodeMigrationTooLarge Code = "migration_too_large"
+	// CodeWriteBudget is a datastore write this node's cost-weighted
+	// budget refused for now. 429 with a Retry-After; never a lockout.
+	CodeWriteBudget Code = "write_budget"
+	// CodeReadBudget is a dashboard dataset read this node's cost-weighted
+	// budget for live sources refused for now (adr/0043). 429 with a
+	// Retry-After; never a lockout.
+	CodeReadBudget Code = "read_budget"
 )
 
 // codes is THE TABLE: every code this engine answers with, each with the one
@@ -874,8 +995,8 @@ var codes = map[Code]string{
 	// THE THREE PERMISSIONS there are (ADR-0033), because a person reading it
 	// on a screen has to know what to ask an admin for, and the refusal's
 	// `grants` beside it says which one.
-	CodeUnauthorized: "You don't have the access this needs (Admin, Tracker " +
-		"or Knowledge). Ask an admin for it.",
+	CodeUnauthorized: "You don't have the access this needs (Admin, Tracker, " +
+		"Knowledge or Artifacts). Ask an admin for it.",
 	CodeQueryFailed: "That query could not be answered. The reason is in " +
 		"this node's log.",
 	CodeNotFound:  "There is no such record here.",
@@ -960,6 +1081,10 @@ var codes = map[Code]string{
 		"store did not answer for some of the company's files, so nothing in " +
 		"that directory counts as a backup. The hint says where to look; take " +
 		"the backup again once the store answers.",
+	CodeMigrationRefused: "The object store migration was refused. The detail " +
+		"says why and what to change before running it again.",
+	CodeMigrationFailed: "The object store migration stopped because a store did " +
+		"not answer. Run it again: it copies only what the target does not hold.",
 	CodePositionRequired: "Name the stream and the sequence your copy reaches. " +
 		"An acknowledgement moves what the trim may delete, so neither has a " +
 		"default.",
@@ -1023,11 +1148,11 @@ var codes = map[Code]string{
 	CodeNoFile:    "That project keeps no file at that path.",
 	CodeBadPath: "That is not a path a project keeps a file under. The detail " +
 		"says what is wrong with it.",
-	CodeBadIfMatch: "If-Match must carry the file's version, as its ETag does.",
-	CodeVersionMoved: "The file changed after you read it, so nothing was " +
+	CodeBadIfMatch: "If-Match must carry the version you read, as its ETag does.",
+	CodeVersionMoved: "This changed after you read it, so nothing was " +
 		"written. Read it again and decide again.",
-	CodeUploadExpired: "The upload took too long to arrive to be recorded, so " +
-		"the file was not written. Send it again.",
+	CodeUploadExpired: "The upload took too long to be recorded, so nothing " +
+		"was written. Send the files again.",
 	CodeContentCorrupt: "The object store holds content for this file that is " +
 		"not what the file records, so it was not sent. The reason is in this " +
 		"node's log.",
@@ -1108,6 +1233,60 @@ var codes = map[Code]string{
 		"is back.",
 	CodeReservedName: "That name is reserved for the engine. The detail " +
 		"names the command that can change it.",
+
+	CodeArtifactTrashed: "This artifact is in the trash. Its owner can " +
+		"restore it, then try again.",
+	CodeArtifactPurging: "This artifact is being deleted for good, so it " +
+		"cannot be restored. The deletion finishes on its own.",
+	CodeQuotaExceeded: "This would take the company past its artifacts quota, " +
+		"so nothing was saved. Remove artifacts, or ask an operator to raise " +
+		"the limit the detail names.",
+	CodeCarriedObjectGone: "Some files this version keeps are no longer stored, " +
+		"so nothing was published. Upload the files the detail names again.",
+	CodeUploadMismatch: "A file that arrived is not the one the upload " +
+		"declared, so it was not used. Upload the file the detail names again.",
+	CodeUploadMissing: "Some files have not arrived yet, so nothing was " +
+		"published. Send the files the detail names, then publish again.",
+	CodeUploadsOutstanding: "Too many uploads are still unfinished. Finish or " +
+		"abandon them, or wait for the time the detail names.",
+	CodeUploadNotFound: "There is no such upload. Begin a new one.",
+	CodeUploadConsumed: "That upload or file has already been used. Begin a " +
+		"new upload for any change.",
+	CodeMediaTypeRefused: "An artifact can't publish a file of that type. The " +
+		"detail names the file.",
+	CodeCapabilityUnknown: "This engine doesn't offer a capability the page " +
+		"declares. The detail names it.",
+	CodeContractUnknown: "This engine doesn't serve the runtime version the " +
+		"page asks for. The detail names it.",
+	CodeCredentialRefused: "The content carries what looks like a credential, " +
+		"so nothing was published. Remove it and publish again.",
+	CodeContentRefused: "A file's content is not what its type says it is, so " +
+		"nothing was published. The detail names the file.",
+	CodeEditRefused: "An edit could not be applied exactly once, so nothing " +
+		"was published. The detail names the edit and what to change.",
+	CodePolicyRefused: "The version breaks the artifact policy, so nothing was " +
+		"published. The detail lists every problem to fix.",
+	CodeSourceTaken: "Another of your artifacts already uses that source " +
+		"address. Publish to that artifact, or choose another address.",
+	CodeLabelTaken: "Another version already has that label, or this " +
+		"artifact keeps no more labels. Choose another label.",
+	CodeArtifactOriginUnset: "This engine has no address to open pages on, so " +
+		"this artifact can't be viewed yet. An operator sets " +
+		"`api.artifacts.external_url`.",
+	CodeArtifactNotFramed: "This artifact is shown here directly rather than " +
+		"opened as a page.",
+	CodeDataQuota: "This would take the data past its size limit, so nothing " +
+		"was written. Delete rows, or ask an operator to raise the limit the " +
+		"detail names.",
+	CodeDataGone: "This artifact's data is gone: the artifact was deleted or is " +
+		"in the trash, so nothing was written.",
+	CodeNotUndoable: "That change can't be undone. The detail says why.",
+	CodeMigrationTooLarge: "This schema change rewrites too many rows at once, so " +
+		"nothing changed. Change fewer columns at a time.",
+	CodeWriteBudget: "Too many changes to this data at once. Wait the moment " +
+		"Retry-After names, then send it again.",
+	CodeReadBudget: "This dashboard asked for its live data too often. Wait the " +
+		"moment Retry-After names, then refresh it.",
 }
 
 // Codes is every code in the vocabulary, sorted.
@@ -1459,8 +1638,16 @@ func RetrySeconds(hint time.Duration) int {
 // admitted it — and zero here would read as "do not retry", which is never
 // what a curve means.
 func Throttled(w http.ResponseWriter, retryAfter time.Duration) {
+	ThrottledWith(w, CodeThrottled, retryAfter, nil)
+}
+
+// ThrottledWith is [Throttled] for a limit of a surface's own, under its own
+// code and carrying a detail: the artifact datastore's write budget, which is
+// no sign-in's failed attempts. THE SAME ONE WRITER of a 429 underneath, so
+// the Retry-After every client waits on is carried by every 429 there is.
+func ThrottledWith(w http.ResponseWriter, code Code, retryAfter time.Duration, detail Detail) {
 	w.Header().Set("Retry-After", strconv.Itoa(max(RetrySeconds(retryAfter), 1)))
-	Fail(w, http.StatusTooManyRequests, CodeThrottled)
+	FailWithFields(w, http.StatusTooManyRequests, code, detail)
 }
 
 // UnavailableWith is [Unavailable] carrying a detail: what could not be read,

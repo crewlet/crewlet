@@ -121,6 +121,12 @@ type Deps struct {
 	// does not run would reach for it and fail at the call.
 	Work WorkDeps
 
+	// Artifacts are the artifacts tools' dependencies; ArtifactData are the
+	// datastore tools'. Each zero value omits its tools. See artifacts.go and
+	// artifactdata.go.
+	Artifacts    ArtifactDeps
+	ArtifactData ArtifactDataDeps
+
 	// Authorize decides whether the party behind a call may make it.
 	//
 	// EVERY TOOL GOES THROUGH IT, wrapped once at registration rather
@@ -160,10 +166,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	// lookup_colleague is unconditional: its corpus is the turn's own org,
 	// so it works on any node that is running a company at all — and it is
 	// the tool every other addressing decision goes through.
-	candidates := []struct {
-		tool tools.Callable
-		on   bool
-	}{
+	candidates := []candidate{
 		{&lookupColleague{env: deps.Env}, true},
 		{&a2aAsk{svc: deps.A2A, env: deps.Env}, deps.A2A != nil},
 		{&useSkill{skills: deps.Skills, events: deps.Events}, deps.Skills != nil},
@@ -245,6 +248,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&savePage{deps: deps.Pages}, deps.Pages.Writer != nil && deps.Pages.Reader != nil},
 		{&commentOnPage{deps: deps.Pages}, deps.Pages.Writer != nil && deps.Pages.Reader != nil},
 	}
+	candidates = slices.Concat(candidates, artifactCandidates(deps), artifactDataCandidates(deps))
 
 	var names []string
 	for _, c := range candidates {
@@ -286,6 +290,14 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	return names, nil
 }
 
+// candidate is one builtin a registry may offer, and whether its dependencies
+// are present to serve it: a tool whose dependency is absent is omitted, never
+// registered and broken.
+type candidate struct {
+	tool tools.Callable
+	on   bool
+}
+
 // annotationsFor classifies a builtin for the delivery gate and the sub-agent
 // guard.
 //
@@ -320,6 +332,12 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 // have to advertise the same decision: a hint written down here and thrown
 // away at the edge is a hint nobody outside this process ever sees.
 func annotationsFor(name string) tools.Annotations {
+	if a, ok := artifactAnnotations(name); ok {
+		return a
+	}
+	if a, ok := artifactDataAnnotations(name); ok {
+		return a
+	}
 	switch name {
 	case LookupColleagueTool, UseSkillTool, QueryEpisodesTool, RefreshMemoryTool,
 		LoadToolSkillTool, SearchKnowledgeTool:

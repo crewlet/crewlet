@@ -1161,6 +1161,101 @@ this replaced had fifteen decisions, no anchor, no gate, and six false
 statements by the time anybody compared it with the code; `adr/README.md`
 records that, because it is the argument for every field in the template.
 
+## Changes `crewlet-operator` has to follow
+
+[`crewlet-operator`](https://github.com/crewlet/crewlet-operator) is the
+Kubernetes operator that runs Crewlet companies from `crewlet.ai` custom
+resources. It consumes this engine's contract rather than sharing code with it:
+it renders both config tiers from its objects, calls the engine's API, copies a
+few run-time decisions out of the engine's source and runs the engine's image in
+pods of its own. Its suites run this repository's `main` as
+`ghcr.io/crewlet/crewlet:main` publishes it, never a pin of it (its ADR-0002), so
+a change here that it has not followed fails its next run while nothing there
+changed. That red run is the safety net, not the plan: a change that needs
+support there ships with it.
+
+A change needs a companion there when it touches something `crewlet-operator`
+renders, calls, copies, runs or links:
+
+- **A document it renders.** A field, enum value, default, rule or refusal of
+  the company document (Tier B, the company types in `internal/config`) or of
+  `crewlet.yaml` (Tier A, `Bootstrap`, which it writes for each pod: `node`,
+  `stream`, `store`, `coordination`, `api` with `api.auth`, and `secrets` among
+  its blocks), and so of `schema/`. It renders both from its objects, hands
+  every render to `crewlet validate` and to a running engine's `/config`, and
+  holds its CRD rules to the engine's own refusals.
+- **A credential position.** A field tagged `secret:"true"` (`x-crewlet-secret`
+  in the schema). Each takes a reference field on one of its kinds, or a stated
+  reason it has none, and a test holds the two lists to each other in both
+  directions, so a credential added here fails its build until it is mapped.
+- **A route or an answer it calls.** `/health`, `/ready`, `/fleet`, `/agents`,
+  `/config`, `/secrets` and the pause tools of `/operator/mcp`: the path, the
+  method, the status, the error envelope, a field it reads (`/ready`'s `reason`;
+  `/health`'s `status`, `posture` and `applied_epoch`; `/fleet`'s nodes and seat
+  leases), the paths a validation error names, or who may call it.
+- **A table or a function it copies a decision from.** Its
+  `internal/render/mirror_test.go` fingerprints engine functions by file and
+  name — the coding-run launch, the address checks the boot refuses to start on
+  and the Atlassian host rule among them — and its CRD suite reads the Claude
+  model table (`claudemodel`, which its `claudeModel` enum is held to) and the
+  CLI profiles (`cliprofile`: each CLI's token and key variables and the
+  variables that keep it inside a seat's home) from the engine's own refusals. A
+  change to one, or a rename or a move, fails it until it has been read against
+  the files that copy it.
+- **How the engine runs in a pod.** `crewlet run -config`, the `CREWLET_*`
+  variables a pod sets, the ports, `/health` and `/ready` as the probes, the
+  drain and the grace a pod is given for it (the engine puts no bound of its own
+  on a drain), and where the engine writes: `crewlet-operator` runs it as a
+  non-root user with a read-only root filesystem and only a data volume, `/tmp`
+  and the user's home writable, so a new place the engine writes is a write the
+  pod refuses.
+- **The engine image and the tag.** The `Dockerfile`, `.goreleaser.yaml`,
+  `make image-context` and `.github/workflows/main-image.yml`: the image's
+  entrypoint, user ID and home directory, platforms, tags and labels (it reads
+  the commit from `org.opencontainers.image.revision`) and the workflow's own
+  path and name, which its release verifies the keyless signature against. A
+  `v*` tag is one too: its ADR-0002 rests on this engine having released no tag
+  that carries Go code, and each of its releases keeps a copy of the engine it
+  was tested against.
+- **A page or a heading it links.** It links this repository's `docs/` as
+  `https://github.com/crewlet/crewlet/blob/main/docs/<page>.md#<heading>`, and
+  its docs gate fails the day a change here removes or renames one.
+
+When it does:
+
+- **Look in its tree, not in your memory.** It is the authority on what it
+  consumes. Grep it for the field, route, enum value, variable, path or heading
+  you are changing, and for the engine file you are editing, since its mirror
+  table names engine files by path. No hit is the answer.
+- **Make the change there; a note is not the change.** Open a pull request on
+  `crewlet-operator` that names yours, and name it in yours, working to its own
+  `CONTRIBUTING.md`: its `make check`, `git commit -s`, its commit scopes, its
+  docs (`docs/reference/api.md` there is generated). If you cannot, say exactly
+  what it needs — the surface, the files — in your pull request instead of
+  saying nothing.
+- **Prove it against your change, not against `main`.** Its suites run the
+  engine that `main` publishes, which lacks your change until it has merged and
+  the image has been rebuilt. Its `CONTRIBUTING.md` ("The engine suite") and
+  ADR-0002 say how to run them against another engine: `CREWLET_VERSION` for a
+  commit, `CREWLET_IMG` for an image built from a checkout of this repository
+  (`make image-context`). Say what you could not run.
+- **Land the pair back to back, this one first.** Its tests read `main`, so its
+  pull request is green only once this change is on `main` and the image
+  rebuilt, and a change that breaks `crewlet-operator` leaves every run of it
+  that reads `main` red from this merge until its own lands.
+- **Follow `main` plainly.** `crewlet-operator` tests against `main` alone and
+  its API is `v1alpha1`, which breaks without ceremony, so the companion change
+  is a rename or a reshape — no alias, no both-spellings reader, no
+  engine-version switch (see [Nothing is released until a tag ships
+  it](#nothing-is-released-until-a-tag-ships-it)) — unless it has shipped a tag
+  that carries the surface, in which case its own `CONTRIBUTING.md` says what a
+  break takes.
+- **Say what you did, or why nothing was needed.** The pull request description
+  links the companion change, or says in one line why there is none
+  (`crewlet-operator: none — internal to the turn loop`). Most changes touch
+  nothing above and need no companion change; one that touches a surface above
+  and says nothing is what this section exists to catch.
+
 ## Commit messages
 
 Commit subjects follow the [Conventional Commits](https://www.conventionalcommits.org/)
@@ -1317,7 +1412,9 @@ what readers see in the generated release notes. See below.
 ## Pull requests
 
 1. Fork and create a feature branch.
-2. Make your change, including tests and doc updates.
+2. Make your change, including tests and doc updates — and, where it touches
+   what `crewlet-operator` consumes, [its companion
+   change](#changes-crewlet-operator-has-to-follow).
 3. Commit it with `git commit -s` — see [Sign your work](#sign-your-work).
 4. Run `make check`.
 5. Open a PR with a clear description of what changed and why. **The title

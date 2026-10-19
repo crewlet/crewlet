@@ -167,16 +167,18 @@ func TestTheHubPostureReachesEveryClient(t *testing.T) {
 func TestEveryPushKindHasARoute(t *testing.T) {
 	t.Parallel()
 	kinds := declaredKinds(t)
-	// The first seat-routed kind, named explicitly: a walk that silently
-	// stopped finding it would look exactly like a pass — and it is the
-	// one kind whose route decides WHO receives it rather than whether
-	// anybody does.
+	// The first room-routed kind, named explicitly: a walk that silently
+	// stopped finding it would look exactly like a pass, and its route
+	// decides WHO receives it rather than whether anybody does.
 	if !slices.Contains(kinds, stream.KindInboxChanged) {
 		t.Fatalf("the walk found %v and not %q, so it is not reading the "+
 			"frozen list", kinds, stream.KindInboxChanged)
 	}
-	if got := stream.RouteOf(stream.KindInboxChanged); got != stream.RouteSeat {
-		t.Errorf("%q routes as %q, want %q", stream.KindInboxChanged, got, stream.RouteSeat)
+	for _, kind := range []stream.Kind{stream.KindInboxChanged, stream.KindArtifactChanged,
+		stream.KindArtifactData, stream.KindArtifactPresence} {
+		if got := stream.RouteOf(kind); got != stream.RouteRoom {
+			t.Errorf("%q routes as %q, want %q", kind, got, stream.RouteRoom)
+		}
 	}
 	if unrouted := withoutARoute(kinds); len(unrouted) > 0 {
 		t.Errorf("these push kinds have no route: %v — add each to the route "+
@@ -190,43 +192,47 @@ func TestEveryPushKindHasARoute(t *testing.T) {
 	}
 }
 
-// EVERY SEAT-ROUTED KIND HAS A PRODUCER.
+// EVERY ROOM-ROUTED KIND HAS A PRODUCER.
 //
-// A seat-routed kind is a promise to a screen — "you will be told when this
-// seat's inbox moves" — and a promise with a route and an index and nothing
-// that ever builds the frame is a screen waiting on a push that cannot come,
-// indistinguishable from a quiet company. `inbox_changed` shipped in exactly
-// that state, declared and routed with its publisher to follow. So the walk
-// reads this package's own source for a PushSeat call naming each such kind,
-// which is the one constructor a seat-routed frame can be built with.
-func TestEverySeatRoutedKindHasAProducer(t *testing.T) {
+// A room-routed kind is a promise to a screen ("you will be told when this
+// seat's inbox moves", "when this artifact's rows change") and a promise with
+// a route and an index and nothing that ever builds the frame is a screen
+// waiting on a push that cannot come, indistinguishable from a quiet company.
+// `inbox_changed` shipped in exactly that state, declared and routed with its
+// publisher to follow. So the walk reads this package's own source for a
+// PushSeat or PushArtifact call naming each such kind, which are the two
+// constructors a room-routed frame can be built with.
+func TestEveryRoomRoutedKindHasAProducer(t *testing.T) {
 	t.Parallel()
 	consts := declaredKindConsts(t)
-	produced := seatProducers(t)
+	produced := roomProducers(t)
 	for name, kind := range consts {
-		if stream.RouteOf(kind) != stream.RouteSeat {
+		if stream.RouteOf(kind) != stream.RouteRoom {
 			continue
 		}
 		if !produced[name] {
-			t.Errorf("%s (%q) is routed by seat and nothing in this package "+
-				"builds one with PushSeat: a screen watching for it waits on a "+
-				"push that cannot come", name, kind)
+			t.Errorf("%s (%q) is routed to a room and nothing in this package "+
+				"builds one with PushSeat or PushArtifact: a screen waiting for "+
+				"it waits on a push that cannot come", name, kind)
 		}
 	}
 	// THE CONTROL: the walk is worth having only if it can find a producer,
 	// and only if an unproduced name would fail it.
-	if !produced["KindInboxChanged"] {
-		t.Fatalf("the walk found producers for %v and not KindInboxChanged, so "+
-			"it is not reading Service.InboxChanged", produced)
+	for _, name := range []string{"KindInboxChanged", "KindArtifactChanged",
+		"KindArtifactData", "KindArtifactPresence"} {
+		if !produced[name] {
+			t.Fatalf("the walk found producers for %v and not %s, so it is not "+
+				"reading the service's producers", produced, name)
+		}
 	}
 	if produced["KindFromTheFuture"] {
 		t.Error("the walk reports a producer for a kind nothing declares")
 	}
 }
 
-// seatProducers is every Kind… constant this package's non-test source passes
-// as the first argument of PushSeat.
-func seatProducers(t *testing.T) map[string]bool {
+// roomProducers is every Kind… constant this package's non-test source passes
+// as the first argument of PushSeat or PushArtifact.
+func roomProducers(t *testing.T) map[string]bool {
 	t.Helper()
 	out := map[string]bool{}
 	for _, file := range parsedSource(t) {
@@ -235,7 +241,8 @@ func seatProducers(t *testing.T) map[string]bool {
 			if !ok || len(call.Args) == 0 {
 				return true
 			}
-			if fn, ok := call.Fun.(*ast.Ident); !ok || fn.Name != "PushSeat" {
+			if fn, ok := call.Fun.(*ast.Ident); !ok ||
+				(fn.Name != "PushSeat" && fn.Name != "PushArtifact") {
 				return true
 			}
 			if kind, ok := call.Args[0].(*ast.Ident); ok {
@@ -413,9 +420,9 @@ func TestAnAnswerIsNeverBroadcast(t *testing.T) {
 	}
 }
 
-// TestUnregisteringLeavesTheSeatIndex: a bucket holding a client the hub has
+// TestUnregisteringLeavesTheRoomIndex: a bucket holding a client the hub has
 // let go of keeps it alive and sends to its closed queue.
-func TestUnregisteringLeavesTheSeatIndex(t *testing.T) {
+func TestUnregisteringLeavesTheRoomIndex(t *testing.T) {
 	t.Parallel()
 	h := stream.NewHub()
 	c := stream.NewClient(reader)

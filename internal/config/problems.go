@@ -452,6 +452,13 @@ func advisory(path Path, message string) Warning {
 	}
 }
 
+// AdvisoryAt is [advisory] at a dotted field path, for an advisory whose
+// judgement needs a package this one cannot import: the engine's, about how
+// much broker a document's state logs reserve.
+func AdvisoryAt(fields, message string) Warning {
+	return advisory(field(fields), message)
+}
+
 // Warnings is everything a person should know about a company the engine
 // will run: every reference it resolves to nothing
 // ([Company.ReferenceWarnings]), every admission rule it breaks
@@ -813,6 +820,7 @@ func (b *Bootstrap) Warnings() []Warning {
 	}
 
 	out = append(out, b.API.warnings(b.ServesAPI())...)
+	out = append(out, b.API.Artifacts.warnings(b.API, b.ServesAPI())...)
 	return out
 }
 

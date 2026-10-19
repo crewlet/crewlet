@@ -353,6 +353,10 @@ describe("the table is the only way a key is bound", () => {
     "lib/keys.ts": "the mechanism useKeymap is built on",
     "lib/useUndoKeys.ts":
       "undo and redo of a draft, scoped to presses from inside its surface; it reads its keys with matchesRow",
+    "routes/artifacts/ArtifactPage.tsx":
+      "follow mode's stop, on the element of the artifact's body only: it binds nothing (no press is prevented, the browser's own scroll keys still scroll) and reads a navigation key as the reader moving the view themselves, as it reads a wheel, a touch drag or a press beside it",
+    "runtime/runtime.ts":
+      "the page runtime's Mod+Escape, inside an artifact's own document on its own origin, where no keymap of the frame's runs",
   };
 
   test("nothing but the table calls the mechanism", () => {

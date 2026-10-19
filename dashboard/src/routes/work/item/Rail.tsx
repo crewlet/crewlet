@@ -26,7 +26,7 @@
  */
 
 import { useMemo, useState, type ReactNode } from "react";
-import { Button, EmptyValue, IconButton, Input, Menu, Tag, cx } from "@crewlethq/ui";
+import { Button, EmptyValue, IconButton, Input, Link, Menu, Tag, cx } from "@crewlethq/ui";
 import {
   ArrowUpRightGlyph,
   CalendarGlyph,
@@ -48,7 +48,10 @@ import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { attribution, type ChangeField } from "~/lib/attribution.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { KNOWLEDGE, accessNames } from "~/lib/access.ts";
+import { KNOWLEDGE, accessNames, holds } from "~/lib/access.ts";
+import { useNow } from "~/lib/clock.ts";
+import { useArtifactPeople } from "~/lib/artifacts/people.ts";
+import { ListedArtifactCard } from "~/routes/artifacts/parts.tsx";
 import {
   fmtCount,
   fmtDate,
@@ -407,6 +410,7 @@ export function ItemRail({
       <PropertiesRail groups={groups} />
       <Relations detail={detail} chrome={chrome} />
       <PageLinks links={(detail.links ?? []).filter((l) => l.kind === "page")} />
+      <ArtifactLinks item={detail.task.key} />
       {!compact && <Cost detail={detail} />}
       <Watching detail={detail} chrome={chrome} />
       {record.length > 0 && (
@@ -941,6 +945,56 @@ function PageLink({ id }: { id: string }) {
           : page.data?.page?.title || (page.error ? "A page this node cannot read" : id)}
       </span>
     </a>
+  );
+}
+
+/** How many artifacts the rail lists, the most recently changed first. */
+const RAIL_ARTIFACTS = 20;
+
+/**
+ * The artifacts made or changed for the task: every artifact whose own history
+ * names the item a turn was charged to when it wrote, by the item's key, as the
+ * engine records it (`artifacts.Authority.WorkItem`).
+ *
+ * THE ENGINE FILTERS THE LISTING ROW BY ROW, so a reader is shown only the
+ * artifacts they could open anyway. The answer's `total` is not drawn: it
+ * counts rows the reader's access withheld, and saying "3 more" would tell a
+ * reader that artifacts they cannot open exist.
+ *
+ * A reader holding the artifacts app is offered a sheet started for the task
+ * (`#/artifacts/new?item=`), which the engine then lists here; for anybody
+ * else the section is left out until there is something to list.
+ */
+function ArtifactLinks({ item }: { item: string }) {
+  const listed = useQuery(
+    "artifacts",
+    { work_item: item, limit: RAIL_ARTIFACTS },
+    { pollMs: 300_000, enabled: item !== "" },
+  );
+  const people = useArtifactPeople();
+  const now = useNow();
+  const { grants } = useViewer();
+  const canStart = item !== "" && holds(grants, "artifacts");
+  const rows = listed.data?.items ?? [];
+  if (rows.length === 0 && !canStart) return null;
+  return (
+    <section className="task-rail-section" aria-label="Artifacts">
+      <div className="task-lbl">Artifacts</div>
+      {rows.length > 0 && (
+        <ul className="task-rail-artifacts" role="list">
+          {rows.map((artifact) => (
+            <li key={artifact.id}>
+              <ListedArtifactCard item={artifact} people={people} now={now} size="compact" />
+            </li>
+          ))}
+        </ul>
+      )}
+      {canStart && (
+        <Link size="caption" variant="quiet" href={href(["artifacts", "new"], { item })}>
+          Start a sheet for this task
+        </Link>
+      )}
+    </section>
   );
 }
 

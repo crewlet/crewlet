@@ -176,6 +176,33 @@
         "null"
       ]
     },
+    "CompanyArtifacts": {
+      "additionalProperties": false,
+      "properties": {
+        "agents_manage_others": {
+          "description": "Let an agent publish over, update and reshare artifacts it does not own. Off by default.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "seen_by": {
+          "description": "Who sees who has opened an artifact: editors (the default) or nobody.",
+          "enum": [
+            "editors",
+            "nobody",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Confluence": {
       "additionalProperties": false,
       "properties": {
@@ -3859,6 +3886,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "artifacts": {
+      "$ref": "#/$defs/CompanyArtifacts"
+    },
     "integrations": {
       "$ref": "#/$defs/Integrations"
     },

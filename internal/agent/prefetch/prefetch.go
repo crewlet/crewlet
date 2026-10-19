@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/search"
 )
@@ -268,6 +269,13 @@ type Request struct {
 	// say which of the messages it showed came before the trigger only if
 	// it knows which one the trigger is.
 	Message string
+
+	// Boundary is the turn's fence token ([turnctx.Turn.Boundary]): the
+	// thread block is other people's words handed over in the prompt, so it
+	// is fenced with the token the turn's tools fence their reads with. An
+	// invalid one is replaced with a fresh token rather than used
+	// ([provenance.Fence]).
+	Boundary provenance.Boundary
 }
 
 // judgeable says there is something to judge relevance against: the trigger

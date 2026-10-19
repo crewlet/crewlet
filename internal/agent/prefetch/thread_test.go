@@ -391,13 +391,14 @@ func TestAnUnrenderableRootIsSaidRatherThanReplaced(t *testing.T) {
 	blocks := fetch(t, prefetch.Sources{Threads: source}, threadRequest(t))
 
 	lines := strings.Split(blocks.ThreadContext, "\n")
-	if len(lines) < 2 {
+	if len(lines) < 3 {
 		t.Fatalf("the block rendered as:\n%s", blocks.ThreadContext)
 	}
-	// The root's own slot, in the root's own place — not the oldest reply.
-	if lines[1] != prefetch.UnrenderableRootLine {
-		t.Fatalf("the line under the preamble is %q, want the root's stand-in",
-			lines[1])
+	// The root's own slot, in the root's own place (the first line inside
+	// the fence, under the preamble) and not the oldest reply.
+	if lines[2] != prefetch.UnrenderableRootLine {
+		t.Fatalf("the first line inside the fence is %q, want the root's stand-in",
+			lines[2])
 	}
 	// AND THE COUNT IS OF MESSAGES, not of lines: the stand-in says a
 	// message is missing, so counting it would report the seat as having
@@ -427,7 +428,7 @@ func TestAnUnrenderableRootIsSaidRatherThanReplaced(t *testing.T) {
 	}
 	capped := fetch(t, prefetch.Sources{Threads: long}, threadRequest(t))
 	cappedLines := strings.Split(capped.ThreadContext, "\n")
-	if cappedLines[1] != prefetch.UnrenderableRootLine {
+	if cappedLines[2] != prefetch.UnrenderableRootLine {
 		t.Fatalf("the bound dropped the root's slot:\n%s", capped.ThreadContext)
 	}
 	// The stand-in is not a message: the posts are the replies that

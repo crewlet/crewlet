@@ -137,7 +137,7 @@ node:
 | `data` | Keeps the company's durable state on this node's disk: a copy of the replicated estate and the event log. The company's files are not under it: they are in the [object store](object-store.md), which on the default `nats` backend is a stream the broker's members keep. It says nothing about the broker (see below). `ingress` and `workers` require it | Every seat's tracker and knowledge tools, which a node without `data` answers through one that has it |
 | `ingress` | Serves the HTTP API: webhooks, the dashboard, the REST endpoints. A node without it serves only its [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on `api.port` | No integration can reach the company, and there is nothing to look at |
 | `seats` | Claims seat leases and runs agents, and serves their agent-mode tool bridge (`/mcp/{token}`) when `CREWLET_MCP_BRIDGE_URL` is set | Every trigger queues up unread |
-| `workers` | The company-wide [singleton duties](seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the state logs' trim, the embedding duty, the sandbox waiter, the integration reconcile loop, the object store's collector, the identity sweep, and the learning background passes (episode lifecycle, skill curation, clustering and promotion) | Nothing fires on a schedule, no sandbox run is collected, no table is swept, no state log is trimmed (each grows until its ordinary writes are refused `log_full`), no knowledge is embedded for semantic search, no integration is reconciled, no unnamed object is collected, and the identity estate's retention never runs |
+| `workers` | The company-wide [singleton duties](seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the state logs' trim, the embedding duty, the sandbox waiter, the integration reconcile loop, the object store's collector, the trash reaper, the identity sweep, and the learning background passes (episode lifecycle, skill curation, clustering and promotion) | Nothing fires on a schedule, no sandbox run is collected, no table is swept, no state log is trimmed (each grows until its ordinary writes are refused `log_full`), no knowledge is embedded for semantic search, no integration is reconciled, no unnamed object is collected, nothing in a trash is purged past its term, and the identity estate's retention never runs |
 
 Subtracting a role subtracts it from **this node, never from the
 company**, so the fleet as a whole still needs every role somewhere. That
@@ -247,7 +247,8 @@ The engine boots in this order:
    [what every start says](../reference/cli.md#every-start-says-what-its-tier-a-is-worth-knowing))
 5. Bind `api.host:api.port` — and `api.public.port`, on a node that serves one
    (an `ingress` node with it set, or a seats node serving its agent-mode tool
-   bridge there) — and log `api_bound`. A port somebody holds fails the boot
+   bridge there), and `api.artifacts.port` on an `ingress` node that sets
+   it — and log `api_bound`. A port somebody holds fails the boot
    here, before anything slow has run. From now until step 13 the sockets
    answer what a starting node answers: `/health` `503` with
    `"phase": "recovering"` until step 11 and `200` with
@@ -854,8 +855,8 @@ What that means in practice:
   present: reveal a secret, change who may do anything, or end everybody's
   sessions ([two locks](identity-and-access.md#some-gestures-ask-how-recently-you-proved-who-you-are)).
 - Everything a company does *with* its apps — filing work, writing pages —
-  needs no admin: that is `tracker` and `knowledge`, which is what most people
-  hold.
+  needs no admin: that is `tracker`, `knowledge` and `artifacts`, which is what
+  most people hold.
 
 The org chart inside this document is also written by its **leads**, who need
 no permission for it: a person who leads a unit may change the seats and units

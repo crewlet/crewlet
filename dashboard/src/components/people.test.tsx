@@ -51,9 +51,9 @@ class InertWebSocket {
 const UUID7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 /** An admin: every app is included. */
-const ADMIN = ["admin", "tracker", "knowledge"];
-/** A member holding both apps: reads the directory and changes none of it. */
-const MEMBER = ["tracker", "knowledge"];
+const ADMIN = ["admin", "tracker", "knowledge", "artifacts"];
+/** A member holding every app: reads the directory and changes none of it. */
+const MEMBER = ["tracker", "knowledge", "artifacts"];
 
 const SAM = { handle: "sam", name: "Sam Support" };
 
@@ -374,16 +374,11 @@ describe("an invitation onto a seat", () => {
     expect(within(dialog).queryByRole("combobox")).toBeNull();
     expect(within(dialog).queryByLabelText("Seat")).toBeNull();
     expect(dialog.textContent).toMatch(/The seat is held until they join\./);
-    // EVERY APP IS PRE-TICKED AND ADMIN IS NOT: a person invited works in the
-    // tracker and the knowledge base unless somebody says otherwise.
-    expect(within(dialog).getByRole("checkbox", { name: "Tracker" })).toHaveProperty(
-      "checked",
-      true,
-    );
-    expect(within(dialog).getByRole("checkbox", { name: "Knowledge" })).toHaveProperty(
-      "checked",
-      true,
-    );
+    // EVERY APP IS PRE-TICKED AND ADMIN IS NOT: a person invited works in
+    // every app unless somebody says otherwise.
+    for (const app of ["Tracker", "Knowledge", "Artifacts"]) {
+      expect(within(dialog).getByRole("checkbox", { name: app })).toHaveProperty("checked", true);
+    }
     expect(within(dialog).getByRole("checkbox", { name: "Admin" })).toHaveProperty(
       "checked",
       false,
@@ -397,7 +392,11 @@ describe("an invitation onto a seat", () => {
     const [sent] = eng.writes();
     expect(sent?.path).toBe("/iam/invitations");
     expect(sent?.key).toMatch(UUID7);
-    expect(sent?.body).toEqual({ email: "dee@example.com", grants: ["tracker"], seat: "sam" });
+    expect(sent?.body).toEqual({
+      email: "dee@example.com",
+      grants: ["tracker", "artifacts"],
+      seat: "sam",
+    });
     expect(
       within(dialog).getByText("https://crewlet.example.com/dashboard#/invite/inv-2.s3cret"),
     ).toBeTruthy();
@@ -417,6 +416,8 @@ describe("an invitation onto a seat", () => {
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Tracker" }));
     expect(within(dialog).getByText(/Without Tracker/)).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Knowledge" }));
+    expect(within(dialog).queryByText(/^Overview only:/)).toBeNull();
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Artifacts" }));
     expect(within(dialog).getByText(/^Overview only:/)).toBeTruthy();
     expect(within(dialog).queryByText(/Without Tracker/)).toBeNull();
   });
@@ -481,7 +482,7 @@ describe("an invitation onto a seat", () => {
     const [first, second] = eng.writes();
     expect(second?.body).toEqual({
       email: "jane@example.com",
-      grants: ["tracker", "knowledge"],
+      grants: ["tracker", "knowledge", "artifacts"],
       seat: "sam",
     });
     expect(second?.key).toMatch(UUID7);
@@ -558,7 +559,7 @@ describe("a person created on a seat", () => {
       kind: "person",
       seat: "sam",
       email: "dee.ray@example.com",
-      grants: ["tracker", "knowledge"],
+      grants: ["tracker", "knowledge", "artifacts"],
     });
     expect(within(dialog).getByText("dee.ray")).toBeTruthy();
     expect(dialog.textContent).toMatch(/dee\.ray is now Sam Support/);
@@ -596,7 +597,7 @@ describe("a person created on a seat", () => {
         email: "dee.ray@example.com",
         login: "dee.ray",
         name: "Dee Ray",
-        grants: ["tracker", "knowledge"],
+        grants: ["tracker", "knowledge", "artifacts"],
       },
     ]);
   });
@@ -777,12 +778,14 @@ describe("the access picker", () => {
     expect(box("Tracker").disabled).toBe(true);
     expect(box("Knowledge").checked).toBe(true);
     expect(box("Knowledge").disabled).toBe(true);
-    expect(screen.getAllByText("Included with Admin.")).toHaveLength(2);
-    expect(value()).toBe("admin,tracker,knowledge");
+    expect(box("Artifacts").checked).toBe(true);
+    expect(box("Artifacts").disabled).toBe(true);
+    expect(screen.getAllByText("Included with Admin.")).toHaveLength(3);
+    expect(value()).toBe("admin,tracker,knowledge,artifacts");
     fireEvent.click(box("Admin"));
     expect(box("Tracker").disabled).toBe(false);
     expect(box("Tracker").checked).toBe(true);
-    expect(value()).toBe("tracker,knowledge");
+    expect(value()).toBe("tracker,knowledge,artifacts");
   });
 
   // A ROW STORED AS ADMIN ALONE keeps its apps when Admin is taken away.
@@ -790,7 +793,7 @@ describe("the access picker", () => {
     render(<Picker initial={["admin"]} held={ADMIN} />);
     expect(box("Tracker").checked).toBe(true);
     fireEvent.click(box("Admin"));
-    expect(value()).toBe("tracker,knowledge");
+    expect(value()).toBe("tracker,knowledge,artifacts");
   });
 
   test("a permission the writer does not hold is offered disabled, with why", () => {

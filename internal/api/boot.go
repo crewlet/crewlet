@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -10,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/artifactserve"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/version"
 )
@@ -79,6 +81,12 @@ import (
 // be there. And nothing here asks for a credential, since nothing is served:
 // there is nothing a caller could be refused that it would otherwise read.
 //
+// THE ARTIFACT ORIGIN (api.artifacts) IS BOUND WITH THEM on a node that serves
+// one ([ArtifactsListener]), and answers as the origin answers: an empty
+// refusal under its own inert headers, `503` with the Retry-After for a route
+// it will serve and the `405` or `404` it gives anything else, never this
+// surface's JSON ([artifactserve.Starting]).
+//
 // IN THE SAME BROWSER POSTURE where the node will serve one: on an ingress
 // node a route waits inside the CORS layer the full surface answers it in, so
 // a dashboard on an allowed origin reads `starting` rather than an opaque
@@ -124,6 +132,7 @@ type Boot struct {
 	stopping  atomic.Bool
 	api       http.Handler
 	public    http.Handler
+	artifacts http.Handler
 }
 
 // NewBoot is the boot surface of the node bootstrap describes, answering as
@@ -195,6 +204,17 @@ func NewBoot(bootstrap *config.Bootstrap, nodeID string, bridge bool) (*Boot, er
 		}
 		refused.ServeHTTP(w, r)
 	}))
+	// AND WHAT THE ARTIFACT ORIGIN WILL SERVE, on a node that binds it: the
+	// origin's own refusal, told to come back on its routes.
+	if ArtifactsListener(bootstrap, nodeID) {
+		origins, err := artifactserve.NewOrigins(artifactserve.OriginsConfigOf(bootstrap))
+		if err != nil {
+			return nil, fmt.Errorf("api: the boot surface's artifact origin: %w", err)
+		}
+		if b.artifacts, err = artifactserve.Starting(origins, b.retryAfter); err != nil {
+			return nil, err
+		}
+	}
 	return b, nil
 }
 
@@ -204,6 +224,19 @@ func (b *Boot) Handler() http.Handler { return b.api }
 // Public is what the public listener (api.public) answers while the node
 // starts.
 func (b *Boot) Public() http.Handler { return b.public }
+
+// Artifacts is what the artifact origin (api.artifacts) answers while the node
+// starts, or nil on a node that binds no listener for it ([ArtifactsListener]).
+func (b *Boot) Artifacts() http.Handler { return b.artifacts }
+
+// retryAfter is the Retry-After a refusal carries now: a starting node's, or a
+// drain's once a stop has begun.
+func (b *Boot) retryAfter() time.Duration {
+	if b.stopping.Load() {
+		return DrainRetryAfter
+	}
+	return BootRetryAfter
+}
 
 // Recovered records that the engine has recovered what this node holds itself,
 // which turns /health from 503 to 200. See [PhasePreparing].
@@ -317,6 +350,19 @@ func PublicListener(bootstrap *config.Bootstrap, nodeID string, bridge bool) boo
 	}
 	profile := bootstrap.Profile(nodeID)
 	return profile.RunsIngress() || servesBridge(profile.RunsSeats(), bridge)
+}
+
+// ArtifactsListener reports whether a node binds a listener on api.artifacts:
+// one with the ingress role, whose dashboard frames what it serves, where the
+// file sets a port for it. api.port 0 is the hard off switch for it too.
+//
+// ONE PREDICATE, for [PublicListener]'s reason: `crewlet run` binds the
+// listener before there is an engine, and serves the origin on it once there
+// is one, so a node never binds an origin it then serves nothing on, nor
+// builds one for a socket it never bound.
+func ArtifactsListener(bootstrap *config.Bootstrap, nodeID string) bool {
+	return bootstrap.API.Port != 0 && bootstrap.API.Artifacts.Enabled() &&
+		bootstrap.Profile(nodeID).RunsIngress()
 }
 
 // servesBridge reports whether a node without the ingress role mounts its

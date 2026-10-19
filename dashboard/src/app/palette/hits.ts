@@ -21,16 +21,23 @@ import type { OrgIndex, Seat, Unit } from "~/lib/seats.ts";
 import { COLLEAGUE_QUERY_MAX } from "~/contract/wire.ts";
 import { sequenceWords } from "../keymap.ts";
 import { utf8Bytes } from "~/lib/format.ts";
+import { KIND_WORDS } from "~/lib/artifacts/words.ts";
+import { artifactPath } from "~/lib/artifacts/api.ts";
+import type { ArtifactListItem } from "~/protocol/index.ts";
 
 /**
  * The scopes, in the order the tab row draws them and Tab walks them.
  *
- * FIVE, because five questions do not fit one ranked list: the company's WORK
- * and its PAGES are server searches ranked by the engine and cannot be ranked
- * against a list of screens; finding a PERSON wants the roster and the
- * engine's own name tiers and nothing else, so a colleague is not buried
- * under four tools whose names happen to match; and running a COMMAND has no
- * name to search for at all. ALL is the launcher over the lot.
+ * SIX, because six questions do not fit one ranked list: the company's WORK,
+ * its PAGES and its ARTIFACTS are server searches ranked by the engine and
+ * cannot be ranked against a list of screens; finding a PERSON wants the
+ * roster and the engine's own name tiers and nothing else, so a colleague is
+ * not buried under four tools whose names happen to match; and running a
+ * COMMAND has no name to search for at all. ALL is the launcher over the lot.
+ *
+ * ARTIFACTS ARE ASKED IN THEIR OWN SCOPE ONLY. All already asks three server
+ * questions, and a fourth would take the slot the screen under the palette
+ * keeps; All offers a row that carries the term there instead.
  *
  * A SIGIL still opens three of them, typed in the same box in the same
  * keystroke as the query: `#` tasks, `@` agents, `>` actions. The sigil
@@ -41,6 +48,7 @@ export const SCOPES = [
   { id: "all", label: "All" },
   { id: "tasks", label: "Tasks", sigil: "#" },
   { id: "pages", label: "Pages" },
+  { id: "artifacts", label: "Artifacts" },
   { id: "agents", label: "Agents", sigil: "@" },
   { id: "actions", label: "Actions", sigil: ">" },
 ] as const;
@@ -76,6 +84,9 @@ export const SEARCH_MIN = 2;
  * approved palette draws two or three of each.
  */
 export const TASK_HITS = 8;
+
+/** How many artifacts the Artifacts scope lists: a ranked answer is opened, not scrolled. */
+export const ARTIFACT_HITS = 8;
 export const ALL_ROWS = 3;
 
 /**
@@ -360,7 +371,19 @@ export function matchingUnits(index: OrgIndex, query: string, cap: number): Unit
   return ranked(index.units, query, (u) => [u.name], cap);
 }
 
-/** The tools matching a query; nothing on an empty one, since a tool is found by name. */
+/** The source the engine names its own agent tools by. */
+export const BUILTIN_TOOL_SOURCE = "builtin";
+
+/**
+ * The tools matching a query; nothing on an empty one, since a tool is found by
+ * name.
+ *
+ * THE ENGINE'S OWN AGENT TOOLS ARE LEFT OUT. They are how an agent works, not a
+ * place a reader goes, and "artif" listed `get_artifact` and
+ * `set_artifact_schema` above the artifacts a reader was looking for. They stay
+ * listed in Settings, under Tools & MCP; what is offered here is a tool the
+ * company connected.
+ */
 export function toolHits(
   tools: readonly { name: string; source: string }[],
   query: string,
@@ -368,12 +391,24 @@ export function toolHits(
   cap: number,
 ): Hit[] {
   if (!query) return [];
-  return ranked(tools, query, (t) => [t.name], cap).map((tool) => ({
+  const connected = tools.filter((t) => t.source !== BUILTIN_TOOL_SOURCE);
+  return ranked(connected, query, (t) => [t.name], cap).map((tool) => ({
     id: `tool-${tool.name}`,
     icon: "wrench",
     label: tool.name,
     hint: tool.source,
     go: () => nav.to(["settings", "tools"], { q: tool.name }),
+  }));
+}
+
+/** The artifacts a listing answered, as rows that open them. */
+export function artifactHits(items: readonly ArtifactListItem[], nav: Navigator): Hit[] {
+  return items.map((item) => ({
+    id: `artifact-${item.id}`,
+    icon: "layers",
+    label: item.title,
+    hint: KIND_WORDS[item.kind],
+    go: () => nav.to(artifactPath(item.id)),
   }));
 }
 

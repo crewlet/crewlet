@@ -28,6 +28,17 @@
 // handler thought about (the mux's own 404 and 405, the redirect from `/`) is
 // covered by construction. A handler that serves a page replaces the policy
 // with the one that page needs.
+//
+// # And the origin that holds no session
+//
+// The artifact origin (the api.artifacts listener, internal/artifactserve)
+// serves pages nobody at this company necessarily wrote, so its policies live
+// here too: [ArtifactDocument] for a document in an artifact frame, a strict
+// script policy under a nonce fresh to the response; [ArtifactSubresource] for
+// a file it loads; [ArtifactPublic] for the embedded runtime and kit. And the
+// dashboard's own policy names that origin as the one thing it may frame
+// ([DashboardFor]). One package, so every policy this engine writes can be
+// read side by side.
 package pagepolicy
 
 import (
@@ -58,7 +69,14 @@ import (
 //     not subject to style-src.
 //   - img-src adds data: because Vite inlines an imported image below its
 //     assetsInlineLimit as a data: URI, so a small icon added to the source
-//     arrives in the bundle in that form rather than as a file.
+//     arrives in the bundle in that form rather than as a file. It adds blob:
+//     because a native artifact's image (a deck's picture) is a file of its
+//     version the API serves only as an attachment typed text/plain where a
+//     browser could run it: the dashboard fetches the bytes with the reader's
+//     own credential, types them from the version's manifest, and shows them
+//     through an object URL of its own making. A blob: URL is minted by script
+//     already running on this origin, so it widens nothing an injected
+//     element could reach on its own.
 //   - object-src and base-uri are 'none': the dashboard embeds no plugin and
 //     sets no base, and a base tag injected into the shell would otherwise
 //     re-point every relative URL.
@@ -73,9 +91,20 @@ import (
 // so no static host list can name it. Browsers enforce form-action on a form
 // submitted into a new tab too, so 'self' alone makes the button do nothing
 // but log a violation.
+//
+// TRUSTED TYPES ARE ENFORCED WITH NO POLICY: `require-trusted-types-for
+// 'script'` makes every string handed to a sink that parses markup or loads
+// script throw, and `trusted-types 'none'` lets no code on the origin create a
+// policy to bless one. The dashboard reaches no such sink (its Markdown
+// renderer builds elements and never parses markup, and an artifact's page is
+// framed on its own origin rather than written into this one), and
+// dashboard/src/app/trustedTypes.test.ts holds the source to that, so a
+// script that did get onto this origin finds no markup sink to widen its
+// reach through.
 const Dashboard = "default-src 'self'; script-src 'self'; style-src 'self'; " +
-	"img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; " +
-	"base-uri 'none'; frame-ancestors 'none'; form-action 'self' https:"
+	"img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; " +
+	"base-uri 'none'; frame-ancestors 'none'; form-action 'self' https:; " +
+	"require-trusted-types-for 'script'; trusted-types 'none'"
 
 // API is the policy for every response that is not a page: JSON, plain text,
 // the redirect from `/`, a 404.

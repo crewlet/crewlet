@@ -30,6 +30,7 @@
  */
 
 import { useMemo } from "react";
+import { uiletTone } from "~/ui/primitives.tsx";
 
 import {
   Callout,
@@ -41,6 +42,12 @@ import {
   StatCard,
   StatGroup,
   Tag,
+  TableKeyCell,
+  TableNumberCell,
+  TableDateCell,
+  TableEntityCell,
+  TableStatusCell,
+  TableTagsCell,
 } from "@crewlethq/ui";
 import {
   ServerGlyph,
@@ -55,15 +62,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import {
-  DateCell,
-  DurationCell,
-  KeyCell,
-  NumberCell,
-  SeatLabel,
-  StatusCell,
-  TagsCell,
-} from "~/app/frame/cells.tsx";
+import { plainSeat } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -73,7 +72,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { usePublishFleet } from "~/app/Shell.tsx";
 import { useEngineHealth } from "~/lib/store-hooks.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
-import { plural } from "~/lib/format.ts";
+import { plural, fmtCount, fmtDuration } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { FleetAnswer, FleetDutyLease, FleetNode, FleetSeatLease } from "~/protocol/index.ts";
 import { BrokerKindTag, BrokerMembership } from "./FleetBroker.tsx";
@@ -93,7 +92,7 @@ const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> 
   error: "danger",
 };
 
-/** Seconds on the wire, milliseconds in a [DurationCell] — converted once. */
+/** Seconds on the wire, milliseconds in a [TableNumberCell], converted once. */
 function leaseMs(seconds?: number | null): number | null {
   return seconds == null ? null : seconds * 1000;
 }
@@ -285,7 +284,7 @@ function FleetScreen() {
                   // the node's peek names its roles among its facts.
                   width: "max-content",
                   drop: 4,
-                  cell: (n) => <TagsCell tags={n.roles} />,
+                  cell: (n) => <TableTagsCell tags={n.roles} />,
                 },
                 {
                   key: "broker",
@@ -314,7 +313,7 @@ function FleetScreen() {
                   sortValue: (n) => n.seats,
                   // A COUNT on the node row; WHICH seats is the placement table
                   // below, and the node's own page, which can name them.
-                  cell: (n) => <NumberCell value={n.seats} />,
+                  cell: (n) => <TableNumberCell value={n.seats} format={fmtCount} />,
                 },
                 {
                   key: "inflight",
@@ -330,14 +329,14 @@ function FleetScreen() {
                   // for a process that was simply not saying — the one reading an
                   // operator must never be given for free.
                   sortValue: (n) => n.in_flight ?? null,
-                  cell: (n) => <NumberCell value={n.in_flight} />,
+                  cell: (n) => <TableNumberCell value={n.in_flight} format={fmtCount} />,
                 },
                 {
                   key: "posture",
                   header: "Posture",
                   shrink: true,
                   sortValue: (n) => n.posture ?? "",
-                  // A TAG RATHER THAN A `StatusCell`: the control plane's
+                  // A TAG RATHER THAN A `TableStatusCell`: the control plane's
                   // postures are a vocabulary the node itself chooses a word
                   // from — `serve`, `hold`, whatever it reports — and a glyph
                   // would claim a binary this column does not have.
@@ -384,7 +383,11 @@ function FleetScreen() {
                   sortValue: (n) => n.expires_in ?? null,
                   cell: (n) => (
                     <span title="time until this node's lease expires">
-                      <DurationCell ms={leaseMs(n.expires_in)} />
+                      <TableNumberCell
+                        value={leaseMs(n.expires_in)}
+                        format={fmtDuration}
+                        emptyLabel="Not measured"
+                      />
                     </span>
                   ),
                 },
@@ -395,7 +398,7 @@ function FleetScreen() {
                   // The node's peek carries it beside In flight ("Running").
                   drop: 3,
                   sortValue: (n) => n.started_at ?? "",
-                  cell: (n) => <DateCell at={n.started_at} now={now} />,
+                  cell: (n) => <TableDateCell value={n.started_at} now={now} />,
                 },
               ]}
             />
@@ -438,10 +441,10 @@ function FleetScreen() {
                     key: "handle",
                     header: "Seat",
                     sortValue: (s) => s.handle,
-                    // NOT `SeatCell`, and not the seat chip this column used to
+                    // NOT `linkedSeat`, and not the seat chip this column used to
                     // draw: both are links and every row here is one now, and an
                     // anchor inside an anchor is markup no browser agrees about.
-                    cell: (s) => <SeatLabel {...seatBadge(s.handle)} />,
+                    cell: (s) => <TableEntityCell {...plainSeat({ ...seatBadge(s.handle) })} />,
                   },
                   {
                     key: "node",
@@ -475,7 +478,13 @@ function FleetScreen() {
                     align: "right",
                     shrink: true,
                     sortValue: (s) => s.expires_in ?? null,
-                    cell: (s) => <DurationCell ms={leaseMs(s.expires_in)} />,
+                    cell: (s) => (
+                      <TableNumberCell
+                        value={leaseMs(s.expires_in)}
+                        format={fmtDuration}
+                        emptyLabel="Not measured"
+                      />
+                    ),
                   },
                 ]}
               />
@@ -499,7 +508,7 @@ function FleetScreen() {
                     key: "name",
                     header: "Duty",
                     sortValue: (d) => d.duty,
-                    cell: (d) => <KeyCell value={d.duty} />,
+                    cell: (d) => <TableKeyCell value={d.duty} />,
                   },
                   {
                     key: "node",
@@ -518,7 +527,13 @@ function FleetScreen() {
                     align: "right",
                     shrink: true,
                     sortValue: (d) => d.expires_in ?? null,
-                    cell: (d) => <DurationCell ms={leaseMs(d.expires_in)} />,
+                    cell: (d) => (
+                      <TableNumberCell
+                        value={leaseMs(d.expires_in)}
+                        format={fmtDuration}
+                        emptyLabel="Not measured"
+                      />
+                    ),
                   },
                 ]}
               />
@@ -603,16 +618,7 @@ function FleetScreen() {
  * peeking row already works — so the node is one click away from either row.
  */
 export function HeldBy({ node }: { node: string }) {
-  if (!node) return <EmptyValue label="Not set" />;
-  return (
-    <a
-      className="mono t-link key-cell held-by"
-      href={href(["settings", "nodes", node])}
-      title={node}
-    >
-      {node}
-    </a>
-  );
+  return <TableKeyCell value={node} href={href(["settings", "nodes", node])} />;
 }
 
 /**
@@ -623,7 +629,7 @@ export function HeldBy({ node }: { node: string }) {
  * end.
  */
 export function HeldSince({ lease, now }: { lease: FleetSeatLease; now: number }) {
-  return <DateCell at={lease.acquired_at} now={now} />;
+  return <TableDateCell value={lease.acquired_at} now={now} />;
 }
 
 /**
@@ -697,7 +703,7 @@ export function NodeScreen({ id }: { id: string }) {
                       shares; this card keeps what only the page draws. */}
                   <div className="row wrap gap-2">
                     <span className="t-label">Labels</span>
-                    <TagsCell
+                    <TableTagsCell
                       tags={Object.entries(node.labels ?? {}).map(([k, v]) => `${k}=${v}`)}
                       max={8}
                     />
@@ -861,7 +867,7 @@ export function nodeFacts({
     // ZERO SEATS IS A REAL ANSWER — an ingress-only node runs none — and it is
     // the node an operator is most often looking for here, so it must not be
     // the one a `||` turns into a dash.
-    { label: "Seats", value: <NumberCell value={node.seats} /> },
+    { label: "Seats", value: <TableNumberCell value={node.seats} format={fmtCount} /> },
     {
       // WHAT THIS NODE MAY RUN — `ingress`, `seats`, `workers` — which is a
       // different fact from the duties it holds. A FACT rather than a line of
@@ -871,7 +877,7 @@ export function nodeFacts({
       // A SET, so the chips take two tracks and one line (`Fact.set`).
       label: "Roles",
       value: node.roles.length ? (
-        <TagsCell tags={node.roles} max={8} />
+        <TableTagsCell tags={node.roles} max={8} />
       ) : (
         <EmptyValue label="This node advertises no roles" />
       ),
@@ -931,7 +937,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
                 as two numbers to subtract. `config_status` beside it is a
                 different fact: a node can report `ok` about a revision two
                 activations old. */}
-            <StatusCell
+            <TableStatusCell
               glyph={current ? "●" : "○"}
               label={
                 current
@@ -940,15 +946,17 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
                     ? `${plural(behind, "epoch")} behind`
                     : "no apply reported"
               }
-              tone={node.config_status === "error" ? "critical" : current ? "positive" : "caution"}
               title={`applied epoch ${applied}, the fleet has activated ${answer.target_epoch}`}
+              tone={uiletTone(
+                node.config_status === "error" ? "critical" : current ? "positive" : "caution",
+              )}
             />
             <Tag variant={STATUS_TONE[node.config_status ?? ""] ?? "neutral"}>
               {node.config_status || "unknown"}
             </Tag>
             <span className="spacer" />
             <span className="t-caption">reported</span>
-            <DateCell at={node.config_reported_at} now={now} />
+            <TableDateCell value={node.config_reported_at} now={now} />
           </div>
           {node.config_error && (
             <Callout variant="danger" role="alert">
@@ -959,9 +967,9 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
             <span className="t-label">In flight</span>
             {/* ABSENT IS NOT ZERO: the count rides the presence heartbeat, and
                 a node that publishes none is not a node running no turns. */}
-            <NumberCell value={node.in_flight} />
+            <TableNumberCell value={node.in_flight} format={fmtCount} />
             <span className="t-label">Up since</span>
-            <DateCell at={node.started_at} now={now} />
+            <TableDateCell value={node.started_at} now={now} />
           </div>
           <p className="t-caption">They differ while the node rebuilds.</p>
         </div>
@@ -977,7 +985,11 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
         </Card.Header>
         <div className="row wrap gap-2" style={{ padding: "var(--spacing-3)" }}>
           <span className="t-label">Its own lease</span>
-          <DurationCell ms={leaseMs(node.expires_in)} />
+          <TableNumberCell
+            value={leaseMs(node.expires_in)}
+            format={fmtDuration}
+            emptyLabel="Not measured"
+          />
           <span className="t-caption">until expiry</span>
         </div>
         <DataGrid<FleetSeatLease>
@@ -996,8 +1008,8 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
               key: "handle",
               header: "Seat",
               sortValue: (s) => s.handle,
-              // NOT `SeatCell`: it is a link and this row is one already.
-              cell: (s) => <SeatLabel {...seatBadge(s.handle)} />,
+              // NOT `linkedSeat`: it is a link and this row is one already.
+              cell: (s) => <TableEntityCell {...plainSeat({ ...seatBadge(s.handle) })} />,
             },
             {
               key: "since",
@@ -1013,7 +1025,13 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
               align: "right",
               shrink: true,
               sortValue: (s) => s.expires_in ?? null,
-              cell: (s) => <DurationCell ms={leaseMs(s.expires_in)} />,
+              cell: (s) => (
+                <TableNumberCell
+                  value={leaseMs(s.expires_in)}
+                  format={fmtDuration}
+                  emptyLabel="Not measured"
+                />
+              ),
             },
           ]}
         />
@@ -1037,7 +1055,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
               key: "name",
               header: "Duty",
               sortValue: (d) => d.duty,
-              cell: (d) => <KeyCell value={d.duty} />,
+              cell: (d) => <TableKeyCell value={d.duty} />,
             },
             {
               key: "ttl",
@@ -1045,7 +1063,13 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
               align: "right",
               shrink: true,
               sortValue: (d) => d.expires_in ?? null,
-              cell: (d) => <DurationCell ms={leaseMs(d.expires_in)} />,
+              cell: (d) => (
+                <TableNumberCell
+                  value={leaseMs(d.expires_in)}
+                  format={fmtDuration}
+                  emptyLabel="Not measured"
+                />
+              ),
             },
           ]}
         />

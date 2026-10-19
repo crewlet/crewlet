@@ -7,9 +7,13 @@ import (
 	"testing"
 )
 
-// GIT MUST NEVER TEXT-MERGE THE COMMITTED DASHBOARD.
+// GIT MUST NEVER TEXT-MERGE THE COMMITTED DASHBOARD, NOR THE ARTIFACT TREE.
 //
-// The tree this package embeds is build output whose names are content-hashed,
+// The artifact tree (the page runtime and the artifact kit) is the same
+// source's third build target and is held by the same rule: two branches that
+// both rebuild it would text-merge minified JavaScript just the same.
+//
+// The dashboard this package embeds is build output whose names are content-hashed,
 // so two branches that both rebuild write different paths for the same chunk.
 // Git reads that as a rename/rename, three-way merges 979 KB of minified
 // JavaScript, and — measured on this tree — splices nine conflict-marker lines
@@ -41,7 +45,7 @@ import (
 // honest mutations are a `#` in front of the directive, a later rule
 // overriding it, a wrong glob, or `git rm --cached` as well as the delete. All
 // four were run against this gate and all four fail it.
-func TestGitWillNotTextMergeTheEmbeddedDashboard(t *testing.T) {
+func TestGitWillNotTextMergeTheEmbeddedTrees(t *testing.T) {
 	t.Parallel()
 
 	// SHAPES, NOT TODAY'S NAMES. `check-attr` resolves a path STRING against
@@ -55,14 +59,18 @@ func TestGitWillNotTextMergeTheEmbeddedDashboard(t *testing.T) {
 		"static/dashboard/assets/react-0000000000.js",
 		"static/dashboard/protocol.js",
 		"static/dashboard/fonts/geist-latin.woff2",
+		"static/artifacts/runtime/1.0.0/runtime.js",
+		"static/artifacts/runtime/1.0.0/THIRD_PARTY_NOTICES.txt",
+		"static/artifacts/kit/0.18.0/kit.js",
+		"static/artifacts/kit/0.18.0/fonts/geist-latin.woff2",
 	}
 	for _, path := range governed {
 		if got := mergeAttr(t, path); got != "unset" {
 			t.Errorf("git check-attr merge %s = %q, want \"unset\"\n"+
 				"a text merge of this path writes conflict markers into a "+
-				"generated file; `static/dashboard/** -merge` in .gitattributes "+
-				"is what stops it, and the only correct resolution is "+
-				"`make dashboard`", path, got)
+				"generated file; `static/dashboard/** -merge` and "+
+				"`static/artifacts/** -merge` in .gitattributes are what stop it, "+
+				"and the only correct resolution is `make dashboard`", path, got)
 		}
 	}
 
@@ -72,6 +80,8 @@ func TestGitWillNotTextMergeTheEmbeddedDashboard(t *testing.T) {
 	for _, path := range []string{
 		"dashboard/src/app/App.tsx",
 		"dashboard/vite.config.ts",
+		"dashboard/vite.runtime.config.ts",
+		"dashboard/src/runtime/runtime.ts",
 		"static/static.go",
 		"internal/api/dashboard.go",
 	} {

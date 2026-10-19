@@ -43,6 +43,10 @@ type App struct {
 	state  *livestate.LiveState
 	stream *stream.Service
 
+	// stopRooms unregisters the socket's rooms from the appliers they hear,
+	// before the service stops.
+	stopRooms []func()
+
 	// runtime is the engine this process runs beside. See NodeRuntime.
 	runtime NodeRuntime
 
@@ -58,6 +62,8 @@ type App struct {
 
 	// backup takes a copy of this node's durable state.
 	backup backupTaker
+	// objects moves the company's files to an S3 bucket (see objectsmigrate.go).
+	objects objectsMigrator
 
 	// audit publishes the runtime audit record every backup leaves; see
 	// [operator.Audit].
@@ -468,6 +474,35 @@ type Options struct {
 	// to a question the authority table already answers.
 	Work guardedMounter
 
+	// Artifacts serves /artifacts on this listener, normally an
+	// artifactsapi.Service: uploads, publishes, shares, trash and purge,
+	// view tickets and the raw bytes of a version's files, each route
+	// stating its authority where it is mounted. Nil serves none, which is
+	// what a node built without the artifacts domain has. The artifact
+	// BYTES are never rendered here: they are served by the separate
+	// api.artifacts listener, inside a sandboxed frame.
+	Artifacts guardedMounter
+
+	// ArtifactData serves an artifact's datastore under
+	// /artifacts/{id}/data, normally an artifactdataapi.Service. Nil serves
+	// none.
+	ArtifactData guardedMounter
+
+	// Datasets is what a dashboard artifact's datasets are read from: the
+	// artifacts surface's board reads and the datastore. The surface itself
+	// (internal/api/datasetsapi) is built here, because an engine dataset
+	// is answered by THIS app's question registry and its agents overview,
+	// on the viewer's own request (adr/0043). Nil serves none.
+	Datasets *DatasetsSource
+
+	// Rooms decides and feeds the socket's artifact rooms: who may join one
+	// (the datastore's own admission, asked with the read verb), where an
+	// artifact's datastore stands, this node's presence hub, and what its
+	// appliers commit. Nil serves no room, which is what a node built
+	// without the artifacts domain has and what a suite about something
+	// else leaves out; `crewlet run` always wires it.
+	Rooms *Rooms
+
 	// Secrets serves /secrets, normally a secretsapi.Service: the fleet's
 	// credential store.
 	Secrets guardedMounter
@@ -538,6 +573,10 @@ type Options struct {
 	// Backup copies this node's durable state to a path an operator
 	// names.
 	Backup backupTaker
+
+	// Objects moves the company's files from the fleet's object store to
+	// an S3 bucket (`crewlet objects migrate --to s3`).
+	Objects objectsMigrator
 
 	// Identity says whether anybody is enrolled, for /health. See
 	// [Identity].
@@ -660,11 +699,24 @@ func New(opts Options) (*App, error) {
 			return seatOf(opts.Sources.Company, name)
 		},
 
+		// THE ARTIFACT ROOMS, every half or none ([Rooms]).
+		Rooms:   opts.Rooms.streamRooms(),
+		Metrics: opts.Rooms.metrics(),
+
 		Now:            now,
 		HealthInterval: opts.HealthInterval,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("api: %w", err)
+	}
+	// AND WHAT EACH ARTIFACT'S APPLIERS COMMITTED, pushed to the sockets in
+	// its room, with every room told to re-read whenever this node's copies
+	// leave or return to service.
+	if r := opts.Rooms; r != nil && r.Feed != nil {
+		a.stopRooms = append(a.stopRooms,
+			r.Feed.OnArtifactsMoved(a.stream.ArtifactsMoved),
+			r.Feed.OnArtifactDataMoved(a.stream.ArtifactDataMoved))
+		r.Feed.SetOnArtifactsServing(a.stream.ArtifactsCopy)
 	}
 	// AND WHOSE INBOX MOVED, pushed to the sockets watching each seat —
 	// and when what this node hears has a gap, every watched inbox read
@@ -679,7 +731,11 @@ func New(opts Options) (*App, error) {
 	if tree == nil {
 		tree = static.FS()
 	}
-	files := newAssets(tree)
+	policy, err := dashboardPolicy(opts.Bootstrap)
+	if err != nil {
+		return nil, err
+	}
+	files := newAssets(tree, policy)
 
 	// ONE registry, and both transports go through it. Two surfaces
 	// answering one question from two implementations is how they end up
@@ -732,6 +788,7 @@ func New(opts Options) (*App, error) {
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)
 	a.backup, a.audit = opts.Backup, opts.Audit
+	a.objects = opts.Objects
 	a.retention, a.nodes = opts.Retention, opts.Nodes
 	a.capacity = opts.Capacity
 	a.fleetBroker = opts.FleetBroker
@@ -824,6 +881,22 @@ func New(opts Options) (*App, error) {
 	if opts.Work != nil {
 		if err := opts.Work.Routes(mux); err != nil {
 			return nil, fmt.Errorf("api: mount the work surface: %w", err)
+		}
+	}
+	// AND THE ARTIFACTS SURFACES, for the same reason.
+	if opts.Artifacts != nil {
+		if err := opts.Artifacts.Routes(mux); err != nil {
+			return nil, fmt.Errorf("api: mount the artifacts surface: %w", err)
+		}
+	}
+	if opts.ArtifactData != nil {
+		if err := opts.ArtifactData.Routes(mux); err != nil {
+			return nil, fmt.Errorf("api: mount the artifact datastore surface: %w", err)
+		}
+	}
+	if opts.Datasets != nil {
+		if err := a.mountDatasets(mux, opts.Datasets, opts.Sources.Chart); err != nil {
+			return nil, fmt.Errorf("api: mount the dashboard datasets surface: %w", err)
 		}
 	}
 	// THE BROWSER POSTURE WRAPS THE CREDENTIAL ONE, because a preflight
@@ -981,6 +1054,7 @@ func (o Options) missing() error {
 		{"Capacity", o.Capacity == nil},
 		{"FleetBroker", o.FleetBroker == nil},
 		{"Backup", o.Backup == nil},
+		{"Objects", o.Objects == nil},
 		{"Nodes", o.Nodes == nil},
 		{"AuthEvents", o.AuthEvents == nil},
 		{"Audit", o.Audit == nil},
@@ -1054,6 +1128,10 @@ func (a *App) deploymentRoutes(mount func(string, http.HandlerFunc)) {
 	// a read. There is no budget reset beside it — a window's turnover IS
 	// the reset (ADR-0019), and a raw reset would re-arm a company mid-window.
 	mount("POST /backup", a.serveBackup)
+	// The move of the company's files to an S3 bucket: a copy every
+	// object passes through, and on the final pass the fleet's record of
+	// where its files are. See objectsmigrate.go.
+	mount("POST /objects/migrate", a.serveMigrateObjects)
 	// The three retention gestures that write. See retention.go.
 	a.mountRetention(mount)
 	// The capacity window's own control surface. It is the one thing a
@@ -1218,7 +1296,12 @@ func (a *App) Start(ctx context.Context) {
 }
 
 // Stop ends the tick and disconnects every client.
-func (a *App) Stop() { a.stream.Stop() }
+func (a *App) Stop() {
+	for _, stop := range a.stopRooms {
+		stop()
+	}
+	a.stream.Stop()
+}
 
 func (a *App) serveHealth(w http.ResponseWriter, r *http.Request) {
 	// ALWAYS 200 while the process is alive, INCLUDING through a drain: an

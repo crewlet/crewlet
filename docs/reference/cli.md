@@ -24,11 +24,15 @@ subcommand below is served by it.
 | `crewlet retention reanchor -stream NAME -confirm <created_at> [-force] [-discard]` | Adopt a recreated stream, or a broker restored from an older copy: move that one log to its next generation, declaring every position below it comparable and safely stale, and resume its applier with no restart. A recreated log is followed from its first surviving record, a restored one from its end, and one continuing in a generation only an evicted peer held from this node's own checkpoint, that generation's records void. A restored log holding records written after the restore that this node's rows do not hold is refused unless `-discard` accepts that they are applied on no node |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
 | `crewlet work purge <item> -reason TEXT -confirm <item-key> [-op-id ID]` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a credential holding `admin`, and never a seat. Its children move onto its own parent rather than being destroyed with it |
+| `crewlet objects migrate -to s3 -target <path> [-final]` | Moves the company's files from the fleet's NATS bucket to an S3-compatible bucket, through a running data node: a copy pass on a live fleet, then `-final` with every node in maintenance mode, which seals the NATS bucket and moves the fleet's record. See [Moving the files to a bucket](../concepts/object-store.md#moving-the-files-to-a-bucket). The token takes `admin` |
 | `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: objects listed and deleted and unfinished uploads abandoned by the last collection; files named, **missing** and **damaged** by the last audit to finish, with those files listed. `-json` prints the fleet view's `objects` block as the node answered it. The token takes `admin` |
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a kind this build does not know) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it. The token takes `admin` |
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it. The token takes `admin` |
 | `crewlet seats pause <handle> [-stop] [-reason TEXT] [-op-id ID]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round. Taken by the seat's holder, whoever leads it, or an administrator, and recorded under the caller's own name, kind and credential |
 | `crewlet seats resume <handle> [-op-id ID]` | Lift the pause; what waited is delivered first, in order. The same authority as `pause` |
+| `crewlet artifacts list\|get\|versions\|assets\|usage` | Read the company's artifacts through a running node, as the token's principal: the listing it may see (`-scope`, `-kind`, `-q`, `-status`, `-work-item`), one artifact's head (its runtime contract and capabilities among it) and audience, its versions, each with its contract and capabilities, its assets, and the company's usage against its quota (an administrator's). See [`crewlet artifacts`](#crewlet-artifacts) |
+| `crewlet artifacts publish <dir\|file> [-artifact ID] [-op-id ID]` | Publish a directory or a file as a new artifact, or as the next version of one: an upload intent first, then only the files the artifact does not already hold are sent, then the version is published against the head it read |
+| `crewlet artifacts update\|restore\|label\|share\|unshare\|trash\|untrash\|purge` | Change the title, description or icon, roll back to a version, label one, share with a seat, a unit or the company, withdraw a share, move to and from the trash, and purge for good (an administrator's, with a person present; the id is asked twice) |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load a company file as a new active `company_config` revision — through a running node's `PUT /config`, which activates it fleet-wide, or offline into this node's store, which the node publishes at its next start; the line it prints says which it did |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -507,7 +511,7 @@ optional. `seats` lists which seats are free.
 | `create` | Create somebody directly, active from the moment it lands. **A person** — `create -email E -seat SEAT [-login L] [-name N] [-grants G,...]`, every app when `-grants` is left out — needs the address they sign in with and the vacant human seat they will hold, and the command refuses either missing before it reads any config. `-login` may be left out: the node proposes one from the address (`jane.doe@example.com` → `jane.doe`), as an invitation's screen does, and the command prints the login it took. It prints their id, login and seat and the outcome, and then their **first password link, once** — `<api.external_url>/dashboard#/reset/<id>.<secret>`, good for a week — which sets their first password once and signs nobody in: they sign in afterwards, enrolling a second factor there where the deployment requires one. Send it to them yourself; this engine sends no mail. See [A person created directly gets their first password link](../concepts/identity-and-access.md#a-person-created-directly-gets-their-first-password-link). **A service account** — `create -kind machine -login L -grants G,... [-seat SEAT] [-name N]` — needs its login, because it has no address to be found by, and `-grants`, because nobody is behind it to have meant a default (`-grants none` for the overview alone; a missing one is refused before any config is read); `-seat` is optional and binds it to act as that human seat (`-login token:<id> -seat SEAT -grants none` binds a Tier A token in one step — the row carries nothing itself, since the token's permissions are its Tier A entry's). It gets no link — it has no password — and the command prints the `iam token -person ID` that mints its token. **Every principal enrols with a login** in its kind's grammar — a person's is dotted (`jane.doe`), a machine's coloned (`ci:release`, or `token:<id>`), at most 64 characters either way — and anything else is refused |
 | `bind ID SEAT` | **Move a person to another vacant human seat**, or bind a service account to one, so they act as it on the engine's own surface — its inbox, its day, the lead relations it holds. `SEAT` is the seat's handle, and it must be a **human** seat that no person and no open invitation holds. A Tier A token acts under the login `token:<id>`, so binding one is a service account's row under that login — `create -kind machine -login token:<id> -seat SEAT -grants none` makes it bound. See [Humans in the Org Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api) |
 | `unbind ID` | Take a **service account's** seat back. A person always holds a human seat, so the node refuses to unbind one (`seat_required`) and the command names what does free it: `bind ID SEAT` moves them to another seat, `remove ID` frees it |
-| `grant ID` | Change someone's permissions: `-grants`, the whole set — `admin` (which stores every app beside it), `tracker`, `knowledge`, or `none` |
+| `grant ID` | Change someone's permissions: `-grants`, the whole set: `admin` (which stores every app beside it), `tracker`, `knowledge`, `artifacts`, or `none` |
 | `suspend ID` / `activate ID` | Stop somebody acting, or let them again. The row stays either way; a suspension also ends every session, token and password reset link they hold, which activating does not bring back |
 | `remove ID` | Tombstone them — which frees the seat they held — and erase every sealed value of theirs — name, address, second factor — from every node's rows, the invitation and trail rows that outlive them included. The identity log keeps the records that wrote those values, sealed under the keyring, until the retention trim passes them, and a backup keeps what it held until you delete it; their login is not sealed and outlives the removal in the clear. See [Removing somebody erases what is theirs from every node's rows](../concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows) |
 | `revoke ID` | End every session, token and password reset link they hold, by raising their sign-out count |
@@ -529,7 +533,7 @@ optional. `seats` lists which seats are free.
 | `-api URL` | the `api.host:port` in `-config` | The running node to talk to |
 | `-json` | off | Print the raw answer rather than a table |
 | `-reason TEXT` | the surface's own | Saved with the change for the audit trail |
-| `-grants G,...` | see below | A comma-separated list of `admin`, `tracker` and `knowledge`, or the word `none` for an empty one — anything else is refused before any config is read, naming the set. `admin` also sends every app, as the dashboard's picker stores it, so taking admin away later leaves the apps. Left out: on a person's `invite` or `create`, **every app** and not admin; on a service account's `create`, refused — it has no default; on `grant`, nothing is changed; on `token`, everything the owner holds. `none` stands alone — beside a permission it is refused, since the two say opposite things — and the flag is refused on every command but `invite`, `create`, `grant` and `token` rather than ignored |
+| `-grants G,...` | see below | A comma-separated list of `admin`, `tracker`, `knowledge` and `artifacts`, or the word `none` for an empty one — anything else is refused before any config is read, naming the set. `admin` also sends every app, as the dashboard's picker stores it, so taking admin away later leaves the apps. Left out: on a person's `invite` or `create`, **every app** and not admin; on a service account's `create`, refused — it has no default; on `grant`, nothing is changed; on `token`, everything the owner holds. `none` stands alone — beside a permission it is refused, since the two say opposite things — and the flag is refused on every command but `invite`, `create`, `grant` and `token` rather than ignored |
 | `-person ID` | yourself | Whose credentials or sessions, and — on `token` — the **service account** a minted token is for; a person's id is refused there, whoever asks |
 | `-login L` | — | On `create`, the login to enrol under — required for a service account, and proposed from the address for a person given none. On `token`, **your own** login: the command signs in as you for the one request, mints, and signs out. The password and any second-factor code are read from the terminal or piped in, and **no flag takes either**: a recovery code on a command line lands in shell history and `ps`, and stays good there — a sign-in refused for a mistyped password spends nothing |
 | `-email E` | — | On `create`, the address a person signs in with — required for a person, optional for a service account |
@@ -1061,6 +1065,7 @@ duration to state, and `crewlet retention status` names which nodes those are.
 
 ```
 crewlet objects status [-json] [<config.yaml>] [-url URL]
+crewlet objects migrate -to s3 -target <path> [-final] [-wait D] [-json] [<config.yaml>] [-url URL]
 ```
 
 Where the company's files are kept, and what the
@@ -1103,6 +1108,40 @@ coordination store did not answer, the node runs no object store, or it
 answered a state this build does not know — and zero otherwise, files that
 cannot be read included: a store that lost bytes is an answer, and the
 [`objects_missing`](alarms.md) alarm is what pages for it.
+
+### `crewlet objects migrate`
+
+Moves the company's files from the fleet's own NATS bucket to an
+S3-compatible bucket ([Moving the files to a
+bucket](../concepts/object-store.md#moving-the-files-to-a-bucket) is the whole
+procedure). It asks a **data node** to do it
+([`POST /objects/migrate`](api-endpoints.md#post-objectsmigrate)), because only
+the engine reads the objects, the records naming them and the coordination
+record the move ends with.
+
+- `-to s3` names where the files go; an S3-compatible bucket is the one other
+  store there is.
+- `-target` is an absolute path **on the engine's host** to the Tier A file
+  every node will run with once the move is made: its `store.objects` block
+  names the bucket, and its `${VAR}` references resolve from the engine's
+  environment, so the bucket's credential never crosses the API.
+- Without `-final` it runs a **copy pass** on a live fleet: every object a
+  file names that the bucket does not hold is read from the fleet's store,
+  checked against its row, and written to the bucket. Run it as often as you
+  like; it copies only what is missing.
+- `-final` runs the pass that moves the fleet. Every node must be running
+  with `crewlet run -mode maintenance`, so that no record naming a new file
+  can be written while it runs. It copies what is left, seals the NATS
+  bucket so a node not yet restarted cannot store anything there, and moves
+  the fleet's record to the bucket.
+
+It prints what the pass found: the objects the files name, how many the
+bucket already held and how many were copied, whether the bucket offers
+direct uploads, any file the fleet's own store could not give back (no copy
+can bring those back), and what to do next. `-wait` (six hours) is how long
+it waits for the answer; the node finishes the pass either way, and running
+the command again reports where the copy stands. `-json` prints the node's
+report as it answered it. The token takes `admin`.
 
 ## `crewlet fleet broker`
 
@@ -1224,6 +1263,111 @@ without it the command mints one, `<uuidv7>.pause` or `<uuidv7>.resume`. An
 `-op-id` so the retry is the same operation rather than a second one. Pass it
 exactly as printed: it carries the instant it was minted, which a node reads
 to decide whether it can still vouch for a retry.
+
+## `crewlet artifacts`
+
+```
+crewlet artifacts list [-scope mine|shared|company|agents|all] [-kind html|doc|slides|dashboard|sheet|design]
+    [-q TEXT] [-status live|trashed] [-work-item KEY] [-limit N]
+crewlet artifacts get <id>
+crewlet artifacts publish <dir|file> [-artifact ID] [-title TEXT] [-description TEXT]
+    [-icon NAME] [-kind html|doc|slides|dashboard|sheet|design] [-entry PATH] [-exclude PATTERN]...
+    [-label TEXT] [-contract VERSION] [-capabilities a,b] [-work-item KEY] [-force]
+    [-op-id ID]
+crewlet artifacts update <id> [-title TEXT] [-description TEXT] [-icon NAME] [-op-id ID]
+crewlet artifacts versions <id>
+crewlet artifacts restore <id> <version> [-label TEXT] [-op-id ID]
+crewlet artifacts label <id> <version> <label> [-op-id ID]
+crewlet artifacts share <id> <seat:HANDLE|unit:KEY|company> <role> [-op-id ID]
+crewlet artifacts unshare <id> <seat:HANDLE|unit:KEY|company> [-op-id ID]
+crewlet artifacts trash <id> [-op-id ID]
+crewlet artifacts untrash <id> [-op-id ID]
+crewlet artifacts purge <id> -confirm <id> [-op-id ID]
+crewlet artifacts assets <id>
+crewlet artifacts sources [<name>]
+crewlet artifacts usage
+    ... [<config.yaml>] [-url URL]
+```
+
+The company's artifacts from a shell, through the same routes the dashboard is
+built on ([Artifacts](api-endpoints.md#artifacts)), as whoever
+`CREWLET_API_TOKEN` resolves to. The node decides every gesture on that
+principal exactly as it decides the dashboard's: publishing, renaming and
+labelling are an editor's and ask the artifacts app, sharing and withdrawing a
+share are the owner's, a move to the trash and back is the owner's and a
+person's, and a purge is an administrator's with a fresh proof of identity
+and a person present, which a machine token never is.
+
+**`publish` moves only the bytes the artifact does not hold.** It declares
+every file first (its path, its SHA-256 and its size; a directory is walked,
+any name starting with a dot is left out with everything beneath it, and a
+symbolic link inside it is never followed), and
+the node answers which files the artifact already holds, which are carried by
+their digest and move no byte, and how each of the rest is sent: straight to
+the bucket on a presigned put where the object store offers one, through the
+node otherwise. Then the version is published.
+
+`-exclude PATTERN` leaves files out of a directory, once per pattern
+(`-exclude '*.map' -exclude drafts`). A pattern with no slash matches a file's
+or a folder's name at any depth; one with a slash matches its path from the
+directory published (`notes/*.md`, where `*` stops at a slash). A folder a
+pattern matches is left out with everything beneath it, and a leading `./` or
+a trailing `/` is ignored. The grammar is Go's `path.Match`: `*` and `?`
+within one name, `[...]` for a class, `\` to escape. A malformed pattern, one
+reaching outside the directory, or `-exclude` beside a single file is refused
+before anything is sent. Quote a pattern so the shell does not expand it.
+
+A new artifact opens on the one default entry it holds, `index.html`,
+`index.md`, `doc.json`, `deck.json`, `dashboard.json` or `canvas.json`, else the only file, unless `-entry`
+names another; a directory holding two default entries is refused until
+`-entry` or `-kind` settles which it is. Its kind is the one whose entry that
+file is: `html` for a page, `doc` for a `.md` file or a tabbed doc's
+`doc.json`, `slides` for `deck.json`, `dashboard` for `dashboard.json`,
+`design` for `canvas.json` (an index is told by its path, never by JSON
+alone), and `-kind` names it outright. Its title defaults to the entry's
+name, and `-description` and `-icon` set the gallery card's subtitle and the
+tab's icon word. Those four describe a new artifact only: naming `-title`,
+`-description`, `-icon` or `-kind` beside `-artifact` is refused before any
+byte moves, since a version keeps the artifact's kind and `update` is what
+changes the rest. A new version of `-artifact` names the head it read as its
+base, so a version somebody else published meanwhile is refused rather than
+overwritten; `-force` publishes over it, a person's gesture. A new version
+keeps the head's runtime contract and capabilities unless `-contract` or
+`-capabilities` names others: `-capabilities db,state` declares exactly that
+set, `-capabilities none` declares none, and a name this build does not serve
+is refused before any byte moves. The result line counts the files two ways:
+how many this command sent, and how many of the version's files are new and how
+many the artifact already held, as the node counted the manifest that landed.
+The two differ for an unchanged page: a page is stored in its linted form, so
+its own digest never matches what the artifact holds and it is sent, and the
+node then finds the linted page already held and carries it. The publish
+policy's warnings are printed beneath the result.
+
+**`get` and `versions` show each version's runtime contract and
+capabilities**: `get` the head version's on its `contract` and `can` lines,
+`versions` one `contract` and `can` per version. Either reads `none` where
+there is none (a Markdown document or a sheet pins no contract; a version
+publishing `-capabilities none` declares none), so a version whose
+capabilities were stripped shows as such.
+
+**`update` changes the title, the description or the icon** (`PATCH
+/artifacts/{id}`, an editor's) and sends exactly the flags it names: an
+empty value clears the description or the icon, a field it does not name is
+left as it is, and a call that names none is refused before anything is sent.
+
+Every write sends an operation id as the request's `Idempotency-Key`: `-op-id`
+takes one in the engine's operation-id grammar, and without it the command
+mints one. An `unknown` outcome, or no answer at all, prints it; send it again
+with `-op-id` so the retry is the same operation rather than a second one. A
+publish keys its upload intent with the id and its version with a step of it,
+so a retried publish reuses the upload and lands one version.
+
+**`sources` lists the dashboard source catalogue** the node answers: each
+engine source a `dashboard`'s datasets may read, what it reads, who may read
+it, its parameters (with their choices and defaults), its columns and the push
+it refreshes on, or one source whole when named. A source is answered as each
+board's viewer, so the list holds no row; see the
+[Dashboard Spec](dashboard-spec.md#the-engine-source-catalogue).
 
 ## `crewlet retention`
 

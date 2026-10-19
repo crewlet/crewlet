@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/artifactdataapi"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/api/configapi"
@@ -52,6 +53,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/version"
+	"github.com/crewlet/crewlet/static"
 
 	"gopkg.in/yaml.v3"
 )
@@ -206,6 +208,8 @@ func runIn(environ config.Source, args []string, stdout, stderr io.Writer) error
 		return runFleet(environ, rest, stdout, stderr)
 	case "seats":
 		return runSeats(environ, rest, stdout, stderr)
+	case "artifacts":
+		return runArtifacts(environ, rest, stdout, stderr)
 	case "llm":
 		return runLLM(environ, rest, stdout, stderr)
 	case "search":
@@ -238,11 +242,15 @@ Usage:
                               produced and which nothing undoes
   crewlet objects status      Where the company's files are kept, and what the
                               object store's collector last found missing
+  crewlet objects migrate     Move the company's files to an S3 bucket: copy on a
+                              live fleet, then -final in maintenance mode
   crewlet fleet broker <cmd>  The fleet broker's members, as the nodes advertise them
                               and as its metadata group counts them: list, and
                               remove a member that is gone for good
   crewlet seats <cmd>         Pause a seat (-stop also ends the turn it is on)
                               or resume it: its holder, its lead, or an admin
+  crewlet artifacts <cmd>     List, publish, version, share, trash and purge the
+                              company's artifacts, as the token's principal
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet iam <cmd>           People, seats, invitations, permissions,
@@ -275,10 +283,10 @@ Config:
 Environment:
   %s
             The token for commands that talk to a running node (budgets,
-            backup, retention, work, seats, secrets, config, iam): one of
-            the node's api.auth.tokens values, or an access token from
-            "crewlet iam token". It's never a flag (flags end up in shell
-            history) and never read from the config file.
+            backup, retention, work, seats, artifacts, secrets, config,
+            iam): one of the node's api.auth.tokens values, or an access
+            token from "crewlet iam token". It's never a flag (flags end up
+            in shell history) and never read from the config file.
 `, version.String(), defaultBootstrapPath, defaultCompanyPath, apiTokenEnv)
 }
 
@@ -669,7 +677,7 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 		// [config.Bootstrap.Warnings] answers nil when a document has
 		// none, and assigning that would put `null` where the payload
 		// promises an array.
-		res.Warnings = append(res.Warnings, boot.Warnings()...)
+		res.Warnings = append(res.Warnings, engine.BootstrapWarnings(boot)...)
 		res.Summary = map[string]any{
 			"stream": boot.Stream.Type, "coordination": boot.Coordination.Type,
 			"store": boot.Store.Path, "roles": boot.Node.Roles,
@@ -771,7 +779,7 @@ func validateBoth(cfg configFlags, asJSON bool, stdout io.Writer) error {
 	// Inserted rather than appended onto Tier A's own list, which is nil
 	// for a document with no warnings at all: the payload promises both
 	// lists are arrays, and `append(nil)` of nothing stays nil.
-	res.Warnings = slices.Insert(res.Warnings, 0, boot.Warnings()...)
+	res.Warnings = slices.Insert(res.Warnings, 0, engine.BootstrapWarnings(boot)...)
 	res.Summary = map[string]any{
 		"company": company.Name, "seats": len(company.epoch.Seats()),
 		"llm_providers": len(company.epoch.Models.Keys()),
@@ -1529,6 +1537,12 @@ type httpSurface struct {
 	public    *apiListener
 	projector *observe.Projector
 
+	// artifacts is the artifact origin's listener (api.artifacts), nil on a
+	// node that sets no port for it, and stopArtifacts ends its handler's
+	// subscription to this node's artifacts movements.
+	artifacts     *apiListener
+	stopArtifacts func()
+
 	// auth is the sign-in surface, held here for the work it runs after
 	// its answers — a stale password's rewrite — which is its own to stop
 	// and must stop before the engine its writes go to does.
@@ -1574,6 +1588,14 @@ func (l *apiListener) serve(h http.Handler) { l.handler.store(h) }
 // that is doing exactly what it should. Each gets its own grace, so a bridge
 // session holding the public listener open never cuts a dashboard request.
 func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
+	// THE ARTIFACT ORIGIN FIRST: it serves no probe, and an artifact frame
+	// is the request most able to wait for a node that is going away.
+	if s.artifacts != nil {
+		shutdownListener(ctx, s.artifacts, "artifacts", log)
+	}
+	if s.stopArtifacts != nil {
+		s.stopArtifacts()
+	}
 	if s.public != nil {
 		shutdownListener(ctx, s.public, "public", log)
 	}
@@ -1690,6 +1712,40 @@ func companyConfig(e *engine.Engine) (*config.Company, *org.Organization) {
 		return company.Config, company.Org
 	}
 	return nil, nil
+}
+
+// artifactDataSurfaces builds the datastore's HTTP surface, its read
+// questions' source and the socket's artifact rooms over the engine's estate
+// router, or none of them on an engine built with no router (which serves no
+// estate to route).
+//
+// THE ARTIFACTS' OWN GATE ([artifactsGate]), so a datastore route, a datastore
+// question, an artifacts route, an artifacts question and a room's join decide
+// who may touch one artifact by one admission.
+func artifactDataSurfaces(e *engine.Engine, boot *config.Bootstrap) (
+	*artifactdataapi.Service, *queries.ArtifactDataSource, *api.Rooms, error) {
+
+	data, routed := engine.ArtifactDataEstate(e)
+	heads, headsRouted := engine.ArtifactsEstate(e)
+	if !routed || !headsRouted {
+		return nil, nil, nil, nil
+	}
+	gate := artifactsGate(e, boot, heads)
+	surface, err := artifactdataapi.New(artifactdataapi.Options{Gate: gate, Data: data, Versions: heads})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	var rooms *api.Rooms
+	// THE ROOMS NEED THE PRESENCE HUB, which every node with a broker
+	// runs: a node with none serves no room rather than rooms that never
+	// say who is there.
+	if hub := e.Presence(); hub != nil {
+		rooms = &api.Rooms{Gate: gate, Stores: data, Presence: hub, Feed: e}
+		if m := e.Recorder(); m != nil {
+			rooms.Metrics = m
+		}
+	}
+	return surface, &queries.ArtifactDataSource{Gate: gate, Reads: data}, rooms, nil
 }
 
 // companySecrets reads the verification material out of the engine's CURRENT
@@ -1979,6 +2035,21 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, err
 	}
 	workSource, pageSource, backlinkSource, searchSource, fileSource := api.NativeSources(e)
+	// THE ARTIFACTS: their routes and their read questions, each deciding
+	// through the one admission they share, over the estate router so a
+	// node whose own copy is out of service answers through a peer's.
+	artifactsSurface, artifactsSource, err := artifactsSurfaces(e, boot)
+	if err != nil {
+		return nil, err
+	}
+	// AN ARTIFACT'S DATASTORE: its write routes and its read questions,
+	// each deciding through the one admission they share, over the estate
+	// router's datastore and artifacts so a node whose own copy is out of
+	// service answers through a peer's.
+	artifactDataSurface, artifactDataSource, artifactRooms, err := artifactDataSurfaces(e, boot)
+	if err != nil {
+		return nil, err
+	}
 	// The contextcheck exemption is for the two PUSH TICKS this constructor
 	// registers — the roster re-send and the health frame. Both manufacture
 	// a bounded context of their own instead of inheriting one, which is
@@ -2203,6 +2274,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Backups:     e.Backends().Fleet,
 			BackupFloor: boot.Stream.TrackerRetention.Floor(),
 			NodeID:      nodeID,
+			// THE ARTIFACTS, decided per artifact and shaped by the
+			// reader's role; nil on an engine with no router.
+			Artifacts: artifactsSource,
+			// AN ARTIFACT'S DATA, decided per artifact and shaped by each
+			// collection's read rule; nil on an engine with no router.
+			ArtifactData: artifactDataSource,
 		},
 		// The fleet's record of what the log may delete, for the one
 		// retention gesture the engine cannot make on its own: an
@@ -2228,6 +2305,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// store is locked to this process and the broker binds no
 		// socket. See internal/backup.
 		Backup: backups,
+		// The move of the company's files to an S3 bucket, which only
+		// the engine can make: it reads the objects and the estate that
+		// names them, and ends with the fleet's coordination record.
+		Objects: e,
 		// THE RUNTIME AUDIT goes onto this node's own queue, whose
 		// publish listener writes the event store here — the same
 		// publisher the operator surface audits through.
@@ -2291,6 +2372,28 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// than mounting its routes over a nil service. See
 	// [api.HumanSurfaces.Mount].
 	humans.Mount(&opts)
+	// THE ARTIFACTS' ROUTES, each stating its authority where it is
+	// mounted. Set only where it was built, so an absent surface is a nil
+	// interface rather than a nil service mounted.
+	if artifactsSurface != nil {
+		opts.Artifacts = artifactsSurface
+	}
+	// THE ARTIFACT DATASTORE'S WRITES, its undo, its schema, the per-viewer
+	// state and the CSV export, each deciding on the artifact's own shares
+	// where it is mounted. Set only where it was built, so an absent
+	// surface is a nil interface rather than a nil service mounted.
+	if artifactDataSurface != nil {
+		opts.ArtifactData = artifactDataSurface
+	}
+	// AND A DASHBOARD'S DATASETS, read from the artifacts surface's boards
+	// and the datastore, each answered as its viewer (adr/0043). Set only
+	// where both were built.
+	if artifactsSurface != nil && artifactDataSource != nil {
+		opts.Datasets = &api.DatasetsSource{Boards: artifactsSurface, Data: artifactDataSource.Reads}
+	}
+	// AND THE SOCKET'S ARTIFACT ROOMS, decided by that same admission and
+	// fed by this engine's appliers and presence hub.
+	opts.Rooms = artifactRooms
 	app, err := api.New(opts) //nolint:contextcheck // see the paragraph above the options
 	if err != nil {
 		return nil, err
@@ -2390,6 +2493,16 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, fmt.Errorf("api: this node serves a public listener: %t, and bound one: %t",
 			app.Public() != nil, listeners.public != nil)
 	}
+	// AND THE ARTIFACT ORIGIN, BUILT BEFORE THE HANDOVER, by the rule its
+	// listener was bound by ([api.ArtifactsListener]): an origin this node
+	// cannot build fails the boot with every socket still the caller's to
+	// close, rather than serving a dashboard whose every artifact frame meets
+	// a listener answering `starting` for ever.
+	origin, err := artifactOrigin(boot, e, app, nodeID, listeners)
+	if err != nil {
+		surface.stop(context.WithoutCancel(ctx), log)
+		return nil, err
+	}
 	// THE HANDOVER, api.port FIRST and then the public listener: the probes
 	// are on api.port, so the node's own answers reach an orchestrator before
 	// they reach a vendor.
@@ -2400,6 +2513,19 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		listeners.public.serve(app.Public())
 		surface.public = listeners.public
 		publicAddr = listeners.public.socket.Addr().String()
+	}
+	// AND THE ARTIFACT ORIGIN, the third listener, last: it serves no
+	// probe and no route an outside party calls.
+	if origin != nil {
+		listeners.artifacts.serve(origin.handler)
+		surface.artifacts, surface.stopArtifacts = listeners.artifacts, origin.stop
+		log.InfoContext(ctx, "api_artifacts_listening",
+			"addr", listeners.artifacts.socket.Addr().String(),
+			"external_url", boot.API.Artifacts.ExternalBase(),
+			// WHAT ISOLATES ONE ARTIFACT FROM ANOTHER on this deployment:
+			// a real origin of its own, or an opaque one. Same-site
+			// templates are served opaque, and `crewlet validate` says why.
+			"mode", string(boot.ArtifactOriginMode()))
 	}
 
 	// KEPT AT THE HANDOVER, though the sockets were bound long before (see
@@ -2443,6 +2569,46 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	return surface, nil
 }
 
+// builtOrigin is the artifact origin [artifactOrigin] built: the handler the
+// api.artifacts listener serves, and the function that stops it hearing this
+// node's artifacts movements.
+type builtOrigin struct {
+	handler http.Handler
+	stop    func()
+}
+
+// artifactOrigin builds the artifact origin for the api.artifacts listener
+// [bindListeners] bound, or answers nil on a node that binds none: the handler
+// internal/artifactserve builds over this engine, whose ticket principals are
+// re-composed through the API's own guard, so a frame's credential is decided
+// by exactly the arms a request through it is.
+//
+// THE LISTENER WAS BOUND BY THE SAME RULE ([api.ArtifactsListener]), and a
+// disagreement is a node that would serve the origin on no socket, or leave
+// one bound that answers `starting` for ever. Refused rather than papered
+// over, as the public listener's is.
+func artifactOrigin(boot *config.Bootstrap, e *engine.Engine, app *api.App, nodeID string,
+	listeners *nodeListeners,
+) (*builtOrigin, error) {
+	serves := api.ArtifactsListener(boot, nodeID)
+	if serves != (listeners.artifacts != nil) {
+		return nil, fmt.Errorf("api: this node serves an artifact origin: %t, and bound "+
+			"a listener for one: %t", serves, listeners.artifacts != nil)
+	}
+	if !serves {
+		return nil, nil
+	}
+	creds, err := auth.NewLineages(app.Guard(), e)
+	if err != nil {
+		return nil, fmt.Errorf("api: the artifact origin: %w", err)
+	}
+	handler, stop, err := engine.ArtifactOrigin(e, boot, creds, static.FS())
+	if err != nil {
+		return nil, fmt.Errorf("api: the artifact origin: %w", err)
+	}
+	return &builtOrigin{handler: handler, stop: stop}, nil
+}
+
 // serveProbes is serveAPI for a node whose roles leave out ingress: it hands
 // api.port the node's probes, and its tool bridge where it has one — api.public
 // instead when the file sets it — and serves nothing else.
@@ -2472,6 +2638,15 @@ func serveProbes(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	handler, err := api.Probes(opts)
 	if err != nil {
 		return nil, err
+	}
+	if boot.API.Artifacts.Enabled() {
+		// THE ARTIFACT ORIGIN IS INGRESS'S, like the dashboard whose frames
+		// it serves ([api.ArtifactsListener]): said here, at info, so a port
+		// set in a file shared across roles is not read as a listener this
+		// node failed to open.
+		log.InfoContext(ctx, "api_artifacts_not_bound", "addr", boot.API.Artifacts.Addr(),
+			"hint", "node.roles does not include ingress, so this node serves no "+
+				"artifacts; api.artifacts is bound by the ingress nodes")
 	}
 	// THE BRIDGE GOES WHERE ITS LISTENER WAS BOUND, by the one predicate both
 	// read ([api.PublicListener]); see serveAPI for why a disagreement is
@@ -3046,7 +3221,7 @@ func validateFolded(boot *config.Bootstrap, fs *flag.FlagSet) error {
 // second, because a field cut from it would name a problem without its fix.
 // No `kind`: every Tier A warning is an advisory.
 func logBootstrapAdvisories(log *slog.Logger, boot *config.Bootstrap) {
-	for _, w := range boot.Warnings() {
+	for _, w := range engine.BootstrapWarnings(boot) {
 		log.Warn("config_advisory", "config", "bootstrap", "path", w.Path, "detail", w.Message)
 	}
 }

@@ -4,13 +4,14 @@ import "context"
 
 // Chart is the company hierarchy, as much of it as the rules ask about.
 //
-// CONSUMER-DEFINED AND FIVE METHODS. It is declared here because this is the
+// CONSUMER-DEFINED AND SIX METHODS. It is declared here because this is the
 // package that calls it, and it is small because a seam is what a caller
 // needs rather than what a provider has: internal/org can answer a dozen
-// questions about a chart and these are the five any authority rule turns
-// on — who leads a person, a project, a unit and a page container, and
-// whether somebody leads ANYBODY, which is the question asked about a record
-// before anybody knows whose it is ([Object.Unresolved]). A relation arrives
+// questions about a chart and these are the six any authority rule turns
+// on: who leads a person, a project, a unit and a page container, whether
+// somebody leads ANYBODY, which is the question asked about a record before
+// anybody knows whose it is ([Object.Unresolved]), and who SITS in a unit,
+// which is what a share with a team admits ([ClassShared]). A relation arrives
 // with its first call site — a seam method nothing calls is a declaration
 // connected to nothing.
 //
@@ -78,6 +79,21 @@ type Chart interface {
 	// cannot say, is never an answer that differs by login for somebody
 	// the answer could not admit. See [Object.Unresolved].
 	LeadsAnyone(ctx context.Context, actor string) (bool, error)
+
+	// MemberOf reports whether actor's seat SITS in the unit key names or
+	// in any unit below it: who a share with that team admits.
+	//
+	// MEMBERSHIP, NOT LEADERSHIP, and not [Chart.LeadsUnit] either: a unit's lead
+	// seated in the unit above it leads the team and is not in it, so a
+	// share with the team does not reach them through this, while every
+	// seat placed in the team or in a team beneath it is reached, live, as
+	// the chart moves. It cannot be read off `iam.Principal.Position`: a
+	// seat principal carries only its own unit, and "anywhere below" needs
+	// the tree.
+	//
+	// A KEY NAMING NO UNIT, or an actor the tree does not seat, answers
+	// false: the tree was read and holds no such membership.
+	MemberOf(ctx context.Context, actor, unitKey string) (bool, error)
 }
 
 // NoChart is a chart that can answer nothing, and says so.
@@ -111,5 +127,10 @@ func (NoChart) LeadsContainer(context.Context, string, string) (bool, error) {
 
 // LeadsAnyone reports that this surface holds no chart.
 func (NoChart) LeadsAnyone(context.Context, string) (bool, error) {
+	return false, ErrNoChart
+}
+
+// MemberOf reports that this surface holds no chart.
+func (NoChart) MemberOf(context.Context, string, string) (bool, error) {
 	return false, ErrNoChart
 }

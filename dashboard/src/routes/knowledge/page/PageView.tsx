@@ -16,9 +16,10 @@
  * The eye ([WatchControl]), History, Edit and More. More holds the star,
  * which is why this page tells the frame to draw none of its own
  * ([useOwnStar]): one control per action on screen. History swaps the outline
- * for the revisions and the comments for the page's changes; Edit writes
- * through `save_page` as the person signed in, against the revision they
- * opened (`Editor.tsx`). For a reader who cannot write, every
+ * for the revisions and the comments for the page's changes; Edit turns the
+ * page itself into the editor, the bar into the editing state with Cancel and
+ * Save, and writes through `save_page` as the person signed in, against the
+ * revision they opened (`Editor.tsx`). For a reader who cannot write, every
  * control stays drawn and says why.
  *
  * # What a wiki cannot tell you, and this can
@@ -30,7 +31,7 @@
  * `skill_loaded_by`, `linked_from`); nothing here is counted in the browser.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   Button,
   DescriptionList,
@@ -38,10 +39,8 @@ import {
   DocumentTitle,
   EmptyState,
   Menu,
-  Outline,
   Skeleton,
-  scrollToHeading,
-  useActiveHeading,
+  preloadRichEditor,
   useToast,
 } from "@crewlethq/ui";
 import {
@@ -60,10 +59,10 @@ import type { PageMenuEntry } from "~/app/header/PageHeader.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
-import { outline, renderMarkdown } from "~/lib/markdown.ts";
+import { renderMarkdown } from "~/lib/markdown.ts";
+import { OnThisPage } from "~/components/OnThisPage.tsx";
 import { copyPageLink } from "~/lib/pageLink.ts";
 import { loadedBy } from "~/lib/pageReads.ts";
-import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
 import { MaxStars, starredIn, useStarred, useToggleStar } from "~/lib/starred.ts";
 import { useReader } from "~/lib/reader.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -79,7 +78,7 @@ import {
   type Who,
 } from "../parts.tsx";
 import { withoutRepeatedTitle } from "./body.ts";
-import { PageComments } from "./Comments.tsx";
+import { PageCommentThread } from "./CommentThread.tsx";
 import { Connections, Revisions } from "./Connections.tsx";
 import { PageEditor } from "./Editor.tsx";
 import { PageChanges, VersionView } from "./History.tsx";
@@ -88,12 +87,6 @@ import { WatchControl } from "./Watch.tsx";
 /** How often a page reads itself again, and how often who read it. */
 const PAGE_POLL_MS = 20_000;
 const READS_POLL_MS = 60_000;
-
-/**
- * Where a heading counts as the one being read: a fifth of the way down the
- * scroller, so the section filling the screen is the one marked.
- */
-const READING_LINE = 0.2;
 
 /** What kind of page this is, when it is not plain prose, as one line. */
 function kindOf(detail: PageDetail, who: Who): string {
@@ -212,34 +205,6 @@ function PageBody({ detail, body }: { detail: PageDetail; body: string }) {
         </ul>
       )}
     </div>
-  );
-}
-
-/** "On this page", following the scroll. */
-function OnThisPage({ body }: { body: string }) {
-  const headings = useMemo(() => {
-    const all = outline(body);
-    if (all.length === 0) return [];
-    // THE TWO TOP LEVELS THE DOCUMENT USES, its sections and their parts: a
-    // third would make the outline the document.
-    const top = Math.min(...all.map((h) => h.level));
-    return all.filter((h) => h.level <= top + 1);
-  }, [body]);
-  const [root, setRoot] = useState<HTMLElement | null>(null);
-  useEffect(() => setRoot(document.getElementById(SCREEN_SCROLL_ID)), []);
-  const ids = useMemo(() => headings.map((h) => h.id), [headings]);
-  const active = useActiveHeading(ids, {
-    root,
-    offset: Math.round((root?.clientHeight ?? 0) * READING_LINE),
-  });
-  if (headings.length < 2) return null;
-  return (
-    <Outline
-      label="On this page"
-      items={headings.map((h) => ({ id: h.id, label: h.text, level: h.level }))}
-      activeId={active}
-      onSelect={(id) => scrollToHeading(id)}
-    />
   );
 }
 
@@ -376,51 +341,59 @@ export function PageView({ id }: { id: string }) {
 
   return (
     <>
-      <KnowledgeBar>
-        {page && (
-          <>
-            <WatchControl page={page} />
-            {/* ON A PHONE HISTORY AND MORE FOLD into the frame's menu, which
+      {/* WHILE EDITING, THE BAR IS THE EDITOR'S: its state, Cancel and Save
+          (`Editor.tsx`), drawn into the same slot. */}
+      {!editing && (
+        <KnowledgeBar>
+          {page && (
+            <>
+              <WatchControl page={page} />
+              {/* ON A PHONE HISTORY AND MORE FOLD into the frame's menu, which
                 holds the same entries (`usePageMenu`), and Edit stays. */}
-            <span className="page-action-folds">
+              <span className="page-action-folds">
+                <Button
+                  size="small"
+                  variant="ghost"
+                  leadingIcon={<ClockGlyph size="sm" />}
+                  disabledReason={
+                    history.length === 0 ? "Nobody has saved over it yet." : undefined
+                  }
+                  aria-pressed={reading}
+                  onClick={toggleHistory}
+                >
+                  History
+                </Button>
+              </span>
               <Button
                 size="small"
-                variant="ghost"
-                leadingIcon={<ClockGlyph size="sm" />}
-                disabledReason={history.length === 0 ? "Nobody has saved over it yet." : undefined}
-                aria-pressed={reading}
-                onClick={toggleHistory}
+                variant="secondary"
+                leadingIcon={<PencilGlyph size="sm" />}
+                disabledReason={
+                  canEdit.can ? (editing ? "You are editing it." : undefined) : canEdit.reason
+                }
+                title={canEdit.can ? undefined : canEdit.reason}
+                onPointerEnter={preloadRichEditor}
+                onFocus={preloadRichEditor}
+                onClick={() => {
+                  setVersion("");
+                  setEdit("1");
+                }}
               >
-                History
+                Edit
               </Button>
-            </span>
-            <Button
-              size="small"
-              variant="secondary"
-              leadingIcon={<PencilGlyph size="sm" />}
-              disabledReason={
-                canEdit.can ? (editing ? "You are editing it." : undefined) : canEdit.reason
-              }
-              title={canEdit.can ? undefined : canEdit.reason}
-              onClick={() => {
-                setVersion("");
-                setEdit("1");
-              }}
-            >
-              Edit
-            </Button>
-            <span className="page-action-folds">
-              <Menu
-                label={`More for “${page.title}”`}
-                icon={<EllipsisGlyph size="sm" />}
-                triggerVariant="ghost"
-                align="end"
-                items={menu}
-              />
-            </span>
-          </>
-        )}
-      </KnowledgeBar>
+              <span className="page-action-folds">
+                <Menu
+                  label={`More for “${page.title}”`}
+                  icon={<EllipsisGlyph size="sm" />}
+                  triggerVariant="ghost"
+                  align="end"
+                  items={menu}
+                />
+              </span>
+            </>
+          )}
+        </KnowledgeBar>
+      )}
 
       {loading && !data && <Skeleton variant="text" rows={10} label="Loading the page" />}
       <QueryState error={error} refusal={refusal} loading={loading}>
@@ -443,7 +416,12 @@ export function PageView({ id }: { id: string }) {
               <DocumentTitle>{page.title}</DocumentTitle>
               <PageProps detail={data} spaceName={spaceName} who={who} now={now} />
               {editing ? (
-                <PageEditor key={page.id} detail={data} onDone={() => setEdit("")} />
+                <PageEditor
+                  key={page.id}
+                  detail={data}
+                  reading={<PageBody detail={data} body={body} />}
+                  onDone={() => setEdit("")}
+                />
               ) : reading ? (
                 <VersionView
                   pageID={page.id}
@@ -459,15 +437,14 @@ export function PageView({ id }: { id: string }) {
               {edit === "1" && !canEdit.can && (
                 <p className="knowledge-note">You cannot edit it here: {canEdit.reason}</p>
               )}
-              {reading ? (
+              {editing ? null : reading ? (
                 <PageChanges pageID={page.id} who={who} now={now} />
               ) : (
                 <>
-                  <PageComments
+                  <PageCommentThread
                     pageID={page.id}
                     title={page.title}
                     comments={data.comments ?? []}
-                    who={who}
                     now={now}
                   />
                   <Connections

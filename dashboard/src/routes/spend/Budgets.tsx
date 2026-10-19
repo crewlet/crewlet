@@ -46,10 +46,10 @@
  */
 
 import { useMemo } from "react";
-import { Callout, Card, EmptyValue, Meter, Skeleton } from "@crewlethq/ui";
+import { Callout, Card, EmptyValue, Meter, Skeleton, TableEntityCell } from "@crewlethq/ui";
 import { BuildingComplexGlyph, DatabaseGlyph, UsersGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { SeatLabel } from "~/app/frame/cells.tsx";
+import { plainSeat } from "~/app/frame/cells.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -351,7 +351,7 @@ export function Budgets() {
                   key: "seat",
                   header: "Seat",
                   sortValue: (s) => s.role,
-                  cell: (s) => <SeatLabel {...seatBadge(s.role)} />,
+                  cell: (s) => <TableEntityCell {...plainSeat({ ...seatBadge(s.role) })} />,
                 },
                 // ONE COLUMN PER WINDOW, spelled out: each heading is a word
                 // the phone's card layout reads beside its value.

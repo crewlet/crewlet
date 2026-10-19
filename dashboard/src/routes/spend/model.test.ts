@@ -217,11 +217,11 @@ describe("the export", () => {
     );
     const lines = csv.split("\r\n");
     expect(lines[0]).toBe(
-      '"window","section","name","tokens","input_tokens","output_tokens","cache_read_tokens","calls","turns"',
+      "window,section,name,tokens,input_tokens,output_tokens,cache_read_tokens,calls,turns",
     );
-    expect(lines).toContain('"2026-09-23..2026-09-29","phase","execute",90,90,0,0,1,""');
+    expect(lines).toContain("2026-09-23..2026-09-29,phase,execute,90,90,0,0,1,");
     // A seat's handle a person typed is text in a spreadsheet, never a formula.
-    expect(lines).toContain(`"2026-09-23..2026-09-29","agent","'=cmd",90,90,0,0,1,3`);
+    expect(lines).toContain("2026-09-23..2026-09-29,agent,'=cmd,90,90,0,0,1,3");
     expect(csv).not.toMatch(/cost|usd|price/i);
   });
 });

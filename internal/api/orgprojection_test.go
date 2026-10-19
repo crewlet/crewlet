@@ -67,6 +67,7 @@ var companyFields = map[string]classified{
 	"Integrations":   {exposure: exposureGuarded, why: "vendor identities, bot tokens and signing secrets"},
 	"Tracker":        {exposure: exposureGuarded, why: "which tracker backend and project keys: a map of what is wired to what"},
 	"Knowledge":      {exposure: exposureGuarded, why: "which knowledge backend and container keys"},
+	"Artifacts":      {exposure: exposureGuarded, why: "the company's artifact policy: what agents may manage and who sees who opened one"},
 	"SkillVariables": {exposure: exposureGuarded, why: "facts substituted into tool-skill text, routinely hostnames and account names"},
 	"Providers": {exposure: exposureResolved, into: "llm",
 		why: "only the KEYS reach an admin, as each seat's resolved chain; every entry's model, endpoint and credentials stay guarded"},

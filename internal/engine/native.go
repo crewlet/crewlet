@@ -482,7 +482,9 @@ func (e *Engine) startNativeCollector(ctx context.Context) {
 	if n == nil {
 		return
 	}
-	estates := n.objectEstates()
+	// THE NATIVE HALF'S AND THE CORE'S: the artifacts log runs on every data
+	// node, and its versions and assets name objects the same store keeps.
+	estates := objectEstatesFor(n, e.ArtifactsReader())
 	if len(estates) == 0 {
 		return
 	}
@@ -495,12 +497,13 @@ func (e *Engine) startNativeCollector(ctx context.Context) {
 	}
 }
 
-// startNativeDuties arms the native half's fleet-singleton duty: the vector
+// startNativeDuties arms the native half's fleet-singleton duties: the vector
 // domain's one writer, which turns the tracker's and the knowledge base's
-// sources into vector records. ONE CALL FOR BOTH CALLERS — [New] and
-// [Engine.startNativeFor] — so halves met at an apply cannot be missing a duty
-// a boot would have armed. The trim and the identity estate's duties are the
-// core's, armed at boot by [Engine.startCoreDuties].
+// sources into vector records, and the trash reaper, which purges what has
+// been in a trash past its term ([Engine.startTrashReaper]). ONE CALL FOR BOTH
+// CALLERS, [New] and [Engine.startNativeFor], so halves met at an apply cannot
+// be missing a duty a boot would have armed. The trim and the identity
+// estate's duties are the core's, armed at boot by [Engine.startCoreDuties].
 func (e *Engine) startNativeDuties(ctx context.Context) {
 	c := e.core.Load()
 	if e.native.Load() == nil || c == nil {
@@ -510,6 +513,7 @@ func (e *Engine) startNativeDuties(ctx context.Context) {
 	// correct over an empty corpus — which reports as a healthy domain
 	// rather than as a missing one.
 	e.startEmbedding(ctx, c.log)
+	e.startTrashReaper(ctx)
 }
 
 // stopNative ends this node's native halves. Nil-safe, which is the node that

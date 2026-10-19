@@ -4,10 +4,12 @@
  */
 
 /**
- * Every `kind` a frame from `/ws/stream` carries — the pushes, the one push
- * addressed to a SEAT rather than to every tab (`inbox_changed`, sent only to
- * a socket whose `watch` of that seat was allowed), the two answers to a
- * query, and the pong.
+ * Every `kind` a frame from `/ws/stream` carries: the pushes, the pushes
+ * addressed to a ROOM rather than to every tab (`inbox_changed`, sent only to
+ * a socket whose `watch` of that seat was allowed, and `artifact_changed`,
+ * `artifact_data` and `artifact_presence`, sent only to the sockets whose
+ * `artifact_join` of that artifact was allowed), the two answers to a query,
+ * and the pong.
  *
  * EXACTLY THE ENGINE'S `stream.Kind` CONSTANTS, held both ways by
  * `internal/api/stream`'s push-kind gate. A kind the engine sends that this
@@ -29,6 +31,9 @@ export type PushKind =
   | "tools"
   | "health"
   | "inbox_changed"
+  | "artifact_changed"
+  | "artifact_data"
+  | "artifact_presence"
   | "result"
   | "error"
   | "pong";
@@ -105,6 +110,18 @@ export const COLLEAGUE_QUERY_MAX = 200;
  * a company with nothing written down.
  */
 export const SEARCH_QUERY_MAX = 400;
+
+/**
+ * How many artifact rooms one socket is in at once.
+ *
+ * EXACTLY THE ENGINE'S OWN (`stream.MaxRoomsPerSocket`), held there by
+ * `internal/api/stream`'s room gate: the engine refuses a ninth join as
+ * `bad_params`, so the socket tells a listener that would be past it at once
+ * rather than after a round trip. A tab is looking at one artifact, and at
+ * most a handful of its panels are open beside it, so a screen never reaches
+ * it.
+ */
+export const MAX_ARTIFACT_ROOMS = 8;
 
 /**
  * What a seat is doing: the ONE seat-state vocabulary, served on every

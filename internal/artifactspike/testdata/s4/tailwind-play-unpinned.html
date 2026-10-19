@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Product launch</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+:root { --bg: #ffffff; --fg: #1d1d1f; --muted: #6b6b70; --accent: #3b5bdb; --card: #f5f5f7; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111114; --fg: #f2f2f5; --muted: #a0a0a8; --accent: #7b93ff; --card: #1c1c21; }
+}
+body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+main { max-width: 960px; margin: 0 auto; padding: 16px; }
+.card { background: var(--card); border-radius: 12px; padding: 16px; margin: 12px 0; }
+button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--muted); background: var(--card); color: var(--fg); cursor: pointer; }
+
+</style>
+</head>
+<body>
+<main>
+<section class="py-16 text-center">
+  <h1 class="text-4xl font-bold">Ship your roadmap faster</h1>
+  <p class="mt-4 text-lg text-gray-500">Plan, track and launch with one shared board.</p>
+  <a href="#pricing" class="mt-8 inline-block rounded-lg bg-indigo-600 px-6 py-3 text-white">See pricing</a>
+</section>
+<section id="pricing" class="grid gap-6 md:grid-cols-3">
+  <div class="rounded-xl border p-6"><h2 class="font-semibold">Starter</h2><p class="text-3xl">$0</p></div>
+  <div class="rounded-xl border p-6"><h2 class="font-semibold">Team</h2><p class="text-3xl">$12</p></div>
+  <div class="rounded-xl border p-6"><h2 class="font-semibold">Business</h2><p class="text-3xl">$29</p></div>
+</section>
+</main>
+
+</body>
+</html>

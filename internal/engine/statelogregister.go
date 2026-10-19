@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -243,8 +244,14 @@ type gateWrite func(ctx context.Context, by iam.Principal, opID, node string,
 	readmit bool) (statelog.Result, error)
 
 // register is every domain this build runs, in a FIXED order.
+//
+// THE ARTIFACTS DOMAINS ARE APPENDED LAST, artifacts before its datastore, from
+// entries declared beside their wiring (artifactsregister.go and
+// artifactdataregister.go) so each domain's entry is written where the rest of
+// its engine wiring lives. Appending keeps every existing domain's position,
+// which is the order every operator surface already reports in.
 func register() []registration {
-	return []registration{
+	return slices.Concat([]registration{
 		{
 			Domain: tracker.Domain{},
 			NewApplier: func(s *stateLog) (statelog.Applier, error) {
@@ -535,7 +542,7 @@ func register() []registration {
 					Floor: config.UsageLogMaxBytesFloor}
 			},
 		},
-	}
+	}, artifactsRegistrations(), artifactDataRegistrations())
 }
 
 // checkRegister refuses a register whose entries are not complete, BEFORE

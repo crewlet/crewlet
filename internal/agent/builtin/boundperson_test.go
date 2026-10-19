@@ -59,6 +59,12 @@ func (c *seatChart) LeadsAnyone(context.Context, string) (bool, error) {
 	return false, nil
 }
 
+// MemberOf answers that nobody sits in any unit: no case here shares an
+// artifact with a team.
+func (*seatChart) MemberOf(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
 // janesChart is the company these cases run in: the seat `jane-founder` leads
 // ENG, and nobody else leads anything.
 func janesChart() *seatChart { return &seatChart{seat: "jane-founder", project: "ENG"} }

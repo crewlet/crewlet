@@ -380,6 +380,17 @@ func (e *Engine) estateBackend(c *core, n *native) estate.Backend {
 	if c.iamReader != nil {
 		b.Identity = c.iamReader
 	}
+	// THE ARTIFACTS ESTATE, which every data node runs from boot whatever its
+	// company keeps, so a node without `data` reaches it through any data
+	// node's copy. Set only where both sides are, for the identity
+	// directory's reason: a typed nil reads as a half that is there.
+	if c.artifactsReader != nil && c.artifactsWriter != nil {
+		b.Artifacts = estate.ArtifactsHalf{Reader: c.artifactsReader, Writer: c.artifactsWriter}
+	}
+	// AND ITS DATASTORE, run beside it on every data node.
+	if c.artifactDataReader != nil && c.artifactDataWriter != nil {
+		b.ArtifactData = estate.ArtifactDataHalf{Reader: c.artifactDataReader, Writer: c.artifactDataWriter}
+	}
 	if n == nil {
 		return b
 	}

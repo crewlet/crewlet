@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 )
@@ -19,6 +20,7 @@ type chart struct {
 	projects   map[[2]string]bool
 	units      map[[2]string]bool
 	containers map[[2]string]bool
+	members    map[[2]string]bool
 	err        error
 }
 
@@ -72,14 +74,26 @@ func (c chart) LeadsAnyone(_ context.Context, actor string) (bool, error) {
 	return false, nil
 }
 
+// MemberOf answers unit membership, a FIFTH map: sitting in a unit is not
+// leading it, and a fake that read either for the other would agree with a
+// rule that asked the wrong one.
+func (c chart) MemberOf(_ context.Context, actor, unit string) (bool, error) {
+	if c.err != nil {
+		return false, c.err
+	}
+	return c.members[[2]string{actor, unit}], nil
+}
+
 // nimbus is the fixture every case below decides against: the CTO leads the
-// SRE, leads the PLATFORM project, and leads the `sre` unit.
+// SRE, leads the PLATFORM project, and leads the `sre` unit, in which the SRE
+// sits (the CTO does not: leading a unit is not sitting in it).
 func nimbus() chart {
 	return chart{
 		leads:      map[[2]string]bool{{"cto", "sre"}: true},
 		projects:   map[[2]string]bool{{"cto", "PLATFORM"}: true},
 		units:      map[[2]string]bool{{"cto", "sre"}: true},
 		containers: map[[2]string]bool{{"cto", "RUNBOOKS"}: true},
+		members:    map[[2]string]bool{{"sre", "sre"}: true},
 	}
 }
 
@@ -124,7 +138,7 @@ func seat(handle string, grants ...iam.Grant) iam.Principal {
 // THE WHOLE TABLE, ONE CASE PER ROW OF IT.
 //
 // Written as a table because the rules ARE a table: what makes this suite
-// worth anything is that a reader can see fifteen classes decided side by side
+// worth anything is that a reader can see sixteen classes decided side by side
 // and spot the row whose answer is wrong for its neighbours.
 func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 	t.Parallel()
@@ -601,6 +615,21 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 		{"a tool skill page is admin's, not the knowledge base's",
 			person("jane.doe", knowledge), authz.ActionSkillPageWrite,
 			authz.Object{Kind: authz.KindPage}, false, authz.ReasonNoGrant},
+
+		// --- shared ----------------------------------------------------- //
+		//
+		// AN ARTIFACT IS ITS SHARES': the SRE sits in the `sre` unit, so a
+		// unit share admits them at its role, and nothing else does.
+		{"a unit share admits who sits in the unit", personLeading("sre"),
+			authz.ActionArtifactRead, authz.Object{Kind: authz.KindArtifact, Owner: "jane",
+				Shares: []artifacts.Share{{Audience: artifacts.Audience{
+					Kind: artifacts.AudienceUnit, ID: "sre"}, Role: artifacts.RoleViewer}}},
+			true, authz.ReasonShared},
+		{"a lead of the unit who sits elsewhere is not in it", personLeading("cto"),
+			authz.ActionArtifactRead, authz.Object{Kind: authz.KindArtifact, Owner: "jane",
+				Shares: []artifacts.Share{{Audience: artifacts.Audience{
+					Kind: artifacts.AudienceUnit, ID: "sre"}, Role: artifacts.RoleViewer}}},
+			false, authz.ReasonNotShared},
 
 		// --- stage --------------------------------------------------------- //
 		{"an invited principal may do nothing yet",

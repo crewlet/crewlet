@@ -90,6 +90,16 @@ func (c ChartAuthority) LeadsUnit(ctx context.Context, actor, unitKey string) (b
 	return chart.LeadsUnit(ctx, actor, unitKey)
 }
 
+// MemberOf reports whether actor's seat sits in the unit key names or any unit
+// below it, in the running chart.
+func (c ChartAuthority) MemberOf(ctx context.Context, actor, unitKey string) (bool, error) {
+	chart, err := c.chart()
+	if err != nil {
+		return false, err
+	}
+	return chart.MemberOf(ctx, actor, unitKey)
+}
+
 // chart is the running company's chart, or why this node cannot answer.
 //
 // ONE PLACE, because every method needs it and the whole point of this type is

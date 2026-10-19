@@ -51,6 +51,31 @@ import type {
   SkillLoad,
 } from "../contract/pages.ts";
 import type { PushKind, SeatActivity, StoppedReason } from "../contract/wire.ts";
+import type {
+  ARTIFACT_CAPABILITIES,
+  ARTIFACT_KINDS,
+  ARTIFACT_LIST_SCOPES,
+  ARTIFACT_LIST_SORTS,
+  ARTIFACT_ROLES,
+  AUDIENCE_KINDS,
+  COLLECTION_PRESETS,
+  COLUMN_TYPES,
+  DASHBOARD_AGGS,
+  DASHBOARD_COLUMN_TYPES,
+  DASHBOARD_COLUMN_WORDS,
+  DASHBOARD_DATASET_STATUSES,
+  DASHBOARD_NUMBER_FORMATS,
+  DASHBOARD_REFRESH_MODES,
+  DASHBOARD_SOURCE_KINDS,
+  DASHBOARD_WIDGET_TYPES,
+  DATA_OP_KINDS,
+  DATA_VERDICTS,
+  FIELD_CONDITIONS,
+  ORIGIN_MODES,
+  PRESENCE_ACTIVITIES,
+  READ_RULES,
+  SHAREABLE_ROLES,
+} from "../contract/artifacts.ts";
 import type { WorkViewShape } from "../contract/work.ts";
 import type {
   RetentionGenerationState,
@@ -4052,6 +4077,11 @@ export interface Frame {
    *  answer. Never omitted there — and waited out, through
    *  `unavailableRetryMs`, by everything that asks again. */
   retry_after?: number;
+  /** On an `artifact_join` error frame: the artifact whose room was refused
+   *  (with the join's `id`) or withdrawn (with no `id`, because the reader's
+   *  access narrowed while they were in it). Absent on every other frame: a
+   *  room's pushes name their artifact in their own payload. */
+  artifact?: string;
 }
 
 /**
@@ -4953,6 +4983,1020 @@ export interface SeatActivityAnswer {
   quantile_resolution: number;
 }
 
+// ---- artifacts ---------------------------------------------------------- //
+//
+// The artifacts' answers and pushes, as `internal/artifactsdomain`,
+// `internal/artifactdata`, `internal/api/artifactsapi`,
+// `internal/api/artifactdataapi` and `internal/api/stream` send them. The
+// closed sets they are made of are the contract's (`contract/artifacts.ts`),
+// held there against the engine; these are composed from them.
+
+/** What an artifact is (`artifacts.Kind`). */
+export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
+/** A runtime capability a version declares (`artifacts.Capability`). */
+export type ArtifactCapability = (typeof ARTIFACT_CAPABILITIES)[number];
+/** A principal's relation to one artifact (`artifacts.Role`). */
+export type ArtifactRole = (typeof ARTIFACT_ROLES)[number];
+/** A role a share may grant. */
+export type ShareableRole = (typeof SHAREABLE_ROLES)[number];
+/** Who a share names. */
+export type AudienceKind = (typeof AUDIENCE_KINDS)[number];
+/** How the artifact origin isolates a page. */
+export type OriginMode = (typeof ORIGIN_MODES)[number];
+/** What a present member is doing. */
+export type PresenceActivity = (typeof PRESENCE_ACTIVITIES)[number];
+/** What a listing is about. */
+export type ArtifactListScope = (typeof ARTIFACT_LIST_SCOPES)[number];
+/** How a listing is ordered. */
+export type ArtifactListSort = (typeof ARTIFACT_LIST_SORTS)[number];
+/** How one datastore field is stored and drawn. */
+export type ColumnType = (typeof COLUMN_TYPES)[number];
+/** Who reads a collection's rows. */
+export type ReadRule = (typeof READ_RULES)[number];
+/** A collection policy picked by intent. */
+export type CollectionPreset = (typeof COLLECTION_PRESETS)[number];
+/** What narrows a column's write rule. */
+export type FieldCondition = (typeof FIELD_CONDITIONS)[number];
+/** What one datastore op does. */
+export type DataOpKind = (typeof DATA_OP_KINDS)[number];
+/** What the applier decided about one write. */
+export type DataVerdict = (typeof DATA_VERDICTS)[number];
+
+/**
+ * Who did something (`iam.Actor`). `kind` is `agent`, `human`, `operator` or
+ * `system`; `operator_id` is the credential the author acted through, absent
+ * where the row records none.
+ */
+export interface ArtifactActor {
+  name: string;
+  kind: string;
+  operator_id?: string;
+}
+
+/** A state-log position (`statelog.Position`). */
+export interface LogPosition {
+  stream: string;
+  generation: number;
+  seq: number;
+}
+
+/** The principal set one share names (`artifacts.Audience`). `id` is empty for the company. */
+export interface ArtifactAudience {
+  kind: AudienceKind;
+  id?: string;
+}
+
+/** One audience's role on one artifact (`artifacts.Share`). */
+export interface ArtifactShare {
+  audience: ArtifactAudience;
+  role: ArtifactRole;
+  granted_by: ArtifactActor;
+  granted_at: string;
+}
+
+/** An artifact's status (`artifactsdomain.Status`). */
+export type ArtifactStatus = "live" | "trashed";
+
+/** One artifact's head (`artifactsdomain.Head`). */
+export interface ArtifactHead {
+  id: string;
+  /** The DNS host label: the id in lowercase Crockford base32. */
+  label: string;
+  kind: ArtifactKind;
+  title: string;
+  description?: string;
+  icon?: string;
+  owner: string;
+  owner_kind: string;
+  source_key?: string;
+  head_number: number;
+  contract?: string;
+  /** What the head version declares; empty, never absent, for none. */
+  capabilities: ArtifactCapability[];
+  status: ArtifactStatus;
+  trashed_by: ArtifactActor;
+  trashed_at: string;
+  /** When its purge began, the zero time for one no purge has begun on: such an artifact is in the trash and is never restored. */
+  purge_begun_at: string;
+  access_epoch: number;
+  bytes_held: number;
+  /** The audience, to the owner and editors only; absent below. */
+  shares?: ArtifactShare[];
+  created_by: ArtifactActor;
+  updated_by: ArtifactActor;
+  created_at: string;
+  updated_at: string;
+  /** The packed position of the last write to the artifact's row. */
+  version: number;
+}
+
+/** A head as a reader is shown it (`artifactsapi.Artifact`). */
+export interface ArtifactRow extends ArtifactHead {
+  /** The reader's own role. */
+  role: ArtifactRole;
+  /** How many shares it carries, which a reader below editor is shown in place of the list. */
+  share_count: number;
+  /** Only the admin path admitted this read, and the engine recorded it. */
+  elevated?: boolean;
+}
+
+/** `artifact{id}`: one artifact as its page reads it (`artifactsapi.Detail`). */
+export interface ArtifactDetail extends ArtifactRow {
+  /** The reader may publish a new version: the artifacts app beside the role. */
+  writer: boolean;
+}
+
+/** One row of a listing (`artifactsapi.ListItem`). */
+export interface ArtifactListItem extends ArtifactRow {
+  pinned?: boolean;
+  /** When this reader last opened it; the zero instant for never. */
+  opened_at: string;
+}
+
+/** `artifacts{scope, kind, q, sort, status, pinned, work_item, cursor, limit}`. */
+export interface ArtifactListAnswer {
+  items: ArtifactListItem[];
+  /** How many matched the estate's own filter; a row the authority table withheld is counted and not listed. */
+  total: number;
+  after?: string;
+  read_level: string;
+  position: LogPosition;
+  complete: boolean;
+}
+
+/** The stored bytes behind one file (`objstore.Object`). */
+export interface ArtifactObject {
+  key?: string;
+  hash: string;
+  size: number;
+}
+
+/** What the linter derived for one HTML file (`artifacts.ScriptPolicy`). */
+export interface ArtifactScriptPolicy {
+  nonced: boolean;
+  handler_hashes?: string[];
+  unsafe_eval?: boolean;
+  wasm_eval?: boolean;
+}
+
+/** One published file of a version (`artifacts.Entry`). */
+export interface ArtifactEntry {
+  path: string;
+  content_type: string;
+  object: ArtifactObject;
+  carried?: boolean;
+  script?: ArtifactScriptPolicy;
+}
+
+/** Every file of one version (`artifacts.Manifest`). */
+export interface ArtifactManifest {
+  /** The path served at the version's root; empty for a native sheet. */
+  entry: string;
+  files: ArtifactEntry[];
+}
+
+/** One retained version without its manifest (`artifactsdomain.VersionSummary`). */
+export interface ArtifactVersionSummary {
+  artifact: string;
+  number: number;
+  version_id: string;
+  base: number;
+  restored_from?: number;
+  forced?: boolean;
+  label?: string;
+  entry?: string;
+  contract?: string;
+  /** What the version declares; empty, never absent, for none. */
+  capabilities: ArtifactCapability[];
+  files: number;
+  bytes: number;
+  author: ArtifactActor;
+  created_at: string;
+  position: number;
+}
+
+/** `artifact_version{id, n}`: one version with its manifest. */
+export interface ArtifactVersion extends ArtifactVersionSummary {
+  manifest: ArtifactManifest;
+}
+
+/** `artifact_versions{id, cursor, limit}`: newest first. */
+export interface ArtifactVersionsAnswer {
+  versions: ArtifactVersionSummary[];
+  after?: string;
+}
+
+/** One live file of an artifact's asset store (`artifactsdomain.Asset`). */
+export interface ArtifactAsset {
+  artifact: string;
+  id: string;
+  name: string;
+  content_type: string;
+  object: ArtifactObject;
+  added_by: ArtifactActor;
+  added_at: string;
+  version: number;
+}
+
+/** `artifact_assets{id}`. */
+export interface ArtifactAssetsAnswer {
+  assets: ArtifactAsset[];
+}
+
+/** What one history row says beyond its op (`artifactsdomain.HistorySummary`). */
+export interface ArtifactHistorySummary {
+  files?: number;
+  bytes?: number;
+  pruned?: number[];
+  forced?: boolean;
+  restored_from?: number;
+  label?: string;
+  fields?: string[];
+  audience?: string;
+  role?: string;
+  from?: string;
+  to?: string;
+  asset?: string;
+  name?: string;
+  paths?: string[];
+  head?: number;
+  limit?: number;
+  usage?: number;
+  key?: string;
+}
+
+/** One row of an artifact's change record (`artifactsdomain.HistoryEntry`). */
+export interface ArtifactHistoryEntry {
+  position: number;
+  op_id: string;
+  /** `create`, `publish`, `restore_version`, `patch`, `share`, `unshare`, `transfer`, `prune`, `trash`, `restore`, `purge_begin`, `purge`, `remove`, `pin`, `unpin`, `opened`, `read_elevated`. */
+  op: string;
+  outcome: "applied" | "refused";
+  reason?: string;
+  number?: number;
+  actor: ArtifactActor;
+  elevated?: boolean;
+  origin?: string;
+  work_item?: string;
+  at: string;
+  summary: ArtifactHistorySummary;
+}
+
+/** `artifact_history{id, cursor, limit}`: newest first, shaped by the reader's role. */
+export interface ArtifactHistoryAnswer {
+  entries: ArtifactHistoryEntry[];
+  after?: string;
+}
+
+/**
+ * One row of the company trail (`artifactsdomain.TrailEntry`): a history row
+ * of any artifact, with the artifact it is about and its title and owner now.
+ */
+export interface ArtifactTrailEntry extends ArtifactHistoryEntry {
+  artifact: string;
+  title: string;
+  owner: string;
+}
+
+/**
+ * `artifact_trail{op, cursor, limit}`: every artifact's history across the
+ * company, newest first in the log's order; an administrator's question
+ * (`audit.read`).
+ */
+export interface ArtifactTrailAnswer {
+  entries: ArtifactTrailEntry[];
+  after?: string;
+  position: LogPosition;
+  complete: boolean;
+}
+
+/** `artifact_seen_by{id}`: who has opened it, or `shown: false` where the company withholds it. */
+export interface ArtifactSeenByAnswer {
+  shown: boolean;
+  reads: { seat: string; opened_at: string }[];
+}
+
+/** One share and the seats a unit share reaches today (`artifactsapi.ShareAccess`). */
+export interface ArtifactShareAccess extends ArtifactShare {
+  members?: string[];
+}
+
+/** `artifact_access{id}`: the share dialog's list (`artifactsapi.Access`). */
+export interface ArtifactAccessAnswer {
+  owner: string;
+  owner_kind: string;
+  role: ArtifactRole;
+  /** To the owner and editors; absent below. */
+  shares?: ArtifactShareAccess[];
+  /** The seats that lead an agent owner, each holding owner on its artifacts. */
+  leads?: string[];
+  share_count: number;
+}
+
+/** The plan quotas in force (`artifacts.Limits`). */
+export interface ArtifactLimits {
+  company_bytes: number;
+  artifacts: number;
+  data_bytes: number;
+  data_store_bytes: number;
+  pending_bytes: number;
+}
+
+/** `artifact_usage`: the company's artifacts against its quota. */
+export interface ArtifactUsageAnswer {
+  usage: {
+    artifacts: number;
+    bytes: number;
+    versions: number;
+    assets: number;
+    position: LogPosition;
+    complete: boolean;
+  };
+  limits: ArtifactLimits;
+}
+
+/** `POST /artifacts/{id}/tickets`: what the viewer embeds (`artifacts.Frame`). */
+export interface ArtifactFrame {
+  frame_url: string;
+  origin: string;
+  version: number;
+  expires_at: string;
+  sandbox: string;
+  allow: string;
+  mode: OriginMode;
+  nonce: string;
+  /** The page the frame opens: the entry of a page, one artboard of a design. */
+  document: string;
+}
+
+/** How one declared file's bytes reach the store (`artifacts.Transfer`). */
+export interface ArtifactTransfer {
+  path: string;
+  method: string;
+  url: string;
+  headers?: Record<string, string>;
+  /** Straight to the bucket; false for a put through the engine, the dashboard's only kind. */
+  direct: boolean;
+}
+
+/** `POST /artifacts/{id}/uploads` (`artifacts.UploadIntent`). */
+export interface ArtifactUploadIntent {
+  upload: string;
+  expires_at: string;
+  carried?: string[];
+  transfers?: ArtifactTransfer[];
+}
+
+/** One tab of a doc, with its Markdown (`docindex.Tab`). */
+export interface DocTab {
+  path: string;
+  title: string;
+  text: string;
+}
+
+/** A version's doc, tab by tab (`docindex.Doc`). */
+export interface ArtifactDoc {
+  /** Whether the version opens on a `doc.json` index rather than one Markdown file. */
+  indexed: boolean;
+  tabs: DocTab[];
+}
+
+/** `GET /artifacts/{id}/versions/{n}/doc` (`artifactsapi.DocAnswer`). */
+export interface ArtifactDocAnswer {
+  artifact: string;
+  version: number;
+  doc: ArtifactDoc;
+}
+
+/** `GET /artifacts/{id}/versions/{n}/source`: a version's entry as text (`artifactsapi.Source`). */
+export interface ArtifactSource {
+  artifact: string;
+  kind: ArtifactKind;
+  version: number;
+  path: string;
+  content_type: string;
+  size: number;
+  text: string;
+}
+
+/** One declaration of a slide's canonical style (`slideformat.Decl`). */
+export interface SlideDecl {
+  p: string;
+  v: string;
+}
+
+/** One element, or one run of text, of a slide (`slideformat.Node`): an element has a tag, a run of text has text alone. */
+export interface SlideNode {
+  tag?: string;
+  text?: string;
+  attrs?: Record<string, string>;
+  style?: SlideDecl[];
+  children?: SlideNode[];
+}
+
+/** One slide of a deck, read (`slideformat.Slide`). */
+export interface DeckSlide {
+  id: string;
+  path: string;
+  title: string;
+  hidden?: boolean;
+  transition?: string;
+  notes?: string;
+  /** The `<section>`, its notes taken out. */
+  root: SlideNode;
+}
+
+/** One run of a deck's outline (`slideformat.Section`). */
+export interface DeckSection {
+  description: string;
+  start: string;
+}
+
+/** One typeface a deck loads from a font file of its version (`slideformat.Face`). */
+export interface DeckFace {
+  family: string;
+  src: string;
+}
+
+/** A version's deck as the dashboard draws it (`slideformat.Deck`). */
+export interface ArtifactDeck {
+  title: string;
+  cover: string;
+  sections: DeckSection[] | null;
+  faces: DeckFace[] | null;
+  slides: DeckSlide[] | null;
+}
+
+/** `GET /artifacts/{id}/versions/{n}/deck` (`artifactsapi.DeckAnswer`). */
+export interface ArtifactDeckAnswer {
+  artifact: string;
+  version: number;
+  deck: ArtifactDeck;
+}
+
+/** One slide of a deck's outline (`slideformat.OutlineSlide`). */
+export interface DeckOutlineSlide {
+  id: string;
+  path: string;
+  title: string;
+  hidden?: boolean;
+  notes?: boolean;
+}
+
+/** `GET /artifacts/{id}/versions/{n}/outline` (`artifactsapi.OutlineAnswer`). */
+export interface ArtifactOutline {
+  artifact: string;
+  kind: ArtifactKind;
+  version: number;
+  slides?: {
+    title: string;
+    count: number;
+    cover: string;
+    sections: DeckSection[] | null;
+    slides: DeckOutlineSlide[] | null;
+    cover_slide: DeckSlide;
+  };
+  /** A doc's tabs and the first tab's opening (`docindex.Outline`). */
+  doc?: {
+    tabs: { path: string; title: string; bytes: number }[];
+    cover: { tab: string; markdown: string };
+  };
+  design?: DesignOutline;
+  /** A board's outline: its widgets and its first stats, never a value (D64). */
+  dashboard?: DashboardOutline;
+}
+
+// ---- dashboards (`internal/artifacts/dashspec`, `internal/api/datasetsapi`) ----
+
+export type DashboardWidgetType = (typeof DASHBOARD_WIDGET_TYPES)[number];
+export type DashboardSourceKind = (typeof DASHBOARD_SOURCE_KINDS)[number];
+export type DashboardRefreshMode = (typeof DASHBOARD_REFRESH_MODES)[number];
+export type DashboardDatasetStatus = (typeof DASHBOARD_DATASET_STATUSES)[number];
+export type DashboardAgg = (typeof DASHBOARD_AGGS)[number];
+export type DashboardNumberFormat = (typeof DASHBOARD_NUMBER_FORMATS)[number];
+export type DashboardColumnType = (typeof DASHBOARD_COLUMN_TYPES)[number];
+export type DashboardColumnWords = (typeof DASHBOARD_COLUMN_WORDS)[number];
+
+/** One column of a dataset (`dashspec.Column`). */
+export interface DashboardColumn {
+  key: string;
+  type: DashboardColumnType;
+  label?: string;
+  /** The vocabulary the column's ids are drawn in, if any. */
+  words?: DashboardColumnWords;
+}
+
+/** A value of a row: text, a number, a boolean, a date as its canonical text, or none. */
+export type DashboardValue = string | number | boolean | null;
+
+/** One row of a dataset, keyed by column. */
+export type DashboardRow = Record<string, DashboardValue>;
+
+/** A dataset's rows as one viewer may read them (`dashspec.Table`). */
+export interface DashboardTable {
+  columns: DashboardColumn[];
+  key?: string;
+  rows: DashboardRow[];
+  truncated?: boolean;
+}
+
+/** A filter the board offers (`dashspec.Param`). */
+export interface DashboardParam {
+  key: string;
+  label: string;
+  options: { value: string; label: string }[];
+  default: string;
+}
+
+/** An engine argument: a literal in its text form, or a filter it is bound to. */
+export type DashboardArg = string | number | boolean | { param: string };
+
+/** One calculation step (`dashspec.Step`), flat as written. */
+export interface DashboardStep {
+  op: "filter" | "group" | "compute" | "join" | "sort" | "limit" | "select";
+  where?: { column: string; cmp: string; value?: DashboardArg }[];
+  by?: string[];
+  aggregates?: { column: string; agg: DashboardAgg; of?: string }[];
+  column?: string;
+  fn?: string;
+  left?: string | number;
+  right?: string | number;
+  with?: string;
+  on?: string;
+  columns?: string[];
+  order?: { column: string; desc?: boolean }[];
+  count?: number;
+}
+
+/** One dataset of a board as the spec declares it (`dashspec.Dataset`). */
+export interface DashboardDataset {
+  id: string;
+  title: string;
+  source: DashboardSourceKind;
+  store?: { collection: string };
+  file?: { path: string };
+  engine?: { name: string; params?: Record<string, DashboardArg> };
+  calc?: { from: string; steps: DashboardStep[] };
+  columns?: DashboardColumn[];
+  key?: string;
+  refresh?: { every_seconds: number };
+}
+
+/** One widget of a board (`dashspec.Widget`), flat as written. */
+export interface DashboardWidget {
+  id: string;
+  type: DashboardWidgetType;
+  title?: string;
+  dataset?: string;
+  w: number;
+  h?: number;
+  value?: string;
+  agg?: DashboardAgg;
+  format?: DashboardNumberFormat;
+  unit?: string;
+  max?: number;
+  max_field?: string;
+  x?: string;
+  y?: string[];
+  by?: string;
+  label?: string;
+  limit?: number;
+  columns?: string[];
+  text?: string;
+  tone?: string;
+  children?: DashboardWidget[];
+}
+
+/** A board's spec (`dashspec.Spec`). */
+export interface DashboardSpec {
+  v: number;
+  title?: string;
+  params?: DashboardParam[];
+  datasets: DashboardDataset[];
+  widgets: DashboardWidget[];
+}
+
+/** How a dataset is kept current (`dashspec.Freshness`). */
+export interface DashboardFreshness {
+  mode: DashboardRefreshMode;
+  collection?: string;
+  signal?: "agents" | "tokens";
+  every_seconds?: number;
+  inputs?: string[];
+}
+
+/** One parameter of an engine source (`dashspec.SourceParam`). */
+export interface DashboardSourceParam {
+  key: string;
+  type: "text" | "number" | "enum";
+  summary: string;
+  enum?: string[];
+  min?: number;
+  max?: number;
+  max_bytes?: number;
+  default?: string;
+}
+
+/** One entry of the engine source catalogue (`dashspec.EngineSource`). */
+export interface DashboardEngineSource {
+  name: string;
+  domain: string;
+  summary: string;
+  access: string;
+  params: DashboardSourceParam[];
+  columns: DashboardColumn[];
+  key: string;
+  signal?: "agents" | "tokens";
+  max_rows: number;
+}
+
+/** One dataset as the Sources rail describes it (`artifactsapi.BoardDataset`). */
+export interface DashboardBoardDataset {
+  id: string;
+  title: string;
+  source: DashboardSourceKind;
+  shape: { columns: DashboardColumn[]; key?: string };
+  freshness: DashboardFreshness;
+  engine?: DashboardEngineSource;
+}
+
+/** A board's outline (`dashspec.Outline`). */
+export interface DashboardOutline {
+  title?: string;
+  widgets: {
+    id: string;
+    type: DashboardWidgetType;
+    title?: string;
+    w: number;
+    dataset?: string;
+    group?: string;
+  }[];
+  stats: { widget: string; label: string; dataset: string; dataset_title: string }[];
+  datasets: { id: string; title: string; source: DashboardSourceKind }[];
+}
+
+/** A version's board (`GET …/versions/{n}/dashboard`, `artifactsapi.BoardAnswer`). */
+export interface DashboardBoardAnswer {
+  artifact: string;
+  version: number;
+  board: DashboardSpec;
+  datasets: DashboardBoardDataset[];
+  outline: DashboardOutline;
+}
+
+/** One dataset as its viewer may read it (`GET …/sources/{dataset}`, `datasetsapi.Answer`). */
+export interface DashboardDatasetAnswer {
+  artifact: string;
+  version: number;
+  dataset: string;
+  status: DashboardDatasetStatus;
+  as_of?: string;
+  table?: DashboardTable;
+  refusal?: { dataset: string; reason: string; grants?: string[] };
+  detail?: string;
+}
+
+/** The engine source catalogue (`GET /artifacts/sources`). */
+export interface DashboardCatalogueAnswer {
+  sources: DashboardEngineSource[];
+}
+
+/** A rectangle of a design's canvas, in canvas pixels (`canvasformat.Rect`). */
+export interface DesignRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** One board of a design's outline (`canvasformat.OutlineBoard`). */
+export interface DesignOutlineBoard extends DesignRect {
+  path: string;
+  title?: string;
+}
+
+/** A design's outline (`canvasformat.Outline`): its boards' frames, for a cover. */
+export interface DesignOutline {
+  title?: string;
+  count: number;
+  cover: string;
+  bounds: DesignRect;
+  boards: DesignOutlineBoard[];
+  notes: number;
+}
+
+/** One finding of the publish linter (`lint.Finding`). */
+export interface ArtifactLintFinding {
+  path: string;
+  line?: number;
+  code: string;
+  message: string;
+}
+
+/** A create's or a publish's answer (`artifactsapi.publishedAnswer`). */
+export interface ArtifactPublished {
+  artifact: string;
+  label: string;
+  number: number;
+  version_id: string;
+  warnings?: ArtifactLintFinding[];
+  /** The version's files by where their bytes came from (`artifactupload.FileCounts`). */
+  files?: { stored: number; carried: number };
+  op_id: string;
+  outcome: "applied" | "pending" | "unknown";
+  position: LogPosition;
+}
+
+/** One choice of a select, multiselect or status column (`artifacts.Option`). */
+export interface DataOption {
+  id: string;
+  label: string;
+  color?: string;
+  category?: string;
+  archived?: boolean;
+}
+
+/** One declared field of a collection (`artifacts.Column`). */
+export interface DataColumn {
+  key: string;
+  type: ColumnType;
+  label?: string;
+  required?: boolean;
+  primary?: boolean;
+  hidden?: boolean;
+  min?: number;
+  max?: number;
+  max_length?: number;
+  max_items?: number;
+  options?: DataOption[];
+  default?: unknown;
+  write?: ArtifactRole;
+  when?: FieldCondition;
+  assigned_field?: string;
+  mode?: "append";
+  immutable?: boolean;
+  humans_only?: boolean;
+}
+
+/** One named set of documents with its rules (`artifacts.Collection`). */
+export interface DataCollection {
+  name: string;
+  title?: string;
+  preset?: CollectionPreset;
+  read: ReadRule;
+  create: ArtifactRole;
+  delete: ArtifactRole;
+  max_rows?: number;
+  max_rows_per_principal?: number;
+  once_per_principal?: boolean;
+  /** Absent for a schemaless collection under the closed default. */
+  columns?: DataColumn[];
+  indexed?: string[];
+}
+
+/** A store's catalogue row (`artifactdata.StoreInfo`). */
+export interface DataStoreInfo {
+  artifact: string;
+  docs: number;
+  /** `doc_bytes` plus `history_bytes`: what the store's rows cost on every data node. */
+  footprint: number;
+  doc_bytes: number;
+  history_bytes: number;
+  body_bytes: number;
+  field_entries: number;
+  writes: number;
+  digest: string;
+  history_floor: number;
+  tombstones_floor: number;
+  version: number;
+}
+
+/** `artifact_data_schema{id}`: the collections the reader may see, the store, and the reader's role. */
+export interface DataSchemaAnswer {
+  collections: DataCollection[];
+  store: DataStoreInfo;
+  role: ArtifactRole;
+}
+
+/** One document (`artifactdata.Doc`). */
+export interface DataDoc {
+  collection: string;
+  id: string;
+  /** Canonical JSON of the fields, a column's default filled where absent; absent on a tombstone. */
+  fields?: Record<string, unknown>;
+  deleted?: boolean;
+  /** The document's version: the `if_version` a guarded write names. */
+  version: number;
+  created_by: ArtifactActor;
+  created_at: string;
+  updated_by: ArtifactActor;
+  updated_at: string;
+  defaulted?: string[];
+  /** Stored fields the schema no longer admits, shown as a warning. */
+  invalid?: string[];
+}
+
+/** `artifact_data{id, collection, since, cursor, limit}` and `artifact_data_query`: a page of documents. */
+export interface DataDocPage {
+  docs: DataDoc[];
+  after?: string;
+  /** The `since` asked is below what the store still accounts for: read the collection whole. */
+  resync?: boolean;
+  /**
+   * The next catch-up's `since`, adopted once the read's LAST page is in: a
+   * whole read's pages answer the version its first page saw, and a catch-up's
+   * the version every change at or below which it has returned.
+   */
+  through: number;
+  position: LogPosition;
+  complete: boolean;
+}
+
+/** One field's change in a history row (`artifactdata.FieldChange`). */
+export interface DataFieldChange {
+  f: string;
+  b?: unknown;
+  a?: unknown;
+  bh?: string;
+  ah?: string;
+}
+
+/** One document's change in a history row (`artifactdata.Change`). */
+export interface DataChange {
+  c: string;
+  d?: string;
+  /** `create`, `update`, `delete`, `migrate`, `conflict` or `schema`. */
+  op: string;
+  /** The row's creator at this change: a row deleted and created again by somebody else changes hands. */
+  cb?: string;
+  bv?: number;
+  av?: number;
+  f?: DataFieldChange[];
+}
+
+/** One row of a store's history (`artifactdata.HistoryEntry`). */
+export interface DataHistoryEntry {
+  seq: number;
+  op_id: string;
+  /** `write`, `undo`, `configure` or `purge`. */
+  op: string;
+  verdict: DataVerdict;
+  reason?: string;
+  actor: ArtifactActor;
+  origin?: string;
+  work_item?: string;
+  elevated?: boolean;
+  client_id?: string;
+  at: string;
+  changes: DataChange[];
+  undoable?: boolean;
+  undoes?: number;
+  digest: string;
+}
+
+/** `artifact_data_history{id, collection, doc, field, actor, cursor, limit}`. */
+export interface DataHistoryAnswer {
+  entries: DataHistoryEntry[];
+  after?: string;
+  /** The oldest position the hot history still holds. */
+  floor: number;
+  position: LogPosition;
+  complete: boolean;
+}
+
+/** One of the reader's per-viewer state keys (`artifactdata.StateEntry`). */
+export interface DataStateEntry {
+  key: string;
+  value: unknown;
+  version: number;
+}
+
+/** `artifact_data_state{id}`. */
+export interface DataStateAnswer {
+  state: DataStateEntry[];
+}
+
+/** `artifact_data_usage`: the company's datastore footprint against its quota. */
+export interface DataUsageAnswer {
+  usage: {
+    stores: number;
+    docs: number;
+    footprint: number;
+    position: LogPosition;
+    complete: boolean;
+  };
+  data_bytes: number;
+  data_store_bytes: number;
+}
+
+/** One op of a datastore write (`artifacts.DataOp`). */
+export interface DataOp {
+  op: DataOpKind;
+  collection: string;
+  doc: string;
+  if_version?: number;
+  fields?: Record<string, unknown>;
+  field?: string;
+  value?: unknown;
+}
+
+/** A datastore write's answer, success or the applier's refusal (`artifactdataapi.answer`). */
+export interface DataWriteAnswer {
+  op_id: string;
+  position?: LogPosition;
+  /** How the write ended: the applier's verdict, or `pending` while the node that took it has not applied it. */
+  verdict: DataVerdict | "pending";
+  /** The write's place in the store's history: what an undo names. */
+  seq?: number;
+  detail?: string;
+  /** The current documents, on a `conflict`. */
+  conflict?: DataDoc[];
+}
+
+/** Where in an artifact a member is looking (`artifacts.Focus`). */
+export interface PresenceFocus {
+  version?: number;
+  region?: string;
+  collection?: string;
+  doc?: string;
+  field?: string;
+}
+
+/** One open viewer of one artifact (`artifacts.PresenceMember`). */
+export interface ArtifactPresenceMember {
+  session: string;
+  /** The seat handle; the dashboard resolves the name. */
+  seat: string;
+  kind: string;
+  activity: PresenceActivity;
+  focus: PresenceFocus;
+  at: string;
+  /** For an agent, the run of the turn whose tool call last put it in the room. */
+  turn?: string;
+}
+
+/** Who is in one artifact's room (`artifacts.PresenceRoster`). */
+export interface ArtifactPresenceRoster {
+  artifact: string;
+  members: ArtifactPresenceMember[] | null;
+  counts?: { human: number; agent: number };
+  truncated?: boolean;
+}
+
+/** An `artifact_join`'s answer (`stream.ArtifactJoined`). */
+export interface ArtifactJoined {
+  artifact: string;
+  session: string;
+  role: ArtifactRole;
+  roster: ArtifactPresenceRoster;
+  through: number;
+  resync: boolean;
+}
+
+/** An `artifact_changed` push (`stream.ArtifactChange`): a hint, never content. */
+export interface ArtifactChangedPush {
+  artifact: string;
+  /** `version`, `meta`, `share`, `asset`, `trash`, `restore`, `purge`, `transfer` or `reset`. */
+  what: string;
+  head?: number;
+  position: LogPosition;
+}
+
+/** One changed document, inline in an `artifact_data` push (`artifactdata.DocDelta`). */
+export interface DataDocDelta {
+  collection: string;
+  doc: string;
+  version: number;
+  deleted?: boolean;
+  body?: Record<string, unknown>;
+  read: ReadRule;
+  created_by: string;
+  updated_by: ArtifactActor;
+  updated_at: string;
+}
+
+/** An `artifact_data` push, as this reader may see it (`stream.ArtifactData`). */
+export interface ArtifactDataPush {
+  artifact: string;
+  deltas?: DataDocDelta[];
+  /** The changed documents named and not carried, with `reread`. */
+  keys?: { collection: string; doc: string; version: number; deleted?: boolean }[];
+  reread?: boolean;
+  schema?: boolean;
+  resync?: boolean;
+  gone?: boolean;
+  through?: number;
+}
+
+/** An `artifact_presence` push (`presence.Change`). */
+export interface ArtifactPresencePush {
+  artifact: string;
+  upsert: ArtifactPresenceMember[] | null;
+  leave: string[] | null;
+  counts?: { human: number; agent: number };
+  truncated: boolean;
+}
+
 export interface QueryMap {
   viewer: Viewer;
   work_inbox: WorkInboxAnswer;
@@ -5017,6 +6061,23 @@ export interface QueryMap {
   config_audit: RevisionMeta[];
   config_diff: ConfigDiff;
   config_entities: { kind: string; ids?: string[]; id?: string; entity?: unknown };
+  artifacts: ArtifactListAnswer;
+  artifact: ArtifactDetail;
+  artifact_versions: ArtifactVersionsAnswer;
+  artifact_version: ArtifactVersion;
+  artifact_history: ArtifactHistoryAnswer;
+  artifact_assets: ArtifactAssetsAnswer;
+  artifact_seen_by: ArtifactSeenByAnswer;
+  artifact_access: ArtifactAccessAnswer;
+  artifact_usage: ArtifactUsageAnswer;
+  artifact_trail: ArtifactTrailAnswer;
+  artifact_data: DataDocPage;
+  artifact_data_doc: DataDoc;
+  artifact_data_query: DataDocPage;
+  artifact_data_history: DataHistoryAnswer;
+  artifact_data_schema: DataSchemaAnswer;
+  artifact_data_state: DataStateAnswer;
+  artifact_data_usage: DataUsageAnswer;
 }
 
 export type QueryName = keyof QueryMap;

@@ -445,6 +445,15 @@ type Sources struct {
 	// from the one evaluation its bars were counted over — so pinning this
 	// does not pin those.
 	Now func() time.Time
+
+	// Artifacts is the artifacts' admission and reads, for the artifacts'
+	// questions. Nil leaves them unregistered: a node built with no
+	// artifacts estate to route to.
+	Artifacts *ArtifactsSource
+	// ArtifactData is the artifact datastore's admission and reads, for the
+	// datastore's questions. Nil leaves them unregistered: a node built with
+	// no datastore.
+	ArtifactData *ArtifactDataSource
 }
 
 // ScheduleRuns is the dispatch history a schedules answer reads.
@@ -845,6 +854,17 @@ func Register(r *Registry, s Sources) {
 		r.Register("config_audit", Requires(iam.GrantAdmin), s.configAudit)
 		r.Register("config_diff", Requires(iam.GrantAdmin), s.configDiff)
 		r.Register("config_entities", Requires(iam.GrantAdmin), s.configEntities)
+	}
+	if s.Artifacts != nil {
+		// THE ARTIFACTS, each decided per artifact by the artifacts' one
+		// admission and shaped by the reader's role; the listing filtered
+		// row by row rather than refused.
+		registerArtifacts(r, *s.Artifacts, s.clock)
+	}
+	if s.ArtifactData != nil {
+		// AN ARTIFACT'S DATA, decided per artifact by the datastore's one
+		// admission and shaped by each collection's read rule.
+		registerArtifactData(r, *s.ArtifactData, s.clock)
 	}
 }
 

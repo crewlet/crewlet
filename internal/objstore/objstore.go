@@ -56,6 +56,7 @@
 package objstore
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -175,6 +176,15 @@ func (k Key) String() string { return uuid.UUID(k).String() }
 // IsZero reports whether k is no key — what a row that names no object
 // carries.
 func (k Key) IsZero() bool { return k == Key{} }
+
+// Compare orders two keys as their canonical spellings sort: -1, 0 or +1.
+//
+// THE SPELLING'S ORDER AND THE BYTES' ORDER ARE ONE ORDER, because the
+// canonical form is lowercase hex with its dashes at fixed places and every
+// hex digit sorts below every letter in it: so a keyset page of a table's key
+// column, which SQL orders by the spelling, walks keys in exactly this order,
+// and a range of keys a pass holds in memory can be matched against one.
+func (k Key) Compare(o Key) int { return bytes.Compare(k[:], o[:]) }
 
 // Minted is the instant the key was minted at, to the millisecond, in UTC.
 func (k Key) Minted() time.Time {

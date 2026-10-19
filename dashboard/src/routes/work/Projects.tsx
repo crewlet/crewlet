@@ -48,6 +48,7 @@
  */
 
 import { useMemo } from "react";
+import { fmtCount } from "~/lib/format.ts";
 import { usePanelAlign } from "~/lib/media.ts";
 import { buildHash, useParam, useRoute } from "~/app/router.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
@@ -57,19 +58,28 @@ import {
   columnChoicesOf,
   type GridColumn,
 } from "~/app/frame/DataGrid.tsx";
-import { DateCell, NumberCell, SeatCell } from "~/app/frame/cells.tsx";
+import { linkedSeat } from "~/app/frame/cells.tsx";
 import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { NewProjectButton } from "~/components/NewProjectButton.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { Button, EmptyState, EmptyValue, Popover, Tag } from "@crewlethq/ui";
+import {
+  Button,
+  EmptyState,
+  EmptyValue,
+  Popover,
+  SegmentedControl,
+  TableDateCell,
+  TableEntityCell,
+  TableNumberCell,
+  Tag,
+} from "@crewlethq/ui";
 import { LayoutDashboardGlyph, Columns3Glyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
-import { Segmented } from "~/ui/primitives.tsx";
 import { ProjectProgress, ProjectProgressLegend } from "./census.tsx";
 import type { WorkProjectRow } from "~/protocol/index.ts";
 import { PROJECT_SORT_KEYS } from "~/contract/work.ts";
@@ -331,7 +341,9 @@ export function Projects() {
         // doing, wearing one column.
         cell: (row) =>
           row.lead?.handle ? (
-            <SeatCell handle={row.lead.handle} {...who(row.lead.handle)} />
+            <TableEntityCell
+              {...linkedSeat({ handle: row.lead.handle, ...who(row.lead.handle) })}
+            />
           ) : (
             // A PROJECT WITH NO LEAD ROUTES ITS UNASSIGNED WORK TO NOBODY,
             // which is a finding rather than a blank cell.
@@ -383,7 +395,7 @@ export function Projects() {
         align: "right",
         shrink: true,
         sortValue: (row) => row.task_counts.todo,
-        cell: (row) => <NumberCell value={row.task_counts.todo} />,
+        cell: (row) => <TableNumberCell value={row.task_counts.todo} format={fmtCount} />,
       },
       {
         key: "active",
@@ -391,7 +403,7 @@ export function Projects() {
         align: "right",
         shrink: true,
         sortValue: (row) => row.task_counts.active,
-        cell: (row) => <NumberCell value={row.task_counts.active} />,
+        cell: (row) => <TableNumberCell value={row.task_counts.active} format={fmtCount} />,
       },
       {
         key: "done",
@@ -399,7 +411,7 @@ export function Projects() {
         align: "right",
         shrink: true,
         sortValue: (row) => row.task_counts.done,
-        cell: (row) => <NumberCell value={row.task_counts.done} />,
+        cell: (row) => <TableNumberCell value={row.task_counts.done} format={fmtCount} />,
       },
       {
         key: "closed",
@@ -414,7 +426,7 @@ export function Projects() {
         // right-aligned integer is also nowhere near the width `optional`
         // exists to ration (`SHRINK_CAP` in `DataGrid`).
         sortValue: (row) => row.task_counts.closed,
-        cell: (row) => <NumberCell value={row.task_counts.closed} />,
+        cell: (row) => <TableNumberCell value={row.task_counts.closed} format={fmtCount} />,
       },
       {
         key: "progress",
@@ -504,10 +516,12 @@ export function Projects() {
             ALL CARRIES NONE. Its count is the sum of the two beside it, and a
             third figure that is the other two added up is arithmetic on
             screen rather than a fact. */}
-        <Segmented
+        <SegmentedControl
+          semantics="radio"
+          activate="manual"
           value={shown}
-          onChange={(value) => setShown(value)}
-          ariaLabel="Which projects"
+          onValueChange={(value) => setShown(value)}
+          label="Which projects"
           options={[
             { value: "active", label: "Active", count: census?.active },
             { value: "archived", label: "Archived", count: census?.archived },
@@ -634,7 +648,7 @@ function LastChange({
     // are single values, so the rhythm a reader scans down was set by the one
     // column they scan last.
     <span className="work-lastchange">
-      <DateCell at={change.at} now={now} />
+      <TableDateCell value={change.at} now={now} />
       {/* A COMMIT CAN NAME NOBODY, and the wire says so by leaving the actor
           out — the engine did it. A handle is resolved through the chart like
           everywhere else, so this column says what the Lead column one cell

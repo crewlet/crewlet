@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/objectives"
 )
 
 // The thresholds an alarm fires at.
@@ -121,6 +122,17 @@ const (
 	// start being refused, so it is what "full" means to everybody but an
 	// eviction.
 	HeadroomAlarmFraction = 0.10
+
+	// ObjectsHeadroomAlarmFraction is how little of the nats object
+	// bucket's byte reservation may remain before an operator is told:
+	// TWICE A LOG'S, a fifth, borrowed from [HeadroomAlarmFraction] so a
+	// retune of the one moves the other. Twice, because both remedies for
+	// a full bucket take longer than a log's: raising its reservation is a
+	// capacity change on a stream every member holds, and moving the files
+	// to a bucket (`crewlet objects migrate --to s3`) copies every one of
+	// them and ends inside a maintenance window. A full bucket refuses
+	// uploads, and only uploads.
+	ObjectsHeadroomAlarmFraction = 2 * HeadroomAlarmFraction
 
 	// WALAlarmBytes is a write-ahead log large enough to say a checkpoint
 	// is not happening. A gibibyte: normal operation keeps it in the tens
@@ -273,6 +285,9 @@ const (
 	KindPoolStarved         Kind = "pool_starved"
 	KindCensusDrift         Kind = "census_drift"
 	KindObjectsMissing      Kind = "objects_missing"
+
+	KindObjectsBucketNearCeiling Kind = "objects_bucket_near_ceiling"
+	KindObjectiveBurn            Kind = "objective_burn"
 )
 
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
@@ -503,6 +518,24 @@ type Reading struct {
 	// for the gated record's reason: there is no threshold below which a
 	// file that cannot be opened is acceptable.
 	ObjectsMissing int
+
+	// ObjectsBucketBytes is how many bytes the nats object bucket holds,
+	// and ObjectsBucketMaxBytes the reservation the broker holds it to,
+	// as the collector's duty holder last read them: zero on every other
+	// node, and on a fleet whose files are in an S3 bucket, which reserves
+	// nothing. A zero MaxBytes is "not measured", never "full".
+	ObjectsBucketBytes, ObjectsBucketMaxBytes int64
+
+	// ObjectiveBurns is every service objective this node is spending the
+	// error budget of too fast, each over the fastest pair of windows that
+	// fires ([objectives.Meter.Burning]): empty on a node whose objectives
+	// are inside their budgets, and on one that measured none.
+	//
+	// JUDGED BY internal/objectives, which owns the targets, the window
+	// pairs and their factors, and carried here already judged: the alarm
+	// borrows the decision whole (ADR-0015) rather than restating a factor
+	// beside the one the objectives declare.
+	ObjectiveBurns []objectives.Burn
 }
 
 // Alarm is one condition currently true on this node.
@@ -1062,6 +1095,47 @@ var table = []rule{
 			"own health (the NATS bucket OBJ_crewlet_files on the data nodes, or " +
 			"the S3 bucket) and restore those files from a backup, or upload them " +
 			"again (see docs/guides/backup.md). `crewlet objects status` names them.",
+	},
+	{
+		kind: KindObjectsBucketNearCeiling,
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("the nats object bucket holds %s of its %s reservation",
+					bytesHuman(r.ObjectsBucketBytes), bytesHuman(r.ObjectsBucketMaxBytes)),
+				r.ObjectsBucketMaxBytes > 0 && float64(r.ObjectsBucketMaxBytes-r.ObjectsBucketBytes) <
+					ObjectsHeadroomAlarmFraction*float64(r.ObjectsBucketMaxBytes)
+		},
+		remedy: "Once the bucket is full every upload is refused. Raise its reservation " +
+			"(`nats stream update OBJ_crewlet_files --max-bytes=<bytes>`, within what the " +
+			"broker can grant), or move the files to an S3-compatible bucket with " +
+			"`crewlet objects migrate --to s3` (see docs/concepts/object-store.md).",
+	},
+	{
+		// ONE ALARM FOR EVERY BURNING OBJECTIVE, the detail naming each:
+		// the kind is the alarm's identity on the gauge and the screen, and
+		// a burn is one cause (this node failing what it promised) whichever
+		// objective shows it first.
+		kind: KindObjectiveBurn,
+		fires: func(r Reading) (string, bool) {
+			if len(r.ObjectiveBurns) == 0 {
+				return "", false
+			}
+			parts := make([]string, 0, len(r.ObjectiveBurns))
+			for _, b := range r.ObjectiveBurns {
+				parts = append(parts, fmt.Sprintf("%s is spending its error budget %.1f "+
+					"times as fast as its objective allows over the last %s and %.1f "+
+					"times over the last %s (the %s pair fires at %g)", b.Objective,
+					b.LongRate, spoken(b.Window.Long), b.ShortRate, spoken(b.Window.Short),
+					b.Window.Pace, b.Window.Factor))
+			}
+			return strings.Join(parts, "; "), true
+		},
+		remedy: "Find the failing events where the objective is measured " +
+			"(docs/reference/service-objectives.md names each one's source and its own " +
+			"instrument), starting from `crewlet.objectives.events` by `objective` and " +
+			"`outcome`. A fast burn spends a fiftieth of the month's error budget every " +
+			"hour and needs attention now; a slow burn spends a twentieth every six hours. " +
+			"The alarm clears within minutes of the fault ending, once the short window " +
+			"is healthy again.",
 	},
 }
 

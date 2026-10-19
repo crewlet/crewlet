@@ -1,0 +1,522 @@
+[
+ {
+  "id": "retitle-dashboard",
+  "kind": "exact",
+  "base": "kpi-dashboard-chartjs.html",
+  "edits": [
+   {
+    "old_str": "<h1>Revenue, last twelve months</h1>",
+    "new_str": "<h1>Revenue, trailing twelve months</h1>"
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "recolor-line",
+  "kind": "exact",
+  "base": "kpi-dashboard-chartjs.html",
+  "edits": [
+   {
+    "old_str": "borderColor: \"#3b5bdb\"",
+    "new_str": "borderColor: \"#2f9e44\""
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "new-month",
+  "kind": "exact",
+  "base": "kpi-dashboard-chartjs.html",
+  "edits": [
+   {
+    "old_str": "const revenue = [41, 44, 47, 46, 52, 58, 61, 66, 70, 74, 79, 85];",
+    "new_str": "const revenue = [41, 44, 47, 46, 52, 58, 61, 66, 70, 74, 79, 91];"
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "churn-figure",
+  "kind": "exact",
+  "base": "kpi-dashboard-chartjs.html",
+  "edits": [
+   {
+    "old_str": "document.getElementById(\"churn\").textContent = \"2.1%\";",
+    "new_str": "document.getElementById(\"churn\").textContent = \"1.8%\";"
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "todo-placeholder",
+  "kind": "exact",
+  "base": "todo-localstorage.html",
+  "edits": [
+   {
+    "old_str": "placeholder=\"What needs doing?\"",
+    "new_str": "placeholder=\"Add a task\""
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "todo-trim-guard",
+  "kind": "exact",
+  "base": "todo-localstorage.html",
+  "edits": [
+   {
+    "old_str": "  if (!input.value.trim()) return;\n",
+    "new_str": "  if (!input.value.trim()) { input.focus(); return; }\n"
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "calc-no-eval",
+  "kind": "exact",
+  "base": "calculator-eval.html",
+  "edits": [
+   {
+    "old_str": "  try { display.value = eval(display.value); } catch (e) { display.value = \"Error\"; }",
+    "new_str": "  try { display.value = evaluate(display.value); } catch (e) { display.value = \"Error\"; }"
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "snake-speed",
+  "kind": "exact",
+  "base": "snake-canvas-game.html",
+  "edits": [
+   {
+    "old_str": "setInterval(step, 120);",
+    "new_str": "setInterval(step, 90);"
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "snake-colors",
+  "kind": "exact",
+  "base": "snake-canvas-game.html",
+  "edits": [
+   {
+    "old_str": "ctx.fillStyle = \"#2f9e44\";",
+    "new_str": "ctx.fillStyle = \"#1971c2\";"
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "weather-city",
+  "kind": "exact",
+  "base": "weather-widget-fetch.html",
+  "edits": [
+   {
+    "old_str": "<h1>Paris</h1>",
+    "new_str": "<h1>Lyon</h1>"
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "survey-option",
+  "kind": "exact",
+  "base": "survey-form-navigates.html",
+  "edits": [
+   {
+    "old_str": "    <label><input type=\"radio\" name=\"overall\" value=\"bad\"> Bad</label>\n",
+    "new_str": "    <label><input type=\"radio\" name=\"overall\" value=\"bad\"> Bad</label>\n    <label><input type=\"radio\" name=\"overall\" value=\"unsure\"> Not sure</label>\n"
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "kanban-column",
+  "kind": "exact",
+  "base": "kanban-dragdrop.html",
+  "edits": [
+   {
+    "old_str": "  <div class=\"col card\" data-col=\"done\"><h2>Done</h2></div>\n",
+    "new_str": "  <div class=\"col card\" data-col=\"review\"><h2>Review</h2></div>\n  <div class=\"col card\" data-col=\"done\"><h2>Done</h2></div>\n"
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "quiz-question",
+  "kind": "exact",
+  "base": "quiz-string-timer.html",
+  "edits": [
+   {
+    "old_str": "[\"How many seats on Starter?\", [\"3\", \"10\"], 0]]",
+    "new_str": "[\"How many seats on Starter?\", [\"3\", \"10\"], 0], [\"Is there an API?\", [\"Yes\", \"No\"], 0]]"
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "svg-hired",
+  "kind": "exact",
+  "base": "svg-infographic.html",
+  "edits": [
+   {
+    "old_str": "Hired 12</text>",
+    "new_str": "Hired 14</text>"
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "pricing-row",
+  "kind": "exact",
+  "base": "pricing-static-noviewport.html",
+  "edits": [
+   {
+    "old_str": "<tr><td>Business</td><td>Unlimited</td><td>$29</td></tr>",
+    "new_str": "<tr><td>Business</td><td>Unlimited</td><td>$32</td></tr>"
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "delete-churn-card",
+  "kind": "delete",
+  "base": "kpi-dashboard-chartjs.html",
+  "edits": [
+   {
+    "old_str": "  <div class=\"card\"><div class=\"label\">Churn</div><div class=\"value\" id=\"churn\">0%</div></div>\n",
+    "new_str": ""
+   },
+   {
+    "old_str": "document.getElementById(\"churn\").textContent = \"2.1%\";\n",
+    "new_str": ""
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "delete-reset",
+  "kind": "delete",
+  "base": "pomodoro-remote-audio.html",
+  "edits": [
+   {
+    "old_str": "<button id=\"reset\">Reset</button>",
+    "new_str": ""
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "dashboard-three-edits",
+  "kind": "sequence",
+  "base": "kpi-dashboard-chartjs.html",
+  "edits": [
+   {
+    "old_str": "<h1>Revenue, last twelve months</h1>",
+    "new_str": "<h1>Revenue</h1>"
+   },
+   {
+    "old_str": "tension: 0.3",
+    "new_str": "tension: 0.4"
+   },
+   {
+    "old_str": "<div class=\"label\">Customers</div>",
+    "new_str": "<div class=\"label\">Accounts</div>"
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "todo-four-edits",
+  "kind": "sequence",
+  "base": "todo-localstorage.html",
+  "edits": [
+   {
+    "old_str": "<h1>To-do</h1>",
+    "new_str": "<h1>Team to-do</h1>"
+   },
+   {
+    "old_str": "<button onclick=\"clearDone()\">Clear done</button>",
+    "new_str": "<button onclick=\"clearDone()\">Clear completed</button>"
+   },
+   {
+    "old_str": "li.done span { text-decoration: line-through; color: var(--muted); }",
+    "new_str": "li.done span { text-decoration: line-through; opacity: 0.6; }"
+   },
+   {
+    "old_str": "span.textContent = \" \" + t.text;",
+    "new_str": "span.textContent = \" \" + t.text.trim();"
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "quiz-two-edits",
+  "kind": "sequence",
+  "base": "quiz-string-timer.html",
+  "edits": [
+   {
+    "old_str": "if (at < questions.length) setTimeout(\"showQuestion()\", 600);",
+    "new_str": "if (at < questions.length) setTimeout(showQuestion, 600);"
+   },
+   {
+    "old_str": "document.getElementById(\"score\").textContent = \"Score: \" + score;",
+    "new_str": "document.getElementById(\"score\").textContent = \"Score: \" + score + \" of \" + questions.length;"
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "leaflet-three-edits",
+  "kind": "sequence",
+  "base": "leaflet-map.html",
+  "edits": [
+   {
+    "old_str": "<h1>Our offices</h1>",
+    "new_str": "<h1>Where we work</h1>"
+   },
+   {
+    "old_str": "setView([48.8566, 2.3522], 4)",
+    "new_str": "setView([50.1, 8.6], 4)"
+   },
+   {
+    "old_str": "[51.5074, -0.1278, \"London\"]]",
+    "new_str": "[51.5074, -0.1278, \"London\"], [40.4168, -3.7038, \"Madrid\"]]"
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "expense-two-edits",
+  "kind": "sequence",
+  "base": "innerhtml-dynamic-handlers.html",
+  "edits": [
+   {
+    "old_str": "<h1>Expenses</h1>",
+    "new_str": "<h1>Trip expenses</h1>"
+   },
+   {
+    "old_str": "item.amount.toFixed(2)}</td>",
+    "new_str": "item.amount.toFixed(2)} EUR</td>"
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "button-widened",
+  "kind": "widened",
+  "base": "calculator-eval.html",
+  "edits": [
+   {
+    "old_str": "<button onclick=\"press('9')\">9</button>",
+    "new_str": "<button onclick=\"press('9')\">9</button><button onclick=\"press('%')\">%</button>"
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "card-widened",
+  "kind": "widened",
+  "base": "kpi-dashboard-chartjs.html",
+  "edits": [
+   {
+    "old_str": "<div class=\"card\"><canvas id=\"revenue\" height=\"120\"></canvas></div>",
+    "new_str": "<div class=\"card\"><canvas id=\"revenue\" height=\"160\"></canvas></div>"
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "label-widened",
+  "kind": "widened",
+  "base": "survey-form-navigates.html",
+  "edits": [
+   {
+    "old_str": "<label>Anything else? <textarea name=\"notes\"></textarea></label>",
+    "new_str": "<label>Anything else? <textarea name=\"notes\" rows=\"4\"></textarea></label>"
+   }
+  ],
+  "expect": "applied"
+ },
+ {
+  "id": "short-button",
+  "kind": "ambiguous",
+  "base": "calculator-eval.html",
+  "edits": [
+   {
+    "old_str": "<button onclick=\"press(",
+    "new_str": "<button class=\"key\" onclick=\"press("
+   }
+  ],
+  "expect": "many_match"
+ },
+ {
+  "id": "short-div-close",
+  "kind": "ambiguous",
+  "base": "kpi-dashboard-chartjs.html",
+  "edits": [
+   {
+    "old_str": "</div>",
+    "new_str": "</div>\n"
+   }
+  ],
+  "expect": "many_match"
+ },
+ {
+  "id": "short-card",
+  "kind": "ambiguous",
+  "base": "kpi-dashboard-chartjs.html",
+  "edits": [
+   {
+    "old_str": "<div class=\"card\">",
+    "new_str": "<div class=\"card wide\">"
+   }
+  ],
+  "expect": "many_match"
+ },
+ {
+  "id": "short-label",
+  "kind": "ambiguous",
+  "base": "survey-form-navigates.html",
+  "edits": [
+   {
+    "old_str": "<label><input type=\"radio\" name=\"overall\"",
+    "new_str": "<label class=\"opt\"><input type=\"radio\" name=\"overall\""
+   }
+  ],
+  "expect": "many_match"
+ },
+ {
+  "id": "short-fillstyle",
+  "kind": "ambiguous",
+  "base": "snake-canvas-game.html",
+  "edits": [
+   {
+    "old_str": "ctx.fillStyle = ",
+    "new_str": "ctx.fillStyle="
+   }
+  ],
+  "expect": "many_match"
+ },
+ {
+  "id": "indent-drift",
+  "kind": "drift",
+  "base": "todo-localstorage.html",
+  "edits": [
+   {
+    "old_str": "if (!input.value.trim()) return;\n    tasks.push",
+    "new_str": "if (!input.value.trim()) return;\n  tasks.unshift"
+   }
+  ],
+  "expect": "zero_match"
+ },
+ {
+  "id": "indent-drift-2",
+  "kind": "drift",
+  "base": "snake-canvas-game.html",
+  "edits": [
+   {
+    "old_str": "function step() {\n    const head",
+    "new_str": "function step() {\n  const head"
+   }
+  ],
+  "expect": "zero_match"
+ },
+ {
+  "id": "quote-drift",
+  "kind": "drift",
+  "base": "kpi-dashboard-chartjs.html",
+  "edits": [
+   {
+    "old_str": "document.getElementById('mrr')",
+    "new_str": "document.getElementById('arr')"
+   }
+  ],
+  "expect": "zero_match"
+ },
+ {
+  "id": "attr-quote-drift",
+  "kind": "drift",
+  "base": "weather-widget-fetch.html",
+  "edits": [
+   {
+    "old_str": "<p id='temp'>Loading...</p>",
+    "new_str": "<p id='temp'>Fetching...</p>"
+   }
+  ],
+  "expect": "zero_match"
+ },
+ {
+  "id": "entity-drift",
+  "kind": "drift",
+  "base": "pricing-static-noviewport.html",
+  "edits": [
+   {
+    "old_str": "<h1>Pricing &amp; plans</h1>",
+    "new_str": "<h1>Plans</h1>"
+   }
+  ],
+  "expect": "zero_match"
+ },
+ {
+  "id": "paraphrase-drift",
+  "kind": "drift",
+  "base": "survey-form-navigates.html",
+  "edits": [
+   {
+    "old_str": "<h1>How was this quarter for you?</h1>",
+    "new_str": "<h1>Quarterly pulse</h1>"
+   }
+  ],
+  "expect": "zero_match"
+ },
+ {
+  "id": "stale-after-own-edit",
+  "kind": "stale",
+  "base": "kpi-dashboard-chartjs.html",
+  "edits": [
+   {
+    "old_str": "<h1>Revenue, last twelve months</h1>",
+    "new_str": "<h1>Revenue</h1>"
+   },
+   {
+    "old_str": "<h1>Revenue, last twelve months</h1>",
+    "new_str": "<h1>Revenue (USD)</h1>"
+   }
+  ],
+  "expect": "zero_match"
+ },
+ {
+  "id": "stale-after-own-edit-2",
+  "kind": "stale",
+  "base": "todo-localstorage.html",
+  "edits": [
+   {
+    "old_str": "function clearDone() { tasks = tasks.filter(t => !t.done); save(); }",
+    "new_str": "function clearDone() { tasks = tasks.filter((t) => !t.done); save(); }"
+   },
+   {
+    "old_str": "tasks = tasks.filter(t => !t.done)",
+    "new_str": "tasks = tasks.filter(t => t.done === false)"
+   }
+  ],
+  "expect": "zero_match"
+ },
+ {
+  "id": "stale-after-own-edit-3",
+  "kind": "stale",
+  "base": "snake-canvas-game.html",
+  "edits": [
+   {
+    "old_str": "setInterval(step, 120);",
+    "new_str": "setInterval(step, 100);"
+   },
+   {
+    "old_str": "setInterval(step, 120);",
+    "new_str": "setInterval(step, 80);"
+   }
+  ],
+  "expect": "zero_match"
+ }
+]

@@ -165,7 +165,10 @@ type Status string
 // The statuses. Three, and each is a different answer to "should a reader see
 // this": published is the page, draft is somebody's unfinished thought, and
 // trashed is deleted as far as any reader is concerned while still being
-// recoverable for thirty days.
+// recoverable for thirty days. After that the trash reaper purges it
+// (internal/trashreap, through [Store.PurgeTrashed]): a trash nothing empties
+// keeps every page anybody ever deleted, for ever, in every data node's copy
+// and every backup.
 const (
 	StatusPublished Status = "published"
 	StatusDraft     Status = "draft"

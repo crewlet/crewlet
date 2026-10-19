@@ -258,7 +258,7 @@ stopping it.
 | `cooldowns` | Which provider key is cooling after a 429. Per-process monotonic values are not even *comparable* across nodes | [Deployment](../guides/deployment.md) |
 | `rate` | The notification valve | [Event System](event-system.md) |
 | `budgets` | Org and per-seat spend against the cap. Caps stay config-derived in memory; only *usage* is shared | [Deployment § Token budgets](../guides/deployment.md#token-budgets) |
-| `objects` | Which store the company's files are in — recorded by the first node, so a node configured with another refuses to boot — and what the object store's collector last found | [Object Store](object-store.md#one-store-per-fleet) |
+| `objects` | Which store the company's files are in (recorded by the first node, so a node configured with another refuses to boot), and what the object store's collector and the trash reaper last did | [Object Store](object-store.md#one-store-per-fleet) |
 
 The full list, what each retention is sized from, and what deliberately stays
 node-local are in [Coordination](coordination.md).

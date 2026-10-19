@@ -36,7 +36,7 @@ func outlineCorpus() []outlined {
 			keys: []string{
 				"identity", "company_context", "background", "responsibilities",
 				"behavioral_guidelines", "unit", "policies", "team", "human_colleagues",
-				"your_turn", "escalation", "sandbox",
+				"your_turn", "escalation", KeyUntrustedText, "sandbox",
 				KeyThreadContext, KeyPersonalMemory, KeySynthesizedSkills,
 				KeyRelevantKnowledge, KeyEpisodeRecall, KeyCounterparty,
 				"workers", "tool_skills", "available_tools",
@@ -49,12 +49,12 @@ func outlineCorpus() []outlined {
 				KeyEpisodeRecall:     {"### 2026-09-30 — deploy 2.2"},
 			},
 		},
-		{name: "executor, no seat", prompt: BuildExecutor(Seat{}, ExecutorInput{}), keys: []string{"your_turn"}},
+		{name: "executor, no seat", prompt: BuildExecutor(Seat{}, ExecutorInput{}), keys: []string{"your_turn", KeyUntrustedText}},
 		{
 			name:   "executor, a plain seat",
 			prompt: BuildExecutor(engineer(), ExecutorInput{}),
 			keys: []string{"identity", "company_context", "responsibilities",
-				"behavioral_guidelines", "unit", "policies", "your_turn"},
+				"behavioral_guidelines", "unit", "policies", "your_turn", KeyUntrustedText},
 		},
 		{
 			name:   "review, every piece of evidence",

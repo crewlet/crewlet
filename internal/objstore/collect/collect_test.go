@@ -56,13 +56,25 @@ func (s *fakeSource) Referenced(_ context.Context, among []objstore.Key,
 	return out, !s.incomplete, nil
 }
 
-func (s *fakeSource) Each(_ context.Context, _ statelog.Position, visit func(Reference) error) (bool, error) {
+// Each walks the references in key order after `after`, as a declared
+// table's keyset walk does.
+func (s *fakeSource) Each(_ context.Context, _ statelog.Position, after objstore.Key,
+	visit func(Reference) error) (bool, error) {
 	s.mu.Lock()
-	named := slices.Collect(maps.Values(s.named))
+	named := slices.SortedFunc(maps.Values(s.named), func(a, b Reference) int {
+		return a.Object.Key.Compare(b.Object.Key)
+	})
 	incomplete := s.incomplete
 	s.mu.Unlock()
 	for _, ref := range named {
-		if err := visit(ref); err != nil {
+		if !after.IsZero() && ref.Object.Key.Compare(after) <= 0 {
+			continue
+		}
+		err := visit(ref)
+		if errors.Is(err, ErrSkipTable) {
+			break
+		}
+		if err != nil {
 			return false, err
 		}
 	}
@@ -117,6 +129,8 @@ type backend struct {
 	// before it answers what the twin holds.
 	lagging map[string]int
 	statErr error
+	// stats and lists count the questions the store was asked.
+	stats, lists int
 }
 
 func (b *backend) Pending(ctx context.Context, visit func(objstore.Pending) error) error {
@@ -135,6 +149,9 @@ func (b *backend) Pending(ctx context.Context, visit func(objstore.Pending) erro
 }
 
 func (b *backend) List(ctx context.Context, visit func(objstore.Info) error) error {
+	b.mu.Lock()
+	b.lists++
+	b.mu.Unlock()
 	if err := b.Backend.List(ctx, visit); err != nil {
 		return err
 	}
@@ -152,6 +169,7 @@ func (b *backend) Abandon(_ context.Context, p objstore.Pending) error {
 
 func (b *backend) Stat(ctx context.Context, name string) (objstore.Info, error) {
 	b.mu.Lock()
+	b.stats++
 	failure := b.statErr
 	lag := b.lagging[name]
 	if lag > 0 {
@@ -634,21 +652,97 @@ func TestTheAuditFindsMissingAndDamagedFiles(t *testing.T) {
 	}
 }
 
-// A STORE THAT HAD NOT CAUGHT UP IS NOT ONE THAT LOST THE OBJECT: a "not found"
-// is asked again at the end of the pass before the object is called missing.
-func TestALaggingNotFoundIsNotMissing(t *testing.T) {
+// A STORE THAT HAD NOT CAUGHT UP IS NOT ONE THAT LOST THE OBJECT: a file no
+// listing showed is asked about by name at the end of the pass before it is
+// called missing, and one the store then answers is judged as it holds it.
+func TestAnUnlistedObjectIsAskedAboutBeforeItIsMissing(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	o := h.file("new.md", "just uploaded")
-	h.backend.lagging[o.Key.Name()] = 1
-	r, err := h.c.Audit(t.Context())
+	// A LISTING THAT LEFT IT OUT, as a gateway that did not date it does.
+	h.backend.listTail = objstore.ErrUndated
+	hidden := &hidingBackend{backend: h.backend, hide: o.Key.Name()}
+	store, err := objstore.NewStoreAt(hidden, h.clock.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := New(Options{Store: store, References: References{h.source}, Now: h.clock.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := c.Audit(t.Context())
 	if err != nil || r.Missing != 0 || r.Found == nil || r.Found.Missing != 0 {
-		t.Fatalf("Audit = %+v, %v; an object answered once as not found and then found "+
+		t.Fatalf("Audit = %+v, %v; an object a listing left out and a stat found "+
 			"is not missing", r, err)
 	}
-	h.backend.lagging[o.Key.Name()] = 2
-	if r, err = h.c.Audit(t.Context()); err != nil || r.Missing != 1 {
-		t.Fatalf("Audit = %+v, %v; an object not found twice is missing", r, err)
+	h.backend.lagging[o.Key.Name()] = 1
+	if r, err = c.Audit(t.Context()); err != nil || r.Missing != 1 {
+		t.Fatalf("Audit = %+v, %v; an object neither listed nor found is missing", r, err)
+	}
+}
+
+// hidingBackend is a store whose listing leaves one name out.
+type hidingBackend struct {
+	*backend
+	hide string
+}
+
+func (b *hidingBackend) List(ctx context.Context, visit func(objstore.Info) error) error {
+	return b.backend.List(ctx, func(info objstore.Info) error {
+		if info.Name == b.hide {
+			return nil
+		}
+		return visit(info)
+	})
+}
+
+// THE AUDIT READS THE LISTING, NOT A QUESTION PER OBJECT: a store holding
+// every file it should is listed and asked nothing else.
+func TestTheAuditReadsAListingRatherThanAStatPerObject(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	for i := range 20 {
+		h.file(fmt.Sprintf("f%02d.md", i), fmt.Sprintf("content %d", i))
+	}
+	r, err := h.c.Audit(t.Context())
+	if err != nil || r.Referenced != 20 || r.Missing != 0 || r.Damaged != 0 {
+		t.Fatalf("Audit = %+v, %v", r, err)
+	}
+	if h.backend.stats != 0 || h.backend.lists != 1 {
+		t.Fatalf("the audit made %d stats and %d listings, want one listing and no stat",
+			h.backend.stats, h.backend.lists)
+	}
+}
+
+// EVERY WINDOW IS AUDITED, each reference once: a store larger than a window
+// is listed once per window, and what it lost or damaged in any of them is
+// found.
+func TestEveryWindowOfTheListingIsAudited(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.c.window = 3
+	var all []objstore.Object
+	for i := range 10 {
+		all = append(all, h.file(fmt.Sprintf("f%02d.md", i), fmt.Sprintf("content %d", i)))
+		h.clock.advance(time.Millisecond)
+	}
+	// SOMEBODY ELSE'S OBJECT, which the window must not count.
+	if err := h.backend.Put(t.Context(), "elsewhere/x", strings.NewReader("x"), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	slices.SortFunc(all, func(a, b objstore.Object) int { return a.Key.Compare(b.Key) })
+	for _, i := range []int{1, 5, 9} {
+		if err := h.store.Delete(t.Context(), all[i].Key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.backend.Corrupt(all[4].Key.Name(), []byte("bent"))
+	r, err := h.c.Audit(t.Context())
+	if err != nil || r.Referenced != 10 || r.Missing != 3 || r.Damaged != 1 {
+		t.Fatalf("Audit = %+v, %v; want ten files, three missing and one damaged", r, err)
+	}
+	if h.backend.lists != 3 {
+		t.Fatalf("seven held objects in windows of three were listed %d times, want 3", h.backend.lists)
 	}
 }
 

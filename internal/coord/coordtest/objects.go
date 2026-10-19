@@ -1,8 +1,39 @@
 package coordtest
 
+import (
+	"errors"
+
+	"github.com/crewlet/crewlet/internal/coord"
+)
+
 // ---- the object store ------------------------------------------------- //
 
 var objectStoreCases = []fleetCase{{
+	// A MOVE IS CONDITIONAL ON THE STORE IT MOVES FROM: the migration that
+	// moved the files made it once, a retry of that move changes nothing,
+	// and a move from a store that is not recorded is refused by name.
+	name: "the object backend moves only from the store recorded",
+	fn: func(h *fleetHarness) {
+		if err := h.f.MoveObjectBackend(h.ctx, "nats", "s3:b/"); !errors.Is(err, coord.ErrObjectBackendMoved) {
+			h.t.Fatalf("a move with nothing recorded answered %v, want ErrObjectBackendMoved", err)
+		}
+		if _, err := h.f.AgreeObjectBackend(h.ctx, "nats"); err != nil {
+			h.t.Fatal(err)
+		}
+		if err := h.f.MoveObjectBackend(h.ctx, "s3:other/", "s3:b/"); !errors.Is(err, coord.ErrObjectBackendMoved) {
+			h.t.Fatalf("a move from a store not recorded answered %v", err)
+		}
+		for range 2 {
+			if err := h.f.MoveObjectBackend(h.ctx, "nats", "s3:b/"); err != nil {
+				h.t.Fatalf("the move, or its retry: %v", err)
+			}
+		}
+		got, err := h.f.AgreeObjectBackend(h.ctx, "nats")
+		if err != nil || got != "s3:b/" {
+			h.t.Fatalf("after the move a node naming nats is told %q, %v; want the bucket", got, err)
+		}
+	},
+}, {
 	// THE LAST REPORT IS THE ANSWER, whoever wrote it: the collector's duty
 	// moves between nodes, and every node's status surface reads the latest.
 	name: "the collector's last report replaces the one before",

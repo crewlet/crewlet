@@ -23,13 +23,8 @@ import { fmtMinutes } from "~/lib/work.ts";
 import { plural } from "~/lib/format.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { SeatCard, Section } from "~/components/common.tsx";
-import { Card, cx, EmptyState, EmptyValue, Tag } from "@crewlethq/ui";
+import { Card, cx, EmptyState, EmptyValue, SegmentedControl, Tag } from "@crewlethq/ui";
 import { UsersGlyph } from "@crewlethq/icons/glyphs";
-// OURS, AND DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
-// `semantics`: `radio` commits the option the arrows land on. Both strips here
-// drive a `useTab`, which pushes a history entry — and the view strip swaps the
-// screen for a table that fires `work_workload`. See the report.
-import { Segmented } from "~/ui/primitives.tsx";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -400,10 +395,12 @@ export function People() {
       <div className="toolbar">
         <span className="spacer" />
         {view === "seats" && (
-          <Segmented<Grouping>
-            ariaLabel="Grouping"
+          <SegmentedControl<Grouping>
+            semantics="radio"
+            activate="manual"
+            label="Grouping"
             value={group}
-            onChange={setGroup}
+            onValueChange={setGroup}
             options={[
               { value: "state", label: "By state" },
               { value: "unit", label: "By unit" },
@@ -414,10 +411,12 @@ export function People() {
         {/* THE VIEW IS A PLACE, so it pushes history: somebody who opened the
             workload and pressed back expects the roster, not the screen
             before this one. */}
-        <Segmented<(typeof VIEWS)[number]>
-          ariaLabel="View"
+        <SegmentedControl<(typeof VIEWS)[number]>
+          semantics="radio"
+          activate="manual"
+          label="View"
           value={view}
-          onChange={setView}
+          onValueChange={setView}
           options={[
             { value: "seats", label: "Seats" },
             { value: "workload", label: "Workload" },

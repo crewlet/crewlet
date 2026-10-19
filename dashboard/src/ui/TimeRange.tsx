@@ -34,14 +34,8 @@ import {
 } from "~/lib/range.ts";
 import type { Range, TimeRange, Window } from "~/lib/range.ts";
 import { fromWall, toWall, tsKey } from "~/lib/format.ts";
-import { Button, Callout, FormField, Input, Modal } from "@crewlethq/ui";
+import { Button, Callout, FormField, Input, Modal, SegmentedControl } from "@crewlethq/ui";
 import { ClockGlyph } from "@crewlethq/icons/glyphs";
-// OURS, AND DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
-// `semantics` — the arrows commit the option they land on — and this strip
-// drives a `useParam` that re-runs the screen's series query. Arrowing across
-// the offered windows under that control is a query per keypress. Ours
-// activates on Enter or Space and says so. See the report.
-import { Segmented } from "~/ui/primitives.tsx";
 
 /** The custom option's value in the segmented group — not a [Range]. */
 const CUSTOM = "custom";
@@ -92,10 +86,12 @@ export function TimeRangePicker({
 
   return (
     <>
-      <Segmented<Choice>
-        ariaLabel={ariaLabel}
+      <SegmentedControl<Choice>
+        semantics="radio"
+        activate="manual"
+        label={ariaLabel}
         value={isRange(window) ? window : window.today ? TODAY : CUSTOM}
-        onChange={(next) =>
+        onValueChange={(next) =>
           next === CUSTOM
             ? setEditing(true)
             : set(next === TODAY ? todayWindow(Date.now(), offer.zone) : next)

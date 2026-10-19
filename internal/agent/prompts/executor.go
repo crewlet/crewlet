@@ -1,6 +1,10 @@
 package prompts
 
-import "slices"
+import (
+	"slices"
+
+	"github.com/crewlet/crewlet/internal/provenance"
+)
 
 // ExecutorHeader is the executor's contract: decide and act in one pass, then
 // account for it.
@@ -75,6 +79,12 @@ const ExecutorHeader = "\n## Your turn" +
 	"\nMission, vision, policies, your role profile, your unit context, " +
 	"and your team roster are already in this prompt -- no lookup " +
 	"needed."
+
+// untrustedTextHeading titles the standing sentence about fenced text.
+const untrustedTextHeading = "\n## Text somebody else wrote"
+
+// KeyUntrustedText is the outline key of that section.
+const KeyUntrustedText = "untrusted_text"
 
 // executorKnowledgeNote points the executor at the prefetched documentation.
 //
@@ -258,6 +268,14 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	// the header says finish the arc, and this says the one case where
 	// finishing means stopping on a branch until somebody answers.
 	b.Heading("escalation", BuildEscalationSection(in.AvailableTools)...)
+	// AND HOW TO READ WHAT OTHER PEOPLE WROTE, before any of it: the thread
+	// below, every page, comment and file a tool answers, and anything an
+	// MCP tool hands back is somebody else's words, and the fences round
+	// them mean something only if the seat was told what. UNCONDITIONAL and
+	// constant ([provenance.StandingInstruction]): the turn's token lives in
+	// the fences, so this section is the same bytes on every turn of every
+	// seat and costs the prompt cache nothing.
+	b.Heading(KeyUntrustedText, untrustedTextHeading, provenance.StandingInstruction)
 
 	if in.OffersSandbox {
 		b.Heading("sandbox", executorSandboxSection)

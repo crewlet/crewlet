@@ -372,6 +372,10 @@ export default defineConfig({
       // Removing a dead member from the broker's metadata group (Settings ›
       // Nodes, Broker members). The membership is read over the socket.
       "/fleet": { target: "http://localhost:8000" },
+      // Every artifact write (a share, a label, a schema, a datastore write),
+      // a page's frame and a document's source, and the ready report a frame
+      // makes (lib/artifacts/api.ts). Its reads are the socket's questions.
+      "/artifacts": { target: "http://localhost:8000" },
     },
   },
 });

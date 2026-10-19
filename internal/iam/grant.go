@@ -4,25 +4,27 @@ import "slices"
 
 // Grant is one permission a principal carries: ADMIN, or ONE APP.
 //
-// A CLOSED SET OF THREE (ADR-0033), and the set is the whole point. Eleven
-// grants carved the engine by surface — a read of the board, a read of the
-// trail, a read of the document, a write of work, a write of pages, the
-// credential store twice, the deployment, the directory, a coding run — and a
-// company had to compose those eleven into the three or four things it meant
-// to say about a person. Nobody could: an operator inviting a teammate faced a
-// list of capabilities that each opened part of a screen, and a person handed
-// none of the right ones landed on an engine that showed them nothing at all.
-// What a company actually says about somebody is whether they RUN it, and
-// which of its apps they USE, so that is the vocabulary:
+// A CLOSED SET (ADR-0033), and the set is the whole point. Eleven grants carved
+// the engine by surface (a read of the board, a read of the trail, a read of
+// the document, a write of work, a write of pages, the credential store twice,
+// the deployment, the directory, a coding run) and a company had to compose
+// those eleven into the three or four things it meant to say about a person.
+// Nobody could: an operator inviting a teammate faced a list of capabilities
+// that each opened part of a screen, and a person handed none of the right
+// ones landed on an engine that showed them nothing at all. What a company
+// actually says about somebody is whether they RUN it, and which of its apps
+// they USE, so that is the vocabulary:
 //
 //   - [GrantAdmin] runs the company and the engine, and includes every app;
 //   - [GrantTracker] uses the native work tracker, read and write;
-//   - [GrantKnowledge] uses the native knowledge base, read and write.
+//   - [GrantKnowledge] uses the native knowledge base, read and write;
+//   - [GrantArtifacts] authors artifacts: creates them, publishes their
+//     versions and shapes their data.
 //
-// Everything else a person sees — the org chart, the agents' status, spend,
-// schedules — is EVERYBODY's, and asks no permission at all; what a team lead
-// may do inside their own team is a RELATION internal/authz asks the chart
-// about, never a grant.
+// Everything else a person sees (the org chart, the agents' status, spend,
+// schedules) is EVERYBODY's, and asks no permission at all; what a team lead
+// may do inside their own team, and what a share lets somebody do on one
+// artifact, are RELATIONS internal/authz asks about, never a grant.
 //
 // THE ZERO IS INVALID, and that is load-bearing rather than decorative: a gate
 // somebody forgot to fill in holds the zero Grant, and a zero that validated
@@ -79,6 +81,20 @@ const (
 	// what every seat reads next turn — which is why the tool-skill pages,
 	// injected into every seat's prompt, are [GrantAdmin]'s and not this.
 	GrantKnowledge Grant = "knowledge"
+
+	// GrantArtifacts authors artifacts: creating one, publishing a version,
+	// renaming it, adding an asset, changing its datastore's schema, and
+	// trashing and restoring what one owns. It is the permission a founder
+	// withholds from somebody who should not publish script that runs in
+	// colleagues' browsers.
+	//
+	// IT GATES AUTHORING ONLY, never participation. Somebody without it
+	// opens, comments on and fills in every artifact shared with them,
+	// because a share is a RELATION (internal/authz's shared class) and on
+	// a participation verb the relation alone decides; an invitation that
+	// ticks nothing still leaves a person able to answer the review sheet a
+	// colleague sent them.
+	GrantArtifacts Grant = "artifacts"
 )
 
 // AllGrants are every permission this build knows, in declaration order.
@@ -86,7 +102,7 @@ const (
 // Named AllGrants rather than Grants because [Principal.Grants] is the field a
 // reader meets first, and one name for the company's whole vocabulary and for
 // one principal's slice of it is a sentence that reads wrong either way.
-var AllGrants = []Grant{GrantAdmin, GrantTracker, GrantKnowledge}
+var AllGrants = []Grant{GrantAdmin, GrantTracker, GrantKnowledge, GrantArtifacts}
 
 // Apps are the permissions that open one APP each, and THE ONE PLACE AN APP IS
 // DECLARED.
@@ -95,10 +111,12 @@ var AllGrants = []Grant{GrantAdmin, GrantTracker, GrantKnowledge}
 // agent seat holds exactly these (it uses the company's apps and never runs
 // the company), [Expand] adds them to an administrator, the dashboard's access
 // picker ticks and locks them under Admin, and internal/authz's walks hold
-// every one of them to a verb a person can take. The dashboard's own copy is
-// held to this one by a gate, so a third app added here and nowhere else fails
-// the build rather than shipping a permission no screen offers.
-var Apps = []Grant{GrantTracker, GrantKnowledge}
+// every one of them to a verb a person can take; the live socket's audience
+// reads it too, so an app added here reaches every reader with no second edit.
+// The dashboard's own copy is held to this one by a gate, so an app added here
+// and nowhere else fails the build rather than shipping a permission no screen
+// offers.
+var Apps = []Grant{GrantTracker, GrantKnowledge, GrantArtifacts}
 
 // Valid reports whether a permission off the wire is one this build knows.
 //

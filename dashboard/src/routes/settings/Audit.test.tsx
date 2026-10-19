@@ -22,7 +22,8 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { Audit, auditCsv, writerOf } from "./Audit.tsx";
+import { toCsv } from "@crewlethq/ui";
+import { Audit, artifactDetail, auditCsv, writerOf } from "./Audit.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { QueryError, type QueryName } from "~/protocol/index.ts";
@@ -300,13 +301,28 @@ test("the export escapes what a spreadsheet would otherwise split", () => {
     },
   ]);
   const [header, row] = csv.split("\r\n");
-  expect(header).toBe(
-    '"at","where","who","who_kind","through","what","to","detail","node","failed"',
-  );
-  expect(row).toContain('"pat:0192f00d"');
-  expect(row).toContain('"turn on Slack, and say ""done"""');
-  // Ten columns, whatever the detail held.
-  expect(row?.match(/","/g)?.length).toBe(9);
+  expect(header).toBe("at,where,who,who_kind,through,what,to,detail,node,failed");
+  expect(row).toContain(",pat:0192f00d,");
+  // A COMMA OR A QUOTE IN A CELL IS QUOTED, its quotes doubled, so it never
+  // moves the columns after it: ten columns, whatever the detail held.
+  const detail = '"turn on Slack, and say ""done"""';
+  expect(row).toContain(detail);
+  expect(row?.replace(detail, "DETAIL").split(",")).toHaveLength(10);
+  // AND A NEWLINE IN A CELL IS QUOTED, so the row stays one record.
+  const multi = auditCsv([
+    {
+      id: "config:rev-3",
+      at: "2031-04-16T00:00:00Z",
+      source: "config",
+      kind: "dashboard",
+      actor: "founder",
+      actorKind: "human",
+      through: "",
+      subject: "rev-3",
+      detail: "line one\nline two",
+    },
+  ]);
+  expect(multi.split("\r\n")[1]).toContain('"line one\nline two"');
 });
 
 // A CELL SOMEBODY ELSE WROTE IS NEVER A FORMULA. A summary is text a model or a
@@ -327,6 +343,9 @@ test("the export opens a formula-looking cell as text", () => {
     },
   ]);
   expect(csv.split("\r\n")[1]).toContain(`"'=HYPERLINK(""https://example.com"",""click"")"`);
+  // AND A COUNT STAYS A NUMBER: only text is marked, so a negative number is
+  // still one a spreadsheet sums.
+  expect(toCsv(["n"], [[-3]])).toBe("n\r\n-3\r\n");
 });
 
 // A PERSON BOUND TO A SEAT WRITES AS THE SEAT, AND A LOGIN IS NOT A SEAT.
@@ -545,6 +564,99 @@ test("runtime calls are merged in, drawn as their author, and narrowed by Where"
   mount();
   await waitFor(() => expect(screen.getByText(/ran update_work_item/)).toBeTruthy());
   expect(screen.queryByText("took it off the board")).toBeNull();
+});
+
+/** One row of the company trail of every artifact, as `artifact_trail` answers it. */
+function trailRow(over: Record<string, unknown> = {}) {
+  return {
+    artifact: "0192f00e-0000-7000-8000-00000000a001",
+    title: "Salary review",
+    owner: "jane",
+    position: 41,
+    op_id: "op-1",
+    op: "read_elevated",
+    outcome: "applied",
+    number: 2,
+    actor: { name: "root@example.com", kind: "operator", operator_id: "session:0192f00e" },
+    elevated: true,
+    at: RECENTLY,
+    summary: {},
+    ...over,
+  };
+}
+
+// EVERY ARTIFACT'S HISTORY IS THE SEVENTH SOURCE (D09). An administrator's
+// read of somebody's private artifact is recorded only in that artifact's own
+// history, which its owner and editors see; here it is found company-wide,
+// said in words, linked to the artifact and narrowed by Where.
+test("every artifact's history is merged in, an administrator's read said in words", async () => {
+  const query = serving({
+    work_activity: { records: [commit()], complete: true },
+    artifact_trail: {
+      entries: [
+        trailRow(),
+        trailRow({
+          position: 40,
+          op: "publish",
+          number: 3,
+          elevated: false,
+          actor: { name: "jane", kind: "human" },
+        }),
+      ],
+      complete: true,
+    },
+  });
+  mount();
+  await waitFor(() =>
+    expect(screen.getByText("Read version 2 as an administrator, with no share")).toBeTruthy(),
+  );
+  expect(asked(query, "artifact_trail").limit).toBe(200);
+  expect(screen.getByText("Version 3")).toBeTruthy();
+  expect(screen.getByText("read elevated")).toBeTruthy();
+  const links = screen.getAllByRole("link", { name: "Salary review" });
+  expect(links[0]?.getAttribute("href")).toBe("#/artifacts/0192f00e-0000-7000-8000-00000000a001");
+  expect(screen.getByText("took it off the board")).toBeTruthy();
+
+  // AND `kind=artifacts` IS THE ARTIFACT ROWS ALONE.
+  cleanup();
+  location.hash = "#/settings/audit?kind=artifacts";
+  serving({
+    work_activity: { records: [commit()], complete: true },
+    artifact_trail: { entries: [trailRow()], complete: true },
+  });
+  mount();
+  await waitFor(() =>
+    expect(screen.getByText("Read version 2 as an administrator, with no share")).toBeTruthy(),
+  );
+  expect(screen.queryByText("took it off the board")).toBeNull();
+});
+
+test("artifactDetail: a refusal says why, and an override says it was one", () => {
+  expect(
+    artifactDetail(
+      trailRow({
+        op: "publish",
+        outcome: "refused",
+        reason: "head_moved",
+        number: 0,
+        elevated: false,
+      }) as never,
+    ),
+  ).toBe("Refused: head moved");
+  expect(artifactDetail(trailRow({ op: "trash", elevated: true, number: 0 }) as never)).toBe(
+    "Admitted only as an administrator",
+  );
+  expect(artifactDetail(trailRow({ op: "share", elevated: false, number: 0 }) as never)).toBe("");
+});
+
+test("a refused artifact trail names the grant, and the other sources stand", async () => {
+  serving({
+    work_activity: { records: [commit()], complete: true },
+    artifact_trail: new QueryError("unauthorized", { reason: "no_grant", grants: ["admin"] }),
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("took it off the board")).toBeTruthy());
+  expect(screen.getByText(/Reading every artifact's history needs Admin/)).toBeTruthy();
 });
 
 // A WINDOWED PAGE THAT FILLED IS REPORTED TOO. The runtime audit and the

@@ -1,4 +1,5 @@
-// Package static embeds the dashboard.
+// Package static embeds the dashboard, and what the artifact origin serves
+// beside a page: the page runtime and the design system's artifact kit.
 //
 // EMBEDDED rather than read from disk, because the product is one binary: a
 // dashboard that lived beside the executable would make deployment a copy of
@@ -16,6 +17,14 @@
 // against these files. The one exception is dashboard/protocol.js, the second
 // build target, which internal/e2e replays a real company's socket frames
 // through.
+//
+// THE ARTIFACT TREE (`artifacts/`) is the dashboard source's third build
+// target (`dashboard/vite.runtime.config.ts`): `runtime/<contract>/` installs
+// `window.crewlet` in an artifact page, and `kit/<version>/` is the
+// `@crewlethq/artifact-kit` package's own built files, copied unchanged.
+// internal/artifactserve serves both from the api.artifacts listener, and
+// internal/artifactupload reads which runtime contracts the tree holds when a
+// publish pins one. Committed, rebuilt and diffed exactly as the dashboard is.
 package static
 
 import (
@@ -41,9 +50,10 @@ import (
 // TestEveryStaticFileIsInTheBinary is what says so — it walks this directory
 // on disk and fails on anything the embed did not take.
 //
-//go:embed all:dashboard
+//go:embed all:dashboard all:artifacts
 var files embed.FS
 
 // FS is the embedded tree rooted at the dashboard directory's parent, so a
-// path in it reads the same as the URL that asks for it: dashboard/js/app.js.
+// path in it reads the same as the URL that asks for it: dashboard/js/app.js,
+// and artifacts/runtime/1.0.0/runtime.js beside it.
 func FS() fs.FS { return files }
