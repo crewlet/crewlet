@@ -155,7 +155,7 @@ func TestARowHiddenFromAReaderIsHiddenFromEveryReadPath(t *testing.T) {
 		t.Fatalf("bob reads the cell history of dana's vote: %+v", cell.Entries)
 	}
 	var out bytes.Buffer
-	if err := artifactdata.Export(ctx, n.reader, sheet, reading("jane", artifacts.RoleEditor), "votes", &out); err != nil {
+	if err := artifactdata.Export(ctx, n.reader, sheet, reading("jane", artifacts.RoleEditor), "votes", nil, &out); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(out.String(), "dana-vote") || strings.Contains(out.String(), "bob-vote") {
@@ -371,18 +371,27 @@ func TestACellsHistoryNamesEachChangeAndItsAuthor(t *testing.T) {
 	}
 }
 
-// THE CSV EXPORT IS A SPREADSHEET'S: option labels for ids, a list's elements
-// joined, the row's attribution, and a cell a spreadsheet would run as a
-// formula neutralised.
+// THE CSV EXPORT IS A SPREADSHEET'S, READ BY A PERSON: a column headed by its
+// label (its key where it has none), option labels for ids, a person by the
+// seat's name, a list's elements joined, the row's attribution under readable
+// headings, and a cell a spreadsheet would run as a formula neutralised.
 func TestTheExportIsASpreadsheetsAndRunsNoFormula(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
 	jane := person("jane", artifacts.RoleOwner)
-	n.configure(jane, reviewSheet())
+	review := reviewSheet()
+	review.Columns[0].Label = "Title of the review"
+	n.configure(jane, review)
 	n.applied(jane, set("review", "r1", map[string]string{"title": `"=HYPERLINK(\"http://evil\")"`,
-		"status": `"done"`, "labels": `["copy","design"]`, "score": `-2`}))
+		"reviewer": `"dana"`, "status": `"done"`, "labels": `["copy","design"]`, "score": `-2`}))
+	names := func(handle string) string {
+		if handle == "dana" {
+			return "Dana Reyes"
+		}
+		return handle
+	}
 	var out bytes.Buffer
-	if err := artifactdata.Export(t.Context(), n.reader, sheet, reading("jane", artifacts.RoleEditor), "review", &out); err != nil {
+	if err := artifactdata.Export(t.Context(), n.reader, sheet, reading("jane", artifacts.RoleEditor), "review", names, &out); err != nil {
 		t.Fatal(err)
 	}
 	records, err := csv.NewReader(&out).ReadAll()
@@ -400,17 +409,20 @@ func TestTheExportIsASpreadsheetsAndRunsNoFormula(t *testing.T) {
 		}
 		return row[i]
 	}
-	if got := col("title"); !strings.HasPrefix(got, "'=") {
+	if got := col("Title of the review"); !strings.HasPrefix(got, "'=") {
 		t.Errorf("a formula cell is written %q, unneutralised", got)
+	}
+	if col("reviewer") != "Dana Reyes" {
+		t.Errorf("the person cell is written %q, want the seat's name", col("reviewer"))
 	}
 	if col("status") != "Done" || col("labels") != "Copy; Design" || col("score") != "-2" {
 		t.Errorf("the row renders status %q, labels %q, score %q", col("status"), col("labels"), col("score"))
 	}
-	if col("created_by") != "jane" || col("id") != "r1" {
-		t.Errorf("the row's id and author are %q and %q", col("id"), col("created_by"))
+	if col("Created by") != "jane" || col("ID") != "r1" {
+		t.Errorf("the row's id and author are %q and %q", col("ID"), col("Created by"))
 	}
-	if _, err := strconv.ParseInt(col("version"), 10, 64); err != nil {
-		t.Errorf("the version cell is %q", col("version"))
+	if _, err := strconv.ParseInt(col("Version"), 10, 64); err != nil {
+		t.Errorf("the version cell is %q", col("Version"))
 	}
 }
 

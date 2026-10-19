@@ -1714,6 +1714,19 @@ func companyConfig(e *engine.Engine) (*config.Company, *org.Organization) {
 	return nil, nil
 }
 
+// seatDisplayName is the name the running org gives the seat a handle
+// addresses, or the handle itself for a seat it does not hold (a retired one,
+// or a node serving no company yet), read at the moment of asking so a rename
+// is exported as it now reads.
+func seatDisplayName(e *engine.Engine, handle string) string {
+	if _, o := companyConfig(e); o != nil {
+		if seat := o.SeatByHandle(handle); seat != nil && seat.Name != "" {
+			return seat.Name
+		}
+	}
+	return handle
+}
+
 // artifactDataSurfaces builds the datastore's HTTP surface, its read
 // questions' source and the socket's artifact rooms over the engine's estate
 // router, or none of them on an engine built with no router (which serves no
@@ -1731,7 +1744,8 @@ func artifactDataSurfaces(e *engine.Engine, boot *config.Bootstrap) (
 		return nil, nil, nil, nil
 	}
 	gate := artifactsGate(e, boot, heads)
-	surface, err := artifactdataapi.New(artifactdataapi.Options{Gate: gate, Data: data, Versions: heads})
+	surface, err := artifactdataapi.New(artifactdataapi.Options{Gate: gate, Data: data, Versions: heads,
+		Names: func(handle string) string { return seatDisplayName(e, handle) }})
 	if err != nil {
 		return nil, nil, nil, err
 	}
