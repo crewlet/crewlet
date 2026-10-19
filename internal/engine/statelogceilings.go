@@ -678,6 +678,14 @@ func (s *stateLog) specOf(domain statelog.Domain) (statelog.StreamSpec, domainCe
 // that fails the same way. What is left is more room for the broker, or a
 // smaller ceiling for the log it refused, which the FIELD's own floor bounds.
 //
+// # And how much room is enough
+//
+// "More room" alone sent an operator to add a little and be refused again by
+// the next log. So wherever a limit is in play the refusal quotes the least a
+// fresh node of this configuration reserves ([BrokerFloor]), split into the
+// logs at their floors and the nats object bucket, with the setting that
+// moves the bucket.
+//
 // # Where the ceiling came from, in one of three words
 //
 // SET, DERIVED or FIXED, because each says something different about what a
@@ -718,6 +726,9 @@ func (s *stateLog) storageRefused(ctx context.Context, host domainHost,
 	if ceiling.Bytes > ceiling.Floor {
 		remedy += fmt.Sprintf(", or set %s to a smaller ceiling, no lower than "+
 			"its %d-byte floor", ceiling.Field, ceiling.Floor)
+	}
+	if s.floor.Limit > 0 && (err != nil || !noApplicableLimit(budget.Source)) {
+		remedy += "; " + s.floor.Sentence()
 	}
 	return fmt.Errorf("engine: the broker refused to reserve the %s log's "+
 		"ceiling: %s needed %d bytes and %s. %s. %s; the state logs that already "+
