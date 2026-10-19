@@ -1623,6 +1623,20 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 		}
 		byName[name] = rel
 	}
+	// A HOST FILE IS ADOPTED UNDER ITS FILE NAME, and a seat is seeded only
+	// with the names credential_paths gives — so a host path whose file name
+	// none of them has is adopted, reported as the login found, and read by
+	// no seat: copilot listed gh's `.config/gh/hosts.yml`, adopted as
+	// `hosts.yml` beside the `hosts.json` its credential_paths name.
+	for i, rel := range p.HostCredentialPaths {
+		if name := filepath.Base(rel); staysInside(rel) && namesAFile(rel) && byName[name] == "" {
+			add("host_credential_paths[%d] %q has a file name (%s) no credential_paths "+
+				"entry has — `crewlet llm login -from-host` keeps an adopted file under its "+
+				"file name and seeds a seat only with the files credential_paths names, so "+
+				"it would adopt a login no seat reads; name where a seat reads it in "+
+				"credential_paths, or drop it", i, rel, name)
+		}
+	}
 	for i, rel := range p.VolatilePaths {
 		if !staysInside(rel) {
 			add("volatile_paths[%d] %q must be relative and stay inside the seat home", i, rel)

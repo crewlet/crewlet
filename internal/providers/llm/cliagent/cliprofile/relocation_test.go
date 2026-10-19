@@ -300,6 +300,9 @@ func TestASeedPathThatClimbsOutAndBackInIsRefusedAtLoad(t *testing.T) {
 // loaded, was admitted by every write path, and failed every call's seed. A
 // login path names a FILE besides, read and carried by its base name, and two
 // sharing a base name are one file in the shared directory and every bundle.
+// And a host path is adopted under its base name, so one whose base name no
+// credential path has is a login `-from-host` adopts and no seat reads, which
+// is what copilot did with gh's hosts.yml.
 func TestALoginOrVolatilePathIsCheckedAtLoad(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -338,6 +341,13 @@ func TestALoginOrVolatilePathIsCheckedAtLoad(t *testing.T) {
 			map[string]any{"host_credential_paths": []any{"./"}},
 			`host_credential_paths[0] "./" must name a login FILE inside the person's home`,
 		},
+		"a host credential path no seat reads": {
+			map[string]any{
+				"credential_paths":      []any{".vendor/auth.json"},
+				"host_credential_paths": []any{".vendor/auth.json", ".config/gh/hosts.yml"},
+			},
+			`host_credential_paths[1] ".config/gh/hosts.yml" has a file name (hosts.yml) no credential_paths entry has`,
+		},
 		"a volatile path climbing out": {
 			map[string]any{"volatile_paths": []any{".vendor/sessions", "../sessions"}},
 			`volatile_paths[1] "../sessions" must be relative and stay inside the seat home`,
@@ -353,8 +363,10 @@ func TestALoginOrVolatilePathIsCheckedAtLoad(t *testing.T) {
 		})
 	}
 	if _, err := loadCustom(map[string]any{
-		"credential_paths":      []any{".vendor/auth.json", ".vendor/a/../token.json"},
-		"host_credential_paths": []any{".vendor/auth.json", ".config/vendor/hosts.yml"},
+		"credential_paths": []any{".vendor/auth.json", ".vendor/a/../token.json"},
+		// A host file lives wherever the person's CLI keeps it, under a
+		// file name a seat reads.
+		"host_credential_paths": []any{".vendor/auth.json", ".config/vendor/token.json"},
 		// A volatile path names a directory as often as a file.
 		"volatile_paths": []any{".vendor/sessions/", ".vendor/history.jsonl"},
 	}); err != nil {

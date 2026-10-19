@@ -605,7 +605,16 @@ copilot:
   output: text
   credential_paths: [".copilot/hosts.json"]
   volatile_paths: [".copilot/history", ".copilot/logs", ".copilot/sessions"]
-  host_credential_paths: [".copilot/hosts.json", ".config/gh/hosts.yml"]
+  # NOT gh's `.config/gh/hosts.yml`, which this list named beside it.
+  # `-from-host` keeps an adopted file under its file name and a seat is
+  # seeded only with the names credential_paths gives, so gh's file was
+  # adopted as `hosts.yml`, reported as the login found, and read by no
+  # seat. Nor does this CLI read that file: the 1.0.98 bundle reaches a gh
+  # sign-in by RUNNING `gh auth token` (which may answer from a keyring), and
+  # handing every seat gh's own token, with gh's scopes, is not this
+  # profile's decision — GITHUB_TOKEN below is the way to give a seat a
+  # GitHub token.
+  host_credential_paths: [".copilot/hosts.json"]
   # Copilot authenticates with a GitHub token, so this is its key variable —
   # reached deliberately through auth.mode api-key or inherit-env, never
   # forwarded silently.
