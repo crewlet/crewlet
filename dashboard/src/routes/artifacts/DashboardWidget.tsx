@@ -11,7 +11,9 @@ import { useRef, type ReactNode } from "react";
 import {
   ActivityStrip,
   BarList,
+  ChartEmpty,
   DataTable,
+  EmptyValue,
   downloadBlob,
   Legend,
   elementToPng,
@@ -83,6 +85,12 @@ export interface DashboardWidgetProps {
   asOf: string | undefined;
   onCite: (() => void) | undefined;
   onFocus: () => void;
+  /**
+   * The widget stands in a row of others read across (a board wider than a
+   * phone): a stat's and a meter's frame keep their title's two lines, so
+   * every number of the row starts on one line.
+   */
+  inRow?: boolean;
 }
 
 export function DashboardWidget({
@@ -95,6 +103,7 @@ export function DashboardWidget({
   asOf,
   onCite,
   onFocus,
+  inRow = false,
 }: DashboardWidgetProps) {
   const toast = useToast();
   const figure = useRef<HTMLDivElement>(null);
@@ -162,6 +171,7 @@ export function DashboardWidget({
       // A TABLE REACHES THE FRAME'S SIDES, its row rules meeting the border
       // and its first column under the title, as a table in any card does.
       flush={widget.type === "table"}
+      holdTitle={inRow && (widget.type === "stat" || widget.type === "meter")}
       onFocus={onFocus}
       data-widget={widget.id}
     >
@@ -244,11 +254,10 @@ function Figure({
             hideLabel
             label={named}
             valueText={`${of(value)} of ${of(max)}`}
-            // A QUANTITY, NOT A VERDICT: the spec says nothing of whether a
-            // full bar is a fault or the goal, so the bar is painted as the
-            // number it is and never in a warning or a danger hue it was not
-            // given.
-            tone="quantity"
+            // THE DESIGN SYSTEM'S RAMP: a meter is a number against a limit,
+            // and the bar says so as it nears it (warning from three quarters,
+            // danger at the limit), which is what a board's author writes a
+            // meter for ("the failure meter turns red at five").
           />
         </div>
       );
@@ -306,6 +315,9 @@ function Figure({
       );
     }
     case "bars":
+      // AN EMPTY LIST STANDS IN ITS PLOT'S MIDDLE, as every empty chart on
+      // the board does, not where its first row would have begun.
+      if (rows.length === 0) return <ChartEmpty>{NO_ROWS}</ChartEmpty>;
       return (
         <BarList
           emptyLabel={NO_ROWS}
@@ -398,7 +410,13 @@ export function RowsTable({
       // is left by another column would read as an order over every row.
       sortable: false,
       ...(c?.type === "number" ? { align: "right" as const } : {}),
-      render: (_row, value) => cellText(c, value as DashboardValue),
+      // AN ABSENT VALUE IS THE EMPTY MARK, the dash a stat draws for one,
+      // never a blank cell (which reads as a value nobody looked at) or a
+      // word for it ("None").
+      render: (_row, value) => {
+        const text = cellText(c, value as DashboardValue);
+        return text === "" ? <EmptyValue label="No value" /> : text;
+      },
     };
   }
   return (
