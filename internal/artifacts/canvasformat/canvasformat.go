@@ -524,3 +524,43 @@ func Read(src Source, m artifacts.Manifest) (Canvas, error) {
 	}
 	return Parse(data, m)
 }
+
+// Outline is a design's structure without its pages: what the gallery draws
+// its cover from (a schematic of every board, the cover titled) and what an
+// agent reads before it opens the boards it changes.
+type Outline struct {
+	Title string `json:"title,omitempty"`
+
+	// Count is how many boards the canvas holds.
+	Count int `json:"count"`
+
+	// Cover is the board the cover titles: [Canvas.CoverBoard].
+	Cover string `json:"cover"`
+
+	// Bounds is the rectangle holding every board and note.
+	Bounds Rect `json:"bounds"`
+
+	// Boards are every board in the canvas's order.
+	Boards []OutlineBoard `json:"boards"`
+
+	// Notes is how many notes the canvas holds.
+	Notes int `json:"notes"`
+}
+
+// OutlineBoard is one board of an outline: its page, its label and its frame.
+type OutlineBoard struct {
+	Path  string `json:"path"`
+	Title string `json:"title,omitempty"`
+	Rect
+}
+
+// Outline is the canvas's outline.
+func (c Canvas) Outline() Outline {
+	out := Outline{Title: c.Title, Count: len(c.Order), Cover: c.CoverBoard(), Bounds: c.Bounds(),
+		Boards: make([]OutlineBoard, len(c.Order)), Notes: len(c.Notes)}
+	for i, p := range c.Order {
+		b := c.Boards[p]
+		out.Boards[i] = OutlineBoard{Path: p, Title: b.Title, Rect: b.Rect()}
+	}
+	return out
+}

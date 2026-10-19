@@ -202,3 +202,24 @@ func TestACommentAnchorIsAPointOnABoard(t *testing.T) {
 		}
 	}
 }
+
+// THE OUTLINE IS EVERY BOARD IN THE CANVAS'S ORDER, each with its frame, the
+// cover, and the rectangle every board and note fits in.
+func TestTheOutlineIsTheBoardsInOrder(t *testing.T) {
+	t.Parallel()
+	c, err := Parse([]byte(landing), landingVersion())
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := c.Outline()
+	if o.Count != 4 || o.Cover != "boards/hero.html" || o.Notes != 2 || len(o.Boards) != 4 {
+		t.Fatalf("the outline is %+v", o)
+	}
+	if b := o.Boards[3]; b.Path != "boards/mobile.html" || b.Title != "Mobile" ||
+		b.Rect != (Rect{X: 1540, Y: 1000, W: 390, H: 844}) {
+		t.Errorf("the last board is %+v", b)
+	}
+	if o.Bounds != (Rect{X: 0, Y: -120, W: 3340, H: 2020}) {
+		t.Errorf("the bounds are %+v", o.Bounds)
+	}
+}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
@@ -275,7 +276,9 @@ func (t *getArtifact) Description() string {
 		"condensed unless you pass `offset`, and an edit's `old_str` must quote the " +
 		"source, so read it with `offset` before editing. For a slide deck, pass " +
 		"`view: \"outline\"` for its slides in order (id, file, title) and its " +
-		"sections, then read only the slide files you change by `path`."
+		"sections, then read only the slide files you change by `path`. For a design, " +
+		"`view: \"outline\"` lists its artboards in order with each one's file, title " +
+		"and frame."
 }
 
 func (t *getArtifact) Parameters() map[string]any {
@@ -311,7 +314,8 @@ func (t *getArtifact) Parameters() map[string]any {
 				"type": "string", "enum": []any{viewOutline},
 				"description": "`outline` answers a slide deck's structure (each slide's " +
 					"id, file and title in order, its notes flag, the sections and the " +
-					"cover) instead of a file.",
+					"cover), or a design's (each artboard's file, title and frame in " +
+					"order, and the cover), instead of a file.",
 			},
 		},
 		"required": []any{"artifact"},
@@ -412,14 +416,14 @@ func (t *getArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case viewOutline:
 		if path != "" {
 			return failed("get_artifact takes `view` or `path`, not both: the outline names " +
-				"each slide's file to read next."), nil
+				"each slide's or artboard's file to read next."), nil
 		}
 		outline, refusal := t.outline(ctx, read, h, version, writers, partial)
 		if refusal != nil {
 			return *refusal, nil
 		}
 		out["outline"] = outline
-		return read.answer(ctx, t.Name(), out, "Read the outline in parts by its slides' files.")
+		return read.answer(ctx, t.Name(), out, "Read the outline in parts by its files.")
 	default:
 		return failed(fmt.Sprintf("get_artifact takes `view` as %q.", viewOutline)), nil
 	}
@@ -553,12 +557,17 @@ func (t *getArtifact) readFile(ctx context.Context, read *foreignRead, c artifac
 // viewOutline is get_artifact's view of a deck's structure.
 const viewOutline = "outline"
 
-// outline is a deck's structure as one text an agent reads, fenced under the
-// version's writers: a slide's title is text its author wrote.
+// outline is a deck's or a design's structure as one text an agent reads,
+// fenced under the version's writers: a slide's or a board's title is text its
+// author wrote.
 func (t *getArtifact) outline(ctx context.Context, read *foreignRead, h artifactsdomain.Head,
 	v artifactsdomain.Version, writers []provenance.Author, partial bool) (map[string]any, *tools.Result) {
 
-	if spec, _ := h.Kind.Spec(); spec.Format != artifacts.FormatSlides {
+	switch spec, _ := h.Kind.Spec(); spec.Format {
+	case artifacts.FormatSlides:
+	case artifacts.FormatDesign:
+		return t.designOutline(ctx, read, v, writers, partial)
+	default:
 		r := failed(fmt.Sprintf("get_artifact: a %s artifact has no outline; read its files "+
 			"by `path`.", h.Kind))
 		return nil, &r
@@ -589,8 +598,31 @@ func (t *getArtifact) outline(ctx context.Context, read *foreignRead, h artifact
 	return map[string]any{"slides": o.Count, "text": text}, nil
 }
 
-// toolDeckSource is a version as the slide format reads it, through the
-// publisher's verified reads.
+// designOutline is a design's boards in the canvas's order, each with its file,
+// title and frame, as one text an agent reads.
+func (t *getArtifact) designOutline(ctx context.Context, read *foreignRead, v artifactsdomain.Version,
+	writers []provenance.Author, partial bool) (map[string]any, *tools.Result) {
+
+	canvas, err := canvasformat.Read(toolDeckSource{ctx: ctx, m: v.Manifest, deps: t.deps}, v.Manifest)
+	if err != nil {
+		r := sourceFailure(ctx, t.Name(), canvasformat.Path, err)
+		return nil, &r
+	}
+	o := canvas.Outline()
+	var b strings.Builder
+	fmt.Fprintf(&b, "Design: %s\nCover: %s\n", o.Title, o.Cover)
+	for i, bd := range o.Boards {
+		fmt.Fprintf(&b, "%d. %s: %s at (%d, %d), %d by %d\n", i+1, bd.Path, bd.Title, bd.X, bd.Y,
+			bd.W, bd.H)
+	}
+	fmt.Fprintf(&b, "Notes: %d\n", o.Notes)
+	text := b.String()
+	read.fence(fieldPath{}.key("outline").key("text"), provenance.SourceArtifactFile, writers, partial, text)
+	return map[string]any{"boards": o.Count, "text": text}, nil
+}
+
+// toolDeckSource is a version as the slide format and the canvas format read
+// it, through the publisher's verified reads.
 type toolDeckSource struct {
 	ctx  context.Context
 	m    artifacts.Manifest

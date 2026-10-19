@@ -31,7 +31,8 @@ import (
 // what was never touched.
 //
 // The company: jane owns `page` (an HTML artifact), `notes` (Markdown) and
-// `deck` (slides, shared with bob as viewer); the
+// `deck` (slides, shared with bob as viewer) and `design` (a canvas of two
+// artboards, shared with bob as viewer); the
 // page is shared with bob as viewer, with the ENG unit as editor and with sam
 // as editor. `scribe` is an agent owning `report`, led by lee. dana relates to
 // nothing, and ada is an administrator who relates to nothing either.
@@ -40,6 +41,7 @@ var (
 	page    = artifacts.IDFor("jane's page")
 	notes   = artifacts.IDFor("jane's notes")
 	deck    = artifacts.IDFor("jane's deck")
+	design  = artifacts.IDFor("jane's design")
 	report  = artifacts.IDFor("scribe's report")
 	binned  = artifacts.IDFor("jane's trashed page")
 	unknown = artifacts.IDFor("nothing at all")
@@ -54,6 +56,13 @@ var (
 	deckJSON  = []byte(`{"title":"Plan","order":["cover","next"],"cover":"next"}`)
 	coverHTML = []byte(`<section id="cover" style="background:#fff"><h1>Plan</h1><aside>Hello.</aside></section>`)
 	nextHTML  = []byte(`<section id="next" style="background:#000;color:#fff"><h2>Next steps</h2></section>`)
+
+	canvasJSON = []byte(`{"v":1,"title":"Launch","boards":{"hero.html":{"x":0,"y":0,"w":1440,"h":900,` +
+		`"title":"Hero"},"mobile.html":{"x":1540,"y":0,"w":390,"h":844}},"order":["hero.html",` +
+		`"mobile.html"],"notes":[{"id":"n1","kind":"title","x":0,"y":-100,"w":600,"h":60,"text":"Launch"}],` +
+		`"cover":"mobile.html"}`)
+	heroHTML   = []byte(`<!doctype html><title>Hero</title><h1>Ship</h1>`)
+	mobileHTML = []byte(`<!doctype html><title>Mobile</title><h1>Go</h1>`)
 )
 
 func object(name string, body []byte) objstore.Object {
@@ -73,6 +82,10 @@ var (
 	entryDeck  = entry("deck.json", "application/json", deckJSON)
 	entryCover = entry("slides/cover.html", "text/html; charset=utf-8", coverHTML)
 	entryNext  = entry("slides/next.html", "text/html; charset=utf-8", nextHTML)
+
+	entryCanvas = entry("canvas.json", "application/json", canvasJSON)
+	entryHero   = entry("hero.html", "text/html; charset=utf-8", heroHTML)
+	entryMobile = entry("mobile.html", "text/html; charset=utf-8", mobileHTML)
 )
 
 func share(kind artifacts.AudienceKind, id string, role artifacts.Role) artifacts.Share {
@@ -101,6 +114,9 @@ func heads() map[artifacts.ID]artifactsdomain.Head {
 			OwnerKind: iam.ActorHuman, HeadNumber: 1, Status: artifactsdomain.StatusLive,
 			Shares: []artifacts.Share{share(artifacts.AudienceSeat, "bob", artifacts.RoleViewer)}},
 		deck: {ID: deck, Kind: artifacts.KindSlides, Title: "Plan", Owner: "jane",
+			OwnerKind: iam.ActorHuman, HeadNumber: 1, Status: artifactsdomain.StatusLive,
+			Shares: []artifacts.Share{share(artifacts.AudienceSeat, "bob", artifacts.RoleViewer)}},
+		design: {ID: design, Kind: artifacts.KindDesign, Title: "Launch", Owner: "jane",
 			OwnerKind: iam.ActorHuman, HeadNumber: 1, Status: artifactsdomain.StatusLive,
 			Shares: []artifacts.Share{share(artifacts.AudienceSeat, "bob", artifacts.RoleViewer)}},
 		report: {ID: report, Kind: artifacts.KindHTML, Title: "Report", Owner: "scribe",
@@ -134,6 +150,9 @@ func (e *estate) Version(_ context.Context, id artifacts.ID, n int) (artifactsdo
 	case deck:
 		v.Manifest = artifacts.Manifest{Entry: "deck.json",
 			Files: []artifacts.Entry{entryDeck, entryCover, entryNext}}
+	case design:
+		v.Manifest = artifacts.Manifest{Entry: "canvas.json",
+			Files: []artifacts.Entry{entryCanvas, entryHero, entryMobile}}
 	default:
 		v.Manifest = artifacts.Manifest{Entry: "index.html",
 			Files: []artifacts.Entry{entryChart, entryLogo, entryIndex}}
@@ -343,7 +362,8 @@ func (o *objects) Open(_ context.Context, obj objstore.Object) (io.ReadCloser, e
 	o.mu.Lock()
 	o.opened++
 	o.mu.Unlock()
-	for _, body := range [][]byte{indexHTML, logoSVG, chartPNG, notesMD, deckJSON, coverHTML, nextHTML} {
+	for _, body := range [][]byte{indexHTML, logoSVG, chartPNG, notesMD, deckJSON, coverHTML, nextHTML,
+		canvasJSON, heroHTML, mobileHTML} {
 		if objstore.HashOf(body) == obj.Hash {
 			return io.NopCloser(bytes.NewReader(body)), nil
 		}
@@ -364,12 +384,18 @@ type framer struct {
 
 	// minted are the frames [framer.Claims] reads back, by URL.
 	minted map[string]artifacts.TicketClaims
+
+	// refuse is what every mint answers, where a case sets it.
+	refuse error
 }
 
 func (f *framer) For(r artifactserve.FrameRequest) (artifacts.Frame, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.requests = append(f.requests, r)
+	if f.refuse != nil {
+		return artifacts.Frame{}, f.refuse
+	}
 	return artifacts.Frame{URL: "https://" + string(r.Head.Label) + ".artifacts.example.net/t/x/index.html",
 		Version: r.Version.Number, Mode: artifacts.OriginPerArtifact}, nil
 }

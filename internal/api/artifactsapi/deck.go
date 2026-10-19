@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
@@ -41,6 +42,9 @@ type OutlineAnswer struct {
 
 	// Slides is a deck's outline and its cover slide, drawn at card size.
 	Slides *SlidesOutline `json:"slides,omitempty"`
+
+	// Design is a design's boards and their frames, drawn as a schematic.
+	Design *canvasformat.Outline `json:"design,omitempty"`
 }
 
 // SlidesOutline is a deck's outline and the one slide its cover draws.
@@ -88,6 +92,14 @@ func (s *Service) outline(w http.ResponseWriter, r *http.Request) {
 		cover, _ := deck.CoverSlide()
 		out.Slides = &SlidesOutline{Outline: deck.Outline(), CoverSlide: cover}
 	}
+	if spec, _ := a.Head.Kind.Spec(); spec.Format == artifacts.FormatDesign {
+		canvas, ok := s.readCanvas(w, r, a, v)
+		if !ok {
+			return
+		}
+		o := canvas.Outline()
+		out.Design = &o
+	}
 	httpjson.Write(w, http.StatusOK, out)
 }
 
@@ -134,7 +146,31 @@ func (s *Service) readDeck(w http.ResponseWriter, r *http.Request, a Admission, 
 	return deck, true
 }
 
-// deckFileError is a file of a deck whose bytes could not be read.
+// readCanvas reads a design version's canvas, held to the version as its
+// publish was. One small file, so it is read on every outline rather than
+// cached.
+func (s *Service) readCanvas(w http.ResponseWriter, r *http.Request, a Admission, v artifactsdomain.Version) (canvasformat.Canvas, bool) {
+	canvas, err := canvasformat.Read(manifestSource{ctx: r.Context(), m: v.Manifest, objects: s.objects},
+		v.Manifest)
+	var refused *canvasformat.Error
+	var unread *deckFileError
+	switch {
+	case errors.As(err, &refused):
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeContentRefused, map[string]string{
+			"detail": "version " + strconv.Itoa(v.Number) + "'s canvas does not read in this " +
+				"build's design format: " + refused.Error()})
+		return canvasformat.Canvas{}, false
+	case errors.As(err, &unread):
+		contentFailed(w, r, a.Head.ID, unread.path, unread.err)
+		return canvasformat.Canvas{}, false
+	case err != nil:
+		contentFailed(w, r, a.Head.ID, canvasformat.Path, err)
+		return canvasformat.Canvas{}, false
+	}
+	return canvas, true
+}
+
+// deckFileError is a file of a deck or a canvas whose bytes could not be read.
 type deckFileError struct {
 	path string
 	err  error
@@ -143,7 +179,8 @@ type deckFileError struct {
 func (e *deckFileError) Error() string { return fmt.Sprintf("read %s: %v", e.path, e.err) }
 func (e *deckFileError) Unwrap() error { return e.err }
 
-// manifestSource is a stored version as the slide format reads it.
+// manifestSource is a stored version as the slide format and the canvas
+// format read it.
 type manifestSource struct {
 	ctx     context.Context
 	m       artifacts.Manifest
