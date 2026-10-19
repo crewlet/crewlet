@@ -78,7 +78,7 @@ p {
    is the shape a default takes when it is wrong: the exceptions outnumber it.
 
    So the frame's own hover vocabulary carries it instead. The sidebar's rows,
-   `.section-tab` and the trail's crumbs already answer a pointer by moving to
+   the section tabs and the trail's crumbs already answer a pointer by moving to
    `--color-text-primary`, and a link does the same: in dark the accent ink
    (#a9b0ff) brightens toward near-white, in light the violet (#4f51bd) darkens
    toward near-black, so in BOTH themes hovering makes a link MORE prominent
@@ -356,7 +356,6 @@ img {
 
    `prefers-reduced-motion` above zeroes every duration in the document, this
    one included, so there is nothing to opt out of here. */
-.section-tab,
 .working-now,
 .peek-grip,
 .grid-row,

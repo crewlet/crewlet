@@ -830,27 +830,18 @@
 }
 
 /* ---- The section tabs ----------------------------------------------------
-   A workspace's sections, under the bar, as LINKS: each goes to its own
-   address, so the current one is `aria-current="page"` and is drawn from that
-   attribute — the underline and the primary ink, no hue — and the two cannot
-   come apart. The row never scrolls: the tabs that do not fit fold into the
-   "More" menu at its end (`SectionTabs` in PageHeader.tsx measures which). It
-   is the containing block of the folded ones, which sit at its start, out of
-   the flow and invisible, so they can be measured again when it grows. */
+   A workspace's sections, under the bar, as LINKS: the kit's underline `Tabs`
+   in router mode (`SectionTabs` in PageHeader.tsx), so the tab, its figure,
+   the bar under the current one and the focus ring are the kit's. What is
+   left here is the strip's place under the bar and its fold: the row never
+   scrolls, because the tabs that do not fit fold into the "More" menu at its
+   end, and the folded ones sit at its start, out of the flow and invisible,
+   so they can be measured again when it grows. */
 .section-tabs {
-  position: relative;
-  display: flex;
-  align-items: stretch;
-  gap: var(--spacing-5);
-  min-height: var(--size-control-lg);
   padding: 0 var(--spacing-5);
-  border-bottom: 1px solid var(--color-border-default);
-  overflow: hidden;
 }
 
-.section-tab[data-folded],
-.section-tabs-more[data-folded],
-.section-tabs-note[data-folded] {
+.section-tabs [data-folded] {
   position: absolute;
   inset-block-start: 0;
   inset-inline-start: 0;
@@ -858,8 +849,8 @@
   pointer-events: none;
 }
 
-/* "More" is the kit's own quiet menu button — the one the page bar's "More"
-   is — centred on the tabs' line. */
+/* "More" is the kit's own quiet menu button (the one the page bar's "More"
+   is), centred on the tabs' line. */
 .section-tabs-more {
   display: inline-flex;
   flex: none;
@@ -867,7 +858,7 @@
 }
 
 /* A workspace's reading note (`WorkspaceRow.note`), at the row's far end: a
-   sentence about every section, never one of them. It gives way to the tabs —
+   sentence about every section, never one of them. It gives way to the tabs,
    folded whenever the strip has no room for it beside every one of them
    (`noteFits`), which on a phone is always. */
 .section-tabs-note {
@@ -905,43 +896,6 @@
     #000 calc(100% - var(--spacing-8)),
     transparent
   );
-}
-
-.section-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  flex: none;
-  padding: 0 2px;
-  border-bottom: 2px solid transparent;
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.section-tab:hover {
-  color: var(--color-text-primary);
-}
-
-/* A section's figure: the tertiary step whatever the tab's own ink, so the
-   current tab's name lifts and its number does not. */
-.section-tab-count {
-  color: var(--color-text-tertiary);
-  font-weight: var(--font-weight-regular);
-}
-
-.section-tab[aria-current="page"] {
-  color: var(--color-text-primary);
-  border-bottom-color: var(--color-text-primary);
-}
-
-/* INSIDE ITS OWN BOX, because the row clips at its edges and an outset ring on
-   the first tab would be cut there. */
-.section-tab:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: var(--size-focus-ring-inset-offset);
 }
 
 /* ---- The Settings column and the Knowledge tree ---------------------------
