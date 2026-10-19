@@ -1935,17 +1935,18 @@ counted in the hour it was **committed**: a node back from days away, or
 adopting a snapshot a day old, replays days of barriers in minutes, and they
 count toward the day they happened in rather than toward today.
 
-Two excursions are designed for and do not alarm:
+Two excursions are designed for and do not alarm on a volume sized for them:
 
 1. **A full re-embedding.** A width change republishes every vector, which at
    year five bottoms the vector log's headroom at about 51 % at the 16 GiB a
-   64 GiB volume asks for — about 43 % at the 13.8 GiB it is created with
-   once the one budget scales every log to fit the broker there — and at about
-   88 % at the 64 GiB a volume of about 290 GiB or more gets. The alarm threshold is
-   10 %, clear of each. The corpus is the company's whole history — about
-   17 MB per agent seat per year — so a larger or older company sets
-   `stream.tracker_vectors_max_bytes` at about twice it: 34 MB per agent seat
-   per year of history.
+   64 GiB volume asks for, and at about 88 % at the 64 GiB a volume of about
+   633 GiB or more gets. The alarm threshold is 10 %, clear of each. But the
+   one budget scales every log to fit the broker, and a 64 GiB volume creates
+   the log at 5.9 GiB, too small to hold that re-embedding at all: below about
+   92 GiB free, set `stream.tracker_vectors_max_bytes` to at least 9 GiB. The
+   corpus is the company's whole history — about 17 MB per agent seat per
+   year — so a larger or older company sets `stream.tracker_vectors_max_bytes`
+   at about twice it: 34 MB per agent seat per year of history.
 2. **A bulk gesture.** One maximal bulk update is 16 seconds of applier
    occupancy on every peer; see [Replication](replication.md).
 

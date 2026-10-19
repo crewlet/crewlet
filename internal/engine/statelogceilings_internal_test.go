@@ -461,7 +461,7 @@ func (h sizingHost) DomainStreamCeiling(_ context.Context, stream string) (int64
 //
 // Its peak is the whole corpus — a model change republishes every source, and
 // for a week all of them are in the window — which is 8.46 GB for the reference
-// company in its fifth year. On a 64 GiB volume under an embedded broker (whose
+// company in its fifth year (vectorYearFivePeak). On a 64 GiB volume under an embedded broker (whose
 // limit is three quarters of the free space, so the logs share 24 GiB) that is
 // what the created ceiling must hold, whatever the mutation log is set to: the
 // rule that took half the mutation log's ceiling asked for 8 GiB there and the
@@ -470,7 +470,6 @@ func (h sizingHost) DomainStreamCeiling(_ context.Context, stream string) (int64
 func TestTheVectorChangelogIsCreatedToHoldAModelChange(t *testing.T) {
 	t.Parallel()
 	const free = 64 * gib
-	const yearFivePeak = int64(8_460_000_000)
 	host := sizingHost{budget: jetstream.StorageBudget{Limit: free / 4 * 3,
 		Source: jetstream.BudgetServerStore}}
 	for name, stream := range map[string]config.Stream{
@@ -482,10 +481,10 @@ func TestTheVectorChangelogIsCreatedToHoldAModelChange(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: sizeCeilings: %v", name, err)
 		}
-		if got := sized[search.Domain{}.Name()].Bytes; got < yearFivePeak {
+		if got := sized[search.Domain{}.Name()].Bytes; got < vectorYearFivePeak {
 			t.Errorf("%s: the vector changelog is created at %d bytes on %d free, "+
 				"under the reference company's fifth-year model change (%d)",
-				name, got, free, yearFivePeak)
+				name, got, free, vectorYearFivePeak)
 		}
 	}
 }
