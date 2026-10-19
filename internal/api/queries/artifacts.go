@@ -109,7 +109,7 @@ func artifactFailure(what string, err error) error {
 	case errors.Is(err, artifactsapi.ErrNoSuchArtifact):
 		return fmt.Errorf("%w: no such artifact", ErrNotFound)
 	case errors.As(err, &refusal):
-		return refused(what, refusal.Decision)
+		return NewRefusal(what, refusal.Decision)
 	case errors.Is(err, artifactsdomain.ErrTrashed):
 		// IN THE TRASH, ITS CONTENT IS NOT SERVED: the record is not one
 		// this question answers until the owner restores the artifact.
@@ -340,7 +340,7 @@ func (s artifactsAnswers) usage(ctx context.Context, _ Params) (any, error) {
 	case d.Unknown():
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, d.Err)
 	case !d.Allowed:
-		return nil, refused("artifact_usage", d)
+		return nil, NewRefusal("artifact_usage", d)
 	}
 	usage, err := s.Reads.Usage(ctx)
 	if err != nil {
@@ -366,7 +366,7 @@ func (s artifactsAnswers) trail(ctx context.Context, p Params) (any, error) {
 	case d.Unknown():
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, d.Err)
 	case !d.Allowed:
-		return nil, refused("artifact_trail", d)
+		return nil, NewRefusal("artifact_trail", d)
 	}
 	page, err := s.Reads.Trail(ctx, artifactsdomain.TrailQuery{
 		Op: artifactsdomain.OpKind(p.String("op")), Cursor: p.String("cursor"),

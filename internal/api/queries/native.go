@@ -444,7 +444,7 @@ func (s Sources) mayReadItem(ctx context.Context, principal iam.Principal,
 		return false, fmt.Errorf("%w: this node cannot decide %s on %s yet: %w",
 			ErrUnavailable, authz.ActionWorkRead, object.ID, d.Err)
 	case !d.Allowed:
-		return false, refused("work_item", d)
+		return false, NewRefusal("work_item", d)
 	}
 	return false, nil
 }

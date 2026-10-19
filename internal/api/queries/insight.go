@@ -422,8 +422,8 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 		// THE APPS OF THE TWO KINDS JUST ASKED ABOUT, and never "every
 		// app": the refusal names what would admit, and an app this
 		// question reads nothing of would not.
-		return nil, &Refusal{What: "knowledge", Reason: authz.ReasonNoGrant,
-			Grants: []iam.Grant{authz.AppFor(authz.KindTask), authz.AppFor(authz.KindPage)}}
+		return nil, NewRefusal("knowledge", authz.Decision{Reason: authz.ReasonNoGrant,
+			Grants: []iam.Grant{authz.AppFor(authz.KindTask), authz.AppFor(authz.KindPage)}})
 	}
 	organization := s.organization()
 	out := map[string]any{

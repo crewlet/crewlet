@@ -315,7 +315,7 @@ func (s Sources) mayLook(principal iam.Principal, action authz.Action) iam.MayLo
 			return fmt.Errorf("%w: this node cannot decide %s on somebody "+
 				"else's record yet: %w", ErrUnavailable, action, d.Err)
 		}
-		return refused(string(action)+" of somebody else's record", d)
+		return NewRefusal(string(action)+" of somebody else's record", d)
 	}
 }
 
@@ -340,7 +340,7 @@ func (s Sources) mayRead(ctx context.Context, principal iam.Principal,
 		return fmt.Errorf("%w: this node cannot decide %s on %s's record "+
 			"yet: %w", ErrUnavailable, action, handle, d.Err)
 	case !d.Allowed:
-		return refused(string(action)+" of "+handle, d)
+		return NewRefusal(string(action)+" of "+handle, d)
 	}
 	return nil
 }

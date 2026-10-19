@@ -1538,32 +1538,30 @@ func (a *App) Queries() *queries.Registry { return a.queries }
 // two to disagree about what "unauthorized" means.
 func (a *App) answer(ctx context.Context, what string, params map[string]any) (any, error) {
 	data, err := a.queries.Answer(ctx, what, params)
+	var refusal *queries.Refusal
 	switch {
 	case err == nil:
 		return data, nil
 	case errors.Is(err, queries.ErrUnknown):
 		return nil, fmt.Errorf("%w: %s", stream.ErrUnknownQuery, what)
-	case errors.Is(err, queries.ErrUnauthenticated),
-		errors.Is(err, queries.ErrUnauthorized):
-		// BOTH ONTO ONE SOCKET CODE, deliberately. The vocabulary here is
-		// shared with the dashboard, and the distinction the REST mapping
-		// draws — present something, versus the thing you presented does
-		// not carry this — has no consumer over a socket: every one
-		// authenticates at its handshake, so the unauthenticated arm is
-		// unreachable and a second code would be a wire change with
-		// nothing to read it.
+	case errors.As(err, &refusal):
+		// A REFUSAL ON AUTHORITY SAYS WHY, as it does over REST, and in the
+		// SAME WORDS: [stream.RefusedFor] answers it through the authority
+		// table's one mapping, so the code, the rule's reason and the grants
+		// that would have admitted the caller are the ones the REST twin
+		// writes. It was reduced to the question's name here once, so the one
+		// channel the dashboard reads was the one on which "you may not"
+		// could not say what would change that — and then spelled
+		// `unauthorized` here for itself, which a refusal the mapping words
+		// otherwise would have reached the dashboard as.
 		//
-		// AND A REFUSAL ON AUTHORITY SAYS WHY, as it does over REST: the
-		// rule's reason and the grants that would have admitted the
-		// caller travel on the frame. It was reduced to the question's
-		// name here, so the one channel the dashboard reads was the one
-		// on which "you may not" could not say what would change that.
-		var refusal *queries.Refusal
-		if errors.As(err, &refusal) {
-			return nil, &stream.RefusedError{What: what,
-				Refused: *stream.NewRefused(refusal.Reason, refusal.Grants)}
-		}
-		return nil, fmt.Errorf("%w: %s", stream.ErrUnauthorized, what)
+		// A QUESTION ASKED BY NOBODY ([queries.ErrUnauthenticated]) has no
+		// arm here and is answered as the fault it is: every socket
+		// authenticates at its handshake and closes when its credential
+		// ends, so a question on one that reaches the registry unresolved
+		// means this node lost who the socket is — which no refusal a client
+		// acts on describes.
+		return nil, stream.RefusedFor(what, refusal.Decision)
 	case errors.Is(err, queries.ErrNotFound):
 		return nil, fmt.Errorf("%w: %s", stream.ErrNotFound, what)
 	case errors.Is(err, queries.ErrBadParams):
@@ -1626,6 +1624,7 @@ func (a *App) serveQuery(w http.ResponseWriter, r *http.Request) {
 // one whose refusals carried no sentence, and the code a client branched on
 // was the only thing it had to show.
 func writeQueryError(w http.ResponseWriter, what string, err error) {
+	var refusal *queries.Refusal
 	switch {
 	case errors.Is(err, queries.ErrUnknown):
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeUnknownQuery)
@@ -1637,7 +1636,7 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		// up — stated because the mapping is this function's to get right
 		// whatever happens to run in front of it.
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
-	case errors.Is(err, queries.ErrUnauthorized):
+	case errors.As(err, &refusal):
 		// 403 AND NOT 401, because the caller has already been
 		// identified. This refusal is a GRANT one — the guard in front
 		// of this resolved somebody, and the question needs authority
@@ -1653,17 +1652,17 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		// the guard answers it for a credential that is absent or
 		// refused, before this function is reached at all.
 		//
-		// AND IT SAYS WHY: the rule's reason and the grants that would
-		// have admitted the caller, carried on the registry's refusal
-		// rather than rewritten here — the same two fields every other
-		// refusal on authority answers with.
-		var refusal *queries.Refusal
-		if !errors.As(err, &refusal) {
-			httpjson.Fail(w, http.StatusForbidden, httpjson.CodeUnauthorized)
-			return
-		}
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-			authz.RefusalDetail(refusal.Reason, refusal.Grants))
+		// AND IT SAYS WHY, in the AUTHORITY TABLE'S OWN MAPPING
+		// ([authz.RefusalFields]): the code, the rule's reason and the
+		// grants that would have admitted the caller, from the decision the
+		// registry's refusal carries whole — the answer every other surface
+		// gives the same refusal. It wrote `unauthorized` here for itself,
+		// which agreed with the mapping only for as long as no question was
+		// refused for a stale proof. A bare [queries.ErrUnauthorized] names
+		// no decision, and is answered by the default arm as the fault it
+		// is.
+		status, code, detail := authz.RefusalFields(refusal.Decision)
+		httpjson.FailWithFields(w, status, code, detail)
 	case errors.Is(err, queries.ErrBadParams):
 		// 400 AND ITS OWN CODE. The status was already right; the code
 		// said `query_failed`, which names a fault of this node for a

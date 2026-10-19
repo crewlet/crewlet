@@ -1368,10 +1368,12 @@ var rules = map[Action]rule{
 // RecencyOf reports how recent a proof a verb asks for, and whether the table
 // knows the verb at all.
 //
-// EXPORTED FOR THE WALKS and for a caller that has to SAY what a refusal it
-// did not make would have needed, on [ClassOf]'s terms: a caller that read
-// this and decided for itself would be the second implementation this
-// package exists to remove. Use [Decide].
+// EXPORTED FOR THE WALKS, for a caller that has to SAY what a refusal it
+// did not make would have needed, on [ClassOf]'s terms, and for a
+// registration that refuses a verb its transport could not refuse in its own
+// words (internal/api/queries' postures): a caller that read this and decided
+// for itself would be the second implementation this package exists to
+// remove. Use [Decide].
 func RecencyOf(a Action) (iam.Recency, bool) {
 	r, ok := rules[a]
 	return r.recency, ok
@@ -1392,7 +1394,7 @@ func IrreversibleOf(a Action) (bool, bool) {
 // differs from [RecencyOf]'s, and empty where the row asks one window of
 // everybody — see [rule.selfRecency].
 //
-// EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
+// EXPORTED on [RecencyOf]'s terms. Use [Decide].
 func SelfRecencyOf(a Action) (iam.Recency, bool) {
 	r, ok := rules[a]
 	return r.selfRecency, ok
@@ -1401,7 +1403,7 @@ func SelfRecencyOf(a Action) (iam.Recency, bool) {
 // PresenceOf reports which arms of a verb need a person present, and whether
 // the table knows the verb at all — see [Presence].
 //
-// EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
+// EXPORTED on [RecencyOf]'s terms. Use [Decide].
 func PresenceOf(a Action) (Presence, bool) {
 	r, ok := rules[a]
 	return r.presence, ok
