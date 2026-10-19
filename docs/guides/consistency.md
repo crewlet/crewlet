@@ -70,7 +70,7 @@ happened to omit the key. There are four:
 | Surface | Default | May the caller choose? |
 |---|---|---|
 | A seat's own tools, inside a turn | `linearizable`, floored at its node's own writes and at the change that woke the turn ([below](#read-your-trigger-is-a-floor-not-the-mechanism)) | No |
-| The operator MCP, about the company's own content — the tracker and the knowledge base | `linearizable` | No |
+| The operator MCP, about the company's own content — the tracker, the knowledge base and chat | `linearizable` | No |
 | The dashboard and the REST read path | `stale` | Yes — `linearizable`, `stale`, `consistent_prefix`, or `session` beside a `min_position` |
 | Any answer **about replication** — the retention report, Settings › Backups & retention's lag, whether a purge landed | `stale`, weakening to `consistent_prefix` | No — it is derived, not chosen |
 
@@ -249,7 +249,7 @@ forever.
 A **write** refused by the log names a reason from the same vocabulary, and a
 reason spelled like one of the codes above agrees with it about waiting — the
 two describe one state of one node. Every surface that writes to a state log
-(`/worklet`, `/doclet/pages`, `/iam` and `/auth`) answers every one of them
+(`/worklet`, `/doclet/pages`, `/chatlet`, `/iam` and `/auth`) answers every one of them
 `503`, with a `Retry-After` only for the four that clear on their own; the
 other thirteen carry none, because the same write is refused the same however
 often it is sent here.
@@ -348,8 +348,8 @@ level does not touch them:
 
 ## Read-your-trigger is a floor, not the mechanism
 
-An agent woken by a change to Worklet or Doclet sees
-that change. That is guaranteed by the *wake* carrying the record's own
+An agent woken by a change to Worklet, Doclet or Chatlet
+sees that change. That is guaranteed by the *wake* carrying the record's own
 position — `trigger_position`, where on its log the change was committed (see
 [the event system](../concepts/event-system.md)) — and not by the level the
 turn's tools then read at:
@@ -357,22 +357,28 @@ turn's tools then read at:
 1. Before the turn's first read, the node hands that position to its
    **read-your-writes floors**: one table per node, the same one every write
    the node makes raises.
-2. Every tracker or knowledge-base read the turn makes carries the floor on its
-   own domain's log to whichever node answers it — a tracker read the tracker
-   log's, a page read the knowledge base's — this node's own copy included.
+2. Every tracker, knowledge-base or chat read the turn makes carries the floor
+   on its own domain's log to whichever node answers it — a tracker read the
+   tracker log's, a page read the knowledge base's, a room, a thread or a
+   mention list a chat read's — this node's own copy included.
 3. That holder waits up to two seconds to have applied it, or answers `behind`
    and the next holder is asked.
 
 The floor travels with the request rather than being waited for before the
 turn opens, because the node running the turn may hold no data at all and have
 no applier of its own to wait on. A floor on one domain's log never holds up a
-read of the other: a tracker read does not depend on the knowledge base's rows.
+read of another: a tracker read does not depend on the knowledge base's rows,
+nor a room on the tracker's.
 
 **What the floor does not reach.** The ranked searches — `search_knowledge`,
 `search_work_items` and the turn-start knowledge block — read an index each
 node builds behind its own rows, so no log position describes them and they
 carry no floor: a seat woken by a page created a moment ago may not find it by
-search yet, and finds it by listing or by its id. A vendor's wake — a Slack
+search yet, and finds it by listing or by its id. `search_messages` is half of
+each: which rooms it may rank over is a chat read and carries the floor on the
+chat log, while the index it ranks them with is the node's own and carries
+none, so a seat woken by a message may not find that message by search yet and
+finds it by reading the room. A vendor's wake — a Slack
 message, a Jira issue — carries no position at all, because what changed is in
 another company's system.
 

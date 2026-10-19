@@ -296,10 +296,12 @@ These limits are structural: they hold whatever the model is asked or reads.
 - **No address the model writes is opened.** A link is live only where the
   dashboard built it, from parts it checked, to a place that is your
   company's: a task's key opens the task, a seat's handle the seat, a pull
-  request or a repository your configured code host, and an address on a host
-  your company configured (GitHub, GitLab, Jira, Confluence, Mattermost) opens
-  as the dashboard rebuilds it from what it names, with nothing else the
-  model wrote. Any other address is shown as its words and the host it names,
+  request or a repository your configured code host, under an organization or
+  group its configuration names, and an address on a host your company
+  configured (GitHub, GitLab, Jira, Confluence, Mattermost) opens as the
+  dashboard rebuilds it from what it names, a GitHub or GitLab address only
+  under such an organization or group, with nothing else the model wrote. Any
+  other address is shown as its words and the host it names,
   which you can read and copy but not click, and a picture is shown as its
   description and never loaded. The Inbox reads an agent's words by the same
   rule.

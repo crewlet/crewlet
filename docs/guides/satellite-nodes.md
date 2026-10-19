@@ -17,7 +17,7 @@ A satellite comes in two shapes, and the difference is the `data` role:
 
 | | `roles: [seats]` — **stateless** | `roles: [data, seats]` — **holds data** |
 |---|---|---|
-| Its store | Scratch: deleted at every boot, and no copy of the tracker or knowledge base | Its own full copy of the replicated estate |
+| Its store | Scratch: deleted at every boot, and no copy of the tracker, the knowledge base or chat | Its own full copy of the replicated estate |
 | Its broker | A **leaf** of the members' — no JetStream, no replica, no vote | A cluster **member**, holding replicas (a data node on a leaf is refused) |
 | Disk it needs | Its seats' memory and working rows, nothing else | The whole company's history |
 | Its seats' tools | Read and write through a data node, over the broker | Read and write its own copy, through the same router |
@@ -433,8 +433,8 @@ the dependency surface before choosing a host for it:
   live there. A network so restricted that neither is reachable cannot
   host a satellite. Its own store file is local, so that one costs
   nothing.
-- **For a stateless satellite, a data node that answers.** Its seats' tracker
-  and knowledge-base tools, their knowledge search and its tool-skill walks
+- **For a stateless satellite, a data node that answers.** Its seats' tracker,
+  knowledge-base and chat tools, their searches and its tool-skill walks
   are each a request to a data node over the broker — no inbound port, the
   same link. It is admitted to claim seats only once a data node answers
   that its own copy is level with its logs, and while none answers its tools

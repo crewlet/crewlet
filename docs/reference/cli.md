@@ -33,6 +33,13 @@ subcommand below is served by it.
 | `crewlet artifacts list\|get\|versions\|assets\|usage` | Read the company's artifacts through a running node, as the token's principal: the listing it may see (`-scope`, `-kind`, `-q`, `-status`, `-work-item`), one artifact's head (its runtime contract and capabilities among it) and audience, its versions, each with its contract and capabilities, its assets, and the company's usage against its quota (an administrator's). See [`crewlet artifacts`](#crewlet-artifacts) |
 | `crewlet artifacts publish <dir\|file> [-artifact ID] [-op-id ID]` | Publish a directory or a file as a new artifact, or as the next version of one: an upload intent first, then only the files the artifact does not already hold are sent, then the version is published against the head it read |
 | `crewlet artifacts update\|restore\|label\|share\|unshare\|trash\|untrash\|purge` | Change the title, description or icon, roll back to a version, label one, share with a seat, a unit or the company, withdraw a share, move to and from the trash, and purge for good (an administrator's, with a person present; the id is asked twice) |
+| `crewlet chatlet channels [-archived]` | The rooms of the company's own chat that your seat is in, most recently active first, each with the id every other chat verb takes and what you have not read there. Every `crewlet chatlet` verb is made as the seat `CREWLET_API_TOKEN` acts as — see [`crewlet chatlet`](#crewlet-chatlet) |
+| `crewlet chatlet read <room-id> [-limit N] [-before CURSOR]` | One room's transcript, oldest first, each message with its id and the thread it hangs under |
+| `crewlet chatlet post <room> -body TEXT [-link URL]... [-op-id ID]` | Say something in a room — by its id or its name — as your seat, through the same `post_message` the dashboard's composer calls |
+| `crewlet chatlet search <text> [-channel ROOM-ID] [-author HANDLE] [-limit N]` | Rank every room your seat may read, each hit with the message's id |
+| `crewlet chatlet erase <room-id> -message ID... -reason TEXT -confirm N [-op-id ID]` | Destroy the messages named, on every data node — what a credential pasted into one message needs. No inverse: `admin`, a recent proof, never a seat |
+| `crewlet chatlet prune <room-id> -cutoff TIME -confirm TIME [-op-id ID]` | Destroy everything a room said before an instant, on every data node, now rather than at its [retention](../concepts/chatlet.md#retention) horizon. The same authority as `erase` |
+| `crewlet chatlet retention <room-id> -days N \| -company [-op-id ID]` | Set how long one room keeps what is said in it (`0` for ever), or return it to the company's `chat.chatlet.message_retention_days`. A shorter horizon is a prune on a delay, so the same authority as `erase` |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load a company file as a new `company_config` revision — through a running node's `PUT /config`, which activates it fleet-wide, or offline as what this node boots on, which its next start publishes only while the fleet still runs the revision the import was built on; the line it prints says which it did |
 | `crewlet config export [--revision <UUID>]` | Dump the company this node knows (or the specified revision) as YAML to stdout |
@@ -1780,6 +1787,165 @@ it refreshes on, or one source whole when named. A source is answered as each
 board's viewer, so the list holds no row; see the
 [Dashboard Spec](dashboard-spec.md#the-engine-source-catalogue).
 
+## `crewlet chatlet`
+
+```
+crewlet chatlet channels|read|post|search|erase|prune|retention
+    [<config.yaml>] [-api URL] [-op-id ID]
+```
+
+The company's own chat from a shell — the
+[`chat.backend: chatlet`](../concepts/chatlet.md) axis. On a company whose chat is
+a vendor's or `none`, chat's questions, routes and tools are never registered
+at all, so every verb here is refused and says that `chat.backend` is why —
+an honest "this company has no such surface" rather than an empty room that
+reads like a company with nothing in it. A node started in a maintenance mode
+(`crewlet run -mode`) refuses the writes the same way, because it may publish
+nothing, and a node without the `ingress` role serves no chat route at all.
+
+**Every verb talks to a running node**, for the reason `crewlet budgets` and
+[`crewlet worklet purge`](#crewlet-worklet-purge) do and one more of chat's own: the
+rooms and the messages are the state log's, so a write is a record the broker
+arbitrates and every data node applies — and on the default topology that
+broker is inside the engine's own process with no listener at all. A command
+that opened the store instead would find a database locked to a live engine,
+or write rows the log never carried.
+
+**No verb here names an author.** The node decides every call on the
+principal `CREWLET_API_TOKEN` resolves to, and a chat verb is made **as a
+seat**: your own machine token (`crewlet iam token -login <login>`) reads and
+speaks as the seat you hold, and a service account or a Tier A token's row the
+identity directory binds to a human seat (`crewlet iam bind`) as that one.
+There is nowhere here to write a handle. A credential acting as itself — the
+deployment's own Tier A token, a service account bound to no seat — is refused
+every room, reads included, `unseated`, and the command prints those two
+remedies. `erase`, `prune` and `retention` are the exception: they are said in
+nobody's voice, so they are an administrator's, on the terms of
+[`crewlet worklet purge`](#crewlet-worklet-purge) — `admin`, a recent proof, never a
+seat — made under the caller's own name, a Tier A token holding `admin`
+included, and none of them reads the room it acts on. See
+[Chatlet § People](../concepts/chatlet.md#people).
+
+Every read prints the [level it was served at](../guides/consistency.md), the
+position it answered at and how far behind the log the copy that answered is —
+this node's while it serves, a data node's otherwise; a copy that could not
+present every row says `incomplete` rather than silently answering short.
+Every write is three-valued, like every write here: `applied` is on the
+answering node's rows, `pending` is durable on the log and not yet applied
+there — **do not run it again** — and `unknown` is the one to retry. Every
+write sends an operation id as the request's `Idempotency-Key`: `-op-id` takes
+an id the engine printed, and without it the command mints one **before** it
+asks. An `unknown` outcome, an answer this build cannot read, or no answer at
+all — a dropped connection, a timeout, since the write may have landed all the
+same — exits non-zero printing that id; send it again with `-op-id` so the
+retry is the same operation rather than a second message, erase or prune. Pass
+it exactly as printed: it carries the instant it was minted, which a node
+reads to decide whether it can still vouch for a retry.
+
+### `crewlet chatlet channels`
+
+```
+crewlet chatlet channels [-archived]
+```
+
+The rooms this seat is in, most recently active first, as `ID  NAME  KIND
+UNREAD  LAST`. The **id** is the value `read`, `post`, `search`, `erase`,
+`prune` and `retention` take. A direct conversation has no name — its identity
+is its participants — so its row carries the handles instead. An unread count
+that hit its ceiling prints as `N+`, and a room this seat muted says so. When
+the node could not read where this seat has read to — read state lives in the
+coordination store, not on the log — every count prints `?` and a line says
+why, rather than a zero that would call every room read. `-archived` includes the rooms
+that take no new messages and stay readable.
+
+### `crewlet chatlet read`
+
+```
+crewlet chatlet read <room-id> [-limit N] [-before CURSOR]
+```
+
+One room's transcript, oldest first, a page at a time: each line carries the
+message's number in the room, when it was said, **its id** — what
+[`chatlet erase`](#crewlet-chatlet-erase) takes — who said it and, for a reply, the
+root it hangs under (`↳<id>`). A message of several lines keeps them under
+its own heading, its links are printed beneath it, an edited one says so and
+a taken-back one reads `(deleted)`. The page ends where the room does or at
+`-limit`, and prints the `-before` cursor that reads the page before it. A
+room the seat may not read answers exactly as a room that does not exist.
+
+### `crewlet chatlet post`
+
+```
+crewlet chatlet post <room> -body TEXT [-link URL]... [-op-id ID]
+```
+
+Says something in a room, by its id or its name, as your seat — the same
+`post_message` the dashboard's composer calls, over the same route
+([`POST /operator/act/{tool}`](api-endpoints.md#operatoract--the-dashboards-write-surface)),
+so a post from a terminal and one from the dashboard are one gesture with one
+record and one `operator_acted` audit row. `-link` repeats, for what the
+message points at — a message links to a file rather than carrying one. Each
+is an absolute `http`, `https` or `mailto` address, written in full, and a
+post carrying any other is refused with nothing said. It
+prints the message's id and outcome, the seats it mentions, and — when
+`@channel` in the body addressed the whole room — that it wakes the agents in
+the room; the people in it are told, and never woken.
+
+### `crewlet chatlet search`
+
+```
+crewlet chatlet search <text> [-channel ROOM-ID] [-author HANDLE] [-limit N]
+```
+
+Ranks every room this seat may read — or one, with `-channel` — as `SCORE
+ROOM MESSAGE WHEN WHO SNIPPET`, and says how many rooms it searched. A node
+whose index is still being built says so rather than reading as nothing said.
+The query is at most 400 bytes, the bound every ranked search shares, and a
+longer one is refused rather than cut.
+
+### `crewlet chatlet erase`
+
+```
+crewlet chatlet erase <room-id> -message ID... -reason TEXT -confirm N [-op-id ID]
+```
+
+Destroys the messages named, on every data node, with the reactions, mentions
+and thread rows that hang off them — what a credential pasted into one message
+needs, without taking the conversation around it. It has no inverse, so
+`-confirm` repeats how many messages it destroys — counted once a repeated id
+is folded — and `-reason` is required: the messages are gone, and the erase
+record's reason is the only account of them that survives. The ids are the
+ones [`chatlet read`](#crewlet-chatlet-read) and [`chatlet search`](#crewlet-chatlet-search)
+print. Like every destruction it reads nothing from the room first, so it
+takes a message out of a private room the administrator is not in. See
+[`POST /chatlet/channels/{channel_id}/erase`](api-endpoints.md#a-chat-erase-prune-or-horizon).
+
+### `crewlet chatlet prune`
+
+```
+crewlet chatlet prune <room-id> -cutoff TIME -confirm TIME [-op-id ID]
+```
+
+Destroys everything a room said before an RFC 3339 instant, on every data
+node, now rather than at the room's [retention](../concepts/chatlet.md#retention)
+horizon — what an erasure request covering a room's history needs. It has no
+inverse, so the cutoff is typed twice and compared as an instant (two zones
+naming one moment are one cutoff), and a cutoff in the future is refused,
+since that would empty the room rather than enforce a horizon.
+
+### `crewlet chatlet retention`
+
+```
+crewlet chatlet retention <room-id> -days N | -company [-op-id ID]
+```
+
+Sets how long one room keeps what is said in it — `-days N`, `0` keeping it
+for ever — or, with `-company`, returns it to the company's own
+`chat.chatlet.message_retention_days`. Exactly one of the two. Nothing is
+destroyed by the change itself; the retention duty prunes what the new
+horizon no longer covers on its next pass, on every data node, with no
+inverse — which is why a shorter horizon is decided as a prune is.
+
 ## `crewlet retention`
 
 ```
@@ -1928,7 +2094,7 @@ one is certain to have read its own tombstone before the trim passes it.
 The node you ran it on writes every log itself: every data node holds the
 whole estate, so one command reaches every log.
 
-The gesture is **judged once, before either log is written**. A node that still
+The gesture is **judged once, before any log is written**. A node that still
 holds a live presence lease is refused with `409 eviction_refused` — it is
 still reaching the fleet and almost certainly running, and an eviction would
 drop everything it writes and take its copy out of service. Stop it and wait
@@ -2065,8 +2231,10 @@ crewlet retention set-capacity CREWLET_TRACKER_LOG 8589934592 -confirm 858993459
 
 Changes a log's byte ceiling, raising or lowering it. A log's Tier A ceiling
 (`stream.tracker_log_max_bytes`, `stream.tracker_vectors_max_bytes`,
-`stream.pages_log_max_bytes`,
-`stream.iam_log_max_bytes`, `stream.usage_log_max_bytes`) is not a live
+`stream.pages_log_max_bytes`, `stream.iam_log_max_bytes`,
+`stream.usage_log_max_bytes`, `stream.artifacts_log_max_bytes`,
+`stream.artifact_data_log_max_bytes`, `stream.assistant_log_max_bytes`,
+`stream.chat_log_max_bytes`) is not a live
 setting, only the value its stream is created with. A resize is decided
 against the usage the log is at, and a
 publisher makes that a moving quantity, so this runs with the whole fleet in a

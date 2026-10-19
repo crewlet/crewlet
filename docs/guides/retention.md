@@ -154,13 +154,13 @@ for as long as the copy runs.
 estate it holds. Every node still evaluates its own alarms on every tick,
 whatever duty it holds.
 
-`feed_ack_floor` is the acknowledgement floor of the durable consumer that each
+`feed_ack_floor` is the acknowledgement floor of the durable consumer that a
 log's own change feed opens — the feed's **group** `crewlet-tracker-feed` on
-`CREWLET_TRACKER_LOG`, and its group `crewlet-pages-feed` on
-`CREWLET_PAGES_LOG` — because a record that feed has not acknowledged is one
-nobody has been woken for yet. So a feed that has stopped holds back its own
-log and no other, and `blocked_by: feed_ack_floor` on a domain names that
-domain's feed.
+`CREWLET_TRACKER_LOG`, its group `crewlet-pages-feed` on `CREWLET_PAGES_LOG`,
+and its group `crewlet-chat-feed` on `CREWLET_CHAT_LOG` — because a record that
+feed has not acknowledged is one nobody has been woken for yet. So a feed that
+has stopped holds back its own log and no other, and `blocked_by:
+feed_ack_floor` on a domain names that domain's feed.
 
 A group name is not the broker's consumer name. The durable consumer is named
 from the group **and** the stream, as `<group>__<stream>__<digest>` — for
@@ -646,11 +646,11 @@ See [Replication](replication.md#what-a-retry-is-judged-by-the-instant-its-opera
 
 When one node [re-anchors](#re-anchoring-a-recreated-or-restored-log) a log
 that claims identity — the tracker's, the knowledge base's, the identity
-estate's, the artifacts log's, the artifact datastore's or the Dashboard
-Assistant's — it opens the next generation from its own rows, and every other
-node's rows are then a history the log no longer continues from. Nothing on the log can bring them level, so
-each of those nodes adopts a snapshot from a node in the new generation, **on
-its own**:
+estate's, the artifacts log's, the artifact datastore's, the Dashboard
+Assistant's or chat's — it opens the next generation from its own rows, and
+every other node's rows are then a history the log no longer continues from. Nothing on the log can bring them
+level, so each of those nodes adopts a snapshot from a node in the new
+generation, **on its own**:
 
 - It learns of the new generation from the re-anchoring node's position row,
   which that node publishes the moment the reanchor completes, on its next
@@ -780,7 +780,7 @@ usage log count nothing and get none: a node behind on the vectors is a
 coverage figure, and an evicted node's usage is still what its seats did.) Every
 node running the state log can make the gesture, whichever backends the
 company uses: every data node runs every one of those logs, and a company on an
-external tracker still runs every one of them.
+external tracker or a vendor's chat still runs every one of them.
 
 **The node you run the gesture on writes every log itself**: every data node
 holds the whole estate, so one gesture on any data node reaches every log. A
@@ -1063,6 +1063,22 @@ one message per (node, day, seat, schedule or person) for 181 days — so a log
 that fills has outgrown its census: raise `stream.usage_log_max_bytes` as
 below.
 
+The **chat log** refuses the same way, a sixteenth short of its ceiling
+([its gate reserve](#the-gate-reserve)), and on this log what is refused is a
+message somebody typed: every post, reply,
+DM, edit, delete, reaction and room change is refused `log_full`, from a seat
+and from a person alike. A seat's chat reads are `linearizable` and go with
+them, so a seat woken in a room can neither read the thread nor answer there. A
+person's message is refused rather than lost — the dashboard's composer keeps
+it, with the engine's sentence and a Retry — and the dashboard's reads, at
+`stale`, keep answering. The prune is refused too, and would free nothing if it
+ran: it deletes rows, not log records, so only the trim frees this log. Its
+ceiling does not follow `stream.tracker_log_max_bytes`, so a fleet sized for a
+long blocked trim on the tracker's log reaches this one first: raise
+`stream.chat_log_max_bytes` as below, or clear whatever `blocked_by` names;
+`log_headroom` names the domain (`log_headroom on chat`) long before the
+ceiling.
+
 The refusal carries **no retry hint**, deliberately: the only thing that frees
 a byte is a fifteen-minute gated job, and the log is full precisely because
 that gate is closed. A number here would be a promise the mechanism does not
@@ -1206,9 +1222,15 @@ acknowledgement could never establish about itself.
 A node in either maintenance mode **keeps its presence lease** — the process is
 running, and `crewlet fleet broker list`, the fleet view and the participant set
 below all read it — while it claims **no seat** and hands **no writer** to any
-surface: the operator's MCP endpoint offers only its search tool, the purge
-route is not served, the chart's projects and containers are applied at the
-next normal boot, and a stateless node's writes are answered "not here". Its
+surface: the operator's MCP endpoint serves none of the tracker's, the
+knowledge base's or chat's room tools, reads included, and what it keeps
+appends to no state log — the knowledge search and its answers, the
+coordination store's gestures (pausing and resuming a seat, steering a running
+turn, answering a parked run) and, on Chatlet, a person's own read state
+(`mark_chat_read`), so a screen attached to the node can still clear a badge.
+The purge route and chat's erase, prune and horizon routes are not served, the
+chart's projects and containers are applied at the next normal boot, and a
+stateless node's writes are answered "not here". Its
 reads are still served — every level but `linearizable`, which proves the
 log's end by appending a barrier to it and is refused
 [`maintenance`](consistency.md#the-fourteen-refusals). The operator gestures
@@ -1801,19 +1823,27 @@ omission.
 Every data node holds the whole corpus in one SQL database. A task filed three
 years ago is read at the same cost as one filed this morning, is searched by the
 same index, and is replicated exactly as many times. The log in front of it is
-trimmed; the tables are not.
+trimmed; the tables are not — bar the usage history, the Dashboard Assistant's
+conversations and the chat transcript, which keep a horizon of their own, and
+the bookkeeping tables each node sweeps, all below.
 
 That is what makes the storage forecast a function of how much a company has
 ever done rather than of how much it is doing — and it is why the numbers below
 are worth reading before the fleet is large.
 
-The **usage history** is the one replicated table set with a horizon of its
-own: each data node's company days — spend, turns, page reads, schedule fires
-— are kept **181 days**, which is a ninety-day window, the ninety days it is
-compared with, and the day a moved clock can touch. Nothing sweeps them: every
-record for a day deletes the rows older than that day minus 181 in the same
-transaction that writes it, on every data node, and the stream's own age bound
-forgets the same days. See [Replication](replication.md#two-compacted-domains-the-embeddings-and-each-data-nodes-day).
+Three replicated table sets keep a horizon of their own. The **usage history**
+is one: each data node's company days — spend, turns, page reads, schedule
+fires — are kept **181 days**, which is a ninety-day window, the ninety days it
+is compared with, and the day a moved clock can touch. Nothing sweeps them:
+every record for a day deletes the rows older than that day minus 181 in the
+same transaction that writes it, on every data node, and the stream's own age
+bound forgets the same days. See [Replication](replication.md#two-compacted-domains-the-embeddings-and-each-data-nodes-day).
+The Dashboard Assistant's conversations are another: a conversation nobody has
+touched for the company's `assistant.retention_days`, 30 days by default, is
+purged by the trash reaper through a record every data node applies (see
+[Running the Dashboard Assistant](assistant.md#retention-and-erasure)).
+The chat transcript is the third, and its horizon is the company's to set: see
+[the chat transcript's horizon](#the-chat-transcripts-horizon) below.
 
 Two tables are the exception, and both are swept **per node** rather than once
 across the fleet — each data node applies the log into its own copy, so a fleet
@@ -1950,12 +1980,52 @@ that is running and finding nothing from one that was never armed.
 A person's **inbox** — one row per routed change per recipient — is swept at
 `tracker.worklet.inbox_retention_days`, **365 days** by default and settable
 between 30 and 3650, and changed live: the sweep reads it off the running
-company at every tick, as the applier does at every batch. It is the one
-horizon here that deletes something a person reads, and it deletes a *pointer* rather than the thing pointed at: the history
+company at every tick, as the applier does at every batch. It deletes
+something a person reads, and it deletes a *pointer* rather than the thing pointed at: the history
 row behind every notice is never swept, so "what was I told about in 2024" is
 still a `work_activity` question at any age. A month is the floor because below
 it an inbox stops being one — somebody away for four weeks would come back to
 nothing.
+
+### The chat transcript's horizon
+
+The chat transcript is a different kind again. The tables above are swept per
+node, each by its own maintenance worker, because each is that node's own
+bookkeeping. The transcript is neither bookkeeping nor this node's: it is
+replicated content, so it is not swept at all — it is **pruned by a record**,
+one more change on the chat log that every data node applies like any other.
+A message is also the only copy of what somebody said, so
+`chat.chatlet.message_retention_days` — **365 days** by default, settable
+between 30 and 3650, and **`0` to keep everything for ever** — is a policy
+decision rather than a bookkeeping one. `0` reads the opposite way here from
+`tracker.worklet.inbox_retention_days`, where it means "take the default": an
+inbox row is derived from history that answers for ever, and a message is not
+derived from anything.
+
+The prune is a record rather than a local delete, and that is forced rather
+than stylistic. A message's instant is the BROKER's, stamped when the record
+was stored, so one fleet-singleton duty (`chat-prune`) publishing one cutoff
+is what makes every data node delete exactly the same rows; nodes each reading
+their own clock would diverge by whatever their clocks disagree by,
+permanently, with no read that repairs it. A room may carry a horizon of its
+own, which beats the company's — set by an administrator on the human write
+surface ([`PUT /chatlet/channels/{channel_id}/retention`](../reference/api-endpoints.md#a-chat-erase-prune-or-horizon),
+or [`crewlet chatlet retention`](../reference/cli.md#crewlet-chatlet)). Each node's
+chat keyword index follows the same range afterwards, because a forward-only
+walk cannot see a row that vanished. See [Chatlet § Retention](../concepts/chatlet.md#retention).
+
+The horizon the duty prunes by is the company's as the fleet runs it: the
+`message_retention_days` of the revision the fleet's activation pointer names,
+read only on a node that runs that very revision. A node serving any other,
+because it refused the fleet's revision, booted on an offline import the fleet
+has not taken, or has not yet applied a revision activated a moment ago,
+neither publishes a cutoff nor claims the duty, and logs
+`chat_prune_declined` naming the activation it serves and the fleet's epoch;
+a peer that runs the fleet's revision takes the duty once the lease lapses.
+So a node falling behind makes a horizon late, never early, which is the
+direction a prune can afford: an hour missed is pruned on the next tick, and
+a message pruned by a horizon the company has since raised cannot be brought
+back.
 
 ## The storage forecast
 
@@ -1967,10 +2037,22 @@ a day, 3 000 turns a day, 50 projects):
 | replicated store, per node | 9.7 GB | 26.6 GB | 43.8 GB |
 | snapshot volume at ×4.2 | 40.8 GB | 111.8 GB | 183.9 GB |
 
-The log itself, on a healthily-trimming fleet, holds **about 156 MB** — the
-`min_age` window's worth of records, not a year's. `blocked_by` is the field
-that says whether this fleet is one that trims; if it is set, the log is
-growing without bound and the forecast above does not apply to it.
+**Chat is forecast separately, and it is the reason the horizon exists.** At
+the declared census of 20 000 messages a day, a year is 7.3 M message rows;
+at the row-and-index width this schema carries that is roughly **7 GB per
+data node, per year** — comparable to everything else the reference company
+writes in its first year put together. Under the default 365-day horizon that
+figure is a STEADY STATE rather than a slope: the prune removes about as much as
+the company writes, on every data node, in every snapshot and in every join
+transfer. With `message_retention_days: 0` it is a slope, and a company choosing
+that should size the snapshot volume for it. This is a DERIVED number over a
+declared census — change the census and it changes proportionally.
+
+The mutation log itself, on a healthily-trimming fleet, holds **about 156 MB**
+— the `min_age` window's worth of records, not a year's — and the chat log
+about 230 MB at the census (a week at its 32 MB a day). `blocked_by` is the field that says whether this
+fleet is one that trims; if it is set on a log, that log is growing without
+bound and the forecast above does not apply to it.
 
 The read barriers add about **639 MB a year** to the log's throughput, which is
 inside the ceiling by a factor of five at year five. That figure is a term in
@@ -2069,8 +2151,10 @@ which:
   deliverable time, the quantisation recall, the fsync rates. These came off a
   benchmark.
 - **DERIVED** — the join projections, the storage forecast, the barrier's
-  annual bytes. These are arithmetic over measured inputs and a stated corpus.
-  Change the corpus and they change.
+  annual bytes, and the chat transcript's 7 GB a node a year. These are
+  arithmetic over measured inputs and a stated corpus. Change the corpus and
+  they change — the chat figure in particular is linear in the declared
+  census, and a company that talks twice as much pays twice as much for it.
 - **PROJECTED** — the supported search corpus at your concurrency, and the
   under-load search capacity. These need a benchmark on your hardware, and
   until it runs they are estimates with a stated basis rather than facts.

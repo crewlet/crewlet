@@ -21,7 +21,7 @@ These roles are implied by the org hierarchy. The driver's manager is the natura
 
 A decision has two halves, and they live in different places.
 
-**The discussion happens in chat.** Agents use their team's **channel** and their existing **chat MCP tools** to discuss — just like real employees:
+**The discussion happens in chat.** Agents use their team's **channel** — with the engine's own chat tools (`post_message`, `reply_in_thread`) on [Chatlet](chatlet.md), or their existing **chat MCP tools** on a vendor's — to discuss, just like real employees:
 
 1. **Driver posts in the team channel** — states the decision topic, context, and options
 2. **Contributors reply** — share their perspectives in the thread
@@ -38,7 +38,7 @@ The rules for each part of a decision, the caps, and the tools' arguments are in
 
 **A coding run asks in the same shape.** A seat's executor is a coding run in a box, and a question it cannot go on without parks the run rather than ending its turn: it calls `ask_and_wait` with the question, its context, and, when the person has to choose, the same options, recommendation, rationale, role and evidence a work item's decision takes ([Mid-run clarification](code-sandbox.md#mid-run-clarification-ask_and_wait), [ADR-0068](../../adr/0068-a-run-asks-a-person-in-the-shape-a-decision-is-asked.md)). The person deciding reads both in one layout in the Inbox and answers both with one press: a work item's ask with `comment_on_work_item{answers, choice}`, a run's with `answer_run{turn_id, choice}`, which resumes the run with the option chosen. The run's ask lives on the run's own record rather than on a work item, because a run need not be on one and a company on another tracker has none; it carries no `inform`, because its answer resumes the run itself rather than waking a turn that could be held to a promise.
 
-The team channel is configured on the unit (`channel`), and it is integration-neutral: the same field serves whichever chat backend the company runs. A seat's transport identity is its own bot: a [Mattermost](../integrations/mattermost.md) bot token, or a [Slack](../integrations/slack.md) app:
+The team channel is configured on the unit (`channel`), and it is integration-neutral: the same field serves whichever chat backend the company runs. On the engine's [own chat](chatlet.md) it opens the unit's room and needs nothing else — every agent seat posts there as itself. On a vendor's, a seat's transport identity is its own bot: a [Mattermost](../integrations/mattermost.md) bot token, or a [Slack](../integrations/slack.md) app:
 
 ```yaml
 units:

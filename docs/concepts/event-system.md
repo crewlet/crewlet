@@ -60,6 +60,17 @@ crewlet.events.{type}                # What the engine records about itself:
 crewlet.config.revision_activated
 crewlet.config.revision_applied
 
+# Who is looking at which chat room, who is typing, and which seat is working
+# there. ONE FLEET-WIDE SUBJECT, and deliberately outside the chat log's own
+# `crewlet.chat.log.>` space: this is in-flight state with no durable record
+# and no applier, so a subject inside the log's wildcard would make every
+# keystroke a record every data node applies for ever. An ephemeral READ,
+# answered from each node's own memory and filtered by each reader's sight of
+# the room, so it is not signed: a forged answer can light an indicator and
+# nothing else. A person's chat read state has no subject at all — it is a
+# coordination record every node serving sockets watches
+crewlet.chat.presence
+
 # A seat's memory, ONE SUBJECT PER ROW, on a stream that retains one message
 # per subject — so it holds the current value of every row rather than a log of
 # every write, and a node acquiring a seat replays it in a single pass
@@ -177,7 +188,7 @@ flowchart TD
 
 For every source but chat the two are the same string — an issue key, a page id, a monitor id and a task's id are each one object that is both the merge unit and the durable thread. **Chat is where they differ, and only for a direct message**: a DM is one conversation however it is threaded, so its identity is the bare channel (`slack:D1`) while a reply in a thread still partitions on that thread (`slack:D1:1718.001`). In a shared channel a thread IS the conversation and the two coincide again. The rule that decides it is that **a partition key is always the identity or a finer cut of it**, so every event in one partition carries one identity: a turn is a partition and its ledger entry is written once, and constituents that disagreed about the identity would file it under whichever event sorted first. Before the two were separated, one value answered both questions — so a DM's first turn was filed under the channel, its thread reply looked its history up under the thread, and a seat re-read its own 1:1 line as a first turn every time.
 
-A notification Worklet or Doclet raised also carries `trigger_position`: where on its log the change that caused it was committed, as a position token (`<stream>@<generation>:<sequence>`). The turn it wakes hands that position to its node's read-your-writes floors before its first read, so whatever the seat then reads from that domain (a Worklet list or item, a page or a listing of pages), on whichever node answers it, is no older than the change it was woken for. The ranked searches are the exception: they read an index each node builds behind its own rows, so they carry no floor and may not find a change made a moment ago (see [Read-your-trigger](../guides/consistency.md#read-your-trigger-is-a-floor-not-the-mechanism)). A vendor's notification carries none.
+A notification Worklet, Doclet or Chatlet raised also carries `trigger_position`: where on its log the change that caused it was committed, as a position token (`<stream>@<generation>:<sequence>`). The turn it wakes hands that position to its node's read-your-writes floors before its first read, so whatever the seat then reads from that domain (a Worklet list or item, a page or a listing of pages, a room, a thread or a mention list), on whichever node answers it, is no older than the change it was woken for. The ranked searches are the exception: they read an index each node builds behind its own rows, so they carry no floor and may not find a change made a moment ago (see [Read-your-trigger](../guides/consistency.md#read-your-trigger-is-a-floor-not-the-mechanism)). A vendor's notification carries none.
 
 On the wire of an inbound notification the partition key rides the payload field `partition_key` and the identity rides `conversation_identity`, each read only from its own field: a notification that names a partition and no identity names no conversation. The partition is spelled as the one event whose subject is a batch spells it (`partition_key`, below), because everywhere else `conversation_key` is the **identity** — that is what a turn's events are tagged with in the event store.
 
@@ -202,7 +213,7 @@ With the window at `0`, an idle-agent burst worst-cases at **two** turns (the fi
 
 **Relation to the rate limiter.** `notification_rate_limit` (the notification service's valve, default off) *drops* notifications above N per seat per second. It remains purely a safety valve against pathological webhook storms and notification loops. Burst handling is coalescing's job: a coalesced comment is context preserved, a dropped one is context lost.
 
-DACI discussion happens in the team channel on the company's chat surface (Mattermost or Slack), with each agent's own chat MCP tools. The decision itself, when somebody has to choose, is a **structured ask** on a work item — a tracker comment carrying the options, answered by a `choice` — so it arrives as an ordinary tracker wake (`asked`, then `answered`) rather than as an event type of its own. The engine runs no workflow over it. See [Decision Framework](decision-framework.md) for details.
+DACI discussion happens in the team channel on the company's chat surface (the engine's own, Mattermost or Slack), with the [Chatlet](chatlet.md) tools or each agent's own chat MCP tools. The decision itself, when somebody has to choose, is a **structured ask** on a work item — a tracker comment carrying the options, answered by a `choice` — so it arrives as an ordinary tracker wake (`asked`, then `answered`) rather than as an event type of its own. The engine runs no workflow over it. See [Decision Framework](decision-framework.md) for details.
 
 ---
 
@@ -914,15 +925,29 @@ The JetStream backend runs both on **core NATS** publish and subscribe, outside 
 
 ## Communication
 
-Two communication systems:
+Two communication systems, and the first of them has two implementations.
 
-### External Channels (Slack, Mattermost)
+### Channels (the engine's own, or Slack / Mattermost)
 
-Org-wide announcements, department coordination, and team discussions happen in the company's own chat (Slack or Mattermost channels). Agents post with their own MCP tools, and the **notification service** routes what arrives, a Slack webhook or a Mattermost socket event, to agent inboxes.
+Org-wide announcements, department coordination and team discussions happen in
+channels: one room per unit, plus whatever the company opens. Which product
+holds them is [`chat.backend`](chatlet.md), and it is exclusive — one live chat
+home, or a person replies in the place the agents are not reading.
 
 - **Org-wide** — announcements (via an `#announcements` channel)
 - **Department** — leads-only coordination (via the department's `channel`)
 - **Team** — team coordination and DACI discussion (via the unit's `channel`)
+
+On a **vendor** backend the rooms are Slack or Mattermost channels: agents post
+with their own MCP tools, and the notification service routes what arrives — a
+Slack webhook, a Mattermost socket event — to agent inboxes.
+
+On Chatlet the rooms are the engine's own, and the path is
+shorter in one specific way rather than different in kind: a message is a
+record on `CREWLET_CHAT_LOG`, and the wake is derived from that committed
+record by a durable consumer rather than from an inbound webhook. Everything
+after that — the routing, the inbox, the coalescing, the turn — is the same
+machinery, which is the point. A unit's `channel` is what opens its room.
 
 ### Ephemeral A2A channels (`internal/a2a`)
 
