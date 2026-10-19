@@ -32,7 +32,7 @@ import { FileTextGlyph, PencilGlyph } from "@crewlethq/icons/glyphs";
 import type { ArtifactDetail, ArtifactDoc, ArtifactDocAnswer } from "~/protocol/index.ts";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { OnThisPage } from "~/components/OnThisPage.tsx";
+import { OnThisPage, pageOutline } from "~/components/OnThisPage.tsx";
 import { PrintOnly } from "~/components/PrintOnly.tsx";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { useRest } from "~/lib/useRest.ts";
@@ -122,37 +122,39 @@ function Doc({
 
   const choose = (path: string) => setTab(path === doc.tabs[0]?.path ? "" : path);
   const many = doc.tabs.length > 1;
-  const body = tab.text.trim() ? (
+  const blank = tab.text.trim() === "";
+  const body = !blank ? (
     <Document as="article" aria-label={many ? `${detail.title}, ${tab.title}` : detail.title}>
       {renderMarkdown(tab.text, { anchors: true, image: tabImages(tab, loaded) })}
     </Document>
   ) : (
-    // A TAB WITH NOTHING WRITTEN says so, and offers the writing to whoever
-    // may publish, rather than leaving a blank page that reads as one still
-    // loading.
+    // A TAB WITH NOTHING WRITTEN says so, as the sheet with no columns does,
+    // and hands whoever may publish the one control that fills it, rather
+    // than leaving a blank page that reads as one still loading.
     <EmptyState
-      size="compact"
       icon={<FileTextGlyph size="xl" />}
       title={many ? "This tab is empty" : "This doc is empty"}
       description={
-        editable
-          ? "Nothing is written here yet."
-          : "Nothing is written here yet. Its editors can add to it."
+        editable ? "Write it, or ask an agent to." : "The people who can edit this doc write it."
       }
       action={
         editable ? (
           <Button
             size="small"
-            variant="secondary"
+            variant="primary"
             leadingIcon={<PencilGlyph size="sm" />}
             onClick={() => setEditing(true)}
           >
-            Start writing
+            Edit
           </Button>
         ) : undefined
       }
     />
   );
+  // THE OUTLINE TAKES A COLUMN ONLY WHEN IT DRAWS: a tab with fewer than two
+  // headings (most single-tab docs, and every empty one) gives its prose the
+  // whole row rather than sitting beside an empty rail.
+  const outlined = pageOutline(tab.text).length > 0;
 
   if (editing) {
     // WHILE EDITING, THE EDITOR'S CONTROLS ARE THE BAR'S: it publishes its
@@ -205,10 +207,16 @@ function Doc({
           />
         </div>
       )}
-      <div className="doc-read">
-        <div className="doc-read-side">
-          <OnThisPage body={tab.text} />
-        </div>
+      <div
+        className={
+          outlined ? "doc-read" : blank ? "doc-read doc-read--blank" : "doc-read doc-read--bare"
+        }
+      >
+        {outlined && (
+          <div className="doc-read-side">
+            <OnThisPage body={tab.text} />
+          </div>
+        )}
         <div className="doc-read-page">
           {many ? (
             <TabPanel id={panel} value={tab.path}>

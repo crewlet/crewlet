@@ -10650,6 +10650,18 @@ a.live-row:focus-visible {
   flex: 1 1 20rem;
   min-width: 0;
 }
+/* A tab with no outline to draw takes the row on its own; an empty one
+   takes the whole view, so its empty state stands in the middle of it as
+   every other kind's does, rather than in the middle of a prose column. */
+.doc-read--bare {
+  grid-template-columns: minmax(0, var(--size-content-max));
+}
+.doc-read--blank {
+  grid-template-columns: minmax(0, 1fr);
+}
+.doc-read--blank > .doc-read-page {
+  max-width: none;
+}
 .doc-read-page {
   min-width: 0;
   max-width: var(--size-measure);
