@@ -2,6 +2,7 @@ package statelog_test
 
 import (
 	"math"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -173,6 +174,118 @@ func TestAGenerationRecordsIDIsOneOperationPerNode(t *testing.T) {
 	}
 }
 
+// A VALUE WRITTEN INTO AN OPERATION'S NAME IS ONE STEP OF IT, AND NO TWO
+// VALUES ARE WRITTEN ALIKE.
+//
+// A dot in a name begins a step, so a path written as itself made a file
+// write's id read as a name and a step; a value past the bound or carrying a
+// space put into every ledger row and message-id header an id the engine's
+// own rule for a caller's id refuses. [OpNamePart] writes an identifier as
+// itself and everything else escaped — and escaped injectively, so a value
+// that spells another's escape is escaped too rather than kept.
+//
+// Mutation: return the value unchanged (the escaped rows fail), drop the
+// bound (the 65-byte and 1024-byte rows are kept), or drop the escape
+// marker's guard (the row spelling another's escape is kept, and two values
+// share a part).
+func TestAValueIsWrittenIntoAnOperationNameAsOneStep(t *testing.T) {
+	t.Parallel()
+	asItself := []string{"ENG-1", uuid.NewString(), "ci:release", "workspace",
+		"n" + strings.Repeat("x", 62) + "9"}
+	escaped := []string{"ENG/docs/a.md", "a.b", "docs/My Notes.md", "\u00fc.md",
+		"~abc", "", "tab\tseparated", "n" + strings.Repeat("x", 63) + "9",
+		"docs/" + strings.Repeat("a", 1016) + ".md",
+		statelog.OpNamePart("a.b")}
+	for _, value := range asItself {
+		if got := statelog.OpNamePart(value); got != value {
+			t.Errorf("OpNamePart(%q) = %q — an identifier the engine writes "+
+				"into a name should read in the ledger as itself", value, got)
+		}
+	}
+	segment := regexp.MustCompile(`^[!-~]{1,64}$`)
+	spelled := map[string]string{}
+	for _, value := range append(append([]string{}, asItself...), escaped...) {
+		part := statelog.OpNamePart(value)
+		if !segment.MatchString(part) || strings.Contains(part, ".") {
+			t.Errorf("OpNamePart(%q) = %q, which is not one segment of at most %d "+
+				"bytes of visible ASCII with no dot", value, part,
+				statelog.MaxOpNamePartBytes)
+		}
+		if other, dup := spelled[part]; dup {
+			t.Errorf("%q and %q are both written %q — two objects would name "+
+				"one operation", value, other, part)
+		}
+		spelled[part] = value
+	}
+	for _, value := range escaped {
+		if got := statelog.OpNamePart(value); got == value {
+			t.Errorf("OpNamePart(%q) kept the value as itself, which is not a "+
+				"segment the grammar may hold", value)
+		}
+	}
+}
+
+// EVERY SEGMENT AN ID IS MINTED WITH IS ONE STEP OF IT — its name, and each
+// step a gesture appends.
+//
+// Nothing downstream holds the grammar, so the mint does: a name or a step
+// that holds a dot is written as one escaped segment rather than spelling
+// steps of its own, a name at the bound is kept and one past it escaped, and
+// [OpNamed] compares through the same rule, so a name the mint had to escape
+// still names its own id. A step that held a dot made two gestures one id:
+// `x` with the step `y.z`, and `x.y` with the step `z`.
+//
+// Mutation: drop the rule from the name's writer, the step's or [OpNamed],
+// and the matching assertion fails.
+func TestEverySegmentAnIDIsMintedWithIsOneStepOfIt(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
+	atBound := "update-" + strings.Repeat("x", statelog.MaxOpSegmentBytes-len("update-"))
+	for _, name := range []string{"file-ENG/docs/a.md", "x.y", "docs/My Notes",
+		"~update-ENG-1", atBound + "x", atBound, "update-ENG-1"} {
+		for shape, id := range map[string]string{
+			"minted":  statelog.NewOpID(at, name),
+			"derived": statelog.DeriveOpID(at, name, "identity"),
+		} {
+			segment := id[37:]
+			if strings.Contains(segment, ".") || len(segment) > statelog.MaxOpSegmentBytes {
+				t.Errorf("the %s id %q names %q in %q — more than one segment",
+					shape, id, name, segment)
+			}
+			if err := statelog.CheckCallerOpID(id); err != nil {
+				t.Errorf("the %s id named %q is one the engine refuses back: %v",
+					shape, name, err)
+			}
+			if !statelog.OpNamed(id, name) {
+				t.Errorf("the %s id %q is not named %q — a surface holding an id "+
+					"to its call would refuse its own", shape, id, name)
+			}
+			readable := name == atBound || name == "update-ENG-1"
+			if readable != (segment == name) {
+				t.Errorf("the %s id named %q writes %q: a segment within the bound "+
+					"is written as itself, and only one", shape, name, segment)
+			}
+		}
+	}
+	gesture := statelog.NewOpID(at, "evict-node-4")
+	for _, step := range []string{"y.z", "", "a b", "~c"} {
+		id := statelog.StepOpID(gesture, step)
+		if tail := strings.TrimPrefix(id, gesture+"."); strings.Contains(tail, ".") {
+			t.Errorf("StepOpID(%q, %q) = %q, a step that spells more than one", gesture,
+				step, id)
+		}
+	}
+	if statelog.StepOpID("x", "y.z") == statelog.StepOpID("x.y", "z") {
+		t.Error("the gesture `x` with the step `y.z` and the gesture `x.y` with " +
+			"the step `z` are one id — one ledger row answering two gestures")
+	}
+	if got := statelog.StepOpID(gesture, "evict", "tracker:node-4"); got !=
+		gesture+".evict.tracker:node-4" {
+		t.Errorf("StepOpID wrote %q, want steps that are already segments as "+
+			"themselves", got)
+	}
+}
+
 // AN ID IS THE CALL IT WAS MINTED FOR, OR IT IS NOTHING.
 //
 // A surface that names the call in an id's name holds a brought-back id to
@@ -336,6 +449,7 @@ func TestAKeyedWriteRefusesWhatItCannotDeriveFrom(t *testing.T) {
 		"a key with a space before it":     {key: " " + key, verb: "save"},
 		"no verb":                          {key: key, verb: ""},
 		"a verb that reads as a step":      {key: key, verb: "comment.edit"},
+		"a verb that reads as an escape":   {key: key, verb: "~save"},
 		"content that will not encode":     {key: key, verb: "save", content: make(chan int)},
 		"a number JSON has no spelling of": {key: key, verb: "save", content: math.NaN()},
 	} {
