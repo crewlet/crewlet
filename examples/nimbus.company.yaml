@@ -562,15 +562,32 @@ mcp_servers:
     # `glab mcp serve` (stdio): the engine's MCP bridge spawns one glab
     # process PER ROLE with that role's GITLAB_TOKEN — so the per-role
     # mcp_env.gitlab below IS the per-agent identity, and there is no
-    # separate server to run/host.  Requires the `glab` CLI on the engine
-    # host.  The
-    # served surface is the full glab command tree (MR approve/diff/notes,
-    # issue CRUD, CI, glab_api for anything else).  Alternative:
-    # @zereight/mcp-gitlab as a shared streamable-HTTP server — see
+    # separate server to run/host.  Requires the `glab` CLI on the PATH of
+    # every engine host that runs seats.  The served surface is the full
+    # glab command tree (MR approve/diff/notes, issue CRUD, CI, glab_api
+    # for anything else).  Alternative: @zereight/mcp-gitlab as a shared
+    # streamable-HTTP server — see
     # docs/integrations/gitlab.md § MCP tool server.
     shared: false
     command: glab
     args: ["mcp", "serve"]
+    # glab answers a tool call with everything its command wrote, standard
+    # error included, so what it prints there unasked reaches the agent
+    # and breaks the JSON: the daily update notice (or the failed check,
+    # where gitlab.com is unreachable) and the "What's new" banner after
+    # an upgrade, which GLAB_CHECK_UPDATE does not cover.  The third stops
+    # a usage event to the instance on every call, naming the command and
+    # the project it ran against, sent under the seat's token and waited
+    # on for up to two seconds; leave it out and GitLab's usage statistics
+    # count the agents' commands.  Here, not in each seat's mcp_env — none
+    # is a credential — and never in the engine's own environment (a
+    # sourced .env, an image's ENV): a stdio server is handed only an
+    # allowlist of it.  "false" exactly; glab warns into every result on a
+    # spelling it cannot parse.
+    env:
+      GLAB_CHECK_UPDATE: "false"
+      GLAB_SHOW_WHATS_NEW: "false"
+      GLAB_SEND_TELEMETRY: "false"
   - name: tavily
     # The newest release: a file somebody copies is run long after it was
     # written and nothing moves a pin in it, so an example fetches
