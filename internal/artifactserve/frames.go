@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactserve/ticket"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -25,6 +26,11 @@ import (
 // Markdown document or a native sheet, which the dashboard renders itself and
 // which carry no author code, or one in the trash.
 var ErrNotServed = errors.New("artifactserve: this artifact is not opened in a frame")
+
+// ErrNoDocument reports a frame whose document is not a page of the version:
+// a design's frame names no artboard, or names a path the version does not
+// hold as an HTML page.
+var ErrNoDocument = errors.New("artifactserve: the frame names no page of the version")
 
 // ErrNoLineage reports a frame asked for with no credential name to bind it
 // to: a principal acting through no credential (a seat's own turn, the engine
@@ -66,8 +72,14 @@ type FrameRequest struct {
 	// Head is the artifact as the API read it.
 	Head artifactsdomain.Head
 
-	// Version is the version to open, which must be one of Head's.
-	Version artifactsdomain.VersionSummary
+	// Version is the version to open, which must be one of Head's, with
+	// its manifest: the document is one of its pages.
+	Version artifactsdomain.Version
+
+	// Document is the page the frame opens: empty for the entry of a kind
+	// whose frame opens on it (a page), and one artboard's path for a kind
+	// that frames each page on its own (a design).
+	Document string
 
 	// Granted are the capabilities the viewer is granted in this frame, a
 	// subset of what the version declares, as the API decided them.
@@ -120,6 +132,10 @@ func (f *Frames) For(r FrameRequest) (artifacts.Frame, error) {
 		return artifacts.Frame{}, fmt.Errorf("%w: version %d names no entry", ErrNotServed,
 			v.Number)
 	}
+	doc, err := frameDocument(head.Kind, v, r.Document)
+	if err != nil {
+		return artifacts.Frame{}, err
+	}
 	for _, c := range r.Granted {
 		if !c.Valid() || !slices.Contains(v.Capabilities, c) {
 			return artifacts.Frame{}, fmt.Errorf("artifactserve: capability %q is not one "+
@@ -150,6 +166,7 @@ func (f *Frames) For(r FrameRequest) (artifacts.Frame, error) {
 		Lineage:      r.Lineage,
 		Capabilities: r.Granted,
 		AccessEpoch:  head.AccessEpoch,
+		Document:     doc,
 		Nonce:        nonce,
 		Expires:      expires,
 	})
@@ -158,17 +175,39 @@ func (f *Frames) For(r FrameRequest) (artifacts.Frame, error) {
 	}
 	origin := f.origins.Origin(head.ID)
 	return artifacts.Frame{
-		URL:       origin + ticketPath + token + "/" + escapePath(v.Entry) + "#n=" + nonce,
+		URL:       origin + ticketPath + token + "/" + escapePath(doc) + "#n=" + nonce,
 		Origin:    origin,
 		Version:   v.Number,
 		ExpiresAt: expires,
 		Sandbox:   strings.Join(f.origins.Sandbox(), " "),
 		// EMPTY IN THIS RELEASE: no device capability is served, so the
 		// frame delegates no feature at all.
-		Allow: "",
-		Mode:  f.origins.Mode(),
-		Nonce: nonce,
+		Allow:    "",
+		Mode:     f.origins.Mode(),
+		Nonce:    nonce,
+		Document: doc,
 	}, nil
+}
+
+// frameDocument is the page a frame of kind opens in version v: the entry
+// where the kind's frame opens on it and none is named, else the page named,
+// which must be an HTML page of the version. A design names its artboard
+// always, since its entry is the canvas the dashboard draws.
+func frameDocument(kind artifacts.Kind, v artifactsdomain.Version, named string) (string, error) {
+	spec, _ := kind.Spec()
+	doc := named
+	if doc == "" {
+		if !spec.OpensEntry() {
+			return "", fmt.Errorf("%w: a %s frame names the page it opens", ErrNoDocument, kind)
+		}
+		doc = v.Entry
+	}
+	e, ok := manifest.EntryAt(v.Manifest, doc)
+	if !ok || essenceOf(e.ContentType) != "text/html" {
+		return "", fmt.Errorf("%w: version %d holds no HTML page at %q", ErrNoDocument,
+			v.Number, doc)
+	}
+	return doc, nil
 }
 
 // Claims reads back the ticket of a live frame this deployment minted, from the

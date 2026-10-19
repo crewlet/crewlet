@@ -385,7 +385,7 @@ func (r *rig) frameFor(p iam.Principal, granted []artifacts.Capability) artifact
 	r.t.Helper()
 	f, err := r.frames.For(artifactserve.FrameRequest{
 		Principal: p, Lineage: p.Via, Head: r.reads.head,
-		Version: r.reads.versions[2].VersionSummary, Granted: granted,
+		Version: r.reads.versions[2], Granted: granted,
 	})
 	if err != nil {
 		r.t.Fatalf("Frames.For: %v", err)
