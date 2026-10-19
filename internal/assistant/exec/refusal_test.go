@@ -1,6 +1,7 @@
 package exec_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -22,10 +23,11 @@ func answered(write func(http.ResponseWriter)) exec.Response {
 }
 
 // A REFUSAL READS AS THE API SAID IT, ON TWO CHANNELS: the code, the sentence
-// the envelope says to a person, the grants that would have admitted them, and
-// the route's own account of this request as the detail only the model reads;
-// a body that is not the envelope is a refusal by its status alone. Mutation:
-// read the detail into the message, or drop the grants, and a row fails.
+// the envelope says to a person, the deciding rule's reason with the grants
+// that would have admitted them, and the route's own account of this request
+// as the detail only the model reads; a body that is not the envelope is a
+// refusal by its status alone, with no reason. Mutation: read the detail into
+// the message, or drop the reason or the grants, and a row fails.
 func TestARefusalReadsAsTheAPISaidIt(t *testing.T) {
 	t.Parallel()
 	deny := func(reason authz.Reason, grants ...iam.Grant) exec.Response {
@@ -34,18 +36,35 @@ func TestARefusalReadsAsTheAPISaidIt(t *testing.T) {
 				authz.RefusalDetail(reason, grants))
 		})
 	}
-	unauthorized := httpjson.CodeUnauthorized.Message()
+	// said is the sentence a refusal's envelope carries, read off the wire
+	// rather than typed here: `unauthorized` says the rule its reason names,
+	// in internal/api/httpjson's words.
+	said := func(resp exec.Response) string {
+		var body struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(resp.Body, &body); err != nil {
+			t.Fatalf("a refusal answered %q, which is not the envelope: %v", resp.Body, err)
+		}
+		return body.Message
+	}
+	noGrant := deny(authz.ReasonNoGrant, iam.GrantWorklet)
+	scope := deny(authz.ReasonAssistScope)
+	never := deny(authz.ReasonAssistRefused)
 	cases := []struct {
 		name string
 		resp exec.Response
 		want wire.Refusal
 	}{
-		{"an authority deny", deny(authz.ReasonNoGrant, iam.GrantWorklet),
-			wire.Refusal{Code: "unauthorized", Message: unauthorized, Grants: []string{"worklet"}}},
-		{"the assistant's scope", deny(authz.ReasonAssistScope),
-			wire.Refusal{Code: "unauthorized", Message: unauthorized, Grants: []string{}}},
-		{"a verb never the assistant's", deny(authz.ReasonAssistRefused),
-			wire.Refusal{Code: "unauthorized", Message: unauthorized, Grants: []string{}}},
+		{"an authority deny", noGrant,
+			wire.Refusal{Code: "unauthorized", Message: said(noGrant), Reason: "no_grant",
+				Grants: []string{"worklet"}}},
+		{"the assistant's scope", scope,
+			wire.Refusal{Code: "unauthorized", Message: said(scope), Reason: "assist_scope",
+				Grants: []string{}}},
+		{"a verb never the assistant's", never,
+			wire.Refusal{Code: "unauthorized", Message: said(never), Reason: "assist_refused",
+				Grants: []string{}}},
 		{"a 401", answered(func(w http.ResponseWriter) {
 			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 		}), wire.Refusal{Code: "invalid_token", Message: httpjson.CodeInvalidToken.Message()}},
@@ -66,7 +85,8 @@ func TestARefusalReadsAsTheAPISaidIt(t *testing.T) {
 	for _, tc := range cases {
 		got := exec.RefusalOf(tc.resp)
 		if got.Code != tc.want.Code || got.Message != tc.want.Message || got.Hint != tc.want.Hint ||
-			got.Detail != tc.want.Detail || !slices.Equal(got.Grants, tc.want.Grants) {
+			got.Reason != tc.want.Reason || got.Detail != tc.want.Detail ||
+			!slices.Equal(got.Grants, tc.want.Grants) {
 			t.Errorf("%s read as %+v, want %+v", tc.name, got, tc.want)
 		}
 		if got.Message == "" {

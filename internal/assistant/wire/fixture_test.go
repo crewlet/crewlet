@@ -77,8 +77,8 @@ func vocabularyFrames() []wire.Frame {
 				Narrow: []string{"the search words"}}})),
 		read.Frame(cardFrame(answer, "card:error", wire.Card{Type: wire.CardError,
 			Error: &wire.ErrorCard{Refusal: wire.Refusal{Code: "unauthorized",
-				Message: "You do not have access to this.", Grants: []string{"admin"}},
-				Phrase: "read the fleet"}})),
+				Message: "You do not have access to this.", Reason: "no_grant",
+				Grants: []string{"admin"}}, Phrase: "read the fleet"}})),
 		// --- deep work (im-deep) ---
 		read.Frame(wire.Frame{Kind: wire.EventStep, Step: &wire.StepEvent{
 			StepID: id("step:deep"), Index: 2, Tool: "start_deep_work",

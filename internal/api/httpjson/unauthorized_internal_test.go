@@ -7,7 +7,8 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// THE UNAUTHORIZED SENTENCE NAMES EVERY PERMISSION THERE IS, read off the list.
+// THE UNAUTHORIZED SENTENCE NAMES EVERY PERMISSION THERE IS, read off the list,
+// for a refusal that says nothing more about itself.
 //
 // A person refused on a screen reads this sentence to learn what to ask an
 // admin for, and it typed the list by hand: the next app's permission would
@@ -22,19 +23,20 @@ import (
 func TestTheUnauthorizedSentenceNamesEveryPermission(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
-		grants []iam.Grant
+		grants []string
 		names  string
 	}{
-		{[]iam.Grant{iam.GrantAdmin}, "(Admin)"},
-		{[]iam.Grant{iam.GrantAdmin, iam.GrantWorklet}, "(Admin or Worklet)"},
-		{[]iam.Grant{iam.GrantAdmin, iam.GrantWorklet, iam.GrantDoclet, "chatlet"},
+		{[]string{"admin"}, "(Admin)"},
+		{[]string{"admin", "worklet"}, "(Admin or Worklet)"},
+		{[]string{"admin", "worklet", "doclet", "chatlet"},
 			"(Admin, Worklet, Doclet or Chatlet)"},
 	} {
-		if got := unauthorizedSentence(c.grants); !strings.Contains(got, c.names) {
+		if got := lacksSentence(grantWords(c.grants)); !strings.Contains(got, c.names) {
 			t.Errorf("for %v the sentence reads %q, want it to name %s", c.grants, got, c.names)
 		}
 	}
-	if got, want := CodeUnauthorized.Message(), unauthorizedSentence(iam.AllGrants); got != want {
+	want := lacksSentence(grantWords(grantNames(iam.AllGrants)))
+	if got := CodeUnauthorized.Message(); got != want {
 		t.Errorf("the table's sentence is %q, want the one naming every permission "+
 			"this build knows: %q", got, want)
 	}

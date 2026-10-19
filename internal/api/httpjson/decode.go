@@ -9,7 +9,8 @@ import (
 // rule's reason and the permissions that would have admitted the caller.
 // Spelled here, beside the envelope's other keys, so the writer
 // (internal/authz's RefusalDetail, which names them DetailReason and
-// DetailGrants) and the reader ([Decode]) can never disagree about them.
+// DetailGrants) and the readers ([Decode], and `unauthorized`'s sentence,
+// which [unauthorizedMessage] chooses by them) can never disagree about them.
 const (
 	KeyReason = "reason"
 	KeyGrants = "grants"

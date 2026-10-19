@@ -1,14 +1,20 @@
 package cards_test
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/assistant/cards"
+	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // internalWords are what a refusal written for the model carries and a person
@@ -49,6 +55,61 @@ func TestEveryRefusalAPersonReadsIsTheEnginesSentence(t *testing.T) {
 			case !strings.HasSuffix(got.Message, "."):
 				t.Errorf("%s at %d reads %q, which is not a sentence", code, status, got.Message)
 			}
+		}
+	}
+}
+
+// A REFUSAL ON AUTHORITY SAYS ITS RULE: a refusal of each kind the authority
+// table makes, answered as the engine answers it and read as the assistant
+// reads it, reads to the person as the sentence the envelope says for that
+// rule, with the rule and the permissions beside it, never as the one sentence
+// every `unauthorized` was worded by, which told a person whose assistant never
+// takes the verb, or may only propose the change, that they lacked access.
+// Mutation: word a refusal by its code and status alone, or leave its reason
+// behind, and every row fails.
+func TestARefusalOnAuthoritySaysItsRule(t *testing.T) {
+	t.Parallel()
+	flat := cards.PersonRefusal(wire.Refusal{Code: string(httpjson.CodeUnauthorized)},
+		http.StatusForbidden).Message
+	for _, c := range []struct {
+		reason authz.Reason
+		grants []iam.Grant
+	}{
+		{authz.ReasonNoGrant, []iam.Grant{iam.GrantWorklet}},
+		{authz.ReasonNotLead, []iam.Grant{iam.GrantAdmin}},
+		{authz.ReasonStepUp, []iam.Grant{iam.GrantAdmin}},
+		{authz.ReasonStage, nil},
+		{authz.ReasonSeatOnly, nil},
+		{authz.ReasonRole, []iam.Grant{iam.GrantAdmin}},
+		{authz.ReasonCeiling, nil},
+		{authz.ReasonAssistRefused, nil},
+		{authz.ReasonAssistScope, nil},
+	} {
+		rec := httptest.NewRecorder()
+		authz.EnvelopeRefusal(rec, nil, authz.Policy{},
+			authz.Decision{Reason: c.reason, Grants: c.grants})
+		var envelope struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+			t.Fatalf("%s was answered %q, which is not the envelope: %v", c.reason,
+				rec.Body.Bytes(), err)
+		}
+		got := cards.PersonRefusal(exec.RefusalOf(exec.Response{Status: rec.Code,
+			Header: rec.Header(), Body: rec.Body.Bytes()}), rec.Code)
+		names := make([]string, 0, len(c.grants))
+		for _, g := range c.grants {
+			names = append(names, string(g))
+		}
+		switch {
+		case got.Message != envelope.Message || got.Message == flat:
+			t.Errorf("%s reads %q to the person, want the envelope's %q", c.reason,
+				got.Message, envelope.Message)
+		case got.Reason != string(c.reason) || !slices.Equal(got.Grants, names):
+			t.Errorf("%s reads with reason %q and grants %v, want %q and %v", c.reason,
+				got.Reason, got.Grants, c.reason, names)
+		case internalWords.MatchString(got.Message):
+			t.Errorf("%s reads %q, which names the engine's internals", c.reason, got.Message)
 		}
 	}
 }
