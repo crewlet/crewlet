@@ -201,3 +201,103 @@ func seedPageHistory(ctx context.Context, tx *sql.Tx, maxVariables int) error {
 	}
 	return nil
 }
+
+// A LISTING IS READ IN ITS ORDER, AND A LATER WINDOW SEEKS IT.
+//
+// Every listing is ordered by container, title and id ([listOrder]), and a
+// window is meant to be a walk of an index in that order which its LIMIT
+// stops: `pages_heads_container_idx` for the workspace and a container,
+// `pages_heads_parent_idx` for a tree level. Without one, every window read
+// every page the listing matched and sorted them all to keep fifty; and a
+// later window resumed through one nested disjunction no index could seek, so
+// it did the same from the top. So each window a listing is asked in is
+// planned — the first, and every arm of a later one ([listResumes]) — over the
+// shapes the surfaces ask for, and held to: no read of `pages_heads` from the
+// heap, no sort of the window, and each arm of a resume one seek of the
+// order's index bounded where the cursor stopped.
+//
+// Mutation: resume through the nested disjunction again, or order a listing by
+// a column its indexes do not lead with, and the plans sort; resume a listing
+// pinned to one container on its container as well, and the last arm reads
+// the whole container to find nothing.
+func TestAListingIsReadInItsOrder(t *testing.T) {
+	t.Parallel()
+	db := pagePlanStore(t)
+	skills, ordinary := true, false
+	live := []Status{StatusPublished, StatusDraft}
+	cursor := listCursor{Container: "ENG", Title: "Page 5", ID: "p-0005"}
+	shapes := map[string]struct {
+		spec, child listSpec
+		pinned      bool
+	}{}
+	for name, f := range map[string]Filter{
+		"the workspace":                 {},
+		"the published pages":           {Status: []Status{StatusPublished}},
+		"one container":                 {Container: "ENG"},
+		"one container's live pages":    {Container: "ENG", Status: live},
+		"the top of a container's tree": {Container: "ENG", Roots: true, Status: live, Skills: &ordinary},
+		"a tree level under one page":   {ParentID: "p-0001", Status: live, Skills: &ordinary},
+		"the tool skills":               {Skills: &skills, Status: []Status{StatusPublished}},
+		"a title in one container":      {Container: "ENG", Title: "page"},
+	} {
+		spec, child := compileListing(f)
+		shapes[name] = struct {
+			spec, child listSpec
+			pinned      bool
+		}{spec, child, f.Container != ""}
+	}
+	spec, child := childListing("p-0001")
+	shapes["a page's own children"] = struct {
+		spec, child listSpec
+		pinned      bool
+	}{spec, child, false}
+
+	for name, shape := range shapes {
+		t.Run(name, func(t *testing.T) {
+			reads := map[string]listSpec{"the first window": {}}
+			for i, arm := range listResumes(cursor, shape.pinned) {
+				reads[fmt.Sprintf("arm %d of a later window", i)] = arm
+			}
+			for read, from := range reads {
+				statement, args := listRowsStatement(shape.spec, shape.child, from,
+					DefaultLimit+1)
+				plan := explainPlan(t, db, statement, args)
+				details := make([]string, len(plan))
+				for i, line := range plan {
+					details[i] = line.detail
+				}
+				shown := strings.Join(details, "\n")
+				for _, line := range plan {
+					switch {
+					case strings.HasPrefix(line.detail, "SCAN pages_heads AS p") &&
+						!strings.Contains(line.detail, "INDEX"):
+						t.Errorf("%s reads every page from the heap:\n%s", read, shown)
+					case strings.Contains(line.detail, "FOR ORDER BY") && line.parent == 0:
+						t.Errorf("%s sorts what it read, where an index is in the "+
+							"listing's order:\n%s", read, shown)
+					}
+				}
+				if len(from.where) == 0 {
+					continue
+				}
+				// THE ARM'S OWN BOUND, in the plan's spelling: the last
+				// conjunct of the arm, `p.title > ?` read as `title>?`.
+				conjuncts := strings.Split(strings.Trim(from.where[0], "()"), " AND ")
+				bound := strings.ReplaceAll(strings.TrimPrefix(
+					conjuncts[len(conjuncts)-1], "p."), " ", "")
+				sought := false
+				for _, line := range details {
+					sought = sought || (strings.HasPrefix(line, "SEARCH p USING ") &&
+						(strings.Contains(line, "INDEX pages_heads_container_idx (") ||
+							strings.Contains(line, "INDEX pages_heads_parent_idx (")) &&
+						strings.Contains(line, bound+")"))
+				}
+				if !sought {
+					t.Errorf("%s (%s) is no seek of the listing's index bounded "+
+						"%s, so it reads from the top of the listing to find where "+
+						"the last window stopped:\n%s", read, from.where[0], bound, shown)
+				}
+			}
+		})
+	}
+}
