@@ -1291,15 +1291,17 @@ SHA-256 of the secret, listed among their credentials and revoked like any of
 them — and issuing another revokes the one before, so a person holds at most
 one. A machine has no password and is refused, and so is somebody suspended or
 retired, because a link would hand back an account somebody stopped. And it is
-issued **only for somebody whose every permission the issuer holds** — `403`
-otherwise, judged in the record's own snapshot: whoever issues the link is shown
+issued **only for somebody whose every permission the issuer holds** — `403
+unauthorized` naming the one they lack otherwise, judged in the record's own
+snapshot: whoever issues the link is shown
 it and could spend it themselves, so administering people must never be a way
 to act with a permission one does not have. It is the rule an invitation and an
 edit are held to — nobody hands out what they do not hold — and the reason a
 machine token is minted only for a service account. An administrator holds
-every app, so what reaches that `403` today is a permission this build does
+every app, so what reaches that refusal today is a permission this build does
 not know, kept on the person's row and never one an issuer here can be shown
-to hold. Because it is judged when the link is issued, **an edit that gives the
+to hold — `403 forbidden` rather than `unauthorized`, because no permission
+would make it one. Because it is judged when the link is issued, **an edit that gives the
 person a permission revokes their outstanding link** in the same record: that
 permission was never judged against whoever holds the link, so they ask for
 another, judged against the new set — and storing `[admin]` as `[admin,
@@ -1786,6 +1788,13 @@ one, whatever it carries.
 | An owner who is not active, and the machine row that binds a Tier A token (`token:<id>`) | That row is the deployment's credential's place in the directory, not an account |
 | No expiry, one already past, or one more than a year away | Ninety days by default and 365 at most: "forever" is deliberately unexpressible |
 | A request that presented a machine token | A token minted from a token is one whoever holds a pipeline's environment can renew for ever, a year at a time, with nobody present |
+
+A refusal a permission would lift — the minting party's missing permission, a
+service account's token minted without `admin` — is `403 unauthorized` naming
+that permission. The rest are the mint's own rule, which no permission changes,
+so they are `403 forbidden` with the rule's sentence: an administrator asking
+for a person's token is told that only that person may mint it, not to ask
+for access. A request through a machine token is `403 token_refused`.
 
 A Tier A token minting one names the service account (`?person=`, or
 `-person` on the CLI): it is the deployment's credential and owns no tokens

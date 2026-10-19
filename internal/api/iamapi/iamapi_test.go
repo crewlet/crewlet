@@ -602,14 +602,21 @@ func (w *fakeWriter) CancelInvitation(_ context.Context, _, opID, reason string)
 // admitted everything would pass it. THROUGH [iam.Expand] on both sides, as
 // the domain compares — so an admin confers every app, and a name this build
 // does not know is kept where the row holds it and refused where it is added.
+// REFUSED AS THE DOMAIN REFUSES: a permission the caller lacks names it, and a
+// name this build does not know names none.
 func (w *fakeWriter) MayConfer(before, after []iam.Grant) error {
 	held := iam.Expand(before)
 	caller := iam.Principal{Grants: w.grants}
 	for _, g := range after {
-		if !slices.Contains(held, g) && !caller.Can(g) {
-			return fmt.Errorf("%w: conferring %s needs the same grant",
-				iamdomain.ErrRefused, g)
+		if slices.Contains(held, g) || caller.Can(g) {
+			continue
 		}
+		if !g.Valid() {
+			return &iamdomain.Refusal{Grants: []iam.Grant{},
+				Err: fmt.Errorf("%q isn't a permission", g)}
+		}
+		return &iamdomain.Refusal{Grants: []iam.Grant{g},
+			Err: fmt.Errorf("conferring %s needs the same grant", g)}
 	}
 	return nil
 }
@@ -1345,22 +1352,24 @@ func TestAnUnknownGrantMayBeRemovedButNotAddedOverHTTP(t *testing.T) {
 // AUTHORITY.
 //
 // The identity estate refuses every administrative record written through a
-// machine token ([iamdomain.ErrTokenRefused], wrapping ErrRefused): a token
-// may carry admin (ADR-0033), so what keeps it off inviting, granting and
-// suspending is that nobody is present, not a permission. The answer is the
-// code the authority table's presence rows give the same request at the route
-// — 403 `token_refused`, reason `token_refused`, NO permission named, since
-// none would admit a token — and never `unauthorized`, which would send the
-// caller to ask for admin they already hold. It is matched BEFORE the
-// authority arm it wraps. The CONTROL is a plain authority refusal, which is
-// still `unauthorized`.
+// machine token ([iamdomain.ErrTokenRefused], in a refusal naming no
+// permission): a token may carry admin (ADR-0033), so what keeps it off
+// inviting, granting and suspending is that nobody is present, not a
+// permission. The answer is the code the authority table's presence rows give
+// the same request at the route — 403 `token_refused`, reason
+// `token_refused`, NO permission named, since none would admit a token — and
+// never `unauthorized`, which would send the caller to ask for admin they
+// already hold. It is matched BEFORE the refusal arms, since every token
+// refusal is one. The CONTROL is a refusal a permission lifts, which is still
+// `unauthorized`.
 //
-// Mutation: match ErrRefused first and every row answers `unauthorized`.
+// Mutation: match the refusal arms first and every row answers `forbidden`.
 func TestATokenWritingAnAdministrativeRecordIsTokenRefused(t *testing.T) {
 	t.Parallel()
-	byToken := fmt.Errorf("%w: %w: the stage was asked through the machine "+
-		"token pat:x, and an administrative identity record needs a person "+
-		"present — sign in", iamdomain.ErrRefused, iamdomain.ErrTokenRefused)
+	byToken := &iamdomain.Refusal{Grants: []iam.Grant{}, Err: fmt.Errorf("%w: "+
+		"the stage was asked through the machine token pat:x, and an "+
+		"administrative identity record needs a person present — sign in",
+		iamdomain.ErrTokenRefused)}
 	for _, tc := range administrativeRequests() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1384,8 +1393,9 @@ func TestATokenWritingAnAdministrativeRecordIsTokenRefused(t *testing.T) {
 
 			// THE CONTROL: the same record refused for authority alone.
 			r = newRig(t)
-			r.writer.refusals = map[string]error{tc.call: fmt.Errorf(
-				"%w: this party may not", iamdomain.ErrRefused)}
+			r.writer.refusals = map[string]error{tc.call: &iamdomain.Refusal{
+				Grants: []iam.Grant{iam.GrantAdmin},
+				Err:    errors.New("this party may not")}}
 			got = r.as(administrator(), tc.method, tc.target, tc.body)
 			if got.status != http.StatusForbidden ||
 				got.body["error"] != string(httpjson.CodeUnauthorized) {
@@ -2332,8 +2342,9 @@ func TestAnEditThatChangedNoDocumentAnswersItsOutcome(t *testing.T) {
 func TestARefusalPartwayNamesWhatLanded(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
-	r.writer.refusals = map[string]error{"update": fmt.Errorf(
-		"%w: conferring doclet needs the same grant", iamdomain.ErrRefused)}
+	r.writer.refusals = map[string]error{"update": &iamdomain.Refusal{
+		Grants: []iam.Grant{iam.GrantDoclet},
+		Err:    errors.New("conferring doclet needs the same grant")}}
 	got := r.as(administrator(), http.MethodPatch, "/iam/people/"+alice.String(),
 		map[string]any{"login": "alice.ops", "grants": []string{"doclet"}})
 	if got.status != http.StatusForbidden {
