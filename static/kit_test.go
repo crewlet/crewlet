@@ -24,6 +24,8 @@ import (
 var shippedKits = []string{
 	"0.18.0",
 	"0.20.0",
+	"0.23.0",
+	"0.25.0",
 }
 
 // TestEveryShippedKitVersionStaysEmbedded: each version in the ledger is still

@@ -587,12 +587,8 @@ function CreateMenu({
   return (
     <Menu
       label={`Create in ${where}`}
-      trigger={
-        <>
-          <PlusGlyph size="sm" />
-          Create
-        </>
-      }
+      icon={<PlusGlyph size="sm" />}
+      trigger="Create"
       triggerVariant="ghost"
       triggerTabIndex={tab}
       open={grid.menuOpen(id)}
