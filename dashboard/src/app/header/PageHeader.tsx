@@ -57,6 +57,7 @@ import {
   useToast,
   type BreadcrumbCrumb,
   type MenuEntry,
+  useMediaMatch,
 } from "@crewlethq/ui";
 import {
   ArrowUpRightGlyph,
@@ -97,7 +98,6 @@ import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { plural } from "~/lib/format.ts";
 import { useScrollEdges } from "~/lib/useScrollEdges.ts";
 import { foldTabs } from "../frame/tabFit.ts";
-import { useMediaQuery } from "~/lib/media.ts";
 import { PHONE_BREAKPOINT } from "../layout.ts";
 
 /** How many working seats the header draws before "+n". */
@@ -520,7 +520,7 @@ export function SectionColumn({
   // a phone reader saw one row reading "General" and never the You group with
   // their Account in it. Every pick folds it again, the section the reader is
   // already on included, which moves no path.
-  const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
+  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
   const at = path.join("/");
   const atRoot = samePath(path, row.path);
   const [open, setOpen] = useState(phone && atRoot);

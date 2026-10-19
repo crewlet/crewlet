@@ -27,7 +27,6 @@
 import { Button, Popover, Select, Tag } from "@crewlethq/ui";
 import { Settings2Glyph } from "@crewlethq/icons/glyphs";
 import { secondAxisOptions, type Shape } from "~/lib/work.ts";
-import { usePanelAlign } from "~/lib/media.ts";
 import { ColumnChooser } from "~/app/frame/DataGrid.tsx";
 import { columnChoices, isGridShape } from "../shapes/Grid.tsx";
 import { CARD_FACTS, type CardFact } from "~/components/work.tsx";
@@ -72,14 +71,14 @@ export interface DisplayMenuProps {
 }
 
 export function DisplayMenu(props: DisplayMenuProps) {
-  // END-ALIGNED under a toolbar's right edge, START on a phone, where the
-  // toolbar wraps this trigger to the left edge — see [usePanelAlign].
-  const align = usePanelAlign("end");
+  // END-ALIGNED under a toolbar's right edge. On a phone the toolbar wraps
+  // this trigger to the left edge, and the kit holds the panel inside the
+  // window there.
   return (
     <Popover
       role="dialog"
       label="Display"
-      align={align}
+      align="end"
       trigger={(open, toggle) => (
         <Button
           size="small"
