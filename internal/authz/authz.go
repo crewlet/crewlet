@@ -164,15 +164,20 @@
 // between: a reader of the trail, a manager of people and an operator of the
 // deployment were three grants nobody could tell apart, and they are one.
 //
-// # Seat-only and human-only
+// # Seat-only, human-only and seated
 //
-// Two facts about a VERB rather than about anybody's relation to an object,
+// Three facts about a VERB rather than about anybody's relation to an object,
 // each a field on the row and each checked before the class. [rule.humanOnly]
 // keeps an agent off a person's gesture — purging, archiving a project,
 // writing the chart. [rule.seatOnly] is its mirror: only an agent seat whose
 // role offers the tool takes it — asking a colleague — with no permission at
 // all, because which seats are offered it is the role's registry's decision
 // and a person has no turn for it to spend.
+// [rule.seated] is the third: a verb made AS A SEAT, which a principal acting
+// as itself — a token, a service account bound to none — cannot take whatever
+// it holds, because what the verb writes or reads is keyed on a seat handle
+// it does not have. A person always has one (ADR-0032); a machine has one
+// only once the identity directory binds it.
 //
 // # An artifact is decided per object, by its shares
 //
@@ -484,9 +489,10 @@ type Decision struct {
 	// self rule, which has no admin path, an object missing the field its
 	// rule reads before it consults any permission, and the refusals that
 	// are not about permission at all — an enrolment stage, a seat taking
-	// a human-only verb, a person taking a seat-only one, a machine token
-	// taking a verb that needs a person present, a verb with no rule, an
-	// agent kept off somebody else's artifact by the company's setting
+	// a human-only verb, a person taking a seat-only one, a principal
+	// acting as no seat taking a verb made as one, a machine token taking a
+	// verb that needs a person present, a verb with no rule, an agent kept
+	// off somebody else's artifact by the company's setting
 	// ([Object.AgentsManageOthers]) and a turn's requester who could not
 	// take the verb ([DecideWithin]).
 	//
@@ -615,6 +621,12 @@ const (
 	// agent seat does not: the verb is an agent's own ([rule.seatOnly]).
 	// It names no permission, because none would change it.
 	ReasonSeatOnly Reason = "seat_only"
+	// ReasonUnseated is a refusal a principal acting as no seat gets: the
+	// verb is made AS a seat ([rule.seated]) — a Tier A token, a service
+	// account bound to none, the development principal. It names no
+	// permission, because none would change it: what does is a binding in
+	// the identity directory.
+	ReasonUnseated Reason = "unseated"
 	// ReasonShared is an admission on a SHARE: the artifact is shared with
 	// the caller's seat, a unit they sit in or the whole company, at a role
 	// that includes what the verb asks ([ClassShared]).
@@ -652,7 +664,8 @@ var Reasons = []Reason{
 	ReasonNoGrant, ReasonNotSelf, ReasonNotLead, ReasonNotAuthor,
 	ReasonSeatRefused, ReasonTokenRefused, ReasonStage, ReasonUnnamed,
 	ReasonUnknownAction, ReasonStepUp, ReasonEverybody, ReasonAsked,
-	ReasonSeatOnly, ReasonShared, ReasonNotShared, ReasonRole, ReasonCeiling,
+	ReasonSeatOnly, ReasonUnseated, ReasonShared, ReasonNotShared, ReasonRole,
+	ReasonCeiling,
 	ReasonAssistRefused, ReasonAssistScope,
 }
 

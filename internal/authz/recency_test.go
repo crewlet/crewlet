@@ -244,9 +244,11 @@ func TestEveryAdminRowAsksForAProofOrSaysWhyNot(t *testing.T) {
 func TestAStaleProofIsRefusedExactlyWhereTheRowAsksForOne(t *testing.T) {
 	t.Parallel()
 	// A SEAT-ONLY ROW IS DECIDED AS A SEAT, every other as a person: each
-	// is refused to the other kind before any proof is asked.
+	// is refused to the other kind before any proof is asked. The person is
+	// BOUND TO THEIR SEAT, as every person is (ADR-0032), so a verb made as
+	// a seat is not refused them before the proof either.
 	holding := func(age time.Duration, kind iam.Kind) iam.Principal {
-		p := iam.Principal{ID: uuid.New(), Login: "jane.doe",
+		p := iam.Principal{ID: uuid.New(), Login: "jane.doe", Seat: "jane",
 			Kind: kind, Stage: iam.StageActive, Grants: iam.AllGrants}
 		if kind == iam.KindSeat {
 			p.Login, p.Seat = "sre", "sre"

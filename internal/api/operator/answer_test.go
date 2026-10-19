@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -108,11 +109,12 @@ func askBody() string {
 // ONLY A PERSON BOUND TO A SEAT MAY ASK, ON EVERY TRANSPORT: the answer runs on
 // the auxiliary model of the asker's own seat and spends the company's tokens
 // on their behalf, so a credential no seat binds has no model to answer on and
-// nobody the spend is charged for. It needs an app too — the knowledge base or
-// the tracker, each corpus searched only for whoever holds its app — since what
-// an answer discloses is what those already show their users. Neither refusal
-// asks the model; the bound person beside them is answered, so a surface that
-// refused everybody fails here too.
+// nobody the spend is charged for — refused by the table as `unseated`,
+// naming no permission, since none would change it. It needs an app too — the
+// knowledge base or the tracker, each corpus searched only for whoever holds
+// its app — since what an answer discloses is what those already show their
+// users. Neither refusal asks the model; the bound person beside them is
+// answered, so a surface that refused everybody fails here too.
 func TestOnlyAPersonBoundToASeatMayAsk(t *testing.T) {
 	t.Parallel()
 	model, budget := &countedModel{}, &companyWindows{}
@@ -121,15 +123,22 @@ func TestOnlyAPersonBoundToASeatMayAsk(t *testing.T) {
 
 	status, answer := act(t, h, "ci", builtin.AnswerKnowledgeTool,
 		"application/json", askBody(), newKey())
-	if status != http.StatusForbidden || answer["error"] != string(crewletmcp.RefusalForbidden) {
-		t.Fatalf("an unbound token over act answered %d %v, want 403 forbidden", status, answer)
+	grants, _ := answer[authz.DetailGrants].([]any)
+	if status != http.StatusForbidden || answer["error"] != string(httpjson.CodeUnauthorized) ||
+		answer[authz.DetailReason] != string(authz.ReasonUnseated) || grants == nil ||
+		len(grants) != 0 {
+		t.Fatalf("an unbound token over act answered %d %v, want 403 unauthorized, "+
+			"unseated, naming no grant", status, answer)
 	}
 	res, err := s.Dispatch(iam.WithPrincipal(t.Context(), pipeline), operator.Call{
 		Transport: types.TransportMCP, Tool: builtin.AnswerKnowledgeTool,
 		Args: map[string]any{"q": "How do we deploy?"},
 	})
-	if err != nil || !res.Failed || crewletmcp.RefusalOf(res) != crewletmcp.RefusalForbidden {
-		t.Fatalf("an unbound token over MCP was answered: (%+v, %v)", res, err)
+	var unseated *builtin.DecisionRefused
+	if err != nil || !res.Failed || !errors.As(res.Cause, &unseated) ||
+		unseated.Decision.Reason != authz.ReasonUnseated {
+		t.Fatalf("an unbound token over MCP was answered, or refused other than "+
+			"by the table as unseated: (%+v, %v)", res, err)
 	}
 	if model.asked() != 0 || len(model.resolved()) != 0 {
 		t.Fatalf("an unbound caller spent tokens: %d model calls, %d resolutions",
@@ -165,6 +174,32 @@ func TestOnlyAPersonBoundToASeatMayAsk(t *testing.T) {
 	want := auxspend.Use{Stage: types.AuxStageOperator, Purpose: types.AuxAnswerKnowledge}
 	if uses := model.resolved(); len(uses) != 1 || uses[0] != want {
 		t.Errorf("the answer was resolved as %+v, want %+v", uses, want)
+	}
+}
+
+// AND IT IS NOT OFFERED TO A CREDENTIAL ACTING AS ITSELF: a screen enables
+// exactly the controls a press of could be served (ADR-0024), and the table
+// refuses this one to such a caller on every press. The person beside it is
+// offered it, or a list offering nobody anything would pass.
+func TestTheAnswerIsNotOfferedToACredentialActingAsItself(t *testing.T) {
+	t.Parallel()
+	s := answerSurface(t, &countedModel{}, &companyWindows{})
+	for _, c := range []struct {
+		who     string
+		caller  iam.Principal
+		offered bool
+	}{
+		{"a pipeline's token bound to no seat", machine("token:ops", iam.AllGrants...), false},
+		{"a person bound to their seat", founder, true},
+	} {
+		acts, err := s.Acts(t.Context(), c.caller)
+		if err != nil {
+			t.Fatalf("Acts for %s: %v", c.who, err)
+		}
+		if slices.Contains(acts, builtin.AnswerKnowledgeTool) != c.offered {
+			t.Errorf("%s is offered %v, and answer_knowledge offered = %t is wrong",
+				c.who, acts, !c.offered)
+		}
 	}
 }
 

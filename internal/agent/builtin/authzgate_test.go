@@ -2,9 +2,12 @@ package builtin_test
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
@@ -131,6 +134,55 @@ func TestNoSeatOnlyVerbIsOfferedToAPerson(t *testing.T) {
 	}
 	if seatOnly == 0 {
 		t.Fatal("the table marks no verb seat-only, so this walk certifies nothing")
+	}
+}
+
+// NO VERB MADE AS A SEAT IS OFFERED TO A CREDENTIAL ACTING AS ITSELF.
+//
+// A person's surface offers what [builtin.Admits] says the table could admit
+// before any object is named (the dashboard's `viewer.acts`), so a seated row
+// is the difference between a screen that draws no control for an unbound
+// credential and one whose every press of that control is refused. Held for
+// every seated verb the operator catalogue serves, against a credential
+// holding admin — what the table admits on — and beside a person bound to a
+// seat holding the same, who must still be offered it, or a surface refusing
+// everybody would pass. Mutation: drop `seated` from answer_knowledge's row
+// and this goes red, which is the bug it was written for: viewer.acts offered
+// the answer to a Tier A token's session and every press was refused.
+func TestNoSeatedVerbIsOfferedToACredentialActingAsItself(t *testing.T) {
+	t.Parallel()
+	authorize := builtin.Decide(chartLeads)
+	unbound := iam.WithPrincipal(context.Background(), iam.Principal{
+		ID:   uuid.MustParse("018f3a9c-0000-7000-8000-00000000fee3"),
+		Kind: iam.KindMachine, Login: "ci:release", Stage: iam.StageActive,
+		Grants: iam.AllGrants,
+	})
+	bound := iam.WithPrincipal(context.Background(), iam.Principal{
+		ID:   uuid.MustParse("018f3a9c-0000-7000-8000-00000000fee4"),
+		Kind: iam.KindPerson, Login: "jane.doe", Seat: "jane", Stage: iam.StageActive,
+		Grants: iam.AllGrants,
+	})
+	seated := 0
+	for _, tool := range builtin.OperatorTools(operatorDeps(t)) {
+		only, _ := authz.SeatedOf(authz.Action(tool.Name()))
+		if !only {
+			continue
+		}
+		seated++
+		err := builtin.Admits(unbound, authorize, tool.Name())
+		var refused *builtin.DecisionRefused
+		if !errors.As(err, &refused) || refused.Decision.Reason != authz.ReasonUnseated {
+			t.Errorf("%s is offered to a credential acting as no seat (%v), "+
+				"and the table refuses its every call", tool.Name(), err)
+		}
+		if err := builtin.Admits(bound, authorize, tool.Name()); err != nil {
+			t.Errorf("%s is not offered to a person bound to a seat: %v",
+				tool.Name(), err)
+		}
+	}
+	if seated == 0 {
+		t.Fatal("the operator catalogue serves no seated verb, so this walk " +
+			"certifies nothing")
 	}
 }
 

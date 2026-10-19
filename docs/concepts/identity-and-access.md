@@ -2396,6 +2396,18 @@ seats may ask is the role registry's decision, and a person has no turn for an
 answer to land in. Seat-only is checked where human-only is, before the rule,
 and no row carries both.
 
+**And some are made as a seat.** `answer_knowledge` carries a third mark,
+**seated**: it is answered on the model of the seat its asker acts as, so a
+credential acting as itself — a Tier A token, a service account the identity
+directory binds to no seat, the development principal — is refused it whatever
+it holds, `403` with the reason `unseated` and no permission named, because
+what would change the answer is a binding (`crewlet iam bind`) rather than a
+permission. A person is never refused it this way: every person acts as their
+human seat ([ADR-0032](../../adr/0032-every-person-holds-a-human-seat.md)). It
+is checked after seat-only and before the rule, and a screen asking what it may
+offer an unbound credential is told the same, so it draws no control that every
+press of would be refused.
+
 A lead may re-order what their report works on; marking somebody's mail read is
 a different gesture and nobody asked a lead to make it. And whether a seat
 works is its lead's to decide, or an administrator's, exactly as what it works

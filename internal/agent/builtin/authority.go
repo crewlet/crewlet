@@ -168,7 +168,15 @@ type DecisionRefused struct {
 }
 
 func (e *DecisionRefused) Error() string {
-	return fmt.Sprintf("%s (%s)", ErrRefused, e.Decision.Reason)
+	refusal := fmt.Sprintf("%s (%s)", ErrRefused, e.Decision.Reason)
+	if e.Decision.Reason == authz.ReasonUnseated {
+		// THE ONE REFUSAL WHOSE REMEDY NO GRANT NAMES, and so the one the
+		// sentence has to: what admits is a binding, and the envelope's
+		// `grants` is empty by design.
+		refusal += ": it's made as a seat and this credential acts as none. " +
+			"Bind it to a human seat with `crewlet iam bind`"
+	}
+	return refusal
 }
 
 // Unwrap makes every [DecisionRefused] an [ErrRefused].

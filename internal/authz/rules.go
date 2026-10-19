@@ -554,6 +554,29 @@ type rule struct {
 	// that is both.
 	seatOnly bool
 
+	// seated marks a verb made AS A SEAT: what it writes is attributed to a
+	// seat handle, or what it reads is answered for one, so a principal
+	// acting as itself — a Tier A token, a service account the identity
+	// directory binds to no seat, the development principal — cannot take
+	// it, whatever it holds. A person always acts as their human seat
+	// (ADR-0032) and an agent as its own, so neither is ever refused it.
+	//
+	// A FACT ABOUT THE VERB, beside humanOnly and seatOnly, and for their
+	// reason: the class weighs permissions and relations, and no
+	// permission gives a credential a seat to speak or be answered as.
+	// Left to each tool, the refusal came after the table had already
+	// admitted the call — so a person's surface asking the table what to
+	// offer (internal/agent/builtin's Admits) offered every such verb to
+	// an unbound credential, and every press of it was refused.
+	//
+	// CHECKED AFTER seatOnly and BEFORE THE CLASS: an unbound credential
+	// holding admin is told it has no seat ([ReasonUnseated]) rather than
+	// a grant it already has, and the refusal names no permission. A walk
+	// refuses a row that is both seat-only and seated — a seat-only verb
+	// is a seat's already, so the second mark would read as a decision
+	// nobody made.
+	seated bool
+
 	// presence is which arms need a PERSON at the keyboard — see
 	// [Presence] — refused to a request that presented a machine token.
 	//
@@ -829,11 +852,12 @@ var rules = map[Action]rule{
 	// app admits and a caller with neither has nothing it could search. And
 	// a person's alone: it runs on the auxiliary model of the seat the
 	// asker holds, and a seat has search_knowledge and a model of its own.
-	// The tool itself refuses a principal no seat binds — a Tier A token's
-	// session or a service account, never a person, who holds a human seat
-	// for as long as they are here (ADR-0032) — naming why.
-	ActionKnowledgeAnswer: {class: ClassAnyApp, humanOnly: true, recency: iam.RecencyAny,
-		assist: AssistApprove},
+	// And SEATED: a principal no seat binds — a Tier A token's session or a
+	// service account, never a person, who holds a human seat for as long
+	// as they are here (ADR-0032) — has no seat whose model to answer on
+	// and nobody the spend is charged for.
+	ActionKnowledgeAnswer: {class: ClassAnyApp, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
 
 	// --- everybody's overview ---------------------------------------- //
 	//
@@ -1375,6 +1399,15 @@ var assistantNever = map[Action]neverEntry{
 	ActionArtifactReady: {"render telemetry an open frame reports; a grant renders nothing, " +
 		"so its report would falsify the service objective", tellReady},
 	ActionColleagueAsk: {"an agent seat's own verb, which no person takes", tellSeat},
+}
+
+// SeatedOf reports whether a verb is made AS A SEAT — see [rule.seated] — and
+// whether the table knows the verb at all.
+//
+// EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
+func SeatedOf(a Action) (bool, bool) {
+	r, ok := rules[a]
+	return r.seated, ok
 }
 
 // Actions is every verb this build authorizes, sorted, for the walks that ask

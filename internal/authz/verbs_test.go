@@ -18,9 +18,9 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
-// SEAT-ONLY AND HUMAN-ONLY ARE CHECKED BEFORE THE CLASS.
+// SEAT-ONLY, HUMAN-ONLY AND SEATED ARE CHECKED BEFORE THE CLASS.
 //
-// Both are facts about the VERB, so the refusal has to say what it is before
+// All three are facts about the VERB, so the refusal has to say what it is before
 // any class weighs a permission: a seat holding nothing takes a seat-only verb
 // (an ask — the role's registry decides who is offered it), a
 // person holding admin is refused one as [authz.ReasonSeatOnly] naming no
@@ -41,9 +41,17 @@ import (
 // seat-only row of any other class FAILS this walk, naming the case it needs
 // — a person the class refuses, who must still be told seat_only — so the
 // order is proved the moment it becomes observable rather than assumed.
-func TestSeatOnlyAndHumanOnlyAreCheckedBeforeTheClass(t *testing.T) {
+//
+// A SEATED ROW refuses a principal acting as no seat as [authz.ReasonUnseated]
+// naming nothing — one holding admin, and one holding nothing whom the class
+// would refuse naming a permission, which is what proves the order — and is
+// never refused that way to a principal acting as a seat: a person bound to
+// their seat, or an agent. Mutation: check seated after the class and the
+// principal holding nothing goes red on every seated row; drop the check and
+// the admin holder does.
+func TestSeatOnlyHumanOnlyAndSeatedAreCheckedBeforeTheClass(t *testing.T) {
 	t.Parallel()
-	var seatOnly, humanOnly int
+	var seatOnly, humanOnly, seatedRows int
 	for _, a := range authz.Actions() {
 		object := everythingAbout(seat("sre"))
 		if only, _ := authz.SeatOnlyOf(a); only {
@@ -92,10 +100,59 @@ func TestSeatOnlyAndHumanOnlyAreCheckedBeforeTheClass(t *testing.T) {
 					"seat naming nothing", a, d)
 			}
 		}
+		if only, _ := authz.SeatedOf(a); only {
+			seatedRows++
+			for _, unseated := range []iam.Principal{
+				person("jane.doe", iam.GrantAdmin),
+				machine("ci:release", iam.GrantAdmin),
+				// THE CLASS WOULD REFUSE THIS ONE naming a permission, so
+				// it is what tells the bar's place from a bar after it.
+				person("lee.nobody"),
+			} {
+				d := authz.Decide(t.Context(), unseated, a, everythingAbout(unseated),
+					nimbus(), decidedAt)
+				if d.Allowed || d.Reason != authz.ReasonUnseated || len(d.Grants) != 0 {
+					t.Errorf("%s: %s acting as no seat decided %+v, want refused as "+
+						"unseated naming nothing", a, unseated.Login, d)
+				}
+			}
+			for _, bound := range []iam.Principal{
+				personLeading("cto", iam.GrantAdmin), personLeading("sam"),
+				seat("sre"), seat("cto", iam.GrantAdmin),
+			} {
+				d := authz.Decide(t.Context(), bound, a, everythingAbout(bound),
+					nimbus(), decidedAt)
+				if d.Reason == authz.ReasonUnseated {
+					t.Errorf("%s: %s acts as the seat %q and was refused as "+
+						"unseated", a, bound.Login, bound.Seat)
+				}
+			}
+		}
 	}
-	if seatOnly == 0 || humanOnly == 0 {
-		t.Fatalf("%d seat-only and %d human-only rows: a walk over none of one "+
-			"certifies nothing about it", seatOnly, humanOnly)
+	if seatOnly == 0 || humanOnly == 0 || seatedRows == 0 {
+		t.Fatalf("%d seat-only, %d human-only and %d seated rows: a walk over "+
+			"none of one certifies nothing about it", seatOnly, humanOnly, seatedRows)
+	}
+}
+
+// NO SEAT-ONLY ROW IS ALSO SEATED.
+//
+// A seat-only verb is an agent seat's already, and an agent always acts as its
+// seat, so the second mark changes no answer — and in the table it reads as a
+// decision somebody made about a credential the row already refuses.
+// Mutation: mark run_sandbox seated and this goes red.
+func TestNoSeatOnlyRowIsAlsoSeated(t *testing.T) {
+	t.Parallel()
+	for _, a := range authz.Actions() {
+		seatOnly, _ := authz.SeatOnlyOf(a)
+		seated, _ := authz.SeatedOf(a)
+		if seatOnly && seated {
+			t.Errorf("%s is seat-only and seated, and the second mark says "+
+				"nothing the first does not", a)
+		}
+	}
+	if _, known := authz.SeatedOf("no.such.verb"); known {
+		t.Error("SeatedOf knows a verb the table has no row for")
 	}
 }
 

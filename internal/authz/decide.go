@@ -234,9 +234,10 @@ var relationClasses = []Class{
 // never succeed, on every retry, for ever. The reason is a closed value a
 // caller can branch on; that is what it is for.
 //
-// THEN THE HUMAN-ONLY AND SEAT-ONLY BARS, which are facts about the VERB and
-// therefore decided before any class reads any relation — see
-// [rule.humanOnly] and [rule.seatOnly] — and the PERSON-PRESENT bar where it
+// THEN THE HUMAN-ONLY, SEAT-ONLY AND SEATED BARS, which are facts about the
+// VERB and therefore decided before any class reads any relation — see
+// [rule.humanOnly], [rule.seatOnly] and [rule.seated] — and the PERSON-PRESENT
+// bar where it
 // covers every arm, for the same reason: a machine token is refused a verb
 // that needs somebody at a keyboard before any class weighs what it carries
 // ([rule.presence]). Where the bar spares the self arm it is asked once the
@@ -317,6 +318,12 @@ func decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 	// [rule.seatOnly].
 	if r.seatOnly && p.Kind != iam.KindSeat {
 		return concealed(ctx, p, r, o, chart, Decision{Reason: ReasonSeatOnly})
+	}
+	// AND A VERB MADE AS A SEAT IS NOT A CREDENTIAL'S ACTING AS ITSELF,
+	// whatever it holds: no permission gives it a seat to be answered or
+	// attributed as. See [rule.seated].
+	if r.seated && !seated(p) {
+		return concealed(ctx, p, r, o, chart, Decision{Reason: ReasonUnseated})
 	}
 	_, throughToken := p.MachineToken()
 	if throughToken && r.presence == PresenceRequired {
@@ -420,11 +427,13 @@ func readMethod(method string) bool {
 	return method == http.MethodGet || method == http.MethodHead
 }
 
-// concealed is a bar on the VERB (an agent taking a person's verb, a token
-// taking one that needs somebody present) answered for the object it was
-// asked of: the bar itself, except where the object is an artifact the caller
-// holds NO RELATION to, which is answered exactly as [ClassShared] answers
-// such a caller, not found.
+// concealed is a bar on the VERB (an agent taking a person's verb, a person
+// taking an agent's, a credential acting as no seat taking a verb made as
+// one, a token taking one that needs somebody present) answered for the
+// object it was asked of: the bar itself, except where the object is an
+// artifact the caller holds NO RELATION to, which is answered exactly as
+// [ClassShared] answers such a caller, not found. Every bar takes it, so a
+// bar on any verb passes one rule whichever verbs carry it today.
 //
 // THE BAR WOULD OTHERWISE BE AN EXISTENCE ORACLE. A surface reads the head
 // before it decides, so an id nothing holds is answered 404 there, and a bar
@@ -892,6 +901,22 @@ func leadsByKind(ctx context.Context, chart Chart, actor string, o Object) Decis
 		return leadsContainer(ctx, chart, actor, o.Container)
 	}
 	return leadsProject(ctx, chart, actor, o.Container)
+}
+
+// seated reports whether p acts AS A SEAT — the one question [rule.seated]
+// asks.
+//
+// [iam.ActorFor]'s ANSWER, never a field read here: a principal is seated
+// exactly when the one attribution function names it by a seat — an agent by
+// its own, a person by the human seat the identity directory binds them to —
+// so the bar refuses exactly the principals whose writes would be attributed
+// to a credential rather than a seat, and nobody else.
+func seated(p iam.Principal) bool {
+	switch iam.ActorFor(p).Kind {
+	case iam.ActorAgent, iam.ActorHuman:
+		return true
+	}
+	return false
 }
 
 // actorOf is the handle the CHART knows this principal by.
