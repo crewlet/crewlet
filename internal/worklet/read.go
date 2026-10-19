@@ -1250,25 +1250,9 @@ func compilePredicate(q Query, now time.Time, fields map[string]resolvedField,
 		add(clause, values...)
 	}
 	if len(q.Flags) > 0 {
-		clause, onTask, err := flagsClause(on, q.Flags)
+		clause, err := flagsClause(on, q.Flags)
 		if err != nil {
 			return nil, nil, err
-		}
-		if onTask {
-			// THE INDEX'S OWN PREDICATE, stated because it is what
-			// makes the index reachable. The attention index is
-			// partial over the four task flags together — a task
-			// with any of them is a fraction of a percent of the
-			// table — and `cycle = 1` alone does not imply that
-			// disjunction to a planner, so a flag filter without it
-			// reads every task in the company.
-			//
-			// ONLY WHEN EVERY NAMED FLAG IS ON THE TASK ROW. The two
-			// dependency flags live on `tracker_relations`, and a
-			// task whose edge is one-sided carries none of these
-			// four — so adding this predicate beside them would
-			// silently answer nothing.
-			add(anyFlagSet(on))
 		}
 		add(clause)
 	}
@@ -1516,16 +1500,6 @@ func numClause(column string, filter NumFilter) (string, []any) {
 	return "1", nil
 }
 
-// anyFlagSet is the attention index's own partial predicate on the task on
-// names, written once so the DDL and the query cannot disagree about what it
-// is: on the row, it is the DDL's own text with the row's alias in front of
-// each column.
-func anyFlagSet(on alias) string {
-	return "(" + on.col("inconsistent_project") + " = 1 OR " + on.col("cycle") +
-		" = 1 OR " + on.col("too_deep") + " = 1 OR " + on.col("key_collision") +
-		" = 1)"
-}
-
 // flagColumn maps an attention flag to its column, from a CLOSED SET — the one
 // place a grammar value reaches a statement as a name rather than a bound
 // value, and therefore the one that has to be enumerated.
@@ -1537,7 +1511,7 @@ func flagColumn(on alias, flag string) (string, bool) {
 	return "", false
 }
 
-// flagsClause is the whole flag filter, and the two things it settles.
+// flagsClause is the whole flag filter, and what it settles.
 //
 // # The set is an OR, not an AND
 //
@@ -1553,31 +1527,38 @@ func flagColumn(on alias, flag string) (string, bool) {
 // `one_sided` and `one_sided_final` are properties of a dependency EDGE — an
 // authored `waiting_on` whose blocker does not list it, and one whose mirror
 // was refused permanently. They are on `tracker_relations`, which is why they
-// are an EXISTS rather than a column, and why the caller is told whether every
-// flag it named is on the task row: the attention index's partial predicate
-// applies to those four and to nothing else.
-func flagsClause(on alias, flags []string) (clause string, allOnTask bool, err error) {
+// are an EXISTS over the row's own edges rather than a column.
+//
+// # And no index holds any of them
+//
+// The flags are read as the listing is walked, each a column of the row or a
+// probe of its own edges. The attention index over the four row flags that
+// replicated 0002 weighed lost to every listing's ORDER BY and was never
+// created, so there is no index predicate to state beside them: this used to
+// add that index's disjunction to every filter naming only row flags, for an
+// index nothing had, and said a filter without it read every task — which a
+// filter with it did as well. A list of the edge-flagged tasks does not drive
+// the read either: measured, the planner holds the list and still walks the
+// listing, since nothing bounds how many tasks it names.
+func flagsClause(on alias, flags []string) (string, error) {
 	terms := make([]string, 0, len(flags))
-	allOnTask = true
 	for _, flag := range flags {
 		switch term, onTask := flagColumn(on, flag); {
 		case onTask:
 			terms = append(terms, term)
 		case flag == "one_sided":
-			allOnTask = false
 			terms = append(terms, "EXISTS (SELECT 1 FROM tracker_relations x "+
 				"WHERE x.task_id = "+on.col("id")+" AND x.one_sided = 1 "+
 				"AND x.one_sided_final = 0)")
 		case flag == "one_sided_final":
-			allOnTask = false
 			terms = append(terms, "EXISTS (SELECT 1 FROM tracker_relations x "+
 				"WHERE x.task_id = "+on.col("id")+" AND x.one_sided_final = 1)")
 		default:
-			return "", false, fmt.Errorf("worklet: %q is not an attention "+
+			return "", fmt.Errorf("worklet: %q is not an attention "+
 				"flag. The flags are: %s", flag, strings.Join(AttentionFlags, ", "))
 		}
 	}
-	return "(" + strings.Join(terms, " OR ") + ")", allOnTask, nil
+	return "(" + strings.Join(terms, " OR ") + ")", nil
 }
 
 // AttentionFlags is the closed set, in the order the attention queue reads
