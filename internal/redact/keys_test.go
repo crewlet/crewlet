@@ -163,8 +163,21 @@ const grepOfBothArmours = grepOfTheBeginLine +
 // for the END took every line of the run between them — the test run, its
 // failure — out of the record and the live view alike.
 //
+// A grep's match for the END line is no key either, whatever path it is
+// under: a path in mixed case is a run as wide as a key's line, and read back
+// across the `.pem:28:` before the armour as the key's head across a cut, it
+// was redacted with the END.
+//
+// Lines of a key under another wrapping are a key's whatever wraps them: each
+// ends in a piece of one where the END's wrapping puts no prefix, and is read
+// back as a line a cut wrote into, as far up as such lines go.
+//
 // Mutation: pair an END with the BEGIN before it without reading what is
-// between, and the transcript between the two greps is one marker.
+// between, and the transcript between the two greps is one marker; cross a cut
+// written straight before an END to any run at a full line's width, and the
+// paths are redacted; read a line whose end holds a piece back as no line a
+// reading goes on from, and the key's lines under the other wrapping above the
+// last are published.
 func TestAnEndClosesOnlyABlockOfKey(t *testing.T) {
 	for name, text := range map[string]string{
 		"a grep's two matches, a run between": grepOfBothArmours,
@@ -172,8 +185,9 @@ func TestAnEndClosesOnlyABlockOfKey(t *testing.T) {
 		"a placeholder between the armours":   "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
 		"a sentence between the armours":      "-----BEGIN PRIVATE KEY-----\nyour key goes here\n-----END PRIVATE KEY-----\n",
 		"the armours one after the other":     "a.pem:1:-----BEGIN RSA PRIVATE KEY-----\na.pem:27:-----END RSA PRIVATE KEY-----\n",
-		"an END under another wrapping's lines": "-----BEGIN RSA PRIVATE KEY-----\nsee below\nx:" + keyLine + "\nx:" + keyLine +
-			"\ny:-----END RSA PRIVATE KEY-----\n",
+		"a grep's match for the END, under a path in mixed case": "src/main/resources/certs/ServerPrivateKey.pem:28:-----END PRIVATE KEY-----\n" +
+			"internal/Redact/testdata/fixtures/rsaprivatekey.pem:27:-----END PRIVATE KEY-----\n",
+		"a sentence naming the END after a path": "Delete " + mixedCasePath + " first; the file ends at -----END PRIVATE KEY----- and nothing follows.\n",
 		// Base64 at a body's width that does not read like a key's — a
 		// hash's hex, a path — is no key's body read back from an END.
 		"hex before an END": strings.Repeat(strings.Repeat("9f86d081884c7d65", 4)+"\n", 3) + "-----END RSA PRIVATE KEY-----\n",
@@ -181,6 +195,12 @@ func TestAnEndClosesOnlyABlockOfKey(t *testing.T) {
 		if got := redact.Secrets(text); got != text {
 			t.Errorf("%s: Secrets =\n%s\nwant it unchanged", name, got)
 		}
+	}
+	text := "-----BEGIN RSA PRIVATE KEY-----\nsee below\nx:" + keyLine + "\nx:" + keyLine + "\nx:" + keyLine +
+		"\ny:-----END RSA PRIVATE KEY-----\n"
+	want := "-----BEGIN RSA PRIVATE KEY-----\nsee below\nx:" + marker + "\n"
+	if got := redact.Secrets(text); got != want {
+		t.Errorf("a key's lines under another wrapping than its END's:\n got %q\nwant %q", got, want)
 	}
 }
 
@@ -575,23 +595,27 @@ func TestARedactedKeyReadsAsTheArmourItReplaced(t *testing.T) {
 
 // WHAT A RULE REPLACES CHANGES NO LINE A KEY IS READ ACROSS, so a second pass
 // over redacted text reads no key the first did not. The rules run after the
-// key blocks are read, and each case here is text whose redaction a second
-// pass used to read a key in — the lines above an END that the first pass had
-// read nothing back from, or the lines after a BEGIN, redacted the second
-// time: a password's value taken off the next line with its line break, so
-// two lines were one; one taken with an escaped break in it, past an armour or
-// into a key already redacted; a token taken on into an END written straight
-// after it; tokens a wrapping's prefix or an armour line's suffix held, read
-// apart the first time and alike once they were one marker; and a value
-// written up to a BEGIN, the prefix of a wrapping the line after it repeats —
-// read as that prefix alone the first time, and as a line of a body under the
-// marker the second.
+// key blocks are read, and each case here is text whose redaction a second pass
+// used to read a key in — the lines above an END that the first pass had read
+// nothing back from, or the lines after a BEGIN, redacted the second time: a
+// password's value taken off the next line with its line break, so two lines
+// were one; one taken with an escaped break in it, past an armour or into a key
+// already redacted; a token taken on into an END written straight after it;
+// tokens a wrapping's prefix or an armour line's suffix held, read apart the
+// first time and alike once they were one marker; a value written up to a
+// BEGIN, the prefix of a wrapping the line after it repeats — read as that
+// prefix alone the first time, and as a line of a body under the marker the
+// second; a token between a key's line and an END on one line, which a read
+// back across a cut went past to the key's line only once it was a marker; and
+// a key on one line between a run at a key's width and an END, whose BEGIN's
+// armour stopped that read the first time and whose marker, words, did not stop
+// it the second.
 //
 // Mutation: make the password's rule replace its whole match again, or its
 // value whole, escaped breaks and all, or let the value run on through an
 // armour or a marker, or a token's into an armour; or read an armour line
-// holding a marker, before its armour or after it: each changes its own
-// case's second pass.
+// holding a marker, before its armour or after it, or a key on one line back
+// across a marker: each changes its own case's second pass.
 func TestARuleReplacesNothingAKeyIsReadAcross(t *testing.T) {
 	escaped := func(lines ...string) string { return `{"log": "` + strings.Join(lines, `\n`) + `\n"}` + "\n" }
 	for name, text := range map[string]string{
@@ -617,6 +641,10 @@ func TestARuleReplacesNothingAKeyIsReadAcross(t *testing.T) {
 		"a token after an END":     mixedCasePath + "\n-----END RSA PRIVATE KEY----- sk-" + strings.Repeat("G", 24) + "\n",
 		"a password's value written up to a BEGIN, the next line repeating it": "pwd:\n" + keyLine +
 			"-----BEGIN RSA PRIVATE KEY-----\n" + keyLine + "\"\n",
+		"a token between a key's line and an END on its line": keyLine + " x ghp_" + strings.Repeat("Q7wE9", 7) + "A" +
+			" xyz Done -----END RSA PRIVATE KEY-----\n",
+		"a key on one line between a run at a key's width and an END": "ZZ " + keyLine + " -----BEGIN RSA PRIVATE KEY----- " +
+			keyLine + " -----END RSA PRIVATE KEY----- x -----END RSA PRIVATE KEY-----\n",
 	} {
 		once := redact.Secrets(text)
 		if twice := redact.Secrets(once); twice != once {
@@ -1012,6 +1040,395 @@ func TestAKeyWhoseLastLineEndsInTheTextAroundItIsRedacted(t *testing.T) {
 		}
 		if got != form.want {
 			t.Errorf("%s:\n got %q\nwant %q", name, got, form.want)
+		}
+	}
+}
+
+// A KEY IS REDACTED WHEREVER A CUT LANDS in it: at the end of a line, the head
+// a tool kept before its mark; at the start of one, the tail a window kept
+// after its mark — the window's first line, the body's last or the line before
+// it, OpenPGP's above its checksum; and in the middle, a head and a tail with
+// the mark between them or on a line of its own, with the END below it, with
+// no END and with no BEGIN, and between the BEGIN's armour and its line break;
+// on every line, as a viewer cuts each at its width or keeps each one's end,
+// to a full line or narrower, before or after a mark in letters, a bare
+// ellipsis or none; beside two lines another process wrote; and on a key
+// written on one line. Each mark is one a tool writes and none is listed
+// anywhere: what is read is the piece of the key beside it, and the line's text
+// at its other end that reads like a key's.
+//
+// What a cut leaves that reads like no key's is left as it is: a piece with no
+// digit, a piece shorter than eight characters, a piece between two marks, the
+// first word of the prose after a key with no END, the word above a key read
+// from inside, a blank line of a wrapping whose prefix reads like a piece, a
+// key on one line between two cuts, read back no further than the second, or
+// across a cut to prose or another block's armour — and a line of prose beside
+// a key that holds a run reading like a piece of one anywhere but at an end of
+// the line, since a cut leaves its piece at one. Prose whose lines each open
+// in such a run, straight above an END, is redacted with it as a key cut on
+// every line: what reading a line a cut wrote into as a full one costs.
+//
+// Mutations: tell a line a cut wrote into by its head alone, or by its tail
+// alone, or read it back as no full line; end its key's text at its first or
+// its last piece; read no cut between the BEGIN's armour and its line break;
+// take no short piece forward as the body's first line, or before text on its
+// line, or after another; read a short piece back as no full line, or a line a
+// cut wrote into, or a short piece, back at the width of its run; start no
+// bridge from a line whose width a cut hid, or land none on one; read a blank
+// line of a wrapping by its prefix's run; read a key on one line back across a
+// cut only to a run as wide as an encoder writes one, or forward or back past
+// no OpenPGP checksum, or its short last run alone as nothing; ask a piece for
+// seven characters or nine: each fails a case.
+func TestAKeyIsRedactedWhereverACutLands(t *testing.T) {
+	m := marker
+	const testFailed = "--- FAIL: TestRSA2048Sign (0.01s)"
+	begin, end := "-----BEGIN RSA PRIVATE KEY-----", "-----END RSA PRIVATE KEY-----"
+	lines := func(l ...string) string { return strings.Join(l, "\n") + "\n" }
+	// rot is the i-th line of a key: keyLine turned i characters, so no
+	// two lines of a case share a run that one cut could keep of another.
+	rot := func(i int) string { return keyLine[i:] + keyLine[:i] }
+	every := func(n int, line func(i int) string) []string {
+		var l []string
+		for i := 1; i <= n; i++ {
+			l = append(l, line(i))
+		}
+		return l
+	}
+	head, tail, narrow := keyLine[:30], keyLine[40:], keyLine[:24]
+	middle := keyLine[:20] + "…[… 2,345 characters truncated …]…" + keyLine[44:]
+	numbered := func(from int, lines ...string) string {
+		var b strings.Builder
+		for i, line := range lines {
+			fmt.Fprintf(&b, "%6d→%s\n", from+i, line)
+		}
+		return b.String()
+	}
+	for name, c := range map[string]keyForm{
+		// The head kept, nothing after it.
+		"a full line, then a mark in letters": {
+			lines(begin, keyLine, keyLine+"[...truncated]", "$ git status"), m + "[...truncated]\n$ git status\n",
+		},
+		"half a line, then a mark spaced from it": {
+			lines(begin, keyLine, head+" (truncated)"), m + " (truncated)\n",
+		},
+		"the body's first line cut short": {
+			lines(begin, head+"<truncated>"), m + "<truncated>\n",
+		},
+		"the same with no mark": {
+			lines(begin, head, "$ git status"), m + "\n$ git status\n",
+		},
+		"under a reader's line numbers": {
+			numbered(10, begin, keyLine, head+"…[1234 more bytes]"), "    10→" + m + "…[1234 more bytes]\n",
+		},
+		"escaped in a JSON string": {
+			`{"private_key": "` + begin + `\n` + keyLine + `\n` + head + `[...truncated]` + "\n",
+			`{"private_key": "` + m + `[...truncated]` + "\n",
+		},
+		"a piece of eight characters": {
+			lines(begin, keyLine, "u1SU1LfV(truncated)"), m + "(truncated)\n",
+		},
+		// The tail kept: a window's first line.
+		"a window opened inside a line": {
+			lines("[… 812 bytes truncated]"+keyLine[34:], keyLine, "u1SU1Lf=", end, "next"), "[… 812 bytes truncated]" + m + "\nnext\n",
+		},
+		"a window opened on the body's last line": {
+			lines("<truncated>u1SU1Lf9x=", end, "next"), "<truncated>" + m + "\nnext\n",
+		},
+		"a window opened on the line before it": {
+			lines("… (5 KiB more)"+tail, "u1SU1Lf=", end), "… (5 KiB more)" + m + "\n",
+		},
+		"a window opened with no mark": {
+			lines("$ tail -c 120 key.pem", tail, "u1SU1Lf=", end), "$ tail -c 120 key.pem\n" + m + "\n",
+		},
+		"a window's first line, then a line another process wrote": {
+			lines("[truncated]"+tail, foreignLine, end), "[truncated]" + m + "\n",
+		},
+		"OpenPGP's, opened on the line above its checksum": {
+			lines("[truncated]"+keyLine[50:], "=nE4V", "-----END PGP PRIVATE KEY BLOCK-----"), "[truncated]" + m + "\n",
+		},
+		// A head and a tail with the mark between them.
+		"a mark between a head and a tail": {
+			lines(begin, keyLine, middle, keyLine, "u1SU1Lf=", end, "next"), m + "\nnext\n",
+		},
+		"the same, read from inside": {
+			lines(keyLine, middle, keyLine, "u1SU1Lf=", end, "next"), m + "\nnext\n",
+		},
+		"the same, with no END": {
+			lines(begin, keyLine, middle, keyLine, "u1SU1Lf="), m + "\n",
+		},
+		"the same, the mark's line the last": {
+			lines(begin, keyLine, middle), m + "\n",
+		},
+		"the same, its head with no digit": {
+			lines(begin, keyLine, digitless[:20]+"…[… 2,345 characters truncated …]…"+keyLine[44:]), m + "\n",
+		},
+		"the same, its tail with no digit": {
+			lines(begin, keyLine, head+"[… 2,345 characters truncated …]"+digitless[30:], "$ git status"), m + "\n$ git status\n",
+		},
+		"an RSA key's first line, its head the encoding's, read from inside": {
+			lines("MIIEogIBAAKCAQEA…"+tail, keyLine, "u1SU1Lf=", end), m + "\n",
+		},
+		"the mark on a line of its own between two pieces": {
+			lines(begin, keyLine, head, "[... 42 lines truncated ...]", tail, "u1SU1Lf=", end), m + "\n",
+		},
+		"a mark on a line of its own, read from inside": {
+			lines(rot(1), rot(2), rot(3)[:30], "... [42 lines truncated] ...", rot(6)[34:], rot(7), "u1SU1Lf=", end, "next"),
+			m + "\nnext\n",
+		},
+		"a cut between the BEGIN's armour and its line break": {
+			"-----BEGIN EC PRIVATE KEY-----[... 2,345 characters truncated ...]" + mimeLine[40:] + "==\n-----END EC PRIVATE KEY-----\nnext\n",
+			m + "\nnext\n",
+		},
+		"the same in a JSON string, inside its escaped break": {
+			`{"private_key": "-----BEGIN PRIVATE KEY-----\\…[… 1,500 characters truncated …]…` + mimeLine[40:] +
+				`==\n-----END PRIVATE KEY-----\n", "x": 1}` + "\n",
+			`{"private_key": "` + m + `\n", "x": 1}` + "\n",
+		},
+		// Every line cut at a viewer's width, or each one's end kept.
+		"every line cut at fifty, with no END": {
+			lines(begin, keyLine[:50]+"…", keyLine[:50]+"…", keyLine[:50]+"…", "u1SU1Lf="), m + "\n",
+		},
+		"every line cut at fifty, read from inside": {
+			lines(keyLine[:50]+"[...truncated]", keyLine[:50]+"[...truncated]", "u1SU1Lf=", end), m + "\n",
+		},
+		"every line cut at thirty, a window on the last of them": {
+			lines("$ tail -n 2 key.pem", head+"[...truncated]", end), "$ tail -n 2 key.pem\n" + m + "\n",
+		},
+		"every line cut at twenty-four, read from inside": {
+			lines(narrow+"[...truncated]", narrow+"[...truncated]", narrow+"[...truncated]", narrow+"[...truncated]", "u1SU1Lf=", end),
+			m + "\n",
+		},
+		"every line cut at twenty-four before an ellipsis, with no END": {
+			lines(begin, narrow+"…", narrow+"…", narrow+"…", narrow+"…", "$ git status"), m + "…\n$ git status\n",
+		},
+		"every line cut at twenty-four before an ellipsis, read from inside": {
+			lines(narrow+"…", narrow+"…", narrow+"…", narrow+"…", "u1SU1Lf=", end), m + "\n",
+		},
+		"every line cut at twenty-four with no mark, below a BEGIN": {
+			lines(begin, narrow, narrow, narrow, narrow, narrow, "$ git status"), m + "\n$ git status\n",
+		},
+		"every line cut at twenty-four with no mark, read from inside": {
+			lines(narrow, narrow, narrow, narrow, narrow, "u1SU1Lf=", end), m + "\n",
+		},
+		"every line's start cut behind a mark, read from inside": {
+			lines(append(every(6, func(i int) string { return "[...truncated]" + rot(i)[24:] }), "u1SU1Lf=", end, "next")...),
+			"[...truncated]" + m + "\nnext\n",
+		},
+		"every line's start cut behind an ellipsis, with no END": {
+			lines(append(append([]string{begin}, every(8, func(i int) string { return "…" + rot(i)[34:] })...), "$ git status")...),
+			m + "\n$ git status\n",
+		},
+		"every line's start cut behind an ellipsis, read from inside": {
+			lines(append(every(8, func(i int) string { return "…" + rot(i)[34:] }), "u1SU1Lf=", end, "next")...),
+			"…" + m + "\nnext\n",
+		},
+		// Beside two lines another process wrote.
+		"two lines another process wrote above a line cut short, read from inside": {
+			lines(rot(1), rot(2), rot(3), foreignLine, "[worker 4] connected", rot(4)[:30]+"[...truncated]", rot(5), rot(6), "u1SU1Lf=", end, "next"),
+			m + "\nnext\n",
+		},
+		"the same below it": {
+			lines(rot(1), rot(2), rot(3)[:30]+"[...truncated]", foreignLine, "[worker 4] connected", rot(4), rot(5), "u1SU1Lf=", end, "next"),
+			m + "\nnext\n",
+		},
+		"the same below a full line cut, read from inside": {
+			lines(keyLine+"[...truncated]", foreignLine, "[worker 4] connected", keyLine, "u1SU1Lf=", end, "next"), m + "\nnext\n",
+		},
+		"the same below lines cut short with no mark, read from inside": {
+			lines(rot(1)[:24], rot(2)[:24], rot(3)[:24], foreignLine, "[worker 4] connected", rot(4), rot(5), "u1SU1Lf=", end, "next"),
+			m + "\nnext\n",
+		},
+		// A key on one line.
+		"a key on one line, a mark between its head and its tail": {
+			"KEY=" + begin + " " + keyLine + " " + head + "[...truncated]" + tail + " " + keyLine + " u1SU1Lf= " + end + " set\n",
+			"KEY=" + m + " set\n",
+		},
+		"a key on one line, a mark between its head and its tail, with no END": {
+			"KEY=" + begin + " " + keyLine + " " + head + "[...truncated]" + tail + " " + keyLine + " u1SU1Lf= set\n",
+			"KEY=" + m + " set\n",
+		},
+		"the same, its last run short": {
+			"KEY=" + begin + " " + keyLine + " " + head + "[...truncated]" + tail + " " + keyLine + " AbCdEf== set\n",
+			"KEY=" + m + " set\n",
+		},
+		"the same, OpenPGP's checksum after it": {
+			"KEY=-----BEGIN PGP PRIVATE KEY BLOCK----- " + keyLine + " " + head + "[...truncated]" + tail + " " + keyLine + " AbCdEf== =nE4V set\n",
+			"KEY=" + m + " set\n",
+		},
+		"a key on one line read from inside, across its cut to a run narrower than a line": {
+			"…" + keyLine[14:] + "[...truncated]" + keyLine + " u1SU1Lf= " + end + "\n", "…" + m + "\n",
+		},
+		"a key on one line read from inside, a mark between its head and its tail": {
+			"…" + tail + " " + keyLine + " " + head + "[...truncated]" + tail + " u1SU1Lf= " + end + "\n", "…" + m + "\n",
+		},
+		"the same, OpenPGP's checksum before its END": {
+			"…" + tail + " " + keyLine + " " + head + "[...truncated]" + tail + " " + keyLine + " u1SU1Lf= =nE4V -----END PGP PRIVATE KEY BLOCK-----\n",
+			"…" + m + "\n",
+		},
+		"a key on one line, read from inside": {
+			"…" + tail + " " + keyLine + " u1SU1Lf= " + end + " set\n", "…" + m + " set\n",
+		},
+		"a key on one line cut short at its first run": {
+			"KEY=" + begin + " " + head + "[...truncated]\n", "KEY=" + m + "[...truncated]\n",
+		},
+		"a body's last run alone, written up to its END": {
+			"key: u1SU1Lf9x=" + end + "\n", "key: " + m + "\n",
+		},
+		// What is across a cut from the tail a window kept is read only
+		// to a run at a full line's width: a word with a digit in it is
+		// what a piece reads like as well.
+		"a window on one line, a word with a digit across its cut": {
+			"see TestRSA2048Sign for it [… 812 bytes truncated]" + tail + " u1SU1Lf= " + end + "\n",
+			"see TestRSA2048Sign for it [… 812 bytes truncated]" + m + "\n",
+		},
+	} {
+		redactsWhole(t, name, c, keyLine[:24], head, tail, keyLine[34:], keyLine[44:], keyLine[50:], "u1SU1Lf9x=", "u1SU1LfV",
+			"MIIEogIBAAKCAQEA", digitless[30:54], mimeLine[40:64], rot(1)[24:48], rot(3)[:24], rot(6)[34:58], "AbCdEf==", "nE4V")
+	}
+	for name, c := range map[string]keyForm{
+		"a piece with no digit": {
+			lines(begin, keyLine, digitless[:30]+"[...truncated]"), m + "\n" + digitless[:30] + "[...truncated]\n",
+		},
+		"a piece of seven characters": {
+			lines(begin, keyLine, keyLine[16:23]+"(truncated)"), m + "\n" + keyLine[16:23] + "(truncated)\n",
+		},
+		"a piece between two marks": {
+			lines(begin, "MI…"+keyLine[20:44]+"[truncated]", rot(5), rot(6), "$ ls"),
+			lines(begin, "MI…"+keyLine[20:44]+"[truncated]", rot(5), rot(6), "$ ls"),
+		},
+		"the prose after a key with no END": {
+			lines(begin, keyLine, "u1SU1Lf=", "Traceback (most recent call last):", `  File "x.py", line 3`),
+			m + "\nTraceback (most recent call last):\n  File \"x.py\", line 3\n",
+		},
+		"a word above a key read from inside": {
+			lines("Done in 3s", keyLine, "u1SU1Lf=", end), "Done in 3s\n" + m + "\n",
+		},
+		"a blank line in a wrapping whose prefix reads like a piece, above a bare END": {
+			lines("[Worker1A] some prose", "[Worker1A]", "[Worker1A] "+end),
+			// The END's own gutter is read as the piece a cut kept
+			// before it: what reading the END's line alone costs.
+			lines("[Worker1A] some prose", "[Worker1A]", "["+m),
+		},
+		// Prose holding a run that reads like a piece of a key, at neither
+		// end of its line: a test's name with a digit.
+		"a line of prose holding a piece, after a key with no END": {
+			lines(begin, keyLine, "u1SU1Lf=", testFailed), m + "\n" + testFailed + "\n",
+		},
+		"the same between two armours": {
+			lines(begin, testFailed, end), lines(begin, testFailed, end),
+		},
+		"the same above a bare END": {
+			lines("see TestRSA2048Sign for the case", end), lines("see TestRSA2048Sign for the case", end),
+		},
+		// What reading a line a cut wrote into as a full line costs: prose
+		// whose lines each open in such a run, straight above an END, is
+		// a key cut on every line as far up as it goes.
+		"lines of prose that each open in a piece, above a bare END": {
+			lines("$ make test", "Alice42Smith logged in", "Ab3f9C2d7E1b pulled", "TestRSA2048Sign passed", end), "$ make test\n" + m + "\n",
+		},
+		"a key on one line between two cuts": {
+			"…" + tail + " " + keyLine + " " + head + "[...truncated]" + tail + " " + keyLine + " " + head + "[...truncated]" +
+				tail + " u1SU1Lf= " + end + "\n",
+			"…" + tail + " " + keyLine + " " + head + "[...truncated]" + m + "\n",
+		},
+		"a certificate's END across a cut from a key's tail on one line": {
+			keyLine + " -----END CERTIFICATE----- [… 812 bytes truncated]" + tail + " u1SU1Lf= " + end + "\n",
+			keyLine + " -----END CERTIFICATE----- [… 812 bytes truncated]" + m + "\n",
+		},
+		"a key on one line, a piece of prose across its cut": {
+			"KEY=" + begin + " " + keyLine + "[...truncated] see TestRSA2048Sign for it\n",
+			// The mark's word is read as the body's short last run.
+			"KEY=" + m + "] see TestRSA2048Sign for it\n",
+		},
+	} {
+		redactsWhole(t, name, c)
+	}
+}
+
+// WHAT ANOTHER RULE REPLACES IS NO PIECE OF A KEY: a password's key, its
+// separator and its value, and a token, beside a key a cut was read in. Each
+// holds runs that read like a piece of a key — `s3Password`,
+// `Password=hunter2`, the `Ab12…` after a token's `_` — and taken as one, the
+// key's span ended or began inside the password or the token: its marker took
+// the key word or the token's head, and what was left matched no rule, so the
+// value and the token's other characters were published.
+//
+// Mutations: judge a piece, a full line's run, the key's text at a cut line's
+// other end or a run across a cut on one line by its run alone, and a case
+// publishes the value or the token's tail; count only a claim the run lies
+// inside, and the run that holds a password's key is a piece again; claim a
+// password's key and separator only with a value after them, and the key a pass
+// left beside its value's marker is read as a piece the second time; read a
+// password's value on past a token, or a password's key inside a token as one,
+// and the piece of the key after the token is published; tell a line a cut
+// wrote into by its tail alone, and the head a cut kept before a password or a
+// token is published.
+func TestARunAnotherRuleClaimsIsNoPieceOfAKey(t *testing.T) {
+	m, pw, api := marker, redact.Marker+"password]", redact.Marker+"api-key]"
+	begin, end := "-----BEGIN RSA PRIVATE KEY-----", "-----END RSA PRIVATE KEY-----"
+	noEnd := begin + "\n" + keyLine + "\n" + keyLine + "\n"
+	// wide is a value as wide as a key's line, in both cases with digits.
+	const wide = "Ab12cdEF34ghIJKLmnopQRSTuvwxYZabCDefGHijKLmn"
+	for name, c := range map[string]keyForm{
+		"a password's key holding a digit, under a key with no END": {
+			noEnd + "s3Password: hunter2-Secret!\n", m + "\ns3Password: " + pw + "\n",
+		},
+		"its value on the next line": {
+			noEnd + "s3Password:\nhunter2 is not it\n", m + "\ns3Password:\n" + pw + " is not it\n",
+		},
+		"the same straight after a BEGIN": {
+			begin + "\ns3Password: hunter2-Secret!\n", begin + "\ns3Password: " + pw + "\n",
+		},
+		"a value holding a piece": {
+			noEnd + "password: Summer2024!\n", m + "\npassword: " + pw + "\n",
+		},
+		"a key and its value in one run": {
+			noEnd + "user1Password=hunter-two\n", m + "\nuser1Password=" + pw + "\n",
+		},
+		"a value on the next line opening in a piece": {
+			noEnd + "password:\nKk55Lm66NN-secretpart\n", m + "\npassword:\n" + pw + "\n",
+		},
+		"a password on the BEGIN's line": {
+			begin + " Password=hunter2-Secret! set\n", begin + " Password=" + pw + " set\n",
+		},
+		"a token after a piece, under a key with no END": {
+			begin + "\n" + keyLine + "\nAb12cdEF34gh sk-proj-Xy98ZzWw76Vv_abcdefghijklmnop\n", m + " " + api + "\n",
+		},
+		"a token above an END": {
+			"OPENAI_API_KEY=sk-abcdefghij_Ab12CdEf34GhIjKlMnOpQr\n" + end + "\n", "OPENAI_API_KEY=" + api + "\n" + end + "\n",
+		},
+		"a token above a key read from inside": {
+			"[... truncated]\nOPENAI_API_KEY=sk-proj-Ab1_xY-Q7wE9Q7wE9Q7wE9Q7wE9Q7wE9\n" + keyLine + "\n" + keyLine + "\nu1SU1Lf=\n" + end + "\n",
+			"[... truncated]\nOPENAI_API_KEY=" + api + "\n" + m + "\n",
+		},
+		"a token before an END on its line": {
+			"sk-ant-api03-Ab12Cd34Ef56Gh78_ijklmnopq " + end + "\n", api + " " + end + "\n",
+		},
+		"a password's value as wide as a key's line, before an END on its line": {
+			"password=" + wide + " " + end + "\n", "password=" + pw + " " + end + "\n",
+		},
+		"a token as wide as one": {
+			"sk-proj-" + wide + " " + end + "\n", api + " " + end + "\n",
+		},
+		"a password after the mark on a line a cut wrote into, under a key with no END": {
+			noEnd + keyLine[:30] + "[...truncated] db_password=SuperSecretValue\n", m + "[...truncated] db_password=" + pw + "\n",
+		},
+		"a key on one line, a password across its cut": {
+			"KEY=" + begin + " " + keyLine + "[...truncated] password=" + wide + " set\n",
+			"KEY=" + m + "] password=" + pw + " set\n",
+		},
+		"a token that ends in a password's key, before an END": {
+			"sk-AAAAAAAAAAAAAAAAAAAApwd: Kk55Lm66NN " + end + "\n", api + ": " + m + "\n",
+		},
+		"in a string, a password's value running on to a token and a piece before an END": {
+			`{"log": "pwd=\nOPENAI_API_KEY=sk-abcdefghij_Ab12CdEf34GhIjKlMnOpQr\n…u1SU1Lf9x= ` + end + `\n"}` + "\n",
+			`{"log": "pwd=\n` + pw + api + `\n…` + m + `\n"}` + "\n",
+		},
+	} {
+		redactsWhole(t, name, c, "hunter2", "Secret", "Summer2024", "-two", "secretpart", "abcdefghij", "Ab12CdEf34", "Xy98ZzWw", "ijklmnopq",
+			"u1SU1Lf9x", wide[:20], "SuperSecret", "Kk55Lm66NN")
+		if twice := redact.Secrets(c.want); twice != c.want {
+			t.Errorf("%s: a second pass changed\n%q\nto\n%q", name, c.want, twice)
 		}
 	}
 }
@@ -1486,6 +1903,10 @@ func TestOnlyALineThatReadsLikeAKeysBodyWaitsForAnEnd(t *testing.T) {
 		"two lines, a checksum, then three":                    {[]string{"one", "two", "=nE4V", "three", "four", "five"}, false},
 		"a key's line cut short, then four lines":              {[]string{keyLine[:56], "one", "two", "three", "four"}, false},
 		"two lines, a line at the other width, then two lines": {[]string{"one", "two", sshLine, "three", "four"}, false},
+		// A line a cut wrote into is at no width a read can tell, so a
+		// read crosses two lines from it to one at any encoder's width.
+		"two lines, a key's line cut short, then two lines":  {[]string{"one", "two", keyLine[:30] + "[...truncated]", "three", "four"}, true},
+		"two lines, a key's line cut short, then four lines": {[]string{"one", "two", keyLine[:30] + "[...truncated]", "three", "four", "five", "six"}, false},
 		// Read as the body's last line, with a line between it and an END
 		// written next, a line at any width is one a read crosses two
 		// lines from.
