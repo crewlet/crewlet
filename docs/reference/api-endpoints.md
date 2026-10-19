@@ -746,6 +746,8 @@ table made the refusal — every question, the policy every `/config/*` and
 `reason` is the authority table's own word for the rule that decided —
 `no_grant`, `not_self`, `not_lead`, `not_author`, `stage`, `seat_refused`,
 `seat_only` (a person or a token asking for a verb only an agent seat takes),
+`unseated` (a credential the identity directory binds to no seat asking for a
+verb made as one — bind it to a human seat, `crewlet iam bind`),
 `token_refused` (a [machine token](#post-iamcredentials-mints-a-machine-token)
 on a gesture that needs a person present, answered under the code
 `token_refused` rather than `unauthorized`), `assist_refused` and
@@ -760,7 +762,8 @@ are the **least** that would have admitted this caller for this object: any
 `["worklet"]`, a relation the caller does not hold names `["admin"]`, a lead
 missing the app names the app, and a question either app answers names both.
 An empty `grants` is an answer rather than an omission: no permission would —
-a seat-only verb, or a relation the org chart does not hold. The [human write
+a seat-only verb, a verb made as a seat asked by a credential bound to none, or
+a relation the org chart does not hold. The [human write
 surface](#the-human-write-surface) answers its own refusals `403 forbidden` in
 its tools' wording instead.
 
@@ -5519,10 +5522,12 @@ holder, and keeps the two answers apart in its cache, so an answer one reader
 was given is never served to a reader holding the other — and it runs on
 the auxiliary model of the seat the identity directory binds the caller to —
 every person's, and a token's bound to one — so a principal no seat binds, a
-pipeline's token or a service account bound to none, is refused
-`forbidden` on every transport rather than answered on the company's default
-model, because spend has to be attributable to somebody. No seat is given it: a
-seat has `search_knowledge` and a model of its own.
+pipeline's token or a service account bound to none, is refused `403
+unauthorized` with the reason `unseated` and no permission named, on every
+transport, rather than answered on the company's default model, because spend
+has to be attributable to somebody; `viewer.acts` does not offer it such a
+caller either. No seat is given it: a seat has `search_knowledge` and a model of
+its own.
 
 **It is charged to the company's windows.** The model is the asker's own
 seat's auxiliary one (`llm_auxiliary`, falling back as every auxiliary pass

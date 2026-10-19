@@ -147,6 +147,10 @@ type answerRig struct {
 	// cache is the node's one answer cache, built once and handed to every
 	// catalogue the rig builds — as the operator surface does.
 	cache *builtin.AnswerCache
+
+	// authorize is the decision the catalogue is built with: the table,
+	// unless a case is about the tool's own arm behind it.
+	authorize builtin.Authorizer
 }
 
 func newAnswerRig() *answerRig {
@@ -196,6 +200,10 @@ func (r *answerRig) asker() iam.Principal {
 func (r *answerRig) tool(t *testing.T) tools.Callable {
 	t.Helper()
 	company := &org.Organization{Name: "Acme", Roles: []*org.Role{{Name: "Founder"}}}
+	authorize := r.authorize
+	if authorize == nil {
+		authorize = builtin.Decide(authz.NoChart{})
+	}
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 		Knowledge: r.search,
 		Org:       func() *org.Organization { return company },
@@ -207,7 +215,7 @@ func (r *answerRig) tool(t *testing.T) tools.Callable {
 			Actor:  builtin.PrincipalActor,
 			Cache:  r.cache,
 		},
-		Authorize: builtin.Decide(authz.NoChart{}),
+		Authorize: authorize,
 	}) {
 		if tool.Name() == builtin.AnswerKnowledgeTool {
 			return askedAs{Callable: tool, caller: r.asker()}
@@ -414,18 +422,46 @@ func TestAnAnswerNeverCarriesAPrice(t *testing.T) {
 // on the auxiliary model of the asker's own seat, and the spend is on their
 // behalf — there is no default model to fall back on. Nothing is searched,
 // nothing asked of a model and nothing charged.
+//
+// THE TABLE REFUSES IT FIRST, `unseated` and naming the binding that would
+// change it — which is also what keeps a screen from offering the control —
+// and the TOOL refuses it behind a surface wired with a decision that admits
+// everybody, because the actor it is handed is where the rule is true.
+// Mutation: drop either refusal and its half goes red.
 func TestAnUnboundCredentialIsRefusedBeforeAnythingIsSpent(t *testing.T) {
 	t.Parallel()
-	rig := newAnswerRig()
-	rig.seat = ""
-	res, _, _ := ask(t, rig.tool(t), "How do we deploy?")
-	if !res.Failed || tools.RefusalOf(res) != tools.RefusalForbidden ||
-		!strings.Contains(res.Output, "bound to no seat") {
-		t.Fatalf("an unbound person was not refused, naming why: %+v", res)
-	}
-	if rig.model.calls != 0 || len(rig.model.uses) != 0 || len(rig.search.asked) != 0 {
-		t.Errorf("refused after spending: model %d, resolutions %d, searches %d",
-			rig.model.calls, len(rig.model.uses), len(rig.search.asked))
+	for _, c := range []struct {
+		name      string
+		authorize builtin.Authorizer
+		refused   func(tools.Result) bool
+	}{
+		{"by the table", nil, func(res tools.Result) bool {
+			var refused *builtin.DecisionRefused
+			return errors.As(res.Cause, &refused) &&
+				refused.Decision.Reason == authz.ReasonUnseated &&
+				strings.Contains(res.Output, "crewlet iam bind")
+		}},
+		{"by the tool, behind a surface that admits everybody",
+			func(context.Context, authz.Action, authz.Object) error { return nil },
+			func(res tools.Result) bool {
+				return tools.RefusalOf(res) == tools.RefusalForbidden &&
+					strings.Contains(res.Output, "bound to no seat")
+			}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newAnswerRig()
+			rig.seat = ""
+			rig.authorize = c.authorize
+			res, _, _ := ask(t, rig.tool(t), "How do we deploy?")
+			if !res.Failed || !c.refused(res) {
+				t.Fatalf("an unbound person was not refused, naming why: %+v", res)
+			}
+			if rig.model.calls != 0 || len(rig.model.uses) != 0 || len(rig.search.asked) != 0 {
+				t.Errorf("refused after spending: model %d, resolutions %d, searches %d",
+					rig.model.calls, len(rig.model.uses), len(rig.search.asked))
+			}
+		})
 	}
 }
 

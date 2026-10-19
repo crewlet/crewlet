@@ -38,16 +38,18 @@ import (
 // Nobody's seat runs this and no turn exists: a person typed a question into
 // the dashboard and is waiting for a paragraph. So it is an OPERATOR tool, and
 // one only a PERSON BOUND TO A SEAT may call ([authz.ActionKnowledgeAnswer]
-// admits whoever uses either app and is human-only; this tool refuses the
-// rest): it runs on the
-// auxiliary model of the seat the identity directory binds them to — the
+// admits whoever uses either app, and is human-only and SEATED): it runs on
+// the auxiliary model of the seat the identity directory binds them to — the
 // human seat every person holds (ADR-0032). A principal no seat binds — a
 // pipeline's token or a service account, never a person (ADR-0032) — has no
-// seat whose model to run on, and is refused
-// rather than answered on the company's default model, because "a CI token"
-// is not somebody the spend can be attributed to. A seat is never given it: a seat has `search_knowledge`
-// and its own model, and an answer written by a second model into its context
-// would be one it could not check.
+// seat whose model to run on, and the table refuses it `unseated` rather than
+// letting it be answered on the company's default model, because "a CI token"
+// is not somebody the spend can be attributed to; a refusal there is also what
+// keeps a screen from offering the control to such a caller at all. The tool
+// asks the same of the actor it is handed, as the arm a surface wired without
+// the table would otherwise reach. A seat is never given it: a seat has
+// `search_knowledge` and its own model, and an answer written by a second
+// model into its context would be one it could not check.
 //
 // # Why it is a write
 //
@@ -320,7 +322,10 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			" answers the person whose credential calls it, and this call carries none."), nil
 	}
 	// A PERSON BOUND TO A SEAT, and nobody else: [iam.ActorFor] names
-	// exactly that asker kind human, by the seat. See the file head.
+	// exactly that asker kind human, by the seat. The table's seated row
+	// refuses everybody else first; this is the arm that keeps the rule
+	// where the actor is read, so a surface wired without the table is not
+	// the one that answers an unbound credential. See the file head.
 	if actor.Kind != worklet.AuthorHuman || strings.TrimSpace(actor.Handle) == "" {
 		return refused(tools.RefusalForbidden, fmt.Sprintf("%s runs on the auxiliary "+
 			"model of the seat its asker is bound to, and %q is bound to no seat, so "+

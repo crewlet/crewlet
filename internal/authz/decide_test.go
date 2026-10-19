@@ -120,6 +120,14 @@ func person(login string, grants ...iam.Grant) iam.Principal {
 		Stage: iam.StageActive, Grants: grants})
 }
 
+// machine is a credential acting as itself — a pipeline's service account the
+// identity directory binds to no seat — with these grants. Fresh by
+// construction, as every credential with nobody at a keyboard is.
+func machine(login string, grants ...iam.Grant) iam.Principal {
+	return proved(iam.Principal{ID: uuid.New(), Login: login, Kind: iam.KindMachine,
+		Stage: iam.StageActive, Grants: grants})
+}
+
 // seat is an agent principal acting as a seat.
 // personLeading is a HUMAN the chart knows by a seat handle, which is what
 // somebody signed in and bound to a seat is: [authz.actorOf] asks the chart by
@@ -220,6 +228,15 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 		{"a seat never does — it has a search and a model of its own",
 			seat("sre", iam.Apps...), authz.ActionKnowledgeAnswer,
 			authz.Object{Kind: authz.KindCompany}, false, authz.ReasonSeatRefused},
+		// AND NEITHER DOES A CREDENTIAL ACTING AS ITSELF, whatever it holds:
+		// the answer runs on the model of the seat its asker acts as, and it
+		// acts as none.
+		{"a credential bound to no seat has no model to answer on",
+			machine("ci:release", admin), authz.ActionKnowledgeAnswer,
+			authz.Object{Kind: authz.KindCompany}, false, authz.ReasonUnseated},
+		{"nor does a person the directory binds to none", person("jane.doe", admin),
+			authz.ActionKnowledgeAnswer, authz.Object{Kind: authz.KindCompany},
+			false, authz.ReasonUnseated},
 
 		// --- the person asked ------------------------------------------- //
 		{"the person an open ask names reads the item", personLeading("sre"),
@@ -867,41 +884,59 @@ func TestAVerbWithNoRuleIsRefused(t *testing.T) {
 // never hides a permission.
 func TestARefusalNamesExactlyTheGrantsThatWouldHaveAdmittedIt(t *testing.T) {
 	t.Parallel()
-	nobody := func() iam.Principal { return person("jane.doe") }
-	for _, a := range authz.Actions() {
-		for _, kind := range authz.ObjectKinds {
-			for _, object := range []authz.Object{
-				{Kind: kind},
-				{Kind: kind, ID: "x", Owner: "somebody.else", Author: "somebody.else",
-					Container: "ELSEWHERE", ContainerKind: authz.KindProject},
-			} {
-				d := authz.Decide(t.Context(), nobody(), a, object, chart{}, decidedAt)
-				if d.Unknown() {
-					t.Fatalf("%s on %+v was undecidable against a chart that "+
-						"answers: %v", a, object, d.Err)
-				}
-				if d.Allowed {
-					continue
-				}
-				var admits []iam.Grant
-				for _, g := range iam.AllGrants {
-					alone := person("jane.doe", g)
-					got := authz.Decide(t.Context(), alone, a, object, chart{}, decidedAt)
-					if got.Allowed && got.Reason == authz.ReasonGrant {
-						admits = append(admits, g)
-					}
-				}
-				named := slices.Clone(d.Grants)
-				minimal := minimalCover(admits)
-				slices.Sort(named)
-				slices.Sort(minimal)
-				if !slices.Equal(named, minimal) {
-					t.Errorf("%s on %+v refused (%s) naming %v; the smallest "+
-						"permissions that would have admitted it alone are %v",
-						a, object, d.Reason, named, minimal)
+	// BOUND AND UNBOUND, because a verb made as a seat refuses the second
+	// before any permission is weighed — naming none, which this holds too —
+	// and decided only unbound, every such row's own grants would go
+	// unchecked.
+	for _, holder := range []func(...iam.Grant) iam.Principal{
+		func(g ...iam.Grant) iam.Principal { return person("jane.doe", g...) },
+		func(g ...iam.Grant) iam.Principal { return personLeading("jane", g...) },
+	} {
+		for _, a := range authz.Actions() {
+			for _, kind := range authz.ObjectKinds {
+				for _, object := range []authz.Object{
+					{Kind: kind},
+					{Kind: kind, ID: "x", Owner: "somebody.else", Author: "somebody.else",
+						Container: "ELSEWHERE", ContainerKind: authz.KindProject},
+				} {
+					refusalNamesItsCover(t, holder, a, object)
 				}
 			}
 		}
+	}
+}
+
+// refusalNamesItsCover is one case of the walk above: holder with nothing is
+// decided, and a refusal must name exactly the minimal cover of the grants
+// that, held alone, admit.
+func refusalNamesItsCover(t *testing.T, holder func(...iam.Grant) iam.Principal,
+	a authz.Action, object authz.Object) {
+
+	t.Helper()
+	nobody := holder()
+	d := authz.Decide(t.Context(), nobody, a, object, chart{}, decidedAt)
+	if d.Unknown() {
+		t.Fatalf("%s on %+v was undecidable against a chart that answers: %v",
+			a, object, d.Err)
+	}
+	if d.Allowed {
+		return
+	}
+	var admits []iam.Grant
+	for _, g := range iam.AllGrants {
+		got := authz.Decide(t.Context(), holder(g), a, object, chart{}, decidedAt)
+		if got.Allowed && got.Reason == authz.ReasonGrant {
+			admits = append(admits, g)
+		}
+	}
+	named := slices.Clone(d.Grants)
+	minimal := minimalCover(admits)
+	slices.Sort(named)
+	slices.Sort(minimal)
+	if !slices.Equal(named, minimal) {
+		t.Errorf("%s (seat %q) on %+v refused (%s) naming %v; the smallest "+
+			"permissions that would have admitted it alone are %v",
+			a, nobody.Seat, object, d.Reason, named, minimal)
 	}
 }
 
