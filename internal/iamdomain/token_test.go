@@ -597,3 +597,52 @@ func TestATokenMintedAdminCarriesWhatItsOwnerKeeps(t *testing.T) {
 			"narrows it and does not end it", got.Answer, got.Detail)
 	}
 }
+
+// A TOKEN ASKED FOR NOTHING CARRIES WHAT ITS MINTER MAY CONFER.
+//
+// Whoever mints a token is shown its value, so it carries nothing the minting
+// party does not hold, and the default is held to that rule rather than
+// refused by it. On a node whose `api.auth.admin` is `refuse`, an administrator
+// signs in carrying their apps alone; asked for nothing, their own token
+// defaulted to everything their row holds, admin included, and was then
+// refused for the admin they cannot confer there — so `crewlet iam token
+// -login`, which sends no list unless -grants names one, minted nothing at all
+// on such a node. It now carries their apps; on a node that serves admin it
+// carries admin too.
+// Mutation: default to the owner's whole set again and the refusing node's
+// mint is refused.
+func TestATokenAskedForNothingCarriesWhatItsMinterMayConfer(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	owner := uuid.Must(uuid.NewV7()).String()
+	if err := rig.enrol(iamdomain.Creation{
+		PersonID: owner, Kind: iam.KindPerson, Stage: iam.StageActive,
+		Name: "Ana Admin", Email: "ana@example.com", Login: "ana.admin",
+		Seat: rig.vacantSeat("ana-admin"), LinkExpiresAt: firstLinkExpiry,
+		Grants: []iam.Grant{iam.GrantAdmin},
+		OpID:   "op-enrol-" + owner, Reason: "a hire",
+	}); err != nil {
+		t.Fatalf("enrol: %v", err)
+	}
+	rig.drain()
+	held := []iam.Grant{iam.GrantAdmin}
+	for _, tc := range []struct {
+		posture iam.AdminPosture
+		want    []iam.Grant
+	}{
+		{iam.AdminRefuse, iam.Apps},
+		{iam.AdminServe, iam.AllGrants},
+	} {
+		minter := asOwner(rig, owner, tc.posture.Effective(held)...)
+		minted, _, err := mintFor(t, rig, minter, iamdomain.TokenMint{PersonID: owner})
+		if err != nil {
+			t.Errorf("on a node that will %s admin, the owner's own mint asked "+
+				"for nothing was refused: %v", tc.posture, err)
+			continue
+		}
+		if !slices.Equal(minted.Grants, tc.want) {
+			t.Errorf("on a node that will %s admin, the token carries %v, want %v",
+				tc.posture, minted.Grants, tc.want)
+		}
+	}
+}

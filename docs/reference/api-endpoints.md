@@ -1269,12 +1269,14 @@ accounts and never on a person's account. A person mints their own with no
 `?person=` from their own session — `crewlet iam token -login` makes exactly
 that request, signing in for it and signing out after.
 The body is `{"label", "expires_in_days", "grants"}`, every field optional:
-`grants` omitted, the token carries every permission its owner holds, `admin`
-included; `[]` mints one that reads the overview alone; and the token lasts 90
-days. A token may carry `admin` — what keeps it off the gestures that need a
-person present is the authority table's presence rows and the identity
-record's own refusal of an administrative record written through a token, not
-a permission it cannot carry. The answer is `201` with
+`grants` omitted, the token carries every permission its owner holds that
+whoever mints it may confer — `admin` included where the minting session holds
+it, and the owner's apps alone on a node whose `api.auth.admin` is `refuse`,
+where no session carries admin; `[]` mints one that reads the overview alone;
+and the token lasts 90 days. A token may carry `admin` — what keeps it off the
+gestures that need a person present is the authority table's presence rows and
+the identity record's own refusal of an administrative record written through a
+token, not a permission it cannot carry. The answer is `201` with
 `{"id", "person", "token", "grants", "expires_at", "position"}`.
 
 | Answer | When |
