@@ -629,6 +629,11 @@ func taskReads() map[string]indexedRead {
 		"what a purge writes, by kin": seek(tree, purgeReachStatement, "t-00001", "t-00001", "t-00001", "t-00001", "t-00001", "t-00001", "t-00001"),
 		"key resolution":              seek(keys, resolveTaskStatement, "ENG-1", "ENG-1", "ENG-1"),
 		"a point read's scope":        seek(keys, taskReadScopeStatement, "ENG-1", "ENG-1", "ENG-1"),
+
+		// THE LEXICAL INDEX'S WALK OF THE LIVE TASKS, a batch at a time by
+		// id from a cursor — a seek of the key, which every partial index
+		// on the live tasks would otherwise take from it.
+		"the lexical index's walk": {read(search.TaskVersionsRead("t-00010", 500)), key, false},
 	}
 	const (
 		task, other = "t-00001", "t-00002"
