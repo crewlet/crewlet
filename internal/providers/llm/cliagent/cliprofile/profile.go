@@ -1265,10 +1265,25 @@ func (p *Profile) Validate(name string) error {
 		if f.In != "" && !f.In.Valid() {
 			add("seed_files[%d].in %q (want home or work)", i, f.In)
 		}
-		// The same two things seeding's UnderRoot proves — relative, and
-		// not escaping the scope — asked before any seat home exists.
-		if !staysInside(f.Path) {
+		switch {
+		case !staysInside(f.Path):
+			// The same two things seeding's UnderRoot proves — relative,
+			// and not escaping the scope — asked before any seat home
+			// exists.
 			add("seed_files[%d].path %q must be relative and stay inside the %s directory",
+				i, f.Path, f.Scope())
+		case !namesAFile(f.Path):
+			// The content is written to exactly this path, and UnderRoot
+			// proves only that it stays inside — it accepts the scope
+			// directory itself. So `.` and `x/..` are a write onto the
+			// home or the working directory (EISDIR on every call), and
+			// `.crewlet-config/` writes a regular FILE where the CLI and
+			// the engine need a directory, so the system prompt's write
+			// under it fails ENOTDIR on every call. The rule
+			// system_prompt_file.name is held to, for the same reason.
+			add("seed_files[%d].path %q must name a FILE inside the %s directory — not "+
+				"the directory itself, not a path ending in a separator, and not one "+
+				"whose last element is . or .. — e.g. .vendor/settings.json",
 				i, f.Path, f.Scope())
 		}
 		if f.Content == "" {

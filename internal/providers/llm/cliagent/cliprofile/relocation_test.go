@@ -3,6 +3,7 @@ package cliprofile
 import (
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -92,6 +93,33 @@ func TestASeedPathThatClimbsOutAndBackInIsRefusedAtLoad(t *testing.T) {
 	refused(t, map[string]any{"seed_files": []any{map[string]any{
 		"path": "../seat/settings.json", "content": "{}",
 	}}}, "must be relative and stay inside")
+}
+
+// A SEED PATH NAMES A FILE, OR EVERY CALL FAILS. Seeding writes the content to
+// exactly the path, and staying inside the scope is not enough: `.` and `x/..`
+// clean to the scope directory itself, a write onto which is EISDIR, and
+// `.crewlet-config/` writes a regular file where OpenCode's configuration
+// directory has to be, so the seat's agent file under it is ENOTDIR — on every
+// call, with a profile that loaded and an entry every write path accepted.
+// Judged on the path AS WRITTEN, as system_prompt_file.name is, because
+// cleaning is what hides a trailing separator.
+func TestASeedPathMustNameAFile(t *testing.T) {
+	t.Parallel()
+	for _, path := range []string{".", "./", ".crewlet-config/", ".crewlet-config/..", "x/.."} {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+			refused(t, map[string]any{"seed_files": []any{map[string]any{
+				"path": path, "in": "work", "content": "{}",
+			}}}, "seed_files[0].path "+strconv.Quote(path)+" must name a FILE inside the work directory")
+		})
+	}
+	// Climbing within the scope is still a file in it: the rule is about the
+	// last element, not about every `..`.
+	if _, err := loadCustom(map[string]any{"seed_files": []any{map[string]any{
+		"path": "a/../.crewlet-config/opencode.json", "in": "work", "content": "{}",
+	}}}); err != nil {
+		t.Errorf("a seed path naming a file inside its scope was refused: %v", err)
+	}
 }
 
 // THE OPENCODE PROFILE READS ONLY THE CALL'S OWN CONFIGURATION, AND WRITES
