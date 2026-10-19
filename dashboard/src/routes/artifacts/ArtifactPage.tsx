@@ -265,7 +265,7 @@ function Trashed({ detail, onChanged }: { detail: ArtifactDetail; onChanged: () 
             <span className="artifact-actions">
               <Button
                 size="small"
-                variant="secondary"
+                variant="primary"
                 loading={gesture.busy}
                 disabledReason={restore.can ? undefined : restore.reason}
                 onClick={async () => {
@@ -377,8 +377,9 @@ function Loaded({
   const presence = useArtifactPresence(room, people, showing);
   const viewer = useViewer();
   // THE NAME THE ROOM KNOWS THIS READER BY: their seat, or the login of a
-  // reader acting under none, as the engine names every member.
-  const selfName = viewer.handle || viewer.login;
+  // reader acting under none, as the engine names every member (its
+  // `iam.RecordOwner`, which the frame holds as `owner`).
+  const selfName = viewer.owner;
   const [follow, setFollow] = useParam("follow", "");
   const [sheetParam] = useParam("sheet", "");
   const [slideParam] = useParam("slide", "");
