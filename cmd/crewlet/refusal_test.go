@@ -1,9 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 )
 
 // EVERY CLIENT RENDERS THE HINT, because the hint is the half that says what
@@ -60,9 +63,17 @@ func TestARefusalWithNothingBesideTheCodeIsLeftAlone(t *testing.T) {
 // to be added here to escape it.
 func TestEveryClientNamesTheGrantANodeRefusedATokenFor(t *testing.T) {
 	t.Parallel()
-	refused := []byte(`{"error":"unauthorized","message":"The credential you ` +
-		`presented does not carry the access (Admin, Worklet, Doclet or Artifacts) ` +
-		`this request needs.","reason":"no_grant","grants":["admin"]}`)
+	// THE NODE'S OWN SENTENCE, from the table it answers with, rather than a
+	// copy typed here that would go on naming three permissions after the
+	// table named a fourth.
+	refused, err := json.Marshal(map[string]any{
+		"error":   httpjson.CodeUnauthorized,
+		"message": httpjson.CodeUnauthorized.Message(),
+		"reason":  "no_grant", "grants": []string{"admin"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	config := &configClient{base: "http://node"}
 	secrets := &secretsClient{base: "http://node"}
 	clients := map[string]func(status int, raw []byte) error{
