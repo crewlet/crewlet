@@ -10474,14 +10474,21 @@ a.live-row:focus-visible {
    frame for the window's height (`useFillScreen`) and takes the content
    column edge to edge, so the workspace (the body and the one panel beside
    it) runs from the bar to the sheet's bottom edge: the body scrolls inside
-   itself, and a panel beside it stays in view however far it is read. */
+   itself, and a panel beside it stays in view however far it is read.
+   THE KIT'S CONTENT PADDING IS TAKEN BACK for this one screen, as the org
+   chart and the task page take it, rather than cancelled by a margin of the
+   wide padding: under a laptop's width the kit pads less, and that margin
+   pushed the body past the window's edges and under the bar. */
+.app .crewlet-app-shell__content:has(> .artifact-page) {
+  padding: 0;
+  gap: 0;
+}
 .artifact-page {
   display: flex;
   flex-direction: column;
-  height: calc(100% + var(--spacing-5) * 2);
+  height: 100%;
   min-width: 0;
   min-height: 0;
-  margin: calc(-1 * var(--spacing-5));
 }
 .artifact-loading,
 .artifact-trashed {
@@ -10515,6 +10522,9 @@ a.live-row:focus-visible {
 }
 .artifact-workspace {
   flex: 1 1 auto;
+  /* THE BODY'S INSET, the shell's own step: the wide one, and on a phone the
+     narrow one the bar above it folds to as well (below). */
+  --artifact-inset: var(--spacing-5);
 }
 /* THE BODY IS THE SCROLLER, and so it is the size container its views
    measure the view by (`100cqb`), as the frame's own scroller is. A page's
@@ -10530,12 +10540,20 @@ a.live-row:focus-visible {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-4);
-  padding: var(--spacing-5);
+  padding: var(--artifact-inset);
   scrollbar-gutter: stable;
+}
+@container crewlet-artifact-workspace (width < 640px) {
+  .artifact-body {
+    --artifact-inset: var(--spacing-3);
+  }
 }
 .artifact-body--html {
   padding: 0;
   gap: 0;
+  /* THE FRAME SCROLLS ITSELF and the body never does, so a reserved gutter
+     was a dead strip down the frame's end edge. */
+  scrollbar-gutter: auto;
 }
 .artifact-body--html > .artifact-frame-box {
   flex: 1 1 auto;
