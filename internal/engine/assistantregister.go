@@ -64,7 +64,14 @@ func assistantRegistrations() []registration {
 			return writeSeams{Rows: rows, Fence: fence,
 				Gates: assistantdomain.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 		},
-		Barrier:    assistantdomain.EncodeBarrier,
+		Barrier: assistantdomain.EncodeBarrier,
+		// NO SEAT READS THIS LOG, so its read model is zero, as the identity
+		// estate's is: a person's reads take no barrier (above), and the
+		// object collector's pins, its one linearizable reader, are counted
+		// as the engine's own ([Engine.backgroundBarriers]). A seat that
+		// starts reading it at `linearizable` meets `census_drift` on its
+		// first barrier.
+		Reads:      &statelog.ReadModel{PerSeatDay: 0},
 		Generation: assistantdomain.GenerationRecord{},
 		NewGate: func(s *stateLog, _ *runningLog,
 			publisher *statelog.Publisher) (gateWrite, error) {

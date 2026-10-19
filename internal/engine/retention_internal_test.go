@@ -1073,8 +1073,10 @@ func TestALogPastItsCensusNamesItsOwnCeilingField(t *testing.T) {
 			continue
 		}
 		want[entry.Domain.Name()] = entry.Ceiling(config.Stream{}, 0).Field
+		// PAST TWICE THE LOG'S OWN CENSUS, which its domain declares — and
+		// past a declared zero on its first barrier.
 		recorder.Add(metrics.StatelogBarriersApplied,
-			uint64(3*statelog.Census{Seats: 1}.Expected()),
+			uint64(3*statelog.Census{Reads: *entry.Reads, Seats: 1}.Expected()+1),
 			metrics.Attrs{"domain": entry.Domain.Name(), "stream": entry.Domain.Stream().Name})
 	}
 	if len(want) < 6 {
@@ -1096,7 +1098,7 @@ func TestALogPastItsCensusNamesItsOwnCeilingField(t *testing.T) {
 	for domain, field := range want {
 		detail, past := got[domain]
 		if !past {
-			t.Errorf("%s took three times its census and census_drift does not "+
+			t.Errorf("%s took past twice its census and census_drift does not "+
 				"name it: %v", domain, got)
 			continue
 		}

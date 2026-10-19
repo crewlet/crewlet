@@ -165,6 +165,13 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{LinearizableReads: 5000, LinearizableReadsExpected: 1000},
 			"5000 linearizable reads a day against the 1000 this log was sized for",
 		},
+		"a barrier on a log whose domain declares no read": {
+			// A DECLARED ZERO IS A CENSUS, and its first barrier is a
+			// reader nobody counted in the log's ceiling.
+			statelog.KindCensusDrift,
+			statelog.Reading{LinearizableReads: 1},
+			"1 linearizable reads a day against the 0 this log was sized for",
+		},
 		"files the object store lost or damaged": {
 			statelog.KindObjectsMissing,
 			statelog.Reading{ObjectsMissing: 2},
@@ -868,26 +875,38 @@ func TestTheTableIsEvaluatedOnThePositionHeartbeat(t *testing.T) {
 // sizing was derived from, so that is what its log is expected to take. A
 // company twice the size doing the same work per seat takes twice it, which
 // the fixed figure read as drift. A company with no agent seat is still one
-// seat's worth, since its operators read too and an expectation of zero is an
-// alarm that cannot fire. The engine's own periodic reads are added to it,
-// since each of them is a barrier on every log it reads: without them a
-// one-seat company on one data node reading exactly its census put 293
+// seat's worth, since its operators read too and an expectation of zero on a
+// log they read fires on the first read. The engine's own periodic reads are
+// added to it, since each of them is a barrier on every log it reads: without
+// them a one-seat company on one data node reading exactly its census put 293
 // barriers a day on a log expected to take 125.
+//
+// AND THE RATE IS THE DOMAIN'S DECLARATION ([statelog.ReadModel]): a log no
+// read takes a barrier on declares none, and is expected to take none
+// however many seats the company has — plus the engine's own reads, which are
+// the engine's and not the seats'.
 func TestALogsCensusIsPerSeat(t *testing.T) {
 	t.Parallel()
+	read := statelog.ReadModel{PerSeatDay: statelog.LinearizableReadsPerSeatDay}
 	for _, tc := range []struct {
 		name   string
 		census statelog.Census
 		want   int
 	}{
-		{"the reference company", statelog.Census{Seats: 100}, 12_500},
-		{"twice the company", statelog.Census{Seats: 200}, 25_000},
-		{"no agent seat", statelog.Census{}, 125},
+		{"the reference company", statelog.Census{Reads: read, Seats: 100}, 12_500},
+		{"twice the company", statelog.Census{Reads: read, Seats: 200}, 25_000},
+		{"no agent seat", statelog.Census{Reads: read}, 125},
 		{"one seat beside one data node's passes",
-			statelog.Census{Seats: 1, Background: 168}, 293},
+			statelog.Census{Reads: read, Seats: 1, Background: 168}, 293},
 		{"a small company beside the engine's own reads",
-			statelog.Census{Seats: 3, Background: 504}, 879},
-		{"a negative background adds nothing", statelog.Census{Seats: 1, Background: -5}, 125},
+			statelog.Census{Reads: read, Seats: 3, Background: 504}, 879},
+		{"a negative background adds nothing",
+			statelog.Census{Reads: read, Seats: 1, Background: -5}, 125},
+		{"a domain no read takes a barrier on", statelog.Census{Seats: 300}, 0},
+		{"a domain no seat reads, beside the engine's own reads",
+			statelog.Census{Seats: 300, Background: 25}, 25},
+		{"a negative rate reads as none",
+			statelog.Census{Reads: statelog.ReadModel{PerSeatDay: -3}, Seats: 10}, 0},
 	} {
 		if got := tc.census.Expected(); got != tc.want {
 			t.Errorf("%s: %+v expects %d a day, want %d", tc.name, tc.census, got, tc.want)

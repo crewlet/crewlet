@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -276,8 +277,11 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 		metrics.Attrs{"gate": "deleted", "subject_kind": "task"})
 	recorder.Add(metrics.TrackerFeedUnreadable, 3, metrics.Attrs{"source": "tracker"})
 	trackerLog := statelog.Domain(worklet.Domain{})
+	trackerCensus := statelog.Census{
+		Reads: statelog.ReadModel{PerSeatDay: statelog.LinearizableReadsPerSeatDay}, Seats: 100,
+	}
 	recorder.Add(metrics.StatelogBarriersApplied,
-		uint64(3*statelog.Census{Seats: 100}.Expected()),
+		uint64(3*trackerCensus.Expected()),
 		metrics.Attrs{"domain": "tracker", "stream": worklet.Domain{}.Stream().Name})
 
 	r := &retention{metrics: recorder, state: censusLogs(trackerLog),
@@ -299,7 +303,7 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 	// THE CENSUS IS EACH LOG'S, as the report evaluates it
 	// ([statelog.DomainInputs.LinearizableReads]).
 	held, counted := r.census(r.state.running())[trackerLog.Name()]
-	if !counted || held.expected != (statelog.Census{Seats: 100}).Expected() ||
+	if !counted || held.expected != trackerCensus.Expected() ||
 		held.reads != 3*held.expected {
 		t.Errorf("the tracker's log reached its census as %d read against %d (counted "+
 			"%v), so `census_drift` compares against nothing", held.reads,
@@ -477,6 +481,7 @@ func censusLogs(domains ...statelog.Domain) *stateLog {
 func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 	t.Parallel()
 	var trackerLog, vectorLog statelog.Domain = worklet.Domain{}, search.Domain{}
+	var pagesLog, iamLog statelog.Domain = doclet.Domain{}, iamdomain.Domain{}
 
 	for _, tc := range []struct {
 		name       string
@@ -532,6 +537,30 @@ func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 			logs: []statelog.Domain{trackerLog}, seats: 100,
 			applied: map[statelog.Domain]int{trackerLog: 30_000}, appended: 10_000,
 			fires: true, log: "tracker", expected: 12_500,
+		},
+		{
+			name: "Doclet's log, held to the whole per-seat rate",
+			logs: []statelog.Domain{pagesLog}, seats: 100,
+			applied: map[statelog.Domain]int{pagesLog: 12_500},
+			fires:   false, log: "pages", expected: 12_500,
+		},
+		{
+			name: "the identity estate's log, whose domain declares no read, quiet",
+			// HUNDREDS OF SEATS AND NOT ONE BARRIER: no read of the
+			// estate takes one, so its census is zero however many
+			// seats the company has — the whole company's figure,
+			// charged here, was a census its ceiling was never sized for.
+			logs: []statelog.Domain{iamLog}, seats: 300,
+			fires: false, log: "iam", expected: 0,
+		},
+		{
+			name: "the identity estate's log on its first barrier",
+			// A DECLARED ZERO IS A CENSUS: the first barrier is a
+			// linearizable reader nobody counted, and the log's ceiling
+			// has no bytes for it.
+			logs: []statelog.Domain{iamLog}, seats: 300,
+			applied: map[statelog.Domain]int{iamLog: 1},
+			fires:   true, log: "iam", expected: 0,
 		},
 		{
 			name: "the vector log, which no read appends to",

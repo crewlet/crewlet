@@ -156,6 +156,77 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 	}
 }
 
+// EVERY BARRIER DECLARES ITS READ MODEL, AND NOTHING ELSE DOES.
+//
+// A domain's read model is how many linearizable reads a day each agent seat
+// puts on its log — the census `census_drift` holds the log to, and a term in
+// its ceiling. It was one figure charged to every log with a read index, so the
+// identity estate's log, which no read takes a barrier on, was held to the
+// whole company's reads while its ceiling was sized with none. Declared per
+// domain it is the domain's own number, and a boot refuses a barrier stated
+// without one, a model stated beside NoBarrier, and a negative rate.
+//
+// The shipped figures are pinned, so moving one is a change in this diff:
+// the reference company's 125 a day per seat on the tracker's, the knowledge
+// base's, the artifacts log's and the artifact datastore's logs, and zero on
+// the identity estate's and the Dashboard Assistant's.
+func TestEveryBarrierDeclaresItsReadModel(t *testing.T) {
+	shipped := map[string]*int{
+		worklet.Domain{}.Name():   new(statelog.LinearizableReadsPerSeatDay),
+		doclet.Domain{}.Name():    new(statelog.LinearizableReadsPerSeatDay),
+		iamdomain.Domain{}.Name(): new(0),
+		search.Domain{}.Name():    nil,
+		usage.Domain{}.Name():     nil,
+
+		artifactsdomain.Domain{}.Name(): new(statelog.LinearizableReadsPerSeatDay),
+		artifactdata.Domain{}.Name():    new(statelog.LinearizableReadsPerSeatDay),
+		assistantdomain.Domain{}.Name(): new(0),
+	}
+	for _, entry := range register() {
+		name := entry.Domain.Name()
+		want, pinned := shipped[name]
+		if !pinned {
+			t.Errorf("%s is registered and its read model is pinned nowhere — say "+
+				"here how many linearizable reads a day each seat puts on its log", name)
+			continue
+		}
+		switch {
+		case want == nil && entry.Reads != nil:
+			t.Errorf("%s declares a read model of %d a seat a day, want none", name,
+				entry.Reads.PerSeatDay)
+		case want != nil && entry.Reads == nil:
+			t.Errorf("%s declares no read model, want %d a seat a day", name, *want)
+		case want != nil && entry.Reads.PerSeatDay != *want:
+			t.Errorf("%s declares %d linearizable reads a seat a day, want %d", name,
+				entry.Reads.PerSeatDay, *want)
+		}
+	}
+	if err := checkRegister(register()); err != nil {
+		t.Fatalf("the shipped register fails its own boot check: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		bend  func(entries []registration)
+		names string
+	}{
+		{name: "a barrier with no read model", names: worklet.Domain{}.Name(),
+			bend: func(e []registration) { e[0].Reads = nil }},
+		{name: "a read model beside NoBarrier", names: search.Domain{}.Name(),
+			bend: func(e []registration) { e[1].Reads = &statelog.ReadModel{} }},
+		{name: "a negative rate", names: worklet.Domain{}.Name(),
+			bend: func(e []registration) { e[0].Reads = &statelog.ReadModel{PerSeatDay: -1} }},
+	} {
+		entries := register()
+		tc.bend(entries)
+		err := checkRegister(entries)
+		if err == nil || !strings.Contains(err.Error(), tc.names) {
+			t.Errorf("%s passed the boot check (%v), want a refusal naming %s",
+				tc.name, err, tc.names)
+		}
+	}
+}
+
 // A REGISTERED DOMAIN WITH NO GENERATION RECORD FAILS THE BOOT CHECK.
 //
 // A reanchor opens a generation with the domain's own record, and the engine

@@ -1929,17 +1929,41 @@ The read barriers add about **639 MB a year** to the log's throughput, which is
 inside the ceiling by a factor of five at year five. That figure is a term in
 the log's own size, so it is printed with its derivation rather than assumed:
 it comes from an assumed 125 linearizable reads a day per agent seat, which is
-12 500 for the reference company's 100 seats. The
-[`census_drift`](../reference/alarms.md) alarm holds every log to that
-assumption: each log is expected to take 125 reads a day per agent seat (a
-company with none is counted as one), plus what the engine reads on its own —
-the object store's collector, one in the fleet, pins the tracker's log 25 times
-a day (24 collections and one audit) — and the alarm names every log past twice
-its census, each with the Tier A field that sets that log's own ceiling —
-`stream.tracker_log_max_bytes` on the mutation log, `stream.iam_log_max_bytes`
-on the identity estate's: every read past the census is a barrier record on
-that log, so it is that field's sizing the extra reads have outgrown, whatever
-else the field is sized from.
+12 500 for the reference company's 100 seats, at about 140 bytes a barrier.
+
+**Each log's read rate is its domain's own declaration.** A barrier lands on the
+log of the domain the read is about, so the engine's register states, per
+domain, how many linearizable reads a day each agent seat puts on its log, and a
+domain that grants `linearizable` cannot be registered without stating it. The
+tracker's, the knowledge base's, the artifacts log's and the artifact
+datastore's logs each declare **125**: a seat's tools read all four at
+`linearizable`, and the census says how many reads a company makes rather than
+how they split between them, so each declares all of them. The
+identity estate's log declares **none**: no read of it takes a barrier, because
+every identity answer is a node's own rows with their lag beside them, and a
+session a node has not applied yet is waited for at the position its bearer
+states. So its ceiling, `stream.iam_log_max_bytes`, has no barrier term — its
+512 MiB default is sized from sessions, and the barrier half of the arithmetic
+at its definition is 0 × 100 × 365 × 140 B. It was held to the other two logs'
+125 a day per seat before the rate was declared per domain: a census its ceiling
+was never sized for, which at the reference company is about 639 MB a year of
+barriers it would have had to hold against a 512 MiB ceiling, and which
+`census_drift` would have measured it against while it took none. The
+Dashboard Assistant's log declares **none** as well: no seat reads it, and a
+person reads their own conversation through the node their own writes waited
+on, so its one barrier is the collector's pin below, counted as the engine's
+own.
+
+The [`census_drift`](../reference/alarms.md) alarm holds every log to its own
+census: its domain's rate per agent seat (a company with none is counted as
+one), plus what the engine reads on its own — the object store's collector, one
+in the fleet, pins the log of every domain whose rows name a file 25 times a day
+(24 collections and one audit) — and the alarm names every log past twice its census, a log whose
+domain declares none on its first barrier, each with the Tier A field that sets
+that log's own ceiling — `stream.tracker_log_max_bytes` on the mutation log,
+`stream.iam_log_max_bytes` on the identity estate's: every read past the census
+is a barrier record on that log, so it is that field's sizing the extra reads
+have outgrown, whatever else the field is sized from.
 The rate is the log's, counted where every data node applies it, and each barrier is
 counted in the hour it was **committed**: a node back from days away, or
 adopting a snapshot a day old, replays days of barriers in minutes, and they

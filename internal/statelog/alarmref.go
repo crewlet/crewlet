@@ -117,9 +117,12 @@ var alarmMeaning = map[Kind]string{
 	KindPoolStarved: "Callers are queuing for a database connection before " +
 		"their query starts.",
 	KindCensusDrift: "A log is taking more than twice the linearizable reads " +
-		"its census allows (125 a day per agent seat, at least one seat, " +
-		"plus what the object store's collector reads on its own schedule), " +
-		"so every sizing decision under it is stale.",
+		"its census allows, so every sizing decision under it is stale. The " +
+		"census is the rate its domain declares for each agent seat, counting " +
+		"at least one seat, plus what the object store's collector reads on " +
+		"its own schedule. That rate is 125 a day for the tracker, the " +
+		"knowledge base, the artifacts and their datastore, and none for the " +
+		"identity estate and the Dashboard Assistant.",
 	KindLogCeilingShort: "At the rate this log took in over the last day, " +
 		"its byte ceiling holds less than the `min_age` window the trim " +
 		"keeps, so it will fill and refuse writes with every trim term " +

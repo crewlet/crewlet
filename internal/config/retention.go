@@ -147,6 +147,25 @@ const (
 	// long somebody has to act on a firing alarm, not how long until anyone
 	// notices.
 	//
+	// # And no barriers, which is a declaration rather than an omission
+	//
+	// A `linearizable` read appends a barrier record to the log of the
+	// domain it reads, so a log a seat's tools read at that level carries a
+	// barrier term: its domain's declared rate per seat (statelog.ReadModel)
+	// × seats × 365 days × the ≈ 140 bytes a signed barrier costs. The
+	// mutation log's is 125 × 100 × 365 × 140 B ≈ 639 MB a year at the
+	// reference company (docs/guides/retention.md) — more than this whole
+	// default. THIS log's is zero: no read of the identity estate takes a
+	// barrier, because every identity answer is a node's own rows with their
+	// lag beside them and a session not yet applied is waited for at the
+	// position its bearer states, so its domain declares a rate of zero in
+	// the engine's register and the term is 0 × 100 × 365 × 140 B = 0 bytes.
+	// The `census_drift` alarm holds the log to that zero and names this
+	// field on its first barrier: a reader that starts reading the estate
+	// at `linearizable` brings its own bytes into this arithmetic — 5.1 MB a
+	// year for every read a day each of the reference company's 100 seats
+	// makes.
+	//
 	// IT IS NOT 64 MiB. This log moves every morning, and at 64 MiB the
 	// pessimistic rate fills it in under three months — a window that
 	// could refuse an append before somebody got back from leave.
@@ -236,6 +255,11 @@ const (
 	// records: ten people write a twentieth of the reference rate, for which
 	// 64 MiB is a month. THE CEILING IS A TYPO GUARD: sixty-four times the
 	// default is far past any modelled company.
+	//
+	// AND NO SEAT'S BARRIERS: no seat reads this log, so its domain declares
+	// a read rate of zero in the engine's register (statelog.ReadModel), and
+	// its one linearizable reader is the object collector's pin, 25 a day:
+	// about 1.3 MB a year at the ≈ 140 bytes a barrier costs.
 	DefaultAssistantLogMaxBytes int64 = 512 << 20
 	AssistantLogMaxBytesFloor   int64 = 64 << 20
 	AssistantLogMaxBytesCeiling int64 = 64 << 30
@@ -254,6 +278,12 @@ const (
 	// DerivedArtifactsLogDivisor is how much smaller an unset
 	// ArtifactsLogMaxBytes is than the mutation log's ceiling: FOUR, the
 	// knowledge base's ratio, because a publish is a page-rate event.
+	//
+	// Its log carries the mutation log's BARRIER TERM as well: a seat's
+	// artifact tools read at `linearizable`, so its domain declares the
+	// reference rate (statelog.ReadModel) and the term is 125 × 100 × 365 ×
+	// 140 B ≈ 639 MB a year at the reference company, which the 16 GiB a
+	// quarter of the mutation log's clamp gives it holds many times over.
 	DerivedArtifactsLogDivisor = 4
 
 	// DerivedArtifactDataLogDivisor is how much smaller an unset
@@ -264,7 +294,9 @@ const (
 	// the pool, and at HALF the mutation log's on a 64 GiB volume the
 	// vector changelog would be created below the corpus a model change
 	// republishes. A company whose pages write heavily sets the field: the
-	// bound it accepts is twice the artifacts log's for that reason.
+	// bound it accepts is twice the artifacts log's for that reason. Its
+	// barrier term is the artifacts log's: a seat's datastore tools read at
+	// `linearizable`, about 639 MB a year at the reference company.
 	DerivedArtifactDataLogDivisor = 4
 
 	// DerivedLogMaxBytesFraction is the share of a volume's free space an
