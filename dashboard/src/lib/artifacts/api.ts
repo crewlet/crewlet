@@ -18,6 +18,9 @@ import type {
   ArtifactFrame,
   ArtifactOutline,
   ArtifactSource,
+  DashboardBoardAnswer,
+  DashboardCatalogueAnswer,
+  DashboardDatasetAnswer,
   DataCollection,
   DataOp,
   ShareableRole,
@@ -280,6 +283,42 @@ export async function readOutline(
     `/artifacts/${encodeURIComponent(id)}/versions/${version}/outline`,
     signal,
   )) as ArtifactOutline;
+}
+
+/** A dashboard's version as its board (`GET …/versions/{n}/dashboard`): the spec and every dataset's shape, no row. */
+export async function readBoard(
+  id: string,
+  version: number,
+  signal: AbortSignal,
+): Promise<DashboardBoardAnswer> {
+  return (await rest.get(
+    `/artifacts/${encodeURIComponent(id)}/versions/${version}/dashboard`,
+    signal,
+  )) as DashboardBoardAnswer;
+}
+
+/**
+ * One dataset of a dashboard as this reader may read it (`GET
+ * …/versions/{n}/sources/{dataset}`), with the board's filters as the query.
+ */
+export async function readDataset(
+  id: string,
+  version: number,
+  dataset: string,
+  params: Readonly<Record<string, string>>,
+  signal: AbortSignal,
+): Promise<DashboardDatasetAnswer> {
+  const res = await rest.request(
+    "GET",
+    `/artifacts/${encodeURIComponent(id)}/versions/${version}/sources/${encodeURIComponent(dataset)}`,
+    { query: { ...params }, signal },
+  );
+  return res.body as DashboardDatasetAnswer;
+}
+
+/** The engine source catalogue a dashboard's engine datasets read (`GET /artifacts/sources`). */
+export async function readCatalogue(signal: AbortSignal): Promise<DashboardCatalogueAnswer> {
+  return (await rest.get("/artifacts/sources", signal)) as DashboardCatalogueAnswer;
 }
 
 /**

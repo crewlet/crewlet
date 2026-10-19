@@ -3,7 +3,9 @@
  * half of the kind table ([KIND_VIEWS]). A framed kind runs in a sandboxed
  * frame on the artifact origin; a native kind is drawn here from its closed
  * format (a document by the element-constructing Markdown renderer, a deck by
- * the slide renderer, a sheet from its schema), since it runs no author code.
+ * the slide renderer, a dashboard's widgets by the design system's figures
+ * over datasets read as the reader, a sheet from its schema), since it runs no
+ * author code.
  */
 
 import type { ReactNode } from "react";
@@ -11,6 +13,7 @@ import type { PresenceMember } from "@crewlethq/ui";
 import type { ArtifactDetail, ArtifactKind, ArtifactVersionSummary } from "~/protocol/index.ts";
 import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
+import { DashboardView } from "./DashboardView.tsx";
 import { FrameView } from "./FrameView.tsx";
 import { DocView } from "./DocView.tsx";
 import { SheetView } from "./SheetView.tsx";
@@ -56,6 +59,9 @@ export const KIND_VIEWS: Readonly<Record<ArtifactKind, (props: KindViewProps) =>
       presence={presence}
       {...(onPublished ? { onPublished } : {})}
     />
+  ),
+  dashboard: ({ detail, version, store, presence }) => (
+    <DashboardView detail={detail} version={version} store={store} presence={presence} />
   ),
   sheet: ({ detail, store, room, presence, drawn }) =>
     store ? (
