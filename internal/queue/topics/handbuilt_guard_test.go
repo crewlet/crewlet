@@ -100,6 +100,7 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"crewlet.agent", "crewlet.events", "crewlet.notifications",
 		"crewlet.config", "dlq.", ".inbox", ".control", ".reflect", "agent-",
 		"crewlet.tracker.log", "crewlet.pages.log", "crewlet.iam.log",
+		"crewlet.chat.log", "crewlet.chat.presence",
 	} {
 		if !markers[want] {
 			t.Errorf("marker %q was not derived from topics.go's constants; the "+
@@ -116,6 +117,8 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"crewlet.pages.log.%s.%s", "crewlet.usage.log.day",
 		"crewlet.iam.log.person.0f3c", "crewlet.iam.log.session.0f3c",
 		"crewlet.iam.log.>",
+		"crewlet.chat.log.message.x", "crewlet.chat.log.%s.%s",
+		"crewlet.chat.presence",
 		// A leaf suffix: the base of a concatenation, and the end of a
 		// format string a seat's subject would come from.
 		".inbox", "crewlet.agent.%s.control", "crewlet.agent.%s.reflect",
@@ -133,6 +136,9 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		topics.IamLogSubject("person", "x"),
 		topics.LogSubject(topics.UsageLogPrefix, "day", "x"),
 		topics.TrackerVectorsWildcard,
+		topics.ChatLogSubject("message", "x"),
+		topics.ChatLogWildcard,
+		topics.ChatPresence,
 	} {
 		if _, hit := violation(markers, built); !hit {
 			t.Errorf("control: the builder's own output %q is not flagged when "+
@@ -157,6 +163,8 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		// subject, and flagging it is how a guard gets switched off.
 		"crewlet.iam.log_lag",
 		"crewlet.iam_people",
+		"crewlet.chat.log_lag",
+		"crewlet.chat.presence_probes",
 		// Names that begin like a log's subject and are not one: the
 		// engine's own environment variables, and words.
 		"CREWLET_LOG_LEVEL",

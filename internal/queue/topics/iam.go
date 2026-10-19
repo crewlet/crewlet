@@ -1,7 +1,7 @@
 package topics
 
 // The identity estate's own log, and why its grammar is the strictest of the
-// five.
+// state logs'.
 //
 // The iam domain is the state-log framework's FOURTH, and its third strictly
 // ordered one. What is particular to it is that the subject grammar carries
@@ -13,7 +13,7 @@ package topics
 // stalls every node's log at once). A person's own content and a session's
 // life each arbitrate on a subject of their own.
 //
-// It lives here for the reason the other four domains' grammar does — the
+// It lives here for the reason the other domains' grammar does — the
 // publisher builds the subject, the wake feed's consumer filters on it, and
 // the applier's kind switch dispatches on the kind inside it, and none of the
 // three can see the others. Written by hand in each place, a kind added in one
@@ -39,8 +39,8 @@ const (
 	IamLogWildcard = IamLogPrefix + ".>"
 )
 
-// The object kinds are NOT constants here, for the reason the other four
-// domains' are not: a kind is one bare word — "person", "directory", "session" —
+// The object kinds are NOT constants here, for the reason the other domains'
+// are not: a kind is one bare word — "person", "directory", "session" —
 // and this package's own marker guard matches a dotless constant by shape, so
 // exporting "person" from here would fail the build on every string literal in
 // the engine that happens to be that word. The kinds are a typed enum in
