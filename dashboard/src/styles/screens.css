@@ -10660,6 +10660,25 @@ a.live-row:focus-visible {
   flex: 1 1 20rem;
   min-width: 0;
 }
+/* A tab with no outline to draw takes the row on its own; an empty one
+   takes the whole view, so its empty state stands in the middle of it as
+   every other kind's does, rather than in the middle of a prose column. */
+.doc-read--bare {
+  grid-template-columns: minmax(0, var(--size-content-max));
+}
+.doc-read--blank {
+  grid-template-columns: minmax(0, 1fr);
+}
+.doc-read--blank > .doc-read-page {
+  max-width: none;
+}
+/* THE OUTLINE FITS THE ARTIFACT'S VIEW: the body is the size container, and
+   `--artifact-view` (its `100cqb`) is already the height inside its inset, so
+   nothing of the inset is taken off again. The page's own rule above takes
+   the screen's padding off a different container. */
+.doc-read-side {
+  max-height: calc(var(--artifact-view) - var(--sticky-top));
+}
 .doc-read-page {
   min-width: 0;
   max-width: var(--size-measure);
