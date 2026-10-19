@@ -554,6 +554,41 @@ func TestAShareNamesOnlyAnAudienceTheCompanyHolds(t *testing.T) {
 	}
 }
 
+// A SHARE STORED BEFORE THE GRANT RULE IS THE OWNER'S TO SEE, CHANGE AND
+// WITHDRAW. A login named as a seat reaches nobody, and the rule refuses a new
+// one; the one an earlier build wrote is listed in the dialog's access, its
+// role may change, and DELETE by its text form removes it, never a record the
+// API could neither honour nor remove.
+func TestAShareStoredBeforeTheGrantRuleIsListedAndWithdrawn(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	full, err := g.svc.Gate().Access(t.Context(), person("jane"), legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := artifacts.Audience{Kind: artifacts.AudienceSeat, ID: "token:maya"}
+	if !slices.ContainsFunc(full.Shares, func(s artifactsapi.ShareAccess) bool {
+		return s.Audience == stored && s.Invalid
+	}) {
+		t.Errorf("the owner's access does not list the stored share as invalid: %+v", full.Shares)
+	}
+	change := `{"audience":{"kind":"seat","id":"token:maya"},"role":"commenter"}`
+	if w := g.do(person("jane"), "PUT", at(legacy, "/shares"), change, keyed()...); w.Code != http.StatusOK {
+		t.Errorf("changing the stored share's role: %d %s", w.Code, w.Body)
+	}
+	if w := g.do(person("jane"), "DELETE", at(legacy, "/shares/seat:token:maya"), ``, keyed()...); w.Code != http.StatusOK {
+		t.Fatalf("withdrawing the stored share: %d %s", w.Code, w.Body)
+	}
+	calls := g.writes.all()
+	if len(calls) != 2 || calls[0].arg.(artifacts.Share).Audience != stored || calls[1].arg.(artifacts.Audience) != stored {
+		t.Errorf("the writes were %+v", calls)
+	}
+	// The same audience is still refused as a NEW grant on another artifact.
+	if w := g.do(person("jane"), "PUT", at(page, "/shares"), change, keyed()...); w.Code != http.StatusUnprocessableEntity {
+		t.Errorf("a new share to the login: %d %s", w.Code, w.Body)
+	}
+}
+
 // A READER BELOW EDITOR SEES THE OWNER AND A COUNT, NOT THE AUDIENCE, and not
 // the elevated reads in the history.
 func TestAViewerSeesTheOwnerAndACountNotTheAudience(t *testing.T) {

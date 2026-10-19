@@ -52,8 +52,8 @@ var ErrNoRoster = errors.New("artifactsapi: this node runs no company yet, so it
 // hold: well formed, and nobody's.
 var ErrUnknownAudience = errors.New("artifactsapi: nobody holds that audience")
 
-// knownAudience refuses an audience a share could not reach: one that is not
-// an audience at all ([artifacts.Audience.Validate], a login named as a seat
+// knownAudience refuses an audience a NEW share could not reach: one a grant
+// may not name ([artifacts.Audience.ValidateGrant], a login named as a seat
 // included), and a seat or a unit the company's roster does not hold. The
 // agents' share tool asks the running org the same question
 // (internal/agent/builtin), so a share is refused alike from either side.
@@ -61,7 +61,7 @@ var ErrUnknownAudience = errors.New("artifactsapi: nobody holds that audience")
 // AN ERROR READING THE ROSTER IS NOT A REFUSAL: the caller answers it as
 // unavailable rather than telling a person their colleague does not exist.
 func (g Gate) knownAudience(ctx context.Context, a artifacts.Audience) error {
-	if err := a.Validate(); err != nil {
+	if err := a.ValidateGrant(); err != nil {
 		return err
 	}
 	switch a.Kind {
@@ -267,6 +267,11 @@ type ShareAccess struct {
 	// Members are the seats a unit share reaches today: the unit's and
 	// every unit's below it. Empty for a seat or company share.
 	Members []string `json:"members,omitempty"`
+
+	// Invalid marks a share that reaches nobody ([artifacts.Audience.Reaches]):
+	// a login named as a seat, which a build before the grant rule wrote. It
+	// is listed rather than hidden, so its owner sees it and removes it.
+	Invalid bool `json:"invalid,omitempty"`
 }
 
 // access is the effective access on a, as the caller a admitted is shown it.
@@ -288,7 +293,7 @@ func (g Gate) access(ctx context.Context, a Admission) (Access, error) {
 	}
 	out.Shares = make([]ShareAccess, 0, len(head.Shares))
 	for _, s := range head.Shares {
-		entry := ShareAccess{Share: s}
+		entry := ShareAccess{Share: s, Invalid: !s.Audience.Reaches()}
 		if s.Audience.Kind == artifacts.AudienceUnit {
 			for _, seat := range seats {
 				member, err := g.Chart.MemberOf(ctx, seat.Handle, s.Audience.ID)

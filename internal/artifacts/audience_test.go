@@ -47,20 +47,39 @@ func TestAnAudienceRefusesWhatNamesNoPrincipalSet(t *testing.T) {
 	}
 }
 
-// A SEAT AUDIENCE IS A SEAT HANDLE, NEVER A LOGIN. `seat:token:maya` was
+// A NEW SEAT AUDIENCE IS A SEAT HANDLE, NEVER A LOGIN. `seat:token:maya` was
 // written, counted by Maya's Shared listing and admitted by nothing, since the
 // authority table matches a seat share against the principal's seat alone.
-func TestASeatAudienceRefusesALogin(t *testing.T) {
+func TestANewSeatAudienceRefusesALogin(t *testing.T) {
 	t.Parallel()
 	for _, id := range []string{"token:maya", "maya.ortiz", "ci:release", "Maya", "-maya"} {
-		err := (Audience{Kind: AudienceSeat, ID: id}).Validate()
+		a := Audience{Kind: AudienceSeat, ID: id}
+		err := a.ValidateGrant()
 		if !errors.Is(err, ErrInvalidAudience) || !strings.Contains(err.Error(), "not a seat handle") {
-			t.Errorf("a seat audience naming %q validated or said %v", id, err)
+			t.Errorf("a new seat audience naming %q validated or said %v", id, err)
+		}
+		if a.Reaches() {
+			t.Errorf("a seat audience naming %q is said to reach somebody", id)
 		}
 	}
 	for _, id := range []string{"maya", "founder", "swe-2"} {
-		if err := (Audience{Kind: AudienceSeat, ID: id}).Validate(); err != nil {
-			t.Errorf("the seat %q was refused: %v", id, err)
+		a := Audience{Kind: AudienceSeat, ID: id}
+		if err := a.ValidateGrant(); err != nil || !a.Reaches() {
+			t.Errorf("the seat %q was refused (%v) or said to reach nobody", id, err)
 		}
+	}
+}
+
+// A SHARE WRITTEN BEFORE THAT RULE STAYS ADDRESSABLE: its text form parses,
+// so its owner can withdraw it by URL, rather than the engine holding a record
+// it can neither honour nor remove.
+func TestAStoredLoginAudienceStillParsesForItsWithdrawal(t *testing.T) {
+	t.Parallel()
+	a, err := ParseAudience("seat:token:maya")
+	if err != nil || a != (Audience{Kind: AudienceSeat, ID: "token:maya"}) {
+		t.Fatalf("ParseAudience(seat:token:maya) = %+v, %v", a, err)
+	}
+	if a.Reaches() {
+		t.Error("a login named as a seat is said to reach somebody")
 	}
 }
