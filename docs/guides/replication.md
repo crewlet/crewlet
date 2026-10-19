@@ -907,8 +907,8 @@ every later boot reports its stream against that figure, and a log created
 past it would be reported as a capacity difference on every one of them.
 
 **A ceiling the broker would not report is counted as absent.** Before it
-sizes anything a node reads every existing log's ceiling from the broker — all
-four at once, each asked again every two seconds for up to thirty while nobody
+sizes anything a node asks the broker for every registered log's ceiling at
+once, each asked again every two seconds for up to thirty while nobody
 answers. A read still unanswered after that, or one the broker refused, counts
 that log as one this boot would create. A log that does exist keeps the
 ceiling it holds, but every log this boot creates is sized without knowing
