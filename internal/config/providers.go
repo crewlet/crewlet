@@ -1417,9 +1417,9 @@ func isolationRemedy(name string, layer cliprofile.IsolationLayer, profile clipr
 		// purpose. Turning the switch off is a decision about every seat's
 		// isolation, and the remedy says so rather than hand it out as a
 		// setting.
-		return fmt.Sprintf("it is the profile's isolation switch (%s=%q), changed only "+
-			"deliberately, with cli.overrides.isolation_env, since a value that turns it "+
-			"off undoes the isolation it is there for", name, profile.IsolationEnv[name])
+		return fmt.Sprintf("it is the profile's isolation switch, which the profile sets to "+
+			"%q, changed only deliberately, with cli.overrides.isolation_env, since a value "+
+			"that turns it off undoes the isolation it is there for", profile.IsolationEnv[name])
 	default: // cliprofile.IsolationHome, which every profile field refuses
 		return "the engine points it at or inside the seat's own home for every CLI, " +
 			"and no field changes it"

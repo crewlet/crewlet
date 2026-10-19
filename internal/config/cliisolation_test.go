@@ -133,7 +133,7 @@ func TestACLIEnvIsolationRefusalNamesTheFieldThatTakesIt(t *testing.T) {
 		},
 		"an isolation switch": {
 			agent: "opencode", model: "anthropic/claude-sonnet-5", variable: "OPENCODE_CONFIG_PROJECT_DISABLE",
-			names:  []string{`it is the profile's isolation switch (OPENCODE_CONFIG_PROJECT_DISABLE="1")`, "cli.overrides.isolation_env"},
+			names:  []string{`it is the profile's isolation switch, which the profile sets to "1"`, "cli.overrides.isolation_env"},
 			follow: `cli: {agent: opencode, overrides: {isolation_env: {OPENCODE_CONFIG_PROJECT_DISABLE: "0"}}}`,
 		},
 	} {
