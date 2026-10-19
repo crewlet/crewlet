@@ -301,7 +301,8 @@ type fileTheme struct {
 }
 
 // themeWarnings warns a version that ignores its reader's appearance, and every
-// link a fresh file makes to a kit release this build does not serve.
+// link a fresh file makes to a kit release this build does not serve or to a
+// file the release it names does not ship.
 //
 // THE VERSION IS THE UNIT, as a page and the rules that theme it are often
 // different files. It follows the reader when any page or stylesheet carries a
@@ -311,6 +312,12 @@ type fileTheme struct {
 // mode onto the page), and a link to a release the origin does not hold loads
 // nothing at all. The kit's own rules are not in the version, which is why its
 // links are read rather than its text.
+//
+// A LINK TO A FILE ITS RELEASE NEVER SHIPPED is a 404 as surely as a release
+// the build does not hold: a page that links the content stylesheet at a
+// release older than it renders on the bare base with nothing failing. Which
+// files a release ships is read from the embedded tree ([Releases.Ships]), so
+// no list here has to follow the kit.
 //
 // EVERY FRAMED KIND IS HELD TO IT: a design's artboards are pages as an html
 // version's are, and its findings name the first board, since its entry is
@@ -336,10 +343,20 @@ func (r *run) themeWarnings(m artifacts.Manifest) {
 				}
 				continue
 			}
-			switch k.File {
-			case artifacts.KitStylesheet:
+			if !r.s.kits.Ships(k.Version, k.File) {
+				if f.fresh {
+					r.warnings = append(r.warnings, lint.Finding{Path: f.path, Line: k.Line,
+						Code: lint.CodeKitFileUnserved, Message: fmt.Sprintf("%s is not a file "+
+							"kit %s ships, so the origin answers it with a 404 and the page loads "+
+							"nothing from it; %s", kitFile(k.Version, k.File), k.Version,
+							r.kitHint(k.File))})
+				}
+				continue
+			}
+			switch {
+			case k.ThemesStylesheet():
 				sheet = k.Version
-			case artifacts.KitTheme:
+			case k.ThemesBootstrap():
 				bootstrap = k.Version
 			}
 		}
@@ -366,11 +383,16 @@ func (r *run) themeWarnings(m artifacts.Manifest) {
 	}
 }
 
-// kitHint is what to link instead of a kit release the build does not serve.
+// kitHint is what to link instead of a kit file the build does not serve: the
+// same file at the newest release, when that release ships it.
 func (r *run) kitHint(file string) string {
 	latest := r.s.kits.Latest()
-	if latest == "" {
+	switch {
+	case latest == "":
 		return "this engine serves no kit, so style the page with rules of its own"
+	case !r.s.kits.Ships(latest, file):
+		return "no kit release this engine serves ships " + file + "; link one of the kit's " +
+			"own files (" + artifacts.KitStylesheet + ", " + artifacts.KitTheme + ")"
 	}
 	return "link " + kitFile(latest, file) + ", the newest it serves"
 }

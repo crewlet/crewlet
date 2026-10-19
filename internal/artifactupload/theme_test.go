@@ -29,7 +29,8 @@ func kitScript(version string) string {
 // OF THE KIT'S THEMING FILES at a release the engine serves, and is warned
 // otherwise with what to add: the kit's stylesheet alone follows the device,
 // its bootstrap alone styles nothing, and a release the origin does not hold
-// loads nothing at all.
+// loads nothing at all. A file the linked release never shipped (the content
+// stylesheet at a release older than it) is a 404 too, and is warned by name.
 func TestTheThemeWarningReadsTheKitLinks(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -67,6 +68,20 @@ func TestTheThemeWarningReadsTheKitLinks(t *testing.T) {
 		files:  map[string]string{"index.html": themePage(kitScript(testKit))},
 		warned: map[lint.Code]string{lint.CodeNoDarkMode: artifacts.KitPrefix + testKit + "/kit.css"},
 	}, {
+		name: "the kit's script beside its theming files",
+		files: map[string]string{"index.html": themePage(kitLink(testKit) + kitScript(testKit) +
+			`<script type="module" src="` + artifacts.KitPrefix + testKit + `/kit.js"></script>`)},
+	}, {
+		name: "a kit file its release does not ship",
+		files: map[string]string{"index.html": themePage(kitLink(testKit) +
+			`<link rel="stylesheet" href="` + artifacts.KitPrefix + testKit + `/content.css">` +
+			kitScript(testKit))},
+		warned: map[lint.Code]string{
+			lint.CodeKitFileUnserved: artifacts.KitPrefix + testKit + "/content.css is not a file kit " +
+				testKit + " ships, so the origin answers it with a 404 and the page loads nothing " +
+				"from it; no kit release this engine serves ships content.css",
+		},
+	}, {
 		name:  "a kit release the engine does not serve",
 		files: map[string]string{"index.html": themePage(kitLink("9.9.9") + kitScript("9.9.9"))},
 		warned: map[lint.Code]string{
@@ -90,7 +105,8 @@ func TestTheThemeWarningReadsTheKitLinks(t *testing.T) {
 			}
 			got := map[lint.Code]string{}
 			for _, w := range report.Warnings {
-				if w.Code == lint.CodeNoDarkMode || w.Code == lint.CodeKitUnserved {
+				if w.Code == lint.CodeNoDarkMode || w.Code == lint.CodeKitUnserved ||
+					w.Code == lint.CodeKitFileUnserved {
 					got[w.Code] = w.Message
 				}
 			}
