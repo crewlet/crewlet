@@ -299,8 +299,8 @@ func compileListing(f Filter) (spec, child listSpec) {
 	// WHAT A CHILD IS COUNTED UNDER: the listing's own status and skill
 	// narrowing, on the child. Only those two — a label or a title filter
 	// selects which pages are LISTED, and a child that does not share its
-	// parent's label is still under it.
-	child = listSpec{where: []string{"c.parent_id = p.id"}}
+	// parent's label is still under it. Which parents it is counted for is
+	// the window's rows, which [childCountStatement] names.
 	if len(f.Status) > 0 {
 		marks := make([]string, len(f.Status))
 		for i, s := range f.Status {
@@ -371,11 +371,10 @@ func parseListCursor(raw string) (listCursor, error) {
 }
 
 // childListing is the listing of one page's children a [Detail] carries —
-// every one of them, whatever its status — and the predicate each of theirs
-// is counted under.
-func childListing(id string) (spec, child listSpec) {
-	return listSpec{where: []string{"p.parent_id = ?"}, args: []any{id}},
-		listSpec{where: []string{"c.parent_id = p.id"}}
+// every one of them, whatever its status, so their own children are counted
+// under no narrowing either.
+func childListing(id string) listSpec {
+	return listSpec{where: []string{"p.parent_id = ?"}, args: []any{id}}
 }
 
 // listOrder is the order every listing is read in, as the terms a later
@@ -438,7 +437,9 @@ func listResumes(after listCursor, pinned bool) []listSpec {
 // list is the listing inside one transaction, so [Reader.Get] can take the
 // children it reports from the same snapshot as the page itself: the total,
 // and then the rows of one window, read through each of resume in turn until
-// the window is full.
+// the window is full, and what each of them carries beyond its head — its
+// labels, its last save and how many children it has under child — read for
+// the window's rows at once.
 //
 // THE TOTAL IS THE PREDICATE WITHOUT THE CURSOR, counted in the same
 // transaction: it describes the whole listing rather than what is left of it.
@@ -456,7 +457,7 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
 		// ONE MORE THAN THE WINDOW, which is how the answer knows whether
 		// there is a next one without a second statement — and what is
 		// left of it, once an arm before this one has answered some of it.
-		statement, args := listRowsStatement(spec, child, from, limit+1-len(out))
+		statement, args := listRowsStatement(spec, from, limit+1-len(out))
 		read, err := listRows(ctx, tx, statement, args)
 		if err != nil {
 			return listPage{}, err
@@ -473,6 +474,9 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
 	}
 	page.rows = out
 	if err := r.attachLabels(ctx, tx, out); err != nil {
+		return listPage{}, err
+	}
+	if err := attachChildren(ctx, tx, out, child); err != nil {
 		return listPage{}, err
 	}
 	return page, r.attachSaves(ctx, tx, out)
@@ -494,20 +498,21 @@ func listTotalStatement(spec listSpec) (string, []any) {
 // THE BOUND IS BOUND HERE, not by the caller. The placeholders are positional,
 // so a caller that appended the window to its arguments itself would be one
 // reordering away from paging the listing by a filter value — and the caller
-// that got it right would still be stating the same numbers twice. The child
-// count's arguments come FIRST because its subquery is in the SELECT list,
-// which a statement binds before its WHERE.
-func listRowsStatement(spec, child, from listSpec, limit int) (string, []any) {
+// that got it right would still be stating the same numbers twice.
+//
+// NO CHILD COUNT IN IT: a count of each row's children written here as a
+// correlated subquery is one the planner may unnest, by cost, into a grouped
+// read of every page head in the company (`storetest.Decorrelated`, in
+// internal/store/storetest, states the rule) — measured, it did on the
+// workspace's listing. So the count is read for the window's rows after them
+// ([attachChildren]).
+func listRowsStatement(spec, from listSpec, limit int) (string, []any) {
 	where := strings.Join(append(slices.Clip(spec.where), from.where...), " AND ")
-	args := append(slices.Clip(child.args), spec.args...)
-	args = append(args, from.args...)
+	args := append(slices.Clip(spec.args), from.args...)
 	return `
 		SELECT p.id, p.container, p.parent_id, p.title, p.status, p.author,
 		       p.edit_version, COALESCE(k.skill, 0), COALESCE(k.onboarding, 0),
 		       p.updated_at, MAX(p.version, p.scoped_through),
-		       (SELECT COUNT(*) FROM pages_heads c
-		          LEFT JOIN pages_skills ck ON ck.page_id = c.id
-		         WHERE ` + strings.Join(child.where, " AND ") + `),
 		       p.body = '',` + summarySaved + `
 		  FROM pages_heads p
 		  LEFT JOIN pages_skills k ON k.page_id = p.id
@@ -534,7 +539,7 @@ func listRows(ctx context.Context, tx *sql.Tx, statement string, args []any) ([]
 		)
 		if err := rows.Scan(&s.ID, &s.Container, &s.ParentID, &s.Title, &s.Status,
 			&s.Author, &s.Version, &skill, &onboarding, &updated, &revision,
-			&s.Children, &folder, &savedID); err != nil {
+			&folder, &savedID); err != nil {
 			return nil, fmt.Errorf("doclet: scan page: %w", err)
 		}
 		s.Skill, s.Onboarding, s.Folder = skill != 0, onboarding != 0, folder != 0
@@ -547,6 +552,58 @@ func listRows(ctx context.Context, tx *sql.Tx, statement string, args []any) ([]
 		return nil, fmt.Errorf("doclet: list pages: %w", err)
 	}
 	return out, nil
+}
+
+// attachChildren fills each row's child count — the pages directly under it
+// that the listing's narrowing (child) admits — in one statement for the whole
+// page of rows ([childCountStatement]). A row no child is counted under keeps
+// its zero, which is its count.
+func attachChildren(ctx context.Context, tx *sql.Tx, items []Summary, child listSpec) error {
+	if len(items) == 0 {
+		return nil
+	}
+	ids := make([]string, len(items))
+	at := make(map[string]int, len(items))
+	for i, item := range items {
+		ids[i] = item.ID
+		at[item.ID] = i
+	}
+	statement, args := childCountStatement(ids, child)
+	rows, err := tx.QueryContext(ctx, statement, args...)
+	if err != nil {
+		return fmt.Errorf("doclet: count the children: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var parent string
+		var n int
+		if err := rows.Scan(&parent, &n); err != nil {
+			return fmt.Errorf("doclet: scan a child count: %w", err)
+		}
+		if i, ok := at[parent]; ok {
+			items[i].Children = n
+		}
+	}
+	return rows.Err()
+}
+
+// childCountStatement counts the children of the pages named, under the
+// listing's narrowing, and its arguments: one seek of `pages_heads_parent_idx`
+// per page, which the IN list's bound values keep a seek whatever the planner
+// decides — there is no correlation for it to unnest.
+func childCountStatement(ids []string, child listSpec) (string, []any) {
+	where := append([]string{"c.parent_id IN (" + placeholders(len(ids)) + ")"},
+		child.where...)
+	args := make([]any, 0, len(ids)+len(child.args))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	return `
+		SELECT c.parent_id, COUNT(*)
+		  FROM pages_heads c
+		  LEFT JOIN pages_skills ck ON ck.page_id = c.id
+		 WHERE ` + strings.Join(where, " AND ") + `
+		 GROUP BY c.parent_id`, append(args, child.args...)
 }
 
 // attachSaves fills each row's last save from the history row the listing
@@ -722,8 +779,8 @@ func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) 
 		if detail.History, err = r.history(ctx, tx, id); err != nil {
 			return err
 		}
-		spec, child := childListing(id)
-		children, err := r.list(ctx, tx, spec, child, DefaultLimit, listFromStart)
+		children, err := r.list(ctx, tx, childListing(id), listSpec{}, DefaultLimit,
+			listFromStart)
 		if err != nil {
 			return err
 		}
