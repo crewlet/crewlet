@@ -241,6 +241,8 @@ func (r *run) searchText(ctx context.Context, m artifacts.Manifest) (string, err
 		return r.entryText(ctx, m)
 	case spec.Search == artifacts.SearchFormat && r.formatted != nil:
 		return truncateText(r.formatted.Text(), int(artifacts.MaxSearchTextBytes)), nil
+	case spec.Search == artifacts.SearchFormat && r.canvas != nil:
+		return r.canvasText(ctx, m)
 	}
 	return "", fmt.Errorf("artifactupload: a %s artifact's search rule %q is not one this "+
 		"pipeline extracts", r.kind, spec.Search)
@@ -309,9 +311,17 @@ type fileTheme struct {
 // mode onto the page), and a link to a release the origin does not hold loads
 // nothing at all. The kit's own rules are not in the version, which is why its
 // links are read rather than its text.
+//
+// EVERY FRAMED KIND IS HELD TO IT: a design's artboards are pages as an html
+// version's are, and its findings name the first board, since its entry is
+// the canvas the dashboard draws.
 func (r *run) themeWarnings(m artifacts.Manifest) {
 	if !r.kind.Framed() || m.Entry == "" {
 		return
+	}
+	page := m.Entry
+	if r.canvas != nil && len(r.canvas.Order) > 0 {
+		page = r.canvas.Order[0]
 	}
 	rules, sheet, bootstrap := false, "", ""
 	for _, f := range r.themes {
@@ -337,19 +347,19 @@ func (r *run) themeWarnings(m artifacts.Manifest) {
 	switch {
 	case rules || sheet != "" && bootstrap != "":
 	case sheet != "":
-		r.warnings = append(r.warnings, lint.Finding{Path: m.Entry, Code: lint.CodeNoDarkMode,
+		r.warnings = append(r.warnings, lint.Finding{Path: page, Code: lint.CodeNoDarkMode,
 			Message: fmt.Sprintf("the version links the kit's %s without its %s, so it follows "+
 				"the device's appearance rather than the reader's; add <script src=\"%s\"> "+
 				"to the page's head", artifacts.KitStylesheet, artifacts.KitTheme,
 				kitFile(sheet, artifacts.KitTheme))})
 	case bootstrap != "":
-		r.warnings = append(r.warnings, lint.Finding{Path: m.Entry, Code: lint.CodeNoDarkMode,
+		r.warnings = append(r.warnings, lint.Finding{Path: page, Code: lint.CodeNoDarkMode,
 			Message: fmt.Sprintf("the version links the kit's %s without its %s, so nothing "+
 				"styles the mode it applies; add <link rel=\"stylesheet\" href=\"%s\"> to the "+
 				"page's head", artifacts.KitTheme, artifacts.KitStylesheet,
 				kitFile(bootstrap, artifacts.KitStylesheet))})
 	default:
-		r.warnings = append(r.warnings, lint.Finding{Path: m.Entry, Code: lint.CodeNoDarkMode,
+		r.warnings = append(r.warnings, lint.Finding{Path: page, Code: lint.CodeNoDarkMode,
 			Message: fmt.Sprintf("no page or stylesheet of the version carries a "+
 				"prefers-color-scheme rule or links the kit's %s and %s, so it ignores the "+
 				"reader's theme", artifacts.KitStylesheet, artifacts.KitTheme)})

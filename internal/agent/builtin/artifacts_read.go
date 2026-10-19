@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
@@ -275,11 +276,12 @@ func (t *getArtifact) Description() string {
 		"`head_version` and pass it back as `base_version` on publish_artifact. File " +
 		"text arrives fenced as text somebody wrote; a long page a colleague wrote is " +
 		"condensed unless you pass `offset`, and an edit's `old_str` must quote the " +
-		"source, so read it with `offset` before editing. For a slide deck or a doc, " +
-		"pass `view: \"outline\"` for its parts in order (a deck's slides and " +
-		"sections, a doc's tabs, each with its file), then read only the files you " +
-		"need by `path`. For a dashboard, the outline is its filters, datasets and " +
-		"widgets; its figures are each viewer's and are never in the answer."
+		"source, so read it with `offset` before editing. For a slide deck, a doc or " +
+		"a design, pass `view: \"outline\"` for its parts in order (a deck's slides " +
+		"and sections, a doc's tabs, a design's artboards with their frames, each with " +
+		"its file), then read only the files you need by `path`. For a dashboard, the " +
+		"outline is its filters, datasets and widgets; its figures are each viewer's " +
+		"and are never in the answer."
 }
 
 func (t *getArtifact) Parameters() map[string]any {
@@ -313,10 +315,12 @@ func (t *getArtifact) Parameters() map[string]any {
 			},
 			"view": map[string]any{
 				"type": "string", "enum": []any{viewOutline},
-				"description": "`outline` answers a slide deck's, a doc's or a dashboard's " +
-					"structure instead of a file: a deck's slides (id, file, title, notes " +
-					"flag) in order with its sections and cover, a doc's tabs (title, file, " +
-					"size) in order, a dashboard's filters, datasets and widgets.",
+				"description": "`outline` answers a slide deck's, a doc's, a dashboard's or " +
+					"a design's structure instead of a file: a deck's slides (id, file, " +
+					"title, notes flag) in order with its sections and cover, a doc's tabs " +
+					"(title, file, size) in order, a dashboard's filters, datasets and " +
+					"widgets, a design's artboards (file, title, frame) in order with its " +
+					"cover.",
 			},
 		},
 		"required": []any{"artifact"},
@@ -588,6 +592,15 @@ func (t *getArtifact) outline(ctx context.Context, read *foreignRead, h artifact
 		}
 		text = docOutline(doc.Outline())
 		out = map[string]any{"tabs": len(doc.Tabs)}
+	case artifacts.FormatDesign:
+		canvas, err := canvasformat.Read(src, v.Manifest)
+		if err != nil {
+			r := sourceFailure(ctx, t.Name(), canvasformat.Path, err)
+			return nil, &r
+		}
+		o := canvas.Outline()
+		text = designOutline(o)
+		out = map[string]any{"boards": o.Count}
 	default:
 		r := failed(fmt.Sprintf("get_artifact: a %s artifact has no outline; read its files "+
 			"by `path`.", h.Kind))
@@ -604,6 +617,19 @@ func docOutline(o docindex.Outline) string {
 	for i, tab := range o.Tabs {
 		fmt.Fprintf(&b, "%d. %s (%s, %d bytes)\n", i+1, tab.Title, tab.Path, tab.Bytes)
 	}
+	return b.String()
+}
+
+// designOutline is a design's artboards in the canvas's order, each with its
+// file, title and frame, as one text.
+func designOutline(o canvasformat.Outline) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Design: %s\nCover: %s\n", o.Title, o.Cover)
+	for i, bd := range o.Boards {
+		fmt.Fprintf(&b, "%d. %s: %s at (%d, %d), %d by %d\n", i+1, bd.Path, bd.Title, bd.X, bd.Y,
+			bd.W, bd.H)
+	}
+	fmt.Fprintf(&b, "Notes: %d\n", o.Notes)
 	return b.String()
 }
 

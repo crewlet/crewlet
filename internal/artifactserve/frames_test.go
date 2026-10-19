@@ -3,11 +3,13 @@ package artifactserve_test
 import (
 	"errors"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactserve"
 	"github.com/crewlet/crewlet/internal/artifactserve/ticket"
@@ -74,7 +76,7 @@ func TestAFrameNeverOutlivesItsCredential(t *testing.T) {
 	r := newRig(t)
 	soon := r.clock.now().Add(10*time.Minute + 700*time.Millisecond)
 	f, err := r.frames.For(artifactserve.FrameRequest{Principal: r.person, Lineage: r.lineage,
-		Until: soon, Head: r.reads.head, Version: r.reads.versions[2].VersionSummary})
+		Until: soon, Head: r.reads.head, Version: r.reads.versions[2]})
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}
@@ -83,7 +85,7 @@ func TestAFrameNeverOutlivesItsCredential(t *testing.T) {
 	}
 	_, err = r.frames.For(artifactserve.FrameRequest{Principal: r.person, Lineage: r.lineage,
 		Until: r.clock.now().Add(500 * time.Millisecond), Head: r.reads.head,
-		Version: r.reads.versions[2].VersionSummary})
+		Version: r.reads.versions[2]})
 	if !errors.Is(err, artifactserve.ErrCredentialEnding) {
 		t.Errorf("a credential ending within the second was handed a frame: %v", err)
 	}
@@ -94,10 +96,10 @@ func TestAFrameNeverOutlivesItsCredential(t *testing.T) {
 func TestOnlyAnHTMLArtifactIsOpenedInAFrame(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
-	v := r.reads.versions[2].VersionSummary
+	v := r.reads.versions[2]
 	for name, tc := range map[string]struct {
 		head    func(*artifactsdomain.Head)
-		version func(*artifactsdomain.VersionSummary)
+		version func(*artifactsdomain.Version)
 		granted []artifacts.Capability
 		want    error
 	}{
@@ -107,10 +109,10 @@ func TestOnlyAnHTMLArtifactIsOpenedInAFrame(t *testing.T) {
 			want: artifactserve.ErrNotServed},
 		"a trashed page": {head: func(h *artifactsdomain.Head) { h.Status = artifactsdomain.StatusTrashed },
 			want: artifactserve.ErrNotServed},
-		"another artifact's version": {version: func(v *artifactsdomain.VersionSummary) {
+		"another artifact's version": {version: func(v *artifactsdomain.Version) {
 			v.Artifact = artifacts.IDFor("other")
 		}},
-		"a version past the head":              {version: func(v *artifactsdomain.VersionSummary) { v.Number = 3 }},
+		"a version past the head":              {version: func(v *artifactsdomain.Version) { v.Number = 3 }},
 		"a grant the version does not declare": {granted: []artifacts.Capability{artifacts.CapabilityPresence}},
 		"a grant this build does not know":     {granted: []artifacts.Capability{"camera"}},
 	} {
@@ -136,8 +138,14 @@ func TestOnlyAnHTMLArtifactIsOpenedInAFrame(t *testing.T) {
 		Head: r.reads.head, Version: v}); err != nil {
 		t.Errorf("a seat with a lineage was refused: %v", err)
 	}
-	nested := r.reads.versions[2].VersionSummary
+	nested := r.reads.versions[2]
 	nested.Entry = "my app/index page.html"
+	page, _ := manifest.EntryAt(nested.Manifest, "index.html")
+	page.Path = nested.Entry
+	nested.Manifest.Files = append([]artifacts.Entry{page}, nested.Manifest.Files...)
+	slices.SortFunc(nested.Manifest.Files, func(a, b artifacts.Entry) int {
+		return strings.Compare(a.Path, b.Path)
+	})
 	f, err := r.frames.For(artifactserve.FrameRequest{Principal: r.person, Lineage: r.lineage,
 		Head: r.reads.head, Version: nested})
 	if err != nil || !strings.Contains(f.URL, "/my%20app/index%20page.html#n=") {

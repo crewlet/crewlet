@@ -43,6 +43,7 @@ func claims(c *clock) artifacts.TicketClaims {
 		Lineage:      "session:6f2c4d0e-8a40-4c55-9a4f-0d7f1b2a3c4d",
 		Capabilities: []artifacts.Capability{artifacts.CapabilityDB, artifacts.CapabilityAssets},
 		AccessEpoch:  2,
+		Document:     "boards/hero <one>.html",
 		Nonce:        "q3yC1bRrX0m9t2vKpZ8wLg",
 		Expires:      c.at.Add(artifacts.TicketLifetime),
 	}
@@ -193,17 +194,51 @@ func TestAMintRefusesClaimsNoTicketMayCarry(t *testing.T) {
 		"unknown capability": func(cl *artifacts.TicketClaims) {
 			cl.Capabilities = []artifacts.Capability{"camera"}
 		},
-		"no expiry":      func(cl *artifacts.TicketClaims) { cl.Expires = time.Time{} },
-		"expired":        func(cl *artifacts.TicketClaims) { cl.Expires = c.at.Add(-time.Second) },
-		"past lifetime":  func(cl *artifacts.TicketClaims) { cl.Expires = c.at.Add(2 * time.Hour) },
-		"expiring now":   func(cl *artifacts.TicketClaims) { cl.Expires = c.at },
-		"huge principal": func(cl *artifacts.TicketClaims) { cl.Principal = strings.Repeat("a", 200) },
+		"no expiry":       func(cl *artifacts.TicketClaims) { cl.Expires = time.Time{} },
+		"expired":         func(cl *artifacts.TicketClaims) { cl.Expires = c.at.Add(-time.Second) },
+		"past lifetime":   func(cl *artifacts.TicketClaims) { cl.Expires = c.at.Add(2 * time.Hour) },
+		"expiring now":    func(cl *artifacts.TicketClaims) { cl.Expires = c.at },
+		"huge principal":  func(cl *artifacts.TicketClaims) { cl.Principal = strings.Repeat("a", 200) },
+		"no document":     func(cl *artifacts.TicketClaims) { cl.Document = "" },
+		"rooted document": func(cl *artifacts.TicketClaims) { cl.Document = "/index.html" },
+		"control in document": func(cl *artifacts.TicketClaims) {
+			cl.Document = "boards/a\x00.html"
+		},
+		"document past the path bound": func(cl *artifacts.TicketClaims) {
+			cl.Document = strings.Repeat("a", artifacts.MaxPathBytes+1)
+		},
 	}
 	for name, mutate := range cases {
 		cl := claims(c)
 		mutate(&cl)
 		if _, err := codec.Mint(cl); !errors.Is(err, ticket.ErrInvalidClaims) {
 			t.Errorf("%s: Mint = %v, want ErrInvalidClaims", name, err)
+		}
+	}
+}
+
+// TestATicketAtEveryBoundOpens: the longest claims a mint accepts (every
+// free-text claim at its bound, every capability, and a document path of
+// characters JSON escapes) still make a ticket Open reads, so no mint writes a
+// URL the origin refuses by its length.
+func TestATicketAtEveryBoundOpens(t *testing.T) {
+	t.Parallel()
+	c := start()
+	codec := codec(t, c, runtoken.OneKey(k1.ID, k1.Material))
+	for _, doc := range []string{strings.Repeat(`"`, artifacts.MaxPathBytes),
+		strings.Repeat("\u2028", artifacts.MaxPathBytes/3)} {
+		cl := claims(c)
+		cl.Principal = strings.Repeat("p", 128)
+		cl.Lineage = "session:" + strings.Repeat("l", 152)
+		cl.Nonce = strings.Repeat("n", 64)
+		cl.Capabilities = artifacts.Capabilities
+		cl.Document = doc
+		tok, err := codec.Mint(cl)
+		if err != nil {
+			t.Fatalf("Mint: %v", err)
+		}
+		if _, verdict, err := codec.Open(tok); verdict != ticket.Valid {
+			t.Fatalf("a %d-byte ticket at every bound opened %v (%v)", len(tok), verdict, err)
 		}
 	}
 }
@@ -226,18 +261,19 @@ func TestASignedSubjectNoMintWritesIsRefused(t *testing.T) {
 		return signer.Mint(base64.RawURLEncoding.EncodeToString([]byte(json)), time.Hour)
 	}
 	refused := map[string]string{
-		"unsorted capabilities": `{"a":"` + id + `","v":1,"p":"x","k":"session:a","c":["db","assets"],"x":0,"n":"abc","e":"2026-10-17T12:30:00Z"}`,
-		"fractional expiry":     `{"a":"` + id + `","v":1,"p":"x","k":"session:a","x":0,"n":"abc","e":"2026-10-17T12:30:00.5Z"}`,
-		"no artifact":           `{"v":1,"p":"x","k":"session:a","x":0,"n":"abc","e":"2026-10-17T12:30:00Z"}`,
-		"two documents":         `{"a":"` + id + `","v":1,"p":"x","k":"session:a","x":0,"n":"abc","e":"2026-10-17T12:30:00Z"}{}`,
+		"unsorted capabilities": `{"a":"` + id + `","v":1,"p":"x","k":"session:a","c":["db","assets"],"x":0,"d":"index.html","n":"abc","e":"2026-10-17T12:30:00Z"}`,
+		"fractional expiry":     `{"a":"` + id + `","v":1,"p":"x","k":"session:a","x":0,"d":"index.html","n":"abc","e":"2026-10-17T12:30:00.5Z"}`,
+		"no artifact":           `{"v":1,"p":"x","k":"session:a","x":0,"d":"index.html","n":"abc","e":"2026-10-17T12:30:00Z"}`,
+		"two documents":         `{"a":"` + id + `","v":1,"p":"x","k":"session:a","x":0,"d":"index.html","n":"abc","e":"2026-10-17T12:30:00Z"}{}`,
 		"not json":              `not json`,
+		"no document":           `{"a":"` + id + `","v":1,"p":"x","k":"session:a","x":0,"n":"abc","e":"2026-10-17T12:30:00Z"}`,
 	}
 	for name, doc := range refused {
 		if _, verdict, _ := tickets.Open(sign(doc)); verdict != ticket.Invalid {
 			t.Errorf("%s: opened %v, want invalid", name, verdict)
 		}
 	}
-	additive := `{"a":"` + id + `","v":1,"p":"x","k":"session:a","x":0,"n":"abc","e":"2026-10-17T12:30:00Z","z":"from a newer build"}`
+	additive := `{"a":"` + id + `","v":1,"p":"x","k":"session:a","x":0,"d":"index.html","n":"abc","e":"2026-10-17T12:30:00Z","z":"from a newer build"}`
 	if _, verdict, err := tickets.Open(sign(additive)); verdict != ticket.Valid {
 		t.Errorf("a field a newer build added refused the ticket: %v, %v", verdict, err)
 	}

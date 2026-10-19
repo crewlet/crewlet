@@ -107,6 +107,8 @@ function host(
     query?: (kind: string, params: Record<string, unknown>) => Promise<unknown>;
     write?: () => Promise<KeyedAnswer>;
     openLink?: (url: URL) => Promise<boolean>;
+    print?: () => Promise<boolean>;
+    readerActed?: () => boolean;
     setPresence?: (...args: unknown[]) => void;
     store?: ArtifactDataStore;
   } = {},
@@ -121,6 +123,8 @@ function host(
     clientID: "client-1",
     newKey: () => "key-1",
     openLink: over.openLink ?? (async () => true),
+    print: over.print,
+    readerActed: over.readerActed,
     setPresence: over.setPresence ?? (() => {}),
     write:
       over.write ??
@@ -224,6 +228,20 @@ describe("the host", () => {
       value: false,
     });
     expect(openLink).toHaveBeenCalledTimes(1);
+  });
+
+  test("prints only on the reader's own gesture, and only where the host prints", async () => {
+    const print = vi.fn(async () => true);
+    let acted = false;
+    const { h } = host([], { print, readerActed: () => acted });
+    expect(await call(h, "print")).toMatchObject({ ok: false, error: { code: "forbidden" } });
+    expect(print).not.toHaveBeenCalled();
+    acted = true;
+    expect(await call(h, "print")).toMatchObject({ ok: true, value: true });
+    expect(print).toHaveBeenCalledTimes(1);
+
+    const { h: none } = host([], { readerActed: () => true });
+    expect(await call(none, "print")).toMatchObject({ ok: false, error: { code: "unavailable" } });
   });
 
   test("refuses a link the frame protocol refuses: userinfo, past the bound, or mail", async () => {

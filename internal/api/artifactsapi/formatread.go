@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
@@ -121,6 +122,21 @@ func newDocCache(objects Objects) *formatCache[docindex.Doc] {
 				weight += int64(len(t.Text))
 			}
 			return doc, weight, err
+		})
+}
+
+// newCanvasCache reads designs' canvases through the canvas format, held to
+// the version as their publish was.
+func newCanvasCache(objects Objects) *formatCache[canvasformat.Canvas] {
+	return newFormatCache(objects, "design format", canvasformat.ErrInvalid,
+		func(artifactsdomain.Version) string { return canvasformat.Path },
+		func(src manifestSource, v artifactsdomain.Version) (canvasformat.Canvas, int64, error) {
+			canvas, err := canvasformat.Read(src, v.Manifest)
+			var weight int64
+			if e, ok := manifest.EntryAt(v.Manifest, canvasformat.Path); ok {
+				weight = e.Object.Size
+			}
+			return canvas, weight, err
 		})
 }
 

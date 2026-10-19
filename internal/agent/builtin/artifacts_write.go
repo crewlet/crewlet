@@ -129,6 +129,18 @@ func defaultEntry(spec artifacts.KindSpec) string {
 	return spec.Entry.Defaults[0]
 }
 
+// carriedEntry is the entry a new artifact whose `files` or `source` name none
+// opens on: the first of its kind's default entries the files hold, and none
+// where they hold no default, which the publish then refuses by name.
+func carriedEntry(spec artifacts.KindSpec, files *fileSources) string {
+	for _, d := range spec.Entry.Defaults {
+		if _, ok := files.find(d); ok {
+			return d
+		}
+	}
+	return ""
+}
+
 // entryDefaults is the agent tools' account of where `content` lands, kind by
 // kind, from the kind table.
 func entryDefaults() string {
@@ -151,7 +163,8 @@ func (t *createArtifact) Name() string { return CreateArtifactTool }
 
 func (t *createArtifact) Description() string {
 	return "Create a NEW artifact in this Crewlet company (not claude.ai): an " +
-		"interactive HTML page, a document, a slide deck, or a sheet, shared with the " +
+		"interactive HTML page, a design canvas of HTML artboards, a document, a " +
+		"slide deck, or a sheet, shared with the " +
 		"colleagues who must use it. Load the artifacts tool skill first: it is the " +
 		"design contract every page is held to. When a person asked for it, they are " +
 		"made an editor. To change an existing artifact use publish_artifact; the answer " +
@@ -286,6 +299,9 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if spec.Store != artifacts.StoreContent && len(files.files) == 0 {
 		return failed("create_artifact needs the page: `content` for the entry page, " +
 			"`files`, or a build's `source`."), nil
+	}
+	if entry == "" {
+		entry = carriedEntry(spec, files)
 	}
 
 	call := t.deps.call(c, artifacts.RoleOwner, false)

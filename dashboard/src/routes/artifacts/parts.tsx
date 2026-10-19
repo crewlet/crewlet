@@ -21,6 +21,7 @@ import { DashboardCardCover } from "./DashboardCardCover.tsx";
 import { DocCover } from "./DocCover.tsx";
 import { SheetCover } from "./SheetCover.tsx";
 import { SlidesCover } from "./SlidesCover.tsx";
+import { DesignCover } from "./DesignCover.tsx";
 
 /**
  * A listed artifact as the design system's card: a gallery's card, or a row
@@ -36,6 +37,7 @@ const KIND_COVERS: Partial<Record<ArtifactKind, (item: ArtifactListItem) => Reac
   slides: (item) => <SlidesCover item={item} />,
   dashboard: (item) => <DashboardCardCover item={item} />,
   sheet: (item) => <SheetCover item={item} />,
+  design: (item) => <DesignCover item={item} />,
 };
 
 export function ListedArtifactCard({

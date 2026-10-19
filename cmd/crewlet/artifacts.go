@@ -82,13 +82,7 @@ var artifactsUsage = `usage: crewlet artifacts <command> [arguments] [<config.ya
 The credential is ` + apiTokenEnv + `.`
 
 // kindChoices is every kind this build serves, as a usage line spells a choice.
-func kindChoices() string {
-	names := make([]string, len(artifacts.Kinds))
-	for i, k := range artifacts.Kinds {
-		names[i] = string(k)
-	}
-	return strings.Join(names, "|")
-}
+func kindChoices() string { return kindList("|") }
 
 // runArtifacts dispatches `crewlet artifacts`.
 func runArtifacts(environ config.Source, args []string, stdout, stderr io.Writer) error {
@@ -933,7 +927,8 @@ func entryFor(files []localFile, asked string, kind artifacts.Kind) (string, err
 }
 
 // kindFor is the kind a new artifact is created as: the one -kind names, else
-// the kind whose entry the entry's type may be, from the kind table.
+// the kind the kind table infers from the entry (its default path, else the one
+// kind its type may be).
 func kindFor(asked artifacts.Kind, entry string) (artifacts.Kind, error) {
 	if asked != "" {
 		return asked, nil
@@ -948,12 +943,15 @@ func kindFor(asked artifacts.Kind, entry string) (artifacts.Kind, error) {
 }
 
 // kindNames lists every kind this build serves, for the flags' help.
-func kindNames() string {
+func kindNames() string { return kindList(", ") }
+
+// kindList is every kind this build serves, in the table's order, joined by sep.
+func kindList(sep string) string {
 	names := make([]string, len(artifacts.Kinds))
 	for i, k := range artifacts.Kinds {
 		names[i] = string(k)
 	}
-	return strings.Join(names, ", ")
+	return strings.Join(names, sep)
 }
 
 // fileSpec is one file of a publish as the surface takes it.

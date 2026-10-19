@@ -1,7 +1,8 @@
 /**
  * The View tab: an artifact drawn as its kind is drawn, from the dashboard's
  * half of the kind table ([KIND_VIEWS]). A framed kind runs in a sandboxed
- * frame on the artifact origin; a native kind is drawn here from its closed
+ * frame on the artifact origin (a page in one, a design's artboards in one
+ * each, on a canvas drawn here); a native kind is drawn here from its closed
  * format (a doc by the element-constructing Markdown renderer, a deck by
  * the slide renderer, a dashboard's widgets by the design system's figures
  * over datasets read as the reader, a sheet from its schema), since it runs no
@@ -15,6 +16,7 @@ import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
 import { DashboardView } from "./DashboardView.tsx";
 import { FrameView } from "./FrameView.tsx";
+import { DesignView } from "./DesignView.tsx";
 import { DocView } from "./DocView.tsx";
 import { SheetView } from "./SheetView.tsx";
 import { SlidesView } from "./SlidesView.tsx";
@@ -77,6 +79,17 @@ export const KIND_VIEWS: Readonly<Record<ArtifactKind, (props: KindViewProps) =>
     store ? (
       <SheetView detail={detail} store={store} room={room} presence={presence} drawn={drawn} />
     ) : null,
+  design: ({ detail, version, versions, room, presence, bridgeStores, onPublished }) => (
+    <DesignView
+      detail={detail}
+      version={version}
+      versions={versions}
+      room={room}
+      presence={presence}
+      bridgeStores={bridgeStores}
+      {...(onPublished ? { onPublished } : {})}
+    />
+  ),
 };
 
 export function ViewTab(props: KindViewProps) {

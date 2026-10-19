@@ -2,9 +2,9 @@
 name: crewlet-artifacts
 description: >
   Publish, update and share artifacts in a Crewlet company from your own
-  assistant over the operator MCP endpoint: interactive pages, documents,
-  slide decks, dashboards and sheets your colleagues and the company's agents use. Use when a
-  person asks you to build, change, review or share something in their
+  assistant over the operator MCP endpoint: interactive pages, design
+  canvases, documents, slide decks, dashboards and sheets your colleagues and
+  the company's agents use. Use when a person asks you to build, change, review or share something in their
   Crewlet company that people will open and use rather than read, or
   hands you an artifact link to work on.
 ---
@@ -236,6 +236,37 @@ refused at publish naming every field to fix, never dropped.
 - **Revise it like any artifact.** Read the board with `get_artifact` and
   `view: "outline"` (its filters, datasets and widgets, never a figure),
   then publish `edits` on `dashboard.json` against your `base_version`.
+
+## A design canvas
+
+For several screens a person reviews side by side (a landing page's sections,
+an onboarding flow, three takes on one hero), create a `design` artifact: a
+canvas of artboards, each a plain HTML page held to the same design contract
+as any page, framed on its own.
+
+1. **One page per artboard.** Write each artboard as its own `.html` file with
+   its own scripts and styles; shared CSS and assets sit beside them. A board
+   is a page, not a fragment: give each one its own head, kit links and body
+   background.
+2. **Lay them out in `canvas.json`**, the entry:
+   `{"v": 1, "title": "...", "boards": {"hero.html": {"x": 0, "y": 0, "w": 1440, "h": 900, "title": "Hero"}}, "order": ["hero.html"], "notes": []}`.
+   Every HTML page of the version is a board and every board names one: a
+   page no board frames is refused. `order` lists every board once, back to
+   front. Sides are 40 to 8000 pixels; at most 64 boards and 200 notes.
+3. **Notes annotate, they do not draw.** A note is a `title` over a group of
+   boards or a `sticky` beside them (`yellow`, `pink`, `blue`, `green` or
+   `purple`), each with a short lower-case `id`, a position, a size and its
+   `text`.
+4. **Boards never link to each other.** Each board's frame opens that board
+   and no other page of the version, so a link from one board to another is
+   refused when followed. Put shared behaviour in a shared script instead.
+5. **Print is the reader's.** A board that offers a Print button calls
+   `crewlet.print()`; the dashboard prints that board on the reader's own
+   click.
+6. **People move frames and notes.** An editor can rearrange boards and edit
+   notes in the dashboard, and each save is a new version that changes
+   `canvas.json` alone. Read the head before publishing, and merge onto a
+   layout a person changed rather than restoring your own.
 
 ## The design contract
 

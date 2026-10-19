@@ -1267,11 +1267,11 @@ to decide whether it can still vouch for a retry.
 ## `crewlet artifacts`
 
 ```
-crewlet artifacts list [-scope mine|shared|company|agents|all] [-kind html|doc|slides|dashboard|sheet]
+crewlet artifacts list [-scope mine|shared|company|agents|all] [-kind html|doc|slides|dashboard|sheet|design]
     [-q TEXT] [-status live|trashed] [-work-item KEY] [-limit N]
 crewlet artifacts get <id>
 crewlet artifacts publish <dir|file> [-artifact ID] [-title TEXT] [-description TEXT]
-    [-icon NAME] [-kind html|doc|slides|dashboard|sheet] [-entry PATH] [-exclude PATTERN]...
+    [-icon NAME] [-kind html|doc|slides|dashboard|sheet|design] [-entry PATH] [-exclude PATTERN]...
     [-label TEXT] [-contract VERSION] [-capabilities a,b] [-work-item KEY] [-force]
     [-op-id ID]
 crewlet artifacts update <id> [-title TEXT] [-description TEXT] [-icon NAME] [-op-id ID]
@@ -1318,12 +1318,13 @@ reaching outside the directory, or `-exclude` beside a single file is refused
 before anything is sent. Quote a pattern so the shell does not expand it.
 
 A new artifact opens on the one default entry it holds, `index.html`,
-`index.md`, `doc.json`, `deck.json` or `dashboard.json`, else the only file, unless `-entry`
+`index.md`, `doc.json`, `deck.json`, `dashboard.json` or `canvas.json`, else the only file, unless `-entry`
 names another; a directory holding two default entries is refused until
 `-entry` or `-kind` settles which it is. Its kind is the one whose entry that
 file is: `html` for a page, `doc` for a `.md` file or a tabbed doc's
-`doc.json`, `slides` for `deck.json`, `dashboard` for `dashboard.json` (an
-index is told by its path, never by JSON alone), and `-kind` names it outright. Its title defaults to the entry's
+`doc.json`, `slides` for `deck.json`, `dashboard` for `dashboard.json`,
+`design` for `canvas.json` (an index is told by its path, never by JSON
+alone), and `-kind` names it outright. Its title defaults to the entry's
 name, and `-description` and `-icon` set the gallery card's subtitle and the
 tab's icon word. Those four describe a new artifact only: naming `-title`,
 `-description`, `-icon` or `-kind` beside `-artifact` is refused before any

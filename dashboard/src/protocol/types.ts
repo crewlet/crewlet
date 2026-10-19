@@ -5324,6 +5324,8 @@ export interface ArtifactFrame {
   allow: string;
   mode: OriginMode;
   nonce: string;
+  /** The page the frame opens: the entry of a page, one artboard of a design. */
+  document: string;
 }
 
 /** How one declared file's bytes reach the store (`artifacts.Transfer`). */
@@ -5363,6 +5365,17 @@ export interface ArtifactDocAnswer {
   artifact: string;
   version: number;
   doc: ArtifactDoc;
+}
+
+/** `GET /artifacts/{id}/versions/{n}/source`: a version's entry as text (`artifactsapi.Source`). */
+export interface ArtifactSource {
+  artifact: string;
+  kind: ArtifactKind;
+  version: number;
+  path: string;
+  content_type: string;
+  size: number;
+  text: string;
 }
 
 /** One declaration of a slide's canonical style (`slideformat.Decl`). */
@@ -5447,6 +5460,7 @@ export interface ArtifactOutline {
     tabs: { path: string; title: string; bytes: number }[];
     cover: { tab: string; markdown: string };
   };
+  design?: DesignOutline;
   /** A board's outline: its widgets and its first stats, never a value (D64). */
   dashboard?: DashboardOutline;
 }
@@ -5641,6 +5655,30 @@ export interface DashboardDatasetAnswer {
 /** The engine source catalogue (`GET /artifacts/sources`). */
 export interface DashboardCatalogueAnswer {
   sources: DashboardEngineSource[];
+}
+
+/** A rectangle of a design's canvas, in canvas pixels (`canvasformat.Rect`). */
+export interface DesignRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** One board of a design's outline (`canvasformat.OutlineBoard`). */
+export interface DesignOutlineBoard extends DesignRect {
+  path: string;
+  title?: string;
+}
+
+/** A design's outline (`canvasformat.Outline`): its boards' frames, for a cover. */
+export interface DesignOutline {
+  title?: string;
+  count: number;
+  cover: string;
+  bounds: DesignRect;
+  boards: DesignOutlineBoard[];
+  notes: number;
 }
 
 /** One finding of the publish linter (`lint.Finding`). */

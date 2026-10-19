@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -64,7 +65,9 @@ const (
 
 	// maxToken bounds what Open will even try to read, before any
 	// signature is checked: an attacker's megabyte is refused by its
-	// length rather than base64-decoded.
+	// length rather than base64-decoded. It is above the longest ticket a
+	// mint writes: every claim at its bound, the document path made of
+	// characters JSON escapes, is about 3.4 KiB (held by a test).
 	maxToken = 4096
 )
 
@@ -188,6 +191,9 @@ func check(claims artifacts.TicketClaims) error {
 	case claims.AccessEpoch < 0:
 		return fmt.Errorf("%w: access epoch %d is negative", ErrInvalidClaims,
 			claims.AccessEpoch)
+	case !document(claims.Document):
+		return fmt.Errorf("%w: document %q is not a path of at most %d bytes",
+			ErrInvalidClaims, claims.Document, artifacts.MaxPathBytes)
 	case !nonce(claims.Nonce):
 		return fmt.Errorf("%w: the nonce is not base64url of at most %d characters",
 			ErrInvalidClaims, maxNonce)
@@ -214,6 +220,18 @@ func token(s string, max int) bool {
 	})
 }
 
+// document reports a path a frame may name: present, within the path bound,
+// valid UTF-8 with no control character, and relative. Whether the version
+// holds it, and serves it as a page, is the origin's to decide per request;
+// what is held here is that a ticket carries a path at all.
+func document(s string) bool {
+	if s == "" || len(s) > artifacts.MaxPathBytes || !utf8.ValidString(s) ||
+		strings.HasPrefix(s, "/") {
+		return false
+	}
+	return !strings.ContainsFunc(s, unicode.IsControl)
+}
+
 // nonce reports a bridge nonce in the unpadded base64url alphabet.
 func nonce(s string) bool {
 	if s == "" || len(s) > maxNonce {
@@ -226,12 +244,17 @@ func nonce(s string) bool {
 // encode is the subject a runtoken carries for claims: their canonical JSON,
 // unpadded base64url. Canonical because the struct's field order is fixed and
 // normalise sorted the one list in it.
+//
+// NO HTML ESCAPING: the subject is base64url, never markup, and escaping a
+// document path's `<`, `>` and `&` would spend six bytes of the URL on each.
 func encode(claims artifacts.TicketClaims) (string, error) {
-	raw, err := json.Marshal(claims)
-	if err != nil {
+	var raw bytes.Buffer
+	enc := json.NewEncoder(&raw)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(claims); err != nil {
 		return "", fmt.Errorf("ticket: encode the claims: %w", err)
 	}
-	return base64.RawURLEncoding.EncodeToString(raw), nil
+	return base64.RawURLEncoding.EncodeToString(bytes.TrimSuffix(raw.Bytes(), []byte("\n"))), nil
 }
 
 // decode reads a subject back to claims, refusing anything a mint would not

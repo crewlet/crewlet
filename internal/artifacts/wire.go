@@ -79,6 +79,12 @@ type TicketClaims struct {
 	// moves it.
 	AccessEpoch int64 `json:"x"`
 
+	// Document is the page the frame was minted for: the version's entry
+	// for a page, one artboard for a design. A kind that frames each page
+	// on its own ([DocumentsEach]) serves no other document under this
+	// ticket, so the frames a viewer holds are the tickets minted for them.
+	Document string `json:"d"`
+
 	// Nonce binds the frame's bridge handshake to this ticket.
 	Nonce string `json:"n"`
 
@@ -117,4 +123,7 @@ type Frame struct {
 	Allow     string     `json:"allow"`
 	Mode      OriginMode `json:"mode"`
 	Nonce     string     `json:"nonce"`
+
+	// Document is the page the frame opens, a path of the version.
+	Document string `json:"document"`
 }
