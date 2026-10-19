@@ -332,10 +332,10 @@ func TestAMoveOnALaggingNodeTakesItsMarkDown(t *testing.T) {
 // A SUBTASK LEFT IN ANOTHER PROJECT THAN ITS ROOT IS IN THE ATTENTION QUEUE,
 // and leaves it when the walk carries it.
 //
-// The flag shipped with the schema — a column, a filter value and a share of
-// the attention index — and nothing ever set it, so `flag=inconsistent_project`
-// answered nothing on every company, including one holding the split subtree
-// a stopped move leaves behind.
+// The flag shipped with the schema — a column and a filter value — and nothing
+// ever set it, so `flag=inconsistent_project` answered nothing on every
+// company, including one holding the split subtree a stopped move leaves
+// behind.
 func TestASubtaskOutsideItsRootsProjectIsFlagged(t *testing.T) {
 	t.Parallel()
 	r := moveFixture(t, "m-kid-a", "m-kid-b")
