@@ -227,7 +227,7 @@ func (h *Handler) serveDocument(w http.ResponseWriter, r *http.Request, c artifa
 		// placeholders are left inert would carry no nonce either.
 		contract = ""
 	}
-	template, err := h.template(r.Context(), obj, contract)
+	template, err := h.template(r.Context(), obj, contract, c.Capabilities)
 	if err != nil {
 		h.contentFailed(w, r, c, obj, err)
 		return
@@ -274,9 +274,14 @@ func nonceTemplate(script *artifacts.ScriptPolicy) bool {
 }
 
 // template is a document's stored bytes, read and checked once and kept, with
-// the runtime of contract placed first where one is named.
-func (h *Handler) template(ctx context.Context, obj objstore.Object, contract string) ([]byte, error) {
-	key := "t:" + string(obj.Hash) + "|" + contract
+// the runtime of contract placed first where one is named, telling it the
+// capabilities the frame grants. One document's bytes may be published in
+// versions declaring different capabilities, so they are part of the key.
+func (h *Handler) template(ctx context.Context, obj objstore.Object, contract string,
+	granted []artifacts.Capability) ([]byte, error) {
+
+	declared := runtimeCapabilities(granted)
+	key := "t:" + string(obj.Hash) + "|" + contract + "|" + declared
 	if body, ok := h.bodies.get(key); ok {
 		return body, nil
 	}
@@ -285,7 +290,7 @@ func (h *Handler) template(ctx context.Context, obj objstore.Object, contract st
 		return nil, err
 	}
 	if contract != "" {
-		body = withRuntime(body, contract)
+		body = withRuntime(body, contract, declared)
 	}
 	h.bodies.put(key, body)
 	return body, nil
@@ -305,18 +310,42 @@ func (h *Handler) template(ctx context.Context, obj objstore.Object, contract st
 // since an element before the doctype would put the page in quirks mode. An
 // element there, before the html start tag, is one the parser places in the
 // head it implies, which is where a script that must run first belongs.
-func withRuntime(page []byte, contract string) []byte {
+//
+// THE CAPABILITIES RIDE THE ELEMENT (`data-capabilities`), so the runtime
+// answers `crewlet.capabilities.has` correctly from the first script of the
+// page rather than only once the host's handshake lands: a page, and every kit
+// release up to 0.32.0, that asked before then was told the version declared
+// nothing, and a sheet said so for good. They are the frame's own grant, never
+// more than the host declares at the handshake, which stays the authority.
+func withRuntime(page []byte, contract, declared string) []byte {
 	if !versionPattern.MatchString(contract) {
 		log.Warn("artifacts_serve_contract_unreadable", "contract", contract)
 		return page
 	}
-	tag := `<script src="` + RuntimePath(contract) + `" nonce="` +
-		artifacts.NoncePlaceholder + `"></script>`
+	tag := `<script src="` + RuntimePath(contract) + `"`
+	if declared != "" {
+		tag += ` data-capabilities="` + declared + `"`
+	}
+	tag += ` nonce="` + artifacts.NoncePlaceholder + `"></script>`
 	at := documentStart(page)
 	out := make([]byte, 0, len(page)+len(tag))
 	out = append(out, page[:at]...)
 	out = append(out, tag...)
 	return append(out, page[at:]...)
+}
+
+// runtimeCapabilities is the grant as the runtime element carries it: each
+// capability the engine knows, once, in the canonical order, space separated.
+// A ticket is signed, so an unknown value is not expected; one is left out
+// rather than written into the page.
+func runtimeCapabilities(granted []artifacts.Capability) string {
+	words := make([]string, 0, len(granted))
+	for _, c := range artifacts.Capabilities {
+		if slices.Contains(granted, c) {
+			words = append(words, string(c))
+		}
+	}
+	return strings.Join(words, " ")
 }
 
 // documentStart is the first offset of a page an element may be placed at

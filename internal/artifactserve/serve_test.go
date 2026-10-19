@@ -440,6 +440,42 @@ func TestAHandlerWithNoRecorderRecordsNothingAndServes(t *testing.T) {
 	}
 }
 
+// TestTheRuntimeIsToldTheFramesCapabilities: the runtime element carries the
+// capabilities the frame grants, in the canonical order, so a page asking
+// `crewlet.capabilities.has` before the host's handshake is answered truly; a
+// frame granting none carries no attribute, and the same document framed with
+// another grant is served its own, never the first one kept. Mutation: drop
+// the grant from the template's key and the second frame is told the first's.
+func TestTheRuntimeIsToldTheFramesCapabilities(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	declared := func(f artifacts.Frame) string {
+		t.Helper()
+		got := string(body(t, r.document(f)))
+		const open = `<script src="/_crewlet/runtime/1.0.0/runtime.js"`
+		at := strings.Index(got, open)
+		if at < 0 {
+			t.Fatalf("no runtime element: %s", got)
+		}
+		element := got[at : at+strings.Index(got[at:], "></script>")]
+		_, value, ok := strings.Cut(element, ` data-capabilities="`)
+		if !ok {
+			return ""
+		}
+		return value[:strings.IndexByte(value, '"')]
+	}
+	both := r.frameFor(r.person, []artifacts.Capability{artifacts.CapabilityDB, artifacts.CapabilityAssets})
+	if got := declared(both); got != "assets db" {
+		t.Errorf("a frame granting db and assets told the runtime %q, want %q", got, "assets db")
+	}
+	if got := declared(r.frameFor(r.person, []artifacts.Capability{artifacts.CapabilityAssets})); got != "assets" {
+		t.Errorf("the same document under another grant told the runtime %q, want %q", got, "assets")
+	}
+	if got := declared(r.frameFor(r.person, nil)); got != "" {
+		t.Errorf("a frame granting nothing told the runtime %q", got)
+	}
+}
+
 // TestThePinnedRuntimeRunsBeforeEveryScriptOfThePage: an author never includes
 // the runtime, so every HTML page of a version pinning a contract is served
 // with that contract's runtime first (past a byte order mark, comments and the
@@ -451,7 +487,8 @@ func TestAHandlerWithNoRecorderRecordsNothingAndServes(t *testing.T) {
 func TestThePinnedRuntimeRunsBeforeEveryScriptOfThePage(t *testing.T) {
 	t.Parallel()
 	tag := func(nonce string) string {
-		return `<script src="/_crewlet/runtime/1.0.0/runtime.js" nonce="` + nonce + `"></script>`
+		return `<script src="/_crewlet/runtime/1.0.0/runtime.js" data-capabilities="assets" nonce="` +
+			nonce + `"></script>`
 	}
 	for name, tc := range map[string]struct{ page, before string }{
 		"a page with a doctype":        {"<!doctype html><html><body>x</body></html>", "<!doctype html>"},

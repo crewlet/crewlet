@@ -20,10 +20,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Button,
-  Callout,
   LinkInterstitial,
   SandboxedFrame,
-  Skeleton,
+  SandboxedFrameNotice,
+  SandboxedFramePlaceholder,
   type SandboxedFrameState,
 } from "@crewlethq/ui";
 import type { ThemeId } from "@crewlethq/tokens";
@@ -38,30 +38,55 @@ import { useRest } from "~/lib/useRest.ts";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
 import { useDensity, usePalette, useTheme } from "~/lib/prefs.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { useOwned } from "~/lib/useOwned.ts";
 import { mintFrame, reportReady } from "~/lib/artifacts/api.ts";
 import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import { useDataStore } from "~/lib/artifacts/useDataStore.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
 import { rowID, type ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
-import type { BridgeRoster, BridgeViewer, RuntimeCapability } from "~/runtime/bridge.ts";
+import type { BridgeViewer, RuntimeCapability } from "~/runtime/bridge.ts";
 import { PageHost } from "./host.ts";
+import { pageRoster, pageSelf, pageViewer } from "./pageIdentity.ts";
 import type { PresenceReport } from "./presence.ts";
 
 /** Why a frame could not be minted, in the reader's words, from the engine's code. */
 function mintRefusal(err: RestError): string {
+  // NOTHING ANSWERED: the client's own words for a deadline or a dropped
+  // connection describe the transport, not the page.
+  if (err.status === 0)
+    return "The engine could not be reached. Check your connection, then try again.";
   switch (err.code) {
     case "artifact_origin_unset":
-      return "This deployment serves no artifact origin, so a page cannot be opened here. An operator sets api.artifacts.external_url.";
+      return "This deployment is not set up to show pages yet. Ask an operator to give it an artifact origin (api.artifacts.external_url).";
     case "artifact_not_framed":
-      return "This version has no page to open.";
+      return "This version has no page to show.";
     case "session_revoked":
       return "Your sign-in is ending. Sign in again to open this page.";
     case "artifact_trashed":
-      return "This artifact is in the trash.";
+      return "This artifact is in the trash. Restore it to open its page.";
     default:
-      return err.detail || "The engine could not open this page.";
+      return err.detail || "The engine could not open this page. Try again in a moment.";
   }
 }
+
+/**
+ * Whether asking again can open the page: a request nothing answered, a
+ * budget spent for now, or an engine that failed on its side. A version with
+ * no page, a trashed artifact, a deployment with no artifact origin and a
+ * refused share answer the same however often.
+ */
+function mintRetryable(err: RestError): boolean {
+  if (SETTLED_REFUSALS.has(err.code)) return false;
+  return err.status === 0 || err.status === 429 || err.status >= 500;
+}
+
+/** The refusals a second ask answers the same. */
+const SETTLED_REFUSALS = new Set([
+  "artifact_origin_unset",
+  "artifact_not_framed",
+  "artifact_trashed",
+  "session_revoked",
+]);
 
 export function FrameView({
   detail,
@@ -137,41 +162,45 @@ export function FrameView({
   const viewer = useViewer();
   const people = useArtifactPeople();
   const [clientID] = useState(() => `page-${rowID()}`);
-  const host = useMemo(() => {
-    if (!store && needsData) return null;
-    return new PageHost({
-      artifact: detail.id,
-      version,
-      capabilities,
-      socket,
-      store,
-      clientID,
-      newKey: () => newActOpID(),
-      openLink: (url) => new Promise<boolean>((answer) => setLink({ url, answer })),
-      ...(canPrint ? { print: () => printRef.current?.() ?? Promise.resolve(false) } : {}),
-      setPresence: (activity, focus) => {
-        const { version: _v, ...rest } = focus;
-        presence.at(Object.keys(rest).length > 0 ? rest : null, activity === "editing");
-      },
-    });
+  // THE HOST IS OWNED BY AN EFFECT: it hears the page's store from the moment
+  // it is made, so a memo would hand back one a cleanup had stopped.
+  const host = useOwned(
+    () =>
+      !store && needsData
+        ? null
+        : new PageHost({
+            artifact: detail.id,
+            version,
+            capabilities,
+            socket,
+            store,
+            clientID,
+            newKey: () => newActOpID(),
+            openLink: (url) => new Promise<boolean>((answer) => setLink({ url, answer })),
+            ...(canPrint ? { print: () => printRef.current?.() ?? Promise.resolve(false) } : {}),
+            setPresence: (activity, focus) => {
+              const { version: _v, ...rest } = focus;
+              presence.at(Object.keys(rest).length > 0 ? rest : null, activity === "editing");
+            },
+          }),
+    (made) => made.stop(),
     // The presence report is read through its stable `at`.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detail.id, version, capabilities, socket, store, needsData, clientID, canPrint]);
-  useEffect(() => () => host?.stop(), [host]);
+    [detail.id, version, capabilities, socket, store, needsData, clientID, canPrint],
+  );
 
   // WHO IS VIEWING, and the people a page may name, to a page that declared
   // it may know: display facts only, from the chart this tab holds.
   const knows = capabilities.includes("identity");
+  const self = useMemo(
+    () => pageSelf(viewer, people),
+    // Read through the fields that name the reader.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [people, viewer.handle, viewer.kind, viewer.name],
+  );
   const bridgeViewer = useMemo<BridgeViewer | null>(
-    () =>
-      knows && viewer.handle
-        ? {
-            ...people.pagePerson(viewer.handle, viewer.kind === "agent" ? "agent" : "human"),
-            displayName: viewer.name || people.seatName(viewer.handle),
-            role: detail.role,
-          }
-        : null,
-    [knows, people, viewer.handle, viewer.kind, viewer.name, detail.role],
+    () => (knows ? pageViewer(viewer, self, detail.role) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [knows, viewer.loading, viewer.anonymous, self, detail.role],
   );
   useEffect(() => host?.setViewer(bridgeViewer), [host, bridgeViewer]);
   useEffect(() => host?.setPeople(knows ? people.pagePeople : []), [host, knows, people]);
@@ -179,19 +208,11 @@ export function FrameView({
     () => host?.setConnection(connection.connected ? "live" : "reconnecting"),
     [host, connection.connected],
   );
-  const roster = useMemo<BridgeRoster>(
-    () => ({
-      members: [...room.roster.members.values()].map((m) => ({
-        ...people.pagePerson(m.seat, m.kind === "agent" ? "agent" : "human"),
-        session: m.session,
-        activity: m.activity,
-        focus: m.focus,
-        at: m.at,
-      })),
-      ...(room.roster.counts ? { counts: room.roster.counts } : {}),
-      truncated: room.roster.truncated,
-    }),
-    [room.roster, people],
+  // The reader's own session is in the room's roster too, named as the reader.
+  const ownSession = room.state.kind === "joined" ? room.state.session : null;
+  const roster = useMemo(
+    () => pageRoster(room.roster, ownSession, self, people),
+    [room.roster, ownSession, self, people],
   );
   useEffect(() => host?.setRoster(roster), [host, roster]);
 
@@ -205,23 +226,37 @@ export function FrameView({
   const [state, setState] = useState<SandboxedFrameState>("loading");
   const reported = useRef("");
 
+  // EVERY STATE IS DRAWN IN THE ONE BOX the page will fill, by the frame's own
+  // parts: the placeholder while the ticket is minted is the one the frame
+  // shows until the page says hello, and a refused ticket is said exactly as
+  // a page that failed to start is.
+  const box = className ? `artifact-frame-box ${className}` : "artifact-frame-box";
+  const name = title ?? detail.title;
   if (frame.error) {
     return (
-      <Callout variant="danger" title="This page could not be opened">
-        <p>{mintRefusal(frame.error)}</p>
-        <Button size="small" variant="secondary" onClick={() => setAttempt((n) => n + 1)}>
-          Try again
-        </Button>
-      </Callout>
+      <div className={box}>
+        <SandboxedFrameNotice
+          className="artifact-frame"
+          title={name}
+          heading="This page could not be opened"
+          action={
+            mintRetryable(frame.error) ? (
+              <Button variant="outline" size="small" onClick={() => setAttempt((n) => n + 1)}>
+                Try again
+              </Button>
+            ) : undefined
+          }
+        >
+          {mintRefusal(frame.error)}
+        </SandboxedFrameNotice>
+      </div>
     );
   }
   if (!frame.data || !host)
     return (
-      <Skeleton
-        variant="box"
-        label={`Loading ${title ?? detail.title}`}
-        className="artifact-frame-skeleton"
-      />
+      <div className={box}>
+        <SandboxedFramePlaceholder className="artifact-frame" title={name} />
+      </div>
     );
   const minted = frame.data;
   const report = (outcome: "ready" | "failed") => {
@@ -230,7 +265,7 @@ export function FrameView({
     reportReady(minted.frame_url, outcome, performance.now() - handed.current);
   };
   return (
-    <div className={className ? `artifact-frame-box ${className}` : "artifact-frame-box"}>
+    <div className={box}>
       <SandboxedFrame
         className="artifact-frame"
         src={minted.frame_url}
@@ -238,7 +273,7 @@ export function FrameView({
         mode={minted.mode}
         sandbox={minted.sandbox}
         allow={minted.allow}
-        title={title ?? detail.title}
+        title={name}
         theme={theme}
         nonce={minted.nonce}
         onReady={(port) => {
@@ -255,7 +290,7 @@ export function FrameView({
         }}
         onReload={() => setAttempt((n) => n + 1)}
       />
-      {dataNote && state === "ready" && version !== detail.head_number && (
+      {dataNote && needsData && state === "ready" && version !== detail.head_number && (
         <p className="artifact-note">Every version shows today's data.</p>
       )}
       <LinkInterstitial

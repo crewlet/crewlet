@@ -42,6 +42,7 @@ beforeAll(async () => {
   page = await openPage({
     host: (options) => new PageHost(options),
     capabilities: ["db", "identity", "presence"],
+    scriptCapabilities: "db identity presence",
     engine,
     viewer: { seat: "maya", kind: "human", displayName: "Maya Ortiz", role: "editor" },
     people: [
@@ -92,6 +93,10 @@ function delivered(
 }
 
 describe("a page", () => {
+  test("knows what its version declares from its first script, before the handshake", () => {
+    expect(page.early).toEqual(["db", "identity", "presence"]);
+  });
+
   test("is told what its version declared once the host has answered its hello", () => {
     expect(pageRuntime().capabilities.list().sort()).toEqual(["db", "identity", "presence"]);
     expect(pageRuntime().capabilities.has("state")).toBe(false);

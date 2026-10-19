@@ -10531,8 +10531,7 @@ a.live-row:focus-visible {
 .artifact-workspace {
   flex: 1 1 auto;
   /* THE BODY'S INSET, the shell's own step: the wide one, and on a phone the
-     shell's phone gutter (below), so an artifact's edge sits where every
-     other screen's does. */
+     16px every artifact surface and the shell keep there (below). */
   --artifact-inset: var(--spacing-5);
 }
 /* THE BODY IS THE SCROLLER, and so it is the size container its views
@@ -10555,14 +10554,23 @@ a.live-row:focus-visible {
   padding: var(--artifact-inset);
   scrollbar-gutter: stable;
 }
-/* A PHONE OVERLAYS ITS SCROLLBAR, so a reserved gutter there only widened the
-   end edge past the start one. */
+/*
+ * ON A PHONE the body stands 16px in from both edges, as the shell does: it
+ * folded to 12px. Its scrollbar gutter is reserved on BOTH edges there, so the
+ * two sides match whatever scrollbar the device draws: an overlay scrollbar
+ * (a phone's) reserves nothing on either side, and a classic one (a narrow
+ * desktop window) the same on each, where `stable` alone reserved it at the
+ * end edge only and stood the content 11px further from the right than the
+ * left.
+ */
 @container crewlet-artifact-workspace (width < 640px) {
   .artifact-body {
     --artifact-inset: var(--spacing-4);
-    scrollbar-gutter: auto;
+    scrollbar-gutter: stable both-edges;
   }
 }
+/* A PAGE'S FRAME MEETS THE BAR AND THE SHEET SQUARE: a page that paints its
+   own background would otherwise show the body through rounded corners. */
 .artifact-body--html {
   padding: 0;
   gap: 0;
@@ -10573,15 +10581,20 @@ a.live-row:focus-visible {
 .artifact-body--html > .artifact-frame-box {
   flex: 1 1 auto;
   min-height: 0;
+  gap: 0;
 }
-.artifact-body--html .artifact-frame,
-.artifact-body--html .artifact-frame-skeleton {
+.artifact-body--html .artifact-frame {
   flex: 1 1 auto;
   height: auto;
   min-height: 20rem;
+  border-radius: 0;
 }
+/* The note under an older version is the frame's footer: one line on a
+   hairline, so it reads as part of the page's chrome, not of the page. */
 .artifact-body--html .artifact-frame-box > .artifact-note {
+  flex: none;
   padding: var(--spacing-2) var(--spacing-4);
+  border-top: 1px solid var(--color-border-default);
 }
 /* A PANEL'S BODY is the screen's measuring stick for what it holds, as the
    content column is for a screen: History's list, the data's grid and the
@@ -10636,8 +10649,7 @@ a.live-row:focus-visible {
   gap: var(--spacing-2);
   min-width: 0;
 }
-.artifact-frame,
-.artifact-frame-skeleton {
+.artifact-frame {
   height: max(28rem, calc(100cqb - var(--sticky-top) - 14rem));
   min-width: 0;
 }
@@ -11481,8 +11493,7 @@ a.live-row:focus-visible {
   gap: 0;
   height: 100%;
 }
-:is(.design-board-frame, .design-opened-frame, .design-print-frame)
-  :is(.artifact-frame, .artifact-frame-skeleton) {
+:is(.design-board-frame, .design-opened-frame, .design-print-frame) .artifact-frame {
   height: 100%;
 }
 :is(.design-board-frame, .design-opened-frame, .design-print-frame) .artifact-note {

@@ -94,6 +94,13 @@ type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 A namespace whose capability the version did not declare exists, and every
 call on it rejects with `capability_not_declared`.
 
+`capabilities` answers from the page's first script: the origin writes the
+frame's grant on the runtime's own element, so a page may branch on
+`capabilities.has` before `ready` resolves. Calls made before then wait for
+the handshake, and the host's answer at the handshake is the authority from
+then on. What the viewer is, and who is in the room, are known only once
+`ready` has resolved.
+
 ### Connection
 
 ```ts
@@ -131,7 +138,11 @@ interface IdentityApi {
 }
 ```
 
-Never a token, a login or an email address. `people` answers from the chart
+Never a token, a login or an email address. `me` answers every signed-in
+viewer: one signed in without a seat (an operator's API token) has an empty
+`seat`, which a person column cannot store, and the name the dashboard shows
+them. The viewer's own session is in the presence roster too, named the same
+way. `people` answers from the chart
 the viewer's dashboard already holds, so a page learns no one the viewer could
 not see there; a seat a value names that it does not list is one that has left
 the company. When the viewer's share is removed while the page is open, the host
