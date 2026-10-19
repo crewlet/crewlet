@@ -145,9 +145,9 @@ datastore and presence, used without a framework). It is served from
 `/_crewlet/kit/<version>/` on the artifact origin:
 
 ```html
-<link rel="stylesheet" href="/_crewlet/kit/0.20.0/kit.css">
-<script src="/_crewlet/kit/0.20.0/theme.js"></script>
-<script type="module" src="/_crewlet/kit/0.20.0/kit.js"></script>
+<link rel="stylesheet" href="/_crewlet/kit/0.23.0/kit.css">
+<script src="/_crewlet/kit/0.23.0/theme.js"></script>
+<script type="module" src="/_crewlet/kit/0.23.0/kit.js"></script>
 ```
 
 Link the version shown here, which is the newest this engine serves. The
