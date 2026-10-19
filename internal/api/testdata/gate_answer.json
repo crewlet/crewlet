@@ -71,6 +71,17 @@
             "generation": 1,
             "seq": 22050
           }
+        },
+        {
+          "domain": "chat",
+          "stream": "CREWLET_CHAT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.chat:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_CHAT_LOG",
+            "generation": 1,
+            "seq": 26460
+          }
         }
       ]
     },
@@ -144,6 +155,17 @@
             "stream": "CREWLET_ASSISTANT_LOG",
             "generation": 1,
             "seq": 22050
+          }
+        },
+        {
+          "domain": "chat",
+          "stream": "CREWLET_CHAT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.chat:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_CHAT_LOG",
+            "generation": 1,
+            "seq": 26460
           }
         }
       ]
@@ -219,6 +241,17 @@
             "generation": 1,
             "seq": 22050
           }
+        },
+        {
+          "domain": "chat",
+          "stream": "CREWLET_CHAT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.chat:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_CHAT_LOG",
+            "generation": 1,
+            "seq": 26460
+          }
         }
       ]
     },
@@ -293,6 +326,17 @@
             "generation": 1,
             "seq": 22050
           }
+        },
+        {
+          "domain": "chat",
+          "stream": "CREWLET_CHAT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.chat:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_CHAT_LOG",
+            "generation": 1,
+            "seq": 26460
+          }
         }
       ]
     },
@@ -365,6 +409,17 @@
             "stream": "CREWLET_ASSISTANT_LOG",
             "generation": 1,
             "seq": 22050
+          }
+        },
+        {
+          "domain": "chat",
+          "stream": "CREWLET_CHAT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.chat:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_CHAT_LOG",
+            "generation": 1,
+            "seq": 26460
           }
         }
       ]
@@ -439,6 +494,17 @@
             "stream": "CREWLET_ASSISTANT_LOG",
             "generation": 1,
             "seq": 22050
+          }
+        },
+        {
+          "domain": "chat",
+          "stream": "CREWLET_CHAT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.chat:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_CHAT_LOG",
+            "generation": 1,
+            "seq": 26460
           }
         }
       ]

@@ -37,7 +37,7 @@ func (b freshnessBag) Has(key string) bool { _, ok := b[key]; return ok }
 // The grammar is the framework's and every domain's surface reads it, so a
 // refusal that opened with a package — it said "worklet:" when the parser was
 // the tracker's, and the floor's said "statelog:" — named a domain the person
-// asking a wiki question never asked about.
+// asking a chat or a wiki question never asked about.
 func TestEveryFreshnessRefusalNamesItsParameterAndNoPackage(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
@@ -48,7 +48,7 @@ func TestEveryFreshnessRefusalNamesItsParameterAndNoPackage(t *testing.T) {
 		"a bare session":          {freshnessBag{"read_level": "session"}, "read_level"},
 		"a floor that is not one": {freshnessBag{"min_position": "4711"}, "min_position"},
 		"a floor out of range": {freshnessBag{
-			"min_position": "CREWLET_PAGES_LOG@99999999:1"}, "min_position"},
+			"min_position": "CREWLET_CHAT_LOG@99999999:1"}, "min_position"},
 		"a bound beside linearizable": {freshnessBag{
 			"read_level": "linearizable", "max_lag_seq": "10"}, "max_lag_seq"},
 		"a negative duration": {freshnessBag{"max_lag_seconds": "-1"}, "max_lag_seconds"},
@@ -71,7 +71,7 @@ func TestEveryFreshnessRefusalNamesItsParameterAndNoPackage(t *testing.T) {
 		})
 	}
 	// AND A FLOOR OUT OF RANGE STILL SAYS WHICH RULE IT BROKE.
-	_, err := statelog.ParseFreshness(freshnessBag{"min_position": "CREWLET_PAGES_LOG@99999999:1"})
+	_, err := statelog.ParseFreshness(freshnessBag{"min_position": "CREWLET_CHAT_LOG@99999999:1"})
 	if !errors.Is(err, statelog.ErrPositionRange) {
 		t.Errorf("an out-of-range floor answered %v, want ErrPositionRange beneath it", err)
 	}
@@ -82,10 +82,10 @@ func TestFreshnessCarriesEverythingItAccepts(t *testing.T) {
 	t.Parallel()
 	got, err := statelog.ParseFreshness(freshnessBag{
 		"read_level": "stale", "max_lag_seconds": "30", "max_lag_seq": "250",
-		"min_position": "CREWLET_PAGES_LOG@1:7",
+		"min_position": "CREWLET_CHAT_LOG@1:7",
 	})
 	want := statelog.Freshness{Level: statelog.ReadStale, MaxLag: 30 * time.Second,
-		MaxLagSeq: 250, MinPosition: statelog.Position{Stream: "CREWLET_PAGES_LOG",
+		MaxLagSeq: 250, MinPosition: statelog.Position{Stream: "CREWLET_CHAT_LOG",
 			Generation: 1, Seq: 7}}
 	if err != nil || got != want {
 		t.Fatalf("parsed %+v (%v), want %+v", got, err, want)

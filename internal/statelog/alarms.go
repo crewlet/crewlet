@@ -416,11 +416,12 @@ type Reading struct {
 	// than by a node-wide caller.
 	//
 	// DeferredJudgesCopy is whether that log is a [Domain.ReadinessInput] —
-	// the tracker's and the knowledge base's are; the identity estate's,
-	// the vectors' and the usage domain's are not — which is whether the
-	// grace is ALSO when this node stops serving its copy of the estate
-	// (its seats stay, and read it from the other data nodes). The alarm
-	// fires at the grace either way, because an upgrade is the remedy
+	// the tracker's, the knowledge base's and chat's are; the identity
+	// estate's, the vectors', the usage domain's, the artifacts log's, the
+	// artifact datastore's and the Dashboard Assistant's are not — which is
+	// whether the grace is ALSO when this node stops serving its copy of the
+	// estate (its seats stay, and read it from the other data nodes). The
+	// alarm fires at the grace either way, because an upgrade is the remedy
 	// either way; what it may not do is tell an operator a node's copy was
 	// taken out of service over a log that judges none — or that it was
 	// not, over the one log among several that took it out, which is why
@@ -1071,7 +1072,7 @@ var table = []rule{
 	},
 	{
 		// NOT `feed_dead_letters`, WHICH NAMED A PATH THIS ENGINE DOES
-		// NOT HAVE. Both domain consumers set `MaxDeliver: -1`
+		// NOT HAVE. Every domain feed's consumer sets `MaxDeliver: -1`
 		// deliberately — a record nobody can handle yet is a retry
 		// rather than a poison message, and a delivery budget that ran
 		// out would drop a wake silently — so nothing ever reaches a

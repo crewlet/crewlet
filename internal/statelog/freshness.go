@@ -125,8 +125,8 @@ type FreshnessParams interface {
 // NO PACKAGE IN THE SENTENCE, because every domain's surface reads these four
 // keys and a person's request is refused through whichever one they asked: the
 // grammar used to live in the tracker and say "worklet:", so a bad
-// `read_level` on a wiki question named a domain the caller never asked about.
-// Param is the key to change.
+// `read_level` on a chat or a wiki question named a domain the caller never
+// asked about. Param is the key to change.
 type FreshnessError struct {
 	Param string
 	Why   string

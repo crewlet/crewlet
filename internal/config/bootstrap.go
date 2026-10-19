@@ -1781,38 +1781,42 @@ type Stream struct {
 	// a blocked trim lasts — and the knowledge base's follows the mutation
 	// log's ceiling, set or derived, so that a blocked trim fills both in
 	// the same time. Chat does not, because of the ONE BUDGET: it grows
-	// faster than the mutation log (about 30 MB a day at the census below,
-	// against the reference company's 22), so following it at that ratio
-	// makes this the largest ask of the nine — about four thirds of the
-	// mutation log's, 85 GiB beside its 64 GiB clamp — and the budget
-	// scales every derived ask in proportion. On a 64 GiB volume that
-	// creates the vector changelog at 4.0 GiB, half the 7.9 GiB the
-	// reference company's fifth-year model change puts in it, which is the
-	// one failure that log is sized to rule out, and a first boot gives it
-	// room for that change clear of the headroom alarm only from about
-	// 133 GiB free; with this log's ask capped as above it is created at
-	// 5.4 GiB on that volume, and has the room from about 100 GiB free.
+	// faster than the mutation log (about 32 MB a day at the census below,
+	// its read barriers included, against the reference company's 22), so
+	// following it at that ratio makes this the largest ask of the nine —
+	// nearly half as much again as the mutation log's, 93 GiB beside its
+	// 64 GiB clamp — and the budget scales every derived ask in proportion.
+	// On a 64 GiB volume that creates the vector changelog at 3.9 GiB, half
+	// the 7.9 GiB the reference company's fifth-year model change puts in
+	// it, which is the one failure that log is sized to rule out, and a
+	// first boot gives it room for that change clear of the headroom alarm
+	// only from about 136 GiB free; with this log's ask capped as above it
+	// is created at 5.4 GiB on that volume, and has the room from about
+	// 100 GiB free.
 	//
 	// WHAT THAT COSTS, stated: an operator who sizes tracker_log_max_bytes
 	// for a long blocked trim has to size this field for the same horizon,
 	// or this log refuses first — beside a 512 GiB mutation log, which
-	// outlasts decades of blocked trim, an unset chat log lasts about nine
+	// outlasts decades of blocked trim, an unset chat log lasts about eight
 	// months, and on a small volume less ([DerivedChatLogDivisor]).
 	//
 	// WHY EIGHT GIBIBYTES, when the steady state is two orders below it.
 	// At the declared census (`chatlet.ChatMessagesPerDay`, 20 000 messages a
 	// day) and a mean record near a kibibyte and a half, the log grows
-	// about 30 MB a day — so a healthily-trimming fleet holds roughly
-	// 210 MB, one `min_age` window's worth, the same order as the mutation
-	// log's own. This ceiling is therefore not sized for the steady state:
-	// it is what a COMPLETELY BLOCKED TRIM may spend before appends start
-	// being refused — at fifteen sixteenths of it, since the log keeps the
-	// gate reserve every identity-claiming log keeps — which is about nine
-	// months at the declared census and about three and a half at the
-	// 50 000/day supported ceiling, on a volume that creates the whole of
-	// it. Both are far past any backup gap or donor outage the retention
-	// gates tolerate, which is what makes a blocked trim here an alarm
-	// somebody answers rather than a company that cannot talk to itself.
+	// about 31 MB a day, and its read barriers add about 1.7 MB more
+	// (`chatlet.LinearizableReadsPerSeatDay` × the reference company's 100
+	// seats × the ≈ 140 bytes a signed barrier costs) — about 32 MB a day,
+	// so a healthily-trimming fleet holds roughly 225 MB, one `min_age`
+	// window's worth, the same order as the mutation log's own. This
+	// ceiling is therefore not sized for the steady state: it is what a
+	// COMPLETELY BLOCKED TRIM may spend before appends start being refused
+	// — at fifteen sixteenths of it, since the log keeps the gate reserve
+	// every identity-claiming log keeps — which is about eight months at
+	// the declared census and about three and a half at the 50 000/day
+	// supported ceiling, on a volume that creates the whole of it. Both are
+	// far past any backup gap or donor outage the retention gates tolerate,
+	// which is what makes a blocked trim here an alarm somebody answers
+	// rather than a company that cannot talk to itself.
 	//
 	// It shares the state logs' one budget, and everything the mutation
 	// log's field says about that holds here unchanged: the value is what
@@ -1822,7 +1826,7 @@ type Stream struct {
 	// transcript is the only acceptable direction, since the pruning of
 	// old messages is a RECORD every data node applies and never a stream
 	// bound.
-	ChatLogMaxBytes int64 `yaml:"chat_log_max_bytes,omitempty" json:"chat_log_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the chat log; unset asks for 8 GiB, capped at a sixteenth of the stream volume's free space (a quarter of what an unset tracker_log_max_bytes derives, so the whole 8 GiB is asked from 128 GiB free), 1 GiB..256 GiB, and does not follow tracker_log_max_bytes - size it for the same blocked-trim horizon, about 30 MB a day at the declared census."`
+	ChatLogMaxBytes int64 `yaml:"chat_log_max_bytes,omitempty" json:"chat_log_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the chat log; unset asks for 8 GiB, capped at a sixteenth of the stream volume's free space (a quarter of what an unset tracker_log_max_bytes derives, so the whole 8 GiB is asked from 128 GiB free), 1 GiB..256 GiB, and does not follow tracker_log_max_bytes - size it for the same blocked-trim horizon, about 32 MB a day at the declared census."`
 
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it

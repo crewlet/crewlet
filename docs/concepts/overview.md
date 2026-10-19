@@ -68,7 +68,7 @@ flowchart TB
 
     STREAM[("<b>Event stream</b><br/><i>embedded NATS JetStream by default</i><br/>crewlet.agent.SEAT-ID.inbox · .control · .reflect<br/>crewlet.notifications.inbound · crewlet.events.*<br/>crewlet.config.* · crewlet.memory.* · dlq.*")]
     KV[("<b>Coordination KV</b><br/><i>on the stream's own broker</i><br/>seat · node · worker leases with a fencing epoch<br/>activation pointer · per-node status<br/>ledgers · counters · the company's secrets")]
-    DB[("<b>Store</b><br/><i>two local files, owned exclusively</i><br/>this node's: crewlet_events · agent_diary · episodes<br/>replicated: the tracker, the pages, the vectors,<br/>the identity directory, the usage history")]
+    DB[("<b>Store</b><br/><i>two local files, owned exclusively</i><br/>this node's: crewlet_events · agent_diary · episodes<br/>replicated: the tracker, the pages, the vectors,<br/>the identity directory, the usage history, the artifacts,<br/>their datastores, the Dashboard Assistant's conversations, chat")]
 
     EXT -->|"webhooks / websocket"| API
     API -->|"verify · claim once per fleet · publish"| STREAM
@@ -210,6 +210,9 @@ internal/
 ├── usage/                # Each data node's day, replicated — statelog's
 │                         #   fifth domain: spend, turns and reads that
 │                         #   outlive the node that recorded them
+├── chatlet/              # Chatlet, the engine's own chat, statelog's ninth
+│                         #   domain: rooms, threads, messages and reactions,
+│                         #   a message additive on its room's subject
 ├── eventfan/             # The fleet's turn-level history, read from every
 │                         #   data node at query time, with coverage on every
 │                         #   answer

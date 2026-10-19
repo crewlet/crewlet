@@ -266,14 +266,14 @@ const (
 	// unset ceiling no lower than [MinDomainCeiling] in internal/engine, and
 	// holds a log that asked for less at what it asked, so a fixed 512 MiB
 	// was reserved in full on every fresh node: it raised the least a node
-	// boots in past the 9 GiB a stated broker limit commonly gives, and a
-	// deployment sized for everything else stopped booting for a feature it
-	// may never turn on. The assistant's register entry therefore lets
-	// scaling take it down to this field's 64 MiB floor, which is all a fresh
-	// node has to find for it; the default is what it gets wherever the
-	// broker has the room. Two weeks of a blocked trim is still far past the
-	// alarm, and the identity estate's log, which also grows with headcount,
-	// takes the same 512 MiB.
+	// boots in past the limit crewlet-operator gives the smallest data volume
+	// it admits, and a deployment sized for everything else stopped booting
+	// for a feature it may never turn on. The assistant's register entry
+	// therefore lets scaling take it down to this field's 64 MiB floor, which
+	// is all a fresh node has to find for it; the default is what it gets
+	// wherever the broker has the room. Two weeks of a blocked trim is still
+	// far past the alarm, and the identity estate's log, which also grows
+	// with headcount, takes the same 512 MiB.
 	//
 	// THE FLOOR IS 64 MiB, by the per-log rule [IamLogMaxBytesFloor]
 	// records: ten people write a twentieth of the reference rate, for which
@@ -353,11 +353,11 @@ const (
 	// WHAT IT COSTS the chat log, stated: its horizon under a completely
 	// blocked trim on a small volume. Created at 1.4 GiB on that 64 GiB
 	// first boot, rather than 2.5 with the whole ask, it refuses ordinary
-	// writes after about 45 days of a fully blocked trim at the declared
-	// census rather than 82, and after about 18 at the supported 50 000
-	// messages a day rather than 33. The log_headroom alarm names the log a
-	// tenth of the way before either, and from 128 GiB free the cap no
-	// longer binds.
+	// writes after about 42 days of a fully blocked trim at the declared
+	// census rather than 78, and after about 17 at the supported 50 000
+	// messages a day rather than 32 — its read barriers counted in both.
+	// The log_headroom alarm names the log a tenth of the way before
+	// either, and from 128 GiB free the cap no longer binds.
 	DerivedChatLogDivisor = 4
 
 	// DerivedLogMaxBytesFraction is the share of a volume's free space an
@@ -377,18 +377,18 @@ const (
 	// THE FLOOR IS SIX GIBIBYTES, a bound on what the field may say rather
 	// than what a node of a given configuration needs. Every node reserves
 	// every state-log domain's ceiling whatever it runs, and left unset the
-	// eight come to 6.5625 GiB at their smallest: the tracker's, the
-	// vectors', the knowledge base's, the artifacts' and the datastore's at
-	// the gibibyte scaling stops at, the usage log's 1 GiB default and the
-	// identity log's 512 MiB one (neither scaled below what it asks), and the
-	// assistant's 64 MiB, where its own scaling stops. The object store's nats
-	// bucket is reserved beside them. So a value this floor admits can be
-	// short of what a configuration boots in, and that is said where it can be
-	// acted on: engine.BrokerFloorFor computes the least a fresh node of the
-	// configuration reserves, `crewlet validate` and every start's
-	// advisories warn below it, and a refused reservation quotes it. Before
-	// the artifact and assistant logs the floor was the logs' 4.5 GiB with
-	// room beside them, which is why it is six.
+	// nine come to 7.5625 GiB at their smallest: the tracker's, the
+	// vectors', the knowledge base's, the artifacts', the datastore's and the
+	// chat log's at the gibibyte scaling stops at, the usage log's 1 GiB
+	// default and the identity log's 512 MiB one (neither scaled below what
+	// it asks), and the assistant's 64 MiB, where its own scaling stops. The
+	// object store's nats bucket is reserved beside them. So a value this
+	// floor admits can be short of what a configuration boots in, and that is
+	// said where it can be acted on: engine.BrokerFloorFor computes the least
+	// a fresh node of the configuration reserves, `crewlet validate` and every
+	// start's advisories warn below it, and a refused reservation quotes it.
+	// Before the artifact, assistant and chat logs the floor was the logs'
+	// 4.5 GiB with room beside them, which is why it is six.
 	//
 	// THE COMPANY'S FILES RESERVE A SHARE OF IT where they live in the broker:
 	// the object store's nats bucket is reserved before any log is sized, a
@@ -695,7 +695,7 @@ func (s Stream) VectorsMaxBytes(free int64) (int64, bool) {
 // wrote is one the shared-budget scaling may lower, and one an operator wrote
 // is not. It used to report whether the operator SET it — the inverse of
 // every other ceiling's second return, read by a register that asks the same
-// question of all five.
+// question of every log.
 func (s Stream) UsageMaxBytes() (int64, bool) {
 	if s.UsageLogMaxBytes > 0 {
 		return s.UsageLogMaxBytes, false

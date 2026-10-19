@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -113,7 +114,7 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 	// The shipped answers, so that a domain silently losing its read index
 	// is a failure here rather than a strongest read level nobody notices
 	// has stopped being available — for EVERY registered domain, since a
-	// table naming three of five pinned nothing about the identity
+	// table naming three of six pinned nothing about the identity
 	// estate's, and docs/guides/consistency.md publishes all of them.
 	shipped := map[string]bool{
 		worklet.Domain{}.Name():   true,
@@ -128,6 +129,7 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 		// release reads the assistant's log at linearizable, and the
 		// barrier is what the gate reserve is proved against there.
 		assistantdomain.Domain{}.Name(): true,
+		chatlet.Domain{}.Name():         true,
 	}
 	for name, want := range shipped {
 		if got, held := stated[name]; !held || got != want {
@@ -168,8 +170,9 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 //
 // The shipped figures are pinned, so moving one is a change in this diff:
 // the reference company's 125 a day per seat on the tracker's, the knowledge
-// base's, the artifacts log's and the artifact datastore's logs, and zero on
-// the identity estate's and the Dashboard Assistant's.
+// base's, the artifacts log's and the artifact datastore's logs, chat's own
+// 120 on its log, and zero on the identity estate's and the Dashboard
+// Assistant's.
 func TestEveryBarrierDeclaresItsReadModel(t *testing.T) {
 	shipped := map[string]*int{
 		worklet.Domain{}.Name():   new(statelog.LinearizableReadsPerSeatDay),
@@ -180,6 +183,7 @@ func TestEveryBarrierDeclaresItsReadModel(t *testing.T) {
 
 		artifactsdomain.Domain{}.Name(): new(statelog.LinearizableReadsPerSeatDay),
 		artifactdata.Domain{}.Name():    new(statelog.LinearizableReadsPerSeatDay),
+		chatlet.Domain{}.Name():         new(chatlet.LinearizableReadsPerSeatDay),
 		assistantdomain.Domain{}.Name(): new(0),
 	}
 	for _, entry := range register() {
@@ -276,10 +280,10 @@ func TestEveryIdentityLogHasANodeGateWriter(t *testing.T) {
 			claims++
 		}
 	}
-	if claims < 6 {
+	if claims < 7 {
 		t.Fatalf("the register holds %d identity-claiming domain(s), want the "+
 			"tracker, the pages, the identity estate, the artifacts, the "+
-			"artifact datastore and the assistant", claims)
+			"artifact datastore, the assistant and chat", claims)
 	}
 
 	// CONTROL, both ways round.
@@ -328,10 +332,10 @@ func TestAGenerationRecordIsKeptExactlyWhereIdentityIsClaimed(t *testing.T) {
 			claims++
 		}
 	}
-	if claims < 6 {
+	if claims < 7 {
 		t.Fatalf("the register holds %d identity-claiming domain(s) keeping a "+
 			"generation record, want the tracker, the pages, the identity "+
-			"estate, the artifacts, the artifact datastore and the assistant", claims)
+			"estate, the artifacts, the artifact datastore, the assistant and chat", claims)
 	}
 
 	// CONTROL, both ways round.
@@ -494,7 +498,7 @@ func TestEveryRegisteredDomainHasACeilingCase(t *testing.T) {
 // offer's terms are compared in and the order every operator surface reports.
 //
 // AND THE SET: the org chart is part of the company document, applied with
-// every revision, so the core runs exactly these eight logs.
+// every revision, so the core runs exactly these logs.
 func TestTheRegisteredOrderIsTheDeclaredOrder(t *testing.T) {
 	want := []string{
 		worklet.Domain{}.Name(),
@@ -505,6 +509,7 @@ func TestTheRegisteredOrderIsTheDeclaredOrder(t *testing.T) {
 		artifactsdomain.Domain{}.Name(),
 		artifactdata.Domain{}.Name(),
 		assistantdomain.Domain{}.Name(),
+		chatlet.Domain{}.Name(),
 	}
 	got := []string{}
 	for _, domain := range registeredDomains() {

@@ -17,7 +17,7 @@ subcommand below is served by it.
 | `crewlet retention status [config]` | Every `retention` command that talks to a node takes `admin`, the reads included. What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every data node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
 | `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
 | `crewlet retention ack -stream NAME -position N` | Publish an operator backup floor, for `backup_floor: operator`. It exists because the engine cannot see a copy that has left the host |
-| `crewlet retention evict <node> -confirm <node> [-op-id ID] [-force]` | Stop a node's records applying on every log the trim counts nodes on — the tracker's, the knowledge base's and the identity estate's — so the trim can pass a floor an absent machine is pinning. Refused, with nothing written, while the node still holds a live presence lease, or while its lease cannot be read (`-force` overrides both). Prints one line per log with its outcome and the watermark before and after; **exits non-zero when not every log holds the record**, printing under each unfinished log what finishes it — the command with `-op-id` where running it again can, and what to do instead where it cannot |
+| `crewlet retention evict <node> -confirm <node> [-op-id ID] [-force]` | Stop a node's records applying on every log the trim counts nodes on — the tracker's, the knowledge base's, the identity estate's, the Dashboard Assistant's and chat's — so the trim can pass a floor an absent machine is pinning. Refused, with nothing written, while the node still holds a live presence lease, or while its lease cannot be read (`-force` overrides both). Prints one line per log with its outcome and the watermark before and after; **exits non-zero when not every log holds the record**, printing under each unfinished log what finishes it — the command with `-op-id` where running it again can, and what to do instead where it cannot |
 | `crewlet retention readmit <node> -confirm <node> [-op-id ID]` | The inverse commit, on the same logs. Refused while the node has not applied every record up to the one just before the higher of the trim floor and the first surviving sequence of any one of those logs, and the refusal prints the numbers. Nothing is written to any log on a refusal; a partial readmission is finished like an eviction |
 | `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling, up or down. Runs inside a fleet-wide maintenance window and costs three restarts, because a log's Tier A ceiling is only the value its stream is created with. A raise the broker has no room for is refused **before** the window opens, and one it refuses at the apply is reported as a refusal rather than as an unknown outcome |
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
@@ -365,7 +365,7 @@ publishes](../concepts/control-plane.md#what-a-booting-node-publishes).
 | `-api-host HOST` | Bind address, overriding `api.host` |
 | `-api-port PORT` | Bind port, overriding `api.port`. With the `ingress` role it carries the whole HTTP surface (less the routes `api.public.port` moves to its own listener); without it, only the [probes](api-endpoints.md#probes-on-a-node-without-ingress) — `/health` and `/ready` — since a box-mode run's tool calls reach a seat on such a node through an `ingress` node's bridge. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint and no probe, so every integration goes deaf and no orchestrator can probe the node. That is why leaving the flag off is not the same as passing `0`. Any other port is bound as the node starts, before it opens its store, so a port somebody holds fails the run at once; until the node serves, it answers what a [starting node](api-endpoints.md#while-a-node-is-starting) answers. Either flag is refused when it contradicts the file's other listeners: `0` beneath an `api.public.port`, or a port another listener in the file binds on the same address. So is a port on an ingress node whose file has no `api:` block: a node serving the API must state `api.external_url`, `api.auth.admin` and a token. |
 | `-mode MODE` | `maintenance` or `seal`: boot for a [capacity window](../guides/retention.md#changing-a-logs-ceiling) rather than for service. Both start the broker and **no publisher** — no seats, no duties, no schedulers, no writer on any surface, no barrier (a `linearizable` read is refused `maintenance`), no object collection or audit (each pins the estate with a barrier), and no eviction, readmission or reanchor — while the node keeps its presence lease, and the difference is that `maintenance` may write stream configuration while `seal` may not, which is exactly what makes a `seal`-mode acknowledgement evidence. Leave it off for a node in service; a node in either mode refuses to run a company. |
-| `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `data` (hold the company's durable state), `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all four — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. The flag is applied after the file validates, so what the roles require of the file is checked again here: dropping `data` from a node whose store is not `store.scratch` is refused, naming the setting. Roles decide what a node serves and which duties it holds, and `data` alone decides which state logs it applies: every data node applies all five, the identity directory included, and a node without `data` applies none and reaches the estate through one that does — see [what a satellite holds](../guides/satellite-nodes.md#what-a-satellite-holds). See [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data). |
+| `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `data` (hold the company's durable state), `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all four — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. The flag is applied after the file validates, so what the roles require of the file is checked again here: dropping `data` from a node whose store is not `store.scratch` is refused, naming the setting. Roles decide what a node serves and which duties it holds, and `data` alone decides which state logs it applies: every data node applies every state log, the identity directory and chat included, and a node without `data` applies none and reaches the estate through one that does — see [what a satellite holds](../guides/satellite-nodes.md#what-a-satellite-holds). See [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data). |
 | `-dev-principal LOGIN` | **Development only.** Resolve every request that presents no credential to `dev:LOGIN`, carrying every app, and `admin` only where `api.auth.admin` is `serve`. It is what `api.auth.disabled` should have been, and it is **refused** unless *both* hold: `api.host` binds a loopback address, and the binary is a development build. See below. |
 
 The logging flags override the Tier A `logging:` block **only when they are actually given**: a flag carries its default whether or not anyone typed it, so applying them unconditionally would pin every node at `info` and make the file's own setting dead on arrival. `-log-file` needs that distinction in both directions — its default *is* the empty string, which is also how an operator says "no file for this run". Every flag that overrides Tier A is **folded into the document** the node runs, the logging flags as much as `-roles` and the API's: the verbosity, the log file and the [advisories the start logs](#every-start-says-what-its-tier-a-is-worth-knowing) all read that one document. The run holds that document to every Tier A rule once the flags are in, and a refusal names the flags given — the file passed as it loaded, but a flag reaches every rule that reads what it moved — and the engine asks the rules again before it opens anything.
@@ -1809,8 +1809,8 @@ generation (`GEN`), and a position from a generation the log has left prints
 `left gen N` (or `ahead gen N`) in place of a lag, since its sequence compares
 with nothing the log holds now; a node that reported its log diverged at its
 checkpoint is marked `LOG DIVERGED`. `RESERVE` is the top of the ceiling every
-identity-claiming log — the tracker's, the knowledge base's and the identity
-estate's — keeps for gate records ([the gate
+identity-claiming log — the tracker's, the knowledge base's, the identity
+estate's, the Dashboard Assistant's and chat's — keeps for gate records ([the gate
 reserve](../guides/retention.md#the-gate-reserve)), `-` on the vector
 changelog and the usage log, which keep none; `HEADROOM` is what is left of
 the rest, the ceiling ordinary writes are refused at — so a log at `0%` still
@@ -1881,8 +1881,8 @@ coming back; eviction is the gesture for one that is not.
 
 `-confirm` repeats the node id, the same shape the other destructive gestures
 use. The trim counts nodes per log, so the eviction is a record on every log it
-counts nodes on — the tracker's, the knowledge base's and the identity
-estate's — and each answers on its
+counts nodes on — the tracker's, the knowledge base's, the identity estate's,
+the Dashboard Assistant's and chat's — and each answers on its
 own line with its [three-valued outcome](../guides/replication.md#a-write-has-three-outcomes),
 or `not written` and the reason that stopped it:
 
@@ -1892,10 +1892,14 @@ evict node-4 (operation 01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4)
   tracker: applied at CREWLET_TRACKER_LOG 918280002
   pages: applied at CREWLET_PAGES_LOG 4410
   iam: applied at CREWLET_IAM_LOG 58311
+  assistant: applied at CREWLET_ASSISTANT_LOG 15734
+  chat: applied at CREWLET_CHAT_LOG 207714
   node-4 stays COUNTED for about a minute, so a live node is certain to have read its own tombstone before the trim passes it.
   tracker trim floor 918100000 → 918100000
   pages trim floor 4100 → 4100
   iam trim floor 57000 → 57000
+  assistant trim floor 15200 → 15200
+  chat trim floor 206900 → 206900
 ```
 
 The command prints the watermark before and after and the instant the
@@ -1952,8 +1956,8 @@ ordinary writes still takes them — needs
 Not the same command now — it is refused the same way until the ceiling moves
 — and **not a fresh one afterwards**: once there is room, this gesture's own
 `-op-id` is what finishes it, because a fresh id is a second eviction that
-writes every log already holding the record again — here the tracker's and the
-identity estate's — and re-dates the eviction there. A node that is
+writes every log already holding the record again — here every log but the
+knowledge base's — and re-dates the eviction there. A node that is
 itself `evicted` cannot write, so it prints `-api <that node>` with the same
 `-op-id`; a `wrong_stream` log needs a [reanchor](#crewlet-retention-reanchor)
 first, and then the same `-op-id`; and a `superseded` operation — an eviction
@@ -1991,7 +1995,9 @@ crewlet: the node answered 409: readmission_refused
 
 The comparison is the one the node's own write fence makes: its **last
 published position** in each log that claims identity — the tracker's, the
-knowledge base's and the identity estate's — against the **higher of the published floor and the log's first
+knowledge base's, the identity estate's, the Dashboard Assistant's and chat's —
+against the **higher of
+the published floor and the log's first
 surviving sequence**, and the node must have applied every record up to the
 one just before it. A node that has never published a position is judged as
 holding nothing; one whose position is from a generation the log has since
@@ -2072,14 +2078,14 @@ check that quietly proves nothing.
 A target whose ordinary ceiling is at or below what the log already holds is
 refused before the window opens, naming both numbers and the least target that
 would do: that ceiling would refuse every ordinary append the moment it
-applied. On the three identity logs the ordinary ceiling is the target less
+applied. On the logs that claim identity the ordinary ceiling is the target less
 its [gate reserve](../guides/retention.md#the-gate-reserve) — the larger of a
 sixteenth of it and seven of the log's largest records with a mebibyte beside
 them; on the vector changelog and the usage log, which hold no gate, it is the
 whole target. A target under the floor Tier A holds the log's own field to is
 refused too, naming the field — a gibibyte on the tracker's, the knowledge
-base's and the vector changelog's, 64 MiB on the identity
-estate's and the usage log's. A target under the
+base's, the vector changelog's and chat's, 64 MiB on the identity estate's, the
+usage log's and the Dashboard Assistant's. A target under the
 current ceiling and above the usage is accepted, and is how a log gives a
 reservation back. A raise the broker cannot
 reserve is refused before the window opens too, naming what it reserves and

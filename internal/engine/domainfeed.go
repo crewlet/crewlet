@@ -6,8 +6,11 @@ import (
 	"log/slog"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The log as a CHANGE FEED, which is a second consumer over the same stream.
@@ -55,7 +58,17 @@ type domainFeed struct {
 	verify *statelog.Verifier
 }
 
-// Consume implements [worklet.DomainConsumer] and [doclet.DomainConsumer].
+// One adapter serves every domain that declares a wake feed, so each domain's
+// own consumer seam is asserted here rather than left to whichever register
+// entry happens to hand it over.
+var (
+	_ worklet.DomainConsumer = domainFeed{}
+	_ doclet.DomainConsumer  = domainFeed{}
+	_ chatlet.DomainConsumer = domainFeed{}
+)
+
+// Consume implements each feed-declaring domain's DomainConsumer —
+// [worklet.DomainConsumer], [doclet.DomainConsumer] and [chatlet.DomainConsumer].
 func (f domainFeed) Consume(ctx context.Context, group string) (changefeed.Records, error) {
 	g, err := f.log.Group(ctx, group)
 	if err != nil {

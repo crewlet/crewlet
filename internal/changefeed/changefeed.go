@@ -97,7 +97,7 @@ const nakDelay = 2 * time.Second
 // no key class and no change record to name one with.
 type Source struct {
 	// Name is the notification source a parser registers under, and the
-	// scope of this estate's claim keys — "work", "page", "tracker".
+	// scope of this estate's claim keys — "work", "page", "chat".
 	Name string
 
 	// Group is the durable consumer's name, and it is STABLE for the
@@ -341,13 +341,14 @@ func (f *Feed) handle(ctx context.Context, msg *Message) {
 		// because the alternative — acking — would drop a wake permanently
 		// on a build that is about to be upgraded past the problem.
 		//
-		// AND NOTHING ENDS IT. Both domain consumers set `MaxDeliver: -1`
-		// deliberately (see [jetstream] — a budget that ran out would drop
-		// a wake silently), so this record circles at the head of the
-		// consumer with every wake behind it waiting. That is the right
-		// trade and it has NO OTHER SYMPTOM: the feed simply stops moving,
-		// on a fleet whose every other surface is healthy. So it is
-		// counted, and the count is what `feed_unreadable` fires on.
+		// AND NOTHING ENDS IT. Every domain feed's consumer sets
+		// `MaxDeliver: -1` deliberately (see [jetstream] — a budget that
+		// ran out would drop a wake silently), so this record circles at
+		// the head of the consumer with every wake behind it waiting.
+		// That is the right trade and it has NO OTHER SYMPTOM: the feed
+		// simply stops moving, on a fleet whose every other surface is
+		// healthy. So it is counted, and the count is what
+		// `feed_unreadable` fires on.
 		f.count(metrics.TrackerFeedUnreadable)
 		log.WarnContext(ctx, "changefeed_untranslatable", "key", msg.Key,
 			"position", msg.Position, "stream", msg.Stream, "generation", msg.Gen,

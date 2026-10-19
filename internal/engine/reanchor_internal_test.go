@@ -16,6 +16,7 @@ import (
 	"github.com/nats-io/nats.go"
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -894,6 +895,79 @@ func TestAReanchorOfThePagesLogIsThePagesOwn(t *testing.T) {
 	waitUntil(t, 10*time.Second, "the page write to apply in the new generation", func() bool {
 		return countRows(t, e, `SELECT COUNT(*) FROM pages_containers
 			WHERE key = 'ENG' AND purpose = 'after' AND version >= ?`,
+			int64(gen)*statelog.GenerationStride) == 1
+	})
+}
+
+// A REANCHOR OF CHAT'S LOG IS CHAT'S, on the knowledge base's terms: the chat
+// log gets chat's generation record and chat's audit row, the tracker's
+// checkpoint, audit and rows are untouched, and a record on chat's log after
+// the reanchor lands in the generation the log moved to — which is the whole of
+// what the reanchor is for on a domain whose rows a position guards.
+//
+// THROUGH THE NODE GATE'S OWN WRITER, which is the one chat write that needs
+// neither a room nor a roster: what is under test is the log and its
+// generation, and an eviction is a record on it like any other.
+func TestAReanchorOfTheChatLogIsChatsOwn(t *testing.T) {
+	t.Parallel()
+	e, js := aRunningNode(t)
+	s := e.core.Load().log
+	running := s.Domain(chatlet.Domain{}.Name())
+	if running == nil {
+		t.Fatal("the node runs no chat log")
+	}
+	gate, err := chatlet.NewGateWriter(chatlet.GateOptions{Publisher: running.publisher})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operator := chatlet.Actor{Handle: "ops-1", Kind: chatlet.AuthorOperator, OperatorID: "ops-1"}
+	if res, err := gate.EvictNode(t.Context(), operator,
+		statelog.NewOpID(time.Now(), ""), "node-x"); err != nil || res.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("a chat write before the rebuild: %+v, %v", res, err)
+	}
+	trackerBefore := readCursorRow(t, e, worklet.Domain{}.Name())
+
+	rebuildLog(t, js, chatlet.Domain{}.Stream())
+	s.publishPositions(t.Context())
+	stream := chatlet.Domain{}.Stream().Name
+	view, err := e.ReanchorStatus(t.Context(), stream)
+	if err != nil {
+		t.Fatalf("ReanchorStatus: %v", err)
+	}
+	plan, err := e.Reanchor(t.Context(), ReanchorRequest{
+		Stream: stream, Confirm: statelog.ConfirmationOf(view.CreatedAt), By: reanchorOperator,
+	})
+	if err != nil {
+		t.Fatalf("Reanchor: %v", err)
+	}
+	gen := plan.Generation
+
+	// THE CHAT LOG CARRIES CHAT'S RECORD, applied as chat's audit row.
+	waitUntil(t, 10*time.Second, "chat's generation record to apply", func() bool {
+		return countRows(t, e, `SELECT COUNT(*) FROM chat_log_generations
+			WHERE generation = ? AND by = 'ops-1'`, gen) == 1
+	})
+	// AND THE TRACKER NEVER HEARD OF IT.
+	if n := countRows(t, e, `SELECT COUNT(*) FROM tracker_log_generations`); n != 0 {
+		t.Fatalf("a reanchor of the chat log wrote %d tracker audit row(s)", n)
+	}
+	if got := readCursorRow(t, e, worklet.Domain{}.Name()); got != trackerBefore {
+		t.Fatalf("the tracker's checkpoint moved from %+v to %+v", trackerBefore, got)
+	}
+
+	// A CHAT RECORD AFTER IT LANDS IN THE NEW GENERATION.
+	waitUntil(t, 10*time.Second, "the chat applier to resume", func() bool {
+		r := running.runner
+		return r.StreamIdentity() == nil && r.Committed().Generation == gen
+	})
+	res, err := gate.EvictNode(t.Context(), operator, statelog.NewOpID(time.Now(), ""), "node-y")
+	if err != nil || res.Outcome != statelog.OutcomeApplied || res.Position.Generation != gen {
+		t.Fatalf("a chat write after the reanchor: %+v, %v — want applied in generation %d",
+			res, err, gen)
+	}
+	waitUntil(t, 10*time.Second, "the chat write to apply in the new generation", func() bool {
+		return countRows(t, e, `SELECT COUNT(*) FROM chat_evictions
+			WHERE node_id = 'node-y' AND from_position >= ?`,
 			int64(gen)*statelog.GenerationStride) == 1
 	})
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -55,6 +56,8 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 			topics.ArtifactDataLogWildcard},
 		assistantdomain.Domain{}.Name(): {topics.AssistantLogStream, topics.AssistantLogPrefix,
 			topics.AssistantLogWildcard},
+		chatlet.Domain{}.Name(): {topics.ChatLogStream, topics.ChatLogPrefix,
+			topics.ChatLogWildcard},
 	}
 	var registered []string
 	for _, d := range registeredDomains() {

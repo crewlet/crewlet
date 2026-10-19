@@ -21,7 +21,7 @@ var goPackages = map[string]bool{
 	"atlassian": true, "atlassianhost": true, "auth": true, "authapi": true,
 	"authevents": true, "authz": true, "auxspend": true, "backoff": true,
 	"backup": true, "brandformat": true, "brokertest": true, "builtin": true, "chain": true, "changefeed": true,
-	"canon": true, "canvasformat": true, "caveat": true, "caveattest": true, "edits": true,
+	"canon": true, "canvasformat": true, "caveat": true, "caveattest": true, "chatlet": true, "edits": true,
 	"cliagent": true, "clientsource": true,
 	"cliprofile": true, "codingagent": true, "colleague": true, "collect": true,
 	"compact": true, "config": true, "configapi": true, "configplane": true, "crewlet": true,

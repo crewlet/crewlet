@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -403,6 +404,7 @@ func TestEveryEstateDeclaresItsOwnGroupAndTheyAreDistinct(t *testing.T) {
 	for estate, group := range map[string]string{
 		"work": worklet.FeedGroup,
 		"page": doclet.FeedGroup,
+		"chat": chatlet.FeedGroup,
 	} {
 		if group == "" {
 			t.Errorf("%s declares no group, so its feed has no durable "+
