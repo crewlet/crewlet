@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // SubagentPreamble is the mandated runtime contract every sub-agent carries,
@@ -15,8 +16,9 @@ import (
 // desk under the parent's name.
 const SubagentPreamble = "You are a short-lived worker. Do not delegate further. " +
 	"Do not contact colleagues. You can discover and activate more tools " +
-	"yourself: call `list_mcp_server_tools(server=...)` to see what an " +
-	"MCP server offers, then `activate_tool(name=...)` to promote a tool " +
+	"yourself: call `" + toolname.ListMCPServerTools + "(server=...)` to " +
+	"see what an MCP server offers, then `" + toolname.Activate +
+	"(name=...)` to promote a tool " +
 	"into your `tools=[...]` so you can call it on the next round. Only " +
 	"read-only tools are available this way — you cannot post to " +
 	"channels, comment on issues, open PRs, or otherwise write to a " +

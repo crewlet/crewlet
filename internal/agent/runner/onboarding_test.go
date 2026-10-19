@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -393,7 +394,7 @@ func TestTheOnboardingSurfaceCanDiscoverTools(t *testing.T) {
 		t.Fatal("the pass never called the model")
 	}
 	offered := toolNames(reqs[0].Tools)
-	for _, want := range []string{runner.ListMCPToolsTool, runner.ActivateTool} {
+	for _, want := range toolname.Discovery() {
 		if !slices.Contains(offered, want) {
 			t.Errorf("the onboarding surface offers %v, without %s: the pass "+
 				"cannot reach the knowledge-base tools its prompt sends it to", offered, want)

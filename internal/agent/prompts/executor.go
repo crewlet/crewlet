@@ -4,6 +4,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // ExecutorHeader is the executor's contract: decide and act in one pass, then
@@ -34,11 +35,13 @@ const ExecutorHeader = "\n## Your turn" +
 	"reporting what you actually did." +
 	"\n" +
 	"\n**Your `tools=[...]` starts with your first-party tools and the " +
-	"discovery meta-tools (`activate_tool`, `list_mcp_server_tools`).** " +
+	"discovery meta-tools (`" + toolname.Activate + "`, `" +
+	toolname.ListMCPServerTools + "`).** " +
 	"Everything your team's MCP servers publish is reachable but not yet " +
 	"loaded: the catalogue below lists those servers by NAME only. Call " +
-	"`list_mcp_server_tools(server=...)` to see what a server offers, " +
-	"then `activate_tool(name=...)` to promote the one you want — its " +
+	"`" + toolname.ListMCPServerTools + "(server=...)` to see what a server " +
+	"offers, then `" + toolname.Activate + "(name=...)` to promote the one " +
+	"you want — its " +
 	"schema appears on the next message and you call it directly. " +
 	"Prefer discovery over giving up: only report that you cannot act if " +
 	"discovery fails or the tool genuinely does not exist." +
