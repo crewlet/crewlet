@@ -408,7 +408,56 @@ func (w *Writer) Can(g iam.Grant) bool { return iam.Principal{Grants: w.Grants}.
 // DISTINCT FROM A CONFLICT AND FROM AN OUTAGE, which is the three-valued rule
 // applied to authority: "you may not", "somebody else won" and "this node
 // could not tell" are three answers a surface renders as 403, 409 and 503.
+//
+// EVERY ONE IS A [Refusal], which says whether a permission would lift it, and
+// nothing in this package builds it any other way — a gate in this package's
+// tests holds that. Compare it with errors.Is; read what lifts it with
+// errors.As.
 var ErrRefused = errors.New("not allowed")
+
+// Refusal is a record this writer's party may not publish, and whether a
+// permission would lift it.
+//
+// TWO KINDS OF "MAY NOT", and a surface answers them differently. One a
+// permission lifts — a record only an administrator publishes, a permission
+// the party cannot confer because it does not hold it — names that permission,
+// so a caller knows what to ask for. One the record's own rule refuses
+// whatever the party holds — a person's token minted by anybody but them, an
+// owner who may not act, an invitation already spent, a name this build does
+// not know — names none, because asking for a permission would change
+// nothing. Both were one sentinel wrapped in a sentence, so every refusal was
+// answered as the first kind, naming every permission there is.
+//
+// EXPORTED, FIELDS AND ALL, because a refusal crosses the estate router's wire
+// (internal/estate) whenever the node that decided it is not the node whose
+// caller is told, and the wire rebuilds an error type from its exported
+// fields. Only this package builds one ([needs], [forbidden]).
+type Refusal struct {
+	// Grants are the permissions any ONE of which, held by the party, would
+	// have admitted the record — internal/authz's minimal cover: an app for
+	// an app, admin for admin. EMPTY where the record's own rule refused it,
+	// whatever the party holds.
+	Grants []iam.Grant
+
+	// Err is the refusal's sentence and its %w chain — [ErrTokenRefused]
+	// among it for a record asked through a machine token.
+	Err error
+}
+
+func (e *Refusal) Error() string   { return ErrRefused.Error() + ": " + e.Err.Error() }
+func (e *Refusal) Unwrap() []error { return []error{ErrRefused, e.Err} }
+
+// needs is a refusal any one of grants would have lifted, worded as
+// fmt.Errorf words format and args.
+func needs(grants []iam.Grant, format string, args ...any) *Refusal {
+	return &Refusal{Grants: slices.Clone(grants), Err: fmt.Errorf(format, args...)}
+}
+
+// forbidden is a refusal no permission lifts, worded as fmt.Errorf words
+// format and args.
+func forbidden(format string, args ...any) *Refusal {
+	return &Refusal{Grants: []iam.Grant{}, Err: fmt.Errorf(format, args...)}
+}
 
 // mayAdminister refuses a record only an administrator may publish, and every
 // administrative record written through a machine token.
@@ -445,24 +494,30 @@ var ErrRefused = errors.New("not allowed")
 // than that it lacks a permission it plainly has. The CLASS decides, never the
 // spelling of an id: an operator id naming the machine-token class is a token,
 // whether or not this build can parse what follows.
+//
+// # Which refusal it is
+//
+// A party without admin is refused NAMING admin, which lifts it; a machine
+// token is refused naming nothing, since no permission on a token would — a
+// person signs in.
 func (w *Writer) mayAdminister(op OpKind) error {
 	if strings.HasPrefix(w.OperatorID, iam.MachineTokenPrefix) {
-		return fmt.Errorf("%w: %w. Sign in and do it yourself (%s, token %s)",
-			ErrRefused, ErrTokenRefused, op,
-			w.OperatorID)
+		return forbidden("%w. Sign in and do it yourself (%s, token %s)",
+			ErrTokenRefused, op, w.OperatorID)
 	}
 	if w.Can(iam.GrantAdmin) {
 		return nil
 	}
-	return fmt.Errorf("%w: %s needs %s, and you have %v", ErrRefused,
+	return needs([]iam.Grant{iam.GrantAdmin}, "%s needs %s, and you have %v",
 		op, iam.GrantAdmin, w.Grants)
 }
 
-// ErrTokenRefused reports an administrative identity record asked through a
-// machine token ([Writer.mayAdminister]). Every error carrying it also wraps
-// [ErrRefused], so a surface that only knows "may not" still refuses; one that
-// tells the two apart answers that a person must be present rather than that
-// a permission is missing.
+// ErrTokenRefused reports an identity record asked through a machine token that
+// needs a person present: an administrative one ([Writer.mayAdminister]), and a
+// token's mint ([Writer.mayMintFor]). Every error carrying it is a [Refusal]
+// naming no permission, so a surface that only knows "may not" still refuses;
+// one that tells the two apart answers that a person must be present rather
+// than that a permission is missing.
 var ErrTokenRefused = errors.New("access tokens can't change people or access")
 
 // publish runs one decide through the framework's own write authority.
