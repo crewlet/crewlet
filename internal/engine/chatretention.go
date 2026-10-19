@@ -808,7 +808,9 @@ type chatRoomRows struct{ db store.ReplicatedReader }
 // whole, and then looks each room up in that — so the MIN spelling is the
 // grouped join under another name, every message the company has ever kept
 // read on every page. The limit is not decorrelated, and stays a seek per room;
-// [TestTheRoomReadSeeksEachRoomsOldestMessage] holds the plan to it.
+// [TestTheRoomReadSeeksEachRoomsOldestMessage] holds the plan to it, through
+// the one predicate every plan gate recognises the rewrite by
+// (Decorrelated, in internal/store/storetest).
 const chatPruneRoomsSQL = `
 	SELECT c.id, c.retention_days,
 	       (SELECT m.created_at FROM chat_messages m
