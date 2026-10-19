@@ -587,9 +587,8 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	// the intent.
 	if c.Tracker.Native != nil && c.TrackerBackendFor() != TrackerNative {
 		p.add(field("tracker.native"), ErrConflict,
-			"this company's tracker is %q, and `tracker.native` is the engine's "+
-				"own tracker's policy — nothing would read it. Remove the block, "+
-				"or run the native tracker", c.TrackerBackendFor())
+			"this company's tracker is %q, so nothing reads `tracker.native`. "+
+				"Remove the block, or use the native tracker", c.TrackerBackendFor())
 	}
 
 	// The hierarchy's own rules (duplicate handles, human seats carrying
@@ -639,9 +638,8 @@ func (c *Company) validateKnowledgeBackend() error {
 	// path so the message names what to delete.
 	if c.Knowledge.Backend == KnowledgeNative && c.Integrations.Confluence != nil {
 		p.add(field("knowledge.backend"), ErrConflict,
-			"a native knowledge base and integrations.confluence cannot both run: "+
-				"pages would live in two places and nothing would keep them in "+
-				"step. Remove one")
+			"a native knowledge base and integrations.confluence can't both "+
+				"run, because pages would be split between them. Remove one")
 	}
 	if c.Knowledge.Backend == KnowledgeConfluence && c.Integrations.Confluence == nil {
 		p.add(field("knowledge.backend"), ErrConflict,
@@ -649,9 +647,8 @@ func (c *Company) validateKnowledgeBackend() error {
 	}
 	if c.Tracker.Backend == TrackerNative && c.Integrations.Jira != nil {
 		p.add(field("tracker.backend"), ErrConflict,
-			"a native tracker and integrations.jira cannot both run: work would "+
-				"be filed in two places and a unit's project key would name two "+
-				"trackers. Remove one")
+			"a native tracker and integrations.jira can't both run, because "+
+				"work would be split between them. Remove one")
 	}
 	if c.Tracker.Backend == TrackerJira && c.Integrations.Jira == nil {
 		p.add(field("tracker.backend"), ErrConflict,
@@ -673,14 +670,13 @@ func (c *Company) validateKnowledgeBackend() error {
 		if c.Knowledge.Vectors != nil && *c.Knowledge.Vectors &&
 			c.TrackerBackendFor() != TrackerNative {
 			p.add(field("knowledge.vectors"), ErrConflict,
-				"vectors need a knowledge backend or a native tracker — with "+
-					"neither there is no corpus to embed")
+				"vectors need a knowledge backend or a native tracker to "+
+					"search")
 		}
 	}
 	if c.Knowledge.Vectors != nil && *c.Knowledge.Vectors && c.Providers.Embeddings == nil {
 		p.add(field("knowledge.vectors"), ErrConflict,
-			"vector recall needs providers.embeddings — there is nothing to "+
-				"compute an embedding with")
+			"vectors need providers.embeddings to compute embeddings with")
 	}
 	return p.err()
 }
@@ -852,9 +848,10 @@ func (t *TrackerNativeConfig) validate(path Path) error {
 	}
 	if d := t.InboxRetentionDays; d != 0 && (d < MinInboxRetentionDays || d > MaxInboxRetentionDays) {
 		p.add(at(path, "inbox_retention_days"), ErrOutOfRange,
-			"%d is outside %d..%d — below a month an inbox stops being one, and "+
-				"past ten years it is a second copy of the history it points at",
-			d, MinInboxRetentionDays, MaxInboxRetentionDays)
+			"%d is outside %d..%d. Under a month, notices are gone before "+
+				"people see them, and past ten years they only repeat the "+
+				"history they point at", d, MinInboxRetentionDays,
+			MaxInboxRetentionDays)
 	}
 	return p.err()
 }
