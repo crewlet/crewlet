@@ -1,6 +1,7 @@
 package doclet_test
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"slices"
@@ -662,4 +663,99 @@ func TestASaveExcerptIsItsMessageAndNothingElse(t *testing.T) {
 	if want := []string{"raise the grace", ""}; !slices.Equal(saves, want) {
 		t.Fatalf("save excerpts = %q, want %q", saves, want)
 	}
+}
+
+// PAGING A LISTING RETURNS EVERY PAGE ONCE, IN ITS ORDER.
+//
+// A later window is read as the arms of the order strictly after the row its
+// cursor names — the title held equal with the id past it, then every title
+// past it, then every container past it — each read in turn until the window
+// is full, so a "Load more" sees every page exactly once only while those arms
+// partition what follows the cursor and are read nearest first. Each listing
+// here is read whole and then one, two and three pages at a time, so a window
+// stops at every row of it: at the boundary between two containers in the
+// workspace, beside a title another container also holds, past a trashed page
+// a listing of the live ones leaves out, and inside a tree level.
+//
+// Mutation: drop the id bound from the resume's first arm, and the row a
+// window stopped on is read again at the top of the next; read the arms
+// shallowest first, and the windows come back out of order.
+func TestPagingAListingReturnsEveryPageOnceInItsOrder(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	retired := r.write(author("jane"), doclet.NewPage{Title: "Retired", Body: "prose"})
+	if _, err := r.store.Trash(t.Context(), author("jane"), retired.Page.ID); err != nil {
+		t.Fatalf("Trash: %v", err)
+	}
+	r.drain()
+	for _, title := range []string{"Alpha", "Oncall", "Zeta", "Runbook"} {
+		r.write(author("jane"), doclet.NewPage{Title: title, Body: "prose"})
+	}
+	handbook := r.write(author("jane"), doclet.NewPage{Title: "Handbook", Body: "index"})
+	for _, title := range []string{"Travel", "Expenses", "Leave"} {
+		r.write(author("jane"), doclet.NewPage{
+			Title: title, Body: "prose", ParentID: handbook.Page.ID,
+		})
+	}
+	for _, title := range []string{"Deploys", "Alpha"} {
+		r.write(author("jane"), doclet.NewPage{Container: "OPS", Title: title, Body: "prose"})
+	}
+	r.write(author("jane"), doclet.NewPage{Container: "PROD", Title: "Roadmap", Body: "prose"})
+
+	live := []doclet.Status{doclet.StatusPublished, doclet.StatusDraft}
+	for name, f := range map[string]doclet.Filter{
+		"the workspace":       {},
+		"one container":       {Container: "ENG"},
+		"its live pages":      {Container: "ENG", Status: live},
+		"its top level":       {Container: "ENG", Roots: true},
+		"one page's children": {ParentID: handbook.Page.ID},
+	} {
+		t.Run(name, func(t *testing.T) {
+			whole := f
+			whole.Limit = doclet.MaxLimit
+			all := r.list(whole)
+			if all.After != "" || len(all.Pages) < 3 {
+				t.Fatalf("the whole listing is %d pages with a next window %q — "+
+					"the fixture must fit one window and give three to page through",
+					len(all.Pages), all.After)
+			}
+			if !slices.IsSortedFunc(all.Pages, inListingOrder) {
+				t.Fatalf("the whole listing is %v, which is not in the listing's "+
+					"order of container, title and id", placement(all.Pages))
+			}
+			for size := 1; size <= 3; size++ {
+				window := f
+				window.Limit = size
+				var paged []doclet.Summary
+				for range len(all.Pages) + 1 {
+					got := r.list(window)
+					paged = append(paged, got.Pages...)
+					if got.After == "" {
+						break
+					}
+					window.After = got.After
+				}
+				if !slices.Equal(placement(paged), placement(all.Pages)) {
+					t.Errorf("paged %d at a time the listing reads\n%v\nwant\n%v",
+						size, placement(paged), placement(all.Pages))
+				}
+			}
+		})
+	}
+}
+
+// inListingOrder orders two rows as every listing is ordered: container, then
+// title, then id, each by its bytes.
+func inListingOrder(a, b doclet.Summary) int {
+	return cmp.Or(cmp.Compare(a.Container, b.Container), cmp.Compare(a.Title, b.Title),
+		cmp.Compare(a.ID, b.ID))
+}
+
+// placement is each row's place in the order, readably.
+func placement(rows []doclet.Summary) []string {
+	out := make([]string, len(rows))
+	for i, row := range rows {
+		out[i] = row.Container + "/" + row.Title + "/" + row.ID
+	}
+	return out
 }

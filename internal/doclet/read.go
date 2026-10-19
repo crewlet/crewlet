@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/keyset"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -223,6 +224,41 @@ func (r *Reader) List(ctx context.Context, f Filter, fresh statelog.Freshness) (
 			"surface resolves an absent read_level to its own default (a seat " +
 			"tool linearizable, a dashboard poll stale) before it reads")
 	}
+	spec, child := compileListing(f)
+	limit := f.Limit
+	if limit <= 0 {
+		limit = DefaultLimit
+	}
+	if limit > MaxLimit {
+		limit = MaxLimit
+	}
+	resume := listFromStart
+	if f.After != "" {
+		c, err := parseListCursor(f.After)
+		if err != nil {
+			return Listing{}, err
+		}
+		resume = listResumes(c, f.Container != "")
+	}
+	var out listPage
+	served, err := r.log.Read(ctx, fresh.Query(ReadScope(f.Container), true), func(tx *sql.Tx) error {
+		var err error
+		out, err = r.list(ctx, tx, spec, child, limit, resume)
+		return err
+	})
+	if err != nil {
+		return Listing{}, err
+	}
+	return Listing{
+		Pages: out.rows, Total: out.total, After: out.after,
+		Level: served.Level, Complete: served.Complete,
+		Position: served.Position, LogLag: served.Lag,
+	}, nil
+}
+
+// compileListing is the predicate a filter's listing is, and the one each of
+// its pages' children is counted under.
+func compileListing(f Filter) (spec, child listSpec) {
 	where := []string{"1 = 1"}
 	var args []any
 	if f.Container != "" {
@@ -264,7 +300,7 @@ func (r *Reader) List(ctx context.Context, f Filter, fresh statelog.Freshness) (
 	// narrowing, on the child. Only those two — a label or a title filter
 	// selects which pages are LISTED, and a child that does not share its
 	// parent's label is still under it.
-	child := listSpec{where: []string{"c.parent_id = p.id"}}
+	child = listSpec{where: []string{"c.parent_id = p.id"}}
 	if len(f.Status) > 0 {
 		marks := make([]string, len(f.Status))
 		for i, s := range f.Status {
@@ -288,36 +324,7 @@ func (r *Reader) List(ctx context.Context, f Filter, fresh statelog.Freshness) (
 	if f.Roots {
 		where = append(where, "p.parent_id = ''")
 	}
-
-	limit := f.Limit
-	if limit <= 0 {
-		limit = DefaultLimit
-	}
-	if limit > MaxLimit {
-		limit = MaxLimit
-	}
-	var after *listCursor
-	if f.After != "" {
-		c, err := parseListCursor(f.After)
-		if err != nil {
-			return Listing{}, err
-		}
-		after = &c
-	}
-	var out listPage
-	served, err := r.log.Read(ctx, fresh.Query(ReadScope(f.Container), true), func(tx *sql.Tx) error {
-		var err error
-		out, err = r.list(ctx, tx, listSpec{where: where, args: args}, child, limit, after)
-		return err
-	})
-	if err != nil {
-		return Listing{}, err
-	}
-	return Listing{
-		Pages: out.rows, Total: out.total, After: out.after,
-		Level: served.Level, Complete: served.Complete,
-		Position: served.Position, LogLag: served.Lag,
-	}, nil
+	return listSpec{where: where, args: args}, child
 }
 
 // listSpec is one set of predicates and the arguments they bind, in order.
@@ -334,10 +341,9 @@ type listPage struct {
 	after string
 }
 
-// listCursor is where a listing window stopped: the ORDER's own columns, so
-// the next window is everything strictly after it in that order. The id is the
-// tie-break, because a title is unique only among a container's LIVE pages —
-// a trashed page keeps its title while a new one claims it.
+// listCursor is where a listing window stopped: the ORDER's own columns
+// ([listOrder]), so the next window is everything strictly after it in that
+// order.
 type listCursor struct {
 	Container string `json:"c"`
 	Title     string `json:"t"`
@@ -364,56 +370,157 @@ func parseListCursor(raw string) (listCursor, error) {
 	return c, nil
 }
 
-// list is the listing inside one transaction, so [Reader.Get] can take the
-// children it reports from the same snapshot as the page itself.
+// childListing is the listing of one page's children a [Detail] carries —
+// every one of them, whatever its status — and the predicate each of theirs
+// is counted under.
+func childListing(id string) (spec, child listSpec) {
+	return listSpec{where: []string{"p.parent_id = ?"}, args: []any{id}},
+		listSpec{where: []string{"c.parent_id = p.id"}}
+}
+
+// listOrder is the order every listing is read in, as the terms a later
+// window resumes through: the container, the title, and the id, which keeps
+// the order total. The knowledge base's own arbitration keeps one container's
+// titles apart — a create claims its title's normalised form, and a trashed
+// page keeps its claim — so two rows tied on both are rows that arbitration
+// failed to keep out, a restore's residue, and a cursor with nothing to break
+// the tie would skip one of them. Every column is NOT NULL, so no arm of a
+// resume reads a NULL tail. Replicated 0062 holds the
+// order in `pages_heads_container_idx` (container, title, id) and in
+// `pages_heads_parent_idx` (parent_id, container, title, id), so a window is a
+// walk of one of them that its LIMIT stops, never a sort of everything the
+// listing matches.
+var listOrder = []keyset.Term{
+	{Column: "p.container", NeverNull: true},
+	{Column: "p.title", NeverNull: true},
+	{Column: "p.id", NeverNull: true},
+}
+
+// listFromStart is a listing's first window: the listing itself, from its
+// first row.
+var listFromStart = []listSpec{{}}
+
+// listResumes is where the window after the row a cursor names is read: the
+// arms of the order strictly after that row ([keyset.After]), nearest first,
+// each an equality prefix and one bound — one seek of the index the order is
+// served by — read in turn until the window is full.
 //
-// THE BOUND IS BOUND HERE, not by the caller. The placeholders are positional,
-// so a caller that appended the window to `args` itself would be one
-// reordering away from paging the listing by a filter value — and the caller
-// that got it right would still be stating the same numbers twice. The child
-// count's arguments come FIRST because its subquery is in the SELECT list,
-// which a statement binds before its WHERE.
+// NOT ONE PREDICATE. Spelled as the nested disjunction `container > ? OR
+// (container = ? AND (title > ? OR …))`, no conjunct bounds the leading
+// column, and the planner seeks nothing: measured, a later window read every
+// page the listing matched from the address index and sorted them all, so
+// paging a knowledge base cost the square of its size. The keyset package's
+// doc has the rest.
+//
+// A LISTING PINNED TO ONE CONTAINER resumes on its title and id alone. Its
+// container is the same on every row, so the order's leading arm — every
+// container after this one — holds nothing, and stated beside the listing's
+// own `p.container = ?` it is a predicate no index range can express: the
+// planner seeks the container and reads every page in it to find none past it,
+// on exactly the last window of a container, where the arms before it ran
+// out. A tree level under one parent keeps all three terms, because there
+// the container is no equality of the listing's and its arm is an empty
+// range of the parent index.
+func listResumes(after listCursor, pinned bool) []listSpec {
+	order, keys := listOrder, []any{after.Container, after.Title, after.ID}
+	if pinned {
+		order, keys = order[1:], keys[1:]
+	}
+	arms := keyset.After(order, keys)
+	out := make([]listSpec, len(arms))
+	for i, arm := range arms {
+		clause, args := arm.SQL(order)
+		out[i] = listSpec{where: []string{clause}, args: args}
+	}
+	return out
+}
+
+// list is the listing inside one transaction, so [Reader.Get] can take the
+// children it reports from the same snapshot as the page itself: the total,
+// and then the rows of one window, read through each of resume in turn until
+// the window is full.
 //
 // THE TOTAL IS THE PREDICATE WITHOUT THE CURSOR, counted in the same
 // transaction: it describes the whole listing rather than what is left of it.
 func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
-	limit int, after *listCursor) (listPage, error) {
+	limit int, resume []listSpec) (listPage, error) {
 
 	var page listPage
-	where := strings.Join(spec.where, " AND ")
-	if err := tx.QueryRowContext(ctx, `
-		SELECT COUNT(*)
-		  FROM pages_heads p
-		  LEFT JOIN pages_skills k ON k.page_id = p.id
-		 WHERE `+where, spec.args...).Scan(&page.total); err != nil {
+	statement, args := listTotalStatement(spec)
+	if err := tx.QueryRowContext(ctx, statement, args...).Scan(&page.total); err != nil {
 		return listPage{}, fmt.Errorf("doclet: count pages: %w", err)
 	}
 
-	args := append(slices.Clip(child.args), spec.args...)
-	if after != nil {
-		// EXPANDED rather than a row-value comparison: the order is three
-		// columns deep and each leg says which one it is breaking a tie on.
-		where += ` AND (p.container > ? OR (p.container = ? AND (p.title > ? OR (p.title = ? AND p.id > ?))))`
-		args = append(args, after.Container, after.Container, after.Title, after.Title, after.ID)
+	var out []Summary
+	for _, from := range resume {
+		// ONE MORE THAN THE WINDOW, which is how the answer knows whether
+		// there is a next one without a second statement — and what is
+		// left of it, once an arm before this one has answered some of it.
+		statement, args := listRowsStatement(spec, child, from, limit+1-len(out))
+		read, err := listRows(ctx, tx, statement, args)
+		if err != nil {
+			return listPage{}, err
+		}
+		out = append(out, read...)
+		if len(out) > limit {
+			break
+		}
 	}
-	// ONE MORE THAN THE WINDOW, which is how the answer knows whether there
-	// is a next one without a second statement.
-	args = append(args, limit+1)
-	rows, err := tx.QueryContext(ctx, `
+	if len(out) > limit {
+		out = out[:limit]
+		last := out[len(out)-1]
+		page.after = listCursor{Container: last.Container, Title: last.Title, ID: last.ID}.String()
+	}
+	page.rows = out
+	if err := r.attachLabels(ctx, tx, out); err != nil {
+		return listPage{}, err
+	}
+	return page, r.attachSaves(ctx, tx, out)
+}
+
+// listTotalStatement counts what the listing matches, and its arguments.
+func listTotalStatement(spec listSpec) (string, []any) {
+	return `
+		SELECT COUNT(*)
+		  FROM pages_heads p
+		  LEFT JOIN pages_skills k ON k.page_id = p.id
+		 WHERE ` + strings.Join(spec.where, " AND "), spec.args
+}
+
+// listRowsStatement is one read of a window — the listing narrowed by from,
+// which is nothing for a first window and one arm of a resume for a later one
+// ([listResumes]) — in the listing's order, and its arguments.
+//
+// THE BOUND IS BOUND HERE, not by the caller. The placeholders are positional,
+// so a caller that appended the window to its arguments itself would be one
+// reordering away from paging the listing by a filter value — and the caller
+// that got it right would still be stating the same numbers twice. The child
+// count's arguments come FIRST because its subquery is in the SELECT list,
+// which a statement binds before its WHERE.
+func listRowsStatement(spec, child, from listSpec, limit int) (string, []any) {
+	where := strings.Join(append(slices.Clip(spec.where), from.where...), " AND ")
+	args := append(slices.Clip(child.args), spec.args...)
+	args = append(args, from.args...)
+	return `
 		SELECT p.id, p.container, p.parent_id, p.title, p.status, p.author,
 		       p.edit_version, COALESCE(k.skill, 0), COALESCE(k.onboarding, 0),
 		       p.updated_at, MAX(p.version, p.scoped_through),
 		       (SELECT COUNT(*) FROM pages_heads c
 		          LEFT JOIN pages_skills ck ON ck.page_id = c.id
-		         WHERE `+strings.Join(child.where, " AND ")+`),
-		       p.body = '',`+summarySaved+`
+		         WHERE ` + strings.Join(child.where, " AND ") + `),
+		       p.body = '',` + summarySaved + `
 		  FROM pages_heads p
 		  LEFT JOIN pages_skills k ON k.page_id = p.id
-		 WHERE `+where+`
+		 WHERE ` + where + `
 		 ORDER BY p.container, p.title, p.id
-		 LIMIT ?`, args...)
+		 LIMIT ?`, append(args, limit)
+}
+
+// listRows reads the rows of one window read.
+func listRows(ctx context.Context, tx *sql.Tx, statement string, args []any) ([]Summary, error) {
+	rows, err := tx.QueryContext(ctx, statement, args...)
 	if err != nil {
-		return listPage{}, fmt.Errorf("doclet: list pages: %w", err)
+		return nil, fmt.Errorf("doclet: list pages: %w", err)
 	}
 	defer rows.Close()
 
@@ -428,7 +535,7 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
 		if err := rows.Scan(&s.ID, &s.Container, &s.ParentID, &s.Title, &s.Status,
 			&s.Author, &s.Version, &skill, &onboarding, &updated, &revision,
 			&s.Children, &folder, &savedID); err != nil {
-			return listPage{}, fmt.Errorf("doclet: scan page: %w", err)
+			return nil, fmt.Errorf("doclet: scan page: %w", err)
 		}
 		s.Skill, s.Onboarding, s.Folder = skill != 0, onboarding != 0, folder != 0
 		s.savedID = savedID.String
@@ -437,18 +544,9 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
 		out = append(out, s)
 	}
 	if err := rows.Err(); err != nil {
-		return listPage{}, fmt.Errorf("doclet: list pages: %w", err)
+		return nil, fmt.Errorf("doclet: list pages: %w", err)
 	}
-	if len(out) > limit {
-		out = out[:limit]
-		last := out[len(out)-1]
-		page.after = listCursor{Container: last.Container, Title: last.Title, ID: last.ID}.String()
-	}
-	page.rows = out
-	if err := r.attachLabels(ctx, tx, out); err != nil {
-		return listPage{}, err
-	}
-	return page, r.attachSaves(ctx, tx, out)
+	return out, nil
 }
 
 // attachSaves fills each row's last save from the history row the listing
@@ -624,9 +722,8 @@ func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) 
 		if detail.History, err = r.history(ctx, tx, id); err != nil {
 			return err
 		}
-		children, err := r.list(ctx, tx,
-			listSpec{where: []string{"p.parent_id = ?"}, args: []any{id}},
-			listSpec{where: []string{"c.parent_id = p.id"}}, DefaultLimit, nil)
+		spec, child := childListing(id)
+		children, err := r.list(ctx, tx, spec, child, DefaultLimit, listFromStart)
 		if err != nil {
 			return err
 		}
@@ -957,8 +1054,9 @@ func (r *Reader) Containers(ctx context.Context, fresh statelog.Freshness) (
 // listing this reader serves, so counting it would put a number on the rail
 // that the list beside it cannot account for — a reader clicks "12" and finds
 // nine. The predicate restates the status rather than reading `trashed_at`,
-// because the container index is on `(container, status, title)` and this walk
-// is meant to use it.
+// because the container index carries the status after the listing's order
+// (`(container, title, id, status)`, replicated 0062), so this walk reads the
+// index alone and never a page's row.
 func (r *Reader) pageCounts(ctx context.Context, tx *sql.Tx) (map[string]int, error) {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT container, COUNT(*) FROM pages_heads

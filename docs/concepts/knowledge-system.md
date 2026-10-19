@@ -661,7 +661,9 @@ Two properties differ from the vendor path and both are visible:
   (`pages{parent}`), each read when its row opens, in windows of 500 with the
   listing's `total` and an `after` cursor, and each page saying how many
   `children` the same listing would show under it, so an expander never opens
-  onto a level whose pages are all in the trash. A search there reads THIS
+  onto a level whose pages are all in the trash. A later window resumes the
+  listing's order where the last one stopped — by space, title and id — so
+  the tenth window of a large space costs what its first does. A search there reads THIS
   NODE'S OWN COPY (the rows, the lexical index and the replicated vectors), and
   the screen says so: it is as current as this node's place on the pages log.
   See [the dashboard's Doclet](../reference/dashboard-design.md#doclet-the-spaces-a-landing-and-search-with-real-modes).
