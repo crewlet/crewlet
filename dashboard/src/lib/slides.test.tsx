@@ -156,9 +156,7 @@ describe("writing a slide back", () => {
     expect(
       src
         .trimEnd()
-        .endsWith(
-          "<aside>Take the questions first, then show the two cards.</aside>\n</section>",
-        ),
+        .endsWith("<aside>Take the questions first, then show the two cards.</aside>\n</section>"),
     ).toBe(true);
   });
 
