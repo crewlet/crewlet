@@ -128,10 +128,13 @@ configuration reserves, split into the logs and the bucket.
   The bucket then holds at most 1 GiB of the company's files; see
   [Object store](../concepts/object-store.md#its-byte-reservation).
 - `stream.store_max_bytes` sets the broker's limit outright, rather than three
-  quarters of the free space at boot. It accepts values from 6 GiB, below
-  what a fresh node needs, so `crewlet validate` (and the advisories a node
-  logs at every start) warn when a data node's embedded broker is given less
-  than the minimum for its configuration.
+  quarters of the free space at boot. It accepts values from 10 GiB, the least
+  a fresh node with nothing set boots in with a gibibyte left beside what it
+  reserves for the mailboxes and the coordination buckets to grow into. A
+  configuration that reserves more — a log's ceiling set higher, the bucket
+  sized by hand — needs more than that, so `crewlet validate` (and the
+  advisories a node logs at every start) warn when a data node's embedded
+  broker is given less than the minimum for its configuration.
 
 The fixed-default logs' fields also go lower: `stream.iam_log_max_bytes` and
 `stream.usage_log_max_bytes` accept 64 MiB. The other five fields accept no

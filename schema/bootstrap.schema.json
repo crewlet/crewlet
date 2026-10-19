@@ -1246,7 +1246,7 @@
           "anyOf": [
             {
               "maximum": 70368744177664,
-              "minimum": 6442450944,
+              "minimum": 10737418240,
               "type": [
                 "integer",
                 "null"
