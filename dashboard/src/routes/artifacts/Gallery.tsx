@@ -464,7 +464,7 @@ function GalleryToolbar({
   trash: { on: boolean; onChange: (on: boolean) => void } | null;
 }) {
   return (
-    <div className="toolbar artifacts-bar">
+    <div className="toolbar">
       <Select
         size="sm"
         width="auto"
