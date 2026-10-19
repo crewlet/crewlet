@@ -168,14 +168,14 @@ test("the panel's Account is the one screen it does not replace", async () => {
 
 test("the user block offers both sign-outs though the viewer never answers", async () => {
   await mount(null);
-  fireEvent.click(await screen.findByRole("button", { name: "Account and preferences" }));
-  const popover = await screen.findByRole("dialog", { name: "Account and preferences" });
-  // UNDER THE SESSION'S OWN LOGIN, the viewer that would name a seat never
-  // answering — with the way to their Account, which reads no socket.
-  await waitFor(() => expect(within(popover).getByText("jane.doe")).toBeDefined());
-  expect(within(popover).getByRole("link", { name: "Account" })).toBeDefined();
-  expect(within(popover).getByRole("button", { name: "Sign out everywhere" })).toBeDefined();
-  expect(within(popover).getByRole("button", { name: "Sign out" })).toBeDefined();
+  // THE ROW IS NAMED BY THE SESSION'S OWN LOGIN, the viewer that would name a
+  // seat never answering, and its menu holds the way to their Account, which
+  // reads no socket.
+  fireEvent.click(await screen.findByRole("button", { name: /jane\.doe/ }));
+  const menu = await screen.findByRole("menu", { name: "Your account" });
+  expect(within(menu).getByRole("menuitem", { name: /^Account/ })).toBeDefined();
+  expect(within(menu).getByRole("menuitem", { name: /^Sign out everywhere/ })).toBeDefined();
+  expect(within(menu).getByRole("menuitem", { name: "Sign out" })).toBeDefined();
 });
 
 // A SESSION HOLDING NO APP IS DIALLED, as every session is: the socket serves

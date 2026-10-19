@@ -1608,27 +1608,19 @@ test("the spend chart's subtitle asks for no width of its own", () => {
   );
 });
 
-// THE ACCOUNT AND PREFERENCES POPOVER IS ONE COLUMN, AS WIDE AS ITS ROWS. The
-// preferences' label and control columns are what set the panel's width; the
-// account block above them fills it and never sets it. With an 18rem block
-// above `width: max-content` rows, every viewer's popover was 18rem, the rows
-// sat in a narrower column with dead space beside them, and the rule between
-// the two stopped about 44px short of the panel's edge.
-test("the preferences popover is as wide as its rows, and the account block above them never sets it", () => {
+// THE PREFERENCES POPOVER IS AS WIDE AS ITS ROWS. The preferences' label and
+// control columns are what set the panel's width, and its body declares none:
+// a `width: max-content` body, or an 18rem block once drawn above it, left the
+// rows in a column narrower than the panel. The session's gestures are the
+// reader's menu now, so nothing else shares the popover or styles for it.
+test("the preferences popover is as wide as its rows, and holds nothing else", () => {
   const css = sheet("frame.css");
   const sized = (selector: string) =>
     mentioning(css, selector)
       .filter(({ body }) => /(?<![-\w])width\s*:/.test(body))
       .map(({ sel }) => sel);
-  // Neither block declares a width: the rows' own size reaches the shrink-to-
-  // fit panel, and both blocks fill whatever that came to.
   expect(sized(".preferences")).toEqual([]);
-  expect(sized(".preferences-account")).toEqual([]);
-  // The account block contributes nothing to the panel's width…
-  expect(block(css, ".preferences-account")).toMatch(/contain:\s*inline-size/);
-  // …and its one unwrapped line is cut at the column's edge rather than
-  // running past it.
-  expect(block(css, ".preferences-account > .truncate")).toMatch(/max-width:\s*100%/);
+  expect(css).not.toContain(".preferences-account");
 });
 
 // SPEND READS AS ROWS. Its cards started at their own heights, so a table of
