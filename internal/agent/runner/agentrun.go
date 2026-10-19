@@ -123,7 +123,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	}
 	surface = built
 
-	system, user := r.executorPrompt(ctx, round, notes, history, snapshot)
+	system, user := r.executorPrompt(ctx, round, notes, history, snapshot, built)
 	// AND ASKED AGAIN once the brief exists, before anything is on the
 	// record: assembling it rewrites the prior rounds' payloads past their
 	// budgets with the seat's auxiliary model, charged to the same counters,

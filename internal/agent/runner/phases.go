@@ -374,7 +374,7 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 	}
 	surface = built
 
-	system, user := r.executorPrompt(ctx, round, notes, history, snapshot)
+	system, user := r.executorPrompt(ctx, round, notes, history, snapshot, built)
 
 	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Execute, surface: surface, system: system, user: user,
@@ -426,8 +426,18 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 // here, once, because this is the one frame that renders the catalogue for
 // both runtimes, and a record made anywhere else would describe a catalogue
 // matched a second time against a live registry rather than the one sent.
+//
+// TWO VIEWS OF THE TOOLS, and each section reads the one it describes.
+// snapshot is the universe the surface was built FROM
+// ([Runner.executorUniverse]): the catalogue lists its first-party tools and
+// the sandbox section is rendered where it holds run_sandbox. built is the
+// surface itself, which also holds what [Runner.surfaceWith] adds to its own
+// copy — submit_work, the discovery pair and `delegate` — so every section
+// gated on a tool being offered, and the tool-skill matching, read built's
+// names. Read off the snapshot, they never saw `delegate`, and `## Your
+// workers` was rendered for no seat at all.
 func (r *Runner) executorPrompt(ctx context.Context, _ int, notes string,
-	history []ledger.Iteration, snapshot tools.Snapshot,
+	history []ledger.Iteration, snapshot tools.Snapshot, built *tools.Surface,
 ) (system, user prompts.Prompt) {
 	offer := r.cfg.Skills.Offer()
 	_, offersSandbox := snapshot.Lookup(RunSandboxTool)
@@ -435,7 +445,7 @@ func (r *Runner) executorPrompt(ctx context.Context, _ int, notes string,
 		// The catalogue of the universe the surface was built from, so it
 		// lists nothing this executor cannot activate.
 		ToolCatalogue:  snapshot.Catalogue(),
-		AvailableTools: snapshot.Names(),
+		AvailableTools: built.Universe().Names(),
 
 		ThreadContext:       r.cfg.Context.ThreadContext,
 		PersonalMemory:      r.cfg.Context.PersonalMemory,

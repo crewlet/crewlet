@@ -123,9 +123,12 @@ type ExecutorInput struct {
 	// with a one-line description, MCP servers by name only.
 	ToolCatalogue string
 
-	// AvailableTools is the tool surface registered for this turn. It
-	// scopes skill matching, and gates every section that tells the model
-	// to call a tool (escalation, workers).
+	// AvailableTools is every name on the surface built for this phase,
+	// the tools the phase adds to it included (`submit_work`, the
+	// discovery pair, `delegate`) — never the registry snapshot it was
+	// built from, which holds none of those. It scopes skill matching,
+	// and gates every section that tells the model to call a tool
+	// (escalation, workers).
 	AvailableTools []string
 
 	// Workers is the rendered `## Your workers` block: one line per
