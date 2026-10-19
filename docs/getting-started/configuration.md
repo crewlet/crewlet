@@ -892,12 +892,14 @@ stream:
                                     #   `no suitable peers for placement,
                                     #   insufficient storage` — naming whichever
                                     #   stream was provisioned last. Bounds:
-                                    #   6 GiB..64 TiB — the 4.5 GiB the five
-                                    #   state logs reserve at their smallest,
-                                    #   and about 1.5 GiB for every stream
-                                    #   that reserves nothing — and it must not
-                                    #   be smaller than the ceilings declared
-                                    #   inside it.
+                                    #   10 GiB..64 TiB — the least a fresh node
+                                    #   with nothing set boots in: the 6.5 GiB
+                                    #   the seven state logs reserve at their
+                                    #   smallest, the files' bucket's quarter
+                                    #   of the limit, and at least a gibibyte
+                                    #   for every stream that reserves nothing
+                                    #   — and it must not be smaller than the
+                                    #   ceilings declared inside it.
                                     #   REFUSED for `type: nats` — an external
                                     #   cluster's account limits are its own
                                     #   operator's, and this node reads them back

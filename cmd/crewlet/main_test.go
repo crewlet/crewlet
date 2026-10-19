@@ -1424,12 +1424,16 @@ func TestValidateReadsTheFileItWasGiven(t *testing.T) {
 
 // A TIER A DOCUMENT WHOSE BROKER CANNOT HOLD A FRESH NODE IS SAID AT VALIDATE,
 // through the same list a node logs at every start ([engine.BootstrapWarnings]):
-// stream.store_max_bytes accepts a value the boot then refuses.
+// stream.store_max_bytes accepts a value the boot then refuses. Here a 64 GiB
+// limit with 60 GiB of it reserved for the files, which validation sums with
+// no declared ceilings and admits, while the logs at their floors do not fit
+// in the 4 GiB left.
 func TestValidateWarnsOfABrokerLimitBelowTheFloor(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := writeYAML(t, "crewlet.yaml", "store:\n  path: "+filepath.Join(dir, "c.db")+"\n"+
-		"stream:\n  store_dir: "+filepath.Join(dir, "s")+"\n  store_max_bytes: 6442450944\n"+
+		"  objects:\n    nats_max_bytes: 64424509440\n"+
+		"stream:\n  store_dir: "+filepath.Join(dir, "s")+"\n  store_max_bytes: 68719476736\n"+
 		fixtureKeyring)
 	var out, errOut bytes.Buffer
 	if err := run([]string{"validate", path, "-json"}, &out, &errOut); err != nil {

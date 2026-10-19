@@ -1469,7 +1469,7 @@ type Stream struct {
 	// EMBEDDED ONLY, for the reason `store_dir` and `debug` are: it is
 	// handed to the server this process STARTS. An external cluster's
 	// account limits are its own operator's to set.
-	StoreMaxBytes int64 `yaml:"store_max_bytes,omitempty" json:"store_max_bytes,omitempty" js:"min=6442450944;max=70368744177664" desc:"How much of store_dir's volume the EMBEDDED broker may hold; unset lets it take three quarters of that volume's free space at boot. Divide it when several engines share one filesystem."`
+	StoreMaxBytes int64 `yaml:"store_max_bytes,omitempty" json:"store_max_bytes,omitempty" js:"min=10737418240;max=70368744177664" desc:"How much of store_dir's volume the EMBEDDED broker may hold; unset lets it take three quarters of that volume's free space at boot. Divide it when several engines share one filesystem."`
 
 	// Cluster makes the embedded server a MEMBER of a cluster with its
 	// peers: the fleet's broker is those members, and every other node

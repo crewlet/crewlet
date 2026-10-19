@@ -204,8 +204,8 @@ const (
 	// and at a busy seat-day's ≈ 6.5 KiB that is about 217 MB: a gibibyte
 	// holds that window four times over, which is room for a fleet to grow
 	// before anybody has to touch the field. Beside the other logs it is
-	// the last gibibyte of the 4.5 GiB that five unset ceilings reserve at
-	// their smallest, which is what [StoreMaxBytesFloor] is sized from.
+	// one gibibyte of what every unset ceiling reserves at its smallest,
+	// which is what [StoreMaxBytesFloor] is derived from.
 	//
 	// THE FLOOR IS 64 MiB, by the per-log rule [IamLogMaxBytesFloor]
 	// records: the broker grants a stream its whole ceiling when it creates
@@ -270,34 +270,47 @@ const (
 	// StoreMaxBytesFloor and StoreMaxBytesCeiling bound the embedded
 	// broker's own declared store limit.
 	//
-	// THE FLOOR IS SIX GIBIBYTES, which is the smallest limit the engine's
-	// own logs fit inside with room beside them. Every node reserves all
-	// FIVE state-log domains' ceilings whatever it runs, and left unset
-	// they come to 4.5 GiB at their smallest: the tracker's, the vectors',
-	// the knowledge base's and the usage log's at the gibibyte scaling stops
-	// at, and the identity log's 512 MiB default (never scaled below what
-	// it asks). What is left, about 1.5 GiB, is for the mailboxes, the event
+	// THE FLOOR IS TEN GIBIBYTES, the smallest whole number of them a fresh
+	// node of the default document boots inside with a gibibyte left beside
+	// everything it reserves. Every data node reserves every state log's
+	// ceiling whatever it runs, and left unset the seven come to 6.5 GiB at
+	// their smallest: the tracker's, the vectors', the knowledge base's, the
+	// artifacts' and their datastore's at the gibibyte scaling stops at, the
+	// usage log's 1 GiB default and the identity log's 512 MiB one (neither
+	// scaled below what it asks). The object store's nats bucket is reserved
+	// before any of them, at a quarter of the limit: 2.5 GiB of ten. What is
+	// left, the gibibyte, is what the engine leaves the mailboxes, the event
 	// stream and every coordination bucket, which reserve nothing and grow
 	// against the same number. Below it a node provisions its way to a
-	// refusal on whichever stream happens to be last.
+	// refusal on whichever stream happens to be last, or boots with nothing
+	// beside its reservations for any of those to grow into.
 	//
-	// SIX AND NOT FIVE: at five gibibytes the unreserved streams would have
-	// half a gibibyte, so a document `crewlet validate` admits — every
-	// ceiling unset, which the cross-field check above cannot sum — would
-	// fail at boot on whichever stream the broker reached last, which is
-	// the failure that check exists to move forward to `crewlet validate`.
+	// IT IS DERIVED AND HELD, never sized by hand. The engine computes the
+	// same figure from its register and the bucket's own derivation, and
+	// TestStoreMaxBytesFloorIsWhatTheDefaultDocumentBootsIn fails until this
+	// constant — and the field's tag, which `make schema` publishes as the
+	// schema's minimum — moves with a log that joins or leaves the register
+	// or a bucket that is derived another way. It was six gibibytes, written
+	// when five logs reserved 4.5 GiB and the bucket reserved nothing, and it
+	// stayed six after both had changed: a limit validation admitted and
+	// every fresh node of the default document then refused to boot on.
 	//
-	// THE COMPANY'S FILES RESERVE NOTHING HERE: the object store's NATS
-	// bucket is created with no byte ceiling, so it grows against this
-	// number beside the unreserved streams rather than claiming a share of
-	// it up front.
+	// IT IS THE DEFAULT DOCUMENT'S FLOOR, which is the only one a single
+	// number can be. A document that sets a log's ceiling higher, or sizes
+	// the bucket itself, needs more, which only the engine can sum, so
+	// `crewlet validate` says so as an advisory (engine.BootstrapWarnings);
+	// and a document that keeps its files in S3 reserves no bucket and would
+	// boot in less, and is held to this floor all the same.
 	//
 	// THE CEILING IS A TYPO GUARD rather than a policy: 64 TiB is more than
 	// an order of magnitude above the largest estate the domain ceilings can
-	// describe (1 TiB of mutation log, 2 TiB of vectors, 256 GiB of
-	// knowledge base), so anything past it is a unit mistake rather than a
-	// deployment.
-	StoreMaxBytesFloor   int64 = 6 << 30
+	// describe (1 TiB of mutation log, 2 TiB of vectors, 512 GiB of artifact
+	// datastore, 256 GiB each of knowledge base and artifacts, 64 GiB of
+	// usage and 16 GiB of identity — about 4.1 TiB together), so anything
+	// past it is a unit mistake rather than a deployment. The object
+	// bucket's own bound is this one, and its reservation has to fit inside
+	// whatever limit is set, beside the logs'.
+	StoreMaxBytesFloor   int64 = 10 << 30
 	StoreMaxBytesCeiling int64 = 64 << 40
 )
 
