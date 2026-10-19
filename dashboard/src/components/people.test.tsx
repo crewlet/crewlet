@@ -376,7 +376,7 @@ describe("an invitation onto a seat", () => {
     expect(dialog.textContent).toMatch(/The seat is held until they join\./);
     // EVERY APP IS PRE-TICKED AND ADMIN IS NOT: a person invited works in
     // every app unless somebody says otherwise.
-    for (const app of ["Tracker", "Knowledge", "Artifacts"]) {
+    for (const app of ["Tracker", "Knowledge", "Artifacts", "Chat"]) {
       expect(within(dialog).getByRole("checkbox", { name: app })).toHaveProperty("checked", true);
     }
     expect(within(dialog).getByRole("checkbox", { name: "Admin" })).toHaveProperty(
@@ -394,7 +394,7 @@ describe("an invitation onto a seat", () => {
     expect(sent?.key).toMatch(UUID7);
     expect(sent?.body).toEqual({
       email: "dee@example.com",
-      grants: ["tracker", "artifacts"],
+      grants: ["tracker", "artifacts", "chat"],
       seat: "sam",
     });
     expect(
@@ -418,6 +418,8 @@ describe("an invitation onto a seat", () => {
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Knowledge" }));
     expect(within(dialog).queryByText(/^Overview only:/)).toBeNull();
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Artifacts" }));
+    expect(within(dialog).queryByText(/^Overview only:/)).toBeNull();
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Chat" }));
     expect(within(dialog).getByText(/^Overview only:/)).toBeTruthy();
     expect(within(dialog).queryByText(/Without Tracker/)).toBeNull();
   });
@@ -482,7 +484,7 @@ describe("an invitation onto a seat", () => {
     const [first, second] = eng.writes();
     expect(second?.body).toEqual({
       email: "jane@example.com",
-      grants: ["tracker", "knowledge", "artifacts"],
+      grants: ["tracker", "knowledge", "artifacts", "chat"],
       seat: "sam",
     });
     expect(second?.key).toMatch(UUID7);
@@ -498,7 +500,7 @@ describe("an invitation onto a seat", () => {
         json(403, {
           error: "unauthorized",
           message:
-            "You don’t have the access this needs (Admin, Tracker or Knowledge). Ask an admin for it.",
+            "You don’t have the access this needs (Admin, Tracker, Knowledge or Chat). Ask an admin for it.",
           reason: "directory",
           grants: ["admin"],
         }),
@@ -511,7 +513,7 @@ describe("an invitation onto a seat", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Invite" }));
     await settle();
     const alert = within(dialog).getByRole("alert");
-    expect(alert.textContent).not.toMatch(/Admin, Tracker or Knowledge/);
+    expect(alert.textContent).not.toMatch(/Admin, Tracker, Knowledge or Chat/);
     expect(alert.textContent).toMatch(/You need Admin access for this\./);
     fireEvent.click(within(dialog).getByRole("button", { name: "Invite" }));
     await settle();
@@ -559,7 +561,7 @@ describe("a person created on a seat", () => {
       kind: "person",
       seat: "sam",
       email: "dee.ray@example.com",
-      grants: ["tracker", "knowledge", "artifacts"],
+      grants: ["tracker", "knowledge", "artifacts", "chat"],
     });
     expect(within(dialog).getByText("dee.ray")).toBeTruthy();
     expect(dialog.textContent).toMatch(/dee\.ray is now Sam Support/);
@@ -597,7 +599,7 @@ describe("a person created on a seat", () => {
         email: "dee.ray@example.com",
         login: "dee.ray",
         name: "Dee Ray",
-        grants: ["tracker", "knowledge", "artifacts"],
+        grants: ["tracker", "knowledge", "artifacts", "chat"],
       },
     ]);
   });
@@ -780,12 +782,14 @@ describe("the access picker", () => {
     expect(box("Knowledge").disabled).toBe(true);
     expect(box("Artifacts").checked).toBe(true);
     expect(box("Artifacts").disabled).toBe(true);
-    expect(screen.getAllByText("Included with Admin.")).toHaveLength(3);
-    expect(value()).toBe("admin,tracker,knowledge,artifacts");
+    expect(box("Chat").checked).toBe(true);
+    expect(box("Chat").disabled).toBe(true);
+    expect(screen.getAllByText("Included with Admin.")).toHaveLength(4);
+    expect(value()).toBe("admin,tracker,knowledge,artifacts,chat");
     fireEvent.click(box("Admin"));
     expect(box("Tracker").disabled).toBe(false);
     expect(box("Tracker").checked).toBe(true);
-    expect(value()).toBe("tracker,knowledge,artifacts");
+    expect(value()).toBe("tracker,knowledge,artifacts,chat");
   });
 
   // A ROW STORED AS ADMIN ALONE keeps its apps when Admin is taken away.
@@ -793,7 +797,7 @@ describe("the access picker", () => {
     render(<Picker initial={["admin"]} held={ADMIN} />);
     expect(box("Tracker").checked).toBe(true);
     fireEvent.click(box("Admin"));
-    expect(value()).toBe("tracker,knowledge,artifacts");
+    expect(value()).toBe("tracker,knowledge,artifacts,chat");
   });
 
   test("a permission the writer does not hold is offered disabled, with why", () => {
