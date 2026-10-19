@@ -135,3 +135,67 @@ test("the older version is the from half whichever was picked first", async () =
   const order = row.textContent ?? "";
   expect(order.indexOf("Draft")).toBeLessThan(order.indexOf("Final"));
 });
+
+// A DECK IS COMPARED BY SLIDE: the side by side lens is named By slide and
+// draws each slide's two versions paired by id, saying what changed in words.
+test("a deck's versions are compared slide by slide", async () => {
+  const slide = (id: string, text: string) => ({
+    id,
+    path: `slides/${id}.html`,
+    title: text,
+    root: {
+      tag: "section",
+      style: [{ p: "background", v: "#ffffff" }],
+      children: [{ tag: "h2", children: [{ text }] }],
+    },
+  });
+  const deck = (n: number, slides: unknown[]) => ({
+    artifact: ID,
+    version: n,
+    deck: { title: "Plan", cover: "a", sections: [], faces: [], slides },
+  });
+  const answers: Record<string, unknown> = {
+    [`/artifacts/${ID}/versions/11/deck`]: deck(11, [
+      slide("a", "Plan"),
+      slide("b", "Typo here"),
+      slide("c", "Team"),
+      slide("d", "Gone"),
+    ]),
+    [`/artifacts/${ID}/versions/12/deck`]: deck(12, [
+      slide("a", "Plan"),
+      slide("c", "Team"),
+      slide("b", "Typo fixed"),
+      slide("e", "New"),
+    ]),
+  };
+  Object.defineProperty(globalThis, "fetch", {
+    writable: true,
+    value: vi.fn(async (input: RequestInfo | URL) => {
+      const body = answers[new URL(String(input), "http://engine.test").pathname];
+      return new Response(JSON.stringify(body ?? {}), {
+        status: body ? 200 : 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    }),
+  });
+  render(
+    <Router>
+      <ArtifactCompare
+        detail={{ ...detail, kind: "slides" } as ArtifactDetail}
+        picked={12}
+        against={11}
+        lens="visual"
+        onLens={() => {}}
+        versions={[]}
+        room={{} as never}
+        presence={{} as never}
+        bridgeStores={new Set()}
+      />
+    </Router>,
+  );
+  expect(await screen.findByText("1 slide changed, 1 added, 1 removed, 1 moved.")).toBeTruthy();
+  expect(screen.getByRole("radio", { name: "By slide" })).toBeTruthy();
+  expect(screen.getByText("Not in Version 11")).toBeTruthy();
+  expect(screen.getByText("Not in Version 12")).toBeTruthy();
+  expect(screen.getByText(/^Moved from/)).toBeTruthy();
+});

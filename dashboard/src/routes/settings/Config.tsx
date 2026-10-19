@@ -18,6 +18,7 @@
  */
 
 import { useCallback, useMemo } from "react";
+import { Mark } from "~/ui/glyph.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import {
   ButtonLink,
@@ -28,11 +29,12 @@ import {
   EmptyState,
   EmptyValue,
   InlineCode,
+  SegmentedControl,
   Skeleton,
-  Tag,
-  TableKeyCell,
   TableDateCell,
+  TableKeyCell,
   TableTextCell,
+  Tag,
 } from "@crewlethq/ui";
 import {
   FileTextGlyph,
@@ -43,14 +45,6 @@ import {
   SlidersVerticalGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
-// OURS, DELIBERATELY. uilet's `SegmentedControl` has no manual-activation
-// mode: with `semantics="radio"` its arrow keys COMMIT the option they land
-// on, and every group on this screen drives a `useParam` — the lens pushes a
-// history entry and re-runs the screen's query, and the collection picker
-// re-runs `config_entities`. Arrowing across four lenses under that control
-// is four queries nobody asked for and four Back presses to undo. See the
-// note on `useRovingGroup`; this is the trade the pattern itself names.
-import { Segmented } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { usePageLabels } from "~/app/Shell.tsx";
@@ -652,15 +646,17 @@ export function ConfigScreen({
     <>
       {!onRevision && (
         <PageActions>
-          <Segmented<Lens>
-            ariaLabel="Configuration view"
+          <SegmentedControl<Lens>
+            semantics="radio"
+            activate="manual"
+            label="Configuration view"
             value={lens}
-            onChange={setLens}
+            onValueChange={setLens}
             options={[
-              { value: "active", label: "Active", icon: "file-text" },
-              { value: "entities", label: "Entities", icon: "layers" },
-              { value: "audit", label: "History", icon: "clock" },
-              { value: "diff", label: "Diff", icon: "split" },
+              { value: "active", label: "Active", icon: <Mark name="file-text" size="xs" /> },
+              { value: "entities", label: "Entities", icon: <Mark name="layers" size="xs" /> },
+              { value: "audit", label: "History", icon: <Mark name="clock" size="xs" /> },
+              { value: "diff", label: "Diff", icon: <Mark name="split" size="xs" /> },
             ]}
           />
         </PageActions>
@@ -762,10 +758,12 @@ export function ConfigScreen({
 
       {!onRevision && lens === "entities" && (
         <>
-          <Segmented<string>
-            ariaLabel="Which collection"
+          <SegmentedControl<string>
+            semantics="radio"
+            activate="manual"
+            label="Which collection"
             value={kind}
-            onChange={(next) => {
+            onValueChange={(next) => {
               setKind(next);
               // AN ID BELONGS TO ONE COLLECTION. Carrying it across would ask
               // for a seat's handle out of the MCP servers and render the

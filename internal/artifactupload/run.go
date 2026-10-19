@@ -62,6 +62,11 @@ type run struct {
 	// them, do about the reader's appearance: the theme warnings' input.
 	themes []fileTheme
 
+	// formatted is the version as its kind's format read it, whole, by
+	// [run.checkFormat] (a deck, a doc), and nil for a kind with no format:
+	// what the gallery's search text is extracted from.
+	formatted formatText
+
 	warnings []lint.Finding
 
 	// counts are the composed manifest's files by where their bytes came
@@ -233,11 +238,16 @@ func (r *run) compose(ctx context.Context, mode manifest.Mode, specs []FileSpec,
 	if err := r.checkNewText(); err != nil {
 		return artifactsdomain.PublishInput{}, err
 	}
-	if err := r.lintFiles(ctx); err != nil {
-		return artifactsdomain.PublishInput{}, err
-	}
-	if err := r.carryVendored(ctx); err != nil {
-		return artifactsdomain.PublishInput{}, err
+	// ONLY A FRAMED KIND'S FILES ARE PAGES: a native kind serves no document
+	// on the artifact origin, so its HTML (a deck's slides) is its format's
+	// to judge, never linted, nonce-marked or given CDN copies as a page.
+	if r.kind.Framed() {
+		if err := r.lintFiles(ctx); err != nil {
+			return artifactsdomain.PublishInput{}, err
+		}
+		if err := r.carryVendored(ctx); err != nil {
+			return artifactsdomain.PublishInput{}, err
+		}
 	}
 	resolved, err := r.s.resolveContract(r.kind, contract, r.headContract, caps)
 	if err != nil {
@@ -248,6 +258,9 @@ func (r *run) compose(ctx context.Context, mode manifest.Mode, specs []FileSpec,
 	}
 	m, uploaded, err := r.manifest(mode, entry)
 	if err != nil {
+		return artifactsdomain.PublishInput{}, err
+	}
+	if err := r.checkFormat(ctx, m); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		return artifactsdomain.PublishInput{}, err
 	}
 	search, err := r.searchText(ctx, m)

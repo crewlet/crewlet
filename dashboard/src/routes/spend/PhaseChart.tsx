@@ -20,7 +20,7 @@
  * by rank, with the residual in the residual's own neutral.
  */
 
-import { Card, StackedColumns } from "@crewlethq/ui";
+import { Card, SegmentedControl, StackedColumns } from "@crewlethq/ui";
 import { QueryState } from "~/components/common.tsx";
 import { GROUPS } from "~/contract/spend.ts";
 import { bandsOf, unbandedTokens } from "~/lib/spend.ts";
@@ -29,10 +29,6 @@ import { dayLabelIn } from "~/lib/range.ts";
 
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { TokenSeries } from "~/protocol/types.ts";
-// OURS, AND DELIBERATELY: the kit's `SegmentedControl` commits the option the
-// arrows land on, and every commit here re-asks `token_series` — six queries
-// and six history entries for one sweep across the dimensions.
-import { Segmented } from "~/ui/primitives.tsx";
 
 /** What each split is called in the card's title: "Daily tokens by phase". */
 const GROUP_NOUN: Record<string, string> = {
@@ -133,11 +129,13 @@ export function PhaseChart({
         )}
       </QueryState>
       <div className="spend-chart-foot">
-        <Segmented
-          ariaLabel="Split by"
+        <SegmentedControl
+          semantics="radio"
+          activate="manual"
+          label="Split by"
           size="sm"
           value={group}
-          onChange={onGroup}
+          onValueChange={onGroup}
           options={GROUPS.map((g) => ({ value: g.value, label: g.label }))}
         />
         {unbanded > 0 && data && (

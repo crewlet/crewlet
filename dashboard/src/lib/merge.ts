@@ -32,7 +32,7 @@
  * PURE, and in `lib/` for the reason the rest of this directory gives.
  */
 
-import { diffLines, splitLines } from "@crewlethq/ui";
+import { diffLines, splitLines, type MergeClash } from "@crewlethq/ui";
 
 /** One side's change to the ancestor: replace `[start, end)` with `lines`. */
 interface Hunk {
@@ -206,4 +206,11 @@ export function mergedText(merge: Merge, choices: Resolution[] = []): string {
   }
   if (out.length === 0) return "";
   return out.join("\n") + (merge.trailingNewline ? "\n" : "");
+}
+
+/** The merge's conflicts as `MergeConflicts` (@crewlethq/ui) draws them, in order. */
+export function clashesOf(merge: Merge): MergeClash[] {
+  return merge.chunks.flatMap((c) =>
+    c.kind === "conflict" ? [{ theirs: c.theirs, mine: c.mine }] : [],
+  );
 }

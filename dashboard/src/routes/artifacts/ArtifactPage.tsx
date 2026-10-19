@@ -33,6 +33,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArtifactIcon,
   Button,
   ButtonLink,
   Callout,
@@ -61,17 +62,26 @@ import { ObjectTabs } from "~/app/frame/ObjectTabs.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { relTime } from "~/lib/format.ts";
+import { fmtDate, relTime } from "~/lib/format.ts";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
-import { pinArtifact, untrashArtifact } from "~/lib/artifacts/api.ts";
+import { untrashArtifact } from "~/lib/artifacts/api.ts";
+import { usePinToggle, usePins } from "~/lib/artifacts/pins.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
-import { memberTurn, presenceMembers, useArtifactPeople } from "~/lib/artifacts/people.ts";
+import {
+  memberTurn,
+  presenceMembers,
+  selfWords,
+  splitOwnSessions,
+  useArtifactPeople,
+  type PresencePlace,
+} from "~/lib/artifacts/people.ts";
 import { useArtifactRoom } from "~/lib/artifacts/room.ts";
 import { useDataStore } from "~/lib/artifacts/useDataStore.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
-import { KIND_WORDS, ROLE_WORDS } from "~/lib/artifacts/words.ts";
+import { keepsData } from "~/lib/artifacts/kinds.ts";
+import { KIND_WORDS, ROLE_WORDS, purgeAt, purgeSentence } from "~/lib/artifacts/words.ts";
 import type {
   ArtifactDetail,
   ArtifactVersionSummary,
@@ -85,7 +95,7 @@ import { HistoryTab } from "./HistoryTab.tsx";
 import { DataTab } from "./DataTab.tsx";
 import { PurgeControl, SettingsTab } from "./SettingsTab.tsx";
 import { useArtifactPresence } from "./presence.ts";
-import { followMoves, followTarget, moves } from "~/lib/artifacts/follow.ts";
+import { followMoves, followTarget, moves, slideOfRegion } from "~/lib/artifacts/follow.ts";
 import { useViewer } from "~/lib/viewer.ts";
 
 /** The head is pushed (`artifact_changed`); this read is the floor under a push the socket missed. */
@@ -102,11 +112,6 @@ const TAB_WORDS: Readonly<Record<Tab, string>> = {
   settings: "Settings",
 };
 
-/** Whether an artifact keeps a datastore a person can open: a sheet always, a page that declared it. */
-function hasData(detail: ArtifactDetail): boolean {
-  return detail.kind === "sheet" || detail.capabilities.includes("db");
-}
-
 export function ArtifactPage({ id }: { id: string }) {
   const detail = useQuery("artifact", { id }, { pollMs: DETAIL_POLL_MS });
   const versions = useQuery(
@@ -121,7 +126,7 @@ export function ArtifactPage({ id }: { id: string }) {
 
   // THE SHEET AND THE DATA TAB write as the dashboard; a page's bridge
   // writes as the page's version, through a store of its own (ViewTab).
-  const store = useDataStore(id, { via: "dashboard" }, live === true && hasData(head!));
+  const store = useDataStore(id, { via: "dashboard" }, live === true && keepsData(head!));
   const bridgeStores = useRef(new Set<ArtifactDataStore>());
 
   const room = useArtifactRoom(id, live === true, {
@@ -183,13 +188,33 @@ function Trashed({ detail, onChanged }: { detail: ArtifactDetail; onChanged: () 
   const restore = useArtifactAccess({ role: "owner", held: detail.role, person: true });
   const gesture = useKeyedGesture();
   const toast = useToast();
+  const trashedBy = people.seatName(detail.trashed_by.name);
+  const deleteOn = purgeAt(detail.trashed_at);
   return (
     <>
-      <ObjectHeader kind={KIND_WORDS[detail.kind]} icon="layers" title={detail.title} />
+      <ObjectHeader
+        kind={KIND_WORDS[detail.kind]}
+        icon={<ArtifactIcon icon={detail.icon} kind={detail.kind} size="xs" />}
+        title={detail.title}
+        facts={[
+          { label: "Trashed by", value: trashedBy },
+          { label: "Trashed on", value: fmtDate(detail.trashed_at) },
+          ...(deleteOn ? [{ label: "Deleted on", value: fmtDate(deleteOn) }] : []),
+        ]}
+        actions={
+          <ButtonLink
+            size="small"
+            variant="secondary"
+            href={href(["artifacts", "mine"], { status: "trashed" })}
+          >
+            Back to the trash
+          </ButtonLink>
+        }
+      />
       <EmptyState
         icon={<TrashGlyph size="xl" />}
         title="This artifact is in the trash"
-        description={`${people.seatName(detail.trashed_by.name)} moved it to the trash. It is deleted for good 30 days after that unless its owner restores it.`}
+        description={`${trashedBy} moved it to the trash. ${purgeSentence(detail.trashed_at)}`}
         action={
           <span className="artifact-actions">
             <Button
@@ -244,7 +269,7 @@ function Loaded({
   const now = useNow();
   const toast = useToast();
   const connection = useConnection();
-  const tabs = useMemo(() => TABS.filter((t) => t !== "data" || hasData(detail)), [detail]);
+  const tabs = useMemo(() => TABS.filter((t) => t !== "data" || keepsData(detail)), [detail]);
   const [tab, setTab] = useTab("tab", tabs);
   const [versionParam, setVersion] = useParam("version", "");
   const asked = Number(versionParam);
@@ -266,6 +291,8 @@ function Loaded({
   const peopleOpen = rail === "people";
   const [follow, setFollow] = useParam("follow", "");
   const [sheetParam] = useParam("sheet", "");
+  const [slideParam] = useParam("slide", "");
+  const [doctabParam] = useParam("doctab", "");
   // WHO IS FOLLOWED is somebody else in the room: following oneself moves
   // nothing, and a seat that left is said once and then let go.
   const followed = follow && follow !== viewer.handle ? follow : "";
@@ -294,6 +321,8 @@ function Loaded({
       showing,
       tab,
       sheet: sheetParam,
+      slide: slideParam,
+      doctab: doctabParam,
     });
     if (!moves(move)) return;
     // ONE REPLACE FOR THE WHOLE MOVE: following is not a place the reader
@@ -301,6 +330,8 @@ function Loaded({
     nav.filter({
       ...(move.version !== undefined ? { version: move.version || null } : {}),
       ...(move.sheet !== undefined ? { sheet: move.sheet } : {}),
+      ...(move.slide !== undefined ? { slide: move.slide } : {}),
+      ...(move.doctab !== undefined ? { doctab: move.doctab } : {}),
       ...(move.tab !== undefined ? { tab: null } : {}),
     });
   }, [
@@ -312,6 +343,8 @@ function Loaded({
     showing,
     tab,
     sheetParam,
+    slideParam,
+    doctabParam,
     nav,
     setFollow,
   ]);
@@ -338,11 +371,33 @@ function Loaded({
     };
   }, [followed, setFollow]);
   const held = useRef(new Map<string, NodeHue>());
+  // THE READER'S OWN OTHER TABS are counted beside "You", never drawn as a
+  // collaborator with a Follow that would move nothing.
+  const { others, ownTabs } = useMemo(
+    () => splitOwnSessions(room.others, viewer.handle),
+    [room.others, viewer.handle],
+  );
+  // WHERE SOMEBODY IS, as the reader sees it: a row by its number in the
+  // sheet's own order, a column by its label.
+  const schema = store?.schema ?? null;
+  const place = useMemo<PresencePlace>(
+    () => ({
+      row: (collection, doc) => {
+        const at = store?.docsOf(collection).findIndex((d) => d.doc.id === doc) ?? -1;
+        return at >= 0 ? `row ${at + 1}` : null;
+      },
+      field: (collection, field) =>
+        schema?.collections
+          .find((c) => c.name === collection)
+          ?.columns?.find((c) => c.key === field)?.label ?? null,
+    }),
+    [store, schema],
+  );
   const drawn = useMemo(() => {
-    const out = presenceMembers(room.others, people, held.current);
+    const out = presenceMembers(others, people, held.current, place);
     held.current = out.hues;
     return out.members;
-  }, [room.others, people]);
+  }, [others, people, place]);
   // The reader, first on the People rail as "You", drawn as their own seat.
   const selfFace = useMemo<PeopleRailSelf | undefined>(() => {
     if (!viewer.handle) return undefined;
@@ -357,26 +412,13 @@ function Loaded({
   }, [viewer.handle, people]);
 
   // WHETHER THE READER PINNED IT is their own record, which the head does not
-  // carry: their pins are a listing of their own, read once and kept current
-  // by their own presses here.
-  const pins = useQuery("artifacts", { scope: "all", pinned: true, limit: 200 });
-  const pinGesture = useKeyedGesture();
-  const [pinnedHere, setPinned] = useState<boolean | null>(null);
-  const pinned = pinnedHere ?? (pins.data?.items ?? []).some((item) => item.id === detail.id);
-  const pin = useCallback(async () => {
-    const next = !pinned;
-    const answer = await pinGesture.run(pinArtifact(detail.id, next));
-    if (answer?.kind === "done") {
-      setPinned(next);
-      toast.ok(next ? "Pinned to your sidebar" : "Removed from your sidebar");
-    } else if (answer) {
-      toast.show({
-        variant: "danger",
-        title: next ? "Could not pin it" : "Could not unpin it",
-        message: answer.text,
-      });
-    }
-  }, [pinned, pinGesture, detail.id, toast]);
+  // carry: their pins are a listing of their own, the same one the sidebar
+  // draws, and every press anywhere in this tab asks it again.
+  const pins = usePins();
+  const pin = usePinToggle(
+    detail.id,
+    (pins.data?.items ?? []).some((item) => item.id === detail.id),
+  );
 
   usePageMenu([
     {
@@ -387,9 +429,9 @@ function Loaded({
     },
     {
       key: "pin",
-      label: pinned ? "Unpin" : "Pin to your sidebar",
+      label: pin.label,
       icon: <PinGlyph size="sm" />,
-      onSelect: () => void pin(),
+      onSelect: () => void pin.toggle(),
     },
   ]);
 
@@ -398,8 +440,9 @@ function Loaded({
     <div className="artifact-page">
       <ObjectHeader
         kind={KIND_WORDS[detail.kind]}
-        icon="layers"
+        icon={<ArtifactIcon icon={detail.icon} kind={detail.kind} size="xs" />}
         title={detail.title}
+        description={detail.description || undefined}
         facts={[
           {
             label: "Owner",
@@ -410,7 +453,11 @@ function Loaded({
             label: "Updated",
             value: `${relTime(detail.updated_at, now)} by ${updater}`,
           },
-          ...(detail.head_number > 0 ? [{ label: "Version", value: `${detail.head_number}` }] : []),
+          // A SHEET'S CONTENT IS ITS LIVE DATA: its version number names
+          // nothing a reader sees change, so it is not a fact of its header.
+          ...(detail.head_number > 0 && detail.kind !== "sheet"
+            ? [{ label: "Version", value: `${detail.head_number}` }]
+            : []),
           {
             label: "Your role",
             value: detail.elevated ? "Administrator" : ROLE_WORDS[detail.role],
@@ -452,9 +499,9 @@ function Loaded({
                   },
                   {
                     key: "pin",
-                    label: pinned ? "Unpin" : "Pin to your sidebar",
+                    label: pin.label,
                     icon: <PinGlyph size="sm" />,
-                    onSelect: () => void pin(),
+                    onSelect: () => void pin.toggle(),
                   },
                 ]}
               />
@@ -509,7 +556,9 @@ function Loaded({
           onStop={stopFollowing}
           labels={{
             following: (name) => {
-              const where = target.focus.region ? ` They are in ${target.focus.region}.` : "";
+              // A SLIDE IS MOVED TO, not said: the view is already on it.
+              const region = target.focus.region;
+              const where = region && !slideOfRegion(region) ? ` They are in ${region}.` : "";
               return `Following ${name}.${where} Press Esc or scroll to stop.`;
             },
           }}
@@ -542,6 +591,7 @@ function Loaded({
               setFollow(member ? peopleRailKey(member) : "");
             }}
             onClose={() => setRail("")}
+            labels={{ you: selfWords(ownTabs) }}
             actions={(member) => {
               const turn = memberTurn(room.roster.members, member);
               return turn ? (
@@ -563,6 +613,11 @@ function Loaded({
               presence={presence}
               drawn={drawn}
               bridgeStores={bridgeStores}
+              onPublished={(n: number) => {
+                refetch();
+                setVersion("");
+                setShownHead(n);
+              }}
             />
           )}
           {tab === "data" && store && <DataTab detail={detail} store={store} />}

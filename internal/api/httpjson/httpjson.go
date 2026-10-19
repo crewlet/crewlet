@@ -920,7 +920,7 @@ const (
 	// operator sets one; no retry here changes it.
 	CodeArtifactOriginUnset Code = "artifact_origin_unset"
 	// CodeArtifactNotFramed is a frame asked for an artifact the dashboard
-	// renders itself (a Markdown document, a native sheet), which runs no
+	// renders itself (a doc, a native sheet), which runs no
 	// author code and so is never opened on the artifact origin. 409.
 	CodeArtifactNotFramed Code = "artifact_not_framed"
 )
@@ -1260,7 +1260,7 @@ var codes = map[Code]string{
 		"nothing was published. The detail names the file.",
 	CodeEditRefused: "An edit could not be applied exactly once, so nothing " +
 		"was published. The detail names the edit and what to change.",
-	CodePolicyRefused: "The page breaks the artifact policy, so nothing was " +
+	CodePolicyRefused: "The version breaks the artifact policy, so nothing was " +
 		"published. The detail lists every problem to fix.",
 	CodeSourceTaken: "Another of your artifacts already uses that source " +
 		"address. Publish to that artifact, or choose another address.",

@@ -86,6 +86,15 @@ func (f *fakeArtifacts) seed(owner string, ownerKind iam.ActorKind, author iam.A
 	return h
 }
 
+// setKind makes a seeded artifact one of kind.
+func (f *fakeArtifacts) setKind(id artifacts.ID, kind artifacts.Kind) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	h := f.heads[id]
+	h.Kind = kind
+	f.heads[id] = h
+}
+
 // republish moves the head to a new version written by author, replacing the
 // named files.
 func (f *fakeArtifacts) republish(id artifacts.ID, author iam.Actor, files ...[2]string) {

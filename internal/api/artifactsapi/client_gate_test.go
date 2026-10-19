@@ -4,8 +4,11 @@ import (
 	"slices"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/docindex"
+	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/clientsource"
 )
@@ -51,6 +54,43 @@ func TestTheDashboardSpeaksTheArtifactsVocabulary(t *testing.T) {
 	}
 }
 
+// THE DASHBOARD DRAWS EACH KIND AS THE KIND TABLE SAYS.
+//
+// The View tab, the side-by-side compare and the Data tab ask the kind's row
+// rather than its name, so a row that disagreed with the engine's would frame
+// a native kind the origin refuses to serve, draw a framed one here, or hide a
+// datastore the engine keeps. Every kind is a row, in the engine's order, and
+// each row's render and store are the engine's.
+func TestTheDashboardDrawsEachKindAsTheKindTableSays(t *testing.T) {
+	t.Parallel()
+	body, err := clientsource.Literal(clientsource.Tree(t), "ARTIFACT_KIND_SPECS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := clientsource.Keys(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(keys, names(artifacts.Kinds)) {
+		t.Fatalf("ARTIFACT_KIND_SPECS is keyed %q and the engine's kinds are %q, in that order",
+			keys, names(artifacts.Kinds))
+	}
+	for _, spec := range artifacts.KindSpecs() {
+		row, err := clientsource.Property(body, string(spec.Kind))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for field, engine := range map[string]string{
+			"render": string(spec.Render), "store": string(spec.Store),
+		} {
+			if got := clientsource.Field(row, field); !slices.Equal(got, []string{engine}) {
+				t.Errorf("ARTIFACT_KIND_SPECS.%s.%s is %q and the engine's is %q",
+					spec.Kind, field, got, engine)
+			}
+		}
+	}
+}
+
 // THE DASHBOARD BOUNDS WHAT A PERSON TYPES, AND WHAT IT TELLS A ROOM, AT THE
 // ENGINE'S CAPS.
 //
@@ -68,6 +108,9 @@ func TestTheDashboardBoundsArtifactTextAtTheEnginesCaps(t *testing.T) {
 		"ARTIFACT_ICON_MAX_BYTES":        artifacts.MaxIconBytes,
 		"ARTIFACT_LABEL_MAX_BYTES":       artifacts.MaxLabelBytes,
 		"PRESENCE_FRAMES_PER_SECOND":     artifacts.PresenceClientRate,
+		"DOC_MAX_TABS":                   docindex.MaxTabs,
+		"DOC_TAB_TITLE_MAX_BYTES":        docindex.MaxTitleBytes,
+		"ARTIFACT_TRASH_RETENTION_DAYS":  int(artifacts.TrashRetention / (24 * time.Hour)),
 	} {
 		raw, err := clientsource.Scalar(clientsource.Tree(t), name)
 		if err != nil {
@@ -91,4 +134,43 @@ func names[S ~string](set []S) []string {
 		out[i] = string(v)
 	}
 	return out
+}
+
+// THE RENDERER DRAWS THE SLIDE SUBSET AND NOTHING ELSE.
+//
+// The engine refuses a slide outside the subset at publish, and the
+// dashboard's element-constructing renderer allows the same elements,
+// properties, drawing elements and attributes again, so a tree that reached
+// it some other way is drawn as text rather than as whatever it names. The two
+// lists are one list: a property the engine admits that the renderer drops
+// would publish and then not show, and one the renderer draws that the engine
+// refuses is an allowlist wider than its source.
+func TestTheRendererDrawsTheSlideSubset(t *testing.T) {
+	t.Parallel()
+	tree := clientsource.Tree(t)
+	for name, engine := range map[string][]string{
+		"SLIDE_ELEMENTS":         slideformat.Elements(),
+		"SLIDE_STYLE_PROPERTIES": slideformat.StyleProperties(),
+		"SLIDE_SVG_ELEMENTS":     slideformat.SVGElements(),
+		"SLIDE_SVG_ATTRIBUTES":   slideformat.SVGAttributes(),
+		"SLIDE_TRANSITIONS":      slideformat.Transitions,
+		"SLIDE_SHAPES":           slideformat.ShapeKinds,
+		"SLIDE_ICONS":            slideformat.Icons,
+	} {
+		body, err := clientsource.Literal(tree, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if client := clientsource.Strings(body); !slices.Equal(client, engine) {
+			t.Errorf("the dashboard's %s is %q and the engine's is %q: change contract/artifacts.ts "+
+				"to the engine's", name, client, engine)
+		}
+	}
+	for name, want := range map[string]int{"SLIDE_STAGE_WIDTH": slideformat.StageWidth,
+		"SLIDE_STAGE_HEIGHT": slideformat.StageHeight} {
+		got, err := clientsource.Scalar(tree, name)
+		if err != nil || got != strconv.Itoa(want) {
+			t.Errorf("%s is %q (%v), want %d", name, got, err, want)
+		}
+	}
 }

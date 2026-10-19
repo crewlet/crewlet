@@ -11,12 +11,14 @@
  * viewing over idle), then the most recent.
  *
  * WHAT FOLLOWS is what a member's presence says: the version they have open,
- * and for a native sheet the collection they are on. A page's own regions are
- * the page's to scroll to, so a region is said in words beside the follow
- * rather than moved to.
+ * for a native sheet the collection they are on, for a deck the slide they
+ * are on (the region `slide:<id>`), which is how a phone follows a presenter,
+ * and for a doc the tab they are on (the region `tab:<path>`). A page's own regions are the page's to scroll to, so any other
+ * region is said in words beside the follow rather than moved to.
  */
 
-import type { ArtifactPresenceMember, PresenceActivity } from "~/protocol/index.ts";
+import type { ArtifactKind, ArtifactPresenceMember, PresenceActivity } from "~/protocol/index.ts";
+import { tabOfRegion } from "./doc.ts";
 
 const RANK: Readonly<Record<PresenceActivity, number>> = { editing: 0, viewing: 1, idle: 2 };
 
@@ -47,7 +49,7 @@ export function followTarget(
 
 /** What the page shows now, as far as following can move it. */
 export interface FollowView {
-  kind: "html" | "markdown" | "sheet";
+  kind: ArtifactKind;
   /** The newest version. */
   head: number;
   /** The version on show; the head when none is addressed. */
@@ -55,6 +57,10 @@ export interface FollowView {
   tab: string;
   /** For a sheet, the collection on show. */
   sheet: string;
+  /** For a deck, the slide on show ("" for its first). */
+  slide: string;
+  /** For a doc, the tab on show ("" for its first). */
+  doctab: string;
 }
 
 /** What to move so the reader's view is the followed member's: each field only where it differs. */
@@ -64,6 +70,15 @@ export interface FollowMove {
   tab?: "view";
   /** The `sheet=` to address. */
   sheet?: string;
+  /** The `slide=` to address. */
+  slide?: string;
+  /** The `doctab=` to address. */
+  doctab?: string;
+}
+
+/** The slide a presence region names, or "" for a region that names none. */
+export function slideOfRegion(region: string | undefined): string {
+  return region?.startsWith("slide:") ? region.slice("slide:".length) : "";
 }
 
 /** The moves that bring view to where target is. */
@@ -73,9 +88,17 @@ export function followMoves(target: ArtifactPresenceMember, view: FollowView): F
   if (f.version && f.version > 0 && f.version <= view.head && f.version !== view.showing) {
     out.version = f.version === view.head ? "" : String(f.version);
   }
+  const slide = slideOfRegion(f.region);
+  const doctab = tabOfRegion(f.region);
   if (view.kind === "sheet" && f.collection) {
     if (view.tab !== "view") out.tab = "view";
     if (f.collection !== view.sheet) out.sheet = f.collection;
+  } else if (slide) {
+    if (view.tab !== "view") out.tab = "view";
+    if (slide !== view.slide) out.slide = slide;
+  } else if (doctab) {
+    if (view.tab !== "view") out.tab = "view";
+    if (doctab !== view.doctab) out.doctab = doctab;
   } else if ((out.version !== undefined || f.version) && view.tab !== "view") {
     out.tab = "view";
   }
@@ -84,5 +107,11 @@ export function followMoves(target: ArtifactPresenceMember, view: FollowView): F
 
 /** Whether a move moves anything. */
 export function moves(m: FollowMove): boolean {
-  return m.version !== undefined || m.tab !== undefined || m.sheet !== undefined;
+  return (
+    m.version !== undefined ||
+    m.tab !== undefined ||
+    m.sheet !== undefined ||
+    m.slide !== undefined ||
+    m.doctab !== undefined
+  );
 }

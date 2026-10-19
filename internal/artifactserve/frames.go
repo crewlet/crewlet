@@ -22,7 +22,7 @@ import (
 // VERBATIM, so the policy has one implementation.
 
 // ErrNotServed reports an artifact the artifact origin does not serve: a
-// Markdown document or a native sheet, which the dashboard renders itself and
+// doc or a native sheet, which the dashboard renders itself and
 // which carry no author code, or one in the trash.
 var ErrNotServed = errors.New("artifactserve: this artifact is not opened in a frame")
 
@@ -108,7 +108,7 @@ func NewFrames(tickets *ticket.Codec, origins Origins, now func() time.Time) (*F
 func (f *Frames) For(r FrameRequest) (artifacts.Frame, error) {
 	head, v := r.Head, r.Version
 	switch {
-	case head.Kind != artifacts.KindHTML:
+	case !head.Kind.Framed():
 		return artifacts.Frame{}, fmt.Errorf("%w: a %s artifact is rendered by the dashboard",
 			ErrNotServed, head.Kind)
 	case head.Status != artifactsdomain.StatusLive:

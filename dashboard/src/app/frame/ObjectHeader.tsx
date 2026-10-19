@@ -24,7 +24,7 @@
  * own values are stated. See `routes/work/WorkItem.tsx` for the worked case.
  */
 
-import type { ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 import {
   FactLine as KitFactLine,
   ObjectHeader as KitObjectHeader,
@@ -119,12 +119,14 @@ export function ObjectHeader({
   title,
   status,
   facts,
+  description,
   actions,
   size = "page",
 }: {
   /** The eyebrow: what kind of thing this is. */
   kind: string;
-  icon?: GlyphName;
+  /** The eyebrow's glyph: a name from the glyph set, or a drawn glyph (an artifact's own icon). */
+  icon?: GlyphName | ReactElement;
   /** The key, handle or id, in the mono face. */
   identifier?: string;
   /** WHOSE the object is, where that is part of its identity and is a name rather than a key. */
@@ -133,13 +135,16 @@ export function ObjectHeader({
   /** The object's state: glyphs or pills, never identity. Several is the ordinary case. */
   status?: ReactNode;
   facts?: Fact[];
+  /** One line under the title, as the object describes itself. */
+  description?: ReactNode;
   actions?: ReactNode;
   size?: "page" | "peek";
 }) {
   return (
     <KitObjectHeader
       kind={kind}
-      icon={icon ? <Mark name={icon} size="xs" /> : undefined}
+      icon={typeof icon === "string" ? <Mark name={icon} size="xs" /> : icon}
+      description={description}
       identifier={identifier}
       within={within}
       title={title}

@@ -66,6 +66,7 @@ export function FrameView({
   room,
   presence,
   bridgeStores,
+  dataNote = true,
 }: {
   detail: ArtifactDetail;
   version: number;
@@ -73,6 +74,8 @@ export function FrameView({
   room: ArtifactRoom;
   presence: PresenceReport;
   bridgeStores: Set<ArtifactDataStore>;
+  /** Says under an old version that its data is today's; off where the caller says it once for two. */
+  dataNote?: boolean;
 }) {
   const [attempt, setAttempt] = useState(0);
   const frame = useRest<ArtifactFrame>(`${detail.id}:${version}:${attempt}`, () =>
@@ -227,7 +230,7 @@ export function FrameView({
         }}
         onReload={() => setAttempt((n) => n + 1)}
       />
-      {state === "ready" && version !== detail.head_number && (
+      {dataNote && state === "ready" && version !== detail.head_number && (
         <p className="artifact-note">Every version shows today's data.</p>
       )}
       <LinkInterstitial

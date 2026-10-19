@@ -53,15 +53,20 @@ import { fmtBytes, fmtCount, relTime } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { keyedWrite } from "~/lib/keyedWrite.ts";
-import { artifactPath, pinArtifact } from "~/lib/artifacts/api.ts";
+import { artifactPath } from "~/lib/artifacts/api.ts";
+import { usePinToggle, usePinsChanged } from "~/lib/artifacts/pins.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useArtifactPeople, type ArtifactPeople } from "~/lib/artifacts/people.ts";
-import { KIND_WORDS, KINDS, ROLE_WORDS, isArtifactKind } from "~/lib/artifacts/words.ts";
+import {
+  KIND_WORDS,
+  KINDS,
+  ROLE_WORDS,
+  TRASH_KEPT,
+  isArtifactKind,
+} from "~/lib/artifacts/words.ts";
 import { ListedArtifactCard, copyAddress } from "./parts.tsx";
 import { ARTIFACT_LIST_SORTS } from "~/contract/artifacts.ts";
 import {
-  newActOpID,
   type ArtifactListAnswer,
   type ArtifactListItem,
   type ArtifactListScope,
@@ -150,6 +155,8 @@ function listParams(
 function useListing(params: Record<string, unknown>, enabled = true) {
   const { socket } = useClient();
   const first = useQuery("artifacts", params, { pollMs: GALLERY_POLL_MS, enabled });
+  // A PIN MOVES A ROW between the pinned list and the rest, and marks it.
+  usePinsChanged(first.refetch);
   const key = JSON.stringify(params);
   const [more, setMore] = useState<{ key: string; items: ArtifactListItem[]; after: string }>({
     key,
@@ -275,7 +282,7 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
             ? trashed
               ? {
                   title: "Nothing in the trash",
-                  hint: "An artifact you trash stays here for 30 days, then is deleted.",
+                  hint: `An artifact you trash stays here for ${TRASH_KEPT}, then is deleted.`,
                 }
               : q || kind
                 ? { title: "Nothing matches", hint: "Change the phrase or the type to see more." }
@@ -296,7 +303,9 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
           />
         )}
       </QueryState>
-      {viewer.admin && <Usage />}
+      {/* THE COMPANY'S STORAGE IS AN ADMINISTRATOR'S OVERVIEW, said once on
+          For you rather than under every section, the trash and a search. */}
+      {viewer.admin && section === "for-you" && !trashed && !q && !kind && <Usage />}
     </>
   );
 }
@@ -386,7 +395,7 @@ function GalleryBar({
           href={href(["artifacts", "new"])}
           leadingIcon={<PlusGlyph size="sm" />}
         >
-          New sheet
+          New
         </ButtonLink>
       ) : (
         <Button
@@ -396,7 +405,7 @@ function GalleryBar({
           disabledReason={canAuthor}
           title={canAuthor}
         >
-          New sheet
+          New
         </Button>
       )}
     </PageActions>
@@ -532,22 +541,7 @@ function Listing({
 /** A row's own actions: pin or unpin, and copy its address. */
 function RowMenu({ item }: { item: ArtifactListItem }) {
   const toast = useToast();
-  const [pinned, setPinned] = useState(item.pinned ?? false);
-  useEffect(() => setPinned(item.pinned ?? false), [item.pinned]);
-  const pin = async () => {
-    const next = !pinned;
-    const answer = await keyedWrite({ ...pinArtifact(item.id, next), key: newActOpID() });
-    if (answer.kind === "done") {
-      setPinned(next);
-      toast.ok(next ? "Pinned to your sidebar" : "Removed from your sidebar");
-    } else {
-      toast.show({
-        variant: "danger",
-        title: next ? "Could not pin it" : "Could not unpin it",
-        message: answer.text,
-      });
-    }
-  };
+  const pin = usePinToggle(item.id, item.pinned ?? false);
   return (
     <Menu
       label={`More for “${item.title}”`}
@@ -557,9 +551,9 @@ function RowMenu({ item }: { item: ArtifactListItem }) {
       items={[
         {
           key: "pin",
-          label: pinned ? "Unpin" : "Pin",
+          label: pin.label,
           icon: <PinGlyph size="sm" />,
-          onSelect: () => void pin(),
+          onSelect: () => void pin.toggle(),
         },
         {
           key: "copy",

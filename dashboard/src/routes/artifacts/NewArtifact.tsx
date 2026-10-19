@@ -1,29 +1,68 @@
 /**
- * New sheet: a native sheet, blank or from the Review sheet template, made by
- * the person signed in and owned by them.
+ * New artifact: a native sheet, blank or from the Review sheet template, or a
+ * doc or a slide deck from the engine's starter, made by the person signed in
+ * and owned by them. `kind=doc` and `kind=slides` open on those.
  *
- * A PAGE OR A DOCUMENT IS PUBLISHED, NOT TYPED HERE: an agent's tool or the
- * CLI publishes those. What a person starts in the dashboard is a sheet,
- * whose content is its datastore, so it is two engine writes: the artifact,
- * then its schema. Each is keyed, so a retry is the same operation; a schema
- * the engine refused after the sheet was made leaves the sheet in place, and
- * its page says so and offers the schema editor.
+ * A PAGE IS PUBLISHED, NOT TYPED HERE: an agent's tool or the CLI publishes
+ * one. A sheet's content is its datastore, so it is two engine writes: the
+ * artifact, then its schema. Each is keyed, so a retry is the same operation;
+ * a schema the engine refused after the sheet was made leaves the sheet in
+ * place, and its page says so and offers the schema editor. A doc or a deck is
+ * one write: the engine publishes its own starter, held to the kind's format,
+ * and the person edits it in place from there.
  *
  * `item=` names the task the sheet is made for, which lists it on that task's
  * Artifacts card.
  */
 
 import { useState } from "react";
-import { Button, ChoiceList, FormField, Input, useToast } from "@crewlethq/ui";
+import { Button, ChoiceList, FormField, Input, SegmentedControl, useToast } from "@crewlethq/ui";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { Section } from "~/components/common.tsx";
 import { utf8Bytes } from "~/lib/format.ts";
 import { keyedWrite, useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { newActOpID } from "~/protocol/index.ts";
 import { ARTIFACT_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
-import { artifactPath, configureSchema, createSheet } from "~/lib/artifacts/api.ts";
+import {
+  artifactPath,
+  configureSchema,
+  createFromStarter,
+  createSheet,
+} from "~/lib/artifacts/api.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { SHEET_TEMPLATES, type SheetTemplate } from "~/lib/artifacts/schema.ts";
+
+/** What New can start, in the order its kind control offers them, and what each says. */
+const STARTS = [
+  {
+    kind: "sheet",
+    label: "Sheet",
+    title: "New sheet",
+    hint: "A sheet everyone you share it with fills in together, live",
+    placeholder: "Integration requirements review",
+    starts: "",
+    action: "Start the sheet",
+  },
+  {
+    kind: "doc",
+    label: "Doc",
+    title: "New doc",
+    hint: "A document you write in Markdown, edit in place and print",
+    placeholder: "On-call handbook",
+    starts: "It starts as one page under its title. Add, rename and reorder its tabs from Edit.",
+    action: "Start the doc",
+  },
+  {
+    kind: "slides",
+    label: "Deck",
+    title: "New deck",
+    hint: "A slide deck you edit in place, present full screen and print",
+    placeholder: "Quarterly plan",
+    starts:
+      "It starts from four example slides (a cover, an agenda, two columns and a closing slide), each with notes on what to put there.",
+    action: "Start the deck",
+  },
+] as const;
 
 /** A work item's key, as the engine names one: a project key, a dash, a number. */
 const ITEM_KEY = /^[A-Z][A-Z0-9_]*-\d+$/;
@@ -33,6 +72,8 @@ export function NewArtifact() {
   const toast = useToast();
   const [item] = useParam("item", "");
   const [templateParam] = useParam("template", "review");
+  const [kindParam, setKind] = useParam("kind", "sheet");
+  const kind = STARTS.find((s) => s.kind === kindParam) ?? STARTS[0];
   const [template, setTemplate] = useState<SheetTemplate>(
     templateParam === "blank" ? "blank" : "review",
   );
@@ -47,6 +88,17 @@ export function NewArtifact() {
       : bytes > ARTIFACT_TITLE_MAX_BYTES
         ? `The title is ${bytes} bytes and the most is ${ARTIFACT_TITLE_MAX_BYTES}.`
         : undefined;
+
+  const startFromStarter = async (starter: "doc" | "slides") => {
+    const answer = await create.run(
+      createFromStarter({ kind: starter, title: title.trim(), ...(workItem ? { workItem } : {}) }),
+    );
+    if (answer?.kind !== "done") return;
+    const id = typeof answer.body.artifact === "string" ? answer.body.artifact : "";
+    if (!id) return;
+    toast.ok(`Started “${title.trim()}”`);
+    nav.to(artifactPath(id));
+  };
 
   const start = async () => {
     const answer = await create.run(
@@ -71,8 +123,16 @@ export function NewArtifact() {
   };
 
   return (
-    <Section title="New sheet" hint="A sheet everyone you share it with fills in together, live">
+    <Section title={kind.title} hint={kind.hint}>
       <div className="artifact-form">
+        <SegmentedControl
+          label="Kind"
+          semantics="radio"
+          size="sm"
+          options={STARTS.map((s) => ({ value: s.kind, label: s.label }))}
+          value={kind.kind}
+          onValueChange={(v: string) => setKind(v)}
+        />
         <FormField label="Title" error={titleWrong}>
           {(field) => (
             <Input
@@ -81,21 +141,25 @@ export function NewArtifact() {
               aria-invalid={field.invalid}
               width="md"
               value={title}
-              placeholder="Integration requirements review"
+              placeholder={kind.placeholder}
               onChange={(e) => setTitle(e.target.value)}
             />
           )}
         </FormField>
-        <ChoiceList
-          label="Start from"
-          value={template}
-          onChange={(value) => setTemplate(value === "blank" ? "blank" : "review")}
-          options={SHEET_TEMPLATES.map((t) => ({
-            value: t.key,
-            label: t.label,
-            detail: t.description,
-          }))}
-        />
+        {kind.kind === "sheet" ? (
+          <ChoiceList
+            label="Start from"
+            value={template}
+            onChange={(value) => setTemplate(value === "blank" ? "blank" : "review")}
+            options={SHEET_TEMPLATES.map((t) => ({
+              value: t.key,
+              label: t.label,
+              detail: t.description,
+            }))}
+          />
+        ) : (
+          <p className="artifact-note">{kind.starts}</p>
+        )}
         {workItem && <p className="artifact-note">It will be listed on {workItem}.</p>}
         {create.answer && create.answer.kind !== "done" && (
           <p className="artifact-refusal">{create.answer.text}</p>
@@ -115,9 +179,9 @@ export function NewArtifact() {
                   ? "Give it a title."
                   : (titleWrong ?? undefined)
             }
-            onClick={() => void start()}
+            onClick={() => void (kind.kind === "sheet" ? start() : startFromStarter(kind.kind))}
           >
-            Start the sheet
+            {kind.action}
           </Button>
         </div>
       </div>

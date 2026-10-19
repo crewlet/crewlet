@@ -48,9 +48,11 @@ function page(docs: DataDoc[], through: number): DataDocPage {
 function store(
   read: () => Promise<DataDocPage>,
   write: (req: KeyedRequest) => Promise<KeyedAnswer>,
+  schema: unknown = {},
 ) {
   const query = vi.fn(async (kind: string) => {
     if (kind === "artifact_data") return read();
+    if (kind === "artifact_data_schema") return schema;
     if (kind === "artifact_data_doc") throw new Error("not asked in this suite");
     return {};
   });
@@ -236,7 +238,34 @@ describe("an edit", () => {
     await s.load("rows");
     await s.edit("rows", [{ rowId: "r1", field: "name", value: "New" }]);
     expect(fieldsOf(s, "r1")).toMatchObject({ fields: { name: "Old" }, pending: false });
-    expect(s.pending.refusal("r1", "name")).toBe("Only the reviewer sets this.");
+    expect(s.pending.refusal("r1", "name")).toBe("Not saved: you cannot change this.");
+  });
+
+  test("of long text names the version it edited, which the engine requires", async () => {
+    const { s, sent } = store(
+      async () => page([doc("r1", 3, { name: "Gate", notes: "Old" })], 3),
+      async () => applied(4, 4),
+      {
+        collections: [
+          {
+            name: "rows",
+            columns: [
+              { key: "name", label: "Name", type: "text" },
+              { key: "notes", label: "Notes", type: "longtext" },
+            ],
+          },
+        ],
+      },
+    );
+    await s.loadSchema();
+    await s.load("rows");
+    await s.edit("rows", [{ rowId: "r1", field: "notes", value: "New" }]);
+    await s.edit("rows", [{ rowId: "r1", field: "name", value: "Renamed" }]);
+    const ops = sent.map((req) => (req.body as { ops: { if_version?: number }[] }).ops[0]);
+    expect(ops[0]).toMatchObject({ op: "merge", doc: "r1", if_version: 3 });
+    // A SHORT VALUE IS NOT GUARDED: the engine merges it field by field.
+    expect(ops[1]).not.toHaveProperty("if_version");
+    s.stop();
   });
 
   test("whose outcome nobody knows is kept, and Retry sends exactly it again", async () => {
@@ -297,7 +326,11 @@ describe("a keyed answer", () => {
           conflict: [doc("r1", 4, {})],
         }),
       }),
-    ).toMatchObject({ verdict: "conflict", reason: "Moved on", conflict: [{ id: "r1" }] });
+    ).toMatchObject({
+      verdict: "conflict",
+      reason: "Not saved: it changed since it was read.",
+      conflict: [{ id: "r1" }],
+    });
   });
 
   test("is the verdict a refusal before the log means, as the applier would say it", () => {
@@ -322,12 +355,19 @@ describe("a keyed answer", () => {
     });
     expect(refused(413, { error: "data_quota" })).toMatchObject({ verdict: "quota" });
     expect(refused(409, { error: "not_undoable" })).toMatchObject({ verdict: "invalid" });
-    expect(refused(422, { error: "invalid", verdict: "invalid", detail: "Only numbers." })).toEqual(
-      {
+    // THE APPLIER'S DETAIL IS NEVER SAID: it names op indices and protocol
+    // terms for the agent tools, and the reader is told the verdict in words.
+    expect(
+      refused(422, {
+        error: "invalid",
         verdict: "invalid",
-        reason: "Only numbers.",
-      },
-    );
+        detail:
+          "op 0: notes is long text, written whole only guarded: name the if_version you edited, or append",
+      }),
+    ).toEqual({
+      verdict: "invalid",
+      reason: "Not saved: the value does not fit this column.",
+    });
   });
 });
 

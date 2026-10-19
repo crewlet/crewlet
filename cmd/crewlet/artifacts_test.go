@@ -445,7 +445,7 @@ func TestArtifactsGetAndVersionsShowTheContractAndCapabilities(t *testing.T) {
 	if !strings.Contains(stdout, "  contract 1.0.0\n") || !strings.Contains(stdout, "  can      db,state\n") {
 		t.Errorf("get printed %q", stdout)
 	}
-	node.head = map[string]any{"kind": "markdown", "capabilities": []string{}}
+	node.head = map[string]any{"kind": "doc", "capabilities": []string{}}
 	if stdout, _, _ = cli(t, "artifacts", "get", cliArtifact, cfg); !strings.Contains(stdout, "  contract none\n") ||
 		!strings.Contains(stdout, "  can      none\n") {
 		t.Errorf("get of a version declaring nothing printed %q", stdout)
@@ -574,4 +574,99 @@ func anyStrings(v any) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+// writeTree writes files under a fresh directory.
+func writeTree(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, body := range files {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// THE KIND IS INFERRED FROM THE ENTRY BY THE KIND TABLE: a directory whose one
+// default entry is a Markdown file creates a document, and the entry it opens
+// on is that file.
+func TestArtifactsPublishInfersTheKindFromTheEntry(t *testing.T) {
+	t.Parallel()
+	node := newFakeArtifactsNode(t)
+	dir := writeTree(t, map[string]string{"index.md": "# Plan", "notes.txt": "more"})
+	if _, stderr, err := cli(t, "artifacts", "publish", dir, bootstrapForURL(t, node.server.URL)); err != nil {
+		t.Fatalf("publish: %v\n%s", err, stderr)
+	}
+	create := node.creates[0]
+	if create["kind"] != string(artifacts.KindDoc) || create["entry"] != "index.md" {
+		t.Errorf("created %v", create)
+	}
+}
+
+// A DECK IS TOLD APART BY ITS INDEX'S PATH, not its type: a directory holding
+// `deck.json` and its slides creates slides opening on the index, while a
+// JSON file anywhere else infers no kind at all.
+func TestArtifactsPublishInfersADeckFromItsIndex(t *testing.T) {
+	t.Parallel()
+	node := newFakeArtifactsNode(t)
+	dir := writeTree(t, map[string]string{
+		"deck.json":         `{"title":"Plan","order":["cover"]}`,
+		"slides/cover.html": `<section id="cover" style="background:#ffffff"><h1>Plan</h1></section>`,
+	})
+	if _, stderr, err := cli(t, "artifacts", "publish", dir, bootstrapForURL(t, node.server.URL)); err != nil {
+		t.Fatalf("publish: %v\n%s", err, stderr)
+	}
+	if create := node.creates[0]; create["kind"] != string(artifacts.KindSlides) || create["entry"] != "deck.json" {
+		t.Errorf("created %v", create)
+	}
+	other := writeTree(t, map[string]string{"data.json": `{}`})
+	if _, _, err := cli(t, "artifacts", "publish", other, bootstrapForURL(t, node.server.URL)); err == nil ||
+		!strings.Contains(err.Error(), "-kind") {
+		t.Errorf("a lone JSON file answered %v", err)
+	}
+}
+
+// A TABBED DOC OPENS ON ITS INDEX: a directory holding `doc.json` and its tabs
+// creates a doc opening on the index, never on one of the tabs.
+func TestArtifactsPublishInfersATabbedDocFromItsIndex(t *testing.T) {
+	t.Parallel()
+	node := newFakeArtifactsNode(t)
+	dir := writeTree(t, map[string]string{
+		"doc.json":      `{"v":1,"tabs":[{"path":"tabs/plan.md","title":"Plan"}]}`,
+		"tabs/plan.md":  "# Plan",
+		"tabs/notes.md": "# Notes",
+	})
+	if _, stderr, err := cli(t, "artifacts", "publish", dir, bootstrapForURL(t, node.server.URL)); err != nil {
+		t.Fatalf("publish: %v\n%s", err, stderr)
+	}
+	if create := node.creates[0]; create["kind"] != string(artifacts.KindDoc) || create["entry"] != "doc.json" {
+		t.Errorf("created %v", create)
+	}
+}
+
+// TWO DEFAULT ENTRIES ARE THE AUTHOR'S TO CHOOSE BETWEEN: a directory holding
+// both is refused before a byte moves, and -kind settles it.
+func TestArtifactsPublishRefusesTwoCandidateEntries(t *testing.T) {
+	t.Parallel()
+	node := newFakeArtifactsNode(t)
+	dir := writeTree(t, map[string]string{"index.html": "<!doctype html>", "index.md": "# Plan"})
+	_, _, err := cli(t, "artifacts", "publish", dir, bootstrapForURL(t, node.server.URL))
+	if err == nil || !strings.Contains(err.Error(), "index.html and index.md") {
+		t.Fatalf("publish of two entries answered %v", err)
+	}
+	if len(node.intents) != 0 {
+		t.Fatalf("the refused publish declared %d uploads", len(node.intents))
+	}
+	if _, stderr, err := cli(t, "artifacts", "publish", dir, "-kind", "doc",
+		bootstrapForURL(t, node.server.URL)); err != nil {
+		t.Fatalf("publish with -kind: %v\n%s", err, stderr)
+	}
+	if create := node.creates[0]; create["kind"] != "doc" || create["entry"] != "index.md" {
+		t.Errorf("created %v", create)
+	}
 }

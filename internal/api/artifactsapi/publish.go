@@ -255,6 +255,10 @@ type createBody struct {
 	Capabilities []artifacts.Capability    `json:"capabilities,omitempty"`
 	Shares       []shareInput              `json:"shares,omitempty"`
 
+	// Starter begins the artifact from its kind's starter content, which the
+	// engine holds (a deck's example slides); it names no upload or files.
+	Starter bool `json:"starter,omitempty"`
+
 	// WorkItem is the tracker item the artifact is made for, which lists it
 	// there. It confers nothing.
 	WorkItem string `json:"work_item,omitempty"`
@@ -334,7 +338,7 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		Kind: body.Kind, Title: body.Title, Description: body.Description, Icon: body.Icon,
 		Owner: actor.Name, OwnerKind: actor.Kind, SourceKey: body.SourceKey, Shares: shares,
 		Upload: body.Upload, Files: body.Files, Entry: body.Entry, Label: body.Label,
-		Contract: body.Contract, Capabilities: body.Capabilities,
+		Contract: body.Contract, Capabilities: body.Capabilities, Starter: body.Starter,
 	})
 	if err != nil {
 		writeFailed(w, r, key, "create the artifact", err)

@@ -396,6 +396,16 @@ A few things worth knowing when deploying Crewlet:
   command or serves a file only for a holder of that box's access token,
   which the engine reads from E2B and never stores
   (`docs/concepts/code-sandbox.md#sandbox-backends`).
+- **A deck runs nothing, and its renderer is a trust boundary.** A `slides`
+  artifact is drawn on the dashboard's own origin, so it is held to a closed
+  subset at publish (no script, no event attribute, no embedded page, no style
+  value naming a URL, a drawing that references only its own ids, images and
+  typefaces only as files of the version), and the dashboard builds every
+  element from the engine's parsed tree with the same allowlists again,
+  never parsing a slide's markup or writing it into the page. The dashboard's
+  `img-src` admits `blob:` for the object URLs it makes of a deck's images,
+  which only script already running on that origin can mint. A defect in
+  either list is a security issue; report it as one.
 - **Artifacts run on an origin of their own, and where that origin lives is
   your decision.** An artifact is HTML and script written by a person or an
   agent, so the engine never renders one on the dashboard's origin: the
