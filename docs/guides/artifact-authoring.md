@@ -124,7 +124,7 @@ grants it:
 | `db` | Read and write the artifact's shared datastore, under the collection rules |
 | `state` | Keep per-viewer state (a remembered filter, a collapsed panel) |
 | `identity` | Learn who is viewing: their seat, kind and role on this artifact. Never a token or an address |
-| `presence` | See who else is here and say where the viewer is |
+| `presence` | Say where the viewer is, and show who is in a part of the page; the dashboard's bar already shows who has it open |
 | `assets` | Reference files from the artifact's asset store |
 
 A publish declaring a capability this build does not know is refused. A

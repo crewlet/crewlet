@@ -353,6 +353,14 @@ counts, and agents working on the artifact appear like people. `region` is a
 name the page chooses for where the viewer is (a tab, a chart), at most 64
 characters.
 
+THE ROOM IS DRAWN ONCE, by the dashboard, in the artifact's bar: everybody
+with the page open. A page draws presence only where it places a reader, by
+their `focus`: the kit's `<crewlet-sheet>` rings the cells the members whose
+focus is in its collection are on, and names them in a small stack of who is
+in that sheet, never the whole room. A page that draws its own presence
+follows the same rule, so nobody is shown twice beside a part of the page
+they are not in.
+
 ### Assets
 
 ```ts
