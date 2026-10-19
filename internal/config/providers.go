@@ -910,9 +910,10 @@ type CLIAgentAuth struct {
 
 	// CredentialBundle is a ${VAR} reference to a bundle exported by
 	// `crewlet llm export` — the CLI's login (its credential files, or the
-	// document its export printed) as one blob,
-	// restored into an empty credential directory at boot so a fresh
-	// container comes up already logged in.
+	// document its export printed) as one blob, restored into an empty
+	// credential directory whenever the engine builds a company to run (boot
+	// and every apply it publishes), so a fresh container comes up already
+	// logged in — and withheld after `crewlet llm logout` until a sign-in.
 	CredentialBundle string `secret:"true" yaml:"credential_bundle,omitempty" json:"credential_bundle,omitempty" desc:"${VAR} holding a bundle exported by crewlet llm export."`
 }
 

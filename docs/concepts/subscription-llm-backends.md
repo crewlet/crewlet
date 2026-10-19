@@ -1652,8 +1652,8 @@ lists and single values replace wholesale.
 | `usage_file_args` | The flag asking the CLI to write its counts to a file, with `{usage_file}`. |
 | `session_args` | The flag naming the call's session, with `{session}` — 32 hex characters minted per call. |
 | `usage_args` | A command run after the call that prints its counts, with the same `{session}`; read through `usage`. Exclusive with `usage_file_args`. One that fails, or prints nothing, logs `cli_agent_usage_report_failed`; one this profile cannot read logs `cli_agent_usage_report_unreadable`; either way the counts are what stdout reported. |
-| `config_env` | A vendor's own relocation variable, mapped to a directory under the seat home — relative, and staying inside it. |
-| `work_config_env` | A vendor's relocation variable mapped to a directory under the per-call working directory, for configuration a call must not share with the seat's other calls. Set only for the call and its usage command; never `HOME`, an XDG home, `TMPDIR`, or a `config_env` variable. |
+| `config_env` | A vendor's own relocation variable, mapped to a directory under the seat home — relative, and staying inside it; never `HOME`, an XDG home or `TMPDIR`, which the engine sets. An override that moves a directory the built-in profile keeps paths under must move those paths with it (its login files, volatile paths and home seed files), or the CLI would no longer find them, and is refused naming the ones left behind. |
+| `work_config_env` | A vendor's relocation variable mapped to a directory under the per-call working directory, for configuration a call must not share with the seat's other calls. Set only for the call and its usage command; never `HOME`, an XDG home, `TMPDIR`, or a `config_env` variable. An override that moves the built-in profile's directory must move what it keeps there too (its work seed files and a discovered system prompt file), or is refused. |
 | `isolation_env` | A vendor's own switch that keeps the CLI from reading configuration outside its seat's home and its call's directory, with the value that turns that reading off — set on every command the profile runs, and refused in `env`, `passthrough_env` and `cli.env`, each of which is layered over it. The name the CLI reads first, never a fallback spelling of it. Never empty (a CLI that reads `1` as on reads an empty value as off), never a credential, `HOME`, an XDG home, `TMPDIR` or a relocated variable. |
 | `env` | Fixed child environment. Never a credential, never `token_env` or `api_key_env`, and never a variable the engine sets to isolate the call (`HOME`, the XDG homes, `TMPDIR`, a `config_env`, `work_config_env` or `isolation_env` variable). |
 | `passthrough_env` | Engine variables forwarded to the child. Never a credential, and never an isolation variable. |
@@ -1661,8 +1661,8 @@ lists and single values replace wholesale.
 | `api_key_env` | The variable a metered key goes in (`api_keys` under `auth.mode: api-key`). |
 | `model_names_provider` | The CLI reads its model as `<provider>/<model>`, split at the first slash, so a `model` with nothing before or after that slash (as the CLI is handed it, through `model_args`) is refused on a write. Declared by `opencode` only — measured from its source; `hermes` and `pi` document a `provider/id` model but are not known to refuse a bare one. |
 | `env_sign_in` | The CLI reads its model provider's key from its own environment, so a [credential-named](#5-a-provider-key-in-clienv-hermes-pi-opencode) variable in `cli.env` signs it in. |
-| `credential_paths` | The login files, relative to the seat home. |
-| `volatile_paths` | Sessions, transcripts and history, deleted before and after every call. |
+| `credential_paths` | The login files, relative to the seat home: each must name a file inside it (not the home itself, not a path ending in a separator), and no two may share a file name, since the shared directory and a bundle keep each under its name. |
+| `volatile_paths` | Sessions, transcripts and history, deleted before and after every call. Each must stay inside the seat home; a directory is fine. |
 | `login_args` | The vendor's own interactive login, for `crewlet llm login`. |
 | `capture_token_args` | The command that mints a headless token on stdout (`-capture-token`). |
 | `status_args` | The command reporting who the CLI is logged in as. |
@@ -1674,10 +1674,10 @@ lists and single values replace wholesale.
 | `marker_scope` | Where markers match: `answer-and-stderr` (default), `stderr`, or `events` (the class in the CLI's own failure events, compared by equality; `jsonl` only, and stderr is not searched). |
 | `marker_events` | Under `marker_scope: events`, the event kinds (read through `event_type_path`) the CLI reports a failure in. Refused beside any other scope. |
 | `marker_path` | Under `marker_scope: events`, where in such an event the failure class is; a sentinel must equal it. Refused beside any other scope. |
-| `host_credential_paths` | Where the CLI keeps its login in a person's own home, for `-from-host`. |
+| `host_credential_paths` | Where the CLI keeps its login in a person's own home, for `-from-host`: each names a file, under a file name `credential_paths` also has, because an adopted file is kept under its name and a seat is seeded only with those names. |
 | `local_tools` | The profile's stance on the CLI's own tools: `denied` or `vendor-default`. |
 | `local_tools_note` | Why a `vendor-default` stance is one. |
-| `seed_files` | `{path, in, content}` (`in` is `home` or `work`): settings files written before a call. |
+| `seed_files` | `{path, in, content}` (`in` is `home` or `work`): settings files written before a call. `path` must name a file inside its scope, and never one another field needs: a login file, the system prompt file, a `config_env` or `work_config_env` directory, or a directory above any of them. |
 
 ---
 
