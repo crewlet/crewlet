@@ -5657,7 +5657,6 @@ export interface DashboardCatalogueAnswer {
   sources: DashboardEngineSource[];
 }
 
-
 /** A rectangle of a design's canvas, in canvas pixels (`canvasformat.Rect`). */
 export interface DesignRect {
   x: number;
