@@ -755,7 +755,8 @@ The `message` follows the `reason`, and names a permission only where one is a
 way past the rule. `no_grant` names the permissions in `grants` ("You don't
 have the access this needs (Tracker)"); a refused relation —
 `not_self`, `not_lead`, `not_author`, `unnamed`, and on an artifact `role`, a
-share below the role the verb asks — says what the rule asked and names the
+share below the role the verb asks (which every route answering it names as
+`role`, the role to ask the owner for) — says what the rule asked and names the
 `grants` beside it as what would admit you anyway, or says that no access
 would; and every other reason says what does clear it, whatever `grants`
 holds: `unseated` a credential bound to a human seat (`crewlet iam bind`),

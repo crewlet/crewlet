@@ -82,7 +82,7 @@ func refuseAdmission(w http.ResponseWriter, r *http.Request, action authz.Action
 	case errors.Is(err, ErrNoSuchArtifact):
 		notFound(w)
 	case errors.As(err, &refused):
-		refuseDecision(w, r, action, refused.Decision)
+		operator.RefuseDecision(w, r, action, refused.Decision)
 	case errors.Is(err, artifactsdomain.ErrTrashed):
 		trashed(w)
 	case errors.Is(err, ErrRecordUnwritten):
@@ -93,22 +93,6 @@ func refuseAdmission(w http.ResponseWriter, r *http.Request, action authz.Action
 		// THE CHART OR THE ESTATE COULD NOT TELL: unknown, never a refusal.
 		unavailable(w, err, "this node could not decide who may act on this artifact")
 	}
-}
-
-// refuseDecision renders a refusal of the authority table: the tools' own
-// envelope ([operator.RefuseDecision]), and for a caller whose relation is
-// below the verb's role, the role named, so the dashboard can say whom to ask
-// for what.
-func refuseDecision(w http.ResponseWriter, r *http.Request, action authz.Action, d authz.Decision) {
-	if d.Err == nil && d.Reason == authz.ReasonRole && d.Role.Valid() {
-		detail := authz.RefusalDetail(d.Reason, d.Grants)
-		detail["role"] = string(d.Role)
-		detail["detail"] = "this needs the " + string(d.Role) + " role on the artifact; " +
-			"its owner can share it with you at that role"
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized, detail)
-		return
-	}
-	operator.RefuseDecision(w, r, action, d)
 }
 
 // notFound is the answer for an artifact this caller is answered as absent:
