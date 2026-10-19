@@ -69,7 +69,11 @@ test("a meter shows what it measures, its count and its maximum", () => {
     [{ outcome: "failed" }, { outcome: "failed" }, { outcome: "rolled_back" }],
     "Failed deploys",
   );
-  expect(screen.getByText("3 of 5")).toBeTruthy();
+  // The count at the tile's step, what it is out of under it, and the bar,
+  // which a screen reader hears it all from once.
+  expect(screen.getByText("3")).toBeTruthy();
+  expect(screen.getByText("of 5")).toBeTruthy();
+  expect(screen.getByRole("meter").getAttribute("aria-valuetext")).toBe("3 of 5");
   expect(screen.getAllByText("Failed deploys").length).toBeGreaterThan(0);
 });
 
@@ -145,11 +149,12 @@ test("a table shows a tracker status in Work's words, never its id", () => {
   expect(screen.getByText("In progress")).toBeTruthy();
   expect(screen.queryByText("in_progress")).toBeNull();
   // Each column is held at what it holds, so the table never fits it narrower.
-  // "In progress" is eleven characters: 11 x 7.5 + 36 = 118.5, held at 119px.
+  // "In progress" is eleven characters: 11 x 7.5 = 82.5, the cell's 28px and,
+  // as the last column, the frame's 4px more: held at 115px.
   const heading = screen
     .getAllByRole("columnheader")
     .find((h) => /status/i.test(h.textContent ?? ""));
-  expect(heading?.style.width).toBe("119px");
+  expect(heading?.style.width).toBe("115px");
 });
 
 test("a chart over days labels its axis with dates and no time of day", () => {
@@ -166,5 +171,5 @@ test("a chart over days labels its axis with dates and no time of day", () => {
   );
   const text = document.body.textContent ?? "";
   expect(text).not.toMatch(/\d{1,2}:\d{2}(:\d{2})?\s?(AM|PM)?/);
-  expect(text).toMatch(/2026/);
+  expect(text).toMatch(/Oct/);
 });

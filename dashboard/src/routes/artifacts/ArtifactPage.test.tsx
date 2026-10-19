@@ -61,7 +61,7 @@ vi.mock("~/lib/artifacts/people.ts", async () => {
   };
   return { ...actual, useArtifactPeople: () => people };
 });
-const reader = vi.hoisted(() => ({ handle: "", login: "" }));
+const reader = vi.hoisted(() => ({ handle: "", login: "", owner: "" }));
 vi.mock("~/lib/viewer.ts", async () => {
   const actual = await vi.importActual<typeof import("~/lib/viewer.ts")>("~/lib/viewer.ts");
   return { ...actual, useViewer: () => reader };
@@ -170,6 +170,7 @@ beforeEach(() => {
   onMode.mockClear();
   reader.handle = "";
   reader.login = "";
+  reader.owner = "";
   roomOthers.length = 0;
 });
 
@@ -264,6 +265,7 @@ test("the People panel starts with the reader, seat or none", () => {
 // they could follow.
 test("a seatless reader's own other tab is counted beside You", () => {
   reader.login = "token:review";
+  reader.owner = "token:review";
   roomOthers.push({
     session: "s-2",
     seat: "token:review",
@@ -299,6 +301,9 @@ test("a sheet's version names nothing a reader sees change, so it draws no chip"
   detail = { ...detail, kind: "sheet" } as ArtifactDetail;
   mount(`#/artifacts/${ID}`);
   expect(screen.queryByRole("button", { name: /^Versions:/ })).toBeNull();
+  // AND ITS PANEL PROMISES NO VERSIONS: it is the sheet's History.
+  fireEvent.click(tool("History"));
+  expect(screen.getByRole("complementary", { name: "History" })).toBeTruthy();
 });
 
 test("Escape from inside a panel closes it and hands focus back to its control", () => {
