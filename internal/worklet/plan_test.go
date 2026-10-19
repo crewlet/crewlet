@@ -96,6 +96,29 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 		}
 	}
 
+	// NO REGISTERED READER ANSWERS A PER-ROW AGGREGATE FROM ITS WHOLE CHILD
+	// TABLE — the plan of a correlated scalar subquery the planner unnested
+	// into one grouped read of every row of the table it counts or bounds,
+	// joined back to the outer rows ([storetest.Decorrelated]). Whether it
+	// does is the planner's cost guess over a database nobody has ANALYZEd,
+	// which no line of the statement decides, so the plan is asked, and a
+	// read it fires on is rewritten in a form the rule cannot reach: a
+	// minimum or maximum as `ORDER BY … LIMIT 1`, a count read for the batch
+	// already in hand by the batch's keys, as the one-sided repair's is
+	// ([blockerDependentsStatement]).
+	//
+	// THE SAME READERS THE HEAP-SCAN RULE HOLDS — the grammar's statements,
+	// the reads, the censuses and the history's reads — and NOT THE PASSES,
+	// which read the whole table by definition: a grouped read of all of it
+	// is what a pass is, and the active recount is one, over every project.
+	refuseUnnested := func(t *testing.T, plan []string) {
+		t.Helper()
+		if line, unnested := storetest.Decorrelated(plan); unnested {
+			t.Errorf("this read answers a per-row aggregate from its whole "+
+				"child table (%q):\n%s", line, strings.Join(plan, "\n"))
+		}
+	}
+
 	// THE INDEX OF THE TREE (replicated 0058), spelled rather than taken
 	// from [parentIndex], which is what is under test.
 	const tree = "tracker_tasks_parent_idx"
@@ -129,6 +152,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 					used[index] = true
 				}
 				refuseHeapScans(t, other)
+				refuseUnnested(t, other)
 				refuseSetWalks(t, what, tree)
 			}
 			// A CUSTOM-FIELD FILTER SEEKS ITS OWN COLUMN'S INDEX,
@@ -191,6 +215,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 				used[index] = true
 			}
 			refuseHeapScans(t, plan)
+			refuseUnnested(t, plan)
 			holdToIndex(t, plan, read, covered)
 		})
 	}
@@ -208,6 +233,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 				used[index] = true
 			}
 			refuseHeapScans(t, plan)
+			refuseUnnested(t, plan)
 		})
 	}
 	for name, pass := range taskPasses() {
@@ -239,6 +265,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 				used[index] = true
 			}
 			refuseHeapScans(t, plan)
+			refuseUnnested(t, plan)
 			holdToIndex(t, plan, read, covered)
 		})
 	}
