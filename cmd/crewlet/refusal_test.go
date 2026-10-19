@@ -175,8 +175,8 @@ func TestARefusalNoGrantLiftsSaysTheRule(t *testing.T) {
 		{authz.ReasonNoGrant, []iam.Grant{iam.GrantTracker},
 			[]string{"doesn't have tracker. Ask an admin for it"}},
 	} {
-		raw, err := json.Marshal(httpjson.Envelope(httpjson.CodeUnauthorized,
-			authz.RefusalDetail(c.reason, c.grants)))
+		_, _, detail := authz.RefusalFields(authz.Decision{Reason: c.reason, Grants: c.grants})
+		raw, err := json.Marshal(httpjson.Envelope(httpjson.CodeUnauthorized, detail))
 		if err != nil {
 			t.Fatal(err)
 		}

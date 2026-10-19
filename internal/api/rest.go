@@ -262,20 +262,20 @@ func (a *App) serveFrom(kind stream.Kind, build func(stream.Audience) any) http.
 		if !principal.Stage.MayAct() {
 			// THE AUTHORITY TABLE'S FIRST CHECK, as every question's: a
 			// person whose stage may not act reads nothing, the overview
-			// included.
-			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-				authz.RefusalDetail(authz.ReasonStage, nil))
+			// included — answered in the table's own envelope.
+			authz.EnvelopeRefusal(w, r, authz.Policy{},
+				authz.Decision{Reason: authz.ReasonStage})
 			return
 		}
 		audience := a.stream.AudienceFor(r.Context(), principal)
 		if !audience.Receives(kind) {
-			// THE SAME TWO FIELDS every refusal on authority carries,
-			// rather than a sentence naming the permission: a client
+			// THE SAME ENVELOPE every refusal on authority is answered
+			// in, rather than a sentence naming the permission: a client
 			// reading `grants` off a refused question reads it off this
 			// too.
 			need, _ := stream.NeedOf(kind)
-			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-				authz.RefusalDetail(authz.ReasonNoGrant, need.Grants()))
+			authz.EnvelopeRefusal(w, r, authz.Policy{},
+				authz.Decision{Reason: authz.ReasonNoGrant, Grants: need.Grants()})
 			return
 		}
 		writeJSON(w, http.StatusOK, stream.ShapeFor(build(audience), audience))
