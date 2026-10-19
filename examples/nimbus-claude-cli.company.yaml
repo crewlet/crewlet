@@ -337,10 +337,11 @@ providers:
   # and it is why the other four seats stay in text mode: somebody waiting
   # in a chat channel wants an answer now, not a detached run.
   #
-  # NO EXTRA CREDENTIAL.  `default_coding_agent: claude-code` is the same
-  # CLI as the LLM above, and on a LOCAL cell the backend seeds that
-  # provider's credential files into the box and writes the refreshed one
-  # back afterwards — so the coding agent runs on the same subscription
+  # NO EXTRA CREDENTIAL.  The coding CLI those boxes run is the `coding`
+  # entry's `claude-code`, the same CLI on the same login as the LLM
+  # above, and on a LOCAL cell the backend seeds that provider's
+  # credential files into the box and writes the refreshed one back
+  # afterwards — so the coding agent runs on the same subscription
   # `crewlet llm login` already established.  (That seeding is exactly why
   # a remote `e2b` cell would NOT work here: the credential files carry a
   # refresh token whose rotation is fleet state and deliberately never
