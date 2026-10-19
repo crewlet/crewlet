@@ -290,12 +290,13 @@ test.each([
 });
 
 describe("scopes and sigils", () => {
-  test("the five scopes are tabs, All first", () => {
+  test("the six scopes are tabs, All first", () => {
     mount();
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
       "All",
       "Tasks",
       "Pages",
+      "Artifacts",
       "Agents",
       "Actions",
     ]);
@@ -946,7 +947,7 @@ describe("the actions, made as the person", () => {
   // first in the gate, and a line here goes red.
   test("a refused browser asks nothing, lists no seat or tool, and says why it cannot write", async () => {
     const p = mount({ answers: TASKS });
-    act(() => p.store.applyTools([{ name: "task_activity", source: "builtin" }] as never));
+    act(() => p.store.applyTools([{ name: "task_activity", source: "mcp:tracker" }] as never));
     await p.type("swe");
     expect(screen.getAllByText("SWE").length).toBeGreaterThan(0);
     await p.type("task");
@@ -1357,5 +1358,50 @@ describe("a screen found by what it holds", () => {
     await p.type("token");
     const go = screen.getByRole("group", { name: "Go to" });
     expect(within(go).queryByRole("option", { name: /^People & access/ })).toBeNull();
+  });
+});
+
+// AN ARTIFACT IS FOUND BY ITS TITLE. "Q4 launch" found nothing, and "artif"
+// listed the engine's own agent tools instead. All carries the term into the
+// Artifacts scope rather than asking a fourth question of its own.
+describe("artifacts", () => {
+  const listing = (params: Record<string, unknown>) =>
+    Promise.resolve({
+      items:
+        params["q"] === "Q4 launch"
+          ? [{ id: "a-1", kind: "sheet", title: "Q4 launch review", owner: "jane-founder" }]
+          : [],
+      total: 1,
+      read_level: "",
+      position: "",
+    });
+
+  test("All offers the Artifacts scope for a term, and asks nothing of the listing itself", async () => {
+    const p = mount({ answers: { artifacts: listing } });
+    await p.type("Q4 launch");
+    expect(asked.some((q) => q.kind === "artifacts")).toBe(false);
+    await act(async () => {
+      fireEvent.click(p.row("Find “Q4 launch” in artifacts →"));
+    });
+    expect(p.tab()).toBe("Artifacts");
+    expect(asked.find((q) => q.kind === "artifacts")?.params).toMatchObject({
+      q: "Q4 launch",
+      scope: "all",
+    });
+    const row = await screen.findByText("Q4 launch review");
+    expect(row.closest('[role="option"]')?.textContent).toContain("Sheet");
+  });
+
+  test("the engine's own agent tools are not offered, and a connected tool is", async () => {
+    const p = mount();
+    act(() => {
+      p.store.applyTools([
+        { name: "get_artifact", description: "", source: "builtin", annotations: {} },
+        { name: "artifact_lint", description: "", source: "mcp:linter", annotations: {} },
+      ] as never);
+    });
+    await p.type("artif");
+    expect(screen.queryByText("get_artifact")).toBeNull();
+    expect(screen.getByText("artifact_lint")).toBeTruthy();
   });
 });
