@@ -2,7 +2,8 @@
  * A doc's gallery cover: the opening of its first tab, drawn natively at card
  * size from the version's outline by the same renderer the doc is read with,
  * never a screenshot (D64). Pictures are left as their alt text, so a gallery
- * of fifty docs fetches fifty small outlines and nothing else.
+ * of fifty docs fetches fifty small outlines and nothing else, and links as
+ * their words: the whole card is one link, which may hold no second one.
  */
 
 import { DocCover as Cover } from "@crewlethq/ui";
@@ -20,5 +21,5 @@ export function DocCover({ item }: { item: Pick<ArtifactListItem, "id" | "head_n
   );
   const cover = outline.data?.doc?.cover;
   if (!cover?.markdown) return null;
-  return <Cover>{renderMarkdown(cover.markdown, { image: noImages })}</Cover>;
+  return <Cover>{renderMarkdown(cover.markdown, { image: noImages, links: "text" })}</Cover>;
 }

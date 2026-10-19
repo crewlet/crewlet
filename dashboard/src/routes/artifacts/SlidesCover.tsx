@@ -2,7 +2,8 @@
  * A deck's gallery cover: its cover slide drawn natively at card size from the
  * version's outline, never a screenshot (D64), and how many slides it holds.
  * Pictures are left as their sized placeholders, so a gallery of fifty decks
- * fetches fifty small outlines and nothing else.
+ * fetches fifty small outlines and nothing else, and links as their words: the
+ * whole card is one link, which may hold no second one.
  */
 
 import { useId } from "react";
@@ -29,7 +30,7 @@ export function SlidesCover({
   return (
     <span className="slides-cover">
       <SlideStage label={`${item.title}, cover`}>
-        {renderSlide(slides.cover_slide, { prefix, image: noImages })}
+        {renderSlide(slides.cover_slide, { prefix, image: noImages, links: "text" })}
       </SlideStage>
       <span className="slides-cover-count">
         {slides.count} {slides.count === 1 ? "slide" : "slides"}
