@@ -47,6 +47,15 @@
 # `?=` leaves as it is.
 export GOTOOLCHAIN ?= auto
 
+# No recipe here reads CDPATH, and every `cd` in one is relative to this tree:
+# `cd $(UI)` is `cd dashboard`, and scripts/git.sh, run as `scripts/git.sh`,
+# finds its own directory with `cd scripts`. A CDPATH a developer exported is
+# searched before the current directory: measured, an entry holding a
+# dashboard/ of its own took `cd dashboard` there, so `npm ci` and the build
+# would have run in that other tree. Unexported, it reaches no recipe; each
+# script that cds also drops it itself, for the runs by hand.
+unexport CDPATH
+
 GO ?= go
 
 # Exported so the partition command and internal/solo's roster guard discover
