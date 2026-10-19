@@ -238,6 +238,16 @@ test("each panel has its key, and the key closes what it opened", () => {
   expect(screen.getByText("The share dialog")).toBeTruthy();
 });
 
+// AN OLDER VERSION WAS ONLY A TINTED CHIP: nothing said why a deck's Edit
+// had gone, or offered the way back.
+test("an older version says so, with the way back to the latest", () => {
+  mount(`#/artifacts/${ID}?version=1`);
+  expect(screen.getByText(/You are looking at version 1, an older version/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Show the latest" }));
+  expect(location.hash).toBe(`#/artifacts/${ID}`);
+  expect(screen.queryByText(/an older version/)).toBeNull();
+});
+
 // A READER SIGNED IN WITH NO SEAT saw a People panel of everybody but
 // themselves: "You" was drawn only from a seat.
 test("the People panel starts with the reader, seat or none", () => {

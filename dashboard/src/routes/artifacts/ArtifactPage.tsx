@@ -745,6 +745,31 @@ function Loaded({
         Changes made by others will appear when the connection comes back.
       </Callout>,
     );
+  // AN OLDER VERSION IS SAID, not only tinted on the chip: it is read, never
+  // edited, and the way back to the latest is one press.
+  if (versioned && version > 0 && version < detail.head_number)
+    notices.push(
+      <Callout
+        key="older"
+        layout="banner"
+        variant="info"
+        action={
+          <Button
+            size="small"
+            variant="secondary"
+            onClick={() => {
+              setVersion("");
+              setShownHead(detail.head_number);
+            }}
+          >
+            Show the latest
+          </Button>
+        }
+      >
+        You are looking at version {version}, an older version. The latest is version{" "}
+        {detail.head_number}.
+      </Callout>,
+    );
   if (newer)
     notices.push(
       <Callout
