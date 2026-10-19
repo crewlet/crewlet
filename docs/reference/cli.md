@@ -1987,8 +1987,8 @@ started while the first is running is refused, saying so. Only the commands
 that make a login create the shared one; `status` and a seat's call write back
 only a refresh of the very login they started from, so neither reverts a newer
 login nor brings back one `logout` removed — and the bundle restore `status`
-makes first declines after a `logout` (below). A login whose export failed after
-you signed in is kept and written by the next command — unless you replaced
+makes first declines after a `logout` (below). A login whose export failed
+after you signed in is kept and written by the next command — unless you replaced
 the login since with `-from-host`, `import` or `logout`; a `login` that cannot
 carry such a kept login out replaces it, saying so — see [token refresh across
 seats](../concepts/subscription-llm-backends.md#token-refresh-across-seats). A

@@ -1215,14 +1215,14 @@ much as a document — and an export holding no login never replaces one.
 it), and while that record stands the entry's configured
 [bundle](#4-move-a-login-onto-another-host) is not restored into the directory
 the logout emptied — not at the engine's next boot or apply, and not by
-`list`, `status`, `export` or `doctor`, each of which says so, naming the logout and
-how to sign in again (the engine as a `cli_agent_bundle_withheld` warning).
-The next `crewlet llm login`, `-from-host` or `import` ends it. A **fresh**
-state directory holds no such record, so a container that comes up on an empty
-volume restores the bundle as it always did: to retire a bundle for good,
-remove `cli.auth.credential_bundle` or the `CREWLET_LLM_CLI_<KEY>_CREDENTIALS`
-secret it was exported to, which `logout` reminds you of when the entry has
-one.
+`list`, `status`, `export` or `doctor`, each of which says so, naming the
+logout and how to sign in again (the engine as a `cli_agent_bundle_withheld`
+warning). The next `crewlet llm login`, `-from-host` or `import` ends it. A
+**fresh** state directory holds no such record, so a container that comes up
+on an empty volume restores the bundle as it always did: to retire a bundle
+for good, remove `cli.auth.credential_bundle` or the
+`CREWLET_LLM_CLI_<KEY>_CREDENTIALS` secret it was exported to, which `logout`
+reminds you of when the entry has one.
 
 `crewlet llm logout` also discards a login a failed export left in the login
 home for the next command
@@ -1308,14 +1308,13 @@ crewlet llm export default -secret-store
 
 That engine restores it when it builds a company to run — at boot, and again
 at every apply it publishes (a revision the apply refuses writes none) —
-whenever its own `credentials/` directory is empty and
-nobody has [logged the entry out](#1-broker-the-vendors-own-login-any-cli)
-since its last login, so a fresh container on the same store comes up already
-authenticated. `crewlet llm
-list`, `status`, `export` and `doctor` restore it first too, so they answer about
-the login the engine would run with; `login`, `logout` and `import` do not, since
-each replaces or removes that login. `crewlet validate` never does: checking a
-document writes nothing onto the host.
+whenever its own `credentials/` directory is empty and nobody has [logged the
+entry out](#1-broker-the-vendors-own-login-any-cli) since its last login, so a
+fresh container on the same store comes up already authenticated. `crewlet llm
+list`, `status`, `export` and `doctor` restore it first too, so they answer
+about the login the engine would run with; `login`, `logout` and `import` do
+not, since each replaces or removes that login. `crewlet validate` never does:
+checking a document writes nothing onto the host.
 It is **that node's** store and nothing else's — the rows do not travel, and a
 second host needs its own `crewlet llm login`, or the same bundle handed to it
 through `providers.llm[].auth.credential_bundle`. The blob is validated on the way back in — only the
@@ -1437,7 +1436,8 @@ first call to its last, which an engine in another process sees too — and a
 seat whose export keeps failing is tried by the other seats again after a
 minute, doubling to half an hour, with a `cli_agent_carry_out_failed` warning
 each time (and a `seats/` directory that cannot be listed at all is a
-`cli_agent_sweep_failed` warning, never read as nothing to carry out). The seat's own next call tries every time, and a call that cannot
+`cli_agent_sweep_failed` warning, never read as nothing to carry out). The
+seat's own next call tries every time, and a call that cannot
 carry its own login out is refused with a retryable error naming the export
 (the fallback chain moves on), rather than run on the stale database or
 discard it. The record is on disk, so an engine that stopped mid-call is
