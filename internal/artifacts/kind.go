@@ -18,7 +18,7 @@ import (
 // a kind every one of those surfaces answers for, or the build fails, and a
 // switch nobody remembered cannot quietly treat a new kind as the old default.
 //
-// THE ORGANISING RULE IS NATIVE OR FRAMED (adr/0042). A framed kind runs
+// THE ORGANISING RULE IS NATIVE OR FRAMED (ADR-0042). A framed kind runs
 // author code, and only on the credential-less artifact origin (adr/0035). A
 // native kind carries no author code: the dashboard draws it from a closed,
 // validated format with its own primitives, so nothing it holds can become

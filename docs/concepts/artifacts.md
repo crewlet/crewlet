@@ -99,7 +99,9 @@ one holds can become script on the dashboard's origin, and a publish outside
 the format is refused with a named error rather than silently dropped on read.
 A native kind declares no capabilities, since there is no page to grant them
 to. Every rule the engine and the dashboard decide by kind is one row of one
-table (`internal/artifacts/kind.go`).
+table (`internal/artifacts/kind.go`), which
+[ADR-0042](../../adr/0042-a-kind-is-native-or-framed.md) records, with the
+comment anchor each kind will take.
 
 A person may also publish to a **source key** (the republish-in-place address
 an agent or the CLI uses), so publishing the same source twice updates one
