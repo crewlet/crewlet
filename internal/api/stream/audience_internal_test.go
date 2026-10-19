@@ -367,6 +367,56 @@ func TestAudiencesThatReadDifferentlyNeverShareAVariant(t *testing.T) {
 	}
 }
 
+// EVERY APP IS A NEED AN AUDIENCE MEETS, and each one apart from the others.
+//
+// The app terms are derived from [iam.Apps] rather than written out per app,
+// so the next app needs no edit here — which holds only if every one of them
+// is a need this build declares, a holder of exactly that app has it and no
+// other, the refusal of its kinds names it, and two readers differing only in
+// it are two audiences with two variants: compared equal they would keep a
+// socket whose grants moved, and sharing a variant one encode would hand one
+// reader the other's frame.
+//
+// Mutation: drop an app from [NewAudience]'s loop, from [Audience.Equal] or
+// from the variant's name, or answer [Audience.Has] from the first app, and
+// this fails.
+func TestEveryAppIsANeedAnAudienceMeets(t *testing.T) {
+	t.Parallel()
+	nobody := NewAudience(overviewPrincipal, nil)
+	for _, app := range iam.Apps {
+		need := NeedFor(app)
+		if !need.Valid() {
+			t.Errorf("the %s app is not a need this build declares", app)
+		}
+		if got := need.Grants(); !slices.Equal(got, []iam.Grant{app}) {
+			t.Errorf("a refusal of a %s kind names %v, want %s", app, got, app)
+		}
+		holder := NewAudience(iam.Principal{Login: "holder", Stage: iam.StageActive,
+			Seat: "holder", Grants: []iam.Grant{app}}, nil)
+		for _, other := range iam.Apps {
+			if got := holder.Has(other); got != (other == app) {
+				t.Errorf("a holder of %s alone has %s = %v", app, other, got)
+			}
+		}
+		if holder.Equal(nobody) {
+			t.Errorf("a holder of %s is the same audience as a holder of nothing", app)
+		}
+		if holder.variant(false) == nobody.variant(false) {
+			t.Errorf("a holder of %s shares the variant %q with a holder of nothing",
+				app, holder.variant(false))
+		}
+	}
+	admin := NewAudience(adminPrincipal, nil)
+	for _, app := range iam.Apps {
+		if !admin.Has(app) {
+			t.Errorf("an administrator does not have %s", app)
+		}
+	}
+	if admin.Has(iam.Grant("timesheets")) || nobody.Has(iam.GrantAdmin) {
+		t.Error("an audience has something that is not an app it holds")
+	}
+}
+
 // A CODING RUN'S QUESTION NAMES ITS READER IN THE VARIANT, AND NOTHING ELSE
 // DOES.
 //

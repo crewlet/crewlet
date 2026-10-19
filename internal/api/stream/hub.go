@@ -220,7 +220,10 @@ var routes = map[Kind]Route{
 // asks no permission at all: the overview — the roster, what each seat is
 // doing, the org chart, spend, schedules, the tools, health — is everybody's
 // (ADR-0033). What a need says is whether the kind is everybody's, admin's,
-// or one app's.
+// or one app's — and an app's need IS the app's own name ([NeedFor]), so the
+// set of needs is derived from [iam.Apps] rather than kept beside it: an app
+// declared there is a need here, and an audience meets it, with no edit to
+// this package.
 type Need string
 
 const (
@@ -237,19 +240,40 @@ const (
 	// NeedWorklet is Worklet's: an `inbox_changed` frame says whose inbox
 	// moved, which is what the `work_inbox` question it tells a screen to
 	// ask again answers.
-	NeedWorklet Need = "worklet"
+	NeedWorklet = Need(iam.GrantWorklet)
 
 	// NeedArtifact is an artifact room's: decided PER ARTIFACT, by the
 	// reader's role on it, which no app answers. A frame of such a kind
 	// reaches only the sockets in the artifact's room, and a socket is in
 	// it only because its join was decided like reading the artifact
 	// (`get_artifact`) and stays decided ([rooms]); any resolved reader may
-	// be in a room, so no grant stands in front of the kind itself.
+	// be in a room, so no grant stands in front of the kind itself. It is
+	// NO APP'S NEED, the `artifacts` app's included ([NeedFor]): that app
+	// gates authoring an artifact and never reading one.
 	NeedArtifact Need = "artifact"
 )
 
-// Needs is the closed set.
-var Needs = []Need{NeedEverybody, NeedAdmin, NeedWorklet, NeedArtifact}
+// NeedFor is the need of a kind one app's holders may read.
+func NeedFor(app iam.Grant) Need { return Need(app) }
+
+// Needs is the closed set: the three that are no app's, then one per app in
+// [iam.Apps]' order.
+var Needs = append([]Need{NeedEverybody, NeedAdmin, NeedArtifact}, appNeeds()...)
+
+// appNeeds is one need per app.
+func appNeeds() []Need {
+	out := make([]Need, 0, len(iam.Apps))
+	for _, app := range iam.Apps {
+		out = append(out, NeedFor(app))
+	}
+	return out
+}
+
+// app is the app this need is, or false for one that is not an app's.
+func (n Need) app() (iam.Grant, bool) {
+	app := iam.Grant(n)
+	return app, app.IsApp()
+}
 
 // Valid reports whether n is a need this build knows.
 func (n Need) Valid() bool { return slices.Contains(Needs, n) }
@@ -299,11 +323,11 @@ func NeedOf(kind Kind) (Need, bool) {
 // reader could be given would change an answer they already have, and an
 // artifact room names none, since what admits a reader there is a share.
 func (n Need) Grants() []iam.Grant {
-	switch n {
-	case NeedAdmin:
+	if n == NeedAdmin {
 		return []iam.Grant{iam.GrantAdmin}
-	case NeedWorklet:
-		return []iam.Grant{iam.GrantWorklet}
+	}
+	if app, ok := n.app(); ok {
+		return []iam.Grant{app}
 	}
 	return nil
 }
@@ -353,8 +377,11 @@ type Audience struct {
 	resolved bool
 	admin    bool
 
-	// apps are the apps this reader uses, in [iam.Apps] order: every one of
-	// them for an administrator.
+	// apps are the apps this reader uses, in [iam.Apps]' order — every one
+	// for an administrator. A SET DERIVED FROM THE APPS rather than a field
+	// per app, so the next app is one line in internal/iam and not five
+	// edits here, any one of which forgotten is an audience that silently
+	// never receives that app's frames or never compares unequal.
 	apps   []iam.Grant
 	record string
 
@@ -397,18 +424,22 @@ func (a Audience) Receives(kind Kind) bool {
 	if !a.resolved {
 		return false
 	}
-	switch needs[kind] {
-	case NeedEverybody:
+	need, declared := needs[kind]
+	switch {
+	case !declared:
+		return false
+	case need == NeedEverybody:
 		return true
-	case NeedAdmin:
+	case need == NeedAdmin:
 		return a.admin
-	case NeedWorklet:
-		return a.Has(iam.GrantWorklet)
-	case NeedArtifact:
+	case need == NeedArtifact:
 		// THE ROOM DECIDES, by the reader's role on the artifact: a
 		// socket reaches a frame of this need only through a join that
 		// was allowed.
 		return true
+	}
+	if app, ok := need.app(); ok {
+		return a.Has(app)
 	}
 	return false
 }
@@ -422,6 +453,10 @@ func (a Audience) Admin() bool { return a.resolved && a.admin }
 // build does not know) is no app anybody uses: [Audience.Admin] is the
 // question about admin.
 func (a Audience) Has(app iam.Grant) bool {
+	// THE ADMINISTRATOR'S APPS ARE ALREADY IN THE SET — [NewAudience] asks
+	// [iam.Principal.Can], which expands admin to every app — so an
+	// administrator is not a case here, and a name that is no app is no
+	// audience's, theirs included.
 	return a.resolved && app.IsApp() && slices.Contains(a.apps, app)
 }
 
