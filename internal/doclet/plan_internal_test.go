@@ -28,8 +28,11 @@ import (
 // So the statement the reader issues ([pageActivityStatement] over
 // [compilePageActivity]) is planned for every shape the feed is asked in, and
 // held to: no heap scan of the history; the audit to one seek of the author
-// index per DISTINCT kind and to no sort below the top; one kind, and the
-// unfiltered digest, to no sort at all.
+// index per DISTINCT kind and to no sort below the top; one kind, the
+// unfiltered digest and one page's own feed to no sort at all — the last
+// because `pages_history_page_idx` is (page_id, version DESC) since replicated
+// 0063, where it was in the broker instant's order and one page's feed sorted
+// its whole history.
 //
 // PLANNED AS A DEPLOYMENT PLANS IT — with no statistics, since nothing in the
 // engine runs ANALYZE — over a history with the shape of a company's
@@ -54,6 +57,8 @@ func TestTheChangeFeedIsReadInItsOwnOrder(t *testing.T) {
 		"the audit of one space":      {PageActivityQuery{Container: "ENG", ActorKinds: people}, false},
 		"one kind of change":          {PageActivityQuery{Kinds: []ChangeKind{ChangeSaved}}, true},
 		"the digest since a position": {PageActivityQuery{Since: 9_000}, true},
+		"one page's changes":          {PageActivityQuery{Page: "p-0001"}, true},
+		"a later page of one page's":  {PageActivityQuery{Page: "p-0001", Cursor: 9_000}, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			statement, args := pageActivityStatement(compilePageActivity(c.q),
@@ -214,12 +219,16 @@ func seedPageHistory(ctx context.Context, tx *sql.Tx, maxVariables int) error {
 // planned — the first, and every arm of a later one ([listResumes]) — over the
 // shapes the surfaces ask for, and held to: no read of `pages_heads` from the
 // heap, no sort of the window, and each arm of a resume one seek of the
-// order's index bounded where the cursor stopped.
+// order's index bounded where the cursor stopped. And no sort INSIDE it
+// either: each row's last save ([summarySaved]) is the newest of its page's
+// saves, which `pages_history_page_idx` holds in log order, where ordered by
+// anything else it sorted that page's whole history once per row.
 //
 // Mutation: resume through the nested disjunction again, or order a listing by
 // a column its indexes do not lead with, and the plans sort; resume a listing
 // pinned to one container on its container as well, and the last arm reads
-// the whole container to find nothing.
+// the whole container to find nothing; order a page's saves by their broker
+// instant, and every row sorts its history.
 func TestAListingIsReadInItsOrder(t *testing.T) {
 	t.Parallel()
 	db := pagePlanStore(t)
@@ -247,6 +256,10 @@ func TestAListingIsReadInItsOrder(t *testing.T) {
 					case strings.Contains(line.detail, "FOR ORDER BY") && line.parent == 0:
 						t.Errorf("%s sorts what it read, where an index is in the "+
 							"listing's order:\n%s", read, shown)
+					case strings.Contains(line.detail, "FOR ORDER BY"):
+						t.Errorf("%s sorts a listed page's history for its last "+
+							"save, where pages_history_page_idx holds it in log "+
+							"order:\n%s", read, shown)
 					}
 				}
 				if len(from.where) == 0 {
