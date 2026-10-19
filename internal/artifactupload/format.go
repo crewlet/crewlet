@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
@@ -66,6 +68,8 @@ func (r *run) checkFormat(ctx context.Context, m artifacts.Manifest) error {
 		}
 		r.formatted = board.Spec
 		return nil
+	case artifacts.FormatDesign:
+		return r.checkCanvas(versionSource{ctx: ctx, run: r, m: m})
 	}
 	return fmt.Errorf("artifactupload: a %s artifact's format %q is not one this pipeline "+
 		"validates", r.kind, spec.Format)
@@ -143,4 +147,54 @@ func (v versionSource) Read(p string) ([]byte, error) {
 		return f.text, nil
 	}
 	return readObject(v.ctx, v.run.s.objects, e.Object, true)
+}
+
+// checkCanvas holds a design's canvas to its format and to the version's pages,
+// answering every problem as a policy finding on canvas.json, and keeps the
+// canvas for the search text. The entry is canvas.json already: the kind's
+// entry rule fixes it.
+func (r *run) checkCanvas(v versionSource) error {
+	canvas, err := canvasformat.Read(v, v.m)
+	var refused *canvasformat.Error
+	if errors.As(err, &refused) {
+		return designRefusal(refused.Problems...)
+	}
+	if err != nil {
+		return err
+	}
+	r.canvas = &canvas
+	return nil
+}
+
+// designRefusal is a canvas's problems in the linter's shape, each on
+// canvas.json at its place in it.
+func designRefusal(problems ...canvasformat.Problem) error {
+	out := &lint.Refusal{Findings: make([]lint.Finding, len(problems))}
+	for i, p := range problems {
+		out.Findings[i] = lint.Finding{Path: canvasformat.Path, Code: lint.CodeDesignFormat,
+			Message: p.String()}
+	}
+	return out
+}
+
+// canvasText is what a design says: the canvas's own words, then each
+// artboard's readable text in the canvas's order, until the bound.
+func (r *run) canvasText(ctx context.Context, m artifacts.Manifest) (string, error) {
+	limit := int(artifacts.MaxSearchTextBytes)
+	v := versionSource{ctx: ctx, run: r, m: m}
+	parts := []string{r.canvas.SearchText()}
+	used := len(parts[0])
+	for _, p := range r.canvas.Order {
+		if used >= limit {
+			break
+		}
+		text, err := v.Read(p)
+		if err != nil {
+			return "", err
+		}
+		page := lint.Text(lint.Source(text), limit-used)
+		parts = append(parts, page)
+		used += len(page) + 1
+	}
+	return truncateText(strings.Join(parts, "\n"), limit), nil
 }

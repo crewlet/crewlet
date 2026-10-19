@@ -18,9 +18,10 @@
 
 /**
  * Every kind of artifact (`artifacts.Kinds`): a page that runs code, a
- * doc, a deck, a dashboard of figures, a native sheet.
+ * doc, a deck, a dashboard of figures, a native sheet, a design's canvas of
+ * framed artboards.
  */
-export const ARTIFACT_KINDS = ["html", "doc", "slides", "dashboard", "sheet"] as const;
+export const ARTIFACT_KINDS = ["html", "doc", "slides", "dashboard", "sheet", "design"] as const;
 
 /**
  * What the engine decides by kind (`artifacts.KindSpecs`), the half a screen
@@ -35,6 +36,7 @@ export const ARTIFACT_KIND_SPECS = {
   slides: { render: "native", store: "none" },
   dashboard: { render: "native", store: "implied" },
   sheet: { render: "native", store: "content" },
+  design: { render: "framed", store: "declared" },
 } as const;
 
 /** Every runtime capability a version may declare (`artifacts.Capabilities`). */

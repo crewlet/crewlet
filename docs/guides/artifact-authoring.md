@@ -15,6 +15,7 @@ the ones the engine enforces at publish; the page's runtime API is the
 | A table people fill in together: a review, a sign-up, a tracker of decisions | `sheet`. Declare the schema and the dashboard draws it, with presence, per-cell history and accessibility, and no page code at all |
 | A document: a report, a plan, release notes, a handbook in tabs | `doc`, Markdown in one file or in tabs. The dashboard renders it; there is nothing to run. See [Writing a doc](#writing-a-doc) |
 | A presentation: a pitch, a review, a talk | `slides`, a deck in Claude's slide format. The dashboard draws, presents and prints it, people fix text and order it in place, and nothing runs. See [Writing a deck](#writing-a-deck) |
+| Several screens reviewed side by side: a landing page's sections, an onboarding flow, three takes on one hero | `design`, a canvas of artboards, each a plain HTML page. People rearrange the boards and annotate them in place. See [Writing a design](#writing-a-design) |
 | A dashboard: figures over the company's work, spend and agents, or over data an agent collects | `dashboard`, a closed spec of datasets and widgets the dashboard draws, every figure answered as its viewer and citing its source. See [Writing a dashboard](#writing-a-dashboard) |
 | A calculator, a custom view over shared data, anything the formats above cannot draw | `html`, with the capabilities it needs |
 
@@ -339,6 +340,68 @@ source, step, widget and bound; the short version:
   makes it `dashboard`), or from an agent with `create_artifact`,
   `kind: "dashboard"` and `content`. `crewlet artifacts sources` and
   `list_dashboard_sources` list the engine reads and their parameters.
+
+---
+
+## Writing a design
+
+A design is a directory: `canvas.json`, the entry, and one `.html` file per
+artboard, with shared stylesheets, scripts and images beside them. Every
+artboard is a whole page held to [the page contract](#the-page-contract) and
+linted exactly as an `html` page is: give each its own head, kit links and
+body background.
+
+```json
+{
+  "v": 1,
+  "title": "Launch landing page",
+  "boards": {
+    "hero.html": { "x": 0, "y": 0, "w": 1440, "h": 900, "title": "Hero" },
+    "mobile.html": { "x": 1540, "y": 0, "w": 390, "h": 844, "title": "Mobile" }
+  },
+  "order": ["hero.html", "mobile.html"],
+  "notes": [
+    { "id": "title-1", "kind": "title", "x": 0, "y": -160, "w": 1200, "h": 100, "text": "Launch landing page" },
+    { "id": "note-1", "kind": "sticky", "x": 2040, "y": 0, "w": 320, "h": 240, "text": "Copy by Friday", "color": "pink" }
+  ],
+  "cover": "hero.html"
+}
+```
+
+| Field | What it holds |
+|---|---|
+| `v` | The format version, `1` |
+| `title` | The canvas's heading, optional |
+| `boards` | One entry per artboard, keyed by its page's path: `x` and `y` (where it sits), `w` and `h` (its size, which is also the width its page lays itself out for), and an optional `title` (the page's file name otherwise) |
+| `order` | Every board's path once, back to front: the order boards are drawn, listed and printed in |
+| `notes` | Titles laid over groups of boards (`kind: "title"`) and stickies beside them (`kind: "sticky"`), each with an `id`, a frame and its `text`. A sticky may take a `color`: `yellow` (the default), `pink`, `blue`, `green` or `purple`; a title takes none |
+| `cover` | The board the gallery's cover titles, optional: the first in `order` otherwise |
+
+- **Every HTML page is a board, and every board an HTML page.** A board naming
+  a path the version does not hold as a page, or a page no board frames, is
+  refused at publish, with every problem named at its place in `canvas.json`;
+  so is a field the format does not have.
+- **Bounds.** A side is 40 to 8000 pixels, a position at most 1,000,000 pixels
+  from the origin, a canvas at most 64 boards and 200 notes, a note's text at
+  most 2000 bytes, and a note id 1 to 32 lower-case letters, digits and
+  hyphens.
+- **Boards never link to each other.** Each board's frame opens that board and
+  no other page of the version: a link or a fetch from one board to another is
+  answered `404`. Put shared behaviour in a shared script.
+- **Print is the reader's.** A board that offers a Print button calls
+  `crewlet.print()`; the dashboard prints that board alone on a page of its
+  own size, on the reader's own click
+  ([Artifact Runtime](../reference/artifact-runtime.md)).
+- **People rearrange it.** An editor moves and resizes boards and edits notes
+  in the dashboard, and each save is a version that changes `canvas.json`
+  alone. Read the head before you publish, and merge onto a layout a person
+  changed rather than restoring your own.
+- **Publish it** with `crewlet artifacts publish <dir>` (a `canvas.json` makes
+  it a `design`), or from an agent with `create_artifact`, `kind: "design"`
+  and `source: {sandbox: "dist"}` for a build, or `files`. The entry is
+  `canvas.json` whether or not you name it. Revise one board at a time with
+  `edits` on its file; `get_artifact` with `view: "outline"` lists every
+  board's file, title and frame first.
 
 ---
 

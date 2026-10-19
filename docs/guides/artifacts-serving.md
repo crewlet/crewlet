@@ -24,6 +24,17 @@ It serves them from a **separate listener**, `api.artifacts`, which:
 - opens a version only for a **view ticket** in the URL, minted by the
   dashboard for the signed-in viewer, re-checked on every document request.
 
+**A design's artboards are framed documents too, one per ticket.** The
+dashboard frames every artboard on screen on its own, each under a ticket
+minted for that board (`POST /artifacts/{id}/tickets` with `document` naming
+the board's page). A board's ticket opens that page and no other as a
+document: a board that navigates or fetches another board's page gets an
+empty `404`, counted under the `document` refusal reason, while its
+stylesheets, scripts and images load as any page's do. An `html` page's single
+frame still moves between the version's pages under one ticket. At most twelve
+boards are framed at once, only those on screen, so a canvas of many boards
+holds a dozen tickets rather than one per board.
+
 The dashboard embeds the listener's pages in a sandboxed frame and talks to
 them over a message port; every live call a page makes goes through the
 dashboard, as the viewer. The decision is
@@ -245,6 +256,7 @@ with a `Content-Security-Policy` carrying a fresh `nonce-` on every reload.
 |---|---|
 | The viewer says artifacts are not served | No node serves `api.artifacts`: set `port` and `external_url` on the ingress nodes |
 | Every frame is an empty `404` | The ticket did not open, or in per-artifact mode the proxy did not pass the original `Host` |
+| One design board shows an empty `404` after a click | The board followed a link to another board's page, which its ticket does not open; boards are separate documents |
 | A frame shows `401` briefly, then loads | The ticket expired (they live an hour); the viewer mints another on its own |
 | A frame answers `503` with `Retry-After` | This node's copy of the artifacts or identity log is stale or out of service and no peer answered; the engine refuses to serve from rows that may hold a revoked share. See [Read Consistency](consistency.md) |
 | A page reports that storage is unavailable | The listener is in shared mode, where documents have opaque origins. Pages that declare `state` keep per-viewer state through the runtime instead |

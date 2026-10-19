@@ -63,6 +63,7 @@ const (
 	reasonExpired    = "expired"
 	reasonHost       = "host"
 	reasonNavigation = "navigation"
+	reasonDocument   = "document"
 	reasonRevoked    = "revoked"
 	reasonStale      = "stale"
 )
@@ -79,6 +80,11 @@ type verdict struct {
 	artifact artifacts.ID
 	number   int
 	at       time.Time
+
+	// documents is how the artifact's kind serves documents, read from the
+	// row the decision was made over: whether a ticket opens its own
+	// document alone.
+	documents artifacts.Documents
 
 	// fresh says this request decided it, rather than reading it back.
 	fresh bool
@@ -264,7 +270,8 @@ func versionSize(v artifactsdomain.Version) int64 {
 // they shared a nonce.
 func ticketKey(c artifacts.TicketClaims) string {
 	return c.Nonce + "|" + c.Artifact.String() + "|" + strconv.Itoa(c.Version) + "|" +
-		c.Lineage + "|" + c.Principal + "|" + strconv.FormatInt(c.AccessEpoch, 10)
+		c.Lineage + "|" + c.Principal + "|" + strconv.FormatInt(c.AccessEpoch, 10) + "|" +
+		c.Document
 }
 
 // authorize is the admission for one request: the remembered verdict for a
@@ -394,5 +401,7 @@ func (h *Handler) decideRows(ctx context.Context, c artifacts.TicketClaims) (
 			"version", c.Version, "error", err)
 		return verdict{}, artifactsdomain.Version{}, unavailable(err)
 	}
-	return verdict{artifact: c.Artifact, number: c.Version, at: h.now(), fresh: true}, v, nil
+	spec, _ := head.Kind.Spec()
+	return verdict{artifact: c.Artifact, number: c.Version, at: h.now(), fresh: true,
+		documents: spec.Documents}, v, nil
 }

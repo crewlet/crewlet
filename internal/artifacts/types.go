@@ -78,6 +78,12 @@ const (
 	// dashboard draws it from the schema alone, so there is nothing for a
 	// model to get wrong and no page script at all.
 	KindSheet Kind = "sheet"
+
+	// KindDesign is a canvas of artboards: a `canvas.json` the dashboard
+	// draws natively (where each artboard sits, and the notes beside them),
+	// and one HTML page per artboard, each framed on the artifact origin
+	// under a ticket of its own (internal/artifacts/canvasformat).
+	KindDesign Kind = "design"
 )
 
 // Capability is a runtime capability a version declares and a viewer's ticket

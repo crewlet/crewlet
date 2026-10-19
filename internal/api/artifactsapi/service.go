@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
@@ -134,11 +135,12 @@ type Service struct {
 	ready   Beacon
 	pace    func() time.Time
 
-	// decks, docs and boards are what this node read of each version for
-	// the dashboard, through the kind's format.
-	decks  *formatCache[slideformat.Deck]
-	docs   *formatCache[docindex.Doc]
-	boards *formatCache[*dashspec.Board]
+	// decks, docs, boards and canvases are what this node read of each
+	// version for the dashboard, through the kind's format.
+	decks    *formatCache[slideformat.Deck]
+	docs     *formatCache[docindex.Doc]
+	boards   *formatCache[*dashspec.Board]
+	canvases *formatCache[canvasformat.Canvas]
 }
 
 // New builds the surface.
@@ -168,7 +170,7 @@ func New(opts Options) (*Service, error) {
 	return &Service{gate: opts.Gate, reads: opts.Reads, writes: opts.Writes, uploads: opts.Uploads,
 		objects: opts.Objects, frames: opts.Frames, ready: opts.Ready, pace: pace,
 		decks: newDeckCache(opts.Objects), docs: newDocCache(opts.Objects),
-		boards: newBoardCache(opts.Objects)}, nil
+		boards: newBoardCache(opts.Objects), canvases: newCanvasCache(opts.Objects)}, nil
 }
 
 // Gate is the surface's admission, which the read questions take too.

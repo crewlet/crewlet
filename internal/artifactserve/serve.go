@@ -99,7 +99,7 @@ func (h *Handler) ticketed(w http.ResponseWriter, r *http.Request, token, file s
 		return h.asset(w, r, claims, asset, got, documentDest)
 	}
 	if path == "" {
-		path = v.Manifest.Entry
+		path = claims.Document
 	}
 	entry, ok := manifest.EntryAt(v.Manifest, path)
 	if !ok {
@@ -107,6 +107,10 @@ func (h *Handler) ticketed(w http.ResponseWriter, r *http.Request, token, file s
 		return ""
 	}
 	if documentType(entry.ContentType, documentDest) {
+		if !opens(got, claims, path) {
+			h.ticketRefused(w, &refusal{status: http.StatusNotFound, reason: reasonDocument})
+			return ""
+		}
 		// ANY DOCUMENT IS DECIDED AGAIN, whatever its destination said: a
 		// page fetched as data is still a page.
 		if !got.fresh {
@@ -151,6 +155,10 @@ func (h *Handler) asset(w http.ResponseWriter, r *http.Request, claims artifacts
 	}
 	a := assets[i]
 	if documentType(a.ContentType, documentDest) {
+		if !opens(got, claims, "") {
+			h.ticketRefused(w, &refusal{status: http.StatusNotFound, reason: reasonDocument})
+			return ""
+		}
 		if !got.fresh {
 			if _, _, ref := h.authorize(r.Context(), claims, true); ref != nil {
 				h.ticketRefused(w, ref)
@@ -166,6 +174,26 @@ func (h *Handler) asset(w http.ResponseWriter, r *http.Request, claims artifacts
 	}
 	h.serveFile(w, r, claims, a.Object, a.ContentType)
 	return destSubresource
+}
+
+// opens reports whether a ticket may load path as a document: any page of the
+// version for a kind whose frame moves between its pages, and only the page
+// the ticket was minted for where each page is a frame of its own. An asset
+// (path empty) is never that page, so a design's ticket loads none as a
+// document.
+//
+// WHY A DESIGN'S TICKET OPENS ONE PAGE. Its viewer holds a frame per artboard
+// on screen, each minted for its board; a board that loaded another as a page
+// would be a frame the dashboard never minted, outside the visibility budget
+// and showing a board the viewer did not open there. The page, its scripts and
+// its grant would be the same, so this is not a widening the check prevents:
+// it keeps "the documents a viewer runs" equal to "the tickets the dashboard
+// minted", which is what the budget and the ready report count.
+func opens(got verdict, claims artifacts.TicketClaims, path string) bool {
+	if got.documents != artifacts.DocumentsEach {
+		return true
+	}
+	return path != "" && path == claims.Document
 }
 
 // ticketRefused answers a refusal and counts it under its reason.

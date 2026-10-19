@@ -35,6 +35,10 @@ func TestEveryKindAnswersEveryFacet(t *testing.T) {
 			t.Errorf("%s searches its format's text and validates no format", s.Kind)
 		case !s.Search.Valid():
 			t.Errorf("%s searches by %q", s.Kind, s.Search)
+		case !s.Documents.Valid():
+			t.Errorf("%s serves documents by %q", s.Kind, s.Documents)
+		case !s.Format.Valid():
+			t.Errorf("%s validates by format %q", s.Kind, s.Format)
 		}
 	}
 	if !slices.Equal(slices.Compact(slices.Clone(Kinds)), Kinds) ||
@@ -57,9 +61,15 @@ func TestOnlyAFramedKindRunsAPage(t *testing.T) {
 			t.Errorf("native %s may declare %q", s.Kind, caps)
 		case s.Kind.Framed() != s.Framed():
 			t.Errorf("%s.Framed() disagrees with its row", s.Kind)
+		case s.Framed() == (s.Documents == DocumentsNone):
+			t.Errorf("%s renders %s and serves documents by %s: only a framed kind, and "+
+				"every framed kind, has documents on the artifact origin", s.Kind, s.Render,
+				s.Documents)
+		case s.OpensEntry() && !slices.Contains(s.Entry.Essences, "text/html"):
+			t.Errorf("%s opens its frame on its entry, which is never a page", s.Kind)
 		}
 	}
-	if Kind("canvas").Framed() {
+	if Kind("whiteboard").Framed() {
 		t.Error("a kind this build does not serve is framed")
 	}
 }
