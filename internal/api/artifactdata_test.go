@@ -104,7 +104,8 @@ func TestTheDatastoresRoutesAndQuestionsShareOneMux(t *testing.T) {
 	t.Parallel()
 	gate := artifactsapi.Gate{Heads: dataHeads{}, Chart: authz.NoChart{}, Marks: apiArtifacts{},
 		Limits: func() artifacts.Limits { return artifacts.Limits{DataBytes: 1, DataStoreBytes: 1} }}
-	surface, err := artifactdataapi.New(artifactdataapi.Options{Gate: gate, Data: dataStore{}, Versions: dataHeads{}})
+	surface, err := artifactdataapi.New(artifactdataapi.Options{Gate: gate, Data: dataStore{}, Versions: dataHeads{},
+		Names: func(handle string) string { return handle }})
 	if err != nil {
 		t.Fatal(err)
 	}
