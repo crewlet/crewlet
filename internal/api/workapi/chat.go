@@ -115,24 +115,23 @@ func (s *served) postChatErase(w http.ResponseWriter, r *http.Request) {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": "state why in the body's `reason` — the " +
-				"messages are destroyed on every data node, and the erase's reason " +
-				"is the only account of them that survives"})
+			map[string]string{"detail": "Give a `reason` in the body. Erased " +
+				"messages are gone for good, and the reason is all that's kept " +
+				"about them."})
 		return
 	}
 	confirm := strings.TrimSpace(r.URL.Query().Get("confirm"))
 	if confirm == "" {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery,
-			map[string]string{"detail": "repeat how many messages this erases in " +
-				"?confirm= — an erase destroys them on every data node, and there is " +
-				"nothing that undoes it"})
+			map[string]string{"detail": "Repeat how many messages you're erasing " +
+				"in ?confirm=. An erase can't be undone."})
 		return
 	}
 	set := chatlet.EraseSet(ids)
 	if confirm != strconv.Itoa(len(set)) {
 		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeInvalid,
-			map[string]string{"detail": fmt.Sprintf("?confirm= says %q and the "+
-				"request names %d messages — nothing was destroyed", confirm, len(set))})
+			map[string]string{"detail": fmt.Sprintf("?confirm= says %q, but the "+
+				"request names %d messages. Nothing was erased.", confirm, len(set))})
 		return
 	}
 	channelID := r.PathValue("channel_id")
@@ -186,22 +185,21 @@ func (s *served) postChatPrune(w http.ResponseWriter, r *http.Request) {
 	if !ok || !only(w, args) {
 		return
 	}
-	cutoff, ok := queryInstant(w, r, "cutoff", "name the instant everything "+
-		"before it is pruned in ?cutoff=, RFC 3339 — a prune destroys it on every "+
-		"data node, and there is nothing that undoes it")
+	cutoff, ok := queryInstant(w, r, "cutoff", "Give the cutoff in ?cutoff= "+
+		"as an RFC 3339 time. Everything the room said before it is deleted, and "+
+		"a prune can't be undone.")
 	if !ok {
 		return
 	}
-	confirm, ok := queryInstant(w, r, "confirm", "repeat the cutoff in ?confirm= "+
-		"— a prune destroys everything the room said before it, and there is "+
-		"nothing that undoes it")
+	confirm, ok := queryInstant(w, r, "confirm", "Repeat the cutoff in "+
+		"?confirm=. A prune can't be undone.")
 	if !ok {
 		return
 	}
 	if !confirm.Equal(cutoff) {
 		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeInvalid,
-			map[string]string{"detail": fmt.Sprintf("?confirm= says %s and "+
-				"?cutoff= says %s — nothing was destroyed",
+			map[string]string{"detail": fmt.Sprintf("?confirm= says %s, but "+
+				"?cutoff= says %s. Nothing was deleted.",
 				confirm.Format(time.RFC3339Nano), cutoff.Format(time.RFC3339Nano))})
 		return
 	}
@@ -269,9 +267,9 @@ func (s *served) putChatRetention(w http.ResponseWriter, r *http.Request) {
 	held, stated := args["retention_days"]
 	if !stated {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": "state the room's horizon in " +
-				"`retention_days` — a number of days, 0 to keep it for ever, or " +
-				"null for the company's own"})
+			map[string]string{"detail": "Say how long the room keeps messages in " +
+				"`retention_days`: a number of days, 0 for forever, or null for the " +
+				"company's setting."})
 		return
 	}
 	days, ok := retentionDays(w, held)
@@ -281,16 +279,15 @@ func (s *served) putChatRetention(w http.ResponseWriter, r *http.Request) {
 	confirm := strings.TrimSpace(r.URL.Query().Get("confirm"))
 	if confirm == "" {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery,
-			map[string]string{"detail": "repeat the horizon in ?confirm= — its " +
-				"number of days, 0 to keep the room for ever, or `company` for the " +
-				"company's own: a shorter one is a prune on a delay, on every data " +
-				"node, and nothing undoes it"})
+			map[string]string{"detail": "Repeat it in ?confirm=: the number of " +
+				"days, 0 for forever, or `company` for the company's setting. A " +
+				"shorter time deletes older messages, and that can't be undone."})
 		return
 	}
 	if want := chatlet.HorizonConfirmation(days); confirm != want {
 		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeInvalid,
-			map[string]string{"detail": fmt.Sprintf("?confirm= says %q and the "+
-				"body's horizon is %q — nothing was changed", confirm, want)})
+			map[string]string{"detail": fmt.Sprintf("?confirm= says %q, but the "+
+				"body asks for %q. Nothing was changed.", confirm, want)})
 		return
 	}
 	channelID := r.PathValue("channel_id")
@@ -349,8 +346,8 @@ func idList(w http.ResponseWriter, held any) ([]string, bool) {
 	list, ok := held.([]any)
 	if !ok {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": "name the messages to erase in the body's " +
-				"`message_ids`, a list of their ids"})
+			map[string]string{"detail": "List the messages to erase by id in " +
+				"the body's `message_ids`."})
 		return nil, false
 	}
 	ids := make([]string, 0, len(list))
@@ -358,8 +355,8 @@ func idList(w http.ResponseWriter, held any) ([]string, bool) {
 		id, ok := entry.(string)
 		if !ok {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-				map[string]string{"detail": fmt.Sprintf("`message_ids` holds %v, "+
-					"and every entry is a message's id as text", entry)})
+				map[string]string{"detail": fmt.Sprintf("`message_ids` holds %v. "+
+					"Each entry is a message id, as text.", entry)})
 			return nil, false
 		}
 		ids = append(ids, id)
@@ -381,8 +378,8 @@ func queryInstant(w http.ResponseWriter, r *http.Request, name, need string) (
 	at, err := time.Parse(time.RFC3339Nano, raw)
 	if err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery,
-			map[string]string{"detail": fmt.Sprintf("?%s= is %q, which is not an "+
-				"RFC 3339 instant (2026-06-01T00:00:00Z)", name, raw)})
+			map[string]string{"detail": fmt.Sprintf("?%s= is %q, which isn't an "+
+				"RFC 3339 time like 2026-06-01T00:00:00Z.", name, raw)})
 		return time.Time{}, false
 	}
 	return at.UTC(), true
@@ -406,8 +403,8 @@ func retentionDays(w http.ResponseWriter, held any) (*int, bool) {
 		}
 	}
 	httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-		map[string]string{"detail": fmt.Sprintf("`retention_days` is %v, and a "+
-			"room's horizon is a whole number of days, 0 to keep it for ever, or "+
-			"null for the company's own", held)})
+		map[string]string{"detail": fmt.Sprintf("`retention_days` is %v. Use "+
+			"a whole number of days, 0 for forever, or null for the company's "+
+			"setting.", held)})
 	return nil, false
 }

@@ -117,9 +117,9 @@ type ChatReads interface {
 // unreachable for every principal the guard composes, and which is refused
 // rather than trusted if it is reached: a viewer that is no seat is shown
 // nothing, never everything.
-var errNoChatSeat = fmt.Errorf("%w: chat is read here as a person's seat, and "+
-	"this credential acts as no person — bind its row in the identity "+
-	"directory to a human seat (`crewlet iam bind`)", ErrBadParams)
+var errNoChatSeat = fmt.Errorf("%w: chat is read as a seat, and this "+
+	"credential isn't bound to one. Bind it to a human seat with `crewlet iam "+
+	"bind`", ErrBadParams)
 
 // chatViewer is the seat a chat question is answered for: the authority
 // table's decision of action for the request's principal — the app and the
