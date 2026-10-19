@@ -45,3 +45,32 @@ func TestADesignIsOutlinedForAnAgent(t *testing.T) {
 	seen, _ := fencesIn(t, turn.Boundary, got.Output)
 	assertFences(t, seen, []wantFence{{"source=artifact_file trust=colleague authors=human:founder", "Mobile"}})
 }
+
+// A DESIGN IS CREATED FROM A SANDBOX BUILD as a page is: the box's canvas and
+// every artboard are declared to one upload by digest and named by the create,
+// which opens on the canvas, the kind's fixed entry.
+func TestADesignIsCreatedFromTheBox(t *testing.T) {
+	t.Parallel()
+	box := &fakeBox{files: map[string]string{
+		"dist/canvas.json": `{"v":1,"boards":{"hero.html":{"x":0,"y":0,"w":1440,"h":900}},"order":["hero.html"]}`,
+		"dist/hero.html":   "<!doctype html><h1>Ship</h1>",
+		"dist/mobile.html": "<!doctype html><h1>Go</h1>",
+		"dist/site.css":    "body { margin: 0 }",
+		"src/landing.tsx":  "not published",
+	}}
+	r := newArtifactRig(t, artifactChart{}, requesters{}, func(d *builtin.ArtifactDeps) {
+		d.Boxes = boxes{box: box}
+	})
+	got := r.call(t, turnFor(t, "agent-cto"), builtin.CreateArtifactTool, map[string]any{
+		"kind": "design", "title": "Landing page", "source": map[string]any{"sandbox": "dist"}})
+	if got.Failed {
+		t.Fatalf("create from the box failed: %s", got.Output)
+	}
+	if len(r.f.intents) != 1 || len(r.f.intents[0].Entries) != 4 {
+		t.Fatalf("intents = %+v, want one declaring the four built files", r.f.intents)
+	}
+	c := r.f.creates[0]
+	if c.Kind != artifacts.KindDesign || c.Entry != "canvas.json" || c.Upload == "" || len(c.Files) != 4 {
+		t.Errorf("create = %+v, want a design opening on canvas.json from one upload", c)
+	}
+}
