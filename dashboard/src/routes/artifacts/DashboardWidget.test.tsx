@@ -173,3 +173,33 @@ test("a chart over days labels its axis with dates and no time of day", () => {
   expect(text).not.toMatch(/\d{1,2}:\d{2}(:\d{2})?\s?(AM|PM)?/);
   expect(text).toMatch(/Oct/);
 });
+
+test("every widget kind says one phrase when its dataset answered no rows", () => {
+  const columns = [
+    { key: "day", type: "date" as const },
+    { key: "n", type: "number" as const },
+    { key: "label", type: "text" as const },
+  ];
+  for (const widget of [
+    { id: "t", type: "timeseries" as const, title: "T", x: "day", y: ["n"], w: 6 },
+    { id: "c", type: "columns" as const, title: "C", x: "day", y: ["n"], w: 6 },
+    { id: "a", type: "activity" as const, title: "A", x: "day", y: ["n"], w: 6 },
+    { id: "b", type: "bars" as const, title: "B", label: "label", value: "n", w: 6 },
+    { id: "s", type: "share" as const, title: "S", label: "label", value: "n", w: 6 },
+    { id: "r", type: "table" as const, title: "R", columns: ["label", "n"], w: 6 },
+  ]) {
+    draw(widget, columns, []);
+    expect(screen.getAllByText("Nothing in this window").length).toBeGreaterThan(0);
+    cleanup();
+  }
+});
+
+test("a widget's table offers no column resizing, its widths being its content's", () => {
+  draw(
+    { id: "w", type: "table", title: "Open work", columns: ["key"], w: 8 },
+    [{ key: "key", type: "text" }],
+    [{ key: "FAIR-1" }],
+  );
+  expect(document.querySelector(".crewlet-data-table__resizer")).toBeNull();
+  expect(document.querySelector(".dashboard-rows")).not.toBeNull();
+});
