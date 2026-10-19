@@ -909,9 +909,13 @@ type CLIAgentAuth struct {
 	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"${VAR} holding a long-lived subscription token."`
 
 	// CredentialBundle is a ${VAR} reference to a bundle exported by
-	// `crewlet llm export` — the CLI's credential files as one blob,
-	// restored into an empty credential directory at boot so a fresh
-	// container comes up already logged in.
+	// `crewlet llm export` — the CLI's login (its credential files, or the
+	// document its export printed) as one blob, restored into an empty
+	// credential directory whenever the engine builds a company to run (boot
+	// and every apply it publishes), so a fresh container comes up already
+	// logged in — and withheld after `crewlet llm logout` until a login is
+	// written into the credential directory again (`crewlet llm login`,
+	// `-from-host` or `crewlet llm import`; a headless token does not end it).
 	CredentialBundle string `secret:"true" yaml:"credential_bundle,omitempty" json:"credential_bundle,omitempty" desc:"${VAR} holding a bundle exported by crewlet llm export."`
 }
 
@@ -1172,7 +1176,8 @@ func (c *Company) validateCLIAgentModels() error {
 // the first slash into a provider and a model, so a bare `claude-sonnet-5`
 // names the provider "claude-sonnet-5" and no model, and every call the entry
 // makes — the text calls and an agent-mode run alike, which are handed the
-// same value — fails inside the CLI with "Model not found".
+// same value — fails inside the CLI, which OpenCode 2 refuses as "Invalid model
+// reference".
 //
 // JUDGED ON THE VALUE THE CLI IS HANDED, the model rendered through the
 // profile's model_args, so an override that puts the provider in the flag
@@ -1212,8 +1217,8 @@ func (l *LLMProvider) validateCLIModel(path Path) error {
 	// a tool that entry does not run.
 	failure, listing := "with the CLI's own model-not-found error", ""
 	if cli.Name() == string(CLIOpenCode) {
-		failure = `with OpenCode's "Model not found"`
-		listing = " (`opencode models` lists them)"
+		failure = `with OpenCode's "Invalid model reference"`
+		listing = " (`opencode models --standalone` lists them)"
 	}
 	p.add(at(path, "model"), ErrConflict,
 		"the %s CLI reads its model as <provider>/<model> and splits it at the first "+
@@ -1307,11 +1312,11 @@ func (l *LLMProvider) validateCLICredentials(path Path) error {
 			p.add(at(path, "cli.auth.mode"), ErrConflict,
 				"api-key puts the api_keys value in the CLI's key variable, and the "+
 					"%q profile names none (api_key_env), so the key would reach "+
-					"nothing: this CLI reads a key only from its credential files "+
-					"(%s), so put it there — `crewlet llm login`, or a credential "+
-					"bundle — or, if your build of the CLI does read a key variable, "+
-					"name it with cli.overrides.api_key_env",
-				agent, strings.Join(profile.CredentialPaths, ", "))
+					"nothing: this CLI reads a key only from %s, so put it there — "+
+					"`crewlet llm login`, or a credential bundle — or, if your build of "+
+					"the CLI does read a key variable, name it with "+
+					"cli.overrides.api_key_env",
+				agent, profile.LoginLocation())
 		case len(l.APIKeys) == 0:
 			p.add(at(path, "api_keys"), ErrMissing,
 				"auth.mode api-key puts the api_keys value in %s, and this entry "+
@@ -1352,6 +1357,7 @@ func (l *LLMProvider) validateCLICredentials(path Path) error {
 	// on the mode and on whether the secret store or the engine's own
 	// environment holds a credential — which the document cannot see, so an
 	// entry relying on cli.env for one is configured to work only sometimes.
+	isolation := profile.IsolationVariables()
 	for _, name := range slices.Sorted(maps.Keys(cli.Env)) {
 		switch name {
 		case "":
@@ -1368,9 +1374,82 @@ func (l *LLMProvider) validateCLICredentials(path Path) error {
 					"here reaches the CLI depends on auth.mode, and on whether api_keys "+
 					"resolves or the engine's environment holds a key of its own. Give "+
 					"the key as api_keys with cli.auth.mode api-key", name)
+		default:
+			// cli.env is layered OVER the variables that keep each seat's
+			// CLI inside its own home and its call's working directory, so a
+			// value here would replace them for every seat on the entry —
+			// the engine user's real dotfiles, a configuration directory the
+			// seat's system prompt is never written to, or a vendor switch
+			// turned back off (OpenCode's project walk, which hands every
+			// seat whatever configuration sits above the state directory) —
+			// and nothing would say so.
+			if layer, ok := profile.IsolationLayerOf(name); ok {
+				p.add(entry(at(path, "cli.env"), name), ErrConflict,
+					"%s is a variable the engine sets for every call of this CLI to keep "+
+						"it inside its seat's own home and its call's working directory "+
+						"(%s); a value here would replace that isolation for every seat, so "+
+						"drop it — %s", name, strings.Join(isolation, ", "),
+					isolationRemedy(name, layer, profile))
+			}
 		}
 	}
 	return p.err()
+}
+
+// isolationRemedy is where an isolation variable's value IS changed, for the
+// refusal of an entry's cli.env that names one: the field of the layer that
+// sets it ([cliprofile.Profile.IsolationLayerOf]), or none.
+//
+// PER LAYER, because the three fields refuse each other's variables: one
+// remedy naming cli.overrides.config_env for every variable sent an operator
+// who followed it to a second refusal for both of OpenCode's —
+// OPENCODE_CONFIG_DIR is work_config_env's, so config_env naming it too is
+// "one variable, two directories", and OPENCODE_CONFIG_PROJECT_DISABLE is an
+// isolation_env switch, which may not also be a relocated variable.
+func isolationRemedy(name string, layer cliprofile.IsolationLayer, profile cliprofile.Profile) string {
+	switch layer {
+	case cliprofile.IsolationConfigEnv:
+		return relocationRemedy("config_env", "the seat's home", profile.ConfigEnv[name],
+			profile.KeptUnder(name))
+	case cliprofile.IsolationWorkConfigEnv:
+		return relocationRemedy("work_config_env", "the call's working directory",
+			profile.WorkConfigEnv[name], profile.KeptUnder(name))
+	case cliprofile.IsolationSwitch:
+		// Not refused there: an override is the profile itself, written on
+		// purpose. Turning the switch off is a decision about every seat's
+		// isolation, and the remedy says so rather than hand it out as a
+		// setting.
+		return fmt.Sprintf("it is the profile's isolation switch, which the profile sets to "+
+			"%q, changed only deliberately, with cli.overrides.isolation_env, since a value "+
+			"that turns it off undoes the isolation it is there for", profile.IsolationEnv[name])
+	default: // cliprofile.IsolationHome, which every profile field refuses
+		return "the engine points it at or inside the seat's own home for every CLI, " +
+			"and no field changes it"
+	}
+}
+
+// relocationRemedy is the remedy for a variable a profile relocates: the
+// field that does it, and what has to move with a different directory.
+//
+// WITH THE PATHS KEPT UNDER IT, because the directory alone is not a remedy
+// that works: the CLI finds the profile's login, sessions, tool policy or
+// agent file through the variable ([cliprofile.Profile.KeptUnder]), so "a
+// different directory is set with cli.overrides.work_config_env", followed as
+// written, was an entry every write path accepted whose OpenCode found no
+// agent and no policy. The profile refuses such a move now; the remedy says
+// what makes one load.
+func relocationRemedy(field, root, dir string, kept []string) string {
+	remedy := fmt.Sprintf("the profile points it at %s under %s with %s", dir, root, field)
+	if len(kept) == 0 {
+		return remedy + "; a different directory is set with cli.overrides." + field
+	}
+	fields := strings.Join(kept, ", ")
+	if n := len(kept); n > 1 {
+		fields = strings.Join(kept[:n-1], ", ") + " and " + kept[n-1]
+	}
+	return fmt.Sprintf("%s; a different directory is set with cli.overrides.%s, moving the "+
+		"%s kept under %s beneath it in the same override, since the CLI finds them "+
+		"through this variable", remedy, field, fields, dir)
 }
 
 // AgentMode reports whether this entry runs the executor as the CLI's own

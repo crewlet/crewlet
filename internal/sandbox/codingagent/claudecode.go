@@ -156,9 +156,6 @@ func (ClaudeCode) Output(paths Paths) Output {
 // Events is a new decoder for one stream, read whole or followed ([Decoder]).
 func (ClaudeCode) Events() Decoder { return &claudeEvents{tools: map[string]string{}} }
 
-// Finished is false: this CLI exits cleanly, so the done marker is the signal.
-func (ClaudeCode) Finished(string) bool { return false }
-
 // Parse maps the CLI's result — the stream's last line — onto a result.
 //
 // TOLERANT BY DESIGN: non-JSON or partial output yields a FAILED result

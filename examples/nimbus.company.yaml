@@ -141,7 +141,9 @@ providers:
     #
     # PREREQUISITE for the local backend: the coding agent named below must
     # be installed on that machine, since `direct` runs it as a child
-    # process. `opencode` here; `claude-code` is the other supported one.
+    # process. `opencode` here — OpenCode 2, the @opencode/cli package; a
+    # 1.x install is refused by name — and `claude-code` is the other
+    # supported one.
     local:
       # The local backend serves both local cells, chosen per seat:
       #

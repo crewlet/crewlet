@@ -256,12 +256,15 @@ func TestNoPieceOfARealKeySurvivesAnyWrapping(t *testing.T) {
 // every wrapping, under every encoder's last line, a label and its value on the
 // next line (or after a blank one) redact the value wherever the same lines
 // from the label on do, since the key's block never takes the word the
-// password's rule keys on, and nothing of the key survives. Where the label's
-// lines alone keep their value (an echo's quote stands where a value would
-// be), so do these: that is the password's rule, not the key's read.
+// password's rule keys on, and nothing of the key survives — a label whose
+// separator is an `=` ending its line too. Where the label's lines alone keep
+// their value (an echo's quote stands where a value would be), so do these:
+// that is the password's rule, not the key's read.
 //
 // Mutation: drop the label from bodyLine, and the value is published under
-// most of these keys in most wrappings.
+// most of these keys in most wrappings; read a password's key only where its
+// separator is past the run, and it is published after `pwd=` and
+// `PASSWORD=`.
 func TestAPasswordAfterARealKeyWithNoEndIsRedactedAsWithNone(t *testing.T) {
 	t.Parallel()
 	const value = "hunter2x9"
@@ -276,14 +279,14 @@ func TestAPasswordAfterARealKeyWithNoEndIsRedactedAsWithNone(t *testing.T) {
 			if w.oneLine {
 				continue
 			}
-			for _, label := range []string{"Password:", "  pwd :"} {
+			for _, label := range []string{"Password:", "  pwd :", "pwd=", "  PASSWORD="} {
 				for _, gap := range []bool{false, true} {
 					lines := append(slices.Clone(key[:len(key)-1]), label)
 					if gap {
 						lines = append(lines, "")
 					}
 					text := w.wrap(append(lines, value)).text
-					word := strings.TrimSpace(strings.TrimRight(label, ": "))
+					word := strings.TrimSpace(strings.TrimRight(label, ":= "))
 					alone := text[strings.LastIndexByte(text[:strings.LastIndex(text, word)], '\n')+1:]
 					name := kname + ", " + wname + ", " + label
 					got := redact.Secrets(text)

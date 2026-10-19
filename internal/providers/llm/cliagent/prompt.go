@@ -234,8 +234,18 @@ func writePromptFile(prompt, dir string) (string, error) {
 // prompt carries the company's org chart, its policies and that seat's own
 // memory, and the box it runs in is a directory on a machine other accounts
 // share.
+//
+// A [cliprofile.SystemPromptFile.Discovered] file is written before the argv is
+// rendered, because nothing in the argv asks for it: the CLI finds it by where
+// it is, and the argv only selects what it found.
 func systemArgs(template []string, spec *cliprofile.SystemPromptFile, system, dir string) ([]string, error) {
 	var path string
+	if spec != nil && spec.Discovered {
+		var err error
+		if path, err = writeSystemPrompt(spec, system, dir); err != nil {
+			return nil, err
+		}
+	}
 	out := make([]string, 0, len(template))
 	for _, arg := range template {
 		if strings.Contains(arg, "{file}") {
@@ -276,8 +286,17 @@ func systemEnv(name string, spec *cliprofile.SystemPromptFile, system, dir strin
 // structured file rather than a bare one — see [cliprofile.SystemPromptFile]. A nil spec
 // writes the prompt alone, under the default name, which is what every other
 // `{file}` profile takes.
+//
+// A discovered file's name is a path under the directory — the place its vendor
+// looks — rooted the way a seeded file is, and its parents are created 0700.
 func writeSystemPrompt(spec *cliprofile.SystemPromptFile, system, dir string) (string, error) {
-	path := filepath.Join(dir, spec.FileName())
+	path, err := cliprofile.UnderRoot(dir, spec.FileName())
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", fmt.Errorf("cli-agent: preparing %q: %w", filepath.Dir(path), err)
+	}
 	if err := os.WriteFile(path, []byte(spec.Render(system)), 0o600); err != nil {
 		return "", fmt.Errorf("cli-agent: writing the system prompt: %w", err)
 	}

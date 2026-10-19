@@ -53,10 +53,16 @@ func buildEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth A
 //
 // Layered lowest-precedence first, so the reason each layer can override the
 // one below is visible in the order: the host allowlist every child gets
-// ([hostbox.Inherit]), then the isolation variables (which nothing may
-// override — they ARE the isolation), then the profile's own fixed
-// environment, then the profile's passthrough, then the operator's cli.env,
-// then auth.
+// ([hostbox.Inherit]), then the isolation variables, then the profile's own
+// fixed environment, then the profile's passthrough, then the operator's
+// cli.env, then auth. The isolation is NOT protected by its place in that
+// order — every layer above it could replace it — but by validation: a
+// profile whose env or passthrough_env names one of
+// [cliprofile.Profile.IsolationVariables] does not load
+// ([cliprofile.Profile.Validate]), and an entry whose cli.env names one is
+// refused on every write of the configuration and warned about on every node
+// that applies it (config's admission rules, which never take a node off the
+// fleet's revision over an entry that still runs).
 //
 // A map of its own, apart from [buildEnv]'s rendering, because it is also
 // what decides whether an entry is signed in ([Provider.signIn]): whether a
@@ -88,6 +94,25 @@ func childEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth A
 	env["TMPDIR"] = filepath.Join(c.Home, "tmp")
 	for name, rel := range p.ConfigEnv {
 		env[name] = filepath.Join(c.Home, rel)
+	}
+	// ONLY FOR A CALL, which is the one kind of command with a working
+	// directory of its own — see [cliprofile.Profile.WorkConfigEnv]. A
+	// command run in a home (a credential store's import and export, a login,
+	// the version probe) is handed no Work, and pointing the variable at the
+	// home instead would put per-call configuration where every concurrent
+	// call of the seat reads it.
+	if c.Work != "" {
+		for name, rel := range p.WorkConfigEnv {
+			env[name] = filepath.Join(c.Work, rel)
+		}
+	}
+	// ON EVERY COMMAND, a call's or not — see
+	// [cliprofile.Profile.IsolationEnv]. A credential store's import, a login
+	// and the version probe start the same CLI, and a switch that kept a call
+	// from loading an ancestor's plugin but not an import would run that
+	// plugin's code anyway.
+	for name, value := range p.IsolationEnv {
+		env[name] = value
 	}
 
 	for name, value := range p.Env {

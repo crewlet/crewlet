@@ -76,8 +76,15 @@ its own place to run:
 **Between seats.** Every seat gets its own `home`. `HOME`,
 `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `TMPDIR` and the
 vendor's own relocation variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, …)
-all point inside it. Nothing in a CLI's state layout is reachable across
-that boundary.
+all point inside it — or, for a variable naming configuration a call must
+not share with the seat's other calls (`OPENCODE_CONFIG_DIR`), inside that
+call's own working directory — and a vendor's own switch that stops it
+reading configuration from anywhere else (`OPENCODE_CONFIG_PROJECT_DISABLE`,
+the profile's `isolation_env`) is set beside them. Nothing in a CLI's state
+layout is reachable across that boundary, and nothing configured may move
+it: a profile's `env` or `passthrough_env`, or an entry's `cli.env`, naming
+one of those variables is refused, because each is layered over the
+isolation and would replace it without a word.
 
 **Between turns.** Each profile declares its `volatile_paths` —
 sessions, transcripts, history, todo state. They are deleted before and
@@ -103,6 +110,23 @@ exported.
 directory that is removed afterwards — so a CLI that reads `AGENTS.md` /
 `CLAUDE.md` from `cwd`, or writes scratch files, finds nothing from
 anyone else.
+
+**An empty directory is not enough for a CLI that also walks *up* from
+it.** The per-call directory is `<state_dir>/seats/<seat>/work/<call>`, and
+`state_dir` defaults to a directory under the engine user's home, so whatever
+sits above it — that home, or a repository you pointed `cli.state_dir` into —
+is an ancestor of every call. OpenCode reads project configuration from every
+ancestor (`opencode.json`, and `.opencode/` agents, skills and plugins), and a
+project's permissions beat the seat's: measured on 2.0.32, an allow-all
+`opencode.json` anywhere above the state directory handed every seat a shell,
+file writes and code execution, and a plugin there ran its code in every call.
+So the `opencode` profile switches that walk off and reads its configuration
+from the call's own directory — see
+[Tool calls in text mode](#tool-calls-in-text-mode). Whether another CLI
+reads an ancestor's configuration is that vendor's behaviour, and the one way
+to know on your host is `crewlet llm doctor`'s shell probe, which asks the CLI
+to run a command and believes only an answer it could not have guessed — run
+it from the state directory you deploy with.
 
 ### Concurrency within a seat
 
@@ -226,9 +250,12 @@ providers:
 The key of the provider the model names goes in `cli.env`, and it
 travels into a box in any cell, a remote one included, like a headless
 token — see [Signing in with a provider key](#5-a-provider-key-in-clienv-hermes-pi-opencode).
-An `opencode auth login` signs that provider in too, but only in a local
-cell (`run_in: direct` or `container`): the login is a file on the engine
-host, and the files never follow a run to a remote box.
+A `crewlet llm login` (OpenCode's own `opencode auth login`) signs that
+provider in too, but only in a local cell (`run_in: direct` or
+`container`): the login stays on the engine host — as the document
+OpenCode's `auth export` prints, imported into the box's OpenCode before the
+run and exported back over it after — and it never follows a run to a
+remote box.
 
 An agent-mode run is a **detached coding run** and reuses that machinery
 whole: the executor phase suspends, the run's state goes on a durable row
@@ -394,7 +421,7 @@ actually have, and every field is a
 | `qwen-code` | 0.23.0 | **both**: `QWEN_SYSTEM_MD` (file) *and* `--system-prompt` (string) | `system_prompt_env: QWEN_SYSTEM_MD` |
 | `grok` | 1.0.13 | flag, string: `--system-prompt-override` (`--rules` appends) | `system_prompt_args: ["--system-prompt-override", "{system}"]` |
 | `codex` | 0.153.4 | none, on `codex` or `codex exec` alike | — |
-| `opencode` | 1.18.29 | none (`--agent` names a persona from its own config, not a per-call prompt) | — |
+| `opencode` | 2.0.32 | **discovered file**: no flag and no variable, but an agent it discovers — `agents/<name>.md` in its configuration directory, which the profile points inside the per-call directory, its body replacing OpenCode's own prompt — which `--agent` selects | `system_prompt_args: ["--agent", "crewlet-seat"]` + `system_prompt_file` with `discovered: true` |
 | `copilot` | 1.0.83 | none (`--no-custom-instructions` only disables its own) | — |
 | `cursor-agent` | 2026.09.02 | none | — |
 | `muse-code` | 1.0.3 | none (`AGENTS.md` / `CLAUDE.md` only, and only in a **trusted** workspace) | — |
@@ -461,8 +488,49 @@ system_prompt_file:
     {system}
 ```
 
+**A channel can be found rather than handed.** OpenCode 2 takes no path at
+all: it *discovers* the agents in its configuration directory, at
+`agents/<name>.md`, and `--agent <name>` selects one. The profile points that
+directory — `OPENCODE_CONFIG_DIR` — at `.crewlet-config` inside the per-call
+working directory (`work_config_env`), so the file is the call's own, and its
+argv only names the agent:
+
+```yaml
+work_config_env:
+  OPENCODE_CONFIG_DIR: .crewlet-config         # relative to the per-call directory
+system_prompt_args: ["--agent", "crewlet-seat"]
+system_prompt_file:
+  name: .crewlet-config/agents/crewlet-seat.md # where OpenCode looks, inside the per-call directory
+  discovered: true                             # found by its location: the argv carries no {file}
+  template: |
+    ---
+    description: The Crewlet seat this run serves.
+    mode: primary
+    ---
+    {system}
+```
+
+Per call rather than in the seat's home, because a seat runs calls
+concurrently in one home and each call's system prompt is its own. It used
+to be `.opencode/agents/` in the working directory, OpenCode's *project*
+location — and reading project configuration is what let every ancestor of
+that directory configure the call (see
+[Tool calls in text mode](#tool-calls-in-text-mode)).
+
+A `discovered` file's `name` is the one that may carry a directory; it must
+stay inside the per-call directory and name a *file* there — not the
+directory itself (`.`, `x/..`), and not a path ending in a separator, which
+would write a file where the CLI looks for a directory of agents and fail
+every call. It needs `system_prompt_args` to select what was found, and
+refuses `{file}` and `{system}` in them, since handing over the path or the
+text as well would be two channels for one prompt — and `{system}` would put
+the seat's whole system prompt on argv. Measured on 2.0.32, the agent's body
+replaces OpenCode's own coding-agent prompt (OpenCode appends a short block
+naming the model and the date) and is not interpolated: `{env:…}` and
+`{file:…}` in a seat's prompt reach the model as written.
+
 `system_prompt_file` only means something on a channel that writes a file
-(`{file}` or `system_prompt_env`); on a `{system}` channel it is refused,
+(`{file}`, a discovered file, or `system_prompt_env`); on a `{system}` channel it is refused,
 because the text would go to argv bare and the envelope would configure
 nothing. A template with no `{system}` is refused for the same kind of
 reason: every call would hand the CLI the same fixed file and no seat's
@@ -585,6 +653,71 @@ name this profile gets wrong costs one tool on a deny list and costs
 everything on an allow list — and a vendor renaming a tool is exactly the
 drift these profiles are built to expect.
 
+**Unless the vendor allows whatever a list does not name.** OpenCode 2 takes
+an ordered rule list in which the *last* match wins, and allows any tool no
+rule denies — so a list of local tools to deny, which is what its 1.x profile
+seeded, let 2.0's new tools straight through: `execute` (Code Mode, a
+JavaScript runtime with `fetch`) and the session and worktree tools it
+exposes. The profile denies every action first and then allows the two web
+tools:
+
+```json
+{"permissions": [
+  {"action": "*",         "resource": "*", "effect": "deny"},
+  {"action": "webfetch",  "resource": "*", "effect": "allow"},
+  {"action": "websearch", "resource": "*", "effect": "allow"}
+]}
+```
+
+**And only if nothing else configures the call.** OpenCode also reads
+*project* configuration — `opencode.json`, and `.opencode/` agents, skills and
+plugins — from the working directory and every ancestor of it, and a
+project's permissions beat the global ones. Measured on 2.0.32 with that
+policy in the seat's home: an `opencode.json` or `.opencode/opencode.json`
+above the state directory allowing everything — in 2.0's `permissions` shape
+or 1.x's `permission` map, which 2.0 translates — widened the model's tools
+from `webfetch` and `websearch` to `shell`, `read`, `write`, `edit` and
+`execute`, and a plugin there was loaded and ran. So the profile sets
+`OPENCODE_CONFIG_PROJECT_DISABLE=1` on every command it runs, and points
+`OPENCODE_CONFIG_DIR` at `.crewlet-config` inside the call's own directory
+(`work_config_env`), where the policy above is seeded on every call as
+`.crewlet-config/opencode.json` beside the seat's agent file. That variable
+*replaces* the global directory under the seat's home rather than adding to
+it (measured: a provider declared only there was not found), which is why the
+policy moved into the call. Measured on 2.0.32 under exactly that
+environment, with those ancestor files planted — each shape in each location,
+beside an ancestor agent of the seat's own name, a plugin, skills,
+`AGENTS.md` and `CLAUDE.md`: the seat's agent is found and its body is the
+system message, the model is offered exactly `webfetch` and `websearch`, no
+ancestor file reaches the request, and no plugin loads. A command with no
+call of its own — the credential store's `auth import` and `auth export`,
+`auth login`, `auth list` — runs with the walk off and no
+`OPENCODE_CONFIG_DIR`, so it reads no configuration at all. `auth import`,
+`auth export` and `auth list` were measured working so, under an ancestor
+holding a plugin and an allow-all `opencode.json`, and loading no plugin;
+`auth login` is OpenCode's own interactive picker, runs in the same
+environment, and was not measured in it. The usage command
+(`api session.get`) runs as part of the call and reads the call's directory.
+One configuration no variable switches off remains: OpenCode's machine-wide
+*managed* configuration (`/etc/opencode` on Linux, read from the 2.0.32
+bundle rather than measured), which only an
+administrator of the host can write. On a host that has one it applies to
+every seat, and nothing in a profile overrides it.
+
+The switch is `OPENCODE_CONFIG_PROJECT_DISABLE` because that is the name
+OpenCode 2 reads *first*: it reads
+`OPENCODE_CONFIG_PROJECT_DISABLE ?? OPENCODE_DISABLE_PROJECT_CONFIG` (in the
+2.0.0 bundle and the 2.0.32 one), so the older spelling is overruled by any
+value of the newer one, an empty value included — and an empty value reads
+as off. And it is part of the isolation (`isolation_env`) rather than an
+ordinary `env` setting, because `cli.env` is layered over `env`: written as
+an ordinary setting, `OPENCODE_CONFIG_PROJECT_DISABLE` set to `0` or to
+nothing in `cli.env` reopened the walk — measured, the model was offered a
+shell, file writes and code execution, an ancestor agent named like the
+seat's replaced its system prompt, and the ancestor's plugins ran. So
+`cli.env` naming it is refused, as `HOME` is, and the older spelling is never
+read, because the newer one is always set.
+
 **A refusal and a removal are not the same guard, and only one of them
 is a denial.** `muse-code` is the profile that makes the difference
 concrete. Its `--disable-shell` and `--disable-write` flags read like tool
@@ -624,7 +757,7 @@ on every call — see [Which CLIs actually have one](#which-clis-actually-have-o
 ask sits on the seat's concurrency slot until `timeout_seconds` fires,
 because there is nobody to answer. Most profiles therefore remove the
 asking rather than the guard: OpenCode's seeded policy is all `allow` and
-`deny` and denies the tool that asks a person, and `muse-code` passes
+`deny` — the tool that asks a person denied with the rest — and `muse-code` passes
 `--disable-approval`, which is the posture its own vendor's headless
 guidance asks for — approval prompts off, the OS sandbox still on.
 
@@ -661,7 +794,10 @@ the web silently, so a test refuses it for every other profile.
 Both stances are profile fields, so an operator can override them like
 any other — `cli.overrides.local_tools`, `cli.overrides.local_tools_note`,
 and `cli.overrides.seed_files` (a list of `{path, in: home|work, content}`;
-lists replace wholesale).
+lists replace wholesale). On an `opencode` entry the policy goes at
+`{path: .crewlet-config/opencode.json, in: work}`, the call's own
+configuration directory: under `OPENCODE_CONFIG_DIR` a file in the seat's
+home is read by nothing, and the CLI would run on its vendor defaults.
 
 Instead the CLI is used strictly as a text model, and the tool channel
 rides in the prompt:
@@ -837,12 +973,17 @@ usage:
 ```
 
 Three rules travel with it. A report that never arrived is not a call that
-cost nothing — the counts fall back to the estimate, because the vendor writes
-the file "even when the run fails", so its absence means the run did not get
-that far and failing a completion the model answered over a count would throw
-away work you paid for. A report whose keys this profile cannot read is
-**drift**, not a zero-token turn, and falls back the same way rather than
-charging zero. And both prompt counts come from the file or neither does: a
+cost nothing — the counts fall back to what stdout reported, which for
+`hermes -z` is nothing, so the estimate — because the vendor writes the file
+"even when the run fails", so its absence means the run did not get that far
+and failing a completion the model answered over a count would throw away work
+you paid for; that is the one fallback that logs nothing. A file that is there
+and cannot be read, or holds nothing, logs `cli_agent_usage_file_unreadable`.
+A report whose keys this profile cannot read is **drift**, not a zero-token
+turn: it falls back the same way rather than charging zero, and logs
+`cli_agent_usage_report_unreadable` with the reason (`the report is not one
+JSON object`, or `usage.input and usage.output do not both resolve in it`),
+the paths it looked in and what the counts came from instead. And both prompt counts come from the file or neither does: a
 partial overlay would pair one source's input count with another's output
 count, and the sum is what a budget is charged. (The two cache figures are
 not part of that test — a provider that caches nothing reports neither, and
@@ -851,6 +992,47 @@ zero is the true answer there.) For the same reason a profile setting
 declaring one means every call quietly falls back to an estimate while
 `crewlet llm doctor` reports the vendor's own figures, which is precisely
 what that line exists to settle.
+
+**Or record them and only ask afterwards.** OpenCode 2's `run --format json`
+emits each step's counts in a `step_finish` event — and drops the *final*
+step's: measured on 2.0.32, a text-only call printed no `step_finish` in six
+runs of six, and a call that used a tool printed the tool step's counts and
+not the answer's. Read from stdout, every call would be charged for nothing
+or for its first step. The session the call ran in holds the whole total, so
+the profile names the call's session and asks about it once the call has
+ended:
+
+```yaml
+session_args: ["--session", "ses_{session}"]   # {session}: 32 hex characters minted per call
+usage_args: ["api", "--standalone", "session.get", "--param", "sessionID=ses_{session}"]
+usage:
+  input:       [["data", "tokens", "input"]]
+  output:      [["data", "tokens", "output"]]
+  cache_read:  [["data", "tokens", "cache", "read"]]
+  cache_write: [["data", "tokens", "cache", "write"]]
+  reasoning:   [["data", "tokens", "reasoning"]]
+```
+
+`usage_args` is a command run after the call in the same home, working
+directory and environment, whose stdout is read through the `usage` paths
+exactly as a usage file is — with the same three rules, plus one: it must
+name `{session}`, and `session_args` must give the call one, because a
+seat's home holds every call running in it at once and "the latest session"
+can be a sub-agent's. Either way the call keeps its answer, and the counts
+fall back to what stdout reported — for OpenCode, whose stdout carries no
+`data.tokens`, the estimate — with a warning naming which way it failed: a
+command that exits non-zero, times out, overflows its output or exits 0 having
+printed nothing logs `cli_agent_usage_report_failed`; one that printed a
+report this profile cannot read logs `cli_agent_usage_report_unreadable`, as a
+usage file does. `usage_args` and `usage_file_args` are refused together: one
+call, one report.
+
+**`reasoning` is the one figure that is added, not reported as itself.**
+Every provider bills a model's reasoning as output, and OpenCode's session
+totals carry `output` as the visible text alone, with `reasoning` beside it;
+the profile declares the path so the two are charged together. Declare it
+only where a CLI's output count *excludes* reasoning — OpenAI's own usage,
+and every CLI that passes it through, counts it inside output already.
 
 **Not every vendor's richer channel is worth taking.** `pi` has one —
 `--mode json` streams every session event and carries real counts — and this
@@ -940,21 +1122,120 @@ in a REPL you have to interrupt — after a login that had already
 succeeded. `crewlet llm login` returning you to your shell is the
 signal that it worked; `crewlet llm doctor <KEY>` confirms it.
 
+**A login that leaves no login fails**, even when the CLI exited 0: if
+nothing ends up where the entry reads its login — its credential files, or
+for OpenCode the document its export prints — `crewlet llm login` says the
+CLI exited without leaving one and writes nothing, rather than printing
+`Login written to …` over an empty directory. Backing out of the vendor's
+sign-in is the usual way to get there; run the login again.
+
+**One `crewlet llm` command at a time per state directory.** `login`,
+`status` and a vendor's own `logout` all run the CLI in the same login home,
+rebuilt from the shared login for each command and emptied after it, so a
+second one started while the first is running — a `status` in another terminal
+while a login waits on its browser flow — is refused at once with a message
+saying so, rather than pruning the database the sign-in is about to store its
+login in. Entries that share a `cli.state_dir` share one login home, so a
+command for one refuses a command for the other.
+
 **`pi` is the one CLI where the REPL *is* the login**, and its profile says
 so rather than pretending otherwise: `/login` there is a slash command and
 the vendor ships no login subcommand at all. So the broker starts pi's own
 interactive session — ephemeral, with `--no-session`, in the isolated
 credential directory — and you type `/login`, complete the browser flow, then
-`/exit`. Declaring no login instead would have `crewlet llm login` tell you,
-wrongly, that the CLI "authenticates on first use".
+`/exit`. Declaring no login instead would leave `crewlet llm login` nothing
+to run, and you to sign in with pi by hand and adopt that login with
+`-from-host`.
 
 **Not every CLI has all three commands.** `kimi-code` has `kimi login` (a
 device-code flow) but no logout and no status subcommand — both are its
 TUI's slash commands, which a headless run cannot reach. `hermes` has
 `hermes auth` and `hermes status`, but `hermes auth logout` requires a
 provider name, which is yours to know rather than the profile's to guess.
+`opencode` has `auth logout`, but it removes *one* credential, picked in an
+interactive menu, from a database the profile rebuilds on every command
+anyway (below) — so the profile declares none, and `crewlet llm logout`
+removes the exported login, which is every login the entry holds.
 A profile declares only the commands its vendor actually has, and
 `crewlet llm logout` / `status` say so plainly for the ones that do not.
+
+**A login the CLI keeps in a database of its own travels as its export.**
+Most CLIs keep a login in a file, which is copied into each seat's home and
+copied back when a refresh rewrote it. OpenCode 2 keeps every login in the
+`credential` table of `opencode.db` — the same SQLite file it keeps every
+session in — and reads them nowhere else: a 1.x `auth.json` copied into a
+fresh home is ignored. Copying that file would carry one seat's
+conversations into every other seat, so the profile declares a
+`credential_store` instead:
+
+```yaml
+credential_store:
+  export_args: ["auth", "export", "--standalone"]   # prints every login as one document
+  import_args: ["auth", "import", "--standalone"]   # reads such a document on stdin
+```
+
+The document `auth export` prints is the login of record, kept as
+`credentials/exported-credentials`. `crewlet llm login` runs OpenCode's own
+`auth login` in a home rebuilt from it and exports what it holds afterwards;
+each seat's generation starts from an **empty** database with the document
+imported into it, and ends by exporting the database and carrying the export
+back when OpenCode changed it — so a token OpenCode refreshed mid-call reaches
+every seat ([below](#token-refresh-across-seats)) — and the database itself is
+then pruned with the rest of the seat's sessions. An import always lands in an
+empty database because OpenCode skips a credential id it already holds rather
+than updating it.
+`-from-host` exports the login from your own home with your own OpenCode,
+bundles carry the document, and a [local coding box](code-sandbox.md)
+imports it before a run and exports it back after. Measured on 2.0.32, an
+import followed by an export reproduces the document byte for byte, and an
+empty database exports `[]`.
+
+**A login replaces a shared login the CLI cannot read.** If OpenCode refuses
+to import the document — a bundle exported by another 2.x build, whose shapes
+this one decodes strictly, is the usual way to get there — every seat's call
+fails as an authentication failure naming the three ways out. `crewlet llm
+login <KEY>` starts its sign-in from an empty database and writes what you sign
+in with over the unreadable document, saying so on your terminal (and as
+`cli_agent_shared_login_refused` in the log); `-from-host` adopts a working
+login without importing the old one; `crewlet llm logout <KEY>` removes it.
+`status` keeps refusing, since it makes no login to put in the document's
+place.
+
+**Only a login creates the shared login, and a logout outlasts everything
+else.** `crewlet llm login` (with `-capture-token` and `-username`),
+`-from-host`, `crewlet llm import` and a bundle restored into an empty
+directory are what create the shared login. A seat, `crewlet llm status` and a
+vendor's own logout only ever *refresh* the login they started from: each
+writes back only over that very login, so a call or a `status` running while
+`crewlet llm logout` ran cannot put the login back — for a credential file as
+much as a document — and an export holding no login never replaces one.
+
+`crewlet llm logout` also **records the logout** in the state directory
+(`logged-out`, beside `credentials/` rather than in it, so no bundle carries
+it), and while that record stands the entry's configured
+[bundle](#4-move-a-login-onto-another-host) is not restored into the directory
+the logout emptied — not at the engine's next boot or apply, and not by
+`list`, `status`, `export` or `doctor`, each of which says so, naming the
+logout and how to sign in again (the engine as a `cli_agent_bundle_withheld`
+warning). What ends it is a login **written into the credential directory**:
+`crewlet llm login` (brokered, or `-username`), `-from-host` or `import` — or a
+`-capture-token` whose sign-in also left a login file there. A headless token
+on its own (`-token-stdin`, or the token `-capture-token` mints) signs the
+entry in through its environment and writes nothing there, so the logout stands
+and the bundle stays out. A **fresh** state directory holds no such record, so
+a container that comes up on an empty volume restores the bundle as it always
+did: to retire a bundle for good, remove `cli.auth.credential_bundle` or the
+`CREWLET_LLM_CLI_<KEY>_CREDENTIALS` secret it was exported to, which `logout`
+reminds you of when the entry has one — even when the CLI's own logout fails,
+since the login is removed and the logout recorded either way.
+
+`crewlet llm logout` also discards a login a failed export left in the login
+home for the next command
+([below](#token-refresh-across-seats)) — unless another command is using the
+login home at that moment, which is a login still in progress in another
+terminal: that one is left to finish, and its result is written when it does.
+Every write to the shared login replaces the file whole rather than rewriting
+it in place, so a seat starting its generation never reads half of one.
 
 ### 2. Capture a headless token (best where it exists)
 
@@ -988,13 +1269,14 @@ vault read -field=password secret/gateway |
   crewlet llm login default -username ops@example.com -password-stdin
 ```
 
-Available for a profile that declares `stdin_login` — the built-in
-`opencode` profile, an operator's own wrapper, or a self-hosted gateway
-CLI. The password is read from stdin or a declared environment variable,
+Available for a profile that declares `stdin_login` — an operator's own
+wrapper, or a self-hosted gateway CLI. No built-in profile declares one,
+because no shipped CLI has one: the `opencode` profile used to, with
+`auth login --username`, a flag no release of either OpenCode major accepts. The password is read from stdin or a declared environment variable,
 never from argv (which is visible in `ps` and lands in shell history).
 
-The Claude, Codex, and Gemini profiles deliberately leave `stdin_login`
-unset, and the command says so rather than failing obscurely:
+Every built-in profile leaves `stdin_login` unset, and the command says so
+rather than failing obscurely:
 
 ```
 Error: the 'claude-code' CLI authenticates through the vendor's browser
@@ -1029,16 +1311,23 @@ encrypted secret store:
 crewlet llm export default -secret-store
 ```
 
-That engine restores it at boot when its own `credentials/` directory is
-empty, so a fresh container on the same store comes up already authenticated.
+That engine restores it when it builds a company to run — at boot, and again
+at every apply it publishes (a revision the apply refuses writes none) —
+whenever its own `credentials/` directory is empty and nobody has [logged the
+entry out](#1-broker-the-vendors-own-login-any-cli) since its last login, so a
+fresh container on the same store comes up already authenticated. `crewlet llm
+list`, `status`, `export` and `doctor` restore it first too, so they answer
+about the login the engine would run with; `login`, `logout` and `import` do
+not, since each replaces or removes that login. `crewlet validate` never does:
+checking a document writes nothing onto the host.
 It is **that node's** store and nothing else's — the rows do not travel, and a
 second host needs its own `crewlet llm login`, or the same bundle handed to it
 through `providers.llm[].auth.credential_bundle`. The blob is validated on the way back in — only the
 profile's own credential paths, files only, size-capped — because an
 archive is an execution surface if it is unpacked on trust.
 
-Only the credential files travel. Sessions, history, and caches never go
-into a bundle.
+Only the credential files — and a CLI's exported login document — travel.
+Sessions, history, and caches never go into a bundle.
 
 **Between two hosts that share no database**, pipe it instead:
 
@@ -1107,12 +1396,80 @@ declare `env_sign_in`, and a key in its `cli.env` is not counted.
 
 OAuth access tokens expire in hours, and the CLI refreshes them
 mid-run. Most vendors rotate the *refresh* token at the same time, so
-Crewlet syncs a changed credential file back to the shared directory
+Crewlet carries a changed credential file — or a changed export, for a CLI
+that keeps its login in its own database — back to the shared directory
 when a seat's generation closes — otherwise the whole fleet would be
-logged out at the next expiry. Two seats refreshing at the same instant
-can still race, exactly as two terminals running the vendor's CLI would.
-A headless token (option 2) has no refresh file and sidesteps this
-entirely.
+logged out at the next expiry.
+
+**Changed means changed from what the home was seeded with**, never
+"different from the shared login now". When a generation starts, Crewlet
+records a digest of every credential file it copied into the home and of the
+document it imported; when it closes, a home holding exactly that wrote
+nothing, whatever the shared directory holds by then. Compared with the shared
+login instead, an idle seat's copy would differ the moment another seat had
+refreshed — and writing it back would put the refresh token the vendor had just
+rotated away in front of every seat.
+
+**And a refresh is a compare-and-swap.** A seat whose CLI did refresh writes
+only while the shared login is still exactly what that seat started from. If
+anything else wrote in between — another seat's refresh, your `crewlet llm
+login` or `-from-host` while seats were mid-call, a `crewlet llm logout` — the
+newer login is kept and the seat's is dropped, with a `cli_agent_login_superseded`
+warning naming the provider and the file (never what either holds) and how the
+shared login moved (`changed` or `removed`). The check and the write are one
+step under a lock beside the credentials directory (`credentials.lock`), which
+the engine's seats, every `crewlet llm` command — each a process of its own —
+and a [local coding box](code-sandbox.md)'s teardown, writing back what its run
+refreshed, take alike. `crewlet llm status` follows the same rule, so it can
+neither revert a refresh that landed while it ran nor bring back a removed
+login. The commands that *make* a login are the one exception: what your
+sign-in stored is written whenever it differs from what the command started
+with, over whatever landed while it ran — a refresh a seat made during a
+browser flow that took minutes, or even your own `-from-host` in another
+terminal — because the later of two sign-ins is the one you asked for.
+
+**A refreshed login that cannot be carried out is kept, not pruned.** If the
+export fails — a host too busy to finish it inside its 30-second bound, a CLI
+killed mid-export — the home is left exactly as it is, with its generation
+recorded beside it (`seats/<seat>/generation.json`), and the next generation
+to open in that state directory carries the login out before it seeds
+anything: the seat's own next call, or **any other seat's** first call,
+whichever comes first, so every seat starting meanwhile is not seeded with the
+refresh token the vendor has just rotated away. A home a call is running in is
+never touched — each generation holds a lock in its seat directory from its
+first call to its last, which an engine in another process sees too — and a
+seat whose export keeps failing is tried by the other seats again after a
+minute, doubling to half an hour, with a `cli_agent_carry_out_failed` warning
+each time (and a `seats/` directory that cannot be listed at all is a
+`cli_agent_sweep_failed` warning, never read as nothing to carry out). The
+seat's own next call tries every time, and a call that cannot
+carry its own login out is refused with a retryable error naming the export
+(the fallback chain moves on), rather than run on the stale database or
+discard it. The record is on disk, so an engine that stopped mid-call is
+covered too: the next process's first call into any seat finishes the
+generation first. If an export can never succeed — a CLI upgrade that broke
+it — the refusal names the record: removing it discards the kept login, and
+the seat's next call starts from the shared one.
+
+The login home works the same way. A `crewlet llm login` whose export failed
+after you finished the browser flow keeps the login there
+(`login-generation.json` beside it), and the next `crewlet llm` command that
+runs the CLI for that state directory carries it out before anything else —
+over a refresh a seat made meanwhile, since it is your sign-in, but never over
+a login of record you replaced after it finished: a `-from-host`, a `crewlet
+llm import` or a `crewlet llm logout` since then wins, and the kept login is
+dropped with `cli_agent_login_superseded` (`shared=replaced`). A bundle the
+engine restores at boot into the empty directory the failed login left is not
+one of those, so your sign-in still lands over it. A `status` or a vendor's
+own logout that cannot carry the kept login out is refused, naming the way
+out: `crewlet llm login` itself replaces a kept login it cannot carry out and
+says so on your terminal (`cli_agent_login_discarded`), and `crewlet llm
+logout` discards it before anything else.
+
+Two seats refreshing at the same instant still race for the vendor's next
+token, exactly as two terminals running the vendor's CLI would; the one that
+wrote first is kept. A headless token (option 2) has no refresh file and
+sidesteps all of this.
 
 ---
 
@@ -1124,7 +1481,7 @@ entirely.
 | `codex` | `codex` | ChatGPT Plus / Pro | `codex login`. Streams JSONL events; runs `--sandbox read-only`. |
 | `gemini-cli` | `gemini` | Google AI Pro / free tier | First run starts the auth picker. `GOOGLE_CLOUD_PROJECT` passes through. |
 | `qwen-code` | `qwen` | Qwen OAuth | Gemini CLI fork; same shape. |
-| `opencode` | `opencode` | Anthropic / Copilot / any | `opencode auth login`; the one built-in profile with a credential login. A provider key goes in `cli.env` under that provider's own variable, and `doctor` counts it — see [Signing in with a provider key](#5-a-provider-key-in-clienv-hermes-pi-opencode). `model` is `<provider>/<model>` (`anthropic/claude-sonnet-5`, `openrouter/anthropic/claude-sonnet-5`); a bare id is refused on a write. |
+| `opencode` | `opencode` | Anthropic / Copilot / any | **OpenCode 2 only** — `@opencode/cli` (`opencode --version` prints `opencode v2.…`); 1.x (`opencode-ai`) runs neither the profile nor a coding box. Every command runs `--standalone`, because without it OpenCode drives a background service on a port shared by every home on the machine, which keeps the credentials of whichever call started it. `opencode auth login` (no status beyond `auth list`, no logout — see [the login it keeps in its own database](#1-broker-the-vendors-own-login-any-cli)). A provider key goes in `cli.env` under that provider's own variable, and `doctor` counts it — see [Signing in with a provider key](#5-a-provider-key-in-clienv-hermes-pi-opencode). `model` is `<provider>/<model>` (`anthropic/claude-sonnet-5`, `openrouter/anthropic/claude-sonnet-5`); a bare id is refused on a write. Prompt on stdin; no project configuration from the working directory or any ancestor of it, only the call's own (see [Tool calls in text mode](#tool-calls-in-text-mode)); the system prompt as an agent in that configuration; failures read from the class in its own JSON `error` events and nowhere else; tokens from the call's session. |
 | `cursor-agent` | `cursor-agent` | Cursor seat | `cursor-agent login`. A Cursor API key (`CURSOR_API_KEY`, its `api_key_env`) is the headless alternative, reached through `auth.mode: api-key`. |
 | `copilot` | `copilot` | GitHub Copilot seat | Prompt goes on argv, so very long transcripts are bounded by `ARG_MAX`. Authenticates with a GitHub token, so `GITHUB_TOKEN` is its `api_key_env` — reached via `auth.mode: api-key` or `inherit-env`, never forwarded silently. |
 | `grok` | `grok` | xAI | **xAI's own CLI** from [x.ai/cli](https://x.ai/cli), not the same-named npm package. Accepts `XAI_API_KEY` (the variable its own signed-out message names) through `auth.mode: api-key`. |
@@ -1198,7 +1555,7 @@ So a CLI whose failures reach stderr and nowhere else declares that, and then
 nothing the model writes classifies anything:
 
 ```yaml
-marker_scope: stderr        # or answer-and-stderr (the default)
+marker_scope: stderr        # or answer-and-stderr (the default), or events
 ```
 
 Three profiles narrow it, each on a measurement rather than an assumption:
@@ -1210,6 +1567,51 @@ and nothing else. Narrow it only where the vendor's behaviour makes the
 answer an impossible place for the report — a profile that narrows it
 wrongly stops recognising spent plans, which is silent until somebody hits
 their cap.
+
+**The third scope matches structure instead of text, for a failure that is
+an event of its own.** OpenCode 2's `--format json` prints a refused key or a
+spent plan as `{"type":"error",…,"error":{"type":"provider.quota",…}}` on
+stdout — and that event can follow an answer the profile located, so the
+answer does not hold it. `marker_scope: events` decodes every stdout line,
+keeps only the CLI's own failure events — those whose `event_type_path` value
+is one of `marker_events` — and compares each sentinel by **equality** with
+the string at `marker_path` in such an event:
+
+```yaml
+marker_scope: events
+marker_events: ["error"]          # read through event_type_path
+marker_path: ["error", "type"]    # the failure class; a sentinel must equal it
+limit_markers:
+  - sentinel: provider.quota
+  - sentinel: provider.rate-limit
+auth_markers:
+  - sentinel: provider.auth
+```
+
+Those are the classes 2.0.32 named for a provider answering 429 with a quota
+body, 429 with a rate-limit body and 401. **Never a substring of stdout**,
+which is what this scope first did, on the reasoning that a model's words
+reach a JSON stream only as escaped strings. A tool call's do not: OpenCode
+prints a call's arguments as the model's own raw JSON object, so a model that
+put `"type":"provider.quota"` into a `webfetch` call — which text injected
+into a page or a message a seat reads can ask it to — printed the sentinel
+exactly as the CLI's event spells it, on a call that exited 0 with a correct
+answer, and the credential was benched for the cooldown (measured on 2.0.32).
+Whatever a model writes arrives inside an event of another type, or nested
+where `marker_path` does not reach. **Stderr is not searched** in this scope:
+OpenCode writes none of these failures there (zero bytes, measured with
+`--print-logs=false`, for all three), so a byte search there could only let
+something other than the CLI's own event classify a call. The scope is
+refused without a `jsonl` output, an `event_type_path`, `marker_events` and
+`marker_path`; `marker_events` may not name a `text_events` kind; a limit
+marker may not carry a `reset_separator`, since the class is compared whole;
+and `marker_events` and `marker_path` are refused beside any other scope,
+which reads neither. (1.x's sentinels — "usage limit", "not authenticated" —
+were printed by neither major, so a spent OpenCode plan used to classify as
+fatal and never moved the fallback chain.) OpenCode retries a rate limit
+itself, with no setting to bound it (about 86 seconds, measured), so a
+transient one holds the seat until then — or until `timeout_seconds` — before
+the sentinel can hand it on.
 
 **And check where it prints it.** A sentinel can only match what the CLI
 puts on stdout or stderr, and one vendor puts the failure *nowhere a
@@ -1225,8 +1627,9 @@ through to its metered key.
 
 Every field a profile has, and therefore every key `cli.overrides` accepts.
 A key not in this table is refused by name. Every mapping field
-(`config_env`, `env`, `usage`, `stdin_login`, `system_prompt_file`) merges
-key by key; lists and single values replace wholesale.
+(`config_env`, `work_config_env`, `isolation_env`, `env`, `usage`,
+`stdin_login`, `system_prompt_file`, `credential_store`) merges key by key;
+lists and single values replace wholesale.
 
 | Field | What it is |
 |---|---|
@@ -1238,36 +1641,43 @@ key by key; lists and single values replace wholesale.
 | `prompt_mode` | How the prompt travels: `stdin` (default), `argv` or `file`. |
 | `system_prompt_args` | The flag carrying the system prompt, with `{file}` (preferred) or `{system}`. Empty leaves it in the transcript. |
 | `system_prompt_env` | A variable naming a file the CLI reads its system prompt from; exclusive with `system_prompt_args`. |
-| `system_prompt_file` | `{name, template}`: the file a `{file}` channel writes, and the text around `{system}`. |
+| `system_prompt_file` | `{name, template, discovered}`: the file a `{file}` channel writes, and the text around `{system}`. `discovered: true` is a file the CLI finds by its location in the per-call directory (`name` may then carry a directory, and must name a file inside it), selected by `system_prompt_args` without `{file}` or `{system}`. |
 | `prompt_args` | The flag introducing the prompt in `argv` mode, or carrying `{file}` in `file` mode. |
 | `output` | How stdout is encoded: `json` (default), `jsonl` or `text`. |
 | `text_paths` | Where the answer is in a `json`/`jsonl` document. |
 | `event_type_path` | Where a `jsonl` line names its event kind. |
 | `text_events` | The event kinds whose text is the answer. |
 | `error_paths` | A boolean the CLI sets when it failed despite exiting zero. |
-| `usage` | `{input, output, cache_read, cache_write}`: where the token counts are. |
+| `usage` | `{input, output, cache_read, cache_write, reasoning}`: where the token counts are. `reasoning` is added to output, for a CLI that reports it apart. |
 | `usage_file_args` | The flag asking the CLI to write its counts to a file, with `{usage_file}`. |
-| `config_env` | A vendor's own relocation variable, mapped to a directory under the seat home. |
-| `env` | Fixed child environment. Never a credential, and never `token_env` or `api_key_env`. |
-| `passthrough_env` | Engine variables forwarded to the child. Never a credential. |
+| `session_args` | The flag naming the call's session, with `{session}` — 32 hex characters minted per call. |
+| `usage_args` | A command run after the call that prints its counts, with the same `{session}`; read through `usage`. Exclusive with `usage_file_args`. One that fails, or prints nothing, logs `cli_agent_usage_report_failed`; one this profile cannot read logs `cli_agent_usage_report_unreadable`; either way the counts are what stdout reported. |
+| `config_env` | A vendor's own relocation variable, mapped to a directory under the seat home — relative, and staying inside it; never `HOME`, an XDG home or `TMPDIR`, which the engine sets. An override that moves a directory the built-in profile keeps paths under must move those paths with it (its login files, volatile paths and home seed files), each to the same place under the new directory — a move to the home itself or to a parent leaves them where the CLI no longer reads them — or it is refused naming the ones left behind. |
+| `work_config_env` | A vendor's relocation variable mapped to a directory under the per-call working directory, for configuration a call must not share with the seat's other calls. Set only for the call and its usage command; never `HOME`, an XDG home, `TMPDIR`, or a `config_env` variable. An override that moves the built-in profile's directory must move what it keeps there too (its work seed files and a discovered system prompt file), or is refused. |
+| `isolation_env` | A vendor's own switch that keeps the CLI from reading configuration outside its seat's home and its call's directory, with the value that turns that reading off — set on every command the profile runs, and refused in `env`, `passthrough_env` and `cli.env`, each of which is layered over it. The name the CLI reads first, never a fallback spelling of it. Never empty (a CLI that reads `1` as on reads an empty value as off), never a credential, `HOME`, an XDG home, `TMPDIR` or a relocated variable. |
+| `env` | Fixed child environment. Never a credential, never `token_env` or `api_key_env`, and never a variable the engine sets to isolate the call (`HOME`, the XDG homes, `TMPDIR`, a `config_env`, `work_config_env` or `isolation_env` variable). |
+| `passthrough_env` | Engine variables forwarded to the child. Never a credential, and never an isolation variable. |
 | `token_env` | The variable a headless subscription token goes in (`cli.auth.token`). |
 | `api_key_env` | The variable a metered key goes in (`api_keys` under `auth.mode: api-key`). |
 | `model_names_provider` | The CLI reads its model as `<provider>/<model>`, split at the first slash, so a `model` with nothing before or after that slash (as the CLI is handed it, through `model_args`) is refused on a write. Declared by `opencode` only — measured from its source; `hermes` and `pi` document a `provider/id` model but are not known to refuse a bare one. |
 | `env_sign_in` | The CLI reads its model provider's key from its own environment, so a [credential-named](#5-a-provider-key-in-clienv-hermes-pi-opencode) variable in `cli.env` signs it in. |
-| `credential_paths` | The login files, relative to the seat home. |
-| `volatile_paths` | Sessions, transcripts and history, deleted before and after every call. |
+| `credential_paths` | The login files, relative to the seat home: each must name a file inside it (not the home itself, not a path ending in a separator), and no two may share a file name, since the shared directory and a bundle keep each under its name. |
+| `volatile_paths` | Sessions, transcripts and history, deleted before and after every call. Each must stay inside the seat home; a directory is fine. |
 | `login_args` | The vendor's own interactive login, for `crewlet llm login`. |
 | `capture_token_args` | The command that mints a headless token on stdout (`-capture-token`). |
 | `status_args` | The command reporting who the CLI is logged in as. |
 | `logout_args` | The command revoking the login. |
 | `stdin_login` | `{args, stdin_template, password_env}`: a real credential login, where the CLI has one. |
+| `credential_store` | `{export_args, import_args}`: a login the CLI keeps in a database of its own, moved as the document its export prints (stdout) and its import reads (stdin). Both, and never `{file}`. |
 | `limit_markers` | Sentences recognising a spent plan — see above. |
 | `auth_markers` | Sentences recognising an expired login. |
-| `marker_scope` | Where markers match: `answer-and-stderr` (default) or `stderr`. |
-| `host_credential_paths` | Where the CLI keeps its login in a person's own home, for `-from-host`. |
+| `marker_scope` | Where markers match: `answer-and-stderr` (default), `stderr`, or `events` (the class in the CLI's own failure events, compared by equality; `jsonl` only, and stderr is not searched). |
+| `marker_events` | Under `marker_scope: events`, the event kinds (read through `event_type_path`) the CLI reports a failure in. Refused beside any other scope. |
+| `marker_path` | Under `marker_scope: events`, where in such an event the failure class is; a sentinel must equal it. Refused beside any other scope. |
+| `host_credential_paths` | Where the CLI keeps its login in a person's own home, for `-from-host`: each names a file, under a file name `credential_paths` also has, because an adopted file is kept under its name and a seat is seeded only with those names. |
 | `local_tools` | The profile's stance on the CLI's own tools: `denied` or `vendor-default`. |
 | `local_tools_note` | Why a `vendor-default` stance is one. |
-| `seed_files` | `{path, in, content}` (`in` is `home` or `work`): settings files written before a call. |
+| `seed_files` | `{path, in, content}` (`in` is `home` or `work`): settings files written before a call. `path` must name a file inside its scope, and never one another field needs: a login file, the system prompt file, a `config_env` or `work_config_env` directory, or a directory above any of them. |
 
 ---
 
@@ -1363,9 +1773,9 @@ refused.** `opencode` reads its model as `<provider>/<model>` and splits it
 at the first slash, so a model with nothing before or after that slash —
 `claude-sonnet-5`, `anthropic/` — names no model at all, and every call the
 entry makes, an agent-mode run included, fails inside the CLI with its own
-"Model not found". Name the provider as the CLI spells it:
+"Invalid model reference". Name the provider as the CLI spells it:
 `anthropic/claude-sonnet-5`, `openrouter/anthropic/claude-sonnet-5`
-(`opencode models` lists them). It is judged on the value the CLI is
+(`opencode models --standalone` lists them). It is judged on the value the CLI is
 handed — the model rendered through `model_args`, a joined
 `--model={model}` read past its `=` — and a `${VAR}` model is not judged,
 since its value is the secret store's and the environment's. The grammar is
@@ -1505,7 +1915,9 @@ holding the reset instant, so the retry-after is a datum rather than a
 guess. They are matched against whatever the CLI printed — which on a
 healthy call is **the model's own answer** — and a match benches the
 credential for a cooldown and hands the seat to the next entry in the
-chain.
+chain. Under `marker_scope: events` a sentinel is instead the failure
+*class*, compared whole with the CLI's own failure event and nothing else
+(see [CLI flags drift](#cli-flags-drift--and-thats-a-config-edit-not-a-release)).
 
 So a sentinel has to be the vendor's *wording*, and a profile is refused
 at `crewlet validate` if one contains no letters. The rule exists because
@@ -1704,8 +2116,9 @@ The `sign-in` line names every route that authenticates the CLI, read off
 the environment the CLI is actually given, after `auth.mode` has set and
 removed what it does — never off the configuration beside it. So a token
 that `auth.mode: api-key` removes is not a sign-in, and `crewlet llm list`'s
-`SIGN-IN` column is the first route the line names, so the two commands
-cannot disagree. The routes are credential files in the entry's directory,
+`SIGN-IN` column is the first route the line names — both restore the entry's
+configured bundle first, as the engine does — so the two commands cannot
+disagree. The routes are credential files in the entry's directory,
 a headless token, an API key under `api-key`, a token or key forwarded under
 `inherit-env`, and a [credential-named](#5-a-provider-key-in-clienv-hermes-pi-opencode)
 variable in `cli.env` on a CLI that reads its key from its environment.
@@ -1789,13 +2202,15 @@ reference](../reference/cli.md#crewlet-llm).
   Code in the box bills your plan), an `api-key` entry's key, what
   `inherit-env` forwards, and `opencode`'s
   [`cli.env` key](#5-a-provider-key-in-clienv-hermes-pi-opencode). The
-  credential *files* never travel to a remote box: they carry a refresh
-  token whose rotation is shared fleet state. So a `claude-code` entry with
-  no headless token, or an `opencode` entry signed in only by
-  `opencode auth login`, needs a
+  login itself — credential files, or OpenCode's exported login — never
+  travels to a remote box: it carries a refresh token whose rotation is
+  shared fleet state. So a `claude-code` entry with no headless token, or an
+  `opencode` entry signed in only by `crewlet llm login`, needs a
   [local cell](code-sandbox.md#local-sandboxes) (`providers.sandbox.local`
-  plus `run_in: direct` or `container`), where the coding agent runs on the
-  engine host and reads the login directly. Any other CLI — Codex, Gemini
+  plus `run_in: direct` or `container`), which is seeded with the login and,
+  when the box closes, writes back one its run refreshed — only while the
+  shared login still holds what the box was seeded with, by the same
+  compare-and-swap a seat's refresh takes. Any other CLI — Codex, Gemini
   CLI, Kimi Code, `hermes`, `pi` — points `role.llm_sandbox` at an API
   entry; see [Code Sandbox](code-sandbox.md#failure-modes).
 - **Latency.** Process launch plus model call. Point `llm_auxiliary` at

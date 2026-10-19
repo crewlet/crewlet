@@ -372,7 +372,8 @@ agent-mode entry) would fall to it on a catalogue offering more than one cell
 needs none — as long as *something* names a cell, since a backend is only
 built for a cell that is reached.
 
-Coding-agent choice: **OpenCode** is provider-agnostic (reuses the key of
+Coding-agent choice: **OpenCode** — version 2, the `@opencode/cli` package,
+in the box — is provider-agnostic (reuses the key of
 any `anthropic`, `openai` or OpenAI-compatible provider you already
 configured — no extra secret — and runs an `opencode`
 [`cli-agent`](../concepts/subscription-llm-backends.md) entry);

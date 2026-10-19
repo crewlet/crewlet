@@ -1458,6 +1458,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		if err != nil {
 			return nil, err
 		}
+		company.restoreBundles(ctx)
 		// STAMPED ONCE, as it is built, with the activation the caller
 		// says this company came from — zero for a file no activation has
 		// named yet. See [stampActivation].
