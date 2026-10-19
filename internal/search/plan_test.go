@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // EVERY INDEX ON THE VECTOR TABLES SERVES A QUERY THIS PACKAGE ISSUES, and the
@@ -35,7 +36,8 @@ import (
 // on a corpus large enough that the planner has a real choice. Then the
 // inverse: every index the schema declares must appear in at least one of
 // those plans, or it is a copy of the row order nobody reads and a trap the
-// planner can still fall into.
+// planner can still fall into. And no plan answers a per-row aggregate from
+// its whole child table ([refuseUnnested]).
 func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
 	const dim, model = 32, "plan-embed"
@@ -165,6 +167,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	refuseUnnested(t, plans)
 
 	for name, method := range methods {
 		joined := strings.Join(plans[name], "\n")
@@ -342,6 +345,27 @@ func firstStage(steps []string) string {
 	return ""
 }
 
+// refuseUnnested fails every registered statement whose plan answers a per-row
+// aggregate from its whole child table: a correlated scalar subquery the
+// planner unnested, by its cost guess over a database nobody has ANALYZEd,
+// into one grouped read of every row of the table it counts or bounds
+// ([storetest.Decorrelated], which states the rule). Whether a statement
+// reads its answer's rows or the whole table is then decided by no line of
+// it, and an index or a driver bump can flip it — so the plan is asked, as
+// the tracker's and the knowledge base's gates ask it of theirs, and a
+// statement it fires on is rewritten in a form the rule cannot reach: a
+// minimum or maximum as `ORDER BY … LIMIT 1`, a count read for the rows
+// already in hand by their keys.
+func refuseUnnested(t *testing.T, plans map[string][]string) {
+	t.Helper()
+	for name, steps := range plans {
+		if line, unnested := storetest.Decorrelated(steps); unnested {
+			t.Errorf("%s answers a per-row aggregate from its whole child "+
+				"table (%q):\n%s", name, line, strings.Join(steps, "\n"))
+		}
+	}
+}
+
 // explain runs one statement through EXPLAIN QUERY PLAN.
 func explain(t *testing.T, tx *sql.Tx, statement string, args ...any) ([]string, error) {
 	t.Helper()
@@ -376,7 +400,8 @@ func explain(t *testing.T, tx *sql.Tx, statement string, args ...any) ([]string,
 // A term's posting list is the outer loop and kb_docs is reached per posting
 // by its primary key. Any plan that drives on kb_docs instead walks a bucket
 // range — one sixty-fourth of the corpus, which is far more documents than a
-// term appears in — and probes the postings per document.
+// term appears in — and probes the postings per document. And no plan answers
+// a per-row aggregate from its whole child table ([refuseUnnested]).
 func TestEveryLexicalIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -469,6 +494,7 @@ func TestEveryLexicalIndexServesARegisteredQuery(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	refuseUnnested(t, plans)
 
 	// THE TERM DRIVES, IN BOTH SHAPES. A bucket range the planner can seek
 	// is the one thing that would make kb_docs the outer table, and it
