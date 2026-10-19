@@ -85,7 +85,6 @@ export function DataTab({ detail, store }: { detail: ArtifactDetail; store: Arti
         <SegmentedControl
           semantics="radio"
           activate="manual"
-          size="sm"
           label="What to show"
           value={view}
           onValueChange={(next) => setView(next)}
