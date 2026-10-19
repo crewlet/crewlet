@@ -708,11 +708,14 @@
 .tool-row.failed {
   border-color: color-mix(in srgb, var(--color-feedback-danger) 40%, transparent);
 }
-/* A task's artifacts, the design system's compact cards stacked in the rail. */
+/* A task's artifacts, the design system's compact cards stacked in the rail.
+   ONE TRACK AS WIDE AS THE RAIL: an `auto` track grows to a card's widest
+   content, and a long title cut on one line is as wide as its whole text. */
 .task-rail-artifacts {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--spacing-1);
-  margin: 0;
+  margin: 0 0 var(--spacing-1);
   padding: 0;
   list-style: none;
 }
