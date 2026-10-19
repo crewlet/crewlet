@@ -4734,14 +4734,16 @@ details > summary.int-summary::-webkit-details-marker {
 
 /* ---- The first row: shapes, views, search and Display ------------------- */
 
-/* WHAT IS DRAWN, as one row of underlined tabs — the approved board's second
-   band. It is the top edge of this screen's content on every company, one day
-   old or a thousand, so it is drawn whether or not anybody has saved a view.
+/* WHAT IS DRAWN, as one row: the shapes and the saved views, each a kit
+   segmented well, then the tools. It is the top edge of this screen's content
+   on every company, one day old or a thousand, so it is drawn whether or not
+   anybody has saved a view.
 
    IT WRAPS RATHER THAN SCROLLS. A company's pinned views are a handful, and a
-   row that scrolled would hide the search box and the Display menu at its end —
-   the controls a reader reaches for most — behind a scroll nobody sees. At a
-   phone's width the tabs take one line and the rest wraps under them. */
+   row that scrolled would hide the search box and the Display menu at its end,
+   the controls a reader reaches for most, behind a scroll nobody sees. At a
+   phone's width the shapes and the views share a line and the tools wrap
+   under them. */
 .work-tabs {
   display: flex;
   align-items: center;
@@ -4753,49 +4755,14 @@ details > summary.int-summary::-webkit-details-marker {
   border-bottom: 1px solid var(--color-border-default);
   min-width: 0;
 }
-.work-tabs-group {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--spacing-4);
-  min-width: 0;
+/* A view's name is the reader's own words, so a long one is cut at a width
+   the strip can hold rather than taking the row; its title carries the rest. */
+.work-view-name {
+  display: block;
+  max-width: 200px;
 }
-/* A TAB IS ITS WORD AND ITS UNDERLINE: the pressed one is the ink step up and
-   the rule under it in the primary text colour — where the reader IS, drawn in
-   ink rather than in the accent, which the primary action at the head of the
-   page already spends. */
-.work-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
-  max-width: 220px;
-  padding: 0 2px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: none;
-  color: var(--color-text-tertiary);
-  font: inherit;
-  font-size: var(--font-size-compact);
-  font-weight: var(--font-weight-medium);
-  cursor: pointer;
-  min-width: 0;
-}
-.work-tab:hover {
-  color: var(--color-text-primary);
-}
-.work-tab[aria-pressed="true"] {
-  color: var(--color-text-primary);
-  border-bottom-color: var(--color-text-primary);
-}
-.work-tabs-sep {
-  width: 1px;
-  height: 18px;
-  background: var(--color-border-strong);
-  flex: none;
-}
-/* The inventory, as the strip's last glyph: a square target at the tabs'
-   height, in the tabs' own quiet ink, lifted on hover as a tab is. */
+/* The inventory, as the strip's last glyph: a square target in the strip's
+   own quiet ink, lifted on hover as an option is. */
 .work-strip-more {
   flex: none;
   display: inline-flex;
@@ -4840,29 +4807,6 @@ details > summary.int-summary::-webkit-details-marker {
   flex: 0 1 220px;
   min-width: 140px;
 }
-/* ON A PHONE THE SHAPES ARE ONE LINE THAT SCROLLS, never four and a stray: a
-   wrapped row of five left Table alone under the other four, with the divider
-   hanging at the start of the next line. The row scrolls inside itself, so the
-   page never does; the divider goes, because the views start a line of their
-   own there. */
-@container page (width < 640px) {
-  .work-tabs > .work-tabs-group:first-child {
-    flex-wrap: nowrap;
-    max-width: 100%;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-  .work-tabs > .work-tabs-group:first-child::-webkit-scrollbar {
-    display: none;
-  }
-  .work-tabs-sep {
-    display: none;
-  }
-  .work-tab {
-    flex: none;
-  }
-}
-
 /* ---- The arrangement at the bar's end ------------------------------------ */
 
 .work-arrange {

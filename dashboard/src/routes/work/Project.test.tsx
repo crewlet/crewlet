@@ -288,7 +288,7 @@ test("the work is the lens a project opens on, scoped to this project", async ()
       .getAllByRole("tab")
       .map((el) => el.textContent),
   ).toEqual(["Tasks1212 open", "About", "History", "Files"]);
-  expect(screen.getByRole("button", { name: "All tasks", pressed: true })).toBeTruthy();
+  expect(screen.getByRole("radio", { name: "All tasks", checked: true })).toBeTruthy();
 });
 
 // A LENS IS A SECTION, so it is in the URL: a reader who walked to

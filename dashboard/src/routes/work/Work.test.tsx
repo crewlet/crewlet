@@ -1418,9 +1418,9 @@ test("the first row draws the shape and the menus, the second cuts the answer", 
   await waitFor(() => expect(container.querySelector(".work-bar")).toBeTruthy());
   const tabs = container.querySelector(".work-tabs") as HTMLElement;
   expect(
-    within(within(tabs).getByRole("group", { name: "Draw as" }))
-      .getAllByRole("button")
-      .map((el) => el.textContent),
+    within(within(tabs).getByRole("radiogroup", { name: "Draw as" }))
+      .getAllByRole("radio")
+      .map((el) => el.getAttribute("aria-label")),
   ).toEqual(["List", "Board", "Timeline", "Calendar", "Table"]);
   expect(within(tabs).getByRole("button", { name: "Display" })).toBeTruthy();
   expect(within(tabs).getByRole("searchbox", { name: /key or title/ })).toBeTruthy();
@@ -1442,21 +1442,17 @@ test("the first row draws the shape and the menus, the second cuts the answer", 
   expect(within(bar).queryByLabelText("Assignee")).toBeNull();
 });
 
-// ON A PHONE THE BAR'S RUN AND THE SHAPES SCROLL, AND SAY SO: the edge with
-// more past it carries the attribute the sheet fades — a control cut at the
-// edge ("Ta", "No g") with nothing to say more was past it read as a broken
-// label. The RUN fades, never the sticky band it sits on.
+// ON A PHONE THE BAR'S RUN SCROLLS, AND SAYS SO: the edge with more past it
+// carries the attribute the sheet fades, because a control cut at the edge
+// ("No g") with nothing to say more was past it read as a broken label. The
+// RUN fades, never the sticky band it sits on. (The shapes no longer scroll:
+// drawn as glyphs in the kit's segmented row they fit on a phone's line.)
 test("a list scroller wider than its box marks the edge with more past it", async () => {
   const had = {
     scroll: Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollWidth"),
     client: Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth"),
   };
-  const widths = (el: HTMLElement) =>
-    el.classList.contains("work-bar-run")
-      ? [745, 356]
-      : el.classList.contains("work-tabs-group")
-        ? [381, 356]
-        : [0, 0];
+  const widths = (el: HTMLElement) => (el.classList.contains("work-bar-run") ? [745, 356] : [0, 0]);
   Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
     configurable: true,
     get(this: HTMLElement) {
@@ -1477,9 +1473,6 @@ test("a list scroller wider than its box marks the edge with more past it", asyn
       expect(container.querySelector(".work-bar-run")?.hasAttribute("data-more-end")).toBe(true),
     );
     expect(container.querySelector(".work-bar")?.hasAttribute("data-more-end")).toBe(false);
-    const shapes = screen.getByRole("group", { name: "Draw as" });
-    expect(shapes.hasAttribute("data-more-end")).toBe(true);
-    expect(shapes.hasAttribute("data-more-start")).toBe(false);
   } finally {
     for (const [key, d] of [
       ["scrollWidth", had.scroll],
@@ -1573,10 +1566,10 @@ test("the strip holds what somebody saved, never the five shapes", async () => {
   await waitFor(() => expect(screen.getByText("Overdue, by owner")).toBeTruthy());
   // THE VIEWS THIS READER PINNED, behind the container's own list — and not
   // the ones they did not, which are one link away in the inventory.
-  const strip = screen.getByRole("group", { name: "Saved views" });
+  const strip = screen.getByRole("radiogroup", { name: "Saved views" });
   expect(
     within(strip)
-      .getAllByRole("button")
+      .getAllByRole("radio")
       .map((el) => el.textContent),
   ).toEqual(["All tasks", "Overdue, by owner"]);
 });
@@ -1643,7 +1636,7 @@ test("a container with no default view opens on the list", async () => {
   expect(asked(query).group_by).toBeUndefined();
   expect(asked(query).group_limit).toBeUndefined();
   // And the shape row says which shape is on without anything opening.
-  expect(screen.getByRole("button", { name: "List", pressed: true })).toBeTruthy();
+  expect(screen.getByRole("radio", { name: "List", checked: true })).toBeTruthy();
   expect(container.querySelector(".work-board")).toBeNull();
 });
 
@@ -1712,7 +1705,7 @@ test("the strip and its way into the inventory survive a company that saved noth
   serving({ work_items: { items: [], groups: [], complete: true } });
   mountWork();
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: "All tasks", pressed: true })).toBeTruthy(),
+    expect(screen.getByRole("radio", { name: "All tasks", checked: true })).toBeTruthy(),
   );
   // A REAL ANCHOR, middle-clickable like every other way out of a screen.
   const more = screen.getByRole("link", { name: "All saved views" });
@@ -1721,7 +1714,7 @@ test("the strip and its way into the inventory survive a company that saved noth
   // AND NO COUNT ON THE CONTAINER TAB. The engine's total is over the FILTER
   // rather than over the container, so a number here would read as the
   // container's size and be the size of whatever is narrowed.
-  expect(screen.getByRole("button", { name: "All tasks" }).textContent).toBe("All tasks");
+  expect(screen.getByRole("radio", { name: "All tasks" }).textContent).toBe("All tasks");
 });
 
 // (a) A NARROWING THAT MATCHED NOTHING CARRIES THE CONTROL THAT REMOVES IT,

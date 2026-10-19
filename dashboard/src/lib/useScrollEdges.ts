@@ -3,7 +3,7 @@
  * attributes the sheet fades an edge on (`data-more-start`, `data-more-end`).
  *
  * A ROW THAT SCROLLS WITH NO SCROLLBAR HAS TO SAY SO. On a phone the page's
- * controls, a list's shapes and its filter bar each take one line and scroll
+ * controls and a list's filter bar each take one line and scroll
  * rather than stack, with the bar hidden because it would sit on the text —
  * and a control cut at the edge ("All wo", "Ta", "No g") read as a broken label
  * rather than as more to swipe to. A fade on the edge that has more is the
