@@ -1120,14 +1120,14 @@ func TestASeatsNodeReadsAndStoresThroughTheDataNodeItNames(t *testing.T) {
 	base := []string{"doctor", "claude", "-no-smoke", "-company", company, "-config", cfg}
 
 	var out, notes bytes.Buffer
-	if err := runLLM(tokenEnviron("ops-token"), base, &out, &notes); err == nil ||
+	if err := runLLM(tokenEnviron("ops-token"), base, strings.NewReader(""), &out, &notes); err == nil ||
 		!strings.Contains(err.Error(), "store.scratch") || !strings.Contains(err.Error(), "-api") {
 		t.Fatalf("a seats node with no node named = %v, want a refusal naming store.scratch and -api", err)
 	}
 
 	out.Reset()
 	if err := runLLM(tokenEnviron("ops-token"), append(base, "-api", node.server.URL),
-		&out, &notes); err != nil {
+		strings.NewReader(""), &out, &notes); err != nil {
 		t.Fatalf("doctor through the named data node: %v\n%s", err, out.String())
 	}
 	if !strings.Contains(out.String(), "problems      : none\n") {
