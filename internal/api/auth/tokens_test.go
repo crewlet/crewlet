@@ -175,8 +175,7 @@ func TestATokenActsAsItsOwnerWithTheNarrowestOfThreeGrantSets(t *testing.T) {
 	minted.row.Grants = []iam.Grant{iam.GrantAdmin}
 	got, _ = present(t, minted.guard(nil), http.MethodGet, "/agents",
 		minted.presented.Value())
-	if !slices.Equal(got.principal.Grants, append([]iam.Grant{iam.GrantAdmin},
-		iam.Apps...)) {
+	if !slices.Equal(got.principal.Grants, iam.AllGrants) {
 		t.Errorf("grants %v, want admin and every app it includes",
 			got.principal.Grants)
 	}
