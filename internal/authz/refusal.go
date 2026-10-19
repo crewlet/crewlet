@@ -1,6 +1,8 @@
 package authz
 
 import (
+	"net/http"
+
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/iam"
 )
@@ -71,4 +73,39 @@ func StepUpDetail(d Decision) httpjson.Detail {
 	detail := RefusalDetail(ReasonStepUp, d.Grants)
 	detail[DetailWindow] = string(d.Recency)
 	return detail
+}
+
+// RefusalFields is how one refusal the authority table made is answered: its
+// status, its code and the machine-readable fields that say why.
+//
+//   - A STALE PROOF is `step_up_required`, carrying the window it needs
+//     ([StepUpDetail]): the rule admitted the caller, and confirming who they
+//     are and replaying the request is the whole remedy.
+//   - A MACHINE TOKEN on a verb that needs a person present is
+//     `token_refused`: no permission on the token would admit it.
+//   - Every other refusal is `unauthorized`, carrying the rule's reason and
+//     the grants that would have admitted the caller ([RefusalDetail]).
+//
+// ONE MAPPING FOR EVERY SURFACE, [EnvelopeRefusal] included, and the reason it
+// is a function of its own: a surface that answers a refusal with fields of its
+// own beside the rule's — the parts of a write it refused, the sentence a
+// tool's gate worded — used to spell the code itself, and the copies drifted:
+// the operator surface answered a token's refusal `unauthorized`, whose
+// sentence sends a caller to ask for a permission no token could carry. Such a
+// surface takes the three values here and adds its fields to the detail.
+//
+// FOR A REFUSAL, never an unknown: a decision this node could not reach is not
+// a 403 at all, and every caller answers [Decision.Unknown] first — see
+// [EnvelopeRefusal].
+func RefusalFields(d Decision) (status int, code httpjson.Code, detail httpjson.Detail) {
+	switch d.Reason {
+	case ReasonStepUp:
+		return http.StatusForbidden, httpjson.CodeStepUpRequired, StepUpDetail(d)
+	case ReasonTokenRefused:
+		return http.StatusForbidden, httpjson.CodeTokenRefused,
+			RefusalDetail(d.Reason, d.Grants)
+	default:
+		return http.StatusForbidden, httpjson.CodeUnauthorized,
+			RefusalDetail(d.Reason, d.Grants)
+	}
 }

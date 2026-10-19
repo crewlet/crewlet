@@ -61,3 +61,60 @@ func TestATokenRefusedForWantOfAPersonIsToldSo(t *testing.T) {
 		})
 	}
 }
+
+// EVERY REFUSAL IS ANSWERED BY ONE MAPPING.
+//
+// [authz.RefusalFields] is how a surface that adds fields of its own to a
+// refusal learns the status, the code and the rule's fields; [EnvelopeRefusal]
+// is the surface that adds none. The two must write the same answer for every
+// reason the table refuses by, or a refusal reads one way at the router and
+// another at the surface that decided it after reading a row — which is how
+// the operator surface came to answer a machine token's refusal `unauthorized`.
+// Mutation: change the code one of them gives any reason and its case fails.
+func TestRefusalFieldsIsWhatEnvelopeRefusalWrites(t *testing.T) {
+	t.Parallel()
+	admissions := map[authz.Reason]bool{
+		authz.ReasonGrant: true, authz.ReasonSelf: true, authz.ReasonAuthor: true,
+		authz.ReasonLead: true, authz.ReasonEverybody: true, authz.ReasonAsked: true,
+	}
+	codes := map[authz.Reason]httpjson.Code{
+		authz.ReasonStepUp:       httpjson.CodeStepUpRequired,
+		authz.ReasonTokenRefused: httpjson.CodeTokenRefused,
+	}
+	refusals := 0
+	for _, reason := range authz.Reasons {
+		if admissions[reason] {
+			continue
+		}
+		refusals++
+		t.Run(string(reason), func(t *testing.T) {
+			t.Parallel()
+			d := authz.Decision{Reason: reason, Grants: []iam.Grant{iam.GrantAdmin}}
+			if reason == authz.ReasonStepUp {
+				d.Recency = iam.RecencyStepUp
+			}
+			router := httptest.NewRecorder()
+			authz.EnvelopeRefusal(router, nil, authz.Policy{}, d)
+			status, code, detail := authz.RefusalFields(d)
+			surface := httptest.NewRecorder()
+			httpjson.FailWithFields(surface, status, code, detail)
+			want, ok := codes[reason]
+			if !ok {
+				want = httpjson.CodeUnauthorized
+			}
+			if status != http.StatusForbidden || code != want {
+				t.Errorf("RefusalFields(%s) = %d %s, want 403 %s", reason, status,
+					code, want)
+			}
+			if router.Code != surface.Code ||
+				router.Body.String() != surface.Body.String() {
+				t.Errorf("the router answers %d %s and the mapping %d %s",
+					router.Code, router.Body, surface.Code, surface.Body)
+			}
+		})
+	}
+	if refusals < 10 {
+		t.Fatalf("held %d refusal reasons; a walk that stopped reading the "+
+			"table certifies nothing", refusals)
+	}
+}
