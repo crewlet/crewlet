@@ -25,7 +25,8 @@
  */
 
 import { useEffect, useId, useMemo, useState } from "react";
-import { Button, Document, Skeleton, TabPanel, Tabs } from "@crewlethq/ui";
+import { Document, Skeleton, TabPanel, Tabs } from "@crewlethq/ui";
+import { FileTextGlyph, PencilGlyph } from "@crewlethq/icons/glyphs";
 import type { ArtifactDetail, ArtifactDoc, ArtifactDocAnswer } from "~/protocol/index.ts";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -39,6 +40,7 @@ import { currentTab, docImagePaths, tabImages, tabRegion } from "~/lib/artifacts
 import { useVersionImages } from "~/lib/artifacts/versionImages.ts";
 import { DocEditor } from "./DocEditor.tsx";
 import type { PresenceReport } from "./presence.ts";
+import { useKindControls } from "./chrome.tsx";
 
 export function DocView({
   detail,
@@ -119,10 +121,41 @@ function Doc({
     </Document>
   );
 
+  // EDIT AND PRINT ARE THE PAGE BAR'S (`chrome.tsx`): Edit labelled at its
+  // end while the doc is read, Print in its More. While editing, the editor's
+  // own Save and Cancel are the controls, and the bar offers neither.
+  useKindControls(
+    primary && !editing
+      ? {
+          ...(editable
+            ? {
+                tools: [
+                  {
+                    key: "edit",
+                    label: "Edit",
+                    icon: <PencilGlyph size="sm" />,
+                    labelled: true,
+                    onSelect: () => setEditing(true),
+                  },
+                ],
+              }
+            : {}),
+          menu: [
+            {
+              key: "print",
+              label: "Print or save as PDF",
+              icon: <FileTextGlyph size="sm" />,
+              onSelect: () => window.print(),
+            },
+          ],
+        }
+      : null,
+  );
+
   return (
     <div className="doc-view">
-      <div className="doc-bar">
-        {many && !editing && (
+      {many && !editing && (
+        <div className="doc-bar">
           <Tabs
             variant="underline"
             size="sm"
@@ -132,20 +165,8 @@ function Doc({
             value={tab.path}
             onValueChange={choose}
           />
-        )}
-        <span className="doc-bar-actions">
-          {editable && !editing && (
-            <Button size="small" variant="secondary" onClick={() => setEditing(true)}>
-              Edit
-            </Button>
-          )}
-          {!editing && (
-            <Button size="small" variant="ghost" onClick={() => window.print()}>
-              Print
-            </Button>
-          )}
-        </span>
-      </div>
+        </div>
+      )}
       {editing ? (
         <DocEditor
           detail={detail}

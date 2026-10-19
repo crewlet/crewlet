@@ -1,5 +1,5 @@
 /**
- * Two versions of a deck, compared slide by slide: the History tab's By slide
+ * Two versions of a deck, compared slide by slide: the History panel's By slide
  * lens. Both versions' canonical trees are read, paired by slide id
  * (`lib/artifacts/deckCompare.ts`) and drawn side by side by uilet's
  * `SlideCompare`, each version's pictures from its own files.

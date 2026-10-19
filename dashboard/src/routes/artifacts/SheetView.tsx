@@ -57,7 +57,7 @@ export function sheetCollections(collections: readonly DataCollection[]): DataCo
 }
 
 /**
- * The collection on show, from the address (`sheet=`): the View and Data tabs
+ * The collection on show, from the address (`sheet=`): the artifact's view and its Data panel
  * read the same one, and the first collection is the default the address
  * leaves out.
  */
@@ -153,8 +153,8 @@ export function SheetView({
       <p className="artifact-note">
         This sheet has no columns yet.{" "}
         {roleIncludes(role, "editor")
-          ? "Add a collection on the Data tab."
-          : "Its editors add them on the Data tab."}
+          ? "Add a collection in the Data panel."
+          : "Its editors add them in the Data panel."}
       </p>
     );
   }

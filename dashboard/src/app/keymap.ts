@@ -43,7 +43,16 @@ import { WORKSPACES } from "./nav.ts";
 
 /** Where a row is live. See the file's doc. */
 export type KeyScope =
-  "frame" | "list" | "object" | "peek" | "canvas" | "draft" | "compose" | "search" | "layer";
+  | "frame"
+  | "list"
+  | "object"
+  | "peek"
+  | "artifact"
+  | "canvas"
+  | "draft"
+  | "compose"
+  | "search"
+  | "layer";
 
 /** The scopes in the order the legend draws them, with what each heading says. */
 export const KEY_SCOPES: readonly { scope: KeyScope; title: string }[] = [
@@ -51,11 +60,15 @@ export const KEY_SCOPES: readonly { scope: KeyScope; title: string }[] = [
   { scope: "list", title: "In a list" },
   { scope: "peek", title: "With a peek open" },
   { scope: "object", title: "On a page with tabs" },
+  { scope: "artifact", title: "On an open artifact" },
   { scope: "canvas", title: "On a chart" },
   { scope: "draft", title: "Editing a draft: the org builder, or Home while it is arranged" },
   { scope: "compose", title: "Writing a reply" },
   { scope: "search", title: "In search" },
-  { scope: "layer", title: "In a dialog, a menu or the navigation drawer" },
+  {
+    scope: "layer",
+    title: "In a dialog, a menu, the navigation drawer or an artifact's panel",
+  },
 ];
 
 /** One press: a key, its modifiers, and the prefix it follows if it is a sequence. */
@@ -211,6 +224,46 @@ const PAGE: KeyRow[] = [
     whileTyping: true,
   },
   { id: "tab", scope: "object", presses: DIGITS, does: "Go to that tab", by: "dashboard" },
+  // AN OPEN ARTIFACT'S PANELS, each a letter that opens it and closes it
+  // again (`routes/artifacts/ArtifactPage.tsx`). Its first letter wherever it
+  // is free; Escape from inside a panel closes it too, the panel's own key
+  // (the kit's `ArtifactPanel`), listed under the layer's Escape because it
+  // is the same gesture.
+  {
+    id: "artifact.details",
+    scope: "artifact",
+    presses: [{ key: "i" }],
+    does: "Show or hide its details",
+    by: "dashboard",
+  },
+  {
+    id: "artifact.history",
+    scope: "artifact",
+    presses: [{ key: "h" }],
+    does: "Show or hide its versions and history",
+    by: "dashboard",
+  },
+  {
+    id: "artifact.data",
+    scope: "artifact",
+    presses: [{ key: "d" }],
+    does: "Show or hide its data, where it keeps any",
+    by: "dashboard",
+  },
+  {
+    id: "artifact.people",
+    scope: "artifact",
+    presses: [{ key: "p" }],
+    does: "Show or hide who is here",
+    by: "dashboard",
+  },
+  {
+    id: "artifact.share",
+    scope: "artifact",
+    presses: [{ key: "s" }],
+    does: "Share it",
+    by: "dashboard",
+  },
   {
     id: "canvas.in",
     scope: "canvas",

@@ -1,0 +1,28 @@
+/**
+ * A kind's view with the page bar its controls are published to, for a suite
+ * that presses them: the deck's Edit, Grid and Present, the doc's Edit. The
+ * real `ArtifactBar` draws what the view publishes (`routes/artifacts/
+ * chrome.tsx`), so a suite presses the controls a reader presses.
+ */
+
+import { useState, type ReactNode } from "react";
+import { ArtifactBar } from "@crewlethq/ui";
+import { KindControlsSink, type KindControls } from "~/routes/artifacts/chrome.tsx";
+
+export function WithKindBar({ children }: { children: ReactNode }) {
+  const [controls, setControls] = useState<KindControls | null>(null);
+  return (
+    <KindControlsSink.Provider value={setControls}>
+      <ArtifactBar
+        as="div"
+        title="Artifact"
+        kind="slides"
+        kindLabel="Artifact"
+        {...(controls?.modes ? { modes: controls.modes } : {})}
+        kindTools={controls?.tools ?? []}
+        menu={controls?.menu ?? []}
+      />
+      {children}
+    </KindControlsSink.Provider>
+  );
+}

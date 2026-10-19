@@ -10462,13 +10462,22 @@ a.live-row:focus-visible {
   padding-block: var(--spacing-6);
 }
 
-/* AN ARTIFACT'S PAGE is the frame's object page: the header, the tabs, then
-   the body, which a page or a sheet fills to the view's own height so the
-   artifact scrolls inside itself and the document does not. */
+/* AN ARTIFACT'S PAGE is the artifact, under one slim bar the page draws in
+   the frame's place (`OwnPageHeader`, the kit's `ArtifactBar`). It asks the
+   frame for the window's height (`useFillScreen`) and takes the content
+   column edge to edge, so the workspace (the body and the one panel beside
+   it) runs from the bar to the sheet's bottom edge: the body scrolls inside
+   itself, and a panel beside it stays in view however far it is read. */
 .artifact-page {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-3);
+  height: calc(100% + var(--spacing-5) * 2);
+  min-width: 0;
+  min-height: 0;
+  margin: calc(-1 * var(--spacing-5));
+}
+.artifact-loading,
+.artifact-trashed {
   min-width: 0;
 }
 .artifact-actions {
@@ -10477,26 +10486,82 @@ a.live-row:focus-visible {
   align-items: center;
   gap: var(--spacing-2);
 }
-.artifact-presence {
-  margin-inline-end: var(--spacing-1);
-}
-.artifact-bar {
-  display: flex;
-  flex-wrap: wrap;
+/* What a trashed artifact's bar says in its version's place. */
+.artifact-trashed-chip {
+  display: inline-flex;
   align-items: center;
-  gap: var(--spacing-2) var(--spacing-3);
-  padding: var(--spacing-2) var(--spacing-3);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-subtle);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-compact);
+  height: var(--size-target-min);
+  padding: 0 var(--spacing-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-feedback-danger-soft);
+  color: var(--color-feedback-danger-ink);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
 }
+/* THE PAGE'S NOTICES are banners across the top of the workspace, each one
+   line with its one action, and none of them a box that pushes the artifact
+   down by a card's height. */
+.artifact-notices,
+.artifact-follow {
+  flex: none;
+}
+.artifact-workspace {
+  flex: 1 1 auto;
+}
+/* THE BODY IS THE SCROLLER, and so it is the size container its views
+   measure the view by (`100cqb`), as the frame's own scroller is. A page's
+   frame takes the body edge to edge; every native kind keeps the screen's
+   padding around it. */
 .artifact-body {
+  container: scroller / size;
+  --sticky-top: 0px;
+  /* THE VIEW A KIND DRAWS IN: the body's height inside its padding. A view
+     that fills the screen subtracts only its own bar from it, since nothing
+     of the page's stands above it any more. */
+  --artifact-view: calc(100cqb - 2 * var(--spacing-5));
   display: flex;
   flex-direction: column;
   gap: var(--spacing-4);
+  padding: var(--spacing-5);
+  scrollbar-gutter: stable;
+}
+.artifact-body--html {
+  padding: 0;
+  gap: 0;
+}
+.artifact-body--html > .artifact-frame-box {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.artifact-body--html .artifact-frame,
+.artifact-body--html .artifact-frame-skeleton {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 20rem;
+}
+.artifact-body--html .artifact-frame-box > .artifact-note {
+  padding: var(--spacing-2) var(--spacing-4);
+}
+/* A PANEL'S BODY is the screen's measuring stick for what it holds, as the
+   content column is for a screen: History's list, the data's grid and the
+   settings' forms were written to `@container page` and fold to one column
+   in the panel's width. */
+.artifact-panel-body {
+  container: page / inline-size;
   min-width: 0;
+}
+/* The details: the artifact's own sentence, then its facts and the link. */
+.artifact-details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+.artifact-details-description {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-compact);
+  line-height: var(--font-line-height-normal);
 }
 .artifact-note {
   margin: 0;
@@ -10541,11 +10606,6 @@ a.live-row:focus-visible {
 .doc-bar > [role="tablist"] {
   flex: 1 1 20rem;
   min-width: 0;
-}
-.doc-bar-actions {
-  display: flex;
-  gap: var(--spacing-2);
-  margin-left: auto;
 }
 .doc-read {
   display: grid;
@@ -10622,10 +10682,11 @@ a.live-row:focus-visible {
   margin-inline-start: auto;
 }
 /* A GRID IS AS TALL AS ITS ROWS (fit="content") up to what the view holds
-   below the header and the tabs, so twelve rows draw no empty slab under
-   them and Add row sits under the last row on a phone too. */
+   below its own bar (in the Data panel, below the panel's head and the
+   data bar), so twelve rows draw no empty slab under them and Add row sits
+   under the last row on a phone too. */
 .artifact-grid {
-  --crewlet-sheet-max-height: max(24rem, calc(100cqb - var(--sticky-top) - 16rem));
+  --crewlet-sheet-max-height: max(16rem, calc(var(--artifact-view, 100cqb - 8rem) - 3rem));
 }
 
 /* A HISTORY IS ONE LINE PER CHANGE: who, what, when, and its one action. */
@@ -10911,28 +10972,6 @@ a.live-row:focus-visible {
   font: inherit;
 }
 
-/* The People rail (uilet's PeopleRail, given `.artifact-people` for its place
-   here) beside an artifact's body: a column at the right where the page is
-   wide, and above the body on a phone, where a reader follows a presenter
-   from it. */
-.artifact-with-rail {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem);
-  gap: var(--spacing-4);
-  align-items: start;
-}
-.artifact-with-rail > .artifact-people {
-  order: 2;
-}
-@container page (width < 860px) {
-  .artifact-with-rail {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .artifact-with-rail > .artifact-people {
-    order: 0;
-  }
-}
-
 /* ---- a slide deck (routes/artifacts/SlidesView.tsx) ---------------------- */
 
 .slides-view {
@@ -10941,13 +10980,6 @@ a.live-row:focus-visible {
   gap: var(--spacing-3);
   min-width: 0;
 }
-.slides-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-2);
-}
-
 /* THE EDITOR: the filmstrip beside the stage, under it on a phone. */
 .slides-edit {
   display: grid;
@@ -10960,7 +10992,7 @@ a.live-row:focus-visible {
   grid-column: 1 / -1;
 }
 .slides-strip {
-  max-height: max(24rem, calc(100cqb - var(--sticky-top) - 12rem));
+  max-height: max(24rem, var(--artifact-view, 100cqb));
   overflow: auto;
 }
 .slides-main {
@@ -11054,7 +11086,7 @@ a.live-row:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 .slides-presenter {
-  height: max(30rem, calc(100cqb - var(--sticky-top) - 10rem));
+  height: max(30rem, var(--artifact-view, 100cqb));
 }
 
 /* A SLIDE IS AUTHORED CONTENT, laid out exactly as the slide format says
@@ -11264,7 +11296,7 @@ a.live-row:focus-visible {
 }
 .design-canvas,
 .design-skeleton {
-  height: max(28rem, calc(100cqb - var(--sticky-top) - 14rem));
+  height: max(28rem, calc(var(--artifact-view, 100cqb) - 3.5rem));
   min-width: 0;
 }
 @media (width < 640px) {

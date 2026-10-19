@@ -1,5 +1,5 @@
 /**
- * The History tab's two dialogs: naming a version opens on that version's own
+ * The History panel's two dialogs: naming a version opens on that version's own
  * label (and Save cannot clear it unchanged), and Restore publishes nothing
  * until the reader confirms it.
  */
@@ -58,7 +58,7 @@ const versions = [version(3), version(2, "Board review"), version(1)];
 let writes: { method: string; path: string }[] = [];
 
 beforeEach(() => {
-  location.hash = `#/artifacts/${ID}?tab=history`;
+  location.hash = `#/artifacts/${ID}?panel=history`;
   writes = [];
   Object.defineProperty(globalThis, "fetch", {
     writable: true,
