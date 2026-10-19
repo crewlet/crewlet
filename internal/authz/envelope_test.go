@@ -21,9 +21,10 @@ import (
 // as `detail` then contradicted the `message` beside it, so the refusal is a
 // code of its own whose ONE sentence says so, and it carries no second one.
 // The CONTROL is a refusal for a missing permission, which the `unauthorized`
-// code's own sentence describes — compared with the code's sentence rather
-// than with words, which belong to internal/api/httpjson. Mutation: answer the
-// token's refusal `unauthorized` and its message is the permission's.
+// code's sentence for that reason describes — compared with the envelope's own
+// sentence for the same refusal rather than with words, which belong to
+// internal/api/httpjson. Mutation: answer the token's refusal `unauthorized`
+// and its message is the permission's.
 func TestATokenRefusedForWantOfAPersonIsToldSo(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -36,7 +37,7 @@ func TestATokenRefusedForWantOfAPersonIsToldSo(t *testing.T) {
 			httpjson.CodeTokenRefused, httpjson.CodeTokenRefused.Message()},
 		{"a missing permission (the control)", authz.Decision{Reason: authz.ReasonNoGrant,
 			Grants: []iam.Grant{iam.GrantAdmin}},
-			httpjson.CodeUnauthorized, httpjson.CodeUnauthorized.Message()},
+			httpjson.CodeUnauthorized, "(Admin)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -48,9 +49,11 @@ func TestATokenRefusedForWantOfAPersonIsToldSo(t *testing.T) {
 			}
 			message, _ := body["message"].(string)
 			_, second := body["detail"]
+			sentence := httpjson.Envelope(tc.code,
+				authz.RefusalDetail(tc.d.Reason, tc.d.Grants))["message"]
 			if rec.Code != http.StatusForbidden || body["error"] != string(tc.code) ||
 				body[authz.DetailReason] != string(tc.d.Reason) ||
-				message != tc.code.Message() || !strings.Contains(message, tc.want) ||
+				message != sentence || !strings.Contains(message, tc.want) ||
 				second {
 				t.Errorf("answered %d %v, want a 403 %s whose one sentence says %q",
 					rec.Code, body, tc.code, tc.want)
