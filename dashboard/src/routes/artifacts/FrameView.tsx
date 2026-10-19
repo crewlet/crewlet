@@ -38,6 +38,7 @@ import { useRest } from "~/lib/useRest.ts";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
 import { useDensity, usePalette, useTheme } from "~/lib/prefs.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { useOwned } from "~/lib/useOwned.ts";
 import { mintFrame, reportReady } from "~/lib/artifacts/api.ts";
 import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import { useDataStore } from "~/lib/artifacts/useDataStore.ts";
@@ -137,27 +138,31 @@ export function FrameView({
   const viewer = useViewer();
   const people = useArtifactPeople();
   const [clientID] = useState(() => `page-${rowID()}`);
-  const host = useMemo(() => {
-    if (!store && needsData) return null;
-    return new PageHost({
-      artifact: detail.id,
-      version,
-      capabilities,
-      socket,
-      store,
-      clientID,
-      newKey: () => newActOpID(),
-      openLink: (url) => new Promise<boolean>((answer) => setLink({ url, answer })),
-      ...(canPrint ? { print: () => printRef.current?.() ?? Promise.resolve(false) } : {}),
-      setPresence: (activity, focus) => {
-        const { version: _v, ...rest } = focus;
-        presence.at(Object.keys(rest).length > 0 ? rest : null, activity === "editing");
-      },
-    });
+  // THE HOST IS OWNED BY AN EFFECT: it hears the page's store from the moment
+  // it is made, so a memo would hand back one a cleanup had stopped.
+  const host = useOwned(
+    () =>
+      !store && needsData
+        ? null
+        : new PageHost({
+            artifact: detail.id,
+            version,
+            capabilities,
+            socket,
+            store,
+            clientID,
+            newKey: () => newActOpID(),
+            openLink: (url) => new Promise<boolean>((answer) => setLink({ url, answer })),
+            ...(canPrint ? { print: () => printRef.current?.() ?? Promise.resolve(false) } : {}),
+            setPresence: (activity, focus) => {
+              const { version: _v, ...rest } = focus;
+              presence.at(Object.keys(rest).length > 0 ? rest : null, activity === "editing");
+            },
+          }),
+    (made) => made.stop(),
     // The presence report is read through its stable `at`.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detail.id, version, capabilities, socket, store, needsData, clientID, canPrint]);
-  useEffect(() => () => host?.stop(), [host]);
+    [detail.id, version, capabilities, socket, store, needsData, clientID, canPrint],
+  );
 
   // WHO IS VIEWING, and the people a page may name, to a page that declared
   // it may know: display facts only, from the chart this tab holds.
