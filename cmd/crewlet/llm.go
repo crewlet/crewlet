@@ -158,7 +158,7 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 
 	switch sub {
 	case "list":
-		return listLLMProviders(providers, stdout)
+		return listLLMProviders(ctx, providers, stdout, stderr)
 	case "login":
 		return loginLLM(ctx, environ, loginRequest{
 			providers: providers, key: key, home: *home,
@@ -292,7 +292,18 @@ func providerKeys(providers []cliAgentProvider) []string {
 	return keys
 }
 
-func listLLMProviders(providers []cliAgentProvider, stdout io.Writer) error {
+// listLLMProviders is `crewlet llm list`: each entry's CLI, model, state
+// directory and how it is signed in.
+//
+// Each entry's configured bundle is RESTORED FIRST, as `doctor` restores it
+// before it diagnoses: the SIGN-IN column is the first route doctor names, and
+// read before the restore it said `none` for a fresh container that doctor —
+// and the engine — would sign in from its bundle. A restore that fails, or a
+// logout that keeps the bundle out, is said on stderr, as `status` says it.
+func listLLMProviders(ctx context.Context, providers []cliAgentProvider, stdout, stderr io.Writer) error {
+	for _, p := range providers {
+		restoreConfiguredBundle(ctx, p.provider, stderr)
+	}
 	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "PROVIDER\tAGENT\tMODEL\tSIGN-IN\tSTATE DIR")
 	for _, p := range providers {

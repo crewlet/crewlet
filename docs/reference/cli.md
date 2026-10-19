@@ -1935,7 +1935,8 @@ resolved in the process running `crewlet llm` — the secret store first, then
 that shell's environment — so run it with the engine's environment to get the
 engine's answer.
 
-`llm list`'s `SIGN-IN` column is the first route `doctor` would name:
+`llm list`'s `SIGN-IN` column is the first route `doctor` would name — both
+restore the entry's configured bundle first, as the engine does:
 `credentials` (files a login wrote), `token` (a headless token), `api key`
 (under `auth.mode: api-key`), `inherited token` or `inherited key` (forwarded
 by `auth.mode: inherit-env`), `environment` (a `cli.env` key), or `none`.
@@ -2016,8 +2017,8 @@ mean to replace it.
 **`logout`** removes the login (and revokes it with the vendor where the CLI
 has a logout of its own), and **records the logout** in the state directory,
 so the configured bundle below is not restored into the directory it emptied —
-not by the engine's next boot or apply, and not by `status`, `export` or
-`doctor`, which each say why instead — until a login is written again with
+not by the engine's next boot or apply, and not by `list`, `status`, `export`
+or `doctor`, which each say why instead — until a login is written again with
 `login`, `-from-host` or `import`. A fresh state directory holds no such record
 and restores the bundle as before, so `logout` names the field or secret that
 retires it when the entry has one.
@@ -2027,7 +2028,7 @@ publishes (never for a revision it refuses), from
 `cli.auth.credential_bundle` or the conventional
 `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` variable — and only into an empty
 credential directory, by the same rule, and never after a `logout` until a
-login is written again. `status`, `export` and `doctor` make
+login is written again. `list`, `status`, `export` and `doctor` make
 the same restore before they look, so they report the login the engine would
 run with; `validate` never writes one. That path authenticates a fresh
 container before its first turn rather than after an operator remembers a

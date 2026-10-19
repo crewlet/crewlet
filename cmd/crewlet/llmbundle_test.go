@@ -159,3 +159,99 @@ func TestALogoutOutlastsTheCommandsThatRestoreTheBundle(t *testing.T) {
 		t.Errorf("a command after the logout restored the login it removed: %q", got)
 	}
 }
+
+// THE COMMANDS THAT ANSWER AS THE ENGINE WOULD RESTORE THE BUNDLE FIRST, on an
+// entry whose state directory is empty — a fresh container before its engine
+// first boots. Each reports on the login the engine would run with, and the
+// engine restores the configured bundle before it runs anything, so a command
+// that looked without restoring reported a different entry: `list` said
+// `none` where `doctor` reported credential files, against the docs' promise
+// that the two cannot disagree.
+//
+// Mutation: drop the restore from any one of them, and its case is red.
+func TestTheCommandsThatAnswerAsTheEngineRestoreTheBundleFirst(t *testing.T) {
+	for _, c := range []struct {
+		command string
+		extra   []string
+		// fails is whether the command reports a problem anyway: doctor
+		// measures `true`, which is no CLI.
+		fails bool
+		say   string
+	}{
+		{command: "status"},
+		{command: "export"},
+		{command: "doctor", extra: []string{"-no-smoke"}, fails: true, say: "credential files in"},
+		{command: "list", say: "credentials"},
+	} {
+		t.Run(c.command, func(t *testing.T) {
+			flags, login := bundledEntry(t, llmBundle(t, `{"token":"k-bundled"}`))
+			var out, errOut bytes.Buffer
+			args := []string{c.command}
+			if c.command != "list" {
+				args = append(args, "sub")
+			}
+			args = append(append(args, c.extra...), flags...)
+			err := runLLM(noEnviron, args, &out, &errOut)
+			if (err != nil) != c.fails {
+				t.Fatalf("%s: %v\n%s%s", c.command, err, out.String(), errOut.String())
+			}
+			if got := readLogin(t, login); got != `{"token":"k-bundled"}` {
+				t.Errorf("%s left %q, want the configured bundle restored before it answered", c.command, got)
+			}
+			if c.say != "" && !strings.Contains(out.String(), c.say) {
+				t.Errorf("%s does not report the restored login (%q):\n%s", c.command, c.say, out.String())
+			}
+		})
+	}
+}
+
+// THE COMMANDS THAT REPLACE OR REMOVE THE LOGIN DO NOT RESTORE IT FIRST. A
+// login restored before `login` ran would be seeded into the sign-in and
+// carried back as the operator's own, so a sign-in the operator backed out of
+// would report a login written; one restored before `import` would refuse the
+// operator's bundle as a login already present. A logout leaves no login
+// whatever it began from.
+//
+// Mutation: restore the bundle before `login` or `import`, and its case is red.
+func TestTheCommandsThatReplaceTheLoginDoNotRestoreItFirst(t *testing.T) {
+	t.Run("login", func(t *testing.T) {
+		flags, login := bundledEntry(t, llmBundle(t, `{"token":"k-bundled"}`))
+		_, _, err := runSub(t, flags, "login")
+		if err == nil || !strings.Contains(err.Error(), "without leaving a login") {
+			t.Errorf("a login whose CLI stored nothing = %v, want it refused as leaving no login", err)
+		}
+		if got := readLogin(t, login); got != "" {
+			t.Errorf("login restored the configured bundle: %q", got)
+		}
+	})
+	t.Run("import", func(t *testing.T) {
+		flags, login := bundledEntry(t, llmBundle(t, `{"token":"k-bundled"}`))
+		stdin := filepath.Join(t.TempDir(), "bundle")
+		if err := os.WriteFile(stdin, []byte(llmBundle(t, `{"token":"k-imported"}`)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f, err := os.Open(stdin) //nolint:gosec // the test's own file
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = f.Close() }()
+		was := os.Stdin
+		os.Stdin = f
+		defer func() { os.Stdin = was }()
+		if _, stderr, err := runSub(t, flags, "import"); err != nil {
+			t.Fatalf("import: %v (%s)", err, stderr)
+		}
+		if got := readLogin(t, login); got != `{"token":"k-imported"}` {
+			t.Errorf("import left %q, want the operator's bundle rather than the configured one", got)
+		}
+	})
+	t.Run("logout", func(t *testing.T) {
+		flags, login := bundledEntry(t, llmBundle(t, `{"token":"k-bundled"}`))
+		if _, stderr, err := runSub(t, flags, "logout"); err != nil {
+			t.Fatalf("logout: %v (%s)", err, stderr)
+		}
+		if got := readLogin(t, login); got != "" {
+			t.Errorf("logout left a login: %q", got)
+		}
+	})
+}

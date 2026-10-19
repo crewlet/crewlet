@@ -1215,7 +1215,7 @@ much as a document — and an export holding no login never replaces one.
 it), and while that record stands the entry's configured
 [bundle](#4-move-a-login-onto-another-host) is not restored into the directory
 the logout emptied — not at the engine's next boot or apply, and not by
-`status`, `export` or `doctor`, each of which says so, naming the logout and
+`list`, `status`, `export` or `doctor`, each of which says so, naming the logout and
 how to sign in again (the engine as a `cli_agent_bundle_withheld` warning).
 The next `crewlet llm login`, `-from-host` or `import` ends it. A **fresh**
 state directory holds no such record, so a container that comes up on an empty
@@ -1312,8 +1312,8 @@ whenever its own `credentials/` directory is empty and
 nobody has [logged the entry out](#1-broker-the-vendors-own-login-any-cli)
 since its last login, so a fresh container on the same store comes up already
 authenticated. `crewlet llm
-status`, `export` and `doctor` restore it first too, so they answer about the
-login the engine would run with; `login`, `logout` and `import` do not, since
+list`, `status`, `export` and `doctor` restore it first too, so they answer about
+the login the engine would run with; `login`, `logout` and `import` do not, since
 each replaces or removes that login. `crewlet validate` never does: checking a
 document writes nothing onto the host.
 It is **that node's** store and nothing else's — the rows do not travel, and a
@@ -2111,8 +2111,9 @@ The `sign-in` line names every route that authenticates the CLI, read off
 the environment the CLI is actually given, after `auth.mode` has set and
 removed what it does — never off the configuration beside it. So a token
 that `auth.mode: api-key` removes is not a sign-in, and `crewlet llm list`'s
-`SIGN-IN` column is the first route the line names, so the two commands
-cannot disagree. The routes are credential files in the entry's directory,
+`SIGN-IN` column is the first route the line names — both restore the entry's
+configured bundle first, as the engine does — so the two commands cannot
+disagree. The routes are credential files in the entry's directory,
 a headless token, an API key under `api-key`, a token or key forwarded under
 `inherit-env`, and a [credential-named](#5-a-provider-key-in-clienv-hermes-pi-opencode)
 variable in `cli.env` on a CLI that reads its key from its environment.
