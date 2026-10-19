@@ -101,8 +101,15 @@ rule, and warns on success about what is legal but likely wrong.
 **What the linter warns about**
 
 Browser storage used for state other viewers should see (use the datastore),
-no dark-mode styling (artifacts follow each reader's own appearance setting),
-and no `<meta name="viewport">`.
+no `<meta name="viewport">`, and a version that ignores its reader's
+appearance (artifacts follow each reader's own appearance setting). A version
+follows it when its pages link both of [the kit's](#capabilities-and-the-runtime)
+theming files, `kit.css` and `theme.js`, at a release the engine serves, or
+when a page or stylesheet of its own carries a `prefers-color-scheme` rule.
+`kit.css` alone is warned (it follows the device, not the reader's chosen
+mode), as is `theme.js` alone (it applies a mode nothing styles). A link to a
+kit release the engine does not serve is warned too, naming the newest one it
+does: the origin answers it with a 404, so the page loads no kit at all.
 
 ---
 
@@ -139,9 +146,9 @@ datastore and presence, used without a framework). It is served from
 `/_crewlet/kit/<version>/` on the artifact origin:
 
 ```html
-<link rel="stylesheet" href="/_crewlet/kit/0.20.0/kit.css">
-<script src="/_crewlet/kit/0.20.0/theme.js"></script>
-<script type="module" src="/_crewlet/kit/0.20.0/kit.js"></script>
+<link rel="stylesheet" href="/_crewlet/kit/0.23.0/kit.css">
+<script src="/_crewlet/kit/0.23.0/theme.js"></script>
+<script type="module" src="/_crewlet/kit/0.23.0/kit.js"></script>
 ```
 
 Link the version shown here, which is the newest this engine serves. The
@@ -221,10 +228,12 @@ write Markdown; every save is a version.
 crewlet artifacts publish ./dist
 ```
 
-`crewlet artifacts` also lists, reads, versions, restores, labels, shares,
+`crewlet artifacts` also lists, reads, updates, versions, restores, labels, shares,
 unshares, trashes, untrashes and purges artifacts, manages assets and reports
 usage. It always asks for an upload intent first and sends only files the
-artifact does not already hold. See [CLI](../reference/cli.md).
+artifact does not already hold. A directory's dotted names are never
+published; leave anything else out with `-exclude` (`-exclude '*.map'
+-exclude drafts`). See [CLI](../reference/cli.md#crewlet-artifacts).
 
 **From an agent**, through `create_artifact` and `publish_artifact`. An agent
 building in a sandbox passes `from_sandbox` and the engine reads the files out

@@ -168,8 +168,14 @@ var fileName = regexp.MustCompile(`^(\d{4})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$`)
 // headerLine matches one field of the header block.
 var headerLine = regexp.MustCompile(`^- \*\*([A-Za-z][A-Za-z-]*):\*\* (.+)$`)
 
-// heading matches the record's own title line.
-var heading = regexp.MustCompile(`^# (ADR-(\d{4})) — (.+)$`)
+// headingForm is the title line every record opens with, as a reader is told
+// to write it.
+const headingForm = "`# ADR-NNNN: Title`"
+
+// heading matches the record's own title line: the id, a colon and a space,
+// then the title. The separator is a colon because this repository's prose
+// takes no em dash, and a title read from the line keeps any colon of its own.
+var heading = regexp.MustCompile(`^# (ADR-(\d{4})): (.+)$`)
 
 // Reference matches a record's id wherever it is cited.
 var Reference = regexp.MustCompile(`\bADR-(\d{4})\b`)
@@ -250,8 +256,8 @@ func parse(path, name string, number int) (Record, error) {
 			if m == nil {
 				if strings.HasPrefix(line, "# ") {
 					return Record{}, fmt.Errorf("adr: %s opens with %q; the "+
-						"heading is `# ADR-NNNN — Title`, with an em dash",
-						name, line)
+						"heading is %s, with a colon after the id",
+						name, line, headingForm)
 				}
 				continue
 			}
@@ -281,8 +287,8 @@ func parse(path, name string, number int) (Record, error) {
 		return Record{}, fmt.Errorf("adr: read %s: %w", name, err)
 	}
 	if rec.ID == "" {
-		return Record{}, fmt.Errorf("adr: %s has no `# ADR-NNNN — Title` "+
-			"heading, so nothing can cite it", name)
+		return Record{}, fmt.Errorf("adr: %s has no %s heading, so "+
+			"nothing can cite it", name, headingForm)
 	}
 	return rec, nil
 }

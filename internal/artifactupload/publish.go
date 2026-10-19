@@ -172,7 +172,7 @@ func (s *Service) create(ctx context.Context, c artifactsdomain.Call, req Create
 		return artifactsdomain.Published{}, Report{}, err
 	}
 	if done, ok := r.answered(); ok {
-		return done.Published, Report{Warnings: done.Warnings}, nil
+		return done.Published, done.Report, nil
 	}
 	in, err := r.compose(ctx, manifest.ModeWhole, req.Files, nil, req.Entry, req.Contract, req.Capabilities)
 	if err != nil {
@@ -247,7 +247,7 @@ func (s *Service) publish(ctx context.Context, c artifactsdomain.Call, req Publi
 		return artifactsdomain.Published{}, Report{}, err
 	}
 	if done, ok := r.answered(); ok {
-		return done.Published, Report{Warnings: done.Warnings}, nil
+		return done.Published, done.Report, nil
 	}
 	base := head.HeadNumber
 	if !req.Force && req.Base != head.HeadNumber {

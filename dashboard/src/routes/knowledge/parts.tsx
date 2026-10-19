@@ -348,12 +348,8 @@ export function KnowledgeSearchBar() {
       </form>
       <Menu
         label={`Rank by: ${modeLabel(mode)}`}
-        trigger={
-          <>
-            {modeLabel(mode)}
-            <ChevronDownGlyph size="sm" />
-          </>
-        }
+        trigger={modeLabel(mode)}
+        trailingIcon={<ChevronDownGlyph size="sm" />}
         triggerVariant="ghost"
         align="end"
         items={SEARCH_MODES.map((m) => {

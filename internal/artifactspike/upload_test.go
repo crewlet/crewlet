@@ -102,14 +102,18 @@ func newUploadRig(tb testing.TB, backend objstore.Backend) *uploadRig {
 	if err != nil {
 		tb.Fatalf("build the object store: %v", err)
 	}
-	runtimes, err := artifactupload.RuntimesIn(fstest.MapFS{"1.0.0/runtime.js": {Data: []byte("//")}})
+	runtimes, err := artifactupload.ReleasesIn(fstest.MapFS{"1.0.0/runtime.js": {Data: []byte("//")}})
 	if err != nil {
 		tb.Fatalf("build the runtime set: %v", err)
+	}
+	kits, err := artifactupload.ReleasesIn(fstest.MapFS{"0.20.0/kit.css": {Data: []byte(":root{}")}})
+	if err != nil {
+		tb.Fatalf("build the kit set: %v", err)
 	}
 	svc, err := artifactupload.New(artifactupload.Deps{
 		Objects: objects, Reservations: coordmemory.NewFleet(),
 		Writes: noWrites{}, Reads: createReads{},
-		Limits: spikeLimits, Hosts: lint.DefaultAllowlist(), Runtimes: runtimes,
+		Limits: spikeLimits, Hosts: lint.DefaultAllowlist(), Runtimes: runtimes, Kits: kits,
 	})
 	if err != nil {
 		tb.Fatalf("build the upload service: %v", err)

@@ -1,4 +1,4 @@
-# ADR-0037 — A datastore write is decided where it is applied, from authority stamped at the API
+# ADR-0037: A datastore write is decided where it is applied, from authority stamped at the API
 
 - **Status:** accepted
 - **Authority:** `internal/artifactdata`

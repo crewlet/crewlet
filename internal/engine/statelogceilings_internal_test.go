@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifactdata"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -564,6 +566,13 @@ func TestARestartSizingFromFreeSpaceSizesTheLogsAsTheFirstBootDid(t *testing.T) 
 		"a broker that states no limit": {
 			budget: jetstream.StorageBudget{Limit: -1, Source: jetstream.BudgetUnstated},
 		},
+		// THE BUCKET'S RESERVATION COMES OFF BOTH BOOTS ALIKE, and the
+		// logs' own come off neither: the broker reports both as granted,
+		// and only the first is another stream's.
+		"a broker that states no limit beside another stream's reservation": {
+			budget: jetstream.StorageBudget{Limit: -1, Committed: gib,
+				Source: jetstream.BudgetUnstated},
+		},
 		"a budget that could not be read": {unread: errors.New("no responders")},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -576,6 +585,7 @@ func TestARestartSizingFromFreeSpaceSizesTheLogsAsTheFirstBootDid(t *testing.T) 
 			host.held = map[string]int64{}
 			for _, domain := range registeredDomains() {
 				host.held[domain.Stream().Name] = first[domain.Name()].Bytes
+				host.budget.Committed += first[domain.Name()].Bytes
 			}
 			again, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream")
 			if err != nil {
@@ -583,6 +593,53 @@ func TestARestartSizingFromFreeSpaceSizesTheLogsAsTheFirstBootDid(t *testing.T) 
 			}
 			if !reflect.DeepEqual(first, again) {
 				t.Errorf("the first boot sized %+v and a restart %+v", first, again)
+			}
+		})
+	}
+}
+
+// AN OPERATOR'S SERVER THAT STATES NO LIMIT HOLDS THE BUCKET AND EVERY LOG.
+//
+// Such a server's own cap is three quarters of its volume's free space, which
+// this node cannot read, so it stands its own free space in for the limit. The
+// object bucket is reserved first, a quarter of that figure, and the logs were
+// then sized as half of the whole of it: three quarters between them, the
+// server's entire cap, so the last log created (the artifact datastore's,
+// appended last to the register) was refused on a CI runner with 86 GB free.
+// Sized from what the bucket leaves, as under a stated limit, the bucket, every
+// log and the coordination remainder fit the cap on every volume large enough
+// to hold the logs' floors.
+func TestAnUnstatedServerHoldsTheBucketAndEveryLog(t *testing.T) {
+	t.Parallel()
+	for _, free := range []int64{16 * gib, 86104199168, 1 << 40} {
+		t.Run(strconv.FormatInt(free, 10), func(t *testing.T) {
+			t.Parallel()
+			bucket := derivedObjectsReservation(free, 0)
+			host := sizingHost{budget: jetstream.StorageBudget{Limit: -1, Committed: bucket,
+				Source: jetstream.BudgetUnstated}}
+			sized, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream")
+			if err != nil {
+				t.Fatalf("sizeCeilings: %v", err)
+			}
+			reserved := bucket
+			for _, domain := range registeredDomains() {
+				ceiling := sized[domain.Name()].Bytes
+				if ceiling <= 0 {
+					t.Fatalf("%s's log was sized at %d bytes", domain.Name(), ceiling)
+				}
+				reserved += ceiling
+			}
+			for _, name := range []string{(artifactsdomain.Domain{}).Name(), (artifactdata.Domain{}).Name()} {
+				if _, found := sized[name]; !found {
+					t.Errorf("the %s log was not sized beside the bucket", name)
+				}
+			}
+			serverCap := free / 4 * 3
+			if reserved+objectsCoordinationFloor > serverCap {
+				t.Errorf("the bucket (%d) and the state logs reserve %d bytes between "+
+					"them, which leaves no %d-byte coordination remainder in a %d-byte "+
+					"server cap: %+v", bucket, reserved, objectsCoordinationFloor,
+					serverCap, sized)
 			}
 		})
 	}

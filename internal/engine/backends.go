@@ -583,9 +583,12 @@ func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js nat
 // ITS RESERVATION IS SPENT BEFORE THE LOGS ARE SIZED. The object store opens
 // with the backends, ahead of the state logs, so the logs size themselves
 // from what the broker has left once the bucket holds its reservation
-// ([sizeCeilings] reads [jetstream.StorageBudget.Available]) and every
-// restart divides the same remainder, which keeps the logs' ceilings
-// reproducible from boot to boot.
+// ([logsGrantable]) and every restart divides the same remainder, which keeps
+// the logs' ceilings reproducible from boot to boot. That holds on a broker
+// that states no limit too: the free space standing in for the limit is
+// spent by the bucket's reservation, which the broker still reports, so the
+// bucket and the logs never reserve more between them than they would under a
+// stated limit of that size.
 
 // objectsCoordinationFloor is what the derived reservation always leaves the
 // broker beside the state logs' share: the mailboxes and coordination buckets

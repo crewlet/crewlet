@@ -1,4 +1,4 @@
-# ADR-0012 — A wake is derived from a durable record, never published by the writer
+# ADR-0012: A wake is derived from a durable record, never published by the writer
 
 - **Status:** accepted
 - **Authority:** `internal/changefeed`
