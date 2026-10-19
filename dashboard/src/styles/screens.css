@@ -11232,9 +11232,11 @@ a.live-row:focus-visible {
   color: var(--color-text-tertiary);
   font-size: var(--font-size-compact);
 }
+/* The board list is as wide as its longest name, and no wider than 12rem, so
+   the canvas keeps the room at a laptop's width. */
 .design-body {
   display: grid;
-  grid-template-columns: minmax(10rem, 14rem) minmax(0, 1fr);
+  grid-template-columns: fit-content(12rem) minmax(0, 1fr);
   gap: var(--spacing-3);
   min-width: 0;
 }

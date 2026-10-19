@@ -392,8 +392,8 @@ body background.
   `crewlet.print()`; the dashboard prints that board alone on a page of its
   own size, on the reader's own click
   ([Artifact Runtime](../reference/artifact-runtime.md)).
-- **People rearrange it.** An editor moves and resizes boards and edits notes
-  in the dashboard, and each save is a version that changes `canvas.json`
+- **People rearrange it.** An editor moves and resizes boards and places,
+  edits and deletes notes in the dashboard, and each save is a version that changes `canvas.json`
   alone. Read the head before you publish, and merge onto a layout a person
   changed rather than restoring your own.
 - **Publish it** with `crewlet artifacts publish <dir>` (a `canvas.json` makes

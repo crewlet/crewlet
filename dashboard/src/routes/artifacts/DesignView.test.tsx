@@ -185,6 +185,37 @@ test("a rearrangement saves the canvas alone against the version it started from
   ]);
 });
 
+test("the Sticky tool places a note where the canvas is clicked, opens it for typing, and saves it", async () => {
+  await mount();
+  // A viewer has Move and Hand alone; editing adds the tools that place notes.
+  expect(screen.queryByRole("button", { name: "Sticky note" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Edit layout" }));
+  fireEvent.click(screen.getByRole("button", { name: "Sticky note" }));
+  const viewport = document.querySelector(".crewlet-canvas__viewport")!;
+  fireEvent.click(viewport, { clientX: 0, clientY: 0 });
+  const field = screen.getByRole("textbox", { name: "Note text" });
+  expect(field).toBe(document.activeElement);
+  fireEvent.change(field, { target: { value: "Check the copy" } });
+  fireEvent.blur(field);
+  run.mockResolvedValueOnce({ kind: "done", pending: false, body: { number: 4 } });
+  fireEvent.click(screen.getByRole("button", { name: "Save version" }));
+  await waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+  const req = run.mock.calls[0]![0] as { body: { edits: { new_str: string }[] } };
+  const saved = JSON.parse(req.body.edits[0]!.new_str) as {
+    notes: { id: string; kind: string; x: number; y: number; text: string }[];
+  };
+  expect(saved.notes).toEqual([
+    expect.objectContaining({ id: "note-1", kind: "sticky", text: "Check the copy" }),
+  ]);
+  // Placed at the canvas point under the click: the top left of the view.
+  const layer = document.querySelector(".crewlet-canvas__world") as HTMLElement;
+  const [, x, y, k] = /translate\((-?[\d.e+-]+)px, (-?[\d.e+-]+)px\) scale\(([\d.e+-]+)\)/
+    .exec(layer.style.transform)!
+    .map(Number);
+  expect(saved.notes[0]!.x).toBe(Math.round(-x! / k!));
+  expect(saved.notes[0]!.y).toBe(Math.round(-y! / k!));
+});
+
 test("a save refused because somebody published is merged onto their version and saved there", async () => {
   await mount();
   fireEvent.click(screen.getByRole("button", { name: "Edit layout" }));

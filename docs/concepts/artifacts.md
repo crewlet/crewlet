@@ -699,8 +699,14 @@ has the format.
   "One document per ticket"). Only boards on screen and drawn wide enough to
   read run, at most twelve at once; the rest are placeholders of their size.
   A board opens at its own size in a dialog, still framed.
+- **Worked like a design tool.** A floating palette holds Move (`V`) and Hand
+  (`H`, or Space held), and while editing Text (`T`) and Sticky (`S`), which
+  place a note where the canvas is clicked. A click selects a board or a note
+  and a double-click hands a board's page the pointer, Escape giving it back.
+  Shift 1 fits every board in view and Shift 0 shows actual size.
 - **Rearranged as versions.** A person with `editor` moves and resizes boards
-  and adds, edits and deletes notes; Save publishes a version whose one change
+  (by a board's name and a selected board's corners) and places, edits and
+  deletes notes; Save publishes a version whose one change
   is `canvas.json`, every board carried by the object it already was. A save
   refused because somebody published since is merged onto their version board
   by board and note by note, keeping the person's change where both changed

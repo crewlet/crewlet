@@ -8,8 +8,14 @@
  * framed, at most twelve at once. A board opens at its own size in a dialog,
  * still framed and still ticketed.
  *
+ * THE CANVAS WORKS AS A DESIGN TOOL'S DOES, and all of it is the design
+ * system's: a floating palette of tools (Move, Hand, and while editing Text
+ * and Sticky), each with its key, the pointer the tool means, hairline board
+ * edges, hover and selection outlines, and resize corners on a selected item.
+ *
  * PEOPLE REARRANGE IT (D69). An editor at the head moves and resizes boards and
- * adds, edits and deletes notes; Save publishes a version that changes
+ * places notes with the Text and Sticky tools, then edits and deletes them;
+ * Save publishes a version that changes
  * `canvas.json` alone against the version the draft started from. A save
  * refused because somebody published since is merged onto their version item
  * by item (lib/artifacts/canvas.ts) and saved again by the person.
@@ -172,14 +178,17 @@ function Design({
     return Promise.resolve(true);
   }, []);
 
-  const addAt = (kind: "title" | "sticky") => {
-    // A new note goes beside everything already on the canvas, where it
-    // covers nothing; the person then moves it where it belongs.
-    const right = Math.max(0, ...boards.map((b) => b.x + b.w), ...notes.map((n) => n.x + n.w));
-    const top = Math.min(0, ...boards.map((b) => b.y), ...notes.map((n) => n.y));
-    change((c) =>
-      addNote(c, kind, { x: right + 100, y: top }, kind === "title" ? "Title" : "Note"),
-    );
+  /*
+   * A NOTE PLACED WITH THE TEXT OR STICKY TOOL, where the person clicked. Its
+   * id goes back to the canvas, which opens it for typing over its starting
+   * words. At the format's note bound nothing is added and no id is returned.
+   */
+  const placeNote = (kind: "title" | "sticky", at: { x: number; y: number }) => {
+    const current = draft ?? base.canvas;
+    const next = addNote(current, kind, at, kind === "title" ? "Title" : "Note");
+    if (next === current) return undefined;
+    setDraft(next);
+    return next.notes?.at(-1)?.id;
   };
 
   const saveNow = async () => {
@@ -267,12 +276,6 @@ function Design({
         )}
         {editing && (
           <>
-            <Button size="small" variant="ghost" onClick={() => addAt("title")}>
-              Add title
-            </Button>
-            <Button size="small" variant="ghost" onClick={() => addAt("sticky")}>
-              Add sticky
-            </Button>
             <Button
               size="small"
               variant="ghost"
@@ -348,6 +351,7 @@ function Design({
             onBoardChange={(id, rect) => change((c) => moveBoard(c, id, rect))}
             onNoteChange={(note) => change((c) => changeNote(c, note))}
             onNoteRemove={(id) => change((c) => removeNote(c, id))}
+            onNoteCreate={placeNote}
             onOpen={openBoard}
             onActivate={setActive}
             canvasRef={canvasRef}
@@ -389,6 +393,7 @@ function Design({
             <div className="design-opened design-opened--fit">
               <SlideStage
                 label={`${openedBoard.title}, ${openedBoard.w} by ${openedBoard.h}`}
+                roleDescription="artboard"
                 fit="contain"
                 width={openedBoard.w}
                 height={openedBoard.h}
