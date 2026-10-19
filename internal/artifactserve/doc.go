@@ -81,7 +81,7 @@
 // compressible files are kept per node, by digest, in a bounded cache;
 // everything leaves at the object store's pace, a mebibyte per write deadline.
 //
-// Markdown and native sheets carry no author code and are rendered by the
+// Docs and native sheets carry no author code and are rendered by the
 // dashboard, so they never reach this origin.
 //
 // An artifact is served from an origin that holds no credential: ADR-0035,

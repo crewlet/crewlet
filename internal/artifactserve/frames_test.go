@@ -101,7 +101,7 @@ func TestOnlyAnHTMLArtifactIsOpenedInAFrame(t *testing.T) {
 		granted []artifacts.Capability
 		want    error
 	}{
-		"a markdown document": {head: func(h *artifactsdomain.Head) { h.Kind = artifacts.KindMarkdown },
+		"a doc": {head: func(h *artifactsdomain.Head) { h.Kind = artifacts.KindDoc },
 			want: artifactserve.ErrNotServed},
 		"a native sheet": {head: func(h *artifactsdomain.Head) { h.Kind = artifacts.KindSheet },
 			want: artifactserve.ErrNotServed},

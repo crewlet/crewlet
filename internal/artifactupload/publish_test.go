@@ -192,31 +192,31 @@ func TestTheRuntimeContractIsResolvedAtPublish(t *testing.T) {
 		t.Fatalf("an unknown contract answered %v", err)
 	}
 	_, _, err = h.svc.Create(t.Context(), h.person("ada", h.opKey("md")), artifactupload.CreateRequest{
-		Kind: artifacts.KindMarkdown, Title: "x", Owner: "ada", OwnerKind: "human", Entry: "a.md",
+		Kind: artifacts.KindDoc, Title: "x", Owner: "ada", OwnerKind: "human", Entry: "a.md",
 		Contract: "latest", Files: []artifactupload.FileSpec{{Path: "a.md", Inline: []byte("# x")}},
 	})
 	if !errors.Is(err, artifactupload.ErrContractUnknown) {
-		t.Fatalf("a markdown artifact pinning a runtime answered %v", err)
+		t.Fatalf("a doc pinning a runtime answered %v", err)
 	}
 	// A NATIVE KIND DECLARES NO CAPABILITY, named as such rather than as a
 	// missing runtime: there is no page to grant one to.
 	_, _, err = h.svc.Create(t.Context(), h.person("ada", h.opKey("mdcaps")), artifactupload.CreateRequest{
-		Kind: artifacts.KindMarkdown, Title: "x", Owner: "ada", OwnerKind: "human", Entry: "a.md",
+		Kind: artifacts.KindDoc, Title: "x", Owner: "ada", OwnerKind: "human", Entry: "a.md",
 		Capabilities: []artifacts.Capability{artifacts.CapabilityDB},
 		Files:        []artifactupload.FileSpec{{Path: "a.md", Inline: []byte("# x")}},
 	})
 	if !errors.Is(err, artifactupload.ErrInvalid) || !strings.Contains(err.Error(), "declares no capabilities") {
-		t.Fatalf("a markdown artifact declaring db answered %v", err)
+		t.Fatalf("a doc declaring db answered %v", err)
 	}
 	got, _, err := h.svc.Create(t.Context(), h.person("ada", h.opKey("md2")), artifactupload.CreateRequest{
-		Kind: artifacts.KindMarkdown, Title: "x", Owner: "ada", OwnerKind: "human", Entry: "a.md",
+		Kind: artifacts.KindDoc, Title: "x", Owner: "ada", OwnerKind: "human", Entry: "a.md",
 		Files: []artifactupload.FileSpec{{Path: "a.md", Inline: []byte("# Notes on the plan")}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if v := h.version(got.Artifact, 1); v.Contract != "" {
-		t.Fatalf("a markdown version pins %q", v.Contract)
+		t.Fatalf("a doc version pins %q", v.Contract)
 	}
 }
 

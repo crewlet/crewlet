@@ -120,6 +120,6 @@ It does not decide **who may open an artifact**, which is
 again for the ticket's principal on every document request. It does not decide
 **an edge cache** for subresources, which a hosted deployment adds later under
 the same thirty-second bound, nor **public links**, which get a registrable
-domain of their own when they are built. Markdown artifacts are rendered by the
+domain of their own when they are built. Doc artifacts are rendered by the
 dashboard's own element-constructing renderer and never reach the artifact
 origin at all.

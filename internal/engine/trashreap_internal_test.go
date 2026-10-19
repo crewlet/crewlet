@@ -151,7 +151,7 @@ func TestADataNodeReapsAnArtifactOnlyOnceItsTermHasRunOut(t *testing.T) {
 	obj := objstore.Object{Key: objstore.KeyAt(time.Now()), Hash: objstore.HashOf(content),
 		Size: int64(len(content))}
 	made, err := w.Create(t.Context(), jane, artifactsdomain.CreateInput{
-		Kind: artifacts.KindMarkdown, Title: "Superseded notes", Owner: "swe",
+		Kind: artifacts.KindDoc, Title: "Superseded notes", Owner: "swe",
 		OwnerKind: iam.ActorHuman, First: artifactsdomain.PublishInput{
 			Uploaded: []objstore.Key{obj.Key},
 			Manifest: artifacts.Manifest{Entry: "notes.md", Files: []artifacts.Entry{{
