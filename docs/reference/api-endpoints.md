@@ -1146,7 +1146,17 @@ account's too, names a **human** seat), and a seat named on a node that runs no
 company yet is `409 no_active_revision` with a `hint`, as `GET /iam/seats` is
 there: no wait supplies a company, so it is not the `503` a retry clears.
 
-An authority refusal is `403` and will never land however often it is retried.
+A refusal on authority is `403` and will never land however often it is
+retried, and its code says what would change it. One a permission would lift —
+a record only `admin` writes, a permission the caller cannot confer because
+they do not hold it — is `403 unauthorized` with `reason: no_grant` and the
+`grants` that would lift it, as the authority table answers a missing
+permission. One the directory's own rule makes whatever the caller holds — a
+person's token asked for by anybody but that person, a permission the owner
+does not hold, an owner who may not act, a permission this build does not know
+on the person's row — is `403 forbidden`, carrying the rule's sentence in
+`detail` and no `reason` or `grants`, because no permission would change it. A
+request through a machine token is `403 token_refused`.
 A login outside its holder's kind is `400`: a person's is dotted (`jane.doe`)
 and a machine's is coloned (`ci:release`, or `token:<id>` to bind a Tier A
 token), at most 64 characters either way, checked on a create and on a rename
@@ -1290,7 +1300,9 @@ token, not a permission it cannot carry. The answer is `201` with
 | `400 bad_params` | No owner: a Tier A token owns no machine tokens, so it names the service account with `?person=` |
 | `400 invalid_body` | An expiry in the past or more than 365 days away, a label past 128 bytes, an owner already holding 64 live credentials — a revoked or expired one gives up its place to the new token, the earliest to lapse first, so revoking a token nothing uses makes room at once |
 | `400 invalid_body` (`field: grants`) | A permission this build does not know, named beside the five |
-| `403` | The request presented a machine token (`token_refused`); a **person's** token asked for by anybody but that person; a service account's asked for without `admin`; a permission the owner does not hold; a permission the caller does not hold; an owner who may not act |
+| `403 token_refused` | The request presented a machine token |
+| `403 unauthorized` | A service account's token asked for without `admin`; a permission the caller does not hold — `grants` names it |
+| `403 forbidden` | A **person's** token asked for by anybody but that person; a permission the owner does not hold; an owner who may not act; the row that binds a Tier A token (`token:<id>`) — `detail` says which |
 | `404` | Nobody by that id |
 
 **`Idempotency-Key` is ignored here, deliberately.** A retry that landed once
@@ -1500,11 +1512,13 @@ reset_spent` by the time it is opened. A
 machine is `409` (it has no password; mint it a token), and so is a person
 `suspended` or `retired`, naming the `stage`, because a link would hand back an
 account somebody stopped: reactivate them first. A person holding a
-permission the caller does not is `403 unauthorized`, judged in the record's
-own snapshot: whoever issues the link is shown it and could spend it
+permission the caller does not is `403 unauthorized` naming it, judged in the
+record's own snapshot: whoever issues the link is shown it and could spend it
 themselves, so a link is held to the rule an invitation and an edit are —
 nobody hands out what they do not hold. An administrator holds every app, so
-what reaches it today is a name this build does not know, kept on the row.
+what reaches that refusal today is a name this build does not know, kept on
+the row — and since no permission would make it one, that is `403 forbidden`,
+naming the name in `detail`.
 
 **Shown once, and no key is read.** Like a token's mint, a replay of the issue
 could not hand back a secret its first attempt never showed, so the route

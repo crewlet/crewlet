@@ -3,6 +3,7 @@ package iamapi_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -171,28 +172,41 @@ func TestAnUnknownMintSaysToMintAgain(t *testing.T) {
 	}
 }
 
-// WHAT THE DOMAIN REFUSES IS ANSWERED FOR WHAT IT IS: an authority refusal is
-// 403 and a malformed request is 400, never the 500 an unclassified error is.
+// WHAT THE DOMAIN REFUSES IS ANSWERED FOR WHAT IT IS: a refusal a permission
+// lifts is 403 `unauthorized`, one the mint's own rule makes is 403
+// `forbidden`, and a malformed request is 400 — never the 500 an unclassified
+// error is. A person's token asked for by an administrator is the second kind:
+// it was answered `unauthorized`, whose sentence sent an administrator to ask
+// an administrator for access.
 func TestAMintTheDomainRefusesIsAnsweredForWhatItIs(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name string
-		err  error
-		want int
+		name   string
+		err    error
+		status int
+		code   httpjson.Code
 	}{
-		{"a grant the owner does not hold",
-			fmt.Errorf("%w: admin is not among [worklet]",
-				iamdomain.ErrRefused), http.StatusForbidden},
+		{"a grant the owner does not hold", &iamdomain.Refusal{
+			Grants: []iam.Grant{}, Err: errors.New("admin is not among [worklet]")},
+			http.StatusForbidden, httpjson.CodeForbidden},
+		{"a person's token asked for by an administrator", &iamdomain.Refusal{
+			Grants: []iam.Grant{}, Err: errors.New("alice is a person, so only " +
+				"they can create their personal access tokens")},
+			http.StatusForbidden, httpjson.CodeForbidden},
+		{"a service account's token asked for without admin", &iamdomain.Refusal{
+			Grants: []iam.Grant{iam.GrantAdmin},
+			Err:    errors.New("creating a token for the service account needs admin")},
+			http.StatusForbidden, httpjson.CodeUnauthorized},
 		{"an expiry already past", fmt.Errorf("%w: the expiry has passed",
-			iamdomain.ErrInvalidToken), http.StatusBadRequest},
+			iamdomain.ErrInvalidToken), http.StatusBadRequest, httpjson.CodeInvalidBody},
 	} {
 		r := newRig(t)
 		r.writer.err = tc.err
 		got := r.as(administrator(), http.MethodPost,
 			"/iam/credentials?person="+alice.String(), map[string]any{})
-		if got.status != tc.want {
-			t.Errorf("%s answered %d, want %d (body %v)", tc.name, got.status,
-				tc.want, got.body)
+		if got.status != tc.status || got.body["error"] != string(tc.code) {
+			t.Errorf("%s answered %d %v, want %d %s", tc.name, got.status,
+				got.body, tc.status, tc.code)
 		}
 		if got.body["token"] != nil {
 			t.Errorf("%s answered a token value", tc.name)
