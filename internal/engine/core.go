@@ -630,8 +630,8 @@ func (e *Engine) StateLogHydrated(ctx context.Context) bool {
 			"detail", "this node's view of the fleet has not listed it yet")
 		return false
 	}
-	trackerServed, pagesServed, err := e.router.Serves(ctx)
-	if err != nil || (runTracker && !trackerServed) || (wiki && !pagesServed) {
+	served, err := e.router.Serves(ctx)
+	if err != nil || (runTracker && !served.Tracker) || (wiki && !served.Pages) {
 		detail := "no copy of the estate admits a seat yet"
 		if err != nil {
 			detail = err.Error()

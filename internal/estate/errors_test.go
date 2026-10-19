@@ -14,8 +14,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/artifactdata"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -182,12 +186,12 @@ func TestARefusalsPersonWordsCrossTheRouter(t *testing.T) {
 // Go prefix — and it finds them by unwrapping the package's refusal TYPE. A
 // refusal decided on the data node that answered and printed on the node whose
 // caller asked has crossed the wire, so the type has to cross with its fields
-// or Sentence finds nothing and prints "tracker: …" or "pages: invalid: …" to
-// the person. The class must survive beside it, since a surface picks the
-// refusal's class by it — and the rebuilt refusal must answer for every
-// sentinel it carries, the one a refusal holds of its own beside its class
-// included, since that is what a caller acting on that refusal in particular
-// tests.
+// or Sentence finds nothing and prints "worklet: …", "doclet: invalid: …" or
+// "chatlet: invalid: …" to the person. The class must survive beside it, since a
+// surface picks the refusal's class by it — and the rebuilt refusal must
+// answer for every sentinel it carries, the one a refusal holds of its own
+// beside its class included, since that is what a caller acting on that
+// refusal in particular tests.
 func TestARefusalsSentenceSurvivesTheWire(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -212,6 +216,9 @@ func TestARefusalsSentenceSurvivesTheWire(t *testing.T) {
 		{"pages", &doclet.InvalidError{Field: "title",
 			Why: "is empty — give the page one"},
 			[]error{doclet.ErrInvalid}, doclet.Sentence, pagesRefusal},
+		{"chat", &chatlet.InvalidError{Field: "name",
+			Why: "is longer than 80 bytes — shorten it"},
+			[]error{chatlet.ErrInvalid}, chatlet.Sentence, chatRefusal},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -253,6 +260,14 @@ func trackerRefusal(err error) error {
 
 func pagesRefusal(err error) error {
 	var r *doclet.InvalidError
+	if errors.As(err, &r) {
+		return r
+	}
+	return nil
+}
+
+func chatRefusal(err error) error {
+	var r *chatlet.InvalidError
 	if errors.As(err, &r) {
 		return r
 	}
@@ -305,18 +320,26 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 	}
 	var found int
 	exempt := map[string]bool{}
+	// EVERY DOMAIN AN OPERATION FLOORS ON, read off the domains themselves
+	// ([crossingDomains]) rather than listed: its backend is what answers
+	// the operation, so its errors are the first a tool on the asking node
+	// compares, and a domain routed with its package left off a hand list
+	// would cross its refusals as words alone, with nothing here to say so.
+	//
 	// THIS PACKAGE'S OWN TOO: a router refuses with them, and a node that
 	// answers on another's behalf carries them back across a second hop.
-	//
-	// AND THE IDENTITY DIRECTORY'S, whose reads a node holding no data asks
-	// of a data node, beside the identity vocabulary's and the session's,
-	// whose answers a person verb is decided on. A code is the identifier
-	// as Go code spells it, so a nested package is named by its last
-	// element.
-	for _, pkg := range []string{"worklet", "doclet", "statelog", "estate",
-		"iamdomain", "iam", "iam/session", "artifactsdomain", "artifacts",
-		"artifacts/manifest", "artifacts/mediatype", "artifactdata", "artifactdata/canon",
-		"artifactdata/query", "caveat"} {
+	// And the state log's, whose freshness and eviction refusals every
+	// domain's read and write returns, and the identity vocabulary's and
+	// the session's, whose answers a person verb is decided on; the
+	// artifacts' vocabularies their domains' answers carry; and the
+	// phrasing for a person that a refusal of any domain carries beside
+	// its error (ADR-0060). A code is the identifier as Go code spells it,
+	// so a nested package is named by its last element.
+	packages := append([]string{"statelog", "estate", "iam", "iam/session",
+		"artifacts", "artifacts/manifest", "artifacts/mediatype",
+		"artifactdata/canon", "artifactdata/query", "caveat"},
+		crossingDomains(t)...)
+	for _, pkg := range packages {
 		vars, types := declaredErrors(t, filepath.Join(root, "internal", filepath.FromSlash(pkg)))
 		name := path.Base(pkg)
 		for _, v := range vars {
@@ -362,6 +385,41 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 	if found < 30 {
 		t.Fatalf("the gate found only %d declarations; it is not reading the packages", found)
 	}
+}
+
+// flooredDomains is every domain an operation may carry its floor on, as the
+// domain declares itself — held against [floorStreams] by [crossingDomains],
+// so a domain the router floors is one whose package the error gate reads.
+var flooredDomains = []statelog.Domain{
+	worklet.Domain{}, doclet.Domain{}, iamdomain.Domain{},
+	artifactsdomain.Domain{}, artifactdata.Domain{}, chatlet.Domain{},
+}
+
+// crossingDomains is the package of every domain an operation floors on,
+// relative to internal/ — after holding [flooredDomains] to [floorStreams] in
+// both directions, the stream each names included.
+func crossingDomains(t *testing.T) []string {
+	t.Helper()
+	internal := path.Dir(reflect.TypeFor[Backend]().PkgPath())
+	held := map[string]bool{}
+	var out []string
+	for _, d := range flooredDomains {
+		stream, floored := floorStreams[d.Name()]
+		if !floored || stream != d.Stream().Name {
+			t.Errorf("%s floors on %q in floorStreams, and its own declaration names %q: "+
+				"keep flooredDomains to the domains an operation floors on",
+				d.Name(), stream, d.Stream().Name)
+		}
+		held[d.Name()] = true
+		out = append(out, strings.TrimPrefix(reflect.TypeOf(d).PkgPath(), internal+"/"))
+	}
+	for name := range floorStreams {
+		if !held[name] {
+			t.Errorf("operations floor on the %s domain's log and flooredDomains does not "+
+				"name it: add its Domain, so the error gate reads its package", name)
+		}
+	}
+	return out
 }
 
 // declaredErrors is every exported Err* package variable and every type with

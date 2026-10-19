@@ -17,9 +17,11 @@
 // The channels that are instructions are each a [Channel] — among them:
 //
 //   - the ESTATE SERVICE (internal/estate): a data node runs a tracker or a
-//     knowledge-base write AS THE ACTOR THE REQUEST NAMES, so unsigned, anybody
-//     on the broker could file, edit or purge as any seat in the company, and
-//     the log would carry it signed by the data node that obeyed;
+//     knowledge-base write AS THE ACTOR THE REQUEST NAMES, and answers a chat
+//     read FOR THE VIEWER IT NAMES, so unsigned, anybody on the broker could
+//     file, edit or purge as any seat in the company — and the log would carry
+//     it signed by the data node that obeyed — or read any private room as
+//     anybody;
 //   - the FLEET BROKER'S MEMBERSHIP (internal/engine, fleetbroker.go): a member
 //     removes a voter from the broker's metadata group through its own system
 //     account, the one action the design keeps off the shared account — so
