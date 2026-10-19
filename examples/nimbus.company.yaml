@@ -201,8 +201,30 @@ providers:
         # under the agent's identity). Setup commands also see the run env,
         # which is how the identity lines below read the engine-provided
         # $CREWLET_AGENT_HANDLE / $CREWLET_AGENT_EMAIL facts.
-        files:
-          /usr/local/bin/git-credential-crewlet: |
+        #
+        # The helper lives in the BOX'S HOME, not /usr/local/bin: neither
+        # local cell writes a setup FILE anywhere else.  Every seat here
+        # runs `direct` (default_run_in above), and a direct box has no
+        # filesystem of its own, so a path outside its home would be the
+        # engine host itself; a container box mounts only its home.  A
+        # system path therefore fails every seat's first run at setup.  A
+        # setup COMMAND is not confined the same way — under `direct` it
+        # runs on the engine host, as the engine's user.
+        #
+        # A `files:` entry named relative to the home (.local/bin/...)
+        # would land in the same place; the helper is written by a command
+        # because git has to be given its ABSOLUTE path, which only the
+        # box's shell knows ("$HOME", expanded), and it has to be made
+        # executable.  It is registered as a quoted shell snippet
+        # ("!'...'") because git runs a helper's value through the shell,
+        # and a direct box's home, under local.state_dir above, holds a
+        # space wherever the engine was started from a directory that
+        # does.  The same step works unchanged in a container or an E2B
+        # box, where $HOME is /home/user.
+        commands:
+          - mkdir -p "$HOME/.local/bin"
+          - |
+            cat > "$HOME/.local/bin/git-credential-crewlet" <<'SH'
             #!/bin/sh
             # Supply this seat's GitLab token for gitlab.com credential
             # requests ONLY. Reads $GITLAB_TOKEN from the environment
@@ -217,9 +239,9 @@ providers:
             [ -n "$ok" ] || exit 0
             echo "username=oauth2"
             echo "password=$GITLAB_TOKEN"
-        commands:
-          - chmod +x /usr/local/bin/git-credential-crewlet
-          - 'git config --global credential."https://gitlab.com".helper /usr/local/bin/git-credential-crewlet'
+            SH
+          - chmod +x "$HOME/.local/bin/git-credential-crewlet"
+          - 'git config --global credential."https://gitlab.com".helper "!''$HOME/.local/bin/git-credential-crewlet''"'
           # insteadOf is multi-valued: --add on both, or the second REPLACES
           # the first and scp-style git@gitlab.com: remotes stay SSH.
           - 'git config --global --add url."https://gitlab.com/".insteadOf "git@gitlab.com:"'
