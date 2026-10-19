@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
@@ -68,6 +69,9 @@ func TestEveryWriteNamesTheObjectItWrites(t *testing.T) {
 			"— a run is no object of the company's records",
 		builtin.SteerTurnTool: "hands a note to a running turn, named by its turn — " +
 			"nothing is written to the company's records",
+		chatlet.MarkChatReadTool: "records the caller's own read state in the " +
+			"coordination store — no record of any domain's, and the caller is " +
+			"its only object",
 	}
 	catalogue := operatorArguments(t)
 	objects := builtin.ObjectArgs()
@@ -117,8 +121,10 @@ func operatorArguments(t *testing.T) map[string]map[string]any {
 	answers := newAnswerRig()
 	actor := full.Work.Actor
 	out := map[string]map[string]any{}
+	talk := full.Chat
+	talk.Cursors = fakeCursors{}
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
-		Work: full.Work, Pages: full.Pages, Knowledge: full.Knowledge,
+		Work: full.Work, Pages: full.Pages, Knowledge: full.Knowledge, Chat: talk,
 		Org:  func() *org.Organization { return company },
 		Runs: builtin.RunDeps{Desk: &deskFake{}, Actor: actor},
 		Pauses: builtin.SeatPauseDeps{Pauses: coordmem.NewFleet(), Announce: &announced{},

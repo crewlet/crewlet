@@ -569,7 +569,7 @@ type APIAuth struct {
 	// had to read to answer the one question they ever asked of it. The
 	// clamp keeps every app — [iam.AdminPosture.Effective] expands before it
 	// clamps — so an administrator signed in on a refusing node keeps the
-	// tracker and the knowledge base.
+	// tracker, the knowledge base and the chat.
 	//
 	// It is applied at DECISION time, per node, per request: nothing is
 	// written when it changes, so changing it takes effect on the next
@@ -940,7 +940,7 @@ type APIToken struct {
 	Token string `secret:"true" yaml:"token" json:"token" js:"required" desc:"Token value or ${VAR} reference."`
 
 	// Grants is what this credential may do: `admin`, `worklet`, `doclet`,
-	// `artifacts`. REQUIRED and non-empty: a credential's blast radius is
+	// `artifacts`, `chatlet`. REQUIRED and non-empty: a credential's blast radius is
 	// stated at the pin, never inferred. The founder's break-glass token is
 	// `[admin]`; a CI pipeline that files work is `[worklet]`.
 	//
@@ -953,7 +953,7 @@ type APIToken struct {
 	// STRICT, unlike a replicated row: a name this build does not know is
 	// refused here, naming the set, because a file an operator wrote is a
 	// typo rather than a newer peer's record.
-	Grants []iam.Grant `yaml:"grants,omitempty" json:"grants,omitempty" desc:"What this credential may do: admin, worklet, doclet, artifacts. Required and non-empty."`
+	Grants []iam.Grant `yaml:"grants,omitempty" json:"grants,omitempty" desc:"What this credential may do: admin, worklet, doclet, artifacts, chatlet. Required and non-empty."`
 }
 
 // validate checks the auth block; serving is [Bootstrap.ServesAPI].

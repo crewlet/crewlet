@@ -182,7 +182,7 @@ vacant):
 
 | The card says | What it means | What an administrator can do from the card's menu, its peek and its page |
 |---|---|---|
-| **Open seat** | Nobody holds it and no invitation names it | **Invite** (on the card's menu, **Invite someone…**) — an address and their access, both apps ticked and Admin not to start; the link is shown once, and the person chooses their login and password when they redeem it. **Add person** (**Add a person…**) — an address, optionally a name and a login (proposed from the address when left empty), and their access, ticked the same way; the person exists at once, `active`, and you are shown their **first password link** once |
+| **Open seat** | Nobody holds it and no invitation names it | **Invite** (on the card's menu, **Invite someone…**) — an address and their access, every app ticked and Admin not to start; the link is shown once, and the person chooses their login and password when they redeem it. **Add person** (**Add a person…**) — an address, optionally a name and a login (proposed from the address when left empty), and their access, ticked the same way; the person exists at once, `active`, and you are shown their **first password link** once |
 | **Invited ·** an address | An open invitation holds it until it is redeemed, cancelled or lapses — a week. Nobody else can be invited onto it, created on it or bound to it meanwhile | **Cancel invitation**, which frees the seat |
 | **Held by** a name | A person holds it, at whatever stage, or a service account or a token's row is bound to it | Nothing here: the person is changed, moved, suspended or removed in Settings › People, and a service account in Settings › Service accounts |
 

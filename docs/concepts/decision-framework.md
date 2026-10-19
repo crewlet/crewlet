@@ -82,8 +82,9 @@ choice names an option of the ask it answers):
   holding the asker's turn, and a person asking from the dashboard or through
   an assistant has no turn to hold.
 - **The channel is the chart's.** The surface must be one the company runs and
-  the asking seat holds a bot on, and the channel one a unit declares with
-  `channel`.
+  the asking seat can post on — a bot it holds on Mattermost or Slack, or the
+  seat itself on the engine's own chat (`chat`) — and the channel one a unit
+  declares with `channel`.
 - **The answer owes the post.** The asker is woken by the answer owing that
   chat surface, and its turn is not finished until a tool there has posted — a
   comment on the work item does not discharge it.

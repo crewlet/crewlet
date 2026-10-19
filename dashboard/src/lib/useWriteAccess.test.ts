@@ -34,6 +34,7 @@ const BOUND: ViewerState = {
   admin: false,
   worklet: true,
   doclet: true,
+  chatlet: true,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -127,6 +128,7 @@ test("a change several apps open names each of them to a reader holding none", (
     grants: [],
     worklet: false,
     doclet: false,
+    chatlet: false,
     acts: [],
   };
   expect(writeAccess("answer_knowledge", none, "open", EVERY)).toEqual({

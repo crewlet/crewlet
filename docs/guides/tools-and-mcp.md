@@ -335,6 +335,61 @@ own assistant, installed as the
 [`company-architect` skill](../getting-started/ai-authoring.md#the-company-architect-skill)
 is (copy the directory into your assistant's skills folder).
 
+### Chatlet
+
+Nine more, on the same terms and on the third axis: they are registered **only
+where the company runs the engine's own chat** (`chat.backend: chatlet`, the
+default). A company on Slack or Mattermost gets none of them and reaches its
+workspace through that vendor's own MCP tools instead, for the reason the
+tracker section gives — a seat offered a tool against a surface its company
+does not run reaches for it and fails at the call. They are the `chatlet` app's
+([Identity and access](../concepts/identity-and-access.md)), which every seat
+holds.
+
+| Tool | Description |
+|------|-------------|
+| `post_message` | Say something new in a room, as a top-level message. `@handle` reaches one colleague; `@channel` in the text is what addresses the whole room, and the receipt says so back |
+| `reply_in_thread` | Answer a message under its own thread, beside the question. Threads are one level deep, so a reply to a reply carries the same root |
+| `send_dm` | Say something privately to one colleague or a few, opening the conversation if it is not open. Never the place for an answer that was asked for in the open |
+| `read_channel` | Read a room, newest first, or one thread in it, oldest first. The rest of the room is not handed to a seat at turn start, so it reads it here when its answer depends on what was said before |
+| `list_channels` | The rooms this seat is in, most recently active first, with what each is for and the last thing said in it |
+| `search_messages` | Find a message by what it **says**, ranked across every room this seat may read — at most fifty to an answer, twenty unless asked — and an answer from an index still being built says so rather than reading as nothing said. `read_channel` is the other half: one room, in order, from a point you name |
+| `react_to_message` | Put one emoji on a message (`message_id`), or take yours back |
+| `join_channel` / `leave_channel` | Move this seat's own membership, and nobody else's. A private room cannot be joined this way, and a unit's own room can be neither joined nor left — its membership is the org chart's, and either gesture would be undone by the next apply |
+
+Every tool that takes a `channel` takes the room's id or its **name** — `#eng`
+and `eng` are the same room. A name is the room's address, unique across the
+company, so it resolves for any room the seat may read whether or not it is
+in it: a public room, or a unit's own room, which is where a decision's
+outcome is often promised. A private room's name resolves only for its
+members, and to anybody else answers exactly as a name nobody holds.
+
+A message's `links`, at most eight on `post_message`, `reply_in_thread` and
+`send_dm`, are each an absolute `http`, `https` or `mailto` address, kept
+exactly as sent. A relative reference, a dashboard route (`#/...`) or any
+other scheme is refused, naming every entry that is not one (`links[1]`): no
+reader of the message could open it as it stands.
+
+**Three of them count as a delivery** for the turn's did-this-reach-anybody
+gate — `post_message`, `reply_in_thread` and `send_dm` — and the obligation is
+*source-scoped*: a turn woken in a room owes an answer **in** a room. A
+reaction is deliberately not one of them. It wakes nobody and discharges
+nothing, because a seat that could answer every obligation with a thumb would.
+A turn's write is made once however often the turn is re-run: its key is
+derived from the turn's unit of work and the call, and a join after a leave is
+a new join rather than the first one's retry.
+
+The same nine are served to **your** AI assistant and to the dashboard over the
+[operator surface](../reference/api-endpoints.md#the-chat-gestures-only-a-person-makes),
+as the person your token is bound to, and seven more that no seat is given:
+`create_channel`, `open_dm`, `update_channel`, `set_channel_members`,
+`edit_message`, `delete_message` and `mark_chat_read`. A seat corrects what it
+said by replying rather than rewriting it; a room, its settings and its
+membership are the company's furniture; and a read cursor is a person's
+attention, which a seat — woken rather than reading — does not have. Every one
+of them is made as a seat, so a credential acting as itself is refused them
+all, the reads included.
+
 ### Per-Role MCP Servers (GitHub)
 
 Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring is the seat's executor run's, with its own shell and git in its [box](../concepts/code-sandbox.md). See [GitHub Integration](../integrations/github.md).

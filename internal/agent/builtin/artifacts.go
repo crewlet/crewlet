@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 	"time"
 
@@ -419,11 +418,6 @@ func (c artifactCaller) self() string { return iam.RecordOwner(c.principal) }
 // the agent-only rules are about.
 func (c artifactCaller) agent() bool { return c.principal.Kind == iam.KindSeat }
 
-// artifactCallNamespace scopes the derivation of a turn's artifact operation
-// keys. FIXED for the life of the format: a new one would make every re-run
-// turn's publish a second version.
-const artifactCallNamespace = "crewlet.artifacts.call"
-
 // caller resolves who this call is, or the refusal it is answered with.
 func (d ArtifactDeps) caller(ctx context.Context, turn *turnctx.Turn, tool string,
 	args map[string]any, writes bool) (artifactCaller, *tools.Result) {
@@ -480,9 +474,9 @@ func (d ArtifactDeps) ceilingFor(ctx context.Context, turn *turnctx.Turn,
 // operation settles the operation key a write's records derive from, the
 // `op_id` its answer carries, or the refusal of one brought back.
 //
-//   - IN A TURN, a key derived from the turn's seed, the tool and this call's
-//     repeat count in the run ([pageOpKey]'s rule), so a re-run turn's publish
-//     is the first run's and lands once;
+//   - IN A TURN, the call's key ([callOpKey], the one derivation every
+//     domain's writes take), so a re-run turn's publish is the first run's
+//     and lands once;
 //   - OUTSIDE ONE, the key the caller's transport carries, as it was sent;
 //   - on the operator's MCP, which carries none, the `op_id` an earlier answer
 //     handed back for exactly this call, or a fresh one the answer hands out.
@@ -493,17 +487,13 @@ func (d ArtifactDeps) operation(ctx context.Context, turn *turnctx.Turn, tool st
 	if text, _ := argval.String(raw); text == "" {
 		brought = false
 	}
-	if seed := turnKey(turn); seed != "" {
+	if turnKey(turn) != "" {
 		if brought {
 			return "", "", fmt.Sprintf("%s takes no `op_id` in a turn: the turn "+
 				"names the operation, so the same call made again is already the "+
 				"same publish. Leave it out.", tool)
 		}
-		identity := []string{artifactCallNamespace, seed, tool}
-		if n := turn.CallLog().Ordinal(tool, args); n > 0 {
-			identity = append(identity, "repeat:"+strconv.Itoa(n))
-		}
-		return statelog.DeriveOpID(turnSince(turn), "", identity...), "", ""
+		return callOpKey(turn, tool, nil, args, ""), "", ""
 	}
 	if d.CallerKey != nil {
 		if k := d.CallerKey(ctx); k != "" {

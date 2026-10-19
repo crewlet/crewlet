@@ -11,6 +11,7 @@ const PERSON: ViewerState = {
   admin: false,
   worklet: false,
   doclet: false,
+  chatlet: false,
   handle: "maya",
   owner: "maya",
   name: "Maya Ortiz",

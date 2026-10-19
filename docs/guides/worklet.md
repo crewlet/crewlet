@@ -1836,7 +1836,7 @@ may say why in its body.
 | `rationale` | optional, at most 1,500 bytes |
 | `evidence` | at most 8, each `{kind, ref, label?}`: `task` (by key or id, stored as the task's id, since a key moves; the Inbox shows its current key before its label, so a label that starts with one of the task's keys is stored without it), `page` (by id or `CONTAINER/Title`; it must exist and not be in the trash, and is stored as its id, since a rename moves the title; a company not on Doclet cites a page as a `url`), `turn`, `run`, or `url` (an absolute `https://` address) |
 | `role` | `approver` — the answer **is** the decision — or `contributor` — it is an input to one somebody else makes |
-| `inform` | optional `{surface, channel}`: the chat channel the asker will report the outcome in, and a promise the engine keeps (see below). Only an **agent seat** may ask with one — a person has no turn to hold to it, so it is refused `forbidden` for an operator and `invalid` at the tracker for any author that is not an agent. `surface` is `mattermost` or `slack`, and must be one the company runs **and** the asking seat holds a bot on; `channel` must be one a unit in the org chart declares (`units[].channel`). A leading `#` is accepted and the chart's own spelling is stored |
+| `inform` | optional `{surface, channel}`: the chat channel the asker will report the outcome in, and a promise the engine keeps (see below). Only an **agent seat** may ask with one — a person has no turn to hold to it, so it is refused `forbidden` for an operator and `invalid` at the tracker for any author that is not an agent. `surface` is `mattermost`, `slack` or `chat` (the engine's own), and must be one the company runs **and** the asking seat can post on — a bot it holds on a vendor surface, or the seat itself on `chat`; `channel` must be one a unit in the org chart declares (`units[].channel`). A leading `#` is accepted and the chart's own spelling is stored |
 
 What the engine enforces is deliberately small: that a decision is well formed,
 that it rides only the comment that **asks** (a remark cannot carry one, and it
@@ -1876,8 +1876,8 @@ question, the option chosen by its label, and — when the decision named an
 `inform` channel — where it said it would report the outcome.
 
 **An inform is enforced.** The asker's `answered` wake **owes** the chat
-surface its decision named: the notification carries `owes` (`slack` or
-`mattermost`), and the turn it wakes is held to a delivery on that surface
+surface its decision named: the notification carries `owes` (`mattermost`,
+`slack` or `chat`), and the turn it wakes is held to a delivery on that surface
 rather than on the tracker the wake came from. A round that only comments on
 the item is sent back with a correction naming the surface, and the turn ends
 once a tool there has posted — because the person who answered was told the

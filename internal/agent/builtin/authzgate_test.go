@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
@@ -201,6 +202,7 @@ func TestEveryAppRowHasItsKindsApp(t *testing.T) {
 	for app, names := range map[iam.Grant][]string{
 		iam.GrantWorklet: append(builtin.WorkTools(), worklet.OperatorOnlyTools()...),
 		iam.GrantDoclet:  append(builtin.PageTools(), builtin.SearchKnowledgeTool),
+		iam.GrantChatlet: append(chatlet.Tools(), chatlet.OperatorOnlyTools()...),
 	} {
 		for _, name := range names {
 			got, known := authz.AppOf(authz.Action(name))
@@ -284,7 +286,15 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 		Knowledge:    full.Knowledge,
 		Artifacts:    full.Artifacts,
 		ArtifactData: full.ArtifactData,
-		Org:          orgOf,
+		// THE CHAT, its read-state store included, which only this surface
+		// is given — left nil, mark_chat_read is a verb no walk sees.
+		Chat: func() builtin.ChatDeps {
+			talk := full.Chat
+			talk.Cursors = fakeCursors{}
+			talk.Actor = builtin.PrincipalChatActor
+			return talk
+		}(),
+		Org: orgOf,
 		// The operator-only verbs: a parked run's answer, a seat's pause
 		// and resume, a note to a running turn and an answer from the
 		// company's knowledge. Each is a seam of its own, and each left

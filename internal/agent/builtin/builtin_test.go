@@ -313,6 +313,19 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.QueryArtifactDataTool: false,
 		builtin.WriteArtifactDataTool: true,
 		builtin.SetArtifactSchemaTool: true,
+
+		// CHATLET. Its reads are reads; saying something and
+		// reacting are words on somebody else's screen; joining and
+		// leaving move only where this seat listens, which is its own.
+		builtin.ReadChannelTool:    false,
+		builtin.ListChannelsTool:   false,
+		builtin.SearchMessagesTool: false,
+		builtin.PostMessageTool:    true,
+		builtin.ReplyInThreadTool:  true,
+		builtin.SendDMTool:         true,
+		builtin.ReactToMessageTool: true,
+		builtin.JoinChannelTool:    false,
+		builtin.LeaveChannelTool:   false,
 	}
 
 	reg := tools.NewRegistry()
@@ -1031,6 +1044,9 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// AND THE DATASTORE BESIDE IT, which the four data tools take
 		// with the artifacts half.
 		ArtifactData: artifactDataDeps(newFakeData()),
+		// AND CHATLET, all three halves: left out, its nine tools
+		// were classified by nothing in the table below.
+		Chat: chatDeps(newFakeChat()),
 	}
 }
 

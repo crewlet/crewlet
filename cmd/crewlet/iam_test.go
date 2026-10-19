@@ -378,7 +378,7 @@ func TestTheCLIStoresEveryAppWithAdmin(t *testing.T) {
 		t.Fatalf("the node was asked %d times, want 5", len(bodies))
 	}
 	for i, body := range bodies {
-		got := make([]string, 0, 3)
+		got := make([]string, 0, len(every))
 		raw, _ := body["grants"].([]any)
 		for _, g := range raw {
 			s, _ := g.(string)
@@ -483,10 +483,10 @@ func TestAMachineCreateNamesItsGrants(t *testing.T) {
 			[]string{"-grants", "or none"}},
 		{[]string{"create", "-kind", "machine", "-login", "ci:release",
 			"-grants", "trackr"},
-			[]string{`"trackr"`, "admin, worklet, doclet", "none"}},
+			[]string{`"trackr"`, "admin, worklet, doclet, artifacts, chatlet", "none"}},
 		{[]string{"invite", "lead@example.com", "-seat", "lead",
 			"-grants", "billing"},
-			[]string{`"billing"`, "admin, worklet, doclet"}},
+			[]string{`"billing"`, "admin, worklet, doclet, artifacts, chatlet"}},
 		{[]string{"grant", "p-1", "-grants", "none,admin"},
 			[]string{"none", "on its own"}},
 		{[]string{"suspend", "p-1", "-grants", "admin"},

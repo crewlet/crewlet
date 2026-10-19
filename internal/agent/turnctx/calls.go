@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"slices"
 	"sync"
 
 	"github.com/google/uuid"
@@ -41,6 +42,25 @@ import (
 // call to the tool can only raise a count, and a raised count is a fresh
 // operation: the cost is that an identical repeat separated by a call to the
 // same tool about something else writes again, which is what was asked.
+//
+// # Unless two tools write one state
+//
+// A count kept per tool cannot see a call to ANOTHER tool, and that is a hole
+// wherever two tools write one piece of state in opposite directions —
+// joining a room and leaving it are two tools and one membership. A run that
+// joined, left and joined again counted the second join 0, exactly as the
+// first: the leave between them was another tool's call. So the second join
+// derived the first one's id and was answered as its retry — `applied`, at the
+// first join's position, with nothing published — and the seat stayed outside
+// the room while the tool reported it inside. The `in_progress` → `done` →
+// `in_progress` hazard above, back again because one object has two tools.
+//
+// Such tools are a FAMILY and are counted together ([CallLog.OrdinalAmong]):
+// every earlier call in the family that is not this same call raises the
+// count. The family is declared by the domain that owns the tools, because
+// only it knows which of them write the same thing; a family drawn too wide
+// can only raise counts, which is the safe direction for the reason above,
+// and one drawn too narrow is this hole.
 //
 // # What it holds, and for how long
 //
@@ -122,6 +142,18 @@ func (l *CallLog) Seed(calls ...SeededCall) {
 // Ordinal is how many calls to tool earlier in this run asked for something
 // other than args — the count a derived operation id carries. See [CallLog].
 func (l *CallLog) Ordinal(tool string, args map[string]any) int {
+	return l.OrdinalAmong(nil, tool, args)
+}
+
+// OrdinalAmong is [CallLog.Ordinal] counted across a FAMILY of tools that
+// write one state: how many calls earlier in this run, to tool or to any tool
+// in family, were not this same call — another tool of the family, or tool
+// with other arguments. See [CallLog] for why a family exists.
+//
+// tool is counted whether or not family lists it, so a nil family is
+// [CallLog.Ordinal]. A call repeated with nothing different in the family
+// between keeps its count, exactly as there.
+func (l *CallLog) OrdinalAmong(family []string, tool string, args map[string]any) int {
 	if l == nil {
 		return 0
 	}
@@ -130,7 +162,12 @@ func (l *CallLog) Ordinal(tool string, args map[string]any) int {
 	defer l.mu.Unlock()
 	n := 0
 	for _, entry := range l.entries {
-		if entry.tool == tool && entry.digest != digest {
+		if entry.tool == tool && entry.digest == digest {
+			// THIS SAME CALL, made before: a repeat, which keeps
+			// the count rather than raising it.
+			continue
+		}
+		if entry.tool == tool || slices.Contains(family, entry.tool) {
 			n++
 		}
 	}

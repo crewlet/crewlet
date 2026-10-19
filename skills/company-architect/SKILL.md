@@ -531,8 +531,8 @@ crewlet run crewlet.yaml -company company.yaml
    password — or, from a shell, `crewlet iam invite <address> -seat
    jane-founder -grants admin` with `CREWLET_API_TOKEN` set. Every teammate
    after them is invited or created from their own vacant seat the same
-   way, by an administrator, with every app (Worklet, Doclet, Artifacts)
-   ticked by default, and Admin only for the people who run the company. See [How the first person
+   way, by an administrator, with every app (Worklet, Doclet, Artifacts,
+   Chatlet) ticked by default, and Admin only for the people who run the company. See [How the first person
    exists](https://docs.crewlet.ai/engine/latest/concepts/identity-and-access/#how-the-first-person-exists).
 
 Full field reference:

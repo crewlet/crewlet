@@ -82,7 +82,7 @@ import type {
   READ_RULES,
   SHAREABLE_ROLES,
 } from "../contract/artifacts.ts";
-import type { WorkViewShape } from "../contract/work.ts";
+import type { InformSurface, WorkViewShape } from "../contract/work.ts";
 import type {
   RetentionGenerationState,
   RetentionIdentityCause,
@@ -4572,7 +4572,7 @@ export interface WorkDecision {
    *  to a decision somebody else makes. */
   role: "approver" | "contributor";
   /** Where the asker will report what was decided. */
-  inform?: { surface: "mattermost" | "slack"; channel: string };
+  inform?: { surface: InformSurface; channel: string };
 }
 
 export interface WorkDecisionOption {

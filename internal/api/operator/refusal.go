@@ -69,11 +69,29 @@ import (
 // THE ARGUMENTS ARE EVERY NATIVE DOMAIN'S OWN ([builtin.ObjectArgs]), declared
 // once beside the domain's refusal classes, rather than a list here: a list
 // here was one more place a domain added later had to be remembered in.
+//
+// AN OBJECT NAMED BY A LIST IS NAMED BY THE LIST: a direct conversation is its
+// participants, and `send_dm` and `open_dm` address it by them alone, so a
+// failed one names who it was with — the handles as the call gave them, its
+// empty entries dropped. Read as text only, it named nothing at all.
 func About(tool string, args map[string]any) httpjson.Detail {
 	about := httpjson.Detail{"tool": tool}
 	for _, field := range builtin.ObjectArgs() {
-		if named, ok := args[field].(string); ok && strings.TrimSpace(named) != "" {
-			about[field] = named
+		switch named := args[field].(type) {
+		case string:
+			if strings.TrimSpace(named) != "" {
+				about[field] = named
+			}
+		case []any:
+			var listed []string
+			for _, entry := range named {
+				if text, ok := entry.(string); ok && strings.TrimSpace(text) != "" {
+					listed = append(listed, text)
+				}
+			}
+			if len(listed) > 0 {
+				about[field] = listed
+			}
 		}
 	}
 	return about

@@ -186,6 +186,41 @@ const (
 	// a seat has search_knowledge and a model of its own.
 	ActionKnowledgeAnswer Action = "answer_knowledge"
 
+	// --- using the chat ---------------------------------------------- //
+	//
+	// THE NINE A SEAT HOLDS, and a person's surface serves too: reading a
+	// room, finding what was said, saying something, reacting, moving one's
+	// own membership. Named after the tools, which internal/chatlet declares.
+	ActionChatList   Action = "list_channels"
+	ActionChatRead   Action = "read_channel"
+	ActionChatSearch Action = "search_messages"
+	ActionChatPost   Action = "post_message"
+	ActionChatReply  Action = "reply_in_thread"
+	ActionChatDirect Action = "send_dm"
+	ActionChatReact  Action = "react_to_message"
+	ActionChatJoin   Action = "join_channel"
+	ActionChatLeave  Action = "leave_channel"
+
+	// --- a person's chat gestures ------------------------------------ //
+	//
+	// THE SEVEN NO SEAT IS GIVEN, each for the reason internal/chatlet writes
+	// beside its name: a room and its membership are furniture a company
+	// arranges, a seat corrects what it said by saying the correction, and
+	// a read cursor is a person's attention.
+	ActionChatCreate  Action = "create_channel"
+	ActionChatOpenDM  Action = "open_dm"
+	ActionChatUpdate  Action = "update_channel"
+	ActionChatMembers Action = "set_channel_members"
+	ActionChatEdit    Action = "edit_message"
+	ActionChatDelete  Action = "delete_message"
+	ActionChatMark    Action = "mark_chat_read"
+	// ActionChatArchive is archiving a room, or opening it again: asked
+	// from inside `update_channel` once the stored room is read, because
+	// who may is the room's creator, its unit's lead or admin — and both
+	// halves of that are on the row, never in the arguments. DOTTED, because
+	// no tool is named for it.
+	ActionChatArchive Action = "chat.channel.archive"
+
 	// --- the company's own controls --------------------------------- //
 	ActionConfigRead  Action = "config.read"
 	ActionConfigWrite Action = "config.write"
@@ -509,8 +544,8 @@ type rule struct {
 	class Class
 
 	// app is the app this verb belongs to ([iam.GrantWorklet],
-	// [iam.GrantDoclet], [iam.GrantArtifacts]), or empty for a verb that
-	// belongs to none. It is
+	// [iam.GrantDoclet], [iam.GrantArtifacts], [iam.GrantChatlet]), or empty
+	// for a verb that belongs to none. It is
 	// the requirement of [ClassApp] and [ClassAppOrAsked], and it is ANDED
 	// onto every relation class ([withApp]): a project's lead who does not
 	// use Worklet does not set its policy, and a comment's author who no
@@ -532,10 +567,10 @@ type rule struct {
 	//
 	// ON THE ROW AND NEVER "EVERY APP". The class used to iterate [iam.Apps],
 	// which was right only while every app was something its one verb
-	// searches: a gesture answered from the pages and the board admitted a
-	// holder of any third app to a search of nothing, and told everybody it
-	// refused that the third app would do. Which apps a gesture draws on is
-	// a fact about that gesture, so the row says it.
+	// searches: with chat declared, a gesture answered from the pages and
+	// the board admitted a holder of chat alone to a search of nothing, and
+	// told everybody it refused that chat would do. Which apps a gesture
+	// draws on is a fact about that gesture, so the row says it.
 	anyOf []iam.Grant
 
 	// humanOnly marks a verb NO AGENT may take, whatever its class would
@@ -874,6 +909,83 @@ var rules = map[Action]rule{
 		anyOf:     []iam.Grant{iam.GrantWorklet, iam.GrantDoclet},
 		humanOnly: true, seated: true, recency: iam.RecencyAny, assist: AssistApprove},
 
+	// --- using the chat ---------------------------------------------- //
+	//
+	// THE APP IS THE WHOLE RULE for using chat, as it is for the tracker's
+	// and the knowledge base's own blocks above. WHICH ROOM is the chat
+	// domain's: a read of a room the caller may not read answers NOT FOUND
+	// (internal/chatlet's Visible — never a refusal that confirms the room
+	// exists), and a write to one is refused inside the write's own
+	// snapshot, which is the state log's one write authority. A room's
+	// membership is a replicated row and not a relation of the chart, so a
+	// relation here would be read in another transaction.
+	//
+	// EVERY CHAT ROW IS SEATED ([rule.seated]): a room renders a speaker by
+	// seat, its membership is seats and a direct conversation's identity is
+	// their handles, so a credential acting as itself has no seat to speak,
+	// be a member or be shown the rooms as. A pipeline that should post is
+	// given a human seat and its credential bound to it.
+	ActionChatList: {class: ClassApp, app: iam.GrantChatlet, seated: true, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionChatRead: {class: ClassApp, app: iam.GrantChatlet, seated: true, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionChatSearch: {class: ClassApp, app: iam.GrantChatlet, seated: true, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionChatPost: {class: ClassApp, app: iam.GrantChatlet, seated: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionChatReply: {class: ClassApp, app: iam.GrantChatlet, seated: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionChatDirect: {class: ClassApp, app: iam.GrantChatlet, seated: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionChatReact: {class: ClassApp, app: iam.GrantChatlet, seated: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	// A SEAT MOVES ITS OWN MEMBERSHIP and nobody else's — the tools take no
+	// handle, and the write path refuses any other — so the app is the rule.
+	ActionChatJoin: {class: ClassApp, app: iam.GrantChatlet, seated: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionChatLeave: {class: ClassApp, app: iam.GrantChatlet, seated: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
+
+	// --- a person's chat gestures ------------------------------------ //
+	//
+	// HUMAN-ONLY, each for a fact about the verb (internal/chatlet's
+	// vocabulary says which): a seat that made rooms as a side effect of
+	// its work would leave a sidebar nobody chose, and one that rewrote
+	// what it said would leave a record the next turn reads as having
+	// always said it. A room's settings and its whole membership are any
+	// member's who can reach it — the store refuses whoever cannot — and
+	// its ARCHIVE is not: see [ActionChatArchive].
+	ActionChatCreate: {class: ClassApp, app: iam.GrantChatlet, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionChatOpenDM: {class: ClassApp, app: iam.GrantChatlet, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionChatUpdate: {class: ClassApp, app: iam.GrantChatlet, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionChatMembers: {class: ClassApp, app: iam.GrantChatlet, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	// A MESSAGE IS ITS AUTHOR'S, or admin's — the comment precedent: the
+	// class answers "may you touch this remark", and the WRITER refuses
+	// anybody but the author an EDIT, because an edit puts words in
+	// somebody's mouth where a delete only takes them down. Admin's delete
+	// is MODERATION, and it is decided on the unread message, so a
+	// moderator takes down what was said in a room they are not in without
+	// reading it ([ClassAuthored]).
+	ActionChatEdit: {class: ClassAuthored, app: iam.GrantChatlet, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionChatDelete: {class: ClassAuthored, app: iam.GrantChatlet, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	// A READ CURSOR IS ONE'S OWN RECORD, as an inbox's marks are, and the
+	// tool takes no handle, so the record is always the caller's own — kept
+	// under their SEAT ([iam.RecordOwner]), whose next holder inherits it.
+	ActionChatMark: {class: ClassOwnRecord, app: iam.GrantChatlet, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	// ARCHIVING A ROOM CLOSES THE CONVERSATION for everybody in it, so it is
+	// a TIDY rather than anybody's: the room's creator, the lead of the unit
+	// a unit's room belongs to or of a unit above it, or admin. Never an
+	// agent's, as no room setting is.
+	ActionChatArchive: {class: ClassTidy, app: iam.GrantChatlet, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+
 	// --- everybody's overview ---------------------------------------- //
 	//
 	// WHO TO ASK IS EVERYBODY'S: the colleague lookup answers from the org
@@ -907,8 +1019,8 @@ var rules = map[Action]rule{
 	// what it works on is ([ActionPrioritiesSet]) — and never any reader's.
 	// HUMAN-ONLY on top: a seat that could pause a colleague, resume
 	// itself, steer another's turn or answer its own run's question would
-	// be overruling the people who run it. No app: a lead who uses neither
-	// app still runs their team.
+	// be overruling the people who run it. No app: a lead who uses no app
+	// still runs their team.
 	ActionSeatPause: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny,
 		assist: AssistApprove},
 	ActionSeatResume: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny,

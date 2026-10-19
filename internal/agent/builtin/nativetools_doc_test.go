@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sourcetree"
@@ -97,8 +98,9 @@ func operatorOnlyTools(t *testing.T) []string {
 // that are not the tracker's: answering a parked coding run, pausing and
 // resuming a seat, steering a running turn and answering a question from the
 // company's knowledge — each a person's decision about the company, served on
-// the operator surface alone. Counted from the catalogue with every seam
-// wired, for the pages that count them all.
+// the operator surface alone — and the chat gestures only a person makes.
+// Counted from the catalogue with every seam wired, for the pages that count
+// them all.
 //
 // EVERY SEAM, AND CHECKED: the operator surface the fixture builds must serve
 // every tool [builtin.OperatorTools] declares ([operatorCandidates]), or a
@@ -115,17 +117,21 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 	work.Placer = func(builtin.Actor) builtin.WorkPlacer { return nil }
 	work.Inbox = newFakeTracker()
 	seat, err := builtin.Register(tools.NewRegistry(), builtin.Deps{Work: work,
-		Pages: full.Pages, Knowledge: full.Knowledge})
+		Pages: full.Pages, Knowledge: full.Knowledge, Chat: full.Chat})
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
+	// THE CHAT WITH ITS READ-STATE STORE TOO, which only the operator
+	// surface is given.
+	talk := full.Chat
+	talk.Cursors = fakeCursors{}
 	actor := func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
 		return builtin.Actor{Handle: "founder", Kind: worklet.AuthorOperator}, nil
 	}
 	company := &org.Organization{Name: "Acme"}
 	answers := newAnswerRig()
 	served := builtin.OperatorTools(builtin.OperatorDeps{
-		Work: work, Pages: full.Pages, Knowledge: full.Knowledge,
+		Work: work, Pages: full.Pages, Knowledge: full.Knowledge, Chat: talk,
 		Org:  func() *org.Organization { return company },
 		Runs: builtin.RunDeps{Desk: &deskFake{}, Actor: actor},
 		Pauses: builtin.SeatPauseDeps{Pauses: coordmem.NewFleet(), Announce: &announced{},
@@ -149,14 +155,49 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 			only = append(only, tool.Name())
 		}
 	}
-	for _, name := range []string{builtin.AnswerRunTool, builtin.PauseSeatTool,
-		builtin.ResumeSeatTool, builtin.SteerTurnTool, builtin.AnswerKnowledgeTool} {
+	for _, name := range append([]string{builtin.AnswerRunTool, builtin.PauseSeatTool,
+		builtin.ResumeSeatTool, builtin.SteerTurnTool, builtin.AnswerKnowledgeTool},
+		chatlet.OperatorOnlyTools()...) {
 		if !slices.Contains(only, name) {
 			t.Fatalf("the operator surface with every seam wired does not serve %s "+
 				"(it adds %v), so this count is not the one the page lists", name, only)
 		}
 	}
 	return only
+}
+
+// chatTools is what registering Chatlet ADDS to a seat's catalogue,
+// and what the operator surface adds beyond that — counted from both
+// registries for the guide's own chat section, a third axis beside the
+// tracker's and the pages'.
+func chatTools(t *testing.T) (seat, operatorOnly []string) {
+	t.Helper()
+	full := fullDeps(t)
+	base, err := builtin.Register(tools.NewRegistry(), builtin.Deps{})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	withChat, err := builtin.Register(tools.NewRegistry(), builtin.Deps{Chat: full.Chat})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	for _, name := range withChat {
+		if !slices.Contains(base, name) {
+			seat = append(seat, name)
+		}
+	}
+	talk := full.Chat
+	talk.Cursors = fakeCursors{}
+	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{Chat: talk}) {
+		if !slices.Contains(seat, tool.Name()) {
+			operatorOnly = append(operatorOnly, tool.Name())
+		}
+	}
+	if len(seat) == 0 || len(operatorOnly) == 0 {
+		t.Fatalf("Chatlet added %d seat and %d operator tools — the "+
+			"fixture wired neither, so this asserts nothing", len(seat), len(operatorOnly))
+	}
+	return seat, operatorOnly
 }
 
 // operatorCandidates is how many tools [builtin.OperatorTools] declares: the
@@ -251,6 +292,16 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 				"catalogue's set of what no seat is given", name)
 		}
 	}
+	// AND THE CHAT, a third axis counted apart: what a seat holds there,
+	// and the gestures only a person makes, which are inside `every` too.
+	chatSeat, chatOnly := chatTools(t)
+	for _, name := range chatOnly {
+		if !slices.Contains(every, name) {
+			t.Errorf("the chat's operator-only %s is missing from the "+
+				"catalogue's set of what no seat is given", name)
+		}
+	}
+	decisions := len(every) - len(operatorOnly) - len(chatOnly)
 	title := func(word string) string { return strings.ToUpper(word[:1]) + word[1:] }
 
 	guide := readPage(t, "docs/guides/tools-and-mcp.md")
@@ -274,16 +325,26 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 				spelled(t, len(builtin.WorkWrites())) + " that count as a delivery"},
 		{"docs/getting-started/quickstart.md",
 			readPage(t, "docs/getting-started/quickstart.md"),
-			"tools a seat holds — " + spelled(t, len(tracker)) + " over the tracker and " +
-				spelled(t, len(pages)) + " over the pages — and " +
+			"tools a seat holds — " + spelled(t, len(tracker)) + " over the tracker, " +
+				spelled(t, len(pages)) + " over the pages and " +
+				spelled(t, len(chatSeat)) + " in the chat — and " +
 				spelled(t, len(every)) + " more that no seat is given"},
 		// THE GUIDE COUNTS THE TWO HALVES APART: the tracker's beside the
 		// tables, and the person's decisions about the company after them.
 		{"docs/guides/tools-and-mcp.md", guide, "and " + spelled(t, len(operatorOnly)) +
 			" more beside them that no seat is given"},
 		{"docs/guides/tools-and-mcp.md", guide,
-			title(spelled(t, len(every)-len(operatorOnly))) +
+			title(spelled(t, decisions)) +
 				" more are a person's decisions about the company"},
+		// AND THE GUIDE'S CHAT SECTION COUNTS ITS OWN: what a seat holds,
+		// and what a person's surface adds.
+		{"docs/guides/tools-and-mcp.md", guide, title(spelled(t, len(chatSeat))) +
+			" more, on the same terms and on the third axis"},
+		{"docs/guides/tools-and-mcp.md", guide, "and " +
+			spelled(t, len(chatOnly)) + " more that no seat is given"},
+		{"docs/reference/api-endpoints.md",
+			readPage(t, "docs/reference/api-endpoints.md"),
+			"the " + spelled(t, len(chatOnly)) + " chat gestures only a person makes"},
 		// THE REFERENCE LISTS EVERY ONE, the tracker's and the rest.
 		{"docs/reference/api-endpoints.md",
 			readPage(t, "docs/reference/api-endpoints.md"),

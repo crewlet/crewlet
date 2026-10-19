@@ -150,7 +150,8 @@ func seat(handle string, grants ...iam.Grant) iam.Principal {
 // and spot the row whose answer is wrong for its neighbours.
 func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 	t.Parallel()
-	worklet, doclet, admin := iam.GrantWorklet, iam.GrantDoclet, iam.GrantAdmin
+	worklet, doclet, chat, admin := iam.GrantWorklet, iam.GrantDoclet,
+		iam.GrantChatlet, iam.GrantAdmin
 	for _, c := range []struct {
 		name    string
 		p       iam.Principal
@@ -225,6 +226,12 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 		{"somebody using neither has nothing to search", personLeading("sam"),
 			authz.ActionKnowledgeAnswer, authz.Object{Kind: authz.KindCompany},
 			false, authz.ReasonNoGrant},
+		// AND CHAT IS NOT ONE OF THE APPS IT DRAWS ON: the answer searches
+		// the pages and the board, never a room, so a person using chat alone
+		// has nothing to search either.
+		{"a person using chat alone has nothing to search", personLeading("sam", chat),
+			authz.ActionKnowledgeAnswer, authz.Object{Kind: authz.KindCompany},
+			false, authz.ReasonNoGrant},
 		{"a seat never does — it has a search and a model of its own",
 			seat("sre", iam.Apps...), authz.ActionKnowledgeAnswer,
 			authz.Object{Kind: authz.KindCompany}, false, authz.ReasonSeatRefused},
@@ -237,6 +244,45 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 		{"nor does a person the directory binds to none", person("jane.doe", admin),
 			authz.ActionKnowledgeAnswer, authz.Object{Kind: authz.KindCompany},
 			false, authz.ReasonUnseated},
+
+		// --- the chat -------------------------------------------------- //
+		{"chat posts in a room", personLeading("sam", chat), authz.ActionChatPost,
+			authz.Object{Kind: authz.KindChannel}, true, authz.ReasonGrant},
+		{"a seat holding the apps posts too", seat("sre", iam.Apps...),
+			authz.ActionChatPost, authz.Object{Kind: authz.KindChannel},
+			true, authz.ReasonGrant},
+		{"Worklet alone reads no room", personLeading("sam", worklet),
+			authz.ActionChatRead, authz.Object{Kind: authz.KindChannel},
+			false, authz.ReasonNoGrant},
+		{"a credential acting as itself says nothing, whatever it holds",
+			machine("ci:release", admin), authz.ActionChatPost,
+			authz.Object{Kind: authz.KindChannel}, false, authz.ReasonUnseated},
+		{"a room is a person's to make", personLeading("sam", chat),
+			authz.ActionChatCreate, authz.Object{Kind: authz.KindChannel},
+			true, authz.ReasonGrant},
+		{"and never a seat's", seat("sre", iam.Apps...), authz.ActionChatCreate,
+			authz.Object{Kind: authz.KindChannel}, false, authz.ReasonSeatRefused},
+		{"a message's author edits it", personLeading("sam", chat), authz.ActionChatEdit,
+			authz.Object{Kind: authz.KindMessage, Author: "sam"}, true, authz.ReasonAuthor},
+		{"a colleague does not", personLeading("ana", chat), authz.ActionChatEdit,
+			authz.Object{Kind: authz.KindMessage, Author: "sam"}, false, authz.ReasonNotAuthor},
+		{"admin takes a message down unread", personLeading("ops", admin),
+			authz.ActionChatDelete, authz.Object{Kind: authz.KindMessage, Unresolved: true},
+			true, authz.ReasonGrant},
+		{"a unit room's lead archives it", personLeading("cto", chat),
+			authz.ActionChatArchive, authz.Object{Kind: authz.KindChannel,
+				Container: "sre", Author: "sam"}, true, authz.ReasonLead},
+		{"its creator does", personLeading("sam", chat), authz.ActionChatArchive,
+			authz.Object{Kind: authz.KindChannel, Author: "sam"}, true, authz.ReasonAuthor},
+		{"a colleague does not archive a named room", personLeading("ana", chat),
+			authz.ActionChatArchive, authz.Object{Kind: authz.KindChannel, Author: "sam"},
+			false, authz.ReasonNotAuthor},
+		{"nor the lead of a unit it is not", personLeading("cto", chat),
+			authz.ActionChatArchive, authz.Object{Kind: authz.KindChannel,
+				Container: "web", Author: "sam"}, false, authz.ReasonNotLead},
+		{"a person marks their own read state", personLeading("sam", chat),
+			authz.ActionChatMark, authz.Object{Kind: authz.KindPerson, Owner: "sam"},
+			true, authz.ReasonSelf},
 
 		// --- the person asked ------------------------------------------- //
 		{"the person an open ask names reads the item", personLeading("sre"),
@@ -572,7 +618,7 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 		// --- whether a seat works ---------------------------------------- //
 		// ITS LEAD PAUSES IT, and nobody who merely uses the company's
 		// apps: a rule that asked for one would let any colleague stop any
-		// seat. No app: a lead who uses neither still runs their team.
+		// seat. No app: a lead who uses none still runs their team.
 		{"a lead pauses their report", personLeading("cto"),
 			authz.ActionSeatPause, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
 			true, authz.ReasonLead},
@@ -736,11 +782,15 @@ func TestAChartReadErrorIsUnknownNotARefusal(t *testing.T) {
 			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"}},
 		{"a tidy", authz.ActionPageTrash,
 			authz.Object{Kind: authz.KindPage, Container: "RUNBOOKS"}},
+		{"a unit room's archive", authz.ActionChatArchive,
+			authz.Object{Kind: authz.KindChannel, Container: "sre", Author: "sam"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			d := authz.Decide(t.Context(), seat("cto", iam.Apps...), c.action, c.object,
-				chart{err: behind}, decidedAt)
+			// A PERSON BOUND TO THEIR SEAT, holding every app: a seat would
+			// be refused the human-only rows before any chart is read.
+			d := authz.Decide(t.Context(), personLeading("cto", iam.Apps...), c.action,
+				c.object, chart{err: behind}, decidedAt)
 			if !d.Unknown() {
 				t.Fatalf("a chart that could not answer decided %v (%q), which "+
 					"a surface renders as a refusal", d.Allowed, d.Reason)

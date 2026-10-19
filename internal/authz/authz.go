@@ -148,15 +148,15 @@
 // # Admin, and one permission per app (ADR-0033)
 //
 // The vocabulary is admin and the apps ([iam.Grant]): `admin`, which runs the
-// company and the engine, and one permission per APP (`worklet`, `doclet`
-// and `artifacts`), which uses it. Every row names at most one app
+// company and the engine, and one permission per APP (`worklet`, `doclet`,
+// `artifacts` and `chatlet`), which uses it. Every row names at most one app
 // ([rule.app]) — the one gesture drawing on several names its set instead
-// ([rule.anyOf]) — and that decides three things at once: a [ClassApp] row admits whoever holds the app;
-// a RELATION row — a person's own record, a container's lead, a comment's
-// author — admits its relation only beside the app, so a lead who does not use
-// the tracker does not reorder a report's queue in it; and an administrator
-// passes every app check through [iam.Expand], so admin is never told it
-// lacks an app.
+// ([rule.anyOf]) — and that decides three things at once: a [ClassApp] row
+// admits whoever holds the app; a RELATION row — a person's own record, a
+// container's lead, a comment's author — admits its relation only beside the
+// app, so a lead who does not use the tracker does not reorder a report's
+// queue in it; and an administrator passes every app check through
+// [iam.Expand], so admin is never told it lacks an app.
 //
 // EVERYTHING ELSE IS EVERYBODY'S ([ClassEverybody]): the org chart, the
 // agents' status, spend, schedules, who to ask. A company is a shared place,
@@ -309,12 +309,19 @@ const (
 	// the artifacts filed in it, so no decision about an artifact ever
 	// reads one (ADR-0047).
 	KindArtifactFolder ObjectKind = "artifact_folder"
+	// KindChannel is one chat room — a named room, a unit's room, a group
+	// or a direct conversation. For a unit's room its [Object.Container] is
+	// the UNIT, which is what its archive asks the chart about.
+	KindChannel ObjectKind = "channel"
+	// KindMessage is one chat message; its [Object.Author] is the seat that
+	// said it.
+	KindMessage ObjectKind = "message"
 )
 
 // ObjectKinds are every kind, in declaration order.
 var ObjectKinds = []ObjectKind{
 	KindTask, KindProject, KindUnit, KindPage, KindContainer, KindPerson,
-	KindView, KindCompany, KindArtifact, KindArtifactFolder,
+	KindView, KindCompany, KindArtifact, KindArtifactFolder, KindChannel, KindMessage,
 }
 
 // Valid reports whether a kind is one this build knows.
@@ -365,18 +372,20 @@ type Object struct {
 	// AND BY THE CLASSES WHOSE OBJECT IS A ROW nobody has read yet —
 	// [ClassAppOrAsked] (which open ask names the caller is on the item),
 	// [ClassTidy], [ClassContainer] and [ClassDestructive] (which project or
-	// space the row is filed in, and who wrote it): an object marked
-	// unresolved there, naming no container, is answered [ErrUnresolved] for
-	// a caller the row could still admit — read the row, then decide again on
-	// it — so a surface offering a verb before it has read anything offers it
-	// to whoever the row might let through.
+	// space the row is filed in, and who wrote it), and [ClassAuthored] (who
+	// wrote the remark): an object marked unresolved there, naming no
+	// container or author, is answered [ErrUnresolved] for a caller the row
+	// could still admit — read the row, then decide again on it — so a
+	// surface offering a verb before it has read anything offers it to
+	// whoever the row might let through.
 	Unresolved bool
 
 	// Author is the login or seat that WROTE this, for the classes where
-	// authorship is an authority: a comment is edited and removed by
-	// whoever left it ([ClassAuthored]), and a page's creator or a work
-	// item's reporter tidies it — trashes, restores, renames, removes —
-	// beside its container's lead ([ClassTidy]).
+	// authorship is an authority: a comment or a chat message is edited and
+	// removed by whoever left it ([ClassAuthored]), and a page's creator, a
+	// work item's reporter or a room's creator tidies it — trashes,
+	// restores, renames, removes, archives — beside its container's lead
+	// ([ClassTidy]).
 	//
 	// EMPTY MEANS "NO AUTHOR ARM", never "anybody wrote it": a tidy of a row
 	// whose creator nobody recorded is its container lead's or an
@@ -400,10 +409,11 @@ type Object struct {
 	// nobody has looked.
 	Asked string
 
-	// Container is the project a task is filed under, or the container a
-	// page sits in. It is what the container and destructive classes ask
-	// the chart about — and, for [ClassSubtree], the key of the unit an org
-	// chart change reaches, empty for the company root.
+	// Container is the project a task is filed under, the container a page
+	// sits in, or the UNIT a unit's chat room belongs to. It is what the
+	// container, tidy and destructive classes ask the chart about — and, for
+	// [ClassSubtree], the key of the unit an org chart change reaches, empty
+	// for the company root.
 	Container string
 
 	// ContainerKind is what sort of thing Container names, for the one

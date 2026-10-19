@@ -277,3 +277,41 @@ func actAnswer(t *testing.T, h http.Handler, tool, body string) (int, map[string
 	h.ServeHTTP(rec, r)
 	return rec.Code, decode(t, rec), rec.Header()
 }
+
+// AN OBJECT NAMED BY A LIST IS NAMED BY THE LIST. A direct conversation is its
+// participants, and `send_dm` and `open_dm` address it by them alone, so a
+// refusal's detail names who it was with — the handles as the call gave them,
+// its empty and non-text entries dropped — beside the text arguments every
+// other tool names its object by. Read as text only, a failed DM named
+// nothing at all.
+//
+// Mutation: drop About's list arm and the participants go missing; keep an
+// entry that is blank and the first case does.
+func TestAnObjectNamedByAListIsNamedInTheRefusal(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		tool string
+		args map[string]any
+		want httpjson.Detail
+	}{
+		{"a conversation, by its participants", "send_dm",
+			map[string]any{"to": []any{"bob", " ", 7, "ana"}, "body": "hi"},
+			httpjson.Detail{"tool": "send_dm", "to": []string{"bob", "ana"}}},
+		{"a list naming nobody names nothing", "open_dm",
+			map[string]any{"to": []any{"", "  "}},
+			httpjson.Detail{"tool": "open_dm"}},
+		{"a room, by its text", "post_message",
+			map[string]any{"channel": "#launch", "body": "hi"},
+			httpjson.Detail{"tool": "post_message", "channel": "#launch"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := operator.About(tc.tool, tc.args)
+			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
+				t.Errorf("About(%s, %v) = %v, want %v", tc.tool, tc.args, got, tc.want)
+			}
+		})
+	}
+}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -105,7 +104,7 @@ type PageDeps struct {
 	// it as [doclet.Actor.OpKey] on the actor it returns, which is the one
 	// way a key reaches a page write outside a turn — the store derives
 	// every write's id from it, bound to what that write says. In a turn
-	// the key is the turn's ([pageOpKey]), whatever the actor carries.
+	// the key is the turn's ([callOpKey]), whatever the actor carries.
 	Actor func(ctx context.Context, turn *turnctx.Turn) (doclet.Actor, error)
 
 	// Await is handed the position every page write landed at, so the next
@@ -115,70 +114,6 @@ type PageDeps struct {
 	// re-reads from a copy that has not caught up gets a stale version and
 	// its next save is refused.
 	Await func(ctx context.Context, at statelog.Position) error
-}
-
-// pageOpKey is the operation key every page write this call makes is derived
-// from, set on [doclet.Actor.OpKey]: the package doc's one rule, "How a write
-// is made once", for the knowledge base, whose store derives each write's id
-// from the key, the verb, the object and a digest of what the write says
-// ([doclet.Store]):
-//
-//   - IN A TURN, a key derived from the turn's seed ([turnKey]), the instant
-//     it began ([turnSince]), the tool, a digest of the call's own arguments
-//     ([turnctx.ArgsDigest]) and this call's repeat count in the run
-//     ([turnctx.CallLog.Ordinal]) — so a re-run's write is the first run's,
-//     and a page saved A, then B, then A again in one run is three saves
-//     rather than the third collapsing into the first, which the store's
-//     digest of what each save says would otherwise make it;
-//   - OUTSIDE ONE, the key the caller's transport put on the actor
-//     ([PageDeps.Actor]), as it was sent: it already names one request,
-//     held to the operation grammar and scoped to the principal that sent
-//     it by internal/api/opkey;
-//   - or none, and the store mints a fresh id for each write.
-//
-// THE DIGEST IS THE CALL'S OWN, beside the parts the store adds, because the
-// two answer different questions and the count needs both. The repeat count
-// compares the arguments AS TYPED, skipping every earlier call that was this
-// same call, while the store's parts are what the call RESOLVED to — the page
-// id, a digest of the body. A page can be named two ways (an id, or
-// "CONTAINER/Title"), so two calls typed differently resolve alike, and a
-// count they happen to share handed the later one the earlier one's id: "ok"
-// by id, the same again, "ok" by title, "other" by id and "ok" by id once more
-// gave the last call the title call's count, so it was answered with that
-// comment's success and nothing was written. The tracker's ids have always
-// carried the digest ([opIDFor]).
-func pageOpKey(turn *turnctx.Turn, tool string, args map[string]any,
-	actor doclet.Actor) string {
-
-	seed := turnKey(turn)
-	if seed == "" {
-		return actor.OpKey
-	}
-	identity := []string{pageCallNamespace, seed, tool, turnctx.ArgsDigest(args)}
-	if n := turn.CallLog().Ordinal(tool, args); n > 0 {
-		identity = append(identity, "repeat:"+strconv.Itoa(n))
-	}
-	return statelog.DeriveOpID(turnSince(turn), "", identity...)
-}
-
-// pageCallNamespace scopes [pageOpKey]'s derivation. FIXED for the life of
-// the format: a new one would make every re-run turn's page write a second
-// one.
-const pageCallNamespace = "crewlet.pages.call"
-
-// pageRepeat says how this caller makes a page write again as the same
-// operation, or "" where no repeat is the same operation: a turn's call made
-// again unchanged, a request sent again under its key, and nothing for a call
-// that carried no key at all.
-func pageRepeat(turn *turnctx.Turn, key, tool string) string {
-	switch {
-	case turnKey(turn) != "":
-		return fmt.Sprintf("call %s again with exactly the same arguments, "+
-			"before calling it with any others", tool)
-	case key != "":
-		return "send the same request again, unchanged"
-	}
-	return ""
 }
 
 // settle hands a page write's position to [PageDeps.Await], so the next read
@@ -568,7 +503,7 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	if t.deps.Writer == nil {
 		return unconfiguredKB(WritePageTool), nil
 	}
-	actor.OpKey = pageOpKey(turn, t.Name(), args, actor)
+	actor.OpKey = callOpKey(turn, t.Name(), nil, args, actor.OpKey)
 	status, refusal := createStatus(args)
 	if refusal != "" {
 		return failed(refusal), nil
@@ -734,7 +669,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	}
 	// ONE KEY FOR THE SAVE AND THE RENAME AFTER IT: the store derives each
 	// record's id from its own verb, so the two stay two operations.
-	actor.OpKey = pageOpKey(turn, t.Name(), args, actor)
+	actor.OpKey = callOpKey(turn, t.Name(), nil, args, actor.OpKey)
 	ref := strings.TrimSpace(argString(args, "page"))
 	if ref == "" {
 		return failed("save_page needs a `page` — an id, or \"CONTAINER/Title\"."), nil
@@ -952,10 +887,10 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		return unconfiguredKB(CommentOnPageTool), nil
 	}
 	// THE CALL'S KEY, its arguments' digest and repeat count included — see
-	// [pageOpKey] for what a remark made again after another one cost
+	// [callOpKey] for what a remark made again after another one cost
 	// without them, however it named the page. One key for an edit and for
 	// a new remark: the store derives each from its own verb.
-	actor.OpKey = pageOpKey(turn, t.Name(), args, actor)
+	actor.OpKey = callOpKey(turn, t.Name(), nil, args, actor.OpKey)
 	ref := strings.TrimSpace(argString(args, "page"))
 	body := strings.TrimSpace(argString(args, "body"))
 	switch {
@@ -1014,7 +949,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// operator's assistant names no operation for a page write, so its
 	// repeat is a new comment, and a second one if the first landed.
 	// [unknownNext] is the rule every tracker write already answers by.
-	again := pageRepeat(turn, actor.OpKey, CommentOnPageTool)
+	again := callRepeat(turn, actor.OpKey, CommentOnPageTool)
 	commentNext := func(unvouched bool) string {
 		return unknownNext(unvouched, again,
 			"Read the page's comments with get_page", "that is a second comment")

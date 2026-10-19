@@ -1521,11 +1521,11 @@ api:
                         #   by colons (ci-pipeline, ci:release), at most 58
                         #   characters so the login stays within 64
         token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26+ chars, on the RESOLVED value
-        grants: [admin]  # admin, worklet, doclet, artifacts: what it may do, and
-                        #   the most an invitation or a create it makes may
-                        #   confer — the first person's included. admin
-                        #   includes every app; on a node whose admin is
-                        #   refuse, listing it is refused
+        grants: [admin]  # admin, worklet, doclet, artifacts, chatlet: what it
+                        #   may do, and the most an invitation or a create it
+                        #   makes may confer — the first person's included.
+                        #   admin includes every app; on a node whose admin
+                        #   is refuse, listing it is refused
 
 logging:
   level: info       # debug, info (default), warn, error
@@ -1679,10 +1679,10 @@ the artifact note in `SECURITY.md`).
 **`api.auth.admin` says whether this node serves admin**, and it is required
 once a port is set: `serve`, or `refuse`. A person's
 [permissions](../concepts/identity-and-access.md#access-admin-and-one-permission-per-app)
-(`admin`, `worklet`, `doclet`, `artifacts`) live in the replicated store and are
-written by an administrator; this is each node's statement, in the tier that
-holds the keyring and never read from Tier B, of whether `admin` counts here at
-all. A `refuse` node clamps admin away from every principal composed on it and
+(`admin`, `worklet`, `doclet`, `artifacts`, `chatlet`) live in the replicated
+store and are written by an administrator; this is each node's statement, in
+the tier that holds the keyring and never read from Tier B, of whether `admin`
+counts here at all. A `refuse` node clamps admin away from every principal composed on it and
 keeps every app — admin includes the apps, and they are expanded before admin
 is taken away — which is how a node published to the people who use the company
 is kept from being one anybody administers it through, however their row reads.

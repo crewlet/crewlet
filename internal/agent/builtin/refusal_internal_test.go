@@ -8,9 +8,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -272,6 +275,132 @@ func TestPageWriteFailureClassesEachSentinel(t *testing.T) {
 	}
 }
 
+// EVERY CHAT SENTINEL HAS ITS OWN CLASS, on [TestPageWriteFailureClassesEachSentinel]'s
+// reasoning — and the chat store wraps every refusal it decides on what was
+// asked in one of them, so the unmarked remainder is this node's: a condition
+// waiting clears, or a fault. Every row is shaped the way the store builds it:
+// a field refusal from a payload's own validation, the rest wrapping their
+// mark with the sentence after it.
+//
+// Mutation: drop any arm of chatClass and its row goes red.
+func TestChatWriteFailureClassesEachSentinel(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		err  error
+		want tools.Refusal
+	}{
+		{"a field refused", chatlet.ChannelPatch{}.Validate(), tools.RefusalInvalid},
+		// A ROOM THAT TAKES NOTHING MORE is fixed by saying it somewhere
+		// else — the argument — and is nobody's permission to ask for.
+		{"an archived room", fmt.Errorf("%w: room-1 was archived", chatlet.ErrArchived),
+			tools.RefusalInvalid},
+		{"not this actor's", fmt.Errorf("%w: message m1 was written by ana",
+			chatlet.ErrForbidden), tools.RefusalForbidden},
+		// A ROOM A NEWER PEER MADE is this node's to serve once upgraded,
+		// never a permission: told "forbidden", a caller stops asking for
+		// something that lands the moment this node is upgraded.
+		{"a room of a kind this build does not know", fmt.Errorf("%w: room-1 is "+
+			"a \"guild\" room", chatlet.ErrUnknownKind), tools.RefusalUnavailable},
+		{"a name somebody holds", fmt.Errorf("%w: launch", chatlet.ErrNameTaken),
+			tools.RefusalExists},
+		{"a conversation already open", fmt.Errorf("%w: dm-1", chatlet.ErrRoomExists),
+			tools.RefusalExists},
+		{"a lost race", fmt.Errorf("%w: room-1: %w", chatlet.ErrConflict,
+			statelog.ErrConflict), tools.RefusalConflict},
+		{"no such room", fmt.Errorf("%w: room room-1", chatlet.ErrNotFound),
+			tools.RefusalNotFound},
+		// THE LOG'S OWN REFUSAL is the node's condition, and anything
+		// unmarked its fault: a person told to fix their input over a disk
+		// error is the lie these rows pin.
+		{"log refused", &statelog.Unavailable{Reason: statelog.ReasonDeferred},
+			tools.RefusalUnavailable},
+		{"timed out", fmt.Errorf("x: %w", context.DeadlineExceeded), tools.RefusalUnavailable},
+		{"ledger unreadable", errors.New("statelog: read the operation ledger: " +
+			"disk I/O"), tools.RefusalInternalError},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := chatWriteFailure(t.Context(), PostMessageTool, c.err, "")
+			if !got.Failed || tools.RefusalOf(got) != c.want {
+				t.Fatalf("chatWriteFailure(%v) = failed %v class %q, want %q",
+					c.err, got.Failed, tools.RefusalOf(got), c.want)
+			}
+		})
+	}
+}
+
+// AND A REFUSAL OF WHAT A CHAT CALL ASKED IS THE STORE'S OWN SENTENCE: the
+// field, the rule or the room it names, without the package's Go prefix, and
+// none of the wording a tool tells a model about a failure of the node, since
+// nothing failed: the call was refused for what it asked.
+func TestAChatRefusalIsTheStoresOwnSentence(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		got  tools.Result
+		says string
+	}{
+		"invalid": {chatWriteFailure(t.Context(), PostMessageTool,
+			chatlet.ChannelPatch{}.Validate(), ""), "`patch`: a patch sets no field"},
+		"forbidden": {chatWriteFailure(t.Context(), ReactToMessageTool, fmt.Errorf("%w: "+
+			"room-1 is a private room and jane is not in it", chatlet.ErrForbidden), ""),
+			"room-1 is a private room and jane is not in it"},
+		"a room this node cannot serve yet": {chatWriteFailure(t.Context(), PostMessageTool,
+			fmt.Errorf("%w: room-1 is a \"guild\" room — upgrade this node",
+				chatlet.ErrUnknownKind), ""),
+			"room-1 is a \"guild\" room — upgrade this node"},
+		"forbidden read": {chatReadFailure(t.Context(), ReadChannelTool, fmt.Errorf("%w: "+
+			"viewer: this chat read resolved to no seat", chatlet.ErrForbidden)),
+			"viewer: this chat read resolved to no seat"},
+		"invalid read": {chatReadFailure(t.Context(), ReadChannelTool,
+			chatlet.ChannelPatch{}.Validate()), "`patch`: a patch sets no field"},
+	} {
+		if !strings.Contains(c.got.Output, c.says) {
+			t.Errorf("%s: the sentence does not say %q: %s", name, c.says, c.got.Output)
+		}
+		for _, never := range []string{"chatlet:", "did not land", "do not report it as done"} {
+			if strings.Contains(c.got.Output, never) {
+				t.Errorf("%s: a refusal of what was asked carries %q: %s", name, never,
+					c.got.Output)
+			}
+		}
+	}
+}
+
+// A CHAT WRITE NOBODY ANSWERED IS UNKNOWN, and nothing wrapping the answer
+// turns it back. A post the router sent to a data node that never answered
+// may have been said; send_dm's post after its open rewrote every node-class
+// answer as "the message was NOT sent", and that class is the one an unknown
+// outcome is answered in — so the mapper's unknown would reach the caller as a
+// refusal saying the opposite.
+func TestAChatWriteNobodyAnsweredIsUnknown(t *testing.T) {
+	t.Parallel()
+	err := fmt.Errorf("%w (chat.post, asked of data-1, data-2)", estate.ErrOutcomeUnknown)
+	room := chatlet.Written{Channel: chatlet.Channel{ID: "dm-1"}}
+	for name, got := range map[string]tools.Result{
+		"a chat write": chatWriteFailure(t.Context(), PostMessageTool, err, ""),
+		"a direct message's post after its open": directPostFailure(t.Context(),
+			[]string{"sam"}, room, err, ""),
+	} {
+		if !tools.UnknownOf(got) || tools.RefusalOf(got) != tools.RefusalUnavailable {
+			t.Errorf("%s nobody answered: failed %v unknown %v class %q, want an "+
+				"unavailable refusal marked unknown", name, got.Failed,
+				tools.UnknownOf(got), tools.RefusalOf(got))
+		}
+		for _, never := range []string{"nothing was written", "NOT sent", "was not said"} {
+			if strings.Contains(got.Output, never) {
+				t.Errorf("%s nobody answered says %q, which nobody can know: %s",
+					name, never, got.Output)
+			}
+		}
+	}
+	// AND THE DIRECT MESSAGE STILL SAYS ITS CONVERSATION IS OPEN: the open is
+	// a record that landed, and only the post after it is in doubt.
+	if dm := directPostFailure(t.Context(), []string{"sam"}, room, err, ""); !strings.Contains(dm.Output, "is open (dm-1)") {
+		t.Errorf("a direct message's unanswered post does not say its "+
+			"conversation is open: %s", dm.Output)
+	}
+}
+
 // THE SHARED REFUSALS ARE NEVER "NOT FOUND". A read this node could not serve
 // and a backend this company does not run both say nothing about whether the
 // object exists, and a surface told not-found would render it as gone. And a
@@ -292,7 +421,17 @@ func TestTheSharedRefusalsCarryTheirClass(t *testing.T) {
 		"page read, behind":     {pageReadFailure(t.Context(), "get_page", behind), tools.RefusalUnavailable},
 		"tracker read, a fault": {readFailure(t.Context(), "get_work_item", boom), tools.RefusalInternalError},
 		"page read, a fault":    {pageReadFailure(t.Context(), "get_page", boom), tools.RefusalInternalError},
-		"bare failed":           {failed("needs an `item`"), tools.RefusalInvalid},
+		"no Chatlet":            {unconfiguredChat("post_message"), tools.RefusalUnavailable},
+		"chat read, behind":     {chatReadFailure(t.Context(), "read_channel", behind), tools.RefusalUnavailable},
+		"chat read, a fault":    {chatReadFailure(t.Context(), "read_channel", boom), tools.RefusalInternalError},
+		// A CHAT CALLER WITH NOBODY TO ACT AS is forbidden whichever way
+		// it got there: a seat outside a turn, or a request that carries
+		// no person bound to a seat — whose sentence names the binding.
+		"chat outside a turn": {chatActorFailure("post_message", turnctx.ErrNoSeat),
+			tools.RefusalForbidden},
+		"chat with nobody": {chatActorFailure("post_message",
+			errors.New("builtin: this request carries nobody")), tools.RefusalForbidden},
+		"bare failed": {failed("needs an `item`"), tools.RefusalInvalid},
 	} {
 		if !c.got.Failed || tools.RefusalOf(c.got) != c.want {
 			t.Errorf("%s: failed %v class %q, want %q", name, c.got.Failed,

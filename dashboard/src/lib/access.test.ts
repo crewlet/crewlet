@@ -42,6 +42,7 @@ describe("expand", () => {
       "doclet",
       "worklet",
       "artifacts",
+      "chatlet",
     ]);
   });
 
@@ -58,7 +59,9 @@ describe("holds", () => {
   test("counts every app an admin carries", () => {
     expect(holds(["admin"], "worklet")).toBe(true);
     expect(holds(["admin"], "doclet")).toBe(true);
+    expect(holds(["admin"], "chatlet")).toBe(true);
     expect(holds(["worklet"], "doclet")).toBe(false);
+    expect(holds(["worklet"], "chatlet")).toBe(false);
     expect(holds(["worklet"], "admin")).toBe(false);
   });
 
@@ -86,6 +89,7 @@ describe("the words", () => {
   test("a set is said as Admin, its apps, or the overview", () => {
     expect(accessLine(["admin", "worklet", "doclet"])).toBe("Admin");
     expect(accessLine(["doclet", "worklet"])).toBe("Worklet · Doclet");
+    expect(accessLine(["chatlet", "worklet", "doclet"])).toBe("Worklet · Doclet · Chatlet");
     expect(accessLine(["worklet"])).toBe("Worklet");
     expect(accessLine([])).toBe("Overview only");
   });

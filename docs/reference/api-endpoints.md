@@ -520,7 +520,7 @@ node means nothing was done.
 > |---|---|
 > | `Authorization` | the guard: the bearer token |
 > | `Content-Type` | every route that takes a body |
-> | `Idempotency-Key` | [`/operator/act`](#operatoract--the-dashboards-write-surface), which requires it, and `/work`, `/pages` and `/iam`, which make a retry the same write by it |
+> | `Idempotency-Key` | [`/operator/act`](#operatoract--the-dashboards-write-surface), which requires it, and `/worklet`, `/doclet/pages` and `/iam`, which make a retry the same write by it |
 > | `If-Match`, `If-None-Match` | `/config` and its entities, a work item, a project file and `/setup`'s disconnect — see [Conditional requests](#conditional-requests) |
 > | `X-Summary` | a `/config` write's revision summary |
 > | `X-Crewlet-Invite-Secret`, `X-Crewlet-Reset-Secret` | `GET /auth/invite/{id}` and `GET /auth/reset/{id}`: a link's secret, kept out of the URL |
@@ -724,10 +724,11 @@ trusted, and every start of the node logs the same warning as
 Holding a credential is not the same as being allowed to use it here. Every
 route and every socket question declares who may ask it — **everybody**, one
 of the [permissions](../concepts/identity-and-access.md#access-admin-and-one-permission-per-app)
-(`admin`, `worklet`, `doclet`, `artifacts`), or a verb of the authority table that the
-answer decides record by record — and a principal that does not carry what it
-declares is refused, a Tier A token included, whose declared permissions are
-read through the node's `api.auth.admin` posture on every request.
+(`admin`, `worklet`, `doclet`, `artifacts`, `chatlet`), or a verb of the
+authority table that the answer decides record by record — and a principal that
+does not carry what it declares is refused, a Tier A token included, whose
+declared permissions are read through the node's `api.auth.admin` posture on
+every request.
 
 **`403`, not `401`**, and the difference matters to a client: `401` means
 *present a credential* and `403` means *the one you presented does not carry
@@ -5229,16 +5230,20 @@ The **same tools a seat holds**, not a parallel implementation: `list_work_items
 `list_project_files`, `read_project_file`, `write_project_file`, `remove_project_file`,
 `task_activity`, `my_work`,
 `list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`,
-`search_knowledge`, and, wherever the node takes artifact uploads,
+`search_knowledge`; wherever the node takes artifact uploads,
 `list_artifacts`, `get_artifact`, `get_company_brand`, `create_artifact`,
 `publish_artifact`, `update_artifact`, `share_artifact`, `unshare_artifact`,
 `upload_artifact_asset`, `create_artifact_folder`, `move_artifact`,
 `read_artifact_data`, `query_artifact_data`,
 `write_artifact_data` and `set_artifact_schema` (see
-[Artifacts](../guides/tools-and-mcp.md#artifacts)); each artifact write answers
-its `op_id` here as Worklet's do. A schema, a default, a trimmed field and the wording of a
-refusal are each written once — two copies of "file an item" drift on exactly
-the parts nobody looks at, and only one of the two is ever tested.
+[Artifacts](../guides/tools-and-mcp.md#artifacts)), each artifact write
+answering its `op_id` here as Worklet's do; and, where the company runs
+Chatlet, `list_channels`, `read_channel`, `search_messages`,
+`post_message`, `reply_in_thread`, `send_dm`, `react_to_message`,
+`join_channel` and `leave_channel`. A schema, a default, a trimmed field and
+the wording of a refusal are each written once — two copies of "file an item"
+drift on exactly the parts nobody looks at, and only one of the two is ever
+tested.
 
 **An argument a tool does not take is refused, naming it** and the arguments
 the tool does read, rather than dropped. A tool reads what its schema declares
@@ -5321,15 +5326,16 @@ land, and nothing a call does not name changes:
 | `set_pins` | `views` and `favorites`, each `{add, remove}` or `{set}` — never both, and a bare list is refused naming the shape. The caps are held against the list the change would leave. |
 | `set_priorities` | `handle`, `items` — the whole order, most important first — and `if_match`, the `version` `get_person` answered: given, a reorder against an older record is refused `stale_version`. |
 
-Plus **sixteen no seat is given**: `list_work_views`, `save_work_view`,
+Plus **twenty-three no seat is given**: `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`,
 `mark_inbox`, `set_pins`, `set_priorities`,
 `remove_work_item`, `restore_work_item`,
 [`place_work_item`](#moving-a-card-on-a-board),
 [`answer_run`](#answering-a-parked-coding-run),
 [`pause_seat` and `resume_seat`](#pausing-and-resuming-a-seat),
-[`steer_turn`](#steering-a-running-turn), and
-[`answer_knowledge`](#answering-a-question-from-the-companys-knowledge). A view is furniture — a name, a shape
+[`steer_turn`](#steering-a-running-turn),
+[`answer_knowledge`](#answering-a-question-from-the-companys-knowledge), and
+[the seven chat gestures only a person makes](#the-chat-gestures-only-a-person-makes). A view is furniture — a name, a shape
 and a filter, arranged so a person finds the same question tomorrow — and a
 seat's job is the work rather than the furniture around it. And the
 catalogue is the company's own vocabulary: a seat adding a type so its own
@@ -5351,6 +5357,47 @@ a colleague, or resume itself, would be overruling the people who run the
 company. And a note to a running turn is a person redirecting the work: a seat
 that could steer a colleague's turn would be directing it past the person who
 asked for the work.
+
+### The chat gestures only a person makes
+
+Where the company runs Chatlet, the dashboard's chat screen makes every
+change it makes through this catalogue — a person's own assistant reaches the
+same tools — and seven of them are given to no seat:
+
+| Tool | Arguments | What it does |
+|---|---|---|
+| `create_channel` | `channel` — the new room's name — and optionally `kind` (`public` or `private`; omitted takes `chat.chatlet.default_channel_private`), `topic`, `purpose`, `members` | Makes a named room, with the caller in it. The name is its address, so two people asking for one contend and one is refused `exists`. A unit's own room is the org chart's: the engine opens one for each unit that declares a `channel`, and a create of kind `unit` is refused `forbidden`. A room keeps what the company keeps; a horizon of its own is an administrator's to set. |
+| `open_dm` | `to` — the other handles | Opens the conversation between the caller and them, or reaches the one already open, without saying anything; `created` says which. Its id is its participants, so opening it twice is one room. |
+| `update_channel` | `channel`, and any of `topic`, `purpose`, `archived` | Changes only what it names: an empty `topic` clears the topic, an absent one leaves it. A topic and a purpose are any member's. `archived` closes the room to new messages — or, `false`, opens it again — and that is **not** any member's: it is decided on the stored room (`chat.channel.archive`), for its creator, the lead of the unit a unit's room belongs to or of a unit above it, or an administrator. An archived room is still read and searched. |
+| `set_channel_members` | `channel`, `members` | States the room's WHOLE membership — whoever is left out is taken out, and an empty list empties it. Refused for a unit's room, whose membership is the org chart's, and for a direct conversation, whose id is its participants. |
+| `edit_message` | `channel`, `message_id`, `body`, and optionally `links` | Rewrites a message. Only its author may. Whoever the new words name for the first time is told; nobody else is woken again. `links` changes only when sent: omitted, the message keeps the links it has, so fixing a typo needs only the new `body`; a list replaces them, and an empty list removes them. Each link is an absolute `http`, `https` or `mailto` address, stored as sent; any other is refused `invalid`, naming every entry that is not one (`links[1]`). |
+| `delete_message` | `channel`, `message_id` | Takes a message back: its words go and its row stays, so a thread hung off it keeps its root. Its author may, and so may an administrator — moderation, decided before the message is read, so it reaches a message in any room, a private room or a direct conversation the administrator is not in included, without showing it to them. |
+| `mark_chat_read` | any of `cursors` (room id → the position read through), `mute` and `unmute` (room ids), `dnd_until` (RFC 3339; empty ends it) | Records how far the caller has read, which rooms they mute or unmute and whether they are in do-not-disturb — the caller's own record, kept under their seat. A cursor only moves forward, and past 256 rooms the one read least recently is forgotten. A mute is a ROOM AT A TIME rather than a list: each named room is muted or unmuted and every other keeps its state, so muting one needs nothing read first and two screens toggling two rooms at once both land. A mute that would take the set past 256 rooms is refused `invalid` rather than cut, and so is one room both muted and unmuted in one call. The answer's `read` is the caller's whole read state as the write left it, named by its `handle`, and `read.revision` orders it against any other state of the same record. Not a record on the log — it is written to the coordination store and answers `applied` at no position. A flush whose write went out and whose answer was lost answers `unknown` (on `/operator/act`, the 503 with `outcome: unknown`): it may have landed, and sending the same call again is safe, because a cursor only moves forward and a mute, an unmute or a do-not-disturb sent twice is stated twice. |
+
+`members` is a list of handles, or of `{handle, follow_all}` where the member
+should hear everything said in the room. Each is a person's for its own
+reason: a seat corrects what it said by replying, which the room sees arrive,
+rather than rewriting a remark colleagues already acted on; a room, its
+settings and its membership are the company's furniture and a private room's
+readership; and a read cursor is a person's attention — a seat is woken rather
+than reading, and has none.
+
+**Every chat verb is made as a seat**, the reads included: a room renders a
+speaker by seat, its membership is seats, and a private room's contents are
+its members'. A person writes and reads as the human seat they hold, and a
+credential acting as itself — a Tier A token, a service account bound to no
+seat — is refused every one of them `403 unauthorized` with reason `unseated`
+before anything is read; binding it to a human seat (`crewlet iam bind`) is
+what admits it.
+
+Every one of them answers `outcome` and `position` like every other write,
+and is made once however often it is asked: through `/operator/act` the retry
+of a gesture is the same request under the same `Idempotency-Key`, and every
+operation it makes is derived from that key. The ones that state something —
+the settings, the members, the words, the tombstone, the conversation — answer
+an `unknown` by offering the same call as harmless, because stating it again
+changes nothing where the first landed; `create_channel` says to look first,
+since a second create of a name that landed is refused as taken.
 
 ### Moving a card on a board
 
@@ -5626,11 +5673,13 @@ rather than new ones; a create, a comment, an update, a page write, a project
 or catalogue change, a saved view and a person's own marks, pins and queue all
 follow the one rule.
 
-Each tool appears only where the company runs its half, Worklet or Doclet: a company on
-`tracker.backend: jira` gets the page tools and not the work tools, and one on
-neither gets only the verbs about the fleet's own records — `answer_run`,
-`pause_seat`, `resume_seat` and `steer_turn` — which every node serves whatever
-the company runs, so the catalogue is never empty. It is read per request, so
+Each tool appears only where the company runs its half (Worklet, Doclet or Chatlet):
+a company on
+`tracker.backend: jira` gets the page tools and not the work tools, one off
+Chatlet gets no chat tool, and one native in none of the three gets only
+the verbs about the fleet's own records — `answer_run`, `pause_seat`,
+`resume_seat` and `steer_turn` — which every node serves whatever the company
+runs, so the catalogue is never empty. It is read per request, so
 a node that has not been handed a company yet answers `503 no_active_revision`
 with a 15-second `Retry-After`, and serves the tools its first revision brings
 up with no restart. `search_knowledge` and `answer_knowledge` are the exception and

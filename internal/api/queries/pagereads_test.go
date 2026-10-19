@@ -324,7 +324,7 @@ func TestLinkedFromTasksNeedWorklet(t *testing.T) {
 		tasks   bool
 	}{
 		{"the knowledge base alone", []iam.Grant{iam.GrantDoclet}, false},
-		{"both apps", iam.Apps, true},
+		{"every app", iam.Apps, true},
 		{"an admin", []iam.Grant{iam.GrantAdmin}, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
