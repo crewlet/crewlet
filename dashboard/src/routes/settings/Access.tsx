@@ -83,8 +83,8 @@
  * A row's ACCESS column says what it amounts to — "Admin" (which includes
  * every app), the apps it holds ("Tracker · Knowledge"), or "Overview only" —
  * through `lib/access.ts`'s one reading, so a row stored as `[admin]` and one
- * stored as `[admin, tracker, knowledge]` read the same, as the engine treats
- * them.
+ * stored as `[admin, tracker, knowledge, artifacts, chat]` read the same, as the
+ * engine treats them.
  */
 
 import { useCallback, useMemo, useState } from "react";

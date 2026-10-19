@@ -29,6 +29,7 @@ const BOUND: ViewerState = {
   admin: false,
   tracker: true,
   knowledge: true,
+  chat: true,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -112,6 +113,7 @@ test("a change several apps open names each of them to a reader holding none", (
     grants: [],
     tracker: false,
     knowledge: false,
+    chat: false,
     acts: [],
   };
   expect(writeAccess("answer_knowledge", none, "open")).toEqual({

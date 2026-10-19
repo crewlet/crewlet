@@ -75,7 +75,7 @@ test("a refusal is the engine's words, the grants that admit, and what had lande
   answer(403, {
     error: "unauthorized",
     message:
-      "You don’t have the access this needs (Admin, Tracker or Knowledge). Ask an admin for it.",
+      "You don’t have the access this needs (Admin, Tracker, Knowledge or Chat). Ask an admin for it.",
     reason: "conferral",
     grants: ["admin"],
     landed: ["identity"],
@@ -84,7 +84,7 @@ test("a refusal is the engine's words, the grants that admit, and what had lande
   expect(got.kind).toBe("refused");
   const text = got.kind === "refused" ? got.text : "";
   // ONE SENTENCE, never the engine's general list beside the specific need.
-  expect(text).not.toMatch(/Admin, Tracker or Knowledge/);
+  expect(text).not.toMatch(/Admin, Tracker, Knowledge or Chat/);
   expect(text).toMatch(/You need Admin access for this\./);
   expect(text).toMatch(/What did change: the login and seat\./);
 });

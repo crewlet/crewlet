@@ -190,7 +190,7 @@ func (f *fakeNode) backend() Backend {
 	rooms := f.rooms
 	f.mu.Unlock()
 	if rooms != nil {
-		b.Chat, b.ChatSearch = rooms, rooms
+		b.Chat, b.ChatWriter, b.ChatSearch = rooms, rooms, rooms
 	}
 	return b
 }

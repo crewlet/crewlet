@@ -644,7 +644,7 @@ test("an edit refused part way reads the directory again", async () => {
       json(403, {
         error: "unauthorized",
         message:
-          "You don’t have the access this needs (Admin, Tracker or Knowledge). Ask an admin for it.",
+          "You don’t have the access this needs (Admin, Tracker, Knowledge or Chat). Ask an admin for it.",
         id: "p-bo",
         landed: ["identity"],
       }),
@@ -859,14 +859,14 @@ test("unticking Admin keeps the apps it included", async () => {
   expect(admin).toHaveProperty("disabled", false);
   expect(tracker).toHaveProperty("checked", true);
   expect(tracker).toHaveProperty("disabled", true);
-  expect(within(edit).getAllByText("Included with Admin.")).toHaveLength(3);
+  expect(within(edit).getAllByText("Included with Admin.")).toHaveLength(4);
   fireEvent.click(admin);
   expect(within(edit).getByRole("checkbox", { name: "Tracker" })).toHaveProperty("checked", true);
   expect(within(edit).getByRole("checkbox", { name: "Tracker" })).toHaveProperty("disabled", false);
   fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
   await settle();
   expect(eng.writes().map((w) => w.body)).toEqual([
-    { add_grants: ["tracker", "knowledge", "artifacts"], remove_grants: ["admin"] },
+    { add_grants: ["tracker", "knowledge", "artifacts", "chat"], remove_grants: ["admin"] },
   ]);
 });
 
@@ -914,7 +914,7 @@ test("a service account's mint starts from its own access, and never a name this
   fireEvent.click(within(mint).getByRole("button", { name: "Create token" }));
   await settle();
   expect(eng.writes().map((w) => w.body)).toEqual([
-    { grants: ["tracker", "admin", "knowledge", "artifacts"] },
+    { grants: ["tracker", "admin", "knowledge", "artifacts", "chat"] },
   ]);
 });
 

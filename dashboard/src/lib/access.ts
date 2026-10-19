@@ -4,9 +4,9 @@
  * The engine's whole vocabulary is admin and the apps (`contract/identity.ts`'s
  * GRANTS, held to `iam.AllGrants`): `admin`, which runs the company and the
  * engine and INCLUDES EVERY APP, and one permission per app: `tracker` for
- * the work tracker, `knowledge` for the knowledge base and `artifacts` for
- * authoring artifacts (APPS, held to `iam.Apps`, the one place an app is
- * declared). Everything a signed-in
+ * the work tracker, `knowledge` for the knowledge base, `artifacts` for
+ * authoring artifacts and `chat` for the company's own chat (APPS, held to
+ * `iam.Apps`, the one place an app is declared). Everything a signed-in
  * principal may do beyond its own account and the read-only overview comes
  * from these, so this module is the one place a screen asks "does the reader
  * hold this?" and the one place the dashboard says a permission in words.
@@ -18,7 +18,7 @@
  * viewer needs nothing more. A STORED row is another matter: a person's
  * directory row, an invitation or a token may hold `[admin]` alone (a Tier A
  * file, a CLI create), and reading it raw would draw an administrator as
- * holding neither app. Every comparison here therefore goes through [expand],
+ * holding no app. Every comparison here therefore goes through [expand],
  * the engine's own `iam.Expand`, so a lock, a picker and a People row read
  * one answer however the set was stored.
  *
@@ -51,6 +51,9 @@ export const TRACKER: App = "tracker";
 
 /** The knowledge base's permission. */
 export const KNOWLEDGE: App = "knowledge";
+
+/** The company's own chat's permission. */
+export const CHAT: App = "chat";
 
 /** Whether `name` is an app this build knows. */
 export function isApp(name: string): name is App {
@@ -120,6 +123,11 @@ export const ACCESS_WORDS: Record<Grant, { label: string; description: string }>
   artifacts: {
     label: "Artifacts",
     description: `Create and publish ${KIND_LIST}. Anything shared with them opens without it.`,
+  },
+  chat: {
+    label: "Chat",
+    description:
+      "Use the company's own chat: read, search and talk in rooms, open conversations, and keep your read state. Agents talk to people through it.",
   },
 };
 
