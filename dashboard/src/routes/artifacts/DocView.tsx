@@ -40,7 +40,7 @@ import { currentTab, docImagePaths, tabImages, tabRegion } from "~/lib/artifacts
 import { useVersionImages } from "~/lib/artifacts/versionImages.ts";
 import { DocEditor } from "./DocEditor.tsx";
 import type { PresenceReport } from "./presence.ts";
-import { useKindControls } from "./chrome.tsx";
+import { useKindControls } from "~/lib/artifacts/kindControls.ts";
 
 export function DocView({
   detail,
@@ -121,7 +121,7 @@ function Doc({
     </Document>
   );
 
-  // EDIT AND PRINT ARE THE PAGE BAR'S (`chrome.tsx`): Edit labelled at its
+  // EDIT AND PRINT ARE THE PAGE BAR'S (`lib/artifacts/kindControls.ts`): Edit labelled at its
   // end while the doc is read, Print in its More. While editing, the editor's
   // own Save and Cancel are the controls, and the bar offers neither.
   useKindControls(

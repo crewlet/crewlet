@@ -118,7 +118,7 @@ import { HistoryTab } from "./HistoryTab.tsx";
 import { DataTab } from "./DataTab.tsx";
 import { DetailsPanel } from "./DetailsPanel.tsx";
 import { PurgeControl, SettingsTab, TrashDialog } from "./SettingsTab.tsx";
-import { KindControlsSink, type KindControls } from "./chrome.tsx";
+import { KindControlsSink, type KindControls } from "~/lib/artifacts/kindControls.ts";
 import { PANEL_SPECS, panelOf, spelledTheOldWay, withPanel, type PanelName } from "./panels.ts";
 import { useArtifactPresence } from "./presence.ts";
 import { followMoves, followTarget, moves, slideOfRegion } from "~/lib/artifacts/follow.ts";

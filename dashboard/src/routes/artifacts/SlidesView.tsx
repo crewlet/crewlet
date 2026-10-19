@@ -76,7 +76,7 @@ import { renderSlide, withText, type SlideRenderContext } from "~/lib/slides.tsx
 import { SLIDE_TRANSITIONS } from "~/contract/artifacts.ts";
 import { FileTextGlyph, MonitorGlyph } from "@crewlethq/icons/glyphs";
 import type { PresenceReport } from "./presence.ts";
-import { useKindControls } from "./chrome.tsx";
+import { useKindControls } from "~/lib/artifacts/kindControls.ts";
 
 /** The views of a deck, as `mode=` names them; "" is the editor (or the reader's slides). */
 type DeckMode = "" | "grid" | "present" | "presenter";
@@ -177,7 +177,7 @@ function Deck({
     [go, channel],
   );
 
-  // THE DECK'S VIEWS AND ITS TWO ACTIONS ARE THE PAGE BAR'S (`chrome.tsx`):
+  // THE DECK'S VIEWS AND ITS TWO ACTIONS ARE THE PAGE BAR'S (`lib/artifacts/kindControls.ts`):
   // Edit, Grid and Present in its middle, the presenter's window and Print in
   // its More. A side of a comparison publishes none.
   useKindControls(

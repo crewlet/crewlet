@@ -13,7 +13,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { ArtifactPage } from "./ArtifactPage.tsx";
-import { useKindControls } from "./chrome.tsx";
+import { useKindControls } from "~/lib/artifacts/kindControls.ts";
 import { Router } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useDataStore } from "~/lib/artifacts/useDataStore.ts";
