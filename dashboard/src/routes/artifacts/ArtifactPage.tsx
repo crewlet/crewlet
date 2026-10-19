@@ -642,8 +642,14 @@ function Loaded({
       icon: <ExternalLinkGlyph size="sm" />,
       // THE DASHBOARD'S PAGE, never the frame's own address: a page runs
       // only inside its sandboxed frame, under the host that answers its
-      // bridge, and a frame URL opened as a window would be neither.
-      onSelect: () => void window.open(artifactAddress(detail.id), "_blank", "noopener,noreferrer"),
+      // bridge, and a frame URL opened as a window would be neither. It opens
+      // at the version on show, as the reader is looking at it.
+      onSelect: () =>
+        void window.open(
+          artifactAddress(detail.id, version || undefined),
+          "_blank",
+          "noopener,noreferrer",
+        ),
     },
     {
       key: "copy",

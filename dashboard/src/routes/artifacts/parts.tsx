@@ -70,9 +70,13 @@ export function ListedArtifactCard({
   );
 }
 
-/** An artifact's dashboard address, absolute, as a person pastes it into chat. */
-export function artifactAddress(id: string): string {
-  return `${location.origin}${location.pathname}${href(artifactPath(id))}`;
+/**
+ * An artifact's dashboard address, absolute, as a person pastes it into chat:
+ * at one of its older versions where `version` names one.
+ */
+export function artifactAddress(id: string, version?: number): string {
+  const query = version ? { version: String(version) } : undefined;
+  return `${location.origin}${location.pathname}${href(artifactPath(id), query)}`;
 }
 
 /** Copies an artifact's address, and says whether the browser let it. */
