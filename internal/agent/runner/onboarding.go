@@ -147,12 +147,14 @@ type Onboarding struct {
 //
 //  1. No budget, no store, no seat — nothing to do, and a pass that could
 //     never be marked would run every turn forever.
-//  2. The process latch: this process has already seen this seat marked.
-//  3. The durable marker, read TRI-STATE. True skips. False runs. An ERROR
+//  2. A human seat: it is never spawned, so it never onboards, and it has
+//     no agent id to key a marker on.
+//  3. The process latch: this process has already seen this seat marked.
+//  4. The durable marker, read TRI-STATE. True skips. False runs. An ERROR
 //     skips and retries next turn — collapsing a failed lookup into "not
 //     onboarded" would re-run full passes for already-marked agents on every
 //     transient database blip, which is strictly worse than waiting a turn.
-//  4. The cross-process lease. Seat inboxes are shared subscriptions, so
+//  5. The cross-process lease. Seat inboxes are shared subscriptions, so
 //     during a rolling restart two engines can each run a turn for the same
 //     un-onboarded seat. The lease makes exactly one of them run the pass.
 //
