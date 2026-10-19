@@ -490,21 +490,19 @@ func (r *Reader) Channels(ctx context.Context, viewer string, q ChannelsQuery,
 // last quarter is in the room they stopped using. The rail leaves them out
 // because it is the list somebody works out of; this is not that list.
 //
-// # Bounded by the company, not by the person
+// # Whole, never cut
 //
-// [MaxChannels] is the cap a company's rooms are already written against, and
-// the create counts EVERY row — archived ones included — so the whole set
-// materialises here and there is no truncation to report. That is what makes
-// this safe to hand a search as its visible set: a partial one would narrow
-// the answer without saying so, which is the failure the search's own
-// [github.com/crewlet/crewlet/internal/search.ErrNoViewer] exists to refuse.
-//
-// THAT DEPENDENCY IS LOAD-BEARING IN BOTH DIRECTIONS, so anything that makes
-// the cap count live rooms rather than all of them has to come here first:
-// the set this returns is bound one variable per channel by the index's own
-// posting query, against a store whose variable budget is two thousand. A cap
-// over live rooms alone leaves the row count unbounded, and the first company
-// past it loses chat search outright rather than gradually.
+// The WHOLE set materialises here, with no limit and so no truncation to
+// report. That is what makes it safe to hand a search as its visible set: a
+// partial one would narrow the answer without saying so, which is the failure
+// the search's own [github.com/crewlet/crewlet/internal/search.ErrNoViewer]
+// exists to refuse. It is NOT bounded by [MaxChannels], which counts live
+// rooms only — archived rooms accumulate, since nothing deletes a room — and
+// a limit at that cap cut the set, alphabetically and silently, for a company
+// that had archived its way past it. What the set's size costs a search is
+// the search's own concern: the index binds it in chunks sized from the
+// store's measured parameter limit, so no count of rooms decides whether chat
+// search works.
 //
 // An empty slice with no error is a viewer who may read nothing at all — a
 // real state, and the caller's to tell apart from a viewer it failed to
@@ -543,7 +541,7 @@ func readableChannels(ctx context.Context, tx *sql.Tx, who string) ([]string, er
 	rows, err := tx.QueryContext(ctx,
 		`SELECT c.id, c.kind FROM chat_channels c
 		  WHERE `+visibleWhere+`
-		  ORDER BY c.id LIMIT ?`, who, MaxChannels)
+		  ORDER BY c.id`, who)
 	if err != nil {
 		return nil, fmt.Errorf("chatlet: read the rooms %q may search: %w", who, err)
 	}
