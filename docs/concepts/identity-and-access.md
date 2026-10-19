@@ -2695,8 +2695,12 @@ may be minted with `admin`:
   as by the routes the table guards.
 
 Answering a step-up is not a verb in the table — it is about nothing and asks
-no permission — so `POST /auth/step-up` refuses a token itself: nobody is there to
-confirm.
+no permission — so `POST /auth/step-up` refuses a token itself, in the table's
+own words for the fact (`403 token_refused`): nobody is there to confirm. A
+session that is no person's — exchanged from a Tier A token, or a service
+account's — is refused there, and at the second-factor routes, `403 forbidden`:
+it has no password or second factor to prove anything with, so a refusal asking
+for a fresher proof would send its client to a step-up that refuses it again.
 
 And **no tool** asks for a proof or needs a person present, nor does any verb a
 tool asks from inside itself once it has read what a gesture is about —
