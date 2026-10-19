@@ -628,9 +628,7 @@ func (r *Reader) attachSaves(ctx context.Context, tx *sql.Tx, items []Summary) e
 	if len(ids) == 0 {
 		return nil
 	}
-	rows, err := tx.QueryContext(ctx,
-		`SELECT id, actor, created_at FROM pages_history WHERE id IN (`+
-			placeholders(len(ids))+`)`, ids...)
+	rows, err := tx.QueryContext(ctx, lastSavesStatement(len(ids)), ids...)
 	if err != nil {
 		return fmt.Errorf("doclet: read who last saved: %w", err)
 	}
@@ -659,9 +657,7 @@ func (r *Reader) attachLabels(ctx context.Context, tx *sql.Tx, items []Summary) 
 		ids[i] = item.ID
 		at[item.ID] = i
 	}
-	rows, err := tx.QueryContext(ctx,
-		`SELECT page_id, label FROM pages_labels WHERE page_id IN (`+
-			placeholders(len(ids))+`) ORDER BY label`, ids...)
+	rows, err := tx.QueryContext(ctx, pageLabelsStatement(len(ids)), ids...)
 	if err != nil {
 		return fmt.Errorf("doclet: read labels: %w", err)
 	}
@@ -771,8 +767,7 @@ func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) 
 		}
 		detail = Detail{Page: page, Revision: revision}
 		var skill, onboarding int
-		switch serr := tx.QueryRowContext(ctx,
-			`SELECT skill, onboarding FROM pages_skills WHERE page_id = ?`, id).
+		switch serr := tx.QueryRowContext(ctx, derivedAsStatement, id).
 			Scan(&skill, &onboarding); {
 		case errors.Is(serr, sql.ErrNoRows):
 		case serr != nil:
@@ -820,13 +815,13 @@ func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) 
 // exactly the term such a create is filed under, and an id is decided by
 // [absentPageScope].
 func pageReadScope(ctx context.Context, tx *sql.Tx, ref string) (statelog.ScopeSet, error) {
-	query := `SELECT id, container FROM pages_heads WHERE id = ?`
+	query := scopeByIDStatement
 	args := []any{ref}
 	var address *ScopeTerm
 	if container, title, ok := strings.Cut(ref, "/"); ok {
 		container = ContainerKey(container)
 		address = &ScopeTerm{Kind: TermTitle, Container: container, ID: TitleToken(title)}
-		query = `SELECT id, container FROM pages_heads WHERE container = ? AND title_norm = ?`
+		query = scopeByAddressStatement
 		args = []any{container, NormalizeTitle(title)}
 	}
 	var id, container string
@@ -946,7 +941,7 @@ func mintedID(ref string) (uuid.UUID, bool) {
 // locate resolves a reference to a page row.
 func (r *Reader) locate(ctx context.Context, tx *sql.Tx, ref string) (document string, revision uint64, id string, err error) {
 	var rev int64
-	query := `SELECT id, document, ` + HeadRevision + ` FROM pages_heads WHERE id = ?`
+	query := locateByIDStatement
 	args := []any{ref}
 	if container, title, ok := strings.Cut(ref, "/"); ok {
 		// "CONTAINER/Title", which is how a person and a model name a page
@@ -959,8 +954,7 @@ func (r *Reader) locate(ctx context.Context, tx *sql.Tx, ref string) (document s
 		// address, because the claim lowercased it with Go's Unicode case
 		// tables and the lookup did not. It also could not use an index,
 		// so every address lookup scanned the container.
-		query = `SELECT id, document, ` + HeadRevision + ` FROM pages_heads
-		          WHERE container = ? AND title_norm = ?`
+		query = locateByAddressStatement
 		args = []any{ContainerKey(container), NormalizeTitle(title)}
 	}
 	err = tx.QueryRowContext(ctx, query, args...).Scan(&id, &document, &rev)
@@ -975,10 +969,7 @@ func (r *Reader) locate(ctx context.Context, tx *sql.Tx, ref string) (document s
 
 // comments reads a page's thread.
 func (r *Reader) comments(ctx context.Context, tx *sql.Tx, pageID string) ([]Comment, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT document FROM pages_comments
-		  WHERE page_id = ? ORDER BY created_at, id`,
-		pageID)
+	rows, err := tx.QueryContext(ctx, threadStatement, pageID)
 	if err != nil {
 		return nil, fmt.Errorf("doclet: read the thread on %s: %w", pageID, err)
 	}
@@ -1001,9 +992,7 @@ func (r *Reader) comments(ctx context.Context, tx *sql.Tx, pageID string) ([]Com
 }
 
 func (r *Reader) history(ctx context.Context, tx *sql.Tx, pageID string) ([]RevisionSummary, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT edit_version, author, message, created_at FROM pages_revisions
-		  WHERE page_id = ? ORDER BY version DESC LIMIT ?`, pageID, RevisionsKept)
+	rows, err := tx.QueryContext(ctx, revisionListStatement, pageID, RevisionsKept)
 	if err != nil {
 		return nil, fmt.Errorf("doclet: read the history of %s: %w", pageID, err)
 	}
@@ -1033,13 +1022,7 @@ func (r *Reader) ancestors(ctx context.Context, tx *sql.Tx, parentID string) ([]
 		var s Summary
 		var skill, onboarding int
 		var updated, revision int64
-		err := tx.QueryRowContext(ctx, `
-			SELECT p.id, p.container, p.parent_id, p.title, p.status, p.author,
-			       p.edit_version, COALESCE(k.skill, 0), COALESCE(k.onboarding, 0),
-			       p.updated_at, MAX(p.version, p.scoped_through)
-			  FROM pages_heads p
-			  LEFT JOIN pages_skills k ON k.page_id = p.id
-			 WHERE p.id = ?`, id).
+		err := tx.QueryRowContext(ctx, ancestorStatement, id).
 			Scan(&s.ID, &s.Container, &s.ParentID, &s.Title, &s.Status, &s.Author,
 				&s.Version, &skill, &onboarding, &updated, &revision)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1122,10 +1105,7 @@ func (r *Reader) Containers(ctx context.Context, fresh statelog.Freshness) (
 // (`(container, title, id, status)`, replicated 0062), so this walk reads the
 // index alone and never a page's row.
 func (r *Reader) pageCounts(ctx context.Context, tx *sql.Tx) (map[string]int, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT container, COUNT(*) FROM pages_heads
-		  WHERE status != ?
-		  GROUP BY container`, string(StatusTrashed))
+	rows, err := tx.QueryContext(ctx, pageCountsStatement, string(StatusTrashed))
 	if err != nil {
 		return nil, fmt.Errorf("doclet: count pages per container: %w", err)
 	}
@@ -1207,12 +1187,8 @@ func (r *Reader) SkillPages(ctx context.Context, container string,
 func (r *Reader) skillPages(ctx context.Context, tx *sql.Tx,
 	container string) ([]Page, error) {
 
-	rows, err := tx.QueryContext(ctx, `
-		SELECT p.document
-		  FROM pages_heads p
-		  JOIN pages_skills k ON k.page_id = p.id
-		 WHERE p.container = ? AND k.skill = 1 AND p.status <> ?
-		 ORDER BY p.title`, container, string(StatusTrashed))
+	rows, err := tx.QueryContext(ctx, skillPagesStatement, container,
+		string(StatusTrashed))
 	if err != nil {
 		return nil, fmt.Errorf("doclet: list the skills in %s: %w", container, err)
 	}
@@ -1235,3 +1211,52 @@ func (r *Reader) skillPages(ctx context.Context, tx *sql.Tx,
 	}
 	return out, rows.Err()
 }
+
+// lastSavesStatement reads the history rows a window's rows named as their last
+// saves ([Reader.attachSaves]), by their keys, for n of them.
+func lastSavesStatement(n int) string {
+	return `SELECT id, actor, created_at FROM pages_history WHERE id IN (` +
+		placeholders(n) + `)`
+}
+
+// pageLabelsStatement reads the labels of a window's n rows
+// ([Reader.attachLabels]), by the pages' keys.
+func pageLabelsStatement(n int) string {
+	return `SELECT page_id, label FROM pages_labels WHERE page_id IN (` +
+		placeholders(n) + `) ORDER BY label`
+}
+
+// The reader's statements over one page or one link at a time, named for the
+// plan gate: what a page was derived as; a reference resolved to the scope a
+// read is about, by id and by address; a reference resolved to the page's
+// document, by id and by address; the page's thread and its revision list; one
+// step of its breadcrumb; the per-container counts of the rail; and the skill
+// pages of a container.
+const (
+	derivedAsStatement       = `SELECT skill, onboarding FROM pages_skills WHERE page_id = ?`
+	scopeByIDStatement       = `SELECT id, container FROM pages_heads WHERE id = ?`
+	scopeByAddressStatement  = `SELECT id, container FROM pages_heads WHERE container = ? AND title_norm = ?`
+	locateByIDStatement      = `SELECT id, document, ` + HeadRevision + ` FROM pages_heads WHERE id = ?`
+	locateByAddressStatement = `SELECT id, document, ` + HeadRevision + ` FROM pages_heads
+		          WHERE container = ? AND title_norm = ?`
+	threadStatement = `SELECT document FROM pages_comments
+		  WHERE page_id = ? ORDER BY created_at, id`
+	revisionListStatement = `SELECT edit_version, author, message, created_at FROM pages_revisions
+		  WHERE page_id = ? ORDER BY version DESC LIMIT ?`
+	ancestorStatement = `
+			SELECT p.id, p.container, p.parent_id, p.title, p.status, p.author,
+			       p.edit_version, COALESCE(k.skill, 0), COALESCE(k.onboarding, 0),
+			       p.updated_at, MAX(p.version, p.scoped_through)
+			  FROM pages_heads p
+			  LEFT JOIN pages_skills k ON k.page_id = p.id
+			 WHERE p.id = ?`
+	pageCountsStatement = `SELECT container, COUNT(*) FROM pages_heads
+		  WHERE status != ?
+		  GROUP BY container`
+	skillPagesStatement = `
+		SELECT p.document
+		  FROM pages_heads p
+		  JOIN pages_skills k ON k.page_id = p.id
+		 WHERE p.container = ? AND k.skill = 1 AND p.status <> ?
+		 ORDER BY p.title`
+)

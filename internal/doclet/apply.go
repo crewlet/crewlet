@@ -444,6 +444,10 @@ func (a *Applier) applyContainer(ctx context.Context, tx *sql.Tx, at applyContex
 	return int(n), nil
 }
 
+// containerHoldsStatement is [Applier.purgeContainer]'s count of the pages a
+// space still holds, named for the plan gate.
+const containerHoldsStatement = `SELECT COUNT(*) FROM pages_heads WHERE container = ?`
+
 // purgeContainer removes an empty space.
 //
 // IT REFUSES A SPACE THAT STILL HOLDS PAGES rather than cascading: a cascade
@@ -452,8 +456,7 @@ func (a *Applier) applyContainer(ctx context.Context, tx *sql.Tx, at applyContex
 func (a *Applier) purgeContainer(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
 	key := at.subject().ID
 	var held int
-	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM pages_heads WHERE container = ?`, key).
+	if err := tx.QueryRowContext(ctx, containerHoldsStatement, key).
 		Scan(&held); err != nil {
 		return 0, fmt.Errorf("doclet: count %s's pages at %s: %w",
 			key, at.position, err)

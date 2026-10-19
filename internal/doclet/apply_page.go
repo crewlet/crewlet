@@ -129,9 +129,7 @@ func (a *Applier) applyRename(ctx context.Context, tx *sql.Tx, at applyContext,
 	// up by the FORMER title's own token, recomputed here — the record
 	// states the title and the token is a function of it, so a stated
 	// token would be a second value that could disagree.
-	res, err := tx.ExecContext(ctx, `
-		DELETE FROM pages_titles
-		WHERE container = ? AND title_token = ? AND page_id = ? AND version < ?`,
+	res, err := tx.ExecContext(ctx, releaseTitleStatement,
 		p.FormerContainer, TitleToken(p.FormerTitle), p.PageID, at.packed)
 	if err != nil {
 		return 0, fmt.Errorf("doclet: release %s/%s at %s: %w",
@@ -165,11 +163,7 @@ func (a *Applier) applyRename(ctx context.Context, tx *sql.Tx, at applyContext,
 		if document, err = EncodePage(head); err != nil {
 			return 0, err
 		}
-		res, err = tx.ExecContext(ctx, `
-			UPDATE pages_heads
-			SET title = ?, title_norm = ?, container = ?, updated_at = ?,
-			    scoped_through = ?, document = ?
-			WHERE id = ? AND scoped_through < ? AND version < ?`,
+		res, err = tx.ExecContext(ctx, retitleHeadStatement,
 			p.Title, NormalizeTitle(p.Title), container,
 			store.EncodeTime(at.brokerAt), at.packed, document,
 			p.PageID, at.packed, at.packed)
@@ -187,6 +181,14 @@ func (a *Applier) applyRename(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	return rows + entry, nil
 }
+
+// retitleHeadStatement is [Applier.applyRename]'s write of the page's new
+// address onto its row, by the row's key, named for the plan gate.
+const retitleHeadStatement = `
+			UPDATE pages_heads
+			SET title = ?, title_norm = ?, container = ?, updated_at = ?,
+			    scoped_through = ?, document = ?
+			WHERE id = ? AND scoped_through < ? AND version < ?`
 
 // applyPage is a patch, a trash, a restore or a purge on an existing page.
 func (a *Applier) applyPage(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
@@ -367,9 +369,7 @@ func (a *Applier) applyPatch(ctx context.Context, tx *sql.Tx, at applyContext,
 	// deletes exactly the same rows at exactly the same position.
 	for _, version := range p.RetiredRevisions {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		res, err := tx.ExecContext(ctx,
-			`DELETE FROM pages_revisions WHERE page_id = ? AND edit_version = ?`,
-			head.ID, version)
+		res, err := tx.ExecContext(ctx, retireRevisionStatement, head.ID, version)
 		if err != nil {
 			return 0, fmt.Errorf("doclet: retire revision %d of %s at %s: %w",
 				version, head.ID, at.position, err)
@@ -438,9 +438,7 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext,
 
 	id := at.subject().ID
 	var container, parent string
-	err := tx.QueryRowContext(ctx,
-		`SELECT container, parent_id FROM pages_heads WHERE id = ?`, id).
-		Scan(&container, &parent)
+	err := tx.QueryRowContext(ctx, purgedHeadStatement, id).Scan(&container, &parent)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf("doclet: read %s before purging it at %s: %w",
 			id, at.position, err)
@@ -451,8 +449,7 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext,
 	// head, so without this the registry went on serving a page that no longer
 	// exists anywhere until something else made it read the container again.
 	var skill int
-	err = tx.QueryRowContext(ctx,
-		`SELECT skill FROM pages_skills WHERE page_id = ?`, id).Scan(&skill)
+	err = tx.QueryRowContext(ctx, skillFlagStatement, id).Scan(&skill)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf("doclet: read %s's skill flag before purging it at %s: %w",
 			id, at.position, err)
@@ -462,26 +459,17 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext,
 	// EVERY CHILD ROW IS NAMED, because a cascade is a delete nobody
 	// committed: the statements below are part of this record's own effect
 	// and are therefore identical on every node.
-	for _, stmt := range []struct{ table, column string }{
-		{"pages_labels", "page_id"},
-		{"pages_watchers", "page_id"},
-		{"pages_revisions", "page_id"},
-		{"pages_comments", "page_id"},
-		{"pages_history", "page_id"},
-		{"pages_titles", "page_id"},
-		{"pages_skills", "page_id"},
-	} {
+	for _, child := range purgedChildren {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		res, err := tx.ExecContext(ctx,
-			`DELETE FROM `+stmt.table+` WHERE `+stmt.column+` = ?`, id)
+		res, err := tx.ExecContext(ctx, childClearStatement(child), id)
 		if err != nil {
 			return 0, fmt.Errorf("doclet: purge %s from %s at %s: %w",
-				id, stmt.table, at.position, err)
+				id, child.table, at.position, err)
 		}
 		n, _ := res.RowsAffected()
 		rows += int(n)
 	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM pages_heads WHERE id = ?`, id)
+	res, err := tx.ExecContext(ctx, purgeHeadStatement, id)
 	if err != nil {
 		return 0, fmt.Errorf("doclet: purge %s at %s: %w", id, at.position, err)
 	}
@@ -520,6 +508,44 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext,
 	return rows + int(n), nil
 }
 
+// The statements [Applier.applyPurge] reads and removes a page with, named for
+// the plan gate: its head and its skill flag by their keys before anything
+// goes, and its head last.
+const (
+	purgedHeadStatement = `SELECT container, parent_id FROM pages_heads WHERE id = ?`
+	skillFlagStatement  = `SELECT skill FROM pages_skills WHERE page_id = ?`
+	purgeHeadStatement  = `DELETE FROM pages_heads WHERE id = ?`
+)
+
+// childTable is one table a page's rows are exploded into, and the column
+// that names the page.
+type childTable struct{ table, column string }
+
+// purgedChildren is every table a purge removes a page's rows from before its
+// head, each by the column naming the page.
+var purgedChildren = []childTable{
+	{"pages_labels", "page_id"},
+	{"pages_watchers", "page_id"},
+	{"pages_revisions", "page_id"},
+	{"pages_comments", "page_id"},
+	{"pages_history", "page_id"},
+	{"pages_titles", "page_id"},
+	{"pages_skills", "page_id"},
+}
+
+// labelsTable is the child set a page's labels are written to
+// ([replaceChildSet]).
+var labelsTable = childTable{"pages_labels", "page_id"}
+
+// childClearStatement removes one page's rows from one child table, by the
+// column naming the page. NAMED FOR THE PLAN GATE, which registers it for
+// every table [purgedChildren] and [labelsTable] name: its table is chosen at
+// run time, so no literal of the source spells the statement for the gate's
+// completeness walk to find.
+func childClearStatement(child childTable) string {
+	return `DELETE FROM ` + child.table + ` WHERE ` + child.column + ` = ?`
+}
+
 // reparentChildren files every page directly under parentID under newParent
 // instead, in the order `pages_heads_parent_idx` holds them.
 //
@@ -541,9 +567,7 @@ func (a *Applier) reparentChildren(ctx context.Context, tx *sql.Tx,
 	at applyContext, parentID, newParent string) (int, error) {
 
 	children, err := func() ([]string, error) {
-		found, err := tx.QueryContext(ctx,
-			`SELECT id FROM pages_heads WHERE parent_id = ?
-			  ORDER BY container, title, id`, parentID)
+		found, err := tx.QueryContext(ctx, childrenOfStatement, parentID)
 		if err != nil {
 			return nil, err
 		}
@@ -576,10 +600,7 @@ func (a *Applier) reparentChildren(ctx context.Context, tx *sql.Tx,
 		if err != nil {
 			return 0, err
 		}
-		res, err := tx.ExecContext(ctx, `
-			UPDATE pages_heads
-			SET parent_id = ?, scoped_through = ?, document = ?
-			WHERE id = ? AND scoped_through < ? AND version < ?`,
+		res, err := tx.ExecContext(ctx, refileChildStatement,
 			newParent, at.packed, document, child, at.packed, at.packed)
 		if err != nil {
 			return 0, fmt.Errorf("doclet: re-file %s under %q at %s: %w",
@@ -591,14 +612,25 @@ func (a *Applier) reparentChildren(ctx context.Context, tx *sql.Tx,
 	return rows, nil
 }
 
+// The statements [Applier.reparentChildren] reads and re-files the children
+// with, named for the plan gate: the children in the parent index's order,
+// and each one's row by its key.
+const (
+	childrenOfStatement = `
+			SELECT id FROM pages_heads WHERE parent_id = ?
+			 ORDER BY container, title, id`
+	refileChildStatement = `
+			UPDATE pages_heads
+			SET parent_id = ?, scoped_through = ?, document = ?
+			WHERE id = ? AND scoped_through < ? AND version < ?`
+)
+
 // applyComment writes one comment's create, edit or removal.
 func (a *Applier) applyComment(ctx context.Context, tx *sql.Tx, at applyContext,
 	pageID string, c CommentPatch) (int, ChangeKind, error) {
 
 	if c.Removed {
-		res, err := tx.ExecContext(ctx,
-			`DELETE FROM pages_comments WHERE id = ? AND version < ?`,
-			c.ID, at.packed)
+		res, err := tx.ExecContext(ctx, removeCommentStatement, c.ID, at.packed)
 		if err != nil {
 			return 0, "", fmt.Errorf("doclet: remove comment %s at %s: %w",
 				c.ID, at.position, err)
@@ -621,8 +653,7 @@ func (a *Applier) applyComment(ctx context.Context, tx *sql.Tx, at applyContext,
 	created := at.brokerAt
 	var heldDoc []byte
 	var heldAt int64
-	switch err := tx.QueryRowContext(ctx,
-		`SELECT document, created_at FROM pages_comments WHERE id = ?`, c.ID).
+	switch err := tx.QueryRowContext(ctx, heldCommentStatement, c.ID).
 		Scan(&heldDoc, &heldAt); {
 	case err == nil:
 		if held, derr := DecodeComment(heldDoc); derr == nil && !held.CreatedAt.IsZero() {
@@ -711,8 +742,8 @@ func (a *Applier) writeHead(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	rows := int(n)
 
-	labels, err := replaceChildSet(ctx, tx, at.maxVariables, "pages_labels",
-		"page_id", "label", head.ID, head.Labels)
+	labels, err := replaceChildSet(ctx, tx, at.maxVariables, labelsTable.table,
+		labelsTable.column, "label", head.ID, head.Labels)
 	if err != nil {
 		return 0, err
 	}
@@ -740,8 +771,7 @@ func (a *Applier) writeHead(ctx context.Context, tx *sql.Tx, at applyContext,
 func (a *Applier) writeWatchers(ctx context.Context, tx *sql.Tx, at applyContext,
 	head Page) (int, error) {
 
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM pages_watchers WHERE page_id = ?`, head.ID); err != nil {
+	if _, err := tx.ExecContext(ctx, clearWatchersStatement, head.ID); err != nil {
 		return 0, fmt.Errorf("doclet: clear %s's watchers: %w", head.ID, err)
 	}
 	muted := map[string]bool{}
@@ -797,8 +827,7 @@ func (a *Applier) writeSkillRow(ctx context.Context, tx *sql.Tx,
 		onboarding = 1
 	}
 	var was int
-	err := tx.QueryRowContext(ctx,
-		`SELECT skill FROM pages_skills WHERE page_id = ?`, head.ID).Scan(&was)
+	err := tx.QueryRowContext(ctx, skillFlagStatement, head.ID).Scan(&was)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf("doclet: read %s's skill flag: %w", head.ID, err)
 	}
@@ -906,8 +935,7 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, at applyContext,
 func readHeadAt(ctx context.Context, tx *sql.Tx, id string) (Page, int64, bool, error) {
 	var document []byte
 	var at int64
-	err := tx.QueryRowContext(ctx,
-		`SELECT document, version FROM pages_heads WHERE id = ?`, id).Scan(&document, &at)
+	err := tx.QueryRowContext(ctx, headAtStatement, id).Scan(&document, &at)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return Page{}, 0, false, nil
@@ -959,7 +987,7 @@ func replaceChildSet(ctx context.Context, tx *sql.Tx, maxVariables int,
 	table, owner, column, id string, values []string) (int, error) {
 
 	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM `+table+` WHERE `+owner+` = ?`, id); err != nil {
+		childClearStatement(childTable{table, owner}), id); err != nil {
 		return 0, fmt.Errorf("doclet: clear %s for %s: %w", table, id, err)
 	}
 	set := sorted(values)
@@ -1047,3 +1075,18 @@ func addressMatches(at applyContext, container, token, claimedContainer,
 		"by nothing", at.position, container, token,
 		ContainerKey(claimedContainer), claimedTitle)
 }
+
+// The applier's remaining reads and removals by a row's own key, named for the
+// plan gate: a page's head and the position it was written at, a comment's
+// held row and its removal, a page's watchers cleared before they are
+// rewritten, one retired revision, and a title claim released by its own key.
+const (
+	headAtStatement         = `SELECT document, version FROM pages_heads WHERE id = ?`
+	heldCommentStatement    = `SELECT document, created_at FROM pages_comments WHERE id = ?`
+	removeCommentStatement  = `DELETE FROM pages_comments WHERE id = ? AND version < ?`
+	clearWatchersStatement  = `DELETE FROM pages_watchers WHERE page_id = ?`
+	retireRevisionStatement = `DELETE FROM pages_revisions WHERE page_id = ? AND edit_version = ?`
+	releaseTitleStatement   = `
+		DELETE FROM pages_titles
+		WHERE container = ? AND title_token = ? AND page_id = ? AND version < ?`
+)
