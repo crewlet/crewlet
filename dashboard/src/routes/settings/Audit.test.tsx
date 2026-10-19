@@ -22,6 +22,7 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
+import { toCsv } from "@crewlethq/ui";
 import { Audit, artifactDetail, auditCsv, writerOf } from "./Audit.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
@@ -300,13 +301,28 @@ test("the export escapes what a spreadsheet would otherwise split", () => {
     },
   ]);
   const [header, row] = csv.split("\r\n");
-  expect(header).toBe(
-    '"at","where","who","who_kind","through","what","to","detail","node","failed"',
-  );
-  expect(row).toContain('"pat:0192f00d"');
-  expect(row).toContain('"turn on Slack, and say ""done"""');
-  // Ten columns, whatever the detail held.
-  expect(row?.match(/","/g)?.length).toBe(9);
+  expect(header).toBe("at,where,who,who_kind,through,what,to,detail,node,failed");
+  expect(row).toContain(",pat:0192f00d,");
+  // A COMMA OR A QUOTE IN A CELL IS QUOTED, its quotes doubled, so it never
+  // moves the columns after it: ten columns, whatever the detail held.
+  const detail = '"turn on Slack, and say ""done"""';
+  expect(row).toContain(detail);
+  expect(row?.replace(detail, "DETAIL").split(",")).toHaveLength(10);
+  // AND A NEWLINE IN A CELL IS QUOTED, so the row stays one record.
+  const multi = auditCsv([
+    {
+      id: "config:rev-3",
+      at: "2031-04-16T00:00:00Z",
+      source: "config",
+      kind: "dashboard",
+      actor: "founder",
+      actorKind: "human",
+      through: "",
+      subject: "rev-3",
+      detail: "line one\nline two",
+    },
+  ]);
+  expect(multi.split("\r\n")[1]).toContain('"line one\nline two"');
 });
 
 // A CELL SOMEBODY ELSE WROTE IS NEVER A FORMULA. A summary is text a model or a
@@ -327,6 +343,9 @@ test("the export opens a formula-looking cell as text", () => {
     },
   ]);
   expect(csv.split("\r\n")[1]).toContain(`"'=HYPERLINK(""https://example.com"",""click"")"`);
+  // AND A COUNT STAYS A NUMBER: only text is marked, so a negative number is
+  // still one a spreadsheet sums.
+  expect(toCsv(["n"], [[-3]])).toBe("n\r\n-3\r\n");
 });
 
 // A PERSON BOUND TO A SEAT WRITES AS THE SEAT, AND A LOGIN IS NOT A SEAT.

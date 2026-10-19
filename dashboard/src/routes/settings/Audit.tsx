@@ -113,6 +113,7 @@ import {
   TableDateCell,
   TableEntityCell,
   TableTextCell,
+  toCsv,
 } from "@crewlethq/ui";
 import { FileTextGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 
@@ -122,7 +123,6 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import { linkedSeat, plainSeat } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { toCsv } from "~/lib/csv.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { plainText } from "~/lib/markdown.ts";
