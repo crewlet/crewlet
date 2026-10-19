@@ -3092,8 +3092,11 @@ a.prof-row:hover {
 
 /* THE OUTLINE TO THE LEFT AND THE PAGE BESIDE IT: the outline stays in view
    while the page scrolls, so where a reader is in a long page is always on
-   screen. On a phone the page is one column and the outline is not drawn. */
-.knowledge-read {
+   screen. On a phone the page is one column and the outline is not drawn.
+   A doc's tab reads the same way (`DocView`), so the two share these rules
+   rather than keeping two copies that drift. */
+.knowledge-read,
+.doc-read {
   display: grid;
   grid-template-columns: var(--size-shell-rail) minmax(0, var(--size-content-max));
   gap: var(--spacing-6);
@@ -3103,7 +3106,8 @@ a.prof-row:hover {
 /* THE WHOLE COLUMN FITS IN THE VIEW: the scroller's own height (`100cqb`)
    less the band above it and the screen's padding below, so a long outline
    scrolls inside it rather than past the fold. */
-.knowledge-read-side {
+.knowledge-read-side,
+.doc-read-side {
   position: sticky;
   top: var(--sticky-top);
   max-height: calc(100cqb - var(--sticky-top) - 2 * var(--spacing-5));
@@ -3111,10 +3115,12 @@ a.prof-row:hover {
   min-width: 0;
 }
 @container page (width < 760px) {
-  .knowledge-read {
+  .knowledge-read,
+  .doc-read {
     grid-template-columns: minmax(0, 1fr);
   }
-  .knowledge-read-side {
+  .knowledge-read-side,
+  .doc-read-side {
     display: none;
   }
 }
@@ -3467,11 +3473,6 @@ a.knowledge-reader-how:hover {
   min-width: 5rem;
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
-}
-/* THE TITLE IS SET AS THE PAGE WILL WEAR IT. */
-.knowledge-composer-title input {
-  font-size: var(--font-size-xl);
-  font-weight: var(--font-weight-semibold);
 }
 .knowledge-composer-count {
   display: flex;
@@ -7265,22 +7266,27 @@ a.work-cal-chip {
 }
 
 /* A TABLE SCROLLS RATHER THAN OVERFLOWING ITS PANEL. A page's own table is
-   written for a document and can be wider than the column it lands in here. */
-.md-table {
+   written for a document and can be wider than the column it lands in here.
+   SCOPED TO `.prose.md` like every rule above: the same renderer draws a doc
+   and a Knowledge page into uilet's `Document`, and the rich editor names its
+   tables `md-table` too, so an unscoped rule here outranked the design
+   system's table there (a 12px table in a 14px body, its header in the
+   secondary ink). */
+.prose.md .md-table {
   overflow-x: auto;
 }
-.md-table table {
+.prose.md .md-table table {
   border-collapse: collapse;
   width: 100%;
   font-size: var(--font-size-xs);
 }
-.md-table th,
-.md-table td {
+.prose.md .md-table th,
+.prose.md .md-table td {
   padding: var(--spacing-1) var(--spacing-2);
   border-bottom: 1px solid var(--color-border-default);
   vertical-align: top;
 }
-.md-table th {
+.prose.md .md-table th {
   font-weight: 600;
   color: var(--color-text-secondary);
   white-space: nowrap;
@@ -10624,8 +10630,9 @@ a.live-row:focus-visible {
   min-width: 0;
 }
 
-/* A DOC: its tabs and actions in one bar, then the outline beside the tab on
-   show, as a Knowledge page reads; one column on a narrow page. */
+/* A DOC: its tabs in one bar, then the outline beside the tab on show, laid
+   out by the Knowledge page's own rules (`.doc-read`, under "A page"); one
+   column on a narrow page. */
 .doc-view {
   display: flex;
   flex-direction: column;
@@ -10642,28 +10649,6 @@ a.live-row:focus-visible {
 .doc-bar > [role="tablist"] {
   flex: 1 1 20rem;
   min-width: 0;
-}
-.doc-read {
-  display: grid;
-  grid-template-columns: var(--size-shell-rail) minmax(0, var(--size-content-max));
-  gap: var(--spacing-6);
-  align-items: start;
-  min-width: 0;
-}
-.doc-read-side {
-  position: sticky;
-  top: var(--sticky-top);
-  max-height: calc(100cqb - var(--sticky-top) - 2 * var(--spacing-5));
-  overflow-y: auto;
-  min-width: 0;
-}
-@container page (width < 760px) {
-  .doc-read {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .doc-read-side {
-    display: none;
-  }
 }
 .doc-read-page {
   min-width: 0;
@@ -10685,11 +10670,13 @@ a.live-row:focus-visible {
   align-items: center;
 }
 /* WHILE EDITING, THE TABS STAY REACHABLE ON A PHONE: they are what a writer
-   renames, reorders, adds and removes, so they stack above the text. */
+   renames, reorders, adds and removes, so they stack above the text, on the
+   text's own measure so the two share a right edge. */
 @container page (width < 760px) {
   .doc-read--editing .doc-read-side {
     display: block;
     position: static;
+    max-width: var(--size-measure);
     max-height: none;
   }
 }
