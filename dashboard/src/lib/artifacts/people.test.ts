@@ -109,7 +109,8 @@ test("a login the chart holds no seat for is said in its words, as a person", ()
   expect(people.seatPrincipal("token:review")).toEqual({
     id: "token:review",
     kind: "person",
-    name: "review (API token)",
+    name: "review",
+    detail: "API token",
   });
   expect(people.seatName("maya.ortiz")).toBe("maya.ortiz");
   expect(people.seatPrincipal("maya.ortiz").kind).toBe("person");
