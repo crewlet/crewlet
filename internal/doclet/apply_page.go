@@ -854,13 +854,12 @@ func (a *Applier) writeSkillRow(ctx context.Context, tx *sql.Tx,
 		a.skillMoved = true
 	}
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO pages_skills (page_id, container, skill, onboarding, at)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO pages_skills (page_id, skill, onboarding, at)
+		VALUES (?, ?, ?, ?)
 		ON CONFLICT (page_id) DO UPDATE SET
-			container = excluded.container, skill = excluded.skill,
-			onboarding = excluded.onboarding, at = excluded.at`,
-		head.ID, head.Container, skill, onboarding,
-		store.EncodeTime(at.brokerAt))
+			skill = excluded.skill, onboarding = excluded.onboarding,
+			at = excluded.at`,
+		head.ID, skill, onboarding, store.EncodeTime(at.brokerAt))
 	if err != nil {
 		return 0, fmt.Errorf("doclet: record %s's skill flag: %w", head.ID, err)
 	}
