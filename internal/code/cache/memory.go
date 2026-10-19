@@ -17,7 +17,10 @@ import (
 // (BitmapBytesPerObject an object), the same index without one — the
 // maintainer's where the bitmap cannot be had, and a full round's own
 // (IndexBytesPerObject) — the commit-graph (GraphBytesPerObject), and
-// Verify's connectivity check (FsckBytesPerObject). The largest repository
+// Verify's connectivity check (FsckBytesPerObject). The first three are the
+// declared writes' own figures (derived.go, Write.BytesPerObject), which the
+// plan and a refusal's line read from the declaration, never beside it; the
+// check is no write and keeps its own. The largest repository
 // the defaults admit is some 60 million objects, which no node holds a bitmap
 // of; and on a node with less memory than a run needs, every duty cycle's run
 // was killed by the kernel, which may as well have chosen the engine. So each
@@ -165,35 +168,11 @@ func (c *Cache) nodeMemory() gitproc.Memory {
 	return c.memory
 }
 
-// maintStep is one of the steps a maintenance run may take, as a set: what a
-// plan takes, and what the node's memory refused an incarnation.
+// maintStep is a set of the maintainer's declared writes (maintWrites), bit i
+// its all[i]: what a plan takes, and what the node's memory refused an
+// incarnation. A step's name — a line's and a count's `step` — is its write's
+// Step.
 type maintStep uint8
-
-const (
-	// stepBitmap is the multi-pack-index with its bitmap: the maintainer's.
-	stepBitmap maintStep = 1 << iota
-	// stepPlain is the multi-pack-index without a bitmap: the maintainer's
-	// where the bitmap cannot be had, and a full round's own.
-	stepPlain
-	// stepGraph is the commit-graph.
-	stepGraph
-)
-
-// maintSteps are the steps, in the order a line or a count names them.
-var maintSteps = []maintStep{stepBitmap, stepPlain, stepGraph}
-
-// String is the step's name on a line and a count's `step` attribute.
-func (s maintStep) String() string {
-	switch s {
-	case stepBitmap:
-		return "bitmap"
-	case stepPlain:
-		return "index"
-	case stepGraph:
-		return "graph"
-	}
-	return "steps"
-}
 
 // memoryRefusals is what the maintainer's latest walk of the entries found
 // refused for memory: how many repositories their bitmap, and the largest of
@@ -209,6 +188,7 @@ type memoryRefusals struct {
 type refusal struct {
 	repo   string
 	step   maintStep
+	name   string
 	charge int64
 }
 
@@ -222,18 +202,21 @@ type refusalWalk struct {
 // note records inc's steps refused on the walk's budget — refused, with each
 // step's charge in charges — and marks the ones refused for the first time on
 // the incarnation, for their line and count. e.mu is held.
-func (w *refusalWalk) note(id string, inc *incarnation, refused maintStep, charges map[maintStep]int64) {
-	if refused&stepBitmap != 0 {
+func (w *refusalWalk) note(mw *maintWrites, id string, inc *incarnation, refused maintStep,
+	charges map[maintStep]int64) {
+
+	if refused&mw.bitmap != 0 {
 		w.bitmaps++
-		w.largest = max(w.largest, charges[stepBitmap])
+		w.largest = max(w.largest, charges[mw.bitmap])
 	}
-	if refused&stepGraph != 0 {
+	if refused&mw.graph != 0 {
 		w.graphs++
 	}
-	for _, s := range maintSteps {
+	for i := range mw.all {
+		s := maintStep(1) << i
 		if refused&s != 0 && inc.memoryRefused&s == 0 {
 			inc.memoryRefused |= s
-			w.fresh = append(w.fresh, refusal{repo: id, step: s, charge: charges[s]})
+			w.fresh = append(w.fresh, refusal{repo: id, step: s, name: mw.name(s), charge: charges[s]})
 		}
 	}
 }
@@ -259,19 +242,20 @@ func (c *Cache) noteRefusals(w refusalWalk) {
 	if c.metrics == nil {
 		return
 	}
-	c.metrics.Set(metrics.CodeCacheMaintenanceRefused, float64(w.bitmaps), metrics.Attrs{"step": stepBitmap.String()})
-	c.metrics.Set(metrics.CodeCacheMaintenanceRefused, float64(w.graphs), metrics.Attrs{"step": stepGraph.String()})
+	c.metrics.Set(metrics.CodeCacheMaintenanceRefused, float64(w.bitmaps),
+		metrics.Attrs{"step": c.mw.name(c.mw.bitmap)})
+	c.metrics.Set(metrics.CodeCacheMaintenanceRefused, float64(w.graphs), metrics.Attrs{"step": c.mw.name(c.mw.graph)})
 }
 
 // logRefusal logs and counts one step refused an incarnation for the first
 // time: the repository, the step, its charge, and what the budget is made of.
 func (c *Cache) logRefusal(r refusal) {
 	m := c.nodeMemory()
-	c.log.Warn("code_cache_maintenance_refused", "repo", r.repo, "step", r.step.String(), "estimate", r.charge,
+	c.log.Warn("code_cache_maintenance_refused", "repo", r.repo, "step", r.name, "estimate", r.charge,
 		"budget", c.maint.budgetNow(), "memory", m.Bytes, "memory_from", m.From, "reserved", c.memReserve)
 	if c.metrics != nil {
 		c.metrics.Add(metrics.CodeCacheMaintenanceRefusals, 1,
-			metrics.Attrs{"reason": refusedForMemory, "step": r.step.String()})
+			metrics.Attrs{"reason": refusedForMemory, "step": r.name})
 	}
 }
 

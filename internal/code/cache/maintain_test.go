@@ -15,6 +15,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // caseRoundPacks is the round's index threshold a case lowers
@@ -620,6 +622,139 @@ func TestMaintenanceNeverDelaysASync(t *testing.T) {
 	}
 }
 
+// A DROP STOPS A RUN WRITING WHAT IT DROPS, at whatever change makes it — a
+// delta's pack added included, which never stops a run otherwise: git reads a
+// write's inputs as it starts, so a run in flight across a change its
+// declaration drops on would rename in a file built over the inputs before
+// it, and record it current. Over declarations in which the multi-pack-index
+// is dropped when a pack is added, a delta adding a pack while the
+// maintainer's index step is held stops the run before the pack is in: the
+// held step sees its context cancelled, the delta is answered, and the
+// incarnation records no index and holds none. The graph the run wrote first
+// is kept, its declaration keeping it when a pack is added.
+//
+// Mutation: drop dropFor's stopWriting, and the run is left running across
+// the delta.
+func TestADropStopsARunWritingWhatItDrops(t *testing.T) {
+	t.Parallel()
+	dropOnAdd := cache.DerivedFiles()
+	for i := range dropOnAdd {
+		if dropOnAdd[i].Name == cache.DerivedMidx {
+			dropOnAdd[i].OnPackAdded = cache.Drop
+		}
+	}
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	for range 3 {
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	reached := make(chan struct{})
+	var once sync.Once
+	ended := make(chan error, 1)
+	c := w.open(t, clk.on, cache.WithDerived(dropOnAdd), func(o *cache.Options) {
+		cache.BeforeMaintaining(o, func(ctx context.Context, step string) {
+			if step != "multi-pack-index" {
+				return
+			}
+			once.Do(func() { close(reached) })
+			<-ctx.Done()
+			ended <- ctx.Err()
+		})
+	})
+	s := w.sync(t, c, repo)
+	clk.Add(cache.MidxDebounce)
+	_, wait := cache.StartMaintainerPass(c)
+	select {
+	case <-reached:
+	case <-time.After(hangDetector):
+		t.Fatalf("the maintainer started no run in %v", hangDetector)
+	}
+
+	w.push(t, repo, "refs/heads/main", nil)
+	ctx, cancel := context.WithTimeout(t.Context(), hangDetector)
+	defer cancel()
+	after, err := c.Sync(ctx, repo, linearizable)
+	if err != nil {
+		t.Fatalf("a delta adding a pack while the run is held: %v", err)
+	}
+	after.Release()
+	select {
+	case err := <-ended:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("the held run's context ended with %v, want a cancellation", err)
+		}
+	case <-time.After(hangDetector):
+		t.Fatal("a delta whose pack drops the index left the run writing the index running")
+	}
+	if ran := wait(); len(ran) != 0 {
+		t.Errorf("a stopped run was reported as maintained: %v", ran)
+	}
+	if statOK(t, filepath.Join(s.Dir, "objects", "pack", "multi-pack-index")) {
+		t.Error("a multi-pack-index is on disk after the delta its declaration drops it on")
+	}
+	covered, _, graphed := cache.Indexed(c, repo)
+	if covered != 0 {
+		t.Errorf("the incarnation records an index over %d packs after the drop", covered)
+	}
+	if !graphed || !statOK(t, filepath.Join(s.Dir, "objects", "info", "commit-graph")) {
+		t.Errorf("the graph the run wrote first: recorded %t, want it kept — its declaration keeps it when a "+
+			"pack is added", graphed)
+	}
+}
+
+// NO RUN STARTS WHILE AN ADOPTION HOLDS THE REPOSITORY, and the last to let go
+// wakes the maintainer. An adoption adds a pack, and a declaration may drop
+// what a run writes when one is added — a drop that stops a run in flight, so
+// a run started between it and the pack's links would write over the packs
+// before the change and record the file current after it. A pass while an
+// adoption holds the repository's write lock starts nothing on it, however
+// due — a copy with no graph is due at once — and owes the maintainer a wake,
+// which the adoption sends as it lets go, rather than leave the graph to the
+// next tick.
+//
+// Mutations: drop runnable's adoption term (the pass starts the graph-first
+// run under the adoption); drop releaseWrite's owed wake (no kick follows the
+// adoption).
+func TestNoRunStartsWhileAnAdoptionHoldsTheRepository(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	var c *cache.Cache
+	var started []string
+	var held bool
+	c = w.open(t, func(o *cache.Options) {
+		cache.WhileAdopting(o, func(string) {
+			held = true
+			// The cache is never started: a kick stays where it was sent.
+			cache.MaintainerKicked(c)
+			var wait func() []string
+			started, wait = cache.StartMaintainerPass(c)
+			wait()
+		})
+	})
+	a := w.receive(t, c, repo)
+	if _, _, graphed := cache.Indexed(c, repo); graphed {
+		t.Fatal("the copy holds a commit-graph: the case needs one due at once")
+	}
+	if err := c.Adopt(t.Context(), repo, a.sc, a.row.Ref()); err != nil {
+		t.Fatalf("Adopt: %v", err)
+	}
+	if !held {
+		t.Fatal("no adoption reached the knob: the case held nothing")
+	}
+	if len(started) != 0 {
+		t.Errorf("a pass while an adoption held the repository started runs on %v, want none", started)
+	}
+	if !cache.MaintainerKicked(c) {
+		t.Error("the adoption let the repository go without waking the maintainer its pass was owed")
+	}
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Errorf("the pass after the adoption ran %v, want the repository's graph", ran)
+	}
+}
+
 // A SWEEP DROPS THE MULTI-PACK-INDEX WITH A PACK: a full round that removes a
 // pack the rows no longer name takes the index, its bitmap and the
 // commit-graph with it, so no reader meets an index naming a pack that is
@@ -1219,6 +1354,74 @@ func TestAGraphFirstRunIsStartedAheadOfABitmap(t *testing.T) {
 	}
 }
 
+// THE END OF A RUN STATS ONLY WHAT THE DECLARATIONS OWN. A maintenance run
+// counts what it leaves against the budget as it ends, and a full round that
+// stops the run — and so every request that round answers — waits for that
+// end. objects/pack holds three files a pack beside the index's, with no cap
+// on the packs, so the count lists each directory a declaration owns a file
+// in once and stats only the declared files there: none of the packs' own
+// files, however many the copy holds, while every file the runs wrote — the
+// graph-first run's graph, the bitmap run's index and bitmap — is counted.
+//
+// Mutation: ownedBytes sizes every entry it lists (a nil keep), and the end
+// of each run stats every pack's .pack, .idx and .rev.
+func TestTheEndOfARunStatsOnlyTheDerivedFiles(t *testing.T) {
+	t.Parallel()
+	const pushes = 12
+	var counting atomic.Bool
+	var mu sync.Mutex
+	statted := map[string]int{}
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	for range pushes {
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	c := w.open(t, clk.on, cache.StatingWith(func(rel string) {
+		if counting.Load() {
+			mu.Lock()
+			statted[rel]++
+			mu.Unlock()
+		}
+	}))
+	s := w.sync(t, c, repo)
+	defer s.Release()
+
+	// Only the maintainer's runs are counted: the full round's own measure
+	// counts the packs' bytes, and stats every entry to do it.
+	counting.Store(true)
+	graphFirst(t, c, repo)
+	clk.Add(cache.MidxDebounce)
+	if ran := cache.MaintainerPass(c); len(ran) != 1 || ran[0] != repo {
+		t.Fatalf("the bitmap pass ran %v, want %s", ran, repo)
+	}
+	counting.Store(false)
+	if packs, bitmap, graph := cache.Indexed(c, repo); packs != pushes || !bitmap || !graph {
+		t.Fatalf("the runs left an index over %d packs (bitmap %t) and graph %t; the case needs every pack "+
+			"indexed with a bitmap, and the graph", packs, bitmap, graph)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	var bitmaps int
+	for rel, n := range statted {
+		if len(cache.OwnersOf(rel)) == 0 {
+			t.Errorf("the end of a run statted %s %d times, which no declaration owns", rel, n)
+		}
+		if matched, _ := filepath.Match("objects/pack/multi-pack-index-*.bitmap", rel); matched {
+			bitmaps++
+		}
+	}
+	for _, rel := range []string{"objects/pack/multi-pack-index", "objects/info/commit-graph"} {
+		if statted[rel] == 0 {
+			t.Errorf("the end of the runs never statted %s: what a run wrote went uncounted", rel)
+		}
+	}
+	if bitmaps == 0 {
+		t.Error("the end of the bitmap run never statted its bitmap: what it wrote went uncounted")
+	}
+}
+
 // A RUN STOPPED FROM OUTSIDE IS NO RUN: a rolling deploy's Stop, a full
 // round's sweep or a retire ends a run its repository did not fail, and
 // recorded as one it would push the next run back by the interval — or by
@@ -1496,4 +1699,152 @@ func TestStopEndsAMaintenanceRun(t *testing.T) {
 		t.Fatalf("Prepare after Stop returned = %v, want the directory free", err)
 	}
 	layout.Release()
+}
+
+// THE MAINTAINER'S STEPS ARE THE DECLARED WRITES (ADR-0038). What a pass and
+// a round run, and what a refusal is said and counted as, are read from the
+// declarations (cache.DerivedFiles): every multi-pack-index and commit-graph
+// process the cache starts runs exactly one declared write's argument list —
+// the round's index the round write's, the maintainer's its bitmap, index and
+// graph writes' — and every declared write runs, since an argument list that
+// no process ran is one somebody changed beside its declaration. And when the
+// node's memory refuses everything, the refusals name exactly the declared
+// maintainer steps, each line's estimate the write's own charge.
+//
+// Mutation: hard-code the graph's argument list in runMaintenance with
+// --split, and the recorded process is no declared write's; give the round's
+// index its own list beside its declaration, and the round's process is.
+func TestTheMaintainersStepsAreTheDeclaredWrites(t *testing.T) {
+	t.Parallel()
+	var declared []cache.Write
+	for _, d := range cache.DerivedFiles() {
+		declared = append(declared, d.Writes...)
+	}
+	maintainer := func(yield func(cache.Write) bool) {
+		for _, wr := range declared {
+			if wr.Trigger == cache.TriggerMaintainer && !yield(wr) {
+				return
+			}
+		}
+	}
+
+	t.Run("the processes", func(t *testing.T) {
+		t.Parallel()
+		w := newSyncWorld(t, onMemory)
+		var calls func() []gittest.Call
+		w.gitPath, calls = gittest.Recording(t)
+		clk := newClock()
+		indexed, plain := w.repo(t, 1), w.repo(t, 2)
+		for range caseRoundPacks {
+			w.push(t, indexed, "refs/heads/main", nil)
+		}
+		w.push(t, plain, "refs/heads/main", nil)
+		w.push(t, plain, "refs/heads/main", nil)
+		c := w.open(t, clk.on, cache.RoundPacksAt(caseRoundPacks))
+
+		// The round's own index, then the maintainer's bitmap and graph.
+		w.sync(t, c, indexed).Release()
+		clk.Add(cache.MidxDebounce)
+		if ran := cache.MaintainerPass(c); len(ran) != 1 || ran[0] != indexed {
+			t.Fatalf("the first pass ran %v, want %s", ran, indexed)
+		}
+		// An index without a bitmap and a graph: the bitmap a byte past
+		// what the node can give.
+		w.sync(t, c, plain).Release()
+		cache.SetMaintenanceBudget(c, cache.BitmapCharge(c, plain)-1)
+		clk.Add(cache.MidxDebounce)
+		if ran := cache.MaintainerPass(c); len(ran) != 1 || ran[0] != plain {
+			t.Fatalf("the second pass ran %v, want %s", ran, plain)
+		}
+		if packs, bitmap, graph := cache.Indexed(c, plain); packs != 2 || bitmap || !graph {
+			t.Fatalf("%s holds an index over %d packs (bitmap %t) and graph %t; the case needs both packs "+
+				"indexed without a bitmap, and the graph", plain, packs, bitmap, graph)
+		}
+
+		ran := map[int]int{}
+		for _, call := range calls() {
+			if len(call.Args) == 0 || (call.Args[0] != "multi-pack-index" && call.Args[0] != "commit-graph") {
+				continue
+			}
+			i := slices.IndexFunc(declared, func(wr cache.Write) bool { return slices.Equal(wr.Args, call.Args) })
+			if i < 0 {
+				t.Errorf("the cache ran git %q, which is no declared write's argument list", call.Args)
+				continue
+			}
+			ran[i]++
+		}
+		for i, wr := range declared {
+			if ran[i] == 0 {
+				t.Errorf("the %s write %s (%q) never ran: the cache runs something else in its place", wr.Trigger,
+					wr.Step, wr.Args)
+			}
+		}
+	})
+
+	t.Run("refused for memory", func(t *testing.T) {
+		t.Parallel()
+		w := newSyncWorld(t, onMemory)
+		clk := newClock()
+		repo := w.repo(t, 1)
+		w.push(t, repo, "refs/heads/main", nil)
+		w.push(t, repo, "refs/heads/main", nil)
+		c := w.open(t, clk.on)
+		w.sync(t, c, repo).Release()
+		cache.SetMaintenanceBudget(c, 1)
+		clk.Add(cache.MidxDebounce)
+		if ran := cache.MaintainerPass(c); len(ran) != 0 {
+			t.Fatalf("on a budget of one byte the maintainer ran %v", ran)
+		}
+
+		want := map[string]int64{}
+		for wr := range maintainer {
+			want[string(wr.Step)] = cache.WriteCharge(c, repo, wr)
+		}
+		counted := map[string]uint64{}
+		gauged := map[string]float64{}
+		for _, s := range w.rec.Read() {
+			switch s.Name {
+			case metrics.CodeCacheMaintenanceRefusals:
+				counted[s.Attrs["step"]] += s.Total
+			case metrics.CodeCacheMaintenanceRefused:
+				gauged[s.Attrs["step"]] = s.Value
+			}
+		}
+		for step := range want {
+			if counted[step] != 1 {
+				t.Errorf("%s{step=%s} = %d, want the declared step counted once", metrics.CodeCacheMaintenanceRefusals,
+					step, counted[step])
+			}
+		}
+		for step := range counted {
+			if _, ok := want[step]; !ok {
+				t.Errorf("%s counts step %q, which no declared maintainer write is", metrics.CodeCacheMaintenanceRefusals,
+					step)
+			}
+		}
+		for step, v := range gauged {
+			if _, ok := want[step]; !ok || v != 1 {
+				t.Errorf("%s{step=%s} = %v, want 1 for a declared step", metrics.CodeCacheMaintenanceRefused, step, v)
+			}
+		}
+		if len(gauged) == 0 {
+			t.Errorf("%s gauges no step while everything is refused", metrics.CodeCacheMaintenanceRefused)
+		}
+		lines := w.logs.lines(t, "code_cache_maintenance_refused")
+		if len(lines) != len(want) {
+			t.Errorf("the refusals were logged %d times, want once a declared step, %d", len(lines), len(want))
+		}
+		for _, l := range lines {
+			step, _ := l["step"].(string)
+			charge, ok := want[step]
+			if !ok {
+				t.Errorf("a refusal names step %q, which no declared maintainer write is", step)
+				continue
+			}
+			if l["estimate"] != float64(charge) {
+				t.Errorf("the %s refusal's estimate is %v, want its declared write's charge %d", step, l["estimate"],
+					charge)
+			}
+		}
+	})
 }

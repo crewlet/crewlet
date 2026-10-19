@@ -105,6 +105,8 @@ func (c *Cache) writeRefs(ctx context.Context, e *entry, inc *incarnation, snap 
 	}
 
 	var staged []placement
+	// refsMove: a new packed-refs is staged to be renamed in.
+	refsMove := false
 	defer func() {
 		for _, s := range staged {
 			if s.staged != "" {
@@ -130,6 +132,7 @@ func (c *Cache) writeRefs(ctx context.Context, e *entry, inc *incarnation, snap 
 			}
 		} else {
 			staged = append(staged, placement{staged: path, dst: filepath.Join(inc.dir, "packed-refs")})
+			refsMove = true
 		}
 	}
 	if writeHead {
@@ -144,6 +147,15 @@ func (c *Cache) writeRefs(ctx context.Context, e *entry, inc *incarnation, snap 
 	}
 	if c.faults != nil {
 		if err := c.faults.Hit(ctx, codefault.SyncRefs, 0); err != nil {
+			return false, fmt.Errorf("cache: sync %s: refs: %w", e.id, err)
+		}
+	}
+	if refsMove {
+		// The refs moved: what a declaration says of that, before the new
+		// packed-refs is renamed in (dropFor's order rule). No declaration
+		// drops for moved refs today — a bitmap names commits it selected,
+		// and stays sound whichever refs point at them.
+		if _, err := c.dropFor(e, inc, EventRefsMoved, 0); err != nil {
 			return false, fmt.Errorf("cache: sync %s: refs: %w", e.id, err)
 		}
 	}

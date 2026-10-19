@@ -586,7 +586,7 @@ type scrubbed struct {
 func (c *Cache) scrub(ctx context.Context, e *entry, inc *incarnation, trigger checkTrigger) (scrubbed, error) {
 	var out scrubbed
 	began := time.Now()
-	files, wants, err := scrubFiles(inc.dir)
+	files, wants, err := scrubFiles(c.image, inc.dir)
 	if err != nil {
 		return out, fmt.Errorf("listing %s: %w", inc.dir, err)
 	}
@@ -626,7 +626,7 @@ func (c *Cache) scrub(ctx context.Context, e *entry, inc *incarnation, trigger c
 			f.trigger, f.scrubbed = trigger, true
 			out.damaged = append(out.damaged, f)
 			c.log.Warn("code_cache_check_damaged", "repo", e.id, "incarnation", inc.n, "file", f.rel,
-				"trigger", string(trigger), "action", repairAction(f.rel), "error", err)
+				"trigger", string(trigger), "action", c.image.repairAction(f.rel), "error", err)
 			continue
 		case v == hashNone:
 			c.countCheck(f.kind, checkReplaced, trigger)
@@ -646,7 +646,7 @@ func (c *Cache) scrub(ctx context.Context, e *entry, inc *incarnation, trigger c
 		f.trigger, f.scrubbed = trigger, true
 		out.damaged = append(out.damaged, f)
 		c.log.Warn("code_cache_check_damaged", "repo", e.id, "incarnation", inc.n, "file", f.rel,
-			"trigger", string(trigger), "action", repairAction(f.rel))
+			"trigger", string(trigger), "action", c.image.repairAction(f.rel))
 	}
 	for cs, n := range soundOf {
 		if n == 3 {
@@ -661,8 +661,9 @@ func (c *Cache) scrub(ctx context.Context, e *entry, inc *incarnation, trigger c
 // its path relative to the incarnation, with what its name says of its last
 // forty bytes: each pack's three files where all three are there — its .pack
 // held to the trailer that is its name, its .idx and .rev to their pack's
-// checksum before their own — and every derived file present.
-func scrubFiles(dir string) ([]checkedFile, map[string]expect, error) {
+// checksum before their own — and every derived file present, held as its
+// declaration says (derived.go).
+func scrubFiles(im *image, dir string) ([]checkedFile, map[string]expect, error) {
 	list, err := os.ReadDir(filepath.Join(dir, packRel))
 	if err != nil {
 		return nil, nil, err
@@ -691,15 +692,15 @@ func scrubFiles(dir string) ([]checkedFile, map[string]expect, error) {
 			wants[rel] = f.want
 		}
 	}
-	derived, err := derivedPresent(dir)
+	present, err := im.present(dir)
 	if err != nil {
 		return nil, nil, err
 	}
-	for _, rel := range derived {
-		kind, _, _ := derivedFile(rel)
-		files = append(files, checkedFile{kind: kind, rel: rel})
-		wants[rel] = derivedExpect(rel)
+	derived, err := heldFiles(present, wants)
+	if err != nil {
+		return nil, nil, err
 	}
+	files = append(files, derived...)
 	slices.SortFunc(files, func(a, b checkedFile) int { return strings.Compare(a.rel, b.rel) })
 	return files, wants, nil
 }

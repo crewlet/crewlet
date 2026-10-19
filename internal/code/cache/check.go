@@ -36,16 +36,14 @@ import (
 // the bitmap.
 
 // fileKind is which file of an incarnation a check hashed: the `file`
-// attribute of crewlet.code.cache.checks.
+// attribute of crewlet.code.cache.checks. A pack's own files are named here;
+// a derived file is named by its declaration (Owned.File, derived.go), so a
+// derived file is checked by declaring it.
 type fileKind string
 
 const (
-	fileGraph   fileKind = "commit-graph"
-	fileMidx    fileKind = "multi-pack-index"
-	fileBitmap  fileKind = "bitmap"
-	fileMidxRev fileKind = "midx-rev"
-	fileIdx     fileKind = "idx"
-	fileRev     fileKind = "rev"
+	fileIdx fileKind = "idx"
+	fileRev fileKind = "rev"
 	// filePack is a pack's own bytes, held to the trailer that is its name:
 	// only the scrub reads one (scrub.go), behind the serving.
 	filePack fileKind = "pack"
@@ -208,8 +206,8 @@ func (c *Cache) pieces(hold func(context.Context) (func(), error)) pieces {
 
 // repairAction is what a repair does about the checkable file at rel found
 // failing: a derived file is dropped, a pack's file installed again.
-func repairAction(rel string) string {
-	if _, _, derived := derivedFile(rel); derived {
+func (im *image) repairAction(rel string) string {
+	if i, _ := im.owner(rel); i >= 0 {
 		return "dropped"
 	}
 	return "reinstalled"
@@ -332,67 +330,43 @@ func checksumBytes(cs string) []byte {
 	return b
 }
 
-// derivedFile is the kind and the part of a derived file of an incarnation
-// by its path relative to the incarnation — one spelling, sweep.go's grammar
-// (midxFile, inInfo) — and false for any other path.
-func derivedFile(rel string) (fileKind, gitproc.Part, bool) {
-	dir, name := filepath.Split(rel)
-	switch filepath.Clean(dir) {
-	case infoRel:
-		if inInfo(name, false) {
-			return fileGraph, gitproc.PartCommitGraph, true
-		}
-	case packRel:
-		if !midxFile.MatchString(name) {
-			return "", 0, false
-		}
-		switch {
-		case name == "multi-pack-index":
-			return fileMidx, gitproc.PartMultiPackIndex, true
-		case strings.HasSuffix(name, ".bitmap"):
-			return fileBitmap, gitproc.PartMultiPackIndex, true
-		default:
-			return fileMidxRev, gitproc.PartMultiPackIndex, true
+// held is how a check and the scrub hold the derived file f to its bytes, as
+// ITS DECLARATION'S Check says (derived.go) — never as a reader would guess
+// from its name: the file as a check of it is counted (its Owned.File), and
+// what it is hashed against. A Check no case here reads is refused: Validate
+// admits only the Checks this build knows, so a reader not taught one a
+// declaration names is this build's bug, never a file to hold to a trailer it
+// may not carry.
+func (f ownedFile) held() (checkedFile, expect, error) {
+	if f.of.Check != CheckTrailer {
+		return checkedFile{}, expect{}, fmt.Errorf("cache: %s is a file of the derived file %q, which declares "+
+			"the check %q, and no check of this build holds a file to it", filepath.ToSlash(f.rel), f.of.Name,
+			f.of.Check)
+	}
+	// CheckTrailer: git's hashfile trailer, and for a name that carries a
+	// checksum (Owned.Prior) that checksum in the twenty bytes before it.
+	var want expect
+	if f.as.Prior {
+		if m := f.as.Name.FindStringSubmatch(filepath.Base(f.rel)); m != nil {
+			want.prior = checksumBytes(m[1])
 		}
 	}
-	return "", 0, false
+	return checkedFile{kind: fileKind(f.as.File), rel: f.rel}, want, nil
 }
 
-// derivedPresent is every derived file in the incarnation at dir — the
-// commit-graph and the multi-pack-index's files — by its path relative to it,
-// sorted; a regular file only, since the sweep moves anything else.
-func derivedPresent(dir string) ([]string, error) {
-	var rels []string
-	list, err := os.ReadDir(filepath.Join(dir, packRel))
-	if err != nil {
-		return nil, err
-	}
-	for _, d := range list {
-		if midxFile.MatchString(d.Name()) && d.Type().IsRegular() {
-			rels = append(rels, filepath.Join(packRel, d.Name()))
+// heldFiles is every derived file of files as a check and the scrub hold it
+// (held), with what each is hashed against added to wants.
+func heldFiles(files []ownedFile, wants map[string]expect) ([]checkedFile, error) {
+	out := make([]checkedFile, 0, len(files))
+	for _, f := range files {
+		cf, want, err := f.held()
+		if err != nil {
+			return nil, err
 		}
+		out = append(out, cf)
+		wants[cf.rel] = want
 	}
-	graph := filepath.Join(infoRel, "commit-graph")
-	if info, err := os.Lstat(filepath.Join(dir, graph)); err == nil && info.Mode().IsRegular() {
-		rels = append(rels, graph)
-	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return nil, err
-	}
-	slices.Sort(rels)
-	return rels, nil
-}
-
-// derivedExpect is what a derived file's name says of its last forty bytes:
-// a multi-pack-index's reverse index carries the index's checksum — the
-// forty hex digits its name carries — before its trailer, as a pack's .rev
-// carries the pack's (git's write_rev_trailer); every other derived file
-// says nothing beside its trailer.
-func derivedExpect(rel string) expect {
-	name := filepath.Base(rel)
-	if kind, _, _ := derivedFile(rel); kind == fileMidxRev {
-		return expect{prior: checksumBytes(strings.TrimSuffix(strings.TrimPrefix(name, "multi-pack-index-"), ".rev"))}
-	}
-	return expect{}
+	return out, nil
 }
 
 // packRel names one of a pack's files relative to its incarnation.
@@ -446,8 +420,10 @@ func packIndexOf(rel string) ([hashTrailer]byte, string, bool) {
 }
 
 // vouch records that inc's file at rel, at identity id, is one this process
-// wrote or checked; e.mu is held. A pack's own bytes are never vouched for:
-// the check reads no .pack, and the scrub reads every one vouched or not.
+// wrote or checked: a pack's .idx or .rev, or a derived file, which is what
+// every caller hands it; e.mu is held. A pack's own bytes are never vouched
+// for: the check reads no .pack, and the scrub reads every one vouched or
+// not.
 func vouch(inc *incarnation, rel string, id fileID) {
 	if !id.present {
 		return
@@ -465,12 +441,13 @@ func vouch(inc *incarnation, rel string, id fileID) {
 		inc.vouched.packs[key] = v
 		return
 	}
-	if _, _, derived := derivedFile(rel); derived {
-		if inc.vouched.derived == nil {
-			inc.vouched.derived = map[string]fileStamp{}
-		}
-		inc.vouched.derived[rel] = stampOf(id)
+	if packFileName.MatchString(filepath.Base(rel)) {
+		return // a .pack
 	}
+	if inc.vouched.derived == nil {
+		inc.vouched.derived = map[string]fileStamp{}
+	}
+	inc.vouched.derived[rel] = stampOf(id)
 }
 
 // vouchFiles vouches for inc's files at rels as they are now: files this
@@ -493,42 +470,43 @@ func (c *Cache) vouchPack(e *entry, inc *incarnation, cs string) {
 	c.vouchFiles(e, inc, packFileRel(cs, ".idx"), packFileRel(cs, ".rev"))
 }
 
-// derivedIDs is the identity of every derived file in the incarnation at dir
-// now, by its path relative to it; a listing that fails reads as none, which
+// ids is the identity of every derived file in the incarnation at dir now,
+// by its path relative to it; a listing that fails reads as none, which
 // vouches nothing afterwards.
-func derivedIDs(dir string) map[string]fileID {
-	rels, err := derivedPresent(dir)
+func (im *image) ids(dir string) map[string]fileID {
+	files, err := im.present(dir)
 	if err != nil {
 		return nil
 	}
-	ids := make(map[string]fileID, len(rels))
-	for _, rel := range rels {
-		ids[rel] = lstatID(filepath.Join(dir, rel))
+	ids := make(map[string]fileID, len(files))
+	for _, f := range files {
+		ids[f.rel] = lstatID(filepath.Join(dir, f.rel))
 	}
 	return ids
 }
 
 // vouchWritten vouches for every derived file of inc that a git process of
 // this one has just written: present now at an identity other than the one
-// before held — and stamps its part written (report.go's wrote). ONLY WHAT
-// MOVED: git keeps a file it would write again
-// unchanged — a bitmap whose index's checksum did not move is not rewritten —
-// so a step that ran over a damaged bitmap and kept it vouches nothing of it,
-// and the next check still reads it.
+// before held — and stamps its declaration written (report.go's wrote). ONLY
+// WHAT MOVED: git keeps a file it would write again unchanged — a bitmap whose
+// index's checksum did not move is not rewritten — so a step that ran over a
+// damaged bitmap and kept it vouches nothing of it, and the next check still
+// reads it.
 func (c *Cache) vouchWritten(e *entry, inc *incarnation, before map[string]fileID) {
 	var rels []string
-	var parts gitproc.Part
-	for rel, id := range derivedIDs(inc.dir) {
+	var written derivedSet
+	for rel, id := range c.image.ids(inc.dir) {
 		if id.present && before[rel] != id {
 			rels = append(rels, rel)
-			_, part, _ := derivedFile(rel)
-			parts |= part
+			if i, _ := c.image.owner(rel); i >= 0 {
+				written |= 1 << i
+			}
 		}
 	}
 	if len(rels) > 0 {
 		c.vouchFiles(e, inc, rels...)
 		e.mu.Lock()
-		wrote(inc, parts)
+		c.wrote(inc, written)
 		e.mu.Unlock()
 	}
 }
@@ -664,15 +642,15 @@ func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, sn
 			wants[rel] = expect{prior: prior}
 		}
 	}
-	derived, err := derivedPresent(inc.dir)
+	present, err := c.image.present(inc.dir)
 	if err != nil {
 		return ck, err
 	}
-	for _, rel := range derived {
-		kind, _, _ := derivedFile(rel)
-		files = append(files, checkedFile{kind: kind, rel: rel})
-		wants[rel] = derivedExpect(rel)
+	derived, err := heldFiles(present, wants)
+	if err != nil {
+		return ck, err
 	}
+	files = append(files, derived...)
 	slices.SortFunc(files, func(a, b checkedFile) int { return strings.Compare(a.rel, b.rel) })
 
 	p := c.pieces(c.git.HoldRead)
@@ -714,7 +692,7 @@ func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, sn
 			f.trigger = trigger
 			ck.damaged = append(ck.damaged, f)
 			c.log.Warn("code_cache_check_damaged", "repo", e.id, "incarnation", inc.n, "file", f.rel,
-				"trigger", string(trigger), "action", repairAction(f.rel), "error", err)
+				"trigger", string(trigger), "action", c.image.repairAction(f.rel), "error", err)
 			continue
 		case v == hashNone:
 			c.countCheck(f.kind, checkReplaced, trigger)
@@ -731,7 +709,7 @@ func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, sn
 		f.trigger = trigger
 		ck.damaged = append(ck.damaged, f)
 		c.log.Warn("code_cache_check_damaged", "repo", e.id, "incarnation", inc.n, "file", f.rel,
-			"trigger", string(trigger), "action", repairAction(f.rel))
+			"trigger", string(trigger), "action", c.image.repairAction(f.rel))
 	}
 	e.mu.Lock()
 	inc.checkedOnce = true
@@ -755,15 +733,15 @@ func (c *Cache) countCheck(kind fileKind, outcome checkOutcome, trigger checkTri
 // replaced or removed since its hash — rewritten by the maintainer, put right
 // by an earlier repair — is no finding any more, and its successor, which no
 // hash of this process read, is checked by the next round or the next scrub.
-func (ck checked) still(dir string) (map[string]packFinding, partDrops) {
+func (ck checked) still(im *image, dir string) (map[string]packFinding, derivedDrops) {
 	packs := map[string]packFinding{}
-	var drops partDrops
+	var drops derivedDrops
 	for _, f := range ck.damaged {
 		if lstatID(filepath.Join(dir, f.rel)) != f.id {
 			continue
 		}
-		if _, part, derived := derivedFile(f.rel); derived {
-			drops.add(part, time.Time{}, f.by())
+		if i, _ := im.owner(f.rel); i >= 0 {
+			drops.add(im.decls[i].Name, time.Time{}, f.by())
 			continue
 		}
 		m := packFileName.FindStringSubmatch(filepath.Base(f.rel))
@@ -792,7 +770,7 @@ type packFinding struct {
 
 // findings is the sentences a check's damaged files are reported to a
 // verification as, the sync before it having repaired them in place.
-func (ck checked) findings() []string {
+func (ck checked) findings(im *image) []string {
 	out := make([]string, 0, len(ck.damaged))
 	for _, f := range ck.damaged {
 		if f.hinted {
@@ -800,7 +778,7 @@ func (ck checked) findings() []string {
 			continue
 		}
 		action := "dropped it to be written again"
-		if _, _, derived := derivedFile(f.rel); !derived {
+		if i, _ := im.owner(f.rel); i < 0 {
 			action = "fetched its pack again"
 		}
 		out = append(out, fmt.Sprintf("the sync before the check found %s failing its checksum and %s",

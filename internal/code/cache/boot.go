@@ -167,7 +167,8 @@ func readBoot(ctx context.Context, root string) (*boot, int64, error) {
 }
 
 // measureIncarnation is what an incarnation with no state holds, counted as a
-// state counts it: the files under objects/ and packed-refs. Its first round
+// state counts it: the files under objects/ — the packs, and every derived
+// file, which validateAll keeps there — and packed-refs. Its first round
 // reads the whole answer and measures the two halves exactly.
 func measureIncarnation(ctx context.Context, dir string, skipped func(string, error)) (int64, error) {
 	total, err := sizeUnder(ctx, filepath.Join(dir, "objects"), allNames, skipped)

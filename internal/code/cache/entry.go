@@ -137,13 +137,24 @@ type entry struct {
 	// maintenance run starts while one does (verify.go), from its listing
 	// to its fsck — which a run in the lane's last free slot would refuse.
 	// A run already in flight is never stopped for one: its own files are
-	// admitted instead (maintenanceWriting).
+	// admitted instead (Write.Holds).
 	verifying int
+	// adopting counts the adoptions holding ONE of write outside a round
+	// (Adopt, and a failed whole wait's settle in acquireWrite): no
+	// maintenance run starts while one does (runnable), as none starts while
+	// a round runs. An adoption ADDS A PACK, and a declaration may drop what
+	// a run writes when one is added (dropFor) — which stops a run in flight
+	// writing it, so one started between that drop and the pack's links
+	// would write a file over the packs before the change and record it as
+	// current after it. Milliseconds a push; a pass that finds one owes the
+	// maintainer a wake when the last lets go (maintainerOwed).
+	adopting int
 	// lastAdded is when a round last added packs: the maintainer's debounce.
 	lastAdded time.Time
-	// maintainerOwed: a full round converged, and the maintainer is to be
-	// woken once no round holds the repository (run), since a pass starts
-	// no run on one a round holds (runnable).
+	// maintainerOwed: a full round converged, or a pass found the repository
+	// due while an adoption held it, and the maintainer is to be woken once
+	// no round runs on it (run) and no adoption holds it (releaseWrite),
+	// since a pass starts no run on one either holds (runnable).
 	maintainerOwed bool
 	// uncoveredSince is when the oldest pack the maintainer's index does not
 	// cover arrived — set by the round that adds packs while none wait, and
@@ -201,16 +212,16 @@ type incarnation struct {
 	// round began, since a round that swept it before the damage a mark
 	// answers did not repair that damage.
 	marks uint64
-	// drop is the derived files a git process over it named damaged
-	// (markWhole for RebuildDerived: the multi-pack-index's, the
-	// commit-graph, or both), OR-ed by every mark, so its next full round
+	// drop is the derived files, by declaration, a git process over it named
+	// damaged (markWhole for RebuildDerived: the multi-pack-index's, the
+	// commit-graph, or both), gathered by every mark, so its next full round
 	// DROPS them before deciding its own index (apply). A mark of its own
 	// rather than a reading of reread, which keeps only the first reason: a
 	// copy already marked to be read whole for its shape, or for a log
 	// recreated under it, would otherwise be read whole with the damaged
 	// files kept, and the request that asked for the repair meet the same
 	// damage on its retry. Taken by the round that drops them.
-	drop partDrops
+	drop derivedDrops
 	// packChecks are the hashes of the packs hints named (gitproc.Hint),
 	// by checksum, each in flight or decided (ConfirmHint, hint.go): a hint
 	// about a pack being hashed waits for that hash rather than starting its
@@ -292,19 +303,19 @@ type incarnation struct {
 	indexRepair bool
 	// repair is what reports asked its next full round to do (report.go).
 	repair repairMark
-	// written is when this process last changed each derived part's files
-	// — a write that moved a file's identity, the round's own index, or a
-	// drop — a time.Now() reading compared on the monotonic clock with a
-	// report's Began (dropDamaged).
-	written map[gitproc.Part]time.Time
-	// damagedAt is when each derived part was last dropped for damage, on
-	// Options.Now's clock: one dropped again within RebuildQuiet of it is
-	// damaged AGAIN (D13 of report.go's doc), and waits for the ordinary
+	// written is when this process last changed each declaration's files —
+	// a write that moved a file's identity, the round's own index, or a drop
+	// — a time.Now() reading compared on the monotonic clock with a report's
+	// Began (dropDamaged).
+	written map[DerivedName]time.Time
+	// damagedAt is when each declaration's files were last dropped for
+	// damage, on Options.Now's clock: one dropped again within RebuildQuiet of
+	// it is damaged AGAIN (D13 of report.go's doc), and waits for the ordinary
 	// rules rather than being written again at once — whatever ordinary
 	// writes came between, since a disk that keeps damaging what is written
-	// to it damages those too. againLogged is the parts logged so.
-	damagedAt   map[gitproc.Part]time.Time
-	againLogged gitproc.Part
+	// to it damages those too. againLogged is the declarations logged so.
+	damagedAt   map[DerivedName]time.Time
+	againLogged derivedSet
 	// memoryRefused is the steps the node's memory has refused it — each
 	// one whose charge alone is more than the node can give its background
 	// work — and said so: each logged and counted once an incarnation,

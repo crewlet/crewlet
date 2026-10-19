@@ -93,8 +93,9 @@ func refusedFor(t *testing.T, err error, rule gitproc.ShapeRule, inAlternate boo
 // test must repair.
 //
 // Mutations: answer Rebuild(shape) with a rebuild, and the incarnation is the
-// next one and every pack is fetched again; drop the image's own sweep of an
-// alternates file (inInfo), and git is still refused after the round.
+// next one and every pack is fetched again; have the image admit any file in
+// objects/info (imaged), and the alternates file is kept and git is still
+// refused after the round.
 func TestEveryShapeThePoolRefusesIsRepairedInPlace(t *testing.T) {
 	t.Parallel()
 	covered := map[gitproc.ShapeRule]bool{}

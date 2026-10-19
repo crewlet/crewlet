@@ -17,6 +17,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/sourcetree/decltype"
@@ -206,6 +207,12 @@ func TestNothingButSyncWritesACache(t *testing.T) {
 //   - a file written by a child process: git's own writes are judged by the
 //     subcommand it was handed, not by what it then opens.
 //
+// The declared half ties each WRITER to a declaration of derived.go — its file,
+// its subcommand and its argument list's literal — and never the FILES that
+// writer leaves, which a static walk cannot see because a child process
+// writes them: those are held to the declarations by
+// TestEveryDerivedFileIsDeclared, which runs real git and reads what it left.
+//
 // If the rule a cache rests on ever goes away, DELETE this half rather than
 // widening the allowance: an allowance kept past its subject is how a list
 // of excuses quietly grows.
@@ -259,10 +266,102 @@ func writersStatic(t *testing.T) {
 				"Delete the entry — it was: %s", a.file, a.kind, a.why)
 		}
 	}
-	if !t.Failed() {
-		t.Logf("scanned %d files: %d mutations, %d git writers, %d Cmd literals judged, %d Cmds handed to a call, "+
-			"every one allowed", found.files, mutations, writers, found.cmds, found.handed)
+	// THE DECLARED HALF: every git writer of the cache is a declared write of
+	// a derived file, and every declared write's writer is a row — so a
+	// derived file is written by nothing its declaration does not name.
+	decls := cache.DerivedFiles()
+	for _, problem := range derivedHalf(decls, cacheWriters, found.argv) {
+		t.Error(problem)
 	}
+	if !t.Failed() {
+		writes := 0
+		for _, d := range decls {
+			writes += len(d.Writes)
+		}
+		t.Logf("scanned %d files: %d mutations, %d git writers, %d Cmd literals judged, %d Cmds handed to a call, "+
+			"every one allowed; %d declared writes of %d derived files tied to their rows", found.files, mutations,
+			writers, found.cmds, found.handed, writes, len(decls))
+	}
+}
+
+// derivedHalf holds the allowance's rows to the cache's declarations of its
+// derived files (cache.DerivedFiles) in both directions, over the argument
+// lists each file that runs git spells (argv), and answers everything that
+// breaks:
+//
+//  1. a declared write whose writer — its file and git subcommand — has no
+//     row naming its declaration: a declaration naming a writer that does
+//     not exist;
+//  2. a row running one git subcommand in the cache that names no
+//     declaration: every git writer in a cache writes a derived file, or it
+//     writes what no row names;
+//  3. a row naming a declaration with no write in the row's file — for a
+//     row of one git subcommand, none with that subcommand;
+//  4. a row naming a name DerivedFiles does not hold;
+//  5. a row naming a declaration in a file that is no declaration's writer;
+//  6. a declared write whose argument list is no list its writer's file
+//     spells whole, element for element: Args are read where git runs them,
+//     or what a write hands git is a value the gate never read.
+//
+// A pure function over values, so its control (controlWriters) judges
+// declarations and rows it makes up.
+func derivedHalf(decls []cache.Derived, rows []writerRow, argv map[string][][]string) []string {
+	var out []string
+	names := map[cache.DerivedName]*cache.Derived{}
+	writers := map[string]bool{}
+	for i := range decls {
+		names[decls[i].Name] = &decls[i]
+		for _, w := range decls[i].Writes {
+			writers[w.Writer.File] = true
+		}
+	}
+	// Rule 1, and rule 6.
+	for _, d := range decls {
+		for _, w := range d.Writes {
+			kind := kindGit + " " + w.Writer.Subcommand
+			if !slices.ContainsFunc(rows, func(r writerRow) bool {
+				return r.file == w.Writer.File && r.kind == kind && slices.Contains(r.derived, d.Name)
+			}) {
+				out = append(out, fmt.Sprintf("derived file %q declares a %s write of step %s by %s running git %s, "+
+					"and no row of cacheWriters (%s, %s) names it: the declaration names a writer that does not "+
+					"exist, or the row forgot what it writes", d.Name, w.Trigger, w.Step, w.Writer.File,
+					w.Writer.Subcommand, w.Writer.File, kind))
+			}
+			if !slices.ContainsFunc(argv[w.Writer.File], func(a []string) bool { return slices.Equal(a, w.Args) }) {
+				out = append(out, fmt.Sprintf("derived file %q declares a %s write of step %s whose argument list "+
+					"%q %s does not spell whole: a write's Args are one of its writer file's own literals, so this "+
+					"gate reads what git is handed where git runs", d.Name, w.Trigger, w.Step, w.Args,
+					w.Writer.File))
+			}
+		}
+	}
+	for _, r := range rows {
+		sub, oneSub := strings.CutPrefix(r.kind, kindGit+" ")
+		oneSub = oneSub && r.kind != kindRuntime
+		// Rule 2.
+		if oneSub && strings.HasPrefix(r.file, "internal/code/cache/") && len(r.derived) == 0 {
+			out = append(out, fmt.Sprintf("%s runs git %s in the cache and its row names no declaration of a "+
+				"derived file: every git writer of a cache writes a derived file, declared in derived.go, or it "+
+				"writes what no row names", r.file, sub))
+		}
+		for _, name := range r.derived {
+			d, ok := names[name]
+			switch {
+			case !ok: // Rule 4.
+				out = append(out, fmt.Sprintf("the row (%s, %s) names derived file %q, which DerivedFiles does not "+
+					"declare", r.file, r.kind, name))
+			case !writers[r.file]: // Rule 5.
+				out = append(out, fmt.Sprintf("the row (%s, %s) names derived file %q, and %s is no declaration's "+
+					"writer", r.file, r.kind, name, r.file))
+			case !slices.ContainsFunc(d.Writes, func(w cache.Write) bool {
+				return w.Writer.File == r.file && (!oneSub || w.Writer.Subcommand == sub)
+			}): // Rule 3.
+				out = append(out, fmt.Sprintf("the row (%s, %s) names derived file %q, which declares no write by "+
+					"that file of that kind", r.file, r.kind, name))
+			}
+		}
+	}
+	return out
 }
 
 // The kinds of write a hit is, and an allowance entry names: kindOS for a
@@ -275,64 +374,79 @@ const (
 	kindRuntime = "git (arguments built at run time)"
 )
 
+// writerRow is one entry of the allowance: a file under internal/code that
+// may write the filesystem or run a git writer, the kind of write, why it
+// cannot go through the cache's own steps, and the declarations of derived
+// files (cache.DerivedFiles) its writes are writes of — none for a write that
+// makes no derived file. derivedHalf holds the last field to the
+// declarations in both directions.
+type writerRow struct {
+	file, kind, why string
+	derived         []cache.DerivedName
+}
+
 // cacheWriters is the closed set of files under internal/code that may write
 // the filesystem or run a git writer, each with what it does and why it
 // cannot go through the cache's own steps. Exact in both directions.
-var cacheWriters = []struct{ file, kind, why string }{
+var cacheWriters = []writerRow{
 	{"internal/code/gitproc/gitproc.go", kindOS,
-		"HOME for every git process, created and kept empty and private by the pool (gitproc.New)"},
+		"HOME for every git process, created and kept empty and private by the pool (gitproc.New)", nil},
 	{"internal/code/cache/layout.go", kindOS,
 		"Prepare: the cache directory, its fixed subdirectories and CACHEDIR.TAG, written in place before " +
 			"tmp/ exists; and toTrash, the one rename of anything into trash/ — a leftover home/, a boot's " +
-			"scratch/ and tmp/, a swept entry, a retired or evicted incarnation, a removed scratch"},
+			"scratch/ and tmp/, a swept entry, a retired or evicted incarnation, a removed scratch", nil},
 	{"internal/code/cache/open.go", kindOS,
 		"Open: repos/, trash/ and hooks/ made sure of, and scratch/ and tmp/ made anew once the boot has " +
-			"moved the old ones into trash/"},
+			"moved the old ones into trash/", nil},
 	{"internal/code/cache/durable.go", kindOS,
 		"stage and place: every file a cache writes but the tag — the state, packed-refs, HEAD, config, " +
 			"the skeleton's files and the hook script — staged in tmp/ and renamed over its destination, " +
-			"and a staging given up on removed"},
+			"and a staging given up on removed", nil},
 	{"internal/code/cache/entry.go", kindOS,
-		"a new incarnation's directory and its skeleton's subdirectories"},
+		"a new incarnation's directory and its skeleton's subdirectories", nil},
 	{"internal/code/cache/install.go", kindOS,
 		"a download's three files in tmp/, renamed into objects/pack in the order git reads a pack by, " +
-			"and what a failed download left removed"},
+			"and what a failed download left removed", nil},
 	{"internal/code/cache/sweep.go", kindOS,
-		"the image's directories made again where a full round's sweep found them missing"},
+		"the image's directories made again where a full round's sweep found them missing", nil},
 	{"internal/code/cache/evict.go", kindOS,
 		"the janitor: trash/ emptied, and a repository's last use stamped on its state file's " +
-			"modification time"},
+			"modification time", nil},
 	{"internal/code/cache/maintain.go", kindOS,
-		"the lock and temporary files a maintenance run that did not succeed, or a round's index that " +
-			"failed, leaves behind"},
+		"the files a declared write holds while it runs (Write.Holds): what a maintenance run that did " +
+			"not succeed, or a round's index that failed, leaves behind",
+		[]cache.DerivedName{cache.DerivedMidx, cache.DerivedGraph}},
 	{"internal/code/cache/maintain.go", kindGit + " multi-pack-index",
-		"a full round's index without a bitmap (indexRound) and the maintainer's with one, in one file " +
-			"so the writer of an index is one file"},
+		"the declared writes of the multi-pack-index — a full round's without a bitmap (indexRound) and the " +
+			"maintainer's with one and without — in one file so the writer of an index is one file",
+		[]cache.DerivedName{cache.DerivedMidx}},
 	{"internal/code/cache/maintain.go", kindGit + " commit-graph",
-		"the maintainer's commit-graph"},
+		"the declared write of the maintainer's commit-graph", []cache.DerivedName{cache.DerivedGraph}},
 	{"internal/code/cache/maintain.go", kindRuntime,
-		"runMaintenance runs its plan's steps, whose argument lists are this file's three literals above: " +
-			"the index with its bitmap and without one, and the graph"},
+		"indexRound and runMaintenance run declared writes (derived.go), whose argument lists are this " +
+			"file's four literals above: the round's index, the maintainer's with its bitmap and without one, " +
+			"and the graph",
+		[]cache.DerivedName{cache.DerivedMidx, cache.DerivedGraph}},
 	{"internal/code/cache/scratch.go", kindOS,
 		"a push's scratch repository and an advertisement view under scratch/: their directories, HEAD, " +
 			"config and alternates, and a view's packed-refs linked from its incarnation; and a request's " +
-			"spool (Spool), created there and unlinked at once, so it is no file of the cache's"},
+			"spool (Spool), created there and unlinked at once, so it is no file of the cache's", nil},
 	{"internal/code/cache/adopt.go", kindOS,
 		"the receiving node's own pack, once its row has applied: linked into tmp/ and from there into " +
-			"objects/pack, and its staging names removed"},
+			"objects/pack, and its staging names removed", nil},
 	{"internal/code/host/receive.go", kindGit + " receive-pack",
 		"a push, received in its SCRATCH repository (cache.NewScratch) — never in a cache, since git " +
 			"migrates a push's objects into the repository it runs in before any hook can refuse them; " +
-			"the pack enters the cache only by Adopt, once its row has applied"},
+			"the pack enters the cache only by Adopt, once its row has applied", nil},
 	{"internal/code/host/advertise.go", kindGit + " receive-pack",
 		"a push's advertisement (`--advertise-refs`, which writes nothing), run in an advertisement view " +
-			"under scratch/ (cache.AdvertiseView), never in a cache"},
+			"under scratch/ (cache.AdvertiseView), never in a cache", nil},
 	{"internal/code/host/scan.go", kindRuntime,
 		"rev-list over a push's new values in its scratch — the path of a blob over the limit and the " +
-			"commits the push introduces — whose argument lists are this file's literals and object ids"},
+			"commits the push introduces — whose argument lists are this file's literals and object ids", nil},
 	{"internal/code/host/relay.go", kindOS,
 		"the hook relay's private socket directory under TMPDIR, made at Start and removed at Stop: no " +
-			"path of the cache's"},
+			"path of the cache's", nil},
 }
 
 type writerKey struct{ file, kind string }
@@ -436,6 +550,9 @@ type writerWalk struct {
 	cmds       int // Cmd literals judged
 	handed     int // Cmds handed to a call, a literal spelled there or not
 	hits       []writerHit
+	// argv is every argument list a file that runs git spells whole, by the
+	// file, slash-separated and relative to the root.
+	argv map[string][][]string
 }
 
 // harnessDir is a directory the walk does not enter: a test harness, named
@@ -472,7 +589,7 @@ func walkForWriters(root string) (writerWalk, error) {
 	if err != nil {
 		return writerWalk{}, err
 	}
-	var out writerWalk
+	out := writerWalk{argv: map[string][][]string{}}
 	for _, path := range paths {
 		// Every file, wherever it is built: one this platform does not
 		// build is read against the scope of the files it does.
@@ -490,6 +607,9 @@ func walkForWriters(root string) (writerWalk, error) {
 		}
 		m.walk()
 		out.hits = append(out.hits, m.hits...)
+		if len(m.argvs) > 0 {
+			out.argv[f.Rel] = append(out.argv[f.Rel], m.argvs...)
+		}
 		out.cmds += m.cmds
 		out.handed += m.handed
 	}
@@ -540,6 +660,10 @@ type writerMatch struct {
 	// cmds counts the Cmd literals judged, handed the Cmds handed to a call.
 	cmds, handed int
 	hits         []writerHit
+	// argvs is every argument list the file spells whole — a []string
+	// literal of string literals — in a file that runs git: what a declared
+	// write's Args are held to (derivedHalf).
+	argvs [][]string
 }
 
 func newWriterMatch(w *decltype.World, f *decltype.File, cmd ast.Expr, inGitproc bool) (*writerMatch, error) {
@@ -639,7 +763,13 @@ func (m *writerMatch) walk() {
 			m.mutation(n)
 			m.receiver(n)
 		case *ast.CompositeLit:
-			if !git || m.judged[n.Lbrace] || !isStrings(n.Type) || len(n.Elts) == 0 {
+			if !git || !isStrings(n.Type) || len(n.Elts) == 0 {
+				return true
+			}
+			if argv, ok := spelledArgv(n); ok {
+				m.argvs = append(m.argvs, argv)
+			}
+			if m.judged[n.Lbrace] {
 				return true
 			}
 			if word, ok := stringLit(n.Elts[0]); ok && gitWriterWords[word] {
@@ -1230,6 +1360,20 @@ func firstOf(exprs []ast.Expr) ast.Expr {
 	return exprs[0]
 }
 
+// spelledArgv is the value of a []string literal every element of which is a
+// string literal: an argument list spelled whole where it stands.
+func spelledArgv(lit *ast.CompositeLit) ([]string, bool) {
+	argv := make([]string, 0, len(lit.Elts))
+	for _, e := range lit.Elts {
+		s, ok := stringLit(e)
+		if !ok {
+			return nil, false
+		}
+		argv = append(argv, s)
+	}
+	return argv, true
+}
+
 // stringLit is the value of a string literal.
 func stringLit(expr ast.Expr) (string, bool) {
 	lit, ok := expr.(*ast.BasicLit)
@@ -1597,6 +1741,8 @@ var _ = Cmd{Args: []string{"version"}}
 		t.Errorf("control: the walk read %d files (%d of cache), want 13 (1)", found.files, found.cacheFiles)
 	}
 
+	controlDerivedHalf(t)
+
 	// A file the walk cannot parse is an error, never a file judged clean.
 	broken := syntheticTree(t, map[string]string{
 		"internal/code/gitproc/own.go":       files["internal/code/gitproc/own.go"],
@@ -1605,6 +1751,62 @@ var _ = Cmd{Args: []string{"version"}}
 	})
 	if _, err := walkForWriters(broken); err == nil || !strings.Contains(err.Error(), "broken.go") {
 		t.Errorf("control: walking a tree holding a file that is not Go answered %v, want an error naming it", err)
+	}
+}
+
+// controlDerivedHalf holds derivedHalf to verdicts known in advance, over
+// declarations and rows made up: one break of each of its six rules, each
+// reported once and nothing else — and the matching declaration, row and
+// argument list alone, which report nothing. A derived half that went inert
+// would certify the real tree's declarations whatever they said.
+func controlDerivedHalf(t *testing.T) {
+	t.Helper()
+	const x, y = "internal/code/cache/x.go", "internal/code/cache/y.go"
+	midx := cache.Derived{Name: cache.DerivedMidx, Writes: []cache.Write{{
+		Step: cache.StepIndex, Trigger: cache.TriggerMaintainer,
+		Writer: cache.Writer{File: x, Subcommand: "multi-pack-index"}, Args: []string{"multi-pack-index", "write"},
+	}}}
+	// A declaration naming a writer with no row, whose argument list its
+	// file does not spell.
+	graph := cache.Derived{Name: cache.DerivedGraph, Writes: []cache.Write{{
+		Step: cache.StepGraph, Trigger: cache.TriggerMaintainer,
+		Writer: cache.Writer{File: x, Subcommand: "commit-graph"}, Args: []string{"commit-graph", "write"},
+	}}}
+	argv := map[string][][]string{x: {{"multi-pack-index", "write"}}}
+	pair := writerRow{file: x, kind: kindGit + " multi-pack-index", why: "the pair",
+		derived: []cache.DerivedName{cache.DerivedMidx}}
+	rows := []writerRow{
+		pair,
+		{file: x, kind: kindGit + " repack", why: "a git writer in the cache naming no declaration"},
+		{file: x, kind: kindOS, why: "a name nobody declared", derived: []cache.DerivedName{"nonesuch"}},
+		{file: y, kind: kindOS, why: "a file that is no writer's", derived: []cache.DerivedName{cache.DerivedMidx}},
+		{file: x, kind: kindGit + " fsck", why: "a write its file does not hold",
+			derived: []cache.DerivedName{cache.DerivedMidx}},
+	}
+	want := []string{
+		`derived file "commit-graph" declares a maintainer write of step graph by internal/code/cache/x.go ` +
+			`running git commit-graph, and no row`,
+		`derived file "commit-graph" declares a maintainer write of step graph whose argument list ` +
+			`["commit-graph" "write"] internal/code/cache/x.go does not spell whole`,
+		`internal/code/cache/x.go runs git repack in the cache and its row names no declaration`,
+		`names derived file "nonesuch", which DerivedFiles does not declare`,
+		`names derived file "midx", and internal/code/cache/y.go is no declaration's writer`,
+		`the row (internal/code/cache/x.go, git fsck) names derived file "midx", which declares no write`,
+	}
+	got := derivedHalf([]cache.Derived{midx, graph}, rows, argv)
+	if len(got) != len(want) {
+		t.Errorf("control: the derived half reported %d problems on a tree that breaks each of its rules once, "+
+			"want %d:\n\t%s", len(got), len(want), strings.Join(got, "\n\t"))
+	}
+	for _, w := range want {
+		if n := len(slices.DeleteFunc(slices.Clone(got), func(g string) bool { return !strings.Contains(g, w) })); n != 1 {
+			t.Errorf("control: the derived half reported %d problems saying %q, want 1; it reported:\n\t%s", n, w,
+				strings.Join(got, "\n\t"))
+		}
+	}
+	if got := derivedHalf([]cache.Derived{midx}, []writerRow{pair}, argv); len(got) != 0 {
+		t.Errorf("control: the derived half reported problems on a declaration, its row and its argument list "+
+			"that match:\n\t%s", strings.Join(got, "\n\t"))
 	}
 }
 

@@ -441,7 +441,7 @@ func (v *Verification) pass(ctx context.Context, s Synced, checking func(time.Du
 // second. A run ALREADY in flight is left to finish, never stopped: work
 // thrown away for a check is work the maintainer does again at once, and its
 // lock and temporary files are admitted by the listing instead
-// (maintenanceWriting). The check's fsck no longer races it for a slot: the
+// (Write.Holds). The check's fsck no longer races it for a slot: the
 // admission holds one. NOTHING IS REPAIRED UNDER A CHECK either: a report
 // recorded meanwhile is repaired by the round its release asks (report.go).
 func (c *Cache) holdMaintainer(e *entry) func() {
@@ -529,10 +529,9 @@ type listing struct {
 	// packs is every pack file in objects/pack, by checksum: each
 	// extension's size.
 	packs map[string]map[string]int64
-	// derived is every derived file the grammar admitted — the
-	// multi-pack-index's files and the commit-graph — by its path relative
-	// to the incarnation.
-	derived []string
+	// derived is every file a declaration owns that the grammar admitted
+	// (derived.go), with its declaration, in declaration order.
+	derived []ownedFile
 	// problems is what the grammar does not admit, and what it requires that
 	// is missing.
 	problems []string
@@ -549,7 +548,7 @@ func (l *listing) close() {
 // it (entry.write, waited for under ctx). A maintenance run may be: one in
 // flight on inc when the listing begins is left to finish — the check holds
 // the maintainer off (holdMaintainer), so none starts — and the files it holds
-// only while it runs are admitted (maintenanceWriting), since a writer's own
+// only while it runs are admitted (Write.Holds), since a writer's own
 // lock and temporary files are no damage. With no run in flight they are,
 // and named as such.
 func (c *Cache) list(ctx context.Context, e *entry, inc *incarnation) (*listing, error) {
@@ -569,35 +568,62 @@ func (c *Cache) list(ctx context.Context, e *entry, inc *incarnation) (*listing,
 	l.at, l.stream, l.repo, l.digest = inc.at, inc.stream, inc.repo, inc.refsDigest
 	running := e.maint != nil && e.maint.inc == inc
 	e.mu.Unlock()
-	writing := func(rel, name string) bool { return running && maintenanceWriting(rel, name) }
+	im := c.image
 	unexpected := func(rel string) { l.problems = append(l.problems, "unexpected "+filepath.ToSlash(rel)) }
 	missing := func(rel string) { l.problems = append(l.problems, "missing "+filepath.ToSlash(rel)) }
+	// admit is the image grammar (image.imaged) and what a listing admits
+	// beside it: a pack's files, whichever the rows name — checkPacks judges
+	// them against the rows, and names a stray — and, while a maintenance
+	// run is in flight on inc, the files a declaration holds only while its
+	// write runs (Write.Holds).
+	admit := func(rel, name string, kind entryKind) bool {
+		switch {
+		case im.imaged(rel, name, kind):
+			return true
+		case kind == dirEntry:
+			return false
+		case rel == packRel && packFileName.MatchString(name):
+			return true
+		}
+		return running && im.holderOf(rel, name) >= 0
+	}
 
 	// admitted is every entry the grammar admitted, by its path: a
 	// directory is listed only when its parent admitted it as one, and one
-	// the grammar requires that is not there is missing.
+	// every incarnation has that is not there is missing. derived is every
+	// owned file admitted, by declaration, in the order each directory
+	// lists it.
 	admitted := map[string]bool{".": true}
-	dir := func(rel string, admit func(name string, dir bool) bool) ([]fs.DirEntry, error) {
+	derived := make([][]ownedFile, len(im.decls))
+	var packFiles []fs.DirEntry
+	dir := func(rel string) error {
 		if !admitted[rel] {
-			missing(rel)
-			return nil, nil
+			if im.required[rel] {
+				missing(rel)
+			}
+			return nil
 		}
 		list, err := os.ReadDir(filepath.Join(inc.dir, rel))
 		if err != nil {
-			return nil, err
+			return err
 		}
-		kept := list[:0]
 		for _, d := range list {
-			if !admit(d.Name(), d.IsDir()) {
-				unexpected(filepath.Join(rel, d.Name()))
+			path := filepath.Join(rel, d.Name())
+			if !admit(rel, d.Name(), kindOf(d)) {
+				unexpected(path)
 				continue
 			}
-			kept = append(kept, d)
-			admitted[filepath.Join(rel, d.Name())] = true
+			admitted[path] = true
+			if rel == packRel {
+				packFiles = append(packFiles, d)
+			}
+			if f, ok := im.owned(path); ok {
+				derived[f.i] = append(derived[f.i], f)
+			}
 		}
-		return kept, nil
+		return nil
 	}
-	if _, err := dir(".", inRoot); err != nil {
+	if err := dir("."); err != nil {
 		return nil, err
 	}
 	// The state is not required: a cache serves without it, and its first
@@ -628,39 +654,19 @@ func (c *Cache) list(ctx context.Context, e *entry, inc *incarnation) (*listing,
 			l.problems = append(l.problems, fmt.Sprintf("%s %s: it reads %q", f.name, f.says, raw))
 		}
 	}
-	for _, sub := range []struct {
-		rel   string
-		admit func(string, bool) bool
-	}{
-		{"refs", inRefs},
-		{filepath.Join("refs", "heads"), func(string, bool) bool { return false }},
-		{filepath.Join("refs", "tags"), func(string, bool) bool { return false }},
-		{"objects", inObjects},
-		{infoRel, func(name string, isDir bool) bool {
-			return inInfo(name, isDir) || (!isDir && writing(infoRel, name))
-		}},
-	} {
-		if _, err := dir(sub.rel, sub.admit); err != nil {
+	for _, rel := range im.dirs[1:] {
+		if err := dir(rel); err != nil {
 			return nil, err
 		}
 	}
-	files, err := dir(packRel, func(name string, isDir bool) bool {
-		return !isDir && (packFileName.MatchString(name) || midxFile.MatchString(name) || writing(packRel, name))
-	})
-	if err != nil {
-		return nil, err
-	}
-	for _, d := range files {
+	for _, d := range packFiles {
 		if !d.Type().IsRegular() {
 			unexpected(filepath.Join(packRel, d.Name()))
 			continue
 		}
 		m := packFileName.FindStringSubmatch(d.Name())
 		if m == nil {
-			if midxFile.MatchString(d.Name()) {
-				l.derived = append(l.derived, filepath.Join(packRel, d.Name()))
-			}
-			continue // the maintainer's
+			continue // a declaration's
 		}
 		info, ierr := d.Info()
 		if errors.Is(ierr, fs.ErrNotExist) {
@@ -674,15 +680,17 @@ func (c *Cache) list(ctx context.Context, e *entry, inc *incarnation) (*listing,
 		}
 		l.packs[m[1]]["."+m[2]] = info.Size()
 	}
-	if graph := filepath.Join(infoRel, "commit-graph"); admitted[graph] {
-		l.derived = append(l.derived, graph)
+	for _, files := range derived {
+		l.derived = append(l.derived, files...)
 	}
 	// packed-refs, opened while no round can rename another over it: the
 	// file and the digest this cache wrote with it are read together.
 	if admitted["packed-refs"] {
-		if l.refs, err = os.Open(filepath.Join(inc.dir, "packed-refs")); err != nil {
+		f, err := os.Open(filepath.Join(inc.dir, "packed-refs"))
+		if err != nil {
 			return nil, err
 		}
+		l.refs = f
 	}
 	return l, nil
 }
@@ -765,26 +773,31 @@ func checkPacks(ctx context.Context, dir string, l *listing, snap snapshot) (int
 }
 
 // checkDerived is step 4: every derived file the listing found held to its
-// trailer (check.go), the one check that names damage in a file git reads
-// without checking — a bitmap no git command verifies, a graph or an index
-// that answers wrong rather than failing. A file replaced or removed since
-// the listing (a repair round may run between the listing and the hash: the
-// check holds rounds off for its listing alone) gives no verdict and is no
-// finding. No read slot is taken a piece at a time: the check holds its
+// bytes as its declaration's Check says (ownedFile.held, check.go) — today
+// git's hashfile trailer — the one check that names damage in a file git
+// reads without checking: a bitmap no git command verifies, a graph or an
+// index that answers wrong rather than failing. A file replaced or removed
+// since the listing (a repair round may run between the listing and the hash:
+// the check holds rounds off for its listing alone) gives no verdict and is
+// no finding. No read slot is taken a piece at a time: the check holds its
 // maintenance slot across the whole of it.
 func (c *Cache) checkDerived(ctx context.Context, dir string, l *listing) ([]string, error) {
 	var problems []string
 	p := c.pieces(nil)
-	for _, rel := range l.derived {
-		if c.knobs != nil && c.knobs.hashing != nil {
-			c.knobs.hashing(filepath.Join(dir, rel))
+	for _, f := range l.derived {
+		_, want, err := f.held()
+		if err != nil {
+			return problems, err
 		}
-		v, _, _, err := trailerSound(ctx, filepath.Join(dir, rel), p, derivedExpect(rel))
+		if c.knobs != nil && c.knobs.hashing != nil {
+			c.knobs.hashing(filepath.Join(dir, f.rel))
+		}
+		v, _, _, err := trailerSound(ctx, filepath.Join(dir, f.rel), p, want)
 		switch {
 		case err != nil:
-			return problems, fmt.Errorf("hashing %s: %w", filepath.ToSlash(rel), err)
+			return problems, fmt.Errorf("hashing %s: %w", filepath.ToSlash(f.rel), err)
 		case v == hashDamaged:
-			problems = append(problems, filepath.ToSlash(rel)+" fails its checksum")
+			problems = append(problems, filepath.ToSlash(f.rel)+" fails its checksum")
 		}
 	}
 	return problems, nil

@@ -2,6 +2,7 @@ package cache_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io/fs"
 	"os"
@@ -33,8 +34,9 @@ import (
 //
 // Mutation: handle RebuildDerived as a rebuild into a new incarnation (drop its
 // inPlace branch), and the incarnation moves and the GET count rises; drop the
-// dropMultiPackIndex step (apply), and the damaged index survives the repair;
-// drop the commit-graph with it (dropIndexes), and the graph is gone.
+// round's dropDamaged step (apply), and the damaged index survives the repair;
+// name the commit-graph's declaration by the multi-pack-index's part too
+// (derived.go, Part), and the graph is dropped with the index and gone.
 func TestADamagedMidxIsRepairedInPlace(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -318,6 +320,120 @@ func TestARoundsOwnGitMeetingADamagedIndexDropsItInPlace(t *testing.T) {
 	}
 }
 
+// DAMAGE NO DROP CAN END ASKS A REBUILD, ONCE. A round's own git meeting
+// damage in a derived file whose declaration KEEPS its files on a report
+// (OnReported Keep) has no drop to ask for: the next round would keep the
+// file, its git meet the same damage, and the round after it mark the same
+// drop again for ever. So the round asks a whole rebuild, `corrupt`, as for
+// damage that survived its drop, and is answered by the incarnation that
+// replaces the damaged one — once, with the index the copy kept never
+// recorded as dropped.
+//
+// Mutation: have damagedRound ask the drop of every declaration the damage
+// names, whatever its declaration says of a report — the sync is never
+// answered.
+func TestDamageNoDropCanEndAsksARebuild(t *testing.T) {
+	t.Parallel()
+	keep := cache.DerivedFiles()
+	for i := range keep {
+		if keep[i].Name == cache.DerivedMidx {
+			keep[i].OnReported = cache.Keep
+		}
+	}
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t, clk.on, cache.WithDerived(keep))
+	s := w.sync(t, c, repo)
+	clk.Add(cache.MidxDebounce)
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Fatalf("the maintainer ran %v, want the repository", ran)
+	}
+	overwriteBytes(t, filepath.Join(s.Dir, "objects", "pack", "multi-pack-index"), 0, []byte{0xde, 0xad, 0xbe, 0xef})
+
+	w.tag(t, repo, "v1", true) // a tag object in a pack of its own: the next round peels it
+	ctx, cancel := context.WithTimeout(t.Context(), hangDetector)
+	defer cancel()
+	after, err := c.Sync(ctx, repo, statelog.Freshness{Level: statelog.ReadLinearizable})
+	if err != nil {
+		t.Fatalf("the sync whose round met damage its declaration keeps: %v", err)
+	}
+	defer after.Release()
+	if got := cache.Incarnation(after); got != cache.Incarnation(s)+1 {
+		t.Errorf("answered incarnation %d, want %d — one rebuild", got, cache.Incarnation(s)+1)
+	}
+	if got := counter(w.rec, metrics.CodeCacheRebuilds, "reason", "corrupt"); got != 1 {
+		t.Errorf("%s{reason=corrupt} = %d, want the one rebuild", metrics.CodeCacheRebuilds, got)
+	}
+	if got := counter(w.rec, metrics.CodeCacheRebuilds, "reason", "derived"); got != 0 {
+		t.Errorf("%s{reason=derived} = %d: nothing was dropped", metrics.CodeCacheRebuilds, got)
+	}
+	if lines := w.logs.lines(t, "code_cache_derived_repaired"); len(lines) != 0 {
+		t.Errorf("code_cache_derived_repaired = %v: a declaration that keeps its files was logged repaired", lines)
+	}
+	if _, err := runGit(t, w.pool, after.Dir, "", "rev-list", "--objects", "--all"); err != nil {
+		t.Errorf("rev-list over the rebuilt incarnation: %v", err)
+	}
+}
+
+// A REQUEST'S DAMAGE NO DROP REPAIRS IS REPAIRED AS A PACK'S IS. A request
+// whose git met damage in a derived file whose declaration KEEPS its files on
+// a report (OnReported Keep) asks a derived repair — and a drop of it would
+// move nothing: the incarnation read whole, the same file kept, the request
+// answered from the copy that failed it. So Rebuild repairs it as a pack's
+// damage, at once: the forced round holds every index file to its trailer
+// whatever its vouch, and the index — damaged in place, so its identity and
+// its vouch are what the maintainer wrote — fails its check and is dropped,
+// the bytes having decided. In place, counted `derived`, nothing fetched.
+//
+// Mutation: have Rebuild mark the incarnation for a derived drop whatever the
+// damage's declarations say of a report (rebuild.go) — the round reads the
+// copy whole, holds only what it has not vouched for to a trailer, and keeps
+// the damaged index.
+func TestARequestsDamageNoDropRepairsIsRepairedAsAPacks(t *testing.T) {
+	t.Parallel()
+	keep := cache.DerivedFiles()
+	for i := range keep {
+		if keep[i].Name == cache.DerivedMidx {
+			keep[i].OnReported = cache.Keep
+		}
+	}
+	r := newReportedCopy(t, nil, cache.WithDerived(keep))
+	midx := r.midx()
+	gittest.DamageInPlace(t, r.s.Dir, gittest.MidxTrailer)
+	if bad, err := cache.Unsound(r.s.Dir); err != nil || len(bad) == 0 {
+		t.Fatalf("the index damaged in place holds to its trailer (%v, %v): the case damaged nothing", bad, err)
+	}
+	gets := r.w.objects.total()
+
+	ctx, cancel := context.WithTimeout(t.Context(), hangDetector)
+	defer cancel()
+	repaired, err := r.c.Rebuild(ctx, r.s, cache.Failure{Reason: cache.RebuildDerived,
+		Drops: gitproc.PartMultiPackIndex, Began: time.Now()})
+	if err != nil {
+		t.Fatalf("Rebuild(derived) of a kept index: %v", err)
+	}
+	defer repaired.Release()
+	if cache.Incarnation(repaired) != cache.Incarnation(r.s) {
+		t.Errorf("the repair answered incarnation %d, want %d in place", cache.Incarnation(repaired),
+			cache.Incarnation(r.s))
+	}
+	if _, err := os.Lstat(midx); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the damaged index survived its request's repair: %v", err)
+	}
+	if got := r.w.objects.total() - gets; got != 0 {
+		t.Errorf("the repair fetched %d objects, want none", got)
+	}
+	if got := counter(r.w.rec, metrics.CodeCacheRebuilds, "reason", "derived"); got != 1 {
+		t.Errorf("%s{reason=derived} = %d, want the one drop", metrics.CodeCacheRebuilds, got)
+	}
+	lines := r.w.logs.lines(t, "code_cache_derived_repaired")
+	if len(lines) != 1 || lines[0]["trigger"] != "check" {
+		t.Errorf("code_cache_derived_repaired = %v, want the forced check's one drop", lines)
+	}
+}
+
 // A DAMAGED GRAPH IS DROPPED IN PLACE AND ITS INDEX KEPT. A commit-graph whose
 // commits name a parent past the graph (I8: every first-parent field
 // 0x00ffffff) is fatal to any walk (`invalid parent position %u`, a
@@ -333,8 +449,12 @@ func TestARoundsOwnGitMeetingADamagedIndexDropsItInPlace(t *testing.T) {
 // classified as (cache.DamageReason: its Reason and Drops), so the case holds
 // the classification and the drop together.
 //
-// Mutations: make dropCommitGraph a no-op (the I8 arm keeps its damaged
-// graph); have PartChunk drop the index alone (the I5′ arm keeps its graph).
+// Mutations: set the commit-graph declaration's OnReported to Keep
+// (derived.go; the I5′ arm's request drops the index alone and its graph
+// falls only to the round's check, two repairs logged where the damage asked
+// one — the I8 arm's graph, failing its trailer, is dropped by the forced
+// check of the pack's-damage repair a kept declaration's request takes);
+// have PartChunk drop the index alone (the I5′ arm keeps its graph).
 func TestADamagedGraphIsDroppedInPlaceAndItsIndexKept(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

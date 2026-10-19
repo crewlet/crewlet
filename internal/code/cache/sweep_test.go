@@ -1,11 +1,21 @@
 package cache_test
 
 import (
+	"context"
+	"io/fs"
+	"maps"
+	"os"
+	"path"
 	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/code/cache"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // A DELTA SWEEPS NOTHING: the steady-state cost of a sync is proportional to
@@ -104,5 +114,394 @@ func TestAFullRoundSweepsADeadWritersFilesBeforeItsIndex(t *testing.T) {
 	}
 	if got, want := w.image(t, c, repo), w.rebuilt(t, repo); got != want {
 		t.Errorf("the image after the crash:\n%s\nwant a fresh cache's:\n%s", got, want)
+	}
+}
+
+// THE SWEEP KEEPS EXACTLY THE DECLARED IMAGE, and Verify admits exactly what
+// the sweep keeps: one predicate (image.imaged) over the fixed entries and the
+// files the declarations own (derived.go, ADR-0038), so the two never disagree
+// about what a cache is. Over a copy the maintainer has written — the
+// multi-pack-index with its bitmap, the commit-graph — an undeclared entry is
+// planted in every directory of the image, a loose ref among them, and a
+// directory named for an index chain or a graph chain no declaration owns,
+// beside each declaration's files held only while a write runs, with no write
+// running. Verify names every one of them unexpected and nothing else; the
+// first round of a new process moves every one of them into trash/ and
+// nothing else, keeping the real index, its bitmap and the graph; and git
+// reads the copy whole after.
+//
+// A symbolic link at a file of the image — the commit-graph's, and config's
+// over a file holding the configuration the pool requires — is KEPT and
+// admitted, as each directory's grammar kept it before the grammar was one
+// predicate: what the declarations' grammar admits of a file's kind is the
+// kinds each directory admitted, a regular file in objects/pack and anything
+// but a directory elsewhere.
+//
+// Mutations: drop the multi-pack-index's owned files from its declaration, and
+// the round trashes the real index and its bitmap; make imaged admit an owned
+// name whatever its kind, and the directory planted at an owned name is kept;
+// give Verify a predicate of its own for objects/info, and the two sets
+// differ.
+func TestTheSweepKeepsExactlyTheDeclaredImage(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	for range 3 {
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	c := w.open(t, clk.on)
+	dir := w.sync(t, c, repo).Dir
+	clk.Add(cache.MidxDebounce)
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Fatalf("the maintainer ran %v, want the repository", ran)
+	}
+	packDir := filepath.Join(dir, "objects", "pack")
+	derived := []string{filepath.Join(packDir, "multi-pack-index"), bitmapOf(t, packDir),
+		filepath.Join(dir, "objects", "info", "commit-graph")}
+	for _, path := range derived {
+		if !statOK(t, path) {
+			t.Fatalf("the maintainer left no %s: the case needs every derived file written", path)
+		}
+	}
+
+	// Every entry planted outside the image, by its path relative to the
+	// incarnation, each with a base name of its own; true for a directory.
+	// A directory at an owned file's name is outside it too: a derived file
+	// is a file.
+	cs := strings.Repeat("ab", 20)
+	planted := map[string]bool{
+		"description":                                  false,
+		"refs/stray-in-refs":                           false,
+		"refs/heads/loose":                             false,
+		"refs/tags/stray-tag":                          false,
+		"objects/stray-in-objects":                     false,
+		"objects/info/stray-in-info":                   false,
+		"objects/info/commit-graphs":                   true,
+		"objects/pack/stray-in-pack":                   false,
+		"objects/pack/multi-pack-index.d":              true,
+		"objects/pack/multi-pack-index.lock":           false,
+		"objects/pack/tmp_bitmap_Xq3vRk":               false,
+		"objects/info/commit-graph.lock":               false,
+		"objects/pack/multi-pack-index-" + cs + ".rev": true,
+	}
+	for rel, isDir := range planted {
+		path := filepath.Join(dir, filepath.FromSlash(rel))
+		if isDir {
+			write(t, filepath.Join(path, "inside"), "a stray directory's file\n")
+			continue
+		}
+		write(t, path, "a stray\n")
+	}
+	// The links: the graph and config, each to a file outside the
+	// incarnation holding what the cache keeps there.
+	outside := t.TempDir()
+	graph := derived[2]
+	link := func(path, content string) {
+		target := filepath.Join(outside, filepath.Base(path))
+		write(t, target, content)
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link(graph, read(t, graph))
+	link(filepath.Join(dir, "config"), gitproc.RepoConfig)
+
+	report, err := verify(t.Context(), c, repo, false)
+	if err != nil {
+		t.Fatalf("Verify of the planted copy: %v", err)
+	}
+	var unexpected []string
+	for _, p := range report.Problems {
+		if rel, ok := strings.CutPrefix(p, "unexpected "); ok {
+			unexpected = append(unexpected, rel)
+		}
+	}
+	slices.Sort(unexpected)
+	if want := slices.Sorted(maps.Keys(planted)); !slices.Equal(unexpected, want) {
+		t.Errorf("Verify named unexpected\n\t%v\nwant exactly what was planted outside the image\n\t%v\n(all its "+
+			"problems: %q)", unexpected, want, report.Problems)
+	}
+
+	c = w.reopen(t, c, clk.on)
+	before := map[string]bool{}
+	for _, name := range names(t, w.path("trash")) {
+		before[name] = true
+	}
+	s := w.sync(t, c, repo)
+	var moved []string
+	for _, name := range names(t, w.path("trash")) {
+		if before[name] {
+			continue
+		}
+		// A move into trash/ is named <a UUIDv7>-<its base name>.
+		if len(name) <= 37 || name[36] != '-' {
+			t.Fatalf("trash/ holds %q, which is no move's name", name)
+		}
+		moved = append(moved, name[37:])
+	}
+	slices.Sort(moved)
+	var want []string
+	for rel := range planted {
+		want = append(want, path.Base(rel))
+	}
+	slices.Sort(want)
+	if !slices.Equal(moved, want) {
+		t.Errorf("the first round of a new process moved into trash/\n\t%v\nwant exactly what Verify named "+
+			"unexpected\n\t%v", moved, want)
+	}
+	for _, path := range derived {
+		if _, err := os.Lstat(path); err != nil {
+			t.Errorf("the sweep took %s, a declared derived file: %v", path, err)
+		}
+	}
+	for _, path := range []string{graph, filepath.Join(s.Dir, "config")} {
+		if info, err := os.Lstat(path); err != nil || info.Mode()&fs.ModeSymlink == 0 {
+			t.Errorf("%s after the sweep: %v, %v — a link at a file of the image is kept, as each directory's "+
+				"grammar kept it", path, info, err)
+		}
+	}
+	if _, err := runGit(t, w.pool, s.Dir, "", "fsck", "--connectivity-only", "--no-progress"); err != nil {
+		t.Errorf("fsck after the sweep: %v", err)
+	}
+}
+
+// A DERIVED FILE FOLLOWS ITS DECLARATION ON EVERY EVENT: a pack added keeps
+// the multi-pack-index and the commit-graph (git reads a pack the index does
+// not cover from the pack's own index, and the graph names commits that are
+// still there), refs moved keep both (a bitmap names the commits it selected,
+// whichever refs point at them), and a pack removed drops both before it goes
+// (an index naming a missing pack fails every read, a graph may name commits
+// that left with it) — and what the incarnation records it holds follows.
+// The explicit expectations of today's declarations, each read at the one
+// place its change is made (dropFor).
+//
+// Mutation: declare the multi-pack-index dropped on a pack added, and the
+// first delta takes it.
+func TestADerivedFileFollowsItsDeclarationOnEveryEvent(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	for range 3 {
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	c := w.open(t, clk.on)
+	dir := w.sync(t, c, repo).Dir
+	clk.Add(cache.MidxDebounce)
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Fatalf("the maintainer ran %v, want the repository", ran)
+	}
+	packDir := filepath.Join(dir, "objects", "pack")
+	files := []string{filepath.Join(packDir, "multi-pack-index"), bitmapOf(t, packDir),
+		filepath.Join(dir, "objects", "info", "commit-graph")}
+	held := func(event string, want bool) {
+		t.Helper()
+		for _, path := range files {
+			if got := statOK(t, path); got != want {
+				t.Errorf("after %s, %s on disk is %t, want %t", event, filepath.Base(path), got, want)
+			}
+		}
+	}
+	before := w.log.state()
+
+	w.push(t, repo, "refs/heads/main", nil)
+	w.sync(t, c, repo)
+	held("a delta that adds a pack", true)
+
+	w.tag(t, repo, "v1", false)
+	w.sync(t, c, repo)
+	held("a delta that only moves refs", true)
+
+	w.push(t, repo, "refs/heads/main", nil)
+	w.sync(t, c, repo)
+	w.log.recreate(before)
+	s := w.sync(t, c, repo)
+	held("a full round that removes the packs a log gone back no longer names", false)
+	if doc := readStateDoc(t, s.Dir); doc.Midx.Packs != 0 || doc.Midx.Bitmap || doc.Midx.Graph || doc.Midx.Bytes != 0 {
+		t.Errorf("the state after the drop records %+v, want no index, no bitmap, no graph and none of their bytes",
+			doc.Midx)
+	}
+	if packs, bitmap, graph := cache.Indexed(c, repo); packs != 0 || bitmap || graph {
+		t.Errorf("the incarnation after the drop records an index over %d packs (bitmap %t) and a graph %t, "+
+			"want none", packs, bitmap, graph)
+	}
+}
+
+// THE CODE READS THE DECLARATIONS, never a constant beside them: a cache
+// opened over declarations in which the commit-graph is dropped when the refs
+// move drops it on a delta that only moves refs, before the new packed-refs
+// is in, and records that it holds none — where the build's own declarations
+// keep it. So what a declaration says of a change is the declaration's to
+// change: a later part that drops a file on an event changes a value, never a
+// call site.
+//
+// Mutations: drop writeRefs' call to dropFor, and the changed declarations'
+// graph survives; drop dropFor's record of what it took (forgot), and the
+// incarnation still records the graph it no longer holds.
+func TestTheCodeReadsTheDeclarations(t *testing.T) {
+	t.Parallel()
+	dropOnRefs := cache.DerivedFiles()
+	for i := range dropOnRefs {
+		if dropOnRefs[i].Name == cache.DerivedGraph {
+			dropOnRefs[i].OnRefsMoved = cache.Drop
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		decls []cache.Derived
+		kept  bool
+	}{
+		{"the build's declarations", cache.DerivedFiles(), true},
+		{"the graph dropped when the refs move", dropOnRefs, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, onMemory)
+			clk := newClock()
+			repo := w.repo(t, 1)
+			for range 3 {
+				w.push(t, repo, "refs/heads/main", nil)
+			}
+			c := w.open(t, clk.on, cache.WithDerived(tc.decls))
+			dir := w.sync(t, c, repo).Dir
+			clk.Add(cache.MidxDebounce)
+			if ran := cache.MaintainerPass(c); len(ran) != 1 {
+				t.Fatalf("the maintainer ran %v, want the repository", ran)
+			}
+			graph := filepath.Join(dir, "objects", "info", "commit-graph")
+			if !statOK(t, graph) {
+				t.Fatal("the maintainer wrote no commit-graph: the case needs one")
+			}
+			w.tag(t, repo, "v1", false)
+			w.sync(t, c, repo)
+			if got := statOK(t, graph); got != tc.kept {
+				t.Errorf("after a delta that only moves refs the commit-graph on disk is %t, want %t", got, tc.kept)
+			}
+			if _, _, recorded := cache.Indexed(c, repo); recorded != tc.kept {
+				t.Errorf("after a delta that only moves refs the incarnation records a graph %t, want %t",
+					recorded, tc.kept)
+			}
+			if !statOK(t, filepath.Join(dir, "objects", "pack", "multi-pack-index")) {
+				t.Error("a delta that only moves refs took the multi-pack-index, which no declaration drops then")
+			}
+		})
+	}
+}
+
+// EVERY PACK ADDED READS ITS DECLARATION, whichever path adds it: a round's
+// download, an adoption that takes the repository's write lock itself, and an
+// adoption HANDED to a round that holds it (adopt.go), which the round links
+// in in place of the pack's download. Over declarations in which the
+// multi-pack-index is dropped when a pack is added, each path takes the index
+// and its bitmap before its pack is in, and the incarnation records that it
+// holds none — so what a declaration says of a pack added is read at every
+// place one is added, never at most of them.
+//
+// Mutation: drop the round's addOnce before a handed pack's links
+// (install.go), and the handed path keeps the index over the pack it added.
+func TestEveryPackAddedReadsItsDeclaration(t *testing.T) {
+	t.Parallel()
+	dropOnAdd := cache.DerivedFiles()
+	for i := range dropOnAdd {
+		if dropOnAdd[i].Name == cache.DerivedMidx {
+			dropOnAdd[i].OnPackAdded = cache.Drop
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		add  func(t *testing.T, w *syncWorld, c *cache.Cache, s cache.Synced, repo string)
+	}{
+		{"a round's download", func(t *testing.T, w *syncWorld, c *cache.Cache, _ cache.Synced, repo string) {
+			w.push(t, repo, "refs/heads/main", nil)
+			w.sync(t, c, repo)
+		}},
+		{"an adoption", func(t *testing.T, w *syncWorld, c *cache.Cache, s cache.Synced, repo string) {
+			a := w.receiveOver(t, c, s, repo)
+			if err := c.Adopt(t.Context(), repo, a.sc, a.row.Ref()); err != nil {
+				t.Fatalf("Adopt: %v", err)
+			}
+		}},
+		{"an adoption handed to a running round", func(t *testing.T, w *syncWorld, c *cache.Cache, s cache.Synced,
+			repo string) {
+			a := w.receiveOver(t, c, s, repo)
+			reached, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			w.log.set(func(f *fakeLog) {
+				f.hook = func(call fakeCall) error {
+					if call.Repo == repo && call.Page == 1 {
+						once.Do(func() {
+							close(reached)
+							<-release
+						})
+					}
+					return nil
+				}
+			})
+			done := make(chan error, 1)
+			go func() {
+				held, err := c.Sync(context.Background(), repo, linearizable)
+				if err == nil {
+					held.Release()
+				}
+				done <- err
+			}()
+			<-reached
+			if err := c.Adopt(t.Context(), repo, a.sc, a.row.Ref()); err != nil {
+				t.Fatalf("Adopt beside a running round: %v", err)
+			}
+			close(release)
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			if got := counter(w.rec, metrics.CodeCacheAdoptions, "outcome", "handed"); got != 1 {
+				t.Fatalf("%s{outcome=handed} = %d, want 1: the case holds no handed pack",
+					metrics.CodeCacheAdoptions, got)
+			}
+			if opens, _, _ := w.objects.counts(); opens[a.row.Object] != 0 {
+				t.Fatalf("the round downloaded the pack it was handed %d times: the case holds no handed pack",
+					opens[a.row.Object])
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, onMemory)
+			clk := newClock()
+			repo := w.repo(t, 1)
+			w.push(t, repo, "refs/heads/main", nil)
+			c := w.open(t, clk.on, cache.WithDerived(dropOnAdd))
+			s := w.sync(t, c, repo)
+			clk.Add(cache.MidxDebounce)
+			if ran := cache.MaintainerPass(c); len(ran) != 1 {
+				t.Fatalf("the maintainer ran %v, want the repository", ran)
+			}
+			packDir := filepath.Join(s.Dir, "objects", "pack")
+			index := []string{filepath.Join(packDir, "multi-pack-index"), bitmapOf(t, packDir)}
+			for _, path := range index {
+				if !statOK(t, path) {
+					t.Fatalf("the maintainer wrote no %s: the case needs the index on disk", filepath.Base(path))
+				}
+			}
+			packs := len(packFiles(t, s.Dir))
+
+			tc.add(t, w, c, s, repo)
+			if got := len(packFiles(t, s.Dir)); got <= packs {
+				t.Fatalf("the copy holds %d pack files after the path, as before it: it added no pack", got)
+			}
+			for _, path := range index {
+				if statOK(t, path) {
+					t.Errorf("%s survived a pack added through %s, which its declaration drops then",
+						filepath.Base(path), tc.name)
+				}
+			}
+			if covered, bitmap, _ := cache.Indexed(c, repo); covered != 0 || bitmap {
+				t.Errorf("the incarnation records an index over %d packs (bitmap %t) after it was dropped",
+					covered, bitmap)
+			}
+		})
 	}
 }

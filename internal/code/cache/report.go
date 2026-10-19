@@ -2,7 +2,9 @@ package cache
 
 import (
 	"errors"
+	"maps"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code/gitproc"
@@ -35,7 +37,11 @@ import (
 //     queued with no waiter when none is queued — linearizable, because a
 //     full round's sweep removes every pack its snapshot does not name, and an
 //     adoption installs a pack past the incarnation's own position. Reports
-//     coalesce on the mark while one is queued.
+//     coalesce on the mark while one is queued. Only a part whose declaration
+//     drops on a report (OnReported) is recorded and queued: one that keeps
+//     its files is damage no drop repairs, and makes the scrub due like a
+//     stored report (below) — queued, it asked a round that moved nothing for
+//     every git process that reported it.
 //   - A DROP IS STILL GUARDED (dropDamaged): a part is not dropped when this
 //     process wrote its current file AFTER the reporting run began
 //     (gitproc.Result.Began against incarnation.written, on the monotonic
@@ -60,7 +66,8 @@ import (
 //     once: one rewrite at once and one ordinary, alternating for ever.)
 //   - A STORED REPORT, AN OBJECT REPORT, A HINT OR A CRASH MAKES THE SCRUB DUE
 //     AT ONCE (scrub.go), and drops nothing: a stored file is never dropped on
-//     a report. `hash mismatch` names no file — the pack, its index or the
+//     a report, and neither is a derived file whose declaration keeps its
+//     files on one. `hash mismatch` names no file — the pack, its index or the
 //     multi-pack-index placed the wrong bytes — a hint names a pack in words a
 //     request may reach, and a crash names nothing at all (a pack-objects
 //     dying of a damaged reverse index or bitmap says only that it died), so
@@ -98,10 +105,11 @@ const (
 type reportOutcome string
 
 const (
-	// reportQueued: a repair asked — a derived part recorded on the
-	// incarnation's repair mark with a round queued to drop it; any other
-	// part, a hint or a crash, the incarnation's scrub made due, or answered
-	// by the one already due or running (scrub.go).
+	// reportQueued: a repair asked — a derived part whose declaration drops
+	// on a report recorded on the incarnation's repair mark with a round
+	// queued to drop it; any other part, a hint or a crash, the
+	// incarnation's scrub made due, or answered by the one already due or
+	// running (scrub.go).
 	reportQueued reportOutcome = "queued"
 	// reportDeferred: recorded while a check of the repository is
 	// admitted; the check's release queues the round.
@@ -142,30 +150,31 @@ const (
 	dropScrub   = "scrub"   // a scrub found it failing its trailer
 )
 
-// partDrops is the derived parts to drop, each with what asked it: one entry
-// a part, PartMultiPackIndex or PartCommitGraph.
-type partDrops map[gitproc.Part]dropAsk
+// derivedDrops is the derived files to drop, by declaration, each with what
+// asked it.
+type derivedDrops map[DerivedName]dropAsk
 
-// add records parts asked by a run begun at began, keeping each part's
-// latest.
-func (d *partDrops) add(parts gitproc.Part, began time.Time, by string) {
-	for _, p := range []gitproc.Part{gitproc.PartMultiPackIndex, gitproc.PartCommitGraph} {
-		if parts&p == 0 {
-			continue
-		}
-		if *d == nil {
-			*d = partDrops{}
-		}
-		if have, ok := (*d)[p]; !ok || have.began.Before(began) {
-			(*d)[p] = dropAsk{began: began, by: by}
-		}
+// add records that a run begun at began asked name dropped, keeping each
+// declaration's latest ask.
+func (d *derivedDrops) add(name DerivedName, began time.Time, by string) {
+	if *d == nil {
+		*d = derivedDrops{}
+	}
+	if have, ok := (*d)[name]; !ok || have.began.Before(began) {
+		(*d)[name] = dropAsk{began: began, by: by}
 	}
 }
 
+// addSet records that a run begun at began asked every declaration of s
+// dropped.
+func (d *derivedDrops) addSet(im *image, s derivedSet, began time.Time, by string) {
+	im.each(s, func(_ int, decl *Derived) { d.add(decl.Name, began, by) })
+}
+
 // merge adds every entry of o.
-func (d *partDrops) merge(o partDrops) {
-	for p, a := range o {
-		d.add(p, a.began, a.by)
+func (d *derivedDrops) merge(o derivedDrops) {
+	for name, a := range o {
+		d.add(name, a.began, a.by)
 	}
 }
 
@@ -173,7 +182,7 @@ func (d *partDrops) merge(o partDrops) {
 // round to do.
 type repairMark struct {
 	// drops is the derived parts reports named.
-	drops partDrops
+	drops derivedDrops
 	// found is every file a scrub found failing its checksum, by its path
 	// relative to the incarnation, at the identity it failed at: the round
 	// reinstalls a pack, or drops a derived file, only while it still has
@@ -267,8 +276,8 @@ func packOfRel(rel string) (string, bool) {
 // git run with where it ran and how it ended, on the run's own goroutine. It
 // reads the parts the run's damage names, its hints and whether it crashed,
 // finds the incarnation they are about by the process's directory, records a
-// derived part on its repair mark and queues a round, and makes its scrub due
-// for the rest — under the entry's mu, never its write lock, and doing no I/O,
+// derived part a drop repairs on its repair mark and queues a round, and makes
+// its scrub due for the rest — under the entry's mu, never its write lock, and doing no I/O,
 // so it never holds its run.
 func (c *Cache) observe(ran gitproc.Ran) {
 	if c.isStopped() {
@@ -319,12 +328,26 @@ func (c *Cache) observe(ran gitproc.Ran) {
 	if derived == 0 {
 		return
 	}
-	inc.repair.drops.add(dmg.Drops(), ran.Result.Began, dropReport)
-	if e.verifying > 0 {
-		c.countReports(derived, reportDeferred)
+	named := c.image.reported(dmg.Drops())
+	drops := named & c.image.dropping(EventReported)
+	if kept := named &^ drops; kept != 0 {
+		// A DERIVED PART NO DROP REPAIRS — every declaration it names keeps
+		// its files on a report (OnReported) — goes where all damage a drop
+		// does not end goes: the copy's scrub, whose bytes decide, bounded
+		// by its cooldown. Recorded as a drop it queued a full round that
+		// could move nothing, for every git process that reported it.
+		c.countReports(c.image.naming(derived, kept), c.scrubAsked(inc))
+	}
+	if drops == 0 {
 		return
 	}
-	c.countReports(derived, reportQueued)
+	inc.repair.drops.addSet(c.image, drops, ran.Result.Began, dropReport)
+	queued := c.image.naming(derived, drops)
+	if e.verifying > 0 {
+		c.countReports(queued, reportDeferred)
+		return
+	}
+	c.countReports(queued, reportQueued)
 	c.repairRound(e)
 }
 
@@ -404,100 +427,134 @@ func (c *Cache) repairRound(e *entry) {
 
 // dropDamaged is a full round's drop of damaged derived files, before its own
 // index decides: what a failed request or the round's own git asked
-// (incarnation.drop), what reports asked (incarnation.repair, unless a check
-// of the repository is admitted), and what the round's check or a scrub found
-// (ck.still). Each asked part is TAKEN before the drop, so a run that names
-// it while the round runs marks it again for the next; a drop that fails
-// puts it back.
+// (incarnation.drop) and what reports asked (incarnation.repair, unless a
+// check of the repository is admitted) — EventReported for the declarations
+// they name, each of which drops on a report (no source asks it of one that
+// keeps its files, and dropFor reads the declaration again) — and what the
+// round's check or a scrub found failing its Check (ck.still), dropped
+// whatever its declaration says of a report (eventFailedCheck: the bytes
+// decided). Only what dropFor dropped is recorded as dropped. Each asked
+// declaration is TAKEN before the drop, so a run that names it while the
+// round runs marks it again for the next; a drop that fails puts it back.
 //
-// THE GUARD: an asked part whose current file this process wrote after the
-// asking run began is spared (`stale`). A part dropped for damage again
+// THE GUARD: an asked declaration whose current file this process wrote
+// after the asking run began is spared (`stale`). One dropped for damage again
 // within RebuildQuiet of its last drop for damage is not made due at once
-// (`again`, D13); any other part dropped for damage is: the index as an
+// (`again`, D13); any other dropped for damage is: the index as an
 // indexRepair, the graph by the maintainer's graph-first run. The check's own
 // drops are unguarded — the bytes decided.
 func (c *Cache) dropDamaged(e *entry, inc *incarnation, res *applied) error {
+	im := c.image
 	e.mu.Lock()
 	asked := inc.drop
 	inc.drop = nil
-	var reported partDrops
+	var reported derivedDrops
 	if e.verifying == 0 {
 		reported, inc.repair.drops = inc.repair.drops, nil
 	}
-	all := partDrops{}
+	all := derivedDrops{}
 	all.merge(asked)
 	all.merge(reported)
-	var drop, stale, again gitproc.Part
-	byTrigger := map[string]gitproc.Part{}
-	for p, a := range all {
-		if w, ok := inc.written[p]; ok && !a.began.IsZero() && !w.Before(a.began) {
-			stale |= p
+	var drop, stale, again derivedSet
+	byTrigger := map[string]derivedSet{}
+	for name, a := range all {
+		s := im.set(name)
+		if w, ok := inc.written[name]; ok && !a.began.IsZero() && !w.Before(a.began) {
+			stale |= s
 			continue
 		}
-		drop |= p
-		byTrigger[a.by] |= p
+		drop |= s
+		byTrigger[a.by] |= s
 	}
 	e.mu.Unlock()
 	if stale != 0 {
-		c.countReports(stale, reportStale)
+		c.countReports(im.parts(stale), reportStale)
 	}
 
-	_, checks := res.checked.still(inc.dir)
-	var found gitproc.Part
-	for p, a := range checks {
-		if p&(drop|res.dropped) == 0 {
-			found |= p
-			byTrigger[a.by] |= p
+	_, checks := res.checked.still(im, inc.dir)
+	var found derivedSet
+	for name, a := range checks {
+		if s := im.set(name); s&(drop|res.dropped) == 0 {
+			found |= s
+			byTrigger[a.by] |= s
 		}
 	}
-	if all := drop | found; all&^res.dropped != 0 {
-		if err := c.dropDerived(e, inc, all&^res.dropped); err != nil {
+	if named := (drop | found) &^ res.dropped; named != 0 {
+		// Two drops, by what found the damage: git's word, which a
+		// declaration answers (OnReported); and the bytes', which none does
+		// — a file failing its check is never kept and served, and kept, a
+		// declaration that keeps its files on a report would be found
+		// failing by every scrub its reports asked, for ever.
+		dropped, err := c.dropFor(e, inc, EventReported, drop&named)
+		if err != nil {
 			e.mu.Lock()
 			inc.drop.merge(asked)
 			inc.repair.drops.merge(reported)
 			e.mu.Unlock()
 			return err
 		}
+		failed, err := c.dropFor(e, inc, eventFailedCheck, found&named)
+		if err != nil {
+			return err
+		}
+		dropped |= failed
+		// WHAT FOLLOWS RECORDS ONLY WHAT WAS DROPPED. A declaration dropFor
+		// kept was dropped by nothing, so nothing below may log it repaired,
+		// count it dropped, stamp its damage or make its write due: recorded
+		// as dropped, the round that met its damage read it as damage that
+		// survived a drop (damagedRound) and asked for a whole rebuild of a
+		// copy no drop had touched.
+		kept := named &^ dropped
+		drop &^= kept
+		found &^= kept
+		for by, s := range byTrigger {
+			if s &^= kept; s == 0 {
+				delete(byTrigger, by)
+			} else {
+				byTrigger[by] = s
+			}
+		}
 	}
 	res.trashed = res.trashed || drop|found != 0
 	res.dropped |= drop | found
-	for by, parts := range byTrigger {
+	for _, by := range slices.Sorted(maps.Keys(byTrigger)) {
 		// Derived files git could not read, or that failed their trailer,
 		// dropped in place: they were damaged, not the repository, and the
 		// round or the maintainer writes sound ones over the same packs.
 		c.log.Warn("code_cache_derived_repaired", "repo", e.id, "incarnation", inc.n,
-			"files", derivedFiles(parts), "trigger", by)
+			"files", im.files(byTrigger[by]), "trigger", by)
 	}
 
 	now := c.now()
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	for _, p := range []gitproc.Part{gitproc.PartMultiPackIndex, gitproc.PartCommitGraph} {
-		if (drop|found)&p != 0 {
+	im.each(im.all(), func(i int, d *Derived) {
+		s := derivedSet(1) << i
+		if (drop|found)&s != 0 {
 			// DAMAGED AGAIN: dropped for damage within RebuildQuiet of the
 			// last drop of it for damage, whatever was written between —
 			// the rewrite the first drop made due, and any ordinary one
 			// after it, which a disk that keeps damaging damages too.
-			if at, ok := inc.damagedAt[p]; ok && now.Sub(at) < RebuildQuiet {
-				again |= p
+			if at, ok := inc.damagedAt[d.Name]; ok && now.Sub(at) < RebuildQuiet {
+				again |= s
 			}
 			if inc.damagedAt == nil {
-				inc.damagedAt = map[gitproc.Part]time.Time{}
+				inc.damagedAt = map[DerivedName]time.Time{}
 			}
-			inc.damagedAt[p] = now
+			inc.damagedAt[d.Name] = now
 		}
 		switch {
-		case again&p != 0:
-			if inc.againLogged&p == 0 {
-				inc.againLogged |= p
+		case again&s != 0:
+			if inc.againLogged&s == 0 {
+				inc.againLogged |= s
 				c.log.Warn("code_cache_derived_damaged_again", "repo", e.id, "incarnation", inc.n,
-					"part", derivedFiles(p))
+					"part", im.files(s))
 			}
-			c.countReports(p, reportAgain)
-			if p == gitproc.PartCommitGraph {
+			c.countReports(d.Part, reportAgain)
+			if d.Name == DerivedGraph {
 				inc.graphFailed = true
 			}
-		case p == gitproc.PartMultiPackIndex && (drop|found|res.dropped)&p != 0:
+		case d.Name == DerivedMidx && (drop|found|res.dropped)&s != 0:
 			// A multi-pack-index dropped as damaged is due at once: every
 			// clone of the copy goes without its bitmap until it is written
 			// again, and nothing but a push would otherwise make it due. A
@@ -505,24 +562,22 @@ func (c *Cache) dropDamaged(e *entry, inc *incarnation, res *applied) error {
 			// missing graph first, at once.
 			inc.indexRepair = true
 		}
-	}
+	})
 	return nil
 }
 
-// wrote stamps that this process has just changed the files of parts in inc
-// — a write that moved a file's identity, or a drop — as a time.Now()
-// reading, compared on the monotonic clock with a report's Began (D4); e.mu
-// is held. Stamped as the write's step RETURNS, after its rename, so a run
-// that began between the rename and the stamp is presumed to have read the
-// file replaced: it spares a file, and never drops a fresh one.
-func wrote(inc *incarnation, parts gitproc.Part) {
+// wrote stamps that this process has just changed the files of each
+// declaration of s in inc — a write that moved a file's identity, or a drop —
+// as a time.Now() reading, compared on the monotonic clock with a report's
+// Began (D4); e.mu is held. Stamped as the write's step RETURNS, after its
+// rename, so a run that began between the rename and the stamp is presumed to
+// have read the file replaced: it spares a file, and never drops a fresh one.
+func (c *Cache) wrote(inc *incarnation, s derivedSet) {
 	now := time.Now()
-	for _, p := range []gitproc.Part{gitproc.PartMultiPackIndex, gitproc.PartCommitGraph} {
-		if parts&p != 0 {
-			if inc.written == nil {
-				inc.written = map[gitproc.Part]time.Time{}
-			}
-			inc.written[p] = now
+	c.image.each(s, func(_ int, d *Derived) {
+		if inc.written == nil {
+			inc.written = map[DerivedName]time.Time{}
 		}
-	}
+		inc.written[d.Name] = now
+	})
 }

@@ -228,19 +228,12 @@ func ForgetMaintenance(c *Cache, repoID string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	inc := e.current
-	packDir := filepath.Join(inc.dir, "objects", "pack")
-	list, err := os.ReadDir(packDir)
+	files, err := c.image.present(inc.dir)
 	if err != nil {
 		return err
 	}
-	paths := []string{filepath.Join(inc.dir, "objects", "info", "commit-graph")}
-	for _, d := range list {
-		if midxFile.MatchString(d.Name()) {
-			paths = append(paths, filepath.Join(packDir, d.Name()))
-		}
-	}
-	for _, p := range paths {
-		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	for _, f := range files {
+		if err := os.Remove(filepath.Join(inc.dir, f.rel)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
 	}
@@ -739,7 +732,7 @@ func MarkWhole(c *Cache, repoID string, reason RebuildReason, drops gitproc.Part
 	e := lookup(c, repoID)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	markWhole(e.current, Failure{Reason: reason, Drops: drops}, dropRequest)
+	c.markWhole(e.current, Failure{Reason: reason, Drops: drops}, dropRequest)
 }
 
 // Reread marks every current incarnation to be read whole for reason, as a
@@ -826,12 +819,22 @@ func WantIndex(c *Cache, repoID string) {
 	e.current.midx.LastRun, e.current.midx.Took = time.Time{}, 0
 }
 
+// testImage is the image of the build's declarations (DerivedFiles), for a
+// helper that reads a directory with no cache open.
+func testImage() *image {
+	im, err := newImage(DerivedFiles())
+	if err != nil {
+		panic(err)
+	}
+	return im
+}
+
 // Unsound is every file of the incarnation at dir a scrub holds to its
 // checksum — each pack's .idx, .pack and .rev, and every derived file
 // (scrub.go) — that fails it, by its path relative to dir.
 func Unsound(dir string) ([]string, error) {
 	p := pieces{buf: make([]byte, copyBuffer), size: CheckPieceBytes}
-	files, wants, err := scrubFiles(dir)
+	files, wants, err := scrubFiles(testImage(), dir)
 	if err != nil {
 		return nil, err
 	}
@@ -848,10 +851,42 @@ func Unsound(dir string) ([]string, error) {
 	return out, nil
 }
 
+// DeclareCheck makes c's declaration name declare check, after Open held
+// the declarations to Validate: a Check no reader of this build knows, which
+// Validate refuses — what a case sets to show that every reader of a derived
+// file's bytes reads its declaration's Check rather than holding every file
+// to a trailer. Nothing of c may be running.
+func DeclareCheck(c *Cache, name DerivedName, check Check) {
+	for i := range c.image.decls {
+		if c.image.decls[i].Name == name {
+			c.image.decls[i].Check = check
+		}
+	}
+}
+
+// ScrubListing is what a scrub of repoID's current incarnation would hold to
+// its bytes (scrubFiles) over c's own declarations, by path relative to the
+// incarnation — or the error the scrub would stop at before reading a byte.
+func ScrubListing(c *Cache, repoID string) ([]string, error) {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	dir := e.current.dir
+	e.mu.Unlock()
+	files, _, err := scrubFiles(c.image, dir)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(files))
+	for _, f := range files {
+		out = append(out, filepath.ToSlash(f.rel))
+	}
+	return out, nil
+}
+
 // ScrubbedFiles is the bytes and the pieces of every file a scrub of the
 // incarnation at dir hashes (scrubFiles), as it holds them now.
 func ScrubbedFiles(dir string) (bytes int64, pieces int, err error) {
-	files, _, err := scrubFiles(dir)
+	files, _, err := scrubFiles(testImage(), dir)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -1012,4 +1047,71 @@ func Quiet(c *Cache, repoID string) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.running == nil && e.next == nil
+}
+
+// ValidateDerived is the check Open holds a build's declarations to
+// (validateAll): every declaration's Validate, and what holds only across
+// them.
+func ValidateDerived(decls []Derived) error { return validateAll(decls) }
+
+// OwnersOf is every declaration of the build's whose Owns names rel — a path
+// relative to an incarnation, slash-separated — in declaration order: one
+// for a derived file, none for any other.
+func OwnersOf(rel string) []DerivedName {
+	dir, name := filepath.Split(filepath.FromSlash(rel))
+	dir = filepath.Clean(dir)
+	var out []DerivedName
+	for _, d := range DerivedFiles() {
+		if slices.ContainsFunc(d.Owns, func(o Owned) bool {
+			return filepath.FromSlash(o.Dir) == dir && o.Name.MatchString(name)
+		}) {
+			out = append(out, d.Name)
+		}
+	}
+	return out
+}
+
+// HoldersOf is every declaration of the build's a write of which holds rel
+// only while it runs (Write.Holds), in declaration order.
+func HoldersOf(rel string) []DerivedName {
+	dir, name := filepath.Split(filepath.FromSlash(rel))
+	dir = filepath.Clean(dir)
+	var out []DerivedName
+	for _, d := range DerivedFiles() {
+		if slices.ContainsFunc(d.holds(), func(p FilePattern) bool {
+			return filepath.FromSlash(p.Dir) == dir && p.Name.MatchString(name)
+		}) {
+			out = append(out, d.Name)
+		}
+	}
+	return out
+}
+
+// WithDerived opens a cache over decls in place of DerivedFiles(): a case
+// proves the code reads the declarations by changing one.
+func WithDerived(decls []Derived) func(*Options) {
+	return func(o *Options) {
+		if o.knobs == nil {
+			o.knobs = &knobs{}
+		}
+		o.knobs.derived = decls
+	}
+}
+
+// StatingWith tells f the path, relative to its incarnation and
+// slash-separated, of every directory entry the cache stats to count its
+// bytes (image.sizes).
+func StatingWith(f func(rel string)) func(*Options) {
+	return func(o *Options) {
+		if o.knobs == nil {
+			o.knobs = &knobs{}
+		}
+		o.knobs.stating = func(rel string) { f(filepath.ToSlash(rel)) }
+	}
+}
+
+// WriteCharge is what w is admitted at over repoID's current incarnation:
+// its own memory an object, and the room for one transfer beside it.
+func WriteCharge(c *Cache, repoID string, w Write) int64 {
+	return chargeOf(c, repoID, w.BytesPerObject)
 }

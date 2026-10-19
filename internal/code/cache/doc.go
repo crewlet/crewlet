@@ -175,6 +175,55 @@
 // eviction is decided under the cache's lock and its directory moved into
 // trash/ after it, so no sync on the node waits on a rename.
 //
+// # Derived files
+//
+// A DERIVED FILE is one the cache writes from what an incarnation already
+// holds — its packs, its refs — and that no row names, and every one is a
+// DECLARATION in DerivedFiles (derived.go, ADR-0038): what it is a function
+// of, every write that makes it (its trigger, lane, deadline, memory charge,
+// the file and git subcommand that run it, and its argument list), the files
+// it owns and the files a write of it holds only while it runs, its check, the
+// part a damage report names it by, what it promises a reader, and what each
+// change to its inputs — a pack added, a pack removed, the refs rewritten, its
+// own files reported damaged — does to it. There are two: the MULTI-PACK-INDEX
+// (a full round's, without a bitmap, once the snapshot names MidxRoundPacks
+// packs; the maintainer's, with its bitmap and lookup table where the node's
+// memory holds one and without one where it does not) and the COMMIT-GRAPH
+// (the maintainer's, written first on a copy that has none). Their files live
+// inside the incarnation, so the budget counts them, they leave with the
+// repository and a rebuild writes them again over its packs.
+//
+// Every reader reads the declarations and nothing spells a derived file
+// beside them: the IMAGE — one predicate a directory, by which the full
+// round's sweep keeps a file and Verify admits it (sweep.go's image) — the
+// one REMOVAL of a derived file, dropFor, called at the one place each change
+// is made (a pack downloaded, adopted or linked from an adoption a round was
+// handed, a pack put back, a pack swept, packed-refs rewritten, a damage
+// report or a failed check) and run before the change is visible to any git
+// process — stopping first a maintenance run writing what it drops, since a
+// file renamed in after the change would be built over the inputs before it,
+// and no run starts while a round runs or an adoption holds the repository —
+// which also takes the dropped files out of what the incarnation records it
+// holds, and answers what it dropped, which is all a report's repair records
+// as dropped (a declaration that keeps its files on a report is dropped by
+// nothing, and a report of it asks no drop: it makes the copy's scrub due,
+// as damage no drop repairs does, and a request that met it is repaired as a
+// pack's damage is); the check, the scrub and Verify, which hold each owned file to
+// its bytes as its declaration's Check says and refuse a Check they do not
+// read; the maintainer's plan, which takes its steps, lanes, deadlines and
+// charges from the declared writes, and the refusal lines, counters and
+// gauge, which name a write's Step; the clearing after a write that did not
+// succeed, of what that write declares it holds (Write.Holds), a lock by
+// name and a directory listed at most once; and the writers gate
+// (TestNothingButSyncWritesACache), whose declared half holds every git
+// writer in the cache to a declared write and every declared write to its
+// writer's file, argument list and all. Open refuses a build whose
+// declarations leave anything unsaid (validateAll), and
+// TestEveryDerivedFileIsDeclared holds the declarations to the files real git
+// writes — a file a writer leaves that the image does not admit is trashed
+// under a running reader, and a file the image admits that no writer makes
+// is a hole anyone may fill.
+//
 // # What this process did not write is checked before it serves, and every byte is scrubbed behind it
 //
 // A CHECKABLE file is one git reads to find an object or a parent — the

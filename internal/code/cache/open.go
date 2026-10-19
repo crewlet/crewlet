@@ -36,6 +36,13 @@ type Cache struct {
 	now      func() time.Time
 	knobs    *knobs
 
+	// image is the grammar of an incarnation, built at Open from the
+	// declarations of the derived files (derived.go), and mw the
+	// maintainer's view of their writes: read-only once built, and read by
+	// every goroutine of the cache.
+	image *image
+	mw    maintWrites
+
 	// fetchConcurrency is how many downloads one round runs at once
 	// (FetchConcurrency), and fetches the node's slots every round's
 	// downloads share (NodeFetches), each with its copy buffer: fields, so
@@ -218,11 +225,30 @@ func Open(ctx context.Context, o Options) (*Cache, error) {
 		}
 	}()
 
+	// The derived files, declared (derived.go): a build whose declarations
+	// leave anything unsaid opens no cache, rather than one that would
+	// sweep a file it writes or keep one nothing tracks.
+	decls := DerivedFiles()
+	if o.knobs != nil && o.knobs.derived != nil {
+		decls = o.knobs.derived
+	}
+	im, err := newImage(decls)
+	if err != nil {
+		return nil, fmt.Errorf("%w: the derived files this build declares: %w", ErrOptions, err)
+	}
+	if c.mw, err = newMaintWrites(im); err != nil {
+		return nil, fmt.Errorf("%w: the derived files this build declares: %w", ErrOptions, err)
+	}
+	if o.knobs != nil {
+		im.stating = o.knobs.stating
+	}
+	c.image = im
+
 	c.initMemory(o.Git)
-	if err := c.clearBoot(); err != nil {
+	if err = c.clearBoot(); err != nil {
 		return nil, err
 	}
-	if err := c.writeHook(ctx, o.HookCommand); err != nil {
+	if err = c.writeHook(ctx, o.HookCommand); err != nil {
 		return nil, err
 	}
 	trashed, err := c.index(b)

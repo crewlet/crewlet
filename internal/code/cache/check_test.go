@@ -970,3 +970,74 @@ func TestAPacksVouchesFitInAQuarterKilobyte(t *testing.T) {
 		}
 	}
 }
+
+// EVERY HOLD OF A DERIVED FILE TO ITS BYTES READS ITS DECLARATION'S CHECK —
+// the first round's check, the scrub and Verify alike — rather than holding
+// every file a declaration owns to git's trailer whatever the declaration
+// says: a declaration whose files carry no trailer (a file the engine writes
+// itself) would otherwise fail every check, be dropped as damaged and be
+// written again, on every round. Over the build's declarations each reader
+// holds the commit-graph to its trailer; with the graph's declaration naming
+// a Check no reader of this build knows (one Validate refuses at Open, set
+// here after it), each refuses, naming the declaration and its Check, before
+// it reads a byte — and never treats the graph as a file with a trailer.
+//
+// Mutation: have the check, the scrub or Verify build a derived file's
+// expectation from its name alone (no ownedFile.held), and its arm passes.
+func TestEveryHoldOfADerivedFileReadsItsDeclarationsCheck(t *testing.T) {
+	t.Parallel()
+	const unknown = cache.Check("engine-sum")
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t, clk.on)
+	s := w.sync(t, c, repo)
+	clk.Add(cache.MidxDebounce)
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Fatalf("the maintainer ran %v, want the repository", ran)
+	}
+	if !statOK(t, filepath.Join(s.Dir, "objects", "info", "commit-graph")) {
+		t.Fatal("the maintainer wrote no commit-graph: the case needs one")
+	}
+	refused := func(t *testing.T, what string, err error) {
+		t.Helper()
+		switch {
+		case err == nil:
+			t.Errorf("%s over a declaration whose Check no reader knows: no error, want it refused", what)
+		case !strings.Contains(err.Error(), `"commit-graph"`) || !strings.Contains(err.Error(), string(unknown)):
+			t.Errorf("%s over a declaration whose Check no reader knows: %v, want the declaration and its "+
+				"Check named", what, err)
+		}
+	}
+
+	// The build's declarations: the graph is held to its trailer.
+	listed, err := cache.ScrubListing(c, repo)
+	if err != nil {
+		t.Fatalf("the scrub's listing: %v", err)
+	}
+	if !slices.Contains(listed, "objects/info/commit-graph") {
+		t.Fatalf("the scrub holds %v, want the commit-graph among them", listed)
+	}
+	if _, err := verify(t.Context(), c, repo, false); err != nil {
+		t.Fatalf("Verify over the build's declarations: %v", err)
+	}
+
+	cache.DeclareCheck(c, cache.DerivedGraph, unknown)
+	_, err = cache.ScrubListing(c, repo)
+	refused(t, "the scrub", err)
+	_, err = verify(t.Context(), c, repo, false)
+	refused(t, "Verify", err)
+
+	// The first round of a new process checks every file it did not write.
+	c = w.reopen(t, c, clk.on)
+	cache.DeclareCheck(c, cache.DerivedGraph, unknown)
+	ctx, cancel := context.WithTimeout(t.Context(), hangDetector)
+	defer cancel()
+	held, err := c.Sync(ctx, repo, statelog.Freshness{Level: statelog.ReadLinearizable})
+	if err == nil {
+		held.Release()
+	}
+	refused(t, "the first round's check", err)
+}

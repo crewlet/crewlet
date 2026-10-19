@@ -18,7 +18,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codefault"
-	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
@@ -234,7 +233,7 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 
 	var out installs
 	packDir := filepath.Join(inc.dir, "objects", "pack")
-	reinstall, _ := ck.still(inc.dir)
+	reinstall, _ := ck.still(c.image, inc.dir)
 	var todo []code.PackRow
 	// over is every pack this install places over files present, by its
 	// checksum, with what found it damaged and why that looked; absent, in a
@@ -280,14 +279,29 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 	if len(todo) == 0 {
 		return out, nil
 	}
-	// dropOnce drops the derived files before the first placement over a
-	// present pack, and answers every later one with its outcome.
+	// dropOnce drops what the declarations drop when a pack is removed
+	// (EventPackRemoved) before the first placement over a present pack —
+	// its old files go, and whatever named them was naming bytes no longer
+	// there — and answers every later one with its outcome. addOnce is the
+	// same for the first pack ADDED (EventPackAdded), which no declaration
+	// drops today, so it moves nothing; it is here because what a
+	// declaration says of an event is the declaration's to change, never a
+	// call site's.
 	var droppedOver atomic.Bool
+	var dropped derivedSet
 	dropOnce := sync.OnceValue(func() error {
-		if err := c.dropIndexes(e, inc); err != nil {
+		s, err := c.dropFor(e, inc, EventPackRemoved, 0)
+		if err != nil {
 			return fmt.Errorf("cache: sync %s: install: %w", e.id, err)
 		}
+		dropped = s
 		droppedOver.Store(true)
+		return nil
+	})
+	addOnce := sync.OnceValue(func() error {
+		if _, err := c.dropFor(e, inc, EventPackAdded, 0); err != nil {
+			return fmt.Errorf("cache: sync %s: install: %w", e.id, err)
+		}
 		return nil
 	})
 	slices.SortFunc(todo, func(a, b code.PackRow) int {
@@ -373,10 +387,21 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 		}
 		// A pack this node's own push wrote, handed to the round by its
 		// adoption (adopt.go), is installed from those files — three links
-		// rather than a GET — once the round reaches it.
-		if st := c.claimHanded(e, p); st != nil && c.installHanded(e, inc, packDir, p, st) {
-			added.Add(1)
-			continue
+		// rather than a GET — once the round reaches it: a pack ADDED like
+		// any other, so what a declaration says of one comes first
+		// (dropFor's order rule), as it does before a download's placement.
+		if st := c.claimHanded(e, p); st != nil {
+			if _, present := over[p.GitChecksum]; !present {
+				if err := addOnce(); err != nil {
+					c.dropStaging(st)
+					fail(err)
+					break
+				}
+			}
+			if c.installHanded(e, inc, packDir, p, st) {
+				added.Add(1)
+				continue
+			}
 		}
 		if err := inHand.Acquire(rctx, 1); err != nil {
 			waited = context.Cause(rctx)
@@ -427,6 +452,14 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 					return
 				}
 			}
+			if !present {
+				// A pack added: what a declaration says of one, before
+				// the first is placed (dropFor's order rule).
+				if err := addOnce(); err != nil {
+					fail(err)
+					return
+				}
+			}
 			if err := c.placePack(e, inc, packDir, staged, present, absent[staged.p.GitChecksum]); err != nil {
 				fail(err)
 				return
@@ -452,7 +485,7 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 	}
 	out.added, out.replaced, out.restored = int(added.Load()), int(replaced.Load()), int(restored.Load())
 	if droppedOver.Load() {
-		out.dropped = gitproc.PartMultiPackIndex | gitproc.PartCommitGraph
+		out.dropped = dropped
 	}
 	if out.added+out.replaced > 0 {
 		// The renames are durable before any ref names what they installed.
@@ -486,7 +519,7 @@ type installs struct {
 	// a request's forced round's repair, where the rest are pushes it had
 	// not yet read.
 	restored int
-	dropped  gitproc.Part
+	dropped  derivedSet
 	// failed is the packs, by checksum, it was to install again over their
 	// files and could not download: left as they stand.
 	failed []string

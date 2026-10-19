@@ -255,10 +255,6 @@ var rebuildReasons = append(append([]RebuildReason{}, gitReasons...), RebuildDer
 // others replace the incarnation.
 var inPlaceReasons = []RebuildReason{RebuildShape, RebuildDerived, RebuildStored}
 
-// derivedParts are the parts a derived repair may drop: the
-// multi-pack-index's files and the commit-graph.
-const derivedParts = gitproc.PartMultiPackIndex | gitproc.PartCommitGraph
-
 // inPlace reports whether r is repaired by a whole read in place rather than a
 // new incarnation.
 func inPlace(r RebuildReason) bool { return slices.Contains(inPlaceReasons, r) }
@@ -362,7 +358,10 @@ func ShapeReason(err error) (Failure, bool) {
 //     file of them after the failing process began (f.Began), which that
 //     process may not have read (dropDamaged). Damage it does not end (a
 //     pack the index named is itself damaged) escalates to
-//     [RebuildCorrupt] on the retry (repair.go).
+//     [RebuildCorrupt] on the retry (repair.go). It drops only the files of
+//     a declaration that drops on a report (OnReported): damage whose every
+//     declaration keeps its files is no derived file a drop ends, and is
+//     repaired as [RebuildCorrupt] is, at once.
 //   - [RebuildCorrupt] and [RebuildMissing] are repaired IN PLACE FIRST, in
 //     the four steps above: a failure that predates a write into the copy is
 //     answered from it as it stands — the one answer of Kind SyncNone, since
@@ -386,9 +385,9 @@ func (c *Cache) Rebuild(ctx context.Context, failed Synced, f Failure) (Synced, 
 			"failed with, one of %v, and %q is not", ErrInvalid, rebuildReasons, reason)
 	}
 	switch {
-	case reason == RebuildDerived && (drops == 0 || drops&^derivedParts != 0):
-		return Synced{}, fmt.Errorf("%w: a derived repair drops the multi-pack-index, the commit-graph or both "+
-			"(gitproc.Damage.Drops), not %v", ErrInvalid, drops)
+	case reason == RebuildDerived && (drops == 0 || drops&^c.image.parts(c.image.all()) != 0):
+		return Synced{}, fmt.Errorf("%w: a derived repair drops the files of a part a declaration of them "+
+			"names (%v, gitproc.Damage.Drops), not %v", ErrInvalid, c.image.parts(c.image.all()), drops)
 	case reason != RebuildDerived && drops != 0:
 		return Synced{}, fmt.Errorf("%w: only a derived repair drops files, and %q is not one", ErrInvalid, reason)
 	case len(f.Packs) > 0 && reason != RebuildCorrupt && reason != RebuildMissing:
@@ -405,6 +404,16 @@ func (c *Cache) Rebuild(ctx context.Context, failed Synced, f Failure) (Synced, 
 	}
 	if c.isStopped() {
 		return Synced{}, ErrStopped
+	}
+	if reason == RebuildDerived && c.image.reported(drops)&c.image.dropping(EventReported) == 0 {
+		// DAMAGE NO DROP REPAIRS: every declaration it names keeps its files
+		// on a report (OnReported), so what git could not read is no derived
+		// file a drop of the copy ends — repaired as a pack's damage is, as
+		// a round whose own git met it asks (damagedRound). Read whole to
+		// drop nothing, the request was answered from the copy that failed
+		// it.
+		f = Failure{Reason: RebuildCorrupt, Began: f.Began}
+		reason = f.Reason
 	}
 	if reason == RebuildCorrupt || reason == RebuildMissing {
 		return c.repairRequest(ctx, failed, f)
@@ -451,7 +460,7 @@ func (c *Cache) repairRequest(ctx context.Context, failed Synced, f Failure) (Sy
 		go c.escalate(e, inc, []*waiter{w})
 		return c.await(ctx, e, w)
 	}
-	markWhole(inc, Failure{Reason: RebuildStored}, dropRequest)
+	c.markWhole(inc, Failure{Reason: RebuildStored}, dropRequest)
 	inc.repair.forces++
 	for _, cs := range f.Packs {
 		rel := packFileRel(cs, ".pack")
@@ -697,7 +706,7 @@ func (c *Cache) rebuild(ctx context.Context, failed Synced, f Failure, refuse bo
 		// derived case dropping the damaged files so the round or the
 		// maintainer rewrites them, with no download and no new incarnation
 		// (apply).
-		markWhole(failed.inc, f, dropRequest)
+		c.markWhole(failed.inc, f, dropRequest)
 		w := newWaiter(linearizable)
 		c.join(e, w)
 		e.mu.Unlock()
@@ -921,6 +930,12 @@ func (c *Cache) queueRebuild(e *entry, inc *incarnation, reason RebuildReason, w
 // and left to the download, which needs nothing from it. The directory is
 // synced once every link is made, as an install's renames are, before any
 // ref names what they hold.
+//
+// It links PACKS ONLY. Every derived file (derived.go) is written again over
+// the new incarnation's packs — the round's index by its own round, the
+// maintainer's index and the commit-graph by the maintainer, the graph first —
+// rather than linked from the copy being replaced, whose derived files may be
+// what failed.
 func (c *Cache) seedRebuild(e *entry, replaced, inc *incarnation, whole []string) error {
 	from := filepath.Join(replaced.dir, "objects", "pack")
 	into := filepath.Join(inc.dir, "objects", "pack")

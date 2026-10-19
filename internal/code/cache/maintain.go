@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -17,9 +18,13 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 )
 
-// THE MULTI-PACK-INDEX's writers, in one file so the writer of an index is one
-// file (TestNothingButSyncWritesACache's allowance holds them to it): the
-// maintainer, and a full round's own index.
+// THE DERIVED FILES' writers, in one file so the writer of an index or a graph
+// is one file: the maintainer, and a full round's own index. Every write each
+// runs is a declared one (derived.go's Writes) — its argument list, lane,
+// deadline and memory charge read from the declaration's row, its files
+// owned and held by the declaration — and the writers gate holds each
+// argument list's literal here to its row in both directions
+// (TestNothingButSyncWritesACache).
 //
 // THE MAINTAINER writes a multi-pack-index WITH its bitmap, and a
 // commit-graph, for a repository whose packs have gathered — so a clone
@@ -171,7 +176,9 @@ import (
 // or more packs and the incarnation holds NO multi-pack-index file — one stat,
 // never the state's count, which reads zero beside an index on disk when the
 // state was unreadable. A round never writes over an index that exists: git
-// deletes a bitmap that does not match the index it writes.
+// deletes a bitmap that does not match the index it writes. What it runs, in
+// which lane, under which deadline and at which charge is DerivedMidx's round
+// write (derived.go); when is this file's.
 //
 // IT RUNS BEFORE THE REFS, because the refs' peel reads every tag the round
 // sets out of the packs, and without an index each lookup searches every
@@ -185,36 +192,39 @@ import (
 // it.
 //
 // Never a failure the round fails on: a busy lane or a failed write is
-// logged, the lock file a killed write leaves removed, and the round answers
-// without the index — slower, never wrong. So is an index the node's memory
-// cannot hold (admitOther): past the budget alone, refused and said so once
-// an incarnation (step index, as the maintainer's own would be); held back
-// by the work in flight, said so and left to the maintainer. It reports
-// whether it wrote.
+// logged, the files a killed write leaves removed (clearWriting, only when
+// its process began: a refused slot wrote nothing), and the
+// round answers without the index — slower, never wrong. So is an index the
+// node's memory cannot hold (admitOther): past the budget alone, refused and
+// said so once an incarnation (step index, as the maintainer's own would be);
+// held back by the work in flight, said so and left to the maintainer. It
+// reports whether it wrote.
 func (c *Cache) indexRound(ctx context.Context, e *entry, inc *incarnation, snap snapshot) bool {
 	packs := len(snap.packs)
 	if packs < c.roundPacks {
 		return false
 	}
-	packDir := filepath.Join(inc.dir, "objects", "pack")
-	if _, err := os.Lstat(filepath.Join(packDir, "multi-pack-index")); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := os.Lstat(filepath.Join(inc.dir, c.image.mainRel(DerivedMidx))); !errors.Is(err, fs.ErrNotExist) {
 		return false
 	}
+	w := c.mw.round
 	var names bytes.Buffer
-	var indexBytes, objects int64
+	covers := Covers{Packs: packs}
 	for _, p := range snap.packs {
 		names.WriteString("pack-" + p.GitChecksum + ".idx\n")
-		indexBytes += p.IndexBytes
-		objects += p.Objects
+		covers.IndexBytes += p.IndexBytes
+		covers.Objects += p.Objects
 	}
-	mem := charge(objects, IndexBytesPerObject)
+	mem := charge(covers.Objects, w.BytesPerObject)
 	switch c.maint.admitOther(mem) {
 	case pastBudget:
+		// Refused as the maintainer's own index without a bitmap would be:
+		// one step, one line, one count an incarnation.
 		e.mu.Lock()
-		var w refusalWalk
-		w.note(e.id, inc, stepPlain, map[maintStep]int64{stepPlain: mem})
+		var walk refusalWalk
+		walk.note(&c.mw, e.id, inc, c.mw.plain, map[maintStep]int64{c.mw.plain: mem})
 		e.mu.Unlock()
-		for _, r := range w.fresh {
+		for _, r := range walk.fresh {
 			c.logRefusal(r)
 		}
 		return false
@@ -224,22 +234,20 @@ func (c *Cache) indexRound(ctx context.Context, e *entry, inc *incarnation, snap
 		return false
 	}
 	defer c.maint.doneOther(mem)
-	before := derivedIDs(inc.dir)
-	_, err := c.git.Run(ctx, gitproc.Cmd{
-		Dir: inc.dir, Args: []string{"multi-pack-index", "write", "--stdin-packs", "--no-progress"},
-		Config: c.ServeConfig(), Class: gitproc.ClassRead, Stdin: &names,
-		Deadline: gitproc.PackWorkDeadline(indexBytes),
+	before := c.image.ids(inc.dir)
+	res, err := c.git.Run(ctx, gitproc.Cmd{
+		Dir: inc.dir, Args: w.Args, Config: c.ServeConfig(), Class: w.Lane, Stdin: &names,
+		Deadline: w.Deadline(covers),
 	})
 	if err != nil {
 		c.log.Warn("code_cache_round_index_skipped", "repo", e.id, "packs", packs, "error", err)
-		lock := filepath.Join(packDir, "multi-pack-index.lock")
-		if rerr := os.Remove(lock); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
-			c.log.Warn("code_cache_trash_failed", "path", lock, "error", rerr)
+		if !res.Began.IsZero() {
+			c.clearWriting(inc, w)
 		}
 		return false
 	}
 	c.vouchWritten(e, inc, before)
-	meta, err := metaBytes(inc.dir)
+	meta, err := c.image.ownedBytes(inc.dir)
 	e.mu.Lock()
 	// LastRun and Took stay the maintainer's: the round's index is no
 	// maintenance run, and the bitmap the maintainer adds is due at once.
@@ -254,33 +262,6 @@ func (c *Cache) indexRound(ctx context.Context, e *entry, inc *incarnation, snap
 	return true
 }
 
-// metaBytes is the size of the maintainer's files in the incarnation at dir:
-// the multi-pack-index's files and the commit-graph.
-func metaBytes(dir string) (int64, error) {
-	packDir := filepath.Join(dir, "objects", "pack")
-	list, err := os.ReadDir(packDir)
-	if err != nil {
-		return 0, err
-	}
-	var total int64
-	for _, d := range list {
-		if !midxFile.MatchString(d.Name()) {
-			continue
-		}
-		info, err := d.Info()
-		if err != nil {
-			return 0, err
-		}
-		total += info.Size()
-	}
-	if info, err := os.Lstat(filepath.Join(dir, "objects", "info", "commit-graph")); err == nil {
-		total += info.Size()
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return 0, err
-	}
-	return total, nil
-}
-
 // maintRun is one maintenance run in flight on an incarnation: what stops it,
 // and what says it has stopped — closed once its outcome is recorded, its
 // lock files are gone and its pin is released.
@@ -289,25 +270,28 @@ type maintRun struct {
 	inc    *incarnation
 	cancel context.CancelFunc
 	done   chan struct{}
+	// writes is the declarations the run's steps write: what a drop of one
+	// of them stops it for (stopWriting).
+	writes derivedSet
 	// maintained: every step the run set out to take ran to its end. Read
 	// once done is closed.
 	maintained bool
 }
 
 // runPlan is what a run was started to do, fixed when it is started under
-// the entry's mu (plan): the index it writes — with its bitmap, without one,
-// or none — and whether it writes the commit-graph, and FIRST, before the
-// index, the packs that index will cover, the bytes its deadline is sized by,
-// the memory it was admitted at (maintFlight), the graph's own charge, and
-// when it started on the cache's clock.
+// the entry's mu (plan): the index it writes — the declared write with its
+// bitmap, the one without, or none — and whether it writes the commit-graph,
+// and FIRST, before the index, what the run covers — the packs that index
+// will cover, the objects its charges are of and the bytes its deadlines are
+// sized by — the memory it was admitted at (maintFlight), the graph's own
+// charge, and when it started on the cache's clock.
 type runPlan struct {
-	index maintStep // stepBitmap, stepPlain or 0
+	index maintStep // the maintainer's bitmap or plain write (maintWrites), or 0
 	graph bool
 	// first: the incarnation has no commit-graph, so the graph is the run's
 	// first step, due at once (GRAPH FIRST above).
 	first       bool
-	covered     int
-	disk        int64
+	covers      Covers
 	memory      int64
 	graphCharge int64
 	startedAt   time.Time
@@ -432,7 +416,14 @@ func (c *Cache) maintainerPass(ctx context.Context) []*maintRun {
 		if c.holdsWork(e) {
 			inc := e.current
 			p, refused, charges := c.plan(inc, budget, c.due(e, now))
-			walk.note(e.id, inc, refused, charges)
+			walk.note(&c.mw, e.id, inc, refused, charges)
+			if p.steps() && !c.runnable(e) && e.adopting > 0 {
+				// Held back by an adoption's links alone, milliseconds:
+				// the last adoption to let go wakes the maintainer, so a
+				// run due at once — a graph, an index repair — is not
+				// left to the next tick.
+				e.maintainerOwed = true
+			}
 			if p.steps() && c.runnable(e) {
 				uncovered := inc.packs
 				if inc.midx.Bitmap {
@@ -652,7 +643,18 @@ func (f *maintFlight) count() int {
 // ordinary run is due is due's to say, and WHAT a run takes, and whether the
 // node's memory holds it, plan's and admit's.
 func (c *Cache) runnable(e *entry) bool {
-	return c.wantsRun(e) && e.running == nil && e.maint == nil && e.verifying == 0
+	return c.wantsRun(e) && e.running == nil && e.adopting == 0 && e.maint == nil && e.verifying == 0
+}
+
+// owedWake reports whether the maintainer is owed a wake on e now — a pass
+// was held back from it (maintainerOwed) by a round or an adoption, and
+// neither holds it any more — and takes the debt; e.mu is held.
+func (c *Cache) owedWake(e *entry) bool {
+	if !e.maintainerOwed || e.running != nil || e.adopting > 0 {
+		return false
+	}
+	e.maintainerOwed = false
+	return true
 }
 
 // due reports whether e's current incarnation's ORDINARY run is due now; e.mu
@@ -735,12 +737,13 @@ func (c *Cache) indexDue(inc *incarnation) bool {
 func (c *Cache) plan(inc *incarnation, budget int64, due bool) (p runPlan, refused maintStep,
 	charges map[maintStep]int64) {
 
-	charges = map[maintStep]int64{
-		stepBitmap: charge(inc.objects, BitmapBytesPerObject),
-		stepPlain:  charge(inc.objects, IndexBytesPerObject),
-		stepGraph:  charge(inc.objects, GraphBytesPerObject),
+	mw := &c.mw
+	charges = make(map[maintStep]int64, len(mw.all))
+	for i, w := range mw.all {
+		charges[maintStep(1)<<i] = charge(inc.objects, w.BytesPerObject)
 	}
-	p = runPlan{covered: inc.packs, disk: inc.diskBytes, startedAt: c.now(), graphCharge: charges[stepGraph]}
+	p = runPlan{covers: Covers{Packs: inc.packs, Objects: inc.objects, DiskBytes: inc.diskBytes}, startedAt: c.now(),
+		graphCharge: charges[mw.graph]}
 	fits := func(s maintStep) bool {
 		if charges[s] > budget {
 			refused |= s
@@ -749,19 +752,19 @@ func (c *Cache) plan(inc *incarnation, budget int64, due bool) (p runPlan, refus
 		return true
 	}
 	var index maintStep
-	if c.indexDue(inc) && fits(stepBitmap) {
-		index = stepBitmap
+	if c.indexDue(inc) && fits(mw.bitmap) {
+		index = mw.bitmap
 	}
-	if refused&stepBitmap != 0 {
+	if refused&mw.bitmap != 0 {
 		outside := inc.packs - inc.midx.Packs
 		plainDue := inc.midx.Packs == 0 ||
 			(inc.midx.Bitmap && outside >= c.roundPacks) ||
 			(!inc.midx.Bitmap && outside >= c.midxPacks)
-		if plainDue && fits(stepPlain) {
-			index = stepPlain
+		if plainDue && fits(mw.plain) {
+			index = mw.plain
 		}
 	}
-	graph := (index != 0 || !inc.midx.Graph) && fits(stepGraph)
+	graph := (index != 0 || !inc.midx.Graph) && fits(mw.graph)
 	p.first = graph && !inc.midx.Graph && !inc.graphFailed
 	if due {
 		p.index = index
@@ -771,7 +774,7 @@ func (c *Cache) plan(inc *incarnation, budget int64, due bool) (p runPlan, refus
 		p.memory = charges[p.index]
 	}
 	if p.graph {
-		p.memory = max(p.memory, charges[stepGraph])
+		p.memory = max(p.memory, charges[mw.graph])
 	}
 	return p, refused, charges
 }
@@ -839,7 +842,8 @@ func (c *Cache) startMaintenance(ctx context.Context, e *entry, most, lane int, 
 	runCtx, cancel := context.WithCancel(ctx)
 	//nolint:contextcheck // The cache's lifetime ends the run too: Stop must end the git it started however long the pass's ctx lives.
 	stop := context.AfterFunc(c.life, cancel)
-	m := &maintRun{e: e, inc: inc, cancel: cancel, done: make(chan struct{})}
+	m := &maintRun{e: e, inc: inc, cancel: cancel, done: make(chan struct{}),
+		writes: c.mw.written(c.image, c.mw.steps(plan))}
 	e.maint = m
 	inc.pins++
 	e.mu.Unlock()
@@ -871,7 +875,7 @@ func (c *Cache) startMaintenance(ctx context.Context, e *entry, most, lane int, 
 //     slot after its index was written records the index and no graph,
 //     which leaves the repository due for its graph alone once the interval
 //     has passed — a refusal, not a failure. One that failed first removes
-//     what a killed git leaves behind (clearMaintenanceDebris).
+//     what a killed git leaves behind (clearWriting).
 //
 // An index written is recorded as what it is: with its bitmap, or without
 // one — the plain index a run writes where the node's memory refused the
@@ -898,27 +902,36 @@ func (c *Cache) maintain(ctx context.Context, m *maintRun, p runPlan) {
 	}()
 
 	began := time.Now()
-	out := c.runMaintenance(ctx, e, inc, p)
+	steps := c.mw.steps(p)
+	out := c.runMaintenance(ctx, e, inc, p.covers, steps)
 	took := time.Since(began)
-	firstStep := procIndex
-	if p.index == 0 || p.first {
-		firstStep = procGraph
-	}
 	refused := errors.Is(out.err, gitproc.ErrBusy)
-	if refused && out.step == firstStep {
+	if refused && out.step == c.mw.all[c.mw.index(steps[0])].Writer.Subcommand {
 		return
 	}
 	kick = true
 	stopped := out.err != nil && ctx.Err() != nil
+	if out.began {
+		// A step whose git process ran and did not succeed: what the run's
+		// writes hold while they run is cleared — the failed step's own, and
+		// any other write's of the plan, since nothing but this run writes
+		// them in the incarnation (clearWriting). A step stopped or refused
+		// before its process began wrote nothing, and the steps before it
+		// succeeded, git removing their locks as they did: nothing to clear,
+		// and no listing for it.
+		writes := make([]Write, 0, len(steps))
+		for _, s := range steps {
+			writes = append(writes, c.mw.all[c.mw.index(s)])
+		}
+		c.clearWriting(inc, writes...)
+	}
 	switch {
 	case stopped:
-		c.clearMaintenanceDebris(inc)
 		c.log.Debug("code_cache_maintenance_cancelled", "repo", e.id, "step", out.step)
 	case out.err != nil && !refused:
-		c.clearMaintenanceDebris(inc)
 		c.log.Warn("code_cache_maintenance_failed", "repo", e.id, "step", out.step, "error", out.err)
 	}
-	meta, merr := metaBytes(inc.dir)
+	meta, merr := c.image.ownedBytes(inc.dir)
 	e.mu.Lock()
 	switch {
 	case out.indexed:
@@ -930,14 +943,14 @@ func (c *Cache) maintain(ctx context.Context, m *maintRun, p runPlan) {
 		inc.indexRepair = false
 	}
 	if out.indexed {
-		inc.midx.Packs, inc.midx.Bitmap = p.covered, p.index == stepBitmap
+		inc.midx.Packs, inc.midx.Bitmap = p.covers.Packs, p.index == c.mw.bitmap
 		// Every pack a delta added while the index was written arrived
 		// after the run began: the oldest one the index leaves out is
 		// no older than that. An incarnation replaced meanwhile says
 		// nothing of the packs of the one that replaced it.
 		switch {
 		case e.current != inc:
-		case inc.packs > p.covered:
+		case inc.packs > p.covers.Packs:
 			e.uncoveredSince = p.startedAt
 		default:
 			e.uncoveredSince = time.Time{}
@@ -978,57 +991,164 @@ func (c *Cache) maintain(ctx context.Context, m *maintRun, p runPlan) {
 		return
 	}
 	m.maintained = true
-	c.log.Debug("code_cache_maintained", "repo", e.id, "packs", p.covered, "index", p.index.String(),
+	c.log.Debug("code_cache_maintained", "repo", e.id, "packs", p.covers.Packs, "index", c.mw.name(p.index),
 		"graph", p.graph, "first", p.first, "took", took)
 }
 
 // maintOutcome is how a run's steps ended: which it wrote, and the step it
-// stopped at with that step's error ("" and nil when every step ran).
+// stopped at — its writer's subcommand — with that step's error ("" and nil
+// when every step ran), and whether that step's git process began (what the
+// run's writes hold may then be left, clearWriting).
 type maintOutcome struct {
 	indexed, graphed bool
 	step             string
 	err              error
+	began            bool
 }
 
 // The maintainer's two processes, by the name a knob a case holds a run with
-// (knobs.maintaining) is told: each argument list's first.
+// (knobs.maintaining) is told: each declared write's Writer.Subcommand, and
+// the first of its argument list.
 const (
 	procIndex = "multi-pack-index"
 	procGraph = "commit-graph"
 )
 
-// The argument lists of a run's steps — the index with its bitmap and
-// without one, and the graph — spelled as literals, which is how
+// maintainFile is this file as the declarations name their writer
+// (Writer.File): the writers gate holds every write declared here to this
+// file's allowance rows.
+const maintainFile = "internal/code/cache/maintain.go"
+
+// The argument lists of the declared writes (derived.go) — a full round's
+// index, the maintainer's index with its bitmap and without one, and the
+// graph — spelled as literals in the file that runs them, which is how
 // TestNothingButSyncWritesACache reads which git writer a file runs.
 var (
-	bitmapArgs = []string{"multi-pack-index", "write", "--bitmap", "--no-progress"}
-	plainArgs  = []string{"multi-pack-index", "write", "--no-progress"}
-	graphArgs  = []string{"commit-graph", "write", "--reachable", "--no-progress"}
+	roundIndexArgs = []string{"multi-pack-index", "write", "--stdin-packs", "--no-progress"}
+	bitmapArgs     = []string{"multi-pack-index", "write", "--bitmap", "--no-progress"}
+	plainArgs      = []string{"multi-pack-index", "write", "--no-progress"}
+	graphArgs      = []string{"commit-graph", "write", "--reachable", "--no-progress"}
 )
 
-// runMaintenance runs the plan's steps in inc — the index it writes, with its
-// bitmap or without, and then the commit-graph, each when the plan takes it,
-// the graph BEFORE the index on a graph-first run — each in the MAINTENANCE
-// lane with the serve configuration and a deadline proportional to the
-// repository. What a step that succeeds writes is vouched (check.go): this
-// process wrote it, so no check of this process hashes it again.
-func (c *Cache) runMaintenance(ctx context.Context, e *entry, inc *incarnation, p runPlan) maintOutcome {
-	var out maintOutcome
-	var steps [][]string
-	if p.graph && p.first {
-		steps = append(steps, graphArgs)
+// maintWrites is the maintainer's declared writes — every Write of the
+// cache's declarations whose Trigger is TriggerMaintainer, in declaration
+// order, a maintStep's bit i being all[i] — and the four the plan and a full
+// round name by what they ARE: the multi-pack-index with its bitmap and
+// without one, the commit-graph, and the round's own index. The declarations
+// say what each step is — its argument list, lane, deadline and charge — and
+// this file when each runs (plan): no step's name, charge, lane, deadline or
+// argument list is spelled outside derived.go.
+type maintWrites struct {
+	all []Write
+	// of is the declaration each of all is a write of.
+	of []DerivedName
+	// bitmap and plain are DerivedMidx's maintainer writes of StepBitmap and
+	// StepIndex, and graph DerivedGraph's of StepGraph, as their bits.
+	bitmap, plain, graph maintStep
+	// round is DerivedMidx's round write (indexRound).
+	round Write
+}
+
+// maxMaintWrites is how many maintainer writes a maintStep holds.
+const maxMaintWrites = 8
+
+// newMaintWrites reads the maintainer's writes out of the image's
+// declarations, and refuses declarations that lack one the plan takes.
+func newMaintWrites(im *image) (maintWrites, error) {
+	var mw maintWrites
+	roundFound := false
+	for _, d := range im.decls {
+		for _, w := range d.Writes {
+			switch {
+			case w.Trigger == TriggerMaintainer:
+				mw.all = append(mw.all, w)
+				mw.of = append(mw.of, d.Name)
+			case d.Name == DerivedMidx && w.Trigger == TriggerRound && w.Step == StepIndex:
+				mw.round, roundFound = w, true
+			}
+		}
 	}
-	switch p.index {
-	case stepBitmap:
-		steps = append(steps, bitmapArgs)
-	case stepPlain:
-		steps = append(steps, plainArgs)
+	if len(mw.all) > maxMaintWrites {
+		return mw, fmt.Errorf("%d maintainer writes are declared, and a plan's set of them holds %d", len(mw.all),
+			maxMaintWrites)
+	}
+	bit := func(name DerivedName, step Step) maintStep {
+		for i, w := range mw.all {
+			if mw.of[i] == name && w.Step == step {
+				return maintStep(1) << i
+			}
+		}
+		return 0
+	}
+	mw.bitmap, mw.plain, mw.graph = bit(DerivedMidx, StepBitmap), bit(DerivedMidx, StepIndex), bit(DerivedGraph,
+		StepGraph)
+	if mw.bitmap == 0 || mw.plain == 0 || mw.graph == 0 || !roundFound {
+		return mw, fmt.Errorf("the maintainer's plan takes %s's maintainer writes of steps %s and %s, %s's of step "+
+			"%s and %s's round write of step %s, and the declarations lack one of them", DerivedMidx, StepBitmap,
+			StepIndex, DerivedGraph, StepGraph, DerivedMidx, StepIndex)
+	}
+	return mw, nil
+}
+
+// index is the position in all of the one write s names, or -1.
+func (mw *maintWrites) index(s maintStep) int {
+	for i := range mw.all {
+		if s == maintStep(1)<<i {
+			return i
+		}
+	}
+	return -1
+}
+
+// name is the Step of the one write s names, "" for none: what a line and a
+// count's `step` attribute say.
+func (mw *maintWrites) name(s maintStep) string {
+	if i := mw.index(s); i >= 0 {
+		return string(mw.all[i].Step)
+	}
+	return ""
+}
+
+// steps is the writes a run of p takes, in order, as their bits: the graph
+// first on a graph-first run, else after the index.
+func (mw *maintWrites) steps(p runPlan) []maintStep {
+	var steps []maintStep
+	if p.graph && p.first {
+		steps = append(steps, mw.graph)
+	}
+	if p.index != 0 {
+		steps = append(steps, p.index)
 	}
 	if p.graph && !p.first {
-		steps = append(steps, graphArgs)
+		steps = append(steps, mw.graph)
 	}
-	for _, args := range steps {
-		name := args[0]
+	return steps
+}
+
+// written is the declarations steps are writes of, in im.
+func (mw *maintWrites) written(im *image, steps []maintStep) derivedSet {
+	var s derivedSet
+	for _, step := range steps {
+		if i := mw.index(step); i >= 0 {
+			s |= im.set(mw.of[i])
+		}
+	}
+	return s
+}
+
+// runMaintenance runs steps in inc, in order, each a declared write: its
+// argument list in its lane with the serve configuration, under its deadline
+// over what the run covers. What a step that succeeds writes is vouched
+// (check.go): this process wrote it, so no check of this process hashes it
+// again.
+func (c *Cache) runMaintenance(ctx context.Context, e *entry, inc *incarnation, covers Covers,
+	steps []maintStep) maintOutcome {
+
+	var out maintOutcome
+	for _, s := range steps {
+		i := c.mw.index(s)
+		w := c.mw.all[i]
+		name := w.Writer.Subcommand
 		if c.knobs != nil && c.knobs.maintaining != nil {
 			c.knobs.maintaining(ctx, name)
 		}
@@ -1036,75 +1156,52 @@ func (c *Cache) runMaintenance(ctx context.Context, e *entry, inc *incarnation, 
 			out.step, out.err = name, context.Cause(ctx)
 			return out
 		}
-		before := derivedIDs(inc.dir)
-		if _, err := c.git.Run(ctx, gitproc.Cmd{
-			Dir: inc.dir, Args: args, Config: c.ServeConfig(), Class: gitproc.ClassMaintenance,
-			Deadline: gitproc.PackWorkDeadline(p.disk),
-		}); err != nil {
-			out.step, out.err = name, err
+		before := c.image.ids(inc.dir)
+		res, err := c.git.Run(ctx, gitproc.Cmd{
+			Dir: inc.dir, Args: w.Args, Config: c.ServeConfig(), Class: w.Lane, Deadline: w.Deadline(covers),
+		})
+		if err != nil {
+			out.step, out.err, out.began = name, err, !res.Began.IsZero()
 			return out
 		}
 		c.vouchWritten(e, inc, before)
-		switch name {
-		case procIndex:
+		switch c.mw.of[i] {
+		case DerivedMidx:
 			out.indexed = true
-		case procGraph:
+		case DerivedGraph:
 			out.graphed = true
 		}
 	}
 	return out
 }
 
-// tmpBitmap matches the temporary file git writes a bitmap into
-// (objects/pack/tmp_bitmap_ and six random characters, git 2.43) before
-// renaming it into place. git makes it with mkstemp and registers no cleanup
-// for it, so a writer killed while it writes the bitmap — the end of a run,
-// where most of its time is — leaves it behind.
-var tmpBitmap = regexp.MustCompile(`^tmp_bitmap_[A-Za-z0-9]+$`)
-
-// The directories of an incarnation a maintenance run writes in, relative to
-// it.
-var (
-	packRel = filepath.Join("objects", "pack")
-	infoRel = filepath.Join("objects", "info")
-)
-
-// maintenanceWriting reports whether name, an entry of the incarnation's
-// directory rel (packRel or infoRel), is a file a maintenance run holds only
-// WHILE IT RUNS: the multi-pack-index's lock and the commit-graph's — each
-// written whole and renamed over its file as the step ends — and a bitmap's
-// temporary file. ONE LIST for the two readers that must agree on it: Verify,
-// which admits them in an incarnation a run is writing (a writer's own files
-// are no damage), and clearMaintenanceDebris, which removes them after a run
-// that did not succeed (a killed git leaves them). Nothing else writes them,
-// so outside a run each is damage the sweep removes.
-func maintenanceWriting(rel, name string) bool {
-	switch rel {
-	case packRel:
-		return name == "multi-pack-index.lock" || tmpBitmap.MatchString(name)
-	case infoRel:
-		return name == "commit-graph.lock"
+// clearWriting removes what a run of writes whose git process began and did
+// not succeed may have left in inc — every file each holds while it runs
+// (Write.Holds): a lock, which git removes when it is asked to stop and
+// leaves when it is killed, and a bitmap's temporary file, which it leaves
+// either way. The run was the only writer of any of them in the incarnation,
+// since no round runs a git writer beside a maintenance run and a round's
+// index runs with none in flight, so anything of theirs still there is its
+// own.
+//
+// A held name that is a whole literal (a lock) is removed BY NAME, and a
+// directory is listed at most once, only for the patterns that are not — the
+// bitmap's temporary file — since objects/pack holds three files a pack, and
+// its listing is what a full round stopping the run, and the request that
+// round answers, would otherwise wait for. A removal that fails is logged;
+// the incarnation's next full round sweeps whatever is outside its image.
+func (c *Cache) clearWriting(inc *incarnation, writes ...Write) {
+	named, listed := clearPlan(writes)
+	paths := make([]string, 0, len(named))
+	for _, rel := range named {
+		paths = append(paths, filepath.Join(inc.dir, rel))
 	}
-	return false
-}
-
-// clearMaintenanceDebris removes what a maintenance run that did not succeed
-// may have left in inc (maintenanceWriting): the index's and the graph's
-// lock files — git removes its own when it is asked to stop, and leaves them
-// when it is killed — and a bitmap's temporary file. The run was the only
-// writer of either in the incarnation, since no round runs a git writer
-// beside it, so anything of theirs still there is its own. A removal that
-// fails is logged; the incarnation's next full round sweeps whatever is
-// outside its image.
-func (c *Cache) clearMaintenanceDebris(inc *incarnation) {
-	var paths []string
-	for _, rel := range []string{packRel, infoRel} {
-		list, err := os.ReadDir(filepath.Join(inc.dir, rel))
-		if err != nil {
-			continue
-		}
+	for rel, patterns := range listed {
+		// A directory that cannot be read holds nothing of the run's this
+		// can remove; the next full round's sweep can.
+		list, _ := os.ReadDir(filepath.Join(inc.dir, rel))
 		for _, d := range list {
-			if maintenanceWriting(rel, d.Name()) {
+			if slices.ContainsFunc(patterns, func(re *regexp.Regexp) bool { return re.MatchString(d.Name()) }) {
 				paths = append(paths, filepath.Join(inc.dir, rel, d.Name()))
 			}
 		}
@@ -1116,16 +1213,47 @@ func (c *Cache) clearMaintenanceDebris(inc *incarnation) {
 	}
 }
 
+// clearPlan is how clearWriting clears what writes hold: the held names that
+// are whole literals, by their path relative to the incarnation, each once —
+// removed by name — and, by directory, the patterns that are not, each
+// directory listed once for all of them.
+func clearPlan(writes []Write) (named []string, listed map[string][]*regexp.Regexp) {
+	listed = map[string][]*regexp.Regexp{}
+	for _, w := range writes {
+		for _, p := range w.Holds {
+			rel := filepath.FromSlash(p.Dir)
+			if name, whole := p.Name.LiteralPrefix(); whole {
+				if path := filepath.Join(rel, name); !slices.Contains(named, path) {
+					named = append(named, path)
+				}
+				continue
+			}
+			if !slices.ContainsFunc(listed[rel], func(re *regexp.Regexp) bool { return re.String() == p.Name.String() }) {
+				listed[rel] = append(listed[rel], p.Name)
+			}
+		}
+	}
+	return named, listed
+}
+
 // stopMaintenance stops a maintenance run on inc, if one is in flight, and
 // waits for it to end — bounded: the pool ends a cancelled git within its kill
 // grace and reaps it, and the run then records its end and lets go. Holding no
 // lock of the entry, since the run takes it to let go. A run on another
 // incarnation of the entry is not inc's to stop.
 func (c *Cache) stopMaintenance(e *entry, inc *incarnation) {
+	c.stopWriting(e, inc, c.image.all())
+}
+
+// stopWriting is stopMaintenance for a run on inc that writes a declaration
+// of s, and none other: a drop of s answers a change of the files those
+// declarations are built over, and only a run writing one of them would
+// record a file built over the inputs before the change as current after it.
+func (c *Cache) stopWriting(e *entry, inc *incarnation, s derivedSet) {
 	e.mu.Lock()
 	m := e.maint
 	e.mu.Unlock()
-	if m == nil || m.inc != inc {
+	if m == nil || m.inc != inc || m.writes&s == 0 {
 		return
 	}
 	m.cancel()

@@ -544,6 +544,27 @@ bitmaps. Reading a copy whole does not write the graph itself: the request
 it was read for would wait those seconds to spare the rare skewed push the
 same.
 
+**What the cache writes beside the packs.** Two kinds of file in a
+repository's cache are the node's own work rather than the rows': the
+multi-pack index — a full read's, written before it answers once the
+repository holds 256 packs, and the background indexing's, with its bitmap or
+without one — and the commit-graph. Each lives inside the repository's own
+directory, so it counts against the budget, leaves with the repository when it
+is evicted and is written again over a rebuild's packs; each is dropped before
+a pack it may name leaves the directory, so no git process reads an index that
+names a pack that is gone; one the node has not written since it started is
+held to its checksum before it serves, and every file of a copy is checked
+again behind the serving. Anything else in the directory that is neither one
+of them nor the repository's own files is moved aside the next time the node
+reads the repository whole. Each is declared once in the engine, and this
+table is that list; the steps are what `code_cache_maintenance_refused` and
+its counter name when the node's memory refuses one.
+
+| Declared file | Its files, in the repository's directory | Written by | When a pack leaves |
+|---|---|---|---|
+| `midx`, the multi-pack index | `objects/pack/multi-pack-index`, `objects/pack/multi-pack-index-<checksum>.bitmap`, `objects/pack/multi-pack-index-<checksum>.rev` | a full read: `index`; the background indexing: `bitmap`, `index` | dropped first |
+| `commit-graph`, the commit-graph | `objects/info/commit-graph` | the background indexing: `graph` | dropped first |
+
 **Memory.** Every git process a node runs over a whole repository holds memory
 in proportion to the repository's objects, measured on git 2.43 over a source
 repository's history: about 1 000 bytes an object for the bitmap (702 over

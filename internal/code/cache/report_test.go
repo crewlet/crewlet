@@ -272,6 +272,137 @@ func TestAReportedDerivedFileIsDroppedAndRewrittenAtOnce(t *testing.T) {
 	}
 }
 
+// A REPORT A DECLARATION KEEPS ITS FILES ON RECORDS NO DROP, AND ASKS NONE.
+// A report of the multi-pack-index is EventReported for the index's
+// declaration, and what it does is the declaration's to say (OnReported).
+// With the build's declarations it drops: one repair round drops the index,
+// logs it repaired and makes its rewrite due at once, and the copy's scrub is
+// not asked. Over declarations in which the index keeps its files on a
+// report, the report is damage no drop repairs: no round is queued — one
+// would read the copy whole and move nothing, for every git process that
+// reported it — nothing says the index was repaired, the same file stays on
+// disk, and the report makes the copy's scrub due, where the bytes decide.
+// That scrub over a sound index finds nothing, and the next report falls in
+// its cooldown: still no round. And what the bytes decide is no report: the
+// same index damaged in place, its next scrub finds it failing its trailer
+// and the repair round drops it, logged and due, whatever its declaration
+// says of a report.
+//
+// Mutations: queue a repair round for every declaration a report names
+// (report.go observe) — the kept arm sweeps the copy for the report and
+// makes no scrub due; drop what a check or a scrub found as a report
+// (dropDamaged's eventFailedCheck as EventReported) — the kept arm keeps the
+// index failing its trailer, logs nothing and makes nothing due.
+func TestAReportADeclarationKeepsItsFilesOnRecordsNoDrop(t *testing.T) {
+	t.Parallel()
+	keep := cache.DerivedFiles()
+	for i := range keep {
+		if keep[i].Name == cache.DerivedMidx {
+			keep[i].OnReported = cache.Keep
+		}
+	}
+	for _, tc := range []struct {
+		name    string
+		decls   []cache.Derived
+		dropped bool
+	}{
+		{"the build's declarations", cache.DerivedFiles(), true},
+		{"the index kept on a report", keep, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var sweeps atomic.Int64
+			r := newReportedCopy(t, nil, cache.WithDerived(tc.decls), func(o *cache.Options) {
+				cache.AfterSweep(o, func(string) { sweeps.Add(1) })
+			})
+			midx := r.midx()
+			before := stat(t, midx)
+			swept := sweeps.Load()
+			report := func() {
+				t.Helper()
+				cache.Report(r.c, derivedReport(r.s.Dir, gitproc.PartMultiPackIndex, time.Now()))
+				eventually(t, "every round the report asked", func() bool { return cache.Settled(r.c, r.repo) })
+			}
+
+			report()
+			if got := reports(r.w, "multi-pack-index", "queued"); got != 1 {
+				t.Fatalf("reports{part=multi-pack-index,outcome=queued} = %d, want the report counted once: the "+
+					"case holds no report", got)
+			}
+			rounds := sweeps.Load() - swept
+			if want := map[bool]int64{true: 1, false: 0}[tc.dropped]; rounds != want {
+				t.Errorf("the report swept the copy in %d full rounds, want %d", rounds, want)
+			}
+			after, err := os.Lstat(midx)
+			if kept := err == nil && os.SameFile(before, after); kept == tc.dropped {
+				t.Errorf("the index after the report: kept %t (%v), want kept %t", kept, err, !tc.dropped)
+			}
+			lines := r.w.logs.lines(t, "code_cache_derived_repaired")
+			if got := len(lines) > 0; got != tc.dropped {
+				t.Errorf("code_cache_derived_repaired = %v, want logged %t", lines, tc.dropped)
+			}
+			if got := cache.IndexRepair(r.c, r.repo); got != tc.dropped {
+				t.Errorf("the index due at once as a repair: %t, want %t", got, tc.dropped)
+			}
+			why, _ := cache.ScrubDue(r.c, r.repo)
+			if want := map[bool]string{true: "", false: "report"}[tc.dropped]; why != want {
+				t.Fatalf("after the report the copy's scrub is due for %q, want %q", why, want)
+			}
+			if tc.dropped {
+				return
+			}
+
+			// The scrub the report asked, over a sound index: nothing found,
+			// and the next report of the same index is in its cooldown.
+			if done := cache.ScrubPass(r.c); !slices.Equal(done, []string{r.repo}) {
+				t.Fatalf("the scrub pass scrubbed %v, want %s", done, r.repo)
+			}
+			if _, found, _ := cache.Scrubbed(r.c, r.repo); found {
+				t.Fatal("the scrub of a sound copy found something")
+			}
+			report()
+			if got := reports(r.w, "multi-pack-index", "cooldown"); got != 1 {
+				t.Errorf("reports{part=multi-pack-index,outcome=cooldown} = %d, want the second report in the "+
+					"scrub's cooldown", got)
+			}
+			if got := reports(r.w, "multi-pack-index", "queued"); got != 1 {
+				t.Errorf("reports{part=multi-pack-index,outcome=queued} = %d after the second report, want the "+
+					"first alone", got)
+			}
+			if rounds := sweeps.Load() - swept; rounds != 0 {
+				t.Errorf("two reports of a kept index swept the copy in %d full rounds, want none", rounds)
+			}
+
+			// What the bytes decide is not the declaration's to keep: past the
+			// cooldown, the index damaged in place — its identity kept, as
+			// media damage keeps it — is reported again, the scrub that report
+			// asks finds it failing its trailer, and the repair round drops it
+			// and makes it due. Kept, it would be served failing its check
+			// and found again by every scrub a report of it asked.
+			r.clk.Add(cache.ScrubCooldown)
+			gittest.DamageInPlace(t, r.s.Dir, gittest.MidxTrailer)
+			report()
+			if done := cache.ScrubPass(r.c); !slices.Equal(done, []string{r.repo}) {
+				t.Fatalf("the scrub pass after the index was damaged scrubbed %v, want %s", done, r.repo)
+			}
+			eventually(t, "the scrub's findings repaired", func() bool {
+				return cache.Settled(r.c, r.repo) && len(cache.ScrubFindings(r.c, r.repo)) == 0
+			})
+			if after, err := os.Lstat(midx); err == nil && os.SameFile(before, after) {
+				t.Error("the index failing its trailer is still on disk: a declaration that keeps its files on a " +
+					"report kept what its check failed")
+			}
+			lines = r.w.logs.lines(t, "code_cache_derived_repaired")
+			if !slices.ContainsFunc(lines, func(l map[string]any) bool { return l["trigger"] == "scrub" }) {
+				t.Errorf("code_cache_derived_repaired = %v, want the scrub's drop", lines)
+			}
+			if !cache.IndexRepair(r.c, r.repo) {
+				t.Error("the index the scrub's round dropped is not due at once as a repair")
+			}
+		})
+	}
+}
+
 // A SCRATCH'S DERIVED REPORT IS ITS ALTERNATE'S, AND NOTHING ELSE IT REPORTS
 // IS. A process in a push's scratch reads the incarnation only as its
 // alternate, and reads the alternate's derived files: a merge-base there

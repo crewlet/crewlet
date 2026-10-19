@@ -158,6 +158,7 @@ func (c *Cache) Adopt(ctx context.Context, repoID string, sc *Scratch, pack code
 		c.adoptCounted(repoID, adoptUncached)
 		return nil
 	case e.write.TryAcquire(1):
+		e.adopting++
 		inc = e.current
 		inc.pins++
 	default:
@@ -339,6 +340,11 @@ func (c *Cache) placeStaging(e *entry, inc *incarnation, st *staging) (adoptOutc
 			return adoptFailed, err
 		}
 	}
+	// A pack added: what a declaration says of one, before it is linked in
+	// (dropFor's order rule). No declaration drops for an added pack today.
+	if _, err := c.dropFor(e, inc, EventPackAdded, 0); err != nil {
+		return adoptFailed, err
+	}
 	linked, err := linkBundle(st.stem, packDir, st.pack.GitChecksum, nil)
 	switch {
 	case err != nil:
@@ -404,7 +410,9 @@ func (c *Cache) claimHanded(e *entry, p code.PackRow) *staging {
 // the same mu registers before this last look, or finds the lock free.
 // Taken back after a release, a staging is dropped where nothing is left to
 // install it into — the repository purged or evicted — and, once Stop has
-// begun, left to the next boot's tmp/.
+// begun, left to the next boot's tmp/. An adoption's share (n one, never
+// writeExclusive) leaves the adoptions holding the repository, and the last
+// to leave wakes the maintainer a pass it held back is owed (owedWake).
 func (c *Cache) releaseWrite(e *entry, n int64) {
 	for {
 		e.mu.Lock()
@@ -412,7 +420,15 @@ func (c *Cache) releaseWrite(e *entry, n int64) {
 		e.handed = nil
 		if len(handed) == 0 {
 			e.write.Release(n)
+			wake := false
+			if n != writeExclusive {
+				e.adopting--
+				wake = c.owedWake(e)
+			}
 			e.mu.Unlock()
+			if wake {
+				c.kickMaintainer()
+			}
 			return
 		}
 		inc := e.current
@@ -453,6 +469,9 @@ func (c *Cache) acquireWrite(ctx context.Context, e *entry) error {
 	}
 	e.mu.Lock()
 	settle := len(e.handed) > 0 && e.write.TryAcquire(1)
+	if settle {
+		e.adopting++
+	}
 	e.mu.Unlock()
 	if settle {
 		c.releaseWrite(e, 1)

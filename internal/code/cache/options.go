@@ -172,6 +172,14 @@ type knobs struct {
 	// end, next on the cache's clock, in place of a timer: a case on a clock
 	// of its own sees when the scrubber means to wake, and wakes it.
 	scrubWake func(next time.Time) <-chan time.Time
+	// derived, when set, is the cache's declarations of its derived files in
+	// place of DerivedFiles(): a case proves the code reads the
+	// declarations by opening a cache over a changed one.
+	derived []Derived
+	// stating, when set, is told the path, relative to its incarnation, of
+	// every directory entry the cache stats to count its bytes (image.sizes):
+	// a case counts what the end of a maintenance run reads.
+	stating func(rel string)
 }
 
 // validate refuses an Options value naming the field and what to set,

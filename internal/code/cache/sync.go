@@ -469,10 +469,7 @@ func (c *Cache) run(e *entry, r *round) {
 	// and left the repository to the next tick, MidxDebounce later: a
 	// graph-first run, an index repair and a copy's first index, each due
 	// at once, waited for it. A round queued behind this one owes it on.
-	wake := e.maintainerOwed && e.running == nil
-	if wake {
-		e.maintainerOwed = false
-	}
+	wake := c.owedWake(e)
 	e.mu.Unlock()
 	if wake {
 		c.kickMaintainer()
@@ -516,8 +513,10 @@ func (c *Cache) run(e *entry, r *round) {
 //     callers are queued for that round. DAMAGED DERIVED FILES (the peel's
 //     cat-file reads the multi-pack-index) are repaired IN PLACE the same
 //     way, the next round dropping the files the damage named — unless THIS
-//     round had already dropped every one of them, in which case the damage
-//     survived its drop and is a pack's: asked as RebuildCorrupt, below.
+//     round had already dropped every one of them a drop can repair (their
+//     declarations drop on a report, OnReported), in which case the damage
+//     survived its drop, or no drop ends it, and is asked as RebuildCorrupt,
+//     below.
 //     Damage a sweep or a drop did not end — a shape refusal past the sweep
 //     of the very round that met it, derived damage past its drop, a pack
 //     or an object git could not read — is a REBUILD, asked for as Rebuild
@@ -546,8 +545,8 @@ func (c *Cache) damagedRound(e *entry, r *round, d *damaged) (*refused, []*waite
 	case len(asking) == 0:
 		return nil, nil
 	case d.reason == RebuildShape && !d.swept,
-		d.reason == RebuildDerived && d.drops&^d.dropped != 0:
-		markWhole(d.inc, Failure{Reason: d.reason, Drops: d.drops, Began: d.began}, dropRound)
+		d.reason == RebuildDerived && c.image.reported(d.drops)&c.image.dropping(EventReported)&^d.dropped != 0:
+		c.markWhole(d.inc, Failure{Reason: d.reason, Drops: d.drops, Began: d.began}, dropRound)
 		for _, w := range asking {
 			c.queue(e, w)
 		}
@@ -555,8 +554,11 @@ func (c *Cache) damagedRound(e *entry, r *round, d *damaged) (*refused, []*waite
 	}
 	reason := d.reason
 	if reason == RebuildDerived {
-		// Every file the damage names was dropped by the round that met it:
-		// what git could not read is no derived file of the copy's.
+		// Every file the damage names that a drop can repair (its
+		// declaration drops on a report) was dropped by the round that met
+		// it — or none can be, a declaration that keeps its files on a
+		// report being repaired by no drop: what git could not read is no
+		// derived file a drop of the copy's ends.
 		reason = RebuildCorrupt
 	}
 	next, rule := c.askRebuild(e, d.inc, reason, true, nil, c.now())
@@ -578,14 +580,16 @@ func (c *Cache) damagedRound(e *entry, r *round, d *damaged) (*refused, []*waite
 // incarnation, and no GET for a pack the incarnation holds: a directory the
 // pool refuses for its shape lost none of its packs, and a multi-pack-index
 // or a commit-graph is a derived file — RebuildDerived also has the round
-// drop the files f.Drops names (incarnation.drop), whatever reason the read
-// is counted under, each with f.Began, which the round's drop is guarded by
-// (dropDamaged), and by, what asked it.
-func markWhole(inc *incarnation, f Failure, by string) {
+// drop the files of the declarations f.Drops names that drop on a report
+// (incarnation.drop; OnReported — one that keeps its files is asked no drop
+// that would move nothing), whatever reason the read is counted under, each
+// with f.Began, which the round's drop is guarded by (dropDamaged), and by,
+// what asked it.
+func (c *Cache) markWhole(inc *incarnation, f Failure, by string) {
 	inc.converged = false
 	inc.marks++
 	if f.Reason == RebuildDerived {
-		inc.drop.add(f.Drops, f.Began, by)
+		inc.drop.addSet(c.image, c.image.reported(f.Drops)&c.image.dropping(EventReported), f.Began, by)
 	}
 	if inc.reread == "" {
 		inc.reread = f.Reason
@@ -603,13 +607,14 @@ type damaged struct {
 	// directory its image and held it to the pool's shape check — so a shape
 	// refusal there is one the sweep did not end.
 	swept bool
-	// drops is the derived files a RebuildDerived damage names
-	// (Failure.Drops), and dropped those the round that met it had itself
-	// dropped (applied.dropped): damage in files the round just dropped
-	// survived the drop. began is when the git that met it began.
-	drops, dropped gitproc.Part
-	began          time.Time
-	err            error
+	// drops is the parts a RebuildDerived damage names (Failure.Drops), and
+	// dropped the declarations the round that met it had itself dropped
+	// (applied.dropped): damage in files the round just dropped survived the
+	// drop. began is when the git that met it began.
+	drops   gitproc.Part
+	dropped derivedSet
+	began   time.Time
+	err     error
 }
 
 func (d *damaged) Error() string { return d.err.Error() }
@@ -807,7 +812,7 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 			e.mu.Unlock()
 		}
 		res, err = c.apply(ctx, e, inc, snap, epoch, marks)
-		*found = append(*found, res.checked.findings()...)
+		*found = append(*found, res.checked.findings(c.image)...)
 		did.add(res)
 		var missing *ErrPackMissing
 		switch {
@@ -884,10 +889,11 @@ type applied struct {
 	// (installs.restored) — of packsAdded, the ones that repair something.
 	reinstalled, restored int
 	trashed               bool
-	// dropped is the derived files the round dropped for a mark
-	// (incarnation.drop) or for its check, taken before anything else the
-	// round did.
-	dropped gitproc.Part
+	// dropped is the declarations whose files the round dropped for a mark
+	// (incarnation.drop) or for its check, or before it placed a pack over
+	// files whose index may have changed (install), taken before anything
+	// else the round did.
+	dropped derivedSet
 	// checked is what the round's check found (check.go); zero for a delta.
 	checked checked
 }
