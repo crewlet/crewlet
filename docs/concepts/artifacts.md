@@ -425,7 +425,9 @@ entries, and the hot history, measured within a few percent of the file. A
 twelve-column review sheet costs about 3.2 KiB a row with a week of history,
 so the default 32 MiB per store holds about ten thousand rows.
 
-**Exports.** An editor downloads any collection as CSV.
+**Exports.** An editor downloads any collection as CSV, written for a person
+to read: columns headed by their labels, choices by their labels and people by
+their names.
 
 ---
 

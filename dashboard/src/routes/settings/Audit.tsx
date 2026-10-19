@@ -424,8 +424,9 @@ function identitySubject(entry: IdentityAuditEntry): Pick<AuditEntry, "subject" 
  * WHAT AN ARTIFACT TRAIL ROW SAYS HAPPENED, in the sentence the artifact's own
  * history says it in (`historyWords`): an administrator's read of somebody's
  * private artifact says so in words, since that is the row this source exists
- * to surface; a write only the admin path admitted says it was an override;
- * and a refused record says why, in words rather than the log's reason code.
+ * to surface; a write only the admin path admitted says so once, in the
+ * sentence's own words; and a refused record says why, in words rather than
+ * the log's reason code.
  */
 export function artifactDetail(
   entry: ArtifactTrailEntry,
@@ -439,7 +440,7 @@ export function artifactDetail(
   const line =
     entry.outcome === "refused"
       ? `refused: ${entry.reason ? historyRefusalWords(entry.reason) : "no reason recorded"}`
-      : `${historyWords(entry, names)}${entry.elevated ? ", admitted only as an administrator" : ""}`;
+      : historyWords(entry, names);
   return line.charAt(0).toUpperCase() + line.slice(1);
 }
 

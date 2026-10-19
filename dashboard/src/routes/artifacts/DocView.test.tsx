@@ -196,20 +196,39 @@ test("draws the tab on show with its outline, and moves between tabs", async () 
   expect(location.hash).toContain("doctab=tabs%2Foncall.md");
 });
 
-test("says a tab with nothing written is empty, and opens the editor on it", async () => {
+test("says a tab with nothing written is empty, and opens the editor from its Edit", async () => {
   const kept = docs[2]!;
   docs[2] = { ...kept, tabs: [kept.tabs[0]!, { ...kept.tabs[1]!, text: "\n" }] };
   try {
     show();
     await screen.findByRole("article", { name: "On-call handbook, Start" });
     fireEvent.click(screen.getByRole("tab", { name: "On call" }));
-    expect(await screen.findByRole("heading", { name: "This tab is empty" })).toBeDefined();
+    const title = await screen.findByRole("heading", { name: "This tab is empty" });
+    const empty = title.closest(".crewlet-empty-state") as HTMLElement;
+    expect(within(empty).getByText("Write it, or ask an agent to.")).toBeDefined();
     expect(screen.queryByRole("article")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Start writing" }));
+    // The empty state takes the whole view, with no outline rail beside it.
+    expect(document.querySelector(".doc-read--blank")).not.toBeNull();
+    expect(document.querySelector(".doc-read-side")).toBeNull();
+    fireEvent.click(within(empty).getByRole("button", { name: "Edit" }));
     expect(await screen.findByRole("list", { name: "Tabs of On-call handbook" })).toBeDefined();
   } finally {
     docs[2] = kept;
   }
+});
+
+test("gives the outline a column only for a tab that has one", async () => {
+  show();
+  await screen.findByRole("article", { name: "On-call handbook, Start" });
+  // Start has a heading and a section under it: an outline of two entries.
+  expect(screen.getByRole("navigation", { name: "On this page" })).toBeDefined();
+  expect(document.querySelector(".doc-read-side")).not.toBeNull();
+  // On call has one heading: no outline, and no empty rail beside the text.
+  fireEvent.click(screen.getByRole("tab", { name: "On call" }));
+  await screen.findByRole("article", { name: "On-call handbook, On call" });
+  expect(screen.queryByRole("navigation", { name: "On this page" })).toBeNull();
+  expect(document.querySelector(".doc-read-side")).toBeNull();
+  expect(document.querySelector(".doc-read--bare")).not.toBeNull();
 });
 
 test("saves an edit as the one changed passage, against the version it started from", async () => {

@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Outline, scrollToHeading, useActiveHeading } from "@crewlethq/ui";
-import { outline } from "~/lib/markdown.ts";
+import { outline, type Heading } from "~/lib/markdown.ts";
 import { scrollerOf } from "~/lib/scroller.ts";
 
 /**
@@ -16,15 +16,24 @@ import { scrollerOf } from "~/lib/scroller.ts";
  */
 const READING_LINE = 0.2;
 
+/**
+ * The headings a body's outline lists, or none when it would list fewer than
+ * two: one entry is not a map of anything. A screen asks this before it gives
+ * the outline a column, so a body with no outline is not set beside an empty
+ * one.
+ */
+export function pageOutline(body: string): Heading[] {
+  const all = outline(body);
+  if (all.length === 0) return [];
+  // THE TWO TOP LEVELS THE DOCUMENT USES, its sections and their parts: a
+  // third would make the outline the document.
+  const top = Math.min(...all.map((h) => h.level));
+  const listed = all.filter((h) => h.level <= top + 1);
+  return listed.length < 2 ? [] : listed;
+}
+
 export function OnThisPage({ body }: { body: string }) {
-  const headings = useMemo(() => {
-    const all = outline(body);
-    if (all.length === 0) return [];
-    // THE TWO TOP LEVELS THE DOCUMENT USES, its sections and their parts: a
-    // third would make the outline the document.
-    const top = Math.min(...all.map((h) => h.level));
-    return all.filter((h) => h.level <= top + 1);
-  }, [body]);
+  const headings = useMemo(() => pageOutline(body), [body]);
   // THE SCROLLER IS THE ONE THAT MOVES THE HEADINGS, found from the first of
   // them once they are drawn: a Knowledge page scrolls the shell, a doc
   // scrolls its artifact's own body.
@@ -36,7 +45,7 @@ export function OnThisPage({ body }: { body: string }) {
     root,
     offset: Math.round((root?.clientHeight ?? 0) * READING_LINE),
   });
-  if (headings.length < 2) return null;
+  if (headings.length === 0) return null;
   return (
     <Outline
       label="On this page"
