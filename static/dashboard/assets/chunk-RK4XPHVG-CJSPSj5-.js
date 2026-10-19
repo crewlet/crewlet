@@ -1,0 +1,1 @@
+import{t as e}from"./react-CR5VJ85Q.js";import{Bs as t}from"./waiting-CYC00Ysl.js";var n=e(),r=({as:e=`span`,variant:r=`muted`,className:i,children:a,...o})=>{let s=t(`crewlet-eyebrow`,`crewlet-eyebrow--${r}`,i);return(0,n.jsx)(e,{...o,className:s,children:a})};export{r as t};
