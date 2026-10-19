@@ -223,35 +223,8 @@ func seedPageHistory(ctx context.Context, tx *sql.Tx, maxVariables int) error {
 func TestAListingIsReadInItsOrder(t *testing.T) {
 	t.Parallel()
 	db := pagePlanStore(t)
-	skills, ordinary := true, false
-	live := []Status{StatusPublished, StatusDraft}
 	cursor := listCursor{Container: "ENG", Title: "Page 5", ID: "p-0005"}
-	shapes := map[string]struct {
-		spec, child listSpec
-		pinned      bool
-	}{}
-	for name, f := range map[string]Filter{
-		"the workspace":                 {},
-		"the published pages":           {Status: []Status{StatusPublished}},
-		"one container":                 {Container: "ENG"},
-		"one container's live pages":    {Container: "ENG", Status: live},
-		"the top of a container's tree": {Container: "ENG", Roots: true, Status: live, Skills: &ordinary},
-		"a tree level under one page":   {ParentID: "p-0001", Status: live, Skills: &ordinary},
-		"the tool skills":               {Skills: &skills, Status: []Status{StatusPublished}},
-		"a title in one container":      {Container: "ENG", Title: "page"},
-	} {
-		spec, child := compileListing(f)
-		shapes[name] = struct {
-			spec, child listSpec
-			pinned      bool
-		}{spec, child, f.Container != ""}
-	}
-	spec, child := childListing("p-0001")
-	shapes["a page's own children"] = struct {
-		spec, child listSpec
-		pinned      bool
-	}{spec, child, false}
-
+	shapes := listingShapes()
 	for name, shape := range shapes {
 		t.Run(name, func(t *testing.T) {
 			reads := map[string]listSpec{"the first window": {}}
@@ -259,8 +232,7 @@ func TestAListingIsReadInItsOrder(t *testing.T) {
 				reads[fmt.Sprintf("arm %d of a later window", i)] = arm
 			}
 			for read, from := range reads {
-				statement, args := listRowsStatement(shape.spec, shape.child, from,
-					DefaultLimit+1)
+				statement, args := listRowsStatement(shape.spec, from, DefaultLimit+1)
 				plan := explainPlan(t, db, statement, args)
 				details := make([]string, len(plan))
 				for i, line := range plan {
@@ -300,4 +272,102 @@ func TestAListingIsReadInItsOrder(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A LISTING COUNTS ITS ROWS' CHILDREN BY SEEKING THEIR PARENTS.
+//
+// Each row of a listing says how many children it has under the listing's own
+// narrowing, which a tree draws its expander off. Written as a correlated
+// subquery in the listing's statement, the count was one the planner unnests by
+// cost into a grouped read of every page head in the company — measured, it
+// did on the workspace's listing, on every window of it. So the count is read
+// for the window's rows in a statement of its own ([childCountStatement]),
+// whose IN list of bound ids leaves nothing to unnest. Each shape a listing is
+// asked in is held to: no decorrelated subquery in its total, its window or its
+// child count ([storetest.Decorrelated]); no read of `pages_heads` from the
+// heap in any of them; and the child count one seek of
+// `pages_heads_parent_idx` by the parent.
+//
+// Mutation: put the correlated count back into the window's statement, and the
+// workspace's window is decorrelated; count the children by the child's own id
+// rather than its parent's, and the count seeks nothing.
+func TestAListingCountsChildrenBySeekingTheirParents(t *testing.T) {
+	t.Parallel()
+	db := pagePlanStore(t)
+	window := []string{"p-0001", "p-0002", "p-0003"}
+	for name, shape := range listingShapes() {
+		t.Run(name, func(t *testing.T) {
+			total, totalArgs := listTotalStatement(shape.spec)
+			rows, rowsArgs := listRowsStatement(shape.spec, listSpec{}, DefaultLimit+1)
+			children, childArgs := childCountStatement(window, shape.child)
+			for read, statement := range map[string]struct {
+				sql  string
+				args []any
+			}{
+				"the total":       {total, totalArgs},
+				"the window":      {rows, rowsArgs},
+				"the child count": {children, childArgs},
+			} {
+				plan := explainPlan(t, db, statement.sql, statement.args)
+				details := make([]string, len(plan))
+				for i, line := range plan {
+					details[i] = line.detail
+				}
+				shown := strings.Join(details, "\n")
+				if line, unnested := storetest.Decorrelated(details); unnested {
+					t.Errorf("%s answers a per-row aggregate by reading its whole "+
+						"child table (%q):\n%s", read, line, shown)
+				}
+				for _, line := range details {
+					if strings.HasPrefix(line, "SCAN pages_heads") &&
+						!strings.Contains(line, "INDEX") {
+						t.Errorf("%s reads every page from the heap:\n%s", read, shown)
+					}
+				}
+				if read != "the child count" {
+					continue
+				}
+				sought := slices.ContainsFunc(details, func(line string) bool {
+					return strings.HasPrefix(line, "SEARCH c USING ") &&
+						strings.Contains(line, "INDEX pages_heads_parent_idx (parent_id=?)")
+				})
+				if !sought {
+					t.Errorf("the child count is no seek of pages_heads_parent_idx by "+
+						"the parent, so it reads pages it does not count:\n%s", shown)
+				}
+			}
+		})
+	}
+}
+
+// listingShape is one listing as the surfaces ask for it: its predicate, the
+// predicate its rows' children are counted under, and whether it is pinned to
+// one container ([listResumes]).
+type listingShape struct {
+	spec, child listSpec
+	pinned      bool
+}
+
+// listingShapes is every shape of listing the plan tests hold, by name: the
+// workspace, a container, a tree level, a narrowing by status, by skill and by
+// title, and a page's own children.
+func listingShapes() map[string]listingShape {
+	skills, ordinary := true, false
+	live := []Status{StatusPublished, StatusDraft}
+	shapes := map[string]listingShape{}
+	for name, f := range map[string]Filter{
+		"the workspace":                 {},
+		"the published pages":           {Status: []Status{StatusPublished}},
+		"one container":                 {Container: "ENG"},
+		"one container's live pages":    {Container: "ENG", Status: live},
+		"the top of a container's tree": {Container: "ENG", Roots: true, Status: live, Skills: &ordinary},
+		"a tree level under one page":   {ParentID: "p-0001", Status: live, Skills: &ordinary},
+		"the tool skills":               {Skills: &skills, Status: []Status{StatusPublished}},
+		"a title in one container":      {Container: "ENG", Title: "page"},
+	} {
+		spec, child := compileListing(f)
+		shapes[name] = listingShape{spec, child, f.Container != ""}
+	}
+	shapes["a page's own children"] = listingShape{spec: childListing("p-0001")}
+	return shapes
 }
