@@ -26,7 +26,9 @@ import { DesignCover } from "./DesignCover.tsx";
 
 /**
  * The native cover each kind draws on its gallery card (D64), from the kind's
- * own structure and never a screenshot; a kind with none shows its glyph.
+ * own structure and never a screenshot; a kind with none shows its glyph, and
+ * so does a cover with nothing to draw (its outline still loading, a sheet
+ * with no columns), which the card cannot tell from a picture.
  */
 const KIND_COVERS: Partial<Record<ArtifactKind, (item: ArtifactListItem) => ReactNode>> = {
   doc: (item) => <DocCover item={item} />,

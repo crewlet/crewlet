@@ -7,7 +7,7 @@
  */
 
 import { useId } from "react";
-import { SlideStage } from "@crewlethq/ui";
+import { ArtifactPreviewGlyph, SlideStage } from "@crewlethq/ui";
 import type { ArtifactListItem, ArtifactOutline } from "~/protocol/index.ts";
 import { useRest } from "~/lib/useRest.ts";
 import { readOutline } from "~/lib/artifacts/api.ts";
@@ -26,7 +26,7 @@ export function SlidesCover({
   );
   const prefix = useId().replace(/:/g, "");
   const slides = outline.data?.slides;
-  if (!slides) return null;
+  if (!slides) return <ArtifactPreviewGlyph kind="slides" />;
   return (
     <span className="slides-cover">
       <SlideStage label={`${item.title}, cover`}>

@@ -6,7 +6,7 @@
  * their words: the whole card is one link, which may hold no second one.
  */
 
-import { DocCover as Cover } from "@crewlethq/ui";
+import { ArtifactPreviewGlyph, DocCover as Cover } from "@crewlethq/ui";
 import type { ArtifactListItem, ArtifactOutline } from "~/protocol/index.ts";
 import { useRest } from "~/lib/useRest.ts";
 import { readOutline } from "~/lib/artifacts/api.ts";
@@ -20,6 +20,6 @@ export function DocCover({ item }: { item: Pick<ArtifactListItem, "id" | "head_n
     (signal) => readOutline(item.id, item.head_number, signal),
   );
   const cover = outline.data?.doc?.cover;
-  if (!cover?.markdown) return null;
+  if (!cover?.markdown) return <ArtifactPreviewGlyph kind="doc" />;
   return <Cover>{renderMarkdown(cover.markdown, { image: noImages, links: "text" })}</Cover>;
 }

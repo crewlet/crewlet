@@ -6,7 +6,7 @@
  * sources at once.
  */
 
-import { DashboardCover, type DashboardCoverWidget } from "@crewlethq/ui";
+import { ArtifactPreviewGlyph, DashboardCover, type DashboardCoverWidget } from "@crewlethq/ui";
 import type { ArtifactListItem, ArtifactOutline, DashboardWidgetType } from "~/protocol/index.ts";
 import { useRest } from "~/lib/useRest.ts";
 import { readOutline } from "~/lib/artifacts/api.ts";
@@ -35,7 +35,7 @@ export function DashboardCardCover({
     (signal) => readOutline(item.id, item.head_number, signal),
   );
   const board = outline.data?.dashboard;
-  if (!board) return null;
+  if (!board) return <ArtifactPreviewGlyph kind="dashboard" />;
   const layout = board.widgets.flatMap((w) => {
     const kind = SCHEMATIC[w.type];
     return kind ? [{ w: w.w, kind }] : [];
