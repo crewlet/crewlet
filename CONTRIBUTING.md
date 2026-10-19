@@ -1078,9 +1078,13 @@ it. It reads nothing of the environment you run it in, and holds that by running
 itself a second time, by a relative path under a `CDPATH` naming another
 `scripts/`, in a hostile environment: every knob the scripts read pointed
 elsewhere, a GnuPG home of yours, and a curl configuration (`.curlrc`) refusing
-the `file://` downloads every case makes. Nothing holds the workflow file
-itself: read its `permissions:`, the issue title it matches and the step that
-runs the key check on any diff that touches it.
+the `file://` downloads every case makes. The scripts themselves do read your
+curl configuration, so a proxy or a CA bundle there applies where they really
+download, and they send what it makes curl print (a `write-out`, say) to
+stderr: a case holds the check's report and the recipe's bin directory to
+being all either prints on stdout under such a file. Nothing holds the
+workflow file itself: read its `permissions:`, the issue title it matches and
+the step that runs the key check on any diff that touches it.
 
 ## Releasing
 

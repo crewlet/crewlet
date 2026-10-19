@@ -322,6 +322,30 @@ else
 	ok "git.sh downloads nothing where it cannot compute its own SHA-256"
 fi
 
+# --- a curl configuration changes nothing the recipe prints ------------------------------------------------------
+
+# The recipe's stdout is the bin directory and nothing else, because the one-package loop puts it first on PATH
+# (`bin=$(scripts/git.sh node) && PATH="$bin:$PATH" go test …`): a `write-out` in a person's curlrc once put a 000
+# there above the directory, on every build that downloaded, and the loop then ran on the machine's git. A build
+# under such a curlrc must print the directory alone, and what the curlrc wrote on stderr (the control: the
+# configuration was read, and kept). Mutation: let the recipe's download write curl's stdout to its own -> red.
+s="$(scripts curlrc-recipe)"
+sha="$(standin "$TMPROOT/curlrc-recipe/downloads" 2.56.0)"
+pin "$s" 2.56.0 "$sha" 2.55.0 "$zero" 2.40.4 "$zero"
+run env CURL_HOME="$(curlhome "$TMPROOT/curlrc-recipe/curl")" CREWLET_GIT_CACHE="$TMPROOT/curlrc-recipe/cache" \
+	GIT_PIN_DOWNLOADS="file://$TMPROOT/curlrc-recipe/downloads" "$s/git.sh" node
+why=()
+[ "$status" = 0 ] || why+=("exit $status, want 0")
+[ "$out" = "$TMPROOT/curlrc-recipe/cache/2.56.0-$recipe/bin" ] ||
+	why+=("its stdout is not $TMPROOT/curlrc-recipe/cache/2.56.0-$recipe/bin alone")
+grep -qx 000 <<<"$err" || why+=("stderr lacks the curlrc's write-out, 000: the configuration was not read")
+if [ ${#why[@]} -eq 0 ]; then
+	ok "a curlrc that writes to curl's stdout changes nothing the recipe prints"
+else
+	bad "a curlrc that writes to curl's stdout changes nothing the recipe prints" "${why[@]}" \
+		"stdout:" "$out" "stderr:" "$err"
+fi
+
 # --- two builders at once publish one build, and neither deletes the other's git -----------------------------
 
 # Two `git.sh node` runs over one cache, the shape of two worktrees' `make test` starting together: B finds no

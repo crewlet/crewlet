@@ -82,8 +82,8 @@
 #
 # ITS OWN SUITE is scripts/git-pin_test.sh (`make git-test`, in `make check` and ci.yml's `build + vet`), beside the
 # pin check's: the refusals above, an intact build handed back with nothing downloaded, a tarball that is not the
-# pin's, a hash that gives no SHA-256, two builders at once leaving one build, and what a prefix build carries — each
-# against a stand-in tarball, so no case builds git.
+# pin's, a hash that gives no SHA-256, a curl configuration that writes to stdout, two builders at once leaving one
+# build, and what a prefix build carries — each against a stand-in tarball, so no case builds git.
 set -eu
 
 usage() {
@@ -261,7 +261,13 @@ echo "git.sh: building git $version from $tarball into $install (a minute or two
 # bring and still moves. Unbounded, a kernel.org transfer that stopped moving held whatever ran it — a CI test job on a
 # cache miss, the release's image build — until that job's own limit, six hours for a GitHub job, while curl's own
 # connect timeout is five minutes an attempt. scripts/git-pin-check.sh downloads with the same bounds.
-if ! curl -fsSL --retry 3 --connect-timeout 30 --speed-limit 1 --speed-time 60 -o "$work/$tarball" "$downloads/$tarball"; then
+#
+# And curl's stdout goes to stderr, with its other diagnostics, because this script's stdout is the bin directory
+# and nothing else. curl is not passed -q, so a person's curlrc — their proxy, their CA bundle — applies to the
+# download; whatever that file makes curl write to stdout (a `write-out`, a trace to -) once landed above the
+# directory, and the one-package loop, `bin=$(scripts/git.sh node) && PATH="$bin:$PATH" …`, then put no directory
+# first on PATH and ran on the machine's git.
+if ! curl -fsSL --retry 3 --connect-timeout 30 --speed-limit 1 --speed-time 60 -o "$work/$tarball" "$downloads/$tarball" >&2; then
 	echo "git.sh: could not download $downloads/$tarball" >&2
 	exit 1
 fi
