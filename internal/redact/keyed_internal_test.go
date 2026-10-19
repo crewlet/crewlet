@@ -16,10 +16,12 @@ import (
 // follow one another — escaped line breaks among the separators, since the
 // password rule's runs across them — the scan's matches, its replacement, its
 // answer to "is there one" and where its first match begins are the pattern's
-// own — for both patterns the password rule is built from, and for a list
+// own — for the patterns the password rule is built from, and for a list
 // whose words open with runes that fold outside ASCII (k to the Kelvin sign, s
 // to ſ), so the scan is certified for whatever word [passwordKeys] gains rather
-// than for the three it holds today.
+// than for the three it holds today. For the two held to the text's end, the
+// scan tried near the end alone ([keyed.indexAtEnd]) begins where the
+// pattern's first match does too.
 //
 // The texts are built from the list itself, so a word added to it is in them.
 // Seeded, so a failure names a text that fails every time.
@@ -28,14 +30,17 @@ import (
 // Kelvin spellings are missed; leave the last word out of what [keyed.begins]
 // tries and every pwd is missed; resume after a match from its start rather
 // than its end and the scan's replacements overlap where the pattern's never
-// do.
+// do; measure the widest word in the bytes it is written with, not the most
+// any of its spellings takes, and a prompt spelt with ſ is missed at the end.
 func TestAKeyedScanFindsWhatItsPatternFinds(t *testing.T) {
 	t.Parallel()
 	for name, k := range map[string]*keyed{
 		"the password rule":           passwordRule,
-		"the pending password key":    pendingPassword,
+		"the pending password key":    pendingKey,
+		"a password's prompt":         passwordPrompt,
 		"words folding outside ASCII": keyedOn([]string{"key", "ſecret", "sk"}, `\s*=\S+`),
 	} {
+		atEnd := k == pendingKey || k == passwordPrompt
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			pieces := []string{
@@ -71,6 +76,10 @@ func TestAKeyedScanFindsWhatItsPatternFinds(t *testing.T) {
 				}
 				if got := k.index(text); got != wantIndex {
 					t.Fatalf("trial %d, %q: the scan's first match begins at %d, the pattern's at %d",
+						trial, text, got, wantIndex)
+				}
+				if got := k.indexAtEnd(text); atEnd && got != wantIndex {
+					t.Fatalf("trial %d, %q: the scan at the end finds a match at %d, the pattern at %d",
 						trial, text, got, wantIndex)
 				}
 				if got, want := r.apply(text), k.pattern.ReplaceAllLiteralString(text, r.with); got != want {
