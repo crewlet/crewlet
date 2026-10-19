@@ -22,7 +22,10 @@
 //     and of whatever ceiling the answer is held to;
 //   - a PRIOR-WORK LINE ([github.com/crewlet/crewlet/internal/agent/ledger])
 //     is re-read by the model every round and shown to a person on the seat
-//     screen as the conversation ledger, and is neither kind of document.
+//     screen as the conversation ledger, and is neither kind of document;
+//   - a CLI RUN'S TRANSCRIPT ([github.com/crewlet/crewlet/internal/providers/llm/cliagent])
+//     shows the model its own earlier calls, which it reads as written:
+//     shown a `<` it typed as an escape, it reads a call it never made.
 //
 // # The text ends where its value does
 //
