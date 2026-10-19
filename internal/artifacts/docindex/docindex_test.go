@@ -218,3 +218,20 @@ func TestTheOutlineIsSmall(t *testing.T) {
 		t.Errorf("a long first line is cut to %d bytes, splitting a rune or past the bound", len(cut))
 	}
 }
+
+// THE STARTER IS A DOC: one tab, held to the format, its title escaped so it
+// reads as the words somebody typed.
+func TestTheStarterIsADoc(t *testing.T) {
+	t.Parallel()
+	src := files{}
+	for p, b := range docindex.Starter("*Q3* plan #1") {
+		src[p] = string(b)
+	}
+	doc, err := docindex.Read(src, docindex.StarterEntry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(doc.Tabs[0].Text, `# \*Q3\* plan \#1`+"\n") {
+		t.Errorf("the starter opens %q", doc.Tabs[0].Text)
+	}
+}

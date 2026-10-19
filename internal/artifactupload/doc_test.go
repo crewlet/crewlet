@@ -103,3 +103,24 @@ func TestAPatchThatOrphansATabIsRefused(t *testing.T) {
 		t.Errorf("the edited tab reads %q", got)
 	}
 }
+
+// A DOC BEGUN FROM ITS STARTER is one titled tab the engine publishes itself,
+// so the dashboard's New › Doc sends no upload.
+func TestADocBeginsFromItsStarter(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{})
+	c := h.person("ada", h.opKey("start"))
+	got, _, err := h.svc.Create(t.Context(), c, artifactupload.CreateRequest{
+		Kind: artifacts.KindDoc, Title: "On-call handbook", Owner: "ada",
+		OwnerKind: c.Authority.Actor.Kind, Starter: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := h.version(got.Artifact, 1)
+	if v.Manifest.Entry != "index.md" || len(v.Manifest.Files) != 1 ||
+		!strings.HasPrefix(h.file(v, "index.md"), "# On\\-call handbook\n") {
+		t.Fatalf("the starter published %d files opening on %q: %q", len(v.Manifest.Files),
+			v.Manifest.Entry, h.file(v, "index.md"))
+	}
+}

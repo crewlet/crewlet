@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 )
 
@@ -17,11 +18,18 @@ import (
 // carries no upload, and a deployment whose object store presigns transfers
 // sends them to an origin the dashboard's own policy does not let it reach.
 func starter(kind artifacts.Kind, title string) ([]FileSpec, string, error) {
-	spec, _ := kind.Spec()
-	if spec.Format != artifacts.FormatSlides {
+	var (
+		files map[string][]byte
+		entry string
+	)
+	switch spec, _ := kind.Spec(); spec.Format {
+	case artifacts.FormatSlides:
+		files, entry = slideformat.Starter(title), slideformat.IndexPath
+	case artifacts.FormatDoc:
+		files, entry = docindex.Starter(title), docindex.StarterEntry
+	default:
 		return nil, "", fmt.Errorf("%w: a %s artifact has no starter to begin from", ErrInvalid, kind)
 	}
-	files := slideformat.Starter(title)
 	paths := make([]string, 0, len(files))
 	for p := range files {
 		paths = append(paths, p)
@@ -31,5 +39,5 @@ func starter(kind artifacts.Kind, title string) ([]FileSpec, string, error) {
 	for i, p := range paths {
 		out[i] = FileSpec{Path: p, Inline: files[p]}
 	}
-	return out, slideformat.IndexPath, nil
+	return out, entry, nil
 }
