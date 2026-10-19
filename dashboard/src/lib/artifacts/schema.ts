@@ -136,6 +136,39 @@ export function schemaProblem(collections: readonly DataCollection[]): string | 
   return null;
 }
 
+/**
+ * How many things a schema draft changes, as the editor's footer counts them:
+ * a collection added or removed, a collection's own policy, and each column
+ * added, removed or edited. A change none of those catch (an order, say) is
+ * still one change, so a draft that differs never counts as none.
+ */
+export function schemaChangeCount(
+  before: readonly DataCollection[],
+  after: readonly DataCollection[],
+): number {
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  const was = new Map(before.map((c) => [c.name, c]));
+  const now = new Map(after.map((c) => [c.name, c]));
+  let count = 0;
+  for (const name of new Set([...was.keys(), ...now.keys()])) {
+    const a = was.get(name);
+    const b = now.get(name);
+    if (!a || !b) {
+      count += 1;
+      continue;
+    }
+    const { columns: aColumns = [], ...aPolicy } = a;
+    const { columns: bColumns = [], ...bPolicy } = b;
+    if (!same(aPolicy, bPolicy)) count += 1;
+    const aByKey = new Map(aColumns.map((col) => [col.key, col]));
+    const bByKey = new Map(bColumns.map((col) => [col.key, col]));
+    for (const key of new Set([...aByKey.keys(), ...bByKey.keys()])) {
+      if (!same(aByKey.get(key), bByKey.get(key))) count += 1;
+    }
+  }
+  return count === 0 && !same(before, after) ? 1 : count;
+}
+
 /** A status option, with its category and the tone it is drawn in. */
 function status(label: string, category: string, color: string, taken: string[]): DataOption {
   const id = optionID(label, taken);

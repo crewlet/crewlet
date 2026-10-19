@@ -10766,6 +10766,22 @@ a.live-row:focus-visible {
 .artifact-schema > .artifact-form-actions {
   grid-column: 1 / -1;
 }
+/* THE FOOT STICKS TO THE VIEW. A sheet with choice columns runs the form to
+   many screens, and Save waited at the end of it; here it stays in reach,
+   with how many changes it will apply at the start of the band. */
+.artifact-schema-foot {
+  position: sticky;
+  bottom: 0;
+  z-index: var(--z-index-sticky);
+  padding-block: var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
+  background: var(--color-surface-background);
+}
+.artifact-schema-pending {
+  margin-inline-end: auto;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-compact);
+}
 @container page (width < 860px) {
   .artifact-schema {
     grid-template-columns: minmax(0, 1fr);
@@ -10777,6 +10793,9 @@ a.live-row:focus-visible {
   flex-direction: column;
   gap: var(--spacing-3);
   min-width: 0;
+}
+.artifact-schema-form {
+  container: artifact-schema-form / inline-size;
 }
 .artifact-columns {
   display: flex;
@@ -10792,13 +10811,23 @@ a.live-row:focus-visible {
   padding-block: var(--spacing-3);
   border-bottom: 1px solid var(--color-border-default);
 }
+/* EVERY COLUMN ROW ON THE SAME TRACKS: name, key, type, who writes it, the
+   two flags and the remove slot. On a wrapping row the type select moved with
+   the width of the key before it, so no two rows lined up. The tracks are
+   bounded rather than sized by content, so each row resolves them the same. */
 .artifact-column-head {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns:
+    minmax(7rem, 1fr) minmax(3rem, 6rem) 8rem minmax(9rem, 12rem)
+    auto auto var(--size-row-sm);
   align-items: center;
   gap: var(--spacing-2) var(--spacing-3);
 }
 .artifact-column-key {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--color-text-tertiary);
   font-size: var(--font-size-xs);
 }
@@ -10809,10 +10838,18 @@ a.live-row:focus-visible {
   padding-inline-start: var(--spacing-4);
 }
 .artifact-option {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(7rem, 14rem) auto auto auto;
+  justify-content: start;
   align-items: center;
-  gap: var(--spacing-2);
+  gap: var(--spacing-2) var(--spacing-3);
+}
+@container artifact-schema-form (width < 44rem) {
+  .artifact-column-head,
+  .artifact-option {
+    display: flex;
+    flex-wrap: wrap;
+  }
 }
 
 /* The History tab's comparison of two versions (uilet's VersionCompare, which

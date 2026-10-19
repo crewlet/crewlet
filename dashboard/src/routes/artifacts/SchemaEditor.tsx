@@ -16,7 +16,21 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { Button, Checkbox, FormField, IconButton, Input, Select, useToast } from "@crewlethq/ui";
+import {
+  Button,
+  Checkbox,
+  FormField,
+  HuePicker,
+  IconButton,
+  Input,
+  isNodeHue,
+  List,
+  ListItem,
+  Select,
+  StatusDot,
+  useToast,
+  type Tone,
+} from "@crewlethq/ui";
 import { PlusGlyph, TrashGlyph } from "@crewlethq/icons/glyphs";
 import { COLLECTION_PRESETS, COLUMN_TYPES, STATUS_CATEGORIES } from "~/contract/artifacts.ts";
 import type {
@@ -37,10 +51,12 @@ import {
   hasOptions,
   keyFromLabel,
   optionID,
+  schemaChangeCount,
   schemaProblem,
   withPreset,
 } from "~/lib/artifacts/schema.ts";
 import { ROLE_WORDS, roleIncludes } from "~/lib/artifacts/words.ts";
+import { plural } from "~/lib/format.ts";
 
 /** What each column type is called. */
 const TYPE_WORDS: Readonly<Record<ColumnType, string>> = {
@@ -65,11 +81,19 @@ const CATEGORY_WORDS: Readonly<Record<(typeof STATUS_CATEGORIES)[number], string
   blocked: "Blocked",
 };
 
-/** The colours a choice may wear: the node hues, or none. */
-const CHOICE_COLORS = ["neutral", "purple", "cyan", "green", "amber", "rose", "blue"] as const;
+/** The colour a choice with no hue is stored as. */
+const NO_HUE = "neutral";
 
-/** The tones a status may wear: the state tones. */
-const STATUS_TONES = ["neutral", "info", "success", "warning", "danger"] as const;
+/** The tones a status may wear, and what each is called. */
+const STATUS_TONES: Readonly<
+  Record<Extract<Tone, "neutral" | "info" | "success" | "warning" | "danger">, string>
+> = {
+  neutral: "Neutral",
+  info: "Info",
+  success: "Success",
+  warning: "Warning",
+  danger: "Danger",
+};
 
 export function SchemaEditor({
   detail,
@@ -93,7 +117,8 @@ export function SchemaEditor({
     setFresh(new Set());
   }, [collections]);
   const canEdit = roleIncludes(role, "editor");
-  const changed = JSON.stringify(draft) !== JSON.stringify(collections);
+  const changes = schemaChangeCount(collections, draft);
+  const changed = changes > 0;
   const problem = schemaProblem(draft);
   const current = draft.find((c) => c.name === picked) ?? draft[0];
 
@@ -133,20 +158,18 @@ export function SchemaEditor({
   return (
     <div className="artifact-schema">
       <div className="artifact-schema-collections">
-        <ul className="artifact-list" role="list">
+        <List aria-label="Collections">
           {draft.map((c) => (
-            <li key={c.name}>
-              <Button
-                size="small"
-                variant={c.name === current?.name ? "secondary" : "ghost"}
-                aria-pressed={c.name === current?.name}
-                onClick={() => setPicked(c.name)}
-              >
-                {c.title || c.name}
-              </Button>
-            </li>
+            <ListItem
+              key={c.name}
+              selected={c.name === current?.name}
+              onClick={() => setPicked(c.name)}
+              trailing={plural(c.columns?.length ?? 0, "column")}
+            >
+              {c.title || c.name}
+            </ListItem>
           ))}
-        </ul>
+        </List>
         {canEdit && (
           <FormField label="New collection" error={nameProblem ?? undefined}>
             {(field) => (
@@ -192,7 +215,15 @@ export function SchemaEditor({
           }
         />
       )}
-      <div className="artifact-form-actions">
+      {/* THE ACTIONS STAY IN REACH. The form runs to many screens on a sheet
+          with choice columns, so Save and how much it will apply stick to the
+          foot of the view rather than waiting at the end of it. */}
+      <div className="artifact-form-actions artifact-schema-foot">
+        {changed && (
+          <span className="artifact-schema-pending" role="status">
+            {`${plural(changes, "unsaved change")}`}
+          </span>
+        )}
         {problem && <p className="artifact-refusal">{problem}</p>}
         {gesture.answer && gesture.answer.kind !== "done" && (
           <p className="artifact-refusal">{gesture.answer.text}</p>
@@ -330,7 +361,7 @@ function CollectionForm({
                 inputSize="sm"
                 width="sm"
                 value={label}
-                placeholder="Owner"
+                placeholder="Column name"
                 onChange={(e) => setLabel(e.target.value)}
               />
               <Button
@@ -402,15 +433,17 @@ function ColumnRow({
       <div className="artifact-column-head">
         <Input
           inputSize="sm"
-          width="sm"
+          width="full"
           aria-label={`Name of column ${column.key}`}
           value={column.label ?? ""}
           disabled={!canEdit}
           onChange={(e) => onChange((c) => ({ ...c, label: e.target.value }))}
         />
-        <span className="mono artifact-column-key">{column.key}</span>
+        <span className="mono artifact-column-key" title={column.key}>
+          {column.key}
+        </span>
         <Select
-          width="auto"
+          width="full"
           size="sm"
           value={column.type}
           disabled={!canEdit}
@@ -419,7 +452,7 @@ function ColumnRow({
           ariaLabel={`Type of ${column.label || column.key}`}
         />
         <Select
-          width="auto"
+          width="full"
           size="sm"
           value={column.write ?? ""}
           disabled={!canEdit}
@@ -439,18 +472,20 @@ function ColumnRow({
           ariaLabel={`Who writes ${column.label || column.key}`}
         />
         <Checkbox
+          size="sm"
           label="Required"
           checked={column.required === true}
           disabled={!canEdit}
           onChange={(e) => onChange((c) => ({ ...c, required: e.target.checked || undefined }))}
         />
         <Checkbox
+          size="sm"
           label="Hidden"
           checked={column.hidden === true}
           disabled={!canEdit}
           onChange={(e) => onChange((c) => ({ ...c, hidden: e.target.checked || undefined }))}
         />
-        {removable && (
+        {removable ? (
           <IconButton
             size="sm"
             variant="ghost"
@@ -458,6 +493,8 @@ function ColumnRow({
             icon={<TrashGlyph size="sm" />}
             onClick={onRemove}
           />
+        ) : (
+          <span aria-hidden="true" />
         )}
       </div>
       {hasOptions(column.type) && (
@@ -473,18 +510,32 @@ function ColumnRow({
                   disabled={!canEdit || o.archived === true}
                   onChange={(e) => setOption(o.id, (x) => ({ ...x, label: e.target.value }))}
                 />
-                <Select
-                  width="auto"
-                  size="sm"
-                  value={o.color ?? "neutral"}
-                  disabled={!canEdit}
-                  onChange={(value) => setOption(o.id, (x) => ({ ...x, color: String(value) }))}
-                  options={(column.type === "status" ? STATUS_TONES : CHOICE_COLORS).map((c) => ({
-                    value: c,
-                    label: c,
-                  }))}
-                  ariaLabel={`Colour of ${o.label}`}
-                />
+                {column.type === "status" ? (
+                  <Select
+                    width="auto"
+                    size="sm"
+                    value={o.color && o.color in STATUS_TONES ? o.color : NO_HUE}
+                    disabled={!canEdit}
+                    onChange={(value) => setOption(o.id, (x) => ({ ...x, color: String(value) }))}
+                    options={Object.entries(STATUS_TONES).map(([tone, words]) => ({
+                      value: tone,
+                      label: words,
+                      leading: <StatusDot tone={tone as Tone} />,
+                    }))}
+                    ariaLabel={`Tone of ${o.label}`}
+                  />
+                ) : (
+                  <HuePicker
+                    size="sm"
+                    label={`Colour of ${o.label}`}
+                    none="No colour"
+                    value={o.color && isNodeHue(o.color) ? o.color : "none"}
+                    disabled={!canEdit}
+                    onValueChange={(hue) =>
+                      setOption(o.id, (x) => ({ ...x, color: hue === "none" ? NO_HUE : hue }))
+                    }
+                  />
+                )}
                 {column.type === "status" && (
                   <Select
                     width="auto"
@@ -499,6 +550,7 @@ function ColumnRow({
                   />
                 )}
                 <Checkbox
+                  size="sm"
                   label="Archived"
                   checked={o.archived === true}
                   disabled={!canEdit}
