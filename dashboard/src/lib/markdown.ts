@@ -346,7 +346,7 @@ export interface RenderOptions {
   image?: (src: string) => string | null;
   /**
    * `anchor` (the default): a link is a link. `text`: a link is its label and
-   * an autolink its address, as plain text — for a run drawn INSIDE a control
+   * an autolink its address, as plain text: for a run drawn INSIDE a control
    * or a link, a listbox option, a picker's entry or a gallery card's cover,
    * whose children are presentational to assistive tech, so a link there is
    * unreachable as itself, and whose click a link would steal to navigate
