@@ -593,7 +593,9 @@ than by any line of the statement. So `storetest.Decorrelated` is the one check
 for it: the `scalar_subquery_<n>` operand the rewrite produces, never the
 `ephemeral_subquery_` index a FROM-clause subquery is joined through, held to
 the driver in both directions, so a driver bump that renames or stops the
-rewrite fails there before it blinds a gate.
+rewrite fails there before it blinds a gate. The tracker's and the knowledge
+base's index gates, search's vector and lexical gates and the chat prune's room
+read each refuse what `Decorrelated` flags.
 
 `Decorrelated` sits beside the one vocabulary the tracker's and the knowledge
 base's plan tests read a plan through: `PlanTree`, `Plan` and `Details`;
