@@ -935,3 +935,71 @@ func TestASyncsRepairAsksNoRebuildOfACheck(t *testing.T) {
 		t.Error("the copy's commit-graph is gone: the check rebuilt or dropped what was sound")
 	}
 }
+
+// A CHECK THAT LEAVES IS HANDED NOTHING: a round answers each checking caller
+// with what its own check repaired (round.found) only while that caller still
+// waits. One whose context ended has stopped reading, so a write to it races
+// whatever it read on the way out — the race detector's verdict on this case.
+//
+// Mutation: hand a checking caller round.found whether or not it has gone,
+// and the run reports a data race between the round's write and the leaving
+// check's read.
+func TestACheckThatLeavesIsHandedNothing(t *testing.T) {
+	t.Parallel()
+	var (
+		armed   atomic.Bool
+		reached = make(chan struct{})
+		release = make(chan struct{})
+	)
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t, func(o *cache.Options) {
+		cache.BeforeRoundEnds(o, func(string) {
+			if armed.CompareAndSwap(true, false) {
+				close(reached)
+				<-release
+			}
+		})
+	})
+	w.sync(t, c, repo).Release()
+
+	v, err := c.AdmitVerify(repo)
+	if err != nil {
+		t.Fatalf("AdmitVerify: %v", err)
+	}
+	defer v.Release()
+	armed.Store(true)
+	ctx, cancel := context.WithCancel(t.Context())
+	ran := make(chan error, 1)
+	go func() {
+		_, err := v.Run(ctx, cache.VerifyRun{})
+		ran <- err
+	}()
+	select {
+	case <-reached:
+	case <-time.After(hangDetector):
+		t.Fatal("the check's round never reached its end")
+	}
+	cancel()
+	// Released once the check has LEFT its round — and before the test
+	// hears from it, since what it says on its way out would order its read
+	// before the round's write and hide the race this case is for.
+	for deadline := time.Now().Add(hangDetector); cache.Waiting(c, repo) != 0; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the check did not leave its round when its context ended")
+		}
+	}
+	close(release)
+	// A sync queued behind the held round runs only once that round has
+	// answered every caller it had, the one that left included.
+	w.sync(t, c, repo).Release()
+	select {
+	case err := <-ran:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("the check whose context ended = %v, want context.Canceled", err)
+		}
+	case <-time.After(hangDetector):
+		t.Fatal("the check did not return when its context ended")
+	}
+}

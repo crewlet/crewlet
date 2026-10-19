@@ -97,7 +97,8 @@ type waiter struct {
 	// round it joined: a failed rebuild queues it again.
 	done chan struct{}
 	// gone: the caller's own context ended before a round answered it, so
-	// no round pins anything for it.
+	// no round pins anything for it or writes anything to it — it read what
+	// it had as it left.
 	gone bool
 }
 
@@ -151,7 +152,8 @@ func (c *Cache) sync(ctx context.Context, repoID string, fresh statelog.Freshnes
 		e.mu.Unlock()
 		s, err := c.await(ctx, e, w)
 		// Written before the answer's close, which await waited for, or
-		// never: a caller that left is answered no damage.
+		// never: a caller that left is handed nothing (Cache.run,
+		// damagedRound), since it reads these as it leaves.
 		return s, w.damage, w.found, err
 	}
 }
@@ -454,7 +456,10 @@ func (c *Cache) run(e *entry, r *round) {
 			escalating = append(escalating, w)
 			continue
 		}
-		if w.checks {
+		if w.checks && !w.gone {
+			// HANDED ONLY TO A CHECK STILL WAITING, as answer pins nothing
+			// for one that left: that caller read what it had as it left,
+			// outside e.mu, so a write now races it.
 			w.found = r.found
 		}
 		c.answer(e, w, inc, kind, err)
