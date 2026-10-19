@@ -42,8 +42,9 @@ type verbScan struct {
 	// non-test files select it.
 	namedIn map[string]map[string]bool
 	// conversions is, per directory, every `authz.Action(…)` conversion its
-	// non-test files make, as file:line — a verb spelled as a string rather
-	// than named by its constant, which no walk over the constants sees.
+	// non-test files make, as a module-relative file:line — a verb spelled as
+	// a string rather than named by its constant, which no walk over the
+	// constants sees.
 	conversions map[string][]string
 	// files is how many non-test Go files the walk read.
 	files int
@@ -148,7 +149,8 @@ func (s *verbScan) read(path, dir string, body []byte) error {
 			if sel, ok := n.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Action" {
 				if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == name {
 					s.conversions[dir] = append(s.conversions[dir],
-						fmt.Sprintf("%s:%d", path, fset.Position(n.Pos()).Line))
+						fmt.Sprintf("%s/%s:%d", dir, filepath.Base(path),
+							fset.Position(n.Pos()).Line))
 				}
 			}
 		}
