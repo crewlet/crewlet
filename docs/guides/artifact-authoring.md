@@ -259,7 +259,8 @@ of each tab in order, with the tabs and any images beside it.
   markup. Images are files of the version, named by their path.
 - **Publish it** with `crewlet artifacts publish <dir>` (a `doc.json` or a
   lone `.md` file makes it a `doc`), from the dashboard with New › Doc (one tab
-  you then edit in place, each save a version), or from an agent with
+  you then edit in place, adding, renaming, reordering and removing tabs, each
+  save a version), or from an agent with
   `create_artifact`,
   `kind: "doc"` and either `content` (one tab) or `files` with
   `entry: "doc.json"`. Revise a tab with `edits` on its file against your base

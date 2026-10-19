@@ -10578,6 +10578,11 @@ a.live-row:focus-visible {
   flex-direction: column;
   gap: var(--spacing-4);
 }
+.doc-conflicts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
 .doc-editor-foot {
   display: flex;
   flex-wrap: wrap;

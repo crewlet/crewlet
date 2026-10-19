@@ -69,6 +69,12 @@ export const ARTIFACT_ICON_MAX_BYTES = 40;
 /** The longest version label, in UTF-8 bytes (`artifacts.MaxLabelBytes`). */
 export const ARTIFACT_LABEL_MAX_BYTES = 60;
 
+/** The most tabs one doc holds (`docindex.MaxTabs`). */
+export const DOC_MAX_TABS = 32;
+
+/** The longest tab title, in UTF-8 bytes (`docindex.MaxTitleBytes`). */
+export const DOC_TAB_TITLE_MAX_BYTES = 120;
+
 /** Every column type a datastore validates (`artifacts.ColumnTypes`). */
 export const COLUMN_TYPES = [
   "text",

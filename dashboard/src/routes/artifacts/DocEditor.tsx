@@ -1,29 +1,33 @@
 /**
- * Editing one tab of a doc, as the signed-in person: Save publishes the change
- * as a new version based on the version the edit started from (D54).
+ * Editing a doc, as the signed-in person: its tabs' text, titles and order,
+ * tabs added and removed, all one draft that Save publishes as one new version
+ * based on the version the edit started from (D54, D55, D69).
  *
- * # Against the version the person opened
+ * # What a save sends
  *
- * The save names its base (`If-Match`), and the engine refuses one that raced
- * somebody else's publish (`version_moved`) rather than letting it replace
- * their change. The change goes as the one exact edit of the tab's file
- * ([editOf]), so a save sends the passage a person changed.
+ * The least that says the change (`lib/artifacts/docDraft.ts`): an exact edit
+ * of each changed tab and of the index, a removal for each tab dropped, and the
+ * bytes of each tab added, uploaded first and streamed through the engine. A
+ * new tab never lands on a file the version already holds.
  *
  * # What to do about somebody else's publish
  *
- * The same answer the Knowledge editor gives (`lib/merge.ts`): their version
- * of the tab is merged into the draft by line against the text this edit
- * started from, and only then does the base move to their version. A merge
- * with no overlap becomes the draft at once, to be saved again; where both
- * changed the same lines, each clash is shown for the person to settle with
- * `MergeConflicts`. Nothing is saved until they press Save.
+ * A save refused because somebody published since (`version_moved`) is merged
+ * onto their version tab by tab: text by line, as the Knowledge editor does,
+ * titles and order as values. A merge with no overlap becomes the draft at
+ * once, to be saved again; where both changed the same lines the person
+ * settles each clash in `MergeConflicts`, and where both changed a title, the
+ * order, or one removed a tab the other changed, they keep theirs or take the
+ * newer one. Nothing is saved until they press Save.
  */
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import {
   Button,
   Callout,
   ConfirmModal,
+  ConflictNote,
+  DocTabsEditor,
   Document,
   FormField,
   Input,
@@ -32,20 +36,42 @@ import {
   markdownWords,
   useToast,
 } from "@crewlethq/ui";
-import type { ArtifactDetail, DocTab } from "~/protocol/index.ts";
+import type { ArtifactDetail, ArtifactDoc } from "~/protocol/index.ts";
+import { newActOpID } from "~/protocol/index.ts";
+import { ARTIFACT_LABEL_MAX_BYTES } from "~/contract/artifacts.ts";
 import { plural, textBudget } from "~/lib/format.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
-import { clashesOf, merge3, mergedText, type Merge } from "~/lib/merge.ts";
-import { publishVersion, readDoc } from "~/lib/artifacts/api.ts";
-import { editOf } from "~/lib/artifacts/doc.ts";
-import { ARTIFACT_LABEL_MAX_BYTES } from "~/contract/artifacts.ts";
+import { clashesOf } from "~/lib/merge.ts";
+import { useQuery } from "~/lib/useQuery.ts";
+import { publishVersion, readDoc, uploadTexts, versionText } from "~/lib/artifacts/api.ts";
+import {
+  DOC_INDEX,
+  addTab,
+  addTabProblem,
+  docChanged,
+  docChangesOf,
+  docDraftOf,
+  docPublishPlan,
+  mergeDoc,
+  removeTab,
+  renameTab,
+  reorderTabs,
+  resolveDoc,
+  setTabText,
+  tabTitleProblem,
+  withFreePaths,
+  type DocConflict,
+  type DocDraft,
+  type DocMerge,
+} from "~/lib/artifacts/docDraft.ts";
 
 export function DocEditor({
   detail,
   version,
-  tab,
-  titled,
+  doc,
+  selected,
+  onSelect,
   image,
   onDraft,
   onDone,
@@ -53,11 +79,12 @@ export function DocEditor({
 }: {
   detail: ArtifactDetail;
   version: number;
-  tab: DocTab;
-  /** Whether the doc has several tabs, so the editor names the one it edits. */
-  titled: boolean;
-  /** How the preview shows the tab's pictures. */
-  image: (src: string) => string | null;
+  doc: ArtifactDoc;
+  /** The tab whose text is open, as the address names it ("" for the first). */
+  selected: string;
+  onSelect: (path: string) => void;
+  /** How the preview shows the pictures of the tab at path. */
+  image: (path: string) => (src: string) => string | null;
   /** Whether a change is drafted, for the room. */
   onDraft: (drafting: boolean) => void;
   onDone: () => void;
@@ -65,178 +92,260 @@ export function DocEditor({
 }) {
   const toast = useToast();
   const save = useKeyedGesture();
-  // WHAT THIS EDIT IS AGAINST, its version and that version's text of the tab.
-  const [base, setBase] = useState({ version, text: tab.text });
-  const [draft, setDraft] = useState(tab.text);
+  const base = useMemo(() => docDraftOf(doc, version), [doc, version]);
+  const [draft, setDraft] = useState<DocDraft>(base);
+  const [merge, setMerge] = useState<DocMerge | null>(null);
   const [label, setLabel] = useState("");
-  const [merging, setMerging] = useState<{ version: number; text: string; merge: Merge } | null>(
-    null,
-  );
-  const [merged, setMerged] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
   const [discard, setDiscard] = useState(false);
   const labelID = useId();
-  const name = titled ? `“${tab.title}”` : `“${detail.title}”`;
+  // WHAT THE SAVE IS AGAINST: the version opened, or the newer one a refused
+  // save was merged onto.
+  const against = merge?.live ?? base;
+  // EVERY FILE OF THAT VERSION, so a new tab never lands on one of them.
+  const files = useQuery("artifact_version", { id: detail.id, n: against.base });
+  const taken = useMemo(() => (files.data?.manifest.files ?? []).map((f) => f.path), [files.data]);
 
-  const dirty = draft !== base.text;
+  const changes = docChangesOf(against, draft);
+  const dirty = docChanged(changes);
   useEffect(() => onDraft(dirty), [dirty, onDraft]);
 
+  const path = draft.tabs[selected] ? selected : draft.order[0]!;
+  const tab = draft.tabs[path]!;
+  const many = draft.order.length > 1;
+  const conflicts = merge?.conflicts ?? [];
+  const clash = conflicts.find((c) => c.kind === "text");
+  const titleProblem = draft.order
+    .map((p) => tabTitleProblem(draft.tabs[p]!.title))
+    .find((problem) => problem !== null);
   const labelBudget = textBudget(label, ARTIFACT_LABEL_MAX_BYTES, "a version's label");
-  const blocked = merging
-    ? "Settle where both edits changed the same lines first."
-    : !dirty
-      ? "Nothing has changed yet."
-      : base.text === ""
-        ? "This tab is empty, so it can only be republished with its files, not edited here."
-        : draft.trim() === ""
-          ? "A tab holds some text."
-          : labelBudget.over
-            ? labelBudget.line
-            : undefined;
+  const blocked =
+    conflicts.length > 0
+      ? "Settle where both edits differ first."
+      : !dirty
+        ? "Nothing has changed yet."
+        : titleProblem
+          ? titleProblem
+          : changes.added.length > 0 && files.data === null
+            ? files.error
+              ? "The doc's files could not be read, so a new tab's file cannot be placed. Try again."
+              : "Reading the doc's files."
+            : labelBudget.over
+              ? labelBudget.line
+              : undefined;
 
-  const press = async () => {
-    const edit = editOf(tab.path, base.text, draft);
-    if (!edit) return;
-    const answer = await save.run(
-      publishVersion(detail.id, base.version, {
-        mode: "patch",
-        edits: [edit],
-        files: [],
-        ...(label.trim() ? { label: label.trim() } : {}),
-      }),
-    );
-    if (answer?.kind === "done") {
-      const n = Number(answer.body.number ?? base.version + 1);
-      toast.ok(`Saved as version ${n}`);
-      onPublished(n);
-      return;
-    }
-    if (answer?.kind === "refused" && answer.error?.code === "version_moved") {
-      await bringIn(answer.error.body.live as { number?: unknown } | undefined, answer.text);
-      return;
-    }
-    if (answer)
-      toast.show({ variant: "danger", title: "Could not save the doc", message: answer.text });
+  const settle = (next: DocMerge) => {
+    setMerge(next);
+    setDraft(next.draft);
   };
 
-  // THE LIVE VERSION the refusal names, whose text of this tab is merged into
-  // the draft against the text this edit started from.
-  const bringIn = async (live: { number?: unknown } | undefined, said: string) => {
-    const head = Number(live?.number);
-    if (!Number.isInteger(head) || head < 1) {
-      toast.show({ variant: "danger", title: "Could not save the doc", message: said });
-      return;
-    }
-    let theirs: string | undefined;
+  const press = async () => {
+    setSaving(true);
     try {
-      const newer = await readDoc(detail.id, head, new AbortController().signal);
-      theirs = newer.doc.tabs.find((t) => t.path === tab.path)?.text;
+      const d = withFreePaths(against, draft, taken);
+      if (d !== draft) setDraft(d);
+      const c = docChangesOf(against, d);
+      const indexChanges = c.index || c.added.length > 0 || c.removed.length > 0;
+      const indexRaw =
+        against.indexed && indexChanges
+          ? await versionText(detail.id, against.base, DOC_INDEX)
+          : null;
+      const plan = docPublishPlan(against, d, indexRaw);
+      const brought =
+        plan.uploads.length > 0 ? await uploadTexts(detail.id, plan.uploads, newActOpID()) : null;
+      const answer = await save.run(
+        publishVersion(detail.id, against.base, {
+          mode: "patch",
+          edits: plan.edits,
+          files: [
+            ...(brought?.files ?? []),
+            ...plan.removes.map((p) => ({ path: p, remove: true as const })),
+          ],
+          ...(brought ? { upload: brought.upload } : {}),
+          ...(plan.entry ? { entry: plan.entry } : {}),
+          ...(label.trim() ? { label: label.trim() } : {}),
+        }),
+      );
+      if (answer?.kind === "done") {
+        const n = Number(answer.body.number ?? against.base + 1);
+        toast.ok(`Saved as version ${n}`);
+        onPublished(n);
+        return;
+      }
+      if (answer?.kind === "refused" && answer.error?.code === "version_moved") {
+        // THE LIVE VERSION the refusal names, which the draft is merged onto
+        // and the next save is based on.
+        const live = answer.error.body.live as { number?: unknown } | undefined;
+        const head = Number(live?.number);
+        if (!Number.isInteger(head) || head < 1) {
+          toast.show({ variant: "danger", title: "Could not save the doc", message: answer.text });
+          return;
+        }
+        const newer = await readDoc(detail.id, head, new AbortController().signal);
+        save.reset();
+        settle(mergeDoc(against, d, docDraftOf(newer.doc, head)));
+        return;
+      }
+      if (answer) {
+        toast.show({ variant: "danger", title: "Could not save the doc", message: answer.text });
+      }
     } catch (err) {
       toast.show({
         variant: "danger",
-        title: `Could not read version ${head}`,
+        title: "Could not save the doc",
         message: err instanceof Error ? err.message : "The engine did not answer.",
       });
-      return;
-    }
-    if (theirs === undefined) {
-      toast.show({
-        variant: "warning",
-        title: `Version ${head} removed this tab`,
-        message:
-          "Copy what you wrote before you leave, then add the tab back if it is still needed.",
-      });
-      return;
-    }
-    const merge = merge3(base.text, draft, theirs);
-    save.reset();
-    if (merge.conflicts === 0) {
-      setDraft(mergedText(merge));
-      setBase({ version: head, text: theirs });
-      setMerged(head);
-    } else {
-      setMerging({ version: head, text: theirs, merge });
+    } finally {
+      setSaving(false);
     }
   };
 
   const leave = () => (dirty ? setDiscard(true) : onDone());
 
   return (
-    <section
-      className="doc-editor"
-      aria-label={`Editing ${name}`}
+    <div
+      className="doc-read"
       onKeyDown={(event) => {
         if (event.key !== "Escape" || !(event.target instanceof HTMLTextAreaElement)) return;
         event.preventDefault();
         leave();
       }}
     >
-      {merging && (
-        <MergeConflicts
-          clashes={clashesOf(merging.merge)}
-          theirs={`version ${merging.version}`}
-          onCancel={() => setMerging(null)}
-          onApply={(choices) => {
-            setDraft(mergedText(merging.merge, choices));
-            setBase({ version: merging.version, text: merging.text });
-            setMerged(merging.version);
-            setMerging(null);
+      <div className="doc-read-side">
+        <DocTabsEditor
+          label={`Tabs of ${detail.title}`}
+          items={draft.order.map((p) => ({ key: p, title: draft.tabs[p]!.title }))}
+          selected={path}
+          onSelect={onSelect}
+          onRename={(p, title) => setDraft((d) => renameTab(d, p, title))}
+          onReorder={(order) => setDraft((d) => reorderTabs(d, order))}
+          onRemove={(p) => {
+            setDraft((d) => removeTab(d, p));
+            if (p === path) onSelect("");
           }}
+          onAdd={(title) => {
+            const added = addTab(draft, title, taken, path);
+            setDraft(added.draft);
+            onSelect(added.path);
+          }}
+          titleProblem={tabTitleProblem}
+          addBlocked={addTabProblem(draft) ?? undefined}
+          disabled={clash !== undefined || saving}
         />
-      )}
-      {merged !== null && !merging && (
-        <Callout variant="info" title={`Version ${merged} is merged into your draft.`}>
-          Somebody published while you were editing. Their change is kept beside yours. Save again
-          to publish both.
-        </Callout>
-      )}
-
-      <MarkdownEditor
-        value={draft}
-        onChange={setDraft}
-        label={`The text of ${name}, in Markdown`}
-        renderPreview={(value) => <Document>{renderMarkdown(value, { image })}</Document>}
-        disabled={merging !== null}
-        rows={22}
-        onSubmit={() => {
-          if (!save.busy && !blocked) void press();
-        }}
-        footer={<span>{plural(markdownWords(draft), "word")} · Markdown</span>}
-      />
-
-      <FormField
-        label="Label"
-        htmlFor={labelID}
-        helper={
-          labelBudget.over
-            ? undefined
-            : (labelBudget.line ?? "Names the version this save makes, which keeps it. Optional.")
-        }
-        error={labelBudget.over ? labelBudget.line : undefined}
-      >
-        <Input
-          id={labelID}
-          value={label}
-          error={labelBudget.over}
-          onChange={(event) => setLabel(event.target.value)}
-        />
-      </FormField>
-
-      <div className="doc-editor-foot">
-        <Button
-          variant="primary"
-          loading={save.busy}
-          disabledReason={blocked}
-          onClick={() => void press()}
-        >
-          Save
-        </Button>
-        <Button variant="ghost" onClick={leave} disabled={save.busy}>
-          Cancel
-        </Button>
-        <span className="doc-note">
-          Saved as you, as a new version based on version {base.version}.
-        </span>
       </div>
+      <section
+        className="doc-editor doc-read-page"
+        aria-label={many ? `Editing “${tab.title}”` : `Editing “${detail.title}”`}
+      >
+        {merge && conflicts.length === 0 && (
+          <Callout variant="info" title={`Version ${merge.live.base} is merged into your draft.`}>
+            Somebody published while you were editing
+            {merge.theirs.length > 0 ? ` (${merge.theirs.join(", ")})` : ""}. Their changes are kept
+            beside yours. Save again to publish both.
+          </Callout>
+        )}
+        {merge && clash?.kind === "text" && (
+          <MergeConflicts
+            key={clash.path}
+            clashes={clashesOf(clash.merge)}
+            theirs={`version ${merge.live.base}`}
+            labels={{
+              heading: (count, theirs) =>
+                count === 1
+                  ? `You and ${theirs} changed the same lines of “${clash.title}”`
+                  : `You and ${theirs} changed the same lines of “${clash.title}” in ${count} places`,
+            }}
+            onCancel={onDone}
+            onApply={(choices) => settle(resolveDoc(merge, clash, choices))}
+          />
+        )}
+        {merge && !clash && conflicts.length > 0 && (
+          <div className="doc-conflicts">
+            {conflicts.map((c) => (
+              <ConflictNote
+                key={conflictKey(c)}
+                subject={conflictSubject(c)}
+                message={conflictSentence(c, merge.live.base)}
+                actions={
+                  <>
+                    <Button
+                      size="small"
+                      variant="secondary"
+                      onClick={() => settle(resolveDoc(merge, c, "mine"))}
+                    >
+                      Keep mine
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="ghost"
+                      onClick={() => settle(resolveDoc(merge, c, "theirs"))}
+                    >
+                      Take theirs
+                    </Button>
+                  </>
+                }
+              />
+            ))}
+          </div>
+        )}
+
+        {!clash && (
+          <MarkdownEditor
+            key={path}
+            value={tab.text}
+            onChange={(text) => setDraft((d) => setTabText(d, path, text))}
+            label={
+              many
+                ? `The text of “${tab.title}”, in Markdown`
+                : `The text of “${detail.title}”, in Markdown`
+            }
+            renderPreview={(value) => (
+              <Document>{renderMarkdown(value, { image: image(path) })}</Document>
+            )}
+            disabled={saving}
+            rows={22}
+            onSubmit={() => {
+              if (!save.busy && !saving && !blocked) void press();
+            }}
+            footer={<span>{plural(markdownWords(tab.text), "word")} · Markdown</span>}
+          />
+        )}
+
+        <FormField
+          label="Label"
+          htmlFor={labelID}
+          helper={
+            labelBudget.over
+              ? undefined
+              : (labelBudget.line ?? "Names the version this save makes, which keeps it. Optional.")
+          }
+          error={labelBudget.over ? labelBudget.line : undefined}
+        >
+          <Input
+            id={labelID}
+            value={label}
+            error={labelBudget.over}
+            onChange={(event) => setLabel(event.target.value)}
+          />
+        </FormField>
+
+        <div className="doc-editor-foot">
+          <Button
+            variant="primary"
+            loading={save.busy || saving}
+            disabledReason={blocked}
+            onClick={() => void press()}
+          >
+            Save
+          </Button>
+          <Button variant="ghost" onClick={leave} disabled={save.busy || saving}>
+            Cancel
+          </Button>
+          <span className="doc-note">
+            Saved as you, as a new version based on version {against.base}.
+          </span>
+        </div>
+      </section>
 
       {discard && (
         <ConfirmModal
@@ -250,6 +359,35 @@ export function DocEditor({
           onConfirm={onDone}
         />
       )}
-    </section>
+    </div>
   );
+}
+
+function conflictKey(c: DocConflict): string {
+  return c.kind === "order" ? "order" : `${c.kind}:${c.path}`;
+}
+
+function conflictSubject(c: DocConflict): string {
+  switch (c.kind) {
+    case "order":
+      return "The order of the tabs";
+    case "title":
+      return `The title of “${c.title}”`;
+    case "tab":
+    case "text":
+      return `“${c.title}”`;
+  }
+}
+
+function conflictSentence(c: DocConflict, version: number): string {
+  switch (c.kind) {
+    case "order":
+      return `Version ${version} moved tabs too. Keep your order, or take theirs.`;
+    case "title":
+      return `Version ${version} renamed “${c.title}” too. Keep your title, or take theirs.`;
+    case "tab":
+      return `One of you removed “${c.title}” and the other changed it. Keep your side, or take version ${version}'s.`;
+    case "text":
+      return `Version ${version} changed the same lines of “${c.title}”.`;
+  }
 }

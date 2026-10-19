@@ -18,8 +18,10 @@
  * somebody moves this reader to the tab they are on: the tab is said to the
  * room as the region `tab:<path>`.
  *
- * A PERSON'S EDIT IS A VERSION (D54): Edit opens the tab's Markdown, and Save
- * publishes the change against the version it started from (`DocEditor`).
+ * A PERSON'S EDIT IS A VERSION (D54, D69): Edit opens the doc's tabs to rename,
+ * reorder, add and remove and each tab's Markdown, and Save publishes the
+ * whole change as one version against the version it started from
+ * (`DocEditor`).
  */
 
 import { useEffect, useId, useMemo, useState } from "react";
@@ -101,10 +103,13 @@ function Doc({
 
   // WHERE THIS READER IS, said to the room: the tab, and whether they are
   // drafting a change to it.
+  // While editing, the tab is the one the editor has open, which may be one
+  // it added and no version holds yet.
   const { at } = presence;
+  const where = editing && tabParam ? tabParam : tab.path;
   useEffect(() => {
-    if (primary) at({ region: tabRegion(tab.path) }, editing && drafting);
-  }, [at, primary, tab.path, editing, drafting]);
+    if (primary) at({ region: tabRegion(where) }, editing && drafting);
+  }, [at, primary, where, editing, drafting]);
 
   const choose = (path: string) => setTab(path === doc.tabs[0]?.path ? "" : path);
   const many = doc.tabs.length > 1;
@@ -141,39 +146,41 @@ function Doc({
           )}
         </span>
       </div>
-      <div className="doc-read">
-        <div className="doc-read-side">{!editing && <OnThisPage body={tab.text} />}</div>
-        <div className="doc-read-page">
-          {!editing &&
-            (many ? (
+      {editing ? (
+        <DocEditor
+          detail={detail}
+          version={version}
+          doc={doc}
+          selected={tabParam}
+          onSelect={choose}
+          image={(path) => tabImages({ path }, loaded)}
+          onDraft={setDrafting}
+          onDone={() => {
+            setEditing(false);
+            setDrafting(false);
+          }}
+          onPublished={(n) => {
+            setEditing(false);
+            setDrafting(false);
+            onPublished?.(n);
+          }}
+        />
+      ) : (
+        <div className="doc-read">
+          <div className="doc-read-side">
+            <OnThisPage body={tab.text} />
+          </div>
+          <div className="doc-read-page">
+            {many ? (
               <TabPanel id={panel} value={tab.path}>
                 {body}
               </TabPanel>
             ) : (
               body
-            ))}
-          {editing && (
-            <DocEditor
-              key={tab.path}
-              detail={detail}
-              version={version}
-              tab={tab}
-              titled={many}
-              image={tabImages(tab, loaded)}
-              onDraft={setDrafting}
-              onDone={() => {
-                setEditing(false);
-                setDrafting(false);
-              }}
-              onPublished={(n) => {
-                setEditing(false);
-                setDrafting(false);
-                onPublished?.(n);
-              }}
-            />
-          )}
+            )}
+          </div>
         </div>
-      </div>
+      )}
       {primary && <DocPrint doc={doc} loaded={loaded} />}
     </div>
   );

@@ -5317,6 +5317,24 @@ export interface ArtifactFrame {
   nonce: string;
 }
 
+/** How one declared file's bytes reach the store (`artifacts.Transfer`). */
+export interface ArtifactTransfer {
+  path: string;
+  method: string;
+  url: string;
+  headers?: Record<string, string>;
+  /** Straight to the bucket; false for a put through the engine, the dashboard's only kind. */
+  direct: boolean;
+}
+
+/** `POST /artifacts/{id}/uploads` (`artifacts.UploadIntent`). */
+export interface ArtifactUploadIntent {
+  upload: string;
+  expires_at: string;
+  carried?: string[];
+  transfers?: ArtifactTransfer[];
+}
+
 /** One tab of a doc, with its Markdown (`docindex.Tab`). */
 export interface DocTab {
   path: string;

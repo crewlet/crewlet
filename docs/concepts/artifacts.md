@@ -586,11 +586,15 @@ contract.
   cannot disagree.
 - **Searched by every tab**, each title and its text, not by the index.
 - **Edited in place, each save a version.** A person who may publish presses
-  Edit on a tab, and Save publishes the passage they changed as one exact
-  edit of the tab's file, based on the version they opened. A save that raced
-  somebody else's publish is merged onto theirs by line, as a Knowledge page's
-  is, and where both changed the same lines the person keeps theirs, their
-  own or both before saving again. Print prints every tab in order.
+  Edit to change any tab's text, rename, reorder, add and remove tabs, and
+  Save publishes all of it as one version based on the version they opened:
+  an exact edit of each changed tab and of `doc.json`, a removal for each tab
+  dropped, and each new tab's file uploaded through the engine (a doc of one
+  file gains its `doc.json` with its second tab). A save that raced somebody
+  else's publish is merged onto theirs tab by tab, text by line as a
+  Knowledge page's is, and where both changed the same lines, the same title
+  or the order, or one removed a tab the other changed, the person settles it
+  before saving again. Print prints every tab in order.
 - **Started from a template.** New › Doc begins a doc from the engine's
   starter, one tab under its title, held to the format like any version.
 - **Followed by tab**: a reader's tab is said to the room as the region

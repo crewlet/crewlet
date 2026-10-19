@@ -49,7 +49,7 @@ const STARTS = [
     title: "New doc",
     hint: "A document you write in Markdown, edit in place and print",
     placeholder: "On-call handbook",
-    starts: "It starts as one page under its title. An agent or the CLI can add tabs.",
+    starts: "It starts as one page under its title. Add, rename and reorder its tabs from Edit.",
     action: "Start the doc",
   },
   {
