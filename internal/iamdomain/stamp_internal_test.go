@@ -100,7 +100,7 @@ func TestEveryRecordTheWriterBuildsIsStampedAtTheBase(t *testing.T) {
 			writer *Writer
 		}{
 			{"the node's own writer", &Writer{Actor: "node-a",
-				ActorKind: iam.KindMachine, Now: now}},
+				ActorKind: NodeKind, Now: now}},
 			{"a party acting through a token", &Writer{Actor: "ana.admin",
 				ActorKind: iam.KindPerson, OperatorID: via, Now: now}},
 		} {

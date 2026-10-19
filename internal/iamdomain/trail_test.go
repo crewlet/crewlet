@@ -172,7 +172,7 @@ func TestAGestureAPersonMakesThroughTheNodeIsTheirsOnTheTrail(t *testing.T) {
 	reader := rig.reader(t)
 	id := uuid.Must(uuid.NewV7()).String()
 	enrolSarah(t, rig, id)
-	node := rig.writer.As(principalNamed("node-0", iam.KindMachine,
+	node := rig.writer.As(principalNamed("node-0", iamdomain.NodeKind,
 		[]iam.Grant{iam.GrantAdmin}))
 
 	sarah := principalNamed("sarah.chen", iam.KindPerson, nil)
@@ -214,7 +214,7 @@ func TestAGestureAPersonMakesThroughTheNodeIsTheirsOnTheTrail(t *testing.T) {
 	}
 	for lineage, want := range map[string]author{
 		theirs: {"sarah.chen", iam.KindPerson, iam.SessionName(theirs)},
-		nodes:  {"node-0", iam.KindMachine, "node-0"},
+		nodes:  {"node-0", iamdomain.NodeKind, "node-0"},
 	} {
 		if got[lineage] != want {
 			t.Errorf("the session %s opened on the trail as %+v, want %+v",
