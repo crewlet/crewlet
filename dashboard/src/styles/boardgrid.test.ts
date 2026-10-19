@@ -21,15 +21,15 @@ test("no board keeps a grid of its own", () => {
   expect(css).not.toMatch(/\.dashboard-board\s*\{[^}]*display:\s*grid/);
 });
 
-// A ROW OF STATS SHARES ONE BASELINE: each stat stands on the foot of its
-// frame, over the citation, whether its title took one line or two.
-test("a stat or a meter stands on the foot of its frame", () => {
-  const body =
-    /\n\.dashboard-figure:is\(\[data-figure="stat"\], \[data-figure="meter"\]\) \{([^}]*)\}/.exec(
-      css,
-    )?.[1] ?? "";
-  expect(body).toMatch(/justify-content:\s*flex-end;/);
-  expect(body).toMatch(/height:\s*100%;/);
+// A ROW OF STATS AND METERS SHARES ONE BASELINE: each figure stands at the
+// head of its body, under a title the frame holds at two lines in a row
+// (DashboardWidget passes holdTitle), so a meter's maximum and bar hang
+// under its number rather than lifting it a line above the stats beside it.
+// Every figure fills its body, so an empty chart is centred in it.
+test("a figure fills its body, and a stat or a meter stands at its head", () => {
+  const figure = /\n\.dashboard-figure \{([^}]*)\}/.exec(css)?.[1] ?? "";
+  expect(figure).toMatch(/height:\s*100%;/);
+  expect(css).not.toMatch(/\.dashboard-figure:is\(\[data-figure="stat"\]/);
 });
 
 // THE VIEW'S SECTIONS ARE SET ON THE BOARD'S OWN GAP: the filters, the board
