@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/crewlet/crewlet/internal/artifacts"
 )
 
 // ---- the files ------------------------------------------------------------ //
@@ -166,17 +168,7 @@ func (d Deck) Text() string {
 
 // Source is how a deck's files are read: the version's file list, and the
 // bytes of a file in it.
-type Source interface {
-	// Paths are every file of the version.
-	Paths() []string
-
-	// Essence is the media type essence of the file at path, false where
-	// the version holds none.
-	Essence(path string) (string, bool)
-
-	// Read is the bytes of the file at path.
-	Read(path string) ([]byte, error)
-}
+type Source = artifacts.FileSource
 
 // Refused is a deck outside the format: every finding, in file order, so an
 // author fixes them in one pass.

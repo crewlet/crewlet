@@ -18,6 +18,8 @@ import { queryErrorCode, type ArtifactKind, type ArtifactListItem } from "~/prot
 import { artifactPath } from "~/lib/artifacts/api.ts";
 import type { ArtifactPeople } from "~/lib/artifacts/people.ts";
 import { DashboardCardCover } from "./DashboardCardCover.tsx";
+import { DocCover } from "./DocCover.tsx";
+import { SheetCover } from "./SheetCover.tsx";
 import { SlidesCover } from "./SlidesCover.tsx";
 
 /**
@@ -30,8 +32,10 @@ import { SlidesCover } from "./SlidesCover.tsx";
  * own structure and never a screenshot; a kind with none shows its glyph.
  */
 const KIND_COVERS: Partial<Record<ArtifactKind, (item: ArtifactListItem) => ReactNode>> = {
+  doc: (item) => <DocCover item={item} />,
   slides: (item) => <SlidesCover item={item} />,
   dashboard: (item) => <DashboardCardCover item={item} />,
+  sheet: (item) => <SheetCover item={item} />,
 };
 
 export function ListedArtifactCard({

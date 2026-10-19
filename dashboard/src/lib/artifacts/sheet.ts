@@ -114,3 +114,26 @@ export function sheetRows(
     })
     .map((d) => ({ id: d.doc.id, values: d.fields }));
 }
+
+/** The longest name a download is given, in characters, before `.csv`. */
+const FILE_NAME_MAX = 120;
+
+/**
+ * The name a collection's CSV downloads as: the artifact's title and the
+ * collection's, as the reader knows them ("Q4 launch review - Launch
+ * gates.csv"), never the collection's key. Characters a file system refuses
+ * are dropped, runs of space collapse, and the name is cut to a length every
+ * system keeps.
+ */
+export function csvFileName(artifact: string, collection: string): string {
+  const clean = (text: string) =>
+    // eslint-disable-next-line no-control-regex
+    text
+      .replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  const parts = [clean(artifact), clean(collection)].filter(Boolean);
+  const unique = parts.length === 2 && parts[0] === parts[1] ? [parts[0]!] : parts;
+  const name = (unique.join(" - ") || "Export").slice(0, FILE_NAME_MAX).trim();
+  return `${name}.csv`;
+}

@@ -179,9 +179,6 @@ function ShareSurface({
         id,
         principal: audiencePrincipal(share.audience, people),
         role: share.role,
-        ...(share.members && share.members.length > 0
-          ? { note: `${plural(share.members.length, "seat")} in this team today` }
-          : {}),
         ...(state.pending ? { pending: true } : {}),
         ...(state.refusal ? { refusal: state.refusal } : {}),
       });

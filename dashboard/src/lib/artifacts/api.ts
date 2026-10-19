@@ -1,7 +1,7 @@
 /**
  * The artifacts' REST surface, as the requests a screen sends: every write
  * (`internal/api/artifactsapi`, `internal/api/artifactdataapi`), the frame a
- * page is embedded in, a document's source, and the ready report a frame
+ * page is embedded in, a native kind's content, and the ready report a frame
  * makes. The reads are the socket's questions (`artifacts`, `artifact`, …),
  * asked through `useQuery`; what is here is what no question answers.
  *
@@ -15,12 +15,13 @@ import { rest } from "~/protocol/index.ts";
 import type {
   ArtifactAudience,
   ArtifactDeckAnswer,
+  ArtifactDocAnswer,
   ArtifactFrame,
   ArtifactOutline,
-  ArtifactSource,
   DashboardBoardAnswer,
   DashboardCatalogueAnswer,
   DashboardDatasetAnswer,
+  ArtifactUploadIntent,
   DataCollection,
   DataOp,
   ShareableRole,
@@ -134,11 +135,12 @@ export function createSheet(fields: {
 }
 
 /**
- * Start a slide deck from the engine's starter (`POST /artifacts` with
- * `starter`): four example slides the person edits in place. The engine holds
- * the starter's files, so the dashboard sends no upload.
+ * Create a doc or a deck from the engine's starter (`POST /artifacts` with
+ * `starter`): the engine publishes its own first version, held to the kind's
+ * format, so the dashboard sends no upload.
  */
-export function createDeck(fields: {
+export function createFromStarter(fields: {
+  kind: "doc" | "slides";
   title: string;
   workItem?: string;
 }): Omit<KeyedRequest, "key"> {
@@ -146,7 +148,7 @@ export function createDeck(fields: {
     method: "POST",
     path: "/artifacts",
     body: {
-      kind: "slides",
+      kind: fields.kind,
       title: fields.title,
       starter: true,
       ...(fields.workItem ? { work_item: fields.workItem } : {}),
@@ -323,26 +325,92 @@ export async function readCatalogue(signal: AbortSignal): Promise<DashboardCatal
 
 /**
  * Publish a new version based on `head` (`POST …/versions` with `If-Match`):
- * a deck's save, a patch of whole-file edits and removes.
+ * a patch of exact edits, removals and the files an upload brought, and the
+ * entry where it moves (a doc gaining its index).
  */
 export function publishVersion(
   id: string,
   head: number,
-  body: { mode: "patch"; edits: unknown[]; files: unknown[]; label?: string },
+  body: {
+    mode: "patch";
+    edits: unknown[];
+    files: unknown[];
+    upload?: string;
+    entry?: string;
+    label?: string;
+  },
 ): Omit<KeyedRequest, "key"> {
   return { method: "POST", path: `${base(id)}/versions`, body, headers: ifMatch(head) };
 }
 
-/** A version's entry as text, for a doc the dashboard renders itself. */
-export async function readSource(
+/** A file a publish names: one an upload brought, one carried by digest, or one removed. */
+export type PublishFile =
+  { path: string; upload: true } | { path: string; carry: string } | { path: string; remove: true };
+
+/** The SHA-256 of text as UTF-8, lowercase hex: how the engine names a file's bytes. */
+export async function textDigest(text: string): Promise<string> {
+  const sum = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(sum)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Bring text files into an artifact's next version: an upload intent
+ * (`POST /artifacts/{id}/uploads`, keyed by `key`), then each file's bytes put
+ * through the engine, the only transfer the dashboard is handed (its own
+ * policy reaches no other origin). Answers the upload to publish with and the
+ * file each path is named by; a file the artifact already holds is carried by
+ * its digest and moves no byte.
+ */
+export async function uploadTexts(
+  id: string,
+  files: readonly { path: string; text: string }[],
+  key: string,
+): Promise<{ upload: string; files: PublishFile[] }> {
+  const digests = await Promise.all(files.map((f) => textDigest(f.text)));
+  const entries = files.map((f, i) => ({
+    path: f.path,
+    sha256: digests[i]!,
+    size: new TextEncoder().encode(f.text).length,
+  }));
+  const intent = (
+    await rest.request("POST", `/artifacts/${encodeURIComponent(id)}/uploads`, {
+      body: { entries },
+      headers: { "Idempotency-Key": key },
+    })
+  ).body as ArtifactUploadIntent;
+  const carried = new Set(intent.carried ?? []);
+  for (const t of intent.transfers ?? []) {
+    if (t.direct) throw new Error(`the engine asked for ${t.path} to go straight to the bucket`);
+    const f = files.find((x) => x.path === t.path);
+    if (!f) throw new Error(`the engine asked for ${t.path}, which this save does not bring`);
+    // THE PATH IS BUILT HERE, from the upload and the file, never followed
+    // from the answer: the transfer route is the engine's own, and a client
+    // that put bytes wherever an answer pointed would trust that answer with
+    // the reader's credential.
+    const segments = t.path.split("/").map(encodeURIComponent).join("/");
+    await rest.putText(
+      `/artifacts/uploads/${encodeURIComponent(intent.upload)}/files/${segments}`,
+      f.text,
+    );
+  }
+  return {
+    upload: intent.upload,
+    files: files.map((f, i) =>
+      carried.has(f.path) ? { path: f.path, carry: digests[i]! } : { path: f.path, upload: true },
+    ),
+  };
+}
+
+/** A doc's version tab by tab (`GET …/versions/{n}/doc`): what the dashboard draws it from. */
+export async function readDoc(
   id: string,
   version: number,
   signal: AbortSignal,
-): Promise<ArtifactSource> {
+): Promise<ArtifactDocAnswer> {
   return (await rest.get(
-    `/artifacts/${encodeURIComponent(id)}/versions/${version}/source`,
+    `/artifacts/${encodeURIComponent(id)}/versions/${version}/doc`,
     signal,
-  )) as ArtifactSource;
+  )) as ArtifactDocAnswer;
 }
 
 /**

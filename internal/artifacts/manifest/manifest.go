@@ -147,17 +147,13 @@ func checkEntry(kind artifacts.Kind, m artifacts.Manifest) error {
 	}
 	// AN OPTIONAL ENTRY admits any of the version's files: a sheet that does
 	// name one names a file shown beside the grid.
-	if len(spec.Entry.Essences) == 0 {
+	if len(spec.Entry.Essences) == 0 && len(spec.Entry.Indexes) == 0 {
 		return nil
 	}
 	typ, _ := mediatype.Resolve(e.Path, e.ContentType)
-	if !spec.Entry.Admits(typ.Essence()) {
-		return fmt.Errorf("%w: a %s artifact's entry is %s, and %q is %s", ErrInvalid, kind,
-			strings.Join(spec.Entry.Essences, " or "), e.Path, typ.Essence())
-	}
 	if !spec.Entry.AdmitsAt(e.Path, typ.Essence()) {
-		return fmt.Errorf("%w: a %s artifact's entry is %s, and the version names %q", ErrInvalid,
-			kind, strings.Join(spec.Entry.Defaults, " or "), e.Path)
+		return fmt.Errorf("%w: a %s artifact's entry is %s, and %q is %s", ErrInvalid, kind,
+			spec.Entry.Names(), e.Path, typ.Essence())
 	}
 	return nil
 }

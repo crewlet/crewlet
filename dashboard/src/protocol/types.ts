@@ -5326,15 +5326,43 @@ export interface ArtifactFrame {
   nonce: string;
 }
 
-/** `GET /artifacts/{id}/versions/{n}/source`: a version's entry as text (`artifactsapi.Source`). */
-export interface ArtifactSource {
-  artifact: string;
-  kind: ArtifactKind;
-  version: number;
+/** How one declared file's bytes reach the store (`artifacts.Transfer`). */
+export interface ArtifactTransfer {
   path: string;
-  content_type: string;
-  size: number;
+  method: string;
+  url: string;
+  headers?: Record<string, string>;
+  /** Straight to the bucket; false for a put through the engine, the dashboard's only kind. */
+  direct: boolean;
+}
+
+/** `POST /artifacts/{id}/uploads` (`artifacts.UploadIntent`). */
+export interface ArtifactUploadIntent {
+  upload: string;
+  expires_at: string;
+  carried?: string[];
+  transfers?: ArtifactTransfer[];
+}
+
+/** One tab of a doc, with its Markdown (`docindex.Tab`). */
+export interface DocTab {
+  path: string;
+  title: string;
   text: string;
+}
+
+/** A version's doc, tab by tab (`docindex.Doc`). */
+export interface ArtifactDoc {
+  /** Whether the version opens on a `doc.json` index rather than one Markdown file. */
+  indexed: boolean;
+  tabs: DocTab[];
+}
+
+/** `GET /artifacts/{id}/versions/{n}/doc` (`artifactsapi.DocAnswer`). */
+export interface ArtifactDocAnswer {
+  artifact: string;
+  version: number;
+  doc: ArtifactDoc;
 }
 
 /** One declaration of a slide's canonical style (`slideformat.Decl`). */
@@ -5413,6 +5441,11 @@ export interface ArtifactOutline {
     sections: DeckSection[] | null;
     slides: DeckOutlineSlide[] | null;
     cover_slide: DeckSlide;
+  };
+  /** A doc's tabs and the first tab's opening (`docindex.Outline`). */
+  doc?: {
+    tabs: { path: string; title: string; bytes: number }[];
+    cover: { tab: string; markdown: string };
   };
   /** A board's outline: its widgets and its first stats, never a value (D64). */
   dashboard?: DashboardOutline;

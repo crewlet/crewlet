@@ -19,15 +19,16 @@
  * cell being edited keeps the editor open and names who changed it.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Button,
   LinkInterstitial,
   Modal,
   Select,
   SheetGrid,
   Skeleton,
   externalUrl,
+  sheetLabels,
+  sortRows,
   useAnnouncer,
   type PresenceMember,
   type SheetCellRef,
@@ -46,12 +47,30 @@ import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import { cellPresence, useArtifactPeople } from "~/lib/artifacts/people.ts";
 import { inferredColumns, sheetColumns, sheetRows } from "~/lib/artifacts/sheet.ts";
 import { useStoreVersion } from "~/lib/artifacts/useDataStore.ts";
-import { actorName, roleIncludes } from "~/lib/artifacts/words.ts";
+import { actorName, cellChangeWords, roleIncludes } from "~/lib/artifacts/words.ts";
+import { useRowDelete } from "./RowDelete.tsx";
 import type { PresenceReport } from "./presence.ts";
 
 /** The collections a reader is offered as sheets: every one but the engine's per-viewer state. */
 export function sheetCollections(collections: readonly DataCollection[]): DataCollection[] {
   return collections.filter((c) => c.name !== STATE_COLLECTION);
+}
+
+/**
+ * The collection on show, from the address (`sheet=`): the View and Data tabs
+ * read the same one, and the first collection is the default the address
+ * leaves out.
+ */
+export function useSheetParam(
+  collections: readonly DataCollection[],
+): [DataCollection | undefined, (name: string) => void] {
+  const [sheetParam, setSheet] = useParam("sheet", "");
+  const collection = collections.find((c) => c.name === sheetParam) ?? collections[0];
+  const set = useCallback(
+    (name: string) => setSheet(name === collections[0]?.name ? "" : name),
+    [setSheet, collections],
+  );
+  return [collection, set];
 }
 
 export function SheetView({
@@ -78,8 +97,7 @@ export function SheetView({
     () => sheetCollections(store.schema?.collections ?? []),
     [store.schema],
   );
-  const [sheetParam, setSheet] = useParam("sheet", "");
-  const collection = collections.find((c) => c.name === sheetParam) ?? collections[0];
+  const [collection, setSheet] = useSheetParam(collections);
   const name = collection?.name ?? "";
   useEffect(() => {
     if (name) void store.load(name);
@@ -101,6 +119,20 @@ export function SheetView({
   const canAdd = collection
     ? roleIncludes(role, collection.create) && roleIncludes(role, "contributor")
     : false;
+  const remove = useRowDelete(
+    store,
+    name,
+    collection ? roleIncludes(role, collection.delete) && roleIncludes(role, "contributor") : false,
+  );
+  // A ROW IS NAMED BY ITS NUMBER AS DRAWN, in the order the reader sorted it.
+  const order = useMemo(
+    () =>
+      sortRows(columns, rows, sort, { people: people.sheetPeople, labels: sheetLabels() }).map(
+        (r) => r.id,
+      ),
+    [columns, rows, sort, people.sheetPeople],
+  );
+  const rowNumber = (rowId: string) => order.indexOf(rowId) + 1;
 
   if (store.isGone) {
     return <p className="artifact-note">This sheet's data was deleted with the artifact.</p>;
@@ -133,9 +165,7 @@ export function SheetView({
           <Select
             width="auto"
             value={name}
-            onChange={(value) =>
-              setSheet(String(value) === collections[0]?.name ? "" : String(value))
-            }
+            onChange={(value) => setSheet(String(value))}
             options={collections.map((c) => ({ value: c.name, label: c.title || c.name }))}
             ariaLabel="Sheet"
           />
@@ -155,6 +185,7 @@ export function SheetView({
         ) : (
           <SheetGrid
             className="artifact-grid"
+            fit="content"
             label={collection.title || detail.title}
             columns={columns}
             rows={rows}
@@ -162,6 +193,11 @@ export function SheetView({
             mode={roleIncludes(role, "contributor") ? "edit" : "read"}
             onEdit={(edits) => void store.edit(name, edits)}
             onAddRow={canAdd ? () => void store.addRow(name) : undefined}
+            onDeleteRow={
+              remove.onDeleteRow
+                ? (rowId) => remove.onDeleteRow?.({ id: rowId, name: `row ${rowNumber(rowId)}` })
+                : undefined
+            }
             onShowHistory={(cell) => setHistory(cell)}
             onActiveCellChange={(cell) =>
               presence.at(
@@ -202,6 +238,7 @@ export function SheetView({
             onSortChange={setSort}
             sync={{ ...store.pending.sync(!connection.connected), failed: store.unsettledCount }}
             onRetry={() => void store.retry()}
+            onDismissRefused={() => store.pending.dismissAll()}
           />
         )}
       </QueryState>
@@ -209,14 +246,12 @@ export function SheetView({
         artifact={detail.id}
         collection={name}
         cell={history}
-        label={(field) => collection.columns?.find((c) => c.key === field)?.label || field}
-        canDelete={roleIncludes(role, collection.delete)}
-        onDelete={(rowId) => {
-          setHistory(null);
-          void store.deleteRows(name, [rowId]);
-        }}
+        title={(cell) =>
+          `${collection.columns?.find((c) => c.key === cell.field)?.label || cell.field}, row ${rowNumber(cell.rowId)}`
+        }
         onClose={() => setHistory(null)}
       />
+      {remove.dialog}
       <LinkInterstitial url={link} source={detail.title} onClose={() => setLink(null)} />
     </div>
   );
@@ -231,17 +266,14 @@ function CellHistory({
   artifact,
   collection,
   cell,
-  label,
-  canDelete,
-  onDelete,
+  title,
   onClose,
 }: {
   artifact: string;
   collection: string;
   cell: SheetCellRef | null;
-  label: (field: string) => string;
-  canDelete: boolean;
-  onDelete: (rowId: string) => void;
+  /** "Gate, row 1": the column and the row, as the reader sees them. */
+  title: (cell: SheetCellRef) => string;
   onClose: () => void;
 }) {
   const people = useArtifactPeople();
@@ -259,15 +291,8 @@ function CellHistory({
         (c.f ?? []).filter((f) => f.f === field).map((f) => ({ entry: e, change: c, field: f })),
       ),
   );
-  const shown = (v: unknown) =>
-    v === undefined || v === null ? "empty" : typeof v === "string" ? v : JSON.stringify(v);
   return (
-    <Modal
-      open={cell !== null}
-      onClose={onClose}
-      title={cell ? `History of ${label(field)}` : ""}
-      placement="top"
-    >
+    <Modal open={cell !== null} onClose={onClose} title={cell ? title(cell) : ""} placement="top">
       <QueryState
         error={answer.error}
         refusal={answer.refusal}
@@ -284,9 +309,7 @@ function CellHistory({
               <span className="artifact-history-who">
                 {actorName(entry.actor, people.seatName)}
               </span>
-              <span className="artifact-history-what">
-                {f.bh || f.ah ? "changed a long value" : `${shown(f.b)} to ${shown(f.a)}`}
-              </span>
+              <span className="artifact-history-what">{cellChangeWords(f)}</span>
               <time className="artifact-history-when" dateTime={entry.at} title={entry.at}>
                 {relTime(entry.at, now)}
               </time>
@@ -294,13 +317,6 @@ function CellHistory({
           ))}
         </ol>
       </QueryState>
-      {canDelete && cell && (
-        <div className="artifact-history-foot">
-          <Button size="small" variant="danger" onClick={() => onDelete(cell.rowId)}>
-            Delete this row
-          </Button>
-        </div>
-      )}
     </Modal>
   );
 }

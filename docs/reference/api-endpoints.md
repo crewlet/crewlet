@@ -6317,8 +6317,7 @@ The API origin **never renders an artifact**:
   `409 artifact_origin_unset`. Minting a frame records that the caller opened
   the artifact, at most once in fifteen minutes.
 - `GET /artifacts/{id}/versions/{n}/source` answers a version's entry as JSON
-  (`text`, `content_type`, `size`), read back and checked against its digest:
-  how the dashboard renders a doc, which runs no author code.
+  (`text`, `content_type`, `size`), read back and checked against its digest.
 - `GET /artifacts/{id}/versions/{n}/deck` answers a deck's version (a
   `slides` artifact) as its **canonical tree**: the title, the cover, the
   outline's sections, the typefaces and every slide in order, each its id,
@@ -6328,16 +6327,27 @@ The API origin **never renders an artifact**:
   dashboard draws, presents and prints a deck from this answer alone and never
   parses a slide's markup. Reading it records that the caller opened the deck,
   as a frame's ticket does for a page. Any other kind is `409 content_refused`.
+- `GET /artifacts/{id}/versions/{n}/doc` answers a doc's version (a `doc`
+  artifact) **tab by tab**: `indexed` (whether it opens on a `doc.json` index
+  rather than one Markdown file) and every tab in the index's order, each its
+  `path`, `title` and Markdown `text`, read through the same
+  [doc format](../guides/artifact-authoring.md#writing-a-doc) the publish was
+  held to. This is how the dashboard draws a doc, which runs no author code:
+  with its own element-constructing renderer, never as markup. Reading it
+  records that the caller opened the doc. Any other kind is
+  `409 content_refused`.
 - `GET /artifacts/{id}/versions/{n}/outline` answers a version's structure
   without every file: for a deck, its title, slide count, cover, sections and
-  each slide's id, title and hidden flag, plus the cover slide's tree, which
-  the gallery draws as the card's cover; for a dashboard, its title, every
-  widget's id, type, title, width and dataset, and its first three stats'
-  labels with their datasets' titles (never a value, which is each viewer's);
-  for any other kind, its kind alone. A cover is not an open, so none is
-  recorded. A node keeps the decks it has read by version (16 MiB of their
-  files at most), and the boards (64 MiB of their spec and file datasets), since
-  a version never changes.
+  each slide's id, title and hidden flag, plus the cover slide's tree; for a
+  doc, each tab's `path`, `title` and size in `bytes`, plus the `cover`: the
+  first tab's opening as Markdown, cut at a line boundary within 1 KiB; for a
+  dashboard, its title, every widget's id, type, title, width and dataset, and
+  its first three stats' labels with their datasets' titles (never a value,
+  which is each viewer's). The gallery draws each as the card's cover. Any
+  other kind answers its kind alone. A cover is not an open, so none is
+  recorded. A node keeps the decks and docs it has read by version (16 MiB of
+  their files at most for each), and the boards (64 MiB of their spec and file
+  datasets), since a version never changes.
 - `GET /artifacts/{id}/versions/{n}/dashboard` answers a dashboard's version
   (a `dashboard` artifact) as its **board**: the spec held to the
   [dashboard spec](dashboard-spec.md) format again on read, and every dataset's

@@ -23,7 +23,7 @@ var goPackages = map[string]bool{
 	"cliprofile": true, "codingagent": true, "colleague": true, "collect": true,
 	"compact": true, "config": true, "configapi": true, "configplane": true,
 	"confluence": true, "coord": true,
-	"coordtest": true, "costlimit": true, "credential": true, "cron": true, "dashspec": true, "datadog": true, "datasetsapi": true,
+	"coordtest": true, "costlimit": true, "credential": true, "cron": true, "dashspec": true, "datadog": true, "datasetsapi": true, "docindex": true,
 	"docsgate": true, "e2e": true, "embeddings": true,
 	"engine": true, "envfile": true, "envref": true, "estate": true,
 	"eventfan": true, "eventfantest": true, "events": true, "execstate": true,

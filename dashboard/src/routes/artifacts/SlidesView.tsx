@@ -27,7 +27,6 @@
  */
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
 import {
   announce,
   Button,
@@ -54,6 +53,7 @@ import type {
   DeckSlide,
 } from "~/protocol/index.ts";
 import { QueryState } from "~/components/common.tsx";
+import { PrintOnly } from "~/components/PrintOnly.tsx";
 import { useParam } from "~/app/router.tsx";
 import { useRest } from "~/lib/useRest.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
@@ -752,8 +752,8 @@ function DeckPrint({
   image: (path: string) => string | null;
 }): ReactNode {
   const prefix = useId().replace(/:/g, "");
-  return createPortal(
-    <div className="slides-print" aria-hidden="true">
+  return (
+    <PrintOnly>
       {slides
         .filter((s) => !s.hidden)
         .map((s, i) => (
@@ -763,7 +763,6 @@ function DeckPrint({
             </SlideStage>
           </div>
         ))}
-    </div>,
-    document.body,
+    </PrintOnly>
   );
 }

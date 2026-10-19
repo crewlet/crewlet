@@ -977,7 +977,7 @@ func artifactsPublish(environ config.Source, args []string, stdout, stderr io.Wr
 		flags = fs
 		target = fs.String("artifact", "", "publish a new version of this artifact; empty creates one")
 		title, description, icon = headFlags(fs, "of a new artifact", " (default: the entry's name)")
-		kind = fs.String("kind", "", kindNames()+" (default: from the entry)")
+		kind = fs.String("kind", "", kindNames()+", for a new artifact (default: from the entry)")
 		entry = fs.String("entry", "", "the file the artifact opens on (default: "+
 			strings.Join(artifacts.DefaultEntries(), ", ")+")")
 		fs.Var(&exclude, "exclude", "leave out of the directory every file and folder this pattern "+
@@ -1029,7 +1029,7 @@ func artifactsPublish(environ config.Source, args []string, stdout, stderr io.Wr
 		}
 	}
 	p := publishing{client: client, files: files, key: key, stdout: stdout}
-	head := newHead{title: *title, description: *description, icon: *icon, kind: string(created)}
+	head := newHead{title: *title, description: *description, icon: *icon, kind: created}
 	if err := p.run(*target, entryPath, head, *label, *contract, *item, *force, caps.list); err != nil {
 		return unknownOutcome(err, "publish", key)
 	}
@@ -1089,7 +1089,11 @@ type publishing struct {
 // newHead is what a publish that creates an artifact says about it; a new
 // version of an existing one sends none of it.
 type newHead struct {
-	title, description, icon, kind string
+	title, description, icon string
+
+	// kind is the kind it is created as, inferred from the kind table where
+	// -kind names none.
+	kind artifacts.Kind
 }
 
 // run declares the files, sends the ones the artifact does not hold, and

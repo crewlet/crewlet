@@ -1,10 +1,7 @@
 package artifactsapi
 
 import (
-	"context"
-	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/artifacts"
@@ -99,36 +96,24 @@ func (s *Service) Board(w http.ResponseWriter, r *http.Request, a Admission, n i
 	if !ok {
 		return nil, false
 	}
-	b, err := s.boardOf(r.Context(), a.Head.ID, v)
-	var invalid *dashspec.Invalid
-	var unread *deckFileError
-	switch {
-	case errors.As(err, &invalid):
-		// A VERSION PUBLISHED UNDER THE FORMAT that no longer reads under
-		// it: the format moved under a board no release ever shipped.
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeContentRefused, map[string]string{
-			"detail": "version " + strconv.Itoa(n) + "'s board does not read in this build's " +
-				"board format: " + invalid.Error()})
-		return nil, false
-	case errors.As(err, &unread):
-		contentFailed(w, r, a.Head.ID, unread.path, unread.err)
-		return nil, false
-	case err != nil:
-		contentFailed(w, r, a.Head.ID, dashspec.EntryPath, err)
-		return nil, false
-	}
-	return b, true
+	return s.boards.read(w, r, a, v)
 }
 
-// boardOf reads v's board through the cache.
-func (s *Service) boardOf(ctx context.Context, id artifacts.ID, v artifactsdomain.Version) (*dashspec.Board, error) {
-	return s.boards.read(versionKey{artifact: id, version: v.Number}, func() (*dashspec.Board, int64, error) {
-		b, err := dashspec.Read(manifestSource{ctx: ctx, m: v.Manifest, objects: s.objects})
-		if err != nil {
-			return nil, 0, err
-		}
-		return b, b.Weight, nil
-	})
+// newBoardCache reads boards through the board format, weighed by the spec and
+// the file datasets they were read from, within [boardCacheBytes]: a board may
+// hold file datasets far past a deck's whole weight.
+func newBoardCache(objects Objects) *formatCache[*dashspec.Board] {
+	c := newFormatCache(objects, "board format", dashspec.ErrInvalid,
+		func(artifactsdomain.Version) string { return dashspec.EntryPath },
+		func(src manifestSource, _ artifactsdomain.Version) (*dashspec.Board, int64, error) {
+			b, err := dashspec.Read(src)
+			if err != nil {
+				return nil, 0, err
+			}
+			return b, b.Weight, nil
+		})
+	c.limit = boardCacheBytes
+	return c
 }
 
 // AdmitContent admits the request's caller to read the content of the

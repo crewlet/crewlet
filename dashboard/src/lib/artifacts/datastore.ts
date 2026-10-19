@@ -47,6 +47,7 @@ import { QueryError, RestError } from "~/protocol/index.ts";
 import { DATA_BATCH_MAX_OPS } from "~/contract/artifacts.ts";
 import { keyedWrite, type KeyedAnswer, type KeyedRequest } from "../keyedWrite.ts";
 import { undoData, writeData, type DataVia } from "./api.ts";
+import { dataRefusalText } from "./words.ts";
 
 /** The packed form of a state-log position (`statelog.Position.Packed`): `(generation << 40) | seq`. */
 export function packedPosition(p: LogPosition | undefined): number {
@@ -501,12 +502,28 @@ export class ArtifactDataStore {
       fields[edit.field] = edit.value;
       byDoc.set(edit.rowId, fields);
     }
-    const ops: DataOp[] = [...byDoc].map(([doc, fields]) => ({
-      op: "merge",
-      collection,
-      doc,
-      fields,
-    }));
+    // LONG TEXT IS WRITTEN GUARDED (D18): replacing a long-text value names
+    // the version of the row the reader edited, so a concurrent edit is a
+    // conflict they are told about rather than a paragraph silently lost.
+    // Without it the engine refuses every such edit.
+    const longText = new Set(
+      (this.schemaAnswer?.collections.find((c) => c.name === collection)?.columns ?? [])
+        .filter((c) => c.type === "longtext")
+        .map((c) => c.key),
+    );
+    const versions = this.collections.get(collection)?.versions;
+    const ops: DataOp[] = [...byDoc].map(([doc, fields]) => {
+      const version = versions?.get(doc);
+      const guarded =
+        version !== undefined && Object.keys(fields).some((field) => longText.has(field));
+      return {
+        op: "merge",
+        collection,
+        doc,
+        fields,
+        ...(guarded ? { if_version: version } : {}),
+      };
+    });
     for (let i = 0; i < ops.length; i += DATA_BATCH_MAX_OPS) {
       await this.write(ops.slice(i, i + DATA_BATCH_MAX_OPS));
     }
@@ -701,7 +718,7 @@ export class ArtifactDataStore {
       } else {
         this.reverted(cells, rows);
         for (const settle of settles)
-          settle({ ok: false, message: entry.reason || "The change was not saved." });
+          settle({ ok: false, message: dataRefusalText(entry.verdict) });
       }
       this.emit();
       return;
@@ -842,13 +859,15 @@ export function resultOf(answer: KeyedAnswer): WriteResult {
       ...(err.retryAfterSeconds !== null ? { retryAfterMs: err.retryAfterSeconds * 1000 } : {}),
     };
   }
-  // THE APPLIER'S OWN DETAIL where it decided, which names the rule; the
-  // node's refusal before the log is said in the sheet's words.
-  const detail = typeof err.body.detail === "string" ? err.body.detail : "";
+  // THE APPLIER'S VERDICT IN THE READER'S WORDS. Its own detail names the
+  // rule for the agent tools (op indices, `if_version`, field keys), which a
+  // person can act on none of; a refusal before the log keeps the sheet's
+  // own sentence, or the dashboard's reading of the engine's code.
+  const verdict = decidedVerdict(err);
   const reason =
-    err.body.verdict !== undefined && detail ? detail : refusedReason(err, answer.text);
+    err.body.verdict !== undefined ? dataRefusalText(verdict) : refusedReason(err, answer.text);
   const conflict = Array.isArray(err.body.conflict) ? (err.body.conflict as DataDoc[]) : undefined;
-  return { verdict: decidedVerdict(err), reason, ...(conflict ? { conflict } : {}) };
+  return { verdict, reason, ...(conflict ? { conflict } : {}) };
 }
 
 /** The decided verdicts, as the applier writes them. */

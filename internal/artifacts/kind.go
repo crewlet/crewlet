@@ -18,7 +18,7 @@ import (
 // a kind every one of those surfaces answers for, or the build fails, and a
 // switch nobody remembered cannot quietly treat a new kind as the old default.
 //
-// THE ORGANISING RULE IS NATIVE OR FRAMED (adr/0042). A framed kind runs
+// THE ORGANISING RULE IS NATIVE OR FRAMED (ADR-0042). A framed kind runs
 // author code, and only on the credential-less artifact origin (adr/0035). A
 // native kind carries no author code: the dashboard draws it from a closed,
 // validated format with its own primitives, so nothing it holds can become
@@ -89,8 +89,8 @@ const (
 
 	// SearchFormat indexes the readable text the kind's own format extracts
 	// from every file it holds (a deck's slides and their speaker notes, a
-	// board's titles and notes, never a figure), not the entry alone, whose
-	// text is only the index.
+	// doc's tabs, a board's titles and notes, never a figure), not the entry
+	// alone, which may be only the index.
 	SearchFormat Search = "format"
 )
 
@@ -115,6 +115,12 @@ const (
 	// closed element and style subset, refused at publish when outside it.
 	FormatSlides Format = "slides"
 
+	// FormatDoc is the doc format (internal/artifacts/docindex): one
+	// Markdown file, or a `doc.json` index naming the Markdown file of each
+	// tab, every tab read whole and refused at publish when the index does
+	// not resolve.
+	FormatDoc Format = "doc"
+
 	// FormatDashboard is the board format (internal/artifacts/dashspec):
 	// the spec's filters, datasets and widgets held to their closed sets,
 	// every file dataset read against its declared columns, refused at
@@ -123,7 +129,7 @@ const (
 )
 
 // Formats are every format this build validates.
-var Formats = []Format{FormatNone, FormatSlides, FormatDashboard}
+var Formats = []Format{FormatNone, FormatSlides, FormatDoc, FormatDashboard}
 
 // Valid reports whether f is a format this build validates.
 func (f Format) Valid() bool { return slices.Contains(Formats, f) }
@@ -134,28 +140,53 @@ type EntryRule struct {
 	// content is its datastore.
 	Optional bool
 
-	// Essences are the media type essences the entry may be served as, as
-	// [mediatype] spells them (`text/html`).
+	// Essences are the media type essences the entry may be served as at
+	// any path, as [mediatype] spells them (`text/html`).
 	Essences []string
+
+	// Indexes are the entries told apart by their path: a format's index is
+	// a file of a common type (a deck's `deck.json`, a doc's `doc.json`), so
+	// it is that format's entry at that one path, never by its type alone.
+	Indexes []EntryIndex
 
 	// Defaults are the entry paths a publish that names none looks for, in
 	// preference order. The first is where a create's single `content` lands.
 	Defaults []string
-
-	// Fixed reports the entry may only be one of [EntryRule.Defaults]: a
-	// format whose index is a file of a common type (a deck's `deck.json`)
-	// is told apart by its path, never by its type alone.
-	Fixed bool
 }
 
-// Admits reports whether a file served as essence may be this kind's entry.
-func (r EntryRule) Admits(essence string) bool { return slices.Contains(r.Essences, essence) }
+// EntryIndex is an entry admitted at one path alone.
+type EntryIndex struct {
+	// Path is the index's path in the version.
+	Path string
+
+	// Essence is the media type essence it is served as.
+	Essence string
+}
 
 // AdmitsAt reports whether the file at path, served as essence, may be this
-// kind's entry: a type the rule admits, at one of its paths where the rule
-// fixes them.
+// kind's entry: a type the rule admits at any path, or one of its indexes.
 func (r EntryRule) AdmitsAt(path, essence string) bool {
-	return r.Admits(essence) && (!r.Fixed || slices.Contains(r.Defaults, path))
+	return slices.Contains(r.Essences, essence) || r.indexAt(path, essence)
+}
+
+func (r EntryRule) indexAt(path, essence string) bool {
+	return slices.Contains(r.Indexes, EntryIndex{Path: path, Essence: essence})
+}
+
+// Names is what an entry the rule admits is, as a refusal says it: "text/html"
+// or "text/markdown, or doc.json".
+func (r EntryRule) Names() string {
+	parts := slices.Clone(r.Essences)
+	for _, i := range r.Indexes {
+		parts = append(parts, i.Path)
+	}
+	switch len(parts) {
+	case 0:
+		return "any file"
+	case 1:
+		return parts[0]
+	}
+	return strings.Join(parts[:len(parts)-1], ", ") + ", or " + parts[len(parts)-1]
 }
 
 // KindSpec is everything the engine and the dashboard decide by kind.
@@ -211,19 +242,21 @@ var kindSpecs = []KindSpec{
 	},
 	{
 		Kind:    KindDoc,
-		Summary: "is a document the dashboard draws",
+		Summary: "is a document of one or more Markdown tabs the dashboard draws",
 		Render:  RenderNative,
-		Entry:   EntryRule{Essences: []string{"text/markdown"}, Defaults: []string{"index.md"}},
-		Store:   StoreNone,
-		Format:  FormatNone,
-		Search:  SearchEntry,
+		Entry: EntryRule{Essences: []string{"text/markdown"},
+			Indexes:  []EntryIndex{{Path: "doc.json", Essence: "application/json"}},
+			Defaults: []string{"index.md", "doc.json"}},
+		Store:  StoreNone,
+		Format: FormatDoc,
+		Search: SearchFormat,
 	},
 	{
 		Kind:    KindSlides,
 		Summary: "is a deck of 16:9 slides the dashboard draws and presents",
 		Render:  RenderNative,
-		Entry: EntryRule{Essences: []string{"application/json"}, Defaults: []string{"deck.json"},
-			Fixed: true},
+		Entry: EntryRule{Indexes: []EntryIndex{{Path: "deck.json", Essence: "application/json"}},
+			Defaults: []string{"deck.json"}},
 		Store:  StoreNone,
 		Format: FormatSlides,
 		Search: SearchFormat,
@@ -232,8 +265,8 @@ var kindSpecs = []KindSpec{
 		Kind:    KindDashboard,
 		Summary: "is a board of figures over live data the dashboard draws, each answered as its viewer",
 		Render:  RenderNative,
-		Entry: EntryRule{Essences: []string{"application/json"}, Defaults: []string{"dashboard.json"},
-			Fixed: true},
+		Entry: EntryRule{Indexes: []EntryIndex{{Path: "dashboard.json", Essence: "application/json"}},
+			Defaults: []string{"dashboard.json"}},
 		Store:  StoreImplied,
 		Format: FormatDashboard,
 		Search: SearchFormat,
@@ -292,15 +325,18 @@ func (k Kind) Framed() bool {
 // be, and false when no kind opens on such a file. It is how a publish that
 // names no kind infers one from its entry.
 //
-// A FIXED PATH WINS: `deck.json` is a deck's index whatever else opens on
-// JSON, so a kind that fixes its entry's path is asked first, and a kind that
-// takes any path of its type only after.
+// AN INDEX WINS: `deck.json` is a deck's index whatever else opens on JSON, so
+// every kind's indexes are asked first, and the types a kind takes at any path
+// only after.
 func KindFor(path, essence string) (Kind, bool) {
-	for _, fixed := range []bool{true, false} {
-		for _, s := range kindSpecs {
-			if s.Entry.Fixed == fixed && s.Entry.AdmitsAt(path, essence) {
-				return s.Kind, true
-			}
+	for _, s := range kindSpecs {
+		if s.Entry.indexAt(path, essence) {
+			return s.Kind, true
+		}
+	}
+	for _, s := range kindSpecs {
+		if slices.Contains(s.Entry.Essences, essence) {
+			return s.Kind, true
 		}
 	}
 	return "", false
@@ -332,6 +368,7 @@ func KindSummaries() string {
 
 func (s KindSpec) clone() KindSpec {
 	s.Entry.Essences = slices.Clone(s.Entry.Essences)
+	s.Entry.Indexes = slices.Clone(s.Entry.Indexes)
 	s.Entry.Defaults = slices.Clone(s.Entry.Defaults)
 	return s
 }

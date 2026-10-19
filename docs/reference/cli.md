@@ -1271,8 +1271,9 @@ crewlet artifacts list [-scope mine|shared|company|agents|all] [-kind html|doc|s
     [-q TEXT] [-status live|trashed] [-work-item KEY] [-limit N]
 crewlet artifacts get <id>
 crewlet artifacts publish <dir|file> [-artifact ID] [-title TEXT] [-description TEXT]
-    [-icon NAME] [-kind html|doc|slides|dashboard|sheet] [-entry PATH] [-exclude PATTERN]... [-label TEXT]
-    [-contract VERSION] [-capabilities a,b] [-work-item KEY] [-force] [-op-id ID]
+    [-icon NAME] [-kind html|doc|slides|dashboard|sheet] [-entry PATH] [-exclude PATTERN]...
+    [-label TEXT] [-contract VERSION] [-capabilities a,b] [-work-item KEY] [-force]
+    [-op-id ID]
 crewlet artifacts update <id> [-title TEXT] [-description TEXT] [-icon NAME] [-op-id ID]
 crewlet artifacts versions <id>
 crewlet artifacts restore <id> <version> [-label TEXT] [-op-id ID]
@@ -1316,32 +1317,30 @@ within one name, `[...]` for a class, `\` to escape. A malformed pattern, one
 reaching outside the directory, or `-exclude` beside a single file is refused
 before anything is sent. Quote a pattern so the shell does not expand it.
 
-A new artifact opens on the one default entry the files hold (`index.html` for
-`html`, `index.md` for `doc`, `deck.json` for `slides`, `dashboard.json` for
-`dashboard`; with `-kind`, that kind's own), else the only file, unless
-`-entry` names another. Files holding two default entries are refused before a
-byte moves, since which one the artifact opens on, and so what kind it is, is
-the author's to say: name it with `-entry` or the kind with `-kind`. Its title
-defaults to the entry's name and its kind to the one whose entry the entry may
-be (`html` for an HTML page, `doc` for a Markdown file, `slides` for
-`deck.json` and `dashboard` for `dashboard.json`, each told by its path, never
-by JSON alone), and `-description` and `-icon` set the gallery card's subtitle
-and the tab's icon word. Those four describe a new
-artifact only: naming `-title`, `-description`, `-icon` or `-kind` beside
-`-artifact` is refused before any byte moves, since a version keeps the
-artifact's kind and `update` is what changes the rest. A new version of
-`-artifact` names the head it read as its base, so a version somebody else published meanwhile is
-refused rather than overwritten; `-force` publishes over it, a person's
-gesture. A new version keeps the head's runtime contract and capabilities
-unless `-contract` or `-capabilities` names others: `-capabilities db,state`
-declares exactly that set, `-capabilities none` declares none, and a name this
-build does not serve is refused before any byte moves. The result line counts
-the files two ways: how many this command sent, and how many of the version's
-files are new and how many the artifact already held, as the node counted the
-manifest that landed. The two differ for an unchanged page: a page is stored
-in its linted form, so its own digest never matches what the artifact holds
-and it is sent, and the node then finds the linted page already held and
-carries it. The publish policy's warnings are printed beneath the result.
+A new artifact opens on the one default entry it holds, `index.html`,
+`index.md`, `doc.json`, `deck.json` or `dashboard.json`, else the only file, unless `-entry`
+names another; a directory holding two default entries is refused until
+`-entry` or `-kind` settles which it is. Its kind is the one whose entry that
+file is: `html` for a page, `doc` for a `.md` file or a tabbed doc's
+`doc.json`, `slides` for `deck.json`, `dashboard` for `dashboard.json` (an
+index is told by its path, never by JSON alone), and `-kind` names it outright. Its title defaults to the entry's
+name, and `-description` and `-icon` set the gallery card's subtitle and the
+tab's icon word. Those four describe a new artifact only: naming `-title`,
+`-description`, `-icon` or `-kind` beside `-artifact` is refused before any
+byte moves, since a version keeps the artifact's kind and `update` is what
+changes the rest. A new version of `-artifact` names the head it read as its
+base, so a version somebody else published meanwhile is refused rather than
+overwritten; `-force` publishes over it, a person's gesture. A new version
+keeps the head's runtime contract and capabilities unless `-contract` or
+`-capabilities` names others: `-capabilities db,state` declares exactly that
+set, `-capabilities none` declares none, and a name this build does not serve
+is refused before any byte moves. The result line counts the files two ways:
+how many this command sent, and how many of the version's files are new and how
+many the artifact already held, as the node counted the manifest that landed.
+The two differ for an unchanged page: a page is stored in its linted form, so
+its own digest never matches what the artifact holds and it is sent, and the
+node then finds the linted page already held and carries it. The publish
+policy's warnings are printed beneath the result.
 
 **`get` and `versions` show each version's runtime contract and
 capabilities**: `get` the head version's on its `contract` and `can` lines,

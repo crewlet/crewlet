@@ -62,11 +62,10 @@ type run struct {
 	// them, do about the reader's appearance: the theme warnings' input.
 	themes []fileTheme
 
-	// formatText is the readable text the kind's format extracted from
-	// the version ([run.checkFormat]), for a kind whose search rule is
-	// [artifacts.SearchFormat]; formatted reports the format was read.
-	formatText string
-	formatted  bool
+	// formatted is the version as its kind's format read it, whole, by
+	// [run.checkFormat] (a deck, a doc), and nil for a kind with no format:
+	// what the gallery's search text is extracted from.
+	formatted formatText
 
 	warnings []lint.Finding
 

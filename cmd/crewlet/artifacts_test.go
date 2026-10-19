@@ -635,6 +635,24 @@ func TestArtifactsPublishInfersADeckFromItsIndex(t *testing.T) {
 	}
 }
 
+// A TABBED DOC OPENS ON ITS INDEX: a directory holding `doc.json` and its tabs
+// creates a doc opening on the index, never on one of the tabs.
+func TestArtifactsPublishInfersATabbedDocFromItsIndex(t *testing.T) {
+	t.Parallel()
+	node := newFakeArtifactsNode(t)
+	dir := writeTree(t, map[string]string{
+		"doc.json":      `{"v":1,"tabs":[{"path":"tabs/plan.md","title":"Plan"}]}`,
+		"tabs/plan.md":  "# Plan",
+		"tabs/notes.md": "# Notes",
+	})
+	if _, stderr, err := cli(t, "artifacts", "publish", dir, bootstrapForURL(t, node.server.URL)); err != nil {
+		t.Fatalf("publish: %v\n%s", err, stderr)
+	}
+	if create := node.creates[0]; create["kind"] != string(artifacts.KindDoc) || create["entry"] != "doc.json" {
+		t.Errorf("created %v", create)
+	}
+}
+
 // TWO DEFAULT ENTRIES ARE THE AUTHOR'S TO CHOOSE BETWEEN: a directory holding
 // both is refused before a byte moves, and -kind settles it.
 func TestArtifactsPublishRefusesTwoCandidateEntries(t *testing.T) {

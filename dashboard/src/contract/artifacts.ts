@@ -18,7 +18,7 @@
 
 /**
  * Every kind of artifact (`artifacts.Kinds`): a page that runs code, a
- * document, a deck, a dashboard of figures, a native sheet.
+ * doc, a deck, a dashboard of figures, a native sheet.
  */
 export const ARTIFACT_KINDS = ["html", "doc", "slides", "dashboard", "sheet"] as const;
 
@@ -72,6 +72,17 @@ export const ARTIFACT_ICON_MAX_BYTES = 40;
 
 /** The longest version label, in UTF-8 bytes (`artifacts.MaxLabelBytes`). */
 export const ARTIFACT_LABEL_MAX_BYTES = 60;
+
+/** The most tabs one doc holds (`docindex.MaxTabs`). */
+export const DOC_MAX_TABS = 32;
+
+/** The longest tab title, in UTF-8 bytes (`docindex.MaxTitleBytes`). */
+export const DOC_TAB_TITLE_MAX_BYTES = 120;
+/**
+ * How many days a trashed artifact is kept before it is deleted for good
+ * (`artifacts.TrashRetention`): the date every trash sentence names.
+ */
+export const ARTIFACT_TRASH_RETENTION_DAYS = 30;
 
 /** Every column type a datastore validates (`artifacts.ColumnTypes`). */
 export const COLUMN_TYPES = [

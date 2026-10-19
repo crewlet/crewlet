@@ -133,8 +133,12 @@ const ArtifactPermissions = "accelerometer=(), ambient-light-sensor=(), autoplay
 //     page legitimately makes its own (script-src names no host, above);
 //   - worker-src is blob: alone, so no service worker can register on the
 //     artifact origin and outlive a revocation in the viewer's browser;
-//   - webrtc 'block', where a browser implements it, closes the one channel
-//     connect-src does not govern everywhere;
+//   - no webrtc directive: no shipping browser implements it, and Chrome logs
+//     an "Unrecognized Content-Security-Policy directive" error for it on every
+//     frame load, so it bought nothing and cost a console error per page. A
+//     script that could open a peer connection is the page's own (nonced), and
+//     the policy does not try to stop a page's author from sending what it
+//     reads elsewhere (the package comment);
 //   - frame-ancestors are the dashboard's origins, so no other site can frame
 //     an artifact a viewer's ticket opened;
 //   - sandbox repeats the frame's own tokens.
@@ -266,7 +270,6 @@ func artifactDocumentPolicy(o ArtifactOrigin, nonce string, script *artifacts.Sc
 		"base-uri 'none'",
 		"form-action 'none'",
 		"frame-src 'none'",
-		"webrtc 'block'",
 		"frame-ancestors " + ancestors,
 		sandbox,
 	}, "; ")

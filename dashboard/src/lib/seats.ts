@@ -197,15 +197,22 @@ export interface OrgIndex {
   byName: Map<string, Seat>;
 }
 
-/** A seat as a principal. A seat the chart does not hold keeps its handle and is drawn as an agent, the kit's default. */
+/**
+ * A seat as a principal. A seat the chart does not hold keeps its handle and is
+ * drawn as an agent, the kit's default.
+ *
+ * THE LINE UNDER A NAME IS THE SEAT'S UNIT OR NOTHING. A handle there repeats
+ * the name in lower case ("Miles", then "miles"), which tells a reader nothing
+ * the name did not.
+ */
 export function principalOfSeat(seat: Seat | undefined, handle: string): Principal {
-  if (!seat) return { id: handle, kind: "agent", name: handle, detail: handle };
+  if (!seat) return { id: handle, kind: "agent", name: handle };
   const out: Principal = {
     id: seat.handle,
     kind: seat.kind === "human" ? "person" : "agent",
     name: seat.name,
-    detail: seat.unit ? seat.unit.name : seat.handle,
   };
+  if (seat.unit) out.detail = seat.unit.name;
   if (seat.kind === "agent" && seat.avatar) {
     out.character = seat.avatar.character as Principal["character"];
     if (isNodeHue(seat.avatar.color)) out.hue = seat.avatar.color;

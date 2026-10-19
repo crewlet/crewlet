@@ -64,6 +64,12 @@ const (
 	// version does not hold. The message names the rule broken.
 	CodeSlideFormat Code = "slide_format"
 
+	// CodeDocFormat is a doc outside the doc format
+	// (internal/artifacts/docindex): a `doc.json` that does not read, a tab
+	// naming a file the version does not hold or one that is not Markdown,
+	// or a bound passed. The message names the rule broken.
+	CodeDocFormat Code = "doc_format"
+
 	// CodeDashboardFormat is a board outside the board format
 	// (internal/artifacts/dashspec): a field the format does not have, a
 	// widget over a column its dataset does not hold, an engine source or
@@ -110,7 +116,7 @@ func (c Code) Refusing() bool {
 	return slices.Contains([]Code{
 		CodeRemoteScript, CodeRemoteStylesheet, CodeUnpinned, CodeRemoteImport,
 		CodeFormOffOrigin, CodeRefreshOffOrigin, CodeJavaScriptURL, CodePlaceholder,
-		CodeVendorOff, CodeVendorFailed, CodeUnparseable, CodeSlideFormat, CodeDashboardFormat,
+		CodeVendorOff, CodeVendorFailed, CodeUnparseable, CodeSlideFormat, CodeDocFormat, CodeDashboardFormat,
 	}, c)
 }
 

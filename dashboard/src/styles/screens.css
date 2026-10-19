@@ -3393,8 +3393,7 @@ a.knowledge-reader-how:hover {
   gap: var(--spacing-4);
 }
 .knowledge-editor-foot,
-.knowledge-callout-actions,
-.knowledge-resolve-foot {
+.knowledge-callout-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -3406,54 +3405,6 @@ a.knowledge-reader-how:hover {
 }
 .knowledge-theirs {
   min-width: 0;
-}
-.knowledge-resolve {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  padding: var(--spacing-4);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-lg);
-}
-.knowledge-resolve-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-4);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.knowledge-resolve-item {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-}
-.knowledge-resolve-sides {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--spacing-3);
-}
-.knowledge-resolve-side {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
-  margin: 0;
-}
-.knowledge-resolve-side figcaption {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.knowledge-resolve-side pre {
-  margin: 0;
-  padding: var(--spacing-2);
-  overflow-x: auto;
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-inset);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  white-space: pre-wrap;
 }
 .knowledge-picker {
   display: flex;
@@ -10572,8 +10523,84 @@ a.live-row:focus-visible {
   min-width: 0;
 }
 
-.artifact-document {
+/* A DOC: its tabs and actions in one bar, then the outline beside the tab on
+   show, as a Knowledge page reads; one column on a narrow page. */
+.doc-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+.doc-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-4);
+  min-width: 0;
+}
+.doc-bar > [role="tablist"] {
+  flex: 1 1 20rem;
+  min-width: 0;
+}
+.doc-bar-actions {
+  display: flex;
+  gap: var(--spacing-2);
+  margin-left: auto;
+}
+.doc-read {
+  display: grid;
+  grid-template-columns: var(--size-shell-rail) minmax(0, var(--size-content-max));
+  gap: var(--spacing-6);
+  align-items: start;
+  min-width: 0;
+}
+.doc-read-side {
+  position: sticky;
+  top: var(--sticky-top);
+  max-height: calc(100cqb - var(--sticky-top) - 2 * var(--spacing-5));
+  overflow-y: auto;
+  min-width: 0;
+}
+@container page (width < 760px) {
+  .doc-read {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .doc-read-side {
+    display: none;
+  }
+}
+.doc-read-page {
+  min-width: 0;
   max-width: var(--size-measure);
+}
+.doc-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+.doc-conflicts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+.doc-editor-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.doc-note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+/* A doc prints its tabs in order, each from a new page under its title. */
+.doc-print-tab + .doc-print-tab {
+  break-before: page;
+}
+.doc-print-title {
+  margin: 0 0 var(--spacing-4);
+  font-size: var(--font-size-2xl);
 }
 
 .artifact-sheet,
@@ -10590,8 +10617,15 @@ a.live-row:focus-visible {
   align-items: center;
   gap: var(--spacing-2) var(--spacing-3);
 }
+/* Export closes the data bar, on the bar's own line. */
+.artifact-data-bar-end {
+  margin-inline-start: auto;
+}
+/* A GRID IS AS TALL AS ITS ROWS (fit="content") up to what the view holds
+   below the header and the tabs, so twelve rows draw no empty slab under
+   them and Add row sits under the last row on a phone too. */
 .artifact-grid {
-  height: max(24rem, calc(100cqb - var(--sticky-top) - 16rem));
+  --crewlet-sheet-max-height: max(24rem, calc(100cqb - var(--sticky-top) - 16rem));
 }
 
 /* A HISTORY IS ONE LINE PER CHANGE: who, what, when, and its one action. */
@@ -10604,7 +10638,7 @@ a.live-row:focus-visible {
 }
 .artifact-history-row {
   display: grid;
-  grid-template-columns: minmax(6rem, 10rem) minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(6rem, 10rem) minmax(0, 1fr) auto;
   align-items: baseline;
   gap: var(--spacing-3);
   padding-block: var(--spacing-2);
@@ -10627,14 +10661,28 @@ a.live-row:focus-visible {
   font-size: var(--font-size-xs);
   white-space: nowrap;
 }
-.artifact-history-foot {
+/* A ROW WITH AN ACTION reserves its track whether or not this row has one,
+   so the time column holds one edge down the list and every row keeps the
+   button's height. A list without actions draws three tracks, so no empty
+   fourth track and its gap pull the times short of the list's edge. */
+.artifact-history-row--action {
+  grid-template-columns: minmax(6rem, 10rem) minmax(0, 1fr) auto 4.5rem;
+  align-items: center;
+  min-height: var(--size-control-sm);
+}
+.artifact-history-action {
   display: flex;
   justify-content: flex-end;
-  margin-top: var(--spacing-3);
+}
+.artifact-history-reason {
+  color: var(--color-text-tertiary);
 }
 @container page (width < 640px) {
   .artifact-history-row {
     grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .artifact-history-row--action {
+    grid-template-columns: minmax(0, 1fr) auto 4.5rem;
   }
   .artifact-history-what {
     grid-column: 1 / -1;
@@ -10647,7 +10695,9 @@ a.live-row:focus-visible {
   gap: var(--spacing-5);
   align-items: start;
 }
-@container page (width < 860px) {
+/* TWO COLUMNS DOWN TO A SMALL LAPTOP: one column below 720 px, where a
+   version item would otherwise run 700 px wide at 1024. */
+@container page (width < 720px) {
   .artifact-history-tab {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -10743,6 +10793,22 @@ a.live-row:focus-visible {
 .artifact-schema > .artifact-form-actions {
   grid-column: 1 / -1;
 }
+/* THE FOOT STICKS TO THE VIEW. A sheet with choice columns runs the form to
+   many screens, and Save waited at the end of it; here it stays in reach,
+   with how many changes it will apply at the start of the band. */
+.artifact-schema-foot {
+  position: sticky;
+  bottom: 0;
+  z-index: var(--z-index-sticky);
+  padding-block: var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
+  background: var(--color-surface-background);
+}
+.artifact-schema-pending {
+  margin-inline-end: auto;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-compact);
+}
 @container page (width < 860px) {
   .artifact-schema {
     grid-template-columns: minmax(0, 1fr);
@@ -10754,6 +10820,9 @@ a.live-row:focus-visible {
   flex-direction: column;
   gap: var(--spacing-3);
   min-width: 0;
+}
+.artifact-schema-form {
+  container: artifact-schema-form / inline-size;
 }
 .artifact-columns {
   display: flex;
@@ -10769,13 +10838,23 @@ a.live-row:focus-visible {
   padding-block: var(--spacing-3);
   border-bottom: 1px solid var(--color-border-default);
 }
+/* EVERY COLUMN ROW ON THE SAME TRACKS: name, key, type, who writes it, the
+   two flags and the remove slot. On a wrapping row the type select moved with
+   the width of the key before it, so no two rows lined up. The tracks are
+   bounded rather than sized by content, so each row resolves them the same. */
 .artifact-column-head {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns:
+    minmax(7rem, 1fr) minmax(3rem, 6rem) 8rem minmax(9rem, 12rem)
+    auto auto var(--size-row-sm);
   align-items: center;
   gap: var(--spacing-2) var(--spacing-3);
 }
 .artifact-column-key {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--color-text-tertiary);
   font-size: var(--font-size-xs);
 }
@@ -10786,10 +10865,18 @@ a.live-row:focus-visible {
   padding-inline-start: var(--spacing-4);
 }
 .artifact-option {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(7rem, 14rem) auto auto auto;
+  justify-content: start;
   align-items: center;
-  gap: var(--spacing-2);
+  gap: var(--spacing-2) var(--spacing-3);
+}
+@container artifact-schema-form (width < 44rem) {
+  .artifact-column-head,
+  .artifact-option {
+    display: flex;
+    flex-wrap: wrap;
+  }
 }
 
 /* The History tab's comparison of two versions (uilet's VersionCompare, which
@@ -11094,22 +11181,26 @@ a.live-row:focus-visible {
   outline-offset: 2px;
 }
 
-/* PRINT: one slide to a 16:9 page, nothing else of the dashboard. Drawn
-   always and shown only in print, and only while a deck is open. */
-.slides-print {
+/* PRINT: what a `PrintOnly` holds, and nothing else of the dashboard. Drawn
+   always and shown only in print, and only while a deck or a doc is open. */
+.print-only {
   display: none;
 }
+@media print {
+  body:has(> .print-only) > :not(.print-only) {
+    display: none;
+  }
+  .print-only {
+    display: block;
+  }
+}
+
+/* A deck prints one slide to a 16:9 page. */
 @page deck {
   size: 1920px 1080px;
   margin: 0;
 }
 @media print {
-  body:has(> .slides-print) > :not(.slides-print) {
-    display: none;
-  }
-  .slides-print {
-    display: block;
-  }
   .slides-print-page {
     page: deck;
     break-after: page;

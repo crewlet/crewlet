@@ -2,7 +2,7 @@
  * The View tab: an artifact drawn as its kind is drawn, from the dashboard's
  * half of the kind table ([KIND_VIEWS]). A framed kind runs in a sandboxed
  * frame on the artifact origin; a native kind is drawn here from its closed
- * format (a document by the element-constructing Markdown renderer, a deck by
+ * format (a doc by the element-constructing Markdown renderer, a deck by
  * the slide renderer, a dashboard's widgets by the design system's figures
  * over datasets read as the reader, a sheet from its schema), since it runs no
  * author code.
@@ -37,11 +37,13 @@ export interface KindViewProps {
    * says nothing to the room.
    */
   onPublished?: ((version: number) => void) | undefined;
+  /** Whether a framed version says its data is today's; false where a comparison says it once for both sides. */
+  dataNote?: boolean;
 }
 
 /** How each kind draws one version: a record over every kind, so a new kind fails the build until it is drawn. */
 export const KIND_VIEWS: Readonly<Record<ArtifactKind, (props: KindViewProps) => ReactNode>> = {
-  html: ({ detail, version, versions, room, presence, bridgeStores }) => (
+  html: ({ detail, version, versions, room, presence, bridgeStores, dataNote }) => (
     <FrameView
       detail={detail}
       version={version}
@@ -49,9 +51,17 @@ export const KIND_VIEWS: Readonly<Record<ArtifactKind, (props: KindViewProps) =>
       room={room}
       presence={presence}
       bridgeStores={bridgeStores}
+      {...(dataNote === undefined ? {} : { dataNote })}
     />
   ),
-  doc: ({ detail, version }) => <DocView detail={detail} version={version} />,
+  doc: ({ detail, version, presence, onPublished }) => (
+    <DocView
+      detail={detail}
+      version={version}
+      presence={presence}
+      {...(onPublished ? { onPublished } : {})}
+    />
+  ),
   slides: ({ detail, version, presence, onPublished }) => (
     <SlidesView
       detail={detail}

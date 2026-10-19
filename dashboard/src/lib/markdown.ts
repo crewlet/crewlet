@@ -760,10 +760,19 @@ export interface RenderOptions {
    * match the search never made.
    */
   highlight?: readonly string[];
+  /**
+   * Where an image's source is shown from, in place of the source itself: a
+   * doc's pictures are files of its version, fetched with the reader's own
+   * credential and shown through an object URL, never loaded from an address
+   * the text names. It answers null for a source it does not show (not a file
+   * of the version, or not loaded yet), which renders as the alt text. Without
+   * it, a source is shown only when it is a safe link ([safeHref]).
+   */
+  image?: (src: string) => string | null;
 }
 
 /** What the inline walk needs of [RenderOptions], and one thing only it does. */
-export interface InlineOptions extends Pick<RenderOptions, "breaks" | "highlight"> {
+export interface InlineOptions extends Pick<RenderOptions, "breaks" | "highlight" | "image"> {
   /**
    * `anchor` (the default): a link is a link. `text`: a link is its label and
    * an autolink its address, as plain text — for a run drawn INSIDE a control,
@@ -803,7 +812,7 @@ export function renderInline(
       // whole would overflow a phone's column.
       out.push(createElement(InlineCode, { key, whole: code.length <= UnbrokenCode }, code));
     } else if (g.src !== undefined) {
-      const src = safeHref(g.src);
+      const src = options.image ? options.image(g.src) : safeHref(g.src);
       // AN IMAGE WITH A REFUSED SOURCE RENDERS AS ITS ALT TEXT, which is
       // what alt text is for — not as a broken image and not as nothing.
       out.push(
@@ -1196,6 +1205,47 @@ function blockText(block: Block): string {
       // renders to nothing rather than to three dashes in a sentence.
       return "";
   }
+}
+
+/**
+ * Every image source the document names, once each, in order: what a host
+ * resolves before [renderMarkdown] draws it with an `image` option.
+ *
+ * THE SAME WALK the renderer takes ([parseBlocks], then [inlineMatches] into
+ * every run a block renders), so a source listed here is one the renderer
+ * will ask for, and one inside a code span, which renders as text, is not.
+ */
+export function imageSources(source: string): string[] {
+  const out = new Set<string>();
+  const inline = (text: string) => {
+    for (const { groups: g } of inlineMatches(text)) {
+      if (g.tick !== undefined || g.auto !== undefined) continue;
+      if (g.src !== undefined) out.add(g.src);
+      else inline(g.label ?? g.strong ?? g.strongUnder ?? g.em ?? g.emUnder ?? g.del ?? "");
+    }
+  };
+  const block = (b: Block) => {
+    switch (b.kind) {
+      case "heading":
+      case "paragraph":
+        inline(b.text);
+        return;
+      case "quote":
+        b.blocks.forEach(block);
+        return;
+      case "list":
+        for (const item of b.items) item.blocks.forEach(block);
+        return;
+      case "table":
+        for (const row of [b.head, ...b.rows]) row.forEach(inline);
+        return;
+      case "code":
+      case "rule":
+        return;
+    }
+  };
+  parseBlocks(source ?? "").forEach(block);
+  return [...out];
 }
 
 /**

@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
+	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactserve"
@@ -133,10 +134,11 @@ type Service struct {
 	ready   Beacon
 	pace    func() time.Time
 
-	// decks and boards are the decks and dashboard boards this node read
-	// for the dashboard, by version.
-	decks  *versionCache[slideformat.Deck]
-	boards *versionCache[*dashspec.Board]
+	// decks, docs and boards are what this node read of each version for
+	// the dashboard, through the kind's format.
+	decks  *formatCache[slideformat.Deck]
+	docs   *formatCache[docindex.Doc]
+	boards *formatCache[*dashspec.Board]
 }
 
 // New builds the surface.
@@ -165,8 +167,8 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{gate: opts.Gate, reads: opts.Reads, writes: opts.Writes, uploads: opts.Uploads,
 		objects: opts.Objects, frames: opts.Frames, ready: opts.Ready, pace: pace,
-		decks:  newVersionCache[slideformat.Deck](deckCacheBytes),
-		boards: newVersionCache[*dashspec.Board](boardCacheBytes)}, nil
+		decks: newDeckCache(opts.Objects), docs: newDocCache(opts.Objects),
+		boards: newBoardCache(opts.Objects)}, nil
 }
 
 // Gate is the surface's admission, which the read questions take too.
@@ -232,6 +234,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 		{patternFiles, pre, s.file},
 		{"GET /artifacts/{id}/versions/{n}/source", pre, s.source},
 		{"GET /artifacts/{id}/versions/{n}/deck", pre, s.deck},
+		{"GET /artifacts/{id}/versions/{n}/doc", pre, s.doc},
 		{"GET /artifacts/{id}/versions/{n}/outline", pre, s.outline},
 		{"GET /artifacts/{id}/versions/{n}/dashboard", pre, s.board},
 		{"POST /artifacts/ready", ready, s.reportReady},

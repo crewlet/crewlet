@@ -32,7 +32,9 @@ straight to an S3 bucket on a presigned `PUT` the engine issues only when its
 boot probe proved the bucket honours the bindings: the exact length, the served
 content type, the declared SHA-256 as a signed checksum and `if-none-match: *`,
 expiring well inside `objstore.RecordWithin`. An agent's sandbox is never handed
-a presigned URL; the engine reads the box itself. **The engine mints every key;
+a presigned URL; the engine reads the box itself. Nor is the dashboard, whose
+own policy (`connect-src 'self'`) reaches only its origin, so its uploads
+always stream through the engine. **The engine mints every key;
 a client never names one.**
 
 **Finalize reads every new object back** through the object store's verifying

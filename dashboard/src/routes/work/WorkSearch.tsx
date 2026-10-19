@@ -80,11 +80,11 @@ import {
   EmptyState,
   EmptyValue,
   Input,
-  TableKeyCell,
+  SegmentedControl,
   TableEntityCell,
+  TableKeyCell,
   TableTextCell,
 } from "@crewlethq/ui";
-import { Segmented } from "~/ui/primitives.tsx";
 import { SEARCH_MODES, asSearchMode, modeLabel, servedNote } from "~/lib/search.ts";
 import { ClockGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
@@ -177,10 +177,12 @@ export function WorkSearch() {
           />
         </div>
         <div className="work-search-how">
-          <Segmented
+          <SegmentedControl
+            semantics="radio"
+            activate="manual"
             value={mode}
-            onChange={setMode}
-            ariaLabel="Rank by"
+            onValueChange={setMode}
+            label="Rank by"
             options={SEARCH_MODES.map((m) => ({ value: m.value, label: m.label, title: m.hint }))}
           />
           <Button variant="primary" leadingIcon={<SearchGlyph size="sm" />} type="submit">
