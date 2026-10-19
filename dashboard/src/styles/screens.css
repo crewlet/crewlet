@@ -7262,22 +7262,27 @@ a.work-cal-chip {
 }
 
 /* A TABLE SCROLLS RATHER THAN OVERFLOWING ITS PANEL. A page's own table is
-   written for a document and can be wider than the column it lands in here. */
-.md-table {
+   written for a document and can be wider than the column it lands in here.
+   SCOPED TO `.prose.md` like every rule above: the same renderer draws a doc
+   and a Knowledge page into uilet's `Document`, and the rich editor names its
+   tables `md-table` too, so an unscoped rule here outranked the design
+   system's table there (a 12px table in a 14px body, its header in the
+   secondary ink). */
+.prose.md .md-table {
   overflow-x: auto;
 }
-.md-table table {
+.prose.md .md-table table {
   border-collapse: collapse;
   width: 100%;
   font-size: var(--font-size-xs);
 }
-.md-table th,
-.md-table td {
+.prose.md .md-table th,
+.prose.md .md-table td {
   padding: var(--spacing-1) var(--spacing-2);
   border-bottom: 1px solid var(--color-border-default);
   vertical-align: top;
 }
-.md-table th {
+.prose.md .md-table th {
   font-weight: 600;
   color: var(--color-text-secondary);
   white-space: nowrap;
