@@ -205,3 +205,31 @@ func (h *harness) searchText(id artifacts.ID) string {
 	}
 	return text
 }
+
+// A DESIGN IS HELD TO THE THEME WARNING AS A PAGE IS: its boards are pages, so a
+// version none of whose pages or stylesheets follows the reader's appearance is
+// warned, the finding naming its first board rather than the canvas.
+func TestADesignThatIgnoresTheThemeIsWarnedOnItsFirstBoard(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{})
+	files := landingFiles()
+	files["site.css"] = "body { margin: 0 }"
+	c := h.person("ada", h.opKey("create"))
+	up := h.upload(c, artifacts.ID{}, files)
+	_, report, err := h.svc.Create(t.Context(), c, artifactupload.CreateRequest{
+		Kind: artifacts.KindDesign, Title: "Landing page", Owner: c.Authority.Actor.Name,
+		OwnerKind: c.Authority.Actor.Kind, Upload: up, Files: specs(files), Entry: canvasformat.Path,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found []lint.Finding
+	for _, w := range report.Warnings {
+		if w.Code == lint.CodeNoDarkMode {
+			found = append(found, w)
+		}
+	}
+	if len(found) != 1 || found[0].Path != "hero.html" {
+		t.Errorf("theme warnings %+v, want one on hero.html", found)
+	}
+}
