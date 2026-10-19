@@ -10,9 +10,9 @@ import (
 // A ledger-owned type rather than the tool loop's Execution because the two
 // answer different questions: the loop's record is live state a phase is still
 // accumulating, this is a closed fact a later round reads. Keeping them apart
-// is also what lets this package import nothing — everything that HOLDS a
-// ledger (the turn context, the prompt builder, the API layer) would otherwise
-// drag the provider stack in behind it.
+// is also what keeps the tool loop out of this package's imports — everything
+// that HOLDS a ledger (the turn context, the prompt builder, the API layer)
+// would otherwise drag the provider stack in behind it.
 type Call struct {
 	Name string
 

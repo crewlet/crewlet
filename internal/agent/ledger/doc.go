@@ -33,7 +33,9 @@
 // would push it to fabricate the data instead. Across turns the rule is
 // STRONGER, not weaker — a read from last Tuesday is stale by construction.
 //
-// The package imports nothing from crewlet. The turn context, the prompt
-// builder and the API layer all hold ledger values, and a ledger that dragged
-// the provider stack behind it would be held by all three.
+// The package imports nothing from crewlet but internal/plainjson, a leaf
+// over the standard library that holds the one rule for JSON read as text, so
+// it still drags nothing behind it. The turn context, the prompt builder and
+// the API layer all hold ledger values, and a ledger that dragged the provider
+// stack behind it would be held by all three; a test holds the import list.
 package ledger

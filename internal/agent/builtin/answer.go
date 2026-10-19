@@ -3,6 +3,7 @@ package builtin
 import (
 	"fmt"
 
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -67,8 +68,8 @@ func jsonAnswer(v any, narrowWith string) (tools.Result, error) {
 func kib(n int) int { return (n + 1<<10 - 1) >> 10 }
 
 // encodeAnswer is a tool answer as its reader is handed it: indented JSON,
-// with what a person wrote left as they wrote it — [tools.PlainJSON], whose
-// doc says why that is not [json.MarshalIndent] — and these are the bytes
-// [ToolAnswerBytes] weighs, so a page of markup weighs what the page of prose
-// beside it does rather than four times it.
-func encodeAnswer(v any) ([]byte, error) { return tools.PlainJSON(v, "  ") }
+// with what a person wrote left as they wrote it — [plainjson.Marshal], whose
+// package doc says why that is not [json.MarshalIndent] — and these are the
+// bytes [ToolAnswerBytes] weighs, so a page of markup weighs what the page of
+// prose beside it does rather than four times it.
+func encodeAnswer(v any) ([]byte, error) { return plainjson.Marshal(v, "  ") }
