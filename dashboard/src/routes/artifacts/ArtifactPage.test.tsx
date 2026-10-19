@@ -35,10 +35,11 @@ const refetch = vi.fn();
 
 vi.mock("~/lib/useQuery.ts", () => ({ useQuery: vi.fn() }));
 vi.mock("~/lib/artifacts/useDataStore.ts", () => ({ useDataStore: vi.fn(() => null) }));
+const roomOthers = vi.hoisted(() => [] as unknown[]);
 vi.mock("~/lib/artifacts/room.ts", () => ({
   useArtifactRoom: () => ({
     state: { kind: "joined" },
-    others: [],
+    others: roomOthers,
     roster: { members: [] },
   }),
 }));
@@ -169,6 +170,7 @@ beforeEach(() => {
   onMode.mockClear();
   reader.handle = "";
   reader.login = "";
+  roomOthers.length = 0;
 });
 
 afterEach(() => {
@@ -255,6 +257,25 @@ test("the People panel starts with the reader, seat or none", () => {
   mount(`#/artifacts/${ID}?panel=people`);
   const panel = screen.getByRole("complementary", { name: "People here" });
   expect(within(panel).getByText("You")).toBeTruthy();
+});
+
+// THE ROOM NAMES A SEATLESS READER BY THEIR LOGIN, so their own second tab is
+// theirs: compared against the seat alone, it was drawn as somebody else
+// they could follow.
+test("a seatless reader's own other tab is counted beside You", () => {
+  reader.login = "token:review";
+  roomOthers.push({
+    session: "s-2",
+    seat: "token:review",
+    kind: "operator",
+    activity: "viewing",
+    focus: {},
+    at: "2026-10-18T10:00:00Z",
+  });
+  mount(`#/artifacts/${ID}?panel=people`);
+  const panel = screen.getByRole("complementary", { name: "People here" });
+  expect(within(panel).getByText("You, 2 tabs")).toBeTruthy();
+  expect(within(panel).queryByText("token:review")).toBeNull();
 });
 
 test("Data is a control and a key only where the artifact keeps data", () => {
