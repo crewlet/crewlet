@@ -34,11 +34,13 @@ export interface KindViewProps {
    * says nothing to the room.
    */
   onPublished?: ((version: number) => void) | undefined;
+  /** Whether a framed version says its data is today's; false where a comparison says it once for both sides. */
+  dataNote?: boolean;
 }
 
 /** How each kind draws one version: a record over every kind, so a new kind fails the build until it is drawn. */
 export const KIND_VIEWS: Readonly<Record<ArtifactKind, (props: KindViewProps) => ReactNode>> = {
-  html: ({ detail, version, versions, room, presence, bridgeStores }) => (
+  html: ({ detail, version, versions, room, presence, bridgeStores, dataNote }) => (
     <FrameView
       detail={detail}
       version={version}
@@ -46,6 +48,7 @@ export const KIND_VIEWS: Readonly<Record<ArtifactKind, (props: KindViewProps) =>
       room={room}
       presence={presence}
       bridgeStores={bridgeStores}
+      {...(dataNote === undefined ? {} : { dataNote })}
     />
   ),
   doc: ({ detail, version, presence, onPublished }) => (

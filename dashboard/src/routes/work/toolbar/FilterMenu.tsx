@@ -33,7 +33,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { Button, Input, Popover, Tag } from "@crewlethq/ui";
+import { Button, Input, Popover, SegmentedControl, Tag } from "@crewlethq/ui";
 import { CheckGlyph, ChevronLeftGlyph, SearchGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import {
   DUE_FILTERS,
@@ -51,10 +51,6 @@ import {
   type TagMode,
   type TrackerFilters,
 } from "~/lib/work.ts";
-// OURS, for the reason `ItemsView` gives: the kit's segmented control selects
-// as the arrows move, and a relation that re-asked the engine on every arrow
-// would be three queries for one choice.
-import { Segmented } from "~/ui/primitives.tsx";
 import { humanize } from "~/lib/format.ts";
 import type { WorkFieldDef, WorkProjectTag, WorkStatusDef, WorkTypeDef } from "~/protocol/index.ts";
 
@@ -554,10 +550,12 @@ function PriorityPanel({
     <div className="work-menu">
       <PanelHead label={label} onBack={onBack} />
       <div className="work-menu-ops">
-        <Segmented
+        <SegmentedControl
+          semantics="radio"
+          activate="manual"
           value={op}
-          onChange={(value) => setOp(value as PriorityOp)}
-          ariaLabel="How the priority compares"
+          onValueChange={(value) => setOp(value as PriorityOp)}
+          label="How the priority compares"
           options={PRIORITY_OPS.map((o) => ({ value: o.value, label: o.label }))}
         />
       </div>
@@ -597,13 +595,15 @@ function TagPanel({
     <div className="work-menu">
       <PanelHead label={label} onBack={onBack} />
       <div className="work-menu-ops">
-        <Segmented
+        <SegmentedControl
+          semantics="radio"
+          activate="manual"
           value={mode}
-          onChange={(value) => {
+          onValueChange={(value) => {
             setMode(value as TagMode);
             if (chosen.length > 0) onSet(tagFilter(value as TagMode, chosen));
           }}
-          ariaLabel="How the tags match"
+          label="How the tags match"
           options={TAG_MODES.map((m) => ({ value: m.value, label: m.label }))}
         />
       </div>

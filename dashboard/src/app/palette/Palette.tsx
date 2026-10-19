@@ -9,12 +9,16 @@
  * # What it searches, per scope (`hits.ts` has the rules)
  *
  *  - ALL — screens, a pasted event / trace / turn id, the company's tasks and
- *    pages (three of each), seats and units, tools, and the three actions;
+ *    pages (three of each), seats and units, the tools the company connected,
+ *    a row into the Artifacts scope, and the three actions;
  *    when nothing is typed, the turns running now and then the recents;
  *  - TASKS — `work_search`, hybrid, eight hits, with its four answers kept
  *    apart (too short, searching, refused, nothing matched) and a row to the
  *    full search screen;
  *  - PAGES — `knowledge`, the company's one knowledge backend;
+ *  - ARTIFACTS: `artifacts` with the term, everything the reader can open,
+ *    eight hits; All offers a row that carries the term here rather than
+ *    asking a fourth question itself;
  *  - AGENTS — the org chart with each seat's status from the agents push, the
  *    engine's own name tiers (`colleague`) first;
  *  - ACTIONS — the per-browser commands, and the three writes.
@@ -124,6 +128,8 @@ import {
   PROJECT_PAGE,
   SCOPES,
   SOURCE_CHIPS,
+  ARTIFACT_HITS,
+  artifactHits,
   SEARCH_MIN,
   TASK_HITS,
   colleagueSendable,
@@ -270,7 +276,9 @@ export function CommandPalette({
   // A TERM PAST THE ENGINE'S SEARCH BOUND ASKS NEITHER SEARCH NOR THE ANSWER,
   // and the lead says why (`searchTooLong`): sent, both would be refused, and
   // a list that silently lost its tasks and pages reads as nothing matching.
-  const searchable = (scope === "all" || scope === "tasks" || scope === "pages") && !picking;
+  const searchable =
+    (scope === "all" || scope === "tasks" || scope === "pages" || scope === "artifacts") &&
+    !picking;
   const tooLong = searchable ? searchTooLong(term) : null;
   const wantsTasks =
     served &&
@@ -290,6 +298,15 @@ export function CommandPalette({
     term.length >= SEARCH_MIN &&
     tooLong === null;
   const pages = useSearchQuery("knowledge", { q: term }, { enabled: wantsPages });
+  // ARTIFACTS IN THEIR OWN SCOPE ONLY, so All still asks three questions. The
+  // listing is open to every signed-in reader and the engine decides each row.
+  const wantsArtifacts =
+    served && !picking && scope === "artifacts" && term.length >= SEARCH_MIN && tooLong === null;
+  const artifacts = useQuery(
+    "artifacts",
+    { scope: "all", q: term, sort: "updated", limit: ARTIFACT_HITS },
+    { enabled: wantsArtifacts },
+  );
   const pickingAgent = pick?.kind === "assign" || pick?.kind === "ask";
   const nameTerm = picking ? pickTerm : term;
   const wantsNames =
@@ -324,6 +341,7 @@ export function CommandPalette({
   // a new object is this term's answer arriving, and nothing else.
   const taskAnswer = useSettled(tasks, term, wantsTasks);
   const pageAnswer = useSettled(pages, term, wantsPages);
+  const artifactAnswer = useSettled(artifacts, term, wantsArtifacts);
   const nameAnswer = useSettled(names, nameTerm, wantsNames);
 
   // ---- the answer --------------------------------------------------------
@@ -945,6 +963,20 @@ export function CommandPalette({
       push("tasks", "Tasks", taskRows(allRows));
       push("pages", "Pages", pageRows(allRows));
       for (const g of agentGroups(ALL_ROWS, true)) push(g.id, g.label, g.items);
+      if (term.length >= SEARCH_MIN && tooLong === null) {
+        push("artifacts", "Artifacts", [
+          {
+            id: "artifact-scope",
+            icon: <SearchGlyph size="sm" />,
+            label: `Find “${term}” in artifacts →`,
+            hint: "sheets, pages and documents",
+            onSelect: () => {
+              setScope("artifacts");
+              return false;
+            },
+          },
+        ]);
+      }
       push("tools", "Tools", asItems(toolHits(tools, lower, nav, ALL_ROWS)));
       push("actions", "Actions", actionRows());
       const drawn = new Set([
@@ -970,6 +1002,8 @@ export function CommandPalette({
     push("pages", "Pages", pageRows(Infinity));
     const drawn = new Set((pageAnswer.data?.hits ?? []).map((p) => `page:${p.id}`));
     push("sources", "Sources of the answer", sourceRows(drawn));
+  } else if (scope === "artifacts") {
+    push("artifacts", "Artifacts", asItems(artifactHits(artifactAnswer.data?.items ?? [], nav)));
   } else if (scope === "agents") {
     for (const g of agentGroups(Infinity, true)) push(g.id, g.label, g.items);
   } else {
@@ -1040,6 +1074,13 @@ export function CommandPalette({
       if (pageAnswer.data.available === false)
         return pageAnswer.data.note || "Knowledge search did not run.";
       return `No page matches “${term}”.`;
+    }
+    if (scope === "artifacts") {
+      if (term.length < SEARCH_MIN) return "Type two or more characters.";
+      if (tooLong) return tooLong;
+      if (artifactAnswer.error) return "Artifact search did not run.";
+      if (!artifactAnswer.data) return "Searching…";
+      return `No artifact you can open matches “${term}”.`;
     }
     if (scope === "agents") return `Nobody in the chart matches “${term}”.`;
     return `Nothing matches “${term}”.`;
@@ -1285,6 +1326,7 @@ const SCOPE_NOTES: Record<Exclude<ScopeId, "actions">, string> = {
   all: "Screens, tasks, pages, agents",
   tasks: "The company’s tasks",
   pages: "The knowledge base",
+  artifacts: "Sheets, pages and documents you can open",
   agents: "The org chart",
 };
 

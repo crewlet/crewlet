@@ -396,7 +396,7 @@ share does not move.
 
 **One sidebar, and three nouns that keep it one.** The sidebar lists where a
 reader can go — nine **workspaces** — and the few objects they keep coming back
-to: the views they pinned and the pages they starred. A
+to: the views and artifacts they pinned and the pages they starred. A
 workspace's own **sections** are paths drawn as tabs in its page header
 (Settings draws its eleven, and cross-links to the reader's Account and to
 Budgets, as a grouped column; Work draws its as the lenses of the scope its
@@ -670,7 +670,12 @@ pinned row RUNS the view, `#/work/tasks?view=<key>` or its project's list for a 
 saved on a project, rather than opening the inventory page about it — and the
 total beside it is that list's own: the engine counts a pinned view with every
 task filtered on its own, as every surface that runs a view asks for it, never
-in the grammar's tree mode, where an open epic's finished subtasks rode along),
+in the grammar's tree mode, where an open epic's finished subtasks rode along;
+then the ARTIFACTS this reader pinned, each a row to its page with its kind's
+glyph, listed for every reader the engine serves because a share alone admits
+a reader to Artifacts, and read from the one listing For you and an artifact's
+Pin item read (`lib/artifacts/pins.ts`), so a pin made anywhere moves the
+sidebar at once),
 **Starred** (drawn only when there is one), and **Running** — one row per seat
 the engine says is working, drawn while one is: the seat's badge with its
 status glyph, its name, the key of the item its turn is charged to as the lead,
@@ -3509,16 +3514,17 @@ It is the design system's `CommandPalette` — the combobox, the scope tabs, the
 answer's live region and the key legend are the kit's — and `app/palette/` is
 what it searches and what a row does.
 
-### Five scopes, three sigils
+### Six scopes, three sigils
 
-A launcher with one index answers "where do I go", and four questions do not
+A launcher with one index answers "where do I go", and five questions do not
 fit that shape, so each is a tab under the field:
 
 | Scope | Searches | Sigil |
 |---|---|---|
-| **All** | screens and **Switch project…**, a pasted event / trace / turn id, three projects ranked as the switcher ranks them, three tasks and three pages (two of each under an answer), agents, people and teams, tools, the three actions, the answer's remaining sources, and **Search all work for “…”**, the full ranked search; when nothing is typed, recents, then **Running now**: a row per seat working as the palette opened, oldest first, its badge, its name and what it is doing ("Executing ENG-412"), each going to the turn's watch link | |
+| **All** | screens and **Switch project…**, a pasted event / trace / turn id, three projects ranked as the switcher ranks them, three tasks and three pages (two of each under an answer), agents, people and teams, the tools the company connected (never the engine's own agent tools, which Settings › Tools & MCP lists), **Find “…” in artifacts**, which carries the term into Artifacts, the three actions, the answer's remaining sources, and **Search all work for “…”**, the full ranked search; when nothing is typed, recents, then **Running now**: a row per seat working as the palette opened, oldest first, its badge, its name and what it is doing ("Executing ENG-412"), each going to the turn's watch link | |
 | **Tasks** | `work_search`, hybrid, eight hits, and a row to the full search screen | `#` |
 | **Pages** | `knowledge`, the company's one knowledge backend | |
+| **Artifacts** | `artifacts` with the term over everything the reader can open, eight hits, each row its kind | |
 | **Agents** | the org chart — the engine's own name tiers first (`colleague`), each seat's status glyph from the agents push, then people and teams | `@` |
 | **Actions** | the per-browser commands (Change theme…, a step listing the themes in their groups, which a query narrows by name, tag or group, whose highlight previews behind the palette, whose Enter applies and closes with an Undo toast, and from which Escape or an empty Backspace goes back to Actions; the mode; density; copy link, the one place a page's address is copied from, a refusal said in a toast; sign in as somebody else; clear recents; the key legend; Switch project…) and the three changes; the legend names who they are made as | `>` |
 
@@ -3549,8 +3555,9 @@ term: the answer on hand is remembered against the term it answers.
 The pill at the end of the scope row is the mode the search was SERVED in —
 "Hybrid search", or "Keyword search" on a company with no embeddings — never
 the mode asked. At most three of the socket's four query slots are the
-palette's (`work_search`, `knowledge`, `colleague`; a picker holds two), so the
-screen under it keeps one. The company's projects (`work_projects`) are read
+palette's (`work_search`, `knowledge`, `colleague`; a picker holds two;
+Artifacts asks `artifacts` alone), so the screen under it keeps one. That is
+why All offers a row into Artifacts rather than asking the listing itself. The company's projects (`work_projects`) are read
 once as the palette opens, before a term can be typed, so they never contend
 with the three. A term longer than the engine resolves to a colleague (200
 bytes — a pasted log line) is not sent to `colleague`, and the chart's own

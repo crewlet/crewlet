@@ -114,6 +114,8 @@ export function ArtifactCompare({
       presence,
       drawn: [],
       bridgeStores,
+      // THE NOTE ON TODAY'S DATA IS SAID ONCE for both sides, under the comparison.
+      dataNote: false,
     });
   // THE PANES ARE HANDED OVER ONLY FOR A KIND DRAWN SIDE BY SIDE, and uilet
   // mounts them only while that lens is on show, so no frame runs behind the

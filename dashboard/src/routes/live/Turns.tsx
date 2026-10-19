@@ -57,21 +57,15 @@ import { CoverageNote } from "~/components/CoverageNote.tsx";
 import {
   Button,
   Card,
+  SegmentedControl,
   Select,
   Skeleton,
-  Tag,
-  TableNumberCell,
   TableDateCell,
   TableEntityCell,
+  TableNumberCell,
+  Tag,
 } from "@crewlethq/ui";
 import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
-// OURS, AND DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
-// `semantics`: `radio` selects as the arrows move, `tabs` is manual but
-// demands a `panelId` naming a TabPanel neither of these rows controls. Both
-// rows here drive a `useParam` that re-runs this screen's query, which is the
-// exact case our own `activate="manual"` exists for — arrowing across three
-// options would ask the engine three times.
-import { Segmented } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -335,10 +329,12 @@ export function Turns() {
           placeholder="Every seat"
           active={seat !== ""}
         />
-        <Segmented
-          ariaLabel="Which turns"
+        <SegmentedControl
+          semantics="radio"
+          activate="manual"
+          label="Which turns"
           value={failed || "all"}
-          onChange={(v) => setFailed(v === "all" ? "" : v)}
+          onValueChange={(v) => setFailed(v === "all" ? "" : v)}
           options={[
             { value: "all", label: "All" },
             { value: "true", label: "Carried a failure" },
@@ -346,10 +342,12 @@ export function Turns() {
           ]}
         />
         <span className="spacer" />
-        <Segmented
-          ariaLabel="Order"
+        <SegmentedControl
+          semantics="radio"
+          activate="manual"
+          label="Order"
           value={sort}
-          onChange={setSort}
+          onValueChange={setSort}
           options={[
             { value: "-started", label: "Newest" },
             { value: "-tokens", label: "Most tokens" },

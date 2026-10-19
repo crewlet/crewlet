@@ -33,9 +33,10 @@ import {
   Card,
   EmptyState,
   EmptyValue,
+  SegmentedControl,
   Select,
-  TableNumberCell,
   TableDateCell,
+  TableNumberCell,
   TableTextCell,
 } from "@crewlethq/ui";
 import { WandSparklesGlyph } from "@crewlethq/icons/glyphs";
@@ -54,7 +55,6 @@ import { useNow } from "~/lib/clock.ts";
 import { plural, tsKey, fmtCount } from "~/lib/format.ts";
 import { loadedBy } from "~/lib/pageReads.ts";
 import { seatBadge } from "~/ui/SeatAvatar.tsx";
-import { Segmented } from "~/ui/primitives.tsx";
 import type { SkillLoad } from "~/contract/pages.ts";
 import type { PageSummary } from "~/protocol/index.ts";
 import { usePagedPages } from "./usePagedPages.ts";
@@ -67,10 +67,12 @@ export function Skills() {
   return (
     <>
       <div className="toolbar">
-        <Segmented
-          ariaLabel="Which skills"
+        <SegmentedControl
+          semantics="radio"
+          activate="manual"
+          label="Which skills"
           value={kind}
-          onChange={setKind}
+          onValueChange={setKind}
           options={[
             { value: "pages", label: "Tool skills", title: "Pages the engine offers a phase" },
             { value: "learned", label: "Learned", title: "What one agent drew from its own work" },

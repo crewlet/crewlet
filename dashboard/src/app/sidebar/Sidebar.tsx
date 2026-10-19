@@ -58,6 +58,7 @@
 import { useMemo, type ReactNode } from "react";
 import {
   AppShell,
+  ArtifactKindGlyph,
   BrandLockup,
   Kbd,
   SearchTrigger,
@@ -87,6 +88,8 @@ import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
 import { pageCount, viewRun } from "~/lib/work.ts";
 import { useStarred } from "~/lib/starred.ts";
+import { artifactPath } from "~/lib/artifacts/api.ts";
+import { usePins } from "~/lib/artifacts/pins.ts";
 import { capsOf, keyRow, useKeymap } from "../keymap.ts";
 import { inboxFigure, useInboxCounts } from "~/lib/useInboxCounts.ts";
 import { useOwnQueueCount } from "~/lib/useQueueCount.ts";
@@ -291,12 +294,13 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
         {/* EACH LIVE SECTION HAS ITS OWN BOUNDARY: they draw rows the
             engine or the browser's storage sent, and a malformed one must
             cost that list and never the navigation above it. */}
-        {!unserved && viewer.tracker && (
+        {!unserved && (
           <RailBoundary label="Pinned" resetKey={at}>
             <PinnedSection
               path={route.path}
               viewKey={route.query.get("view") ?? ""}
               owner={viewer.owner}
+              tracker={viewer.tracker}
             />
           </RailBoundary>
         )}
@@ -369,7 +373,8 @@ function NavRow({ label, icon, glyph, lead, path, query, current, badge, count }
 }
 
 /**
- * The views THIS READER pinned, each with the total it selects.
+ * What THIS READER pinned: their saved views, each with the total it selects,
+ * then the artifacts they pinned.
  *
  * THE CALLER'S OWN, and the engine says whose: `work_saved_views` counts the
  * pins of whoever asks — a `viewer=` that named anybody else was a free choice
@@ -385,28 +390,38 @@ function NavRow({ label, icon, glyph, lead, path, query, current, badge, count }
  * `counts=true` makes the engine run each pinned view's own count in the same
  * read; a view that no longer compiles carries a refusal instead, and draws no
  * figure rather than a wrong one.
+ *
+ * AN ARTIFACT PIN NEEDS NO GRANT: a share alone admits a reader to Artifacts,
+ * so the artifacts the reader pinned are listed for every reader the engine
+ * serves, from the one listing the gallery and the page read (`usePins`), and
+ * a press anywhere moves this list at once.
  */
 function PinnedSection({
   path,
   viewKey,
   owner,
+  tracker,
 }: {
   path: string[];
   /** The `view=` the reader is on, which is what marks a pinned row current. */
   viewKey: string;
   /** The name the reader's own record is kept under, or "" for nobody's. */
   owner: string;
+  /** Whether the reader holds Tracker, which saved views need. */
+  tracker: boolean;
 }) {
   const views = useQuery(
     "work_saved_views",
     { counts: true },
     {
-      enabled: owner !== "",
+      enabled: tracker && owner !== "",
       pollMs: 120_000,
     },
   );
-  const pinned = (views.data?.views ?? []).filter((v) => v.pinned && v.id);
-  if (pinned.length === 0) return null;
+  const artifacts = usePins();
+  const pinned = tracker ? (views.data?.views ?? []).filter((v) => v.pinned && v.id) : [];
+  const pinnedArtifacts = artifacts.data?.items ?? [];
+  if (pinned.length === 0 && pinnedArtifacts.length === 0) return null;
   return (
     <SidebarNav.Group label="Pinned">
       {pinned.map((v) => {
@@ -430,6 +445,18 @@ function PinnedSection({
                 ? undefined
                 : { value: v.count_capped ? `${v.count}+` : v.count, label: "tasks" }
             }
+          />
+        );
+      })}
+      {pinnedArtifacts.map((item) => {
+        const at = artifactPath(item.id);
+        return (
+          <NavRow
+            key={`artifact:${item.id}`}
+            label={item.title}
+            glyph={<ArtifactKindGlyph kind={item.kind} size="sm" />}
+            path={at}
+            current={samePath(path, at)}
           />
         );
       })}

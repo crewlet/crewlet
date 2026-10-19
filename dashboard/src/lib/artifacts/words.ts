@@ -11,6 +11,7 @@ import {
   ARTIFACT_CAPABILITIES,
   ARTIFACT_KINDS,
   ARTIFACT_ROLES,
+  ARTIFACT_TRASH_RETENTION_DAYS,
   SHAREABLE_ROLES,
 } from "~/contract/artifacts.ts";
 import type {
@@ -20,9 +21,12 @@ import type {
   ArtifactHistoryEntry,
   ArtifactKind,
   ArtifactRole,
+  DataFieldChange,
+  DataHistoryEntry,
+  DataVerdict,
   ShareableRole,
 } from "~/protocol/index.ts";
-import { plural } from "../format.ts";
+import { fmtDate, parseUTC, plural } from "../format.ts";
 
 /** What each kind is called, in the eyebrow, the gallery's Type column and its filter. */
 export const KIND_WORDS: Readonly<Record<ArtifactKind, string>> = {
@@ -81,6 +85,99 @@ export const CAPABILITY_WORDS: Readonly<Record<ArtifactCapability, string>> = {
 
 /** Every capability, in the engine's order. */
 export const CAPABILITIES: readonly ArtifactCapability[] = ARTIFACT_CAPABILITIES;
+
+/**
+ * Why the datastore did not take a write, in a reader's words: the sentence
+ * after "Not saved:". The applier's own `reason` names the rule it applied for
+ * the agent tools and the logs (op indices, `if_version`, field keys), which a
+ * person reading a sheet can act on none of, so no screen draws it.
+ */
+export const DATA_REFUSAL_WORDS: Readonly<Record<Exclude<DataVerdict, "applied">, string>> = {
+  conflict: "it changed since it was read.",
+  invalid: "the value does not fit this column.",
+  forbidden: "you cannot change this.",
+  quota: "the sheet has reached its storage limit.",
+  gone: "the data was deleted.",
+};
+
+/** One refused write said whole: "Not saved: it changed since it was read." */
+export function dataRefusalText(verdict: Exclude<DataVerdict, "applied">): string {
+  return `Not saved: ${DATA_REFUSAL_WORDS[verdict]}`;
+}
+
+/** A refusal's reason as a sentence of its own, beside a "Not saved" tag. */
+export function dataRefusalReason(verdict: Exclude<DataVerdict, "applied">): string {
+  const words = DATA_REFUSAL_WORDS[verdict];
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** Names in a sentence: "Notes", "Notes and Gate", "3 columns". */
+function fieldList(labels: readonly string[]): string {
+  if (labels.length === 0) return "";
+  if (labels.length === 1) return labels[0]!;
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return plural(labels.length, "column");
+}
+
+/**
+ * One datastore write as a sentence after its actor's name: what it changed,
+ * by the columns' own labels, or what it tried to change when the store
+ * refused it. The refusal's reason is said beside it (`dataRefusalReason`),
+ * never the applier's own detail.
+ */
+export function dataChangeWords(
+  entry: DataHistoryEntry,
+  labelOf: (collection: string, field: string) => string,
+): string {
+  if (entry.op === "configure") {
+    return entry.verdict === "applied" ? "changed the schema" : "tried to change the schema";
+  }
+  if (entry.op === "purge") return "deleted the data";
+  const labels = [
+    ...new Set(entry.changes.flatMap((c) => (c.f ?? []).map((f) => labelOf(c.c, f.f)))),
+  ];
+  const rows = new Set(entry.changes.filter((c) => c.d).map((c) => `${c.c}/${c.d}`)).size;
+  const fields = fieldList(labels);
+  if (entry.verdict !== "applied") {
+    if (!fields) return "tried to make a change";
+    return `tried to change ${fields}${rows > 0 ? ` in ${plural(rows, "row")}` : ""}`;
+  }
+  const removed = entry.changes.filter((c) => c.op === "delete").length;
+  if (removed > 0 && removed === entry.changes.length) return `deleted ${plural(removed, "row")}`;
+  const verb = entry.op === "undo" ? "undid a change to" : "changed";
+  return `${verb} ${fields || "nothing"}${rows > 0 ? ` in ${plural(rows, "row")}` : ""}`;
+}
+
+/** The most of a value a history line quotes before it is cut. */
+const QUOTED_MAX = 80;
+
+/** A stored value as a history line quotes it, or null for an empty one. */
+function quoted(value: unknown): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (Array.isArray(value) && value.length === 0) return null;
+  const text = Array.isArray(value)
+    ? value.map((v) => (typeof v === "string" ? v : JSON.stringify(v))).join(", ")
+    : typeof value === "string"
+      ? value
+      : JSON.stringify(value);
+  const cut = text.length > QUOTED_MAX ? `${text.slice(0, QUOTED_MAX - 1).trimEnd()}…` : text;
+  return `“${cut}”`;
+}
+
+/**
+ * One cell's change as its history says it: "Set to “Ready”", "Changed from
+ * “a” to “b”", "Cleared “a”". A long value the history keeps only a digest
+ * of is said to have changed, without either side.
+ */
+export function cellChangeWords(change: DataFieldChange): string {
+  if (change.bh || change.ah) return "Changed the text";
+  const before = quoted(change.b);
+  const after = quoted(change.a);
+  if (before === null && after === null) return "Left empty";
+  if (before === null) return `Set to ${after}`;
+  if (after === null) return `Cleared ${before}`;
+  return `Changed from ${before} to ${after}`;
+}
 
 /** An actor's name as a row shows it: the seat handle or login, or "the engine". */
 export function actorName(
@@ -211,4 +308,22 @@ function stripPast(said: string): string {
     if (said.startsWith(`${past} `) || said === past) return base + said.slice(past.length);
   }
   return said;
+}
+
+/** How long the trash keeps an artifact, in words: "30 days". */
+export const TRASH_KEPT = plural(ARTIFACT_TRASH_RETENTION_DAYS, "day");
+
+/** When a trashed artifact is deleted for good, as an instant, or null where the trash time is unknown. */
+export function purgeAt(trashedAt: string | null | undefined): string | null {
+  const at = parseUTC(trashedAt);
+  if (!at || at.getUTCFullYear() < 2000) return null;
+  return new Date(at.getTime() + ARTIFACT_TRASH_RETENTION_DAYS * 86_400_000).toISOString();
+}
+
+/** "Deleted for good on 17 November 2026 unless restored.", or the retention where the date is unknown. */
+export function purgeSentence(trashedAt: string | null | undefined): string {
+  const at = purgeAt(trashedAt);
+  return at
+    ? `It is deleted for good on ${fmtDate(at)} unless its owner restores it.`
+    : `It is deleted for good ${TRASH_KEPT} after it was trashed unless its owner restores it.`;
 }

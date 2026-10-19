@@ -74,6 +74,11 @@ export const DOC_MAX_TABS = 32;
 
 /** The longest tab title, in UTF-8 bytes (`docindex.MaxTitleBytes`). */
 export const DOC_TAB_TITLE_MAX_BYTES = 120;
+/**
+ * How many days a trashed artifact is kept before it is deleted for good
+ * (`artifacts.TrashRetention`): the date every trash sentence names.
+ */
+export const ARTIFACT_TRASH_RETENTION_DAYS = 30;
 
 /** Every column type a datastore validates (`artifacts.ColumnTypes`). */
 export const COLUMN_TYPES = [

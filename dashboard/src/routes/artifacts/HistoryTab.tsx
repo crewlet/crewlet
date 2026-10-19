@@ -16,7 +16,7 @@
  * opens it ([ArtifactCompare]).
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParam } from "~/app/router.tsx";
 import {
   Button,
@@ -77,12 +77,16 @@ export function HistoryTab({
 }) {
   const people = useArtifactPeople();
   const now = useNow();
-  const toast = useToast();
   const [picked, setPicked] = useState(showing);
   const [labelling, setLabelling] = useState<number | null>(null);
   const publish = useArtifactAccess({ app: true, role: "editor", held: detail.role });
   const update = useArtifactAccess({ role: "editor", held: detail.role });
-  const restore = useKeyedGesture();
+  const [restoring, setRestoring] = useState<number | null>(null);
+  // THE COMPARISON IS BROUGHT INTO VIEW when it is asked for: it is drawn
+  // under the versions, their details and the change record, so on a phone
+  // pressing Compare changed nothing a reader could see.
+  const compareBox = useRef<HTMLDivElement>(null);
+  const shownAgainst = useRef<number | undefined>(undefined);
   const [againstParam, setAgainst] = useParam("against", "");
   const [lensParam, setLens] = useParam("lens", "source", "section");
   const lens: CompareLens = (COMPARE_LENSES as readonly string[]).includes(lensParam)
@@ -97,6 +101,13 @@ export function HistoryTab({
     versions.some((v) => v.number === againstAsked)
       ? againstAsked
       : undefined;
+
+  useEffect(() => {
+    if (against !== undefined && against !== shownAgainst.current) {
+      compareBox.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    }
+    shownAgainst.current = against;
+  }, [against]);
 
   const items: VersionItem[] = useMemo(
     () =>
@@ -141,26 +152,7 @@ export function HistoryTab({
           onCompare={(n: number | null) => setAgainst(n === null ? "" : String(n))}
           oldestKept={Number.isFinite(oldest) ? oldest : undefined}
           now={now}
-          {...(publish.can
-            ? {
-                onRestore: async (n: number) => {
-                  const answer = await restore.run(
-                    restoreVersion(detail.id, n, detail.head_number),
-                  );
-                  if (answer?.kind === "done") {
-                    toast.ok(
-                      `Restored version ${n} as version ${String(answer.body.number ?? detail.head_number + 1)}`,
-                    );
-                  } else if (answer) {
-                    toast.show({
-                      variant: "danger",
-                      title: "Could not restore it",
-                      message: answer.text,
-                    });
-                  }
-                },
-              }
-            : {})}
+          {...(publish.can ? { onRestore: (n: number) => setRestoring(n) } : {})}
           {...(update.can ? { onLabel: (n: number) => setLabelling(n) } : {})}
         />
       </QueryState>
@@ -182,7 +174,7 @@ export function HistoryTab({
         <ChangeRecord detail={detail} />
       </div>
       {against !== undefined && (
-        <div className="artifact-compare-row">
+        <div className="artifact-compare-row" ref={compareBox}>
           <ArtifactCompare
             detail={detail}
             picked={picked}
@@ -196,12 +188,16 @@ export function HistoryTab({
           />
         </div>
       )}
+      {/* KEYED ON THE VERSION, so the field opens on that version's own label
+          and text typed for one version never carries over to the next. */}
       <LabelDialog
+        key={labelling ?? "closed"}
         detail={detail}
         version={labelling}
         current={versions.find((v) => v.number === labelling)?.label ?? ""}
         onClose={() => setLabelling(null)}
       />
+      <RestoreDialog detail={detail} version={restoring} onClose={() => setRestoring(null)} />
     </div>
   );
 }
@@ -319,8 +315,8 @@ function LabelDialog({
   const [text, setText] = useState(current);
   const gesture = useKeyedGesture();
   const toast = useToast();
-  const bytes = utf8Bytes(text.trim());
-  const tooLong = bytes > ARTIFACT_LABEL_MAX_BYTES;
+  const tooLong = utf8Bytes(text.trim()) > ARTIFACT_LABEL_MAX_BYTES;
+  const unchanged = text.trim() === current;
   const save = async () => {
     if (version === null || tooLong) return;
     const answer = await gesture.run(labelVersion(detail.id, version, text.trim()));
@@ -345,7 +341,9 @@ function LabelDialog({
             variant="primary"
             onClick={() => void save()}
             loading={gesture.busy}
-            disabledReason={tooLong ? "The label is too long." : undefined}
+            disabledReason={
+              tooLong ? "The label is too long." : unchanged ? "Nothing has changed." : undefined
+            }
           >
             Save
           </Button>
@@ -354,10 +352,10 @@ function LabelDialog({
     >
       <FormField
         label="Label"
-        helper={`A labelled version is kept however many are published after it. At most ${ARTIFACT_LABEL_MAX_BYTES} bytes.`}
+        helper={`Up to ${ARTIFACT_LABEL_MAX_BYTES} characters. A labelled version is kept however many are published after it.`}
         error={
           tooLong
-            ? `The label is ${bytes} bytes and the most is ${ARTIFACT_LABEL_MAX_BYTES}.`
+            ? `This label is too long. Keep it to ${ARTIFACT_LABEL_MAX_BYTES} characters.`
             : gesture.answer?.kind === "refused" || gesture.answer?.kind === "unknown"
               ? gesture.answer.text
               : undefined
@@ -371,10 +369,67 @@ function LabelDialog({
             width="full"
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="Review draft"
+            placeholder="For example, Board review"
           />
         )}
       </FormField>
+    </Modal>
+  );
+}
+
+/** Publishing an old version again as the newest: said before it is done, and pending while it runs. */
+function RestoreDialog({
+  detail,
+  version,
+  onClose,
+}: {
+  detail: ArtifactDetail;
+  version: number | null;
+  onClose: () => void;
+}) {
+  const gesture = useKeyedGesture();
+  const toast = useToast();
+  const next = detail.head_number + 1;
+  const restore = async () => {
+    if (version === null) return;
+    const answer = await gesture.run(restoreVersion(detail.id, version, detail.head_number));
+    if (answer?.kind === "done") {
+      toast.ok(`Restored version ${version} as version ${String(answer.body.number ?? next)}`);
+      gesture.reset();
+      onClose();
+    }
+  };
+  return (
+    <Modal
+      open={version !== null}
+      onClose={onClose}
+      dismissable={!gesture.busy}
+      size="sm"
+      placement="top"
+      title={version !== null ? `Publish version ${version} again as version ${next}?` : ""}
+      footer={
+        <>
+          <Button size="small" variant="ghost" onClick={onClose} disabled={gesture.busy}>
+            Cancel
+          </Button>
+          <Button
+            size="small"
+            variant="primary"
+            loading={gesture.busy}
+            onClick={() => void restore()}
+          >
+            Restore
+          </Button>
+        </>
+      }
+    >
+      <p>
+        Every file of version {version} is published as a new version. Nothing is deleted: version{" "}
+        {detail.head_number} stays in the history.
+      </p>
+      {gesture.answer && gesture.answer.kind !== "done" && (
+        <p className="artifact-refusal">{gesture.answer.text}</p>
+      )}
     </Modal>
   );
 }
