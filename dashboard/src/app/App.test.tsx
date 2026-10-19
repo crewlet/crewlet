@@ -193,10 +193,16 @@ describe("the overlays the frame opens", () => {
     grants: [],
   };
 
-  test("the Account popover is portalled to the body, under no layer host", async () => {
+  test("the reader's menu and the preferences are portalled to the body, under no layer host", async () => {
     mountAs(Promise.resolve(person));
-    fireEvent.click(await screen.findByRole("button", { name: "Account and preferences" }));
-    const popover = await screen.findByRole("dialog", { name: "Account and preferences" });
+    fireEvent.click(await screen.findByRole("button", { name: /your menu/ }));
+    const menu = await screen.findByRole("menu", { name: "Your account" });
+    expect(menu.parentElement).toBe(document.body);
+    expect(menu.closest(".crewlet-layer-host")).toBeNull();
+    fireEvent.keyDown(menu, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Preferences" }));
+    const popover = await screen.findByRole("dialog", { name: "Preferences" });
     expect(popover.parentElement).toBe(document.body);
     expect(popover.closest(".crewlet-layer-host")).toBeNull();
     expect(document.querySelectorAll(".crewlet-layer-host")).toHaveLength(0);

@@ -14,9 +14,9 @@
  * NOBODY: the block says so and offers the sign-in. Each is a sentence, never
  * a blank avatar, because "who does the engine think I am" is the question
  * every write this dashboard makes turns on. Their ACCESS is said in the
- * popover, under the login ("Admin", "Tracker · Knowledge", "Overview only"),
- * since it is what decides which of those writes and screens the reader
- * reaches.
+ * header of the reader's menu ("Admin", "Tracker · Knowledge", "Overview
+ * only"), since it is what decides which of those writes and screens the
+ * reader reaches.
  *
  * THE READER IS CALLED BY THEIR OWN NAME, never their seat's (`readerName` in
  * `lib/viewer.ts`): their directory row's name, else their login, with the
@@ -47,54 +47,57 @@
  * can read. It said "Checking who you are" with no link until the tab came
  * back.
  *
- * # The name IS the way to the reader's own Account, and says so
+ * # The name OPENS the reader's own menu
  *
- * Somebody resolved — bound or not — is a link to `#/account`, the one
- * workspace with no sidebar row (`place: "menu"` in `nav.ts`), because this
- * block already IS the reader: their password, second factor, recovery codes,
- * sessions and personal tokens are there. It linked to the SEAT, and the seat
- * is the company's page about a place in the chart — a person clicking their
- * own name to find their account landed on a profile with no password and no
- * second factor on it, and the only way to either was a text link inside the
- * preferences popover, so a company's people reported that the dashboard had
- * no two-step verification at all. The seat is one click on from there,
- * Account's Profile naming it. Nobody is not a link: there is no account to
- * open, and the popover offers the sign-in.
+ * Pressing who you are is where a reader looks for their account and for
+ * signing out, so for anybody resolved (and for a browser whose session read
+ * failed, which may hold a session) the row is the MENU BUTTON (the kit's
+ * `AccountRow` `menu`), ending in the up-and-down chevron a menu's trigger
+ * draws. It linked straight to `#/account`, and the session's own gestures sat
+ * in a second popover beside it, mixed with the preferences: the two ways to
+ * the same account, and a popover that said "Signed in as" over the very name
+ * the row had just said.
  *
- * THE LINK SAYS WHERE IT GOES, three ways, because nothing about a name says
- * "press me for your password": its accessible name ends ", your account";
- * its title is the Account row's own hint, the one description the palette
- * and the popover show; and at rest it draws the rail's pressable mark, a
- * chevron in quiet ink, where it drew nothing until hovered. Its title was the
- * access line, which answered a question the reader had not asked.
+ * THE MENU SAYS ONLY WHAT THE ROW DOES NOT. Its header is the reader's ACCESS
+ * ("Admin", "Tracker · Knowledge", "Overview only"), which decides which
+ * writes and screens they reach and which the row has no room for; the name,
+ * the login and the seat are the row's. Under it:
+ *
+ * - **Account**, the workspace with no sidebar row (`place: "menu"` in
+ *   `nav.ts`): their password, second factor, recovery codes, sessions and
+ *   personal tokens. It linked to the SEAT once, and the seat is the
+ *   company's page about a place in the chart, so a company's people reported
+ *   that the dashboard had no two-step verification at all. The seat is one
+ *   step on from there, Account's Profile naming it.
+ * - **Sign out** and **Sign out everywhere**, the two ways a session ends by
+ *   its owner's hand, both of which end in a reload at the sign-in
+ *   (`lib/session.ts`), kept here because the Account page is a screen and
+ *   this menu is reached even by a person the socket refuses. Everywhere is
+ *   drawn in the danger ink and says what it ends.
+ *
+ * NOBODY is offered the sign-in, and the row says so; a failed read is
+ * offered the Account (whose page states its own read's failure, with a
+ * retry) and the sign-out of this browser, never "everywhere", which needs to
+ * know whose.
  *
  * AND IT IS THE ACCOUNT'S ROW, so it is marked current on `#/account` exactly
- * as a sidebar row is on its own page — raised, with the hairline — since the
+ * as a sidebar row is on its own page, raised, with the hairline, since the
  * Account has no row of its own to mark (`place: "menu"`).
  *
- * # The popover holds the session's own gestures
- *
- * The Account link again, beside the session's own gestures, because a
- * popover is where a reader looks for "my account" too. And signing out, here
- * or everywhere: the two ways a session ends
- * by its owner's hand, both of which end in a reload at the sign-in
- * (`lib/session.ts`), kept here because the Account page is a screen and this
- * menu is reached even by a person the socket refuses.
- *
  * SIGNING OUT DOES NOT WAIT FOR THE SOCKET. The viewer is a socket question,
- * and a person the socket refuses — a seat taken out of the chart (`403
- * seat_unavailable`), a stage that may not act — never has it answered: the
+ * and a person the socket refuses (a seat taken out of the chart, `403
+ * seat_unavailable`, a stage that may not act) never has it answered: the
  * socket stops dialling on a refusal. So the block reads the frame's `GET
  * /auth/session` (`lib/frameSession.ts`) whatever the viewer says, and while
- * the viewer has
- * not answered, a session it names is offered the two sign-outs under its own
- * login.
+ * the viewer has not answered, a session it names is offered the two
+ * sign-outs.
  *
  * # Preferences are per-browser, and they are here
  *
  * Mode, density and theme: none of them is the company's, and all of them are
  * about the person at this browser, so they sit behind the one control beside
- * that person's name. Settings › Appearance offers the same three with room
+ * that person's name, **Preferences**, drawn with a palette and holding
+ * nothing else: the session's gestures are the row's own menu. Settings › Appearance offers the same three with room
  * to show every theme, and the command palette sets them too.
  *
  * ONE CONTROL ON THE ROW. The mode had a one-press flip beside the name as
@@ -114,20 +117,22 @@
 import { useState } from "react";
 import {
   AccountRow,
-  Button,
   DensitySwitcher,
   IconButton,
-  Link,
   Popover,
   Select,
+  Tag,
   ThemeSwitcher,
   Text,
   useToast,
+  type AccountRowMenu,
+  type MenuEntry,
 } from "@crewlethq/ui";
 import { isThemeId } from "@crewlethq/tokens";
-import { KeyGlyph, Settings2Glyph } from "@crewlethq/icons/glyphs";
+import { KeyGlyph, LogInGlyph, LogOutGlyph, PaletteGlyph } from "@crewlethq/icons/glyphs";
 import { THEME_OPTIONS, useApplyTheme } from "~/app/appearance.tsx";
-import { href, useRoute } from "~/app/router.tsx";
+import { useNavigator, useRoute } from "~/app/router.tsx";
+import { Mark } from "~/ui/glyph.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { previewPalette, useViewerPrefs } from "~/lib/prefs.ts";
 import { refusalText } from "~/lib/refusal.ts";
@@ -142,9 +147,9 @@ import type { SessionAnswer } from "~/protocol/index.ts";
 import { WORKSPACES, workspaceOf, workspaceRow } from "../nav.ts";
 import { preload } from "../lazyScreen.ts";
 
-/** The access a principal carries, as one line (`lib/access.ts`'s `accessLine`). */
+/** The access a principal carries, as one line (`lib/access.ts`'s `accessLine`): "Admin". */
 export function grantsLine(grants: readonly string[]): string {
-  return `Access: ${accessLine(grants)}`;
+  return accessLine(grants);
 }
 
 /**
@@ -276,6 +281,8 @@ export function UserBlock({
   const bound = answered ? !viewer.unbound : Boolean(session?.seat);
   const credential = resolved && viaLine(login) !== "";
 
+  const menu = useAccountMenu(account, who.grants, () => setEverywhere(true));
+
   return (
     <>
       {everywhere && <SignOutEverywhereDialog onClose={() => setEverywhere(false)} />}
@@ -300,54 +307,34 @@ export function UserBlock({
         }
         name={who.name}
         detail={who.detail || undefined}
-        // THE READER'S OWN ACCOUNT, for anybody resolved, and for a browser
-        // whose session read failed, which may hold one (see the file's doc).
-        href={resolved || account?.kind === "unknown" ? href(ACCOUNT.path) : undefined}
+        // THE READER'S OWN MENU, once anything can be offered (see the file's doc).
+        menu={menu}
         current={here}
-        title={ACCOUNT.hint}
+        title={menu ? "Your account and signing out" : undefined}
+        linkSuffix=", your menu"
         actions={
-          <>
-            {/* START-ALIGNED, OPENING INTO THE ROOM TO ITS RIGHT. The trigger sits at the sidebar's
-                inner edge, a couple of hundred pixels from the left of the window, so an
-                end-aligned panel would have to be slid back across the window edge to fit at all.
-
-                And the kit cannot draw it end-aligned from here: @crewlethq/ui 0.5.0's Popover (and
-                Menu) asks whether the anchor left the layer using the END-ALIGNED PANEL'S left edge
-                with the ANCHOR'S width, so any panel wider than the anchor's right edge plus its
-                width reads as an anchor carried off screen and closes on the frame it opened. That
-                is a kit defect, raised against uilet; the test beside this block lays the sidebar
-                out at its real coordinates so a return to `end` goes red while the kit still has
-                it. */}
-            <Popover
-              label="Account and preferences"
-              side="top"
-              align="start"
-              trigger={(open, toggle) => (
-                <IconButton
-                  label="Account and preferences"
-                  icon={<Settings2Glyph size="sm" />}
-                  size="sm"
-                  variant="ghost"
-                  aria-expanded={open}
-                  onClick={toggle}
-                />
-              )}
-            >
-              {(close) => (
-                <>
-                  {account && (
-                    <AccountActions
-                      account={account}
-                      grants={who.grants}
-                      onLeave={close}
-                      onSignOutEverywhere={() => setEverywhere(true)}
-                    />
-                  )}
-                  <Preferences />
-                </>
-              )}
-            </Popover>
-          </>
+          // START-ALIGNED, OPENING INTO THE ROOM TO ITS RIGHT. The trigger sits
+          // at the sidebar's inner edge, a couple of hundred pixels from the
+          // left of the window, so an end-aligned panel would have to be slid
+          // back across the window edge to fit at all; the test beside this
+          // block lays the sidebar out at its real coordinates.
+          <Popover
+            label="Preferences"
+            side="top"
+            align="start"
+            trigger={(open, toggle) => (
+              <IconButton
+                label="Preferences"
+                icon={<PaletteGlyph size="sm" />}
+                size="sm"
+                variant="ghost"
+                aria-expanded={open}
+                onClick={toggle}
+              />
+            )}
+          >
+            <Preferences />
+          </Popover>
         }
       />
     </>
@@ -355,15 +342,15 @@ export function UserBlock({
 }
 
 /**
- * What the popover may offer about the session behind this browser: nobody's
- * sign-in, a session under its login, or a browser whose session read FAILED
- * and which may hold one.
+ * What the reader's menu may offer about the session behind this browser:
+ * nobody's sign-in, a session under its login, or a browser whose session read
+ * FAILED and which may hold one.
  */
 export type Account = { kind: "nobody" } | { kind: "session"; login: string } | { kind: "unknown" };
 
 /**
- * What the popover may offer, from the viewer and the session's own answer —
- * or null for nothing at all, while the first read is out.
+ * What the menu may offer, from the viewer and the session's own answer, or
+ * null for nothing at all while the first read is out.
  *
  * A SESSION THE VIEWER HAS NOT ANSWERED FOR (it may never, for a person the
  * socket refuses) is offered its two sign-outs and its Account under its own
@@ -387,34 +374,28 @@ export function accountOf(
 /** The menu's own rows: the workspaces no sidebar row draws (`place: "menu"`). */
 const MENU_ROWS = WORKSPACES.filter((ws) => ws.place === "menu");
 
-/** The reader's own Account, which the block's name opens. */
+/** The reader's own Account, which the menu opens. */
 const ACCOUNT = workspaceRow("account")!;
 
-/** The session's own gestures. Exported for its suite. */
-export function AccountActions({
-  account,
-  grants,
-  onLeave,
-  onSignOutEverywhere,
-}: {
-  account: Account;
-  /** The grants line, said under the login — empty where nothing settles it. */
-  grants: string;
-  /** Close the menu: a link out of it leads to a page the menu would cover. */
-  onLeave?: () => void;
-  /** Ask whether to sign out everywhere, outside the menu — see `SignOutEverywhereDialog`. */
-  onSignOutEverywhere: () => void;
-}) {
+/**
+ * The reader's menu: their access above, then the Account and the session's
+ * own gestures, or null while nothing can be offered. Exported for its suite.
+ */
+export function useAccountMenu(
+  account: Account | null,
+  /** The grants line, said in the header; empty where nothing settles it. */
+  grants: string,
+  /** Ask whether to sign out everywhere, outside the menu (`SignOutEverywhereDialog`). */
+  onSignOutEverywhere: () => void,
+): AccountRowMenu | undefined {
   const toast = useToast();
   const { socket } = useClient();
+  const nav = useNavigator();
+  if (account === null) return undefined;
   if (account.kind === "nobody") {
-    return (
-      <div className="preferences-account">
-        <Button size="small" variant="primary" onClick={goSignIn}>
-          Sign in
-        </Button>
-      </div>
-    );
+    return {
+      items: [{ key: "sign-in", label: "Sign in", icon: <LogInGlyph />, onSelect: goSignIn }],
+    };
   }
   // A FAILED SIGN-OUT IS SAID, and the page stays: see `signOut` for why a
   // sign-out that nothing answered must not look like one that worked.
@@ -423,51 +404,56 @@ export function AccountActions({
       toast.failed(`${what} didn’t go through. ${refusalText(err)}`),
     );
   };
-  return (
-    <div className="preferences-account">
-      {account.kind === "session" ? (
-        <>
-          <Text variant="label">Signed in as</Text>
-          <Text variant="cell" mono truncate>
-            {account.login}
-          </Text>
-          {grants && <Text variant="caption">{grants}</Text>}
-        </>
+  const items: MenuEntry[] = [
+    // THE ACCOUNT, from the navigation's own row, so its words and its mark
+    // are the palette's.
+    ...MENU_ROWS.map((ws): MenuEntry => ({
+      key: ws.key,
+      label: ws.label,
+      description:
+        ws.key === ACCOUNT.key ? "Password, two-step verification and sessions" : ws.hint,
+      icon: <Mark name={ws.icon} />,
+      onSelect: () => {
+        preload(ws.path);
+        nav.to(ws.path);
+      },
+    })),
+    { kind: "separator", key: "session" },
+    {
+      key: "sign-out",
+      label: "Sign out",
+      icon: <LogOutGlyph />,
+      onSelect: run(() => signOut(socket), "Signing out"),
+    },
+  ];
+  if (account.kind === "session") {
+    items.push({
+      key: "sign-out-everywhere",
+      label: "Sign out everywhere",
+      description: "Every device, and stops your tokens",
+      icon: <LogOutGlyph />,
+      danger: true,
+      onSelect: onSignOutEverywhere,
+    });
+  }
+  return {
+    header:
+      account.kind === "session" ? (
+        grants ? (
+          <>
+            <Text variant="label">Access</Text>
+            <span>
+              <Tag size="xs" variant="neutral">
+                {grants}
+              </Tag>
+            </span>
+          </>
+        ) : undefined
       ) : (
         <Text variant="caption">We couldn’t check who’s signed in.</Text>
-      )}
-      {/* A LINK, not a button: it is a page, so ⌘-click opens it in a tab. */}
-      {MENU_ROWS.map((ws) => (
-        <Link
-          key={ws.key}
-          size="caption"
-          href={href(ws.path)}
-          title={ws.hint}
-          onPointerEnter={() => preload(ws.path)}
-          onFocus={() => preload(ws.path)}
-          onClick={onLeave}
-        >
-          {ws.label}
-        </Link>
-      ))}
-      <Button size="small" variant="secondary" onClick={run(() => signOut(socket), "Signing out")}>
-        Sign out
-      </Button>
-      {account.kind === "session" && (
-        <Button
-          size="small"
-          variant="ghost"
-          title="Sign out on every device and stop your tokens"
-          onClick={() => {
-            onLeave?.();
-            onSignOutEverywhere();
-          }}
-        >
-          Sign out everywhere
-        </Button>
-      )}
-    </div>
-  );
+      ),
+    items,
+  };
 }
 
 /**
