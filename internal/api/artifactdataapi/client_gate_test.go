@@ -128,7 +128,7 @@ func TestTheDashboardNamesCollectionsAndFieldsByTheEnginesGrammar(t *testing.T) 
 	}
 	for _, name := range collections {
 		dashboard := collection.MatchString(name) && !slices.Contains(reserved, name)
-		if engine := artifactdata.ValidCollectionName(name); dashboard != engine {
+		if engine := artifacts.ValidCollectionName(name); dashboard != engine {
 			t.Errorf("collection %q: the dashboard says %v and the engine %v", name, dashboard, engine)
 		}
 	}

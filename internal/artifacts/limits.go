@@ -207,6 +207,91 @@ const (
 	DataWritesStoreBurst        = 100
 )
 
+// Dashboard bounds: what one dashboard spec may declare and what one dataset
+// may answer (internal/artifacts/dashspec).
+const (
+	// MaxDashboardWidgets bounds a board's widgets, a group's children
+	// counted: twice what a screen shows without scrolling, so a board is a
+	// dashboard rather than a report.
+	MaxDashboardWidgets = 64
+
+	// MaxDashboardDatasets bounds a spec's datasets: every one may be
+	// fetched when the board opens, so this is also the most live reads one
+	// open costs.
+	MaxDashboardDatasets = 32
+
+	// MaxDashboardParams bounds the filters a board offers, and
+	// MaxParamOptions the choices one offers: a filter is a closed set, so
+	// a value a viewer sends is always one the author wrote.
+	MaxDashboardParams = 8
+	MaxParamOptions    = 50
+
+	// MaxCalcSteps bounds one calculated dataset's steps, and MaxCalcDepth
+	// how many calculated datasets one may stand on (a join counted): a
+	// calculation is a few declared steps, never a program.
+	MaxCalcSteps = 16
+	MaxCalcDepth = 4
+
+	// MaxDatasetRows bounds the rows one dataset answers, a file's rows
+	// included: a widget draws at most a few hundred, and five thousand is
+	// what a browser holds and exports without a stall.
+	MaxDatasetRows = 5000
+
+	// MaxFileDatasetBytes bounds one CSV or JSON file a dataset reads: the
+	// published contract an author already knows (an attached data file of
+	// at most 8 MB), and read whole at publish and at each first read.
+	MaxFileDatasetBytes = 8 * miB
+
+	// DashboardColumns is the grid every board lays out on, the Home
+	// board's; a widget is 1 to 12 columns wide and MinWidgetRows to
+	// MaxWidgetRows grid rows tall, or as tall as its content.
+	DashboardColumns = 12
+	MinWidgetRows    = 2
+	MaxWidgetRows    = 60
+
+	// What one widget draws: a chart's series, a share's parts, a list's
+	// bars and a table's columns and rows, each past what a reader takes in
+	// at a glance, and a note's and a unit's text.
+	MaxChartSeries   = 6
+	MaxShareParts    = 8
+	MaxBarRows       = 50
+	DefaultBarRows   = 10
+	MaxTableColumns  = 16
+	MaxTableRows     = 500
+	DefaultTableRows = 100
+	MaxNoteBytes     = 2000
+	MaxUnitBytes     = 16
+
+	// MinRefreshSeconds is the shortest interval an engine dataset may
+	// declare (D63): a minute keeps a board of thirty-two datasets inside
+	// the per-viewer read budget with room for a person's own refresh.
+	// MaxRefreshSeconds is a day.
+	MinRefreshSeconds = 60
+	MaxRefreshSeconds = 24 * 60 * 60
+
+	// DatasetCacheTTL is how long a node keeps one viewer's answer to one
+	// live dataset (ADR-0043): long enough that a board opened in three
+	// tabs, or reopened, costs one domain read, and short against the
+	// minute an interval may refresh at. Keyed by the viewer and their
+	// grants, so no answer ever reaches a second principal.
+	DatasetCacheTTL = 30 * time.Second
+
+	// DatasetReadsPerViewerPerSecond and DatasetReadsViewerBurst are one
+	// viewer's live dataset reads on one artifact, per node: a whole board
+	// opens in one burst (every dataset at once, twice over for a second
+	// tab), and then refreshes at most once a minute per dataset, about half
+	// a read a second at the bound.
+	DatasetReadsPerViewerPerSecond = 2
+	DatasetReadsViewerBurst        = 2 * MaxDashboardDatasets
+
+	// DatasetReadsPerArtifactPerSecond and DatasetReadsArtifactBurst are
+	// every viewer together on one artifact, per node: a board thirty
+	// people have open refreshing every dataset each minute is sixteen
+	// reads a second, and the cache answers the repeats.
+	DatasetReadsPerArtifactPerSecond = 20
+	DatasetReadsArtifactBurst        = 10 * MaxDashboardDatasets
+)
+
 // Serving bounds.
 const (
 	// TicketLifetime is a view ticket's life, capped by the credential's own

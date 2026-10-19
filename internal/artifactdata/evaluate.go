@@ -307,10 +307,10 @@ func checkOpShape(op artifacts.DataOp) error {
 	if !op.Op.Valid() {
 		return fmt.Errorf("%w: op %q is not one of %v", ErrInvalid, op.Op, artifacts.DataOpKinds)
 	}
-	if op.Collection != StateCollection && !ValidCollectionName(op.Collection) {
+	if op.Collection != StateCollection && !artifacts.ValidCollectionName(op.Collection) {
 		return fmt.Errorf("%w: collection %q is a lowercase letter, then lowercase letters, "+
 			"digits and `_`, at most %d bytes, and not one of %v", ErrInvalid, op.Collection,
-			artifacts.MaxCollectionNameBytes, reservedCollections)
+			artifacts.MaxCollectionNameBytes, artifacts.ReservedCollections)
 	}
 	if !ValidDocID(op.Doc) {
 		return fmt.Errorf("%w: document id %q is 1..%d letters, digits, `_` and `-`, and "+

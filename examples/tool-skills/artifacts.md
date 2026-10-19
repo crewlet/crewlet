@@ -36,7 +36,8 @@ For a table people fill in together, create a `sheet` artifact: its content is
 its datastore, and the dashboard draws it with no page script at all. Declare
 its schema and fill its rows with the datastore tools (see Shared data). For a
 document people read, a plan, a runbook or a handbook, create a `doc` artifact
-(see Docs). For a presentation, create a `slides` artifact (see Slide decks).
+(see Docs). For a presentation, create a `slides` artifact (see Slide decks), and for
+figures over live data, a `dashboard` artifact (see Dashboards).
 
 ## The publishing flow
 
@@ -166,6 +167,58 @@ is refused at publish with its file, line and rule, never dropped.
   slides) against your `base_version`. A person may have fixed a typo or
   reordered slides meanwhile: a `stale_version` refusal names the slide files
   that changed, so re-read those, redo your edit on them, and publish again.
+
+## Dashboards
+
+A board of figures over live data is a `dashboard` artifact. The dashboard
+draws it natively from a closed spec, `dashboard.json`: no page script, every
+figure citing its dataset and when it was true. A spec outside the format is
+refused at publish naming every field to fix, never dropped.
+
+- **The spec.** `{"v": 1, "title": "Delivery", "params": [...], "datasets":
+  [...], "widgets": [...]}`, created with `create_artifact`,
+  `kind: "dashboard"` and `content` (or `files` with `dashboard.json` and any
+  data files). Ids are lowercase letters, digits and `_`.
+- **Datasets** name where rows come from (`source`): `store`, a collection of
+  the artifact's own datastore that you and people write
+  (`"store": {"collection": "deals"}` with its `columns`, each a `key` and a
+  `type` of `text`, `number`, `date` or `boolean`); `engine`, a named read from
+  the catalogue `list_dashboard_sources` lists
+  (`"engine": {"name": "tracker.items", "params": {"scope": "mine"}}`);
+  `file`, a CSV or JSON file of the version with its `columns`; and `calc`,
+  rows derived from another dataset by `steps` (`filter`, `group`, `compute`,
+  `join`, `sort`, `limit`, `select`). Never compute a number yourself and
+  write it into the spec: declare the dataset and let the board compute it.
+- **Every viewer sees their own rows.** An engine dataset is answered as the
+  person viewing the board, by the same rules as the screens they already
+  use: `scope: "mine"` is each viewer's own work, and somebody without the
+  tracker sees that the figure is closed to them. Sharing a board never
+  shares the data behind it, so publish one board for everybody rather than
+  one per person.
+- **Integration data arrives through the store.** Crewlet holds no
+  per-viewer connector to GitHub, Jira or Slack: read them with your own
+  tools, declare a `store` collection with `set_artifact_schema`, and write
+  the rows with `write_artifact_data`. Every open board redraws as the rows
+  land.
+- **Widgets** draw one dataset each, on a twelve-column grid (`w` 1 to 12,
+  an optional `h` in rows): `stat` and `meter` (a `value` column folded by
+  `agg`: `sum`, `avg`, `min`, `max`, `count`, `first` or `last`, the last row's
+  by default), `timeseries`, `columns` and `activity` (`x` a date column, `y`
+  number columns, `by` to split one), `bars` and `share` (`label` and
+  `value`), `table` (`columns`), `note` (`text`, no dataset) and `group`
+  (a `title`, a `tone` and `children`). A widget names only fields its type
+  reads, and only columns its dataset has.
+- **Filters** are closed choice sets: `{"key": "scope", "label": "Whose work",
+  "default": "mine", "options": [{"value": "mine", "label": "Mine"}]}`. Bind
+  an engine parameter or a calc condition to one with `{"param": "scope"}`;
+  an option with an empty `value` means "all".
+- **Freshness.** A store dataset is live. An engine dataset over a source
+  with a change signal refreshes on it; any other takes
+  `"refresh": {"every_seconds": 300}`, never under 60. A file dataset changes
+  only with a new version.
+- **Revise it like any artifact.** Read the board with `get_artifact` and
+  `view: "outline"` (its filters, datasets and widgets, never a figure),
+  then publish `edits` on `dashboard.json` against your `base_version`.
 
 ## The design contract
 

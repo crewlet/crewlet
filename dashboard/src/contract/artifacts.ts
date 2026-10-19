@@ -16,20 +16,24 @@
  * (`protocol/types.ts`), so this module stays the declarations a gate reads.
  */
 
-/** Every kind of artifact (`artifacts.Kinds`): a page that runs code, a doc, a deck, a native sheet. */
-export const ARTIFACT_KINDS = ["html", "doc", "slides", "sheet"] as const;
+/**
+ * Every kind of artifact (`artifacts.Kinds`): a page that runs code, a
+ * doc, a deck, a dashboard of figures, a native sheet.
+ */
+export const ARTIFACT_KINDS = ["html", "doc", "slides", "dashboard", "sheet"] as const;
 
 /**
  * What the engine decides by kind (`artifacts.KindSpecs`), the half a screen
  * draws by: whether the kind runs author code in a frame on the artifact
  * origin (`framed`) or is drawn here from a closed format (`native`), and what
  * its datastore is to it (`declared` by a page's `db`, the `content` itself,
- * or `none`).
+ * `implied` beside a native kind's files, or `none`).
  */
 export const ARTIFACT_KIND_SPECS = {
   html: { render: "framed", store: "declared" },
   doc: { render: "native", store: "none" },
   slides: { render: "native", store: "none" },
+  dashboard: { render: "native", store: "implied" },
   sheet: { render: "native", store: "content" },
 } as const;
 
@@ -492,3 +496,56 @@ export const SLIDE_STAGE_WIDTH = 1920;
 
 /** A slide's stage height, in CSS pixels (`slideformat.StageHeight`). */
 export const SLIDE_STAGE_HEIGHT = 1080;
+
+/**
+ * A dashboard's closed sets and bounds (`internal/artifacts/dashspec`): what a
+ * widget draws, where a dataset's rows come from, how a dataset is kept
+ * current, what a stat folds and how a number is written, what a column holds,
+ * the grid a board lays out on and the shortest interval an engine dataset may
+ * refresh at.
+ */
+
+/** Every widget a board holds (`dashspec.WidgetTypes`). */
+export const DASHBOARD_WIDGET_TYPES = [
+  "stat",
+  "meter",
+  "timeseries",
+  "columns",
+  "activity",
+  "bars",
+  "share",
+  "table",
+  "note",
+  "group",
+] as const;
+
+/** Where a dataset's rows come from (`dashspec.SourceKinds`). */
+export const DASHBOARD_SOURCE_KINDS = ["store", "engine", "file", "calc"] as const;
+
+/** How a dataset is kept current (`dashspec.RefreshMode`). */
+export const DASHBOARD_REFRESH_MODES = [
+  "live",
+  "signal",
+  "interval",
+  "manual",
+  "fixed",
+  "derived",
+] as const;
+
+/** What a dataset read answers (`datasetsapi.Status*`). */
+export const DASHBOARD_DATASET_STATUSES = ["ready", "refused", "unanswered"] as const;
+
+/** The folds a stat or a meter takes (`dashspec.Aggs`). */
+export const DASHBOARD_AGGS = ["first", "last", "sum", "avg", "min", "max", "count"] as const;
+
+/** How a widget writes a number (`dashspec.Formats`). */
+export const DASHBOARD_NUMBER_FORMATS = ["number", "integer", "percent", "compact"] as const;
+
+/** What a dataset's column holds (`dashspec.ColumnTypes`). */
+export const DASHBOARD_COLUMN_TYPES = ["text", "number", "date", "boolean"] as const;
+
+/** The grid every board lays out on (`artifacts.DashboardColumns`). */
+export const DASHBOARD_COLUMNS = 12;
+
+/** The shortest interval an engine dataset refreshes at, in seconds (`artifacts.MinRefreshSeconds`). */
+export const DASHBOARD_MIN_REFRESH_SECONDS = 60;

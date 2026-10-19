@@ -60,6 +60,13 @@ import type {
   AUDIENCE_KINDS,
   COLLECTION_PRESETS,
   COLUMN_TYPES,
+  DASHBOARD_AGGS,
+  DASHBOARD_COLUMN_TYPES,
+  DASHBOARD_DATASET_STATUSES,
+  DASHBOARD_NUMBER_FORMATS,
+  DASHBOARD_REFRESH_MODES,
+  DASHBOARD_SOURCE_KINDS,
+  DASHBOARD_WIDGET_TYPES,
   DATA_OP_KINDS,
   DATA_VERDICTS,
   FIELD_CONDITIONS,
@@ -5440,6 +5447,200 @@ export interface ArtifactOutline {
     tabs: { path: string; title: string; bytes: number }[];
     cover: { tab: string; markdown: string };
   };
+  /** A board's outline: its widgets and its first stats, never a value (D64). */
+  dashboard?: DashboardOutline;
+}
+
+// ---- dashboards (`internal/artifacts/dashspec`, `internal/api/datasetsapi`) ----
+
+export type DashboardWidgetType = (typeof DASHBOARD_WIDGET_TYPES)[number];
+export type DashboardSourceKind = (typeof DASHBOARD_SOURCE_KINDS)[number];
+export type DashboardRefreshMode = (typeof DASHBOARD_REFRESH_MODES)[number];
+export type DashboardDatasetStatus = (typeof DASHBOARD_DATASET_STATUSES)[number];
+export type DashboardAgg = (typeof DASHBOARD_AGGS)[number];
+export type DashboardNumberFormat = (typeof DASHBOARD_NUMBER_FORMATS)[number];
+export type DashboardColumnType = (typeof DASHBOARD_COLUMN_TYPES)[number];
+
+/** One column of a dataset (`dashspec.Column`). */
+export interface DashboardColumn {
+  key: string;
+  type: DashboardColumnType;
+  label?: string;
+}
+
+/** A value of a row: text, a number, a boolean, a date as its canonical text, or none. */
+export type DashboardValue = string | number | boolean | null;
+
+/** One row of a dataset, keyed by column. */
+export type DashboardRow = Record<string, DashboardValue>;
+
+/** A dataset's rows as one viewer may read them (`dashspec.Table`). */
+export interface DashboardTable {
+  columns: DashboardColumn[];
+  key?: string;
+  rows: DashboardRow[];
+  truncated?: boolean;
+}
+
+/** A filter the board offers (`dashspec.Param`). */
+export interface DashboardParam {
+  key: string;
+  label: string;
+  options: { value: string; label: string }[];
+  default: string;
+}
+
+/** An engine argument: a literal in its text form, or a filter it is bound to. */
+export type DashboardArg = string | number | boolean | { param: string };
+
+/** One calculation step (`dashspec.Step`), flat as written. */
+export interface DashboardStep {
+  op: "filter" | "group" | "compute" | "join" | "sort" | "limit" | "select";
+  where?: { column: string; cmp: string; value?: DashboardArg }[];
+  by?: string[];
+  aggregates?: { column: string; agg: DashboardAgg; of?: string }[];
+  column?: string;
+  fn?: string;
+  left?: string | number;
+  right?: string | number;
+  with?: string;
+  on?: string;
+  columns?: string[];
+  order?: { column: string; desc?: boolean }[];
+  count?: number;
+}
+
+/** One dataset of a board as the spec declares it (`dashspec.Dataset`). */
+export interface DashboardDataset {
+  id: string;
+  title: string;
+  source: DashboardSourceKind;
+  store?: { collection: string };
+  file?: { path: string };
+  engine?: { name: string; params?: Record<string, DashboardArg> };
+  calc?: { from: string; steps: DashboardStep[] };
+  columns?: DashboardColumn[];
+  key?: string;
+  refresh?: { every_seconds: number };
+}
+
+/** One widget of a board (`dashspec.Widget`), flat as written. */
+export interface DashboardWidget {
+  id: string;
+  type: DashboardWidgetType;
+  title?: string;
+  dataset?: string;
+  w: number;
+  h?: number;
+  value?: string;
+  agg?: DashboardAgg;
+  format?: DashboardNumberFormat;
+  unit?: string;
+  max?: number;
+  max_field?: string;
+  x?: string;
+  y?: string[];
+  by?: string;
+  label?: string;
+  limit?: number;
+  columns?: string[];
+  text?: string;
+  tone?: string;
+  children?: DashboardWidget[];
+}
+
+/** A board's spec (`dashspec.Spec`). */
+export interface DashboardSpec {
+  v: number;
+  title?: string;
+  params?: DashboardParam[];
+  datasets: DashboardDataset[];
+  widgets: DashboardWidget[];
+}
+
+/** How a dataset is kept current (`dashspec.Freshness`). */
+export interface DashboardFreshness {
+  mode: DashboardRefreshMode;
+  collection?: string;
+  signal?: "agents" | "tokens";
+  every_seconds?: number;
+  inputs?: string[];
+}
+
+/** One parameter of an engine source (`dashspec.SourceParam`). */
+export interface DashboardSourceParam {
+  key: string;
+  type: "text" | "number" | "enum";
+  summary: string;
+  enum?: string[];
+  min?: number;
+  max?: number;
+  max_bytes?: number;
+  default?: string;
+}
+
+/** One entry of the engine source catalogue (`dashspec.EngineSource`). */
+export interface DashboardEngineSource {
+  name: string;
+  domain: string;
+  summary: string;
+  access: string;
+  params: DashboardSourceParam[];
+  columns: DashboardColumn[];
+  key: string;
+  signal?: "agents" | "tokens";
+  max_rows: number;
+}
+
+/** One dataset as the Sources rail describes it (`artifactsapi.BoardDataset`). */
+export interface DashboardBoardDataset {
+  id: string;
+  title: string;
+  source: DashboardSourceKind;
+  shape: { columns: DashboardColumn[]; key?: string };
+  freshness: DashboardFreshness;
+  engine?: DashboardEngineSource;
+}
+
+/** A board's outline (`dashspec.Outline`). */
+export interface DashboardOutline {
+  title?: string;
+  widgets: {
+    id: string;
+    type: DashboardWidgetType;
+    title?: string;
+    w: number;
+    dataset?: string;
+    group?: string;
+  }[];
+  stats: { widget: string; label: string; dataset: string; dataset_title: string }[];
+  datasets: { id: string; title: string; source: DashboardSourceKind }[];
+}
+
+/** A version's board (`GET …/versions/{n}/dashboard`, `artifactsapi.BoardAnswer`). */
+export interface DashboardBoardAnswer {
+  artifact: string;
+  version: number;
+  board: DashboardSpec;
+  datasets: DashboardBoardDataset[];
+  outline: DashboardOutline;
+}
+
+/** One dataset as its viewer may read it (`GET …/sources/{dataset}`, `datasetsapi.Answer`). */
+export interface DashboardDatasetAnswer {
+  artifact: string;
+  version: number;
+  dataset: string;
+  status: DashboardDatasetStatus;
+  as_of?: string;
+  table?: DashboardTable;
+  refusal?: { dataset: string; reason: string; grants?: string[] };
+  detail?: string;
+}
+
+/** The engine source catalogue (`GET /artifacts/sources`). */
+export interface DashboardCatalogueAnswer {
+  sources: DashboardEngineSource[];
 }
 
 /** One finding of the publish linter (`lint.Finding`). */

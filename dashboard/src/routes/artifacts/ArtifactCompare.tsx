@@ -135,7 +135,7 @@ export function ArtifactCompare({
       versions={visual && items ? items.draw(detail, older, newer) : undefined}
       note={
         dataBesideVersions(detail.kind)
-          ? "Both versions show today's data: a page's data is live and is not versioned with it."
+          ? "Both versions show today's data: an artifact's data is live and is not versioned with it."
           : undefined
       }
       from={visual && !items ? side(older) : undefined}
