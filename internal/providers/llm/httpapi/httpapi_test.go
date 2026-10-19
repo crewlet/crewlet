@@ -489,6 +489,12 @@ func TestEncodeArgs(t *testing.T) {
 		{"nil", nil, "{}"},
 		{"empty", map[string]any{}, "{}"},
 		{"object", map[string]any{"a": 1}, `{"a":1}`},
+		// The string is shown to the model as the text it holds, so the
+		// call it made comes back as it wrote it: `<`, `>` and `&` as
+		// themselves rather than `\u003c` and its kin. Mutation:
+		// put json.Marshal back in EncodeArgs and this case fails.
+		{"markup", map[string]any{"code": "a < b && c > d", "url": "https://example.com/?a=1&b=2"},
+			`{"code":"a < b && c > d","url":"https://example.com/?a=1&b=2"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

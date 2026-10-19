@@ -733,6 +733,33 @@ func TestToolCallWithNoArgumentsSendsAnEmptyObject(t *testing.T) {
 	}
 }
 
+// A REPLAYED CALL CARRIES ITS ARGUMENTS AS THE MODEL WROTE THEM. On this wire
+// they are a JSON string, which the host hands the model as the text it holds
+// on every later round of the turn — so the string must spell `<`, `>` and
+// `&` as themselves, not as the `\u003c` escapes json.Marshal writes, or the
+// model is shown a call it did not make. Read from the decoded body: the
+// request's own encoding of the outer document is the SDK's business and is
+// undone by any decoder, while an escape inside the string survives it.
+// Mutation: put json.Marshal back in httpapi.EncodeArgs and this fails.
+func TestAReplayedCallCarriesItsArgumentsAsTheModelWroteThem(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okCompletion("ok")) })
+	p := newProvider(t, url, nil)
+	_, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "hi"},
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "c", Name: "run",
+			Arguments: map[string]any{"code": "if a < b && c > d"}}}},
+		{Role: llm.RoleTool, ToolCallID: "c", Name: "run", Content: "done"},
+	}})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	call := api.seen()[0].body["messages"].([]any)[1].(map[string]any)["tool_calls"].([]any)[0]
+	if got := dig(t, call.(map[string]any), "function", "arguments"); got != `{"code":"if a < b && c > d"}` {
+		t.Fatalf("arguments = %q, want the call as the model wrote it", got)
+	}
+}
+
 // Arguments the caller handed back that cannot be JSON are a plumbing fault.
 // Swapping them for empty arguments would rewrite the conversation and blame
 // the model, so the call is refused before it reaches the network.
