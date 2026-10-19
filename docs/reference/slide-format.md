@@ -300,14 +300,17 @@ A refusal lists every finding at once (up to 50), each as
 - **Present.** Present draws the slide as large as fits, full screen on the
   reader's press, with the keys a clicker sends (Right, Down, Page Down,
   Space and Enter forward; Left, Up, Page Up and Backspace back; Home and End;
-  Escape out), each slide announced by its number and title. The Presenter
+  Escape out), each slide announced by its number and title. Full screen is
+  a projector's: the slide on black, its controls floating over its foot and
+  put away with the cursor while the pointer rests (a clicker's keys do not
+  bring them back). The Presenter
   window, the dashboard's own, shows the slide, the next one, the notes and a
   timer, and moves the room's screen. Anybody in the room can **Follow** the
   presenter, a phone included, and is moved to the slide they are on.
 - **Print.** Print draws every shown slide on its own 16:9 page, so the
   browser's Save as PDF is the deck as a PDF.
 - **Compare.** History compares two versions By slide: each slide's two
-  versions side by side, paired by id, with changed, added, removed and moved
+  versions side by side under their versions' names, paired by id, with changed, added, removed and moved
   slides said in words, and unchanged ones folded away.
 - **Start.** New › Deck, or `POST /artifacts` with `"kind": "slides"` and
   `"starter": true`, begins a deck from the engine's starter slides.
