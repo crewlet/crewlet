@@ -1,6 +1,7 @@
 package cliagent
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -232,9 +233,17 @@ func TestSeededSettingsFilesAreValidJSONThatKeepsTheWebOn(t *testing.T) {
 			[]string{"run_shell_command", "write_file", `"web_fetch"`}, nil},
 		"qwen-code": {".qwen/settings.json", cliprofile.SeedHome,
 			[]string{"run_shell_command", `"web_fetch"`}, nil},
-		"opencode": {".config/opencode/opencode.json", cliprofile.SeedHome,
-			[]string{`"bash":"deny"`, `"edit":"deny"`, `"webfetch":"allow"`, `"websearch":"allow"`},
-			[]string{`"ask"`}},
+		// 2.0's own permissions format, deny-all first: the LAST matching
+		// rule wins, and 2.0 allows whatever is not denied, so a list of
+		// local tools to deny let its new ones through. In the call's own
+		// configuration directory, the only one OpenCode reads.
+		"opencode": {".crewlet-config/opencode.json", cliprofile.SeedWork,
+			[]string{
+				`"permissions":[{"action":"*","resource":"*","effect":"deny"},`,
+				`{"action":"webfetch","resource":"*","effect":"allow"}`,
+				`{"action":"websearch","resource":"*","effect":"allow"}`,
+			},
+			[]string{`"ask"`, `"permission":`}},
 		"cursor-agent": {".cursor/cli.json", cliprofile.SeedWork,
 			[]string{`Shell(*)`, `Write(*)`, `WebFetch(*)`}, nil},
 	}
@@ -281,11 +290,11 @@ func TestSeedFilesLandInTheirScope(t *testing.T) {
 			map[string]any{"path": ".vendor/project.json", "in": "work", "content": `{"work":true}`},
 		},
 	})
-	co, err := p.ws.Acquire("seat-a", "call-1")
+	co, err := p.ws.Acquire(t.Context(), "seat-a", "call-1", p)
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
-	t.Cleanup(func() { _ = co.Release() })
+	t.Cleanup(func() { _ = co.Release(context.Background()) })
 
 	home, err := os.ReadFile(filepath.Join(co.Home, ".vendor", "settings.json"))
 	if err != nil || string(home) != `{"home":true}` {

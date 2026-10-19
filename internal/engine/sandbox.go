@@ -2518,6 +2518,16 @@ func newCodingRun(c *Company, seat *org.Role, ph phase.Phase, runner string,
 		// seat brought is what signs the run in.
 		run.llm = &sandbox.AgentLLM{Model: agent.ModelArgument(), CLI: agent.Agent()}
 		run.files = agent.SandboxCredentials()
+		// A LOGIN THE CLI KEEPS IN ITS OWN DATABASE travels as the document
+		// its export printed, mapped where the runner imports it from — the
+		// runner's path, not the profile's, because the runner is what reads
+		// it ([codingagent.Paths.CredentialDocument]).
+		if doc := agent.SandboxCredentialDocument(); doc != "" {
+			if run.files == nil {
+				run.files = map[string]string{}
+			}
+			run.files[codingagent.CredentialDocument] = doc
+		}
 		run.env = underlay(seatEnv, agent.SandboxEnv())
 		return run, nil
 	}
@@ -2546,7 +2556,7 @@ func newCodingRun(c *Company, seat *org.Role, ph phase.Phase, runner string,
 //
 // THE KEY TRAVELS, because nothing else in the box can sign the agent in:
 // Claude Code reads only its environment, and OpenCode's providers read the
-// same variable, its declared one through {env:…} rather than holding the
+// same variable, its declared one by naming it (`env`) rather than holding the
 // value. It is one scoped, revocable variable, exactly the trust step a
 // subscription's headless token already takes into every box. The FIRST key
 // of the entry's pool, because a box cannot rotate: the pool's cooldowns live
@@ -2753,8 +2763,8 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 	}
 	return &SandboxCredentialError{msg: fmt.Sprintf(
 		"seat %q runs code in %q, where the %q subscription login cannot follow it: "+
-			"the credential files stay on the engine host because they carry a refresh "+
-			"token whose rotation is fleet state, and nothing in this run's environment "+
+			"the login stays on the engine host because it carries a refresh token whose "+
+			"rotation is fleet state, and nothing in this run's environment "+
 			"authenticates. %s",
 		seat.Handle(), placement, member.Key, remedy)}
 }

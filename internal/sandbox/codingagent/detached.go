@@ -117,8 +117,9 @@ var prPattern = regexp.MustCompile(
 //
 // WHAT IS THE CLI'S, AND ONLY THAT: its invocation, its config file, where its
 // stdout lands and how its result is read back ([Output]), how its event
-// stream is decoded ([Decoder]), how its result is parsed, and whether its
-// stream can say it is done before its process exits. Everything else — where
+// stream is decoded ([Decoder]) and how its result is parsed. Everything else
+// — when a run has ended included, which is the done marker for every CLI —
+// where
 // the markers go, how the box is torn down, how a question is signalled, how
 // a stream is read and how much of one is kept — is the same for every CLI,
 // and a runner that could override it would be a second implementation of the
@@ -149,14 +150,11 @@ type CLI interface {
 	// WriteConfig renders the agent's config file into the box and returns
 	// the path the CLI is pointed at, or "" when there is nothing to write.
 	WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error)
-
-	// Finished reports whether the END of the stream says the agent has done
-	// its work, for one that finishes but never exits: lines is the stream's
-	// last complete lines. Asked only when [Output.Terminal] is set.
-	Finished(lines string) bool
 }
 
-// Output is where a CLI's stdout lands in the box, and how it is read back.
+// Output is how the wrapper connects a CLI's standard streams in the box —
+// where its stdout lands, what its stdin reads — and how its result is read
+// back.
 type Output struct {
 	// Stdout is the file the wrapper redirects the CLI's stdout into.
 	Stdout string
@@ -166,12 +164,6 @@ type Output struct {
 	// call the run makes.
 	Events bool
 
-	// Terminal says the stream's end can show the agent has finished
-	// though its process has not exited, so the poll reads that end
-	// ([CLI.Finished]). A CLI that exits cleanly leaves it unset and the
-	// done marker is its only signal — and the poll reads nothing more.
-	Terminal bool
-
 	// Result is the file the CLI's RESULT is read from, whole ([CLI.Parse]),
 	// or "" when the result is the stream's own. When it names a file other
 	// than Stdout, the wrapper writes it after the CLI exits: the stream's
@@ -179,6 +171,16 @@ type Output struct {
 	// where the wrapper died before it could, the collection reads that line
 	// from the stream in its place.
 	Result string
+
+	// BriefOnStdin says the CLI reads its brief on STDIN, from a file Start
+	// writes ([Paths.Brief]), rather than on its argv — for a CLI that does
+	// not take an argv prompt verbatim. OpenCode re-quotes one: a brief
+	// passed as an argument reached the model wrapped in double quotes with
+	// every quote inside it escaped, so code and quoted text in a brief came
+	// out altered (measured on 1.18.35 and 2.0.32 alike), while the same
+	// brief on stdin arrived byte for byte. Unset, the CLI's stdin is
+	// /dev/null, so a headless agent can never block waiting for input.
+	BriefOnStdin bool
 }
 
 // Runner drives one CLI through the detached lifecycle.
@@ -257,7 +259,7 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error {
 	p := PathsFor(box)
 	out := r.cli.Output(p)
-	targets := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Ask()}
+	targets := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Ask(), p.Brief()}
 	// The stream too, where it lives apart from the result: it is only
 	// truncated when the next job starts, and a peek between the clear and
 	// the start would show the previous job's stream as this one's.
@@ -279,11 +281,11 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 // The job runs UNCAPPED: nothing force-stops it on a wall-clock timer, so a
 // legitimately long run is free to finish. On a clean exit the shell writes the
 // exit code into both the exit-code file and the done marker — non-empty, for
-// the reason on [Paths.Done]. When the agent finishes but never exits, Poll
-// falls back to the streamed output, and the box teardown reaps the husk.
+// the reason on [Paths.Done].
 //
-// Its stdin is closed: a headless agent must never block waiting for input,
-// and one that does would hang forever with no timer to stop it.
+// Its stdin is closed — or, for a CLI that reads its brief there, the brief's
+// file, which ends: a headless agent must never block waiting for input, and
+// one that does would hang forever with no timer to stop it.
 func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest) (sandbox.RunHandle, error) {
 	paths := PathsFor(box)
 	// The artefacts are cleared unconditionally rather than only on a reuse
@@ -297,8 +299,14 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 		return sandbox.RunHandle{}, err
 	}
 	req.Brief = finalBrief(req.Brief, paths)
+	out := r.cli.Output(paths)
+	if out.BriefOnStdin {
+		if err = box.WriteFile(ctx, paths.Brief(), []byte(req.Brief)); err != nil {
+			return sandbox.RunHandle{}, fmt.Errorf("codingagent: writing the brief: %w", err)
+		}
+	}
 	inner := withShimPath(r.cli.Command(req, paths, configPath), paths)
-	script := wrapperScript(inner, r.cli.Output(paths), paths)
+	script := wrapperScript(inner, out, paths)
 
 	// A LOGIN SHELL, and the -l is load-bearing: a coding CLI is commonly
 	// installed through nvm, asdf or a similar version manager, whose PATH
@@ -327,9 +335,13 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 // beside it, because a pipe's status is its last command's under a plain
 // `sh`, which has no pipefail to say otherwise.
 func wrapperScript(inner string, out Output, paths Paths) string {
+	stdin := "/dev/null"
+	if out.BriefOnStdin {
+		stdin = shellQuote(paths.Brief())
+	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s < /dev/null > %s 2> %s; code=$?; ",
-		inner, shellQuote(out.Stdout), shellQuote(paths.Err()))
+	fmt.Fprintf(&b, "%s < %s > %s 2> %s; code=$?; ",
+		inner, stdin, shellQuote(out.Stdout), shellQuote(paths.Err()))
 	if out.Result != "" && out.Result != out.Stdout {
 		fmt.Fprintf(&b, "tail -n 1 %s > %s; ", shellQuote(out.Stdout), shellQuote(out.Result))
 	}
@@ -356,66 +368,43 @@ func withShimPath(cmd string, paths Paths) string {
 	return "PATH=" + shellQuote(paths.BinDir()) + `:"$PATH" ` + cmd
 }
 
-// terminalWindow is how much of the end of a stream the poll reads to find a
-// CLI's terminal event ([CLI.Finished]).
-//
-// The terminal event is the stream's LAST line by construction — the CLI
-// prints it when the session stops and prints nothing after it — and is a few
-// hundred bytes (a step's finish reason, a session going idle), or an error
-// event carrying a provider's message, which a provider's HTML error page can
-// stretch to tens of KiB. 256 KiB holds that whole with room to spare, at one
-// ranged read per running box per poll tick; the whole stream it replaced was
-// tens of MiB on a long run, re-read and re-decoded every fifteen seconds.
-const terminalWindow = 256 << 10
-
 // Poll reports whether the detached job has finished.
 //
-// THREE SIGNALS, because a finished, hung or dead job must not be able to
-// wedge the run — and there is no run-time TTL to fall back on, since the
-// waiter keeps the box alive for exactly as long as the job needs:
+// TWO SIGNALS, because a finished or dead job must not be able to wedge the
+// run — and there is no run-time TTL to fall back on, since the waiter keeps
+// the box alive for exactly as long as the job needs:
 //
 //  1. THE DONE MARKER. The wrapper returned, cleanly or not, and wrote its
 //     exit code.
-//  2. A TERMINAL SIGNAL AT THE END OF THE STREAM, for an agent that finishes
-//     its work but never exits — an open file watcher or an MCP subprocess
-//     keeps its event loop alive, so the shell never reaches the marker
-//     write. The keepalive holds the box open so the terminal event lands and
-//     Collect reads it. Only the stream's END is read ([terminalWindow]),
-//     and only for a CLI that declares its stream can say so.
-//  3. PROCESS LIVENESS. The wrapper is gone yet no marker was written: the
+//  2. PROCESS LIVENESS. The wrapper is gone yet no marker was written: the
 //     whole process group died abnormally, before the tail echo ran. Without
 //     this the run hangs forever; with it, Collect surfaces the partial result
 //     and the failure. The box answers it ([sandbox.Sandbox.JobRunning]),
 //     because only the backend knows whether its handle is a pid in the box's
 //     own namespace or a host pid the kernel may since have handed to a
 //     stranger. The wrapper is the right process to ask about: while the
-//     coding agent runs, or has finished but not exited, the wrapper is alive,
-//     and once it exits it has already written the done marker, which is
-//     checked first.
+//     coding agent runs the wrapper is alive, and once it exits it has
+//     already written the done marker, which is checked first.
+//
+// There was a third — a terminal event read off the end of the stream, for an
+// agent that finished its work and did not exit, which was OpenCode 1.x. No
+// CLI this build drives does that: Claude Code exits, and OpenCode 2 exits
+// when its session does. A signal no runner gives is a branch nothing tests.
 //
 // A READ THAT FAILS NEVER SKIPS THE LIVENESS PROBE. It used to return before
-// it: a stdout the whole read refused made a finished-but-hung or dead job
-// poll as still running for good, with its keepalive refreshed every tick and
-// its seat busy until a person stopped it. The read's error is still reported
-// — beside a "not done" — once the probe has had its say.
+// it: a read the box refused made a dead job poll as still running for good,
+// with its keepalive refreshed every tick and its seat busy until a person
+// stopped it. The read's error is still reported — beside a "not done" — once
+// the probe has had its say.
 //
 // A still-alive wrapper reports NOT DONE, whether it is working or hung: a
 // genuinely hung-but-alive process is indistinguishable from a working one
 // without a timer, and imposing one is exactly what this design refuses.
 func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.RunHandle) (bool, error) {
 	paths := PathsFor(box)
-	out := r.cli.Output(paths)
 	marker, readErr := box.ReadFile(ctx, paths.Done())
 	if readErr == nil && len(marker) > 0 {
 		return true, nil
-	}
-	if readErr == nil && out.Terminal {
-		tail, err := box.ReadTail(ctx, out.Stdout, terminalWindow)
-		if err != nil {
-			readErr = err
-		} else if lines, _ := tail.Lines(); len(lines) > 0 && r.cli.Finished(string(lines)) {
-			return true, nil
-		}
 	}
 	if handle.CommandID != "" {
 		alive, err := box.JobRunning(ctx, handle.CommandID)
@@ -553,9 +542,10 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 
 	// THE FINDINGS FILE IS THE RESULT CARRIER OF RECORD. The brief asks the
 	// agent to write its report there before stopping, and it survives both
-	// a finished-but-never-exited run whose streamed message was lost and a
-	// tool-only run that parses to no text — so it wins for the result text,
-	// and its presence is the success signal unless the process crashed.
+	// a run whose process group died before its streamed final message was
+	// written and a tool-only run that parses to no text — so it wins for the
+	// result text, and its presence is the success signal unless the process
+	// crashed.
 	findingsText, refusal, err := readWhole(ctx, box, paths.Findings(), "the report the coding agent wrote")
 	if err != nil {
 		return sandbox.Result{}, err

@@ -87,8 +87,8 @@ type LiveRead struct {
 	// finished, a private key whose END may still come, a password whose
 	// value is on a later line.
 	Held int
-	// Finished is whether the job has written its done marker, or its
-	// stream's last line says it is over.
+	// Finished is whether the job has written its done marker: the wrapper
+	// returned, so the stream will not grow again.
 	Finished bool
 	// AsOf is when the box was read.
 	AsOf time.Time

@@ -159,16 +159,20 @@ func TestTheFirstApplyBuildsTheDispatcherAndLaterOnesKeepIt(t *testing.T) {
 	if e.reflector.Load() != nil {
 		t.Fatal("a node with no company has a dispatcher")
 	}
-	if err := e.reconfigureReflection(t.Context(), c); err != nil {
+	install, err := e.prepareReflection(t.Context(), c)
+	if err != nil {
 		t.Fatalf("first apply: %v", err)
 	}
+	install()
 	first := e.reflector.Load()
 	if first == nil {
 		t.Fatal("the first company built no dispatcher")
 	}
-	if err := e.reconfigureReflection(t.Context(), c); err != nil {
+	install, err = e.prepareReflection(t.Context(), c)
+	if err != nil {
 		t.Fatalf("second apply: %v", err)
 	}
+	install()
 	if e.reflector.Load() != first {
 		t.Error("a later apply rebuilt the dispatcher, emptying its redelivery ring")
 	}

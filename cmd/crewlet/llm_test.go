@@ -58,7 +58,7 @@ func TestALoginBundleRoundTripsThroughTheCLI(t *testing.T) {
 
 	target := bundleProvider(t)
 	var out bytes.Buffer
-	if err := importLLM(target, "sub", strings.NewReader(blob+"\n"), &out); err != nil {
+	if err := importLLM(t.Context(), target, "sub", strings.NewReader(blob+"\n"), &out); err != nil {
 		t.Fatalf("importLLM: %v", err)
 	}
 	restored, err := os.ReadFile(
@@ -88,7 +88,7 @@ func TestImportingOverAnExistingLoginIsRefusedLoudly(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	err := importLLM(target, "sub", strings.NewReader("anything"), &out)
+	err := importLLM(t.Context(), target, "sub", strings.NewReader("anything"), &out)
 	if err == nil {
 		t.Fatal("a bundle was restored over a live login")
 	}
@@ -107,7 +107,7 @@ func TestImportingOverAnExistingLoginIsRefusedLoudly(t *testing.T) {
 func TestImportingNothingSaysHowToPipeABundle(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	err := importLLM(bundleProvider(t), "sub", strings.NewReader("   \n"), &out)
+	err := importLLM(t.Context(), bundleProvider(t), "sub", strings.NewReader("   \n"), &out)
 	if err == nil {
 		t.Fatal("an empty stdin imported")
 	}

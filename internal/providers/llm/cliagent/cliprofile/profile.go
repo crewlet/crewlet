@@ -97,12 +97,74 @@ func PathList(paths []Path) string {
 // characters a token), and `crewlet llm doctor` reports the profile's token
 // usage as estimated, because a budget built on estimates is a different
 // promise.
+//
+// Reasoning is the one figure that is ADDED rather than reported as itself:
+// every provider bills the tokens a model spends reasoning as output, and a CLI
+// that reports them APART from its output count — OpenCode 2.0's session totals
+// carry `output` as the visible text alone, beside `reasoning` — would otherwise
+// have every thinking model charged for its answer and not its thought. Declared
+// only where the vendor's output count excludes them: OpenAI's own usage, and
+// every CLI that passes it through, counts reasoning INSIDE output already, and
+// adding it there would charge it twice.
 type UsagePaths struct {
 	Input      []Path `yaml:"input,omitempty"`
 	Output     []Path `yaml:"output,omitempty"`
 	CacheRead  []Path `yaml:"cache_read,omitempty"`
 	CacheWrite []Path `yaml:"cache_write,omitempty"`
+	Reasoning  []Path `yaml:"reasoning,omitempty"`
 }
+
+// CredentialStore is a login a CLI keeps in a DATABASE OF ITS OWN rather than
+// in files — and so a login that cannot travel the way [Profile.CredentialPaths]
+// do. It travels as the DOCUMENT the CLI's own export command prints, and
+// reaches a home through the CLI's own import command.
+//
+// THE FILE CANNOT BE THE CREDENTIAL, because it is also the transcript. OpenCode
+// 2.0 keeps its logins in the `credential` table of the same SQLite file it
+// keeps every session in (`opencode.db`), and reads them nowhere else: a v1
+// `auth.json` copied into a fresh home is ignored outright, and imported only
+// once, while a v1 database is being upgraded. Copying the database would carry
+// one seat's conversations into every other seat, syncing it back would carry
+// them into the shared directory, and pruning it after a call — which is what
+// keeps a turn from reaching the next — would delete the login.
+//
+// So the document is the login of record: the shared credential directory keeps
+// it under [CredentialStoreDocument], a seat's home starts every generation from
+// an empty database with the document imported into it, and the generation ends
+// by exporting what the CLI then holds — a token it refreshed mid-call included
+// — and carrying it back only where it differs from the document the home was
+// seeded with, and only over that same document. A compare-and-swap, under the
+// shared login's lock (hostbox.LockCredentials), and never "replace when it
+// changed": where the shared document has moved on since the home's seed —
+// another seat's refresh, an operator's new login, a logout — the shared
+// directory keeps what it now holds and the home's export is dropped, and a
+// home that exports what it was seeded with writes nothing at all, whatever
+// the shared document holds (the backend's Workspace.syncCredentialsOut).
+//
+// The database itself is then volatile like any other session store. Measured
+// against OpenCode 2.0.32: an import followed by an export reproduces the
+// document byte for byte, and an import skips a credential id the database
+// already holds rather than updating it, which is why a refresh comes back as a
+// new document and never as an import into an older database.
+type CredentialStore struct {
+	// ExportArgs print every login the CLI holds as one document on stdout.
+	ExportArgs []string `yaml:"export_args,omitempty"`
+
+	// ImportArgs read such a document on STDIN and store every login in it.
+	// Never on argv and never a path the engine invents: the document is a
+	// credential, and stdin is the one channel no other account on the
+	// machine can read.
+	ImportArgs []string `yaml:"import_args,omitempty"`
+}
+
+// CredentialStoreDocument is the name the shared credential directory, a
+// credential bundle and a coding box keep a [CredentialStore]'s document under.
+//
+// ONE NAME FOR EVERY PROFILE, and the engine's rather than the vendor's: no CLI
+// reads this file — it reads the document on stdin — so where it is kept is a
+// fact about this engine, and a profile declaring one would be a second place
+// to keep the same answer. No extension, because the format is the CLI's own.
+const CredentialStoreDocument = "exported-credentials"
 
 // StdinLogin is a credential login a CLI genuinely accepts.
 //
@@ -136,7 +198,9 @@ type LimitMarker struct {
 	// Sentinel is the exact substring the vendor emits. It is compared
 	// case-sensitively against the extracted text: the vendors write these
 	// as fixed strings, and folding case is what turns a sentinel back
-	// into a keyword.
+	// into a keyword. In the [MarkerScopeEvents] scope it is the failure
+	// CLASS instead, compared whole and case-sensitively with the string at
+	// [Profile.MarkerPath] in the CLI's own failure event.
 	Sentinel string `yaml:"sentinel,omitempty"`
 
 	// ResetSeparator splits the reset value off the sentinel line. Claude
@@ -171,6 +235,38 @@ type LimitMarker struct {
 // to stderr with stdout empty, and hermes writes `hermes -z: agent failed: …`
 // there — all three measured. A profile only narrows this when the vendor's
 // own behaviour makes the answer an impossible place for the report.
+//
+// THE THIRD SCOPE MATCHES STRUCTURE, NOT TEXT, for a CLI that reports a failure
+// as an EVENT OF ITS OWN in a JSON stream. OpenCode 2's `--format json` prints
+// `{"type":"error",…,"error":{"type":"provider.quota",…}}` on stdout and nothing
+// on stderr, so the report is neither the answer nor stderr. And it can follow
+// an answer — a call that wrote a sentence, fetched a page and was then refused
+// on its next step has a located answer that does not contain the refusal — so
+// searching the answer finds nothing exactly when a spent plan most needs the
+// chain to carry the seat on.
+//
+// A substring search of stdout cannot stand in for it, and the first shape of
+// this scope was exactly that, defended on the grounds that the model's words
+// reach a JSON stream only as escaped strings. They do not: OpenCode prints
+// every tool call as a `tool_use` event whose `state.input` is the model's
+// arguments as a raw JSON OBJECT, so a model that put `"type":"provider.quota"`
+// into a webfetch call — which text injected into a page or a message it read
+// can ask it to — printed the sentinel verbatim on a call that exited 0 with a
+// correct answer, and the credential was benched (measured on 2.0.32). So the
+// scope decodes each stdout line, looks only at the events the profile names
+// as the CLI's own failure reports ([Profile.MarkerEvents], told apart by
+// [Profile.EventTypePath]), and compares every sentinel by EQUALITY with the
+// string at [Profile.MarkerPath] in such an event. Whatever bytes a model puts
+// in its text or a tool's arguments, they arrive inside an event of another
+// type, or nested where the path does not reach.
+//
+// STDERR IS NOT SEARCHED in this scope. The one CLI that takes it writes none
+// of these failures there — zero bytes, measured on 2.0.32 with
+// `--print-logs=false` for a refused key, a spent plan and a rate limit — and a
+// byte search of a channel with nothing to find is only a way for something
+// other than the CLI's own event to classify a call. [Profile.Validate] refuses
+// the scope without a jsonl stream, its discriminator, the failure events and
+// the path.
 type MarkerScope string
 
 const (
@@ -181,11 +277,15 @@ const (
 	// MarkerScopeStderr searches stderr only, for a CLI whose failures
 	// never reach the answer.
 	MarkerScopeStderr MarkerScope = "stderr"
+	// MarkerScopeEvents compares sentinels with the failure class in the
+	// CLI's own failure events and looks nowhere else — for a CLI that
+	// reports a failure as an event of its own in a JSON stream.
+	MarkerScopeEvents MarkerScope = "events"
 )
 
 // Valid reports whether s is a scope this package knows.
 func (s MarkerScope) Valid() bool {
-	return s == MarkerScopeAnswerAndStderr || s == MarkerScopeStderr
+	return s == MarkerScopeAnswerAndStderr || s == MarkerScopeStderr || s == MarkerScopeEvents
 }
 
 // LocalTools says what a profile does about the CLI's OWN tools — its shell,
@@ -256,10 +356,16 @@ type SeedFile struct {
 	Content string `yaml:"content,omitempty"`
 }
 
-// seedValidationRoot is the stand-in a seed path's shape is checked against
-// at load time. Any ordinary directory does; what is proved is that the path
-// is relative and climbs out of nothing.
-var seedValidationRoot = filepath.Join(string(filepath.Separator), "seat")
+// staysInside reports, at load time, whether a profile-declared relative path
+// stays inside whatever directory it is later joined onto: relative, not
+// empty, and climbing out of nothing once cleaned ([filepath.IsLocal]).
+//
+// The load-time half of [UnderRoot], for a path whose real root does not exist
+// yet. It used to be UnderRoot against a stand-in root named `/seat`, which
+// proved less than it claimed: `../seat/settings.json` climbs out and back in
+// by that very name, so it passed at load and was refused by the real
+// UnderRoot on every call.
+func staysInside(rel string) bool { return filepath.IsLocal(rel) }
 
 // Scope is the seed scope with its default applied.
 func (f SeedFile) Scope() SeedScope {
@@ -289,16 +395,33 @@ func (f SeedFile) Scope() SeedScope {
 // are two). Passing it only when there is text to put in it would hand the
 // vendor's default agent, and every tool it has, to exactly the calls that
 // exist to prove the tools are off.
+//
+// OpenCode 2 is the second, and it takes the file a different way: it is
+// handed no path at all. It DISCOVERS agents by their location — `agents/<name>.md`
+// in its configuration directory, with the body as the agent's system prompt —
+// and `--agent <name>` selects one. Its profile points that directory inside
+// the per-call working directory ([Profile.WorkConfigEnv]), so the file is
+// written there and the channel's argv names the agent rather than carrying
+// `{file}`: see [SystemPromptFile.Discovered].
 type SystemPromptFile struct {
 	// Name is the file to write in the per-call working directory. Empty
-	// takes the default. A bare name, never a path: a vendor that keys on
-	// the extension (`--agent-file` wants `.md`) is the only reason to set
-	// it.
+	// takes the default. A bare name for a file whose path the CLI is
+	// handed: a vendor that keys on the extension (`--agent-file` wants
+	// `.md`) is the only reason to set it. A relative path naming a FILE,
+	// staying inside the working directory, for a
+	// [SystemPromptFile.Discovered] one, which the CLI finds where its
+	// vendor says to look.
 	Name string `yaml:"name,omitempty"`
 
 	// Template is the file's content, with `{system}` substituted by the
 	// seat's system prompt. Empty writes the prompt alone.
 	Template string `yaml:"template,omitempty"`
+
+	// Discovered says the CLI FINDS the file by its location in the working
+	// directory rather than being handed its path, so system_prompt_args
+	// select what it found and carry no `{file}`. Written on every call, as
+	// a `{file}` one is, and removed with the working directory on release.
+	Discovered bool `yaml:"discovered,omitempty"`
 }
 
 // Render returns the bytes to write for one call's system prompt.
@@ -334,6 +457,7 @@ const DefaultSystemPromptFile = "crewlet-system-prompt.txt"
 // unrecognised failure would get, so that a role keeps working off its
 // metered fallback while the operator re-runs `crewlet llm login`.
 type AuthMarker struct {
+	// Sentinel is matched exactly as a [LimitMarker]'s is, in the same scope.
 	Sentinel string `yaml:"sentinel,omitempty"`
 }
 
@@ -378,9 +502,10 @@ type Profile struct {
 	//
 	// A DECLARATION OF A VENDOR FACT, measured per CLI and overridable like
 	// every other: a release that starts accepting a bare id is an override,
-	// not a Crewlet release. Only opencode's is measured — its `run --model`
-	// splits the value at the first slash and a bare id is "Model not
-	// found: <id>/." — so only opencode declares it.
+	// not a Crewlet release. Only opencode's is measured — OpenCode 2's
+	// `run --model` takes `provider/model[#variant]`, splits it at the first
+	// slash, and refuses a bare id as "Invalid model reference: <id>" — so
+	// only opencode declares it.
 	ModelNamesProvider bool `yaml:"model_names_provider,omitempty"`
 
 	// PromptMode is stdin (the default), argv or file.
@@ -493,7 +618,8 @@ type Profile struct {
 	ErrorPaths []Path `yaml:"error_paths,omitempty"`
 
 	// Usage locates the token counts, in the CLI's stdout — or, where
-	// [Profile.UsageFileArgs] is set, in the report that field names.
+	// [Profile.UsageFileArgs] or [Profile.UsageArgs] is set, in the report
+	// that field names.
 	Usage UsagePaths `yaml:"usage,omitempty"`
 
 	// UsageFileArgs asks the CLI to write its token counts to a FILE,
@@ -512,17 +638,125 @@ type Profile struct {
 	// the process exits; when it is absent or unreadable the counts fall
 	// back to whatever stdout said, because the vendor writes it "even
 	// when the run fails" and a broken usage write must never mask the
-	// run's own outcome.
+	// run's own outcome. Absent is silent — the run did not get that far —
+	// while a file that cannot be read or is empty logs
+	// `cli_agent_usage_file_unreadable`, and one that does not decode, or in
+	// which usage.input and usage.output do not both resolve, logs
+	// `cli_agent_usage_report_unreadable`.
 	UsageFileArgs []string `yaml:"usage_file_args,omitempty"`
+
+	// SessionArgs name the session one call runs in, with `{session}`
+	// substituted by an id the engine mints for that call alone: 32
+	// lowercase hexadecimal characters, so a vendor that wants a prefix of
+	// its own spells it around the placeholder (`ses_{session}`). Appended
+	// with the model arguments, before the system prompt and the prompt.
+	//
+	// It exists for [Profile.UsageArgs], which has to ask the CLI about
+	// THIS call afterwards — and a seat's home is shared by every call
+	// running in it at once, so "the most recent session" would answer
+	// with a sub-agent's.
+	SessionArgs []string `yaml:"session_args,omitempty"`
+
+	// UsageArgs is a command run AFTER the call, in the same home and
+	// working directory and with the same environment, that prints the
+	// call's token counts as one JSON document on stdout — which
+	// [Profile.Usage] is then read out of, as it would be a usage file.
+	// `{session}` is substituted with the id [Profile.SessionArgs] gave the
+	// call.
+	//
+	// It exists because a CLI can record a call's usage exactly and still
+	// not report it where the call prints. OpenCode 2.0's `run --format
+	// json` emits a step's counts in a `step_finish` event, and drops the
+	// FINAL step's: its formatter stops at the session's completion event,
+	// and the last step's end does not reach it first. Measured on 2.0.32,
+	// a text-only call printed no `step_finish` in six runs of six, and a
+	// call that used a tool printed the tool step's counts and not the
+	// answer's. Read from stdout, every call would have been charged for
+	// nothing or for its first step. The session the call ran in holds the
+	// whole total (`opencode api session.get`), so that is asked instead.
+	//
+	// A failed or unreadable report is not a failed call: the counts fall
+	// back to whatever stdout said, as for a usage file — which, for a CLI
+	// that reports no usage there, is the estimate — and a warning says
+	// which: `cli_agent_usage_report_failed` for a command that failed or
+	// printed nothing, `cli_agent_usage_report_unreadable` for a report that
+	// does not decode or in which usage.input and usage.output do not both
+	// resolve.
+	UsageArgs []string `yaml:"usage_args,omitempty"`
 
 	// ConfigEnv maps a vendor's own relocation variable to a directory
 	// under the seat's home. Without it a CLI reads the engine user's real
 	// dotfiles and every seat shares one set of sessions.
 	ConfigEnv map[string]string `yaml:"config_env,omitempty"`
 
+	// WorkConfigEnv maps a vendor's relocation variable to a directory under
+	// the PER-CALL WORKING directory, where [Profile.ConfigEnv] maps one under
+	// the seat's home — for a CLI that reads configuration it must not share
+	// with the seat's other calls from a directory a variable names.
+	//
+	// The seat's home cannot be that directory, because every call a seat runs
+	// at once shares it and each call's system prompt is its own. OpenCode 2 is
+	// the CLI that needs it, and the alternative it replaced was its PROJECT
+	// configuration: OpenCode reads `opencode.json`, and `.opencode/` agents
+	// and plugins, from the working directory and EVERY ANCESTOR of it, and a
+	// project's permissions beat the seat's — so an `opencode.json` anywhere
+	// above the state directory (the engine user's home, a repository
+	// cli.state_dir was put in) handed every seat a shell, and a plugin there
+	// ran its code in every call (measured on 2.0.32). With that walk switched
+	// off (OPENCODE_CONFIG_PROJECT_DISABLE, in [Profile.IsolationEnv]) the
+	// only configuration OpenCode reads from a directory is the one
+	// OPENCODE_CONFIG_DIR names — it REPLACES the one under XDG_CONFIG_HOME
+	// rather than adding to it — so that variable points inside the call's own
+	// directory, where the profile's `in: work` seed and its discovered agent
+	// file are written. The one exception is a machine-wide MANAGED
+	// configuration (`/etc/opencode` on Linux, read from the 2.0.32 bundle),
+	// which only an administrator of the host can write and no variable
+	// switches off; on a host that has one, it configures every seat.
+	//
+	// Set only for a command that runs AS A CALL: the completion, and the
+	// usage command after it. A command with no call of its own — a credential
+	// store's import and export, `crewlet llm login` and `status`, the version
+	// probe — has no working directory to point inside, and runs without the
+	// variable.
+	WorkConfigEnv map[string]string `yaml:"work_config_env,omitempty"`
+
+	// IsolationEnv is a vendor's own SWITCH that keeps the CLI from reading
+	// configuration outside its seat's home and its call's directory — set,
+	// with its value, on EVERY command this profile runs (a call, its usage
+	// command, a credential store's import and export, a login, the version
+	// probe), at the same layer as HOME and the relocations.
+	//
+	// A FIELD APART FROM [Profile.Env], whose values are settings, because a
+	// switch here is part of the isolation and has to be protected like the
+	// rest of it: the profile's env and passthrough_env, and an entry's
+	// cli.env, are all layered OVER the isolation, and each is refused naming
+	// one of [Profile.IsolationVariables] — which an ordinary env entry is not.
+	// Written in env, OpenCode's project switch was replaced by
+	// `cli.env: {OPENCODE_CONFIG_PROJECT_DISABLE: "0"}` — or by an EMPTY value,
+	// which it reads as off — with nothing to say so, and every ancestor's
+	// `opencode.json`, agents and plugins were configuration for every seat
+	// again: measured on 2.0.32, the model's tools widened to shell, write and
+	// execute, an ancestor agent of the seat's own name replaced the seat's
+	// system prompt, and the ancestor's plugins ran.
+	//
+	// The NAME the vendor reads FIRST, never a fallback spelling: OpenCode 2
+	// reads `OPENCODE_CONFIG_PROJECT_DISABLE ?? OPENCODE_DISABLE_PROJECT_CONFIG`
+	// (read from the 2.0.0 and 2.0.32 bundles), so a profile setting only the
+	// second is overruled by any value of the first, an empty one included.
+	// With the first fixed here and refused everywhere else, the second is
+	// never read, so nothing needs to refuse it.
+	//
+	// Never a credential, never the profile's token_env or api_key_env
+	// ([Profile.ValidateCredentials]), never a variable the engine already
+	// sets ([HomeIsolation], a relocation), and never an empty value, which
+	// every switch these vendors read takes as off.
+	IsolationEnv map[string]string `yaml:"isolation_env,omitempty"`
+
 	// Env is fixed child environment the CLI needs. Never a credential,
 	// and never the profile's own token_env or api_key_env, both refused
-	// by [Profile.ValidateCredentials].
+	// by [Profile.ValidateCredentials] — nor a variable the engine sets to
+	// isolate the call ([Profile.IsolationVariables]), refused by
+	// [Profile.Validate].
 	Env map[string]string `yaml:"env,omitempty"`
 
 	// PassthroughEnv names engine environment variables forwarded to the
@@ -531,6 +765,9 @@ type Profile struct {
 	// forwarded before auth.mode is consulted, so a key listed here would
 	// reach every seat whatever the mode said, which is exactly the
 	// metered-bill-on-a-flat-rate-plan failure auth.mode exists to prevent.
+	// Nor may it name a variable the engine sets to isolate the call
+	// ([Profile.IsolationVariables]): forwarding the engine's own HOME is
+	// handing the CLI the engine user's dotfiles.
 	PassthroughEnv []string `yaml:"passthrough_env,omitempty"`
 
 	// TokenEnv is the variable carrying a long-lived headless
@@ -591,6 +828,11 @@ type Profile struct {
 	// StdinLogin is a real credential login, where one exists.
 	StdinLogin *StdinLogin `yaml:"stdin_login,omitempty"`
 
+	// CredentialStore is set for a CLI that keeps its login in a database of
+	// its own rather than in files — see [CredentialStore]. Nil, the default,
+	// means the login is CredentialPaths, a token, a key, or nothing.
+	CredentialStore *CredentialStore `yaml:"credential_store,omitempty"`
+
 	// LimitMarkers recognise a spent subscription.
 	LimitMarkers []LimitMarker `yaml:"limit_markers,omitempty"`
 
@@ -601,6 +843,18 @@ type Profile struct {
 	// see [MarkerScope]. Empty searches the answer and stderr, which is
 	// what a CLI reporting a spent plan as its answer needs.
 	MarkerScope MarkerScope `yaml:"marker_scope,omitempty"`
+
+	// MarkerEvents names the events — by the value at [Profile.EventTypePath]
+	// — in which the CLI reports a failure of its own: the only lines the
+	// [MarkerScopeEvents] scope looks at. Required by that scope, and refused
+	// beside any other, which reads nothing here.
+	MarkerEvents []string `yaml:"marker_events,omitempty"`
+
+	// MarkerPath locates the failure CLASS inside one of
+	// [Profile.MarkerEvents]: the string a sentinel must EQUAL, not merely
+	// contain. Required by the [MarkerScopeEvents] scope, and refused beside
+	// any other.
+	MarkerPath Path `yaml:"marker_path,omitempty"`
 
 	// HostCredentialPaths are where this CLI keeps its login in a human's
 	// own home directory, for `crewlet llm login -from-host` to adopt.
@@ -724,6 +978,172 @@ func (p *Profile) EffectiveMarkerScope() MarkerScope {
 	return p.MarkerScope
 }
 
+// HomeIsolation is the variables the engine points inside a seat's home — or,
+// for XDG_CACHE_HOME, beside it — for every CLI, whatever its profile says.
+//
+// Declared here, beside [Profile.IsolationVariables], rather than only in the
+// code that sets them, because config refuses an entry that would override
+// one and has to be able to name them without importing the backend.
+var HomeIsolation = []string{
+	"HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "TMPDIR",
+}
+
+// IsolationVariables names every variable the engine sets to keep this CLI
+// inside its seat's home and its call's working directory: [HomeIsolation],
+// then the profile's [Profile.ConfigEnv], [Profile.WorkConfigEnv] and
+// [Profile.IsolationEnv], each sorted.
+//
+// One list for the three places that must not set one of them — the profile's
+// own env and passthrough_env ([Profile.Validate]) and an entry's cli.env
+// (config) — because every one of those is layered OVER the isolation when the
+// child's environment is built, so a value there silently replaces the seat's
+// home with whatever it names: the engine user's own dotfiles, a
+// configuration directory no seat's system prompt is written to, or a switch
+// turned back off.
+func (p *Profile) IsolationVariables() []string {
+	names := slices.Clone(HomeIsolation)
+	names = append(names, slices.Sorted(maps.Keys(p.ConfigEnv))...)
+	names = append(names, slices.Sorted(maps.Keys(p.WorkConfigEnv))...)
+	return append(names, slices.Sorted(maps.Keys(p.IsolationEnv))...)
+}
+
+// IsolationLayer is which of the layers that keep a CLI inside its seat's home
+// and its call's working directory sets one of [Profile.IsolationVariables] —
+// and so which field, if any, changes the value the child is given.
+type IsolationLayer string
+
+// The layers, each but the engine's own named by the profile field that sets
+// it, which is what an operator overrides it with (cli.overrides.<field>).
+const (
+	// IsolationHome is [HomeIsolation]: HOME, the XDG homes and TMPDIR, set
+	// by the engine for every CLI, whatever its profile says, and changed by
+	// no field at all — config_env, work_config_env and isolation_env each
+	// refuse every one of them.
+	IsolationHome IsolationLayer = "home"
+	// IsolationConfigEnv is a [Profile.ConfigEnv] relocation under the
+	// seat's home.
+	IsolationConfigEnv IsolationLayer = "config_env"
+	// IsolationWorkConfigEnv is a [Profile.WorkConfigEnv] relocation under
+	// the call's working directory.
+	IsolationWorkConfigEnv IsolationLayer = "work_config_env"
+	// IsolationSwitch is a [Profile.IsolationEnv] switch.
+	IsolationSwitch IsolationLayer = "isolation_env"
+)
+
+// IsolationLayerOf reports which layer sets name, and false when none does:
+// when name is not one of [Profile.IsolationVariables].
+//
+// ONE LAYER PER VARIABLE in a profile that loaded, because each field refuses
+// the others' names ([Profile.Validate]): config_env refuses [HomeIsolation],
+// work_config_env refuses it and config_env's variables, and isolation_env
+// refuses all three. So the answer is the layer whose value the child is
+// given, with no precedence to decide.
+//
+// For the refusals that have to say WHERE a variable's value is changed,
+// rather than a second copy of the lists beside each of them: an entry's
+// cli.env naming OPENCODE_CONFIG_DIR used to be sent to
+// cli.overrides.config_env, which [Profile.Validate] refuses for that very
+// variable as work_config_env's, and naming OPENCODE_CONFIG_PROJECT_DISABLE
+// to the same field, refused there as an isolation_env switch.
+func (p *Profile) IsolationLayerOf(name string) (IsolationLayer, bool) {
+	switch {
+	case slices.Contains(HomeIsolation, name):
+		return IsolationHome, true
+	case hasKey(p.ConfigEnv, name):
+		return IsolationConfigEnv, true
+	case hasKey(p.WorkConfigEnv, name):
+		return IsolationWorkConfigEnv, true
+	case hasKey(p.IsolationEnv, name):
+		return IsolationSwitch, true
+	}
+	return "", false
+}
+
+// hasKey reports whether a map names key, whatever its value.
+func hasKey(m map[string]string, key string) bool {
+	_, ok := m[key]
+	return ok
+}
+
+// KeptUnder names the fields whose paths this profile keeps inside the
+// directory one of its relocation variables points at — a [Profile.ConfigEnv]
+// directory under the seat's home, a [Profile.WorkConfigEnv] one under the
+// call's working directory — each once, in field order; nil for a variable
+// neither relocates, or one under which the profile keeps nothing.
+//
+// WHAT HAS TO MOVE WITH THE DIRECTORY. The CLI finds each of those paths
+// THROUGH the variable — CODEX_HOME's login and sessions, the policy and the
+// agent file under OPENCODE_CONFIG_DIR — so pointing the variable somewhere
+// else and leaving them where they were is a CLI that never reads its login,
+// never has its sessions pruned, or never sees the tool policy that denies it
+// a shell. The refusal of an entry's cli.env naming the variable says which
+// fields move with it; a profile that moves the directory without them does
+// not load ([Load]).
+func (p *Profile) KeptUnder(name string) []string {
+	var dir string
+	var scope SeedScope
+	switch {
+	case hasKey(p.ConfigEnv, name):
+		dir, scope = p.ConfigEnv[name], SeedHome
+	case hasKey(p.WorkConfigEnv, name):
+		dir, scope = p.WorkConfigEnv[name], SeedWork
+	default:
+		return nil
+	}
+	var fields []string
+	for _, k := range p.kept(scope) {
+		if within(k.path, dir) && !slices.Contains(fields, k.field) {
+			fields = append(fields, k.field)
+		}
+	}
+	return fields
+}
+
+// keptPath is one path a profile keeps for its CLI in a scope: the field it
+// is set with, the entry as an operator would find it, and the path as
+// written.
+type keptPath struct {
+	field, label, path string
+}
+
+// kept lists the paths this profile keeps for its CLI in one scope — the ones
+// a relocation of that scope can strand. Under the seat's home: the login
+// files, the volatile paths and the home's seed files. Under the call's
+// working directory: its seed files and a discovered system prompt file, which
+// the CLI finds by where it is; a `{file}` one is handed to the CLI by its
+// path, wherever it is.
+func (p *Profile) kept(scope SeedScope) []keptPath {
+	var out []keptPath
+	add := func(field, label, path string) {
+		out = append(out, keptPath{field: field, label: label, path: path})
+	}
+	if scope == SeedHome {
+		for i, rel := range p.CredentialPaths {
+			add("credential_paths", fmt.Sprintf("credential_paths[%d]", i), rel)
+		}
+		for i, rel := range p.VolatilePaths {
+			add("volatile_paths", fmt.Sprintf("volatile_paths[%d]", i), rel)
+		}
+	}
+	for i, f := range p.SeedFiles {
+		if f.Scope() == scope {
+			add("seed_files", fmt.Sprintf("seed_files[%d].path", i), f.Path)
+		}
+	}
+	if spf := p.SystemPromptFile; scope == SeedWork && spf != nil && spf.Discovered {
+		add("system_prompt_file.name", "system_prompt_file.name", spf.Name)
+	}
+	return out
+}
+
+// within reports whether rel is dir or lies under it, both relative to one
+// root and compared clean: `.codex/auth.json` is within `.codex/`, and every
+// path is within `.`, the root itself.
+func within(rel, dir string) bool {
+	rel, dir = filepath.Clean(rel), filepath.Clean(dir)
+	return dir == "." || rel == dir || strings.HasPrefix(rel, dir+string(filepath.Separator))
+}
+
 // HasSystemChannel reports whether this profile carries the system prompt on
 // a channel of its own rather than leaving it in the transcript.
 func (p *Profile) HasSystemChannel() bool {
@@ -731,10 +1151,13 @@ func (p *Profile) HasSystemChannel() bool {
 }
 
 // WritesSystemPromptFile reports whether this profile's system-prompt channel
-// puts the text in a FILE — either `{file}` on argv, or the env-var channel,
-// which is a path by construction.
+// puts the text in a FILE — `{file}` on argv, the env-var channel, which is a
+// path by construction, or a file the CLI discovers by its location.
 func (p *Profile) WritesSystemPromptFile() bool {
 	if p.SystemPromptEnv != "" {
+		return true
+	}
+	if p.SystemPromptFile != nil && p.SystemPromptFile.Discovered {
 		return true
 	}
 	return hasPlaceholder(p.SystemPromptArgs, "{file}")
@@ -756,9 +1179,39 @@ func isBareFileName(name string) bool {
 	return !strings.ContainsRune(name, '/') && !strings.ContainsRune(name, filepath.Separator)
 }
 
+// namesAFile reports whether a relative path that [staysInside] names a FILE
+// under the directory it is joined onto, rather than that directory or a
+// directory spelled with a trailing separator: its last element, as written,
+// is a [isBareFileName], and it does not clean to the directory itself.
+//
+// The last element AS WRITTEN, not after cleaning, because cleaning is what
+// hides the shape: `x/..` cleans to `.` and `agents/` to `agents`, and the
+// second of those reads as a file name while the operator wrote a directory.
+func namesAFile(rel string) bool {
+	if strings.HasSuffix(rel, "/") || strings.HasSuffix(rel, string(filepath.Separator)) {
+		return false
+	}
+	last := rel[strings.LastIndexAny(rel, "/"+string(filepath.Separator))+1:]
+	return isBareFileName(last) && filepath.Clean(rel) != "."
+}
+
 // Validate reports what is wrong with a profile, naming the override field an
 // operator would edit rather than the Go field they cannot see.
 func (p *Profile) Validate(name string) error {
+	return profileError(name, p.problems())
+}
+
+// profileError is the one error a profile's problems are reported as, or nil
+// for none.
+func profileError(name string, bad []string) error {
+	if len(bad) == 0 {
+		return nil
+	}
+	return fmt.Errorf("cli-agent profile %q: %s", name, strings.Join(bad, "; "))
+}
+
+// problems is what [Profile.Validate] reports, one sentence each.
+func (p *Profile) problems() []string {
 	var bad []string
 	add := func(format string, args ...any) {
 		bad = append(bad, fmt.Sprintf(format, args...))
@@ -786,11 +1239,7 @@ func (p *Profile) Validate(name string) error {
 		// output is a json profile, and the raw field printed "a  profile".
 		add("text_paths is empty — a %s profile must say where the answer is", p.EffectiveOutput())
 	}
-	for dir := range p.ConfigEnv {
-		if dir == "HOME" {
-			add("config_env may not name HOME — it is set from the seat home already")
-		}
-	}
+	p.validateRelocations(add)
 	if len(p.PromptArgs) > 0 && p.EffectivePromptMode() != PromptArgv && p.EffectivePromptMode() != PromptFile {
 		add("prompt_args is set but prompt_mode is %q — the flag introduces a prompt "+
 			"on argv and there is none to introduce", p.EffectivePromptMode())
@@ -854,23 +1303,28 @@ func (p *Profile) Validate(name string) error {
 			add("system_prompt_file.template has no {system} placeholder — every " +
 				"call would hand the CLI the same fixed file and no seat's identity")
 		}
-		// `fileName` rather than `name`, which is this function's own
-		// parameter: the PROFILE's name. Two different names in one
-		// validator whose every message is about the profile is worth a
-		// second word.
-		if fileName := p.SystemPromptFile.Name; fileName != "" && !isBareFileName(fileName) {
+		// `fileName` rather than `name`, which is Validate's own parameter:
+		// the PROFILE's name. Two different names in one validator whose
+		// every message is about the profile is worth a second word.
+		fileName := p.SystemPromptFile.Name
+		switch {
+		case p.SystemPromptFile.Discovered:
+			p.validateDiscoveredPromptFile(add)
+		case fileName != "" && !isBareFileName(fileName):
 			// The path is joined onto the per-call working directory,
 			// and this field is operator-overridable.
 			add("system_prompt_file.name %q must be a plain file name, with no "+
-				"directory separator", fileName)
+				"directory separator — only a discovered file, which the CLI finds "+
+				"where its vendor says to look, carries a directory", fileName)
 		}
 	}
+	p.validateUsageCommand(add)
 	if len(p.UsageFileArgs) > 0 {
 		if !hasPlaceholder(p.UsageFileArgs, "{usage_file}") {
 			add("usage_file_args carries no {usage_file} placeholder — there is " +
 				`nothing to substitute the path into, e.g. ["--usage-file", "{usage_file}"]`)
 		}
-		// BOTH PROMPT COUNTS, because [extracted.applyUsageFile] accepts a
+		// BOTH PROMPT COUNTS, because [extracted.applyUsageReport] accepts a
 		// report only when both resolve — a partial overlay would pair one
 		// source's input with another's output, and the sum is what a
 		// budget is charged. A profile declaring one of them (or only the
@@ -884,9 +1338,21 @@ func (p *Profile) Validate(name string) error {
 				"call would fall back to an estimate while the doctor reports otherwise")
 		}
 	}
-	if p.MarkerScope != "" && !p.MarkerScope.Valid() {
-		add("marker_scope %q (want %s or %s)",
-			p.MarkerScope, MarkerScopeAnswerAndStderr, MarkerScopeStderr)
+	switch {
+	case p.MarkerScope != "" && !p.MarkerScope.Valid():
+		add("marker_scope %q (want %s, %s or %s)", p.MarkerScope,
+			MarkerScopeAnswerAndStderr, MarkerScopeStderr, MarkerScopeEvents)
+	case p.MarkerScope == MarkerScopeEvents:
+		p.validateEventMarkers(add)
+	case len(p.MarkerEvents) > 0 || len(p.MarkerPath) > 0:
+		// Refused rather than ignored: an operator who named the failure
+		// event meant markers to be matched in it, and under any other scope
+		// they would be matched as substrings of the answer and stderr while
+		// the profile appeared to say otherwise.
+		add("marker_events or marker_path is set but marker_scope is %q — they say "+
+			"where the %s scope looks, and no other scope reads them; set "+
+			"marker_scope: %s, or drop them", p.EffectiveMarkerScope(), MarkerScopeEvents,
+			MarkerScopeEvents)
 	}
 	for i, m := range p.LimitMarkers {
 		if problem := sentinelProblem(m.Sentinel); problem != "" {
@@ -907,6 +1373,40 @@ func (p *Profile) Validate(name string) error {
 	if p.StdinLogin != nil && len(p.StdinLogin.Args) == 0 {
 		add("stdin_login.args is empty")
 	}
+	if store := p.CredentialStore; store != nil {
+		// BOTH HALVES OR NEITHER: an export with no import leaves every seat
+		// home empty, and an import with no export can never write back the
+		// token a call refreshed, which is how a fleet is logged out at the
+		// next expiry.
+		if len(store.ExportArgs) == 0 {
+			add("credential_store.export_args is empty — a login held in the CLI's " +
+				"own database can only leave it through the CLI's export command")
+		}
+		if len(store.ImportArgs) == 0 {
+			add("credential_store.import_args is empty — a seat home starts from an " +
+				"empty database, and only the CLI's import command puts the login in it")
+		}
+		for _, args := range [][]string{store.ExportArgs, store.ImportArgs} {
+			if hasPlaceholder(args, "{file}") {
+				// The document is a credential, so it goes on stdin, which no
+				// other account can read; a path would also have to be a
+				// file the engine wrote and then had to remember to remove.
+				add("credential_store args carry {file} — the document travels on " +
+					"stdin and stdout, never through a path")
+				break
+			}
+		}
+		for _, rel := range p.CredentialPaths {
+			if filepath.Base(rel) == CredentialStoreDocument {
+				// The shared directory keeps both kinds under their base
+				// names, so one would overwrite the other there and in every
+				// bundle.
+				add("credential_paths names %q, whose file name is the one the "+
+					"credential store's document is kept under (%s)", rel, CredentialStoreDocument)
+			}
+		}
+	}
+	p.validateHomePaths(add)
 	if p.LocalTools != "" && !p.LocalTools.Valid() {
 		add("local_tools %q (want denied or vendor-default)", p.LocalTools)
 	}
@@ -924,12 +1424,28 @@ func (p *Profile) Validate(name string) error {
 		if f.In != "" && !f.In.Valid() {
 			add("seed_files[%d].in %q (want home or work)", i, f.In)
 		}
-		// UnderRoot against a stand-in root proves the same two things
-		// seeding will: relative, and not escaping the scope. No seat
-		// home exists at load time, and the root directory itself will
-		// not do — nothing can sit "inside" it by this test.
-		if _, err := UnderRoot(seedValidationRoot, f.Path); err != nil {
+		switch {
+		case !staysInside(f.Path):
+			// The same two things seeding's UnderRoot proves — relative,
+			// and not escaping the scope — asked before any seat home
+			// exists.
 			add("seed_files[%d].path %q must be relative and stay inside the %s directory",
+				i, f.Path, f.Scope())
+		case !namesAFile(f.Path):
+			// The content is written to exactly this path, and UnderRoot
+			// proves only that it stays inside — it accepts the scope
+			// directory itself. So `.` and `x/..` are a write onto the
+			// home or the working directory (EISDIR on every call), and
+			// `.crewlet-config/` writes a regular FILE where the CLI and
+			// the engine need a directory, so the system prompt's write
+			// under it fails ENOTDIR on every call. The rule
+			// system_prompt_file.name is held to, for the same reason.
+			// The same directory spelled as a file name, `.crewlet-config`,
+			// is a conflict between two fields rather than a shape, and
+			// [Profile.validateCollisions] refuses it.
+			add("seed_files[%d].path %q must name a FILE inside the %s directory — not "+
+				"the directory itself, not a path ending in a separator, and not one "+
+				"whose last element is . or .. — e.g. .vendor/settings.json",
 				i, f.Path, f.Scope())
 		}
 		if f.Content == "" {
@@ -937,10 +1453,499 @@ func (p *Profile) Validate(name string) error {
 				"configures nothing", i)
 		}
 	}
-	if len(bad) == 0 {
-		return nil
+	p.validateCollisions(add)
+	return bad
+}
+
+// pathClaim is one path a profile has the engine WRITE a file at, or has the
+// CLI read a DIRECTORY at, inside one scope: the field that names it, and the
+// path clean.
+type pathClaim struct {
+	label, path string
+	dir         bool
+}
+
+// claims lists every path this profile claims in one scope whose own shape is
+// valid — a path its shape check refuses is reported there and not again.
+// Under the seat's home: the login files and the home's seed files are
+// written, and each config_env directory is read. Under the call's working
+// directory: its seed files and the system prompt file are written, and each
+// work_config_env directory is read.
+func (p *Profile) claims(scope SeedScope) []pathClaim {
+	var out []pathClaim
+	file := func(label, rel string) {
+		out = append(out, pathClaim{label: label, path: filepath.Clean(rel)})
 	}
-	return fmt.Errorf("cli-agent profile %q: %s", name, strings.Join(bad, "; "))
+	if scope == SeedHome {
+		for i, rel := range p.CredentialPaths {
+			if staysInside(rel) && namesAFile(rel) {
+				file(fmt.Sprintf("credential_paths[%d]", i), rel)
+			}
+		}
+	}
+	for i, f := range p.SeedFiles {
+		if f.Scope() == scope && staysInside(f.Path) && namesAFile(f.Path) {
+			file(fmt.Sprintf("seed_files[%d].path", i), f.Path)
+		}
+	}
+	if scope == SeedWork && p.WritesSystemPromptFile() {
+		// Written by every call that has a file channel, discovered or
+		// handed over by path, so a seed at the same path is overwritten
+		// before the CLI ever reads it.
+		name := p.SystemPromptFile.FileName()
+		discovered := p.SystemPromptFile != nil && p.SystemPromptFile.Discovered
+		if (discovered && staysInside(name) && namesAFile(name)) || (!discovered && isBareFileName(name)) {
+			file("system_prompt_file.name", name)
+		}
+	}
+	field, relocations := "config_env", p.ConfigEnv
+	if scope == SeedWork {
+		field, relocations = "work_config_env", p.WorkConfigEnv
+	}
+	for _, name := range slices.Sorted(maps.Keys(relocations)) {
+		rel := relocations[name]
+		if strings.TrimSpace(rel) != "" && staysInside(rel) {
+			out = append(out, pathClaim{label: field + "." + name, path: filepath.Clean(rel), dir: true})
+		}
+	}
+	return out
+}
+
+// validateCollisions holds the paths a profile claims in each scope
+// ([Profile.claims]) apart: no file the engine writes may be a path another
+// claim needs as a DIRECTORY — the same path as a relocated directory, or an
+// ancestor of any other claim — and no two writes may name one file.
+//
+// The shape of one path ([namesAFile]) cannot see this, because the conflict
+// is between two fields: `.crewlet-config` is a file name, and opencode needs
+// that name as OPENCODE_CONFIG_DIR's directory, so seeding a file there failed
+// the agent file's write under it with ENOTDIR on every call — as did
+// `.crewlet-config/agents` and, in the seat's home, codex's `.codex`, which
+// both CODEX_HOME and its login need as a directory. And a file written twice
+// is one write the CLI never sees: a seed at a login path replaces the seeded
+// login and is then carried back out over the shared one, and a seed at the
+// system prompt's path is replaced before the CLI starts.
+//
+// One refusal per file, naming the first claim it collides with.
+func (p *Profile) validateCollisions(add func(string, ...any)) {
+	for _, scope := range []SeedScope{SeedHome, SeedWork} {
+		claims := p.claims(scope)
+		for i, a := range claims {
+			if a.dir {
+				continue
+			}
+			if problem := collision(claims, i, scope); problem != "" {
+				add("%s", problem)
+			}
+		}
+	}
+}
+
+// collision is what is wrong with the file claims[i] beside the other claims
+// of its scope, or "" for nothing: a relocated directory at its very path
+// first, as the plainest statement of the conflict, then an earlier write of
+// the same file, then the first claim that needs it as a directory above
+// itself.
+func collision(claims []pathClaim, i int, scope SeedScope) string {
+	a := claims[i]
+	for _, b := range claims {
+		if b.dir && b.path == a.path {
+			return fmt.Sprintf("%s %q is the directory %s points the CLI at, in the %s "+
+				"directory — a file there leaves it no directory to read, and every call "+
+				"fails; name a file inside it", a.label, a.path, b.label, scope)
+		}
+	}
+	for _, b := range claims[:i] {
+		if b.path == a.path {
+			return fmt.Sprintf("%s %q is the file %s names too, in the %s directory — one "+
+				"of the two writes replaces the other on every call; give each its own path",
+				a.label, a.path, b.label, scope)
+		}
+	}
+	for _, b := range claims {
+		if strings.HasPrefix(b.path, a.path+string(filepath.Separator)) {
+			return fmt.Sprintf("%s %q is a FILE where %s needs a directory (%q lies under "+
+				"it, in the %s directory), so every call fails with ENOTDIR; name a file that "+
+				"is no other path's directory", a.label, a.path, b.label, b.path, scope)
+		}
+	}
+	return ""
+}
+
+// validateHomePaths holds the paths a login and a prune are made of —
+// [Profile.CredentialPaths], [Profile.HostCredentialPaths] and
+// [Profile.VolatilePaths] — to the shape in which each names what it says,
+// asked at load as a seed path is.
+//
+// Every one of them is operator-overridable and joined onto a directory only
+// at run time, where [UnderRoot] alone checks it — and refuses one climbing out
+// of the home on EVERY call, so `credential_paths: [../auth.json]` loaded, was
+// admitted by every write path, and failed each call's seed, and a volatile
+// path like it each call's prune. A login path is a FILE besides: each is read,
+// written and carried by its base name, so `.` and `x/..` — a directory, under
+// a base name of `.` or `..` — fail with EISDIR wherever a seed or a write-back
+// reads them, `.vendor/` writes a file where its operator wrote a directory,
+// and in a human's home, where `-from-host` takes regular files only, each of
+// them is a login nothing ever finds. And two credential paths sharing a base
+// name are ONE file in the shared directory and in every bundle, so the second
+// overwrote the first there, and every seat was seeded with one login in both
+// places.
+//
+// A volatile path may name a directory — most do — so it is held only to
+// staying inside the home.
+func (p *Profile) validateHomePaths(add func(string, ...any)) {
+	for _, list := range []struct {
+		field, home string
+		paths       []string
+	}{
+		{"credential_paths", "seat home", p.CredentialPaths},
+		{"host_credential_paths", "person's home", p.HostCredentialPaths},
+	} {
+		for i, rel := range list.paths {
+			switch {
+			case !staysInside(rel):
+				add("%s[%d] %q must be relative and stay inside the %s", list.field, i, rel, list.home)
+			case !namesAFile(rel):
+				add("%s[%d] %q must name a login FILE inside the %s — not the directory "+
+					"itself, not a path ending in a separator, and not one whose last "+
+					"element is . or ..", list.field, i, rel, list.home)
+			}
+		}
+	}
+	byName := map[string]string{}
+	for _, rel := range p.CredentialPaths {
+		name := filepath.Base(rel)
+		if first, taken := byName[name]; taken {
+			add("credential_paths names %q and %q, which share the file name %s — the "+
+				"shared directory and every bundle keep a login file under its file name, "+
+				"so one would overwrite the other", first, rel, name)
+			continue
+		}
+		byName[name] = rel
+	}
+	// A HOST FILE IS ADOPTED UNDER ITS FILE NAME, and a seat is seeded only
+	// with the names credential_paths gives — so a host path whose file name
+	// none of them has is adopted, reported as the login found, and read by
+	// no seat: copilot listed gh's `.config/gh/hosts.yml`, adopted as
+	// `hosts.yml` beside the `hosts.json` its credential_paths name.
+	for i, rel := range p.HostCredentialPaths {
+		if name := filepath.Base(rel); staysInside(rel) && namesAFile(rel) && byName[name] == "" {
+			add("host_credential_paths[%d] %q has a file name (%s) no credential_paths "+
+				"entry has — `crewlet llm login -from-host` keeps an adopted file under its "+
+				"file name and seeds a seat only with the files credential_paths names, so "+
+				"it would adopt a login no seat reads; name where a seat reads it in "+
+				"credential_paths, or drop it", i, rel, name)
+		}
+	}
+	for i, rel := range p.VolatilePaths {
+		if !staysInside(rel) {
+			add("volatile_paths[%d] %q must be relative and stay inside the seat home", i, rel)
+		}
+	}
+}
+
+// validateRelocations holds [Profile.ConfigEnv] and [Profile.WorkConfigEnv] to
+// the one shape in which they relocate anything: each variable named once,
+// none the engine already points at the seat's home, and each directory
+// relative and inside its root — holds [Profile.IsolationEnv] to a vendor
+// variable of its own with a value — and holds env and passthrough_env off
+// every variable any of them, or [HomeIsolation], names.
+//
+// The directories were never checked before: `config_env: {CODEX_HOME: ../..}`
+// loaded, and pointed the vendor's whole configuration — sessions and login
+// included — outside the seat's home, which is the isolation this field exists
+// to provide.
+func (p *Profile) validateRelocations(add func(string, ...any)) {
+	for _, name := range slices.Sorted(maps.Keys(p.ConfigEnv)) {
+		rel := p.ConfigEnv[name]
+		switch {
+		case slices.Contains(HomeIsolation, name):
+			// The engine's own, for every CLI, and never a vendor's: HOME
+			// is the seat's home, and the XDG homes and TMPDIR already
+			// point inside it (the cache beside it). Relocating one moved
+			// nothing out of the home that was not in it, and stranded
+			// whatever the profile keeps at the engine's location — on
+			// muse-code, `XDG_CONFIG_HOME: .x` left the seeded tool policy
+			// in a `.config` the CLI no longer read, handing every seat
+			// its default tools. It was also the one overlap between the
+			// isolation layers, so an entry's cli.env naming XDG_CONFIG_HOME
+			// could not be told that no field changes it.
+			add("config_env may not name %s — the engine points it at or inside the "+
+				"seat home for every CLI already; config_env relocates a variable of "+
+				"the vendor's own", name)
+		case strings.TrimSpace(rel) == "":
+			add("config_env.%s is empty — name the directory under the seat home it points at", name)
+		case !staysInside(rel):
+			add("config_env.%s %q must be relative and stay inside the seat home", name, rel)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(p.WorkConfigEnv)) {
+		rel := p.WorkConfigEnv[name]
+		_, alsoHome := p.ConfigEnv[name]
+		switch {
+		case slices.Contains(HomeIsolation, name):
+			// A home variable pointed at a directory removed after every call
+			// takes the login and every setting the home holds with it.
+			add("work_config_env may not name %s — the engine points it at the seat's "+
+				"home, which outlives the call", name)
+		case alsoHome:
+			add("config_env and work_config_env both name %s — one variable names one "+
+				"directory; keep it in whichever the CLI must not share across calls", name)
+		case strings.TrimSpace(rel) == "":
+			add("work_config_env.%s is empty — name the directory under the per-call "+
+				"working directory it points at", name)
+		case !staysInside(rel):
+			add("work_config_env.%s %q must be relative and stay inside the per-call "+
+				"working directory", name, rel)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(p.IsolationEnv)) {
+		_, home := p.ConfigEnv[name]
+		_, work := p.WorkConfigEnv[name]
+		switch {
+		case strings.TrimSpace(name) == "":
+			add("isolation_env names an empty variable")
+		case slices.Contains(HomeIsolation, name) || home || work:
+			// Two values for one variable, of which the child would get
+			// whichever layer happened to be applied last.
+			add("isolation_env names %s, which the engine already points at a directory — "+
+				"a switch is a variable of the vendor's own, never a relocated one", name)
+		case strings.TrimSpace(p.IsolationEnv[name]) == "":
+			// Not "unset": a vendor reading `1` or `true` as on reads an
+			// empty value as OFF, so the switch would be declared and do the
+			// opposite of what it says.
+			add("isolation_env.%s is empty — give the value that switches the vendor's "+
+				"behaviour off, e.g. \"1\"; an empty one reads as off", name)
+		}
+	}
+	// LAYERED OVER THE ISOLATION, which is why they are refused here: the
+	// child's environment applies the profile's env and passthrough after
+	// the variables that point it at its own home, so one named here
+	// replaces the seat's home with something else and says nothing.
+	isolation := p.IsolationVariables()
+	for _, name := range slices.Sorted(maps.Keys(p.Env)) {
+		if slices.Contains(isolation, name) {
+			add("env names %s, which the engine sets to keep the CLI inside its seat's "+
+				"home and its call's working directory — a value here would replace that "+
+				"isolation; relocate a vendor directory with config_env or work_config_env, "+
+				"and set a vendor's isolating switch in isolation_env", name)
+		}
+	}
+	for _, name := range p.PassthroughEnv {
+		if slices.Contains(isolation, name) {
+			add("passthrough_env names %s, which the engine sets to keep the CLI inside "+
+				"its seat's home and its call's working directory — forwarding the engine's "+
+				"own would hand the CLI the engine user's directories", name)
+		}
+	}
+}
+
+// strandedBy reports every relocation an override MOVED that left behind a
+// path the built-in kept under it: a [Profile.ConfigEnv] or
+// [Profile.WorkConfigEnv] variable pointed at a different directory than
+// builtin points it at, while a path this profile keeps in that scope
+// ([Profile.kept]) still lies under the built-in's directory and is not
+// reached through the moved variable — outside the new directory, or under it
+// only because the new directory is the old one's ancestor.
+//
+// EACH VARIABLE ON ITS OWN. A path is reached through the variable that points
+// at its directory, so another variable's directory excuses nothing (`{CODEX_HOME:
+// ., CODEX_EXTRA: .codex}` left the login where only CODEX_HOME was read), and
+// an ANCESTOR excuses nothing either: the CLI reads `$VAR/auth.json`, so with
+// CODEX_HOME at `.` it reads `auth.json` while the login sits at
+// `.codex/auth.json`, under the new directory and unreached. A path still under
+// the old directory is reached only where the new directory lies strictly
+// inside the old one and the path inside the new.
+//
+// The CLI finds those paths through the variable ([Profile.KeptUnder]), so a
+// moved directory with the paths left where they were loaded and was admitted
+// by every write path while every call ran without them:
+// `work_config_env: {OPENCODE_CONFIG_DIR: .elsewhere}` left the deny-all
+// policy and the seat's agent file in a `.crewlet-config` OpenCode no longer
+// read — "Agent not found" on every run, and with the agent file alone moved,
+// a model handed OpenCode's default tools — and `config_env: {CODEX_HOME:
+// .codex-elsewhere}` left the login and every session path behind, so no seat
+// was signed in and no session was ever pruned.
+//
+// Judged against the BUILT-IN, and only for a directory it relocates, because
+// the built-in's own layout is the one statement of which paths the CLI reads
+// through which variable: a path a `custom` profile keeps beside its relocation
+// may be one its CLI reads from a fixed place, and nothing here can say
+// otherwise. A variable whose new value is itself refused
+// ([Profile.validateRelocations]) is left to that refusal.
+func (p *Profile) strandedBy(builtin *Profile) []string {
+	var bad []string
+	for _, r := range []struct {
+		field    string
+		scope    SeedScope
+		was, now map[string]string
+	}{
+		{"config_env", SeedHome, builtin.ConfigEnv, p.ConfigEnv},
+		{"work_config_env", SeedWork, builtin.WorkConfigEnv, p.WorkConfigEnv},
+	} {
+		for _, name := range slices.Sorted(maps.Keys(r.was)) {
+			// An override merges into the built-in's map key by key, so the
+			// variable is still there; empty (a YAML null) or escaping its
+			// root, it is refused on its own. The same directory, however
+			// spelled, strands nothing.
+			was, now := filepath.Clean(r.was[name]), r.now[name]
+			if strings.TrimSpace(now) == "" || !staysInside(now) {
+				continue
+			}
+			now = filepath.Clean(now)
+			if now == was {
+				continue
+			}
+			var left []string
+			example := ""
+			for _, k := range p.kept(r.scope) {
+				if !within(k.path, was) || (within(k.path, now) && !within(was, now)) {
+					continue
+				}
+				left = append(left, fmt.Sprintf("%s %q", k.label, k.path))
+				if example == "" {
+					if rel, err := filepath.Rel(was, filepath.Clean(k.path)); err == nil {
+						example = fmt.Sprintf(" (%q becomes %q)", k.path, filepath.Join(now, rel))
+					}
+				}
+			}
+			if len(left) == 0 {
+				continue
+			}
+			bad = append(bad, fmt.Sprintf("%s moves %s from %s to %s, and %s still lie "+
+				"where the CLI found them through %s, which it no longer reads them from — "+
+				"re-root them from %s to %s in the same override, each at the same place "+
+				"under the new directory%s", r.field, name, was, now,
+				strings.Join(left, ", "), was, was, now, example))
+		}
+	}
+	return bad
+}
+
+// validateEventMarkers holds a [MarkerScopeEvents] profile to the shape in
+// which a sentinel can only be the CLI's own: a jsonl stream, a discriminator
+// that tells its events apart, the events that report a failure, and where in
+// them the class is.
+func (p *Profile) validateEventMarkers(add func(string, ...any)) {
+	if p.EffectiveOutput() != OutputJSONL {
+		// On a text profile stdout IS the model's reply, and a json one is a
+		// single document with no events to tell apart.
+		add("marker_scope is %s but output is %q — a failure event exists only in a "+
+			"jsonl stream; use %s for a CLI that reports a failure as its answer",
+			MarkerScopeEvents, p.EffectiveOutput(), MarkerScopeAnswerAndStderr)
+	}
+	if len(p.EventTypePath) == 0 {
+		add("marker_scope is %s but event_type_path is empty — without the "+
+			"discriminator no line can be told to be the CLI's failure event rather than "+
+			"one carrying the model's words", MarkerScopeEvents)
+	}
+	if len(p.MarkerEvents) == 0 {
+		add("marker_scope is %s but marker_events is empty — name the event types the "+
+			`CLI reports a failure in, e.g. ["error"]`, MarkerScopeEvents)
+	}
+	if len(p.MarkerPath) == 0 {
+		add("marker_scope is %s but marker_path is empty — say where in that event the "+
+			`failure class is, e.g. ["error", "type"]`, MarkerScopeEvents)
+	}
+	for _, kind := range p.MarkerEvents {
+		if slices.Contains(p.TextEvents, kind) {
+			// An event that carries the answer carries the model's words, and
+			// matching a sentinel in it is matching what the model wrote.
+			add("marker_events and text_events both name %q — an event that carries "+
+				"the model's answer is not the CLI's failure report", kind)
+		}
+	}
+	for i, m := range p.LimitMarkers {
+		if m.ResetSeparator != "" {
+			add("limit_markers[%d].reset_separator is set but marker_scope is %s — the "+
+				"sentinel is compared with the whole failure class, so there is no text "+
+				"after it to read a reset from", i, MarkerScopeEvents)
+		}
+	}
+}
+
+// validateUsageCommand holds [Profile.SessionArgs] and [Profile.UsageArgs] to
+// the one shape in which a usage command reports the call it follows.
+func (p *Profile) validateUsageCommand(add func(string, ...any)) {
+	if len(p.SessionArgs) > 0 && !hasPlaceholder(p.SessionArgs, "{session}") {
+		add("session_args carries no {session} placeholder — there is nothing to " +
+			`substitute the call's id into, e.g. ["--session", "ses_{session}"]`)
+	}
+	if len(p.UsageArgs) == 0 {
+		return
+	}
+	switch {
+	case !hasPlaceholder(p.UsageArgs, "{session}"):
+		// Without the id the command can only ask about SOME session, and a
+		// seat's home holds every call running in it at once.
+		add("usage_args carries no {session} placeholder — the report has to be " +
+			"about this call's session, and a seat's home holds every call running in it")
+	case !hasPlaceholder(p.SessionArgs, "{session}"):
+		add("usage_args asks about the call's session but session_args does not name " +
+			"one — declare session_args with {session}, or the CLI picks an id nobody " +
+			"can ask about")
+	}
+	if len(p.UsageFileArgs) > 0 {
+		// Two reports of one call, and whichever was read second would
+		// silently replace the first.
+		add("usage_args and usage_file_args are both set — one call has one usage " +
+			"report; declare the one this CLI writes")
+	}
+	// The same rule, for the same reason, as a usage file's: both prompt
+	// counts or the report is never read.
+	if len(p.Usage.Input) == 0 || len(p.Usage.Output) == 0 {
+		add("usage_args is set but usage.input and usage.output are not both " +
+			"declared — the report is only read when both counts resolve, so every " +
+			"call would fall back to an estimate while the doctor reports otherwise")
+	}
+}
+
+// validateDiscoveredPromptFile holds a [SystemPromptFile.Discovered] channel to
+// the shape that makes it one: a file the CLI finds in the working directory,
+// and an argv that selects it.
+func (p *Profile) validateDiscoveredPromptFile(add func(string, ...any)) {
+	fileName := p.SystemPromptFile.Name
+	switch {
+	case fileName == "":
+		// The default name is a bare prompt file no vendor looks for, so a
+		// discovered channel without a name of its own writes a file nothing
+		// will ever find — and the argv then selects an agent that does not
+		// exist.
+		add("system_prompt_file is discovered but its name is empty — say where the " +
+			"CLI looks for it, e.g. .crewlet-config/agents/crewlet-seat.md")
+	case !staysInside(fileName):
+		add("system_prompt_file.name %q must be relative and stay inside the per-call "+
+			"working directory", fileName)
+	case !namesAFile(fileName):
+		// The prompt is written to exactly this path, so a name that cleans
+		// to a DIRECTORY fails every call: `.` and `x/..` are the working
+		// directory itself (a write onto it is EISDIR), and
+		// `.opencode/agents/` writes a regular FILE where the CLI looks for a
+		// directory of agents, so it finds none. The bare-name rule beside
+		// this one refuses `.` and `..` for the same reason.
+		add("system_prompt_file.name %q must name a FILE inside the per-call working "+
+			"directory — not the directory itself, not a path ending in a separator, and "+
+			"not one whose last element is . or .. — e.g. "+
+			".crewlet-config/agents/crewlet-seat.md", fileName)
+	}
+	switch {
+	case len(p.SystemPromptArgs) == 0:
+		// Found but never selected, the file changes nothing: the CLI runs its
+		// own default agent, and the seat's identity is in neither place.
+		add("system_prompt_file is discovered but system_prompt_args is empty — the " +
+			"CLI finds the file, and nothing tells it to use what it found")
+	case hasPlaceholder(p.SystemPromptArgs, "{file}") || hasPlaceholder(p.SystemPromptArgs, "{system}"):
+		// A discovered file is found by where it is. Handing over its path
+		// too is two channels for one prompt, and {system} would put the
+		// text on argv beside the file.
+		add("system_prompt_file is discovered but system_prompt_args carries {file} or " +
+			"{system} — a discovered file is found by its location, and the argv only " +
+			"selects it")
+	}
+	if p.SystemPromptEnv != "" {
+		add("system_prompt_file is discovered but system_prompt_env is set — the " +
+			"variable hands the CLI a path, and a discovered file needs none")
+	}
 }
 
 // ValidateCredentials reports every place this profile routes a credential
@@ -969,6 +1974,15 @@ func (p *Profile) ValidateCredentials(name string) error {
 				"passthrough is forwarded before auth.mode is consulted, so it would "+
 				"reach every seat whatever the mode says; use auth.mode api-key or "+
 				"inherit-env instead", env)
+		}
+	}
+	for _, env := range slices.Sorted(maps.Keys(p.IsolationEnv)) {
+		// A switch is forwarded on every command whatever auth.mode says,
+		// and is no place for a value anybody would have to keep secret.
+		if env != "" && (env == p.TokenEnv || env == p.APIKeyEnv || IsCredentialName(env)) {
+			add("isolation_env names %q, which is a credential variable — a switch the "+
+				"engine sets on every command is forwarded whatever auth.mode says and is "+
+				"stored unredacted; give the credential through cli.auth or cli.env", env)
 		}
 	}
 	for _, env := range slices.Sorted(maps.Keys(p.Env)) {
@@ -1063,11 +2077,12 @@ func sentinelProblem(sentinel string) string {
 // is a one-line override, and the JSON paths it inherits from the built-in
 // profile are simply inert afterwards.
 //
-// THE USAGE FILE IS THE EXCEPTION TO THE TEXT RULE, and it is the whole
-// reason that channel exists: a report the CLI writes to a path of its own is
-// decoded whatever stdout carries, so a `text` profile declaring
-// [Profile.UsageFileArgs] reports real counts. Reading the text rule first
-// would answer "estimated" for exactly the profile that went to the trouble.
+// A USAGE REPORT IS THE EXCEPTION TO THE TEXT RULE, and it is the whole reason
+// those channels exist: a report the CLI writes to a path of its own, or prints
+// to a usage command, is decoded whatever stdout carries, so a `text` profile
+// declaring [Profile.UsageFileArgs] or [Profile.UsageArgs] reports real
+// counts. Reading the text rule first would answer "estimated" for exactly the
+// profile that went to the trouble.
 //
 // It exists so `crewlet llm doctor` and the extractor answer the same
 // question. Doctor asked a narrower one — "are usage paths declared" — and so
@@ -1077,10 +2092,34 @@ func (p *Profile) ReadsUsage() bool {
 	if len(p.Usage.Input) == 0 && len(p.Usage.Output) == 0 {
 		return false
 	}
-	if len(p.UsageFileArgs) > 0 {
+	if p.ReadsUsageReport() {
 		return true
 	}
 	return p.EffectiveOutput() != OutputText
+}
+
+// LoginLocation says where this CLI keeps a login, for a message telling an
+// operator to put one there: its credential files, the database a
+// [CredentialStore] reads and writes, or both.
+func (p *Profile) LoginLocation() string {
+	var where []string
+	if len(p.CredentialPaths) > 0 {
+		where = append(where, "its credential files ("+strings.Join(p.CredentialPaths, ", ")+")")
+	}
+	if p.CredentialStore != nil {
+		where = append(where, "the login it keeps in its own database")
+	}
+	if len(where) == 0 {
+		return "a login this profile names no place for"
+	}
+	return strings.Join(where, " and ")
+}
+
+// ReadsUsageReport reports whether this profile takes its counts from a report
+// apart from stdout — a usage file the CLI writes, or a usage command run after
+// the call — rather than from what the call printed.
+func (p *Profile) ReadsUsageReport() bool {
+	return len(p.UsageFileArgs) > 0 || len(p.UsageArgs) > 0
 }
 
 // UnderRoot joins a profile-declared relative path onto a root and refuses

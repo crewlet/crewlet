@@ -15,12 +15,22 @@ import (
 // wrapping's own punctuation, headers, another block's armour, base64 that is
 // not a key's in one case and in both (a path in mixed case, a Go test's
 // name), prose and a line another process wrote, a key already redacted, a
-// password key (spaced from its separator too) and its value, and what a rule
-// writes into a line a key is read across: a password's key with its value on
-// the next line, in a string — broken after its key, its breaks kept — or
-// written up to an armour, a key's line written up to a BEGIN and repeated with
-// a quote after it, and tokens before a key's line or an armour, after one, or
-// written up to one.
+// password key (spaced from its separator too, or an `=` ending its line) and
+// its value, and what a rule writes into a line a key is read across: a
+// password's key with its value on the next line, in a string — broken after
+// its key, its breaks kept — or written up to an armour, a key's line written
+// up to a BEGIN and repeated with a quote after it, and tokens before a key's
+// line or an armour, after one, or written up to one, and one on a line of its
+// own — and what a cut leaves of a key: a line's head before a tool's mark,
+// its tail after one, both with the mark between them and a head with no
+// digit, a head narrower than a full line before a bare ellipsis, a window's
+// first line, a key on one line cut between its armours and a body a window
+// kept before its END, a mark on a line of its own and the tail it kept, a
+// head cut short with no mark, a cut between a BEGIN's armour and its break —
+// and prose holding what reads like a piece of a key at the start of its line,
+// at its end and in its middle, or in brackets; and what another rule claims
+// that reads like such a piece: a password's key holding a digit, a value that
+// does, an indented one, and a token after a `_`.
 var transcriptLines = []string{
 	"-----BEGIN RSA PRIVATE KEY-----",
 	"-----END RSA PRIVATE KEY-----",
@@ -77,6 +87,8 @@ var transcriptLines = []string{
 	"  hunter2",
 	"token sk-" + strings.Repeat("q", 40),
 	"pwd=",
+	"  PASSWORD=",
+	"AKIAABCDEFGHIJKLMNOP",
 	`"password:\n` + keyLine + `\n" +`,
 	`key: "password:\n`,
 	`  hunter2\n"`,
@@ -91,6 +103,30 @@ var transcriptLines = []string{
 	"-----END RSA PRIVATE KEY----- sk-" + strings.Repeat("G", 24),
 	"[R " + keyLine,
 	"xyz -----END RSA PRIVATE KEY-----",
+	keyLine + "[...truncated]",
+	keyLine[:30] + " (truncated)",
+	"[… 812 bytes truncated]" + keyLine[20:],
+	keyLine[:20] + "…[… 2,345 characters truncated …]…" + keyLine[30:],
+	digitless[:20] + "…" + keyLine[44:],
+	"     8\u2192" + keyLine[:25] + " [output truncated]",
+	"KEY=-----BEGIN RSA PRIVATE KEY----- " + keyLine[:30] + "[...truncated]" + keyLine[10:] + " -----END RSA PRIVATE KEY-----",
+	"…u1SU1Lf9x= -----END RSA PRIVATE KEY-----",
+	"=== RUN   TestSHA256Sum",
+	"--- FAIL: TestRSA2048Sign (0.01s)",
+	keyLine[:24] + "…",
+	"TestRSA2048Sign:",
+	"Ab3f9C2d7E1b pulled",
+	"[...truncated]",
+	"…",
+	"[...] " + keyLine[44:],
+	keyLine[:30],
+	"-----BEGIN RSA PRIVATE KEY-----…" + keyLine[40:],
+	"[Worker1A] started",
+	"s3Password: hunter2-Secret!",
+	"db2Password=",
+	"  Kk55Lm66NN-secretpart",
+	"pwd=Ab12cdEF34gh",
+	"OPENAI_API_KEY=sk-abcdefghij_Ab12CdEf34GhIjKlMnOpQr",
 }
 
 // WHAT IS SHOWN AS IT SETTLES IS THE WHOLE TEXT REDACTED, over transcripts no

@@ -78,9 +78,6 @@ type follower struct {
 	// spoke is whether the transcript has ever had an entry: from then on
 	// it is the account shown.
 	spoke bool
-	// last is the stream's last complete line, which says whether a CLI
-	// that finishes without exiting has finished.
-	last []byte
 
 	// errs is the error stream, read while the transcript has said nothing.
 	errs    rawStream
@@ -103,9 +100,6 @@ func (f *follower) Read(ctx context.Context, box sandbox.Sandbox) (sandbox.LiveR
 	if out.Events {
 		if err = f.readEvents(ctx, box, out.Stdout, done); err != nil {
 			return sandbox.LiveRead{}, err
-		}
-		if !done && out.Terminal && len(f.last) > 0 {
-			read.Finished = f.cli.Finished(string(f.last))
 		}
 	}
 	if f.spoke {
@@ -154,10 +148,6 @@ func (f *follower) readEvents(ctx context.Context, box sandbox.Sandbox, path str
 		f.transcript.add(entry + "\n")
 		f.spoke = true
 	}
-	// CLONED: the line is a slice of the read's buffer, which would
-	// otherwise be held for as long as the reading lasts.
-	trimmed := bytes.TrimRight(lines, "\r\n")
-	f.last = bytes.Clone(trimmed[bytes.LastIndexByte(trimmed, '\n')+1:])
 	return nil
 }
 

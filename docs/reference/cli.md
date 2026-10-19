@@ -53,7 +53,7 @@ subcommand below is served by it.
 | `crewlet llm doctor [KEY]` | Verify a subscription backend end to end — the CLI is installed, the login answers, a real completion returns, the CLI's own shell is refused and its web tool reaches the network — and an `anthropic` entry against its model: the Models API's record compared with the request shape the engine sends, and one real round that must come back as a tool call (`-no-smoke` stops before every real completion) |
 | `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
 | `crewlet llm status <KEY>` | Ask the CLI who it is currently logged in as |
-| `crewlet llm logout <KEY>` | Revoke locally and delete the provider's credential files |
+| `crewlet llm logout <KEY>` | Revoke locally and delete the provider's login — its credential files, or the login document a CLI like OpenCode 2 exports |
 | `crewlet llm export <KEY> [-secret-store]` | Pack the login into one portable blob — stdout, or the secret store under the name the engine restores from on a fresh host |
 | `crewlet llm import <KEY>` | Restore a bundle from **stdin** onto this host; refuses to overwrite a login that is already there |
 | `crewlet confluence import <company.yaml> <directory>` | Publish a directory of authored markdown into [Confluence](../integrations/confluence.md) spaces — one space per directory, plus the tool skills the files themselves declare. Every target space is checked before a single page is written |
@@ -2064,7 +2064,8 @@ clock, read by the tool.
 
 Both commands answer "signed in" the same way, from the environment the CLI is
 actually given rather than from the configuration: credential files a login
-wrote, a headless token, an `api_keys` value under `auth.mode: api-key`, a
+wrote (or, for OpenCode 2, which keeps its login in its own database, the
+document its export printed), a headless token, an `api_keys` value under `auth.mode: api-key`, a
 variable `auth.mode: inherit-env` forwards, or — for a CLI whose profile reads
 its provider's key from its own environment (`hermes`, `pi`, `opencode`) — a
 [credential-named](../concepts/subscription-llm-backends.md#5-a-provider-key-in-clienv-hermes-pi-opencode)
@@ -2078,7 +2079,8 @@ resolved in the process running `crewlet llm` — the secret store first, then
 that shell's environment — so run it with the engine's environment to get the
 engine's answer.
 
-`llm list`'s `SIGN-IN` column is the first route `doctor` would name:
+`llm list`'s `SIGN-IN` column is the first route `doctor` would name — both
+restore the entry's configured bundle first, as the engine does:
 `credentials` (files a login wrote), `token` (a headless token), `api key`
 (under `auth.mode: api-key`), `inherited token` or `inherited key` (forwarded
 by `auth.mode: inherit-env`), `environment` (a `cli.env` key), or `none`.
@@ -2115,10 +2117,27 @@ others. `openai` entries are not examined.
 | Shape | When |
 |---|---|
 | *(no flag)* | Broker the vendor's own interactive login and keep the result |
-| `-from-host` | Adopt a login this machine already has, e.g. from running the CLI by hand |
-| `-capture-token` | Mint a **headless token** into the secret store — the only shape a remote [code sandbox](../concepts/code-sandbox.md) can use, because a token is one scoped revocable variable and credential *files* never leave the engine host |
+| `-from-host` | Adopt a login this machine already has, e.g. from running the CLI by hand — copied for a login kept in files, exported by the CLI itself (`opencode auth export --standalone`) for one kept in its own database |
+| `-capture-token` | Mint a **headless token** into the secret store — the only shape a remote [code sandbox](../concepts/code-sandbox.md) can use, because a token is one scoped revocable variable and a login (credential files, an exported login) never leaves the engine host |
 | `-capture-token -print-token` | The same mint, written to **stdout** and stored nowhere — for an operator whose secrets live in somebody else's manager. It **refuses to run on a terminal**: this is a credential, and a token in a scrollback outlives the command, while a screen-share or a shell history outlives the scrollback. Pipe it or redirect it. The two-step alternative (`-capture-token`, then `secrets get -reveal`) writes the token into the store on the way past, which is precisely what this avoids. |
 | `-token-stdin` / `-username U -password-stdin` | Store a credential you already hold, where the CLI genuinely has one |
+
+The brokered and `-username` shapes **fail when the CLI left no login** where
+the entry reads one — exiting 0 having stored nothing, as backing out of the
+vendor's sign-in does — rather than printing that a login was written. `login`,
+`status` and a vendor's own `logout` run the CLI one at a time per state
+directory (entries sharing a `cli.state_dir` share one login home): a second
+started while the first is running is refused, saying so. Only the commands
+that make a login create the shared one; `status` and a seat's call write back
+only a refresh of the very login they started from, so neither reverts a newer
+login nor brings back one `logout` removed — and the bundle restore `status`
+makes first declines after a `logout` (below). A login whose export failed
+after you signed in is kept and written by the next command — unless you replaced
+the login since with `-from-host`, `import` or `logout`; a `login` that cannot
+carry such a kept login out replaces it, saying so — see [token refresh across
+seats](../concepts/subscription-llm-backends.md#token-refresh-across-seats). A
+`login` likewise replaces a shared login the CLI refuses to import (OpenCode's
+document from another build, say), saying so, where `status` keeps refusing it.
 
 **`export`** packs a login into one portable blob so another host can come up
 already authenticated. `-secret-store` writes it to the [secret
@@ -2139,10 +2158,27 @@ running holds the fresher refresh token, and restoring a boot-time blob over
 it is how a fleet logs itself out. `crewlet llm logout <KEY>` first if you
 mean to replace it.
 
-The engine also restores a bundle **itself**, at boot, from
+**`logout`** removes the login (and revokes it with the vendor where the CLI
+has a logout of its own), and **records the logout** in the state directory,
+so the configured bundle below is not restored into the directory it emptied —
+not by the engine's next boot or apply, and not by `list`, `status`, `export`
+or `doctor`, which each say why instead — until a login is written into that
+directory again: `login` (brokered or `-username`), `-from-host` or `import`. A
+headless token (`-token-stdin`, or the one `-capture-token` mints, unless its
+sign-in also left a login file) signs the entry in without ending the logout. A
+fresh state directory holds no such record and restores the bundle as before,
+so `logout` names the field or secret that retires it when the entry has one —
+even when the CLI's own logout fails, since the login is removed and the logout
+recorded either way.
+
+The engine also restores a bundle **itself**, at boot and at every apply it
+publishes (never for a revision it refuses), from
 `cli.auth.credential_bundle` or the conventional
 `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` variable — and only into an empty
-credential directory, by the same rule. That path authenticates a fresh
+credential directory, by the same rule, and never after a `logout` until a
+login is written again. `list`, `status`, `export` and `doctor` make
+the same restore before they look, so they report the login the engine would
+run with; `validate` never writes one. That path authenticates a fresh
 container before its first turn rather than after an operator remembers a
 command; `import` is for the hosts that are already up. See [environment
 variables](environment-variables.md).
