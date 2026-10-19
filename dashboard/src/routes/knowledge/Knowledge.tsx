@@ -1026,12 +1026,8 @@ function KnowledgeResults({ phrase }: { phrase: string }) {
               ) : (
                 <Menu
                   label="Filter the results by space"
-                  trigger={
-                    <>
-                      <PlusGlyph size="sm" />
-                      Filter
-                    </>
-                  }
+                  icon={<PlusGlyph size="sm" />}
+                  trigger="Filter"
                   triggerVariant="ghost"
                   items={spaces.map((s) => ({
                     key: s.key,
