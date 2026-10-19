@@ -692,11 +692,15 @@ func taskReads() map[string]indexedRead {
 		// THE RANK DUTY'S PROJECT WALK, which reads a flagged project's
 		// live board and probes each card's rank; the next rank above a
 		// shared one; and the probe the duty clears behind it.
-		"a project's shared ranks":      seek(ranks, duplicateRanksStatement, "P01", WalkBatch),
-		"the rank above a shared one":   seek(ranks, rankAboveStatement, "P01", "a000001"),
-		"a duplicate probe cleared":     seek(ranks, clearDuplicateProbeStatement, "P01", "P01"),
-		"a project's lowest rank":       seek(board, lowestRankStatement, "P01"),
-		"a dependency's missing mirror": seek(key, oneSidedStatement, 1, WalkBatch),
+		"a project's shared ranks":    seek(ranks, duplicateRanksStatement, "P01", WalkBatch),
+		"the rank above a shared one": seek(ranks, rankAboveStatement, "P01", "a000001"),
+		"a duplicate probe cleared":   seek(ranks, clearDuplicateProbeStatement, "P01", "P01"),
+		"a project's lowest rank":     seek(board, lowestRankStatement, "P01"),
+		// THE ONE-SIDED REPAIR'S SELECTION, a walk of the partial index
+		// that holds exactly the edges it repairs, in its own order — and
+		// so not sorted, or every waiting edge is read for each batch.
+		"a dependency's missing mirror": walk("tracker_relations_repair_idx",
+			oneSidedStatement, 1, WalkBatch),
 		// THE DETAIL AND THE DECORATIONS: one task by its key, and a
 		// page's rows each by theirs.
 		"a task named":               seek(key, taskRefStatement, task),
