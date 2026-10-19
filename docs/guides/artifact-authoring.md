@@ -140,14 +140,16 @@ current pin. You never include the runtime yourself; the engine serves it from
 `window.crewlet`. See the [runtime reference](../reference/artifact-runtime.md).
 
 **The kit.** The artifact kit is the company's design system for pages:
-`kit.css` (tokens and base styles that follow the reader's theme),
-`theme.js` (a few hundred bytes that apply the reader's light or dark mode
-before first paint) and `kit.js` (custom elements for a sheet bound to the
-datastore and presence, used without a framework). It is served from
+`kit.css` (tokens and a bare base that follow the reader's theme),
+`content.css` (the design system's look for the plain HTML a page writes
+itself), `theme.js` (a few hundred bytes that apply the reader's light or
+dark mode before first paint) and `kit.js` (custom elements for a sheet bound
+to the datastore and presence, used without a framework). It is served from
 `/_crewlet/kit/<version>/` on the artifact origin:
 
 ```html
 <link rel="stylesheet" href="/_crewlet/kit/0.32.0/kit.css">
+<link rel="stylesheet" href="/_crewlet/kit/0.32.0/content.css">
 <script src="/_crewlet/kit/0.32.0/theme.js"></script>
 <script type="module" src="/_crewlet/kit/0.32.0/kit.js"></script>
 ```
@@ -160,6 +162,27 @@ kit, publish a new version of the page that links it.
 
 Colours, spacing and type come from the kit's tokens, never literal values,
 so a page looks like the rest of the company in both themes.
+
+**Plain HTML.** Link `content.css` right after `kit.css` whenever the page
+writes its own headings, paragraphs, lists, quotes, code, tables, rules or
+form controls. Without it they render on the kit's bare base: headings at one
+size, no space between blocks, and buttons as plain text. With it they take
+the dashboard's document and form look in both themes:
+
+- It styles elements only, each rule at the weight of its element, so a class
+  of your own overrides any of it. Link it before your own `<style>`.
+- It never touches what the kit draws (a `<crewlet-sheet>` and its menus).
+  A region you design entirely yourself opts out with
+  `data-crewlet-content="off"`.
+- Wrap a table in a `<div>` or `<figure>`: a table wider than a phone scrolls
+  inside it rather than moving the page. Mark a column of figures
+  `data-align="right"` (or `"center"`), which also keeps each figure on one
+  line.
+- A `<button type="submit">` is the primary action; every other button is
+  secondary.
+
+It is opt in: a page that does not link it, every page published before it
+existed included, paints exactly as before.
 
 ---
 

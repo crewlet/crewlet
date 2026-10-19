@@ -277,6 +277,14 @@ as any page, framed on its own.
   artifact authoring guide names) and colour everything with its
   `var(--color-*)` tokens. The kit follows the reader's theme, light or dark;
   colour literals do not.
+- **Link `content.css` for plain HTML.** A page that writes its own headings,
+  text, lists, tables, code or form controls links the kit's `content.css`
+  right after `kit.css`, at the same version, rather than restyling those
+  elements itself; otherwise they render on a bare base. Your own classes
+  still override it, it leaves the kit's sheet alone, and a region you design
+  yourself opts out with `data-crewlet-content="off"`. Wrap a table in a
+  `<div>` so it scrolls on a phone, and mark figure columns
+  `data-align="right"`.
 - **Give the body an explicit background** from the tokens, so the page reads
   correctly in both themes.
 - **Fit a phone.** Include a viewport meta tag, keep a 16px side gutter, and let
