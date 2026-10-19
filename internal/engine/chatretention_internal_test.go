@@ -1113,39 +1113,24 @@ func TestTheRoomReadCarriesAllThreeRetentionSettingsAndTheRoomsFloor(t *testing.
 // The read runs every hour over every room the company ever made, and the
 // answer it needs from `chat_messages` is one row per room — the leading edge
 // of `chat_messages_prune_idx`. The obvious spelling, `MIN(created_at)` in a
-// correlated subquery, is planned here as a scan of that whole index into an
-// ephemeral table of every room's minimum: correct answers, and every message
-// the company has ever kept read once an hour, a cost that grows with its
-// whole history and that no result reveals. So the plan is held, not the rows.
+// correlated subquery, is one the planner unnests into a grouped read of that
+// whole index, joined back to the rooms: correct answers, and every message the
+// company has ever kept read once an hour, a cost that grows with its whole
+// history and that no result reveals. So the plan is held, not the rows — and
+// the rewrite is recognised by [storetest.Decorrelated], the one predicate
+// every plan gate asks, rather than by a word of the plan this test chose.
 //
 // NEVER ANALYZEd, because no node is: a plan taken over statistics is a plan
 // no deployment runs.
+//
+// Mutation: spell the floor `MIN(m.created_at)` again, and the plan is the
+// unnested grouped read this refuses.
 func TestTheRoomReadSeeksEachRoomsOldestMessage(t *testing.T) {
 	t.Parallel()
 	db, estate := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
 
-	var plan []string
-	err := estate.Reader().Read(t.Context(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+chatPruneRoomsSQL,
-			"room-0500", chatPruneRoomsPage)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var id, parent, notUsed int
-			var detail string
-			if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
-				return err
-			}
-			plan = append(plan, detail)
-		}
-		return rows.Err()
-	})
-	if err != nil {
-		t.Fatalf("explain the room read: %v", err)
-	}
+	plan := storetest.Plan(t, estate, chatPruneRoomsSQL, []any{"room-0500", chatPruneRoomsPage})
 	const seek = "SEARCH m USING COVERING INDEX chat_messages_prune_idx (channel_id=?)"
 	if !slices.Contains(plan, seek) {
 		t.Errorf("the room read's plan is %q, which never takes %q — each "+
@@ -1159,9 +1144,13 @@ func TestTheRoomReadSeeksEachRoomsOldestMessage(t *testing.T) {
 		t.Errorf("the room read's plan is %q, which never takes %q — a page "+
 			"must seek to where the last one stopped", plan, page)
 	}
+	if step, unnested := storetest.Decorrelated(plan); unnested {
+		t.Errorf("the room read's plan takes %q: its floor is a per-room "+
+			"aggregate the planner answers from every message the company holds "+
+			"(whole plan %q)", step, plan)
+	}
 	for _, step := range plan {
-		if strings.Contains(step, "SCAN chat_messages") || strings.Contains(step, "SCAN m ") ||
-			strings.Contains(step, "ephemeral") {
+		if strings.Contains(step, "SCAN chat_messages") || strings.Contains(step, "SCAN m ") {
 			t.Errorf("the room read's plan takes %q: it reads every message the "+
 				"company holds to find each room's oldest (whole plan %q)", step, plan)
 		}
