@@ -24,16 +24,17 @@ import (
 // own loop, which holds each write in a batch to its own patience
 // (counter.go) — unless what the loop races ends it of itself (below).
 //
-// What this replaced was sixteen immediate attempts for every record, and one
-// record has writers nothing bounds: the token counter, the hottest key the
-// fleet has, where counter.go measures what sixteen cost. The rest race
-// writers something does bound — the two ends of a channel, the messages that
-// assert one follow, a create that finds the key
-// removed
-// between its refusal and its read — and lose for a whole patience
-// only on a
-// store this engine does not produce; on those the rule costs
-// nothing.
+// What this replaced was sixteen immediate attempts for every record, and two
+// records have writers nothing bounds. The token counter is the hottest key
+// the fleet has, and counter.go measures what sixteen cost there. And a
+// person's chat read record is written by every tab and device they read in
+// and by the reconcile, each flushing again as soon as it has landed
+// ([FleetStore.mutateChatRead]), so sixteen held sixteen writers and a
+// seventeenth tab failed the flush. The rest race writers something does bound
+// — the two ends of a channel, the messages that assert one follow, a create
+// that finds the key removed between its refusal and its read — and lose for a
+// whole patience only on a store this engine does not produce; on those the
+// rule costs nothing.
 //
 // The patience is the JetStream client's own request timeout. Every request
 // this package makes on a context with no deadline already waits that long for

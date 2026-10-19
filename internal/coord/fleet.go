@@ -1492,12 +1492,12 @@ type Mailboxes interface {
 // bucket the broker ages takes the marker with everything else when it ages
 // out. The families here that no clock may reap — the activation pointer, the
 // runs, the channels, the mailboxes, the secrets, the integration statuses, the
-// object store's backend record, the positions register — keep every marker for
-// the life of the deployment, and each one is a leader read on every listing
-// that meets it (internal/coord/kv walk.go says why a marker is read again
-// rather than trusted). So the markers are swept, as a DECISION under the
-// maintenance duty, for the reason the channels are: a bucket's age cannot
-// express which records may go.
+// object store's backend record, the positions register, the chat read state —
+// keep every marker for the life of the deployment, and each one is a leader
+// read on every listing that meets it (internal/coord/kv walk.go says why a
+// marker is read again rather than trusted). So the markers are swept, as a
+// DECISION under the maintenance duty, for the reason the channels are: a
+// bucket's age cannot express which records may go.
 //
 // # It changes no answer
 //
@@ -1527,6 +1527,7 @@ type Fleet interface {
 	Plane
 	Channels
 	Follows
+	ChatReads
 	Fires
 	Rebases
 	SandboxRuns
