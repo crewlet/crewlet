@@ -10525,8 +10525,11 @@ a.live-row:focus-visible {
   --sticky-top: 0px;
   /* THE VIEW A KIND DRAWS IN: the body's height inside its padding. A view
      that fills the screen subtracts only its own bar from it, since nothing
-     of the page's stands above it any more. */
-  --artifact-view: calc(100cqb - 2 * var(--spacing-5));
+     of the page's stands above it any more. The unit is read where the
+     property is used, against this body as the nearest size container, and
+     a container unit measures the content box, so the padding is already
+     out of it: subtracting it here took it off twice. */
+  --artifact-view: 100cqb;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-4);
