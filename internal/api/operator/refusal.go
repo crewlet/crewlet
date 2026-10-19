@@ -285,32 +285,30 @@ func refusedFor(err error, reason statelog.Reason) bool {
 	return errors.As(err, &refused) && refused.Reason == reason
 }
 
-// refuseDecision writes one authority REFUSAL in the engine's envelope: `403
-// step_up_required` naming the window for a stale proof, `403 token_refused`
-// for a machine token on a verb that needs a person present, and `403
-// unauthorized` with the rule's reason and grants otherwise, each beside
-// whatever else detail carries (the sentence a tool's gate worded it with).
+// refuseDecision writes one authority REFUSAL in the engine's envelope, in the
+// status and code the authority table's own mapping gives it
+// ([authz.RefusalFields]) — `step_up_required` naming the window for a stale
+// proof, `token_refused` for a machine token on a verb that needs a person,
+// `unauthorized` with the rule's reason and grants otherwise — each beside
+// whatever else detail carries: the fields naming what the call was about, the
+// person's words a refusal has, or the verb a surface's own decision was about.
 //
-// THE SAME CODES [authz.EnvelopeRefusal] ANSWERS, so a route that decides
-// itself and one the router stopped cannot answer one refusal two ways. A
-// token refusal answered `unauthorized` carried that code's sentence about a
-// grant the credential lacks, which no grant on a token would supply.
+// THROUGH THE ONE MAPPING rather than a copy of it: a copy is a second place
+// every new arm has to land, and this surface's once lacked the token arm and
+// answered a token's refusal `unauthorized`, whose sentence asks for a
+// permission no token could carry.
 func refuseDecision(w http.ResponseWriter, d authz.Decision, detail httpjson.Detail) {
-	if d.Reason == authz.ReasonStepUp {
-		for k, v := range authz.StepUpDetail(d) {
-			detail[k] = v
-		}
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeStepUpRequired, detail)
+	status, code, fields := authz.RefusalFields(d)
+	if d.NotFound() {
+		// Byte for byte an id nothing holds: nothing of this surface's
+		// rides it, or the refusal says the artifact exists.
+		httpjson.FailWithFields(w, status, code, fields)
 		return
 	}
-	for k, v := range authz.RefusalDetail(d.Reason, d.Grants) {
+	for k, v := range fields {
 		detail[k] = v
 	}
-	code := httpjson.CodeUnauthorized
-	if d.Reason == authz.ReasonTokenRefused {
-		code = httpjson.CodeTokenRefused
-	}
-	httpjson.FailWithFields(w, http.StatusForbidden, code, detail)
+	httpjson.FailWithFields(w, status, code, detail)
 }
 
 // RefuseDecision answers an authority decision a SURFACE took itself — on a

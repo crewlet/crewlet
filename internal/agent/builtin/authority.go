@@ -176,6 +176,13 @@ func (e *DecisionRefused) Error() string {
 		refusal += ": it's made as a seat and this credential acts as none. " +
 			"Bind it to a human seat with `crewlet iam bind`"
 	}
+	if e.Decision.Reason == authz.ReasonRole && e.Decision.Role.Valid() {
+		// THE ROLE IS THE REMEDY, and the artifact's owner is who gives it:
+		// the envelope carries it as `role`, and the sentence beside it says
+		// the same, so a route's refusal and a tool's read alike.
+		refusal += ": it needs the " + string(e.Decision.Role) + " role on the " +
+			"artifact, which its owner can share with you"
+	}
 	return refusal
 }
 

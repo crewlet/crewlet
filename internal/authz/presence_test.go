@@ -1,6 +1,7 @@
 package authz_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -212,5 +213,35 @@ func TestAMachineTokenNeverChangesHowItsOwnerProvesWhoTheyAre(t *testing.T) {
 			t.Errorf("a token decided %+v on %s about its own owner, want "+
 				"refused as a token", d, c.action)
 		}
+	}
+}
+
+// NO TOOL NEEDS A PERSON PRESENT.
+//
+// A verb a seat's tools are served under carries the tool's own name, with no
+// dot. Those tools are also an operator's assistant's — the operator surface
+// serves the same catalogue over MCP, and an assistant connects with the
+// machine token its person minted for it — so a tool row needing a person
+// present would refuse every assistant every call. It is also what keeps the
+// act transport's answers to the codes it declares (internal/api/operator's
+// ActTransportCodes, held against the dashboard): a refusal there is mapped
+// by [authz.RefusalFields], and `token_refused` is not among them because no
+// tool can be refused it.
+func TestNoToolNeedsAPersonPresent(t *testing.T) {
+	t.Parallel()
+	tools := 0
+	for _, a := range authz.Actions() {
+		if strings.Contains(string(a), ".") {
+			continue
+		}
+		tools++
+		if p, _ := authz.PresenceOf(a); p != authz.PresenceOptional {
+			t.Errorf("the tool %s needs a person present (%s), which no "+
+				"assistant acting through a token can be", a, p)
+		}
+	}
+	if tools < 20 {
+		t.Fatalf("read %d tools; a walk that stopped reading the table "+
+			"certifies nothing", tools)
 	}
 }

@@ -16,11 +16,13 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -379,6 +381,46 @@ func TestAnObjectNamedByAListIsNamedInTheRefusal(t *testing.T) {
 			got := operator.About(tc.tool, tc.args)
 			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
 				t.Errorf("About(%s, %v) = %v, want %v", tc.tool, tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
+// A REFUSAL A SURFACE DECIDED IS ANSWERED IN THE AUTHORITY TABLE'S OWN CODE.
+//
+// [operator.RefuseDecision] answers a decision the human write surface took on
+// a row it read, and it mapped a refusal to its code with a copy of the
+// table's mapping that knew a stale proof and nothing else: a machine token on
+// a verb that needs a person present was answered `unauthorized`, whose
+// sentence sends the caller to ask for a permission no token could carry,
+// where the router answers the same refusal `token_refused`. Each refusal is
+// held to the code [authz.RefusalFields] gives it. Mutation: map the refusals
+// here by a table of this package's own and the token's case fails.
+func TestARefusalASurfaceDecidedIsAnsweredInTheTablesCode(t *testing.T) {
+	t.Parallel()
+	for _, d := range []authz.Decision{
+		{Reason: authz.ReasonTokenRefused},
+		{Reason: authz.ReasonStepUp, Recency: iam.RecencyStepUp,
+			Grants: []iam.Grant{iam.GrantAdmin}},
+		{Reason: authz.ReasonNoGrant, Grants: []iam.Grant{iam.GrantAdmin}},
+	} {
+		t.Run(string(d.Reason), func(t *testing.T) {
+			t.Parallel()
+			r := httptest.NewRequest(http.MethodPost, "/worklet/items/ENG-1/purge", nil)
+			r = r.WithContext(iam.WithPrincipal(r.Context(), iam.Principal{
+				Kind: iam.KindPerson, Login: "jane.doe", Seat: "jane",
+				Stage: iam.StageActive,
+			}))
+			rec := httptest.NewRecorder()
+			operator.RefuseDecision(rec, r, authz.ActionWorkPurge, d)
+			var answer map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil {
+				t.Fatal(err)
+			}
+			status, code, _ := authz.RefusalFields(d)
+			if rec.Code != status || answer["error"] != string(code) ||
+				answer[authz.DetailReason] != string(d.Reason) {
+				t.Errorf("answered %d %v, want %d %s", rec.Code, answer, status, code)
 			}
 		})
 	}

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
@@ -292,7 +293,7 @@ func refuseFolderDecision(w http.ResponseWriter, r *http.Request, action authz.A
 		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized, detail)
 		return
 	}
-	refuseDecision(w, r, action, d)
+	operator.RefuseDecision(w, r, action, d)
 }
 
 // folderRoleSentence says whom to ask for the role a folder verb needs.
