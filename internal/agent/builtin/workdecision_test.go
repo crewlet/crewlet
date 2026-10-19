@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -310,7 +311,7 @@ func TestAnOperatorCannotAskTheEngineToInform(t *testing.T) {
 }
 
 // AN INFORM CHANNEL MUST BE ONE THE CHART DECLARES, on a surface the asking
-// seat holds a bot on — each half alone admits a promise nobody can keep. A
+// seat can post on — each half alone admits a promise nobody can keep. A
 // leading `#` is accepted and the chart's spelling is stored.
 func TestAnInformChannelMustBeOneTheChartDeclares(t *testing.T) {
 	t.Parallel()
@@ -354,5 +355,65 @@ func TestAnInformChannelMustBeOneTheChartDeclares(t *testing.T) {
 			"decision": informedDecision("slack", "releases")})
 	if !got.Failed || len(bare.patched) != 0 {
 		t.Errorf("an inform nothing could check was accepted: %+v", got)
+	}
+}
+
+// THE ENGINE'S OWN CHAT IS A SURFACE AN INFORM CAN NAME, under the one
+// spelling that can be kept.
+//
+// An inform is kept by OWING its surface: the asker's answered turn is held
+// until a tool that delivers there has run, and Chatlet's posting
+// tools deliver to the chat's own feed source. So the surface a decision names
+// must BE that source — any other spelling is a promise no tool discharges,
+// and a company on Chatlet could promise nothing at all. The tool offers
+// it, the value layer accepts it, and a seat that can post there promises it.
+//
+// Mutation: drop InformChat from worklet.InformSurfaces and the schema offers
+// no `chat`, and the inform is refused.
+func TestAnInformCanNameTheEnginesOwnChat(t *testing.T) {
+	t.Parallel()
+	if string(worklet.InformChat) != chatlet.Source {
+		t.Fatalf("the Chatlet inform surface is %q and the chat tools deliver to "+
+			"%q — the owed post could never be discharged", worklet.InformChat,
+			chatlet.Source)
+	}
+	for _, name := range []string{builtin.CreateWorkItemTool, builtin.CommentOnWorkTool} {
+		schema := registered(t, builtin.Deps{Work: builtin.WorkDeps{
+			Reader: newFakeTracker(), Writer: newFakeTracker().as,
+		}}, name).Parameters()
+		encoded, err := json.Marshal(schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(encoded), `"`+string(worklet.InformChat)+`"`) {
+			t.Errorf("%s does not offer %q as an inform surface: %s", name,
+				worklet.InformChat, encoded)
+		}
+	}
+
+	trk := newFakeTracker()
+	reg := tools.NewRegistry()
+	if _, err := builtin.Register(reg, gated(builtin.Deps{
+		Work: builtin.WorkDeps{
+			Reader: trk, Writer: trk.as,
+			Channels: fakeChannels{
+				surfaces: map[string][]worklet.InformSurface{"eng": {worklet.InformChat}},
+				channels: []string{"releases"},
+			},
+		},
+		Pages: builtin.PageDeps{Reader: newFakeKB()},
+	})); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{
+		"item": "ENG-1", "body": "?", "ask": "pm",
+		"decision": informedDecision(string(worklet.InformChat), "#releases"),
+	})
+	if got.Failed {
+		t.Fatalf("an inform on the engine's own chat was refused: %s", got.Output)
+	}
+	inform := trk.patched[0].Comment.Decision.Inform
+	if inform == nil || inform.Surface != worklet.InformChat || inform.Channel != "releases" {
+		t.Errorf("the inform is stored as %+v, want chat/releases", inform)
 	}
 }

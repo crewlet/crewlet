@@ -15,7 +15,7 @@ import (
 //
 // Every entry here is the same value [Register] files into a seat's registry.
 // The only thing that differs is who a write is attributed to, and that is
-// [WorkDeps.Actor] — a single field — rather than a second copy of ten tools.
+// [WorkDeps.Actor] — a single field — rather than a second copy of the tools.
 // Two copies drift on exactly the parts nobody looks at: which field is
 // trimmed, which default applies, what a refusal says. Only one of the two is
 // ever tested, and it is never the copy that broke.
@@ -31,9 +31,10 @@ import (
 // which is `answer_run`), and `lookup_colleague` — which would be useful, but resolves
 // against the turn's own org and has no other source.
 //
-// What is left is the surface an operator's assistant actually needs: read
-// the board, file and move work, read and write the wiki, search what the
-// company knows.
+// What is left is the surface an operator's assistant actually needs — and
+// the dashboard, which makes every change it makes through this catalogue
+// (ADR-0024): read the board, file and move work, read and write the wiki,
+// search what the company knows, and talk in the company's own chat.
 
 // OperatorDeps are the halves an operator surface can serve.
 type OperatorDeps struct {
@@ -45,6 +46,15 @@ type OperatorDeps struct {
 	// dependencies on this surface. Each zero value omits its tools.
 	Artifacts    ArtifactDeps
 	ArtifactData ArtifactDataDeps
+
+	// Chat is the company's own chat. Its [ChatDeps.Actor] is the
+	// request's principal ([PrincipalChatActor]): a person writes as the
+	// `kind: human` seat their credential is bound to — a room renders a
+	// speaker by seat, so that is the handle every message carries — with
+	// the credential beside it. A credential acting as itself is refused
+	// every chat verb, the reads included, by the table first
+	// (`unseated`) and by the tools after it.
+	Chat ChatDeps
 
 	// Org is the company this surface is about, resolved per call because
 	// a config apply replaces it. An operator has no turn and therefore no
@@ -62,8 +72,9 @@ type OperatorDeps struct {
 	// admin was refused here while every HTTP route allowed.
 	//
 	// NIL REFUSES EVERYTHING, on [Deps.Authorize]'s rule. Pushed down
-	// into [OperatorDeps.Work] and [OperatorDeps.Pages] by
-	// [OperatorTools], so a caller cannot set the three differently.
+	// into [OperatorDeps.Work], [OperatorDeps.Pages] and
+	// [OperatorDeps.Chat] by [OperatorTools], so a caller cannot set the
+	// four differently.
 	Authorize Authorizer
 
 	// Runs answers a parked coding run by its turn — see answerrun.go.
@@ -96,7 +107,8 @@ type OperatorDeps struct {
 // two boots of one config advertise the same list.
 func OperatorTools(deps OperatorDeps) []tools.Callable {
 	deps.Work.Authorize, deps.Pages.Authorize = deps.Authorize, deps.Authorize
-	work, pages := deps.Work, deps.Pages
+	deps.Chat.Authorize = deps.Authorize
+	work, pages, talk := deps.Work, deps.Pages, deps.Chat
 	// A CALL HERE IS AN OPERATION ITS CALLER HOLDS, because there is no
 	// turn to derive one from: every write answers with its `op_id`, and
 	// the call brought back with it is that operation again. See
@@ -169,6 +181,35 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// company's expense, and a seat has search_knowledge and a model
 		// of its own — see answerknowledge.go.
 		{newAnswerKnowledge(deps), answerable(deps)},
+		// EVERY CHAT GESTURE A PERSON MAKES, because the dashboard makes
+		// them through this catalogue (ADR-0024): read the rooms, find
+		// what was said, say something, react, move one's own membership
+		// — the nine a seat holds — and the furniture only a person
+		// arranges, which no seat is given: a room made or its settings
+		// changed, its whole membership stated, a message rewritten or
+		// taken back, a conversation opened before its first word, and
+		// how far one has read. See chatoperator.go for why each is a
+		// person's.
+		{&listChannels{deps: talk}, talk.Reader != nil},
+		{&readChannel{deps: talk}, talk.Reader != nil},
+		{&searchMessages{deps: talk}, talk.Search != nil},
+		{&postMessage{deps: talk}, talk.Writer != nil},
+		{&replyInThread{deps: talk}, talk.Writer != nil},
+		{&sendDM{deps: talk}, talk.Writer != nil},
+		{&reactToMessage{deps: talk}, talk.Writer != nil},
+		{&joinChannel{deps: talk}, talk.Writer != nil},
+		{&leaveChannel{deps: talk}, talk.Writer != nil},
+		// THE THREE DECIDED AFTER A READ need the reader as well: whose
+		// words a message is, and who made a room and which unit holds
+		// it, are on the rows ([ChatDeps.remarkAuthority],
+		// [ChatDeps.archiveAuthority]).
+		{&editMessage{deps: talk}, talk.Writer != nil && talk.Reader != nil},
+		{&deleteMessage{deps: talk}, talk.Writer != nil && talk.Reader != nil},
+		{&createChannel{deps: talk}, talk.Writer != nil},
+		{&openDM{deps: talk}, talk.Writer != nil},
+		{&updateChannel{deps: talk}, talk.Writer != nil && talk.Reader != nil},
+		{&setChannelMembers{deps: talk}, talk.Writer != nil},
+		{&markChatRead{deps: talk}, talk.Cursors != nil},
 	}
 	candidates = slices.Concat(candidates,
 		artifactOperatorCandidates(deps), artifactDataOperatorCandidates(deps))

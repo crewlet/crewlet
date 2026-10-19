@@ -17,7 +17,7 @@
  * runs the company and includes every app, then one per app. The wire field is
  * still `grants`; the dashboard calls the concept "Access".
  */
-export const GRANTS = ["admin", "worklet", "doclet", "artifacts"] as const;
+export const GRANTS = ["admin", "worklet", "doclet", "artifacts", "chatlet"] as const;
 
 /**
  * The apps (`iam.Apps`), the one place the engine declares one. Admin
@@ -28,7 +28,7 @@ export const GRANTS = ["admin", "worklet", "doclet", "artifacts"] as const;
  * artifact. Somebody without it still opens, comments on and fills in every
  * artifact shared with them, because a share is a relation, not a permission.
  */
-export const APPS = ["worklet", "doclet", "artifacts"] as const;
+export const APPS = ["worklet", "doclet", "artifacts", "chatlet"] as const;
 
 /**
  * The two login grammars, as the engine holds them (`iam.ValidLoginFor`):

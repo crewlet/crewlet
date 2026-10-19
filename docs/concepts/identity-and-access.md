@@ -148,9 +148,9 @@ taken.
 
 What a principal may do comes from two things: the **permissions** it carries,
 and its **relations** in the org chart — the seat it holds, the team it leads,
-the work it wrote. There are four permissions, because there are four things
+the work it wrote. There are five permissions, because there are five things
 a company actually decides about somebody who joins it: whether they **run**
-it, and which of its three apps they **use**.
+it, and which of its four apps they **use**.
 
 | Permission | On the dashboard | What it is |
 |---|---|---|
@@ -158,14 +158,17 @@ it, and which of its three apps they **use**.
 | `worklet` | **Worklet** | Uses [Worklet](../guides/worklet.md), the engine's own work tracker: reads it and writes it |
 | `doclet` | **Doclet** | Uses Doclet, the engine's own [knowledge base](knowledge-system.md): reads it and writes it |
 | `artifacts` | **Artifacts** | **Authors** artifacts: creates them, publishes their versions and shapes their data. It never gates opening one: what somebody may do on an artifact is decided by its [shares](#an-artifact-is-opened-by-its-shares) |
+| `chatlet` | **Chatlet** | Uses the company's own [chat](../guides/tools-and-mcp.md#chatlet): reads its rooms and talks in them |
 
 They are stored in the `grants` field of a person's row, an invitation, a
 machine token and a Tier A token entry — the field keeps its name, and the
-dashboard calls the concept **Access**. `worklet`, `doclet` and `artifacts`
-are the **apps**, and `iam.Apps` is the one place an app is declared: an agent
-seat's own set, the dashboard's picker, the live socket's reader and the
+dashboard calls the concept **Access**. `worklet`, `doclet`, `artifacts` and
+`chatlet` are the **apps**, and `iam.Apps` is the one place an app is declared: an
+agent seat's own set, the dashboard's picker, the live socket's reader and the
 authority table's checks all read it, so a new app is a new member there and a
-new set of rows, and the build fails until both are in place.
+new set of rows, and the build fails until both are in place — which is how
+`chatlet` arrived, appended last so the order every list is drawn in kept its
+first three members.
 
 **Admin includes every app.** One function, `iam.Expand`, reads a set as it is
 compared — its own members, plus every app when it holds `admin` — and every
@@ -281,6 +284,7 @@ hands an administrator private titles by that override.
 | `worklet` | Every Worklet read and write: the board, a project, its files, its views and reading the workspace catalogue (writing it is admin's); filing, updating, commenting, merging and placing work; and every `work_*` question. A person's own **Inbox**, **My work** and person view, and the same for a report as their lead (or anybody, as an administrator). The `inbox_changed` push |
 | `doclet` | Reading, listing and searching the company's pages (`get_page`, `list_pages`, `search_knowledge`, and the `pages`, `page`, `containers`, `page_activity`, `page_revision` and `page_reads` questions); writing, saving and commenting on them (`write_page`, `save_page`, `comment_on_page`) |
 | `artifacts` | Authoring artifacts, beside the role each asks: creating one (`create_artifact`), and on an artifact somebody holds editor on, publishing a version (`publish_artifact`), renaming it (`update_artifact`), adding an asset (`upload_artifact_asset`), changing its datastore's schema (`set_artifact_schema`) and filing it in a folder (`move_artifact`, beside contributor on the folder); creating a folder inside one they may file in (`create_artifact_folder`); trashing and restoring one they own (`artifacts.trash`, `artifacts.restore`). **Nothing else**: opening an artifact, reading and writing its data, being present on it, sharing it and exporting it ask only the role |
+| `chatlet` | Every room a person may read and every word they say in one, where the company runs Chatlet: listing their rooms, reading and searching them (`list_channels`, `read_channel`, `search_messages`); posting, replying, a direct message, a reaction and moving their own membership (`post_message`, `reply_in_thread`, `send_dm`, `react_to_message`, `join_channel`, `leave_channel`); and a person's own gestures — making a room, opening a conversation, a room's settings and whole membership, editing and taking back their own messages and their read state (`create_channel`, `open_dm`, `update_channel`, `set_channel_members`, `edit_message`, `delete_message`, `mark_chat_read`). WHICH room is the chat's own rule: a private room is its members', and one a person cannot read answers as if it did not exist. Archiving a room is its creator's, its unit's lead's or an administrator's, and taking back somebody else's message is an administrator's — moderation, which reaches a room the moderator is not in without showing it to them |
 
 **A relation asks the app beside it.** Leading a project, being the owner of an
 inbox, having written a comment, owning a saved view: each is a relation, and
@@ -580,7 +584,7 @@ deploy. A writer may **remove** an unknown name from a row and never **add**
 one; a whole-set edit that restates one the row already carries adds nothing
 and is allowed. Tier A is stricter, because a file an operator wrote is a typo
 rather than an upgrade: an unknown name in an `api.auth.tokens` entry is
-refused, naming the three.
+refused, naming the five.
 
 ---
 
@@ -1298,7 +1302,8 @@ to hold. Because it is judged when the link is issued, **an edit that gives the
 person a permission revokes their outstanding link** in the same record: that
 permission was never judged against whoever holds the link, so they ask for
 another, judged against the new set — and storing `[admin]` as `[admin,
-tracker, knowledge]` adds nothing, since the comparison expands both sides.
+worklet, doclet, artifacts, chatlet]` adds nothing, since the comparison
+expands both sides.
 Taking a permission away revokes nothing. What
 the issue does not follow is the *issuer*: an administrator demoted after
 issuing a link still holds one that opens, as an invitation they issued still
@@ -2357,18 +2362,18 @@ unlocks.
 | Rule | Covers | Decided by |
 |---|---|---|
 | **Everybody** | The overview's reads that a tool or a route asks about, such as who to ask (`lookup_colleague`) and who holds each human seat (`GET /iam/seats`); the route to a work item's thread (`work.thread`), which admits the request and leaves the decision to `comment_on_work_item` once the item is read; listing artifacts (`list_artifacts`), a filter answering only the artifacts reading admits; the dashboard source catalogue (`list_dashboard_sources`), which names reads and holds no row; and a browser's report that an artifact finished rendering (`artifacts.ready`) | Any principal whose stage may act |
-| **App** | Every Worklet and Doclet read and write: the board, a project, its files, its views and reading its catalogue (writing it is Admin's); filing, updating, merging and placing work, and a project's tags; reading, listing, searching, writing, saving and commenting on pages | The row's app (`worklet` or `doclet`), which an administrator holds through `Expand` |
-| **Any app** | A person's question answered from what the company has written down (`answer_knowledge`), which a principal no seat binds (a token or a service account bound to none) is refused, because it runs on the bound seat's model | Any one of the apps the row names — here `tracker` or `knowledge`, and no other: the answer searches the pages only for a `doclet` holder and the board only for a `worklet` holder |
+| **App** | Every Worklet and Doclet read and write: the board, a project, its files, its views and reading its catalogue (writing it is Admin's); filing, updating, merging and placing work, and a project's tags; reading, listing, searching, writing, saving and commenting on pages. And using the chat: reading and searching rooms, saying something in one, reacting and moving one's own membership, and, a person's, making a room, opening a conversation, a room's topic, purpose and whole membership | The row's app (`worklet`, `doclet` or `chatlet`), which an administrator holds through `Expand`. WHICH room is the chat's own rule, decided where the write lands: a private room is its members' |
+| **Any app** | A person's question answered from what the company has written down (`answer_knowledge`), which a principal no seat binds (a token or a service account bound to none) is refused, because it runs on the bound seat's model | Any one of the apps the row names (here `worklet` or `doclet`, and no other): the answer searches the pages only for a `doclet` holder and the board only for a `worklet` holder |
 | **App or asked** | Reading one work item, and commenting on it (`get_work_item`, `comment_on_work_item`) | `worklet`, or the person an open ask on the item names, and on the comment only their answer to it ([You may answer what you were asked](#what-each-app-opens)) |
 | **Self** | The caller's own diary, episodes, skills and onboarding marker | The caller, and **nobody else** — not even admin |
-| **Own record** | Marking an inbox, pinned views | The owner, or admin, with `worklet` |
-| **Own or lead** | Priorities, a person's day and queue (`set_priorities`, `my_work`, `work_inbox`, `get_person`); whether a seat works (pausing it, resuming it, a note to the turn it is running: `pause_seat`, `resume_seat`, `steer_turn`); answering the question a coding run parked on (`answer_run`); and reading one seat's own trail (`audit.seat.read`) | The owner, whoever leads them, or admin, with `worklet` on the four Worklet verbs, and with no app on the rest, since a lead who uses neither app still runs their team. For a seat's controls the owner is the person bound to the seat; for a run's question it is the run's **requester** (the person whose message woke the turn that launched it), and otherwise whoever leads the run's seat, so nobody who merely leads the requester answers a question the run put to them |
+| **Own record** | Marking an inbox, pinned views; a person's chat read state (`mark_chat_read`) | The owner, or admin, with the row's app |
+| **Own or lead** | Priorities, a person's day and queue (`set_priorities`, `my_work`, `work_inbox`, `get_person`); whether a seat works (pausing it, resuming it, a note to the turn it is running: `pause_seat`, `resume_seat`, `steer_turn`); answering the question a coding run parked on (`answer_run`); and reading one seat's own trail (`audit.seat.read`) | The owner, whoever leads them, or admin, with `worklet` on the four Worklet verbs, and with no app on the rest, since a lead who uses no app still runs their team. For a seat's controls the owner is the person bound to the seat; for a run's question it is the run's **requester** (the person whose message woke the turn that launched it), and otherwise whoever leads the run's seat, so nobody who merely leads the requester answers a question the run put to them |
 | **Saved view** | Saving a view | With `worklet`: a **personal** view (one naming an owner) is its owner's, or admin's; a **shared** one is its container's lead's (a project's, a unit's, or the person whose page it sits on and whoever leads them) or admin's, which is the only way to a workspace-wide tab. Replacing a stored view asks this twice: for the view written, and for the view it overwrites as it stands |
 | **Container** | A project's policy (its fields, default assignee, tag renames and archives, archiving the project) and re-routing a task to another team | The project's lead, or admin, with `worklet` |
-| **Tidy** | Removing and restoring a work item; renaming, trashing and restoring a page | The container's lead, the item's **reporter** or the page's **creator**, or admin — with the app. An author tidies their own item and never a subtree beneath it |
+| **Tidy** | Removing and restoring a work item; renaming, trashing and restoring a page; archiving a chat room and opening it again (`chat.channel.archive`, asked inside `update_channel` once the room is read) | The container's lead, the item's **reporter**, the page's or the room's **creator**, or admin — with the app. A unit's room has its unit as its container, so its unit's lead (or the lead of a unit above it) archives it; a named room has none, so nobody but its creator and admin does. An author tidies their own item and never a subtree beneath it |
 | **Subtree** | The org chart — its seats and units — read and written through `/config` (`config.org.read`, `config.org.write`) | `admin` for any of it, or a person who **leads** the part concerned: a unit is in their subtree when they lead it or a unit above it, and a seat when its unit is. A write by a lead is judged change by change on **both sides** of it — see [A lead edits their own team](#a-lead-edits-their-own-team). The company root is nobody's subtree, and no agent takes either verb |
 | **Destructive** | Moving a task out of its project; removing a project's file | The project's lead, or admin, with `worklet` |
-| **Authored** | Editing and removing a comment, on a page or a work item | Whoever wrote it, or admin — with the comment's app |
+| **Authored** | Editing and removing a comment, on a page or a work item; editing and taking back a chat message (`edit_message`, `delete_message`) | Whoever wrote it, or admin — with the remark's app. Admin is decided on the remark **unread**: a moderator takes a chat message down in a room they cannot read without being shown it, and anybody else reads it and is decided again on its author. An edit is still its author's alone — the chat's writer refuses anybody else one, because an edit puts words in somebody's mouth where a take-down only removes them |
 | **Admin** | Configuration, secrets, integrations, the deployment, the company-wide trail, the workspace catalogue, a page in the tool-skills container, every directory write, ending every session in the company, the purges (an artifact's among them, with a person present), and what the company's artifacts hold against their quotas | `admin` |
 | **Shared** | One artifact: reading it and its data, writing its data, publishing it, renaming it, its assets and schema, sharing it, trashing and restoring it, a forced publish, a transfer, a pin and an export | The caller's **role** on the artifact, the best of owning it, a share naming their seat, a unit they sit in or the whole company, and leading the agent that owns it; the verb names the least role it admits, and an authoring verb asks the `artifacts` app beside it. No relation is "not found". Admin through the admin path, marked elevated where nothing else admitted. An agent holds at most `contributor` on work it does not own unless the company allows more ([An artifact is opened by its shares](#an-artifact-is-opened-by-its-shares)) |
 | **Directory** | One person's directory row and what hangs off it — reading it, their credentials and sessions, minting and revoking their machine tokens, ending their sessions, changing how they prove who they are — and the directory's own listings: the people, the open invitations, `GET /iam/check` and the answering node's Tier A token labels joined to the rows holding their logins (`GET /iam/node-tokens`) | The person the row is about, by their **ID**, or admin |
@@ -2396,17 +2401,20 @@ may do either is the role registry's decision, and a person has no turn for an
 answer to land in. Seat-only is checked where human-only is, before the rule,
 and no row carries both.
 
-**And some are made as a seat.** `answer_knowledge` carries a third mark,
-**seated**: it is answered on the model of the seat its asker acts as, so a
-credential acting as itself — a Tier A token, a service account the identity
-directory binds to no seat, the development principal — is refused it whatever
-it holds, `403` with the reason `unseated` and no permission named, because
-what would change the answer is a binding (`crewlet iam bind`) rather than a
-permission. A person is never refused it this way: every person acts as their
-human seat ([ADR-0032](../../adr/0032-every-person-holds-a-human-seat.md)). It
-is checked after seat-only and before the rule, and a screen asking what it may
-offer an unbound credential is told the same, so it draws no control that every
-press of would be refused.
+**And some are made as a seat.** `answer_knowledge` and every chat verb carry
+a third mark, **seated**: the answer is given on the model of the seat its
+asker acts as, and a room renders a speaker by seat, its membership is seats
+and a private room's contents are its members' — so a credential acting as
+itself — a Tier A token, a service account the identity directory binds to no
+seat, the development principal — is refused them whatever it holds, the chat's
+reads included, `403` with the reason `unseated` and no permission named,
+because what would change the answer is a binding (`crewlet iam bind`) rather
+than a permission. A person is never refused them this way: every person acts
+as their human seat
+([ADR-0032](../../adr/0032-every-person-holds-a-human-seat.md)). It is checked
+after seat-only and before the rule, and a screen asking what it may offer an
+unbound credential is told the same, so it draws no control that every press of
+would be refused.
 
 A lead may re-order what their report works on; marking somebody's mail read is
 a different gesture and nobody asked a lead to make it. And whether a seat
@@ -2772,7 +2780,7 @@ Identity has **two trails**, and they answer different questions.
 | `iam_password_reset_issued` | The directory, when an administrator issues somebody a one-time password reset link, or creates a person and so issues their first password link (`first: true`) — for whom, by whom and until when, never the link | Once per link, by the call whose record issued it — never by a retry that hands the same first link back |
 | `iam_password_changed` | The sign-in surface, when a person changes their own password — which ended every other session and token they held | Once per change |
 | `iam_password_reset` | The sign-in surface, when a reset link is spent — the password set, every session and token the person held ended, and nobody signed in — or a first password link is (`first: true`), which sets the person's first password and has nothing of theirs to end | Once per link |
-| `iam_grants_changed` | The identity writer, from the snapshot it decided the write in | One per person write that moved a permission, with what it added and removed (compared through `Expand`, so storing `[admin]` as `[admin, worklet, doclet]` moves nothing), by whoever decided it: for a redemption, the person who issued the invitation, never the person redeeming it |
+| `iam_grants_changed` | The identity writer, from the snapshot it decided the write in | One per person write that moved a permission, with what it added and removed (compared through `Expand`, so storing `[admin]` as `[admin, worklet, doclet, chatlet]` moves nothing), by whoever decided it: for a redemption, the person who issued the invitation, never the person redeeming it |
 | `iam_session_generation_bumped` | The identity writer | Once per company-wide invalidation, with the generation it moved to |
 | `statelog_record_unverifiable`, `statelog_record_tampered` | Any domain's applier, for a record signed under a key this node lacks, or failing under one it holds | Once per domain and key id per node process, capped at sixteen ids |
 
@@ -3301,7 +3309,7 @@ today is smaller, and lives in two places:
 
 - **Tier A, `api.auth`** — `tokens`, the deployment's own credentials,
   each carrying an id recorded as the author of anything written with it and
-  the `grants` it may use (`admin`, `worklet`, `doclet`, `artifacts`); `admin`, whether
+  the `grants` it may use (`admin`, `worklet`, `doclet`, `artifacts`, `chatlet`); `admin`, whether
   this node [serves admin](#access-admin-and-one-permission-per-app) at all
   (`serve` or `refuse`); what a password
   sign-in asks for — `totp` (unset is `required`), `accept_insecure` and

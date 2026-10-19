@@ -18,35 +18,39 @@
 // after a crash, a call repeated after an `unknown`, a person pressing retry —
 // and the state log collapses a repetition only when it arrives under the SAME
 // operation id. So every id a write derives — the operation's, and a created
-// task's, comment's, view's, checklist item's or page's own — comes from ONE
-// identity per call, chosen by one rule:
+// task's, comment's, view's, checklist item's, page's, room's or chat
+// message's own — comes from ONE identity per call, chosen by one rule:
 //
 //   - IN A TURN, the turn: its work key (or its run, for a turn with no
 //     ledgerable trigger), the instant that unit of work began, a digest of
-//     the call's own arguments and how many different calls to the same tool
-//     the run made first ([opIDFor], [Actor.OperationSince],
-//     turnctx.CallLog). A re-run makes the same calls and derives the same
-//     ids; a different call, or the same one after a different one, is a new
+//     the call's own arguments and how many different calls the run made
+//     first to the same tool, or to a tool that undoes it — its FAMILY,
+//     which the domain owning the pair declares (chatlet.CallFamily: joining a
+//     room and leaving it) ([opIDFor], [callOpKey], [Actor.OperationSince],
+//     turnctx.CallLog.OrdinalAmong). A re-run makes the same calls and
+//     derives the same ids; a different call, or the same one after a
+//     different one — a leave between two joins included — is a new
 //     operation.
 //   - OUTSIDE A TURN, the request's or the call's own operation. A transport
 //     that names its requests — the act transport and the HTTP write
 //     surface — carries the `Idempotency-Key` a retry repeats, held to the
 //     operation grammar and scoped to the principal by internal/api/opkey,
 //     as [Actor.WorkKey] with its instant as [Actor.WorkSince] (and as
-//     [doclet.Actor.OpKey] for a page write), so a request is a unit of work
-//     exactly as a turn's trigger is and every id is derived from it as a
-//     turn's are. The operator's assistant over MCP names the call's
-//     OPERATION ([Actor.Operation]) instead: it brings back the `op_id` its
-//     call was answered with, or is minted one; that operation carries the
-//     instant it was minted and NAMES THE CALL — the tool and a digest of its
-//     arguments — so it is accepted only with that call
-//     ([WorkDeps.bindOperation]): the same call made again is the same
-//     operation, and anything else under it is refused before a write.
+//     [doclet.Actor.OpKey] for a page write, [chatlet.Actor.OpKey] for a chat
+//     one), so a request is a unit of work exactly as a turn's trigger is
+//     and every id is derived from it as a turn's are. The operator's
+//     assistant over MCP names the call's OPERATION ([Actor.Operation])
+//     instead: it brings back the `op_id` its call was answered with, or is
+//     minted one; that operation carries the instant it was minted and NAMES
+//     THE CALL — the tool and a digest of its arguments — so it is accepted
+//     only with that call ([WorkDeps.bindOperation]): the same call made
+//     again is the same operation, and anything else under it is refused
+//     before a write.
 //   - WITH NEITHER — a tool that takes no `op_id`, called over MCP — each
-//     write is fresh, since nothing will repeat it. The page tools are such
-//     tools, and so are write_project and write_work_catalogue, whose writes
-//     restate what they declare, so a repeat under a new operation already
-//     changes nothing a first attempt landed.
+//     write is fresh, since nothing will repeat it. The page and chat tools
+//     are such tools, and so are write_project and write_work_catalogue,
+//     whose writes restate what they declare, so a repeat under a new
+//     operation already changes nothing a first attempt landed.
 //
 // There is deliberately no second key: a request key beside the operation, a
 // seed beside the turn, would be a second answer to "is this the same write",

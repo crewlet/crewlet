@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/mcp"
@@ -127,6 +128,13 @@ type Deps struct {
 	Artifacts    ArtifactDeps
 	ArtifactData ArtifactDataDeps
 
+	// Chat is Chatlet. Every half nil omits all nine tools, which
+	// is what a company on Slack or Mattermost has — there the colleague
+	// surface is that vendor's own MCP server, and a seat offered
+	// `post_message` against a chat this company does not run would answer
+	// a founder into a room nobody reads.
+	Chat ChatDeps
+
 	// Authorize decides whether the party behind a call may make it.
 	//
 	// EVERY TOOL GOES THROUGH IT, wrapped once at registration rather
@@ -139,7 +147,8 @@ type Deps struct {
 	// that locked nothing, and a missing authority decision is a surface
 	// that shipped without wiring one. See authority.go.
 	//
-	// ONE FIELD, PUSHED DOWN into [WorkDeps] and [PageDeps] by [Register],
+	// ONE FIELD, PUSHED DOWN into [WorkDeps], [PageDeps] and [ChatDeps] by
+	// [Register],
 	// because a few checks can only be taken after a read and those tools
 	// reach the decision through their own deps. A caller that set three
 	// fields could set two of them differently, which is the drift this
@@ -162,6 +171,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		return nil, fmt.Errorf("builtin: no registry")
 	}
 	deps.Work.Authorize, deps.Pages.Authorize = deps.Authorize, deps.Authorize
+	deps.Chat.Authorize = deps.Authorize
 
 	// lookup_colleague is unconditional: its corpus is the turn's own org,
 	// so it works on any node that is running a company at all — and it is
@@ -242,6 +252,22 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&writeProjectFile{deps: deps.Work},
 			deps.Work.FileWriter != nil && deps.Work.Objects != nil},
 		{&removeProjectFile{deps: deps.Work}, deps.Work.FileWriter != nil},
+		// THE CHAT TOOLS, gated on the half each one needs: a build with
+		// a reader and no writer is a company whose chat is readable and
+		// not writable, which is what a seat should be offered rather
+		// than a `post_message` that fails at the call.
+		{&postMessage{deps: deps.Chat}, deps.Chat.Writer != nil},
+		{&replyInThread{deps: deps.Chat}, deps.Chat.Writer != nil},
+		{&sendDM{deps: deps.Chat}, deps.Chat.Writer != nil},
+		{&readChannel{deps: deps.Chat}, deps.Chat.Reader != nil},
+		{&listChannels{deps: deps.Chat}, deps.Chat.Reader != nil},
+		// AND THE RANKED SEARCH, on its own half: the inverted list is
+		// this node's own index rather than the replicated rows, so a
+		// build can hold the whole conversation and no way to rank it.
+		{&searchMessages{deps: deps.Chat}, deps.Chat.Search != nil},
+		{&reactToMessage{deps: deps.Chat}, deps.Chat.Writer != nil},
+		{&joinChannel{deps: deps.Chat}, deps.Chat.Writer != nil},
+		{&leaveChannel{deps: deps.Chat}, deps.Chat.Writer != nil},
 		{&listPages{deps: deps.Pages}, deps.Pages.Reader != nil},
 		{&getPage{deps: deps.Pages, events: deps.Events}, deps.Pages.Reader != nil},
 		{&writePage{deps: deps.Pages}, deps.Pages.Writer != nil},
@@ -266,15 +292,26 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		// neither of them.
 		// THE FEED'S OWN SOURCE NAME, never a second spelling. The gate
 		// compares a delivery's surface against the NotificationSource an
-		// inbound wake carried, and these two feeds publish under
-		// [worklet.Source] and [doclet.Source], so inventing `tracker`
-		// and `pages` here made every Worklet and Doclet obligation unreachable and
-		// the check silently fell back to "any delivery counts".
+		// inbound wake carried, and the three native feeds publish
+		// under [worklet.Source], [doclet.Source] and [chatlet.Source], so
+		// inventing `tracker` and `pages` here made every Worklet, Doclet
+		// and Chatlet obligation unreachable and the check silently fell back
+		// to "any delivery counts".
 		switch {
 		case slices.Contains(WorkWrites(), c.tool.Name()):
 			opts = append(opts, tools.DeliversTo(worklet.Source))
 		case slices.Contains(PageWrites(), c.tool.Name()):
 			opts = append(opts, tools.DeliversTo(doclet.Source))
+		case slices.Contains(ChatWrites(), c.tool.Name()):
+			// THE THREE POSTING TOOLS AND NOT THE REACTION. The gate
+			// asks whether the person waiting was reached, and an
+			// emoji reaches nobody — it wakes no seat and obliges
+			// nothing — so counting one would let every addressed
+			// turn discharge its obligation with a thumb. Joining a
+			// room is not a delivery either: it changes where this
+			// seat listens, which leaves the asker exactly as
+			// unanswered. See [chatlet.WriteTools].
+			opts = append(opts, tools.DeliversTo(chatlet.Source))
 		}
 		// THE GATE WRAPS EVERY ONE, and it wraps HERE rather than at
 		// each tool: the authority table is keyed on the tool's own
@@ -380,7 +417,8 @@ func annotationsFor(name string) tools.Annotations {
 		// nowhere near idempotent: a second call is a second run, a second
 		// box, and a second set of commits.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
-	case ListWorkItemsTool, GetWorkItemTool, ListPagesTool, GetPageTool,
+	case ReadChannelTool, ListChannelsTool, SearchMessagesTool,
+		ListWorkItemsTool, GetWorkItemTool, ListPagesTool, GetPageTool,
 		worklet.GetWorkCatalogueTool, worklet.ListProjectsTool,
 		worklet.DescribeProjectTool,
 		worklet.TaskActivityTool, worklet.MyWorkTool,
@@ -553,6 +591,98 @@ func annotationsFor(name string) tools.Annotations {
 		// somebody's work — and a status flip riding the same tool does
 		// not make the whole tool safe.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes}
+	case PostMessageTool, ReplyInThreadTool, SendDMTool:
+		// WORDS ON SOMEBODY ELSE'S SCREEN, which ReadOnly=No plus
+		// OpenWorld=Yes is how that is stated: a message is read by
+		// whoever is in the room and wakes whoever it named, so
+		// [mcp.WritesToSharedSurface] reads true and the sub-agent guard
+		// keeps all three away from a worker acting under its parent's
+		// name. A worker that could speak as its parent would be a
+		// colleague answering in somebody else's voice, and the room has
+		// no way to tell.
+		//
+		// A DIRECT MESSAGE IS THE SAME ANSWER, not a narrower one: the
+		// flag asks whether a second party is reached, and a private
+		// conversation reaches exactly one.
+		//
+		// Not destructive — a message is additive and an edit is a
+		// verb no seat is offered — and NOT idempotent: a second call is
+		// a second message. The derived key makes a RE-RUN of one turn
+		// post once, which is the engine protecting a redelivery rather
+		// than a licence to repeat.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
+	case ReactToMessageTool:
+		// SHARED, because everybody in the room sees it, but IDEMPOTENT
+		// where the three above are not: a reaction is keyed on
+		// (message, emoji, handle), so adding the same one twice leaves
+		// the same state and removing one that is not there is a no-op.
+		// That is what makes a retry after a lost answer safe.
+		//
+		// It is NOT a delivery, and that is a different flag — see the
+		// registration switch in [Register].
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.No,
+			Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
+		}
+	case JoinChannelTool, LeaveChannelTool:
+		// A SEAT'S OWN SUBSCRIPTION IS NOT A SHARED SURFACE, and saying
+		// so takes an explicit `OpenWorld: No` — the arm the tracker's
+		// `mark_inbox` and `set_pins` are in, for the same reason and
+		// with the same trap: left to the default arm, `ReadOnly: No`
+		// with OpenWorld UNSET is exactly what
+		// [mcp.WritesToSharedSurface] reads as true, and a worker would
+		// be refused a subscription change its parent had granted.
+		//
+		// The question the flag asks is whether a second party is
+		// written FOR, not whether a row changes. These two move this
+		// seat's membership and nobody else's — the write path refuses
+		// any other handle — so what they change is where this seat
+		// listens.
+		//
+		// IDEMPOTENT, because each states a membership rather than
+		// toggling one: joining a room you are in leaves you in it, and
+		// the store publishes nothing when the set does not move.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.No,
+			Idempotent: mcp.Yes, OpenWorld: mcp.No,
+		}
+	case chatlet.CreateChannelTool:
+		// A ROOM THE COMPANY SEES and its founding members are put in, so
+		// OpenWorld is Yes. Not destructive — a room is additive — and NOT
+		// idempotent: the same name again is refused as taken, and another
+		// name is a second room.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
+	case chatlet.OpenDMTool:
+		// A CONVERSATION THE OTHERS ARE IN, so OpenWorld is Yes although
+		// nothing is said yet. IDEMPOTENT by construction: its id IS its
+		// participants, so opening it again reaches the same room.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.No,
+			Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
+		}
+	case chatlet.UpdateChannelTool, chatlet.SetChannelMembersTool, chatlet.EditMessageTool,
+		chatlet.DeleteMessageTool:
+		// WRITES EVERYBODY IN THE ROOM SEES, and DESTRUCTIVE: a setting is
+		// replaced (archiving closes the room to everybody in it), a
+		// membership set takes people out of a room they could read, an
+		// edit replaces what somebody said and a delete takes it back.
+		// IDEMPOTENT, because each STATES its result — the same settings,
+		// the same members, the same words, the same tombstone — so a
+		// retry after a lost answer changes nothing where the first one
+		// landed.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.Yes,
+			Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
+		}
+	case chatlet.MarkChatReadTool:
+		// A PERSON'S OWN STATE, in the arm `mark_inbox` and `set_pins` are
+		// in and for their reason: nobody else reads where somebody got
+		// to, so OpenWorld is explicitly No. Idempotent — a cursor only
+		// advances and a mute states one room's — and destroys nothing.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.No,
+			Idempotent: mcp.Yes, OpenWorld: mcp.No,
+		}
 	case WritePageTool, CommentOnPageTool:
 		// Shared and additive: a page and a comment on one are both new
 		// records everyone in the company can read, so OpenWorld is Yes

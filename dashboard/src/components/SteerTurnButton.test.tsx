@@ -30,6 +30,7 @@ const JANE: ViewerState = {
   admin: true,
   worklet: true,
   doclet: true,
+  chatlet: true,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",

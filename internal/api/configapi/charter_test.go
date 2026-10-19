@@ -528,7 +528,7 @@ func TestTheCharterIsAnAdministratorsToReadAndWrite(t *testing.T) {
 	s := newSurface(t)
 	s.seed(t, charterDoc)
 	_, tag := s.readCharter(t)
-	s.grants = []iam.Grant{iam.GrantWorklet, iam.GrantDoclet}
+	s.grants = slices.Clone(iam.Apps)
 	for _, req := range []struct{ method, body string }{
 		{http.MethodGet, ""},
 		{http.MethodPut, `{"mission":"m","vision":"","policies":[]}`},

@@ -304,7 +304,7 @@ export function AccessPicker({
  *
  *   - NOTHING TICKED is the overview only — the org chart, the agents'
  *     status, spend and their own account — which every signed-in person
- *     reads, and nothing of the tracker or the knowledge base;
+ *     reads, and nothing of the tracker, the knowledge base or the chat;
  *   - WITHOUT WORKLET, the work the company's agents send to people never
  *     reaches them: an agent asks a person, assigns them a task or waits on
  *     their answer through Worklet, and their inbox and My work are its.
@@ -323,7 +323,7 @@ export function AppReachNote({
 }) {
   const have = expand(grants);
   if (!APPS.some((app) => have.includes(app)) && !have.includes(ADMIN)) {
-    return <Callout variant="warning">Overview only: no tasks or pages.</Callout>;
+    return <Callout variant="warning">Overview only: no tasks, pages or chat.</Callout>;
   }
   if (!have.includes(WORKLET)) {
     return (
@@ -1415,7 +1415,7 @@ export function MintTokenDialog({
               was offered "Nothing to offer." beside an enabled Mint. */}
           {expand(grants).every((g) => !isGrant(g)) && (
             <Text as="p" variant="caption" tone="secondary">
-              Nothing ticked: overview only. No tasks or pages.
+              Nothing ticked: overview only. No tasks, pages or chat.
             </Text>
           )}
         </>

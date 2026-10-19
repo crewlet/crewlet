@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -75,6 +76,16 @@ var nativeDomains = map[string]nativeDomain{
 		// the tracker's tools `title` is a work item's text, not an object.
 		objects: []string{"container", "page"},
 	},
+	chatlet.Domain{}.Name(): {
+		class: chatClass,
+		// A room is named by `channel` — its id or its name, which is
+		// its address, a new room's included — and a message by
+		// `message_id`, never `message`, which on the knowledge base's
+		// tools is a save's revision note rather than an object. A
+		// direct conversation IS its participants, so the `to` that
+		// names them is the object a failed send_dm or open_dm points at.
+		objects: []string{"channel", "message_id", "to"},
+	},
 }
 
 // WriterClass is the refusal class a native domain writer's error is, and
@@ -84,8 +95,9 @@ var nativeDomains = map[string]nativeDomain{
 //
 // EXPORTED for the human write surface, whose tool-less writers are classed
 // by this one rule (internal/api/operator's ClassifyWrite) — the same
-// classes the tools' own failures carry, since [writeFailure] and
-// [pageWriteFailure] fall back to it.
+// classes the tools' own failures carry, since [writeFailure],
+// [pageWriteFailure], [publishFailure] and [dataFailure] fall back to it, and
+// [chatWriteFailure] classes by [chatClass] itself.
 func WriterClass(err error) (tools.Refusal, bool) {
 	// AN OUTCOME NOBODY CAN VOUCH FOR IS NEVER A REFUSAL, whatever its
 	// cause carries beside it: a step whose outcome is unknown, a write no

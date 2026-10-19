@@ -51,6 +51,9 @@ func TestADecisionIsValidatedField(t *testing.T) {
 		{"an inform", func(d *worklet.Decision) {
 			d.Inform = &worklet.Inform{Surface: worklet.InformSlack, Channel: "eng"}
 		}, ""},
+		{"an inform on the engine's own chat", func(d *worklet.Decision) {
+			d.Inform = &worklet.Inform{Surface: worklet.InformChat, Channel: "eng"}
+		}, ""},
 
 		{"no question", func(d *worklet.Decision) { d.Question = "  " }, "decision.question"},
 		{"a long question", func(d *worklet.Decision) {

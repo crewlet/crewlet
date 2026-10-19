@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/sourcetree"
@@ -33,7 +34,7 @@ import (
 // operation table ([estate.WriteDomains]), so the first write a new domain
 // declares makes this red until the domain is declared.
 //
-// Mutation: drop either row of nativeDomains and this goes red.
+// Mutation: drop any row of nativeDomains and this goes red.
 func TestEveryRoutedDomainIsDeclaredToTheSurfaces(t *testing.T) {
 	t.Parallel()
 	routed := estate.WriteDomains()
@@ -161,6 +162,27 @@ var domainErrors = map[string]map[string]classRow{
 			why: "a document version this build cannot read, a fault of the copy"},
 		"InvalidError": {err: &doclet.InvalidError{}, class: tools.RefusalInvalid},
 	},
+	chatlet.Domain{}.Name(): {
+		// AN ARCHIVED ROOM IS AN ARGUMENT TO CHANGE: it takes nothing more
+		// from anybody, and what fixes the call is a room still open.
+		"ErrArchived":   {err: chatlet.ErrArchived, class: tools.RefusalInvalid},
+		"ErrConflict":   {err: chatlet.ErrConflict, class: tools.RefusalConflict},
+		"ErrForbidden":  {err: chatlet.ErrForbidden, class: tools.RefusalForbidden},
+		"ErrInvalid":    {err: chatlet.ErrInvalid, class: tools.RefusalInvalid},
+		"ErrNameTaken":  {err: chatlet.ErrNameTaken, class: tools.RefusalExists},
+		"ErrNotFound":   {err: chatlet.ErrNotFound, class: tools.RefusalNotFound},
+		"ErrRoomExists": {err: chatlet.ErrRoomExists, class: tools.RefusalExists},
+		// THIS NODE'S CONDITION, NOT A PERMISSION: the same call lands
+		// once the node is upgraded.
+		"ErrUnknownKind":  {err: chatlet.ErrUnknownKind, class: tools.RefusalUnavailable},
+		"ErrNoActivation": {err: chatlet.ErrNoActivation, why: "a configuration apply's wiring, never a caller's request"},
+
+		"ErrFutureVersion": {err: &chatlet.ErrFutureVersion{},
+			why: "a record a newer build wrote, which the framework defers rather than refuses"},
+		"ErrUnknownVersion": {err: chatlet.ErrUnknownVersion{},
+			why: "a document version this build cannot read, a fault of the copy"},
+		"InvalidError": {err: &chatlet.InvalidError{}, class: tools.RefusalInvalid},
+	},
 }
 
 // EVERY ERROR A NATIVE DOMAIN DECLARES IS CLASSED, or named as no refusal.
@@ -172,7 +194,8 @@ var domainErrors = map[string]map[string]classRow{
 // domain's own source, as the estate wire's registration gate is, so a
 // sentinel added to a domain is red here until somebody says what it is.
 //
-// Mutation: drop any arm from trackerClass or pageClass and its rows go red;
+// Mutation: drop any arm from trackerClass, pageClass or chatClass and its
+// rows go red;
 // add an exported sentinel to either domain and the gate names it.
 func TestEveryDomainRefusalIsClassed(t *testing.T) {
 	t.Parallel()
@@ -287,7 +310,7 @@ func exportedErrors(t *testing.T, dir string) []string {
 func domainPackages() map[string]string {
 	internal := path.Dir(reflect.TypeFor[statelog.Position]().PkgPath())
 	out := map[string]string{}
-	for _, d := range []statelog.Domain{worklet.Domain{}, doclet.Domain{},
+	for _, d := range []statelog.Domain{worklet.Domain{}, doclet.Domain{}, chatlet.Domain{},
 		artifactsdomain.Domain{}, artifactdata.Domain{}} {
 		out[d.Name()] = strings.TrimPrefix(reflect.TypeOf(d).PkgPath(), internal+"/")
 	}

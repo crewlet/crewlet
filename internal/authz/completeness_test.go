@@ -454,7 +454,10 @@ func policyFor(pattern string) authz.Policy {
 
 // grantedOnly is an active person carrying exactly one permission.
 func grantedOnly(g iam.Grant) iam.Principal {
+	// BOUND TO A SEAT, as every person is (ADR-0032), so a verb made as one
+	// is asked of its permission rather than refused before it.
 	p := person("jane.doe", g)
+	p.Seat = "jane"
 	return p
 }
 

@@ -38,8 +38,8 @@ import (
 // password they chose, acting as that seat.
 //
 // `-grants admin` STORES EVERY APP BESIDE IT, as the dashboard's picker does,
-// so the founder's row lists admin and every app (worklet, doclet,
-// artifacts), and taking admin away from them later leaves them the apps.
+// so the founder's row lists admin and every app, and taking admin away from
+// them later leaves them the apps.
 //
 // Mutation: make the directory write require an enrolled administrator rather
 // than the grant, and the invitation is refused; drop a grant from what the

@@ -94,8 +94,8 @@
  * A row's ACCESS column says what it amounts to: "Admin" (which includes
  * every app), the apps it holds ("Worklet · Doclet"), or "Overview only",
  * through `lib/access.ts`'s one reading, so a row stored as `[admin]` and one
- * stored as `[admin, worklet, doclet]` read the same, as the engine treats
- * them.
+ * stored as `[admin, worklet, doclet, artifacts, chatlet]` read the same, as the
+ * engine treats them.
  */
 
 import { ORG_EDIT_PATH } from "~/app/routes.ts";

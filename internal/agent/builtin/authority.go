@@ -332,6 +332,20 @@ var subjectOf = map[string]subject{
 	QueryArtifactDataTool: {kind: authz.KindArtifact, inTool: true},
 	WriteArtifactDataTool: {kind: authz.KindArtifact, inTool: true},
 	SetArtifactSchemaTool: {kind: authz.KindArtifact, inTool: true},
+
+	// A CHAT MESSAGE IS DECIDED ON WHOSE WORDS IT IS, which is its stored
+	// row and never an argument: the tools name a message by its id. An
+	// admin is admitted on the unread message — moderation, which takes a
+	// message down in a room the moderator cannot read without showing it
+	// to them — and anybody else is told [authz.ErrUnresolved], read as
+	// themselves, and decided again on its author. See
+	// [ChatDeps.remarkAuthority].
+	"edit_message":   {kind: authz.KindMessage, inTool: true},
+	"delete_message": {kind: authz.KindMessage, inTool: true},
+
+	// AND A READ CURSOR IS THE CALLER'S OWN RECORD, as an inbox's marks
+	// are: `mark_chat_read` takes no handle, so its owner is the caller.
+	"mark_chat_read": {kind: authz.KindPerson},
 }
 
 // subject is what one tool is about, as the names of its own arguments.

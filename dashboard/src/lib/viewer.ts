@@ -50,7 +50,7 @@ import {
 } from "react";
 import { useQuery } from "./useQuery.ts";
 import { useFrameSession } from "./frameSession.ts";
-import { ADMIN, DOCLET, WORKLET, holds } from "./access.ts";
+import { ADMIN, CHATLET, DOCLET, WORKLET, holds } from "./access.ts";
 import type { SessionAnswer, Viewer } from "~/protocol/index.ts";
 import type { AssistantModelNotice } from "~/contract/assistant.ts";
 import {
@@ -85,6 +85,8 @@ export interface ViewerState {
   worklet: boolean;
   /** Whether this caller holds DOCLET: every page question. */
   doclet: boolean;
+  /** Whether this caller holds CHATLET: every room question. */
+  chatlet: boolean;
   /** The seat the directory binds this caller to, or "" — see the note above. */
   handle: string;
   /**
@@ -201,6 +203,7 @@ function useViewerRead(): ViewerState {
     admin: holds(grants, ADMIN),
     worklet: holds(grants, WORKLET),
     doclet: holds(grants, DOCLET),
+    chatlet: holds(grants, CHATLET),
     handle,
     owner: data?.owner ?? "",
     name: data?.name ?? "",

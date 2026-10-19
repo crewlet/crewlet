@@ -110,8 +110,8 @@ api:
       - id: founder
         token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26 characters at minimum
         grants: [admin]   # what this credential may do — required and
-                          #   non-empty: admin, tracker, knowledge,
-                          #   artifacts. Admin runs the company and
+                          #   non-empty: admin, worklet, doclet,
+                          #   artifacts, chatlet. Admin runs the company and
                           #   includes every app.
 
 secrets:                  # REQUIRED. Every record on every state log — the
@@ -483,7 +483,7 @@ for that seat and offers no other — and fill in
 
 - **your email address** — what the invitation is held against;
 - **your access**: tick **Admin**, which ticks and locks every app (Worklet,
-  Doclet and Artifacts) beside it. The founder token holds `admin`, and nobody can
+  Doclet, Artifacts and Chatlet) beside it. The founder token holds `admin`, and nobody can
   confer a permission they do not hold. Keep Admin, or nobody after you can be
   invited or created except with the token again.
 
@@ -533,9 +533,9 @@ credential, not how people should be signing in. Everybody after you arrives
 the same way, on a seat of their own: add a human seat for them (**Org chart ›
 Edit org › Add human seat**), and once it is saved an administrator invites
 them onto it, or creates them on it, from its card in the org chart — with
-both apps ticked by default and Admin not. A person handed no permission at all
+every app ticked by default and Admin not. A person handed no permission at all
 still sees the company's overview: the org chart, what the agents are doing,
-spend and schedules — just not its tracker or its knowledge base.
+spend and schedules — just not its tracker, its knowledge base or its chat.
 
 **From a shell instead**, `crewlet iam invite` issues the same invitation
 through the running node, authenticating with `CREWLET_API_TOKEN` like every
@@ -549,8 +549,8 @@ crewlet iam invite you@example.com -seat founder -grants admin
 ```
 
 `-grants admin` stores `admin` and every app beside it; `-grants` takes
-`admin`, `worklet`, `doclet`, `artifacts` or `none`, and left out on an
-invitation it sends every app and not admin.
+`admin`, `worklet`, `doclet`, `artifacts`, `chatlet` or `none`, and left out
+on an invitation it sends every app and not admin.
 
 ```
 invitation 0192f4c8-…
@@ -649,17 +649,23 @@ client at `/operator/mcp` with your API token:
 }
 ```
 
-It gets the same tracker and knowledge-base tools a seat holds — eighteen over
-the tracker and five over the pages — and sixteen more that no seat is given:
-the saved views, the catalogue write, a person's own queue, inbox and pins, the
-trash, the board drag, and the gestures a person makes about the company rather
-than its work — pausing and resuming a seat, steering a running turn, answering
-a coding run's question and answering a question from the company's knowledge.
+It gets the same tracker, knowledge-base and chat tools a seat holds — eighteen
+over the tracker, five over the pages and nine in the chat — and twenty-three
+more that no seat is given: the saved views, the catalogue write, a person's own
+queue, inbox and pins, the trash, the board drag, the chat's furniture — making
+a room, opening a conversation, a room's settings and membership, editing and
+taking back a message, and how far you have read — and the gestures a person
+makes about the company rather than its work — pausing and resuming a seat,
+steering a running turn, answering a coding run's question and answering a
+question from the company's knowledge.
 Each is decided by the same authority table a seat's calls are, and knowledge
 search sits beside them. On the deployment's token its writes carry the token's
 own login, `token:founder`, with author kind `operator` — never an agent's — so
 an audit can tell them from an agent's. The token cannot write as your seat: a
-seat is held by one row of the identity directory, and yours is you. See
+seat is held by one row of the identity directory, and yours is you. Which is
+also why it is refused every chat tool, the reads included (`unseated`): a room
+renders a speaker by seat and its membership is seats, so chat is spoken in as
+somebody — your own token, below, does. See
 [the operator surface](../reference/api-endpoints.md#operatormcp--your-own-assistant).
 
 Once you sign in as a person, give the assistant **your own** token rather than

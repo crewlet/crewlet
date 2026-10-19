@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/chatlet"
 )
 
 // modelVocabulary is each mark of a model's (or a wire protocol's) vocabulary,
@@ -36,9 +37,12 @@ var modelVocabulary = []struct {
 	{regexp.MustCompile(`(?i)\b(operation|node|writer|tool|argument|call)\b`), "engine-internal vocabulary"},
 }
 
-// toolNames is every builtin tool a person could be told to use by name.
+// toolNames is every builtin tool a person could be told to use by name, each
+// app's, chat's included: the tools a seat holds there and the gestures only
+// a person is given.
 var toolNames = slices.Concat(builtin.WorkTools(), builtin.PageTools(),
-	builtin.ArtifactTools(), builtin.ArtifactDataTools())
+	builtin.ArtifactTools(), builtin.ArtifactDataTools(), chatlet.Tools(),
+	chatlet.OperatorOnlyTools())
 
 // Problems is every reason text is not worded for a person, or none. It names
 // no tool, no argument, no internal id and no engine vocabulary, carries no em
@@ -88,7 +92,11 @@ var valueFields = []string{"tool", "outcome", "position", "op_id", "id", "item",
 	"question", "reference", "role", "shared_with", "asset", "name",
 	// AND THE IDS AN ANSWER TO A RUN IS READ BACK BY: the question it answers
 	// and the answer's own delivery, which a screen finds on the run's record.
-	"launch_id", "answer_id"}
+	"launch_id", "answer_id",
+	// A CHAT GESTURE'S ROOM AND MESSAGE, by the ids a screen opens them by,
+	// the handles a membership names, the emoji a reaction is, and the topic
+	// and purpose people gave a room, shown as they were given.
+	"channel", "message_id", "members", "emoji", "topic", "purpose"}
 
 // writtenForThePerson are the answers whose text at one path is a model's
 // answer written FOR the person who asked, by tool and path: the product

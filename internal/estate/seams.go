@@ -546,8 +546,20 @@ func (p Pages) RemoveComment(ctx context.Context, actor doclet.Actor, pageID, co
 	return out, err
 }
 
-// Chat is the engine's own chat, read: every read answered for the one viewer
-// it names, by a data node whose copy serves.
+// Chat is the engine's own chat, read and written: every read answered for one
+// viewer, every write as the actor it names.
+//
+// THE KNOWLEDGE BASE'S SHAPE rather than the tracker's, because it is the
+// store's own: one node's chat serves every seat and every person through one
+// store, so the party a write acts as — and the caller's key it carries
+// ([chatlet.Actor.OpKey]) — travels per call rather than being derived into a
+// writer ([WorkWriter]).
+//
+// EVERY WRITE RAISES THIS NODE'S FLOOR ON THE CHAT LOG to the position it
+// reported, an error included — an unvouched or a refused answer can still
+// carry the position the next read must include — so the seat's next chat read,
+// on whichever node answers it, includes what it just wrote, and nothing it
+// reads of the tracker or the knowledge base waits on it.
 type Chat struct{ r *Router }
 
 // Chat answers the engine's own chat.
@@ -608,6 +620,155 @@ func (c Chat) Thread(ctx context.Context, viewer string, q chatlet.ThreadQuery,
 func (c Chat) Mentions(ctx context.Context, viewer string, q chatlet.MentionQuery,
 	fresh statelog.Freshness) (chatlet.MentionFeed, error) {
 	return call(ctx, c.r, opChatMentions, nil, chatMentionsArgs{Viewer: viewer, Query: q, Fresh: fresh})
+}
+
+// settled raises the session floor to what a chat write reported.
+func (c Chat) settled(w chatlet.Written) { c.r.Observe(w.Outcome.Position) }
+
+// CreateChannel opens a room. Never repeated when unanswered — see
+// [ErrOutcomeUnknown] — unless its actor carries the caller's operation key,
+// under which a repeat is the same operation ([op.repeatableWhen]). So for every
+// chat write below but the erase and the prune, which take the caller's
+// operation id.
+func (c Chat) CreateChannel(ctx context.Context, actor chatlet.Actor, in chatlet.NewChannel) (
+	chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatCreateChannel, nil, chatCreateChannelArgs{Actor: actor, Channel: in})
+	c.settled(out)
+	return out, err
+}
+
+// OpenDirect opens the direct conversation between the actor and the
+// participants, reporting whether this call created it.
+func (c Chat) OpenDirect(ctx context.Context, actor chatlet.Actor, participants []string) (
+	chatlet.Written, bool, error) {
+	out, err := call(ctx, c.r, opChatOpenDirect, nil,
+		chatOpenDirectArgs{Actor: actor, Participants: participants})
+	c.settled(out.Written)
+	return out.Written, out.Created, err
+}
+
+// PatchChannel changes a room's topic, purpose or archive, under the authority
+// the caller's table decided.
+func (c Chat) PatchChannel(ctx context.Context, actor chatlet.Actor, channelID string,
+	patch chatlet.ChannelPatch, authority chatlet.ChannelAuthority) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatPatchChannel, nil, chatPatchChannelArgs{
+		Actor: actor, ChannelID: channelID, Patch: patch, Authority: authority,
+	})
+	c.settled(out)
+	return out, err
+}
+
+// SetMembers replaces a room's members.
+func (c Chat) SetMembers(ctx context.Context, actor chatlet.Actor, channelID string,
+	members []chatlet.Member) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatSetMembers, nil,
+		chatSetMembersArgs{Actor: actor, ChannelID: channelID, Members: members})
+	c.settled(out)
+	return out, err
+}
+
+// Join puts the actor in a room.
+func (c Chat) Join(ctx context.Context, actor chatlet.Actor, channelID string) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatJoin, nil, chatMembershipArgs{Actor: actor, ChannelID: channelID})
+	c.settled(out)
+	return out, err
+}
+
+// Leave takes the actor out of a room.
+func (c Chat) Leave(ctx context.Context, actor chatlet.Actor, channelID string) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatLeave, nil, chatMembershipArgs{Actor: actor, ChannelID: channelID})
+	c.settled(out)
+	return out, err
+}
+
+// Post says something in a room.
+func (c Chat) Post(ctx context.Context, actor chatlet.Actor, channelID string,
+	in chatlet.NewMessage) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatPost, nil,
+		chatPostArgs{Actor: actor, ChannelID: channelID, Message: in})
+	c.settled(out)
+	return out, err
+}
+
+// Reply says something in a message's thread.
+func (c Chat) Reply(ctx context.Context, actor chatlet.Actor, channelID, replyTo string,
+	in chatlet.NewMessage) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatReply, nil,
+		chatReplyArgs{Actor: actor, ChannelID: channelID, ReplyTo: replyTo, Message: in})
+	c.settled(out)
+	return out, err
+}
+
+// Edit rewrites a message its actor wrote.
+func (c Chat) Edit(ctx context.Context, actor chatlet.Actor, channelID, messageID string,
+	in chatlet.EditMessage) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatEdit, nil,
+		chatEditArgs{Actor: actor, ChannelID: channelID, MessageID: messageID, Edit: in})
+	c.settled(out)
+	return out, err
+}
+
+// Delete takes a message down, leaving its tombstone, under the authority the
+// caller's table decided.
+func (c Chat) Delete(ctx context.Context, actor chatlet.Actor, channelID, messageID string,
+	authority chatlet.MessageAuthority) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatDelete, nil, chatDeleteArgs{
+		Actor: actor, ChannelID: channelID, MessageID: messageID, Authority: authority,
+	})
+	c.settled(out)
+	return out, err
+}
+
+// React adds the actor's reaction to a message.
+func (c Chat) React(ctx context.Context, actor chatlet.Actor, channelID, messageID,
+	emoji string) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatReact, nil, chatReactArgs{
+		Actor: actor, ChannelID: channelID, MessageID: messageID, Emoji: emoji,
+	})
+	c.settled(out)
+	return out, err
+}
+
+// Unreact takes the actor's reaction back.
+func (c Chat) Unreact(ctx context.Context, actor chatlet.Actor, channelID, messageID,
+	emoji string) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatReact, nil, chatReactArgs{
+		Actor: actor, ChannelID: channelID, MessageID: messageID, Emoji: emoji, Remove: true,
+	})
+	c.settled(out)
+	return out, err
+}
+
+// SetRetention states how long a room keeps what is said in it: days, or nil
+// for the company's default.
+func (c Chat) SetRetention(ctx context.Context, actor chatlet.Actor, channelID string,
+	days *int) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatSetRetention, nil,
+		chatSetRetentionArgs{Actor: actor, ChannelID: channelID, Days: days})
+	c.settled(out)
+	return out, err
+}
+
+// Erase removes messages for good, under the operation id the caller derived —
+// repeated under it when unanswered, as a purge is.
+func (c Chat) Erase(ctx context.Context, actor chatlet.Actor, opID, channelID string,
+	messageIDs []string, reason string) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatErase, nil, chatEraseArgs{
+		Actor: actor, OpID: opID, ChannelID: channelID, MessageIDs: messageIDs, Reason: reason,
+	})
+	c.settled(out)
+	return out, err
+}
+
+// Prune drops a room's messages older than cutoff, under the operation id the
+// caller derived.
+func (c Chat) Prune(ctx context.Context, actor chatlet.Actor, opID, channelID string,
+	cutoff time.Time) (chatlet.Written, error) {
+	out, err := call(ctx, c.r, opChatPrune, nil, chatPruneArgs{
+		Actor: actor, OpID: opID, ChannelID: channelID, Cutoff: cutoff,
+	})
+	c.settled(out)
+	return out, err
 }
 
 // ChatSearch is the chat keyword search, answered for one viewer by a data

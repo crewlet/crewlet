@@ -249,7 +249,7 @@ api:
         # Generate one with `crewlet secrets keygen`.
         token: "${CREWLET_API_TOKEN_FOUNDER}"
         # What this credential may do: `admin`, `worklet`, `doclet`,
-        # `artifacts`.
+        # `artifacts`, `chatlet`.
         # Required and non-empty: a credential's blast radius is stated
         # where it is pinned, never inferred.  This one is the founder's,
         # so it is admin, which includes every app.  A pipeline that only

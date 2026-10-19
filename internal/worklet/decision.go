@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -100,8 +101,8 @@ const (
 	// common use still carries whole.
 	MaxEvidenceRef = 2048
 
-	// MaxInformChannel is Slack's own channel-name ceiling, the longer of
-	// the two chat surfaces' (Mattermost's is 64).
+	// MaxInformChannel is Slack's own channel-name ceiling, the longest of
+	// the three chat surfaces' (Mattermost's and Chatlet's are both 64).
 	MaxInformChannel = 80
 )
 
@@ -204,7 +205,8 @@ type Evidence struct {
 // Inform is the chat channel the asker will report the decision in.
 //
 // A PROMISE THE ENGINE KEEPS, in three places and no fourth. Here, over values:
-// a surface is one of the two chat integrations, a channel is a name, and only
+// a surface is one of the chat surfaces — the two vendor integrations or the
+// engine's own chat — a channel is a name, and only
 // an agent seat's ask may carry one ([checkCommentShape]) — the promise is kept
 // by holding the asker's turn, and a person has none. At the tool, against the
 // chart: the surface is one the asking seat can post on and the channel is one
@@ -216,7 +218,7 @@ type Inform struct {
 	Channel string        `json:"channel"`
 }
 
-// InformSurface is a chat integration an asker may report a decision in.
+// InformSurface is a chat surface an asker may report a decision in.
 type InformSurface string
 
 const (
@@ -224,12 +226,25 @@ const (
 	InformMattermost InformSurface = "mattermost"
 	// InformSlack is Slack.
 	InformSlack InformSurface = "slack"
+	// InformChat is the engine's own chat (`chat.backend: chatlet`).
+	//
+	// ITS VALUE IS CHATLET'S FEED SOURCE, `chat`, and has to be: an
+	// inform is kept by OWING the surface ([Owes]) — the asker's answered
+	// turn is held until a tool that DELIVERS there has run — and Chatlet's posting tools
+	// declare their delivery as that source. Any other spelling
+	// is a promise no tool could ever discharge. This package cannot import
+	// the chat domain, so a test where both are visible holds the two equal.
+	InformChat InformSurface = "chat"
 )
 
-// Valid reports whether s is a chat surface this build knows.
-func (s InformSurface) Valid() bool {
-	return s == InformMattermost || s == InformSlack
+// InformSurfaces is every chat surface this build knows, in the order a
+// refusal lists them.
+func InformSurfaces() []InformSurface {
+	return []InformSurface{InformMattermost, InformSlack, InformChat}
 }
+
+// Valid reports whether s is a chat surface this build knows.
+func (s InformSurface) Valid() bool { return slices.Contains(InformSurfaces(), s) }
 
 // Option is the option with this id, or false.
 func (d Decision) Option(id string) (DecisionOption, bool) {
@@ -314,8 +329,8 @@ func (d Decision) Validate() error {
 	}
 	if d.Inform != nil {
 		if !d.Inform.Surface.Valid() {
-			note(invalid("decision.inform.surface is %q and must be "+
-				"%q or %q", d.Inform.Surface, InformMattermost, InformSlack))
+			note(invalid("decision.inform.surface is %q and must be one of "+
+				"%v", d.Inform.Surface, InformSurfaces()))
 		}
 		note(checkText("decision.inform.channel", d.Inform.Channel,
 			MaxInformChannel, true))

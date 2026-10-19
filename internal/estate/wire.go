@@ -328,11 +328,12 @@ func (o op[A, R]) ungated() op[A, R] {
 }
 
 // repeatableWhen declares a once-write that is IDEMPOTENT for the calls whose
-// arguments say so: a page write whose actor carries the caller's own
-// operation key ([doclet.Actor.OpKey]) derives its operation id, and a create
-// its page's id, from that key and what the write says rather than minting one
-// per call, so a repeat under it is the same operation and the ledger answers
-// it with the first copy's outcome. Such a call fails over as an
+// arguments say so: a page or chat write whose actor carries the caller's own
+// operation key ([doclet.Actor.OpKey], [chatlet.Actor.OpKey]) derives its operation
+// id — and a create its page's or its room's id, a post its message's — from
+// that key and what the write says rather than minting one per call, so a
+// repeat under it is the same operation and the ledger answers it with the
+// first copy's outcome. Such a call fails over as an
 // [opIdempotentWrite] does; one without a key is still never repeated
 // ([opOnceWrite]). A property of the ASKING side, since the class is what the
 // asker may do with an unanswered request, and the server runs the operation

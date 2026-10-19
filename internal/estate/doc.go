@@ -10,11 +10,11 @@
 // A node WITHOUT the `data` role keeps nothing that has to outlive it: its
 // store is scratch, its broker is a leaf with JetStream off, and it holds no
 // copy of the tracker's, the knowledge base's, chat's or the identity
-// directory's rows. Its seats still read and write the first two, constantly —
-// every board, every task, every page a tool touches — read the rooms of the
-// third, and ask the fourth whose record a login names and who holds each human
-// seat, so something has to answer them. EVERY DATA NODE HOLDS THE WHOLE ESTATE
-// and SERVES it over the broker ([Serve]), and every node's tools are handed
+// directory's rows. Its seats still read and write the first three, constantly
+// — every board, every task, every page and every room a tool touches — and ask
+// the fourth whose record a login names and who holds each human seat, so
+// something has to answer them. EVERY DATA NODE HOLDS THE WHOLE ESTATE and
+// SERVES it over the broker ([Serve]), and every node's tools are handed
 // facades of one [Router], which answers in-process where this node's copy
 // serves and asks another data node otherwise. So are the operator's surfaces —
 // the API's tracker and knowledge-base routes and the operator's own MCP — for
@@ -50,7 +50,10 @@
 // is a second write (a second comment) or a refusal of its own first copy (a
 // create whose title is now taken): an unanswered unkeyed page write is NEVER
 // repeated, and is reported as [ErrOutcomeUnknown] — the honest answer, and
-// the one a tool turns into "read the page before writing again".
+// the one a tool turns into "read the page before writing again". A CHAT write
+// is the page write's case exactly, keyed by its actor's operation key
+// ([chatlet.Actor.OpKey]); the erase and the prune take their caller's whole
+// operation id instead, and are repeated under it as a tracker purge is.
 //
 // A node that answers "I did not run it" — its copy is out of service, it runs
 // no native backend, its copy lags its logs, it could not reach the caller's
@@ -168,7 +171,12 @@
 // is a replicated row judged inside the read's own snapshot there. A visible
 // set resolved on one node and handed to another node's index would be an
 // authorization fact crossing the wire, which is why [ChatQuery] has no field
-// for it.
+// for it. What a caller was admitted to do BEYOND membership — take down a
+// message somebody else wrote, archive a room — crosses as the DECISION
+// ([chatlet.MessageAuthority], [chatlet.ChannelAuthority]), the rule a remark's
+// take-down follows ([removeCommentArgs]): decided where the grants and the
+// chart are, and judged against the stored author and the room's unit in the
+// serving node's own snapshot.
 //
 // # Errors keep their identity
 //

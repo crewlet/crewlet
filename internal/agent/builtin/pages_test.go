@@ -839,7 +839,7 @@ func TestAPageRemarkCarriesItsRepeatCount(t *testing.T) {
 // nothing was written. Held end to end over the real store in internal/doclet
 // (TestASeatsRemarkAfterAnotherCallIsAnotherCommentHoweverItNamedThePage).
 //
-// Mutation: drop the digest from pageOpKey's identity and keys[4] equals
+// Mutation: drop the digest from callOpKey's identity and keys[4] equals
 // keys[2].
 func TestAPageRemarkNamedAnotherWayIsAnotherCall(t *testing.T) {
 	t.Parallel()

@@ -116,8 +116,11 @@ const (
 
 	// ClassTidy — taking one's own work out of circulation and putting it
 	// back: trashing, restoring and renaming a page, removing and restoring
-	// a work item. Its container's lead, the admin path, OR whoever WROTE
-	// it ([Object.Author]: a page's creator, an item's reporter).
+	// a work item, archiving a chat room and opening it again. Its
+	// container's lead, the admin path, OR whoever WROTE it ([Object.Author]:
+	// a page's creator, an item's reporter, a room's creator). A unit's room
+	// has its UNIT as its container, so the unit's lead is the lead asked; a
+	// named room has none, so nobody but its creator and admin tidies it.
 	//
 	// THE AUTHOR ARM IS WHAT MAKES IT ITS OWN CLASS rather than
 	// [ClassDestructive]. Somebody who filed a duplicate or drafted a page in
@@ -160,8 +163,10 @@ const (
 	// may file work in a project and may not carry it away again.
 	ClassDestructive Class = "destructive"
 
-	// ClassAuthored — editing and removing a comment, on a page or on a
-	// work item. Whoever wrote it, or the admin path.
+	// ClassAuthored — editing and removing a remark: a comment on a page or
+	// on a work item, a chat message. Whoever wrote it, or the admin path —
+	// and the admin path decides on the UNREAD remark ([Object.Unresolved]),
+	// so a moderator never has to read a message to take it down.
 	ClassAuthored Class = "authored"
 
 	// ClassAdmin — running the company: configuration, secrets,
@@ -652,6 +657,14 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 			return Decision{Reason: ReasonNotLead, Err: ErrUnresolved}
 		}
 		if o.Container == "" {
+			if o.Kind == KindChannel {
+				// A NAMED ROOM BELONGS TO NO UNIT, which is its shape
+				// rather than a field nobody filled: there is no lead
+				// to ask, so it is its creator's and admin's. Refused
+				// as unnamed, a colleague was told the call named no
+				// container — a fix nobody could make.
+				return consulting(Decision{Reason: ReasonNotAuthor}, adminGrant)
+			}
 			return consulting(Decision{Reason: ReasonUnnamed}, adminGrant)
 		}
 		return consulting(leadsByKind(ctx, chart, actorOf(p), o), adminGrant)
@@ -682,7 +695,18 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 
 	case ClassAuthored:
 		if o.Author == "" {
-			return Decision{Reason: ReasonUnnamed}
+			if !o.Unresolved {
+				return Decision{Reason: ReasonUnnamed}
+			}
+			// NOBODY HAS READ THE REMARK, so nobody knows who wrote it:
+			// admin is admitted on the unread row — which is what lets a
+			// moderator take down a message in a room they cannot read,
+			// never shown it — and anybody else reads it and decides
+			// again on its author.
+			if p.Can(adminGrant) {
+				return consulting(Decision{Allowed: true, Reason: ReasonGrant}, adminGrant)
+			}
+			return Decision{Reason: ReasonNotAuthor, Err: ErrUnresolved}
 		}
 		if p.Login != "" && p.Login == o.Author {
 			return consulting(Decision{Allowed: true, Reason: ReasonAuthor}, adminGrant)
@@ -893,16 +917,21 @@ func leadsProject(ctx context.Context, chart Chart, actor, project string) Decis
 	return Decision{Reason: ReasonNotLead}
 }
 
-// leadsByKind asks the chart about the container a task, a project, a page or
-// a page container is filed in, by the relation its KIND names.
+// leadsByKind asks the chart about the container a task, a project, a page, a
+// page container or a unit's chat room is filed in, by the relation its KIND
+// names.
 //
 // THE KIND PICKS THE RELATION, for [Chart.LeadsContainer]'s reason: a page
-// container and a tracker project are two key classes a unit declares in two
-// fields, and one relation asked with the other's key matches only a company
-// that spelled them the same.
+// container, a tracker project and a unit are three key classes, and one
+// relation asked with another's key matches only a company that spelled them
+// the same — a unit's room asked as a project refused its unit's lead
+// everywhere a project was not spelt like the unit.
 func leadsByKind(ctx context.Context, chart Chart, actor string, o Object) Decision {
-	if o.Kind == KindContainer || o.Kind == KindPage {
+	switch o.Kind {
+	case KindContainer, KindPage:
 		return leadsContainer(ctx, chart, actor, o.Container)
+	case KindChannel:
+		return leadsUnit(ctx, chart, actor, o.Container)
 	}
 	return leadsProject(ctx, chart, actor, o.Container)
 }

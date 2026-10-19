@@ -80,6 +80,7 @@ const nobody: ViewerState = {
   admin: false,
   worklet: false,
   doclet: false,
+  chatlet: false,
   handle: "",
   owner: "",
   name: "",

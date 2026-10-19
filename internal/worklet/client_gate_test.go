@@ -298,3 +298,31 @@ func TestTheDashboardBoundsWorkletTextAtTheEnginesCaps(t *testing.T) {
 		}
 	}
 }
+
+// AND THE DASHBOARD NAMES EVERY CHAT SURFACE AN INFORM CAN, AND NO OTHER.
+//
+// A structured ask's `inform` reaches the dashboard whole, in every decisions
+// answer, so its surface is one of the engine's closed set
+// ([worklet.InformSurfaces]), and the dashboard's protocol type says which from
+// a copy it keeps. The copy drifted the day the engine's own chat became a
+// surface: it went on naming the two vendors alone, so every decision asked on
+// a company running its own chat carried a surface the type said could not
+// occur, and a branch on it type-checked against a set that left `chat` out.
+// Held whole and in the engine's order, so the next surface fails here rather
+// than reaching a screen as a value nothing declared.
+func TestTheDashboardNamesEveryInformSurface(t *testing.T) {
+	t.Parallel()
+	client, err := clientsource.Union(clientsource.Tree(t), "InformSurface")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var engine []string
+	for _, surface := range worklet.InformSurfaces() {
+		engine = append(engine, string(surface))
+	}
+	if !slices.Equal(client, engine) {
+		t.Errorf("the dashboard names the inform surfaces %v and the engine %v — "+
+			"make InformSurface in contract/work.ts the engine's set, in its order",
+			client, engine)
+	}
+}
