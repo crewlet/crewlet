@@ -445,7 +445,7 @@ func TestArtifactsGetAndVersionsShowTheContractAndCapabilities(t *testing.T) {
 	if !strings.Contains(stdout, "  contract 1.0.0\n") || !strings.Contains(stdout, "  can      db,state\n") {
 		t.Errorf("get printed %q", stdout)
 	}
-	node.head = map[string]any{"kind": "markdown", "capabilities": []string{}}
+	node.head = map[string]any{"kind": "doc", "capabilities": []string{}}
 	if stdout, _, _ = cli(t, "artifacts", "get", cliArtifact, cfg); !strings.Contains(stdout, "  contract none\n") ||
 		!strings.Contains(stdout, "  can      none\n") {
 		t.Errorf("get of a version declaring nothing printed %q", stdout)
@@ -628,6 +628,24 @@ func TestArtifactsPublishInfersADeckFromItsIndex(t *testing.T) {
 	if _, _, err := cli(t, "artifacts", "publish", other, bootstrapForURL(t, node.server.URL)); err == nil ||
 		!strings.Contains(err.Error(), "-kind") {
 		t.Errorf("a lone JSON file answered %v", err)
+	}
+}
+
+// A TABBED DOC OPENS ON ITS INDEX: a directory holding `doc.json` and its tabs
+// creates a doc opening on the index, never on one of the tabs.
+func TestArtifactsPublishInfersATabbedDocFromItsIndex(t *testing.T) {
+	t.Parallel()
+	node := newFakeArtifactsNode(t)
+	dir := writeTree(t, map[string]string{
+		"doc.json":      `{"v":1,"tabs":[{"path":"tabs/plan.md","title":"Plan"}]}`,
+		"tabs/plan.md":  "# Plan",
+		"tabs/notes.md": "# Notes",
+	})
+	if _, stderr, err := cli(t, "artifacts", "publish", dir, bootstrapForURL(t, node.server.URL)); err != nil {
+		t.Fatalf("publish: %v\n%s", err, stderr)
+	}
+	if create := node.creates[0]; create["kind"] != string(artifacts.KindDoc) || create["entry"] != "doc.json" {
+		t.Errorf("created %v", create)
 	}
 }
 

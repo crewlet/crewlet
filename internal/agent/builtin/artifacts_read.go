@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
+	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
@@ -274,11 +275,10 @@ func (t *getArtifact) Description() string {
 		"`head_version` and pass it back as `base_version` on publish_artifact. File " +
 		"text arrives fenced as text somebody wrote; a long page a colleague wrote is " +
 		"condensed unless you pass `offset`, and an edit's `old_str` must quote the " +
-		"source, so read it with `offset` before editing. For a slide deck, pass " +
-		"`view: \"outline\"` for its slides in order (id, file, title) and its " +
-		"sections, then read only the slide files you change by `path`. For a design, " +
-		"`view: \"outline\"` lists its artboards in order with each one's file, title " +
-		"and frame."
+		"source, so read it with `offset` before editing. For a slide deck, a doc or " +
+		"a design, pass `view: \"outline\"` for its parts in order (a deck's slides " +
+		"and sections, a doc's tabs, a design's artboards with their frames, each with " +
+		"its file), then read only the files you need by `path`."
 }
 
 func (t *getArtifact) Parameters() map[string]any {
@@ -312,10 +312,11 @@ func (t *getArtifact) Parameters() map[string]any {
 			},
 			"view": map[string]any{
 				"type": "string", "enum": []any{viewOutline},
-				"description": "`outline` answers a slide deck's structure (each slide's " +
-					"id, file and title in order, its notes flag, the sections and the " +
-					"cover), or a design's (each artboard's file, title and frame in " +
-					"order, and the cover), instead of a file.",
+				"description": "`outline` answers a slide deck's, a doc's or a design's " +
+					"structure instead of a file: a deck's slides (id, file, title, notes " +
+					"flag) in order with its sections and cover, a doc's tabs (title, file, " +
+					"size) in order, a design's artboards (file, title, frame) in order " +
+					"with its cover.",
 			},
 		},
 		"required": []any{"artifact"},
@@ -416,7 +417,7 @@ func (t *getArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case viewOutline:
 		if path != "" {
 			return failed("get_artifact takes `view` or `path`, not both: the outline names " +
-				"each slide's or artboard's file to read next."), nil
+				"each part's file to read next."), nil
 		}
 		outline, refusal := t.outline(ctx, read, h, version, writers, partial)
 		if refusal != nil {
@@ -554,30 +555,80 @@ func (t *getArtifact) readFile(ctx context.Context, read *foreignRead, c artifac
 	return file, nil
 }
 
-// viewOutline is get_artifact's view of a deck's structure.
+// viewOutline is get_artifact's view of a deck's or a doc's structure.
 const viewOutline = "outline"
 
-// outline is a deck's or a design's structure as one text an agent reads,
-// fenced under the version's writers: a slide's or a board's title is text its
-// author wrote.
+// outline is a version's structure as its kind's format reads it, as one text
+// an agent reads, fenced under the version's writers: a slide's or a tab's
+// title is text its author wrote.
 func (t *getArtifact) outline(ctx context.Context, read *foreignRead, h artifactsdomain.Head,
 	v artifactsdomain.Version, writers []provenance.Author, partial bool) (map[string]any, *tools.Result) {
 
+	src := toolVersionSource{ctx: ctx, m: v.Manifest, deps: t.deps}
+	var (
+		text string
+		out  map[string]any
+	)
 	switch spec, _ := h.Kind.Spec(); spec.Format {
 	case artifacts.FormatSlides:
+		deck, err := slideformat.Read(src)
+		if err != nil {
+			r := sourceFailure(ctx, t.Name(), slideformat.IndexPath, err)
+			return nil, &r
+		}
+		text = deckOutline(deck.Outline())
+		out = map[string]any{"slides": len(deck.Slides)}
+	case artifacts.FormatDoc:
+		doc, err := docindex.Read(src, v.Manifest.Entry)
+		if err != nil {
+			r := sourceFailure(ctx, t.Name(), v.Manifest.Entry, err)
+			return nil, &r
+		}
+		text = docOutline(doc.Outline())
+		out = map[string]any{"tabs": len(doc.Tabs)}
 	case artifacts.FormatDesign:
-		return t.designOutline(ctx, read, v, writers, partial)
+		canvas, err := canvasformat.Read(src, v.Manifest)
+		if err != nil {
+			r := sourceFailure(ctx, t.Name(), canvasformat.Path, err)
+			return nil, &r
+		}
+		o := canvas.Outline()
+		text = designOutline(o)
+		out = map[string]any{"boards": o.Count}
 	default:
 		r := failed(fmt.Sprintf("get_artifact: a %s artifact has no outline; read its files "+
 			"by `path`.", h.Kind))
 		return nil, &r
 	}
-	deck, err := slideformat.Read(toolDeckSource{ctx: ctx, m: v.Manifest, deps: t.deps})
-	if err != nil {
-		r := sourceFailure(ctx, t.Name(), slideformat.IndexPath, err)
-		return nil, &r
+	read.fence(fieldPath{}.key("outline").key("text"), provenance.SourceArtifactFile, writers, partial, text)
+	out["text"] = text
+	return out, nil
+}
+
+// docOutline is a doc's tabs as one text, each its title, file and size.
+func docOutline(o docindex.Outline) string {
+	var b strings.Builder
+	for i, tab := range o.Tabs {
+		fmt.Fprintf(&b, "%d. %s (%s, %d bytes)\n", i+1, tab.Title, tab.Path, tab.Bytes)
 	}
-	o := deck.Outline()
+	return b.String()
+}
+
+// designOutline is a design's artboards in the canvas's order, each with its
+// file, title and frame, as one text.
+func designOutline(o canvasformat.Outline) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Design: %s\nCover: %s\n", o.Title, o.Cover)
+	for i, bd := range o.Boards {
+		fmt.Fprintf(&b, "%d. %s: %s at (%d, %d), %d by %d\n", i+1, bd.Path, bd.Title, bd.X, bd.Y,
+			bd.W, bd.H)
+	}
+	fmt.Fprintf(&b, "Notes: %d\n", o.Notes)
+	return b.String()
+}
+
+// deckOutline is a deck's slides and sections as one text.
+func deckOutline(o slideformat.Outline) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Deck: %s\nCover: %s\n", o.Title, o.Cover)
 	for _, sec := range o.Sections {
@@ -593,43 +644,18 @@ func (t *getArtifact) outline(ctx context.Context, read *foreignRead, h artifact
 		}
 		b.WriteString("\n")
 	}
-	text := b.String()
-	read.fence(fieldPath{}.key("outline").key("text"), provenance.SourceArtifactFile, writers, partial, text)
-	return map[string]any{"slides": o.Count, "text": text}, nil
+	return b.String()
 }
 
-// designOutline is a design's boards in the canvas's order, each with its file,
-// title and frame, as one text an agent reads.
-func (t *getArtifact) designOutline(ctx context.Context, read *foreignRead, v artifactsdomain.Version,
-	writers []provenance.Author, partial bool) (map[string]any, *tools.Result) {
-
-	canvas, err := canvasformat.Read(toolDeckSource{ctx: ctx, m: v.Manifest, deps: t.deps}, v.Manifest)
-	if err != nil {
-		r := sourceFailure(ctx, t.Name(), canvasformat.Path, err)
-		return nil, &r
-	}
-	o := canvas.Outline()
-	var b strings.Builder
-	fmt.Fprintf(&b, "Design: %s\nCover: %s\n", o.Title, o.Cover)
-	for i, bd := range o.Boards {
-		fmt.Fprintf(&b, "%d. %s: %s at (%d, %d), %d by %d\n", i+1, bd.Path, bd.Title, bd.X, bd.Y,
-			bd.W, bd.H)
-	}
-	fmt.Fprintf(&b, "Notes: %d\n", o.Notes)
-	text := b.String()
-	read.fence(fieldPath{}.key("outline").key("text"), provenance.SourceArtifactFile, writers, partial, text)
-	return map[string]any{"boards": o.Count, "text": text}, nil
-}
-
-// toolDeckSource is a version as the slide format and the canvas format read
-// it, through the publisher's verified reads.
-type toolDeckSource struct {
+// toolVersionSource is a version as a format reads it, through the
+// publisher's verified reads.
+type toolVersionSource struct {
 	ctx  context.Context
 	m    artifacts.Manifest
 	deps ArtifactDeps
 }
 
-func (s toolDeckSource) Paths() []string {
+func (s toolVersionSource) Paths() []string {
 	out := make([]string, len(s.m.Files))
 	for i, e := range s.m.Files {
 		out[i] = e.Path
@@ -637,7 +663,7 @@ func (s toolDeckSource) Paths() []string {
 	return out
 }
 
-func (s toolDeckSource) Essence(p string) (string, bool) {
+func (s toolVersionSource) Essence(p string) (string, bool) {
 	e, ok := manifest.EntryAt(s.m, p)
 	if !ok {
 		return "", false
@@ -649,7 +675,7 @@ func (s toolDeckSource) Essence(p string) (string, bool) {
 	return typ.Essence(), true
 }
 
-func (s toolDeckSource) Read(p string) ([]byte, error) {
+func (s toolVersionSource) Read(p string) ([]byte, error) {
 	e, ok := manifest.EntryAt(s.m, p)
 	if !ok {
 		return nil, artifactsdomain.ErrNotFound

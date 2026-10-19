@@ -35,15 +35,16 @@ import {
   EmptyState,
   EmptyValue,
   InlineCode,
+  SegmentedControl,
   Skeleton,
-  Tag,
-  type Tone,
-  TableKeyCell,
-  TableNumberCell,
   TableDateCell,
   TableEntityCell,
+  TableKeyCell,
+  TableNumberCell,
   TableStatusCell,
   TableTextCell,
+  Tag,
+  type Tone,
 } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import {
@@ -99,7 +100,6 @@ import {
   type ReconcileStatus,
 } from "~/contract/integrations.ts";
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
-import { Segmented } from "~/ui/primitives.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
 // THE TONE VOCABULARY IS uilet's NOW. This screen used to declare its own
@@ -3149,11 +3149,13 @@ export function Integrations({ kind }: { kind?: string }) {
         <div className="int-bar">
           <PageNote>Connect the tools the company already uses.</PageNote>
           {data && (
-            <Segmented<Show>
-              ariaLabel="Which integrations to show"
+            <SegmentedControl<Show>
+              semantics="radio"
+              activate="manual"
+              label="Which integrations to show"
               size="sm"
               value={show}
-              onChange={setShow}
+              onValueChange={setShow}
               options={[
                 { value: "all", label: "All" },
                 { value: "connected", label: "Connected", count: configured.length },

@@ -825,7 +825,7 @@ describe("every class the dashboard names", () => {
     // exactly what a changed `className=` spelling or a moved source root
     // would do to it. These two are the shapes the tree actually writes.
     expect(all.length).toBeGreaterThan(500);
-    expect(all.some((u) => u.name === "segmented")).toBe(true);
+    expect(all.some((u) => u.name === "spacer")).toBe(true);
     expect(all.some((u) => u.name === "muted")).toBe(true);
   });
 

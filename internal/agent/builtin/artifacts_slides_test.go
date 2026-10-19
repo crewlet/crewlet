@@ -49,3 +49,35 @@ func TestADeckIsOutlinedForAnAgent(t *testing.T) {
 		t.Errorf("a page's outline answered %s", got.Output)
 	}
 }
+
+// A DOC IS READ ONE TAB AT A TIME: the outline names every tab's title, file and
+// size in its index's order, fenced as text the doc's author wrote.
+func TestADocIsOutlinedForAnAgent(t *testing.T) {
+	t.Parallel()
+	r := newArtifactRig(t, artifactChart{}, requesters{"founder": founderPrincipal(iam.Apps...)}, nil)
+	turn := asked(t)
+	h := r.f.seed("founder", iam.ActorHuman, founder,
+		[]artifacts.Share{shareWith("agent-cto", artifacts.RoleEditor)},
+		[2]string{"doc.json", `{"v":1,"tabs":[{"path":"tabs/plan.md","title":"Plan"},{"path":"tabs/risks.md","title":"Risks"}]}`},
+		[2]string{"tabs/plan.md", "# Plan\n"},
+		[2]string{"tabs/risks.md", "# Risks\n\nVendor lock-in.\n"})
+	r.f.setKind(h.ID, artifacts.KindDoc)
+
+	got := r.call(t, turn, builtin.GetArtifactTool, map[string]any{"artifact": h.ID.String(), "view": "outline"})
+	if got.Failed {
+		t.Fatalf("the outline was refused: %s", got.Output)
+	}
+	out := decode(t, got)
+	outline, _ := out["outline"].(map[string]any)
+	text, _ := outline["text"].(string)
+	for _, want := range []string{"1. Plan (tabs/plan.md, 7 bytes)", "2. Risks (tabs/risks.md, 25 bytes)"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the outline lacks %q:\n%s", want, text)
+		}
+	}
+	if outline["tabs"] != float64(2) || strings.Contains(text, "Vendor lock-in") {
+		t.Errorf("the outline answered %v tabs, or a tab's text:\n%s", outline["tabs"], text)
+	}
+	seen, _ := fencesIn(t, turn.Boundary, got.Output)
+	assertFences(t, seen, []wantFence{{"source=artifact_file trust=colleague authors=human:founder", "Risks"}})
+}

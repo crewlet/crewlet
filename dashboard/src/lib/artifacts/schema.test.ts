@@ -9,6 +9,7 @@ import {
   keyFromLabel,
   optionID,
   reviewSheetSchema,
+  schemaChangeCount,
   schemaProblem,
   SHEET_TEMPLATES,
   withPreset,
@@ -95,5 +96,36 @@ describe("the templates", () => {
       columns: [{ key: "pick", type: "select" as const, label: "Pick", options: [] }],
     };
     expect(schemaProblem([noChoices])).toMatch(/offers no choices/);
+  });
+});
+
+// THE FOOTER COUNTS WHAT A READER CHANGED, one per collection, policy or
+// column, so a long form says how much Save will apply before it is pressed.
+describe("a schema draft's change count", () => {
+  test("is one per collection added or removed, policy changed and column touched", () => {
+    const before = reviewSheetSchema();
+    expect(schemaChangeCount(before, before)).toBe(0);
+    const [first, ...rest] = before;
+    if (!first) throw new Error("the review template has a collection");
+    const columns = first.columns ?? [];
+    const edited = {
+      ...first,
+      title: "Renamed",
+      columns: [
+        { ...columns[0]!, label: "Changed" },
+        ...columns.slice(2),
+        { key: "fresh", type: "text" as const, label: "Fresh" },
+      ],
+    };
+    // A policy, one column edited, one removed and one added.
+    expect(schemaChangeCount(before, [edited, ...rest])).toBe(4);
+    const added = {
+      name: "extra",
+      read: "all" as const,
+      create: "editor" as const,
+      delete: "editor" as const,
+    };
+    expect(schemaChangeCount(before, [...before, added])).toBe(1);
+    expect(schemaChangeCount(before, rest)).toBe(1);
   });
 });

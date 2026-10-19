@@ -88,6 +88,7 @@
  */
 
 import { useMemo } from "react";
+import { Mark } from "~/ui/glyph.tsx";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import type { MeSection } from "~/app/routes.ts";
 import { QueryState, SeatChip } from "~/components/common.tsx";
@@ -98,14 +99,14 @@ import { AskList, decisionsHref } from "~/components/DecisionRow.tsx";
 import {
   Callout,
   EmptyState,
+  InlineCode,
+  SegmentedControl,
   Select,
+  type SelectOption,
   Skeleton,
   Tag,
-  type SelectOption,
-  InlineCode,
 } from "@crewlethq/ui";
 import { KeyGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
-import { Segmented } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, leadsInLine, seatResolvers, type OrgIndex, type Seat } from "~/lib/seats.ts";
@@ -398,16 +399,18 @@ export function MyWork({ section }: { section: MeSection }) {
             asks to be seen — somebody else ordered this queue. The title
             names the PERSON, as the banner does, never the handle. */}
         {section === "queue" && (
-          <Segmented<Order>
-            ariaLabel="Order the queue by"
+          <SegmentedControl<Order>
+            semantics="radio"
+            activate="manual"
+            label="Order the queue by"
             value={order}
-            onChange={setOrder}
+            onValueChange={setOrder}
             options={[
-              { value: "due", label: "Due", icon: "calendar" },
+              { value: "due", label: "Due", icon: <Mark name="calendar" size="xs" /> },
               {
                 value: "priorities",
                 label: "Priorities",
-                icon: setBy ? "flag" : "list",
+                icon: <Mark name={setBy ? "flag" : "list"} size="xs" />,
                 title: setBy ? `Ordered by ${setByName}` : undefined,
               },
             ]}

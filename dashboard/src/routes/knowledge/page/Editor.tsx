@@ -27,7 +27,7 @@
  * or keep both. Nothing is saved until they press Save.
  */
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useId, useState } from "react";
 import {
   Button,
   Callout,
@@ -36,7 +36,7 @@ import {
   FormField,
   Input,
   MarkdownEditor,
-  SegmentedControl,
+  MergeConflicts,
   markdownWords,
   VersionCompare,
 } from "@crewlethq/ui";
@@ -44,7 +44,7 @@ import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.ts
 import { PAGE_MESSAGE_MAX_BYTES } from "~/contract/pages.ts";
 import { plural, textBudget } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
-import { merge3, mergedText, type Merge, type Resolution } from "~/lib/merge.ts";
+import { clashesOf, merge3, mergedText, type Merge } from "~/lib/merge.ts";
 import { useAct } from "~/lib/useAct.ts";
 import type { PageDetail } from "~/protocol/index.ts";
 import { LinkPageButton } from "./LinkPicker.tsx";
@@ -167,12 +167,12 @@ export function PageEditor({ detail, onDone }: { detail: PageDetail; onDone: () 
         </div>
       )}
       {merging && (
-        <ResolveConflicts
-          version={merging.version}
-          merge={merging.merge}
+        <MergeConflicts
+          clashes={clashesOf(merging.merge)}
+          theirs={`revision ${merging.version}`}
           onCancel={() => setMerging(null)}
-          onApply={(text) => {
-            setDraft(text);
+          onApply={(choices) => {
+            setDraft(mergedText(merging.merge, choices));
             setBase({ version: merging.version, body: merging.body });
             setMerged(merging.version);
             setMerging(null);
@@ -250,94 +250,6 @@ export function PageEditor({ detail, onDone }: { detail: PageDetail; onDone: () 
           onConfirm={onDone}
         />
       )}
-    </section>
-  );
-}
-
-/** What each resolution keeps, in the person's words. */
-const RESOLUTIONS: { value: Resolution; label: string }[] = [
-  { value: "theirs", label: "Theirs" },
-  { value: "mine", label: "Yours" },
-  { value: "both", label: "Both" },
-];
-
-/**
- * Settling the passages both edits changed: each clash shows their lines and
- * the draft's, and the person keeps one or both. Nothing is pre-chosen, since
- * a default would be the browser deciding whose sentence survives, so Apply
- * waits for every clash to have an answer.
- */
-function ResolveConflicts({
-  version,
-  merge,
-  onApply,
-  onCancel,
-}: {
-  version: number;
-  merge: Merge;
-  onApply: (text: string) => void;
-  onCancel: () => void;
-}) {
-  const [choices, setChoices] = useState<(Resolution | undefined)[]>(() =>
-    Array.from({ length: merge.conflicts }, () => undefined),
-  );
-  const clashes = merge.chunks.filter((c) => c.kind === "conflict");
-  const settled = choices.every((c) => c !== undefined);
-  const heading = useId();
-  const first = useRef<HTMLHeadingElement>(null);
-  useEffect(() => first.current?.focus(), []);
-  return (
-    <section className="knowledge-resolve" aria-labelledby={heading}>
-      <h2 className="knowledge-section-title" id={heading} ref={first} tabIndex={-1}>
-        {clashes.length === 1
-          ? `You and revision ${version} changed the same lines`
-          : `You and revision ${version} changed the same lines in ${clashes.length} places`}
-      </h2>
-      <p className="knowledge-note">For each conflict, keep their lines, yours or both.</p>
-      <ol className="knowledge-resolve-list">
-        {clashes.map((clash, i) => (
-          <li key={i} className="knowledge-resolve-item">
-            <div className="knowledge-resolve-sides">
-              <figure className="knowledge-resolve-side">
-                <figcaption>Theirs · revision {version}</figcaption>
-                <pre>{clash.theirs.join("\n") || "(removed)"}</pre>
-              </figure>
-              <figure className="knowledge-resolve-side">
-                <figcaption>Yours</figcaption>
-                <pre>{clash.mine.join("\n") || "(removed)"}</pre>
-              </figure>
-            </div>
-            <SegmentedControl
-              semantics="radio"
-              size="sm"
-              label={`Place ${i + 1}: which lines to keep`}
-              value={choices[i] ?? ""}
-              onValueChange={(v) =>
-                setChoices(choices.map((c, k) => (k === i ? (v as Resolution) : c)))
-              }
-              options={RESOLUTIONS}
-            />
-          </li>
-        ))}
-      </ol>
-      <div className="knowledge-resolve-foot">
-        <Button
-          size="small"
-          variant="primary"
-          disabledReason={settled ? undefined : "Settle every place first."}
-          onClick={() => onApply(mergedText(merge, choices as Resolution[]))}
-        >
-          Apply to my draft
-        </Button>
-        <Button size="small" variant="ghost" onClick={onCancel}>
-          Not now
-        </Button>
-        {!settled && (
-          <span className="knowledge-note">
-            {plural(choices.filter((c) => c === undefined).length, "place")} still to settle.
-          </span>
-        )}
-      </div>
     </section>
   );
 }

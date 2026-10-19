@@ -10,6 +10,7 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
+import { ArtifactIcon } from "@crewlethq/ui";
 
 import { href } from "../router.tsx";
 import { FactLine, ObjectHeader, SetByLine, type SetBy } from "./ObjectHeader.tsx";
@@ -76,4 +77,19 @@ test("draws no fact line when the caller passes none, and keeps the state marks"
   expect(container.querySelector(".crewlet-fact-line")).toBeNull();
   expect(screen.getByText("LEAD-1")).toBeTruthy();
   expect(screen.getByText("Blocked")).toBeTruthy();
+});
+
+// WHAT AN OBJECT SAYS ABOUT ITSELF IS DRAWN: an artifact's Settings promise
+// its description "shown under the title" and an icon word, such as chart.
+test("draws the object's description under its title and a glyph it chose", () => {
+  const { container } = render(
+    <ObjectHeader
+      kind="Sheet"
+      icon={<ArtifactIcon icon="calendar" kind="sheet" size="xs" />}
+      title="Q4 launch review"
+      description="The gates every launch passes, and who signs each off."
+    />,
+  );
+  expect(screen.getByText("The gates every launch passes, and who signs each off.")).toBeTruthy();
+  expect(container.querySelector("svg")).not.toBeNull();
 });

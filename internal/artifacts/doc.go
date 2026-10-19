@@ -38,6 +38,10 @@
 // by those owners (role.go, id.go, label.go, audience.go); nothing else here
 // changes without changing the contract every one of them was built against.
 //
+// THE KIND TABLE (kind.go) is the one place a kind's rules are decided: native
+// or framed, its entry, its format, its store and its search, with every
+// surface asking it rather than switching on a kind's name (ADR-0042).
+//
 // # Zero values
 //
 // Every enum here is a named string type with typed constants and a Valid

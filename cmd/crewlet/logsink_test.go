@@ -35,8 +35,37 @@ func TestMain(m *testing.M) {
 	if os.Getenv(interruptProbeEnv) != "" {
 		runInterruptProbe()
 	}
-	logging.Configure(slog.LevelError+1, logging.FormatText, io.Discard)
+	silenceProcessLog()
 	os.Exit(m.Run())
+}
+
+// silenceProcessLog points the process sink at nothing, which is where this
+// suite keeps it between the cases that read it.
+func silenceProcessLog() {
+	logging.Configure(slog.LevelError+1, logging.FormatText, io.Discard)
+}
+
+// keepProcessLog sends the process sink to a buffer of this test's own for the
+// rest of it, and prints what the node logged if the test fails.
+//
+// A FAILURE A NODE EXPLAINS ONLY IN ITS LOG IS OTHERWISE UNREADABLE here: the
+// suite discards the sink ([TestMain]), and a route that keeps its reason out
+// of the response body (a backup's, say) answers a bare code. So a case that
+// drives such a route keeps the log, and a red run carries the reason.
+//
+// Not for a parallel test, since it reconfigures the process-wide logger; and
+// called before the engine is built, so its cleanup runs after the engine has
+// stopped and the lines the stop writes are kept too.
+func keepProcessLog(t *testing.T) {
+	t.Helper()
+	sink := &lockedBuffer{}
+	logging.Configure(slog.LevelDebug, logging.FormatText, sink)
+	t.Cleanup(func() {
+		silenceProcessLog()
+		if t.Failed() {
+			t.Logf("the node's log:\n%s", sink.String())
+		}
+	})
 }
 
 // unresolvedBootstrap is a Tier A document whose ${VAR} nothing answers,
@@ -67,7 +96,7 @@ func TestACommandLogsToTheProcessSinkNotItsCallersWriter(t *testing.T) {
 	var sink bytes.Buffer
 	logging.Configure(slog.LevelInfo, logging.FormatText, &sink)
 	t.Cleanup(func() {
-		logging.Configure(slog.LevelError+1, logging.FormatText, io.Discard)
+		silenceProcessLog()
 	})
 
 	var out, errOut bytes.Buffer

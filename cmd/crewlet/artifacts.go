@@ -1025,7 +1025,8 @@ type publishing struct {
 type newHead struct {
 	title, description, icon string
 
-	// kind is the kind the kind table inferred, or -kind named.
+	// kind is the kind it is created as, inferred from the kind table where
+	// -kind names none.
 	kind artifacts.Kind
 }
 

@@ -75,6 +75,7 @@ export function FrameView({
   print,
   onReady,
   className,
+  dataNote = true,
 }: {
   detail: ArtifactDetail;
   version: number;
@@ -91,6 +92,8 @@ export function FrameView({
   /** The page said hello and holds its port: it is drawn. */
   onReady?: (() => void) | undefined;
   className?: string | undefined;
+  /** Says under an old version that its data is today's; off where the caller says it once for two. */
+  dataNote?: boolean;
 }) {
   const [attempt, setAttempt] = useState(0);
   const frame = useRest<ArtifactFrame>(`${detail.id}:${version}:${document ?? ""}:${attempt}`, () =>
@@ -252,7 +255,7 @@ export function FrameView({
         }}
         onReload={() => setAttempt((n) => n + 1)}
       />
-      {state === "ready" && version !== detail.head_number && (
+      {dataNote && state === "ready" && version !== detail.head_number && (
         <p className="artifact-note">Every version shows today's data.</p>
       )}
       <LinkInterstitial

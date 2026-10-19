@@ -18,6 +18,7 @@
 
 import type { ArtifactDeck, DeckSlide, SlideNode } from "~/protocol/index.ts";
 import { slideSource, titleOf } from "../slides.tsx";
+import { mergeOrder, placeAfter } from "./orderMerge.ts";
 
 /** The index's path, and where slide id's file is (`slideformat.IndexPath`, `slideformat.SlidePath`). */
 export const DECK_INDEX = "deck.json";
@@ -222,31 +223,9 @@ export function mergeDeck(base: DeckDraft, mine: DeckDraft, live: DeckDraft): De
     conflicts.push({ kind: "slide", id, title: titleOf((m ?? l ?? b)!.root) || id });
     if (m) slides[id] = m;
   }
-  const same = (a: readonly string[], b: readonly string[]) => a.join("\n") === b.join("\n");
-  // WHAT COUNTS AS A MOVE is the order of the slides all three still hold: a
-  // slide one side added or deleted is not a reorder of the others.
-  const kept = (o: readonly string[]) =>
-    o.filter((id) => base.order.includes(id) && live.order.includes(id) && mine.order.includes(id));
-  const mineMoved = !same(kept(mine.order), kept(base.order));
-  const liveMoved = !same(kept(live.order), kept(base.order));
-  // THE ORDER TO START FROM is the side that moved slides (the newer version
-  // when neither or both did); the other side's additions are put back after
-  // the slide they followed there.
-  const fromMine = mineMoved && (!liveMoved || same(kept(mine.order), kept(live.order)));
-  if (mineMoved && liveMoved && !fromMine) conflicts.push({ kind: "order" });
-  const start = (fromMine ? mine.order : live.order).filter(
-    (id) => !deleted.has(id) && (live.order.includes(id) || !base.order.includes(id)),
-  );
-  const order = [...start];
-  const other = fromMine ? live.order : mine.order;
-  other.forEach((id, i) => {
-    if (order.includes(id) || deleted.has(id) || base.order.includes(id)) return;
-    const before = other
-      .slice(0, i)
-      .reverse()
-      .find((n) => order.includes(n));
-    order.splice(before === undefined ? 0 : order.indexOf(before) + 1, 0, id);
-  });
+  const merged = mergeOrder(base.order, mine.order, live.order, deleted);
+  if (merged.conflict) conflicts.push({ kind: "order" });
+  const order = merged.order;
   let title = live.title;
   if (mine.title !== base.title) {
     if (live.title !== base.title && live.title !== mine.title) conflicts.push({ kind: "title" });
@@ -274,13 +253,12 @@ export function resolve(
       if (theirs) slides[conflict.id] = theirs;
       else order = order.filter((id) => id !== conflict.id);
       if (theirs && !order.includes(conflict.id)) {
-        const i = live.order.indexOf(conflict.id);
-        const before = live.order
-          .slice(0, i)
-          .reverse()
-          .find((n) => order.includes(n));
         order = [...order];
-        order.splice(before === undefined ? 0 : order.indexOf(before) + 1, 0, conflict.id);
+        order.splice(
+          placeAfter(order, live.order.slice(0, live.order.indexOf(conflict.id))),
+          0,
+          conflict.id,
+        );
       }
       return { ...merge, draft: { ...d, slides, order }, conflicts: rest };
     }

@@ -16,7 +16,6 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
-	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload/edits"
 	"github.com/crewlet/crewlet/internal/artifactupload/lint"
@@ -64,9 +63,10 @@ type run struct {
 	// them, do about the reader's appearance: the theme warnings' input.
 	themes []fileTheme
 
-	// deck is the version's deck where the kind's format is the slide
-	// format, read whole by [run.checkFormat].
-	deck *slideformat.Deck
+	// formatted is the version as its kind's format read it, whole, by
+	// [run.checkFormat] (a deck, a doc), and nil for a kind with no format:
+	// what the gallery's search text is extracted from.
+	formatted formatText
 
 	// canvas is the version's canvas where the kind's format is a design's,
 	// read by [run.checkFormat]: what its search text is drawn from.

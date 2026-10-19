@@ -1,33 +1,18 @@
 /**
  * A deck's pictures and typefaces, loaded the one way the dashboard's policy
  * allows: the bytes of a version file, fetched with the reader's own
- * credential from the API (which serves them only as an attachment), typed
- * from the file's name, and shown through an object URL, or registered as a
- * `FontFace` from the bytes. Nothing is loaded from an address a slide names.
+ * credential from the API (which serves them only as an attachment), shown
+ * through an object URL ([useVersionImages]) or registered as a `FontFace`
+ * from the bytes. Nothing is loaded from an address a slide names.
  *
  * Everything is let go when the version changes or the deck is closed: every
  * object URL is revoked and every face removed from the document.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import type { ArtifactDeck, SlideNode } from "~/protocol/index.ts";
 import { versionFile } from "./api.ts";
-
-/** The image types a slide may show, by extension (`slideformat`'s image essences). */
-const IMAGE_TYPES: Readonly<Record<string, string>> = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  webp: "image/webp",
-  svg: "image/svg+xml",
-};
-
-/** The image type a version file is shown as, or null for one a slide may not show. */
-export function imageType(path: string): string | null {
-  const ext = path.split(".").pop()?.toLowerCase() ?? "";
-  return IMAGE_TYPES[ext] ?? null;
-}
+import { useVersionImages } from "./versionImages.ts";
 
 /** Every image path a deck's slides show, once each. */
 export function imagePaths(deck: ArtifactDeck): string[] {
@@ -50,37 +35,9 @@ export function useDeckAssets(
   version: number,
   deck: ArtifactDeck | null,
 ): (path: string) => string | null {
-  const [urls, setUrls] = useState<ReadonlyMap<string, string>>(new Map());
   const paths = useMemo(() => (deck ? imagePaths(deck) : []), [deck]);
+  const image = useVersionImages(id, version, paths);
   const faces = deck?.faces;
-
-  useEffect(() => {
-    if (paths.length === 0) return undefined;
-    const ctl = new AbortController();
-    const made: string[] = [];
-    void Promise.all(
-      paths.map(async (path) => {
-        const type = imageType(path);
-        if (!type) return null;
-        try {
-          const blob = await versionFile(id, version, path, ctl.signal);
-          const url = URL.createObjectURL(new Blob([blob], { type }));
-          made.push(url);
-          return [path, url] as const;
-        } catch {
-          return null;
-        }
-      }),
-    ).then((entries) => {
-      if (ctl.signal.aborted) return;
-      setUrls(new Map(entries.filter((e): e is readonly [string, string] => e !== null)));
-    });
-    return () => {
-      ctl.abort();
-      for (const url of made) URL.revokeObjectURL(url);
-      setUrls(new Map());
-    };
-  }, [id, version, paths]);
 
   useEffect(() => {
     if (!faces || faces.length === 0 || typeof FontFace === "undefined") return undefined;
@@ -106,5 +63,5 @@ export function useDeckAssets(
     };
   }, [id, version, faces]);
 
-  return (path: string) => urls.get(path) ?? null;
+  return image;
 }

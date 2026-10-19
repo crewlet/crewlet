@@ -69,17 +69,17 @@ import {
   EmptyState,
   EmptyValue,
   Popover,
-  Tag,
-  TableNumberCell,
+  SegmentedControl,
   TableDateCell,
   TableEntityCell,
+  TableNumberCell,
+  Tag,
 } from "@crewlethq/ui";
 import { LayoutDashboardGlyph, Columns3Glyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
-import { Segmented } from "~/ui/primitives.tsx";
 import { ProjectProgress, ProjectProgressLegend } from "./census.tsx";
 import type { WorkProjectRow } from "~/protocol/index.ts";
 import { PROJECT_SORT_KEYS } from "~/contract/work.ts";
@@ -516,10 +516,12 @@ export function Projects() {
             ALL CARRIES NONE. Its count is the sum of the two beside it, and a
             third figure that is the other two added up is arithmetic on
             screen rather than a fact. */}
-        <Segmented
+        <SegmentedControl
+          semantics="radio"
+          activate="manual"
           value={shown}
-          onChange={(value) => setShown(value)}
-          ariaLabel="Which projects"
+          onValueChange={(value) => setShown(value)}
+          label="Which projects"
           options={[
             { value: "active", label: "Active", count: census?.active },
             { value: "archived", label: "Archived", count: census?.archived },

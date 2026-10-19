@@ -11,8 +11,8 @@ Five kinds ship in this release:
 | Kind | What it is | Who draws it |
 |---|---|---|
 | `html` | A page of HTML, CSS and script, with any files it references | The page itself, inside a sandboxed frame on an origin of its own |
-| `doc` | A document | The dashboard's own renderer; it carries no author code |
-| `slides` | A deck of 16:9 slides in a closed slide format | The dashboard's slide renderer; it carries no author code |
+| `doc` | A document of one Markdown file, or of several tabs ordered by a `doc.json` index | The dashboard's own renderer; it carries no author code |
+| `slides` | A deck of 16:9 slides in Claude's slide format | The dashboard, from the deck's canonical tree |
 | `sheet` | A native sheet: rows and typed columns, with no page at all | The dashboard, from the sheet's schema alone |
 | `design` | A canvas of artboards (`canvas.json`), each an HTML page, with titles and stickies beside them | The dashboard draws the canvas and the notes; each artboard runs in a sandboxed frame of its own |
 
@@ -101,7 +101,9 @@ one holds can become script on the dashboard's origin, and a publish outside
 the format is refused with a named error rather than silently dropped on read.
 A native kind declares no capabilities, since there is no page to grant them
 to. Every rule the engine and the dashboard decide by kind is one row of one
-table (`internal/artifacts/kind.go`).
+table (`internal/artifacts/kind.go`), which
+[ADR-0042](../../adr/0042-a-kind-is-native-or-framed.md) records, with the
+comment anchor each kind will take.
 
 A person may also publish to a **source key** (the republish-in-place address
 an agent or the CLI uses), so publishing the same source twice updates one
@@ -563,6 +565,45 @@ them.
 | `store.objects.nats_max_bytes` | A | The `nats` object bucket's reservation on the broker |
 | `artifacts.agents_manage_others` | B | Let agents publish over, update and reshare artifacts they do not own (default `false`) |
 | `artifacts.seen_by` | B | `editors` (default) or `nobody` |
+
+---
+
+## Docs
+
+A `doc` artifact is Markdown: one file (`index.md` by default), or several
+tabs, each its own Markdown file, ordered and titled by a `doc.json` index
+(`{"v": 1, "tabs": [{"path": "tabs/plan.md", "title": "Plan"}]}`). The
+[authoring guide](../guides/artifact-authoring.md#writing-a-doc) is the whole
+contract.
+
+- **Held to the format at publish.** Every version is read whole through one
+  reader (`internal/artifacts/docindex`), carried tabs included: an index that
+  names a file the version does not hold, a tab that is not Markdown, a path
+  twice, more than 32 tabs or more than 16 MiB of text is refused, each
+  finding naming its rule, under the code `doc_format`.
+- **Drawn by the dashboard, never as markup.** The engine answers a version tab
+  by tab (`GET /artifacts/{id}/versions/{n}/doc`), and the dashboard draws each
+  with the element-constructing Markdown renderer Knowledge pages use, which
+  also decides what a heading is, so the outline and the page it points into
+  cannot disagree.
+- **Searched by every tab**, each title and its text, not by the index.
+- **Edited in place, each save a version.** A person who may publish presses
+  Edit to change any tab's text, rename, reorder, add and remove tabs, and
+  Save publishes all of it as one version based on the version they opened:
+  an exact edit of each changed tab and of `doc.json`, a removal for each tab
+  dropped, and each new tab's file uploaded through the engine (a doc of one
+  file gains its `doc.json` with its second tab). A save that raced somebody
+  else's publish is merged onto theirs tab by tab, text by line as a
+  Knowledge page's is, and where both changed the same lines, the same title
+  or the order, or one removed a tab the other changed, the person settles it
+  before saving again. Print prints every tab in order.
+- **Started from a template.** New › Doc begins a doc from the engine's
+  starter, one tab under its title, held to the format like any version.
+- **Followed by tab**: a reader's tab is said to the room as the region
+  `tab:<path>`, so following somebody opens the tab they are on.
+- **Covered natively in the gallery**: the first tab's opening, from the
+  version's outline, drawn at card size. A sheet's cover is its first columns
+  and rows, read as the viewer.
 
 ---
 

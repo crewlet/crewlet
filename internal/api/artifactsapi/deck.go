@@ -1,29 +1,21 @@
 package artifactsapi
 
 import (
-	"container/list"
-	"context"
-	"errors"
-	"fmt"
-	"io"
 	"net/http"
-	"strconv"
-	"sync"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
-	"github.com/crewlet/crewlet/internal/artifacts/manifest"
-	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
+	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
-	"github.com/crewlet/crewlet/internal/artifactsdomain"
 )
 
-// HOW THE DASHBOARD DRAWS A NATIVE DECK: it never reads a slide's markup. The
-// engine reads the version's deck through the same parser the publish was
-// held to (internal/artifacts/slideformat) and answers its canonical tree as
-// JSON, which the dashboard's element-constructing renderer turns into
-// elements. One parser decides what a slide is, on publish and on read.
+// HOW THE DASHBOARD DRAWS A NATIVE KIND: it never reads a file's markup. The
+// engine reads the version through the same format the publish was held to (a
+// deck through internal/artifacts/slideformat, a doc through
+// internal/artifacts/docindex) and answers it as JSON, which the dashboard's
+// element-constructing renderers turn into elements. One format decides what a
+// version is, on publish and on read.
 
 // DeckAnswer is a version's whole deck (`GET /artifacts/{id}/versions/{n}/deck`).
 type DeckAnswer struct {
@@ -45,6 +37,17 @@ type OutlineAnswer struct {
 
 	// Design is a design's boards and their frames, drawn as a schematic.
 	Design *canvasformat.Outline `json:"design,omitempty"`
+
+	// Doc is a doc's tabs and the opening of its first, drawn at card size.
+	Doc *docindex.Outline `json:"doc,omitempty"`
+}
+
+// DocAnswer is a version's whole doc (`GET /artifacts/{id}/versions/{n}/doc`):
+// every tab, in order, with its Markdown.
+type DocAnswer struct {
+	Artifact artifacts.ID `json:"artifact"`
+	Version  int          `json:"version"`
+	Doc      docindex.Doc `json:"doc"`
 }
 
 // SlidesOutline is a deck's outline and the one slide its cover draws.
@@ -56,16 +59,31 @@ type SlidesOutline struct {
 // deck answers a version's whole deck, decided by `get_artifact`, recording
 // the open as reading a native kind's content does.
 func (s *Service) deck(w http.ResponseWriter, r *http.Request) {
-	a, v, n, ok := s.slidesVersion(w, r)
+	a, v, n, ok := s.formatVersion(w, r, artifacts.FormatSlides, "a deck")
 	if !ok {
 		return
 	}
-	deck, ok := s.readDeck(w, r, a, v)
+	deck, ok := s.decks.read(w, r, a, v)
 	if !ok {
 		return
 	}
 	s.gate.markOpened(r.Context(), a)
 	httpjson.Write(w, http.StatusOK, DeckAnswer{Artifact: a.Head.ID, Version: n, Deck: deck})
+}
+
+// doc answers a version's whole doc, decided by `get_artifact`, recording the
+// open as reading a native kind's content does.
+func (s *Service) doc(w http.ResponseWriter, r *http.Request) {
+	a, v, n, ok := s.formatVersion(w, r, artifacts.FormatDoc, "a doc")
+	if !ok {
+		return
+	}
+	doc, ok := s.docs.read(w, r, a, v)
+	if !ok {
+		return
+	}
+	s.gate.markOpened(r.Context(), a)
+	httpjson.Write(w, http.StatusOK, DocAnswer{Artifact: a.Head.ID, Version: n, Doc: doc})
 }
 
 // outline answers a version's outline, decided by `get_artifact`. A cover
@@ -84,213 +102,30 @@ func (s *Service) outline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := OutlineAnswer{Artifact: a.Head.ID, Kind: a.Head.Kind, Version: n}
-	if spec, _ := a.Head.Kind.Spec(); spec.Format == artifacts.FormatSlides {
-		deck, ok := s.readDeck(w, r, a, v)
+	spec, _ := a.Head.Kind.Spec()
+	switch spec.Format {
+	case artifacts.FormatSlides:
+		deck, ok := s.decks.read(w, r, a, v)
 		if !ok {
 			return
 		}
 		cover, _ := deck.CoverSlide()
 		out.Slides = &SlidesOutline{Outline: deck.Outline(), CoverSlide: cover}
-	}
-	if spec, _ := a.Head.Kind.Spec(); spec.Format == artifacts.FormatDesign {
-		canvas, ok := s.readCanvas(w, r, a, v)
+	case artifacts.FormatDoc:
+		doc, ok := s.docs.read(w, r, a, v)
+		if !ok {
+			return
+		}
+		o := doc.Outline()
+		out.Doc = &o
+	case artifacts.FormatDesign:
+		canvas, ok := s.canvases.read(w, r, a, v)
 		if !ok {
 			return
 		}
 		o := canvas.Outline()
 		out.Design = &o
+	case artifacts.FormatNone:
 	}
 	httpjson.Write(w, http.StatusOK, out)
-}
-
-// slidesVersion admits a read of a deck's version, refusing an artifact of
-// another kind as a conflict naming its kind.
-func (s *Service) slidesVersion(w http.ResponseWriter, r *http.Request) (Admission, artifactsdomain.Version, int, bool) {
-	n, ok := pathVersion(w, r)
-	if !ok {
-		return Admission{}, artifactsdomain.Version{}, 0, false
-	}
-	a, ok := s.admitContent(w, r, n)
-	if !ok {
-		return Admission{}, artifactsdomain.Version{}, 0, false
-	}
-	if spec, _ := a.Head.Kind.Spec(); spec.Format != artifacts.FormatSlides {
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeContentRefused, map[string]string{
-			"detail": "a " + string(a.Head.Kind) + " artifact is not a deck"})
-		return Admission{}, artifactsdomain.Version{}, 0, false
-	}
-	v, ok := s.versionOf(w, r, a, n)
-	return a, v, n, ok
-}
-
-// readDeck reads a version's deck, from the cache where it is there.
-func (s *Service) readDeck(w http.ResponseWriter, r *http.Request, a Admission, v artifactsdomain.Version) (slideformat.Deck, bool) {
-	deck, err := s.decks.read(r.Context(), a.Head.ID, v, s.objects)
-	var refused *slideformat.Refused
-	var unread *deckFileError
-	switch {
-	case errors.As(err, &refused):
-		// A VERSION PUBLISHED UNDER THE FORMAT that no longer reads under
-		// it: the format moved under a deck no release ever shipped.
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeContentRefused, map[string]string{
-			"detail": "version " + strconv.Itoa(v.Number) + "'s deck does not read in this " +
-				"build's slide format: " + refused.Error()})
-		return slideformat.Deck{}, false
-	case errors.As(err, &unread):
-		contentFailed(w, r, a.Head.ID, unread.path, unread.err)
-		return slideformat.Deck{}, false
-	case err != nil:
-		contentFailed(w, r, a.Head.ID, slideformat.IndexPath, err)
-		return slideformat.Deck{}, false
-	}
-	return deck, true
-}
-
-// readCanvas reads a design version's canvas, held to the version as its
-// publish was. One small file, so it is read on every outline rather than
-// cached.
-func (s *Service) readCanvas(w http.ResponseWriter, r *http.Request, a Admission, v artifactsdomain.Version) (canvasformat.Canvas, bool) {
-	canvas, err := canvasformat.Read(manifestSource{ctx: r.Context(), m: v.Manifest, objects: s.objects},
-		v.Manifest)
-	var refused *canvasformat.Error
-	var unread *deckFileError
-	switch {
-	case errors.As(err, &refused):
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeContentRefused, map[string]string{
-			"detail": "version " + strconv.Itoa(v.Number) + "'s canvas does not read in this " +
-				"build's design format: " + refused.Error()})
-		return canvasformat.Canvas{}, false
-	case errors.As(err, &unread):
-		contentFailed(w, r, a.Head.ID, unread.path, unread.err)
-		return canvasformat.Canvas{}, false
-	case err != nil:
-		contentFailed(w, r, a.Head.ID, canvasformat.Path, err)
-		return canvasformat.Canvas{}, false
-	}
-	return canvas, true
-}
-
-// deckFileError is a file of a deck or a canvas whose bytes could not be read.
-type deckFileError struct {
-	path string
-	err  error
-}
-
-func (e *deckFileError) Error() string { return fmt.Sprintf("read %s: %v", e.path, e.err) }
-func (e *deckFileError) Unwrap() error { return e.err }
-
-// manifestSource is a stored version as the slide format and the canvas
-// format read it.
-type manifestSource struct {
-	ctx     context.Context
-	m       artifacts.Manifest
-	objects Objects
-}
-
-func (m manifestSource) Paths() []string {
-	out := make([]string, len(m.m.Files))
-	for i, e := range m.m.Files {
-		out[i] = e.Path
-	}
-	return out
-}
-
-func (m manifestSource) Essence(p string) (string, bool) {
-	e, ok := manifest.EntryAt(m.m, p)
-	if !ok {
-		return "", false
-	}
-	typ, err := mediatype.Resolve(e.Path, e.ContentType)
-	if err != nil {
-		return "", false
-	}
-	return typ.Essence(), true
-}
-
-func (m manifestSource) Read(p string) ([]byte, error) {
-	e, ok := manifest.EntryAt(m.m, p)
-	if !ok {
-		return nil, &deckFileError{path: p, err: errors.New("the version names no such file")}
-	}
-	body, err := m.objects.Open(m.ctx, e.Object)
-	if err != nil {
-		return nil, &deckFileError{path: p, err: err}
-	}
-	defer body.Close()
-	out, err := io.ReadAll(body)
-	if err != nil {
-		return nil, &deckFileError{path: p, err: err}
-	}
-	return out, nil
-}
-
-// deckCacheBytes bounds the decks one node keeps read, by the bytes of the
-// index and slide files they were read from: 16 MiB holds a gallery page of
-// typical decks (a twelve-slide deck is tens of KiB of markup) many times
-// over, while a run of the largest decks (500 slides of the largest text
-// file) cannot hold more than the budget in memory.
-const deckCacheBytes = 16 << 20
-
-// deckCache keeps read decks by version. A version never changes, so a
-// cached deck is never stale; who may read it is decided on every request
-// before the cache is asked.
-type deckCache struct {
-	mu    sync.Mutex
-	order *list.List // of *deckEntry, most recent first
-	byKey map[deckKey]*list.Element
-	bytes int64
-	limit int64
-}
-
-type deckKey struct {
-	artifact artifacts.ID
-	version  int
-}
-
-type deckEntry struct {
-	key    deckKey
-	deck   slideformat.Deck
-	weight int64
-}
-
-func newDeckCache(limit int64) *deckCache {
-	return &deckCache{order: list.New(), byKey: map[deckKey]*list.Element{}, limit: limit}
-}
-
-// read answers v's deck, reading it on a miss.
-func (c *deckCache) read(ctx context.Context, id artifacts.ID, v artifactsdomain.Version, objects Objects) (slideformat.Deck, error) {
-	key := deckKey{artifact: id, version: v.Number}
-	c.mu.Lock()
-	if el, ok := c.byKey[key]; ok {
-		c.order.MoveToFront(el)
-		deck := el.Value.(*deckEntry).deck
-		c.mu.Unlock()
-		return deck, nil
-	}
-	c.mu.Unlock()
-	deck, err := slideformat.Read(manifestSource{ctx: ctx, m: v.Manifest, objects: objects})
-	if err != nil {
-		return slideformat.Deck{}, err
-	}
-	var weight int64
-	for _, e := range v.Manifest.Files {
-		if e.Path == slideformat.IndexPath || slideformat.IsSlidePath(e.Path) {
-			weight += e.Object.Size
-		}
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, ok := c.byKey[key]; ok || weight > c.limit {
-		return deck, nil
-	}
-	c.byKey[key] = c.order.PushFront(&deckEntry{key: key, deck: deck, weight: weight})
-	c.bytes += weight
-	for c.bytes > c.limit {
-		last := c.order.Back()
-		e := last.Value.(*deckEntry)
-		c.order.Remove(last)
-		delete(c.byKey, e.key)
-		c.bytes -= e.weight
-	}
-	return deck, nil
 }

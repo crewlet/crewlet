@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/logging"
 )
 
 // advisoryLine is one config_advisory record as a case reads it.
@@ -283,7 +282,7 @@ func TestTheFoldedDocumentIsHeldToEveryTierARule(t *testing.T) {
 // process's environment. See [TestMain].
 func TestRunLogsTheAdvisoriesOfTheDocumentItApplies(t *testing.T) {
 	t.Cleanup(func() {
-		logging.Configure(slog.LevelError+1, logging.FormatText, io.Discard)
+		silenceProcessLog()
 	})
 	t.Setenv(config.NodeIDEnvVar, "not a node id")
 	dir := t.TempDir()
@@ -333,7 +332,7 @@ func TestRunLogsTheAdvisoriesOfTheDocumentItApplies(t *testing.T) {
 // process's environment. See [TestMain].
 func TestRunLogsNoAdvisoryBesideARefusalItsFlagsDraw(t *testing.T) {
 	t.Cleanup(func() {
-		logging.Configure(slog.LevelError+1, logging.FormatText, io.Discard)
+		silenceProcessLog()
 	})
 	t.Setenv(config.NodeIDEnvVar, "not a node id")
 	dir := t.TempDir()

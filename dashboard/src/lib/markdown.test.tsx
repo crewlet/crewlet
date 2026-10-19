@@ -12,6 +12,7 @@ import {
   safeHref,
   splitSections,
   UnbrokenCode,
+  imageSources,
 } from "./markdown.ts";
 // THE FIXTURES ARE REAL FILES, imported verbatim rather than inlined as
 // template literals: a document written in a `.md` file is a document
@@ -735,5 +736,53 @@ describe("a wide table", () => {
     expect(region?.getAttribute("role")).toBe("region");
     expect(region?.getAttribute("tabindex")).toBe("0");
     expect(region?.getAttribute("aria-label")).toBe("Table: Step, Owner");
+  });
+});
+
+describe("pictures a host resolves", () => {
+  const source = [
+    "# ![Logo](img/logo.png) Plan",
+    "",
+    "A [linked ![chart](img/chart.png)](https://example.com) and `![not](code.png)`.",
+    "",
+    "- ![In a list](img/list.png)",
+    "",
+    "| a |",
+    "| - |",
+    "| ![cell](img/cell.png) |",
+    "",
+    "```",
+    "![fenced](fenced.png)",
+    "```",
+  ].join("\n");
+
+  it("lists exactly the sources the renderer asks for, once each, and none it renders as text", () => {
+    const asked: string[] = [];
+    render(
+      <div>
+        {renderMarkdown(source, {
+          image: (src) => {
+            asked.push(src);
+            return null;
+          },
+        })}
+      </div>,
+    );
+    expect(imageSources(source)).toEqual([...new Set(asked)]);
+    expect(imageSources(source)).toEqual(["img/logo.png", "img/list.png", "img/cell.png"]);
+  });
+
+  it("shows an image through the resolver, and its alt text where the resolver has none", () => {
+    const { container } = render(
+      <div>
+        {renderMarkdown("![Team](img/team.png) ![Far](https://example.com/a.png)", {
+          image: (src) => (src === "img/team.png" ? "blob:team" : null),
+        })}
+      </div>,
+    );
+    const imgs = container.querySelectorAll("img");
+    expect(imgs).toHaveLength(1);
+    expect(imgs[0]!.getAttribute("src")).toBe("blob:team");
+    expect(container.textContent).toContain("Far");
   });
 });

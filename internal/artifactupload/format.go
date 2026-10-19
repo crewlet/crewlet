@@ -8,14 +8,20 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
+	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 	"github.com/crewlet/crewlet/internal/artifactupload/lint"
 )
 
+// formatText is a version as its format read it, which answers its readable
+// text for the gallery's search.
+type formatText interface{ Text() string }
+
 // checkFormat holds the composed version to its kind's format: for a deck,
-// the index, every slide it orders and every file they name, read whole and
-// refused, finding by finding, when any of it is outside the slide format.
+// the index, every slide it orders and every file they name; for a doc, its
+// index and every tab, or its one Markdown file; each read whole and refused,
+// finding by finding, when any of it is outside the format.
 //
 // THE WHOLE VERSION, NOT THE FILES THIS PUBLISH BRINGS: a patch that removes an
 // image breaks a carried slide that shows it, and an index that drops a slide
@@ -36,7 +42,18 @@ func (r *run) checkFormat(ctx context.Context, m artifacts.Manifest) error {
 		if err != nil {
 			return err
 		}
-		r.deck = &deck
+		r.formatted = deck
+		return nil
+	case artifacts.FormatDoc:
+		doc, err := docindex.Read(versionSource{ctx: ctx, run: r, m: m}, m.Entry)
+		var refused *docindex.Refused
+		if errors.As(err, &refused) {
+			return docRefusal(refused)
+		}
+		if err != nil {
+			return err
+		}
+		r.formatted = doc
 		return nil
 	case artifacts.FormatDesign:
 		return r.checkCanvas(versionSource{ctx: ctx, run: r, m: m})
@@ -56,7 +73,17 @@ func slideRefusal(refused *slideformat.Refused) error {
 	return out
 }
 
-// versionSource is a composed version as the slide format reads it: the bytes
+// docRefusal is a doc's refusal in the linter's shape.
+func docRefusal(refused *docindex.Refused) error {
+	out := &lint.Refusal{Findings: make([]lint.Finding, len(refused.Findings))}
+	for i, f := range refused.Findings {
+		out.Findings[i] = lint.Finding{Path: f.Path, Code: lint.CodeDocFormat,
+			Message: string(f.Rule) + ": " + f.Message}
+	}
+	return out
+}
+
+// versionSource is a composed version as a format reads it: the bytes
 // this run holds for a file it brings, else the object the manifest names.
 type versionSource struct {
 	ctx context.Context
