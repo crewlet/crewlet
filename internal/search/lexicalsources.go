@@ -120,12 +120,8 @@ func (PageSource) Source() string { return string(SourcePage) }
 func (PageSource) Versions(ctx context.Context, tx *sql.Tx, after string,
 	limit int) ([]DocVersion, error) {
 
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id, MAX(version, scoped_through)
-		  FROM pages_heads
-		 WHERE status = 'published' AND id > ?
-		 ORDER BY id
-		 LIMIT ?`, after, limit)
+	statement, args := PageVersionsRead(after, limit)
+	rows, err := tx.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -137,11 +133,8 @@ func (PageSource) Fetch(ctx context.Context, tx *sql.Tx, ids []string) ([]Doc, e
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id, container, title, body, MAX(version, scoped_through)
-		  FROM pages_heads
-		 WHERE status = 'published' AND id IN (`+binds(len(ids))+`)`,
-		anyOf(ids)...)
+	statement, args := PageFetchRead(ids)
+	rows, err := tx.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -150,16 +143,56 @@ func (PageSource) Fetch(ctx context.Context, tx *sql.Tx, ids []string) ([]Doc, e
 
 // Live implements [LexicalSource].
 func (PageSource) Live(ctx context.Context, tx *sql.Tx, ids []string) (map[string]bool, error) {
-	return liveIDs(ctx, tx, `SELECT id FROM pages_heads
-		 WHERE status = 'published' AND id IN (`+binds(len(ids))+`)`, ids)
+	if len(ids) == 0 {
+		return map[string]bool{}, nil
+	}
+	statement, args := PageLiveRead(ids)
+	return liveIDs(ctx, tx, statement, args)
 }
 
 // Count implements [LexicalSource].
 func (PageSource) Count(ctx context.Context, tx *sql.Tx) (int, error) {
 	var n int
-	err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM pages_heads WHERE status = 'published'`).Scan(&n)
+	statement, args := PageCountRead()
+	err := tx.QueryRowContext(ctx, statement, args...).Scan(&n)
 	return n, err
+}
+
+// PageVersionsRead is [PageSource.Versions]' statement — the walk of the
+// published pages by id — and its arguments. It, [PageFetchRead],
+// [PageLiveRead] and [PageCountRead] are the page source's four statements;
+// see the package doc's "a read of another domain's table".
+func PageVersionsRead(after string, limit int) (string, []any) {
+	return pageVersionsStatement, []any{after, limit}
+}
+
+const pageVersionsStatement = `
+		SELECT id, MAX(version, scoped_through)
+		  FROM pages_heads
+		 WHERE status = 'published' AND id > ?
+		 ORDER BY id
+		 LIMIT ?`
+
+// PageFetchRead is [PageSource.Fetch]'s statement over a batch of ids — each
+// published page among them, whole — and its arguments.
+func PageFetchRead(ids []string) (string, []any) {
+	return `
+		SELECT id, container, title, body, MAX(version, scoped_through)
+		  FROM pages_heads
+		 WHERE status = 'published' AND id IN (` + binds(len(ids)) + `)`, anyOf(ids)
+}
+
+// PageLiveRead is [PageSource.Live]'s statement over a batch of ids — which
+// of them are still published — and its arguments.
+func PageLiveRead(ids []string) (string, []any) {
+	return `SELECT id FROM pages_heads
+		 WHERE status = 'published' AND id IN (` + binds(len(ids)) + `)`, anyOf(ids)
+}
+
+// PageCountRead is [PageSource.Count]'s statement, the published pages
+// counted, and its arguments.
+func PageCountRead() (string, []any) {
+	return `SELECT COUNT(*) FROM pages_heads WHERE status = 'published'`, nil
 }
 
 // TaskSource is Worklet.
@@ -185,11 +218,8 @@ func (TaskSource) Source() string { return string(SourceTask) }
 func (TaskSource) Versions(ctx context.Context, tx *sql.Tx, after string,
 	limit int) ([]DocVersion, error) {
 
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id, version FROM tracker_tasks
-		 WHERE removed_at IS NULL AND id > ?
-		 ORDER BY id
-		 LIMIT ?`, after, limit)
+	statement, args := TaskVersionsRead(after, limit)
+	rows, err := tx.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -208,12 +238,8 @@ func (TaskSource) Fetch(ctx context.Context, tx *sql.Tx, ids []string) ([]Doc, e
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id, project_key, title,
-		       COALESCE(json_extract(document, '$.body'), ''), version
-		  FROM tracker_tasks
-		 WHERE removed_at IS NULL AND id IN (`+binds(len(ids))+`)`,
-		anyOf(ids)...)
+	statement, args := TaskFetchRead(ids)
+	rows, err := tx.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -222,16 +248,56 @@ func (TaskSource) Fetch(ctx context.Context, tx *sql.Tx, ids []string) ([]Doc, e
 
 // Live implements [LexicalSource].
 func (TaskSource) Live(ctx context.Context, tx *sql.Tx, ids []string) (map[string]bool, error) {
-	return liveIDs(ctx, tx, `SELECT id FROM tracker_tasks
-		 WHERE removed_at IS NULL AND id IN (`+binds(len(ids))+`)`, ids)
+	if len(ids) == 0 {
+		return map[string]bool{}, nil
+	}
+	statement, args := TaskLiveRead(ids)
+	return liveIDs(ctx, tx, statement, args)
 }
 
 // Count implements [LexicalSource].
 func (TaskSource) Count(ctx context.Context, tx *sql.Tx) (int, error) {
 	var n int
-	err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM tracker_tasks WHERE removed_at IS NULL`).Scan(&n)
+	statement, args := TaskCountRead()
+	err := tx.QueryRowContext(ctx, statement, args...).Scan(&n)
 	return n, err
+}
+
+// TaskVersionsRead is [TaskSource.Versions]' statement — the walk of the
+// live tasks by id — and its arguments. It, [TaskFetchRead], [TaskLiveRead]
+// and [TaskCountRead] are the task source's four statements; see the package
+// doc's "a read of another domain's table".
+func TaskVersionsRead(after string, limit int) (string, []any) {
+	return taskVersionsStatement, []any{after, limit}
+}
+
+const taskVersionsStatement = `
+		SELECT id, version FROM tracker_tasks
+		 WHERE removed_at IS NULL AND id > ?
+		 ORDER BY id
+		 LIMIT ?`
+
+// TaskFetchRead is [TaskSource.Fetch]'s statement over a batch of ids — each
+// live task among them, with its body — and its arguments.
+func TaskFetchRead(ids []string) (string, []any) {
+	return `
+		SELECT id, project_key, title,
+		       COALESCE(json_extract(document, '$.body'), ''), version
+		  FROM tracker_tasks
+		 WHERE removed_at IS NULL AND id IN (` + binds(len(ids)) + `)`, anyOf(ids)
+}
+
+// TaskLiveRead is [TaskSource.Live]'s statement over a batch of ids — which
+// of them are still live — and its arguments.
+func TaskLiveRead(ids []string) (string, []any) {
+	return `SELECT id FROM tracker_tasks
+		 WHERE removed_at IS NULL AND id IN (` + binds(len(ids)) + `)`, anyOf(ids)
+}
+
+// TaskCountRead is [TaskSource.Count]'s statement, the live tasks counted, and
+// its arguments.
+func TaskCountRead() (string, []any) {
+	return `SELECT COUNT(*) FROM tracker_tasks WHERE removed_at IS NULL`, nil
 }
 
 // scanDocs reads the five columns every source's batch query answers, in the
@@ -278,18 +344,15 @@ func anyOf(ids []string) []any {
 }
 
 // liveIDs runs one source's existence query over a batch of ids.
-func liveIDs(ctx context.Context, tx *sql.Tx, query string,
-	ids []string) (map[string]bool, error) {
+func liveIDs(ctx context.Context, tx *sql.Tx, statement string,
+	args []any) (map[string]bool, error) {
 
-	if len(ids) == 0 {
-		return map[string]bool{}, nil
-	}
-	rows, err := tx.QueryContext(ctx, query, anyOf(ids)...)
+	rows, err := tx.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	out := make(map[string]bool, len(ids))
+	out := make(map[string]bool, len(args))
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {

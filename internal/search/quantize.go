@@ -60,6 +60,19 @@
 // and the knowledge base's own embeddings are what would pay for it. ADR-0069
 // is the record of that decision and of what admitting chat to one half and
 // not the other cost the last time it happened.
+//
+// # A read of another domain's table is a named, exported statement
+//
+// This package reads tables it does not own — the tracker's tasks and
+// relations, the knowledge base's page heads — for the lexical index, the
+// embedding duty, the backlinks and the window report. Each of those
+// statements is a function returning the statement and its arguments
+// ([TaskVersionsRead], [PageSelection], [LinkedTasksRead] and the rest), and
+// it is the one the reader runs, so the gate of the package that owns the
+// table — the one that owns its indexes — plans exactly what runs. Written
+// inline, none of them could be planned by anything but a copy, and a copy
+// certifies a statement nobody runs: the embedding duty's task selection had
+// drifted from its copy by two columns and a predicate before it was named.
 package search
 
 import "math/bits"
