@@ -1970,12 +1970,12 @@ func TestTheNodeCredentialIsTheEnvironmentAndNeverAFlag(t *testing.T) {
 	}
 
 	var stderr bytes.Buffer
-	if _, err := nodeClientFor(config.EnvSource{}, []string{"-url", "http://127.0.0.1:1", "-token", "typed"},
+	if _, err := nodeClientFor(config.EnvSource{}, []string{"-api", "http://127.0.0.1:1", "-token", "typed"},
 		"budgets show", &stderr, nil); err == nil {
 		t.Error("-token was accepted: a credential typed on the command line " +
 			"is in the shell history and in ps")
 	}
-	client, err := nodeClientFor(config.EnvSource{}, []string{"-url", "http://127.0.0.1:1"},
+	client, err := nodeClientFor(config.EnvSource{}, []string{"-api", "http://127.0.0.1:1"},
 		"budgets show", &stderr, nil)
 	if err != nil {
 		t.Fatalf("nodeClientFor: %v", err)

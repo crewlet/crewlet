@@ -212,7 +212,7 @@ func runBudgets(environ config.Source, args []string, stdout, stderr io.Writer) 
 		return budgetsShow(environ, rest, stdout, stderr)
 	case "", "help":
 		fmt.Fprintln(stderr,
-			"usage: crewlet budgets show [<config.yaml>] [-url URL]")
+			"usage: crewlet budgets show [<config.yaml>] [-api URL]")
 		return flag.ErrHelp
 	default:
 		return fmt.Errorf("unknown budgets command %q", sub)

@@ -220,7 +220,7 @@ func TestTheGateAnswerOmitsWhatALogDidNotSay(t *testing.T) {
 	scenarios := gateAnswerScenarios()
 	for name, result := range scenarios {
 		for _, d := range api.RenderGate(true, result).Domains {
-			for _, flag := range []string{"-force", "-op-id", "-url", "crewlet "} {
+			for _, flag := range []string{"-force", "-op-id", "-api", "crewlet "} {
 				if strings.Contains(d.Hint, flag) {
 					t.Errorf("%s: %s's hint names %q, which only the command line "+
 						"has — the dashboard renders it word for word: %s",
@@ -321,7 +321,7 @@ func TestEveryGateRefusalCarriesItsActions(t *testing.T) {
 		}
 		if hint, _ := body["hint"].(string); hint == "" ||
 			strings.Contains(hint, "-force") || strings.Contains(hint, "-op-id") ||
-			strings.Contains(hint, "-url") {
+			strings.Contains(hint, "-api") {
 			t.Errorf("%s's hint %q is empty or names a command-line flag — the "+
 				"dashboard renders it word for word", name, hint)
 		}

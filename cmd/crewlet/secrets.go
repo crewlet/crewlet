@@ -116,7 +116,7 @@ func runSecrets(environ config.Source, args []string, stdout, stderr io.Writer) 
 		"the id the generated key is installed under (keygen only)")
 	dryRun := fs.Bool("dry-run", false,
 		"report what would be re-sealed without writing (rekey only)")
-	apiURL := fs.String("api", "",
+	apiURL := nodeAPIFlag(fs,
 		"a running node to go through; default is this node's engine at the "+
 			"api.host:port in -config when it runs, and the fleet's store "+
 			"itself when it is stopped")

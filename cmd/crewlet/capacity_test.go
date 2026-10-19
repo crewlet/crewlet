@@ -597,7 +597,7 @@ func TestAnOperatorCallIsGivenTenSeconds(t *testing.T) {
 		t.Errorf("reanchorRequestTimeout = %v, which does not outlast the ordinary %v",
 			reanchorRequestTimeout, nodeRequestTimeout)
 	}
-	client, err := nodeClientFor(noEnviron, []string{"-url", "http://127.0.0.1:1"},
+	client, err := nodeClientFor(noEnviron, []string{"-api", "http://127.0.0.1:1"},
 		"retention reanchor", io.Discard, nil)
 	if err != nil {
 		t.Fatalf("nodeClientFor: %v", err)

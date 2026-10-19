@@ -56,7 +56,7 @@ func runWorklet(environ config.Source, args []string, stdout, stderr io.Writer) 
 // workletPurgeUsage is the one usage line, printed wherever the command is
 // refused for want of an argument.
 const workletPurgeUsage = "usage: crewlet worklet purge <item> -reason TEXT " +
-	"-confirm <item-key> [-op-id ID] [<config.yaml>] [-url]"
+	"-confirm <item-key> [-op-id ID] [<config.yaml>] [-api URL]"
 
 // workletPurge is `crewlet worklet purge`.
 //
@@ -162,7 +162,7 @@ func workletPurge(environ config.Source, args []string, stdout, stderr io.Writer
 			// until the record reaches it.
 			return fmt.Errorf("%w\n\nThis node cannot tell whether it landed "+
 				"and will answer the same way until it can: check whether %s "+
-				"is gone, or run it through another node with -url <that node> "+
+				"is gone, or run it through another node with -api <that node> "+
 				"-op-id %s — never a fresh id", err, item, refused.OpID)
 		case refused.Unsettled:
 			return fmt.Errorf("%w\n\nNo acknowledgement — this is the one "+

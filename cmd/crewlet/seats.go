@@ -56,8 +56,8 @@ func runSeats(environ config.Source, args []string, stdout, stderr io.Writer) er
 }
 
 const seatsUsage = "usage: crewlet seats pause <handle> [-stop] [-reason TEXT] " +
-	"[<config.yaml>] [-url URL] [-op-id ID]\n" +
-	"       crewlet seats resume <handle> [<config.yaml>] [-url URL] [-op-id ID]\n" +
+	"[<config.yaml>] [-api URL] [-op-id ID]\n" +
+	"       crewlet seats resume <handle> [<config.yaml>] [-api URL] [-op-id ID]\n" +
 	"The credential is " + apiTokenEnv + "."
 
 // seatsAct is one pause or resume.
@@ -139,7 +139,7 @@ func seatsAct(environ config.Source, args []string, tool string, pausing bool, s
 		if refused.Unvouched {
 			return fmt.Errorf("%w\n\nThis node cannot tell whether it landed and "+
 				"will answer the same way until it can: check the seat, or run it "+
-				"through another node with -url <that node> -op-id %s — never a "+
+				"through another node with -api <that node> -op-id %s — never a "+
 				"fresh id", err, operation)
 		}
 		return fmt.Errorf("%w\n\nTo find out, %s", err, retry)

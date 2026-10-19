@@ -111,7 +111,7 @@ func addStoreFlags(fs *flag.FlagSet) storeFlags {
 	return storeFlags{
 		bootstrap: fs.String("config", defaultBootstrapPath,
 			"Tier A config: this node's store and its secret keyring"),
-		api: fs.String("api", "",
+		api: nodeAPIFlag(fs,
 			"a running node to read the company's stored values through and "+
 				"record into; default is this node's engine at the api.host:port "+
 				"in -config when it runs, and the fleet's store itself when it is "+
