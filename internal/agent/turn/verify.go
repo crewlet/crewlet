@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // Whether a turn actually delivered, judged from the engine's own record.
@@ -329,8 +330,8 @@ func Remedy(s Surface, reply Reply) string {
 	on := reply.Surface
 	if on == "" || !s.Reaches(on) {
 		return "Call the tool that delivers on the surface the request came from — " +
-			"`list_mcp_server_tools` and `activate_tool` will find one you do not " +
-			"have yet."
+			"`" + toolname.ListMCPServerTools + "` and `" + toolname.Activate +
+			"` will find one you do not have yet."
 	}
 	var held []string
 	discoverable := false
@@ -346,7 +347,8 @@ func Remedy(s Surface, reply Reply) string {
 	slices.Sort(held)
 	// THE SERVER IS THE SURFACE: an MCP tool reaches the surface named after
 	// its own server, so `on` is also the server to look in.
-	const discover = "`list_mcp_server_tools` lists and `activate_tool` promotes"
+	const discover = "`" + toolname.ListMCPServerTools + "` lists and `" +
+		toolname.Activate + "` promotes"
 	switch {
 	case len(held) > 0 && discoverable:
 		return "Deliver on `" + on + "` with one of the tools already on your tool " +

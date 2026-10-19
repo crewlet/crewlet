@@ -11,7 +11,10 @@ package runner
 // The struct tags and these schemas must agree; the tests assert a submission
 // shaped by the schema decodes into the struct.
 
-import "github.com/crewlet/crewlet/internal/agent/phase"
+import (
+	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/toolname"
+)
 
 var workSchema = map[string]any{
 	"type": "object",
@@ -123,7 +126,8 @@ const submitWorkDescription = "Report what you did and end the turn. Call " +
 	"If the task ends by replying where it arrived, call that channel's " +
 	"post tool; if it creates, updates or transitions something, call that " +
 	"write tool. You do not need to know the tool's name in advance — " +
-	"`list_mcp_server_tools` lists a server's tools and `activate_tool` " +
+	"`" + toolname.ListMCPServerTools + "` lists a server's tools and `" +
+	toolname.Activate + "` " +
 	"puts one on your surface for the next round.\n\n" +
 	"`deliveries` names the tools that actually delivered. The engine " +
 	"checks them against what it recorded you calling, so a name you did " +

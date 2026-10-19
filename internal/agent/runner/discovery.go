@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -21,10 +22,10 @@ import (
 // They are per-PHASE, like the submission tools, because activation mutates
 // one surface. Registering them into the shared registry would let one phase's
 // activation leak into the next — or into the next turn.
-const (
-	ListMCPToolsTool = "list_mcp_server_tools"
-	ActivateTool     = "activate_tool"
-)
+//
+// THEIR NAMES ARE internal/toolname's, not this package's: the skill guard,
+// the worker deny list, the prompts and the delivery remedy all have to spell
+// them, and every one of those sits below this package.
 
 // DiscoveryTools returns the pair bound to one surface, reached through a
 // getter.
@@ -40,8 +41,8 @@ const (
 // that lock, and it is exactly the kind of harmless that stops being harmless.
 //
 // EXPORTED for [subagent.Config.Discovery], whose type it matches exactly: a
-// sub-agent's own prompt tells it to call list_mcp_server_tools and
-// activate_tool, so a nil Discovery makes that prompt a lie and costs a wasted
+// sub-agent's own prompt tells it to call both tools by name, so a nil
+// Discovery makes that prompt a lie and costs a wasted
 // round every time the child obeys it.
 func DiscoveryTools(surface func() *tools.Surface) []tools.Callable {
 	return []tools.Callable{
@@ -52,13 +53,13 @@ func DiscoveryTools(surface func() *tools.Surface) []tools.Callable {
 
 type listMCPTools struct{ surface func() *tools.Surface }
 
-func (t *listMCPTools) Name() string { return ListMCPToolsTool }
+func (t *listMCPTools) Name() string { return toolname.ListMCPServerTools }
 
 func (t *listMCPTools) Description() string {
 	return "List the tools one MCP server offers. Use this when you need a tool " +
 		"from a server and do not yet know its exact name — your system prompt " +
 		"lists server names, not their individual tools. After picking one, call " +
-		"`" + ActivateTool + "` so its schema arrives on the next message."
+		"`" + toolname.Activate + "` so its schema arrives on the next message."
 }
 
 func (t *listMCPTools) Parameters() map[string]any {
@@ -121,14 +122,14 @@ func (t *listMCPTools) knownServers() string {
 
 type activateTool struct{ surface func() *tools.Surface }
 
-func (t *activateTool) Name() string { return ActivateTool }
+func (t *activateTool) Name() string { return toolname.Activate }
 
 func (t *activateTool) Description() string {
 	return "Activate a tool from your role's catalogue so you can call it " +
 		"directly from the next round on. Its schema appears in your tools then; " +
 		"there is no need to activate twice.\n\n" +
 		"Use it for first-party tools and for MCP tools whose names you got from " +
-		"`" + ListMCPToolsTool + "`. Activate a tool the moment you need it — " +
+		"`" + toolname.ListMCPServerTools + "`. Activate a tool the moment you need it — " +
 		"there is no separate planning step to name it in, and nothing is " +
 		"cheaper about activating it earlier."
 }
@@ -159,7 +160,7 @@ func (t *activateTool) Call(_ context.Context, args map[string]any) (tools.Resul
 	// recoverable round and a phase that keeps guessing.
 	return tools.Result{
 		Output: fmt.Sprintf("No tool named %q. If it belongs to an MCP server, call "+
-			"%s to see that server's real tool names.", name, ListMCPToolsTool),
+			"%s to see that server's real tool names.", name, toolname.ListMCPServerTools),
 		Failed: true,
 		Cause:  tools.RefusalNotFound,
 	}, nil

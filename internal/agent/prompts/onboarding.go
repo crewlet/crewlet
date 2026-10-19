@@ -1,6 +1,10 @@
 package prompts
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/crewlet/crewlet/internal/toolname"
+)
 
 // OnboardingHeader is the one-time setup contract, run on a seat's first turn
 // before the executor.
@@ -15,9 +19,11 @@ const OnboardingHeader = "\n## ONBOARDING phase" +
 	"with its **own** budget. Do ONLY this now — not the task you were " +
 	"triggered on (that runs next).\n" +
 	"Your knowledge-base search / read tools are MCP tools: call " +
-	"`list_mcp_server_tools(server=...)` to find them (a page-search / " +
+	"`" + toolname.ListMCPServerTools + "(server=...)` to find them (a " +
+	"page-search / " +
 	"get-page tool on your team's knowledge-base server), then " +
-	"`activate_tool(name=...)` to promote one into your `tools=[...]`. " +
+	"`" + toolname.Activate + "(name=...)` to promote one into your " +
+	"`tools=[...]`. " +
 	"`reflect_and_persist` and `mark_onboarded` are already active — " +
 	"call them directly. Follow the steps below, then call " +
 	"`mark_onboarded` to end the pass."
