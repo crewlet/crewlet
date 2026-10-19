@@ -32,15 +32,19 @@ import {
   Button,
   Callout,
   ConflictNote,
+  Eyebrow,
   FormField,
+  IconButton,
   Input,
   PresenterView,
   Skeleton,
   SlideFilmstrip,
   SlideGrid,
+  SlideNav,
   SlideStage,
   Textarea,
   useFullscreen,
+  useIdle,
   useSlideKeys,
   useToast,
   type SlideGridSection,
@@ -74,9 +78,17 @@ import {
 } from "~/lib/artifacts/deck.ts";
 import { renderSlide, withText, type SlideRenderContext } from "~/lib/slides.tsx";
 import { SLIDE_TRANSITIONS } from "~/contract/artifacts.ts";
-import { FileTextGlyph, MonitorGlyph } from "@crewlethq/icons/glyphs";
+import {
+  EyeOffGlyph,
+  FileTextGlyph,
+  MaximizeGlyph,
+  MinimizeGlyph,
+  MonitorGlyph,
+} from "@crewlethq/icons/glyphs";
+import { useMediaQuery } from "~/lib/media.ts";
+import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import type { PresenceReport } from "./presence.ts";
-import { useKindControls } from "~/lib/artifacts/kindControls.ts";
+import { useKindControls, useRegionNames } from "~/lib/artifacts/kindControls.ts";
 
 /** The views of a deck, as `mode=` names them; "" is the editor (or the reader's slides). */
 type DeckMode = "" | "grid" | "present" | "presenter";
@@ -163,6 +175,13 @@ function Deck({
   useEffect(() => {
     if (primary) at({ region: slideRegion(current.id) }, dirty);
   }, [at, primary, current.id, dirty]);
+  // AND WHAT THOSE REGIONS ARE CALLED, so the room says "Viewing slide 3"
+  // rather than the slide's id.
+  useRegionNames(
+    primary
+      ? Object.fromEntries(slides.map((s, i) => [slideRegion(s.id), `slide ${i + 1}`]))
+      : null,
+  );
 
   const go = useCallback(
     (id: string) => setSlide(id === slides[0]?.id ? "" : id),
@@ -216,7 +235,6 @@ function Deck({
       {mode === "" && (
         <DeckEditor
           detail={detail}
-          deck={deck}
           base={base}
           shown={shown}
           slides={slides}
@@ -328,7 +346,6 @@ function useShowChannel(
 
 function DeckEditor({
   detail,
-  deck,
   base,
   shown,
   slides,
@@ -344,7 +361,6 @@ function DeckEditor({
   onPublished,
 }: {
   detail: ArtifactDetail;
-  deck: ArtifactDeck;
   base: DeckDraft;
   shown: DeckDraft;
   slides: readonly DeckSlide[];
@@ -370,6 +386,9 @@ function DeckEditor({
   const [saving, setSaving] = useState(false);
   const prefix = useId().replace(/:/g, "");
   const position = slides.findIndex((s) => s.id === current.id);
+  // ON A PHONE THE STRIP IS A ROW UNDER THE STAGE, where the next slide is a
+  // swipe away, rather than a column of full-width slides under the notes.
+  const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
 
   const change = onChange;
   const edit: SlideRenderContext["edit"] = editable
@@ -435,6 +454,23 @@ function DeckEditor({
     }
   };
 
+  const strip = (
+    <SlideFilmstrip
+      className="slides-strip"
+      orientation={phone ? "horizontal" : "vertical"}
+      slides={slides.map((s) => ({ id: s.id, title: s.title, hidden: !!s.hidden }))}
+      selected={current.id}
+      onSelect={onSelect}
+      renderSlide={(id) =>
+        renderSlide(
+          slides.find((s) => s.id === id)!,
+          { prefix: `${prefix}-t-${id}-`, image },
+        )
+      }
+      {...(editable ? { onReorder: (order: string[]) => change((d) => ({ ...d, order })) } : {})}
+    />
+  );
+
   return (
     <div className="slides-edit">
       {merge && (
@@ -448,25 +484,26 @@ function DeckEditor({
           onDismiss={() => onMerge(merge.conflicts.length === 0 ? null : merge)}
         />
       )}
-      <SlideFilmstrip
-        className="slides-strip"
-        slides={slides.map((s) => ({ id: s.id, title: s.title, hidden: !!s.hidden }))}
-        selected={current.id}
-        onSelect={onSelect}
-        renderSlide={(id) =>
-          renderSlide(
-            slides.find((s) => s.id === id)!,
-            { prefix: `${prefix}-t-${id}-`, image },
-          )
-        }
-        {...(editable ? { onReorder: (order: string[]) => change((d) => ({ ...d, order })) } : {})}
-      />
+      {!phone && strip}
       <div className="slides-main">
         <SlideStage
           label={`Slide ${position + 1} of ${slides.length}, ${current.title || "Untitled"}`}
+          framed
         >
           {renderSlide(current, { prefix: `${prefix}-s-`, image, edit })}
         </SlideStage>
+        <p className="slides-stage-caption">
+          <span className="slides-stage-position">
+            Slide {position + 1} of {slides.length}
+          </span>
+          {current.hidden && (
+            <span className="slides-stage-hidden">
+              <EyeOffGlyph size="sm" />
+              Hidden when presenting
+            </span>
+          )}
+        </p>
+        {phone && strip}
         {editable ? (
           <div className="slides-panel">
             <FormField label="Speaker notes" helper="Everyone who can open the deck can read them.">
@@ -559,13 +596,11 @@ function DeckEditor({
         ) : (
           current.notes && (
             <section className="slides-notes" aria-label="Speaker notes">
-              <p>{current.notes}</p>
+              <Eyebrow as="p">Speaker notes</Eyebrow>
+              <p className="slides-notes-body">{current.notes}</p>
             </section>
           )
         )}
-        <p className="artifact-note">
-          {deck.title}, {slides.length} {slides.length === 1 ? "slide" : "slides"}
-        </p>
       </div>
     </div>
   );
@@ -698,12 +733,23 @@ function DeckShow({
   useEffect(() => {
     previous.current = current;
   }, [current]);
+  // FULL SCREEN IS THE ROOM'S: the controls and the cursor go once the
+  // pointer rests, and come back on its next move.
+  const idle = useIdle(box, fullscreen.active);
   return (
-    <div className="slides-show" ref={box} role="region" aria-label="Slide show" tabIndex={-1}>
+    <div
+      className="slides-show"
+      ref={box}
+      role="region"
+      aria-label="Slide show"
+      tabIndex={-1}
+      data-idle={idle || undefined}
+    >
       {/* THE STAGE STAYS as the slides change, so the room it measured holds;
           only the slide inside it is new, and plays its entrance. */}
       <SlideStage
         fit="view"
+        framed
         label={`Slide ${at + 1} of ${shown.length}, ${current.title || "Untitled"}`}
       >
         <div
@@ -715,20 +761,22 @@ function DeckShow({
         </div>
       </SlideStage>
       <div className="slides-show-bar">
-        <Button size="small" variant="ghost" onClick={() => to(at - 1)}>
-          Previous
-        </Button>
-        <span className="slides-show-count">
-          {at + 1} of {shown.length}
-        </span>
-        <Button size="small" variant="ghost" onClick={() => to(at + 1)}>
-          Next
-        </Button>
-        {fullscreen.supported && (
-          <Button size="small" variant="secondary" onClick={fullscreen.toggle}>
-            {fullscreen.active ? "Exit full screen" : "Full screen"}
-          </Button>
-        )}
+        <SlideNav
+          position={at + 1}
+          total={shown.length}
+          onPrevious={() => to(at - 1)}
+          onNext={() => to(at + 1)}
+          tone={fullscreen.active ? "projection" : "page"}
+        >
+          {fullscreen.supported && (
+            <IconButton
+              label={fullscreen.active ? "Exit full screen" : "Full screen"}
+              icon={fullscreen.active ? <MinimizeGlyph /> : <MaximizeGlyph />}
+              variant="ghost"
+              onClick={fullscreen.toggle}
+            />
+          )}
+        </SlideNav>
       </div>
     </div>
   );

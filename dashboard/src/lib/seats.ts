@@ -54,6 +54,7 @@ import { useQuery } from "./useQuery.ts";
 import { useRest } from "./useRest.ts";
 import { useOrg } from "./store-hooks.ts";
 import { useViewer } from "./viewer.ts";
+import { loginKind } from "./login.ts";
 import { rest } from "~/protocol/rest.ts";
 import { DELEGATE_TASKS, DELEGATE_TOOL, type SeatActivity } from "~/contract/wire.ts";
 import type { EngineHealth } from "~/contract/health.ts";
@@ -198,15 +199,19 @@ export interface OrgIndex {
 }
 
 /**
- * A seat as a principal. A seat the chart does not hold keeps its handle and is
- * drawn as an agent, the kit's default.
+ * A seat as a principal. A seat the chart does not hold keeps its handle; it is
+ * drawn as a person where the handle is a login (somebody signed in with no
+ * seat, as a Tier A token's session acts under `token:<id>`), and as an agent,
+ * the kit's default, otherwise. Drawn as an agent, a login wore an agent's
+ * square face and the share dialog said it could act "in its turns", which a
+ * login has none of.
  *
  * THE LINE UNDER A NAME IS THE SEAT'S UNIT OR NOTHING. A handle there repeats
  * the name in lower case ("Miles", then "miles"), which tells a reader nothing
  * the name did not.
  */
 export function principalOfSeat(seat: Seat | undefined, handle: string): Principal {
-  if (!seat) return { id: handle, kind: "agent", name: handle };
+  if (!seat) return { id: handle, kind: loginKind(handle) ? "person" : "agent", name: handle };
   const out: Principal = {
     id: seat.handle,
     kind: seat.kind === "human" ? "person" : "agent",

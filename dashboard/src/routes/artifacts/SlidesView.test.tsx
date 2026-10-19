@@ -148,3 +148,24 @@ test("a show with room to spare asks only for the slide at its width", async () 
   const show = await present();
   expect(stageOf(show).style.height).toBe("201px");
 });
+
+test("the slide on the stage says where it is in the deck, and when Present skips it", async () => {
+  const hidden = (deck.slides ?? []).find((s) => s.hidden)!;
+  const at = (deck.slides ?? []).indexOf(hidden) + 1;
+  location.hash = `#/artifacts/${ID}?slide=${hidden.id}`;
+  mount();
+  expect(await screen.findByText(`Slide ${at} of ${deck.slides!.length}`)).toBeTruthy();
+  expect(screen.getByText("Hidden when presenting")).toBeTruthy();
+});
+
+test("Present's controls stop at the ends of the deck, saying why", async () => {
+  mount();
+  const show = await present();
+  const previous = within(show).getByRole("button", { name: "Previous slide" });
+  expect(previous.getAttribute("aria-disabled")).toBe("true");
+  expect(within(show).getByText("This is the first slide")).toBeTruthy();
+  fireEvent.keyDown(show, { key: "End" });
+  expect(await within(show).findByText(`${shown} of ${shown}`)).toBeTruthy();
+  const next = within(show).getByRole("button", { name: "Next slide" });
+  expect(next.getAttribute("aria-disabled")).toBe("true");
+});

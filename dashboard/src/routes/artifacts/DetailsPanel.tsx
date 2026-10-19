@@ -81,7 +81,7 @@ export function DetailsPanel({
           <Copyable value={detail.id} ariaLabel="Copy the artifact's id" monospace truncate />
         </dd>
       </dl>
-      <div className="artifact-form-actions">
+      <div className="artifact-details-actions">
         <Button
           size="small"
           variant="secondary"

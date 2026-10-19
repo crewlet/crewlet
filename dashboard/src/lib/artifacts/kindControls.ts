@@ -116,3 +116,30 @@ function throughLatest(latest: MutableRefObject<KindControls | null>): KindContr
       : {}),
   };
 }
+
+/**
+ * WHAT A VIEW CALLS THE PLACES IT TELLS THE ROOM ABOUT: a doc's tab regions
+ * (`tab:<path>`) by the tab's title, a deck's slide regions (`slide:<id>`) by
+ * the slide's number. A region is an address the view and the room share; it
+ * is never words for a reader, so the page names one only through the view
+ * that drew it, and leaves one nobody named unsaid.
+ */
+export type RegionNames = Readonly<Record<string, string>>;
+
+/** Set by the artifact's page; a no-op where a view is drawn without one. */
+export const RegionNamesSink = createContext<(names: RegionNames | null) => void>(() => {});
+
+/** Publish the names of this view's presence regions while it is mounted; `null` publishes none. */
+export function useRegionNames(names: RegionNames | null): void {
+  const publish = useContext(RegionNamesSink);
+  const latest = useRef(names);
+  useLayoutEffect(() => {
+    latest.current = names;
+  });
+  // Published again only when a name moves, as the controls above are.
+  const key = names === null ? "null" : JSON.stringify(names);
+  useLayoutEffect(() => {
+    publish(latest.current);
+    return () => publish(null);
+  }, [key, publish]);
+}

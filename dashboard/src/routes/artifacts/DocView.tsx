@@ -27,7 +27,7 @@
  */
 
 import { useEffect, useId, useMemo, useState } from "react";
-import { Document, Skeleton, TabPanel, Tabs } from "@crewlethq/ui";
+import { Button, Document, EmptyState, Skeleton, TabPanel, Tabs } from "@crewlethq/ui";
 import { FileTextGlyph, PencilGlyph } from "@crewlethq/icons/glyphs";
 import type { ArtifactDetail, ArtifactDoc, ArtifactDocAnswer } from "~/protocol/index.ts";
 import { useParam } from "~/app/router.tsx";
@@ -42,7 +42,7 @@ import { currentTab, docImagePaths, tabImages, tabRegion } from "~/lib/artifacts
 import { useVersionImages } from "~/lib/artifacts/versionImages.ts";
 import { DocEditor } from "./DocEditor.tsx";
 import type { PresenceReport } from "./presence.ts";
-import { useKindControls } from "~/lib/artifacts/kindControls.ts";
+import { useKindControls, useRegionNames } from "~/lib/artifacts/kindControls.ts";
 
 export function DocView({
   detail,
@@ -114,13 +114,44 @@ function Doc({
   useEffect(() => {
     if (primary) at({ region: tabRegion(where) }, editing && drafting);
   }, [at, primary, where, editing, drafting]);
+  // AND WHAT THOSE REGIONS ARE CALLED, so the room says "Viewing Overview"
+  // rather than the tab's address.
+  useRegionNames(
+    primary ? Object.fromEntries(doc.tabs.map((t) => [tabRegion(t.path), t.title])) : null,
+  );
 
   const choose = (path: string) => setTab(path === doc.tabs[0]?.path ? "" : path);
   const many = doc.tabs.length > 1;
-  const body = (
+  const body = tab.text.trim() ? (
     <Document as="article" aria-label={many ? `${detail.title}, ${tab.title}` : detail.title}>
       {renderMarkdown(tab.text, { anchors: true, image: tabImages(tab, loaded) })}
     </Document>
+  ) : (
+    // A TAB WITH NOTHING WRITTEN says so, and offers the writing to whoever
+    // may publish, rather than leaving a blank page that reads as one still
+    // loading.
+    <EmptyState
+      size="compact"
+      icon={<FileTextGlyph size="xl" />}
+      title={many ? "This tab is empty" : "This doc is empty"}
+      description={
+        editable
+          ? "Nothing is written here yet."
+          : "Nothing is written here yet. Its editors can add to it."
+      }
+      action={
+        editable ? (
+          <Button
+            size="small"
+            variant="secondary"
+            leadingIcon={<PencilGlyph size="sm" />}
+            onClick={() => setEditing(true)}
+          >
+            Start writing
+          </Button>
+        ) : undefined
+      }
+    />
   );
 
   if (editing) {
