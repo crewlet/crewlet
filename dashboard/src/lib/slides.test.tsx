@@ -79,6 +79,14 @@ describe("drawing a slide", () => {
     expect(a.getAttribute("rel")).toBe("noopener noreferrer");
   });
 
+  // A SLIDE DRAWN INSIDE A LINK (a gallery card's cover) may hold no second
+  // `<a>`: React warns, and a browser splits the outer link in two.
+  test("a link is drawn as its words where the slide sits inside a link", () => {
+    const { container } = render(<>{renderSlide(slide("ask"), { ...ctx, links: "text" })}</>);
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.querySelector(".slide-a")?.textContent).toBeTruthy();
+  });
+
   test("a tree the engine would not send is drawn as its text, and nothing else", () => {
     const hostile: DeckSlide = {
       id: "x",

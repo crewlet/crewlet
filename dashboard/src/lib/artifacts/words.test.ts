@@ -14,6 +14,7 @@ import {
   historyRefusalWords,
   historyWords,
   KIND_LIST,
+  KIND_WORDS,
   purgeAt,
   purgeSentence,
   roleIncludes,
@@ -186,7 +187,14 @@ describe("the trash", () => {
 
 describe("the words other screens say an artifact's facts in", () => {
   test("the kind list names every kind the engine has, in its order", () => {
-    expect(KIND_LIST).toBe("pages, docs, slides, dashboards, sheets and designs");
+    expect(KIND_LIST).toBe("HTML pages, docs, slides, dashboards, sheets and designs");
+  });
+
+  // "PAGE" IS KNOWLEDGE'S WORD: the html kind beside Knowledge's Pages named
+  // two things one way.
+  test("an html artifact is called HTML, and no kind is called a page", () => {
+    expect(KIND_WORDS.html).toBe("HTML");
+    expect(Object.values(KIND_WORDS)).not.toContain("Page");
   });
 
   test("an op is a word a reader knows, and an unknown one keeps its name", () => {

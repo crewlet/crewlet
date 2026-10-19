@@ -22,6 +22,7 @@ import {
 } from "@crewlethq/ui";
 import type { ArtifactAudience, ArtifactPresenceMember, OrgProjection } from "~/protocol/index.ts";
 import type { BridgePerson } from "~/runtime/bridge.ts";
+import { loginKind, loginWords } from "../login.ts";
 import { indexOrg, principalOfSeat, type OrgIndex, type Unit } from "../seats.ts";
 import { useOrg } from "../store-hooks.ts";
 import { plural } from "../format.ts";
@@ -33,11 +34,15 @@ export interface ArtifactPeople {
   index: OrgIndex;
   /** The company's name, as the share dialog's company row says it. */
   company: string;
-  /** A seat's name by handle, or the handle as written where the chart holds no such seat. */
+  /**
+   * A seat's name by handle. A name the chart holds no seat for is a LOGIN
+   * (an owner who acts as no seat, a Tier A token) and is said in its words
+   * ([loginWords]), else the handle as written.
+   */
   seatName: (handle: string) => string;
   /** A unit's name by key, or the key as written. */
   unitName: (key: string) => string;
-  /** A seat as a principal: a person or an agent with their face. */
+  /** A seat as a principal: a person or an agent with their face; a login as a person, by its words. */
   seatPrincipal: (handle: string) => Principal;
   /** A unit as a principal: a team, with how many it holds. */
   unitPrincipal: (key: string) => Principal;
@@ -87,12 +92,13 @@ export function memberTurn(
 export function artifactPeople(org: OrgProjection | null | undefined): ArtifactPeople {
   const index = indexOrg(org);
   const units = new Map(index.units.map((u) => [u.id, u]));
+  const nameOf = (handle: string) => index.byHandle.get(handle)?.name ?? loginWords(handle);
   const pagePerson = (handle: string, kind?: "human" | "agent"): BridgePerson => {
     const seat = index.byHandle.get(handle);
     const person: BridgePerson = {
       seat: handle,
       kind: kind ?? (seat?.kind === "agent" ? "agent" : "human"),
-      displayName: seat?.name ?? (handle || "Somebody"),
+      displayName: handle ? nameOf(handle) : "Somebody",
     };
     if (seat?.kind === "agent" && seat.avatar) {
       person.avatar = { character: seat.avatar.character, hue: seat.avatar.color };
@@ -102,9 +108,19 @@ export function artifactPeople(org: OrgProjection | null | undefined): ArtifactP
   return {
     index,
     company: org?.name?.trim() || "the company",
-    seatName: (handle) => index.byHandle.get(handle)?.name ?? handle,
+    seatName: nameOf,
     unitName: (key) => units.get(key)?.name ?? key,
-    seatPrincipal: (handle) => principalOfSeat(index.byHandle.get(handle), handle),
+    // A LOGIN IS NOT A SEAT, and drawn as the chart's default it wore an
+    // agent's squircle with the credential's first letters ("TO" for
+    // `token:review`). It is a person's circle and its words, as the Audit
+    // trail draws a login.
+    seatPrincipal: (handle) => {
+      const seat = index.byHandle.get(handle);
+      if (!seat && loginKind(handle) !== null) {
+        return { id: handle, kind: "person", name: loginWords(handle) };
+      }
+      return principalOfSeat(seat, handle);
+    },
     unitPrincipal: (key) => principalOfUnit(units.get(key), key),
     sheetPeople: index.seats.map((seat) => {
       const person: SheetPerson = { id: seat.handle, name: seat.name, kind: seat.kind };
@@ -244,7 +260,7 @@ export function presenceMembers(
     const out: PresenceMember = {
       id: m.session,
       seat: m.seat || m.session,
-      name: seat?.name ?? (m.seat || "Somebody"),
+      name: m.seat ? people.seatName(m.seat) : "Somebody",
       kind,
       activity: m.activity,
     };

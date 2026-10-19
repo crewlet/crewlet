@@ -15,6 +15,7 @@ import {
 } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { queryErrorCode, type ArtifactKind, type ArtifactListItem } from "~/protocol/index.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { artifactPath } from "~/lib/artifacts/api.ts";
 import type { ArtifactPeople } from "~/lib/artifacts/people.ts";
 import { DashboardCardCover } from "./DashboardCardCover.tsx";
@@ -24,13 +25,10 @@ import { SlidesCover } from "./SlidesCover.tsx";
 import { DesignCover } from "./DesignCover.tsx";
 
 /**
- * A listed artifact as the design system's card: a gallery's card, or a row
- * in a task's rail (`compact`). One mapping, so an artifact reads the same
- * wherever it is listed.
- */
-/**
  * The native cover each kind draws on its gallery card (D64), from the kind's
- * own structure and never a screenshot; a kind with none shows its glyph.
+ * own structure and never a screenshot; a kind with none shows its glyph, and
+ * so does a cover with nothing to draw (its outline still loading, a sheet
+ * with no columns), which the card cannot tell from a picture.
  */
 const KIND_COVERS: Partial<Record<ArtifactKind, (item: ArtifactListItem) => ReactNode>> = {
   doc: (item) => <DocCover item={item} />,
@@ -40,6 +38,17 @@ const KIND_COVERS: Partial<Record<ArtifactKind, (item: ArtifactListItem) => Reac
   design: (item) => <DesignCover item={item} />,
 };
 
+/**
+ * A listed artifact as the design system's card: a gallery's card, or a row
+ * in a task's rail (`compact`). One mapping, so an artifact reads the same
+ * wherever it is listed.
+ *
+ * WHO, ONCE. The owner is named unless it is the reader, whose own card says
+ * nothing it would repeat on every one of theirs; the change is "by" somebody
+ * only when that is not the owner already named: "by you" for the reader's
+ * own change to somebody else's. It drew the owner and then the same name
+ * again before the time.
+ */
 export function ListedArtifactCard({
   item,
   people,
@@ -51,14 +60,23 @@ export function ListedArtifactCard({
   now: number;
   size?: ArtifactCardSize;
 }) {
+  const reader = useViewer().owner;
+  const mine = reader !== "" && item.owner === reader;
+  const changer = item.updated_by.name;
+  const updatedBy =
+    !changer || changer === item.owner
+      ? undefined
+      : changer === reader
+        ? "you"
+        : people.seatName(changer);
   return (
     <ArtifactCard
       title={item.title}
       kind={item.kind}
       href={href(artifactPath(item.id))}
-      owner={people.seatPrincipal(item.owner)}
+      owner={mine ? undefined : people.seatPrincipal(item.owner)}
       updatedAt={item.updated_at}
-      updatedBy={people.seatName(item.updated_by.name)}
+      updatedBy={updatedBy}
       pinned={item.pinned ?? false}
       version={item.head_number > 0 ? item.head_number : undefined}
       size={size}

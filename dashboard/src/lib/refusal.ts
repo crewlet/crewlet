@@ -10,15 +10,7 @@
  */
 
 import { RestError } from "~/protocol/index.ts";
-import { plural } from "./format.ts";
-
-/** A phrase the engine wrote in its own lower case, as a sentence. */
-function asSentence(text: string): string {
-  const trimmed = text.trim();
-  if (trimmed === "") return "";
-  const opened = trimmed[0]!.toUpperCase() + trimmed.slice(1);
-  return /[.!?]$/.test(opened) ? opened : `${opened}.`;
-}
+import { asSentence, plural } from "./format.ts";
 
 /**
  * What a person is told when the sign-in surface refuses them — in the

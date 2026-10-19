@@ -135,6 +135,13 @@ export interface SlideRenderContext {
    * reports the run's path and its new text. Absent, the slide is read only.
    */
   edit?: { onText: (path: string, text: string) => void } | undefined;
+  /**
+   * `anchor` (the default): a link is a link. `text`: a link is its words,
+   * drawn as a link reads but not one, for a slide drawn INSIDE a link (a
+   * gallery card's cover), which may hold no second `<a>`. As markdown's
+   * `RenderOptions.links`.
+   */
+  links?: "anchor" | "text" | undefined;
 }
 
 /** A node's address in its slide: child indexes from the section, "0/2/1" (D65's element path). */
@@ -268,6 +275,13 @@ function renderNode(node: SlideNode, ctx: SlideRenderContext, path: NodePath): R
     }
     case "a": {
       const href = attrs.href ?? "";
+      if (ctx.links === "text") {
+        return (
+          <span key={path} className="slide-a">
+            {children}
+          </span>
+        );
+      }
       return /^https:\/\/[^\s<>"'`]+$/.test(href) ? (
         <a key={path} className="slide-a" href={href} target="_blank" rel="noopener noreferrer">
           {children}

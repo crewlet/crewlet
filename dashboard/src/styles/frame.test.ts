@@ -202,6 +202,16 @@ describe("the frame's layout", () => {
   // Asserted in the SHEET because it cannot be asserted anywhere else: jsdom
   // computes no layout, so the suites that render a grid stay green through
   // every value of this, and a screenshot is the only other witness.
+  // THE LIST TABLE'S HEAD IS 11/500 UPPERCASE, as the kit's DataTable draws
+  // every other list table: the gallery's and Audit's heads were the one
+  // pair at 400, lighter than the cells under them.
+  test("a grid's column heads are the list table's head: the 2xs step, medium, uppercase", () => {
+    const head = block(sheet("frame.css"), ".grid-th");
+    expect(head).toMatch(/font-size:\s*var\(--font-size-2xs\)/);
+    expect(head).toMatch(/font-weight:\s*var\(--font-weight-medium\)/);
+    expect(head).toMatch(/text-transform:\s*uppercase/);
+  });
+
   test("one grid owns the columns and every row adopts them", () => {
     // THE WIDE LAYOUT ALONE. Below the phone breakpoint a row is deliberately
     // NOT a row — the heads go and each cell draws its own label — so the

@@ -718,6 +718,21 @@ describe("emphasis", () => {
     });
   }
 
+  it("draws every link of a document as its words where the document sits inside a link", () => {
+    // A GALLERY CARD'S DOC COVER is drawn inside the card's own link, and an
+    // `<a>` may hold no other: a paragraph's link and a list item's alike.
+    const { container } = render(
+      <div>
+        {renderMarkdown("A [guide](https://example.com).\n\n- see <https://example.com/x>", {
+          links: "text",
+        })}
+      </div>,
+    );
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.textContent).toContain("A guide.");
+    expect(container.textContent).toContain("see https://example.com/x");
+  });
+
   it("draws a link as its words where the run sits inside a control", () => {
     // `links: "text"` is for an outline row or a picker's option: a link
     // inside one is unreachable as itself and steals the row's click.
