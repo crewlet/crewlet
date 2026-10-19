@@ -161,6 +161,21 @@ function show(onPublished = vi.fn()) {
 /** The editor's document, by the name it carries for the tab it edits. */
 const editor = () => screen.getByRole("textbox", { name: /^The text of/ });
 
+/** Choose one of a tab's actions from its row's menu in the editor's tab list. */
+function tabAction(tab: string, action: string) {
+  const tabs = screen.getByRole("list", { name: "Tabs of On-call handbook" });
+  fireEvent.click(within(tabs).getByRole("button", { name: `Actions for ${tab}` }));
+  fireEvent.click(screen.getByRole("menuitem", { name: action }));
+}
+
+/** Rename a tab in place, as its menu's Rename does, and keep the title with Enter. */
+function renameTab(tab: string, title: string) {
+  tabAction(tab, "Rename");
+  const field = screen.getByRole("textbox", { name: /^Title of tab/ });
+  fireEvent.change(field, { target: { value: title } });
+  fireEvent.keyDown(field, { key: "Enter" });
+}
+
 /** The editing state the page bar carries, apart from the editor's own live regions. */
 const barStatus = () => document.querySelector(".crewlet-artifact-bar__status") as HTMLElement;
 
@@ -179,6 +194,22 @@ test("draws the tab on show with its outline, and moves between tabs", async () 
   const next = await screen.findByRole("article", { name: "On-call handbook, On call" });
   expect(within(next).getByText("Hand over at nine.")).toBeDefined();
   expect(location.hash).toContain("doctab=tabs%2Foncall.md");
+});
+
+test("says a tab with nothing written is empty, and opens the editor on it", async () => {
+  const kept = docs[2]!;
+  docs[2] = { ...kept, tabs: [kept.tabs[0]!, { ...kept.tabs[1]!, text: "\n" }] };
+  try {
+    show();
+    await screen.findByRole("article", { name: "On-call handbook, Start" });
+    fireEvent.click(screen.getByRole("tab", { name: "On call" }));
+    expect(await screen.findByRole("heading", { name: "This tab is empty" })).toBeDefined();
+    expect(screen.queryByRole("article")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Start writing" }));
+    expect(await screen.findByRole("list", { name: "Tabs of On-call handbook" })).toBeDefined();
+  } finally {
+    docs[2] = kept;
+  }
 });
 
 test("saves an edit as the one changed passage, against the version it started from", async () => {
@@ -267,20 +298,17 @@ test("where both changed the same lines, the person settles each before saving",
 test("adds, renames, moves and removes tabs, and saves them as one version", async () => {
   const onPublished = show();
   fireEvent.click((await screen.findAllByRole("button", { name: "Edit" }))[0]!);
-  const tabs = screen.getByRole("list", { name: "Tabs of On-call handbook" });
-  fireEvent.change(within(tabs).getByRole("textbox", { name: "Title of tab 1" }), {
-    target: { value: "Start here" },
-  });
+  renameTab("Start", "Start here");
   // A NEW TAB'S FILE IS NEVER ONE THE VERSION HOLDS: tabs/budget.md is taken.
-  fireEvent.change(screen.getByRole("textbox", { name: "New tab title" }), {
-    target: { value: "Budget" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: /Add tab/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Add tab" }));
+  const named = screen.getByRole("textbox", { name: "New tab title" });
+  fireEvent.change(named, { target: { value: "Budget" } });
+  fireEvent.keyDown(named, { key: "Enter" });
   // The new tab opens on its title as its heading, in the editor.
   expect(within(editor()).getByRole("heading", { name: "Budget" })).toBeDefined();
   await append(editor(), "Two seats.");
-  fireEvent.click(within(tabs).getByRole("button", { name: "Move Budget up" }));
-  fireEvent.click(within(tabs).getByRole("button", { name: "Remove On call" }));
+  tabAction("Budget", "Move up");
+  tabAction("On call", "Remove");
   const save = screen.getByRole("button", { name: "Save" });
   await waitFor(() => expect(save.getAttribute("aria-disabled")).toBeNull());
   fireEvent.click(save);
@@ -329,9 +357,7 @@ test("a tab both renamed is the person's to keep or take, and the save waits for
   publishAnswer = () => json(412, { error: "version_moved", detail: "moved", live: { number: 3 } });
   show();
   fireEvent.click((await screen.findAllByRole("button", { name: "Edit" }))[0]!);
-  fireEvent.change(screen.getByRole("textbox", { name: "Title of tab 1" }), {
-    target: { value: "Start here" },
-  });
+  renameTab("Start", "Start here");
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   const note = await screen.findByText(/Version 3 renamed “Start here” too/);
   const save = screen.getByRole("button", { name: "Save" });
@@ -339,8 +365,7 @@ test("a tab both renamed is the person's to keep or take, and the save waits for
   fireEvent.click(
     within(note.closest('[role="alert"]')!).getByRole("button", { name: "Take theirs" }),
   );
-  expect((screen.getByRole("textbox", { name: "Title of tab 1" }) as HTMLInputElement).value).toBe(
-    "Read me",
-  );
+  const tabs = screen.getByRole("list", { name: "Tabs of On-call handbook" });
+  expect(within(tabs).getByRole("button", { name: "Read me" })).toBeDefined();
   expect(await screen.findByText("Version 3 is merged into your draft.")).toBeDefined();
 });
