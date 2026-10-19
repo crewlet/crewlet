@@ -300,6 +300,15 @@ func TestAVerifyAtItsCallersFloorAppendsNoBarrier(t *testing.T) {
 // outlasts the wait is answered as it stands, running; an id the node does
 // not keep, or another repository's, is none.
 //
+// THE LANE IS READ WITH THE MAINTAINER HELD OFF, by a check of the case's own
+// admitted across the loop (the cache's holdMaintainer): the maintainer's
+// graph-first run, due at once on a copy just pushed, takes a maintenance
+// slot the moment a check lets go of the repository, so the lane's free count
+// read after an answer was the maintainer's as often as the check's (one run
+// in fifteen failed so). The held check keeps one slot of the lane's two
+// (MaxProcesses four, so the lane is two on any machine), and every check of
+// the loop must leave the other free.
+//
 // Mutation: record the end before the check lets go of its slot, and the
 // next check can find the lane still held.
 func TestAVerifyIsAwaitedWhereItWasAsked(t *testing.T) {
@@ -317,7 +326,8 @@ func TestAVerifyIsAwaitedWhereItWasAsked(t *testing.T) {
 		}
 		return inner.RepoState(ctx, q)
 	}}
-	c := newCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: e.wrap}}, codetest.Settings())
+	c := newCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: e.wrap}, MaxProcesses: 4},
+		codetest.Settings())
 	node := c.Fleet.Nodes()[0]
 	h := node.Host()
 	p := codetest.NewPerson(t, c.Fleet, "ceo")
@@ -326,6 +336,24 @@ func TestAVerifyIsAwaitedWhereItWasAsked(t *testing.T) {
 	c.MustPush(p, work, "main")
 
 	slots := node.Pool().Slots(gitproc.ClassMaintenance)
+	if slots != 2 {
+		t.Fatalf("the maintenance lane holds %d slots, want 2: one for the held check, one for the loop's", slots)
+	}
+	held, err := node.Cache().AdmitVerify(c.Rows().Repo.ID)
+	if err != nil {
+		t.Fatalf("the check held across the loop was refused: %v", err)
+	}
+	t.Cleanup(held.Release) // a case that fails mid-loop lets it go before the fleet stops
+	// A maintainer run already in flight is left to finish; none starts
+	// while the check is held.
+	deadline := time.Now().Add(time.Minute)
+	for node.Pool().Free(gitproc.ClassMaintenance) != slots-1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the maintenance lane has %d of its %d slots free a minute after the held check's admission, "+
+				"want all but its own", node.Pool().Free(gitproc.ClassMaintenance), slots)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	for i := range 20 {
 		started, err := h.StartVerify(c.Ctx, codetest.RepoName, false, statelog.Position{})
 		if err != nil {
@@ -337,11 +365,12 @@ func TestAVerifyIsAwaitedWhereItWasAsked(t *testing.T) {
 		if !ok || ended.State != host.VerifyDone {
 			t.Fatalf("verify %d was awaited as %+v, %v; want it done", i, ended, ok)
 		}
-		if free := node.Pool().Free(gitproc.ClassMaintenance); free != slots {
-			t.Fatalf("verify %d was answered done with %d of the maintenance lane's %d slots free; want the "+
-				"check's let go first", i, free, slots)
+		if free := node.Pool().Free(gitproc.ClassMaintenance); free != slots-1 {
+			t.Fatalf("verify %d was answered done with %d of the maintenance lane's %d slots free, one of them "+
+				"the held check's; want the answered check's let go first", i, free, slots)
 		}
 	}
+	held.Release()
 
 	holding.Store(true)
 	started, err := h.StartVerify(c.Ctx, codetest.RepoName, false, statelog.Position{})
