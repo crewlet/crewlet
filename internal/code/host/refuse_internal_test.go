@@ -165,8 +165,9 @@ func TestACallSiteRefusalNamesItselfAndPromisesNoRetry(t *testing.T) {
 		"gitproc.ErrEnv":        fmt.Errorf("%w: HOME", gitproc.ErrEnv),
 		"gitproc.ErrNoDeadline": fmt.Errorf("%w: upload-pack has none", gitproc.ErrNoDeadline),
 		"gitproc.ErrHome":       fmt.Errorf("%w: /var/cache/home holds .gitconfig", gitproc.ErrHome),
-		"gitproc.ErrTooOld":     &gitproc.ErrTooOld{Path: "/usr/bin/git", Found: gitproc.Version{Major: 2, Minor: 30}},
-		"gitproc.ErrNoTrace":    fmt.Errorf("%w: git version 2.43.0 on fd 3", gitproc.ErrNoTrace),
+		"gitproc.ErrTooOld": &gitproc.ErrTooOld{Path: "/usr/bin/git", Found: gitproc.Version{Major: 2, Minor: 54},
+			Floor: gitproc.FloorNode},
+		"gitproc.ErrNoTrace": fmt.Errorf("%w: git version 2.43.0 on fd 3", gitproc.ErrNoTrace),
 		"gitproc.ErrCaptureFull": fmt.Errorf("%w: git cat-file: %w", gitproc.ErrOutput,
 			fmt.Errorf("%w: git wrote more than 1048576 bytes into a capture — stream it through Cmd.Stdout",
 				gitproc.ErrCaptureFull)),
@@ -233,7 +234,7 @@ func TestEveryGitprocErrorHasADecidedAnswer(t *testing.T) {
 		"ErrConfig":     {fmt.Errorf("%w: core.pager", gitproc.ErrConfig), refused},
 		"ErrInvalid":    {fmt.Errorf("%w: no subcommand", gitproc.ErrInvalid), refused},
 		"ErrHome":       {fmt.Errorf("%w: /h holds x", gitproc.ErrHome), refused},
-		"ErrTooOld":     {&gitproc.ErrTooOld{Path: "/usr/bin/git"}, refused},
+		"ErrTooOld":     {&gitproc.ErrTooOld{Path: "/usr/bin/git", Floor: gitproc.FloorNode}, refused},
 		"ErrNoTrace":    {fmt.Errorf("%w: /usr/bin/git", gitproc.ErrNoTrace), refused},
 		// Unmarked, a shape refusal is not the cache's: the cache's own is
 		// repaired under the request, and one met again past its repair is
@@ -480,7 +481,7 @@ func TestDamageARepairDidNotEndSaysSo(t *testing.T) {
 // (`corrupt`, the pack named in cache.Failure.Packs, which the cache installs
 // again in place, and the run's start in Began) and the run served again; a
 // sound one is no repair, and git's own failure is the answer. The same
-// sentence as a ROW (2.40 to 2.55) names a pack's damage itself, and its hint
+// sentence as a ROW (2.55) names a pack's damage itself, and its hint
 // still names the pack to the repair — confirmed, each pack once however
 // many of its objects git named. A process in a push's scratch or an
 // advertisement view (asAlternate) never asks — its hint names the scratch's

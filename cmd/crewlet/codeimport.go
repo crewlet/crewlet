@@ -23,7 +23,6 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/config"
 )
 
@@ -227,7 +226,7 @@ func prepareImport(ctx context.Context, args []string, stdout, stderr io.Writer)
 	if err != nil {
 		return nil, false, err
 	}
-	if err = g.atLeast(ctx, gitproc.MinVersion); err != nil {
+	if err = g.atClientFloor(ctx); err != nil {
 		return nil, false, err
 	}
 	imp := &importer{g: g, client: client, source: source, name: name, repo: repo, principal: principal,

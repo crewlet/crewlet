@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 )
 
 // tagSignature is the Cache Directory Tagging standard's first line, which
@@ -314,6 +315,7 @@ func TestPrepareIsBoundedByItsContext(t *testing.T) {
 // down until a person emptied it.
 func TestPrepareMovesALeftoverHomeAside(t *testing.T) {
 	t.Parallel()
+	gittest.RequireNode(t)
 	dir := filepath.Join(t.TempDir(), "c")
 	prepare(t, dir).Release()
 	write(t, filepath.Join(dir, "home", "left-behind"), "a killed git's file")

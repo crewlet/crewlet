@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 )
 
 // The trace2 event lines below are spelled as git writes them under
@@ -172,10 +173,6 @@ type requestForm struct {
 	payload  bool   // the form carries p
 	body     func(p string) string
 	want     error // nil: served; ErrNotOurRef; ErrFailed
-	// either is a form one git serves and another refuses (ErrFailed):
-	// packfile-uris (2.40–2.48 take it, 2.56 dies), object-info and a
-	// deepen-since past every commit (2.43 serves both, 2.47 refuses both).
-	either bool
 	// echoes is whether the report a dying form makes copies p: proved by
 	// requestMark in its stderr.
 	echoes bool
@@ -254,9 +251,9 @@ func requestForms(tip, c3, tree, blob string) []requestForm {
 		echo("v2 deepen-since", v2p, func(p string) string { return fetch(wantTip, "deepen-since "+p) }),
 		echo("v2 deepen-not", v2p, func(p string) string { return fetch(wantTip, "deepen-not "+p) }),
 		echo("v2 want-ref", v2p, func(p string) string { return fetch("want-ref " + p) }),
-		{name: "v2 packfile-uris", protocol: v2p, payload: true, either: true,
+		{name: "v2 packfile-uris", protocol: v2p, payload: true, want: gitproc.ErrFailed,
 			body: func(p string) string { return fetch(wantTip, "packfile-uris "+p) }},
-		{name: "v2 packfile-uris twice", protocol: v2p, payload: true, either: true,
+		{name: "v2 packfile-uris twice", protocol: v2p, payload: true, want: gitproc.ErrFailed,
 			body: func(p string) string { return fetch(wantTip, "packfile-uris "+p, "packfile-uris "+p) }},
 		// v2 ls-refs and commands.
 		echo("v2 ls-refs an unknown argument", v2p, func(p string) string { return v2("ls-refs", nil, p) }),
@@ -303,10 +300,10 @@ func requestForms(tip, c3, tree, blob string) []requestForm {
 		served("v2 shallow of a commit under deepen 1", v2p, fetch(wantTip, "shallow "+c3, "deepen 1")),
 		served("v2 the deepest deepen, relative", v2p, fetch(wantTip, "deepen 2147483647", "deepen-relative")),
 		served("v2 deepen-since 0", v2p, fetch(wantTip, "deepen-since 0")),
-		{name: "v2 deepen-since the far future", protocol: v2p, either: true,
-			body: func(string) string { return fetch(wantTip, "deepen-since 99999999999") }},
+		dies("v2 deepen-since the far future", v2p, fetch(wantTip, "deepen-since 99999999999"), gitproc.ErrFailed),
 		dies("v2 deepen-not the tip's branch", v2p, fetch(wantTip, "deepen-not refs/heads/main"), gitproc.ErrFailed),
 		dies("v2 deepen-not of an id", v2p, fetch(wantTip, "deepen-not "+tip), gitproc.ErrFailed),
+		dies("v2 deepen-not of a name a branch and a tag both hold", v2p, fetch(wantTip, "deepen-not twice"), gitproc.ErrFailed),
 		served("v2 the flags", v2p, fetch(wantTip, "thin-pack", "ofs-delta", "no-progress", "include-tag")),
 		dies("v2 sideband-all", v2p, fetch(wantTip, "sideband-all"), gitproc.ErrFailed),
 		served("v2 wait-for-done", v2p, fetch(wantTip, "wait-for-done")),
@@ -314,8 +311,7 @@ func requestForms(tip, c3, tree, blob string) []requestForm {
 		dies("v2 a sha256 client", v2p, v2("fetch", []string{"object-format=sha256"}, wantTip, "done"), gitproc.ErrFailed),
 		served("v2 an empty server option", v2p, v2("fetch", []string{"server-option="}, wantTip, "done")),
 		dies("v2 bundle-uri", v2p, v2("bundle-uri", nil), gitproc.ErrFailed),
-		{name: "v2 object-info", protocol: v2p, either: true,
-			body: func(string) string { return v2("object-info", nil, "size", "oid "+tip) }},
+		dies("v2 object-info", v2p, v2("object-info", nil, "size", "oid "+tip), gitproc.ErrFailed),
 		dies("v2 a second command", v2p, pkt("command=ls-refs\n")+pkt("command=fetch\n")+"0001"+"0000", gitproc.ErrFailed),
 		served("v2 ls-refs with peel, symrefs and unborn", v2p, v2("ls-refs", nil, "peel", "symrefs", "unborn")),
 		dies("v2 a length header of letters", v2p, "zzzz", gitproc.ErrFailed),
@@ -342,7 +338,8 @@ func requestForms(tip, c3, tree, blob string) []requestForm {
 // protocol v2 and the lines of v0, each holding every row's format, every
 // row's message and 65 000 control bytes in turn — and the forms beside them
 // that carry none, against a HEALTHY copy under the cache's serve
-// configuration: no Damage, no hint, and the kind each form is (nil for a
+// configuration, on the node pin and on the node floor's own build
+// (onNodeGits): no Damage, no hint, and the kind each form is (nil for a
 // form that is served, ErrNotOurRef for a want of something the copy does
 // not hold, ErrFailed for every other refusal). The formats every run met are
 // EXACTLY the request formats this git prints (requestFormats, and the one
@@ -362,9 +359,19 @@ func requestForms(tip, c3, tree, blob string) []requestForm {
 // TestAHintIsOnlyTheOneAnchoredMessage holds each anchor on its own.
 func TestARequestCannotNameTheDamage(t *testing.T) {
 	t.Parallel()
+	onNodeGits(t, requestCannotNameTheDamageOn)
+}
+
+// requestCannotNameTheDamageOn is TestARequestCannotNameTheDamage on the git
+// at git.
+func requestCannotNameTheDamageOn(t *testing.T, git string) {
 	f := newFixture(t)
-	p := realPool(t, gitproc.Options{})
+	p := poolOn(t, git, gitproc.Options{})
 	dir, _ := f.bare(t)
+	// A branch and a tag of one name beside the copy's main, so a deepen-not
+	// can name a ref ambiguously: a healthy copy may hold both.
+	gittest.SetRefs(t, dir, map[string]string{"refs/heads/main": f.tip(), "refs/heads/twice": f.Commits[2],
+		"refs/tags/twice": f.Commits[2]})
 	tree := strings.TrimSpace(f.Client.Run(t, f.Work, "rev-parse", f.tip()+"^{tree}"))
 	blob := strings.TrimSpace(f.Client.Run(t, f.Work, "rev-parse", f.tip()+":big.txt"))
 	payloads := requestPayloads()
@@ -399,9 +406,6 @@ func TestARequestCannotNameTheDamage(t *testing.T) {
 					t.Errorf("a request hinted %v", res.Trace.Hints)
 				}
 				switch {
-				case form.either && err != nil && !errors.Is(err, gitproc.ErrFailed):
-					t.Errorf("%v (formats %q), want the form served or refused", err, res.Trace.Formats)
-				case form.either:
 				case form.want == nil && err != nil:
 					t.Errorf("%v (formats %q), want the form served", err, res.Trace.Formats)
 				case form.want != nil:
@@ -419,9 +423,7 @@ func TestARequestCannotNameTheDamage(t *testing.T) {
 	}
 	want := map[string]bool{gitproc.CanonicalFormat(`git upload-pack: not our ref %s`): true}
 	for format := range requestFormats {
-		if spanOfRequest(format).holds(p.Version()) {
-			want[gitproc.CanonicalFormat(format)] = true
-		}
+		want[gitproc.CanonicalFormat(format)] = true
 	}
 	got := slices.Sorted(func(yield func(string) bool) {
 		for c := range met {
@@ -440,24 +442,6 @@ func TestARequestCannotNameTheDamage(t *testing.T) {
 	if !slices.Equal(got, wantList) {
 		t.Errorf("%d runs on git %s met formats\n  %q\nwant exactly\n  %q", runs, p.Version(), got, wantList)
 	}
-}
-
-// requestSpans is the versions that print a request format where it is not
-// every git from the floor: deepen-not's refusal, reworded at 2.48, and the
-// object format's mismatch, whose format lost its trailing newline between
-// 2.43 (measured with it) and 2.47.3 (measured without).
-var requestSpans = map[string]span{
-	`git upload-pack: ambiguous deepen-not: %s`:        {v(2, 40), v(2, 48)},
-	`git upload-pack: deepen-not is not a ref: %s`:     {v(2, 48), gitproc.Version{}},
-	"mismatched object format: server %s; client %s\n": {v(2, 40), v(2, 47)},
-	`mismatched object format: server %s; client %s`:   {v(2, 47), gitproc.Version{}},
-}
-
-func spanOfRequest(format string) span {
-	if s, ok := requestSpans[format]; ok {
-		return s
-	}
-	return span{v(2, 40), gitproc.Version{}}
 }
 
 // A HINT IS ONLY THE ONE ANCHORED MESSAGE: git's sentence for a corrupt
@@ -516,7 +500,7 @@ func TestAHintIsOnlyTheOneAnchoredMessage(t *testing.T) {
 			}
 		})
 	}
-	// THE SAME SENTENCE AS THE ROW (2.40 to 2.55) names the same pack: a hint
+	// THE SAME SENTENCE AS THE ROW (2.55) names the same pack: a hint
 	// beside the row's damage, under the same anchoring — so the repair can
 	// name the pack the row says is damaged. Mutation: read hints only from
 	// "%s" events.

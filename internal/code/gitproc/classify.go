@@ -287,10 +287,13 @@ type row struct {
 // formatTable is every report format git prints about a repository file or
 // object it failed to read, AS GIT SPELLS IT, by what it classifies as —
 // exactly the formats a case of classify_test.go provokes from a real damaged
-// repository (TestTheFormatTableIsWhatGitSays holds the table to what each git
-// version the suite runs says, both ways: a row nothing provokes fails it as
-// surely as a report the table lacks). A range in a comment is the gits that
-// print the format; every other row is printed by every git from the floor.
+// repository (TestTheFormatTableIsWhatGitSays holds the table to what the node
+// pin and the node floor's own build each say, both ways: a row nothing
+// provokes fails it as surely as a report the table lacks). A version in a
+// comment is the gits that print the format; every other row is printed by
+// every git from the node floor ([NodeMinVersion]), the oldest a pool runs,
+// and a row only gits below it print is deleted rather than kept: no pool
+// can meet it, and no run of the suite can say whether it is still right.
 //
 // What a row may be (TestNoRowIsAFormatARequestWrites): a format of git's own,
 // with words of its own — never one of conversions and punctuation alone
@@ -303,12 +306,12 @@ type row struct {
 //   - `invalid commit position. commit-graph is likely corrupt`: every path a
 //     commit position from a file reaches it by is checked first, and
 //     reported `invalid parent position %u`, which is a row;
-//   - `commit-graph overflow generation data is too small` (2.43 on): it
+//   - `commit-graph overflow generation data is too small`: it
 //     needs a generation-overflow chunk, which a repository of a test's size
 //     never has, and building one by hand is building the file;
 //   - `unable to read index` (show-index's), `missing %s %s` and `broken link
 //     from` (fsck's findings, written to its stdout, not reported);
-//   - `could not find object in pack %s at offset %lu in MIDX` (2.47 on): a
+//   - `could not find object in pack %s at offset %lu in MIDX`: a
 //     BUG pack-objects reports, dying of SIGABRT, only beside `bad offset
 //     for revindex`, which is a row — and the run's crash (Result.Crashed);
 //   - `object %s is a %s, not a %s` and `unable to parse object: %s`: a
@@ -319,7 +322,7 @@ var formatTable = map[row][]string{
 		`index file %s is too small`,
 		`packfile %s does not match index`,
 		`inflate: %s (%s)`,
-		`packed object %s (stored in %s) is corrupt`, // 2.40–2.55: 2.56 reports it through "%s" (trace.go's hint)
+		`packed object %s (stored in %s) is corrupt`, // 2.55: 2.56 reports it through "%s" (trace.go's hint)
 		`%s pack checksum mismatch`,
 		`index CRC mismatch for object %s from %s at offset %lu`,
 		`cannot unpack %s from %s at offset %lu`,
@@ -356,18 +359,14 @@ var formatTable = map[row][]string{
 		`multi-pack-index version %d not recognized`,
 		`multi-pack-index hash version %u does not match version %u`,
 		`multi-pack-index file %s is too small`,
-		`invalid MIDX object position, MIDX is likely corrupt`,                // 2.47 on; before it the same damage is a segmentation fault
-		`multi-pack-index missing required pack-name chunk`,                   // 2.40–2.42
-		`multi-pack-index missing required OID fanout chunk`,                  // 2.40–2.42
-		`multi-pack-index missing required OID lookup chunk`,                  // 2.40–2.42
-		`multi-pack-index missing required object offsets chunk`,              // 2.40–2.42
-		`multi-pack-index required pack-name chunk missing or corrupted`,      // 2.43 on
-		`multi-pack-index required OID fanout chunk missing or corrupted`,     // 2.43 on
-		`multi-pack-index required OID lookup chunk missing or corrupted`,     // 2.43 on
-		`multi-pack-index required object offsets chunk missing or corrupted`, // 2.43 on
-		`multi-pack-index OID fanout is of the wrong size`,                    // 2.40–2.42
+		`invalid MIDX object position, MIDX is likely corrupt`,
+		`multi-pack-index required pack-name chunk missing or corrupted`,
+		`multi-pack-index required OID fanout chunk missing or corrupted`,
+		`multi-pack-index required OID lookup chunk missing or corrupted`,
+		`multi-pack-index required object offsets chunk missing or corrupted`,
+		`multi-pack-index OID fanout is of the wrong size`, // beside the required-fanout row
 		`multi-pack-index pack names out of order: '%s' before '%s'`,
-		`oid fanout out of order: fanout[%d] = %x > %x = fanout[%d]`, // 2.47 on, beside the required-fanout row
+		`oid fanout out of order: fanout[%d] = %x > %x = fanout[%d]`, // beside the required-fanout row
 		// The maintainer's own write over an index whose checksum is not its
 		// bytes: git says so and writes on, keeping whatever of the old index
 		// it could read — the one report of a damaged index a run that
@@ -383,10 +382,9 @@ var formatTable = map[row][]string{
 		`commit-graph file is too small`,
 		`commit-graph version %X does not match version %X`,
 		`commit-graph hash version %X does not match version %X`,
-		`commit-graph is missing the OID Fanout chunk`,                // 2.40–2.43
-		`commit-graph oid fanout chunk is wrong size`,                 // 2.43 on
-		`commit-graph required OID fanout chunk missing or corrupted`, // 2.44 on
-		`commit-graph fanout values out of order`,                     // 2.43 on
+		`commit-graph oid fanout chunk is wrong size`,
+		`commit-graph required OID fanout chunk missing or corrupted`,
+		`commit-graph fanout values out of order`,
 		`invalid parent position %u`,                                  // fatal
 		`commit-graph requires overflow generation data but has none`, // fatal
 	},
@@ -394,7 +392,7 @@ var formatTable = map[row][]string{
 		`final chunk has non-zero id %x`,
 		`terminating chunk id appears earlier than expected`,
 		`improper chunk offset(s) %lx and %lx`,
-		`chunk id %x not %d-byte aligned`, // 2.43 on
+		`chunk id %x not %d-byte aligned`,
 		`duplicate chunk ID %x found`,
 	},
 	{ErrMissingObject, PartObject}: {

@@ -225,7 +225,7 @@ COMPANY ?=
 .PHONY: help build crewlet install fmt tidy schema metrics-doc alarms-doc derived gate-answer objects-answer broker-answer \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
         check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-solo \
-        require-npm bench git \
+        require-npm bench git test-gitproc \
         mattermost-up mattermost-down \
         gitlab-up gitlab-down \
         snapshot clean require-node
@@ -352,7 +352,7 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard is not what dash
 # is the git's behaviour as much as the engine's, so the suite runs the git a
 # git node runs rather than whichever one the machine has: every target that
 # runs Go tests depends on `git` and runs under GIT_ENV, and so do CI's two test
-# jobs, which call those targets.
+# jobs and its `git recipe (macOS)` job, which call those targets.
 #
 # EVERY PIN IS BUILT, the floors' as well as the node's, so a pin whose version
 # or digest is wrong fails here — at the download its SHA-256 refuses — rather
@@ -364,12 +364,32 @@ git: ## build the pinned gits the suite and the image run (scripts/git-pin.env; 
 	@for pin in $(GIT_PINS); do scripts/git.sh $$pin >/dev/null || exit 1; done
 
 # GIT_ENV puts the node pin first on PATH, so every pool and every client a case
-# starts runs it. STATEMENTS rather than a prefix of assignments: a prefix
-# `PATH="$(scripts/git.sh node):$PATH" go test …` whose command failed runs
-# the suite on the machine's own git with nothing said, which is the one
-# outcome this group exists to rule out. A recipe line starts with it, and what
-# follows it runs with the pin on PATH.
-GIT_ENV = node_git="$$(scripts/git.sh node)" || exit 1; export PATH="$$node_git:$$PATH";
+# starts runs it, and names the two floors' builds where the floors' arm finds
+# them (gittest.NodeFloor and gittest.ClientFloor read CREWLET_TEST_GIT_NODE_FLOOR
+# and CREWLET_TEST_GIT_CLIENT_FLOOR: every pool of host's
+# TestTheGitFloorsPassTheSuite on the node floor, gitproc.NodeMinVersion, and
+# every person's git on the client floor, gitproc.ClientMinVersion) —
+# REQUIRED there (CREWLET_REQUIRE_GIT_FLOOR=1), so a run whose floors are
+# missing fails naming them rather than skipping the arm, which only a bare
+# `go test` outside make does. STATEMENTS rather than a prefix of assignments:
+# a prefix `PATH="$(scripts/git.sh node):$PATH" go test …` whose command
+# failed runs the suite on the machine's own git with nothing said, which is
+# the one outcome this group exists to rule out. A recipe line starts with it,
+# and what follows it runs with the pin on PATH and the floors named.
+GIT_ENV = node_git="$$(scripts/git.sh node)" || exit 1; \
+	node_floor="$$(scripts/git.sh node-floor)" || exit 1; \
+	client_floor="$$(scripts/git.sh client-floor)" || exit 1; \
+	export PATH="$$node_git:$$PATH" CREWLET_TEST_GIT_NODE_FLOOR="$$node_floor/git" \
+	  CREWLET_TEST_GIT_CLIENT_FLOOR="$$client_floor/git" CREWLET_REQUIRE_GIT_FLOOR=1;
+
+# gitproc's own suite on the pinned gits, alone: what ci.yml's `git recipe
+# (macOS)` job runs, so the recipe's macOS branch (shasum, sysctl's core count,
+# the SDK's libcurl) is built on every pull request and the gits it builds run
+# gitproc's floor judgement, a real pool and the floors' own gits. On Linux
+# `make test` runs these packages with the rest, so `check` does not depend on
+# it.
+test-gitproc: git ## build the pinned gits and run gitproc's own suite on them (ci: git recipe (macOS))
+	$(GIT_ENV) $(SKIPGATE) -- $(GOTEST) -json ./internal/code/gitproc/...
 
 ##@ Gates — `make check` is all of them
 

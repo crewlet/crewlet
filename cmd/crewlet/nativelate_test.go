@@ -137,7 +137,7 @@ func TestNativeSurfacesServeACompanyAppliedAfterBoot(t *testing.T) {
 // refused as a company that hosts no code.
 func TestCodeRoutesServeACompanyAppliedAfterBoot(t *testing.T) {
 	t.Parallel()
-	gittest.Require(t)
+	gittest.RequireNode(t)
 	const token = "a-test-token"
 	n := bootUnconfiguredWith(t, token, func(b *config.Bootstrap) {
 		// THE CASE'S OWN, never the machine's: an explicit cache budget and
@@ -245,7 +245,7 @@ code:
 // the read says the company hosts no code.
 func TestANodeWhoseCodeHostCannotStartSaysSo(t *testing.T) {
 	t.Parallel()
-	gittest.Require(t)
+	gittest.RequireNode(t)
 	const token = "a-test-token"
 	occupied := t.TempDir()
 	if err := os.WriteFile(filepath.Join(occupied, "somebody-elses.txt"), []byte("mine\n"), 0o600); err != nil {

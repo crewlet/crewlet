@@ -210,7 +210,7 @@
 // writes no stream is refused at [New] ([ErrNoTrace]). The one damage git 2.56
 // names only through a bare "%s" — a corrupt packed object — is a [Hint]
 // naming a pack, which decides nothing until that pack's bytes are held to its
-// row (the cache's ConfirmHint); the same sentence is a row on 2.40 to 2.55,
+// row (the cache's ConfirmHint); the same sentence is a row on 2.55,
 // a pack's damage, and the pack its message names is recorded as a hint
 // beside it, so the repair can fetch that pack again rather than look for it.
 //
@@ -295,11 +295,29 @@
 // arm's six runs span 0.3–1.3 ms of a 2–3 ms process here). What it costs a
 // request is the code host's (internal/code/host, its warm fetch).
 //
-// git ≥ 2.40 ([MinVersion]). The engine image does not install Debian's git:
-// it BUILDS the newest git release from the tarball scripts/git-pin.env pins
-// (scripts/git.sh, the recipe the suite's `make git` runs too), so a git CVE is
-// an engine CVE on a git node, and what reaches the image is a bump of that
-// pin — Debian's security updates to its own git never do.
+// # Two floors, one pin (ADR-0039)
+//
+// A git node runs git 2.55 or newer ([NodeMinVersion], the node floor),
+// checked where a pool is built — [New], and nowhere else, since every git a
+// git node runs is a pool's — and refused there as an [*ErrTooOld] naming the
+// floor. A git that only TALKS to a git node — a person's, a CI runner's, the
+// operator CLI's, the suite's client — needs 2.40 ([ClientMinVersion], the
+// client floor), checked where the engine meets such a git (gittest.Require,
+// and the CLI before it runs one). Two numbers because the two gits are
+// different people's: a client's is a laptop or a CI image the operator does
+// not choose, a node's is the engine's own. The engine image does not install
+// Debian's git (trixie ships 2.47, below the node floor): it BUILDS the
+// newest git release from the tarball scripts/git-pin.env pins
+// (scripts/git.sh, the recipe the suite's `make git` runs too), so a git CVE
+// is an engine CVE on a git node, and what reaches the image is a bump of that
+// pin — Debian's security updates to its own git never do. The suite runs
+// that pin; every case here whose subject is what git says or does in a pool
+// — the format table, what a request can reach, what the environment keeps
+// from git — runs on the node floor's own build as well; and one arm of the
+// code host's suite runs the node floor's build against the client floor's —
+// so each floor is a measured claim rather than a number, and a row or an
+// expectation only a git below the floor could meet is deleted rather than
+// kept where no run can say whether it is still right.
 package gitproc
 
 import (
@@ -494,16 +512,16 @@ func (p *Pool) report(c Cmd, res Result) {
 	}
 }
 
-// New builds a pool over the node's git, checks it is at least [MinVersion]
-// (an [*ErrTooOld] otherwise) and then that it writes the trace2 event stream
-// ([ErrNoTrace] otherwise), and resolves the lanes' sizes. Every refusal
-// names what to change.
+// New builds a pool over the node's git, checks it is at least
+// [NodeMinVersion] (an [*ErrTooOld] naming the node floor otherwise) and then
+// that it writes the trace2 event stream ([ErrNoTrace] otherwise), and
+// resolves the lanes' sizes. Every refusal names what to change.
 func New(ctx context.Context, o Options) (*Pool, error) {
 	git := o.Path
 	if git == "" {
 		found, err := exec.LookPath("git")
 		if err != nil {
-			return nil, fmt.Errorf("gitproc: no git on this node's PATH (%w): the code host runs the node's own git, 2.40 or newer; the engine image builds the newest git release", err)
+			return nil, fmt.Errorf("gitproc: no git on this node's PATH (%w): a git node runs the node's own git, %s or newer (gitproc.NodeMinVersion, the node floor); the engine image builds the newest git release", err, NodeMinVersion)
 		}
 		git = found
 	}
@@ -628,8 +646,8 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gitproc: reading the version of %s: %w", git, err)
 	}
-	if !found.AtLeast(MinVersion) {
-		return nil, &ErrTooOld{Path: git, Found: found, Want: MinVersion}
+	if !found.AtLeast(NodeMinVersion) {
+		return nil, &ErrTooOld{Path: git, Found: found, Floor: FloorNode}
 	}
 	// A git that writes no event stream can classify no failure: every
 	// damaged cache would be answered as git's own failure, silently, and

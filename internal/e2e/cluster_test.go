@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -110,8 +111,11 @@ func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstr
 	deadline := time.Now().Add(jetstreamtest.ClusterStartBudget)
 	// THE HOOK'S ARGV IS THE SAME FOR EVERY MEMBER OF EVERY ATTEMPT, and
 	// finding this test binary can fail the test — which only this
-	// goroutine may do, never a member's ([startMeshOnce]).
+	// goroutine may do, never a member's ([startMeshOnce]). So is the git
+	// every member's code host runs, held here to the node floor: the
+	// fleet's company hosts code ([fleetCompanyDoc]).
 	hook := codetest.HookCommand(t)
+	gittest.RequireNode(t)
 	for attempt := 1; attempt <= clusterStartAttempts; attempt++ {
 		// THE MESH IS BUILT INSIDE THE ATTEMPT, because reserving its
 		// ports and starting its relays is part of what the ceiling

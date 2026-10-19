@@ -30,7 +30,7 @@ import (
 // doc). A damage git names only in words — 2.56's corrupt packed object,
 // under a bare "%s" — is a hint, which decides nothing until the pack it
 // nominates is held to its row ([Cache.ConfirmHint]); the same sentence is a
-// row on 2.40 to 2.55, a pack's damage, and the pack its message names is a
+// row on 2.55, a pack's damage, and the pack its message names is a
 // hint beside it, so a confirmed one names to the repair the pack to fetch
 // again (Failure.Packs).
 //

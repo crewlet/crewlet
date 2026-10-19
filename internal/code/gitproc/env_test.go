@@ -152,8 +152,13 @@ func TestAClientProtocolIsPassedOnlyWhenWellFormed(t *testing.T) {
 // it leaves alone; the package doc has the measurement).
 func TestTheHomeCanNeverConfigureAGitProcess(t *testing.T) {
 	t.Parallel()
+	onNodeGits(t, homeCannotConfigureOn)
+}
+
+// homeCannotConfigureOn is TestTheHomeCanNeverConfigureAGitProcess on the git at git.
+func homeCannotConfigureOn(t *testing.T, git string) {
 	home := filepath.Join(t.TempDir(), "home")
-	p := realPool(t, gitproc.Options{Home: home})
+	p := poolOn(t, git, gitproc.Options{Home: home})
 	hooks := t.TempDir()
 	writeHook(t, filepath.Join(hooks, "pre-receive"), "exit 7")
 	planted := "[uploadpack]\n\tallowAnySHA1InWant = true\n[core]\n\thooksPath = " + hooks + "\n"
@@ -206,19 +211,16 @@ func TestTheHomeCanNeverConfigureAGitProcess(t *testing.T) {
 
 	// The HOST's attributes file cannot be planted from a test, so git is
 	// asked: `git var GIT_ATTR_SYSTEM` names the system file only while it
-	// is read (git 2.42 and newer, which answers 1 otherwise; an older git
-	// knows no such variable and answers usage's 129 either way, and the
-	// exact table TestTheEnvironmentIsBuiltNotInherited holds is the line
-	// there). GIT_ATTR_GLOBAL names the global file git reads, which must be
-	// the base's path that cannot exist.
-	res, err = p.Run(t.Context(), gitproc.Cmd{Args: []string{"var", "GIT_ATTR_SYSTEM"}, Answers: []int{1, 129},
+	// is read, and answers 1 otherwise. GIT_ATTR_GLOBAL names the global
+	// file git reads, which must be the base's path that cannot exist.
+	res, err = p.Run(t.Context(), gitproc.Cmd{Args: []string{"var", "GIT_ATTR_SYSTEM"}, Answers: []int{1},
 		Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
-	if err != nil || res.Exit == 0 {
+	if err != nil || res.Exit != 1 {
 		t.Errorf("git var GIT_ATTR_SYSTEM = exit %d %q, %v: the pool's git reads the host's attributes file", res.Exit, res.Stdout, err)
 	}
-	res, err = p.Run(t.Context(), gitproc.Cmd{Args: []string{"var", "GIT_ATTR_GLOBAL"}, Answers: []int{129},
+	res, err = p.Run(t.Context(), gitproc.Cmd{Args: []string{"var", "GIT_ATTR_GLOBAL"},
 		Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
-	if err != nil || (res.Exit == 0 && strings.TrimSpace(string(res.Stdout)) != "/dev/null/no-attributes") {
+	if err != nil || strings.TrimSpace(string(res.Stdout)) != "/dev/null/no-attributes" {
 		t.Errorf("git var GIT_ATTR_GLOBAL = exit %d %q, %v: want the base's /dev/null/no-attributes", res.Exit, res.Stdout, err)
 	}
 }
@@ -596,7 +598,12 @@ func TestCheckShapeIsThePoolsOwnCheck(t *testing.T) {
 // ignored, and no deprecation hint is printed for the path that disables them.
 func TestNoRepositoryFileChangesWhatHistoryIs(t *testing.T) {
 	t.Parallel()
-	p := realPool(t, gitproc.Options{})
+	onNodeGits(t, repositoryFilesOn)
+}
+
+// repositoryFilesOn is TestNoRepositoryFileChangesWhatHistoryIs on the git at git.
+func repositoryFilesOn(t *testing.T, git string) {
+	p := poolOn(t, git, gitproc.Options{})
 	c := gittest.NewClient(t)
 	wt := c.Init(t)
 	c.Commit(t, wt, map[string]string{"a": "1\n"}, "one")
@@ -630,7 +637,12 @@ func TestNoRepositoryFileChangesWhatHistoryIs(t *testing.T) {
 // never runs.
 func TestHooksRunOnlyWhereTheCallSiteNamesThem(t *testing.T) {
 	t.Parallel()
-	p := realPool(t, gitproc.Options{})
+	onNodeGits(t, hooksOn)
+}
+
+// hooksOn is TestHooksRunOnlyWhereTheCallSiteNamesThem on the git at git.
+func hooksOn(t *testing.T, git string) {
+	p := poolOn(t, git, gitproc.Options{})
 	bare := gittest.Empty(t)
 	writeHook(t, filepath.Join(bare, "hooks", "pre-receive"), "echo REPO HOOK >&2\nexit 1")
 	cmd := gitproc.Cmd{Dir: bare, Args: []string{"hook", "run", "--ignore-missing", "pre-receive"}, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline}
@@ -651,9 +663,14 @@ func TestHooksRunOnlyWhereTheCallSiteNamesThem(t *testing.T) {
 // A RUN WITH NO REPOSITORY FINDS NONE, even when HOME sits inside one.
 func TestARunWithNoRepositoryFindsNone(t *testing.T) {
 	t.Parallel()
+	onNodeGits(t, noRepositoryOn)
+}
+
+// noRepositoryOn is TestARunWithNoRepositoryFindsNone on the git at git.
+func noRepositoryOn(t *testing.T, git string) {
 	c := gittest.NewClient(t)
 	wt := c.Init(t)
-	p := realPool(t, gitproc.Options{Home: filepath.Join(wt, "home")})
+	p := poolOn(t, git, gitproc.Options{Home: filepath.Join(wt, "home")})
 	res, err := p.Run(t.Context(), gitproc.Cmd{Args: []string{"rev-parse", "--git-dir"}, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
 	var exit *gitproc.ExitError
 	if !errors.As(err, &exit) || !strings.Contains(res.Stderr, "not a git repository") {
@@ -889,8 +906,13 @@ func pkt(s string) string {
 // the run's events grow by the def_param lines and the targets fill.
 func TestNoConfigurationMovesTheTrace(t *testing.T) {
 	t.Parallel()
+	onNodeGits(t, configurationCannotMoveTheTraceOn)
+}
+
+// configurationCannotMoveTheTraceOn is TestNoConfigurationMovesTheTrace on the git at git.
+func configurationCannotMoveTheTraceOn(t *testing.T, git string) {
 	home := filepath.Join(t.TempDir(), "home")
-	p := realPool(t, gitproc.Options{Home: home})
+	p := poolOn(t, git, gitproc.Options{Home: home})
 	bare := gittest.Empty(t)
 	run := func() gitproc.Trace {
 		t.Helper()

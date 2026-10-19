@@ -27,6 +27,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitref"
@@ -108,7 +109,7 @@ func codeNodeAmended(t *testing.T, d codeDeclaration, tokens map[string]string,
 	amend func(*config.Bootstrap)) codeHost {
 
 	t.Helper()
-	gittest.Require(t)
+	gittest.RequireNode(t)
 	const token = "a-code-token"
 	n := bootUnconfiguredWith(t, token, func(b *config.Bootstrap) {
 		// THE CASE'S OWN, never the machine's: an explicit cache budget
@@ -1430,6 +1431,48 @@ func TestAnExportOfARepositoryNotDeclaredSaysSo(t *testing.T) {
 	if _, _, err := cli(t, "code", "export", "web", "-url", h.base, "-token", h.token); err == nil ||
 		!strings.Contains(err.Error(), "bundle file") {
 		t.Errorf("an export naming no bundle file = %v, want it refused naming what is missing", err)
+	}
+}
+
+// THE CLI HOLDS AN OPERATOR'S GIT TO THE CLIENT FLOOR — gitproc.ClientMinVersion,
+// 2.40 — and never to the node's: the operator's git talks to a git node and
+// runs none of its own. A git below the floor is refused as gitproc's own
+// *ErrTooOld at the client floor, naming the git, its version, the floor and
+// -git, before it is handed any work, and leaves nothing at the path; one AT
+// the floor gets past the check, to the clone this stand-in cannot make.
+//
+// Mutation: compare against gitproc.Version{Major: 2, Minor: 30} in
+// atClientFloor, and 2.39.5 is handed the clone — red.
+func TestTheCLIRefusesAGitBelowTheClientFloor(t *testing.T) {
+	t.Parallel()
+	h := codeNode(t, "    - name: web\n      owner: {seat: founder}\n")
+	const body = `echo "the stand-in was asked: $*" >&2; exit 1`
+
+	outDir := t.TempDir()
+	old := gittest.Fake(t, "git version 2.39.5", body)
+	_, _, err := cli(t, "code", "export", "web", filepath.Join(outDir, "web.bundle"), h.cfg, "-git", old)
+	var tooOld *gitproc.ErrTooOld
+	if !errors.As(err, &tooOld) || tooOld.Floor != gitproc.FloorClient || tooOld.Path != old {
+		t.Fatalf("an export on git 2.39.5 = %v, want a *gitproc.ErrTooOld at the client floor for %s", err, old)
+	}
+	for _, want := range []string{old, "2.39.5", gitproc.ClientMinVersion.String(), "gitproc.ClientMinVersion",
+		"-git"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %s: %v", want, err)
+		}
+	}
+	if entries, _ := os.ReadDir(outDir); len(entries) != 0 {
+		t.Errorf("a refused export left %v", entries)
+	}
+
+	atFloor := gittest.Fake(t, "git version "+gitproc.ClientMinVersion.String(), body)
+	_, _, err = cli(t, "code", "export", "web", filepath.Join(outDir, "web.bundle"), h.cfg, "-git", atFloor)
+	switch {
+	case errors.As(err, &tooOld):
+		t.Fatalf("a git at the client floor was refused: %v", err)
+	case err == nil || !strings.Contains(err.Error(), "the stand-in was asked: clone"):
+		t.Fatalf("an export on git %s = %v, want it past the check, at the clone the stand-in "+
+			"cannot make", gitproc.ClientMinVersion, err)
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -67,6 +68,10 @@ type Fleet interface {
 	// Token is a token bound to the human seat person; "" is one bound to
 	// nobody.
 	Token(t testing.TB, person string) string
+	// ClientGit is the git every person a case makes runs ([NewPerson]): the
+	// PATH's, held to the client floor, unless the fleet names another (the
+	// floors' arm names the client floor's own build).
+	ClientGit() string
 	// Faults is the fleet's fault script, shared across restarts.
 	Faults() *codefault.Script
 	// Evict and Readmit evict and readmit the data node.
@@ -126,9 +131,14 @@ type SoloOptions struct {
 	MaxProcesses int
 	// People are the human seats with a token each; nil is ceo and dev.
 	People []string
-	// GitPath is the git every pool runs; "" is the one on PATH (a case
-	// that records what git ran sets gittest.Recording's).
+	// GitPath is the git every pool runs; "" is the one on PATH, held to the
+	// node floor (gittest.RequireNode). A case that records what git ran
+	// sets gittest.Recording's, and the floors' arm gittest.NodeFloor's.
 	GitPath string
+	// ClientGit is the git every person a case makes runs ([NewPerson]);
+	// "" is the one on PATH, held to the client floor (gittest.Require). The
+	// floors' arm sets gittest.ClientFloor's.
+	ClientGit string
 	// CacheMaxBytes is every git node's cache budget; 0 is the git node's
 	// default.
 	CacheMaxBytes int64
@@ -191,6 +201,9 @@ func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 	o.Limits = withDefaults(o.Limits)
 	if o.People == nil {
 		o.People = []string{"ceo", "dev"}
+	}
+	if o.ClientGit == "" {
+		o.ClientGit = gittest.Require(t)
 	}
 	f := &SoloFleet{o: o, dir: t.TempDir(), creds: NewCredentials(o.People),
 		// AN HOUR AGO, so an activation a case mints — a second apart, in
@@ -296,6 +309,9 @@ func (f *SoloFleet) Nodes() []Node {
 // Token is a token bound to the human seat person, "" one bound to nobody
 // (Fleet).
 func (f *SoloFleet) Token(_ testing.TB, person string) string { return f.creds.Token(person) }
+
+// ClientGit is the git every person a case makes on the fleet runs (Fleet).
+func (f *SoloFleet) ClientGit() string { return f.o.ClientGit }
 
 // Faults is the fleet's fault script, shared across restarts (Fleet).
 func (f *SoloFleet) Faults() *codefault.Script { return f.o.Faults }

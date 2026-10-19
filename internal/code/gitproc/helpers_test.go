@@ -27,8 +27,9 @@ import (
 // configured value — never as a tight wall-clock bound.
 const hang = 30 * time.Second
 
-// fakeVersion is the version every stand-in git answers with.
-const fakeVersion = "git version 2.43.0"
+// fakeVersion is the version every stand-in git answers with: the node floor
+// exactly, the oldest git a pool is built over.
+var fakeVersion = "git version " + gitproc.NodeMinVersion.String()
 
 // newPool is a pool over o with a HOME of its own.
 func newPool(t testing.TB, o gitproc.Options) *gitproc.Pool {
@@ -50,11 +51,49 @@ func fakePool(t testing.TB, body string, o gitproc.Options) *gitproc.Pool {
 	return newPool(t, o)
 }
 
-// realPool is a pool over the real git.
+// realPool is a pool over the real git, held to the node floor before the
+// pool refuses it ([gittest.RequireNode]): the node pin under every make
+// target. A test whose SUBJECT is what git does in a pool runs on both of the
+// node's gits instead ([onNodeGits]).
 func realPool(t testing.TB, o gitproc.Options) *gitproc.Pool {
 	t.Helper()
-	o.Path = gittest.Require(t)
+	return poolOn(t, gittest.RequireNode(t), o)
+}
+
+// poolOn is a pool over the real git at git.
+func poolOn(t testing.TB, git string, o gitproc.Options) *gitproc.Pool {
+	t.Helper()
+	o.Path = git
 	return newPool(t, o)
+}
+
+// onNodeGits runs body once on each of the two gits that bound what a pool
+// may run, each a parallel subtest of its own: the NODE PIN — the PATH's git,
+// which every make target makes the newest release (gittest.RequireNode),
+// what the image builds — and the NODE FLOOR's own build, the newest patch of
+// gitproc.NodeMinVersion's series (gittest.NodeFloor), the oldest git
+// gitproc.New admits. Every claim about what a real git says or does in a
+// pool — the format table, what a request can reach, what the pool's
+// environment keeps from git — is a claim about every git a git node may
+// run, and measured on the pin alone it was a claim about one of them: the
+// floor's own expectations were wrong in three arms of the format table, and
+// nothing ran them (ADR-0039, "each floor is a measured claim"). Under every
+// make target the floor's build is required (CREWLET_REQUIRE_GIT_FLOOR=1);
+// a bare `go test` without it skips the floor's arm alone.
+func onNodeGits(t *testing.T, body func(t *testing.T, git string)) {
+	t.Helper()
+	for _, g := range []struct {
+		name string
+		git  func(testing.TB) string
+	}{
+		{"node pin", gittest.RequireNode},
+		{"node floor", gittest.NodeFloor},
+	} {
+		t.Run(g.name, func(t *testing.T) {
+			t.Parallel()
+			body(t, g.git(t))
+		})
+	}
 }
 
 // quote is s as one POSIX shell word.

@@ -396,6 +396,7 @@ func newSandboxNode(t testing.TB, company *config.Company) *Engine {
 	b.Stream.StoreDir = filepath.Join(dir, "stream")
 	PinGitLanes(&b)
 	SeedStore(t, &b)
+	RequireNodeGit(t, &b, company)
 	e, err := New(t.Context(), Options{
 		Bootstrap: &b, Company: company,
 		ActivatedAt:         time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),

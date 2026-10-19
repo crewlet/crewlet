@@ -34,7 +34,7 @@ import (
 //     key, so no other process in a cache is changed by it, and a bitmap
 //     written without the table is read as git always read one.
 //     Unconditional, never a knob: every request that opens the bitmap is
-//     the cheaper for it, and no git at the 2.40 floor lacks it.
+//     the cheaper for it, and no git at the node floor lacks it.
 //   - uploadpack.allowFilter: partial clones (--filter=blob:none), and the
 //     uploadpackfilter keys after it: ONLY THE FILTERS A BITMAP CAN ANSWER.
 //     uploadpackfilter.allow=false refuses every filter the keys after it do
@@ -46,7 +46,7 @@ import (
 //     fetch reaches whatever the repository holds, and git refuses them in
 //     its own words (`filter 'sparse:oid' not supported`, `tree filter
 //     allows max depth 0, but got 1`), which the client prints after
-//     `remote error:`. Every key is at the 2.40 floor. A served filter is
+//     `remote error:`. Every key predates the node floor. A served filter is
 //     answered from the bitmap only where this cache HOLDS one: before the
 //     maintainer's first run over an incarnation, and on a repository whose
 //     bitmap the node's memory refuses (code_maintenance_refused), every

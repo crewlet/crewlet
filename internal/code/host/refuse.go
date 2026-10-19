@@ -189,7 +189,7 @@ func (s *Server) gitStopped(w http.ResponseWriter, r *http.Request, name string,
 //     outside its allowlists (ErrConfig, ErrEnv), capturing output a call site
 //     must stream (ErrCaptureFull, whose own message says so), or reaching a
 //     pool that should never have been built — git's HOME not empty
-//     (ErrHome), a git below the floor (*gitproc.ErrTooOld), a git that
+//     (ErrHome), a git below the node floor (*gitproc.ErrTooOld), a git that
 //     writes no trace2 stream (ErrNoTrace), each refused by gitproc.New and
 //     never by a run;
 //   - the cache refusing the host's call (cache.ErrInvalid): a Synced or a

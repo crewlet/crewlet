@@ -76,7 +76,8 @@ type Trace struct {
 	Unread int
 	// Version is the git version the leader's version event names (its
 	// `exe`), and EventVersion that event's `evt` — the format of the stream
-	// (3 on 2.40–2.43, 4 from 2.47); Version is empty for a git that wrote
+	// (4 on every git a pool runs, measured on 2.55.0 and 2.56.0), logged so
+	// a later git's new format is seen; Version is empty for a git that wrote
 	// no stream.
 	Version, EventVersion string
 	// Kinds is every kind an event's format classifies as.
@@ -272,8 +273,8 @@ func (s *traceSink) classify(format, message string) {
 		}
 		s.rank = max(s.rank, rank)
 		if c == packedObjectRow {
-			// The same sentence 2.56 reports through "%s" is a ROW on 2.40
-			// to 2.55, and its message names the same pack: read as a hint
+			// The same sentence 2.56 reports through "%s" is a ROW on
+			// 2.55, and its message names the same pack: read as a hint
 			// too, under the same anchoring, so the repair can name the pack
 			// it would otherwise have to find (the cache's ConfirmHint).
 			if h, ok := hintOf(message, s.dir); ok {
@@ -294,7 +295,7 @@ func (s *traceSink) classify(format, message string) {
 }
 
 // packedObjectRow is the canonical format of git's sentence for a corrupt
-// packed object, a row of the table on 2.40 to 2.55 (classify.go), whose
+// packed object, a row of the table on 2.55 (classify.go), whose
 // message is the sentence a hint is read from (hintOf).
 var packedObjectRow = canonicalFormat(`packed object %s (stored in %s) is corrupt`)
 
@@ -313,7 +314,7 @@ func (s *traceSink) hint(h Hint) {
 // hintOf is the hint message names when it is EXACTLY git's sentence for a
 // corrupt packed object — "packed object <id> (stored in <pack>) is corrupt",
 // nothing before it and nothing after, reported through a bare "%s" (2.56) or
-// as the row whose format it is (2.40 to 2.55) — with <pack> a pack file of
+// as the row whose format it is (2.55) — with <pack> a pack file of
 // dir's own pack directory, as rev-list spells it
 // (dir/objects/pack/pack-<checksum>.pack) or as upload-pack does, from inside
 // the repository (./objects/pack/pack-<checksum>.pack). Anything else names no

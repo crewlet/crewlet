@@ -186,7 +186,7 @@
 // it, like any other process's. A damage git 2.56 names only through a bare
 // "%s" — a corrupt packed object — is a HINT naming a pack, and repaired only
 // once the cache has held that pack to its row and found it is not
-// (cache.Cache.ConfirmHint); the same sentence is a row on 2.40 to 2.55, and
+// (cache.Cache.ConfirmHint); the same sentence is a row on 2.55, and
 // its pack is confirmed the same way beside the damage the row names, so the
 // repair is told which pack to fetch again (cache.Failure.Packs) rather than
 // look for it. A FETCH'S FIRST BYTE IS ITS PACK'S: upload-pack
@@ -274,9 +274,8 @@
 // indexed it just before, so what the refs cost is not mixed with packs
 // another arm left outside an index. The other node's sync, packed-refs
 // merged as a stream, is 8.0–9.4, 11–12 and 42 ms — at the bound 14% of the
-// request: the packed-refs a cache writes in place of reftable
-// (gitproc.MinVersion) cost a delta sync tens of milliseconds there and the
-// push nothing.
+// request: the packed-refs file a cache writes itself, in place of reftable,
+// cost a delta sync tens of milliseconds there and the push nothing.
 //
 // A COMMIT DATED BEFORE ITS PARENT — a person's clock that is behind
 // (gittest.Skewed) — is what makes a push pay for the history, measured over

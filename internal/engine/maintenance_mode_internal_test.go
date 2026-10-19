@@ -126,6 +126,7 @@ func aNodeInModeOf(t *testing.T, mode statelog.MaintenanceMode, doc string) (*En
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
+	RequireNodeGit(t, &b, cfg)
 	back, err := OpenBackends(t.Context(), &b, cfg, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)

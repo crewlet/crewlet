@@ -144,6 +144,11 @@ const (
 	// MidxChunkTwice names the multi-pack-index's first chunk's id again in
 	// its second row.
 	MidxChunkTwice DamageCase = "F12"
+	// MidxFanoutSize moves the offset of the chunk the multi-pack-index's
+	// table lists after its OIDF chunk four bytes on: the table still
+	// aligned, and the fanout, whose size git reads off that offset, four
+	// bytes longer than its 256 entries.
+	MidxFanoutSize DamageCase = "F13"
 	// MidxFanout sets the multi-pack-index's first fanout entry to
 	// 0xffffffff.
 	MidxFanout DamageCase = "FO"
@@ -225,7 +230,7 @@ var DamageCases = []DamageCase{
 	RevSwapped, RevOverwritten, RevTrailer, DeltaData, DeltaBase, DeltaBaseData,
 	MidxRidx, MidxSignature, MidxTruncated, MidxVersion, MidxHashVersion, MidxNoChunks, MidxFirstChunkZeroed,
 	MidxPackNamesMissing, MidxFanoutMissing, MidxLookupMissing, MidxOffsetsMissing, MidxPackNamesOrder,
-	MidxChunkPastEnd, MidxChunkMisaligned, MidxChunkTwice, MidxFanout, MidxOffset, MidxTrailer,
+	MidxChunkPastEnd, MidxChunkMisaligned, MidxChunkTwice, MidxFanoutSize, MidxFanout, MidxOffset, MidxTrailer,
 	BitmapSignature, BitmapTruncated, BitmapVersion, BitmapBody, BitmapTrailer, BitmapEntries,
 	GraphSignature, GraphTruncated, GraphVersion, GraphHashVersion, GraphFirstChunkZeroed, GraphNoChunks,
 	GraphChunkShifted, GraphParentPast, GraphParentSelf, GraphParentOther, GraphFanoutMissing, GraphGeneration,
@@ -445,6 +450,8 @@ func (d *damager) derived(c DamageCase, oids []string) {
 	case MidxChunkTwice:
 		first := ChunkRow(MidxHeader, 0)
 		d.overwrite(midx, ChunkRow(MidxHeader, 1), d.bytesAt(midx, first, 4))
+	case MidxFanoutSize:
+		d.tableOffset(midx, MidxHeader, d.chunkRow(midx, MidxHeader, "OIDF")+1, func(off uint64) uint64 { return off + 4 })
 	case MidxFanout:
 		start, _ := MidxChunk(tb, midx, "OIDF")
 		d.overwrite(midx, start, []byte{0xff, 0xff, 0xff, 0xff})
@@ -735,6 +742,20 @@ func (d *damager) renameChunk(path string, header int, from, to string) {
 		}
 	}
 	d.tb.Fatalf("%s has no %s chunk", path, from)
+}
+
+// chunkRow is the row of chunk id in the table of contents of the
+// chunk-format file at path, failing the test on a file with no such chunk.
+func (d *damager) chunkRow(path string, header int, id string) int {
+	d.tb.Helper()
+	body := d.read(path)
+	for i := range int(body[6]) {
+		if at := ChunkRow(header, i); string(body[at:at+4]) == id {
+			return i
+		}
+	}
+	d.tb.Fatalf("%s has no %s chunk", path, id)
+	return 0
 }
 
 // tableOffset sets row i's offset in the chunk-format file at path to set's

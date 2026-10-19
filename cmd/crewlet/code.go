@@ -1204,7 +1204,7 @@ func codeExport(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err = g.atLeast(ctx, gitproc.MinVersion); err != nil {
+	if err = g.atClientFloor(ctx); err != nil {
 		return err
 	}
 	target, err := filepath.Abs(file)
@@ -1420,8 +1420,8 @@ func newOperatorGit(gitPath string, client *nodeClient, environ []string) (opera
 	case path == "":
 		found, err := exec.LookPath("git")
 		if err != nil {
-			return operatorGit{}, fmt.Errorf("no git on PATH (%w): install git %s or newer, or name one with -git",
-				err, gitproc.MinVersion)
+			return operatorGit{}, fmt.Errorf("no git on PATH (%w): install git %s or newer (gitproc.ClientMinVersion, "+
+				"the client floor), or name one with -git", err, gitproc.ClientMinVersion)
 		}
 		path = found
 	case !strings.ContainsRune(path, filepath.Separator):
@@ -1514,8 +1514,11 @@ func (g operatorGit) targetEnv() []string {
 	)
 }
 
-// atLeast refuses a git older than want, naming it and where it is.
-func (g operatorGit) atLeast(ctx context.Context, want gitproc.Version) error {
+// atClientFloor refuses a git below the client floor (gitproc.ClientMinVersion)
+// — the operator's git TALKS to a git node and runs none of its own, so the
+// node floor is not its business — as gitproc's own *ErrTooOld, naming the
+// git, its version and the floor, with the one remedy only this command has.
+func (g operatorGit) atClientFloor(ctx context.Context) error {
 	out, err := g.run(ctx, g.environ, "", "version")
 	if err != nil {
 		return err
@@ -1524,9 +1527,8 @@ func (g operatorGit) atLeast(ctx context.Context, want gitproc.Version) error {
 	if err != nil {
 		return fmt.Errorf("git at %s: %w", g.path, err)
 	}
-	if !v.AtLeast(want) {
-		return fmt.Errorf("git at %s is %s, and this needs %s or newer: install a newer git, or name one "+
-			"with -git", g.path, v, want)
+	if !v.AtLeast(gitproc.ClientMinVersion) {
+		return fmt.Errorf("%w; or name one with -git", &gitproc.ErrTooOld{Path: g.path, Found: v, Floor: gitproc.FloorClient})
 	}
 	return nil
 }

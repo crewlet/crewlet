@@ -436,6 +436,7 @@ func TestANodeStillReachingTheFleetsRevisionDeclinesThePurgeQuietly(t *testing.T
 // fixed instant, with no reconciler.
 func bootCodeNode(t *testing.T, b *config.Bootstrap, company *config.Company) (*Engine, *Backends) {
 	t.Helper()
+	RequireNodeGit(t, b, company)
 	back, err := OpenBackends(t.Context(), b, company, nil)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)

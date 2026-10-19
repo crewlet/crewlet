@@ -1038,16 +1038,22 @@ func TestARunReadsItsTraceToTheEnd(t *testing.T) {
 // read as surely as the leader's: a short push through real receive-pack,
 // which itself exits 0 and reports the failure in its answer, carries
 // index-pack's "early EOF" (a child's, at depth 2) as its Result's damage;
-// from git 2.47 a clone over a damaged reverse index carries pack-objects'
-// position row (upload-pack's child); and a commit-graph's damaged chunk
+// a clone over a damaged reverse index carries pack-objects' position row
+// (upload-pack's child); and a commit-graph's damaged chunk
 // table under upload-pack is named whichever process of the tree read it.
 //
 // Mutation: classify only the leader's own events (a sid with no "/") — the
 // short push's arm is red.
 func TestEveryProcessInTheTreeReportsToOneStream(t *testing.T) {
 	t.Parallel()
+	onNodeGits(t, everyProcessReportsOn)
+}
+
+// everyProcessReportsOn is TestEveryProcessInTheTreeReportsToOneStream on the
+// git at git.
+func everyProcessReportsOn(t *testing.T, git string) {
 	f := newFixture(t)
-	p := realPool(t, gitproc.Options{})
+	p := poolOn(t, git, gitproc.Options{})
 
 	t.Run("a short push", func(t *testing.T) {
 		d := &damaged{f: f, p: p}
@@ -1066,15 +1072,6 @@ func TestEveryProcessInTheTreeReportsToOneStream(t *testing.T) {
 		}
 	})
 	t.Run("a clone over a damaged reverse index", func(t *testing.T) {
-		if !p.Version().AtLeast(gittest.NamesMidxPosition) {
-			// Before 2.47 pack-objects does not check the positions and
-			// dies of a segmentation fault saying nothing — there is no
-			// child's report to read: TestTheFormatTableIsWhatGitSays
-			// holds what such a git says instead (E). Declared in
-			// skipgate, so a run that skips it says so.
-			t.Skipf("git %s: a clone's pack-objects reports a damaged reverse index from %s (gittest.NamesMidxPosition)",
-				p.Version(), gittest.NamesMidxPosition)
-		}
 		d := &damaged{f: f, p: p}
 		d.dir, d.older, d.newer = f.packed(t)
 		writeMidx(t, d)
@@ -1113,17 +1110,19 @@ func TestACrashIsASignalThePoolDidNotSend(t *testing.T) {
 	t.Parallel()
 	t.Run("a clone whose pack-objects dies of a damaged reverse index", func(t *testing.T) {
 		t.Parallel()
-		f := gittest.NewFixture(t)
-		s := gittest.Bare(t, f)
-		gittest.Damage(t, s.Dir, gittest.RevOverwritten, f.Tip())
-		res, err := realPool(t, gitproc.Options{}).Run(t.Context(), fetchV2(s.Dir, f.Tip()))
-		if err == nil || res.Exit < 0 {
-			t.Fatalf("the clone: exit %d, %v; want upload-pack to fail by itself", res.Exit, err)
-		}
-		if !res.Crashed || res.Trace.Crashes == 0 {
-			t.Errorf("Crashed %v with %d crash reports (formats %q), want its pack-objects' crash",
-				res.Crashed, res.Trace.Crashes, res.Trace.Formats)
-		}
+		onNodeGits(t, func(t *testing.T, git string) {
+			f := gittest.NewFixture(t)
+			s := gittest.Bare(t, f)
+			gittest.Damage(t, s.Dir, gittest.RevOverwritten, f.Tip())
+			res, err := poolOn(t, git, gitproc.Options{}).Run(t.Context(), fetchV2(s.Dir, f.Tip()))
+			if err == nil || res.Exit < 0 {
+				t.Fatalf("the clone: exit %d, %v; want upload-pack to fail by itself", res.Exit, err)
+			}
+			if !res.Crashed || res.Trace.Crashes == 0 {
+				t.Errorf("Crashed %v with %d crash reports (formats %q), want its pack-objects' crash",
+					res.Crashed, res.Trace.Crashes, res.Trace.Formats)
+			}
+		})
 	})
 	for _, c := range []struct {
 		name, body string

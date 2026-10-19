@@ -1110,9 +1110,11 @@ company that sets [`code.native`](../concepts/code-host.md), serves the
 company's repositories on its API listener under `/git/`, from a disposable
 cache on its own disk. What such a node needs from its host:
 
-- **git 2.40 or newer on its `PATH`.** The node runs the host's own git as a
-  subprocess per request and checks its version at boot: an older one refuses
-  the boot, naming the version and the path it found. The published image does
+- **git 2.55 or newer on its `PATH`** — the node floor. The node runs the
+  host's own git as a subprocess per request and checks its version at boot:
+  an older one refuses the boot, naming the version and the path it found. The
+  code host's clients — a person's git, a CI runner's, a sandbox box's — need
+  only 2.40 or newer (the client floor). The published image does
   not install Debian's git: it builds the newest git release from a pinned,
   checksummed tarball ([`scripts/git-pin.env`](https://github.com/crewlet/crewlet/blob/main/scripts/git-pin.env)),
   cross-compiled for each platform, with its HTTPS transport (libcurl, the

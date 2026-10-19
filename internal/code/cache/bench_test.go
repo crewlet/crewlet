@@ -48,7 +48,7 @@ import (
 // fixture of millions of real packs would measure the disk filling up.
 func BenchmarkBoot(b *testing.B) {
 	quiet(b)
-	gittest.Require(b)
+	gittest.RequireNode(b)
 	for _, arm := range []struct {
 		repos, packs int
 		states       bool

@@ -759,8 +759,9 @@ failing on one damaged copy cost one repair. How depends on the damage:
   ordinary schedule's after it rather than a loop
   (`code_cache_derived_damaged_again`). A clone over an index whose positions
   are damaged makes git die `invalid MIDX object position, MIDX is likely
-  corrupt` (git 2.47 and later; an older git crashes there without a word) as
-  it starts building the pack, after the answer's first line — so a fetch's
+  corrupt` (every git at the node floor; one older than 2.47 crashed there
+  without a word) as it starts building the pack, after the answer's first
+  line — so a fetch's
   answer starts only once its pack does, and a fetch whose git dies before
   then has shown the client nothing and is run again, over the repaired copy.
   Only damage that survives the drop — a pack the index named is itself
@@ -893,8 +894,10 @@ audit ([ADR-0037](https://github.com/crewlet/crewlet/blob/main/adr/0037-a-person
 git is served by every node whose `node.roles` name `git` (an undeclared node
 has every role), once the company sets `code.native`: the node builds the code
 host at boot, or at the activation that brings its native runtime up, and
-refuses to start one on a git older than 2.40. A node without the role answers
-every `/git/` request `404`. Every node answers the code host's REST reads
+refuses to start one on a git older than 2.55 (the node floor), naming the git it
+found; a person's git, CI's or a sandbox box's needs 2.40 or newer. A node
+without the role answers every `/git/` request `404`. Every node answers the
+code host's REST reads
 (`GET /code/repos…`, [API Endpoints](../reference/api-endpoints.md#the-code-host-git-and-code)).
 The [Code guide](../guides/code.md) walks through turning it on, declaring a
 repository, binding a token and the first push.
@@ -1256,7 +1259,7 @@ reference](../reference/metrics.md)).
 | `code_git_unavailable` | `WARN` | A git request could not read the code log here (no quorum, a copy out of service, no data node answering), answered 503. Only the code log's own failure is logged so. |
 | `code_object_store_unavailable` | `WARN` | A fetch's sync could not read a pack from the object store for a reason that is no answer about the pack — a timeout, a throttle past its retries, the store unreachable — answered 503. A pack the store does not hold, or holds damaged, is `code_pack_missing` instead. |
 | `code_cache_sized` | `INFO` | The node built its code host and sized its cache: the cache's `dir`, its budget in `bytes`, whether it was `derived` from the volume or set as `git.cache_max_bytes`, and every figure it was decided from — the `room` the cache can use, which is the volume's `free` space plus what the cache already `held`, less what an embedded `broker` on the same volume may still write under its limit and the request `spools`' allowance (64 MiB for each of the pool's `transfers`), and whether the volume is `dedicated` to it (half the room where it is shared, seven eighths where it is the cache's own). `WARN`, with a `detail` naming what to change, when a derived budget comes out under 1 GiB or an explicit one is more than the room. A room of nothing is never logged here: the node refuses to build its code host, and the error names the same figures and what to change. |
-| `code_git_ready` | `INFO` | The node's git is 2.40 or newer and its process pool is built: the git's `path` and `version`, its `read_slots`, `maintenance_slots` and `transfer_slots`, the `pack_reuse` it asks git for (`multi` on git 2.48 or newer; `true`, the bitmap's preferred pack alone, on an older git, whose multi-pack reuse sends a pack the client refuses), and the empty `home` every git process runs with. |
+| `code_git_ready` | `INFO` | The node's git is 2.55 or newer (the node floor, `gitproc.NodeMinVersion`) and its process pool is built: the git's `path` and `version`, its `read_slots`, `maintenance_slots` and `transfer_slots`, the `pack_reuse` it asks git for (`multi` on git 2.48 or newer; `true`, the bitmap's preferred pack alone, on an older git, whose multi-pack reuse sends a pack the client refuses), and the empty `home` every git process runs with. |
 | `code_git_killed` | `WARN` | The node ended a git process (`class`, `command`): past its deadline (`reason`: `deadline`), or having read and written nothing for its stall bound (`stall`) — a minute for a transfer, twelve of git's keepalives. `DEBUG` when its caller ended it (`caller`): a client that hung up, a node stopping. |
 | `code_git_straggler_killed`, `code_git_pipe_held` | `WARN` | Something a git process started outlived it: still in its process group, and killed; or outside it and holding git's output open, which the node closed after five seconds. |
 | `code_git_signal_withheld`, `code_git_signal_failed` | `WARN` | The node could not read the kernel's record of a git process's group, so sent it no signal rather than risk signalling a stranger; or sending one failed. |

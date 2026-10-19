@@ -3,6 +3,7 @@ package engine_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -78,8 +79,19 @@ func gitNodeBootstrap(t *testing.T, roles []string) *config.Bootstrap {
 }
 
 // newGitNode boots an engine over b for the company doc, its hook this test
-// binary, and stops it at the end of the test.
+// binary, and stops it at the end of the test — on the git the suite runs,
+// held to the node floor first where the boot builds a code host
+// (engine.RequireNodeGit), so a machine below it reads the contributor's
+// sentence rather than the node's refusal.
 func newGitNode(t *testing.T, b *config.Bootstrap, doc string) (*engine.Engine, error) {
+	t.Helper()
+	engine.RequireNodeGit(t, b, parsedCompany(t, doc))
+	return bootGitNode(t, b, doc)
+}
+
+// bootGitNode is newGitNode on whatever git PATH names, for a case that hands
+// the boot a git of its own.
+func bootGitNode(t *testing.T, b *config.Bootstrap, doc string) (*engine.Engine, error) {
 	t.Helper()
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: b, Company: parsedCompany(t, doc),
@@ -148,6 +160,7 @@ func TestACompanyWithoutNativeCodeBuildsNoHost(t *testing.T) {
 // the cache's, naming no setting.
 func TestAVolumeWithNoRoomRefusesTheCodeHostByName(t *testing.T) {
 	t.Parallel()
+	gittest.RequireNode(t)
 	const gib = int64(1) << 30
 	boot := func(b *config.Bootstrap) (*engine.Engine, error) {
 		e, err := engine.New(t.Context(), engine.WithCacheDisk(engine.Options{
@@ -184,32 +197,40 @@ func TestAVolumeWithNoRoomRefusesTheCodeHostByName(t *testing.T) {
 	}
 }
 
-// A GIT NODE BOOTS ONLY ON GIT 2.40 OR NEWER, and the refusal names the role,
-// code.native, the version it needs and the git it found — a boot, not a first
-// push, is where an operator learns the host's git is too old.
+// A GIT NODE BOOTS ONLY AT ITS FLOOR — git 2.55 or newer, gitproc.NodeMinVersion
+// — and the refusal names the role, code.native, the version it needs and the
+// git it found: a boot, not a first push, is where an operator learns the
+// host's git is too old.
 //
 // Not parallel: it sets PATH, which every git the process starts reads.
-func TestAGitNodeBootsOnlyWithGit240(t *testing.T) {
-	old := gittest.Fake(t, "git version 2.39.5", "exit 1")
+//
+// Mutation: check gitproc.ClientMinVersion in gitproc.New, and the 2.54.9 node
+// boots.
+func TestAGitNodeBootsOnlyAtItsFloor(t *testing.T) {
+	old := gittest.Fake(t, "git version 2.54.9", "exit 1")
 	t.Setenv("PATH", filepath.Dir(old))
-	_, err := newGitNode(t, gitNodeBootstrap(t, nil), gitCompany)
+	_, err := bootGitNode(t, gitNodeBootstrap(t, nil), gitCompany)
 	if err == nil {
-		t.Fatal("a git node booted on git 2.39.5")
+		t.Fatal("a git node booted on git 2.54.9")
 	}
-	for _, want := range []string{`"git"`, "code.native", "2.40", old} {
+	for _, want := range []string{`"git"`, "code.native", gitproc.NodeMinVersion.String(), "2.54.9", old} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not name %s: %v", want, err)
 		}
 	}
+	var tooOld *gitproc.ErrTooOld
+	if !errors.As(err, &tooOld) || tooOld.Floor != gitproc.FloorNode {
+		t.Errorf("the refusal is %v, want a *gitproc.ErrTooOld at the node floor", err)
+	}
 
-	fresh := gittest.Fake(t, "git version 2.40.0", "exit 1")
+	fresh := gittest.Fake(t, "git version "+gitproc.NodeMinVersion.String(), "exit 1")
 	t.Setenv("PATH", filepath.Dir(fresh))
-	e, err := newGitNode(t, gitNodeBootstrap(t, nil), gitCompany)
+	e, err := bootGitNode(t, gitNodeBootstrap(t, nil), gitCompany)
 	if err != nil {
-		t.Fatalf("a git node on git 2.40.0 did not boot: %v", err)
+		t.Fatalf("a git node on git %s did not boot: %v", gitproc.NodeMinVersion, err)
 	}
 	if _, ok := e.CodeHost(); !ok {
-		t.Fatal("a git node on git 2.40.0 built no code host")
+		t.Fatalf("a git node on git %s built no code host", gitproc.NodeMinVersion)
 	}
 }
 
@@ -220,7 +241,6 @@ func TestAGitNodeBootsOnlyWithGit240(t *testing.T) {
 // built over the engine's own Persons, Audit, Estate and Objects.
 func TestAPersonPushesThroughTheEnginesHost(t *testing.T) {
 	t.Parallel()
-	gittest.Require(t)
 	b := gitNodeBootstrap(t, nil)
 	e, err := newGitNode(t, b, gitCompany)
 	if err != nil {
@@ -290,7 +310,7 @@ func TestAPersonPushesThroughTheEnginesHost(t *testing.T) {
 // fill nothing from the cache in codeReading, and the alarm never fires.
 func TestTheGitCachesMaintenanceAlarmFiresOnItsNode(t *testing.T) {
 	t.Parallel()
-	gittest.Require(t)
+	gittest.RequireNode(t)
 	const memory = int64(8) << 30
 	b := gitNodeBootstrap(t, nil)
 	b.Git.MaxTransfers = int(memory/gitproc.TransferMemory) + 1

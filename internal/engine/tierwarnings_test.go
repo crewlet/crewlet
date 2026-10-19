@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -41,6 +42,7 @@ roles:
 // Mutation: warn whatever the apply's status, and the refused ticks log it.
 func TestAnAppliedEpochLogsItsTierWarnings(t *testing.T) {
 	t.Parallel()
+	gittest.RequireNode(t) // an activation hosts code on this node
 	logs := &logBuffer{}
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
@@ -106,6 +108,7 @@ func TestAnAppliedEpochLogsItsTierWarnings(t *testing.T) {
 // node derived, and nothing is said.
 func TestAGitNodeComparesItsDerivedBudget(t *testing.T) {
 	t.Parallel()
+	gittest.RequireNode(t) // an activation hosts code on this node
 	const gib = int64(1) << 30
 	logs := &logBuffer{}
 	e := newEngine(t, engine.WithCacheDisk(engine.Options{Company: parsedCompany(t, logless),
@@ -142,6 +145,7 @@ func TestAGitNodeComparesItsDerivedBudget(t *testing.T) {
 // Mutation: log the boot company's warnings in engine.New as well, and the
 // count is two.
 func TestABootedCompanysTierWarningsAreSaidOnce(t *testing.T) {
+	gittest.RequireNode(t) // the booted company hosts code on this node
 	logs := &logBuffer{}
 	logging.Configure(slog.LevelInfo, logging.FormatJSON, logs)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })

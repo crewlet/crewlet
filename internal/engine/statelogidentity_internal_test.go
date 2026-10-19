@@ -685,6 +685,7 @@ func aRunningNodeWith(t *testing.T, company string, opts Options) (*Engine, nats
 	}
 	t.Cleanup(func() { back.Close(context.Background()) })
 	opts.Bootstrap, opts.Company, opts.Backends = &b, cfg, back
+	RequireNodeGit(t, &b, cfg)
 	e, err := New(t.Context(), opts)
 	if err != nil {
 		t.Fatalf("New: %v", err)

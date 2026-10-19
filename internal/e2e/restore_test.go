@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/backup/backuptest"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
@@ -228,6 +229,8 @@ func copyObjects(t *testing.T, bucket *s3fake.Server, dir string, m backup.Manif
 // failure dropping the skip from the main case turns it into.
 func TestARestoredNodeServesEveryRefWhole(t *testing.T) {
 	t.Parallel()
+	// Every node this case boots hosts code: its git, held to the node floor.
+	gittest.RequireNode(t)
 	const repo = "restored"
 
 	fakeA := s3fake.Start(t, restoreBucket)

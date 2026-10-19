@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -569,6 +570,10 @@ func (c *cluster) Collect(t testing.TB) collect.CollectionReport {
 }
 
 func (c *cluster) Token(_ testing.TB, person string) string { return c.creds.Token(person) }
+
+// ClientGit is the PATH's git, held to the client floor: a fleet's persons run
+// what the one-node suite's do outside its floors' arm.
+func (c *cluster) ClientGit() string { return gittest.Require(c.life) }
 
 func (c *cluster) Faults() *codefault.Script { return c.faults }
 

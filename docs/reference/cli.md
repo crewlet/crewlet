@@ -989,8 +989,13 @@ $ git clone web.bundle web        # restores it, anywhere
 ```
 
 It runs **your** git — the first on `PATH`, or `-git PATH` (a name is looked
-up on `PATH`, a relative path taken from where you run the command); 2.40 or
-newer — with your environment and your configuration, as a `git clone
+up on `PATH`, a relative path taken from where you run the command), which
+must be 2.40 or newer: the client floor, `gitproc.ClientMinVersion`, below
+which it is refused before anything runs, as `gitproc: <path> is git
+<version>, and a client of the code host needs git 2.40.0 or newer
+(gitproc.ClientMinVersion, the client floor): install a newer git — on macOS,
+Homebrew's: Apple's bundled git is 2.39; or name one with -git`. It runs it
+with your environment and your configuration, as a `git clone
 --mirror` through the node's git routes, then bundles the mirror, naming the
 mirror to every command (`--git-dir`), so `safe.bareRepository=explicit` in
 your configuration refuses none of them. Your token reaches git only through
@@ -1045,8 +1050,9 @@ In order:
    import also asks the node who the token is (`GET /viewer`): every push's
    record names that person, so it is part of what one push may carry
    (step 6).
-2. **Before anything is downloaded**, your git (2.40 or newer — the first on
-   `PATH`, or `-git PATH`) reads the source's own list of refs, and the import
+2. **Before anything is downloaded**, your git (2.40 or newer, the client
+   floor, refused below it as `export` refuses it — the first on `PATH`, or
+   `-git PATH`) reads the source's own list of refs, and the import
    refuses a ref the code host takes no push of (git's ref rules, at most 255
    bytes of UTF-8) and more refs than one repository holds (100 000). Where the
    source asks for a user name and password none of your credential helpers

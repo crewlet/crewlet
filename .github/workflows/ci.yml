@@ -32,10 +32,11 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # THE GO CACHES. Every Go job below runs the same six steps around its own
-# work, written ONCE here as YAML anchors (`&name`) and repeated by alias
-# (`*name`), so the jobs cannot drift apart. GitHub Actions and Dependabot both
-# resolve aliases; merge keys (`<<:`) are NOT supported, which is why each
-# anchor is a whole step.
+# work — `git recipe (macOS)` all but the module cache's, for the reason given
+# at that job — written ONCE here as YAML anchors (`&name`) and repeated by
+# alias (`*name`), so the jobs cannot drift apart. GitHub Actions and
+# Dependabot both resolve aliases; merge keys (`<<:`) are NOT supported, which
+# is why each anchor is a whole step.
 #
 # Why not setup-go's own cache, which this used to be: it keeps BOTH Go caches
 # in ONE entry under ONE key, made of the runner, the Go version and a
@@ -90,10 +91,17 @@ jobs:
       # an entry this job created or used is newer than the epoch, and one it
       # only restored is older — unless the run that saved it ended within the
       # hour, which is at most an hour of churn.
+      #
+      # Written for BOTH dates, because `git recipe (macOS)` runs it too: BSD
+      # date takes `-v-1H` and GNU date `-d '-1 hour'`, each refusing the
+      # other's, and the stamp is set with POSIX `touch -t`, since BSD touch
+      # refuses GNU touch's `-d`. Both run in UTC, because `touch -t` reads its
+      # argument in the zone TZ names.
       - &go-caches
         name: locate the Go caches, and mark when this job began using them
         run: |
-          touch -d '-1 hour' "$RUNNER_TEMP/gocache-epoch"
+          epoch="$(TZ=UTC0 date -v-1H +%Y%m%d%H%M.%S 2>/dev/null || TZ=UTC0 date -d '-1 hour' +%Y%m%d%H%M.%S)"
+          TZ=UTC0 touch -t "$epoch" "$RUNNER_TEMP/gocache-epoch"
           gocache="$(go env GOCACHE)"
           gomodcache="$(go env GOMODCACHE)"
           echo "GOCACHE=$gocache" >> "$GITHUB_ENV"
@@ -414,7 +422,8 @@ jobs:
       # not use (git.sh names each build by version and recipe, so it would
       # build beside them anyway). A pull request that changes either builds the
       # three gits, about four minutes, on every run until main saves them. Only
-      # this job and `end-to-end gates` run git, so only they carry the steps.
+      # this job, `end-to-end gates` and `git recipe (macOS)` run git, so only
+      # they carry the steps.
       - &git-cache-dir
         name: name the pinned gits' cache directory
         run: echo "CREWLET_GIT_CACHE=$HOME/.cache/crewlet/git" >> "$GITHUB_ENV"
@@ -530,6 +539,44 @@ jobs:
       - *git-deps
       - name: the packages that run alone
         run: make test-solo
+      - *git-save
+      - *gobuild-prune
+      - *gobuild-save
+
+  # THE RECIPE'S macOS BRANCH, on every pull request: scripts/git.sh builds the
+  # three pinned gits there with shasum, sysctl's core count and the SDK's
+  # libcurl, none of which any Linux job reaches, and `make test-gitproc` runs
+  # gitproc's own suite on what it built — the floor judgement, a real pool on
+  # the node pin, and the two floors' builds through gittest.NodeFloor and
+  # gittest.ClientFloor, required as every make target requires them. A
+  # contributor on a Mac runs this recipe (CONTRIBUTING.md, Development setup),
+  # so a failure here is theirs before it is anybody's: it is fixed, never
+  # skipped. Whether the job is a REQUIRED check is a repository setting.
+  #
+  # The pinned gits' cache steps are `test (race)`'s, whose key already
+  # carries the runner's OS and architecture, and there is no install step:
+  # Xcode's command line tools, on the image, supply the compiler, libcurl and
+  # zlib. The BUILD cache is every Go job's, under this job's own key: what it
+  # keeps is the race-instrumented standard library, gitproc's test binaries
+  # and skipgate for the runner's darwin, which no other job compiles —
+  # measured from an empty cache on four Linux vCPUs, 29–31 s for the test
+  # binaries and 10 s for skipgate, against 1.8 s warm, in an entry of 151 MB.
+  # The MODULE cache is not: `build + vet` saves it on Linux, a cache is
+  # restored only on the OS that saved it, and an entry of this job's own would
+  # hold three modules — uuid, x/sys and x/term, all gitproc's tests and
+  # skipgate import, 13 MB — which the proxy served in 0.5–0.8 s.
+  gitrecipe-macos:
+    name: git recipe (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - *setup-go
+      - *go-caches
+      - *gobuild-restore
+      - *git-cache-dir
+      - *git-restore
+      - name: gitproc's suite on the pinned gits
+        run: make test-gitproc
       - *git-save
       - *gobuild-prune
       - *gobuild-save

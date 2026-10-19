@@ -478,7 +478,7 @@
 // hashed that pack, as a check does, against the row naming it: a pack that
 // is not its row's is a [RebuildCorrupt] repair naming THAT pack, fetched
 // again in place, a sound one is no repair, and a pack no row names is no
-// damage of the copy. The same sentence is a row on 2.40 to 2.55, a pack's
+// damage of the copy. The same sentence is a row on 2.55, a pack's
 // damage, whose pack is recorded as a hint beside it and confirmed the same
 // way, so the repair fetches that pack rather than look for it. A pack is hashed ONCE however many
 // hints name it, on the cache's lifetime rather than any request's — every

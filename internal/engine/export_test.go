@@ -4,8 +4,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -81,6 +83,20 @@ const TestGitTransfers = 4
 // machine running the suite, never of the case. Pinned, the room is a quarter
 // of the free space less 256 MiB, which every volume a node boots on has.
 func PinGitLanes(b *config.Bootstrap) { b.Git.MaxTransfers = TestGitTransfers }
+
+// RequireNodeGit holds the git the suite runs to the node floor
+// ([gittest.RequireNode]) where a boot over b for company builds a code host —
+// the company hosts code and b's node has the git role, which is
+// [Engine.hostsGit] read off the two documents — so a machine below the floor
+// reads the contributor's sentence rather than the node's refusal, and a boot
+// that builds no pool asks nothing of the machine's git. A case whose company
+// hosts code only from a later activation calls [gittest.RequireNode] itself.
+func RequireNodeGit(t testing.TB, b *config.Bootstrap, company *config.Company) {
+	t.Helper()
+	if company.NeedsRole(placement.RoleGit) && b.Profile("").Roles.Has(placement.RoleGit) {
+		gittest.RequireNode(t)
+	}
+}
 
 // SeedStore writes the migrated store image ([storetest.Seed]) where b's store
 // opens, for a case booting a node on a path of its own: the node's file

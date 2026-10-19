@@ -87,8 +87,10 @@ import (
 //     filepath.Join(parts...)). A name's own words make a PROGRAM git and
 //     never a part of one, so filepath.Join(gitDir, "objects") is not;
 //   - a concatenation one of whose operands is git by its value (dir + "/git");
-//   - a call of what gittest hands out as a git binary — Require, and the
-//     stand-ins Fake and Recording, whose recorder execs the real git;
+//   - a call of what gittest hands out as a git binary — Require and
+//     RequireNode (the PATH's git, held to each floor), NodeFloor and
+//     ClientFloor (the floors' own builds), and the stand-ins Fake, Wrap and
+//     Recording, the last two of which exec the real git;
 //   - a constant or variable given one of those anywhere in the same file —
 //     declared, defined, assigned or written through a pointer (*p = …; a
 //     pointer and what it points at are one value here, whichever of the two
@@ -469,8 +471,9 @@ var allowedGitExecs = map[string]string{
 	"internal/code/gitproc/run.go": "Pool.Run's exec.Command(p.git, …) — the one exec this " +
 		"gate exists to keep the only one",
 	"internal/code/gitproc/gittest/gittest.go": "the client git every test drives: " +
-		"Require's `git version` and Client.Try's exec.CommandContext(ctx, c.git, …), " +
-		"hermetic for the reasons the pool's environment is built",
+		"readVersion's `git version` (the PATH's git and each floor's, once a binary) and " +
+		"Client.Try's exec.CommandContext(ctx, c.git, …), hermetic for the reasons the pool's " +
+		"environment is built",
 }
 
 // gittestPackage is the import path of the client git, whose binary-handing
@@ -478,12 +481,17 @@ var allowedGitExecs = map[string]string{
 const gittestPackage = "github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 
 // gittestBinaries are the gittest functions whose (first) result is a git
-// binary: Require is the real git, Fake a stand-in, and Recording a recorder
-// that execs the real git. The anchor below fails the build when one is
-// renamed, so this list cannot silently stop naming anything.
-var gittestBinaries = map[string]bool{"Require": true, "Fake": true, "Recording": true}
+// binary: Require and RequireNode are the real git on PATH, NodeFloor and
+// ClientFloor the floors' own builds, Fake a stand-in, and Wrap and Recording
+// stand-ins that exec the real git. The anchor below fails the build when one
+// is renamed, so this list cannot silently stop naming anything.
+var gittestBinaries = map[string]bool{
+	"Require": true, "RequireNode": true, "NodeFloor": true, "ClientFloor": true,
+	"Fake": true, "Wrap": true, "Recording": true,
+}
 
-var _ = []any{gittest.Require, gittest.Fake, gittest.Recording}
+var _ = []any{gittest.Require, gittest.RequireNode, gittest.NodeFloor, gittest.ClientFloor,
+	gittest.Fake, gittest.Wrap, gittest.Recording}
 
 // starters are the calls that start a process, by the import path of their
 // package, with the index of the argument that names the program.

@@ -43,7 +43,7 @@ import (
 // bare "%s" — is a hint: the pack it nominates is held to its row
 // (cache.Cache.ConfirmHint), and only a pack that is not the row's is
 // repaired, so no message decides a repair. The same sentence is a ROW on
-// 2.40 to 2.55, which names the damage itself (a pack's) and records the hint
+// 2.55, which names the damage itself (a pack's) and records the hint
 // beside it, so there too the pack it names is confirmed and handed to the
 // repair (cache.Failure.Packs): the cache installs THAT pack again, one GET,
 // where with no pack named it must hash every pack the copy holds to find it

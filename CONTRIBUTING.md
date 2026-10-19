@@ -38,20 +38,46 @@ leaves `PATH` starting with an empty entry and runs the loop on whatever git
 the machine has, with only the recipe's own line above the test output to
 say so. A loop
 run on the machine's own git instead FAILS the git-driven tests where that git
-is older than 2.40 (`internal/code/gitproc/gittest.Require`) — on macOS,
-Apple's bundled git is 2.39 — rather than skipping, because git is a
-prerequisite of the suite, not something a machine may lack. What the engine
-reads of a failed git is the FORMAT of each report git makes to its trace2
-stream, checked against a table of git's own formats that is held, version by
-version, to what real git reports over real damaged repositories — so a pin
-bump re-measures it on the new git by itself, in `make check`. To hold it to
-another git, put that git first on `PATH` for the one package
-(`scripts/git.sh node-floor` and `client-floor` print two), with the same two
-statements:
-`bin=$(scripts/git.sh node-floor) && PATH="$bin:$PATH" go test -count=1 -run 'TestTheFormatTableIsWhatGitSays|TestARequestCannotNameTheDamage' ./internal/code/gitproc/`
-— `gittest.Require` takes the `PATH`'s git, and a row whose range does not
-hold names the format and the git that disagreed. **A
-current Node** (npm ships with it) for the dashboard — its build output is
+is below the floor it stands for, rather than skipping, because git is a
+prerequisite of the suite, not something a machine may lack: every pool a test
+builds needs the node floor, 2.55 (`gitproc.NodeMinVersion`, held by
+`internal/code/gitproc/gittest.RequireNode`), and the client git a test drives
+the client floor, 2.40 (`gitproc.ClientMinVersion`, `gittest.Require`). On
+macOS, Apple's bundled git is 2.39, below both, and Homebrew's is new enough for
+both — but the documented loop is the pin, the git the image ships. What the
+engine reads of a failed git is the FORMAT of each report git makes to its
+trace2 stream, checked against a table of git's own formats that is held,
+version by version, to what real git reports over real damaged repositories —
+on BOTH ends of what a pool runs, the node pin and the node floor's own build,
+each a subtest (`node pin`, `node floor`) of every gitproc case whose subject is
+what git says or does in a pool — so a pin bump re-measures it on the new git
+by itself, in `make check`, and the floor is measured on every run rather than
+by hand. A one-package loop names the floor's build the way the make targets
+do, or those cases' floor arms skip:
+`bin=$(scripts/git.sh node) && floor=$(scripts/git.sh node-floor) && PATH="$bin:$PATH" CREWLET_TEST_GIT_NODE_FLOOR="$floor/git" go test -count=1 ./internal/code/gitproc/`
+— and a row whose range does not hold names the format and the git that
+disagreed.
+
+**The floors' arm.** Every make target that runs Go tests also names the two
+floors' own builds — `CREWLET_TEST_GIT_NODE_FLOOR` and
+`CREWLET_TEST_GIT_CLIENT_FLOOR`, each `$(scripts/git.sh <pin>)/git` for
+`node-floor` and `client-floor` — and sets `CREWLET_REQUIRE_GIT_FLOOR=1` (the
+Makefile's `GIT_ENV`), so `internal/code/host`'s
+`TestTheGitFloorsPassTheSuite` runs the code host's whole suite with every
+pool on the node floor's 2.55 and every person's git on the client floor's
+2.40 — the worst pairing the floors admit — and FAILS, naming the variable and
+`make git`, where either build is missing — as do gitproc's node-floor arms
+above. A bare `go test ./internal/code/host/` or `./internal/code/gitproc/`
+without them skips those arms, saying so, and runs everything else; export the
+three variables to run them by hand. A git named
+there must be an absolute path to a build of its floor's own series (2.55.x,
+2.40.x): a newer git in its place is a floor nobody is testing, and is refused
+naming the variable. ci.yml's `git recipe (macOS)` job runs `make
+test-gitproc` — gitproc's own suite on the three pins — on macOS for every pull
+request, so the recipe's macOS branch is built where a Mac contributor builds
+it; on Linux `make test` runs the same packages.
+
+**A current Node** (npm ships with it) for the dashboard — its build output is
 committed, so building and running the ENGINE needs neither, but changing the
 dashboard or running `internal/e2e`'s client replay does. Nothing in the tree
 pins a node version; CI installs the latest — see *Which node* under

@@ -8,17 +8,64 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// MinVersion is the oldest git the engine runs: proc-receive (2.29),
-// GIT_CONFIG_COUNT (2.31), index-pack --rev-index (2.31), object-type filters
-// (2.32), multi-pack-index bitmaps (2.34), `git hook run` (2.36), and
-// merge-tree --write-tree --merge-base (2.40) — the newest feature the code
-// host is designed around.
+// ClientMinVersion is the oldest git a CLIENT of the code host may run: a
+// person's and a CI runner's, the operator CLI's (`crewlet code import`,
+// `export`, and every git its credential helper answers), and gittest's
+// client in every suite. merge-tree --write-tree --merge-base (2.40) is the
+// newest feature a client-side recipe uses; GIT_CONFIG_COUNT (2.31), protocol
+// v2 by default (2.26) and partial clone (2.19) are older. A client's git is
+// a person's laptop or a CI image the operator does not choose, so it is held
+// to what the distributions people run still ship (ADR-0039).
+var ClientMinVersion = Version{2, 40, 0}
+
+// NodeMinVersion is the oldest git a GIT NODE runs — every pool [New] builds:
+// an incremental multi-pack-index layer with its bitmap (2.50) written over a
+// NAMED base with no chain file (`multi-pack-index write --incremental
+// --base=<checksum> --no-write-chain-file`, 2.55: `write` offers neither
+// option in v2.54.0's documentation and both in v2.55.0's), which is how a
+// repository's maintainer publishes the layers every git node installs; and
+// pack.allowPackReuse=multi sending a cache's overlapping packs whole (fixed
+// in 2.48, tb/multi-pack-reuse-dupfix: 2.44 to 2.47 sent an object twice or a
+// delta without its base, and every full clone of a bitmapped repository
+// failed on 2.47.3, Debian trixie's git). Everything else a git node runs is
+// older: proc-receive (2.29), index-pack --rev-index (2.31), object-type
+// filters (2.32), multi-pack-index bitmaps (2.34) and merge-tree
+// --write-tree --merge-base (2.40).
 //
-// ONE MINIMUM FOR THE WHOLE DESIGN, chosen once, so that no later capability
-// raises it under a node an operator has already deployed. Reftable (2.45),
-// the one later feature the design once used, was dropped for packed-refs
-// swapped by an atomic rename rather than raise this.
-var MinVersion = Version{2, 40, 0}
+// THE FLOOR FOLLOWS THE COMMANDS, never the reverse:
+// TestTheNodeFloorWritesALayerOverANamedBase runs the layer on the floor's
+// own build, and a later part that needs more of git raises this rather than
+// bend its commands to fit it. EACH FLOOR IS CHOSEN ONCE, so that no later
+// capability raises it under a node an operator has already deployed: both
+// moved before any tag shipped Go code. A git release newer than the floor is
+// what the engine image builds (scripts/git-pin.env), never what the floor is.
+var NodeMinVersion = Version{2, 55, 0}
+
+// Floor is which of the two floors a git is held to — a closed set, so a
+// value nothing set is refused rather than read as either.
+type Floor string
+
+const (
+	// FloorNode is NodeMinVersion: every pool New builds.
+	FloorNode Floor = "node"
+	// FloorClient is ClientMinVersion: gittest's client and the operator
+	// CLI's git.
+	FloorClient Floor = "client"
+)
+
+// Valid reports whether f is one of the two floors.
+func (f Floor) Valid() bool { return f == FloorNode || f == FloorClient }
+
+// Min is the floor's version: the zero Version for a floor that is not one.
+func (f Floor) Min() Version {
+	switch f {
+	case FloorNode:
+		return NodeMinVersion
+	case FloorClient:
+		return ClientMinVersion
+	}
+	return Version{}
+}
 
 // MultiPackReuse is the first git whose pack.allowPackReuse=multi sends a
 // pack its client can read, so the value a cache serves with is chosen per
@@ -86,18 +133,38 @@ func ParseVersion(out string) (Version, error) {
 	return v, nil
 }
 
-// ErrTooOld is the refusal of a git below [MinVersion]. Its message names the
-// binary, what it is and what to install, because the person reading it is
-// the operator of a node that cannot serve git until they do.
+// ErrTooOld is the refusal of a git below its floor. Its message names the
+// binary, what it is, the floor and its version and what to install, because
+// the person reading it cannot go on until they do — and never the engine
+// image's own git, whose version moves with the pin: a sentence naming it
+// would be a second copy of scripts/git-pin.env.
+//
+// The version wanted is the floor's ([ErrTooOld.Want]) rather than a field
+// beside it, which could disagree with it.
 type ErrTooOld struct {
 	Path  string
 	Found Version
-	Want  Version
+	Floor Floor
 }
 
-// Error names the binary, the version found, the minimum and where to get one.
+// Want is the version the floor needs: the zero Version for an ErrTooOld held
+// to no floor.
+func (e *ErrTooOld) Want() Version { return e.Floor.Min() }
+
+// Error names the binary, the version found, the floor and what to install.
+// An ErrTooOld held to no floor is a call site's bug, never an operator's, and
+// says so rather than guess which floor was meant.
 func (e *ErrTooOld) Error() string {
-	return fmt.Sprintf("gitproc: %s is git %s, and the code host needs git %s or newer: "+
-		"install a newer git on this node — the engine image builds the newest git release; "+
-		"on macOS, Apple's bundled git is 2.39, so install Homebrew's", e.Path, e.Found, e.Want)
+	switch e.Floor {
+	case FloorNode:
+		return fmt.Sprintf("gitproc: %s is git %s, and a git node needs git %s or newer "+
+			"(gitproc.NodeMinVersion, the node floor): install a newer git on this node's PATH — "+
+			"the engine image builds the newest git release — or on macOS Homebrew's",
+			e.Path, e.Found, NodeMinVersion)
+	case FloorClient:
+		return fmt.Sprintf("gitproc: %s is git %s, and a client of the code host needs git %s or newer "+
+			"(gitproc.ClientMinVersion, the client floor): install a newer git — on macOS, Homebrew's: "+
+			"Apple's bundled git is 2.39", e.Path, e.Found, ClientMinVersion)
+	}
+	return fmt.Sprintf("gitproc: %s is git %s, held to no floor (ErrTooOld.Floor %q)", e.Path, e.Found, string(e.Floor))
 }

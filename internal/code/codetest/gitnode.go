@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -121,7 +122,8 @@ type GitOptions struct {
 	MaxTransfers, MaxProcesses int
 	// CacheMaxBytes is the cache's budget; 0 is defaultCacheMaxBytes.
 	CacheMaxBytes int64
-	// GitPath is the git the pool runs; "" is the one on PATH.
+	// GitPath is the git the pool runs; "" is the one on PATH, held to the
+	// node floor (gittest.RequireNode).
 	GitPath string
 	// Logger is the host's; nil is the package's own.
 	Logger *slog.Logger
@@ -186,6 +188,13 @@ func StartGitNode(t testing.TB, o GitOptions) *GitNode {
 	o.Limits = withDefaults(o.Limits)
 	if o.CacheMaxBytes == 0 {
 		o.CacheMaxBytes = defaultCacheMaxBytes
+	}
+	// THE PATH'S GIT IS HELD TO THE NODE FLOOR HERE, before a pool refuses
+	// it, so a machine below the floor reads what to run rather than an
+	// operator's refusal — and a stand-in a case names (a recorder, a wrap)
+	// stands in front of that same git.
+	if path := gittest.RequireNode(t); o.GitPath == "" {
+		o.GitPath = path
 	}
 	g := &GitNode{o: o, life: t}
 	t.Cleanup(g.teardown)

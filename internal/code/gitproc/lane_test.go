@@ -406,7 +406,12 @@ func TestAnAdvertisementIsNeverLent(t *testing.T) {
 // hoped for.
 func TestAReceivePackIsReadAsGitReadsIt(t *testing.T) {
 	t.Parallel()
-	p := realPool(t, gitproc.Options{})
+	onNodeGits(t, receivePackReadOn)
+}
+
+// receivePackReadOn is TestAReceivePackIsReadAsGitReadsIt on the git at git.
+func receivePackReadOn(t *testing.T, git string) {
+	p := poolOn(t, git, gitproc.Options{})
 	repo := gittest.Empty(t)
 	for _, args := range [][]string{
 		{"--stateless-rpc", "--advertise-refs", repo}, // the host's advertisement

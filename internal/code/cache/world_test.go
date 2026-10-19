@@ -59,7 +59,7 @@ type world struct {
 // an Open takes it or the case ends.
 func newWorld(t testing.TB) *world {
 	t.Helper()
-	gittest.Require(t)
+	gittest.RequireNode(t)
 	w := &world{logs: &logs{}}
 	w.prepare(t, filepath.Join(t.TempDir(), "c"))
 	return w
@@ -93,12 +93,15 @@ func newPool(t testing.TB, layout cache.Layout) *gitproc.Pool {
 }
 
 // newPoolOf is a pool over layout's HOME running the git at path ("" is the
-// one on PATH) with processes slots (0 is two) and transfers transfer slots (0
-// is the pool's default), on a node of memory bytes (0 is the machine's own,
-// read as a node's is).
+// one on PATH, held to the node floor: gittest.RequireNode) with processes
+// slots (0 is two) and transfers transfer slots (0 is the pool's default), on a
+// node of memory bytes (0 is the machine's own, read as a node's is).
 func newPoolOf(t testing.TB, layout cache.Layout, path string, processes, transfers int,
 	memory int64) *gitproc.Pool {
 	t.Helper()
+	if path == "" {
+		gittest.RequireNode(t)
+	}
 	if processes == 0 {
 		processes = 2
 	}

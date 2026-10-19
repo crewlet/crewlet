@@ -10,9 +10,15 @@
 // and clock, so a fixture is the same bytes on every machine and every run,
 // and an object id a test asserts is stable.
 //
-// Git is a PREREQUISITE of the suite, not a property of the machine: [Require]
-// fails a test on a machine without git 2.40 or newer and never skips it,
-// because a skip there would be a pass the suite never earned.
+// Git is a PREREQUISITE of the suite, not a property of the machine, and it
+// is held to the floor of the git it stands for (gitproc's two floors,
+// ADR-0039): [Require] is a CLIENT's git and fails a test without git 2.40 or
+// newer on PATH, [RequireNode] is the git every POOL a test builds runs and
+// fails one without 2.55 — never skipping either, because a skip there would
+// be a pass the suite never earned. Every make target puts the node pin first
+// on PATH, so both are that git; [NodeFloor] and [ClientFloor] are the floors'
+// own builds, which the floors' arm of the code host's suite runs against
+// each other.
 //
 // A client trusts one repository a test did not make: the checkout this
 // module was compiled from, for a test whose subject is the repository itself
@@ -33,7 +39,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -62,12 +67,12 @@ const clientDate = "2026-01-01T00:00:00Z"
 // writeScript execs one without running its body or leaving a call record.
 const probe = "--gittest-probe"
 
-// found is the git on PATH and its version, read once per test binary.
-var found = sync.OnceValues(func() (string, error) {
-	git, err := exec.LookPath("git")
-	if err != nil {
-		return "", fmt.Errorf("no git on PATH (%w)", err)
-	}
+// readVersion is what `git version` says of git, asked with nothing of the
+// machine's configuration: the PATH's git once a test binary ([found]) and a
+// floor's once a binary ([floorVersion]). Here, beside the client's own exec,
+// because this file is the one gittest file gitproc's TestOnlyGitprocExecsGit
+// lets start git.
+func readVersion(git string) (gitproc.Version, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), ClientDeadline)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, git, "version")
@@ -80,40 +85,14 @@ var found = sync.OnceValues(func() (string, error) {
 	}
 	out, err := cmd.Output()
 	if err != nil {
-		return git, fmt.Errorf("git at %s did not answer `git version` (%w)", git, err)
+		return gitproc.Version{}, fmt.Errorf("git at %s did not answer `git version` (%w)", git, err)
 	}
 	v, err := gitproc.ParseVersion(string(out))
 	if err != nil {
-		return git, fmt.Errorf("git at %s (%w)", git, err)
+		return gitproc.Version{}, fmt.Errorf("git at %s (%w)", git, err)
 	}
-	if !v.AtLeast(gitproc.MinVersion) {
-		return git, fmt.Errorf("git %s at %s", v, git)
-	}
-	return git, nil
-})
-
-// Require is the git every test drives: exec.LookPath("git"), at least
-// gitproc.MinVersion, read once per test binary. Absent, unreadable or older,
-// it FAILS t — never skips.
-func Require(t testing.TB) string {
-	t.Helper()
-	git, err := found()
-	if err != nil {
-		t.Fatalf("%v cannot run this suite: the code host's tests drive real git, and need git %s or newer on PATH "+
-			"(CONTRIBUTING.md, Development setup)", err, gitproc.MinVersion)
-	}
-	return git
+	return v, nil
 }
-
-// NamesMidxPosition is the first git that checks every object position it
-// reads through a multi-pack-index and dies naming one past its objects
-// ("invalid MIDX object position, MIDX is likely corrupt"). Before it, a
-// bitmapped walk over a damaged reverse index dies of a segmentation fault and
-// says nothing — so a case whose SUBJECT is that message has nothing to
-// provoke on an older git, and skips there, declared (internal/skipgate's
-// allowed.go) rather than read as a pass: the node pin every make target runs
-// (scripts/git-pin.env, the engine image's git) says it.
-var NamesMidxPosition = gitproc.Version{Major: 2, Minor: 47}
 
 // MidxChunk is where chunk id lies in the multi-pack-index at path — its first
 // byte and the byte past its last — read from the file's own chunk table, for
@@ -289,7 +268,14 @@ const clientConfig = `[user]
 // in a t.TempDir and nothing else from the test's environment.
 func NewClient(t testing.TB) *Client {
 	t.Helper()
-	git := Require(t)
+	return NewClientWith(t, Require(t))
+}
+
+// NewClientWith is [NewClient] over the git at git — the client floor's own
+// build ([ClientFloor]) where an arm runs a person's git on the oldest one a
+// client may run. The caller vouches for git: it is run as given.
+func NewClientWith(t testing.TB, git string) *Client {
+	t.Helper()
 	home := t.TempDir()
 	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(clientConfig), hostbox.FileMode); err != nil {
 		t.Fatalf("writing the client's configuration: %v", err)
@@ -624,7 +610,9 @@ func fake(t testing.TB, version, onVersion, body string) string {
 // stand-in decides what it decides from a version (the pack reuse it asks for,
 // a git it refuses) from the git that runs, and a test that held a fault at
 // one step of real git's work needs no exec of its own to ask what that git
-// is. Its path, for gitproc.Options.Path.
+// is. Its path, for gitproc.Options.Path — where the test holds the git it
+// wraps to the node floor as every pool's builder does ([RequireNode]) — or
+// for an operator's git, a client's, which is all [Require] holds it to.
 func Wrap(t testing.TB, body string) string {
 	t.Helper()
 	git := Require(t)
@@ -647,10 +635,12 @@ type Call struct {
 // Recording is the real git behind a recorder: every invocation writes one
 // file (GIT_DIR and argv, NUL-separated — a file per invocation, so
 // concurrent processes never interleave) and execs the real git. calls
-// returns every invocation so far, in no particular order.
+// returns every invocation so far, in no particular order. What it records is
+// a pool's work, so the git it execs is held to the node floor
+// ([RequireNode]).
 func Recording(t testing.TB) (path string, calls func() []Call) {
 	t.Helper()
-	git := Require(t)
+	git := RequireNode(t)
 	dir := t.TempDir()
 	path = filepath.Join(dir, "git")
 	writeScript(t, path, "#!/bin/sh\n"+

@@ -681,9 +681,8 @@ func TestTheWantsCheckRepairsWhatItsCatFileNames(t *testing.T) {
 // HINT (gitproc), the host has the cache hash it against its row
 // (cache.Cache.ConfirmHint), and a pack that is not its row's is named to the
 // repair (cache.Failure.Packs): that one pack is fetched again over its files,
-// the same incarnation answering, and the fetch served. Before 2.55 git names
-// only `not our ref`, so the real arm skips there, declared
-// (internal/skipgate).
+// the same incarnation answering, and the fetch served — on every git a git
+// node runs, since the node floor is 2.55.
 //
 // And its control, on any git: a HEALTHY copy whose upload-pack — a stand-in
 // in front of the real git — dies naming one of the copy's own packs in that
@@ -700,10 +699,6 @@ func TestThePackGitNamesIsFetchedAgainInPlace(t *testing.T) {
 		t.Parallel()
 		var l logs
 		c := newCase(t, codetest.SoloOptions{Logger: l.logger()}, codetest.Settings())
-		if got := c.Fleet.Nodes()[0].Pool().Version(); !got.AtLeast(namesThePackOfACorruptObject) {
-			t.Skipf("git %s names a packed object whose size is wrong by nothing but `not our ref` (from %s it "+
-				"names its pack)", got, namesThePackOfACorruptObject)
-		}
 		p := codetest.NewPerson(t, c.Fleet, "ceo")
 		work := p.Init()
 		head := p.Commit(work, map[string]string{"README.md": "one\n", "src/a.go": "package a\n"}, "one")
@@ -785,12 +780,6 @@ esac`)
 		}
 	})
 }
-
-// namesThePackOfACorruptObject is the first git that names the pack of a
-// packed object whose header states the wrong size (S1): 2.55 by the row
-// naming a corrupt packed object, 2.56 and later by the same sentence through
-// a bare "%s" alone.
-var namesThePackOfACorruptObject = gitproc.Version{Major: 2, Minor: 55}
 
 // entryOf is the pack file under dir holding oid, where oid's entry begins in
 // it and where its header (its type and size, seven bits a byte) ends.
@@ -884,11 +873,6 @@ func TestADamagedMidxBitmapIsRepaired(t *testing.T) {
 				t.Parallel()
 				var l logs
 				c := newCase(t, codetest.SoloOptions{Logger: l.logger()}, codetest.Settings())
-				if got := c.Fleet.Nodes()[0].Pool().Version(); !got.AtLeast(gittest.NamesMidxPosition) {
-					t.Skipf("git %s does not check a multi-pack-index's object positions (from %s): its "+
-						"pack-objects dies of a segmentation fault over this damage, naming nothing",
-						got, gittest.NamesMidxPosition)
-				}
 				p := codetest.NewPerson(t, c.Fleet, "ceo")
 				work := p.Init()
 				head := p.Commit(work, map[string]string{"README.md": "one\n", "src/a.go": "package a\n"}, "one")

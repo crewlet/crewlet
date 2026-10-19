@@ -42,7 +42,7 @@ func TestAFixtureIsARepositoryThePoolAccepts(t *testing.T) {
 	newer := gittest.Pack(t, c, bare, wt, tip, "^"+first)
 	gittest.SetRefs(t, bare, map[string]string{"refs/heads/main": tip, "refs/tags/v1": first})
 
-	p, err := gitproc.New(t.Context(), gitproc.Options{Path: gittest.Require(t), Home: filepath.Join(t.TempDir(), "home")})
+	p, err := gitproc.New(t.Context(), gitproc.Options{Path: gittest.RequireNode(t), Home: filepath.Join(t.TempDir(), "home")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,12 +156,12 @@ func TestTheStandInsDoWhatTheySay(t *testing.T) {
 		t.Fatalf("the recording holds %+v, not the rev-parse it ran", calls())
 	}
 
-	fake := gittest.Fake(t, "git version 2.41.0", `echo "body: $*"`)
+	fake := gittest.Fake(t, "git version 2.55.1", `echo "body: $*"`)
 	f, err := gitproc.New(t.Context(), gitproc.Options{Path: fake, Home: filepath.Join(t.TempDir(), "home")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v := f.Version(); v != (gitproc.Version{Major: 2, Minor: 41}) {
+	if v := f.Version(); v != (gitproc.Version{Major: 2, Minor: 55, Patch: 1}) {
 		t.Fatalf("the fake answered version %v", v)
 	}
 	res, err = f.Run(t.Context(), gitproc.Cmd{Args: []string{"anything", "it's"}, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
@@ -175,7 +175,7 @@ func TestTheStandInsDoWhatTheySay(t *testing.T) {
 // itself — and hands the real git every call its body did not end.
 func TestAWrapIsTheRealGitBehindItsBody(t *testing.T) {
 	t.Parallel()
-	direct, err := gitproc.New(t.Context(), gitproc.Options{Path: gittest.Require(t),
+	direct, err := gitproc.New(t.Context(), gitproc.Options{Path: gittest.RequireNode(t),
 		Home: filepath.Join(t.TempDir(), "home")})
 	if err != nil {
 		t.Fatal(err)

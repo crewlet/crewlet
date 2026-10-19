@@ -30,7 +30,7 @@ dashboard). Then:
 - **Every data node** commits the repositories' pushes, and every node that
   serves git — one whose Tier A [`node.roles`](../concepts/configuration.md#noderoles)
   names `git`, or names none, since an undeclared node has every role — builds
-  the code host and starts serving `/git/`. A git node needs **git 2.40 or
+  the code host and starts serving `/git/`. A git node needs **git 2.55 or
   newer** on its host (the engine's image builds the newest release) and a
   place for its cache, sized by its Tier A [`git` block](../concepts/configuration.md#git); the
   [deployment guide](deployment.md#the-code-host) says how to size both.
@@ -47,7 +47,7 @@ dashboard). Then:
   revision that hosted code, until it restarts. Restart the nodes one at a
   time, as for any upgrade.
 - **A node whose apply of the revision fails** — its code host could not be
-  built: the cache directory is another program's, git is older than 2.40 —
+  built: the cache directory is another program's, git is older than 2.55 —
   answers git and `/code/` with a `503` naming `config_apply_failed`, never that
   the company hosts no code; `GET /fleet` and the node's log say why, and a
   node still applying it answers `503` with `Retry-After: 5`. A node whose
