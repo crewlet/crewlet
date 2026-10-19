@@ -999,6 +999,58 @@ func (p *Profile) IsolationVariables() []string {
 	return append(names, slices.Sorted(maps.Keys(p.IsolationEnv))...)
 }
 
+// IsolationLayer is which of the layers that keep a CLI inside its seat's home
+// and its call's working directory sets one of [Profile.IsolationVariables] —
+// and so which field, if any, changes the value the child is given.
+type IsolationLayer string
+
+// The layers, each but the engine's own named by the profile field that sets
+// it, which is what an operator overrides it with (cli.overrides.<field>).
+const (
+	// IsolationHome is [HomeIsolation]: set by the engine for every CLI,
+	// whatever its profile says, and changed by no field at all.
+	IsolationHome IsolationLayer = "home"
+	// IsolationConfigEnv is a [Profile.ConfigEnv] relocation under the
+	// seat's home.
+	IsolationConfigEnv IsolationLayer = "config_env"
+	// IsolationWorkConfigEnv is a [Profile.WorkConfigEnv] relocation under
+	// the call's working directory.
+	IsolationWorkConfigEnv IsolationLayer = "work_config_env"
+	// IsolationSwitch is a [Profile.IsolationEnv] switch.
+	IsolationSwitch IsolationLayer = "isolation_env"
+)
+
+// IsolationLayerOf reports which layer sets name, and false when none does:
+// when name is not one of [Profile.IsolationVariables].
+//
+// THE LAYER THE CHILD IS GIVEN, which is the last one applied: its environment
+// sets [HomeIsolation], then config_env, then work_config_env, then
+// isolation_env, so a variable two of them name is the later one's — and the
+// one overlap [Profile.Validate] admits, config_env relocating an XDG home, is
+// config_env's.
+//
+// For the refusals that have to say WHERE a variable's value is changed,
+// rather than a second copy of the lists beside each of them: an entry's
+// cli.env naming OPENCODE_CONFIG_DIR used to be sent to
+// cli.overrides.config_env, which [Profile.Validate] refuses for that very
+// variable as work_config_env's, and naming OPENCODE_CONFIG_PROJECT_DISABLE
+// to the same field, refused there as an isolation_env switch.
+func (p *Profile) IsolationLayerOf(name string) (IsolationLayer, bool) {
+	if _, ok := p.IsolationEnv[name]; ok {
+		return IsolationSwitch, true
+	}
+	if _, ok := p.WorkConfigEnv[name]; ok {
+		return IsolationWorkConfigEnv, true
+	}
+	if _, ok := p.ConfigEnv[name]; ok {
+		return IsolationConfigEnv, true
+	}
+	if slices.Contains(HomeIsolation, name) {
+		return IsolationHome, true
+	}
+	return "", false
+}
+
 // HasSystemChannel reports whether this profile carries the system prompt on
 // a channel of its own rather than leaving it in the transcript.
 func (p *Profile) HasSystemChannel() bool {

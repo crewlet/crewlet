@@ -84,6 +84,52 @@ func TestTheProfilesEnvMayNotReplaceTheIsolation(t *testing.T) {
 	}
 }
 
+// AN ISOLATION VARIABLE'S LAYER IS THE ONE THE CHILD IS GIVEN. A refusal that
+// tells an operator where a variable's value is changed reads it here, and the
+// three profile fields refuse each other's variables, so the answer must be the
+// layer whose value the child's environment ends up with: the last applied —
+// config_env over the engine's own XDG home it relocates, the one overlap a
+// loaded profile can carry — and a layer for exactly the names
+// IsolationVariables lists, so the two can never describe different sets.
+func TestAnIsolationVariablesLayerIsTheOneTheChildIsGiven(t *testing.T) {
+	t.Parallel()
+	p, err := loadCustom(map[string]any{
+		"config_env":      map[string]any{"VENDOR_HOME": ".vendor", "XDG_CONFIG_HOME": ".vendor-xdg"},
+		"work_config_env": map[string]any{"VENDOR_CONFIG": ".vendor-config"},
+		"isolation_env":   map[string]any{"VENDOR_NO_WALK": "1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]IsolationLayer{
+		"HOME":            IsolationHome,
+		"TMPDIR":          IsolationHome,
+		"XDG_CACHE_HOME":  IsolationHome,
+		"XDG_CONFIG_HOME": IsolationConfigEnv,
+		"VENDOR_HOME":     IsolationConfigEnv,
+		"VENDOR_CONFIG":   IsolationWorkConfigEnv,
+		"VENDOR_NO_WALK":  IsolationSwitch,
+	}
+	for _, name := range p.IsolationVariables() {
+		layer, ok := p.IsolationLayerOf(name)
+		if !ok {
+			t.Errorf("%s is an isolation variable with no layer", name)
+			continue
+		}
+		if expected, listed := want[name]; listed && layer != expected {
+			t.Errorf("IsolationLayerOf(%s) = %s, want %s", name, layer, expected)
+		}
+	}
+	for name := range want {
+		if !slices.Contains(p.IsolationVariables(), name) {
+			t.Errorf("%s has a layer but is not an isolation variable", name)
+		}
+	}
+	if layer, ok := p.IsolationLayerOf("VENDOR_LOG_LEVEL"); ok {
+		t.Errorf("an ordinary variable is reported as set by %s", layer)
+	}
+}
+
 // A seed path is checked at load the way seeding checks it at every call. The
 // load-time check used to be UnderRoot against a stand-in root named `/seat`,
 // so a path climbing out and back in by that very name loaded and was refused

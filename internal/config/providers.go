@@ -1380,17 +1380,50 @@ func (l *LLMProvider) validateCLICredentials(path Path) error {
 			// turned back off (OpenCode's project walk, which hands every
 			// seat whatever configuration sits above the state directory) —
 			// and nothing would say so.
-			if slices.Contains(isolation, name) {
+			if layer, ok := profile.IsolationLayerOf(name); ok {
 				p.add(entry(at(path, "cli.env"), name), ErrConflict,
 					"%s is a variable the engine sets for every call of this CLI to keep "+
 						"it inside its seat's own home and its call's working directory "+
 						"(%s); a value here would replace that isolation for every seat, so "+
-						"drop it — a vendor directory is relocated with "+
-						"cli.overrides.config_env", name, strings.Join(isolation, ", "))
+						"drop it — %s", name, strings.Join(isolation, ", "),
+					isolationRemedy(name, layer, profile))
 			}
 		}
 	}
 	return p.err()
+}
+
+// isolationRemedy is where an isolation variable's value IS changed, for the
+// refusal of an entry's cli.env that names one: the field of the layer that
+// sets it ([cliprofile.Profile.IsolationLayerOf]), or none.
+//
+// PER LAYER, because the three fields refuse each other's variables: one
+// remedy naming cli.overrides.config_env for every variable sent an operator
+// who followed it to a second refusal for both of OpenCode's —
+// OPENCODE_CONFIG_DIR is work_config_env's, so config_env naming it too is
+// "one variable, two directories", and OPENCODE_CONFIG_PROJECT_DISABLE is an
+// isolation_env switch, which may not also be a relocated variable.
+func isolationRemedy(name string, layer cliprofile.IsolationLayer, profile cliprofile.Profile) string {
+	switch layer {
+	case cliprofile.IsolationConfigEnv:
+		return "the profile relocates a vendor directory under the seat's home with it, " +
+			"and a different directory there is set with cli.overrides.config_env"
+	case cliprofile.IsolationWorkConfigEnv:
+		return "the profile relocates a vendor directory under the call's working " +
+			"directory with it, and a different directory there is set with " +
+			"cli.overrides.work_config_env"
+	case cliprofile.IsolationSwitch:
+		// Not refused there: an override is the profile itself, written on
+		// purpose. Turning the switch off is a decision about every seat's
+		// isolation, and the remedy says so rather than hand it out as a
+		// setting.
+		return fmt.Sprintf("it is the profile's isolation switch (%s=%q), changed only "+
+			"deliberately, with cli.overrides.isolation_env, since a value that turns it "+
+			"off undoes the isolation it is there for", name, profile.IsolationEnv[name])
+	default: // cliprofile.IsolationHome, the one layer no field sets
+		return "the engine sets it for every CLI, whatever the profile says, and no " +
+			"field changes it"
+	}
 }
 
 // AgentMode reports whether this entry runs the executor as the CLI's own
