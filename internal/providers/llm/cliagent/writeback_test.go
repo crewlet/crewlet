@@ -224,26 +224,58 @@ func TestAStatusNeverRevertsARefreshThatLandedWhileItRan(t *testing.T) {
 // result is written over whatever the shared directory holds: an operator who
 // backed out of the sign-in leaves the home holding the login it was seeded
 // with, and writing THAT over a refresh a seat made while the browser flow sat
-// open reverted the refresh.
+// open reverted the refresh. For a login command the generation's baseline is
+// the only guard — nothing compares what the shared directory holds — so each
+// kind of login is held to it on its own.
+//
+// Mutation: judge a changed credential file, or a changed document, against
+// the shared directory as it is now rather than against the baseline, and its
+// case is red.
 func TestALoginThatChangedNothingNeverRevertsARefresh(t *testing.T) {
 	t.Parallel()
-	seeded := `[{"id":"cred_1","key":"k-old"}]` + "\n"
-	refreshed := `[{"id":"cred_1","key":"k-refreshed"}]` + "\n"
 	run := "-test.run=TestCLIAgentFakeCLI"
-	p := storeProvider(t, nil, map[string]any{"login_args": []any{run, "store-list"}})
-	writeDocument(t, p, seeded)
-	p.env = fakeChildEnv(map[string]string{
-		"FAKE_STORE":       "1",
-		"FAKE_MIDRUN_VERB": "store-list",
-		"FAKE_MIDRUN_PATH": p.ws.documentPath(),
-		"FAKE_MIDRUN_BODY": refreshed,
+	t.Run("credential store", func(t *testing.T) {
+		t.Parallel()
+		seeded := `[{"id":"cred_1","key":"k-old"}]` + "\n"
+		refreshed := `[{"id":"cred_1","key":"k-refreshed"}]` + "\n"
+		p := storeProvider(t, nil, map[string]any{"login_args": []any{run, "store-list"}})
+		writeDocument(t, p, seeded)
+		p.env = fakeChildEnv(map[string]string{
+			"FAKE_STORE":       "1",
+			"FAKE_MIDRUN_VERB": "store-list",
+			"FAKE_MIDRUN_PATH": p.ws.documentPath(),
+			"FAKE_MIDRUN_BODY": refreshed,
+		})
+		if err := p.BrokerLogin(t.Context(), nil, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+			t.Fatalf("BrokerLogin: %v", err)
+		}
+		if got := readDocument(t, p); got != refreshed {
+			t.Errorf("a login that changed nothing wrote the old login back over a refresh: %q", got)
+		}
 	})
-	if err := p.BrokerLogin(t.Context(), nil, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
-		t.Fatalf("BrokerLogin: %v", err)
-	}
-	if got := readDocument(t, p); got != refreshed {
-		t.Errorf("a login that changed nothing wrote the old login back over a refresh: %q", got)
-	}
+	t.Run("credential file", func(t *testing.T) {
+		t.Parallel()
+		seeded := `{"token":"seeded"}`
+		refreshed := `{"token":"refreshed"}`
+		p := fakeProvider(t, nil, map[string]any{
+			"credential_paths": []any{".fake/creds.json"},
+			"volatile_paths":   []any{".local/share/fake"},
+			"login_args":       []any{run, "store-list"},
+		})
+		writeCreds(t, p, seeded)
+		p.env = fakeChildEnv(map[string]string{
+			"FAKE_STORE":       "1",
+			"FAKE_MIDRUN_VERB": "store-list",
+			"FAKE_MIDRUN_PATH": filepath.Join(p.ws.CredentialsDir(), "creds.json"),
+			"FAKE_MIDRUN_BODY": refreshed,
+		})
+		if err := p.BrokerLogin(t.Context(), nil, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+			t.Fatalf("BrokerLogin: %v", err)
+		}
+		if got := readCreds(t, p); got != refreshed {
+			t.Errorf("a login that changed nothing wrote the old login back over a refresh: %q", got)
+		}
+	})
 }
 
 // A LOGIN THAT STORED NOTHING IS A FAILURE. The CLI exited 0 with no login
