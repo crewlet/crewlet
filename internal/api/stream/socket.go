@@ -54,8 +54,9 @@ import (
 //
 // ONE MORE CLOSE IS NOT THE APPLICATION'S: [CloseUndecided], the standard's
 // "try again later", for a credential this node will not vouch for now and
-// leaves to the reconnect's handshake — see lifetime.go. Nothing else closes this socket for a fault: a node that cannot
-// serve keeps its socket open and degrades it instead — see [FrameDegraded].
+// leaves to the reconnect's handshake — see lifetime.go. Nothing else closes
+// this socket for a fault: a node that cannot serve keeps its socket open and
+// degrades it instead — see [FrameDegraded].
 const (
 	// CloseUnauthenticated ends a socket whose credential no longer
 	// resolves to anybody: its session ended, expired or was revoked, or
@@ -435,7 +436,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	// that closed must not stay in an artifact's room for its peers to see.
 	defer svc.leave(client)
 	seats := &watching{hub: svc.Hub(), client: client, chart: svc.chart,
-		holders: svc.holders}
+		holders: svc.holders, now: svc.now}
 	// THE SOCKET'S ROOM FRAMES, in the order it sent them, on a goroutine of
 	// their own: a join reads the artifact and its datastore, and the read
 	// loop must not wait on that to answer a ping. One goroutine rather than
@@ -626,7 +627,7 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 		case "presence":
 			// HELD TO ITS ALLOWANCE HERE, on the read loop, so a socket
 			// that does not throttle itself fills no queue.
-			if rooms.presence.take(time.Now()) {
+			if rooms.presence.take(seats.now()) {
 				rooms.queue(ctx, req)
 			}
 		case "query":
@@ -733,6 +734,13 @@ type watching struct {
 	client  *Client
 	chart   authz.Chart
 	holders iam.Holders
+
+	// now is the service's clock ([Options.Now]), which every decision
+	// here is taken at: the guard that resolved this socket's caller and
+	// the timer that ends its credential read the same one (lifetime.go),
+	// and a watch decided on a private wall-clock reading would judge a
+	// recency window by a different clock from the guard that proved it.
+	now func() time.Time
 }
 
 // watchWhat is what a watch refusal's error frame names in `what`, which is
@@ -827,7 +835,7 @@ func (w *watching) mayLook(principal iam.Principal) iam.MayLook {
 	return func(ctx context.Context, login string) error {
 		d := authz.Decide(ctx, principal, authz.ActionPersonRead, authz.Object{
 			Kind: authz.KindPerson, Owner: login, Unresolved: true,
-		}, w.chart, time.Now())
+		}, w.chart, w.now())
 		switch {
 		case d.Allowed, errors.Is(d.Err, authz.ErrUnresolved):
 			return nil
@@ -902,7 +910,7 @@ func (w *watching) decide(ctx context.Context, principal iam.Principal,
 	seat string) *watchAnswer {
 
 	d := authz.Decide(ctx, principal, authz.ActionPersonRead,
-		authz.Object{Kind: authz.KindPerson, Owner: seat}, w.chart, time.Now())
+		authz.Object{Kind: authz.KindPerson, Owner: seat}, w.chart, w.now())
 	switch {
 	case d.Unknown():
 		log.InfoContext(ctx, "stream_watch_undecidable", "login", principal.Login,
