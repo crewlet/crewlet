@@ -32,8 +32,9 @@ func TestARefusalReadsAsTheAPISaidIt(t *testing.T) {
 	t.Parallel()
 	deny := func(reason authz.Reason, grants ...iam.Grant) exec.Response {
 		return answered(func(w http.ResponseWriter) {
-			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-				authz.RefusalDetail(reason, grants))
+			status, code, fields := authz.RefusalFields(authz.Decision{Reason: reason,
+				Grants: grants})
+			httpjson.FailWithFields(w, status, code, fields)
 		})
 	}
 	// said is the sentence a refusal's envelope carries, read off the wire

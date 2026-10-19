@@ -752,7 +752,11 @@ as the first, which tells them to go and get a new credential.
 **A `403` says which rule refused, and what would have admitted you.** Beside
 `"error": "unauthorized"` it carries two detail fields wherever the authority
 table made the refusal — every question, the policy every `/config/*` and
-`/iam/*` route is mounted with, and the snapshot mirrors alike:
+`/iam/*` route is mounted with, and the snapshot mirrors alike. Which code a
+refusal is answered with is the table's own mapping on every surface, the
+WebSocket's frames included — `unauthorized`, `step_up_required` for a stale
+proof, `token_refused` for a machine token where a person must be present — and
+no route spells one of those codes for itself:
 
 ```json
 {
@@ -798,15 +802,17 @@ it names as `role`, the role to ask the owner for), that its owner can share it
 with you at a higher one (the admin path admits whatever the shares say, but
 the share is what to ask for), `unseated` a credential bound to a human seat
 (`crewlet iam bind`),
-`stage` an account an admin activates (`crewlet iam activate`), `step_up` a
-fresh proof of who you are, `seat_refused` and `seat_only` that the verb is a
-person's or an agent's, `ceiling` that the person an agent is working for
-could not do it either, `assist_refused` that the Dashboard Assistant never
-takes the gesture, which stays with you, and `assist_scope` that the assistant
-makes the change only as one you approve. (`not_shared` is never seen here: an
-artifact nothing relates you to is answered `404 not_found`.) A refusal
-carrying no `reason` is told the code's own sentence, which names every
-permission there is.
+`stage` an account an admin activates (`crewlet iam activate`),
+`seat_refused` and `seat_only` that the verb is a person's or an agent's,
+`ceiling` that the person an agent is working for could not do it either,
+`assist_refused` that the Dashboard Assistant never takes the gesture, which
+stays with you, and `assist_scope` that the assistant makes the change only as
+one you approve.
+(`step_up` and `token_refused` are answered under codes of their own, whose
+messages say what clears them — a fresh proof of who you are, signing in as
+yourself — and `not_shared` is never seen at all: an artifact nothing relates
+you to is answered `404 not_found`.) A refusal carrying no `reason` is told
+the code's own sentence, which names every permission there is.
 
 A request the node **cannot decide** — it holds no company yet — is
 `503 unavailable` with a `Retry-After`, never a `403`: a lead

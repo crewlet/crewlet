@@ -11,12 +11,19 @@ import (
 )
 
 // unauthorizedSays is the message a refusal on authority is answered with,
-// built the way every surface builds one — through authz.RefusalDetail, so the
+// built the way every surface builds one — through authz.RefusalFields, so the
 // keys this package reads are the ones authz writes.
 func unauthorizedSays(reason authz.Reason, grants ...iam.Grant) string {
-	body := httpjson.Envelope(httpjson.CodeUnauthorized, authz.RefusalDetail(reason, grants))
+	body := httpjson.Envelope(httpjson.CodeUnauthorized, fieldsOf(reason, grants...))
 	message, _ := body["message"].(string)
 	return message
+}
+
+// fieldsOf is the detail authz.RefusalFields answers a refusal for reason
+// with, naming grants.
+func fieldsOf(reason authz.Reason, grants ...iam.Grant) httpjson.Detail {
+	_, _, detail := authz.RefusalFields(authz.Decision{Reason: reason, Grants: grants})
+	return detail
 }
 
 // A REFUSAL SAYS THE RULE THAT REFUSED, AND NAMES A PERMISSION ONLY WHERE ONE
@@ -63,14 +70,8 @@ func TestUnauthorizedSaysTheRuleThatRefused(t *testing.T) {
 			[]string{"Only an agent can do this"}, false},
 		{authz.ReasonUnseated, []iam.Grant{iam.GrantAdmin},
 			[]string{"this account has none", "crewlet iam bind"}, false},
-		{authz.ReasonTokenRefused, []iam.Grant{iam.GrantAdmin},
-			[]string{"Access tokens can't", "Sign in"}, false},
 		{authz.ReasonStage, []iam.Grant{iam.GrantAdmin},
 			[]string{"isn't active", "crewlet iam activate"}, false},
-		// The grants beside a stale proof are what ADMITTED the caller,
-		// never a remedy: naming them told an admin to ask for admin.
-		{authz.ReasonStepUp, []iam.Grant{iam.GrantAdmin},
-			[]string{"Confirm it's you"}, false},
 		{authz.ReasonUnknownAction, []iam.Grant{iam.GrantAdmin},
 			[]string{"no rule for that request"}, false},
 		// An artifact's share is cleared by its owner. The admin path beside
@@ -79,8 +80,6 @@ func TestUnauthorizedSaysTheRuleThatRefused(t *testing.T) {
 		// the company.
 		{authz.ReasonRole, []iam.Grant{iam.GrantAdmin},
 			[]string{"Your role on this", "share it with you"}, false},
-		{authz.ReasonNotShared, []iam.Grant{iam.GrantAdmin},
-			[]string{"isn't shared with you"}, false},
 		// No permission an agent holds lifts what its requester could not do.
 		{authz.ReasonCeiling, nil, []string{"the agent can't either"}, false},
 		// Nor does any the person holds lift what their assistant may not
@@ -130,8 +129,8 @@ func TestUnauthorizedSaysTheRuleThatRefused(t *testing.T) {
 	// no rule refuses by.
 	for name, detail := range map[string]httpjson.Detail{
 		"no reason":                 {},
-		"no grant named":            authz.RefusalDetail(authz.ReasonNoGrant, nil),
-		"an admission":              authz.RefusalDetail(authz.ReasonGrant, nil),
+		"no grant named":            fieldsOf(authz.ReasonNoGrant),
+		"an admission":              fieldsOf(authz.ReasonGrant),
 		"a reason off a newer peer": {authz.DetailReason: "invented"},
 	} {
 		if got := httpjson.Envelope(httpjson.CodeUnauthorized, detail)["message"]; got != generic {
@@ -140,15 +139,20 @@ func TestUnauthorizedSaysTheRuleThatRefused(t *testing.T) {
 	}
 }
 
-// EVERY REASON THE AUTHORITY TABLE REFUSES BY HAS A SENTENCE, AND NO OTHER.
+// EVERY REASON THE AUTHORITY TABLE ANSWERS `unauthorized` HAS A SENTENCE, AND
+// NO OTHER.
 //
 // The two lists are two packages' — the reasons are authz's, and the words are
 // this package's, which imports no engine machinery — so nothing but this
 // holds them together: a reason authz grows would be told the code's own
 // sentence (every permission, for a rule that may ask none), and a sentence
-// for a reason nothing reports is what a rename leaves behind. Mutation: delete
-// a row from the table and the first loop fails; add one keyed on a word no
-// rule reports and the second does.
+// for a reason nothing reports is what a rename leaves behind. Which reasons
+// are answered `unauthorized` at all is the mapping's own answer
+// ([authz.RefusalFields]): a stale proof, a token's refusal and no relation
+// are answered under codes of their own, so a sentence kept for one is words
+// no refusal is told. Mutation: delete a row from the table and the first
+// loop fails; add one for `step_up` and the never-unauthorized arm does; add
+// one keyed on a word no rule reports and the last does.
 func TestEveryRefusalReasonHasASentence(t *testing.T) {
 	t.Parallel()
 	said := map[string]bool{}
@@ -156,12 +160,18 @@ func TestEveryRefusalReasonHasASentence(t *testing.T) {
 		said[reason] = true
 	}
 	for _, reason := range authz.Reasons {
-		// AN ADMISSION is carried by no refusal, so `unauthorized` has
-		// no sentence for it.
-		if reason.Admits() {
+		// AN ADMISSION is carried by no refusal, and a refusal the mapping
+		// answers under a code of its own (a stale proof, a token's, no
+		// relation) is never `unauthorized`, so `unauthorized` has no
+		// sentence for either.
+		_, code, _ := authz.RefusalFields(authz.Decision{Reason: reason,
+			Grants: []iam.Grant{iam.GrantAdmin}, Recency: iam.RecencyStepUp})
+		if reason.Admits() || code != httpjson.CodeUnauthorized {
 			if said[string(reason)] {
-				t.Errorf("%q admits, and unauthorized keeps a sentence for it", reason)
+				t.Errorf("%q is never answered unauthorized (admits %t, answered %s), "+
+					"and unauthorized keeps a sentence for it", reason, reason.Admits(), code)
 			}
+			delete(said, string(reason))
 			continue
 		}
 		if !said[string(reason)] {

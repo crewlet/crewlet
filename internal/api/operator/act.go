@@ -267,8 +267,9 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 		AuditRefusal(r.Context(), s.audit, transport, name, key, false)
 		log.WarnContext(r.Context(), "operator_act_assist_refused", append(logged,
 			"detail", refusal)...)
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-			authz.RefusalDetail(authz.ReasonAssistRefused, nil))
+		status, code, fields := authz.RefusalFields(authz.Decision{
+			Reason: authz.ReasonAssistRefused})
+		httpjson.FailWithFields(w, status, code, fields)
 		return
 	}
 	// THROUGH THE DISPATCH, which publishes the call's runtime audit

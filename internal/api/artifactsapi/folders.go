@@ -284,13 +284,14 @@ func refuseFolderAdmission(w http.ResponseWriter, r *http.Request, action authz.
 }
 
 // refuseFolderDecision renders a refusal of the authority table on a folder:
-// for a caller whose relation is below the verb's role, the role named.
+// for a caller whose relation is below the verb's role, the mapping's own
+// answer ([authz.RefusalFields], which names the role) with the sentence
+// saying whom to ask beside it.
 func refuseFolderDecision(w http.ResponseWriter, r *http.Request, action authz.Action, d authz.Decision) {
 	if d.Err == nil && d.Reason == authz.ReasonRole && d.Role.Valid() {
-		detail := authz.RefusalDetail(d.Reason, d.Grants)
-		detail["role"] = string(d.Role)
+		status, code, detail := authz.RefusalFields(d)
 		detail["detail"] = folderRoleSentence(d.Role)
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized, detail)
+		httpjson.FailWithFields(w, status, code, detail)
 		return
 	}
 	operator.RefuseDecision(w, r, action, d)
@@ -811,10 +812,14 @@ func moveOutcome(err error) (string, string) {
 		return string(httpjson.CodeNotFound), "there is no such artifact, or it is not shared with you"
 	case errors.Is(err, ErrNoSuchFolder), errors.Is(err, artifactsdomain.ErrFolderNotFound):
 		return string(httpjson.CodeFolderNotFound), "there is no such folder, or it is not one you can see"
-	case errors.As(err, &refused) && folder:
-		return string(httpjson.CodeUnauthorized), folderRoleSentence(refused.Decision.Role)
 	case errors.As(err, &refused):
-		return string(httpjson.CodeUnauthorized), "moving it needs the editor role on the artifact; " +
+		// THE CODE IS THE MAPPING'S ([authz.RefusalFields]), as every refusal
+		// on authority's is; the sentence says whose role the move needs.
+		_, code, _ := authz.RefusalFields(refused.Decision)
+		if folder {
+			return string(code), folderRoleSentence(refused.Decision.Role)
+		}
+		return string(code), "moving it needs the editor role on the artifact; " +
 			"its owner can share it with you at that role"
 	case errors.Is(err, artifactsdomain.ErrTrashed):
 		return string(httpjson.CodeArtifactTrashed), "it is in the trash; its owner restores it first"
