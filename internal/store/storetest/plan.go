@@ -1,6 +1,7 @@
 package storetest
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"go/ast"
@@ -16,8 +17,23 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sourcetree"
-	"github.com/crewlet/crewlet/internal/store"
 )
+
+// Handle is what a plan is read through: either estate's handle — the node's
+// own file (*store.DB) or the replicated estate (store.ReplicatedHandle) — as
+// the two transactions every plan needs, a read for a query and a write
+// transaction for a write.
+//
+// EITHER ESTATE, because a gate holds a statement to the plan it runs under
+// wherever the statement runs: the event log, the chat index and the custody
+// ledger are the node's own, the tracker, the knowledge base and the vectors
+// replicated. Taking the replicated handle alone, every node-estate gate read
+// its plans its own way, and a reading of a plan spelled twice is two readings
+// a driver bump can blind one at a time.
+type Handle interface {
+	Read(ctx context.Context, fn func(*sql.Tx) error) error
+	Tx(ctx context.Context, fn func(*sql.Tx) error) error
+}
 
 // PlanLine is one line of a statement's plan: its id, the line it sits under —
 // 0 for the statement's own top level, which is what tells a sort of the whole
@@ -35,8 +51,7 @@ type PlanLine struct {
 // WRITE IS PLANNED IN A WRITE TRANSACTION, because the read path runs
 // query_only, which refuses even the EXPLAIN of one. Nothing is executed either
 // way.
-func PlanTree(t testing.TB, db store.ReplicatedHandle, statement string,
-	args []any) []PlanLine {
+func PlanTree(t testing.TB, db Handle, statement string, args []any) []PlanLine {
 
 	t.Helper()
 	in := db.Read
@@ -71,7 +86,7 @@ func PlanTree(t testing.TB, db store.ReplicatedHandle, statement string,
 }
 
 // Plan is [PlanTree]'s lines alone.
-func Plan(t testing.TB, db store.ReplicatedHandle, statement string, args []any) []string {
+func Plan(t testing.TB, db Handle, statement string, args []any) []string {
 	t.Helper()
 	return Details(PlanTree(t, db, statement, args))
 }
@@ -174,7 +189,7 @@ func ScansHeap(plan []string, table string) bool {
 
 // IndexesOn is every index the schema declares on these tables — its
 // autoindexes, which no DDL names, left out.
-func IndexesOn(t testing.TB, db store.ReplicatedHandle, tables []string) []string {
+func IndexesOn(t testing.TB, db Handle, tables []string) []string {
 	t.Helper()
 	var found []string
 	if err := db.Read(t.Context(), func(tx *sql.Tx) error {
