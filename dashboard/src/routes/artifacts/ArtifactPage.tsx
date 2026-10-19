@@ -365,13 +365,16 @@ function Loaded({
   // ---- who is here, and following them --------------------------------------
   const presence = useArtifactPresence(room, people, showing);
   const viewer = useViewer();
+  // THE NAME THE ROOM KNOWS THIS READER BY: their seat, or the login of a
+  // reader acting under none, as the engine names every member.
+  const selfName = viewer.handle || viewer.login;
   const [follow, setFollow] = useParam("follow", "");
   const [sheetParam] = useParam("sheet", "");
   const [slideParam] = useParam("slide", "");
   const [doctabParam] = useParam("doctab", "");
   // WHO IS FOLLOWED is somebody else in the room: following oneself moves
   // nothing, and a seat that left is said once and then let go.
-  const followed = follow && follow !== viewer.handle ? follow : "";
+  const followed = follow && follow !== selfName ? follow : "";
   const target = useMemo(
     () => (followed ? followTarget(room.others, followed) : null),
     [room.others, followed],
@@ -452,8 +455,8 @@ function Loaded({
   // THE READER'S OWN OTHER TABS are counted beside "You", never drawn as a
   // collaborator with a Follow that would move nothing.
   const { others, ownTabs } = useMemo(
-    () => splitOwnSessions(room.others, viewer.handle),
-    [room.others, viewer.handle],
+    () => splitOwnSessions(room.others, selfName),
+    [room.others, selfName],
   );
   // WHERE SOMEBODY IS, as the reader sees it: a row by its number in the
   // sheet's own order, a column by its label, a doc's tab or a deck's slide

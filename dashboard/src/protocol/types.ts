@@ -5925,7 +5925,7 @@ export interface PresenceFocus {
 /** One open viewer of one artifact (`artifacts.PresenceMember`). */
 export interface ArtifactPresenceMember {
   session: string;
-  /** The seat handle; the dashboard resolves the name. */
+  /** The seat handle, which the dashboard resolves to a name, or the login of one acting under no seat. */
   seat: string;
   kind: string;
   activity: PresenceActivity;
