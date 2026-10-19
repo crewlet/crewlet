@@ -7,8 +7,10 @@
 #
 # Prints the directory holding that build's `git` (its bin/) and nothing else on stdout, building it first unless
 # an intact build is already there. A refusal, a build's progress and a build's failure go to stderr. Exits 0 with
-# the directory printed, 1 when a download or a build failed, 2 when it was asked something it refuses — an unknown
-# pin, a malformed pin file, a tool the build needs and the machine lacks — before anything is downloaded.
+# the directory printed, 1 when a download or a build failed (a tarball whose SHA-256 the machine's hash could not
+# compute among them), 2 when it was asked something it refuses — an unknown pin, a malformed pin file, a tool the
+# build needs and the machine lacks or a hash that cannot compute the recipe's own SHA-256 — before anything is
+# downloaded.
 #
 # Environment (each optional):
 #   CREWLET_GIT_CACHE    where builds are kept; ${XDG_CACHE_HOME:-$HOME/.cache}/crewlet/git
@@ -80,8 +82,8 @@
 #
 # ITS OWN SUITE is scripts/git-pin_test.sh (`make git-test`, in `make check` and ci.yml's `build + vet`), beside the
 # pin check's: the refusals above, an intact build handed back with nothing downloaded, a tarball that is not the
-# pin's, two builders at once leaving one build, and what a prefix build carries — each against a stand-in tarball,
-# so no case builds git.
+# pin's, a hash that gives no SHA-256, two builders at once leaving one build, and what a prefix build carries — each
+# against a stand-in tarball, so no case builds git.
 set -eu
 
 usage() {
@@ -124,14 +126,30 @@ if ! printf '%s\n' "$sha" | grep -Eqx '[0-9a-f]{64}'; then
 	exit 2
 fi
 
+# digest FILE prints FILE's SHA-256 and fails rather than print anything else, the rule scripts/git-pin-check.sh's
+# digest follows too. Piped through cut, as it was, a hash missing, failing part way through a file or printing no
+# digest answered cut's 0 and an empty string: the recipe's own digest then named its builds `<version>-`, and a
+# tarball's was reported as hashing to nothing. Both are the machine's hash failing, which is named as that.
 digest() {
 	if command -v sha256sum >/dev/null 2>&1; then
-		sha256sum "$1"
+		sum=$(sha256sum "$1") || return 1
 	else
-		shasum -a 256 "$1" # macOS
-	fi | cut -d' ' -f1
+		sum=$(shasum -a 256 "$1") || return 1 # macOS
+	fi
+	sum=${sum%% *}
+	printf '%s\n' "$sum" | grep -Eqx '[0-9a-f]{64}' || return 1
+	printf '%s\n' "$sum"
 }
-recipe=$(digest "$here/git.sh" | cut -c1-12)
+if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+	echo "git.sh: checking a tarball against its pin needs sha256sum, or shasum where that is absent — CONTRIBUTING.md, Development setup, says what to install" >&2
+	exit 2
+fi
+# The recipe's digest names its builds, so one it cannot compute is refused before anything is looked for.
+if ! sum=$(digest "$here/git.sh"); then
+	echo "git.sh: cannot compute the SHA-256 of $here/git.sh, which names this recipe's builds" >&2
+	exit 2
+fi
+recipe=$(printf '%s' "$sum" | cut -c1-12)
 tarball=git-$version.tar.xz
 downloads=${GIT_PIN_DOWNLOADS:-https://www.kernel.org/pub/software/scm/git}
 
@@ -247,7 +265,10 @@ if ! curl -fsSL --retry 3 --connect-timeout 30 --speed-limit 1 --speed-time 60 -
 	echo "git.sh: could not download $downloads/$tarball" >&2
 	exit 1
 fi
-got=$(digest "$work/$tarball")
+if ! got=$(digest "$work/$tarball"); then
+	echo "git.sh: cannot compute the SHA-256 of $tarball, so it cannot be checked against $pin" >&2
+	exit 1
+fi
 if [ "$got" != "$sha" ]; then
 	echo "git.sh: $tarball hashes to $got, and $pin pins $sha" >&2
 	exit 1

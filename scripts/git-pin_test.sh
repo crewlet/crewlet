@@ -291,6 +291,37 @@ expect "git.sh names both digests when the tarball is not the pin's" 1 "" "pins 
 # Mutation: drop the stall bound from the recipe's download -> red.
 bounded "every download the recipe makes ends when it stalls"
 
+# --- a hash that gives no SHA-256 is a refusal, never a digest -------------------------------------------------
+
+# The tarball's: a hash that fails over it, having printed nothing, leaves a download the recipe cannot check (1),
+# never a digest of nothing compared against the pin — the status of `sha256sum FILE | cut` is cut's, so the
+# recipe's hash once answered 0 and an empty string. Mutation: let digest print whatever its hash printed -> "hashes
+# to , and ... pins" (red).
+s="$(scripts hashfails)"
+sha="$(standin "$TMPROOT/hashfails/downloads" 2.56.0)"
+pin "$s" 2.56.0 "$sha" 2.55.0 "$zero" 2.40.4 "$zero"
+hashtool "$TMPROOT/hashfails/tools" fails '*.tar.xz'
+run env PATH="$TMPROOT/hashfails/tools:$PATH" CREWLET_GIT_CACHE="$TMPROOT/hashfails/cache" \
+	GIT_PIN_DOWNLOADS="file://$TMPROOT/hashfails/downloads" "$s/git.sh" node
+expect "git.sh refuses a tarball whose SHA-256 the machine cannot compute (1)" 1 "" \
+	"cannot compute the SHA-256 of git-2.56.0.tar.xz"
+
+# The recipe's own: a hash that prints no digest names no build, so the recipe refuses before it downloads (2) —
+# rather than look for a build at "<version>-", download, and fail at the tarball. Mutation: as above -> exit 1
+# after a download (red).
+s="$(scripts hashnone)"
+pin "$s" 2.56.0 "$sha" 2.55.0 "$zero" 2.40.4 "$zero"
+hashtool "$TMPROOT/hashnone/tools" garbles
+: >"$TMPROOT/curl.log"
+run env PATH="$TMPROOT/hashnone/tools:$PATH" CREWLET_GIT_CACHE="$TMPROOT/hashnone/cache" \
+	GIT_PIN_DOWNLOADS="file://$TMPROOT/hashfails/downloads" "$s/git.sh" node
+expect "git.sh refuses to build where it cannot compute its own SHA-256 (2)" 2 "" "cannot compute the SHA-256 of"
+if [ -s "$TMPROOT/curl.log" ]; then
+	bad "git.sh downloads nothing where it cannot compute its own SHA-256" "$(cat "$TMPROOT/curl.log")"
+else
+	ok "git.sh downloads nothing where it cannot compute its own SHA-256"
+fi
+
 # --- two builders at once publish one build, and neither deletes the other's git -----------------------------
 
 # Two `git.sh node` runs over one cache, the shape of two worktrees' `make test` starting together: B finds no
