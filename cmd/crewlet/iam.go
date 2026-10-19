@@ -107,8 +107,8 @@ Flags:
   -grants G,...  On invite, create, grant and token:
                  %[2]s, comma-separated, or none
                  (overview only). admin includes every app. Defaults:
-                 %[3]s for people, the owner's
-                 permissions for a token. Required for a service account
+                 %[3]s for people; for a token, the owner's
+                 permissions you may give. Required for a service account
   -seat SEAT     On invite and create: the vacant human seat they'll hold
                  ("iam seats -unheld" lists them). Required for people,
                  optional for service accounts
@@ -773,7 +773,8 @@ func iamHelp() string {
 
 // iamTokenBody is a mint's request: what the token carries, what it is called
 // and how long it lasts — the same whoever the owner is. A list not given
-// sends no `grants`, which the node reads as everything the owner holds.
+// sends no `grants`, which the node reads as everything the owner holds that
+// the minting session may confer.
 func iamTokenBody(granted iamGrantList, label string, days int) map[string]any {
 	body := granted.body()
 	body["label"] = label
