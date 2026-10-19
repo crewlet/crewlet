@@ -595,6 +595,14 @@ for it: the `scalar_subquery_<n>` operand the rewrite produces, never the
 the driver in both directions, so a driver bump that renames or stops the
 rewrite fails there before it blinds a gate.
 
+`Decorrelated` sits beside the one vocabulary the tracker's and the knowledge
+base's plan tests read a plan through: `PlanTree`, `Plan` and `Details`;
+`IndexesIn`, `Seeks`, `Walks`, `Sorts` and `ScansHeap`; `IndexesOn`; and
+`StatementLiterals`, the walk of the module's source a gate's completeness
+check makes, which fails when it read nothing outside the gate's own package.
+Two copies of how a plan is spelled are two gates a driver bump blinds one at a
+time.
+
 ### The end-to-end gates
 
 `internal/e2e` runs a real engine, a real broker and the real API, then

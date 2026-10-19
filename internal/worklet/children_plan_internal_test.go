@@ -3,6 +3,8 @@ package worklet
 import (
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // A TASK'S CHILDREN ARE READ IN THE TREE INDEX'S OWN ORDER.
@@ -22,8 +24,8 @@ func TestATasksChildrenAreReadInTheTreesOrder(t *testing.T) {
 		"a walk's batch of children": {childBatchStatement,
 			[]any{"t-00001", "P01", "", WalkBatch}},
 	} {
-		plan := explain(t, db, read.sql, read.args)
-		if !seeks(plan, parentIndex) || sorts(plan) {
+		plan := storetest.Plan(t, db, read.sql, read.args)
+		if !storetest.Seeks(plan, parentIndex) || storetest.Sorts(plan) {
 			t.Errorf("%s is not a seek of %s in its own order:\n%s", name,
 				parentIndex, strings.Join(plan, "\n"))
 		}

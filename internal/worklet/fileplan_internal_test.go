@@ -4,13 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // declared is a statement the object store builds from this package's own
@@ -75,8 +75,8 @@ func TestTheFileIndexesServeTheirQueries(t *testing.T) {
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			plan := explain(t, db, c.statement, c.args)
-			if !seeks(plan, c.index) {
+			plan := storetest.Plan(t, db, c.statement, c.args)
+			if !storetest.Seeks(plan, c.index) {
 				t.Fatalf("this query does not SEEK %s:\n%s", c.index, strings.Join(plan, "\n"))
 			}
 		})
@@ -130,50 +130,4 @@ func fileRow(i int) []any {
 		"ana", store.EncodeTime(at), "ana", store.EncodeTime(at),
 		removedBy, removedAt, int64(i + 1), []byte(`{}`), object,
 	}
-}
-
-// seeks reports a plan that SEARCHES through index — a seek on the index's
-// leading columns.
-//
-// REACHING THE INDEX IS NOT ENOUGH, which is what this used to check: every
-// query here is covered by its index, so an index whose columns lead with the
-// wrong one is still "used" — as a SCAN of every entry, which is every file
-// row in the company read in index order rather than heap order, and no
-// cheaper. `SEARCH` is the planner saying it will seek.
-//
-// KEYED ON THE INDEX, NOT ON THE TABLE, because the table is not what the
-// line names once the statement aliases it: this engine writes a seek under
-// the ALIAS (`SEARCH h USING INDEX …`) and a scan under the table and the
-// alias (`SCAN tracker_history AS h …`), so a match on `SEARCH <table>` finds
-// no seek in any statement that joins. An index belongs to exactly one table,
-// so its name already says which table is being sought.
-//
-// AN INTERSECTION SEEKS EVERY INDEX IT NAMES (`MULTI-INDEX AND h (a, b)`):
-// each is looked up by its own equality before the row ids are joined — and so
-// does a union of two (`MULTI-INDEX OR`).
-func seeks(plan []string, index string) bool {
-	for _, line := range plan {
-		if (strings.HasPrefix(line, "SEARCH ") || strings.HasPrefix(line, "MULTI-INDEX AND ") ||
-			strings.HasPrefix(line, "MULTI-INDEX OR ")) &&
-			slices.Contains(indexesIn([]string{line}), index) {
-			return true
-		}
-	}
-	return false
-}
-
-// sorts reports a plan that sorts the rows it read before it returns any.
-//
-// MATCHED ON `FOR ORDER BY`, the part of the line both spellings share — this
-// engine's `USE SORTER FOR ORDER BY` and SQLite's `USE TEMP B-TREE FOR ORDER
-// BY` — because the word for the structure is the engine's and the step is
-// the same: every row the read selected, buffered and sorted before the first
-// is returned, which a LIMIT can no longer stop early.
-func sorts(plan []string) bool {
-	for _, line := range plan {
-		if strings.Contains(line, "FOR ORDER BY") {
-			return true
-		}
-	}
-	return false
 }

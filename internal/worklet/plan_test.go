@@ -4,21 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"io/fs"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/search"
-	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -57,7 +51,7 @@ import (
 // The table's readers are every statement this package runs that finds
 // history rows ([historyReads]), each planned over a company's history, and
 // the set is held COMPLETE: every statement in the module's source that reads
-// the table is one of them ([statementLiterals]).
+// the table is one of them ([storetest.StatementLiterals]).
 func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
 	db := planStore(t)
@@ -95,7 +89,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	refuseHeapScans := func(t *testing.T, plan []string) {
 		t.Helper()
 		for _, table := range covered {
-			if scansHeap(plan, table) {
+			if storetest.ScansHeap(plan, table) {
 				t.Errorf("this read reads %s with no index:\n%s",
 					table, strings.Join(plan, "\n"))
 			}
@@ -127,11 +121,11 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 			// nobody issues — and the FROM and the ORDER BY are half of
 			// what decides which index the planner reaches for.
 			page := statements["the page"]
-			plan := explain(t, db, page.sql, page.args)
+			plan := storetest.Plan(t, db, page.sql, page.args)
 			for what, statement := range statements {
-				tree := explainTree(t, db, statement.sql, statement.args)
-				other := planDetails(tree)
-				for _, index := range indexesIn(other) {
+				tree := storetest.PlanTree(t, db, statement.sql, statement.args)
+				other := storetest.Details(tree)
+				for _, index := range storetest.IndexesIn(other) {
 					used[index] = true
 				}
 				refuseHeapScans(t, other)
@@ -154,7 +148,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 			for _, filter := range q.Fields {
 				field := planFields(q)[filter.Ref]
 				index := "tracker_field_values_" + FieldValueColumn(field.Type) + "_idx"
-				if !seeks(plan, index) {
+				if !storetest.Seeks(plan, index) {
 					t.Errorf("this filter on a %s field does not SEEK %s:\n%s",
 						field.Type, index, strings.Join(plan, "\n"))
 				}
@@ -192,8 +186,8 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	for name, read := range taskReads() {
 		planned = append(planned, read.sql)
 		t.Run(name, func(t *testing.T) {
-			plan := explain(t, db, read.sql, read.args)
-			for _, index := range indexesIn(plan) {
+			plan := storetest.Plan(t, db, read.sql, read.args)
+			for _, index := range storetest.IndexesIn(plan) {
 				used[index] = true
 			}
 			refuseHeapScans(t, plan)
@@ -209,8 +203,8 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	for name, census := range taskCensuses() {
 		planned = append(planned, census.sql)
 		t.Run(name, func(t *testing.T) {
-			plan := explain(t, db, census.sql, census.args)
-			for _, index := range indexesIn(plan) {
+			plan := storetest.Plan(t, db, census.sql, census.args)
+			for _, index := range storetest.IndexesIn(plan) {
 				used[index] = true
 			}
 			refuseHeapScans(t, plan)
@@ -219,7 +213,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	for name, pass := range taskPasses() {
 		planned = append(planned, pass.sql)
 		t.Run(name, func(t *testing.T) {
-			if plan := explain(t, db, pass.sql, pass.args); sorts(plan) {
+			if plan := storetest.Plan(t, db, pass.sql, pass.args); storetest.Sorts(plan) {
 				t.Errorf("this pass sorts the table it reads, holding every "+
 					"row before the first is used:\n%s", strings.Join(plan, "\n"))
 			}
@@ -240,8 +234,8 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	reads := historyReads(t, history)
 	for name, read := range reads {
 		t.Run(name, func(t *testing.T) {
-			plan := explain(t, history, read.sql, read.args)
-			for _, index := range indexesIn(plan) {
+			plan := storetest.Plan(t, history, read.sql, read.args)
+			for _, index := range storetest.IndexesIn(plan) {
 				used[index] = true
 			}
 			refuseHeapScans(t, plan)
@@ -263,7 +257,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	passes := historyPasses()
 	for name, statement := range passes {
 		t.Run(name, func(t *testing.T) {
-			if plan := explain(t, history, statement.sql, statement.args); sorts(plan) {
+			if plan := storetest.Plan(t, history, statement.sql, statement.args); storetest.Sorts(plan) {
 				t.Errorf("this pass sorts the history it reads, holding every "+
 					"row before the first is used:\n%s", strings.Join(plan, "\n"))
 			}
@@ -283,14 +277,14 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	for _, statement := range passes {
 		registered = append(registered, statement.sql)
 	}
-	for _, literal := range statementLiterals(t, "tracker_history") {
+	for _, literal := range storetest.StatementLiterals(t, "internal/worklet", "tracker_history") {
 		if !slices.ContainsFunc(registered, func(statement string) bool {
-			return strings.Contains(statement, literal.text)
+			return strings.Contains(statement, literal.Text)
 		}) {
 			t.Errorf("this statement in %s reads tracker_history and is "+
 				"registered in neither historyReads nor historyPasses, so no plan "+
 				"of it is taken — name it, as every other is named, and register "+
-				"it:\n%s", literal.file, literal.text)
+				"it:\n%s", literal.File, literal.Text)
 		}
 	}
 
@@ -304,20 +298,20 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	// field value from the heap once per field, and the subtree walk,
 	// which read the table from the heap once per level.
 	planned = append(planned, registered...)
-	for _, literal := range statementLiterals(t, taskTables...) {
+	for _, literal := range storetest.StatementLiterals(t, "internal/worklet", taskTables...) {
 		if !slices.ContainsFunc(planned, func(statement string) bool {
-			return strings.Contains(statement, literal.text)
+			return strings.Contains(statement, literal.Text)
 		}) {
 			t.Errorf("this statement in %s reads a task table and no statement "+
 				"this test plans holds it, so no plan of it is taken — name it, "+
 				"as every other is named (from outside this package, as an "+
 				"exported function returning the statement and its arguments), "+
 				"and register it in taskReads, taskCensuses or taskPasses, or "+
-				"as a query in registeredQueries:\n%s", literal.file, literal.text)
+				"as a query in registeredQueries:\n%s", literal.File, literal.Text)
 		}
 	}
 
-	for _, index := range indexesOn(t, db, covered) {
+	for _, index := range storetest.IndexesOn(t, db, covered) {
 		if !used[index] {
 			t.Errorf("no registered query's plan reaches %s — an index is a "+
 				"write cost on every commit on every node for ever, so one no "+
@@ -351,25 +345,25 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 // every live task in the company for the workspace's default listing, a
 // project's whole board for a board and the whole trash at either scope, and
 // passed every other check here, because its subquery reused the alias `t`.
-func refuseSetWalks(t *testing.T, what string, tree []planLine) {
+func refuseSetWalks(t *testing.T, what string, tree []storetest.PlanLine) {
 	t.Helper()
-	plan := planDetails(tree)
+	plan := storetest.Details(tree)
 	listed := underList(tree)
 	for _, line := range tree {
 		for _, table := range []string{"tracker_task_tags", "tracker_task_deps",
 			"tracker_field_values"} {
-			if strings.HasPrefix(line.detail, "SCAN "+table+" ") ||
-				line.detail == "SCAN "+table {
+			if strings.HasPrefix(line.Detail, "SCAN "+table+" ") ||
+				line.Detail == "SCAN "+table {
 				t.Errorf("%s walks every row of %s:\n%s", what, table,
 					strings.Join(plan, "\n"))
 			}
 		}
-		if strings.HasPrefix(line.detail, "SCAN tracker_tasks AS ") &&
-			!strings.HasPrefix(line.detail, "SCAN tracker_tasks AS t ") {
+		if strings.HasPrefix(line.Detail, "SCAN tracker_tasks AS ") &&
+			!strings.HasPrefix(line.Detail, "SCAN tracker_tasks AS t ") {
 			t.Errorf("%s walks the task table once per row it filters:\n%s",
 				what, strings.Join(plan, "\n"))
 		}
-		if readsTaskTable(line.detail) && listed(line) {
+		if readsTaskTable(line.Detail) && listed(line) {
 			t.Errorf("%s reads the task table into a list it holds whole "+
 				"before the first row:\n%s", what, strings.Join(plan, "\n"))
 		}
@@ -386,7 +380,7 @@ func readsTaskTable(detail string) bool {
 	if !strings.HasPrefix(detail, "SEARCH ") {
 		return false
 	}
-	for _, index := range indexesIn([]string{detail}) {
+	for _, index := range storetest.IndexesIn([]string{detail}) {
 		if strings.HasPrefix(index, "tracker_tasks_") ||
 			index == "sqlite_autoindex_tracker_tasks_1" {
 			return true
@@ -398,28 +392,19 @@ func readsTaskTable(detail string) bool {
 // underList reports, for each line of a plan, whether it sits inside an IN
 // list's subquery — which this engine plans once for the statement rather
 // than once per row, and holds whole.
-func underList(tree []planLine) func(planLine) bool {
-	byID := map[int]planLine{}
+func underList(tree []storetest.PlanLine) func(storetest.PlanLine) bool {
+	byID := map[int]storetest.PlanLine{}
 	for _, line := range tree {
-		byID[line.id] = line
+		byID[line.ID] = line
 	}
-	return func(line planLine) bool {
-		for at := line.parent; at != 0; at = byID[at].parent {
-			if strings.HasPrefix(byID[at].detail, "LIST SUBQUERY") {
+	return func(line storetest.PlanLine) bool {
+		for at := line.Parent; at != 0; at = byID[at].Parent {
+			if strings.HasPrefix(byID[at].Detail, "LIST SUBQUERY") {
 				return true
 			}
 		}
 		return false
 	}
-}
-
-// planDetails is a plan tree's lines, in order.
-func planDetails(tree []planLine) []string {
-	details := make([]string, len(tree))
-	for i, line := range tree {
-		details[i] = line.detail
-	}
-	return details
 }
 
 // registeredQueries is the grammar's own coverage set: one entry per filter
@@ -587,8 +572,8 @@ func inBothModes(queries map[string]map[string]any) map[string]map[string]any {
 // duty does run was certified by nothing; the trash and one tag's tasks were
 // two more, each a statement no reader issued. Every one is a named value of
 // this package (the search package exports its own), and the completeness
-// walk ([statementLiterals]) is what stops a reader being written inline where
-// no plan of it is taken.
+// walk ([storetest.StatementLiterals]) is what stops a reader being written
+// inline where no plan of it is taken.
 //
 // AN UPDATE, A DELETE OR AN INSERT … SELECT IS A READER TOO: it finds its rows
 // by its WHERE exactly as a SELECT does.
@@ -896,7 +881,7 @@ func holdLinkedPageFilter(t *testing.T, plan []string, q Query) {
 	if q.LinkedPage == "" {
 		return
 	}
-	if !seeks(plan, "tracker_relations_other_idx") {
+	if !storetest.Seeks(plan, "tracker_relations_other_idx") {
 		t.Errorf("linked_page= does not seek the page's own edges through "+
 			"tracker_relations_other_idx:\n%s", strings.Join(plan, "\n"))
 	}
@@ -920,7 +905,7 @@ func holdTagFilter(t *testing.T, plan []string, q Query) {
 	shown := strings.Join(plan, "\n")
 	const slugs, key = "tracker_task_tags_slug_idx", "sqlite_autoindex_tracker_task_tags_1"
 	if q.Tags.Mode == TagNone {
-		if !seeks(plan, key) {
+		if !storetest.Seeks(plan, key) {
 			t.Errorf("tag=none: does not probe each task's own tag rows:\n%s", shown)
 		}
 		return
@@ -928,7 +913,7 @@ func holdTagFilter(t *testing.T, plan []string, q Query) {
 	scoped := q.Scope.Project != ""
 	sought := 0
 	for _, line := range plan {
-		if !seeks([]string{line}, slugs) {
+		if !storetest.Seeks([]string{line}, slugs) {
 			continue
 		}
 		sought++
@@ -972,7 +957,7 @@ func holdPeopleFilter(t *testing.T, plan []string, q Query) {
 		if filter.named == 0 {
 			continue
 		}
-		if !seeks(plan, filter.index) {
+		if !storetest.Seeks(plan, filter.index) {
 			t.Errorf("this filter on a person does not seek %s:\n%s", filter.index, shown)
 		}
 		others, _ := tasksReadOtherwise(plan, "sqlite_autoindex_tracker_tasks_1")
@@ -1013,7 +998,7 @@ func holdToIndex(t *testing.T, plan []string, read indexedRead, covered []string
 	// subject index it then named, and passing.
 	for _, line := range plan {
 		for _, table := range covered {
-			walked := indexesIn([]string{line})
+			walked := storetest.IndexesIn([]string{line})
 			if !strings.HasPrefix(line, "SCAN "+table+" ") || len(walked) == 0 ||
 				(read.walk && walked[0] == read.index) {
 				continue
@@ -1024,12 +1009,12 @@ func holdToIndex(t *testing.T, plan []string, read indexedRead, covered []string
 		}
 	}
 	switch {
-	case !read.walk && !seeks(plan, read.index):
+	case !read.walk && !storetest.Seeks(plan, read.index):
 		t.Errorf("this read does not SEEK %s:\n%s", read.index, shown)
-	case read.walk && !walks(plan, read.index):
+	case read.walk && !storetest.Walks(plan, read.index):
 		t.Errorf("this read does not walk %s in its order:\n%s",
 			read.index, shown)
-	case read.walk && sorts(plan):
+	case read.walk && storetest.Sorts(plan):
 		// A WALK IS RIGHT ONLY WHILE ITS ORDER IS THE ANSWER'S, because
 		// then the LIMIT stops it after a page; sorted, it reads every
 		// row it selects first.
@@ -1052,8 +1037,9 @@ const historyKey = "sqlite_autoindex_tracker_history_1"
 // table are [historyPasses].
 //
 // THE STATEMENTS ARE THE READERS' OWN, never a copy: each is a named value of
-// this package, and the gate's completeness walk ([statementLiterals]) is what
-// stops one being written inline where no plan of it is taken.
+// this package, and the gate's completeness walk
+// ([storetest.StatementLiterals]) is what stops one being written inline where
+// no plan of it is taken.
 //
 // AN UPDATE OR A DELETE IS A READER TOO. It finds its rows by its WHERE exactly
 // as a SELECT does, and the late record's raise and the purge's rewrites run
@@ -1203,9 +1189,9 @@ func TestAFeedReadIsItsIndexInTheFeedsOrder(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			statement, args := activityRead(t, db, c.q)
-			plan := explain(t, db, statement, args)
+			plan := storetest.Plan(t, db, statement, args)
 			shown := strings.Join(plan, "\n")
-			if sorts(plan) {
+			if storetest.Sorts(plan) {
 				t.Errorf("this feed read sorts what it selected rather than "+
 					"reading %s in the feed's order:\n%s", c.index, shown)
 			}
@@ -1275,26 +1261,26 @@ func TestTheAuditReadsOnePageOfEachKind(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			statement, args := activityRead(t, db, q)
-			plan := explainTree(t, db, statement, args)
+			plan := storetest.PlanTree(t, db, statement, args)
 			details := make([]string, len(plan))
 			for i, line := range plan {
-				details[i] = line.detail
+				details[i] = line.Detail
 			}
 			shown := strings.Join(details, "\n")
 			kinds := len(slices.Compact(slices.Sorted(slices.Values(q.ActorKinds))))
 			sought := 0
 			for _, line := range plan {
-				if seeks([]string{line.detail}, writers) {
+				if storetest.Seeks([]string{line.Detail}, writers) {
 					sought++
 				}
-				if !strings.Contains(line.detail, "FOR ORDER BY") {
+				if !strings.Contains(line.Detail, "FOR ORDER BY") {
 					continue
 				}
 				switch {
 				case kinds == 1:
 					t.Errorf("one author kind sorts what it read, where the "+
 						"index is in the feed's order:\n%s", shown)
-				case line.parent != 0:
+				case line.Parent != 0:
 					t.Errorf("an arm sorts what it read rather than reading "+
 						"one kind's range in its order:\n%s", shown)
 				}
@@ -1328,186 +1314,6 @@ func historyPasses() map[string]plannedRead {
 		"the reopen re-derivation":   {reopensStatement, []any{string(KindTask)}},
 		"every task's last change":   {every, args},
 	}
-}
-
-// statementLiterals is every statement fragment of this module's non-test Go
-// source that names one of tables as a source of rows — after FROM, JOIN or
-// UPDATE — which is every fragment of every statement that reads them.
-//
-// THE SOURCE RATHER THAN A LIST, for the reason [taskReads] gives against a
-// copy: a list beside the readers is one a new reader is added to by memory.
-//
-// THE WHOLE TREE RATHER THAN THIS PACKAGE, because the tables are read from
-// outside it: the search package walks, fetches and counts the live tasks for
-// its lexical index, names the tasks a page's backlinks cite and reads every
-// task's body for the window report — and walked over this directory alone,
-// none of those was a reader this gate could see, so the lexical index's walk
-// read every live task in the company and sorted it for each batch while the
-// gate passed. A package that starts reading a task table fails here until
-// its statement is named, exported and registered, as search's are
-// ([search.TaskVersionsRead] and the rest). The walk is [sourcetree.Walk]'s,
-// so a nested checkout's copy of a file is never read as this tree's, and a
-// walk that read no file outside this package fails rather than passing on
-// this package alone.
-//
-// A FRAGMENT IS A RUN OF ADJACENT LITERALS, folded: `"… FROM " +
-// "tracker_task_deps d …"` is one fragment, because a statement written across
-// two literals reads the table exactly as one written in one does, and matched
-// literal by literal neither half names it — which is how the unblocked block
-// of `my_work` read the dependency table unseen. A run ends wherever the
-// expression stops being literal (a placeholder list, a compiled clause, a
-// named constant), and the fragment is matched WHOLE against the registered
-// statements, so a statement assembled from several runs is held by each of
-// them. A table name that is not spelled in any literal — a statement over a
-// table the code chooses at run time, or over a compiled set, whose source is
-// the set's own — is invisible here, which is why every such builder is
-// registered by hand ([childClearStatement], and [queryStatements] for every
-// statement over a set).
-func statementLiterals(t *testing.T, tables ...string) []sourceLiteral {
-	t.Helper()
-	names := make([]string, len(tables))
-	for i, table := range tables {
-		names[i] = regexp.QuoteMeta(table)
-	}
-	reads := regexp.MustCompile(`(?i)\b(FROM|JOIN|UPDATE)\s+(` +
-		strings.Join(names, "|") + `)\b`)
-	tree, err := moduleLiterals()
-	if err != nil {
-		t.Fatalf("read the module's source: %v", err)
-	}
-	if tree.outside == 0 {
-		t.Fatalf("the walk read no Go file outside internal/tracker, so it "+
-			"holds only this package's readers of %v", tables)
-	}
-	var out []sourceLiteral
-	for _, literal := range tree.literals {
-		if reads.MatchString(literal.text) {
-			out = append(out, literal)
-		}
-	}
-	if len(out) == 0 {
-		t.Fatalf("no literal of the module reads %v, so this walk is reading "+
-			"nothing", tables)
-	}
-	return out
-}
-
-// sourceLiteral is one fragment [statementLiterals] found, and the file it is
-// in, relative to the module's root.
-type sourceLiteral struct {
-	file, text string
-}
-
-// moduleLiterals is every literal run of the module's non-test Go source, and
-// how many of the files it read are outside this package — read once for the
-// test binary, since every walk asks the same tree.
-var moduleLiterals = sync.OnceValues(func() (moduleSource, error) {
-	root, err := sourcetree.ModuleRoot()
-	if err != nil {
-		return moduleSource{}, err
-	}
-	own := filepath.Join("internal", "tracker")
-	fset := token.NewFileSet()
-	var out moduleSource
-	err = sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
-		switch {
-		case err != nil:
-			return err
-		case d.IsDir() && d.Name() == "testdata":
-			// NOT THE MODULE'S CODE: nothing compiles it.
-			return fs.SkipDir
-		case d.IsDir() || !strings.HasSuffix(path, ".go") ||
-			strings.HasSuffix(path, "_test.go"):
-			return nil
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		if err != nil {
-			return fmt.Errorf("parse %s: %w", rel, err)
-		}
-		if filepath.Dir(rel) != own {
-			out.outside++
-		}
-		for _, run := range literalRuns(file) {
-			out.literals = append(out.literals, sourceLiteral{rel, run})
-		}
-		return nil
-	})
-	return out, err
-})
-
-// moduleSource is what [moduleLiterals] read.
-type moduleSource struct {
-	literals []sourceLiteral
-	outside  int
-}
-
-// literalRuns is every maximal run of adjacent string literals in a file's
-// concatenations, each folded into the one string it spells.
-func literalRuns(file *ast.File) []string {
-	var out []string
-	var visit func(ast.Node) bool
-	visit = func(n ast.Node) bool {
-		switch x := n.(type) {
-		case *ast.BinaryExpr:
-			if x.Op != token.ADD {
-				return true
-			}
-		case *ast.BasicLit:
-			if x.Kind != token.STRING {
-				return true
-			}
-		default:
-			return true
-		}
-		// A CONCATENATION, flattened left to right: each run of literals
-		// is one fragment, and every other operand is visited on its own,
-		// because a call inside a concatenation can hold a statement too.
-		var operands []ast.Expr
-		var flatten func(ast.Expr)
-		flatten = func(e ast.Expr) {
-			switch y := e.(type) {
-			case *ast.BinaryExpr:
-				if y.Op == token.ADD {
-					flatten(y.X)
-					flatten(y.Y)
-					return
-				}
-			case *ast.ParenExpr:
-				flatten(y.X)
-				return
-			}
-			operands = append(operands, e)
-		}
-		flatten(n.(ast.Expr))
-		var run strings.Builder
-		held := false
-		end := func() {
-			if held {
-				out = append(out, run.String())
-			}
-			run.Reset()
-			held = false
-		}
-		for _, operand := range operands {
-			if lit, ok := operand.(*ast.BasicLit); ok && lit.Kind == token.STRING {
-				if value, err := strconv.Unquote(lit.Value); err == nil {
-					run.WriteString(value)
-					held = true
-				}
-				continue
-			}
-			end()
-			ast.Inspect(operand, visit)
-		}
-		end()
-		return false
-	}
-	ast.Inspect(file, visit)
-	return out
 }
 
 var planNow = time.Date(2031, 4, 16, 14, 30, 0, 0, time.UTC)
@@ -1711,156 +1517,6 @@ func seedTaskCorpus(ctx context.Context, tx *sql.Tx, maxVariables int) error {
 	return nil
 }
 
-// explain is the planner's account of one statement.
-//
-// A WRITE IS PLANNED IN A WRITE TRANSACTION, because the read path runs
-// query_only, which refuses even the EXPLAIN of one. Nothing is executed
-// either way.
-func explain(t *testing.T, db store.ReplicatedHandle, statement string, args []any) []string {
-	t.Helper()
-	tree := explainTree(t, db, statement, args)
-	plan := make([]string, len(tree))
-	for i, line := range tree {
-		plan[i] = line.detail
-	}
-	return plan
-}
-
-// planLine is one line of a plan and the line it sits under — 0 for the
-// statement's own top level — which is what tells a sort of a whole statement
-// from a sort inside one of its subqueries.
-type planLine struct {
-	id, parent int
-	detail     string
-}
-
-// explainTree is [explain] with each line's place in the plan's tree.
-func explainTree(t *testing.T, db store.ReplicatedHandle, statement string,
-	args []any) []planLine {
-
-	t.Helper()
-	in := db.Read
-	if words := strings.Fields(statement); len(words) > 0 &&
-		(strings.EqualFold(words[0], "UPDATE") || strings.EqualFold(words[0], "DELETE") ||
-			strings.EqualFold(words[0], "INSERT")) {
-		in = db.Tx
-	}
-	var plan []planLine
-	if err := in(t.Context(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(t.Context(),
-			"EXPLAIN QUERY PLAN "+statement, args...)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var line planLine
-			var notUsed int
-			if err := rows.Scan(&line.id, &line.parent, &notUsed, &line.detail); err != nil {
-				return err
-			}
-			plan = append(plan, line)
-		}
-		return rows.Err()
-	}); err != nil {
-		t.Fatalf("EXPLAIN QUERY PLAN:\n%s\n%v", statement, err)
-	}
-	return plan
-}
-
-// indexesIn reads the index names out of a plan.
-//
-// AN INTERSECTION NAMES SEVERAL: this engine plans two equality terms on two
-// indexes as `MULTI-INDEX AND h (a, b)`, a seek on each and the row ids they
-// share, so both are read — and a disjunction of two as `MULTI-INDEX OR`, a
-// seek on each and the row ids of either.
-func indexesIn(plan []string) []string {
-	var found []string
-	for _, line := range plan {
-		_, tail, ok := strings.Cut(line, "MULTI-INDEX AND ")
-		if !ok {
-			_, tail, ok = strings.Cut(line, "MULTI-INDEX OR ")
-		}
-		if ok {
-			_, list, _ := strings.Cut(tail, "(")
-			list, _, _ = strings.Cut(list, ")")
-			for _, name := range strings.Split(list, ",") {
-				found = append(found, strings.TrimSpace(name))
-			}
-			continue
-		}
-		_, tail, ok = strings.Cut(line, "USING INDEX ")
-		if !ok {
-			_, tail, ok = strings.Cut(line, "USING COVERING INDEX ")
-		}
-		if !ok {
-			continue
-		}
-		name, _, _ := strings.Cut(tail, " ")
-		found = append(found, strings.TrimSpace(name))
-	}
-	return found
-}
-
-// walks reports a plan that reads through index in the index's own order —
-// `SCAN … USING INDEX` — with no term on its leading columns to seek.
-func walks(plan []string, index string) bool {
-	for _, line := range plan {
-		if strings.HasPrefix(line, "SCAN ") &&
-			slices.Contains(indexesIn([]string{line}), index) {
-			return true
-		}
-	}
-	return false
-}
-
-// scansHeap reports a plan line that reads a whole table with no index.
-//
-// AN INDEX SCAN IS NOT THIS. "SCAN t USING INDEX x" walks an index in its own
-// order and a LIMIT stops it early, which is the right plan for a query whose
-// point is the order; "SCAN t" reads the table itself, which is every task in
-// the company through the row heap.
-func scansHeap(plan []string, table string) bool {
-	for _, line := range plan {
-		if strings.HasPrefix(line, "SCAN "+table) && !strings.Contains(line, "INDEX") {
-			return true
-		}
-	}
-	return false
-}
-
-// indexesOn is every index the schema declares on these tables.
-func indexesOn(t *testing.T, db store.ReplicatedHandle, tables []string) []string {
-	t.Helper()
-	var found []string
-	if err := db.Read(t.Context(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(t.Context(),
-			`SELECT name, tbl_name FROM sqlite_master WHERE type = 'index'
-			 AND sql IS NOT NULL ORDER BY name`)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var name, table string
-			if err := rows.Scan(&name, &table); err != nil {
-				return err
-			}
-			if slices.Contains(tables, table) {
-				found = append(found, name)
-			}
-		}
-		return rows.Err()
-	}); err != nil {
-		t.Fatalf("read the indexes: %v", err)
-	}
-	if len(found) == 0 {
-		t.Fatal("the schema declares no index on any covered table, so this " +
-			"test is measuring its own reader")
-	}
-	return found
-}
-
 // planFields resolves this test's own field refs without a catalogue.
 //
 // THE PLAN IS ABOUT THE STATEMENT, not about the declarations: what is under
@@ -2004,7 +1660,7 @@ func TestARolledUpRowProbesItsAnchorByKey(t *testing.T) {
 				if what == "the around task's sort values" {
 					continue
 				}
-				plan := explain(t, db, statement.sql, statement.args)
+				plan := storetest.Plan(t, db, statement.sql, statement.args)
 				shown := strings.Join(plan, "\n")
 				sought := false
 				for _, line := range plan {
@@ -2109,7 +1765,7 @@ func TestTheTrashIsReadThroughItsOwnIndex(t *testing.T) {
 							"with no removal, which no trash listing holds")
 					}
 					for what, statement := range statements {
-						plan := explain(t, db, statement.sql, statement.args)
+						plan := storetest.Plan(t, db, statement.sql, statement.args)
 						shown := strings.Join(plan, "\n")
 						others, read := tasksReadOtherwise(plan, c.index)
 						switch {
@@ -2129,7 +1785,7 @@ func TestTheTrashIsReadThroughItsOwnIndex(t *testing.T) {
 							what == runLast || strings.HasPrefix(what, nextPage) ||
 							strings.HasPrefix(what, nextRow) ||
 							strings.HasPrefix(what, previousRow)
-						if walk && sort == "" && sorts(plan) {
+						if walk && sort == "" && storetest.Sorts(plan) {
 							t.Errorf("%s in the trash's own order sorts what "+
 								"it read, so it is the whole trash rather than a "+
 								"page:\n%s", what, shown)
@@ -2178,13 +1834,13 @@ func TestALaterPageSeeksTheOrderItsFirstPageWalks(t *testing.T) {
 		if _, paged := statements[nextPageArm(0)]; !paged {
 			continue
 		}
-		first := explainTree(t, db, statements["the page"].sql,
+		first := storetest.PlanTree(t, db, statements["the page"].sql,
 			statements["the page"].args)
 		top, read := topTaskRead(first)
 		if !read || sortsAtTop(first) {
 			continue
 		}
-		indexes := indexesIn([]string{top.detail})
+		indexes := storetest.IndexesIn([]string{top.Detail})
 		if len(indexes) != 1 {
 			continue
 		}
@@ -2199,15 +1855,15 @@ func TestALaterPageSeeksTheOrderItsFirstPageWalks(t *testing.T) {
 				if !ok {
 					break
 				}
-				tree := explainTree(t, db, arm.sql, arm.args)
-				shown := strings.Join(planDetails(tree), "\n")
+				tree := storetest.PlanTree(t, db, arm.sql, arm.args)
+				shown := strings.Join(storetest.Details(tree), "\n")
 				line, read := topTaskRead(tree)
 				switch {
 				case !read:
 					t.Errorf("%s reads no task at all:\n%s", nextPageArm(i), shown)
-				case !strings.HasPrefix(line.detail, "SEARCH ") ||
-					!slices.Contains(indexesIn([]string{line.detail}), index) ||
-					!bound.MatchString(line.detail):
+				case !strings.HasPrefix(line.Detail, "SEARCH ") ||
+					!slices.Contains(storetest.IndexesIn([]string{line.Detail}), index) ||
+					!bound.MatchString(line.Detail):
 					t.Errorf("%s does not SEEK %s on %s, the index and the "+
 						"column the first page walks — so it walks the order "+
 						"from its start to the cursor:\n%s", nextPageArm(i),
@@ -2236,24 +1892,24 @@ func TestALaterPageSeeksTheOrderItsFirstPageWalks(t *testing.T) {
 
 // topTaskRead is the statement's own read of its rows — the line at the top
 // of the plan that reads the task table under the row's alias.
-func topTaskRead(tree []planLine) (planLine, bool) {
+func topTaskRead(tree []storetest.PlanLine) (storetest.PlanLine, bool) {
 	for _, line := range tree {
-		if line.parent != 0 {
+		if line.Parent != 0 {
 			continue
 		}
-		if strings.HasPrefix(line.detail, "SCAN tracker_tasks AS "+string(rowAlias)+" ") ||
-			strings.HasPrefix(line.detail, "SEARCH "+string(rowAlias)+" ") {
+		if strings.HasPrefix(line.Detail, "SCAN tracker_tasks AS "+string(rowAlias)+" ") ||
+			strings.HasPrefix(line.Detail, "SEARCH "+string(rowAlias)+" ") {
 			return line, true
 		}
 	}
-	return planLine{}, false
+	return storetest.PlanLine{}, false
 }
 
 // sortsAtTop reports a plan that sorts the statement's own rows, as opposed to
-// one of its subqueries' ([sorts] reads every line).
-func sortsAtTop(tree []planLine) bool {
+// one of its subqueries' ([storetest.Sorts] reads every line).
+func sortsAtTop(tree []storetest.PlanLine) bool {
 	for _, line := range tree {
-		if line.parent == 0 && strings.Contains(line.detail, "FOR ORDER BY") {
+		if line.Parent == 0 && strings.Contains(line.Detail, "FOR ORDER BY") {
 			return true
 		}
 	}
@@ -2274,7 +1930,8 @@ func cmpOr(value, otherwise string) string {
 //
 // A LINE READS IT when it scans `tracker_tasks` or seeks under the alias `t`,
 // which every statement over a compiled set gives it: this engine writes a
-// scan under the table's name and a seek under the alias (see [seeks]).
+// scan under the table's name and a seek under the alias (see
+// [storetest.Seeks]).
 func tasksReadOtherwise(plan []string, index string) ([]string, bool) {
 	var others []string
 	read := false
@@ -2284,7 +1941,7 @@ func tasksReadOtherwise(plan []string, index string) ([]string, bool) {
 			continue
 		}
 		read = true
-		if !slices.Contains(indexesIn([]string{line}), index) {
+		if !slices.Contains(storetest.IndexesIn([]string{line}), index) {
 			others = append(others, line)
 		}
 	}
@@ -2308,15 +1965,15 @@ func tasksReadOtherwise(plan []string, index string) ([]string, bool) {
 // for:
 //
 //   - A read that BOUNDS `effective_at` — the flow's window, a feed page past
-//     its cursor — SEEKS the index on it ([seeks]). Measured: wrapping the
-//     column in the flow's walk (`effective_at + 0 >= ?`) turns its SEARCH
-//     into a SCAN of the index — every change that ever moved a count, in
-//     the index's order — and that plan still names the index, which is all
-//     this test used to ask.
+//     its cursor — SEEKS the index on it ([storetest.Seeks]). Measured:
+//     wrapping the column in the flow's walk (`effective_at + 0 >= ?`) turns
+//     its SEARCH into a SCAN of the index — every change that ever moved a
+//     count, in the index's order — and that plan still names the index,
+//     which is all this test used to ask.
 //   - A read with NO bound — the newest page, filtered or not — is an order
 //     and a LIMIT, and the right plan is the index walked in its own order and
 //     stopped after a page. Right only while the index's order IS the read's,
-//     so no read here SORTS ([sorts]): measured, ordering the feed by
+//     so no read here SORTS ([storetest.Sorts]): measured, ordering the feed by
 //     `effective_at, id` kept the index, added a sort of every moving change
 //     before the first row, and passed.
 //
@@ -2329,19 +1986,19 @@ func TestTheFlowAndFeedReadsSearchTheirIndex(t *testing.T) {
 	reads := companyWideReads()
 	for name, r := range reads {
 		t.Run(name, func(t *testing.T) {
-			plan := explain(t, db, r.sql, r.args)
+			plan := storetest.Plan(t, db, r.sql, r.args)
 			shown := strings.Join(plan, "\n")
 			switch {
-			case !slices.Contains(indexesIn(plan), moves) ||
-				scansHeap(plan, "tracker_history"):
+			case !slices.Contains(storetest.IndexesIn(plan), moves) ||
+				storetest.ScansHeap(plan, "tracker_history"):
 				t.Errorf("this read does not reach %s:\n%s", moves, shown)
-			case r.bounded && !seeks(plan, moves):
+			case r.bounded && !storetest.Seeks(plan, moves):
 				t.Errorf("this read bounds effective_at and does not SEEK %s "+
 					"on it — it walks every change that ever moved a count, "+
 					"which is the company's history rather than the "+
 					"window's:\n%s", moves, shown)
 			}
-			if sorts(plan) {
+			if storetest.Sorts(plan) {
 				t.Errorf("this read sorts what it selected rather than reading "+
 					"%s in its own order, so every moving change it selects is "+
 					"read before the first row is returned:\n%s", moves, shown)
@@ -2565,7 +2222,7 @@ func TestAFieldValueIsReadByItsTaskOrByItsFilter(t *testing.T) {
 					FieldValueColumn(planFieldTypes[filter.Ref])+"_idx"] = true
 			}
 			for what, statement := range queryStatements(t, q) {
-				holdFieldReads(t, what, explainTree(t, db, statement.sql,
+				holdFieldReads(t, what, storetest.PlanTree(t, db, statement.sql,
 					statement.args), filters)
 			}
 		})
@@ -2606,15 +2263,15 @@ func TestOneColumnIsTheAnswerNarrowedByAProbe(t *testing.T) {
 					what != runFirst && what != runLast {
 					continue
 				}
-				tree := explainTree(t, db, statement.sql, statement.args)
+				tree := storetest.PlanTree(t, db, statement.sql, statement.args)
 				listed := underList(tree)
-				shown := strings.Join(planDetails(tree), "\n")
+				shown := strings.Join(storetest.Details(tree), "\n")
 				for _, line := range tree {
-					if listed(line) || !readsChildOfTask(line.detail) {
+					if listed(line) || !readsChildOfTask(line.Detail) {
 						continue
 					}
-					if !strings.HasPrefix(line.detail, "SEARCH ") ||
-						!strings.Contains(line.detail, "(task_id=?") {
+					if !strings.HasPrefix(line.Detail, "SEARCH ") ||
+						!strings.Contains(line.Detail, "(task_id=?") {
 						t.Errorf("%s reads a task's child table other than by "+
 							"the task:\n%s", what, shown)
 					}
@@ -2631,7 +2288,7 @@ func readsChildOfTask(detail string) bool {
 		if strings.HasPrefix(detail, "SCAN "+table) {
 			return true
 		}
-		for _, index := range indexesIn([]string{detail}) {
+		for _, index := range storetest.IndexesIn([]string{detail}) {
 			if strings.HasPrefix(index, table+"_") ||
 				index == "sqlite_autoindex_"+table+"_1" {
 				return true
@@ -2644,17 +2301,17 @@ func readsChildOfTask(detail string) bool {
 // holdFieldReads fails a plan that reads `tracker_field_values` through the
 // key on anything but a task, or through a value index anywhere but inside a
 // filter's own subquery on a field the query filters by.
-func holdFieldReads(t *testing.T, what string, plan []planLine, filters map[string]bool) {
+func holdFieldReads(t *testing.T, what string, plan []storetest.PlanLine, filters map[string]bool) {
 	t.Helper()
 	const key = "sqlite_autoindex_tracker_field_values_1"
 	// INSIDE AN IN LIST'S SUBQUERY, which this engine plans once for the
 	// statement rather than once per row.
 	inList := underList(plan)
-	shown := strings.Join(planDetails(plan), "\n")
+	shown := strings.Join(storetest.Details(plan), "\n")
 	for _, line := range plan {
-		for _, index := range indexesIn([]string{line.detail}) {
+		for _, index := range storetest.IndexesIn([]string{line.Detail}) {
 			switch {
-			case index == key && !strings.Contains(line.detail, "(task_id=?"):
+			case index == key && !strings.Contains(line.Detail, "(task_id=?"):
 				t.Errorf("%s reads field values through the key without a "+
 					"task to seek it on:\n%s", what, shown)
 			case index != key && strings.HasPrefix(index, "tracker_field_values_") &&
@@ -2833,17 +2490,17 @@ func TestADropReadsTheGapItOpened(t *testing.T) {
 	db := planStore(t)
 	for _, above := range []bool{false, true} {
 		for _, inclusive := range []bool{false, true} {
-			plan := explain(t, db, gapSideStatement(above, inclusive), []any{"P01",
+			plan := storetest.Plan(t, db, gapSideStatement(above, inclusive), []any{"P01",
 				"t-00002", "a000100", "a000100", "t-00001", RankRespreadInline/2 + 1})
 			shown := strings.Join(plan, "\n")
 			sought := false
 			for _, line := range plan {
-				if seeks([]string{line}, "tracker_tasks_rank_idx") &&
+				if storetest.Seeks([]string{line}, "tracker_tasks_rank_idx") &&
 					strings.Contains(line, "(project_key=? AND rank") {
 					sought = true
 				}
 			}
-			if !sought || sorts(plan) {
+			if !sought || storetest.Sorts(plan) {
 				t.Errorf("above=%t inclusive=%t: the gap is not a seek on the "+
 					"project and the pivot's rank in the index's order:\n%s",
 					above, inclusive, shown)
