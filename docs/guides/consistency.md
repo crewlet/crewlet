@@ -192,7 +192,7 @@ Five of the seven state logs grant it; the vectors and the usage log do not.
 |---|---|---|
 | The tracker (`CREWLET_TRACKER_LOG`) | Yes | It encodes the barrier as one of its own records. |
 | The knowledge base (`CREWLET_PAGES_LOG`) | Yes | Likewise. |
-| The identity estate (`CREWLET_IAM_LOG`) | Yes | Likewise. |
+| The identity estate (`CREWLET_IAM_LOG`) | Yes | Likewise — and no surface reads it that way: every identity answer is a node's own rows with their lag beside them, so its declared read rate is zero (below). |
 | The artifacts log (`CREWLET_ARTIFACTS_LOG`) | Yes | Likewise: an artifact's head, versions, shares and history are read at a position, and a seat tool reads them at `linearizable`. |
 | The artifact datastore (`CREWLET_ARTIFACT_DATA_LOG`) | Yes | Likewise: a store's rows, history and state digest are read at a position, and every datastore read question takes the same freshness parameters as the other estate reads, so a caller that must see every write acknowledged before it asks at `linearizable`. |
 | The vectors (`CREWLET_TRACKER_VECTORS`) | **No** — declared, not omitted | A compacted changelog keeping one message per source, and every value in it is derived from a source another log owns, so a read of the vectors claims no position a barrier could prove anything about. No surface reads them at a level: a search ranks with them, and what it answers for is the pages and tasks those sources came from. |
@@ -203,6 +203,15 @@ The decision is **declared per log**, in the engine's register of domains
 encoder it appends with or `NoBarrier`, and a boot refuses an entry that states
 neither or both. It used to be a switch, where a log that grants no
 `linearizable` read and a log whose author forgot it looked the same.
+
+An entry with a barrier also states **how often it is read that way**: the
+linearizable reads a day each agent seat puts on its log — 125 on the
+tracker's, the knowledge base's, the artifacts log's and the artifact
+datastore's, none on the identity estate's — and a boot
+refuses a barrier stated without it. That figure is the log's census, which
+[`census_drift`](../reference/alarms.md) holds it to, and a term in the log's
+ceiling; see [Retention § The storage
+forecast](retention.md#the-storage-forecast).
 
 ## The fourteen refusals
 
