@@ -287,7 +287,6 @@ function ChangeRecord({ detail }: { detail: ArtifactDetail }) {
               <span className="artifact-history-what">
                 {historyWords(entry, { audience: audienceName, seat: people.seatName })}
                 {entry.work_item ? ` for ${entry.work_item}` : ""}
-                {entry.elevated ? " (as an administrator)" : ""}
               </span>
               <time className="artifact-history-when" dateTime={entry.at} title={entry.at}>
                 {relTime(entry.at, now)}

@@ -213,7 +213,9 @@ export function audienceKey(audience: ArtifactAudience): string {
 
 /**
  * One history row as a sentence after its actor's name. A refused row says it
- * was refused, so the record reads as what was tried and what came of it.
+ * was refused, so the record reads as what was tried and what came of it, and
+ * a change an administrator made with no share of their own says so once: an
+ * administrator's read already names it in its own words.
  * `audience` reads a share's audience as the engine spells it (`seat:pm`,
  * `unit:ops`, `company`) and `seat` a seat handle, each as the names the
  * reader knows them by.
@@ -281,7 +283,8 @@ export function historyWords(
         return entry.op.replaceAll("_", " ");
     }
   })();
-  return entry.outcome === "refused" ? `tried to ${stripPast(said)} and was refused` : said;
+  const tried = entry.outcome === "refused" ? `tried to ${stripPast(said)} and was refused` : said;
+  return entry.elevated && entry.op !== "read_elevated" ? `${tried} (as an administrator)` : tried;
 }
 
 /** A sentence's verb in the infinitive, for "tried to …": a crude but closed table. */
