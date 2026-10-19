@@ -1,6 +1,10 @@
 package prompts
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/crewlet/crewlet/internal/toolname"
+)
 
 // PriorWorkHeader introduces the prior-work ledger: what an EARLIER ROUND of
 // this same turn already did.
@@ -26,7 +30,7 @@ const PriorWorkHeader = "## Already done earlier in this turn" +
 	"\n- **everything else** — assume it changed something outside the" +
 	" engine (a post, a comment, a status change, a code run). Do NOT issue" +
 	" it again: a human sees the second one as a duplicate. If it was the" +
-	" delivery, it still counts: name it in `submit_work`'s `deliveries`." +
+	" delivery, it still counts: name it in `" + toolname.SubmitWork + "`'s `deliveries`." +
 	"\n- **`→ error`** — it did NOT take effect. Retry it, fixed." +
 	"\nPlan and deliver only what is still missing. If the gap is a follow-up" +
 	" to something already delivered, ADD to it — reply in the existing" +

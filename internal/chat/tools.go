@@ -1,6 +1,10 @@
 package chat
 
-import "slices"
+import (
+	"slices"
+
+	"github.com/crewlet/crewlet/internal/toolname"
+)
 
 // The native chat's tool names.
 //
@@ -52,7 +56,7 @@ const (
 	// addressed by its id — one call takes handles and the other takes a
 	// room, and a single tool would have to decide which of two arguments
 	// it was given.
-	SendDMTool = "send_dm"
+	SendDMTool = toolname.SendDM
 
 	// ReadChannelTool is a page of a room, or of one thread in it.
 	//

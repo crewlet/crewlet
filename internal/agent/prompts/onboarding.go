@@ -24,9 +24,9 @@ const OnboardingHeader = "\n## ONBOARDING phase" +
 	"get-page tool on your team's knowledge-base server), then " +
 	"`" + toolname.Activate + "(name=...)` to promote one into your " +
 	"`tools=[...]`. " +
-	"`reflect_and_persist` and `mark_onboarded` are already active — " +
+	"`" + toolname.ReflectAndPersist + "` and `" + toolname.MarkOnboarded + "` are already active — " +
 	"call them directly. Follow the steps below, then call " +
-	"`mark_onboarded` to end the pass."
+	"`" + toolname.MarkOnboarded + "` to end the pass."
 
 // OnboardingInput is what the onboarding pass renders beyond the seat.
 type OnboardingInput struct {

@@ -109,11 +109,11 @@ func (t *lookupColleague) Description() string {
 		"handle, the seat kind (agent | human), and every known " +
 		"cross-platform identity; human results add what they own and how " +
 		"to reach them (a mention and an asynchronous reply — never " +
-		"a2a_ask, which addresses agents only). Matching is " +
+		A2AAskTool + ", which addresses agents only). Matching is " +
 		"case-insensitive and falls back to partial and fuzzy matching, so " +
 		"'ceo' finds the role 'Agent CEO'; when more than one colleague " +
 		"matches, the candidate list is returned instead of a guess. Use " +
-		"this before a2a_ask or before @mentioning anyone."
+		"this before " + A2AAskTool + " or before @mentioning anyone."
 }
 
 func (t *lookupColleague) Parameters() map[string]any {
@@ -262,11 +262,11 @@ func describe(s colleague.Seat) string {
 		b.WriteString("  reach them: they cannot be reached on any chat or " +
 			"code-host account right now, so there is nobody to mention or " +
 			"message. Work for this seat goes in the PM tool, assigned to " +
-			"the seat. a2a_ask addresses AGENTS only and will not reach them.\n")
+			"the seat. " + A2AAskTool + " addresses AGENTS only and will not reach them.\n")
 	case s.Kind == string(org.KindHuman):
 		b.WriteString("  reach them: mention them on a shared surface and " +
 			"continue without waiting — a person answers asynchronously. " +
-			"a2a_ask addresses AGENTS only and will not reach them.\n")
+			A2AAskTool + " addresses AGENTS only and will not reach them.\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

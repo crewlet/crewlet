@@ -262,7 +262,7 @@ func TestTheOnboardingPassAsksOnAutoAndIsReAskedToMark(t *testing.T) {
 	if len(reqs) != 2 {
 		t.Fatalf("the pass was asked %d times, want 2", len(reqs))
 	}
-	if last := reqs[1].Messages[len(reqs[1].Messages)-1]; !isFinishingCorrective(last, runner.MarkOnboardedTool) {
+	if last := reqs[1].Messages[len(reqs[1].Messages)-1]; !isFinishingCorrective(last, toolname.MarkOnboarded) {
 		t.Errorf("the second round opened on %q, want the finishing corrective", last.Content)
 	}
 	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}

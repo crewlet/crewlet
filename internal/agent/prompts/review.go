@@ -1,5 +1,7 @@
 package prompts
 
+import "github.com/crewlet/crewlet/internal/toolname"
+
 // ReviewHeader is the reviewer's contract: the decision enum plus the rules
 // that decide it.
 //
@@ -46,7 +48,7 @@ package prompts
 // further delivery — a correction the first answer needs — is a question about
 // the work's merits, which is the reviewer's.
 const ReviewHeader = "\n## REVIEW phase" +
-	"\nJudge the work below. Submit exactly one `submit_review` call with " +
+	"\nJudge the work below. Submit exactly one `" + toolname.SubmitReview + "` call with " +
 	"one decision:" +
 	"\n- **done** — this turn is over: the work meets the ask, or it is " +
 	"honestly blocked on somebody already told. Return the artifact." +
@@ -69,7 +71,7 @@ const ReviewHeader = "\n## REVIEW phase" +
 	"Nobody stands behind it. Judge the tool log and the produced text on " +
 	"their own, and choose `self_iterate` unless the record already shows " +
 	"the work finished." +
-	"\n**Sandbox rule:** a successful `run_sandbox` call IS the code work " +
+	"\n**Sandbox rule:** a successful `" + toolname.RunSandbox + "` call IS the code work " +
 	"— a coding agent cloned the repo and ran the shell / tests inside " +
 	"an isolated sandbox; its report is in `## What the agent produced`. " +
 	"The absence of `git`/`shell`/`pytest`/`file` calls is NOT " +
@@ -91,7 +93,7 @@ const ReviewHeader = "\n## REVIEW phase" +
 	"The tool log answers that, not the agent's prose. Not yet → " +
 	"`self_iterate`, naming who to reach in `notes`; the next round " +
 	"reaches them with its own tools — a chat mention, an issue comment, " +
-	"a doc comment, `a2a_ask` — wherever the work lives. Already asked → " +
+	"a doc comment, `" + toolname.A2AAsk + "` — wherever the work lives. Already asked → " +
 	"`done`: their reply is what re-triggers this agent, so no round of " +
 	"THIS turn can produce it and sending it back only asks twice. " +
 	"Nothing anyone replies would finish it → `failed`. Never leave a " +
