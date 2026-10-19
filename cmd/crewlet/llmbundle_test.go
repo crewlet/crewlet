@@ -25,9 +25,23 @@ import (
 // path the entry's login is kept at.
 func bundledEntry(t *testing.T, bundle string) (flags []string, login string) {
 	t.Helper()
+	return bundledEntryWithLogout(t, bundle, "")
+}
+
+// bundledEntryWithLogout is [bundledEntry] whose CLI is `sh`, whose status
+// and login succeed and whose own logout runs `sh -c logout` in the login
+// home, where a seeded login sits at .fake/creds.json — "" declares no vendor
+// logout and keeps `true` for every command.
+func bundledEntryWithLogout(t *testing.T, bundle, logout string) (flags []string, login string) {
+	t.Helper()
 	dir := t.TempDir()
 	state := filepath.Join(dir, "state")
 	t.Setenv(cliagent.BundleVarName("sub"), bundle)
+	binary, status, signIn, logoutArgs := "true", `["status"]`, `["login"]`, ""
+	if logout != "" {
+		binary, status, signIn = "sh", `["-c", "exit 0"]`, `["-c", "exit 0"]`
+		logoutArgs = fmt.Sprintf("\n          logout_args: [\"-c\", %q]", logout)
+	}
 	company := writeFile(t, dir, "company.yaml", fmt.Sprintf(`name: Acme
 providers:
   llm:
@@ -38,18 +52,18 @@ providers:
         agent: custom
         state_dir: %q
         overrides:
-          binary: "true"
+          binary: %q
           complete_args: ["-p"]
           model_args: ["--model", "{model}"]
           output: text
           credential_paths: [".fake/creds.json"]
-          status_args: ["status"]
-          login_args: ["login"]
+          status_args: %s
+          login_args: %s%s
 roles:
   - name: CEO
     handle: ceo
     llm: sub
-`, state))
+`, state, binary, status, signIn, logoutArgs))
 	return []string{"-company", company, "-config", filepath.Join(dir, "absent.yaml")},
 		filepath.Join(state, "credentials", "creds.json")
 }
@@ -209,10 +223,15 @@ func TestTheCommandsThatAnswerAsTheEngineRestoreTheBundleFirst(t *testing.T) {
 // login restored before `login` ran would be seeded into the sign-in and
 // carried back as the operator's own, so a sign-in the operator backed out of
 // would report a login written; one restored before `import` would refuse the
-// operator's bundle as a login already present. A logout leaves no login
-// whatever it began from.
+// operator's bundle as a login already present; and one restored before
+// `logout` would be seeded into the login home the vendor's own logout runs
+// in, handing it the configured bundle's login to REVOKE at the vendor — the
+// login every fresh container signs in with — although the logout leaves no
+// login on disk either way. So that case's vendor logout fails exactly when a
+// login was seeded for it.
 //
-// Mutation: restore the bundle before `login` or `import`, and its case is red.
+// Mutation: restore the bundle before `login`, `import` or `logout`, and its
+// case is red.
 func TestTheCommandsThatReplaceTheLoginDoNotRestoreItFirst(t *testing.T) {
 	t.Run("login", func(t *testing.T) {
 		flags, login := bundledEntry(t, llmBundle(t, `{"token":"k-bundled"}`))
@@ -246,9 +265,11 @@ func TestTheCommandsThatReplaceTheLoginDoNotRestoreItFirst(t *testing.T) {
 		}
 	})
 	t.Run("logout", func(t *testing.T) {
-		flags, login := bundledEntry(t, llmBundle(t, `{"token":"k-bundled"}`))
+		flags, login := bundledEntryWithLogout(t, llmBundle(t, `{"token":"k-bundled"}`),
+			"test ! -e .fake/creds.json")
 		if _, stderr, err := runSub(t, flags, "logout"); err != nil {
-			t.Fatalf("logout: %v (%s)", err, stderr)
+			t.Fatalf("logout handed the vendor's own logout a login to revoke, which only a restore "+
+				"before it could have put there: %v (%s)", err, stderr)
 		}
 		if got := readLogin(t, login); got != "" {
 			t.Errorf("logout left a login: %q", got)
