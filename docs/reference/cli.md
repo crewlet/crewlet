@@ -1267,11 +1267,11 @@ to decide whether it can still vouch for a retry.
 ## `crewlet artifacts`
 
 ```
-crewlet artifacts list [-scope mine|shared|company|agents|all] [-kind html|markdown|sheet]
+crewlet artifacts list [-scope mine|shared|company|agents|all] [-kind html|doc|sheet]
     [-q TEXT] [-status live|trashed] [-work-item KEY] [-limit N]
 crewlet artifacts get <id>
 crewlet artifacts publish <dir|file> [-artifact ID] [-title TEXT] [-description TEXT]
-    [-icon NAME] [-kind html|markdown] [-entry PATH] [-exclude PATTERN]... [-label TEXT]
+    [-icon NAME] [-kind html|doc] [-entry PATH] [-exclude PATTERN]... [-label TEXT]
     [-contract VERSION] [-capabilities a,b] [-work-item KEY] [-force] [-op-id ID]
 crewlet artifacts update <id> [-title TEXT] [-description TEXT] [-icon NAME] [-op-id ID]
 crewlet artifacts versions <id>
@@ -1315,15 +1315,19 @@ within one name, `[...]` for a class, `\` to escape. A malformed pattern, one
 reaching outside the directory, or `-exclude` beside a single file is refused
 before anything is sent. Quote a pattern so the shell does not expand it.
 
-A new artifact opens on
-`index.html`, else `index.md`, else the only file, unless `-entry` names
-another; its title defaults to the entry's name and its kind to `markdown`
-for a `.md` entry and `html` otherwise, and `-description` and `-icon` set the
-gallery card's subtitle and the tab's icon word. Those four describe a new
-artifact only: naming `-title`, `-description`, `-icon` or `-kind` beside
-`-artifact` is refused before any byte moves, since a version keeps the
-artifact's kind and `update` is what changes the rest. A new version of
-`-artifact` names the head it read as its base, so a version somebody else published meanwhile is
+A new artifact opens on the one default entry the files hold (`index.html` for
+`html`, `index.md` for `doc`; with `-kind`, that kind's own), else the only
+file, unless `-entry` names another. Files holding two default entries are
+refused before a byte moves, since which one the artifact opens on, and so what
+kind it is, is the author's to say: name it with `-entry` or the kind with
+`-kind`. Its title defaults to the entry's name and its kind to the one whose
+entry the entry's type may be (`html` for an HTML page, `doc` for a Markdown
+file), and `-description` and `-icon` set the gallery card's subtitle and the
+tab's icon word. Those four describe a new artifact only: naming `-title`,
+`-description`, `-icon` or `-kind` beside `-artifact` is refused before any
+byte moves, since a version keeps the artifact's kind and `update` is what
+changes the rest. A new version of `-artifact` names the
+head it read as its base, so a version somebody else published meanwhile is
 refused rather than overwritten; `-force` publishes over it, a person's
 gesture. A new version keeps the head's runtime contract and capabilities
 unless `-contract` or `-capabilities` names others: `-capabilities db,state`

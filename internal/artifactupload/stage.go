@@ -232,9 +232,20 @@ func (r *run) manifest(mode manifest.Mode, entry string) (artifacts.Manifest, []
 	return m, uploaded, nil
 }
 
-// searchText is the text the gallery indexes the version by: its entry's
-// readable text, at most [artifacts.MaxSearchTextBytes].
+// searchText is the text the gallery indexes the version by, as the kind's
+// search rule extracts it, at most [artifacts.MaxSearchTextBytes].
 func (r *run) searchText(ctx context.Context, m artifacts.Manifest) (string, error) {
+	spec, _ := r.kind.Spec()
+	if spec.Search == artifacts.SearchEntry {
+		return r.entryText(ctx, m)
+	}
+	return "", fmt.Errorf("artifactupload: a %s artifact's search rule %q is not one this "+
+		"pipeline extracts", r.kind, spec.Search)
+}
+
+// entryText is the entry's readable text: a page's text without its markup,
+// any other text file as it is, and nothing for a binary entry or none.
+func (r *run) entryText(ctx context.Context, m artifacts.Manifest) (string, error) {
 	if m.Entry == "" {
 		return "", nil
 	}
@@ -296,7 +307,7 @@ type fileTheme struct {
 // nothing at all. The kit's own rules are not in the version, which is why its
 // links are read rather than its text.
 func (r *run) themeWarnings(m artifacts.Manifest) {
-	if r.kind != artifacts.KindHTML || m.Entry == "" {
+	if !r.kind.Framed() || m.Entry == "" {
 		return
 	}
 	rules, sheet, bootstrap := false, "", ""

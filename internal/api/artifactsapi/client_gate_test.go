@@ -52,6 +52,43 @@ func TestTheDashboardSpeaksTheArtifactsVocabulary(t *testing.T) {
 	}
 }
 
+// THE DASHBOARD DRAWS EACH KIND AS THE KIND TABLE SAYS.
+//
+// The View tab, the side-by-side compare and the Data tab ask the kind's row
+// rather than its name, so a row that disagreed with the engine's would frame
+// a native kind the origin refuses to serve, draw a framed one here, or hide a
+// datastore the engine keeps. Every kind is a row, in the engine's order, and
+// each row's render and store are the engine's.
+func TestTheDashboardDrawsEachKindAsTheKindTableSays(t *testing.T) {
+	t.Parallel()
+	body, err := clientsource.Literal(clientsource.Tree(t), "ARTIFACT_KIND_SPECS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := clientsource.Keys(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(keys, names(artifacts.Kinds)) {
+		t.Fatalf("ARTIFACT_KIND_SPECS is keyed %q and the engine's kinds are %q, in that order",
+			keys, names(artifacts.Kinds))
+	}
+	for _, spec := range artifacts.KindSpecs() {
+		row, err := clientsource.Property(body, string(spec.Kind))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for field, engine := range map[string]string{
+			"render": string(spec.Render), "store": string(spec.Store),
+		} {
+			if got := clientsource.Field(row, field); !slices.Equal(got, []string{engine}) {
+				t.Errorf("ARTIFACT_KIND_SPECS.%s.%s is %q and the engine's is %q",
+					spec.Kind, field, got, engine)
+			}
+		}
+	}
+}
+
 // THE DASHBOARD BOUNDS WHAT A PERSON TYPES, AND WHAT IT TELLS A ROOM, AT THE
 // ENGINE'S CAPS.
 //

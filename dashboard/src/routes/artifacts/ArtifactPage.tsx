@@ -80,6 +80,7 @@ import {
 import { useArtifactRoom } from "~/lib/artifacts/room.ts";
 import { useDataStore } from "~/lib/artifacts/useDataStore.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
+import { keepsData } from "~/lib/artifacts/kinds.ts";
 import { KIND_WORDS, ROLE_WORDS, purgeAt, purgeSentence } from "~/lib/artifacts/words.ts";
 import type {
   ArtifactDetail,
@@ -111,11 +112,6 @@ const TAB_WORDS: Readonly<Record<Tab, string>> = {
   settings: "Settings",
 };
 
-/** Whether an artifact keeps a datastore a person can open: a sheet always, a page that declared it. */
-function hasData(detail: ArtifactDetail): boolean {
-  return detail.kind === "sheet" || detail.capabilities.includes("db");
-}
-
 export function ArtifactPage({ id }: { id: string }) {
   const detail = useQuery("artifact", { id }, { pollMs: DETAIL_POLL_MS });
   const versions = useQuery(
@@ -130,7 +126,7 @@ export function ArtifactPage({ id }: { id: string }) {
 
   // THE SHEET AND THE DATA TAB write as the dashboard; a page's bridge
   // writes as the page's version, through a store of its own (ViewTab).
-  const store = useDataStore(id, { via: "dashboard" }, live === true && hasData(head!));
+  const store = useDataStore(id, { via: "dashboard" }, live === true && keepsData(head!));
   const bridgeStores = useRef(new Set<ArtifactDataStore>());
 
   const room = useArtifactRoom(id, live === true, {
@@ -273,7 +269,7 @@ function Loaded({
   const now = useNow();
   const toast = useToast();
   const connection = useConnection();
-  const tabs = useMemo(() => TABS.filter((t) => t !== "data" || hasData(detail)), [detail]);
+  const tabs = useMemo(() => TABS.filter((t) => t !== "data" || keepsData(detail)), [detail]);
   const [tab, setTab] = useTab("tab", tabs);
   const [versionParam, setVersion] = useParam("version", "");
   const asked = Number(versionParam);

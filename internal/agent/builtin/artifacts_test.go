@@ -585,7 +585,7 @@ func TestAnOperatorWriteAnswersTheOperationItWas(t *testing.T) {
 		t.Fatal("the operator catalogue serves no create_artifact")
 	}
 	ctx := iam.WithPrincipal(context.Background(), founderPrincipal(iam.Apps...))
-	args := map[string]any{"kind": "markdown", "title": "Notes", "content": "# hi"}
+	args := map[string]any{"kind": "doc", "title": "Notes", "content": "# hi"}
 	got, err := create.Call(ctx, args)
 	if err != nil || got.Failed {
 		t.Fatalf("create: %v %s", err, got.Output)
@@ -597,11 +597,11 @@ func TestAnOperatorWriteAnswersTheOperationItWas(t *testing.T) {
 	if len(f.creates[0].Shares) != 0 {
 		t.Error("a person's own artifact was shared with somebody")
 	}
-	again := map[string]any{"kind": "markdown", "title": "Notes", "content": "# hi", "op_id": op}
+	again := map[string]any{"kind": "doc", "title": "Notes", "content": "# hi", "op_id": op}
 	if got, _ := create.Call(ctx, again); got.Failed || f.calls[len(f.calls)-1].OpKey != op {
 		t.Fatalf("the brought-back op_id was not the operation: %s", got.Output)
 	}
-	other := map[string]any{"kind": "markdown", "title": "Other", "content": "# hi", "op_id": op}
+	other := map[string]any{"kind": "doc", "title": "Other", "content": "# hi", "op_id": op}
 	if got, _ := create.Call(ctx, other); !got.Failed {
 		t.Fatal("an op_id brought back with other arguments was accepted")
 	}

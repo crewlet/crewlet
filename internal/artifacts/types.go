@@ -47,7 +47,8 @@ const LabelAlphabet = "0123456789abcdefghjkmnpqrstvwxyz"
 
 // ---- kinds and capabilities ------------------------------------------------ //
 
-// Kind is what an artifact is, which decides how it is rendered.
+// Kind is what an artifact is. Everything decided by kind is the kind's row of
+// the kind table ([KindSpec], kind.go), never a switch on the name.
 type Kind string
 
 const (
@@ -55,21 +56,15 @@ const (
 	// origin inside a sandboxed frame.
 	KindHTML Kind = "html"
 
-	// KindMarkdown is a document the dashboard renders with its own
+	// KindDoc is a document: Markdown the dashboard renders with its own
 	// element-constructing renderer. It carries no author code.
-	KindMarkdown Kind = "markdown"
+	KindDoc Kind = "doc"
 
 	// KindSheet is a native sheet: its content is its datastore and the
 	// dashboard draws it from the schema alone, so there is nothing for a
 	// model to get wrong and no page script at all.
 	KindSheet Kind = "sheet"
 )
-
-// Kinds are every kind this build serves, in declaration order.
-var Kinds = []Kind{KindHTML, KindMarkdown, KindSheet}
-
-// Valid reports whether k is a kind this build serves.
-func (k Kind) Valid() bool { return slices.Contains(Kinds, k) }
 
 // Capability is a runtime capability a version declares and a viewer's ticket
 // may be granted. A version declaring one this build does not know is refused

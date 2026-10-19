@@ -83,14 +83,21 @@ func compareReleases(a, b string) int {
 //   - `latest` is the newest this build serves, resolved now and stored exact;
 //   - an exact version must be one this build serves.
 //
-// Only an HTML page runs the runtime; a Markdown document or a native sheet is
-// drawn by the dashboard, pins none, and refuses one. A version declaring a
-// capability needs a runtime to reach it through.
+// Only a framed kind runs the runtime; a native kind is drawn by the dashboard,
+// pins none, and refuses one. A version declaring a capability needs a runtime
+// to reach it through.
 func (s *Service) resolveContract(kind artifacts.Kind, asked, current string, caps []artifacts.Capability) (string, error) {
-	if kind != artifacts.KindHTML {
-		if asked != "" {
+	if !kind.Framed() {
+		// A NATIVE KIND HAS NO PAGE to grant a capability to or run a
+		// runtime in, so either is refused naming the kind, never stored as
+		// a declaration nothing honours.
+		switch {
+		case asked != "":
 			return "", fmt.Errorf("%w: a %s artifact runs no page runtime; publish it with no "+
 				"contract", ErrContractUnknown, kind)
+		case len(caps) > 0:
+			return "", fmt.Errorf("%w: a %s artifact is drawn by the dashboard and declares no "+
+				"capabilities, and the version declares %s", ErrInvalid, kind, capabilityList(caps))
 		}
 		return "", nil
 	}

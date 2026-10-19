@@ -17,7 +17,20 @@
  */
 
 /** Every kind of artifact (`artifacts.Kinds`): a page that runs code, a document, a native sheet. */
-export const ARTIFACT_KINDS = ["html", "markdown", "sheet"] as const;
+export const ARTIFACT_KINDS = ["html", "doc", "sheet"] as const;
+
+/**
+ * What the engine decides by kind (`artifacts.KindSpecs`), the half a screen
+ * draws by: whether the kind runs author code in a frame on the artifact
+ * origin (`framed`) or is drawn here from a closed format (`native`), and what
+ * its datastore is to it (`declared` by a page's `db`, the `content` itself,
+ * or `none`).
+ */
+export const ARTIFACT_KIND_SPECS = {
+  html: { render: "framed", store: "declared" },
+  doc: { render: "native", store: "none" },
+  sheet: { render: "native", store: "content" },
+} as const;
 
 /** Every runtime capability a version may declare (`artifacts.Capabilities`). */
 export const ARTIFACT_CAPABILITIES = ["assets", "db", "state", "identity", "presence"] as const;

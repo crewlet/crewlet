@@ -119,12 +119,26 @@ func sourceArg(tool string, args map[string]any) (map[string]any, bool, string) 
 	return m, true, ""
 }
 
-// defaultEntry is the entry page a new artifact's `content` lands at.
-func defaultEntry(kind artifacts.Kind) string {
-	if kind == artifacts.KindMarkdown {
-		return "index.md"
+// defaultEntry is the entry a new artifact's `content` lands at: its kind's
+// first default entry, and nothing for a kind that publishes no files at
+// create.
+func defaultEntry(spec artifacts.KindSpec) string {
+	if len(spec.Entry.Defaults) == 0 {
+		return ""
 	}
-	return "index.html"
+	return spec.Entry.Defaults[0]
+}
+
+// entryDefaults is the agent tools' account of where `content` lands, kind by
+// kind, from the kind table.
+func entryDefaults() string {
+	var parts []string
+	for _, s := range artifacts.KindSpecs() {
+		if d := defaultEntry(s); d != "" {
+			parts = append(parts, fmt.Sprintf("`%s` for %s", d, s.Kind))
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // ---- create_artifact ---------------------------------------------------- //
@@ -137,7 +151,7 @@ func (t *createArtifact) Name() string { return CreateArtifactTool }
 
 func (t *createArtifact) Description() string {
 	return "Create a NEW artifact in this Crewlet company (not claude.ai): an " +
-		"interactive HTML page, a Markdown document, or a sheet, shared with the " +
+		"interactive HTML page, a document, or a sheet, shared with the " +
 		"colleagues who must use it. Load the artifacts tool skill first: it is the " +
 		"design contract every page is held to. When a person asked for it, they are " +
 		"made an editor. To change an existing artifact use publish_artifact; the answer " +
@@ -150,8 +164,7 @@ func (t *createArtifact) Parameters() map[string]any {
 		"properties": map[string]any{
 			"kind": map[string]any{
 				"type": "string", "enum": kindEnum(),
-				"description": "`html` runs the page's own code in a sandbox, `markdown` " +
-					"is a document, `sheet` is a table drawn from its datastore.",
+				"description": artifacts.KindSummaries(),
 			},
 			"title": map[string]any{
 				"type": "string",
@@ -167,9 +180,8 @@ func (t *createArtifact) Parameters() map[string]any {
 				"description": "One generic word, e.g. chart, table, calendar.",
 			},
 			"entry": map[string]any{
-				"type": "string",
-				"description": "The page served at the artifact's root. Default " +
-					"`index.html` (`index.md` for markdown).",
+				"type":        "string",
+				"description": "The file the artifact opens on. Default " + entryDefaults() + ".",
 			},
 			"content": map[string]any{
 				"type":        "string",
@@ -211,7 +223,8 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	kind := artifacts.Kind(strings.TrimSpace(argString(args, "kind")))
-	if !kind.Valid() {
+	spec, ok := kind.Spec()
+	if !ok {
 		return failed(fmt.Sprintf("create_artifact takes `kind` as one of %v.", artifacts.Kinds)), nil
 	}
 	title := strings.TrimSpace(argString(args, "title"))
@@ -243,15 +256,15 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case hasSource && (hasContent || hasFiles):
 		return failed("create_artifact takes `source` alone: a build's output is the " +
 			"whole file set, so `content` and `files` are not combined with it."), nil
-	case kind == artifacts.KindSheet && (hasContent || hasFiles || hasSource):
-		return failed("create_artifact: a sheet's content is its datastore, so it " +
-			"publishes no files. Create it with a title and declare its collections " +
-			"with set_artifact_schema."), nil
+	case spec.Store == artifacts.StoreContent && (hasContent || hasFiles || hasSource):
+		return failed(fmt.Sprintf("create_artifact: a %s's content is its datastore, so it "+
+			"publishes no files. Create it with a title and declare its collections "+
+			"with set_artifact_schema.", kind)), nil
 	}
 	if hasContent {
 		p := entry
 		if p == "" {
-			p = defaultEntry(kind)
+			p = defaultEntry(spec)
 		}
 		clean, refusal := files.cleanPath(p) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if refusal != nil {
@@ -270,7 +283,7 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			return *refusal, nil
 		}
 	}
-	if kind != artifacts.KindSheet && len(files.files) == 0 {
+	if spec.Store != artifacts.StoreContent && len(files.files) == 0 {
 		return failed("create_artifact needs the page: `content` for the entry page, " +
 			"`files`, or a build's `source`."), nil
 	}

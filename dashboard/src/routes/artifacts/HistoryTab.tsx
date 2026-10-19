@@ -33,6 +33,7 @@ import { fmtBytes, plural, relTime, utf8Bytes } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { ARTIFACT_LABEL_MAX_BYTES } from "~/contract/artifacts.ts";
+import { contentIsData } from "~/lib/artifacts/kinds.ts";
 import type {
   ArtifactDetail,
   ArtifactVersionSummary,
@@ -124,7 +125,7 @@ export function HistoryTab({
   const oldest = versions.reduce((n, v) => Math.min(n, v.number), Number.POSITIVE_INFINITY);
   const current = versions.find((v) => v.number === picked);
 
-  if (detail.kind === "sheet" && versions.length <= 1) {
+  if (contentIsData(detail.kind) && versions.length <= 1) {
     return (
       <>
         <p className="artifact-note">

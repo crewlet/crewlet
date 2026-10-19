@@ -180,7 +180,7 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, c applyContext, i
 	}
 	v := p.Version
 	if !stampedLimits(p.Authority) || v.Number != 1 || v.Base != 0 || len(v.Prune) > 0 ||
-		p.Owner == "" || p.Kind == "" {
+		p.Owner == "" || !p.Kind.Valid() {
 		return no(RefusedInvalid, HistorySummary{})
 	}
 	// NOTHING IS CARRIED INTO A CREATE: the artifact holds no object yet, so

@@ -2,7 +2,7 @@
 // upload intents and the engine-streamed transfer, creates and publishes,
 // rollbacks, renames and labels, the share dialog (grant, revoke, transfer and
 // the effective access), trash, restore and purge, assets, pins, the frames the
-// dashboard embeds a page in, a Markdown document's source and the raw bytes of
+// dashboard embeds a page in, a doc's source and the raw bytes of
 // a version's files; and the one admission ([Gate]) the read questions in
 // internal/api/queries take too.
 //
@@ -45,7 +45,7 @@
 //
 // A page runs on the artifact origin, in a sandboxed frame, under a view
 // ticket bound to the credential the viewer signed in through; this surface
-// only mints the frame. A Markdown document runs no author code, so its source
+// only mints the frame. A doc runs no author code, so its source
 // is answered as JSON for the dashboard to render. A version's raw bytes are
 // served here only as an attachment, text and anything a browser could run as
 // plain text, under the API's own policy.

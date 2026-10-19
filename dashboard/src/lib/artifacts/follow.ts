@@ -16,7 +16,7 @@
  * rather than moved to.
  */
 
-import type { ArtifactPresenceMember, PresenceActivity } from "~/protocol/index.ts";
+import type { ArtifactKind, ArtifactPresenceMember, PresenceActivity } from "~/protocol/index.ts";
 
 const RANK: Readonly<Record<PresenceActivity, number>> = { editing: 0, viewing: 1, idle: 2 };
 
@@ -47,7 +47,7 @@ export function followTarget(
 
 /** What the page shows now, as far as following can move it. */
 export interface FollowView {
-  kind: "html" | "markdown" | "sheet";
+  kind: ArtifactKind;
   /** The newest version. */
   head: number;
   /** The version on show; the head when none is addressed. */

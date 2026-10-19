@@ -47,7 +47,7 @@ CREATE TABLE artifacts (
     -- (D48). Stored beside the id so a serving node resolves a host without
     -- recomputing it, and so an operator can read it off the row.
     label           TEXT    NOT NULL,
-    -- html, markdown or sheet.
+    -- The kind (artifacts.Kind): html, doc or sheet.
     kind            TEXT    NOT NULL,
     title           TEXT    NOT NULL,
     description     TEXT    NOT NULL DEFAULT '',

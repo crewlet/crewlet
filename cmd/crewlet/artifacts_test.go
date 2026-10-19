@@ -575,3 +575,57 @@ func anyStrings(v any) []string {
 	}
 	return out
 }
+
+// writeTree writes files under a fresh directory.
+func writeTree(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, body := range files {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// THE KIND IS INFERRED FROM THE ENTRY BY THE KIND TABLE: a directory whose one
+// default entry is a Markdown file creates a document, and the entry it opens
+// on is that file.
+func TestArtifactsPublishInfersTheKindFromTheEntry(t *testing.T) {
+	t.Parallel()
+	node := newFakeArtifactsNode(t)
+	dir := writeTree(t, map[string]string{"index.md": "# Plan", "notes.txt": "more"})
+	if _, stderr, err := cli(t, "artifacts", "publish", dir, bootstrapForURL(t, node.server.URL)); err != nil {
+		t.Fatalf("publish: %v\n%s", err, stderr)
+	}
+	create := node.creates[0]
+	if create["kind"] != string(artifacts.KindDoc) || create["entry"] != "index.md" {
+		t.Errorf("created %v", create)
+	}
+}
+
+// TWO DEFAULT ENTRIES ARE THE AUTHOR'S TO CHOOSE BETWEEN: a directory holding
+// both is refused before a byte moves, and -kind settles it.
+func TestArtifactsPublishRefusesTwoCandidateEntries(t *testing.T) {
+	t.Parallel()
+	node := newFakeArtifactsNode(t)
+	dir := writeTree(t, map[string]string{"index.html": "<!doctype html>", "index.md": "# Plan"})
+	_, _, err := cli(t, "artifacts", "publish", dir, bootstrapForURL(t, node.server.URL))
+	if err == nil || !strings.Contains(err.Error(), "index.html and index.md") {
+		t.Fatalf("publish of two entries answered %v", err)
+	}
+	if len(node.intents) != 0 {
+		t.Fatalf("the refused publish declared %d uploads", len(node.intents))
+	}
+	if _, stderr, err := cli(t, "artifacts", "publish", dir, "-kind", "doc",
+		bootstrapForURL(t, node.server.URL)); err != nil {
+		t.Fatalf("publish with -kind: %v\n%s", err, stderr)
+	}
+	if create := node.creates[0]; create["kind"] != "doc" || create["entry"] != "index.md" {
+		t.Errorf("created %v", create)
+	}
+}

@@ -11,7 +11,7 @@ Three kinds ship in this release:
 | Kind | What it is | Who draws it |
 |---|---|---|
 | `html` | A page of HTML, CSS and script, with any files it references | The page itself, inside a sandboxed frame on an origin of its own |
-| `markdown` | A document | The dashboard's own renderer; it carries no author code |
+| `doc` | A document | The dashboard's own renderer; it carries no author code |
 | `sheet` | A native sheet: rows and typed columns, with no page at all | The dashboard, from the sheet's schema alone |
 
 The motivating case is a review table an agent hands to a team: the agent
