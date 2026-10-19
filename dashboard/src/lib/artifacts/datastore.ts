@@ -326,6 +326,10 @@ export class ArtifactDataStore {
       c.status = "failed";
       c.error = err instanceof QueryError ? err : new QueryError("query_failed");
       this.emit();
+      // A FAULT OF THE DASHBOARD'S OWN is not the engine's: the view says the
+      // read failed, and the error still reaches the console rather than
+      // passing for a refusal (a page whose `docs` came back null did).
+      if (!(err instanceof QueryError)) throw err;
       return;
     }
     // WHAT A PUSH ALREADY BROUGHT NEWER is kept over what the read saw: the

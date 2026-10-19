@@ -10747,6 +10747,11 @@ a.live-row:focus-visible {
   border-bottom: 1px solid var(--color-border-default);
   font-size: var(--font-size-compact);
 }
+/* Rules run BETWEEN changes: the last one closes on the list's own edge (a
+   dialog's foot, a section's end) rather than drawing a second line there. */
+.artifact-history-row:last-child {
+  border-bottom: 0;
+}
 .artifact-history-who {
   color: var(--color-text-primary);
   font-weight: var(--font-weight-medium);
@@ -10910,9 +10915,13 @@ a.live-row:focus-visible {
    with how many changes it will apply at the start of the band. */
 .artifact-schema-foot {
   position: sticky;
-  bottom: 0;
+  /* A sticky edge stops at the panel body's padding, which left a band under
+     the foot that the form scrolled through; it sits on the panel's own
+     bottom edge instead, padded by that inset above and below its buttons. */
+  bottom: calc(-1 * var(--crewlet-artifact-panel-inset, 0px));
   z-index: var(--z-index-sticky);
-  padding-block: var(--spacing-3);
+  padding-block: var(--crewlet-artifact-panel-inset, var(--spacing-3));
+  margin-block-end: calc(-1 * var(--crewlet-artifact-panel-inset, 0px));
   border-top: 1px solid var(--color-border-default);
   background: var(--color-surface-background);
 }
@@ -10983,8 +10992,42 @@ a.live-row:focus-visible {
   align-items: center;
   gap: var(--spacing-2) var(--spacing-3);
 }
+/* A NARROW FORM (a phone, the panel beside the sheet) keeps each column on
+   tracks too, rather than stacking seven full-width controls: the name with
+   its remove slot, the key under it, the type beside who writes it, and the
+   two flags on one line under those. */
 @container artifact-schema-form (width < 44rem) {
-  .artifact-column-head,
+  .artifact-column-head {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--size-row-sm);
+    grid-template-areas:
+      "name name remove"
+      "key key key"
+      "type write write"
+      "required hidden hidden";
+    row-gap: var(--spacing-2);
+  }
+  .artifact-column-name {
+    grid-area: name;
+  }
+  .artifact-column-key {
+    grid-area: key;
+    margin-block-start: calc(-1 * var(--spacing-1));
+  }
+  .artifact-column-type {
+    grid-area: type;
+  }
+  .artifact-column-write {
+    grid-area: write;
+  }
+  .artifact-column-required {
+    grid-area: required;
+  }
+  .artifact-column-hidden {
+    grid-area: hidden;
+  }
+  .artifact-column-remove {
+    grid-area: remove;
+  }
   .artifact-option {
     display: flex;
     flex-wrap: wrap;

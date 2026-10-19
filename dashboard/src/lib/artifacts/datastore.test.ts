@@ -6,7 +6,13 @@
  */
 
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { RestError, type DataDoc, type DataDocPage, type LiveSocket } from "~/protocol/index.ts";
+import {
+  QueryError,
+  RestError,
+  type DataDoc,
+  type DataDocPage,
+  type LiveSocket,
+} from "~/protocol/index.ts";
 import type { KeyedAnswer, KeyedRequest } from "../keyedWrite.ts";
 import { ArtifactDataStore, packedPosition, resultOf, stepRefusal } from "./datastore.ts";
 
@@ -177,6 +183,26 @@ describe("reading", () => {
     expect(asked[4]).toMatchObject({ since: 10 });
     expect(asked[4]).not.toHaveProperty("cursor");
     expect(fieldsOf(s, "r3")?.fields).toEqual({ name: "Three" });
+  });
+
+  test("a refused read says it failed; a fault of the dashboard's own also reaches the console", async () => {
+    const refused = store(
+      async () => {
+        throw new QueryError("query_failed");
+      },
+      async () => applied(1, 1),
+    );
+    await refused.s.load("rows");
+    expect(refused.s.view("rows")).toMatchObject({ status: "failed" });
+    // A page the dashboard cannot read (a `docs` that came back null) is no
+    // refusal of the engine's: the view says the read failed, and the fault
+    // is not swallowed.
+    const broken = store(
+      async () => ({ ...page([], 1), docs: null }) as unknown as DataDocPage,
+      async () => applied(1, 1),
+    );
+    await expect(broken.s.load("rows")).rejects.toThrow(TypeError);
+    expect(broken.s.view("rows")).toMatchObject({ status: "failed" });
   });
 
   test("the packed position is the generation above the sequence", () => {
