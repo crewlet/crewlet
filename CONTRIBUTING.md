@@ -7,18 +7,48 @@ need to get a development environment running and land a change.
 
 Prerequisites: **Go 1.27+** and
 **[golangci-lint](https://golangci-lint.run/welcome/install/)**, which
-`make check` runs and CI's own job downloads for itself. **git 2.40 or newer**
-on `PATH` — on macOS, Homebrew's: Apple's bundled git is 2.39. The code host
-runs real git as a subprocess, and its suites drive real git both as the
-engine and as a client; a machine without it, or with an older one, FAILS
-them (`internal/code/gitproc/gittest.Require`) rather than skipping, because
-git is a prerequisite of the suite, not something a machine may lack. What
-the engine reads of a failed git is the FORMAT of each report git makes to its
-trace2 stream, checked against a table of git's own formats that is held,
-version by version, to what real git reports over real damaged repositories.
-When the git the engine image ships moves, re-measure that table against the
-new git by putting it first on `PATH`:
-`PATH=<prefix>/bin:$PATH go test -count=1 -run 'TestTheFormatTableIsWhatGitSays|TestARequestCannotNameTheDamage' ./internal/code/gitproc/`
+`make check` runs and CI's own job downloads for itself. **What building git
+takes** — a C compiler, `make`, `curl`, `xz`, and libcurl's and zlib's
+development files (Debian and Ubuntu: `build-essential curl xz-utils
+libcurl4-openssl-dev zlib1g-dev`, or `libcurl4-gnutls-dev` in place of
+`libcurl4-openssl-dev`, the flavour the image builds against — the recipe
+compiles nothing against OpenSSL itself, so libcurl's TLS is the only one it
+needs and OpenSSL's headers are not; macOS: the Xcode command line tools,
+which carry libcurl and zlib, and Homebrew's `xz`, which macOS does not ship) —
+because **the suite never runs the machine's own git**. The code host
+runs real git as a subprocess, and its suites drive real git both as the engine
+and as a client, so what a case asserts is that git's behaviour as much as the
+engine's: `make git` builds the gits
+[`scripts/git-pin.env`](scripts/git-pin.env) pins — the node pin, the newest
+release, which the engine image builds too, and the newest patches of the two
+floors' series — from their checksummed release tarballs with
+[`scripts/git.sh`](scripts/git.sh), the one recipe the image and CI share,
+once, into `~/.cache/crewlet/git` (`CREWLET_GIT_CACHE` moves it; about four
+minutes on four vCPUs, and a pin bump or a change to the recipe builds beside
+what is there — and leaves the older builds where they are, about 70 MB a set,
+because another checkout still on them may be running one: `rm -rf
+~/.cache/crewlet/git` clears them, and the next `make git` builds what the tree
+pins). Every target that runs Go tests depends on it and puts the node
+pin first on `PATH`, and a one-package loop does the same by hand, as two
+statements:
+`bin=$(scripts/git.sh node) && PATH="$bin:$PATH" go test ./internal/code/cache/`
+— never `PATH="$(scripts/git.sh node):$PATH" go test …`, whose substitution
+is empty when the recipe fails (a missing header, a refused download), which
+leaves `PATH` starting with an empty entry and runs the loop on whatever git
+the machine has, with only the recipe's own line above the test output to
+say so. A loop
+run on the machine's own git instead FAILS the git-driven tests where that git
+is older than 2.40 (`internal/code/gitproc/gittest.Require`) — on macOS,
+Apple's bundled git is 2.39 — rather than skipping, because git is a
+prerequisite of the suite, not something a machine may lack. What the engine
+reads of a failed git is the FORMAT of each report git makes to its trace2
+stream, checked against a table of git's own formats that is held, version by
+version, to what real git reports over real damaged repositories — so a pin
+bump re-measures it on the new git by itself, in `make check`. To hold it to
+another git, put that git first on `PATH` for the one package
+(`scripts/git.sh node-floor` and `client-floor` print two), with the same two
+statements:
+`bin=$(scripts/git.sh node-floor) && PATH="$bin:$PATH" go test -count=1 -run 'TestTheFormatTableIsWhatGitSays|TestARequestCannotNameTheDamage' ./internal/code/gitproc/`
 — `gittest.Require` takes the `PATH`'s git, and a row whose range does not
 hold names the format and the git that disagreed. **A
 current Node** (npm ships with it) for the dashboard — its build output is
@@ -84,7 +114,8 @@ scripts/check-signoff_test.sh  # ... and that gate's own suite
 go vet ./...
 golangci-lint run        # what CI's lint job runs
 go build ./...
-make test        # the suite, minus the packages that run alone
+make git         # the pinned gits, built once a machine (both test targets need it)
+make test        # the suite, minus the packages that run alone, on the node pin
 make test-solo   # ... and those, at -p 1, with a runner to themselves
 # then, for each of CROSS_TARGETS (linux and darwin x amd64/arm64):
 CGO_ENABLED=0 GOOS=$OS GOARCH=$ARCH go build ./...            # test-cross
@@ -537,15 +568,14 @@ split into hundreds of packs; in `internal/code/host` a gigabyte history, a
 hundred thousand refs and a 100 000-file tree — skip unless
 `CREWLET_BENCH_LARGE=1`.
 
-`CREWLET_BENCH_GIT`, beside the `CREWLET_BENCH_S3_*` variables, names the git
-the code host's pools run in `internal/code/host` — an absolute path — while
-the client stays the git on `PATH` (`internal/code/codecluster`'s commit
-chain runs no git: its pushes carry no pack). A code host figure is the pool's git's as much as the
-engine's, so a figure the docs quote is taken on the git the engine image
-ships (Debian trixie's): where the machine's own git is another, build that
-release outside the tree — the pool runs only server-side programs, so
-`make NO_CURL=1 prefix=<dir> install` from its source is enough — and point
-the variable at `<dir>/bin/git`. Unset, the pools run the git on `PATH`.
+A code host figure is the pool's git's as much as the engine's, so `make bench`
+runs the node pin — the git the engine image builds — first on `PATH`, as every
+test target does: every pool and every client a benchmark starts runs it, and
+never whichever git the machine has (`internal/code/codecluster`'s commit chain
+runs no git: its pushes carry no pack). A figure the docs quote names that
+version, and a pin bump leaves the figures taken on the git before it as what
+they are — measured on the version they name — until a change to that path
+measures again.
 
 **A figure the design argues from is recorded in the package doc of what it
 measures**, with the machine it was measured on — its CPUs and model, and

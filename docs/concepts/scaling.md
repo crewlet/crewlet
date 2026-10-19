@@ -178,8 +178,8 @@ correctness one ([Deployment](../guides/deployment.md#the-code-host)).
 **What a request on a cold node costs.** A request on a node that holds no copy
 of its repository — one that just joined, or whose budget evicted it — waits for
 a cold sync before its first byte, since git's protocol has nothing to send
-earlier: measured end to end, the git nodes on git 2.47.3 (the release the
-engine image installs) against an S3-shaped fake answering every request
+earlier: measured end to end, the git nodes on git 2.47.3 (Debian trixie's,
+which the engine image installed then) against an S3-shaped fake answering every request
 100 ms after it arrives, the first clone of a repository of two hundred
 pushes begins with a 1.4 s sync and of two thousand with a 13.4–13.8 s one, and
 a balancer's idle timeout sees all of it. A cold sync is network work, not CPU:

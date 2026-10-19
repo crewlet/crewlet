@@ -25,10 +25,12 @@
 // GIT_SSH_COMMAND, GIT_TRACE…) any one of which changes what a process is.
 // HOME is an empty directory the pool owns, and neither the system nor the
 // global configuration is read — nor the system or global ATTRIBUTES, which
-// the configuration switches do not reach: git reads /etc/gitattributes
-// unless GIT_ATTR_NOSYSTEM is set and $HOME/.config/git/attributes unless
-// core.attributesFile names another file, so the environment sets the one and
-// the base configuration points the other at a path that cannot exist.
+// the configuration switches do not reach: git reads the system attributes
+// file (`git var GIT_ATTR_SYSTEM`: /etc/gitattributes for the image's git, as
+// for a distribution's) unless GIT_ATTR_NOSYSTEM is set, and
+// $HOME/.config/git/attributes unless core.attributesFile names another file,
+// so the environment sets the one and the base configuration points the other
+// at a path that cannot exist.
 // pack-objects asks a path's `delta` attribute when it SEARCHES for a delta,
 // so a `* -delta` an operator wrote on the host for something else would
 // leave whole every object whose delta pack-objects has to compute: one
@@ -293,9 +295,11 @@
 // arm's six runs span 0.3–1.3 ms of a 2–3 ms process here). What it costs a
 // request is the code host's (internal/code/host, its warm fetch).
 //
-// git ≥ 2.40 ([MinVersion]); the engine image ships 2.47 (Debian trixie),
-// and a git CVE is an engine CVE on a git node: the image tracks Debian's
-// security updates through the Dependabot docker surface.
+// git ≥ 2.40 ([MinVersion]). The engine image does not install Debian's git:
+// it BUILDS the newest git release from the tarball scripts/git-pin.env pins
+// (scripts/git.sh, the recipe the suite's `make git` runs too), so a git CVE is
+// an engine CVE on a git node, and what reaches the image is a bump of that
+// pin — Debian's security updates to its own git never do.
 package gitproc
 
 import (
@@ -499,7 +503,7 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 	if git == "" {
 		found, err := exec.LookPath("git")
 		if err != nil {
-			return nil, fmt.Errorf("gitproc: no git on this node's PATH (%w): the code host runs the node's own git, 2.40 or newer; the engine image ships 2.47", err)
+			return nil, fmt.Errorf("gitproc: no git on this node's PATH (%w): the code host runs the node's own git, 2.40 or newer; the engine image builds the newest git release", err)
 		}
 		git = found
 	}
@@ -551,18 +555,22 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 			// the configuration by GIT_CONFIG_GLOBAL below, the
 			// attributes by the base's core.attributesFile (cmd.go).
 			"HOME=" + home,
-			// /etc/gitconfig is the host's, not the engine's.
+			// The host's system configuration — wherever the git was
+			// built to read it (`git var GIT_CONFIG_SYSTEM`; the image's
+			// reads /etc/gitconfig) — is not the engine's.
 			"GIT_CONFIG_NOSYSTEM=1",
 			// Overrides both ~/.gitconfig and $XDG_CONFIG_HOME/git/config.
 			"GIT_CONFIG_GLOBAL=/dev/null",
-			// /etc/gitattributes is the host's too, and the variable above
-			// does not reach it (traced on git 2.43: a process with
-			// GIT_CONFIG_NOSYSTEM still opens it). pack-objects' delta
-			// search asks a path's `delta` attribute, so a host's
-			// `* -delta`, written for something else entirely, would
-			// write undeltified every delta a repack recomputes — 12.5
-			// times the bytes, measured (the package doc) — though the
-			// deltas a clone or fetch reuses are sent as stored.
+			// The host's system attributes are the host's too (`git var
+			// GIT_ATTR_SYSTEM`; the image's reads /etc/gitattributes), and
+			// the variable above does not reach them (traced on git 2.43:
+			// a process with GIT_CONFIG_NOSYSTEM still opens the file).
+			// pack-objects' delta search asks a path's `delta` attribute,
+			// so a host's `* -delta`, written for something else
+			// entirely, would write undeltified every delta a repack
+			// recomputes — 12.5 times the bytes, measured (the package
+			// doc) — though the deltas a clone or fetch reuses are sent
+			// as stored.
 			"GIT_ATTR_NOSYSTEM=1",
 			// Nothing ever prompts.
 			"GIT_TERMINAL_PROMPT=0",

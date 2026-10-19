@@ -234,9 +234,9 @@
 // # Measured
 //
 // On four vCPUs of a 2.1 GHz Xeon with SHA instructions, Go 1.27.2, every
-// pool running git 2.47.3 — the release the engine image installs, built
-// from source (CREWLET_BENCH_GIT) — and every client the machine's git
-// 2.43.0, all on one machine: one data node and two git nodes
+// pool running git 2.47.3 — Debian trixie's release, which the engine image
+// installed when these were taken, built from source — and every client the
+// machine's git 2.43.0, all on one machine: one data node and two git nodes
 // (codetest.SoloNode), the broker fsyncing every write as stream.sync's
 // default does (SoloOptions.SyncAlways), the S3 fake answering each request
 // 100 ms after it arrives at 80 MB/s a connection. Three counts of three

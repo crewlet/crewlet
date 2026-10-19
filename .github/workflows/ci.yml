@@ -398,6 +398,40 @@ jobs:
           path: ${{ runner.temp }}/test-weights.tsv
           key: test-weights-${{ hashFiles('internal/skipgate/**', 'internal/solo/partition/**') }}-${{ github.sha }}
           restore-keys: test-weights-${{ hashFiles('internal/skipgate/**', 'internal/solo/partition/**') }}-
+      # THE PINNED GITS. `make test` runs the suite on the gits
+      # scripts/git-pin.env pins, which scripts/git.sh builds into
+      # CREWLET_GIT_CACHE (the Makefile's `##@ The pinned gits` says why the
+      # suite never runs the runner's own git), and the make step builds
+      # whatever the restore did not bring: the Makefile stays the command.
+      #
+      # The directory is set HERE and read by both the recipe and the cache, so
+      # the path cached is the path built by construction: git.sh's own default
+      # follows XDG_CACHE_HOME, and a runner image that set it would otherwise
+      # build into one directory while the cache saved another, empty.
+      #
+      # KEYED ON THE PIN AND THE RECIPE, exactly, with no restore-keys: a build
+      # is a function of both, and a near-miss restores builds this run would
+      # not use (git.sh names each build by version and recipe, so it would
+      # build beside them anyway). A pull request that changes either builds the
+      # three gits, about four minutes, on every run until main saves them. Only
+      # this job and `end-to-end gates` run git, so only they carry the steps.
+      - &git-cache-dir
+        name: name the pinned gits' cache directory
+        run: echo "CREWLET_GIT_CACHE=$HOME/.cache/crewlet/git" >> "$GITHUB_ENV"
+      - &git-restore
+        name: restore the pinned gits main built
+        id: git
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.CREWLET_GIT_CACHE }}
+          key: git-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/git-pin.env', 'scripts/git.sh') }}
+      # libcurl's development files are what building git's HTTPS transport
+      # needs and the runner image may not carry; the C toolchain and zlib's
+      # headers it does. Only a miss builds, so only a miss installs.
+      - &git-deps
+        name: install what building git needs
+        if: steps.git.outputs.cache-hit != 'true'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev zlib1g-dev
       # THE MAKEFILE IS THE COMMAND, rather than a copy of it. Every other job
       # here inlines its own, and CLAUDE.md's rule that "the Makefile is the
       # same command CI runs, or it is a lie" was therefore held by hand —
@@ -433,6 +467,17 @@ jobs:
         run: |
           touch "$RUNNER_TEMP/test-weights.tsv"
           make test TEST_WEIGHTS="$RUNNER_TEMP/test-weights.tsv" TEST_TIMINGS="$RUNNER_TEMP/test-timings.tsv"
+      # On main only, and only a miss, as every cache here; after the make step,
+      # which built what the restore did not bring. Both test jobs save the
+      # same key, and the second to finish is told the key is taken: a warning,
+      # never a failure.
+      - &git-save
+        name: save the pinned gits
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.git.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.CREWLET_GIT_CACHE }}
+          key: git-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/git-pin.env', 'scripts/git.sh') }}
       # What this run measured, kept as the next run's weights: on main only,
       # like every cache here, and only from a job that passed. Moved onto the
       # restored file's path because a cache entry is matched on its path as
@@ -479,8 +524,13 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: latest
+      # The pinned gits, as in `test (race)` above, whose comment says why.
+      - *git-cache-dir
+      - *git-restore
+      - *git-deps
       - name: the packages that run alone
         run: make test-solo
+      - *git-save
       - *gobuild-prune
       - *gobuild-save
 

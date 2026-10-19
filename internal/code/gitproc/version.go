@@ -28,8 +28,8 @@ var MinVersion = Version{2, 40, 0}
 // completes each thin push with the bases it borrowed from the packs before
 // it — send that object twice or a delta without its base, and the client's
 // index-pack refuses the whole pack: every full clone of a repository the
-// maintainer had written a bitmap for failed on 2.47.3, the git the engine
-// image installs ("REF_DELTA … already resolved", "pack has N unresolved
+// maintainer had written a bitmap for failed on 2.47.3, Debian trixie's git
+// ("REF_DELTA … already resolved", "pack has N unresolved
 // deltas"). 2.48.0 is the release that fixed it (tb/multi-pack-reuse-dupfix,
 // "Object reuse code based on multi-pack-index sent an unwanted copy of
 // object"), measured against the same repositories. An older git reuses from
@@ -98,6 +98,6 @@ type ErrTooOld struct {
 // Error names the binary, the version found, the minimum and where to get one.
 func (e *ErrTooOld) Error() string {
 	return fmt.Sprintf("gitproc: %s is git %s, and the code host needs git %s or newer: "+
-		"install a newer git on this node — the engine image ships git 2.47 (Debian trixie); "+
+		"install a newer git on this node — the engine image builds the newest git release; "+
 		"on macOS, Apple's bundled git is 2.39, so install Homebrew's", e.Path, e.Found, e.Want)
 }

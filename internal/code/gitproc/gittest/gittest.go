@@ -111,8 +111,8 @@ func Require(t testing.TB) string {
 // bitmapped walk over a damaged reverse index dies of a segmentation fault and
 // says nothing — so a case whose SUBJECT is that message has nothing to
 // provoke on an older git, and skips there, declared (internal/skipgate's
-// allowed.go) rather than read as a pass: the engine image's git (2.47) and
-// CI's say it.
+// allowed.go) rather than read as a pass: the node pin every make target runs
+// (scripts/git-pin.env, the engine image's git) says it.
 var NamesMidxPosition = gitproc.Version{Major: 2, Minor: 47}
 
 // MidxChunk is where chunk id lies in the multi-pack-index at path — its first

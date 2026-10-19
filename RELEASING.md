@@ -172,9 +172,10 @@ leg fails inside `apt-get` with an exit code and no explanation. Add
 
 CI runs the same thing for you: the snapshot job fires on demand
 (**Actions → release → Run workflow**) and on any pull request touching
-`.goreleaser.yaml`, `Dockerfile`, `go.mod`, `internal/version/**` or the
-workflow. That is what stops the release pipeline running for the first time
-on the tag that publishes.
+`.goreleaser.yaml`, `Dockerfile`, `go.mod`, `internal/version/**`,
+`scripts/notices/**`, the git pin or its recipe (`scripts/git-pin.env`,
+`scripts/git.sh`) or the workflow. That is what stops the release pipeline
+running for the first time on the tag that publishes.
 
 Neither release job saves a cache. Both restore the module cache `ci.yml`'s
 `build + vet` job saves on `main`, read-only, and neither restores a build
@@ -197,9 +198,20 @@ release pipeline does when it runs:
   as whatever the build does with it.
 - **The snapshot job builds everything** — all four targets, the archives, the
   checksums and the container image — on demand and on any pull request
-  touching `.goreleaser.yaml`, `Dockerfile`, `go.mod`, `internal/version/**` or
-  the workflow. A dependency that needs cgo, or a `Dockerfile` that no longer
+  touching `.goreleaser.yaml`, `Dockerfile`, `go.mod`, `internal/version/**`,
+  `scripts/notices/**`, `scripts/git-pin.env`, `scripts/git.sh` or the
+  workflow. A dependency that needs cgo, or a `Dockerfile` that no longer
   copies from `${TARGETPLATFORM}`, fails there rather than at tag time.
+- **The image checks its own git** in the `Dockerfile`'s last git step, on
+  both platforms, every time the image is built: its `git version` is the
+  node pin's, `git-remote-https` links nothing the image lacks — GnuTLS's
+  libcurl, and no OpenSSL of git's own — and reaches curl's connect on a
+  loopback port, its checksums are block-sha1 (`git version
+  --build-options`), it reads its system configuration from `/etc`, git's
+  licence is there, and the source tarball beside it hashes to the pin's
+  SHA-256. A stage that stopped building the pin, built another, built it
+  without the recipe's choices, or linked a library the runtime stage does
+  not install fails the snapshot job on the pull request that did it.
 - **Both release jobs run the built binary** and compare what it reports against
   the version goreleaser recorded in `dist/metadata.json`. That is the only
   symptom the ldflags stamp has: rename `internal/version.value`, move the
@@ -298,19 +310,70 @@ doing the thing, or starts doing more — so read the file when you touch it:
 | **archives** (`crewlet_X.Y.Z_<os>_<arch>.tar.gz`) | one `crewlet` binary, `LICENSE`, `README.md`, `THIRD_PARTY_NOTICES.txt` (the license and notice files of the Go toolchain and every Go module the binary links, written by `scripts/notices` in goreleaser's before hook) and `dashboard/THIRD_PARTY_NOTICES.txt` (the embedded dashboard's bundled packages, fonts and icon paths, from the committed bundle). Four of them: linux and darwin × amd64 and arm64. **No Windows**, and **no musl**; see below |
 | **`checksums.txt`** | SHA-256 over every archive |
 | **`checksums.txt.sig` + `checksums.txt.pem`** | the keyless cosign signature and its certificate |
-| **`ghcr.io/crewlet/crewlet:X.Y.Z`** | a multi-arch image (linux/amd64, linux/arm64), also `:latest` on a stable tag. `LICENSE` and both notices files are under `/usr/share/doc/crewlet/` |
+| **`ghcr.io/crewlet/crewlet:X.Y.Z`** | a multi-arch image (linux/amd64, linux/arm64), also `:latest` on a stable tag. `LICENSE` and both notices files are under `/usr/share/doc/crewlet/`; the git it builds carries its own under `/usr/local/share/doc/git/` — git's licence texts, its source tarball, the recipe that built it and a `SOURCE` file saying which is which |
 
 The binary is self-contained: the dashboard's assets are embedded, the store is
 a file it creates, and the event stream is an embedded NATS JetStream server.
 There is no runtime to install and nothing to point a DSN at.
 
-The image is `debian:trixie-slim` with `ca-certificates`, `git` and `tini`
-rather than `distroless` or `scratch`, because the engine **spawns process
-trees** — the local sandbox backend runs a coding agent as a child process,
-setup recipes are shell, and stdio MCP servers are child processes launched by
-whatever the config names. On `scratch` all three fail at the moment they are
-used, from an image that started perfectly happily. The reasoning is at the top
-of the [`Dockerfile`](Dockerfile).
+The image is `debian:trixie-slim` with `ca-certificates`, `libcurl3t64-gnutls`
+and `tini`, rather than `distroless` or `scratch`, because the engine **spawns
+process trees** — the local sandbox backend runs a coding agent as a child
+process, setup recipes are shell, stdio MCP servers are child processes launched
+by whatever the config names, and the code host runs git. On `scratch` all four
+fail at the moment they are used, from an image that started perfectly happily.
+The reasoning is at the top of the [`Dockerfile`](Dockerfile).
+
+**Its git is the pin's, built rather than installed.** Debian trixie ships git
+2.47; the image builds the release [`scripts/git-pin.env`](scripts/git-pin.env)
+names, from its checksummed tarball, with [`scripts/git.sh`](scripts/git.sh) —
+the recipe CI and `make git` run, so the suite tests the git the image ships —
+in a stage of the `Dockerfile` that runs on the build platform and
+cross-compiles for each target. Cross-compiling is what keeps it cheap: the
+linux/arm64 image is built under QEMU, where compiling git took 812 s against
+87 s cross-compiled (four vCPUs of a 2.1 GHz Xeon, when the stage was
+designed), and the cross-compiled stage runs beside the runtime stage's
+emulated `apt-get`, which the arm64 image pays anyway. Measured back to back on
+one development machine (four vCPUs of a 2.8 GHz Xeon; each build from an
+empty build cache with the base image pulled again, both platforms in one
+buildx run as a release does, twice in alternating order): 187–191 s with
+Debian's git, 246–248 s with the pin's, so **about a minute more a release** —
+the two git stages compile beside the arm64 runtime stage's emulated
+`apt-get` and slow it from 175 s to 214 s — where a stage built under QEMU
+would add about fourteen minutes. These are that machine's figures; the
+release runner's is the image step of the snapshot job, which every pull
+request touching the pin or the recipe runs. With the pin and the recipe
+unchanged, a builder that keeps its layer cache pays none of it.
+The image checks its own git as it is built (see
+[What CI already guards](#what-ci-already-guards)), and it carries git's licence
+texts, its source tarball, the recipe and a `SOURCE` file under
+`/usr/local/share/doc/git/`, because the image redistributes a git binary it
+built and owes its corresponding source (GPLv2 §3).
+
+**What of OpenSSL a git process holds, and what the image relies on.** git is
+GPLv2-only, and OpenSSL 3 is Apache-2.0, a licence the FSF reads as one GPLv2
+cannot be combined with. So the recipe builds git with no OpenSSL of its own
+(`NO_OPENSSL`) and the image's libcurl does its TLS through GnuTLS
+(`libcurl3t64-gnutls`) — Debian's own pairing for its git, and what the image
+shipped before it built one. That keeps OpenSSL out of everything git links
+itself. It does NOT keep OpenSSL out of git's processes: libcurl's own
+dependencies link it — on trixie, libssh2 links OpenSSL 3's `libcrypto.so.3`
+and OpenLDAP its `libssl.so.3` and `libcrypto.so.3` — so every
+`git-remote-https` the image starts maps both, exactly as Debian's own git
+does under the same libcurl, and `libssl3t64` is in the image as their
+dependency, as it was beside Debian's git. For that transitive load the image
+relies on Debian's reading, the one Debian ships its git under, and on no
+reading of its own. A git whose processes hold no OpenSSL at all would need a
+libcurl built without libssh2 and LDAP, which the image does not build.
+
+**A git security release is an engine release.** Every git node runs the
+image's git, so a git CVE reaches a deployment only through a bump of the pin
+and an image built from it — Debian's security updates to its own git never do.
+A release cut while the pin is behind a security patch of its series is one to
+hold until the pin moves: a bump changes a version and its SHA-256 together in
+`scripts/git-pin.env`, the pull request runs the snapshot job (the image builds
+and checks the new git on both platforms) and the suite on it, and it lands
+before the tag.
 
 ### Verifying a download
 

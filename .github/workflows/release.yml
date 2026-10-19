@@ -35,6 +35,11 @@ on:
       # change to what it copies, fails the release rather than the pull
       # request unless the pipeline runs here too.
       - "scripts/notices/**"
+      # The git the image builds: a pin bump or a recipe change is checked by
+      # the image's own build — every platform, the arm64 one cross-compiled —
+      # on the pull request that makes it, not first on the tag.
+      - "scripts/git.sh"
+      - "scripts/git-pin.env"
 
 permissions:
   contents: read

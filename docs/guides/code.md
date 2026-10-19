@@ -31,8 +31,8 @@ dashboard). Then:
   serves git — one whose Tier A [`node.roles`](../concepts/configuration.md#noderoles)
   names `git`, or names none, since an undeclared node has every role — builds
   the code host and starts serving `/git/`. A git node needs **git 2.40 or
-  newer** on its host (the engine's image ships 2.47) and a place for its cache,
-  sized by its Tier A [`git` block](../concepts/configuration.md#git); the
+  newer** on its host (the engine's image builds the newest release) and a
+  place for its cache, sized by its Tier A [`git` block](../concepts/configuration.md#git); the
   [deployment guide](deployment.md#the-code-host) says how to size both.
 - **On a node that booted with no company, or one running no native backend
   yet**, the activation that sets `code.native` starts the code host — no

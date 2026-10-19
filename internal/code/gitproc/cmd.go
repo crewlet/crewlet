@@ -243,8 +243,9 @@ type Result struct {
 //     reads as an absent file without a warning), because git otherwise
 //     reads $HOME/.config/git/attributes — GIT_CONFIG_GLOBAL does not move
 //     it — and a file written into the pool's HOME after New checked it was
-//     empty would steer every process's attributes. Its system twin,
-//     /etc/gitattributes, is the environment's GIT_ATTR_NOSYSTEM (gitproc.go).
+//     empty would steer every process's attributes. Its system twin, the
+//     host's system attributes file (`git var GIT_ATTR_SYSTEM`), is the
+//     environment's GIT_ATTR_NOSYSTEM (gitproc.go).
 const (
 	keyThreads   = "pack.threads"
 	keyHooksPath = "core.hooksPath"

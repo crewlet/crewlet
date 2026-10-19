@@ -186,7 +186,7 @@ func TestTheIdxReaderAgreesWithShowIndex(t *testing.T) {
 	defer func() { _ = f.Close() }()
 	// Inside the repository: outside one, git 2.47's show-index never sets
 	// up the hash algorithm it reads by and dies of a segmentation fault —
-	// measured on the engine image's 2.47.3, where 2.43 and 2.56 answer.
+	// measured on 2.47.3, Debian trixie's, where 2.43 and 2.56 answer.
 	shown, stderr, err := c.Try(t, bare, f, "show-index")
 	if err != nil {
 		t.Fatalf("git show-index: %v\n%s", err, stderr)

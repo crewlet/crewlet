@@ -170,8 +170,8 @@ func ReceivePackDeadline(maxPushBytes, liveObjects int64, hook time.Duration) ti
 // to stop on — every walk where the repository has no commit-graph, and a
 // walk that is not asked for in topological order everywhere — so a commit
 // dated before its parent (a person's skewed clock, a GIT_COMMITTER_DATE) is
-// a reason to walk every commit of the history. MEASURED with git 2.47.3, the
-// release the engine image ships, on four vCPUs, over the gigabyte history
+// a reason to walk every commit of the history. MEASURED with git 2.47.3,
+// Debian trixie's release, on four vCPUs, over the gigabyte history
 // BenchmarkPushSmall pushes (455 680 commits, 3.27 million objects; its
 // step= arms, a tip dated before the history began): with no commit-graph,
 // 5.0–5.5 µs a commit — the force check's merge-base 5.1, the listing of

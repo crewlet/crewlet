@@ -316,10 +316,11 @@ var allowed = []Allowance{
 	// SUBJECT is that report has nothing to provoke there
 	// (gittest.NamesMidxPosition). gitproc's TestTheFormatTableIsWhatGitSays
 	// needs no entry: its rows state the gits they hold on, and assert what
-	// every other git reports instead. It does not fire where the engine runs
-	// — the image's git is 2.47 — nor on CI's runners, whose git is newer; it
-	// fires on a workstation with an older distribution's git, such as
-	// Ubuntu 24.04's 2.43.
+	// every other git reports instead. It does not fire under a make target or
+	// in CI, which run the suite on the node pin (scripts/git-pin.env, the
+	// git the engine image builds), nor where the engine runs; it fires on a
+	// one-package loop over a workstation's older git, such as Ubuntu 24.04's
+	// 2.43.
 	// -----------------------------------------------------------------
 	{
 		Package: "internal/code/gitproc",

@@ -58,7 +58,7 @@ func TestAnOldGitRefusesToStart(t *testing.T) {
 	if tooOld.Path != old || tooOld.Found != (gitproc.Version{Major: 2, Minor: 39}) || tooOld.Want != (gitproc.Version{Major: 2, Minor: 40}) {
 		t.Fatalf("ErrTooOld = %+v", tooOld)
 	}
-	for _, want := range []string{old, "2.39.0", "2.40.0", "2.47 (Debian trixie)"} {
+	for _, want := range []string{old, "2.39.0", "2.40.0", "the engine image builds the newest git release"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal %q does not name %q", err, want)
 		}

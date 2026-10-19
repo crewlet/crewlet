@@ -1112,8 +1112,23 @@ cache on its own disk. What such a node needs from its host:
 
 - **git 2.40 or newer on its `PATH`.** The node runs the host's own git as a
   subprocess per request and checks its version at boot: an older one refuses
-  the boot, naming the version and the path it found. The published image ships
-  2.47 (Debian trixie). On git 2.48 or newer a clone is sent from every pack
+  the boot, naming the version and the path it found. The published image does
+  not install Debian's git: it builds the newest git release from a pinned,
+  checksummed tarball ([`scripts/git-pin.env`](https://github.com/crewlet/crewlet/blob/main/scripts/git-pin.env)),
+  cross-compiled for each platform, with its HTTPS transport (libcurl, the
+  GnuTLS flavour Debian's own git uses) and zlib and nothing else — no
+  OpenSSL of its own (libcurl's own libssh2 and OpenLDAP still bring
+  OpenSSL 3, Debian's `libssl3t64`, into the image and into every
+  `git-remote-https`, as they do beside Debian's git), no PCRE
+  (`git grep -P`, `git log -P`) and no Perl, Python or Tcl programs
+  (`git send-email`, `git p4`, `gitk`). It reads its
+  system configuration from `/etc/gitconfig` and `/etc/gitattributes`, where
+  Debian's git did, so an image you derive configures it there (`git var
+  GIT_CONFIG_SYSTEM` prints the path); the code host's own processes read
+  neither, whatever they hold. A local sandbox box
+  that runs as the engine (`run_in: direct`) on a node from that image runs this
+  git too, so a coding agent's `git grep -P` fails there; a `container` or
+  `e2b` box runs its own image's git. On git 2.48 or newer a clone is sent from every pack
   the cache holds verbatim (multi-pack reuse); an older git reuses only the
   bitmap's preferred pack — 2.43 and older cannot reuse from several, and 2.44
   to 2.47 send a pack the client refuses when they do. Measured, the

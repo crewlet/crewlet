@@ -46,11 +46,10 @@ import (
 // THE CODE HOST'S REQUEST PATHS, MEASURED END TO END: a person's git against
 // the real handlers, the real cache and a real code log on one data node
 // (codetest.SoloNode), with the timer around what the person waits for and
-// every fixture built with it stopped. The pools run the git
-// CREWLET_BENCH_GIT names (codetest.BenchGit) — the engine image's, where the
-// machine's own is another — and the client is the git on PATH. Every arm
-// logs the pool's git version, and doc.go's measured section names it beside
-// each figure.
+// every fixture built with it stopped. The pools and the client run the git
+// on PATH, which `make bench` makes the node pin — the git the engine image
+// builds (scripts/git-pin.env). Every arm logs the pool's git version, and
+// doc.go's measured section names it beside each figure.
 
 // benchFirstByte is how long the S3 fake waits before it answers each request
 // of an `s3fake` arm: 100 ms, the lower end of the 100–200 ms AWS documents
@@ -96,9 +95,9 @@ const coldCloners = 8
 func cloner(i int) string { return fmt.Sprintf("cloner%d", i) }
 
 // benchFleet is a solo fleet of gitNodes over objects, its pools running the
-// git BenchGit names and its broker fsyncing every write as a deployment's
-// does (stream.sync's default), with RepoName declared, and the person who
-// pushes to it; the coldCloners people beside them have a token each.
+// git on PATH and its broker fsyncing every write as a deployment's does
+// (stream.sync's default), with RepoName declared, and the person who pushes
+// to it; the coldCloners people beside them have a token each.
 func benchFleet(b *testing.B, objects objstore.Backend, gitNodes int) (*codetest.SoloFleet, *codetest.Person) {
 	b.Helper()
 	people := []string{"ceo"}
@@ -106,7 +105,7 @@ func benchFleet(b *testing.B, objects objstore.Backend, gitNodes int) (*codetest
 		people = append(people, cloner(i))
 	}
 	f := codetest.SoloNode(b, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: gitNodes}, Objects: objects,
-		GitPath: codetest.BenchGit(b), CacheMaxBytes: benchCacheBytes, People: people, SyncAlways: true})
+		CacheMaxBytes: benchCacheBytes, People: people, SyncAlways: true})
 	f.Declare(b, code.Declared{Name: codetest.RepoName, Settings: codetest.Settings()})
 	b.Logf("the pools run git %s", f.Nodes()[0].Pool().Version())
 	return f, codetest.NewPerson(b, f, "ceo")

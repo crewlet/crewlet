@@ -21,7 +21,10 @@
 # them FAIL saying what to install, which is the same posture CI takes
 # (CONTRIBUTING.md, "A skip is not a pass"). Every queue backend certifies
 # itself with no external service: the JetStream suite starts an embedded
-# broker per test.
+# broker per test. The suite's git is the same posture's: every target that
+# runs Go tests runs the git the engine image builds, which `make git` builds
+# once a machine, and a machine without a C compiler or libcurl's headers is
+# told so by name rather than handed its own git (`##@ The pinned gits`).
 #
 # THE BUILT DASHBOARD IS COMMITTED, and that is deliberate rather than lazy:
 # `go build ./...` and `go install …@latest` must work on a clean checkout with
@@ -222,7 +225,7 @@ COMPANY ?=
 .PHONY: help build crewlet install fmt tidy schema metrics-doc alarms-doc derived gate-answer objects-answer broker-answer \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
         check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-solo \
-        require-npm bench \
+        require-npm bench git \
         mattermost-up mattermost-down \
         gitlab-up gitlab-down \
         snapshot clean require-node
@@ -338,6 +341,35 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard is not what dash
 	    echo "run: make dashboard && git add -A -- static/dashboard"; } >&2; \
 	  exit 1; \
 	fi
+
+##@ The pinned gits
+
+# THE GITS THE SUITE RUNS, built from the release tarballs scripts/git-pin.env
+# pins by scripts/git.sh — the recipe the engine image builds its own git with —
+# once a machine, into a per-user cache (CREWLET_GIT_CACHE, by default
+# ~/.cache/crewlet/git; a pin bump or a change to the recipe is a new build
+# beside the old). The code host runs real git, and what a case asserts about it
+# is the git's behaviour as much as the engine's, so the suite runs the git a
+# git node runs rather than whichever one the machine has: every target that
+# runs Go tests depends on `git` and runs under GIT_ENV, and so do CI's two test
+# jobs, which call those targets.
+#
+# EVERY PIN IS BUILT, the floors' as well as the node's, so a pin whose version
+# or digest is wrong fails here — at the download its SHA-256 refuses — rather
+# than in whichever later run first needs it. About four minutes for the three
+# on four vCPUs, once; after that git.sh finds each build and answers at once.
+GIT_PINS := node node-floor client-floor
+
+git: ## build the pinned gits the suite and the image run (scripts/git-pin.env; needs a C compiler and libcurl's headers)
+	@for pin in $(GIT_PINS); do scripts/git.sh $$pin >/dev/null || exit 1; done
+
+# GIT_ENV puts the node pin first on PATH, so every pool and every client a case
+# starts runs it. STATEMENTS rather than a prefix of assignments: a prefix
+# `PATH="$(scripts/git.sh node):$PATH" go test …` whose command failed runs
+# the suite on the machine's own git with nothing said, which is the one
+# outcome this group exists to rule out. A recipe line starts with it, and what
+# follows it runs with the pin on PATH.
+GIT_ENV = node_git="$$(scripts/git.sh node)" || exit 1; export PATH="$$node_git:$$PATH";
 
 ##@ Gates — `make check` is all of them
 
@@ -473,9 +505,9 @@ lint: ## run golangci-lint (ci: golangci-lint)
 # target stricter than the CI job it mirrors — ci.yml's `test (race)` installs
 # no node and passes — and a Makefile stricter than CI is the same lie as one
 # looser than it, just in the direction nobody notices.
-test: ## the suite, minus the packages that run alone (ci: test (race))
+test: git ## the suite, minus the packages that run alone (ci: test (race))
 	@test -n "$(PARALLEL_PKGS)" || { echo "the parallel partition printed no packages; internal/solo/partition said why above (a TEST_WEIGHTS file it refused, or go list failing)" >&2; exit 1; }
-	$(SKIPGATE)$(if $(TEST_TIMINGS), -timings $(TEST_TIMINGS)) -- $(GOTEST) -json $(PARALLEL_PKGS)
+	$(GIT_ENV) $(SKIPGATE)$(if $(TEST_TIMINGS), -timings $(TEST_TIMINGS)) -- $(GOTEST) -json $(PARALLEL_PKGS)
 
 # The solo half: every package that needs the runner to itself.
 #
@@ -518,10 +550,10 @@ test: ## the suite, minus the packages that run alone (ci: test (race))
 # share action IDs — and $(2) the packages.
 PREBUILD = $(GO) list -e -export -test -deps $(1) -f '{{.ImportPath}}' $(2) > /dev/null
 
-test-solo: require-node ## the packages that need a runner to themselves (ci: end-to-end gates)
+test-solo: require-node git ## the packages that need a runner to themselves (ci: end-to-end gates)
 	@test -n "$(SOLO_PKGS)" || { echo "the solo partition printed no packages; internal/solo/partition said why above (go list failing, or no package importing internal/solo)" >&2; exit 1; }
 	$(call PREBUILD,$(GOTESTBUILD),$(SOLO_PKGS))
-	$(SKIPGATE) -- $(GOTEST) -json -p 1 $(SOLO_PKGS)
+	$(GIT_ENV) $(SKIPGATE) -- $(GOTEST) -json -p 1 $(SOLO_PKGS)
 
 # The suite without the detector. It is roughly twice as fast and it is NOT
 # what CI runs: a data race it cannot see is a data race that lands.
@@ -542,8 +574,8 @@ test-solo: require-node ## the packages that need a runner to themselves (ci: en
 #
 # The same flags as the gates bar -race (GOTESTRUN), and the same prebuild for
 # the solo half, compiled without it.
-test-norace: require-node ## the full suite without -race (faster; not a gate)
-	@status=0; \
+test-norace: require-node git ## the full suite without -race (faster; not a gate)
+	@$(GIT_ENV) status=0; \
 	echo "==> parallel partition"; \
 	$(GO) test $(GOTESTRUN) $(PARALLEL_PKGS) || status=1; \
 	echo "==> solo partition"; \
@@ -639,9 +671,10 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # 100 000-file tree — unless CREWLET_BENCH_LARGE=1; an arm that silently did
 # not run reads as one that measured nothing worth showing. Not through
 # skipgate, for the same reason: an allowance there would make that skip
-# silent again. CREWLET_BENCH_GIT names the git the code host's pools run (an
-# absolute path, codetest.BenchGit) — the engine image's, where the machine's
-# own is another; unset, the pools run the git on PATH.
+# silent again. The code host's pools and every client run the node pin, which
+# GIT_ENV puts first on PATH as it does for every test target, so a figure is
+# of the git the engine image builds and never of whichever one the machine
+# had: a package doc quoting it names that version.
 # BENCH_TIME 3s: the 128 MiB cases take most of a second an operation, so at
 # go's default of one second they are one or two operations whose first-touch
 # page faults are the figure; at three they are several.
@@ -675,9 +708,9 @@ BENCH_TIME    ?= 3s
 BENCH_COUNT   ?= 1
 BENCH_TIMEOUT ?= 8h
 
-bench: ## measure the object store, the state log's write path, git, its cache, the code host's pushes and clones, a client's pace and the push hook's start (not a gate)
+bench: git ## measure the object store, the state log's write path, git, its cache, the code host's pushes and clones, a client's pace and the push hook's start (not a gate)
 	$(call PREBUILD,,$(BENCH_PKGS))
-	$(GO) test -run '^$$' -bench '$(BENCH_PATTERN)' -benchmem \
+	$(GIT_ENV) $(GO) test -run '^$$' -bench '$(BENCH_PATTERN)' -benchmem \
 	  -benchtime $(BENCH_TIME) -count $(BENCH_COUNT) -timeout $(BENCH_TIMEOUT) \
 	  -p 1 -v $(BENCH_PKGS)
 
