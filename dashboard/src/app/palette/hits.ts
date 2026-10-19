@@ -11,7 +11,7 @@
  */
 
 import type { GlyphName } from "@crewlethq/icons/glyphs";
-import { DESTINATIONS } from "../nav.ts";
+import { DESTINATIONS, WORKSPACES } from "../nav.ts";
 import { accessNames, holdsAny, type Grant } from "~/lib/access.ts";
 import type { Navigator } from "../router.tsx";
 import { resolve } from "../routes.ts";
@@ -23,7 +23,7 @@ import { sequenceWords } from "../keymap.ts";
 import { utf8Bytes } from "~/lib/format.ts";
 import { KIND_WORDS } from "~/lib/artifacts/words.ts";
 import { artifactPath } from "~/lib/artifacts/api.ts";
-import type { ArtifactListItem } from "~/protocol/index.ts";
+import type { ArtifactKind, ArtifactListItem } from "~/protocol/index.ts";
 
 /**
  * The scopes, in the order the tab row draws them and Tab walks them.
@@ -184,8 +184,12 @@ function wordsOf(text: string): string[] {
 export interface Hit {
   id: string;
   icon: GlyphName;
+  /** An artifact's kind, drawn with the kind's own glyph in place of `icon`, as the gallery and the sidebar draw it. */
+  kind?: ArtifactKind;
   label: string;
   hint: string;
+  /** A short fact at the row's end, never cut with the label as `hint` is. */
+  meta?: string;
   /**
    * Taking the row. The palette closes after it unless it returns `false`,
    * which a row that leads into a step of the palette (Change theme) does.
@@ -264,7 +268,10 @@ export function recentHits(recents: readonly Recent[], nav: Navigator): Hit[] {
     id: `recent-${r.path.join("/")}`,
     icon: "clock",
     label: r.label,
-    hint: r.workspace || r.path.join(" / "),
+    // THE WORKSPACE BY ITS NAME, as the sidebar says it: the stored value is
+    // its key, and "Q4 roadmap artifacts" read as one phrase.
+    hint:
+      WORKSPACES.find((w) => w.key === r.workspace)?.label ?? (r.workspace || r.path.join(" / ")),
     go: () => nav.to(r.path),
   }));
 }
@@ -406,8 +413,12 @@ export function artifactHits(items: readonly ArtifactListItem[], nav: Navigator)
   return items.map((item) => ({
     id: `artifact-${item.id}`,
     icon: "layers",
+    kind: item.kind,
     label: item.title,
-    hint: KIND_WORDS[item.kind],
+    // THE KIND AT THE ROW'S END, as a page's space is: a hint is cut with the
+    // label, and a long title took the kind with it.
+    hint: "",
+    meta: KIND_WORDS[item.kind],
     go: () => nav.to(artifactPath(item.id)),
   }));
 }

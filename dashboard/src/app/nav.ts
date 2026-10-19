@@ -45,6 +45,7 @@
 
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { holdsAny, type Grant } from "~/lib/access.ts";
+import { KIND_LIST } from "~/lib/artifacts/words.ts";
 
 /** The workspaces: the sidebar's navigation rows, and the reader's own Account. */
 export type Workspace =
@@ -567,7 +568,7 @@ export const WORKSPACES: WorkspaceRow[] = [
     label: "Artifacts",
     icon: "layers",
     path: ["artifacts"],
-    hint: "Pages, documents and sheets your company and its agents made",
+    hint: `${KIND_LIST.charAt(0).toUpperCase()}${KIND_LIST.slice(1)} your company and its agents made`,
     keywords: [
       "artifact",
       "page",
@@ -632,9 +633,11 @@ export const WORKSPACES: WorkspaceRow[] = [
         label: "New artifact",
         icon: "plus",
         path: ["artifacts", "new"],
-        hint: "Start a sheet, blank or from the Review sheet template, or a slide deck",
+        hint: "Start a sheet, blank or from the Review sheet template, a doc or a slide deck",
         keywords: [
           "new sheet",
+          "new doc",
+          "document",
           "review sheet",
           "template",
           "spreadsheet",

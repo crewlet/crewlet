@@ -596,6 +596,15 @@ describe("the breadcrumb", () => {
     }
   });
 
+  test("an artifact is named by its title, and never by its uuid", () => {
+    const id = "0192f00e-0000-7000-8000-00000000a001";
+    expect(crumbsFor(["artifacts", id]).map((c) => [c.label, c.mono ?? false])).toEqual([
+      ["Artifacts", false],
+      ["Artifact", false],
+    ]);
+    expect(crumbsFor(["artifacts", id], { [id]: "Q4 roadmap" }).at(-1)?.label).toBe("Q4 roadmap");
+  });
+
   // AND EVERY OTHER CRUMB IS ONE, or the trail is a label rather than an
   // address: a reader two levels into a project has to be able to step back
   // out through the trail.
