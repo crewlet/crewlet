@@ -1,7 +1,6 @@
 package chatlet
 
 import (
-	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,7 +22,12 @@ import (
 // the older the company is.
 //
 // NEVER ANALYZEd, because no node is: a plan taken over statistics is a plan
-// no deployment runs.
+// no deployment runs. Each plan is read through storetest's one reading of
+// one, which also refuses a correlated aggregate the planner unnested into a
+// read of its whole table ([storetest.Decorrelated]).
+//
+// Mutation: join the replies plainly rather than CROSS JOIN and the plan
+// drives on chat_mentions_handle_idx.
 func TestTheFollowDerivationSeeksByKey(t *testing.T) {
 	t.Parallel()
 	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"),
@@ -52,31 +56,16 @@ func TestTheFollowDerivationSeeksByKey(t *testing.T) {
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			var plan []string
-			// A WRITE TRANSACTION, because one of the three is a delete
-			// and a read transaction refuses to plan it.
-			if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
-				args := make([]any, strings.Count(c.statement, "?"))
-				for i := range args {
-					args[i] = "x"
-				}
-				rows, err := tx.QueryContext(t.Context(),
-					"EXPLAIN QUERY PLAN "+c.statement, args...)
-				if err != nil {
-					return err
-				}
-				defer func() { _ = rows.Close() }()
-				for rows.Next() {
-					var id, parent, notUsed int
-					var detail string
-					if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
-						return err
-					}
-					plan = append(plan, detail)
-				}
-				return rows.Err()
-			}); err != nil {
-				t.Fatalf("explain: %v", err)
+			args := make([]any, strings.Count(c.statement, "?"))
+			for i := range args {
+				args[i] = "x"
+			}
+			// THE DELETE IS PLANNED IN A WRITE TRANSACTION, by Plan
+			// itself: a read transaction refuses to plan it.
+			plan := storetest.Plan(t, db, c.statement, args)
+			if line, ok := storetest.Decorrelated(plan); ok {
+				t.Errorf("the planner unnested a correlated aggregate into a "+
+					"read of the whole table: %s", line)
 			}
 			if strings.Join(plan, "\n") != strings.Join(c.want, "\n") {
 				t.Errorf("the plan is\n\t%s\nwant\n\t%s",
