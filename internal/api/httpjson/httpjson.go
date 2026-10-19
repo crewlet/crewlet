@@ -1260,7 +1260,7 @@ var codes = map[Code]string{
 		"nothing was published. The detail names the file.",
 	CodeEditRefused: "An edit could not be applied exactly once, so nothing " +
 		"was published. The detail names the edit and what to change.",
-	CodePolicyRefused: "The page breaks the artifact policy, so nothing was " +
+	CodePolicyRefused: "The version breaks the artifact policy, so nothing was " +
 		"published. The detail lists every problem to fix.",
 	CodeSourceTaken: "Another of your artifacts already uses that source " +
 		"address. Publish to that artifact, or choose another address.",

@@ -29,27 +29,34 @@ func TestEveryEntryRuleCanBeMet(t *testing.T) {
 	}
 }
 
-// INFERENCE NAMES ONE KIND: no two kinds open on the same type, and a default
-// entry infers its own kind, so a publish that names no kind becomes the kind
-// whose default it used.
+// INFERENCE NAMES ONE KIND OR NONE: a default entry infers its own kind by its
+// path, a type exactly one kind opens on infers that kind, and a type two kinds
+// open on infers nothing, so a publish that names no kind becomes the kind
+// whose default it used and is never picked by the table's order.
 func TestAnEntryInfersExactlyOneKind(t *testing.T) {
 	t.Parallel()
-	seen := map[string]artifacts.Kind{}
+	opens := map[string][]artifacts.Kind{}
 	for _, s := range artifacts.KindSpecs() {
 		for _, e := range s.Entry.Essences {
-			if other, dup := seen[e]; dup {
-				t.Errorf("%s and %s both open on %s, so inference picks by order", other, s.Kind, e)
-			}
-			seen[e] = s.Kind
+			opens[e] = append(opens[e], s.Kind)
 		}
 		for _, d := range s.Entry.Defaults {
 			typ, _ := mediatype.For(d)
-			if got, ok := artifacts.KindFor(typ.Essence()); !ok || got != s.Kind {
+			if got, ok := artifacts.KindFor(d, typ.Essence()); !ok || got != s.Kind {
 				t.Errorf("%s's default entry %q infers %q", s.Kind, d, got)
 			}
 		}
 	}
-	if k, ok := artifacts.KindFor("application/pdf"); ok {
+	for essence, kinds := range opens {
+		got, ok := artifacts.KindFor("elsewhere/entry", essence)
+		switch {
+		case len(kinds) == 1 && (!ok || got != kinds[0]):
+			t.Errorf("%s opens only %s and infers %q", essence, kinds[0], got)
+		case len(kinds) > 1 && ok:
+			t.Errorf("%s opens %q and infers %q by the table's order", essence, kinds, got)
+		}
+	}
+	if k, ok := artifacts.KindFor("report.pdf", "application/pdf"); ok {
 		t.Errorf("a PDF entry infers %q, and no kind opens on one", k)
 	}
 }

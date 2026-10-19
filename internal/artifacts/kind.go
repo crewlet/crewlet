@@ -79,13 +79,72 @@ const (
 	// SearchEntry indexes the entry's readable text (a page's text without
 	// its markup), and nothing when the version names no entry.
 	SearchEntry Search = "entry"
+
+	// SearchCanvas indexes a design's canvas (its title, the artboards'
+	// titles and the notes' text) and then each artboard's readable text,
+	// in the canvas's order: the canvas file itself is layout, and a search
+	// over its JSON would match coordinates.
+	SearchCanvas Search = "canvas"
 )
 
 // Searches are every search extraction this build knows.
-var Searches = []Search{SearchEntry}
+var Searches = []Search{SearchEntry, SearchCanvas}
 
 // Valid reports whether s is a search extraction this build knows.
 func (s Search) Valid() bool { return slices.Contains(Searches, s) }
+
+// Documents is which of a version's files the artifact origin serves as a
+// document, and how many of them one ticket opens.
+//
+// WHY IT IS A FACET AND NOT "EVERY HTML PAGE". A ticket names a principal and
+// one immutable version, and every document request is decided again; what a
+// kind adds is how many frames a viewer holds of one version and what each may
+// load as a page. A page is one frame that may move between its own pages, the
+// way a site does. A design is many frames at once, each its own artboard, so
+// each ticket opens the one artboard it was minted for and nothing else: a
+// board cannot become another board, and the frames a viewer holds are exactly
+// the tickets the dashboard minted (adr/0035, "One document per ticket").
+type Documents string
+
+const (
+	// DocumentsNone serves nothing on the artifact origin: a native kind,
+	// which carries no author code.
+	DocumentsNone Documents = "none"
+
+	// DocumentsSite opens the version's entry in one frame, and the frame
+	// may load any HTML page of the version under the same ticket, as a
+	// multi-page site navigates.
+	DocumentsSite Documents = "site"
+
+	// DocumentsEach frames every HTML page of the version on its own, and a
+	// ticket opens exactly the page it was minted for.
+	DocumentsEach Documents = "each"
+)
+
+// DocumentRules are every way a kind's documents are served.
+var DocumentRules = []Documents{DocumentsNone, DocumentsSite, DocumentsEach}
+
+// Valid reports whether d is a document rule this build serves by.
+func (d Documents) Valid() bool { return slices.Contains(DocumentRules, d) }
+
+// Format is the validator a kind's own files are held to at publish, beyond
+// the entry's media type.
+type Format string
+
+const (
+	// FormatNone holds a kind to its entry rule alone.
+	FormatNone Format = "none"
+
+	// FormatCanvas holds a design's `canvas.json` to its schema and to the
+	// version's files (internal/artifacts/canvasformat).
+	FormatCanvas Format = "canvas"
+)
+
+// Formats are every format validator this build runs.
+var Formats = []Format{FormatNone, FormatCanvas}
+
+// Valid reports whether f is a format this build validates.
+func (f Format) Valid() bool { return slices.Contains(Formats, f) }
 
 // EntryRule is what a kind's entry, the file a version opens on, may be.
 type EntryRule struct {
@@ -125,12 +184,26 @@ type KindSpec struct {
 
 	// Search is what a version contributes to the gallery's search text.
 	Search Search
+
+	// Documents is which files the artifact origin serves as a document,
+	// and how many one ticket opens.
+	Documents Documents
+
+	// Format is what the kind's own files are validated against at
+	// publish.
+	Format Format
 }
 
 // Framed reports the kind runs author code on the artifact origin: the only
 // kind a view ticket is minted for, a version may declare capabilities and pin
 // a runtime contract on, and the linter's page warnings apply to.
 func (s KindSpec) Framed() bool { return s.Render == RenderFramed }
+
+// OpensEntry reports a frame of the kind opens on the version's entry, so a
+// ticket that names no document is minted for the entry; a design's entry is
+// its canvas, which the dashboard draws, and every frame of it names its
+// artboard.
+func (s KindSpec) OpensEntry() bool { return s.Documents == DocumentsSite }
 
 // Capabilities are the runtime capabilities a version of the kind may
 // declare: every one this build serves for a framed kind, and none for a
@@ -145,28 +218,44 @@ func (s KindSpec) Capabilities() []Capability {
 // kindSpecs is the table, in the order every listing of kinds follows.
 var kindSpecs = []KindSpec{
 	{
-		Kind:    KindHTML,
-		Summary: "runs the page's own code in a sandbox",
-		Render:  RenderFramed,
-		Entry:   EntryRule{Essences: []string{"text/html"}, Defaults: []string{"index.html"}},
-		Store:   StoreDeclared,
-		Search:  SearchEntry,
+		Kind:      KindHTML,
+		Summary:   "runs the page's own code in a sandbox",
+		Render:    RenderFramed,
+		Entry:     EntryRule{Essences: []string{"text/html"}, Defaults: []string{"index.html"}},
+		Store:     StoreDeclared,
+		Search:    SearchEntry,
+		Documents: DocumentsSite,
+		Format:    FormatNone,
 	},
 	{
-		Kind:    KindMarkdown,
-		Summary: "is a document the dashboard draws",
-		Render:  RenderNative,
-		Entry:   EntryRule{Essences: []string{"text/markdown"}, Defaults: []string{"index.md"}},
-		Store:   StoreNone,
-		Search:  SearchEntry,
+		Kind:      KindMarkdown,
+		Summary:   "is a document the dashboard draws",
+		Render:    RenderNative,
+		Entry:     EntryRule{Essences: []string{"text/markdown"}, Defaults: []string{"index.md"}},
+		Store:     StoreNone,
+		Search:    SearchEntry,
+		Documents: DocumentsNone,
+		Format:    FormatNone,
 	},
 	{
-		Kind:    KindSheet,
-		Summary: "is a table drawn from its datastore",
-		Render:  RenderNative,
-		Entry:   EntryRule{Optional: true},
-		Store:   StoreContent,
-		Search:  SearchEntry,
+		Kind:      KindSheet,
+		Summary:   "is a table drawn from its datastore",
+		Render:    RenderNative,
+		Entry:     EntryRule{Optional: true},
+		Store:     StoreContent,
+		Search:    SearchEntry,
+		Documents: DocumentsNone,
+		Format:    FormatNone,
+	},
+	{
+		Kind:      KindDesign,
+		Summary:   "is a canvas of artboards, each an HTML page run in a sandbox",
+		Render:    RenderFramed,
+		Entry:     EntryRule{Essences: []string{"application/json"}, Defaults: []string{"canvas.json"}},
+		Store:     StoreDeclared,
+		Search:    SearchCanvas,
+		Documents: DocumentsEach,
+		Format:    FormatCanvas,
 	},
 }
 
@@ -209,16 +298,28 @@ func (k Kind) Framed() bool {
 	return ok && s.Framed()
 }
 
-// KindFor is the kind whose entry a file served as essence may be, in the
-// table's order, and false when no kind opens on such a file. It is how a
-// publish that names no kind infers one from its entry.
-func KindFor(essence string) (Kind, bool) {
+// KindFor is the kind a publish that names none is created as, inferred from
+// its entry: the kind whose default entry is that path (`canvas.json` is a
+// design), else the ONE kind whose entry a file served as essence may be, and
+// false when no kind, or more than one, opens on it. A JSON file other than a
+// default is a format only its name tells apart, so two kinds admitting an
+// essence is an answer the caller asks the author for rather than a guess.
+func KindFor(path, essence string) (Kind, bool) {
 	for _, s := range kindSpecs {
-		if s.Entry.Admits(essence) {
+		if slices.Contains(s.Entry.Defaults, path) {
 			return s.Kind, true
 		}
 	}
-	return "", false
+	var found []Kind
+	for _, s := range kindSpecs {
+		if s.Entry.Admits(essence) {
+			found = append(found, s.Kind)
+		}
+	}
+	if len(found) != 1 {
+		return "", false
+	}
+	return found[0], true
 }
 
 // DefaultEntries are every kind's default entry paths, in the table's order:

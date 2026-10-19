@@ -698,18 +698,17 @@ func entryFor(files []localFile, asked string, kind artifacts.Kind) (string, err
 }
 
 // kindFor is the kind a new artifact is created as: the one -kind names, else
-// the kind whose entry the entry's type may be, from the kind table.
+// the kind the kind table infers from the entry (its default path, else the one
+// kind its type may be).
 func kindFor(asked artifacts.Kind, entry string) (artifacts.Kind, error) {
 	if asked != "" {
 		return asked, nil
 	}
-	typ, ok := mediatype.For(entry)
-	if ok {
-		if kind, ok := artifacts.KindFor(typ.Essence()); ok {
-			return kind, nil
-		}
+	typ, _ := mediatype.For(entry)
+	if kind, ok := artifacts.KindFor(entry, typ.Essence()); ok {
+		return kind, nil
 	}
-	return "", fmt.Errorf("name the kind with -kind: no kind opens on %s", entry)
+	return "", fmt.Errorf("name the kind with -kind: no one kind opens on %s", entry)
 }
 
 // kindNames lists every kind this build serves, for the flags' help.

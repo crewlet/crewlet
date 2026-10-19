@@ -57,6 +57,11 @@ const (
 	// could verify: refused, since a page whose scripts the linter cannot
 	// account for is one whose policy it cannot vouch for.
 	CodeUnparseable Code = "unparseable"
+
+	// CodeFormat is a kind's own file outside its format: a design's
+	// `canvas.json` that names a board no page backs, or a field the format
+	// does not have. The format's validator says which, at its place.
+	CodeFormat Code = "format_invalid"
 )
 
 // The warnings: legal, and almost certainly not what the author meant.
@@ -91,7 +96,7 @@ func (c Code) Refusing() bool {
 	return slices.Contains([]Code{
 		CodeRemoteScript, CodeRemoteStylesheet, CodeUnpinned, CodeRemoteImport,
 		CodeFormOffOrigin, CodeRefreshOffOrigin, CodeJavaScriptURL, CodePlaceholder,
-		CodeVendorOff, CodeVendorFailed, CodeUnparseable,
+		CodeVendorOff, CodeVendorFailed, CodeUnparseable, CodeFormat,
 	}, c)
 }
 
@@ -124,7 +129,7 @@ func (r *Refusal) Error() string {
 	for i, f := range r.Findings {
 		lines[i] = f.String()
 	}
-	return "the page breaks the artifact policy: " + strings.Join(lines, "; ")
+	return "the version breaks the artifact policy: " + strings.Join(lines, "; ")
 }
 
 // Unwrap makes every refusal an [ErrRefused].

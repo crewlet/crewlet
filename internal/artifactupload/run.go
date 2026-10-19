@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
@@ -63,6 +64,10 @@ type run struct {
 	read [][]byte
 
 	warnings []lint.Finding
+
+	// canvas is a design version's canvas, as its format check read it:
+	// what its search text is drawn from.
+	canvas *canvasformat.Canvas
 }
 
 // pending is one file of the new version, as the run assembles it.
@@ -243,6 +248,9 @@ func (r *run) compose(ctx context.Context, mode manifest.Mode, specs []FileSpec,
 	}
 	m, uploaded, err := r.manifest(mode, entry)
 	if err != nil {
+		return artifactsdomain.PublishInput{}, err
+	}
+	if err = r.checkFormat(ctx, m); err != nil {
 		return artifactsdomain.PublishInput{}, err
 	}
 	search, err := r.searchText(ctx, m)
