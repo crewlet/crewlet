@@ -521,7 +521,13 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext,
 }
 
 // reparentChildren files every page directly under parentID under newParent
-// instead, in id order.
+// instead, in the order `pages_heads_parent_idx` holds them.
+//
+// THE INDEX'S ORDER, NOT THE ID'S. Each child is its own row, so any order
+// that is the same on every data node writes the same rows; the one this read
+// is given is the index's own (parent_id, container, title, id), which the
+// seek of the parent reads the children in, where asked for them by id the
+// planner sought them and then sorted them all (measured).
 //
 // FROM ANOTHER SUBJECT, so it moves `scoped_through` and never `version` — the
 // rule [Applier.applyRename] states for the same reason: each child's own
@@ -536,7 +542,8 @@ func (a *Applier) reparentChildren(ctx context.Context, tx *sql.Tx,
 
 	children, err := func() ([]string, error) {
 		found, err := tx.QueryContext(ctx,
-			`SELECT id FROM pages_heads WHERE parent_id = ? ORDER BY id`, parentID)
+			`SELECT id FROM pages_heads WHERE parent_id = ?
+			  ORDER BY container, title, id`, parentID)
 		if err != nil {
 			return nil, err
 		}
