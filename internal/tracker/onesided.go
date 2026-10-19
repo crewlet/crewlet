@@ -97,6 +97,12 @@ func (o OneSided) Final() (string, bool) {
 	return "", false
 }
 
+// pendingOneSidedStatement is [duty.pendingOneSided]'s probe — whether any
+// edge waits for the repair at all — named for the plan test.
+const pendingOneSidedStatement = `
+			SELECT EXISTS (SELECT 1 FROM tracker_relations
+			               WHERE one_sided = 1 AND one_sided_final = 0)`
+
 // oneSidedStatement is [ScanOneSided]'s read, named for the plan test.
 const oneSidedStatement = `
 		SELECT r.task_id, r.other_id,
