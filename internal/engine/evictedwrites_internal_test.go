@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/chat"
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -376,7 +375,7 @@ func iamEviction(t *testing.T, node string) []byte {
 			Writer: "node-peer", CreatedAt: time.Now().UTC(),
 			Scope: iamdomain.RootScope(),
 		},
-		Mutation: body, Actor: "node-peer", ActorKind: iam.KindMachine,
+		Mutation: body, Actor: "node-peer", ActorKind: iamdomain.NodeKind,
 	})
 	if err != nil {
 		t.Fatalf("encode the eviction record: %v", err)

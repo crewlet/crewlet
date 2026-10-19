@@ -86,7 +86,8 @@ type Writer struct {
 
 	// Actor and ActorKind are who this writer acts as. ActorKind is the
 	// PRINCIPAL's kind — person, machine, engine — because that is what
-	// this domain's own records carry.
+	// this domain's own records carry; the node's own writer is
+	// [NodeKind].
 	Actor     string
 	ActorKind iam.Kind
 
@@ -173,6 +174,20 @@ type SeatLookup interface {
 	Seat(ctx context.Context, handle string) (session.Seat, bool, error)
 }
 
+// NodeKind is the principal kind the node's own writer authors as: the sweeps,
+// a re-seal, a password re-hashed at this build's cost, a company-wide
+// invalidation — everything the engine decides for itself — and the kind a
+// generation record that names nobody records the node under.
+//
+// THE ENGINE, NEVER A MACHINE. A machine is a token with nobody behind it, and
+// a row authored by one is drawn as that credential's login; written as one,
+// every row the engine wrote for itself read in the trail as a service account
+// named after the node id, a login no machine grammar admits
+// ([iam.Principal.Validate]). [iam.KindEngine] is the kind that exists so the
+// engine's housekeeping is never mistaken for somebody's decision, and the
+// tracker's node writer is its `system` already.
+const NodeKind = iam.KindEngine
+
 // WriterDeps is what a writer is built from.
 type WriterDeps struct {
 	Publisher *statelog.Publisher
@@ -191,6 +206,9 @@ type WriterDeps struct {
 	// seat, is a writer that can create no person and invite nobody.
 	Seats SeatLookup
 
+	// Actor and ActorKind are who the writer acts as, until [Writer.As]
+	// or [Writer.For] derives another: the node's own writer is its id and
+	// [NodeKind].
 	Actor     string
 	ActorKind iam.Kind
 	Grants    []iam.Grant
