@@ -245,7 +245,7 @@ test("an agent's write to the board's store dataset reaches the stat drawn from 
         body: { amount: 650 },
         read: "all",
         created_by: "closer",
-        updated_by: { Name: "closer", Kind: "agent" },
+        updated_by: { name: "closer", kind: "agent" },
         updated_at: "2026-10-18T10:01:00Z",
       },
     ],
