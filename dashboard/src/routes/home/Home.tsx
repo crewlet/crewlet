@@ -41,6 +41,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import {
   ArrangeBoard,
   ArrangeFrame,
+  ArrangeGrid,
   ArrangeGroup,
   Button,
   ConfirmModal,
@@ -385,11 +386,7 @@ export function Home() {
                   )
               : undefined
           }
-          bodyProps={
-            editing
-              ? { ...reorder.listProps(groupList(g.id)), className: "home-group-body" }
-              : undefined
-          }
+          bodyProps={editing ? reorder.listProps(groupList(g.id)) : undefined}
           empty={editing ? "Drag widgets here, or add them from the tray." : "This group is empty."}
         >
           {children.map((id) => renderLeaf(id))}
@@ -408,7 +405,7 @@ export function Home() {
     <HomeDataProvider value={data}>
       <div
         ref={root}
-        className={editing ? "home home-board is-editing" : "home home-board"}
+        className="home"
         data-stacked={stacked ? "" : undefined}
         {...(editing ? reorder.listProps(PAGE) : {})}
         // Links open in a new tab while arranging, the add sheet's preview
@@ -464,13 +461,13 @@ export function Home() {
           />
         ) : (
           <ArrangeBoard editing={editing} columns={stacked ? 1 : COLUMNS}>
-            <div className="board-grid">
+            <ArrangeGrid>
               {page.map((id) => {
                 const w = findWidget(board, id);
                 if (!w) return null;
                 return w.kind === "group" ? renderGroup(w) : renderLeaf(id);
               })}
-            </div>
+            </ArrangeGrid>
           </ArrangeBoard>
         )}
         {settingsWidget && (

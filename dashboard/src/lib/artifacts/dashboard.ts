@@ -258,11 +258,14 @@ export function datasetStatus(
   return "loading";
 }
 
-/** How a dataset is kept current, in the rail's words. */
+/**
+ * How a dataset is kept current, in the rail's words. A live store says how,
+ * not "Live" again: the line above it already says the rows are live.
+ */
 export function refreshWords(f: DashboardFreshness): string {
   switch (f.mode) {
     case "live":
-      return "Live";
+      return "As its rows are written";
     case "signal":
       return f.every_seconds ? `On change, and every ${minutes(f.every_seconds)}` : "On change";
     case "interval":
@@ -368,40 +371,74 @@ export function eachWidget(
   return out;
 }
 
-/** What one character of a compact table's text takes, in pixels, and a cell's padding. */
+/**
+ * What one character of a compact table's text takes, in pixels, and a cell's
+ * padding: the widget frame's 16px inset each side (a widget's table is
+ * flush, its cells on the frame's inset) and 4px of air.
+ */
 const TABLE_CHAR_PX = 7.5;
-const TABLE_CELL_PAD_PX = 28;
+const TABLE_CELL_PAD_PX = 36;
 
 /**
- * A heading's character and its room beside the words: a heading is set in
- * capitals and spaced wider than a value, and carries its sort control, so a
- * column sized for its values alone cut its heading short (`SERVI…`).
+ * A heading's character: a heading is set in capitals and spaced wider than a
+ * value, so a column sized for its values alone cut its heading short
+ * (`SERVI…`). It carries no sort control (a widget's rows are in the order
+ * its dataset gives them), so its padding is a cell's.
  */
 const TABLE_HEAD_CHAR_PX = 8.5;
-const TABLE_HEAD_PAD_PX = 52;
+const TABLE_HEAD_PAD_PX = TABLE_CELL_PAD_PX;
 
 /** The narrowest and widest a table column starts at, in pixels. */
 const TABLE_MIN_PX = 72;
 const TABLE_MAX_PX = 320;
 
 /**
+ * The narrowest the prose column is fitted to, about twenty characters: what
+ * still reads as the start of a title. Past it the table scrolls sideways.
+ */
+const TABLE_PROSE_MIN_PX = 180;
+
+/** How a dashboard table's columns are laid out: see [tableLayout]. */
+export interface TableLayout {
+  /** Each column's width from what it holds. */
+  widths: Record<string, number>;
+  /** The one column that takes the table's leftover room, or none. */
+  flex: string | undefined;
+  /** The narrowest the flexing column is fitted to. */
+  flexMin: number;
+}
+
+/**
  * Each column's width, from what it holds: the wider of its heading (with its
  * sort control) and its longest value as shown, at least [TABLE_MIN_PX] and at
- * most [TABLE_MAX_PX].
+ * most [TABLE_MAX_PX]; and the one column that gives or takes the room left
+ * in the widget.
  *
  * WHY A TABLE IS SIZED BY ITS CONTENT: a column the design system's compact
  * table may fit is shrunk to its box, so on a narrow widget a heading is cut
  * to its first letters and a value is broken mid-word (`succeed|ed`). Held at
- * what it holds (a column's `width`), a column keeps its words whole, and a
- * table wider than its widget scrolls sideways inside it.
+ * what it holds (a column's `width`), a column keeps its words whole.
+ *
+ * WHY ONE COLUMN FLEXES: held at their content every column, a table either
+ * stopped short of its widget's side or ran past it and scrolled. The column
+ * of prose (a free text column whose values are words with spaces between
+ * them, the longest such, a title) is the one a reader reads by its start, so
+ * it alone is fitted: it takes what is left of the widget's width, and gives
+ * up its tail behind an ellipsis when there is less, down to
+ * [TABLE_PROSE_MIN_PX], while every other column
+ * (a key, a version, a state, a date, a number) keeps its value whole. A table
+ * whose held columns alone are wider than its widget scrolls sideways.
  */
-export function tableWidths(
+export function tableLayout(
   shown: readonly { key: string; label: string; column: DashboardColumn | undefined }[],
   rows: readonly DashboardRow[],
-): Record<string, number> {
-  const out: Record<string, number> = {};
+): TableLayout {
+  const widths: Record<string, number> = {};
+  let flex: string | undefined;
+  let flexChars = 0;
   for (const { key, label, column } of shown) {
     let chars = 0;
+    let spaced = false;
     for (const r of rows) {
       const v = r[key] ?? null;
       const text =
@@ -409,10 +446,20 @@ export function tableWidths(
           ? formatNumber(v, "number")
           : wordsOf(column, v);
       chars = Math.max(chars, text.length);
+      spaced ||= /\s/.test(text.trim());
     }
     const head = label.length * TABLE_HEAD_CHAR_PX + TABLE_HEAD_PAD_PX;
     const body = chars * TABLE_CHAR_PX + TABLE_CELL_PAD_PX;
-    out[key] = Math.round(Math.min(TABLE_MAX_PX, Math.max(TABLE_MIN_PX, head, body)));
+    widths[key] = Math.round(Math.min(TABLE_MAX_PX, Math.max(TABLE_MIN_PX, head, body)));
+    // Prose is free text in words: a column of a closed vocabulary is a
+    // state, and one value with no space in it an identifier, each read
+    // whole, whatever its length.
+    const prose = (column?.type ?? "text") === "text" && !column?.words && spaced;
+    if (prose && chars > flexChars) {
+      flex = key;
+      flexChars = chars;
+    }
   }
-  return out;
+  const flexMin = flex ? Math.min(widths[flex] ?? 0, TABLE_PROSE_MIN_PX) : 0;
+  return { widths, flex, flexMin };
 }

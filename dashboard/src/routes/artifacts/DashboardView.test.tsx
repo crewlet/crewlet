@@ -297,7 +297,11 @@ test("the Sources rail lists every dataset with how it is kept current", async (
   mount(dataStore());
   const rail = await screen.findByRole("complementary", { name: "Sources" });
   await waitFor(() => expect(within(rail).getByText("Pipeline total")).toBeTruthy());
+  // One card, headed by its own title, as a panel beside a board is.
+  expect(within(rail).getByRole("heading", { level: 2, name: "Sources" })).toBeTruthy();
+  expect(rail.querySelector(".crewlet-card")).not.toBeNull();
   expect(within(rail).getAllByText("Live").length).toBeGreaterThan(0);
+  expect(within(rail).getByText("As its rows are written")).toBeTruthy();
   expect(within(rail).getByText("When its inputs change")).toBeTruthy();
   expect(within(rail).getByText("The deals collection of this dashboard's data")).toBeTruthy();
 });
@@ -308,8 +312,9 @@ test("the Sources rail lists every dataset with how it is kept current", async (
 test("each widget is a cell of the board's twelve-column grid", async () => {
   mount(dataStore());
   await waitFor(() => expect(widget("pipeline")).toBeTruthy());
-  const grid = document.querySelector(".dashboard-board > .board-grid");
+  const grid = document.querySelector<HTMLElement>(".dashboard-board > .crewlet-arrange-grid");
   expect(grid).toBeTruthy();
+  expect(grid?.style.getPropertyValue("--crewlet-arrange-columns")).toBe("12");
   const cells = [...document.querySelectorAll(".dashboard-cell")].filter(
     (c) => !c.parentElement?.closest(".dashboard-cell"),
   );

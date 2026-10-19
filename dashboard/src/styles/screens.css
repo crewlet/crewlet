@@ -7852,19 +7852,14 @@ a.work-cal-chip {
 
 /* ---- Home's board ------------------------------------------------------ */
 
-/* A BOARD'S PAGE GRID: blocks on twelve columns, each spanning its own width
-   (`grid-column: span N`, which ArrangeFrame sets), on the page as in a group.
+/* A BOARD'S PAGE GRID is the design system's ArrangeGrid: blocks on twelve
+   columns, each spanning its own width (`grid-column: span N`, which
+   ArrangeFrame sets), on the page as in a group, whose body is the same grid.
    ONE GRID FOR EVERY BOARD, Home's and a dashboard's, so a widget is laid out
-   at one width wherever it stands. A group's own body is the design system's
-   ArrangeGroup, on the same twelve columns. The chrome of a block being
-   arranged (its ring, toolbar, resize handles and the column lanes) is the
-   design system's ArrangeFrame and ArrangeBoard. */
-.board-grid {
-  display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  gap: var(--spacing-4);
-  align-items: stretch;
-}
+   at one width wherever it stands; the rows open a step while the board is
+   arranged, for each block's toolbar. The chrome of a block being arranged
+   (its ring, toolbar, resize handles and the column lanes) is the design
+   system's ArrangeFrame and ArrangeBoard. */
 .home-board-cell {
   display: flex;
   flex-direction: column;
@@ -7936,15 +7931,6 @@ a.work-cal-chip {
   width: 1px;
   height: var(--spacing-5);
   background: var(--color-border-default);
-}
-
-/* The board while it is arranged. */
-
-/* More room between rows while editing: each toolbar sits on its widget's
-   top edge, half in the gap above it. */
-.home-board.is-editing .board-grid,
-.home-group-body {
-  row-gap: var(--spacing-5);
 }
 
 /* Widgets. */
@@ -11386,7 +11372,7 @@ a.live-row:focus-visible {
 .dashboard-view {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-3);
+  gap: var(--spacing-4);
   min-width: 0;
 }
 .dashboard-bar {
@@ -11420,21 +11406,32 @@ a.live-row:focus-visible {
 .dashboard-figure {
   min-width: 0;
 }
+/* A STAT OR A METER STANDS ON THE FOOT OF ITS FRAME, over the citation, so
+   the values of a row share one baseline whether a title or a label above
+   them took one line or two, and a frame the board makes taller than its
+   figure holds its air above the figure, never as a gap under it. */
+.dashboard-figure:is([data-figure="stat"], [data-figure="meter"]) {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  height: 100%;
+}
 /* A share: the bar, and under it the legend naming each part and its value. */
 .dashboard-share {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
 }
+/* The rail is one card; its entries are rows on the card's inset, each
+   entry's own 12px plus this 4px putting its words under the card's title. */
 .dashboard-sources {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
   min-width: 0;
 }
-.dashboard-sources-title {
-  margin: 0;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
+.dashboard-sources-list {
+  padding: var(--spacing-2) var(--spacing-1);
+}
+/* A note fills its cell, as a figure's frame does, so a row of blocks ends
+   on one line. */
+.dashboard-note {
+  height: 100%;
 }

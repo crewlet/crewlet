@@ -22,7 +22,6 @@ import {
   StackedBar,
   StackedColumns,
   StatCard,
-  Text,
   TimeSeries,
   toCsv,
   useToast,
@@ -48,7 +47,7 @@ import {
   fold,
   formatDay,
   formatNumber,
-  tableWidths,
+  tableLayout,
   wordsOf,
 } from "~/lib/artifacts/dashboard.ts";
 
@@ -91,12 +90,13 @@ export function DashboardWidget({
 
   if (widget.type === "note") {
     return (
-      <Note tone="none" onFocus={onFocus} tabIndex={-1}>
-        {title ? (
-          <Text as="h3" variant="label">
-            {title}
-          </Text>
-        ) : null}
+      <Note
+        tone="none"
+        heading={title || undefined}
+        className="dashboard-note"
+        onFocus={onFocus}
+        tabIndex={-1}
+      >
         {(widget.text ?? "").split(/\n{2,}/).map((para, i) => (
           <p key={i}>{para}</p>
         ))}
@@ -147,10 +147,13 @@ export function DashboardWidget({
       source={{ label: dataset?.title ?? widget.dataset ?? "", status, asOf, detail }}
       onCite={onCite}
       actions={actions}
+      // A TABLE REACHES THE FRAME'S SIDES, its row rules meeting the border
+      // and its first column under the title, as a table in any card does.
+      flush={widget.type === "table"}
       onFocus={onFocus}
       data-widget={widget.id}
     >
-      <div ref={figure} className="dashboard-figure">
+      <div ref={figure} className="dashboard-figure" data-figure={widget.type}>
         {ready ? (
           <Figure
             widget={widget}
@@ -280,7 +283,7 @@ function Figure({
     case "table": {
       const shown = w.columns ?? columns.map((c) => c.key);
       const drawn = rows.slice(0, w.limit ?? 100);
-      const widths = tableWidths(
+      const { widths, flex, flexMin } = tableLayout(
         shown.map((key) => ({ key, label: label(key), column: column(key) })),
         drawn,
       );
@@ -289,11 +292,18 @@ function Figure({
         const c = column(key);
         table[key] = {
           label: label(key),
-          // A WIDTH, NOT A DEFAULT: the table fits every default-width
-          // column to its box, which on a narrow widget cut headings to their
-          // first letters and broke values mid-word. Held at what it holds,
-          // a column keeps its words whole and the table scrolls sideways.
-          width: widths[key] ?? 0,
+          // HELD, BUT FOR THE PROSE: a held `width` the table leaves alone,
+          // so a short column keeps its words whole; the one column given a
+          // `defaultWidth` is fitted to the room the others leave (see
+          // tableLayout).
+          ...(key === flex
+            ? { defaultWidth: widths[key] ?? 0, minWidth: flexMin }
+            : { width: widths[key] ?? 0 }),
+          // A WIDGET'S ROWS ARE IN ITS DATASET'S ORDER: the dataset sorts
+          // and cuts them ("sort by day descending; keep the first 8"), and
+          // sorting what is left by another column would read as an order
+          // over every row.
+          sortable: false,
           ...(c?.type === "number" ? { align: "right" as const } : {}),
           render: (_row, value) => cell(value as DashboardValue, c),
         };
@@ -301,6 +311,15 @@ function Figure({
       return (
         <DataTable
           variant="compact"
+          // NO CHROME ROW: the rows are the widget's, already cut to its
+          // limit, so a pager and a settings control over two rows were a
+          // band of controls with nothing to do.
+          paginated={false}
+          showSettings={false}
+          // NEVER BROKEN MID-WORD: a value too long for its column ends in
+          // an ellipsis, and only the prose column is ever narrower than
+          // what it holds.
+          defaultWrapLines={false}
           columns={table}
           data={drawn.map((r, i) => ({ ...r, __row: i }))}
           getRowKey={(r) => Number(r.__row)}
