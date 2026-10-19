@@ -169,12 +169,13 @@ const (
 	// that number, so at 2× they are describing a different company.
 	CensusDriftFactor = 2.0
 
-	// LinearizableReadsPerSeatDay is the read rate this engine's log sizing
-	// was derived from, per agent seat.
+	// LinearizableReadsPerSeatDay is the reference company's read rate per
+	// agent seat — the rate the logs its seats read at `linearizable` are
+	// sized from, and the one their read models declare ([ReadModel]).
 	//
 	// ONE HUNDRED AND TWENTY-FIVE: the reference company's 12 500
 	// linearizable reads a day over its 100 seats. It is the census input
-	// every capacity decision under the log rests on — a `linearizable`
+	// every capacity decision under such a log rests on — a `linearizable`
 	// read appends a barrier record, so the rate is a term in a log's byte
 	// ceiling, in how often the trim has to run to stay under it, and in
 	// how long a rejoining node's replay takes — and it is PER SEAT because
@@ -194,8 +195,39 @@ const (
 	LinearizableReadsPerSeatDay = 125
 )
 
+// ReadModel is what one domain DECLARES about the linearizable reads its log
+// takes: the barrier records a day each agent seat's reads append to it.
+//
+// # Per domain, because the logs are read differently
+//
+// A barrier lands on the log of the domain a read is about, so the rate is a
+// property of who reads that domain and how, and one figure charged to every
+// log with a read index is a claim about all of them that is true of some.
+// It was one figure: every such log was expected to take the whole company's
+// 125 reads a day per seat, so the identity estate's log — which no read
+// takes a barrier on, because every identity answer is a node's own rows —
+// was held to a census its ceiling was never sized for, and the ceiling was
+// sized with no barrier bytes in it at all. Declared per domain, the census a
+// log is held to and the barriers its ceiling is sized for are one number,
+// stated where the domain is registered.
+//
+// REQUIRED OF EVERY DOMAIN THAT HAS A BARRIER, by the engine's register: a
+// domain that grants `linearizable` says how often it is read that way, and
+// zero is a declaration rather than a default — the identity estate makes it,
+// and its log's first barrier is then `census_drift` naming its ceiling,
+// which is the alarm a new linearizable reader of it should meet.
+type ReadModel struct {
+	// PerSeatDay is the linearizable reads a day each agent seat's reads
+	// put on this log. Zero declares that no read of the domain takes a
+	// barrier.
+	PerSeatDay int
+}
+
 // Census is what one log's expected read rate is derived from.
 type Census struct {
+	// Reads is the log's domain's declared read model.
+	Reads ReadModel
+
 	// Seats is the running company's agent seats.
 	Seats int
 
@@ -220,27 +252,28 @@ type Census struct {
 //
 // # Per seat, and at least one
 //
-// The seats' reads come from their tools, so the company's figure is
-// [LinearizableReadsPerSeatDay] times its seats. A company with NO agent seat
-// is counted as one: its operators still read through the dashboard and the
-// operator MCP, and an expectation of zero would be an alarm that could never
-// fire, on exactly the company whose first seat has not been hired yet.
+// The seats' reads come from their tools, so the company's figure is the
+// domain's declared rate ([ReadModel.PerSeatDay]) times its seats. A company
+// with NO agent seat is counted as one: its operators still read through the
+// dashboard and the operator MCP, and an expectation of zero on a log they
+// read would fire on the first read anybody made, on exactly the company whose
+// first seat has not been hired yet.
 //
-// # The whole company's figure on every log, not a share of it
+// # The whole company's figure on each log it reads, not a share of it
 //
 // The census says how many reads a company makes and not how they split
-// between the tracker and the knowledge base, so each log is sized for all of
-// them — which is how their ceilings are sized too: each domain's log has its
-// own budget. Divided across the logs instead, the tracker's log would be
-// expected to take a fraction of the census, and the reference company, whose
-// reads are mostly the tracker's, would fire the alarm doing exactly the work
-// it was sized for.
+// between the tracker and the knowledge base, so each of those logs declares
+// all of them — which is how their ceilings are sized too: each domain's log
+// has its own budget. Divided across the logs instead, the tracker's log would
+// be expected to take a fraction of the census, and the reference company,
+// whose reads are mostly the tracker's, would fire the alarm doing exactly the
+// work it was sized for. A log no read takes a barrier on declares none.
 //
 // # Plus what the engine reads on its own
 //
 // [Census.Background] is added to it, for the reason it gives.
 func (c Census) Expected() int {
-	return LinearizableReadsPerSeatDay*max(c.Seats, 1) + max(c.Background, 0)
+	return max(c.Reads.PerSeatDay, 0)*max(c.Seats, 1) + max(c.Background, 0)
 }
 
 // Kind names one alarm.
@@ -1107,11 +1140,13 @@ var table = []rule{
 			if r.LogCeilingField != "" {
 				ceiling = fmt.Sprintf("; its ceiling is `%s`", r.LogCeilingField)
 			}
+			// A DECLARED ZERO FIRES ON THE FIRST BARRIER: a log whose
+			// domain declares that no read takes one was sized with no
+			// barrier bytes in it, so any is a reader nobody counted.
 			return fmt.Sprintf("%d linearizable reads a day against the %d this "+
 					"log was sized for%s", r.LinearizableReads,
 					r.LinearizableReadsExpected, ceiling),
-				r.LinearizableReadsExpected > 0 &&
-					float64(r.LinearizableReads) > CensusDriftFactor*float64(r.LinearizableReadsExpected)
+				float64(r.LinearizableReads) > CensusDriftFactor*float64(r.LinearizableReadsExpected)
 		},
 		remedy: "Each read past the census is a barrier record on the named log, " +
 			"so re-derive that log's own ceiling — the field its line names — " +

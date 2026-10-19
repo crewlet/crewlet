@@ -666,9 +666,10 @@ type logCensus struct {
 //
 // Declared rather than configured — it is a term in the log's own sizing, so
 // an operator who could set it would be silencing the alarm rather than
-// resizing the deployment it is about — scaled by the company's own seats,
-// plus what the engine's own periodic reads put on the log whatever the seats
-// do ([statelog.Census]).
+// resizing the deployment it is about — by each domain for its own log in the
+// register ([registration.Reads]), scaled by the company's own seats, plus
+// what the engine's own periodic reads put on the log whatever the seats do
+// ([statelog.Census]).
 //
 // WINDOWED, like every alarm input [retention.observed] reads: a count since
 // the process started only grows, and a threshold against it latches.
@@ -692,7 +693,8 @@ func (r *retention) census(running []*runningLog) map[string]logCensus {
 	}
 	out := make(map[string]logCensus, len(running))
 	for _, l := range running {
-		if barrierEncoder(l.domain) == nil {
+		reads, declared := readModel(l.domain)
+		if !declared {
 			// A LOG NO READ APPENDS TO has no census to drift from: its
 			// domain has no read index, so nothing it receives is a
 			// linearizable read.
@@ -702,6 +704,7 @@ func (r *retention) census(running []*runningLog) map[string]logCensus {
 		out[name] = logCensus{
 			reads: received[l.spec.Name],
 			expected: statelog.Census{
+				Reads:      reads,
 				Seats:      seats,
 				Background: background(name),
 			}.Expected(),
