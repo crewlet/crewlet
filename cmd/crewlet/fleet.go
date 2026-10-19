@@ -36,7 +36,7 @@ import (
 // in words what disagrees and what to do about it.
 
 // fleetBrokerUsage is the group's usage line.
-const fleetBrokerUsage = "usage: crewlet fleet broker list|remove [<config.yaml>] [-url]\n" +
+const fleetBrokerUsage = "usage: crewlet fleet broker list|remove [<config.yaml>] [-api URL]\n" +
 	"       crewlet fleet broker remove <node-id> -confirm <node-id> [-force]\n" +
 	"       crewlet fleet broker remove -peer <peer-id> -confirm <peer-id> [-force]"
 
