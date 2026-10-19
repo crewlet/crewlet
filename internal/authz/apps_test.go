@@ -94,6 +94,73 @@ func TestEveryAppRowAdmitsAHolderAndRefusesANonHolder(t *testing.T) {
 	}
 }
 
+// AN ANY-APP ROW NAMES ITS OWN SET OF APPS, AND NO OTHER ROW NAMES ONE.
+//
+// [authz.ClassAnyApp] admits on any ONE of its row's apps ([authz.AnyOf]) and
+// on nothing else, so a holder of an app the gesture draws nothing from is
+// refused, and the refusal names exactly the set. Every such row names at
+// least two apps — one would be [authz.ClassApp] spelt another way — each a
+// real app, none twice; and a row of any other class names none, since no
+// other class reads it and a set there would be a decision nobody consults.
+// Walked as a person bound to a seat, so a seated row is decided on its class.
+//
+// THE OUTSIDE-THE-SET HALF IS VACUOUS while every app is in the set, and stops
+// being so the day a third app arrives: that is the case the class used to
+// get wrong, iterating [iam.Apps] and admitting the third app's holders to a
+// search of nothing. Mutation: decide the class over iam.Apps again with a
+// third app declared, and this goes red.
+func TestAnAnyAppRowNamesItsOwnSetOfApps(t *testing.T) {
+	t.Parallel()
+	walked := 0
+	for _, a := range authz.Actions() {
+		class, _ := authz.ClassOf(a)
+		set, known := authz.AnyOf(a)
+		if !known {
+			t.Fatalf("AnyOf does not know %s, which the table has a row for", a)
+		}
+		if class != authz.ClassAnyApp {
+			if len(set) != 0 {
+				t.Errorf("%s is decided by %s and names the any-app set %v, "+
+					"which nothing reads", a, class, set)
+			}
+			continue
+		}
+		walked++
+		if len(set) < 2 {
+			t.Errorf("%s is any-app over %v: fewer than two apps is one app "+
+				"spelt another way", a, set)
+		}
+		for i, app := range set {
+			if !app.IsApp() || slices.Contains(set[:i], app) {
+				t.Errorf("%s names %q in its set %v, which is not one more app",
+					a, app, set)
+			}
+		}
+		object := authz.Object{Kind: authz.KindCompany}
+		nobody := authz.Decide(t.Context(), personLeading("sam"), a, object,
+			nimbus(), decidedAt)
+		if nobody.Allowed || nobody.Reason != authz.ReasonNoGrant ||
+			!slices.Equal(nobody.Grants, set) {
+			t.Errorf("%s: a caller holding nothing decided %+v, want refused "+
+				"naming exactly %v", a, nobody, set)
+		}
+		for _, app := range iam.Apps {
+			d := authz.Decide(t.Context(), personLeading("sam", app), a, object,
+				nimbus(), decidedAt)
+			if want := slices.Contains(set, app); d.Allowed != want {
+				t.Errorf("%s: a caller holding %s alone decided %+v, want "+
+					"admitted = %t (the set is %v)", a, app, d, want, set)
+			}
+		}
+	}
+	if walked == 0 {
+		t.Fatal("no row is any-app, so this walk certifies nothing")
+	}
+	if _, known := authz.AnyOf("no.such.verb"); known {
+		t.Error("AnyOf knows a verb the table has no row for")
+	}
+}
+
 // THE ASKED ARM ADMITS ONLY THE PERSON ASKED, AND ONLY TO READ AND ANSWER.
 //
 // Somebody a colleague put a question to reads the item and answers it without
