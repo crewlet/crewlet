@@ -69,7 +69,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/artifacts"
-	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -761,24 +760,19 @@ func (e *Envelope) unavailable(u Unavailable) {
 	e.Detail = httpjson.Sentence(u.Detail)
 }
 
-// Refused is the reason and the grants an `unauthorized` frame carries.
+// Refused is the reason and the grants an `unauthorized` frame carries, and
+// the role an artifact's refusal for a role names.
 //
 // GRANTS IS NEVER OMITTED from a refusal that has one, because an EMPTY list is
 // an answer — no capability would admit this caller, and what the deciding
 // rule asks is something else, which the reason names — where an absent key
-// would read as a frame that did not say.
+// would read as a frame that did not say. ROLE IS, on every refusal but the
+// one for a role below the verb's: it is the role to ask an artifact's owner
+// for, which no other refusal has.
 type Refused struct {
 	Reason string   `json:"reason"`
 	Grants []string `json:"grants"`
-}
-
-// NewRefused is the refusal a decision made, as the frame carries it.
-func NewRefused(reason authz.Reason, grants []iam.Grant) *Refused {
-	names := make([]string, 0, len(grants))
-	for _, g := range grants {
-		names = append(names, string(g))
-	}
-	return &Refused{Reason: string(reason), Grants: names}
+	Role   string   `json:"role,omitempty"`
 }
 
 // Push builds a broadcast envelope stamped now.

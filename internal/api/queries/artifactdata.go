@@ -255,7 +255,7 @@ func (s artifactData) usage(ctx context.Context, _ Params) (any, error) {
 	case d.Unknown():
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, d.Err)
 	case !d.Allowed:
-		return nil, refused("artifact_data_usage", d)
+		return nil, NewRefusal("artifact_data_usage", d)
 	}
 	usage, err := s.Reads.Usage(ctx)
 	if err != nil {

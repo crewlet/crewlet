@@ -142,7 +142,7 @@ func (s Sources) chatViewer(ctx context.Context, action authz.Action) (string, e
 		return "", fmt.Errorf("%w: this node cannot decide %s yet: %w",
 			ErrUnavailable, action, d.Err)
 	case !d.Allowed:
-		return "", refused(string(action), d)
+		return "", NewRefusal(string(action), d)
 	}
 	actor := iam.ActorFor(principal)
 	if actor.Kind != iam.ActorHuman || actor.Name == "" {

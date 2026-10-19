@@ -351,8 +351,8 @@ func (s Sources) tokenSeries(ctx context.Context, p Params) (any, error) {
 	if group.AdminOnly() && !readsConfig(ctx) {
 		// ITS BANDS ARE THE COMPANY'S ENTRIES, which only an admin reads
 		// (see [Sources.tokens]); every other grouping is everybody's.
-		return nil, &Refusal{What: "token_series by " + string(group), Reason: authz.ReasonNoGrant,
-			Grants: []iam.Grant{iam.GrantAdmin}}
+		return nil, NewRefusal("token_series by "+string(group), authz.Decision{
+			Reason: authz.ReasonNoGrant, Grants: []iam.Grant{iam.GrantAdmin}})
 	}
 	interval := tokens.Interval(p.String("bucket"))
 	if interval == "" {

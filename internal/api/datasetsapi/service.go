@@ -563,14 +563,19 @@ func (s *Service) ask(ctx context.Context, src dashspec.EngineSource, args map[s
 }
 
 // sourceFailure is a source's failure in the answer's vocabulary.
+//
+// A DATASET IS CLOSED ONLY BY A REFUSAL THAT NAMES ITS DECISION — the
+// question's own [queries.Refusal], whose reason and grants are the rule's.
+// A bare [queries.ErrUnauthorized] names none (only a Refusal produces it),
+// and a question asked by nobody cannot reach here, since every dataset is
+// read on a request its artifact's gate admitted: closing the dataset as a
+// missing grant for either told the viewer a permission would open what no
+// permission decided, so both are the fault they would be.
 func sourceFailure(dataset string, src dashspec.EngineSource, err error) error {
 	var refusal *queries.Refusal
 	switch {
 	case errors.As(err, &refusal):
 		return &closed{refusal: Refusal{Dataset: dataset, Reason: refusal.Reason, Grants: refusal.Grants},
-			detail: "You cannot read " + string(src.Domain) + ": " + src.Access + "."}
-	case errors.Is(err, queries.ErrUnauthorized), errors.Is(err, queries.ErrUnauthenticated):
-		return &closed{refusal: Refusal{Dataset: dataset, Reason: authz.ReasonNoGrant},
 			detail: "You cannot read " + string(src.Domain) + ": " + src.Access + "."}
 	case errors.Is(err, queries.ErrUnknown):
 		return &unanswered{detail: "This node does not run " + string(src.Domain) + ", so " +

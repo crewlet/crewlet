@@ -17,6 +17,8 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -521,7 +523,12 @@ func TestEachQueryFailureCarriesItsOwnCode(t *testing.T) {
 		want string
 	}{
 		{stream.ErrUnknownQuery, stream.CodeUnknownQuery},
-		{stream.ErrUnauthorized, stream.CodeUnauthorized},
+		{stream.RefusedFor("config", authz.Decision{Reason: authz.ReasonNoGrant,
+			Grants: []iam.Grant{iam.GrantAdmin}}), stream.CodeUnauthorized},
+		// A BARE REFUSAL SENTINEL NAMES NO DECISION, so it is the fault
+		// it is rather than a refusal that cannot say what would change
+		// it — see stream.RefusedFor.
+		{stream.ErrUnauthorized, stream.CodeQueryFailed},
 		{stream.ErrNotFound, stream.CodeNotFound},
 		// A REFUSED REQUEST IS NOT A FAILED ONE. Left to the default it
 		// reached the client as `query_failed` — retried on every poll
@@ -551,6 +558,89 @@ func TestEachQueryFailureCarriesItsOwnCode(t *testing.T) {
 		if raw, _ := json.Marshal(got); strings.Contains(string(raw), "/var/lib") {
 			t.Errorf("the failure leaked its detail to the client: %s", raw)
 		}
+	}
+}
+
+// A REFUSAL FRAME IS THE AUTHORITY TABLE'S MAPPING, AND NEVER A CODE THE
+// SOCKET CANNOT SAY.
+//
+// Every refusal reason the table names is answered over the socket with the
+// code and the fields [authz.RefusalFields] gives it — the words the REST twin
+// and every other surface answer the same decision with — so a change to the
+// mapping reaches the socket or fails here: `unauthorized` with the reason,
+// the grants and, on an artifact refused for a role, the role it needs; and
+// `not_found` with nothing beside it for a caller with no relation to an
+// artifact, as for an id nothing holds. The two the mapping words in a code
+// this vocabulary lacks (a stale proof's `step_up_required`, a token's
+// `token_refused`) are answered as the fault they would be, carrying no
+// refusal: the socket cannot carry a step-up, and a frame code the dashboard
+// does not know reads to it as a failure of no kind.
+//
+// Mutation: drop the grants or the role in RefusedFor, answer every refusal
+// `unauthorized` whatever the mapping says, or answer no relation as the
+// fault, and this goes red.
+func TestARefusalFrameCarriesTheMappingsCodeAndFields(t *testing.T) {
+	t.Parallel()
+	decisions := map[string]authz.Decision{}
+	for _, r := range authz.Reasons {
+		d := authz.Decision{Reason: r, Grants: []iam.Grant{iam.GrantWorklet, iam.GrantAdmin}}
+		switch r {
+		case authz.ReasonStepUp:
+			d.Recency = iam.RecencyStepUp
+		case authz.ReasonRole:
+			d.Role = artifacts.RoleEditor
+		}
+		decisions[string(r)] = d
+	}
+	if len(decisions) < 10 {
+		t.Fatalf("read %d refusal reasons; a walk that stopped reading the "+
+			"vocabulary certifies nothing", len(decisions))
+	}
+	f := newSocket(t, nil, func(_ context.Context, what string, _ map[string]any) (any, error) {
+		return nil, stream.RefusedFor(what, decisions[what])
+	})
+	conn, _, err := f.dial(t, "")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	next(t, conn)
+	spoken := map[string]bool{}
+	for i, r := range authz.Reasons {
+		write(t, conn, map[string]any{"kind": "query", "id": i + 1, "what": string(r)})
+		got := next(t, conn)
+		_, code, detail := authz.RefusalFields(decisions[string(r)])
+		_, reason := got["reason"]
+		_, grants := got["grants"]
+		_, role := got["role"]
+		switch code {
+		case stream.CodeUnauthorized:
+			spoken[string(code)] = true
+			wantGrants, _ := json.Marshal(detail[authz.DetailGrants])
+			gotGrants, _ := json.Marshal(got["grants"])
+			wantRole, roleNamed := detail[authz.DetailRole]
+			if got["error"] != string(code) || got["reason"] != detail[authz.DetailReason] ||
+				string(gotGrants) != string(wantGrants) || role != roleNamed ||
+				(roleNamed && got["role"] != wantRole) {
+				t.Errorf("%s: the frame = %v, want error %s, reason %v, grants %s and "+
+					"role %v, as the mapping gives it", r, got, code,
+					detail[authz.DetailReason], wantGrants, wantRole)
+			}
+		case stream.CodeNotFound:
+			spoken[string(code)] = true
+			if got["error"] != stream.CodeNotFound || reason || grants || role {
+				t.Errorf("%s is %s to the mapping, an id nothing holds; the frame = %v, "+
+					"want not_found carrying nothing", r, code, got)
+			}
+		default:
+			if got["error"] != stream.CodeQueryFailed || reason || grants || role {
+				t.Errorf("%s is %s to the mapping, which this socket cannot say; "+
+					"the frame = %v, want query_failed carrying no refusal", r, code, got)
+			}
+		}
+	}
+	if !spoken[stream.CodeUnauthorized] || !spoken[stream.CodeNotFound] {
+		t.Fatalf("the walk reached the codes %v, which is not every code a refusal "+
+			"is spoken in here", spoken)
 	}
 }
 

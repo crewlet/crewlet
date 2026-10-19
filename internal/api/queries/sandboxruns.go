@@ -162,7 +162,7 @@ func (s Sources) mayTail(ctx context.Context, turnID string) (gone bool, err err
 		return false, fmt.Errorf("%w: this node cannot decide %s yet: %w",
 			ErrUnavailable, authz.ActionAuditRead, company.Err)
 	case s.Sandbox == nil:
-		return false, refused("sandbox_tail", company)
+		return false, NewRefusal("sandbox_tail", company)
 	}
 	first := authz.Decide(ctx, principal, authz.ActionSeatTrailRead, authz.Object{
 		Kind: authz.KindPerson, ID: turnID, Owner: unresolvedRunSeat, Unresolved: true,
@@ -176,7 +176,7 @@ func (s Sources) mayTail(ctx context.Context, turnID string) (gone bool, err err
 		return false, fmt.Errorf("%w: this node cannot decide %s yet: %w",
 			ErrUnavailable, authz.ActionSeatTrailRead, first.Err)
 	default:
-		return false, refused("sandbox_tail", first)
+		return false, NewRefusal("sandbox_tail", first)
 	}
 	run, found, err := s.Sandbox.Get(ctx, turnID)
 	switch {
