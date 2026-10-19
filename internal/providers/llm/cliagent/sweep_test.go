@@ -54,6 +54,78 @@ func TestAnotherSeatsKeptRefreshReachesTheNextSeatToStart(t *testing.T) {
 	}
 }
 
+// THE SWEEP FINDS A KEPT REFRESH WHATEVER THE STATE DIRECTORY IS CALLED. The
+// directory is the operator's path, and the sweep built a glob from it: a
+// `[prod]` in it was a character class that matched no seat, and an unclosed
+// `[` a malformed pattern whose error was dropped — either way seat a's kept
+// refresh was never carried out, and seat b was seeded with the token the
+// vendor had rotated away.
+//
+// Mutation: list the seats with filepath.Glob over the root again, and the two
+// bracketed cases are red (a `*` or `?` in the path happens to match itself).
+func TestASweepFindsAKeptRefreshUnderAStateDirectoryWithPatternCharacters(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"crewlet[prod]", "crewlet[x", "state*?"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			marker := filepath.Join(t.TempDir(), "export-failed-once")
+			p := storeProvider(t, map[string]string{
+				"FAKE_STORE_REFRESH": "k-new", "FAKE_STORE_EXPORT_FAIL_ONCE": marker,
+			}, nil)
+			dir := filepath.Join(t.TempDir(), name)
+			t.Cleanup(func() { forgetWorkspace(dir) })
+			ws, err := Shared(dir, p.agent, p.profile)
+			if err != nil {
+				t.Fatalf("Shared: %v", err)
+			}
+			p.ws = ws
+			writeDocument(t, p, `[{"id":"cred_1","key":"k-old"}]`+"\n")
+			req := llm.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}}}
+			if _, err := p.Complete(llm.WithSeat(t.Context(), "seat-a"), req); err != nil {
+				t.Fatalf("seat a: %v", err)
+			}
+			if got := readDocument(t, p); strings.Contains(got, "k-new") {
+				t.Fatalf("the premise: an export that failed was written: %q", got)
+			}
+
+			p.env = fakeChildEnv(map[string]string{"FAKE_STORE": "1"})
+			comp, err := p.Complete(llm.WithSeat(t.Context(), "seat-b"), req)
+			if err != nil {
+				t.Fatalf("seat b: %v", err)
+			}
+			if comp.Content != "key=k-new" {
+				t.Errorf("seat b held %q under %q, want the login seat a refreshed", comp.Content, dir)
+			}
+		})
+	}
+}
+
+// A SEATS DIRECTORY THE SWEEP CANNOT LIST IS SAID OUT LOUD, never read as a
+// workspace with nothing open: every seat starting meanwhile is seeded from a
+// shared login a kept refresh may have rotated away.
+//
+// NOT PARALLEL: it reads the process's log.
+//
+// Mutation: return without the warning when the listing fails, and this is red.
+func TestASweepThatCannotListTheSeatsSaysSo(t *testing.T) {
+	logs := captureLogs(t)
+	ws := newWorkspace(t)
+	// A file where the seats directory belongs: listing it fails, and not
+	// because it does not exist.
+	writeFile(t, filepath.Join(ws.Root(), "seats"), "not a directory")
+	ws.sweep(t.Context(), &stubStore{}, "dev")
+	if got := logs.String(); !strings.Contains(got, "cli_agent_sweep_failed") {
+		t.Errorf("a sweep that could not list the seats said nothing: %q", got)
+	}
+
+	logs.Reset()
+	fresh := newWorkspace(t)
+	fresh.sweep(t.Context(), &stubStore{}, "dev")
+	if got := logs.String(); strings.Contains(got, "cli_agent_sweep_failed") {
+		t.Errorf("a workspace with no seats yet was reported as a failed sweep: %q", got)
+	}
+}
+
 // A GENERATION AN EARLIER PROCESS LEFT OPEN IS CARRIED OUT BY ANY SEAT. A
 // restarted engine has no memory of the seat whose call it died in, so the
 // record on disk is what finds it — or that seat's refresh waits for that seat.

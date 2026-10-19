@@ -1406,7 +1406,8 @@ never touched — each generation holds a lock in its seat directory from its
 first call to its last, which an engine in another process sees too — and a
 seat whose export keeps failing is tried by the other seats again after a
 minute, doubling to half an hour, with a `cli_agent_carry_out_failed` warning
-each time. The seat's own next call tries every time, and a call that cannot
+each time (and a `seats/` directory that cannot be listed at all is a
+`cli_agent_sweep_failed` warning, never read as nothing to carry out). The seat's own next call tries every time, and a call that cannot
 carry its own login out is refused with a retryable error naming the export
 (the fallback chain moves on), rather than run on the stale database or
 discard it. The record is on disk, so an engine that stopped mid-call is

@@ -936,15 +936,38 @@ func (w *Workspace) carryFailed(slug string) time.Duration {
 // as it does while another seat is mid-call, which is the same not-knowing
 // whether that seat's CLI has refreshed. Refusing it instead would turn one
 // seat's broken export into every seat's outage.
+//
+// THE SEATS ARE LISTED, NEVER GLOBBED: the state directory is the operator's
+// path (cli.state_dir, CREWLET_CLI_HOME or HOME), and a pattern built from it
+// reads a `[`, `*` or `?` in it as syntax — `crewlet[prod]` matched nothing,
+// and an unclosed `[` was a malformed pattern whose error was dropped — so
+// every seat was seeded with the token a kept refresh had rotated away. A
+// listing that fails for any reason but the seats directory not existing yet
+// is logged (`cli_agent_sweep_failed`) rather than read as nothing to sweep.
 func (w *Workspace) sweep(ctx context.Context, store loginStore, own string) {
-	records, err := filepath.Glob(filepath.Join(w.root, "seats", "*", generationFile))
-	if err != nil {
-		return // only a malformed pattern fails, and this one is constant
+	who := ""
+	if store != nil {
+		who = store.providerKey()
 	}
-	for _, record := range records {
-		dir := filepath.Dir(record)
-		slug := filepath.Base(dir)
-		if slug == own || !w.sweepDue(slug) {
+	seats := filepath.Join(w.root, "seats")
+	entries, err := os.ReadDir(seats)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.WarnContext(ctx, "cli_agent_sweep_failed", "provider", who, "agent", w.agent,
+				"error", err)
+		}
+		return
+	}
+	for _, entry := range entries {
+		slug := entry.Name()
+		if !entry.IsDir() || slug == own || !w.sweepDue(slug) {
+			continue
+		}
+		dir := filepath.Join(seats, slug)
+		record := filepath.Join(dir, generationFile)
+		if _, err := os.Lstat(record); os.IsNotExist(err) {
+			// Nothing open; any other failure to look is the carry's to
+			// report, which reads the same record.
 			continue
 		}
 		if ctx.Err() != nil {
@@ -961,10 +984,6 @@ func (w *Workspace) sweep(ctx context.Context, store loginStore, own string) {
 			// seat's home: counted, it would pace a carry that never ran.
 			return
 		default:
-			who := ""
-			if store != nil {
-				who = store.providerKey()
-			}
 			log.WarnContext(ctx, "cli_agent_carry_out_failed", "provider", who, "agent", w.agent,
 				"seat", slug, "retry_in", w.carryFailed(slug).String(), "error", err)
 		}
