@@ -1264,13 +1264,14 @@ esac`)
 // Mutation: make gitproc.ExitError match its Kind alone, and the push is
 // answered as a failure.
 func TestAStaleForcedPushBesideADamagedIndexIsStale(t *testing.T) {
-	c := newCase(t, codetest.SoloOptions{}, codetest.Settings())
+	var l logs
+	c := newCase(t, codetest.SoloOptions{Logger: l.logger()}, codetest.Settings())
 	p := codetest.NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
 	head := p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
 	c.MustPush(p, work, "main")
 	// The header's sixth byte is the hash version the index's ids are in.
-	midx := filepath.Join(maintainersBitmap(t, c), "objects", "pack", "multi-pack-index")
+	midx := filepath.Join(maintainersBitmap(t, c, &l), "objects", "pack", "multi-pack-index")
 	overwriteFile(t, midx, 5, []byte{7})
 
 	unheld := randomOID()
@@ -1335,7 +1336,7 @@ func TestAnOldCommitInADamagedPackIsNoStaleUpdate(t *testing.T) {
 				c.MustPush(p, work, "main")
 				next := p.Commit(work, map[string]string{"README.md": "two\n"}, "two")
 				c.MustPush(p, work, "HEAD:refs/heads/side")
-				dir := maintainersBitmap(t, c)
+				dir := maintainersBitmap(t, c, &l)
 				eventually(t, "the maintainer's commit-graph", func() bool {
 					_, err := os.Stat(filepath.Join(dir, "objects", "info", "commit-graph"))
 					return err == nil
@@ -1386,7 +1387,8 @@ func shellWord(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`
 // Mutation: skip the check (sync.go apply) — on 2.56 the force passes the
 // protection and main moves; on every git the graph is left in place.
 func TestAProtectedBranchIsNotForcedThroughADamagedGraph(t *testing.T) {
-	c := newCase(t, codetest.SoloOptions{}, codetest.Settings())
+	var l logs
+	c := newCase(t, codetest.SoloOptions{Logger: l.logger()}, codetest.Settings())
 	p := codetest.NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
 	first := p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
@@ -1395,7 +1397,7 @@ func TestAProtectedBranchIsNotForcedThroughADamagedGraph(t *testing.T) {
 	p.Commit(work, map[string]string{"README.md": "two\n"}, "two")
 	tip := p.Commit(work, map[string]string{"b.txt": "three\n"}, "three")
 	c.MustPush(p, work, "HEAD:refs/heads/dev")
-	dir := maintainersBitmap(t, c)
+	dir := maintainersBitmap(t, c, &l)
 	graph := filepath.Join(dir, "objects", "info", "commit-graph")
 	eventually(t, "the maintainer's commit-graph", func() bool {
 		_, err := os.Stat(graph)
