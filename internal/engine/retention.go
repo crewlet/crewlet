@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -1065,7 +1066,7 @@ type evictionLister interface {
 	Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error)
 }
 
-// The six identity-claiming domains this build registers, held to the
+// The seven identity-claiming domains this build registers, held to the
 // interface — and to the log probe a stranded node asks
 // ([statelog.EvictionProbe]) — at compile time, so a reshaped method is a
 // build failure rather than a boot refusal.
@@ -1076,6 +1077,7 @@ var (
 	_ evictionLister = artifactsdomain.Domain{}
 	_ evictionLister = artifactdata.Domain{}
 	_ evictionLister = assistantdomain.Domain{}
+	_ evictionLister = chatlet.Domain{}
 
 	// AND EVERY ONE READS ITS GATE RECORDS OFF THE LOG — an eviction and the
 	// readmission that lifts it — which [checkRegister] refuses a registered
@@ -1086,6 +1088,7 @@ var (
 	_ statelog.EvictionProbe = artifactsdomain.Domain{}
 	_ statelog.EvictionProbe = artifactdata.Domain{}
 	_ statelog.EvictionProbe = assistantdomain.Domain{}
+	_ statelog.EvictionProbe = chatlet.Domain{}
 )
 
 // tombstones is every eviction this node has applied for one domain's log.

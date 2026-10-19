@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/backup"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -482,6 +483,7 @@ func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 	t.Parallel()
 	var trackerLog, vectorLog statelog.Domain = worklet.Domain{}, search.Domain{}
 	var pagesLog, iamLog statelog.Domain = doclet.Domain{}, iamdomain.Domain{}
+	var chatLog statelog.Domain = chatlet.Domain{}
 
 	for _, tc := range []struct {
 		name       string
@@ -561,6 +563,23 @@ func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 			logs: []statelog.Domain{iamLog}, seats: 300,
 			applied: map[statelog.Domain]int{iamLog: 1},
 			fires:   true, log: "iam", expected: 0,
+		},
+		{
+			name: "the chat log, held to its own per-seat rate",
+			// 120 a seat a day, chat's own declaration, rather than the
+			// tracker's 125 borrowed: 12 000 for 100 seats.
+			logs: []statelog.Domain{chatLog}, seats: 100,
+			applied: map[statelog.Domain]int{chatLog: 12_500},
+			fires:   false, log: "chat", expected: 12_000,
+		},
+		{
+			name: "the chat log past twice its own census, inside twice the tracker's",
+			// 24 500 a day is under twice the tracker's 12 500 and over
+			// twice chat's 12 000, so a census that held the chat log to
+			// the tracker's rate stays quiet here.
+			logs: []statelog.Domain{chatLog}, seats: 100,
+			applied: map[statelog.Domain]int{chatLog: 24_500},
+			fires:   true, log: "chat", expected: 12_000,
 		},
 		{
 			name: "the vector log, which no read appends to",

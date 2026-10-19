@@ -102,10 +102,11 @@ func assistantRegistrations() []registration {
 		// which the identity estate's and the usage log's are not: the
 		// assistant is a feature a company may never turn on, and a fixed
 		// 512 MiB counted in full on every fresh node raised the least a
-		// node boots in past the 9 GiB a stated broker limit commonly
-		// gives, so a deployment sized for everything else stopped
-		// booting. Scaled, it reserves its 64 MiB floor there (a month at
-		// ten people) and its default wherever the broker has the room.
+		// node boots in past the limit crewlet-operator gives the smallest
+		// data volume it admits, so a deployment sized for everything else
+		// stopped booting. Scaled, it reserves its 64 MiB floor there (a
+		// month at ten people) and its default wherever the broker has the
+		// room.
 		Ceiling: func(stream config.Stream, _ int64) domainCeiling {
 			bytes, derived := stream.AssistantMaxBytes()
 			return domainCeiling{Bytes: bytes,

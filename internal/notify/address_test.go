@@ -36,8 +36,8 @@ func nativeMeta(mutate func(map[string]string)) map[string]string {
 //
 // They disagreed before this: the indicator and the gate read a
 // package-level list of channel types while the prompt read the backend's
-// own, so a backend whose vocabulary was not in that list — a
-// first-party backend — was in a DIRECT conversation for the
+// own, so a backend whose vocabulary was not in that list — Chatlet,
+// on day one — was in a DIRECT conversation for the
 // partition key and NOT ADDRESSED for the reply obligation, for the same
 // message.
 func TestOneRuleDecidesWhoIsAddressed(t *testing.T) {

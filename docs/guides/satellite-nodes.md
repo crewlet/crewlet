@@ -70,8 +70,8 @@ Whether a satellite is also a **replica** is the `data` role's answer and
 nothing else's. A satellite that holds data applies every one of the
 company's shared state logs (Worklet, Doclet, the
 search vectors, the identity directory, every data node's usage history, the
-artifacts, their datastores and the Dashboard Assistant's conversations)
-into its own database, exactly as a core node does. A stateless one applies
+artifacts, their datastores, the Dashboard Assistant's conversations and
+Chatlet) into its own database, exactly as a core node does. A stateless one applies
 none of them and asks a data node instead. See
 [what a satellite holds](#what-a-satellite-holds) before you choose a host
 for either.
@@ -356,8 +356,8 @@ Two failures to know by sight:
 ## What a satellite holds
 
 Worklet, Doclet, the search vectors, the identity
-directory, every data node's usage history, the artifacts, their datastores
-and the Dashboard Assistant's conversations are [replicated state
+directory, every data node's usage history, the artifacts, their datastores,
+the Dashboard Assistant's conversations and Chatlet are [replicated state
 machines](replication.md).
 Each is one ordered log the whole fleet shares, and every **data** node
 applies every log into its own copy of the rows — so it answers questions
@@ -418,7 +418,7 @@ HTTP — which on a `roles: [data, seats]` satellite is the one place to look,
 because such a node serves no API on its port:
 
 ```
-statelog_started  node=sat-eu-1 domains="[tracker vectors pages iam usage artifacts artifactdata assistant]"
+statelog_started  node=sat-eu-1 domains="[tracker vectors pages iam usage artifacts artifactdata assistant chat]"
 ```
 
 ---

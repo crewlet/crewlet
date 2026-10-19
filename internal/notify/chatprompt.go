@@ -99,6 +99,17 @@ func (ChatPrompt) DigestBody(_, body string) string { return body }
 // where the dashboard reads it to say "gated" rather than "broken". Changing
 // what it means for chat would silently rewrite what every past turn in the
 // store claims about itself.
+//
+// CHATLET IS THE ONE SOURCE THAT ANSWERS FALSE with a thread, and it
+// overrides this rather than weakening it: its trigger is never a pointer at a
+// message somewhere else. The record carries the message itself — what was
+// said, who said it, in which room and why it reached this seat, copied at
+// write time — so there is nothing to reconcile before the seat can reason,
+// and the prefetches this gates have a real query. The THREAD around it is not
+// on the record: it reaches the seat the way a vendor thread does, through the
+// prefetch's thread block over Chatlet's own thread reader, so one
+// mechanism serves every chat surface and a thread is never in the prompt
+// twice. See internal/chatlet's prompt.
 func (ChatPrompt) RequiresRecon(n Inbound) bool { return n.Metadata[ThreadField] != "" }
 
 // SubjectIsLabel implements [Prompt]: always. A chat message has no subject

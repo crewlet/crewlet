@@ -339,14 +339,15 @@ node:
 | `workers` | The company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the state-log trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
 
 Roles decide what a node serves and which duties it holds, and of them only
-`data` decides **which state logs it applies**: a data node applies all five —
-the tracker, the vectors, the knowledge base, the identity directory and the
-usage history — whatever its other roles and whether or not a company has been
-published yet, and a node without `data` applies none. So every data node
-holds a copy of your people, the verifiers of their credentials and their
-sessions, which is what lets the node a browser reaches decide a sign-in from
-its own rows with nothing cached; a seats-only satellite holds none of it and
-reads who holds each seat from a data node. See
+`data` decides **which state logs it applies**: a data node applies all nine —
+the tracker, the vectors, the knowledge base, the identity directory, the
+usage history, the artifacts, their datastores, the Dashboard Assistant's
+conversations and chat — whatever its other roles and whether or not a
+company has been published yet, and a node without `data` applies none. So
+every data node holds a copy of your people, the verifiers of their
+credentials and their sessions, which is what lets the node a browser reaches
+decide a sign-in from its own rows with nothing cached; a seats-only satellite
+holds none of it and reads who holds each seat from a data node. See
 [what a satellite holds](satellite-nodes.md#what-a-satellite-holds) for what
 that means for the host you put one on.
 

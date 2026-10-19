@@ -1176,11 +1176,11 @@ stream:
                                     #   so a 64 GiB first boot creates it at
                                     #   about 1.4 GiB. It does NOT follow the
                                     #   mutation log's ceiling as the knowledge
-                                    #   base's does: chat grows faster (~30 MB a
+                                    #   base's does: chat grows faster (~32 MB a
                                     #   day against ~22), so following it would
                                     #   make chat the largest ask in the one
                                     #   budget, and a first boot would need
-                                    #   ~133 GiB free rather than ~100 before the
+                                    #   ~136 GiB free rather than ~100 before the
                                     #   vector changelog holds a fifth-year
                                     #   model change clear of the headroom
                                     #   alarm. So if you size
@@ -1188,18 +1188,19 @@ stream:
                                     #   trim, size this for the same horizon, or
                                     #   chat refuses first. WHY 8 GiB: at the
                                     #   declared census of 20 000 messages a day
-                                    #   and a mean record near 1.5 KiB the log
-                                    #   grows ~30 MB a day, so a healthy fleet
-                                    #   holds ~210 MB — one min_age window, not
-                                    #   a year. This ceiling is what a
-                                    #   COMPLETELY BLOCKED trim may spend first:
-                                    #   ~9 months at that census, ~3½ at the
-                                    #   supported 50 000/day (on 64 GiB free,
-                                    #   capped and scaled: ~6 weeks and ~2½).
-                                    #   Crossing it refuses the append, which
-                                    #   for a transcript is the only acceptable
-                                    #   direction — old messages go by a prune
-                                    #   RECORD all data nodes apply
+                                    #   and a mean record near 1.5 KiB, plus its
+                                    #   read barriers, the log grows ~32 MB a
+                                    #   day, so a healthy fleet holds ~225 MB —
+                                    #   one min_age window, not a year. This
+                                    #   ceiling is what a COMPLETELY BLOCKED
+                                    #   trim may spend first: ~8 months at that
+                                    #   census, ~3½ at the supported 50 000/day
+                                    #   (on 64 GiB free, capped and scaled:
+                                    #   ~6 weeks and ~2½). Crossing it refuses
+                                    #   the append, which for a transcript is
+                                    #   the only acceptable direction — old
+                                    #   messages go by a prune RECORD all data
+                                    #   nodes apply
                                     #   (chat.chatlet.message_retention_days),
                                     #   never by a stream bound
   # tracker_retention:              # when the log may be trimmed. Every term

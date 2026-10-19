@@ -15,7 +15,7 @@ import (
 const (
 	trackerLog = "CREWLET_TRACKER_LOG"
 	pagesLog   = "CREWLET_PAGES_LOG"
-	vectorsLog = "CREWLET_TRACKER_VECTORS"
+	chatLog    = "CREWLET_CHAT_LOG"
 )
 
 // putBackup writes one point, failing the case on any refusal.
@@ -71,7 +71,7 @@ var backupCases = []fleetCase{{
 		base := h.now()
 		h.acknowledge(trackerLog, 900, base)
 		h.acknowledge(pagesLog, 400, base.Add(time.Minute))
-		h.acknowledge(vectorsLog, 700, base.Add(2*time.Minute))
+		h.acknowledge(chatLog, 700, base.Add(2*time.Minute))
 
 		for _, want := range []struct {
 			stream string
@@ -80,7 +80,7 @@ var backupCases = []fleetCase{{
 		}{
 			{trackerLog, 900, base},
 			{pagesLog, 400, base.Add(time.Minute)},
-			{vectorsLog, 700, base.Add(2 * time.Minute)},
+			{chatLog, 700, base.Add(2 * time.Minute)},
 		} {
 			seq, at, ok := h.reach(want.stream)
 			if !ok {
@@ -219,7 +219,7 @@ var backupCases = []fleetCase{{
 	fn: func(h *fleetHarness) {
 		base := h.now()
 		h.acknowledge(trackerLog, 900, base)
-		h.acknowledge(vectorsLog, 700, base)
+		h.acknowledge(chatLog, 700, base)
 		h.putBackup(coord.BackupPoint{
 			Owner: "node-a", At: base, Verified: true,
 			Streams: map[string]coord.Position{

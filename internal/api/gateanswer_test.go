@@ -184,10 +184,11 @@ func TestTheGateAnswerMatchesItsGoldenFile(t *testing.T) {
 	t.Parallel()
 	// A FLOOR, so a register that lost a domain reads as a failure here
 	// rather than as a golden that quietly lost its line.
-	if logs := gateLogs(); len(logs) < 6 {
+	if logs := gateLogs(); len(logs) < 7 {
 		t.Fatalf("the register holds %d identity-claiming log(s), fewer than the "+
 			"tracker's, the knowledge base's, the identity estate's, the "+
-			"artifacts log's, the artifact datastore's and the assistant's", len(logs))
+			"artifacts log's, the artifact datastore's, the assistant's and chat's",
+			len(logs))
 	}
 	got := renderGateScenarios(t)
 	if os.Getenv("CREWLET_REGENERATE_GATE_ANSWER") == "1" {

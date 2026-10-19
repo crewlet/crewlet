@@ -1258,10 +1258,10 @@ func (q Query) Wants(field RowField) bool { return slices.Contains(q.RowFields, 
 // framework's one grammar for them ([statelog.ParseFreshness]).
 //
 // THE GRAMMAR IS NOT THE TRACKER'S. Every domain's questions read the same four
-// keys, and the parser lived here once — so a bad `read_level` on a wiki
-// question was refused naming the tracker. What stays here is the tracker's own
-// prefix on a tracker query's refusal, which every other refusal of this
-// grammar carries too.
+// keys, and the parser lived here once — so a bad `read_level` on a chat or a
+// wiki question was refused naming the tracker. What stays here is the
+// tracker's own prefix on a tracker query's refusal, which every other refusal
+// of this grammar carries too.
 func (q *Query) parseLevel(p Params) error {
 	got, err := statelog.ParseFreshness(p)
 	if err != nil {

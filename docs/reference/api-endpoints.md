@@ -352,7 +352,7 @@ node means nothing was done.
 | `GET` | `/worklet` | Worklet: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `worklet`; a company on Jira gets `404 unknown_query`, not an empty board (see [below](#worklet-and-doclet)) |
 | `GET` | `/worklet/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every data node's position, and what this node costs to replace. **Takes `admin`, reads included** (see [below](#get-workletretention-what-the-log-is-holding)) |
 | `POST` | `/worklet/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
-| `POST` | `/worklet/retention/evict/{node}` | Install the eviction gate on a node on every log the trim counts nodes on (Worklet's, Doclet's and the identity estate's), so the trim can pass a floor it is pinning. Refused `409` while the node holds a live presence lease; answers per log (see [below](#the-three-retention-gestures-that-write)) |
+| `POST` | `/worklet/retention/evict/{node}` | Install the eviction gate on a node on every log the trim counts nodes on (Worklet's, Doclet's, the identity estate's, the Dashboard Assistant's and Chatlet's), so the trim can pass a floor it is pinning. Refused `409` while the node holds a live presence lease; answers per log (see [below](#the-three-retention-gestures-that-write)) |
 | `POST` | `/worklet/retention/readmit/{node}` | Lift it on every one of those logs: the inverse commit rather than a delete. Refused `409` while the node still lacks records a trim floor lets the log delete |
 | `POST` | `/worklet/retention/capacity` | Drive a log's byte-ceiling change as far as this node's mode allows |
 | `GET` | `/worklet/retention/maintenance` | Where that window stands and what is holding it |
@@ -6560,7 +6560,7 @@ controls, and a caller without it is refused `403` naming it.
 | Route | What it does |
 |---|---|
 | `POST /worklet/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `404` when the stream is not one this node runs, which on a node running no state log is every stream. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. It is **filed under that stream**: acknowledging another log writes another point and leaves this one standing, and each log's trim reads its own — under `backup_floor: operator` that is one acknowledgement per log. |
-| `POST /worklet/retention/evict/{node}?confirm={node}` | Installs the eviction gate on every identity-claiming log: Worklet's, Doclet's and the identity estate's; the vector log and the usage log count no node and get none. **Refused `409 eviction_refused`**, with nothing written to any log, while the node still holds a live presence lease: it is still reaching the fleet, and an eviction would drop everything it writes. The body carries `detail`, `hint`, `op_id` and `actions`, `["wait", "force"]`: stop the node and let its lease lapse, or force it. `force=true` overrides that refusal for a node wedged in a way that still renews its lease. A node that cannot read the presence leases at all answers **`503 eviction_unjudged`** (a judgement nobody could make is not one that came back clear), with a `hint` and `actions` `["retry_same_op", "force"]`; `force=true` takes the eviction past that too, since the leases are the judgement's only input, and the node logs `retention_eviction_forced_unjudged`. A node in a [capacity window](../guides/retention.md#changing-a-logs-ceiling) answers **`409 not_publishing`**, before anything is judged, with `detail`, `hint` and `actions` `["wait"]`: a gate record is an append, and the window's mode appends nothing; readmission answers the same. |
+| `POST /worklet/retention/evict/{node}?confirm={node}` | Installs the eviction gate on every identity-claiming log: Worklet's, Doclet's, the identity estate's, the Dashboard Assistant's and Chatlet's; the vector log and the usage log count no node and get none. **Refused `409 eviction_refused`**, with nothing written to any log, while the node still holds a live presence lease: it is still reaching the fleet, and an eviction would drop everything it writes. The body carries `detail`, `hint`, `op_id` and `actions`, `["wait", "force"]`: stop the node and let its lease lapse, or force it. `force=true` overrides that refusal for a node wedged in a way that still renews its lease. A node that cannot read the presence leases at all answers **`503 eviction_unjudged`** (a judgement nobody could make is not one that came back clear), with a `hint` and `actions` `["retry_same_op", "force"]`; `force=true` takes the eviction past that too, since the leases are the judgement's only input, and the node logs `retention_eviction_forced_unjudged`. A node in a [capacity window](../guides/retention.md#changing-a-logs-ceiling) answers **`409 not_publishing`**, before anything is judged, with `detail`, `hint` and `actions` `["wait"]`: a gate record is an append, and the window's mode appends nothing; readmission answers the same. |
 | `POST /worklet/retention/readmit/{node}?confirm={node}` | The inverse commit, on every one of those logs. **Refused `409 readmission_refused`**, with nothing written to any log, when in any one of those logs the node has not applied every record up to the one just before the higher of that log's published floor (at the log's current generation) and its first surviving sequence (its last published position is more than one below that bound), or its last published position is from a generation the log has since left. The body carries the sentence (`detail`), what to do (`hint`, and `actions` `["wait"]`), and the numbers: `domain`, `position`, `generation`, `floor`, `first_seq`, `floor_generation`, and `published`: false for a node that has never published a position and is judged as holding nothing. A judgement that could not be made at all refuses too, with nothing written, as **`503 readmission_unjudged`**: the register or a floor unreadable, a log's first surviving sequence unreadable, or this node behind a reanchor the fleet has made. The body carries `detail`, `hint`, `actions` `["retry_same_op", "other_node"]` and, where one log could not be judged, that `log`. `force` has no effect here and nothing overrides this refusal: the floor is a fact about what the node holds, not a lease it might be wedged into renewing. |
 
 `confirm` echoes the node id, and a mismatch is `400`. A node id no node could
@@ -6603,7 +6603,15 @@ other. A `200` answers **per log**:
     {"domain": "iam", "stream": "CREWLET_IAM_LOG",
      "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.iam:node-4",
      "outcome": "applied",
-     "position": {"stream": "CREWLET_IAM_LOG", "generation": 0, "seq": 58311}}
+     "position": {"stream": "CREWLET_IAM_LOG", "generation": 0, "seq": 58311}},
+    {"domain": "assistant", "stream": "CREWLET_ASSISTANT_LOG",
+     "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.assistant:node-4",
+     "outcome": "applied",
+     "position": {"stream": "CREWLET_ASSISTANT_LOG", "generation": 0, "seq": 15734}},
+    {"domain": "chat", "stream": "CREWLET_CHAT_LOG",
+     "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.chat:node-4",
+     "outcome": "applied",
+     "position": {"stream": "CREWLET_CHAT_LOG", "generation": 0, "seq": 207714}}
   ]
 }
 ```
@@ -7964,7 +7972,7 @@ a takeover, and on the same node re-claiming after its own lease lapsed.
       "config_boot_revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41",
       "config_reported_at": "2026-09-23T08:14:02.118Z",
       "in_flight": 1, "draining": false, "started_at": "2026-09-23T08:01:57Z",
-      "posture": "serve", "appliers_ready": 8, "appliers_total": 8,
+      "posture": "serve", "appliers_ready": 9, "appliers_total": 9,
       "admin": "serve"
     }
   ],

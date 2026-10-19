@@ -221,9 +221,9 @@ func TestEachLogsTrimMarksItsOwnPoint(t *testing.T) {
 			points: []coord.BackupPoint{
 				acknowledged("CREWLET_TRACKER_LOG", 900, backupNow.Add(-3*time.Hour)),
 				acknowledged("CREWLET_PAGES_LOG", 400, backupNow.Add(-2*time.Hour)),
-				acknowledged("CREWLET_TRACKER_VECTORS", 700, backupNow.Add(-time.Hour)),
+				acknowledged("CREWLET_CHAT_LOG", 700, backupNow.Add(-time.Hour)),
 			},
-			newest: []string{"CREWLET_PAGES_LOG", "CREWLET_TRACKER_LOG", "CREWLET_TRACKER_VECTORS"},
+			newest: []string{"CREWLET_CHAT_LOG", "CREWLET_PAGES_LOG", "CREWLET_TRACKER_LOG"},
 		},
 		"a node's newer copy that leaves a log out": {
 			floor: config.BackupFloorEngine,

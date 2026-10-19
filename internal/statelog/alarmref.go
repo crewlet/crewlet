@@ -58,8 +58,9 @@ var alarmMeaning = map[Kind]string{
 		"ordinary writes are held to. One alarm names every such log, " +
 		"leading with the one with the least room. A full log refuses writes " +
 		"rather than dropping records; on every log that claims identity " +
-		"(Worklet's, Doclet's and the identity estate's) an " +
-		"eviction still lands in the gate reserve above that ceiling.",
+		"(Worklet's, Doclet's, the identity estate's, the Dashboard " +
+		"Assistant's and Chatlet's) an eviction still lands in the gate reserve " +
+		"above that ceiling.",
 	KindBackupAge: "No verified backup of a log has been recorded, or the " +
 		"newest one covering it is older than the policy asks for. The trim " +
 		"does not advance that log either way. One alarm names every such " +
@@ -121,8 +122,8 @@ var alarmMeaning = map[Kind]string{
 		"census is the rate its domain declares for each agent seat, counting " +
 		"at least one seat, plus what the object store's collector reads on " +
 		"its own schedule. That rate is 125 a day for the tracker, the " +
-		"knowledge base, the artifacts and their datastore, and none for the " +
-		"identity estate and the Dashboard Assistant.",
+		"knowledge base, the artifacts and their datastore, 120 for chat, and " +
+		"none for the identity estate and the Dashboard Assistant.",
 	KindLogCeilingShort: "At the rate this log took in over the last day, " +
 		"its byte ceiling holds less than the `min_age` window the trim " +
 		"keeps, so it will fill and refuse writes with every trim term " +

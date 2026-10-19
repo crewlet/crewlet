@@ -665,10 +665,10 @@ func TestATargetOnlyTheGateReserveClearsIsRefused(t *testing.T) {
 				"least that works", stream)
 		}
 	}
-	if reserved < 6 {
+	if reserved < 7 {
 		t.Fatalf("%d registered log(s) keep a gate reserve, want at least the "+
 			"tracker's, the knowledge base's, the identity estate's, the "+
-			"artifacts log's, the artifact datastore's and the assistant's", reserved)
+			"artifacts log's, the artifact datastore's, the assistant's and chat's", reserved)
 	}
 }
 

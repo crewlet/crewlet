@@ -243,7 +243,7 @@ func TestTheDeletionGateCountsItsHits(t *testing.T) {
 //
 // Whether the readmission is PERMITTED is not this writer's to judge any more:
 // it is one fleet gesture over every identity-claiming log, judged once by the
-// engine's node gate before either log is written, and certified there.
+// engine's node gate before any log is written, and certified there.
 func TestAReadmissionIsTheInverseCommitOnThisLog(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

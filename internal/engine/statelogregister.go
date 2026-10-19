@@ -576,7 +576,8 @@ func register() []registration {
 					Floor: config.UsageLogMaxBytesFloor}
 			},
 		},
-	}, artifactsRegistrations(), artifactDataRegistrations(), assistantRegistrations())
+	}, artifactsRegistrations(), artifactDataRegistrations(), assistantRegistrations(),
+		chatRegistrations())
 }
 
 // checkRegister refuses a register whose entries are not complete, BEFORE

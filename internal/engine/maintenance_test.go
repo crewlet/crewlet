@@ -79,6 +79,11 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// delete.
 		"assistant_anchors",
 		"assistant_ops",
+		// THE CHAT LOG'S anchor table and operation ledger, per node, for
+		// the reason every registered domain's pair is (see pages_ops
+		// below).
+		"chat_anchors",
+		"chat_ops",
 		// EACH HUMAN SEAT'S CHAT READ STATE, a coordination record with
 		// no age: without this entry the cursors, mutes and
 		// do-not-disturb of every seat anybody ever read a room as were

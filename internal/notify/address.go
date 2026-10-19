@@ -18,7 +18,7 @@ import (
 // the union of the two shipped backends' channel types, which made the answer
 // right by coincidence rather than by construction: the partition key read
 // the backend's OWN kinds and the reply obligation read the global, so a
-// backend whose channel_type is its own — a first-party backend would be the
+// backend whose channel_type is its own — Chatlet is the
 // first — was DIRECT to one and NOT ADDRESSED to the other for the same
 // message. Nothing about that fails; the seat just stops owing anybody an
 // answer in its own direct messages.
@@ -57,7 +57,7 @@ type AddressRule struct {
 	// package defines, and every shipped backend states it.
 	//
 	// STATED RATHER THAN INHERITED, because the reason a seat is in a
-	// conversation belongs to the BACKEND: a first-party backend
+	// conversation belongs to the BACKEND: Chatlet
 	// routes on reasons this package has never heard of, and a rule that
 	// silently fell back to this package's reasons would read every one of
 	// them as "does not address".

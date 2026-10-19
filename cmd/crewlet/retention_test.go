@@ -163,10 +163,11 @@ func identityLogs(t *testing.T) []statelog.Domain {
 			out = append(out, domain)
 		}
 	}
-	if len(out) < 6 {
+	if len(out) < 7 {
 		t.Fatalf("the register holds %d identity-claiming log(s), fewer than the "+
 			"tracker's, the knowledge base's, the identity estate's, the "+
-			"artifacts log's, the artifact datastore's and the assistant's", len(out))
+			"artifacts log's, the artifact datastore's, the assistant's and chat's",
+			len(out))
 	}
 	return out
 }

@@ -1167,7 +1167,7 @@
               "type": "string"
             }
           ],
-          "description": "Byte ceiling on the chat log; unset asks for 8 GiB, capped at a sixteenth of the stream volume's free space (a quarter of what an unset tracker_log_max_bytes derives, so the whole 8 GiB is asked from 128 GiB free), 1 GiB..256 GiB, and does not follow tracker_log_max_bytes - size it for the same blocked-trim horizon, about 30 MB a day at the declared census."
+          "description": "Byte ceiling on the chat log; unset asks for 8 GiB, capped at a sixteenth of the stream volume's free space (a quarter of what an unset tracker_log_max_bytes derives, so the whole 8 GiB is asked from 128 GiB free), 1 GiB..256 GiB, and does not follow tracker_log_max_bytes - size it for the same blocked-trim horizon, about 32 MB a day at the declared census."
         },
         "cluster": {
           "$ref": "#/$defs/StreamCluster"
