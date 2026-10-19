@@ -266,13 +266,19 @@ func roomRedecideDelay(attempts int, err error) time.Duration {
 }
 
 // roomWork is the rooms whose memberships wait to be decided again: now
-// (pending), or at a due instant after an undecidable answer (due), with the
-// number of undecidable answers in a row each room has had (misses), which
-// is what its next backoff is sized by.
+// (pending), or once a backoff after an undecidable answer runs out (due, the
+// backoff's timer), with the number of undecidable answers in a row each room
+// has had (misses), which is what its next backoff is sized by.
+//
+// A BACKOFF IS A TIMER, NEVER A DUE INSTANT. An instant would be read off a
+// clock and compared with another reading of it, and the service's clock
+// ([Options.Now]) is the one every decision and stamp here is taken at, which
+// a test pins: a backoff measured on it never runs out. A timer measures the
+// delay itself and reads no clock at all.
 type roomWork struct {
 	mu      sync.Mutex
 	pending map[artifacts.ID]bool
-	due     map[artifacts.ID]time.Time
+	due     map[artifacts.ID]*time.Timer
 	misses  map[artifacts.ID]int
 	wake    chan struct{}
 
@@ -285,7 +291,7 @@ type roomWork struct {
 // the service's, ended by [Service.Stop].
 func (s *Service) startRooms() {
 	ctx, cancel := context.WithCancel(context.Background())
-	s.work = &roomWork{pending: map[artifacts.ID]bool{}, due: map[artifacts.ID]time.Time{},
+	s.work = &roomWork{pending: map[artifacts.ID]bool{}, due: map[artifacts.ID]*time.Timer{},
 		misses: map[artifacts.ID]int{}, wake: make(chan struct{}, 1),
 		stop: cancel, done: make(chan struct{})}
 	s.stopPresence = s.rooms.Presence.OnChange(s.PresenceChanged)
@@ -585,17 +591,23 @@ func (s *Service) queueDecision(id artifacts.ID) {
 
 // retryDecision asks the decider to decide id's room again after a backoff,
 // because a decision about one of its members could not be reached (err). A
-// retry already scheduled keeps its instant, so several members missing in one
+// retry already scheduled keeps its timer, so several members missing in one
 // pass, or a credential recheck missing beside it, cost one backoff step and
 // not one each.
 func (s *Service) retryDecision(id artifacts.ID, err error) {
 	s.work.mu.Lock()
-	if _, scheduled := s.work.due[id]; !scheduled {
-		s.work.misses[id]++
-		s.work.due[id] = time.Now().Add(roomRedecideDelay(s.work.misses[id], err))
+	defer s.work.mu.Unlock()
+	if _, scheduled := s.work.due[id]; scheduled {
+		return
 	}
-	s.work.mu.Unlock()
-	s.wakeDecider()
+	s.work.misses[id]++
+	s.work.due[id] = time.AfterFunc(roomRedecideDelay(s.work.misses[id], err), func() {
+		s.work.mu.Lock()
+		delete(s.work.due, id)
+		s.work.pending[id] = true
+		s.work.mu.Unlock()
+		s.wakeDecider()
+	})
 }
 
 // settleDecision records that every member of id's room was decided, so its
@@ -616,9 +628,9 @@ func (s *Service) wakeDecider() {
 	}
 }
 
-// takeDecisions is every room due to be decided now, sorted, taken off the
-// queue, and how long until the next scheduled one (zero for none).
-func (s *Service) takeDecisions(now time.Time) ([]artifacts.ID, time.Duration) {
+// takeDecisions is every room due to be decided now, sorted and taken off the
+// queue: each queued room, and each whose backoff has run out.
+func (s *Service) takeDecisions() []artifacts.ID {
 	s.work.mu.Lock()
 	defer s.work.mu.Unlock()
 	ids := make([]artifacts.ID, 0, len(s.work.pending))
@@ -626,21 +638,19 @@ func (s *Service) takeDecisions(now time.Time) ([]artifacts.ID, time.Duration) {
 		ids = append(ids, id)
 	}
 	clear(s.work.pending)
-	var next time.Duration
-	for id, at := range s.work.due {
-		if wait := at.Sub(now); wait > 0 {
-			if next == 0 || wait < next {
-				next = wait
-			}
-			continue
-		}
-		delete(s.work.due, id)
-		if !slices.Contains(ids, id) {
-			ids = append(ids, id)
-		}
-	}
 	slices.SortFunc(ids, func(a, b artifacts.ID) int { return strings.Compare(a.String(), b.String()) })
-	return ids, next
+	return ids
+}
+
+// stopBackoffs stops every backoff still waiting to run out, once the decider
+// that would take its room has ended.
+func (s *Service) stopBackoffs() {
+	s.work.mu.Lock()
+	defer s.work.mu.Unlock()
+	for id, timer := range s.work.due {
+		timer.Stop()
+		delete(s.work.due, id)
+	}
 }
 
 // decideRooms decides queued rooms again until ctx ends: each as soon as it is
@@ -648,12 +658,9 @@ func (s *Service) takeDecisions(now time.Time) ([]artifacts.ID, time.Duration) {
 // is due.
 func (s *Service) decideRooms(ctx context.Context) {
 	defer close(s.work.done)
-	timer := time.NewTimer(time.Hour)
-	timer.Stop()
-	defer timer.Stop()
+	defer s.stopBackoffs()
 	for {
-		ids, next := s.takeDecisions(time.Now())
-		for _, id := range ids {
+		for _, id := range s.takeDecisions() {
 			var undecided error
 			for _, m := range s.hub.Members(id) {
 				if err := s.decideMember(ctx, m.Client.Audience().Principal(), id, m); err != nil {
@@ -669,21 +676,13 @@ func (s *Service) decideRooms(ctx context.Context) {
 				s.settleDecision(id)
 			}
 		}
-		if len(ids) > 0 {
-			// A retry the pass just scheduled is collected by the next
-			// take, which also sizes the timer to it.
-			continue
-		}
-		if next > 0 {
-			timer.Reset(next)
-		}
+		// A ROOM QUEUED DURING THE PASS, or a backoff run out, has already
+		// signalled wake, so the next take collects it at once.
 		select {
 		case <-ctx.Done():
 			return
 		case <-s.work.wake:
-		case <-timer.C:
 		}
-		timer.Stop()
 	}
 }
 
