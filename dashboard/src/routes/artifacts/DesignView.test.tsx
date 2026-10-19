@@ -5,7 +5,7 @@
  * are FrameView's to hold; here each is a stand-in that names its board.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ToastProvider } from "@crewlethq/ui";
 
@@ -145,8 +145,12 @@ async function mount(onPublished = vi.fn()) {
 
 test("every board is listed, and each live board is a frame of its own document", async () => {
   await mount();
-  expect(screen.getByRole("button", { name: "Hero" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Pricing" })).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Hero, press Enter or double-click to open" }),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Pricing, press Enter or double-click to open" }),
+  ).toBeTruthy();
   const frames = [...document.querySelectorAll("[data-board-frame]")].map((el) =>
     el.getAttribute("data-board-frame"),
   );
@@ -247,4 +251,41 @@ test("a board's print shows that board alone at its own size, prints, and goes a
   expect(sizes()).toEqual([]);
   printed.mockRestore();
   globalThis.CSSStyleSheet = realSheet;
+});
+
+test("a click on a listed board only selects it; Enter or a double-click opens it", async () => {
+  await mount();
+  const row = screen.getByRole("button", { name: "Pricing, press Enter or double-click to open" });
+  fireEvent.click(row);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  fireEvent.keyDown(row, { key: "Enter" });
+  expect(await screen.findByRole("dialog")).toBeTruthy();
+  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  fireEvent.doubleClick(
+    screen.getByRole("button", { name: "Hero, press Enter or double-click to open" }),
+  );
+  expect(await screen.findByRole("dialog")).toBeTruthy();
+});
+
+test("an opened board fits the dialog, letterboxed, and shows at its own size on request", async () => {
+  await mount();
+  fireEvent.keyDown(
+    screen.getByRole("button", { name: "Pricing, press Enter or double-click to open" }),
+    { key: "Enter" },
+  );
+  const dialog = await screen.findByRole("dialog");
+  // FITTED BY DEFAULT: the board's page is laid out at 1440 by 900 on a stage
+  // that scales it into the dialog.
+  const stage = dialog.querySelector(".design-opened--fit .crewlet-slide-stage--contain");
+  expect(stage).not.toBeNull();
+  expect(stage!.getAttribute("aria-label")).toBe("Pricing, 1440 by 900");
+  expect((stage!.querySelector(".crewlet-slide-stage__frame") as HTMLElement).style.width).toBe(
+    "1440px",
+  );
+  fireEvent.click(within(dialog).getByRole("radio", { name: "Actual size" }));
+  const actual = within(dialog).getByRole("region", { name: "Pricing at actual size" });
+  expect(actual.classList.contains("design-opened--actual")).toBe(true);
+  expect((actual.firstElementChild as HTMLElement).style.width).toBe("1440px");
+  expect(dialog.querySelector(".crewlet-slide-stage")).toBeNull();
 });

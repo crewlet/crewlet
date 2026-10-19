@@ -751,7 +751,8 @@ func sizeAndProvision(t *testing.T, q *jetstream.Queue, stream config.Stream, fr
 	if err != nil {
 		t.Fatalf("sizeCeilings: %v", err)
 	}
-	s := &stateLog{ceilings: ceilings, volume: "/var/lib/crewlet/stream"}
+	s := &stateLog{ceilings: ceilings, volume: "/var/lib/crewlet/stream",
+		floor: BrokerFloorFor(&config.Bootstrap{Stream: stream})}
 	_, err = s.provisionAll(t.Context(), q)
 	return err
 }
@@ -861,6 +862,11 @@ func TestARefusedReservationNamesWhatItNeededAndHad(t *testing.T) {
 				"derived from the stream volume's free space",
 				"no lower than 1073741824 bytes",
 				"Give the broker more room;",
+				// HOW MUCH ROOM: the least a fresh node reserves, and
+				// the setting that moves the bucket's part of it.
+				"a fresh node of this configuration reserves at least " +
+					itoa(BrokerFloorFor(&config.Bootstrap{}).Limit) + " bytes",
+				"store.objects.nats_max_bytes",
 			},
 			never: []string{"to a smaller ceiling", "fixed default"},
 		},

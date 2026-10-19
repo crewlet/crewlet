@@ -464,7 +464,7 @@ export function Home() {
           />
         ) : (
           <ArrangeBoard editing={editing} columns={stacked ? 1 : COLUMNS}>
-            <div className="home-board-grid">
+            <div className="board-grid">
               {page.map((id) => {
                 const w = findWidget(board, id);
                 if (!w) return null;

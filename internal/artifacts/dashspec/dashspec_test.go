@@ -447,3 +447,48 @@ func TestTheCatalogueIsACopy(t *testing.T) {
 		}
 	}
 }
+
+// A DOMAIN'S IDS ARE DRAWN IN ITS OWN WORDS: the tracker's status, status
+// group and priority, and an agent's activity, carry the vocabulary a reader
+// is shown them in, while their values stay the ids a filter compares.
+func TestTheCatalogueNamesTheVocabularyItsIDsAreDrawnIn(t *testing.T) {
+	want := map[string]map[string]Words{
+		"tracker.items": {"status": WordsTrackerStatus, "status_group": WordsTrackerStatusGroup,
+			"priority": WordsTrackerPriority},
+		"agents.status": {"activity": WordsAgentActivity},
+	}
+	for name, cols := range want {
+		src, _ := Source(name)
+		for key, words := range cols {
+			i := slices.IndexFunc(src.Columns, func(c Column) bool { return c.Key == key })
+			if i < 0 || src.Columns[i].Words != words {
+				t.Errorf("%s.%s is drawn in %q, want %q", name, key, src.Columns[i].Words, words)
+			}
+		}
+	}
+}
+
+func TestADeclaredVocabularyIsHeldToTheClosedSetAndToText(t *testing.T) {
+	for change, want := range map[string]string{
+		"guessed": `"guessed" is not one of`,
+		"number":  "names a text column's vocabulary",
+	} {
+		v := boardVersion(t)
+		v.edit(t, func(s map[string]any) {
+			col := at(s, "datasets", 2, "columns", 2)
+			if change == "number" {
+				col["words"] = "tracker_status"
+			} else {
+				at(s, "datasets", 2, "columns", 1)["words"] = change
+			}
+		})
+		if got := refusal(t, v); !strings.Contains(got, want) {
+			t.Errorf("%s: the refusal %q does not say %q", change, got, want)
+		}
+	}
+	v := boardVersion(t)
+	v.edit(t, func(s map[string]any) { at(s, "datasets", 2, "columns", 1)["words"] = "tracker_status" })
+	if b := readBoard(t, v); b.Shapes["deals"].Columns[2].Words != WordsTrackerStatus {
+		t.Errorf("a store column declared in the tracker's words keeps them: %+v", b.Shapes["deals"].Columns)
+	}
+}

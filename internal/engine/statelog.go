@@ -350,6 +350,11 @@ type stateLog struct {
 	// broker.
 	volume string
 
+	// floor is the least the broker must reserve for a fresh node of this
+	// Tier A ([BrokerFloorFor]), which a refused reservation quotes. Zero
+	// says nothing.
+	floor BrokerFloor
+
 	// ring is the Tier A keyring every record on every log is signed
 	// under and verified against. Read once at construction: only a
 	// restart changes it, which is the same restart that changes every
@@ -765,7 +770,7 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		metrics: e.metrics,
 		witness: e.stateLogWitness(),
 		skills:  skillDetector{}, applyHooks: e.applyHooks(),
-		ceilings: ceilings, volume: streamVolume(boot),
+		ceilings: ceilings, volume: streamVolume(boot), floor: BrokerFloorFor(boot),
 		clustered: host.Clustered(),
 		run:       runCtx, stop: cancel,
 		snapshotNudge:  make(chan struct{}, 1),
