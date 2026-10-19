@@ -152,11 +152,13 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 	if _, fromToken := auth.PresentedToken(r.Context()); fromToken {
 		// `token_refused`, the code every gesture a token may not make
 		// answers — `unauthorized`'s sentence is about access the
-		// credential lacks, which contradicted this detail.
-		detail := authz.RefusalDetail(authz.ReasonTokenRefused, nil)
+		// credential lacks, which contradicted this detail — in the
+		// authority table's own mapping ([authz.RefusalFields]).
+		status, code, detail := authz.RefusalFields(authz.Decision{
+			Reason: authz.ReasonTokenRefused})
 		detail["detail"] = "An access token can't create another token. Sign " +
 			"in, or use an API token."
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeTokenRefused, detail)
+		httpjson.FailWithFields(w, status, code, detail)
 		return
 	}
 	// A TIER A TOKEN HOLDS NO TOKENS OF ITS OWN: it is the deployment's

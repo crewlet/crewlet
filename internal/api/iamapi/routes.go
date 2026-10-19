@@ -420,9 +420,23 @@ func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request, opID strin
 //     code the authority table's presence rows answer the same request with
 //     at the route — an administrative identity record needs a person
 //     present, and the remedy is to sign in rather than to be granted
-//     anything. Before the authority arm it wraps.
-//   - AUTHORITY, [iamdomain.ErrRefused]: 403, and it will never land however
-//     often it is retried.
+//     anything. Before the refusal arms below, whose refusal it is.
+//   - A PERMISSION THE CALLER LACKS, an [iamdomain.Refusal] naming grants:
+//     403 `unauthorized`, reason `no_grant` and the grants that would lift
+//     it — rendered by [authz.RefusalFields], the mapping the authority
+//     table's own refusals take, so its sentence names that permission.
+//   - THE RECORD'S OWN RULE, an [iamdomain.Refusal] naming none — a
+//     person's token asked for by somebody else, a permission the owner does
+//     not hold, an owner who may not act, a name this build does not know:
+//     403 `forbidden`, the domain's sentence in `detail` and no `reason` or
+//     `grants`, because no rule of the authority table decided it and no
+//     permission would change it. Both were one `unauthorized` naming no
+//     grant, so every one of them told an administrator to ask an
+//     administrator for access.
+//   - Neither lands however often it is retried. A bare [iamdomain.ErrRefused]
+//     is none of them: the domain builds every refusal as an
+//     [iamdomain.Refusal], so one that is not is unclassified, and answered
+//     as the fault below.
 //   - SOMEBODY ELSE HOLDS IT, [iamdomain.ErrTaken]: an address, a login or a
 //     seat, 409 naming who holds it — a person, or an open invitation.
 //   - A PERSON'S SEAT LEFT OUT: a person's gesture naming none, or clearing
@@ -474,6 +488,7 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 
 	var (
 		taken   *iamdomain.ErrTaken
+		record  *iamdomain.Refusal
 		refused *statelog.Unavailable
 	)
 	// A REFUSAL CARRIES WHAT THE CALLER PASSED TOO — the id it was about,
@@ -495,12 +510,21 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		// THE RECORD LAYER'S LOCK, answered as the route's own would be:
 		// the table's reason and no permission, since none would admit a
 		// token — a person signs in.
-		fields := authz.RefusalDetail(authz.ReasonTokenRefused, nil)
+		status, code, fields := authz.RefusalFields(authz.Decision{
+			Reason: authz.ReasonTokenRefused})
 		fields["detail"] = err.Error()
-		refuse(http.StatusForbidden, httpjson.CodeTokenRefused, fields)
+		refuse(status, code, fields)
 		return
-	case errors.Is(err, iamdomain.ErrRefused):
-		refuse(http.StatusForbidden, httpjson.CodeUnauthorized,
+	case errors.As(err, &record) && len(record.Grants) > 0:
+		// A PERMISSION WOULD LIFT IT, so it is answered as the authority
+		// table answers a missing one, naming that permission.
+		status, code, fields := authz.RefusalFields(authz.Decision{
+			Reason: authz.ReasonNoGrant, Grants: record.Grants})
+		fields["detail"] = err.Error()
+		refuse(status, code, fields)
+		return
+	case errors.As(err, &record):
+		refuse(http.StatusForbidden, httpjson.CodeForbidden,
 			httpjson.Detail{"detail": err.Error()})
 		return
 	case errors.Is(err, iamdomain.ErrSeatRequired):
