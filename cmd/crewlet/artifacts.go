@@ -63,9 +63,10 @@ var artifactsUsage = `usage: crewlet artifacts <command> [arguments] [<config.ya
   list [-scope mine|shared|company|agents|all] [-kind ` + kindChoices() + `]
        [-q TEXT] [-status live|trashed] [-work-item KEY] [-limit N]
   get <id>
-  publish <dir|file> [-artifact ID] [-title TEXT] [-kind ` + kindChoices() + `]
-       [-entry PATH] [-label TEXT] [-contract VERSION] [-capabilities a,b]
-       [-work-item KEY] [-force] [-op-id ID]
+  publish <dir|file> [-artifact ID] [-title TEXT] [-description TEXT] [-icon NAME]
+       [-kind ` + kindChoices() + `] [-entry PATH] [-exclude PATTERN]... [-label TEXT]
+       [-contract VERSION] [-capabilities a,b] [-work-item KEY] [-force] [-op-id ID]
+  update <id> [-title TEXT] [-description TEXT] [-icon NAME] [-op-id ID]
   versions <id>
   restore <id> <version> [-label TEXT] [-op-id ID]
   label <id> <version> <label> [-op-id ID]
@@ -94,7 +95,7 @@ func runArtifacts(environ config.Source, args []string, stdout, stderr io.Writer
 	sub, rest := splitSubject(args)
 	run, known := map[string]func(config.Source, []string, io.Writer, io.Writer) error{
 		"list": artifactsList, "get": artifactsGet, "publish": artifactsPublish,
-		"versions": artifactsVersions, "restore": artifactsRestore, "label": artifactsLabel,
+		"update": artifactsUpdate, "versions": artifactsVersions, "restore": artifactsRestore, "label": artifactsLabel,
 		"share": artifactsShare, "unshare": artifactsUnshare, "trash": artifactsTrash,
 		"untrash": artifactsUntrash, "purge": artifactsPurge, "assets": artifactsAssets,
 		"usage": artifactsUsageCmd, "sources": artifactsSources,
@@ -249,11 +250,17 @@ type artifactRow struct {
 	Title      string    `json:"title"`
 	Owner      string    `json:"owner"`
 	HeadNumber int       `json:"head_number"`
+	Contract   string    `json:"contract"`
 	Status     string    `json:"status"`
 	Role       string    `json:"role"`
 	ShareCount int       `json:"share_count"`
 	UpdatedAt  time.Time `json:"updated_at"`
-	Shares     []struct {
+
+	// Capabilities are the head version's; the node answers an empty list,
+	// never an absent one, for a version that declares none.
+	Capabilities []artifacts.Capability `json:"capabilities"`
+
+	Shares []struct {
 		Audience artifacts.Audience `json:"audience"`
 		Role     string             `json:"role"`
 	} `json:"shares"`
@@ -325,8 +332,9 @@ func artifactsGet(environ config.Source, args []string, stdout, stderr io.Writer
 		return err
 	}
 	fmt.Fprintf(stdout, "%s\n  title    %s\n  kind     %s\n  owner    %s\n  version  %d\n"+
-		"  status   %s\n  role     %s (yours)\n  updated  %s\n", a.ID, a.Title, a.Kind, a.Owner,
-		a.HeadNumber, a.Status, a.Role, a.UpdatedAt.Format(time.RFC3339))
+		"  contract %s\n  can      %s\n  status   %s\n  role     %s (yours)\n  updated  %s\n",
+		a.ID, a.Title, a.Kind, a.Owner, a.HeadNumber, contractText(a.Contract),
+		capabilitiesText(a.Capabilities), a.Status, a.Role, a.UpdatedAt.Format(time.RFC3339))
 	if a.Shares == nil {
 		fmt.Fprintf(stdout, "  shares   %d\n", a.ShareCount)
 		return nil
@@ -335,6 +343,26 @@ func artifactsGet(environ config.Source, args []string, stdout, stderr io.Writer
 		fmt.Fprintf(stdout, "  shared   %s as %s\n", audienceText(s.Audience), s.Role)
 	}
 	return nil
+}
+
+// contractText is a version's runtime contract as `get` and `versions` print
+// it: `none` for a version that pins none (a Markdown document or a sheet,
+// which the dashboard draws).
+func contractText(contract string) string {
+	if contract == "" {
+		return "none"
+	}
+	return contract
+}
+
+// capabilitiesText is a version's declared capabilities as `get` and
+// `versions` print them: `none` for an empty set, so a version whose
+// capabilities were stripped reads as such rather than as a missing line.
+func capabilitiesText(caps []artifacts.Capability) string {
+	if len(caps) == 0 {
+		return "none"
+	}
+	return joinCapabilities(caps, ",")
 }
 
 // audienceText is an audience as an operator names it.
@@ -360,12 +388,14 @@ func artifactsVersions(environ config.Source, args []string, stdout, stderr io.W
 	}
 	var page struct {
 		Versions []struct {
-			Number    int       `json:"number"`
-			Label     string    `json:"label"`
-			Files     int       `json:"files"`
-			Bytes     int64     `json:"bytes"`
-			CreatedAt time.Time `json:"created_at"`
-			Author    struct {
+			Number       int                    `json:"number"`
+			Label        string                 `json:"label"`
+			Contract     string                 `json:"contract"`
+			Capabilities []artifacts.Capability `json:"capabilities"`
+			Files        int                    `json:"files"`
+			Bytes        int64                  `json:"bytes"`
+			CreatedAt    time.Time              `json:"created_at"`
+			Author       struct {
 				Name string `json:"name"`
 			} `json:"author"`
 		} `json:"versions"`
@@ -378,8 +408,9 @@ func artifactsVersions(environ config.Source, args []string, stdout, stderr io.W
 		if v.Label != "" {
 			label = "  [" + v.Label + "]"
 		}
-		fmt.Fprintf(stdout, "v%-4d %s  %-12s  %d files, %d bytes%s\n", v.Number,
-			v.CreatedAt.Format(time.RFC3339), v.Author.Name, v.Files, v.Bytes, label)
+		fmt.Fprintf(stdout, "v%-4d %s  %-12s  %d files, %d bytes  contract %s  can %s%s\n", v.Number,
+			v.CreatedAt.Format(time.RFC3339), v.Author.Name, v.Files, v.Bytes,
+			contractText(v.Contract), capabilitiesText(v.Capabilities), label)
 	}
 	return nil
 }
@@ -568,6 +599,72 @@ func artifactsLabel(environ config.Source, args []string, stdout, stderr io.Writ
 		}, nil)
 }
 
+// headFields are the flags that describe an artifact's head rather than one of
+// its versions, in the order an outcome names them: what `update` changes and
+// what `publish` sets on a new artifact.
+var headFields = []string{"title", "description", "icon"}
+
+// headFlags registers the head's fields on fs, each described as what it
+// sets (`to set`, `of a new artifact`), the title with its default after.
+func headFlags(fs *flag.FlagSet, what, titleDefault string) (title, description, icon *string) {
+	title = fs.String("title", "", "the title "+what+titleDefault)
+	description = fs.String("description", "", "the one-sentence description "+what)
+	icon = fs.String("icon", "", "the icon "+what+": one short word")
+	return title, description, icon
+}
+
+// namedHeadFields is every head field fs was given, in [headFields] order.
+func namedHeadFields(fs *flag.FlagSet) []string {
+	var named []string
+	for _, name := range headFields {
+		if isFlagSet(fs, name) {
+			named = append(named, name)
+		}
+	}
+	return named
+}
+
+// artifactsUpdate changes an artifact's title, description or icon. Only the
+// flags named are sent, so `-description ""` clears the description while an
+// update that does not name it leaves it as it is.
+func artifactsUpdate(environ config.Source, args []string, stdout, stderr io.Writer) error {
+	var fs *flag.FlagSet
+	var title, description, icon *string
+	return gesture(environ, args, stdout, stderr, "update", 1, "the artifact",
+		func(c *nodeClient, pos []string, key string) (string, error) {
+			id, err := artifactID(pos[0])
+			if err != nil {
+				return "", err
+			}
+			named := namedHeadFields(fs)
+			if len(named) == 0 {
+				return "", errors.New("name what to change: -title, -description or -icon")
+			}
+			values := map[string]*string{"title": title, "description": description, "icon": icon}
+			body := map[string]string{}
+			for _, name := range named {
+				body[name] = *values[name]
+			}
+			var answer writtenAnswer
+			if err := c.write(context.Background(), http.MethodPatch, "/artifacts/"+id.String(),
+				key, nil, body, &answer); err != nil {
+				return "", err
+			}
+			return outcomeLine(fmt.Sprintf("updated the %s of %s", fieldList(named), id), answer), nil
+		}, func(set *flag.FlagSet) {
+			fs = set
+			title, description, icon = headFlags(set, "to set", "")
+		})
+}
+
+// fieldList names fields as a sentence does: `a`, `a and b`, `a, b and c`.
+func fieldList(fields []string) string {
+	if len(fields) < 2 {
+		return strings.Join(fields, "")
+	}
+	return strings.Join(fields[:len(fields)-1], ", ") + " and " + fields[len(fields)-1]
+}
+
 func artifactsShare(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	return gesture(environ, args, stdout, stderr, "share", 3, "the artifact, the audience and the role",
 		func(c *nodeClient, pos []string, key string) (string, error) {
@@ -682,12 +779,17 @@ type localFile struct {
 }
 
 // collectFiles is every file a publish of root sends: root itself, or every
-// regular file under a directory, a dotted name (`.git`, `.DS_Store`) left out
-// with everything beneath it.
-func collectFiles(root string) ([]localFile, error) {
+// regular file under a directory, a dotted name (`.git`, `.DS_Store`) and a
+// name exclude matches left out with everything beneath it. A symbolic link
+// inside the directory is never followed: a link out of it would publish what
+// the author did not put in it.
+func collectFiles(root string, exclude excludeFlag) ([]localFile, error) {
 	info, err := os.Stat(root)
 	if err != nil {
 		return nil, err
+	}
+	if !info.IsDir() && len(exclude.patterns) > 0 {
+		return nil, fmt.Errorf("-exclude leaves files out of a directory, and %s is a file", root)
 	}
 	var files []localFile
 	add := func(published, disk string) error {
@@ -703,11 +805,26 @@ func collectFiles(root string) ([]localFile, error) {
 	if !info.IsDir() {
 		return files, add(filepath.Base(root), root)
 	}
-	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	// THE DIRECTORY NAMED IS WALKED WHERE IT LIVES: a root that is itself a
+	// link (`dist` pointing at a build folder) is the operator's own choice,
+	// and walked as the link it would hold nothing.
+	walked, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, err
+	}
+	err = filepath.WalkDir(walked, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if p != root && strings.HasPrefix(d.Name(), ".") {
+		if p == walked {
+			return nil
+		}
+		rel, err := filepath.Rel(walked, p)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if strings.HasPrefix(d.Name(), ".") || exclude.excludes(rel) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -716,16 +833,63 @@ func collectFiles(root string) ([]localFile, error) {
 		if !d.Type().IsRegular() {
 			return nil
 		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
-		return add(filepath.ToSlash(rel), p)
+		return add(rel, p)
 	})
 	if len(files) == 0 && err == nil {
 		err = fmt.Errorf("%s holds no file to publish", root)
 	}
 	return files, err
+}
+
+// excludeFlag is `-exclude`, named once per pattern. A pattern is matched by
+// [path.Match] against a file's or a directory's path relative to the
+// directory published, slash-separated, or against its name alone (at any
+// depth) when the pattern holds no slash; a directory it matches is left out
+// with everything beneath it.
+//
+// A FLAG RATHER THAN AN IGNORE FILE: every other input to this CLI is on its
+// command line, a file in the directory would be one more thing a publish
+// reads that the command does not show, and its grammar (gitignore's
+// negation and anchoring) would be a second one beside the path grammar the
+// engine already holds paths to.
+type excludeFlag struct {
+	patterns []string
+}
+
+func (f *excludeFlag) String() string { return strings.Join(f.patterns, " ") }
+
+// Set adds one pattern, refused here when it is malformed or reaches outside
+// the directory, so a typo never publishes what it meant to leave out. A
+// leading `./` and a trailing `/` are dropped, as a shell's completion
+// writes them.
+func (f *excludeFlag) Set(value string) error {
+	p := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(value), "./"), "/")
+	switch {
+	case p == "":
+		return errors.New("name a pattern, such as *.map or drafts")
+	case strings.HasPrefix(p, "/") || slices.Contains(strings.Split(p, "/"), ".."):
+		return fmt.Errorf("%q reaches outside the directory: a pattern is relative to it", value)
+	}
+	if _, err := path.Match(p, ""); err != nil {
+		return fmt.Errorf("%q is not a pattern: %w", value, err)
+	}
+	f.patterns = append(f.patterns, p)
+	return nil
+}
+
+// excludes reports whether rel, a path relative to the directory published,
+// is one a pattern leaves out.
+func (f excludeFlag) excludes(rel string) bool {
+	for _, p := range f.patterns {
+		target := rel
+		if !strings.Contains(p, "/") {
+			target = path.Base(rel)
+		}
+		if ok, _ := path.Match(p, target); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // entryFor is the entry a publish of files names: the one asked for, else the
@@ -804,15 +968,20 @@ func artifactsPublish(environ config.Source, args []string, stdout, stderr io.Wr
 	if err != nil {
 		return err
 	}
-	var target, title, kind, entry, label, contract, item, opID *string
+	var flags *flag.FlagSet
+	var target, title, description, icon, kind, entry, label, contract, item, opID *string
 	var force *bool
 	var caps capabilitiesFlag
+	var exclude excludeFlag
 	client, err := nodeClientFor(environ, rest, "artifacts publish", stderr, func(fs *flag.FlagSet) {
+		flags = fs
 		target = fs.String("artifact", "", "publish a new version of this artifact; empty creates one")
-		title = fs.String("title", "", "the title of a new artifact (default: the entry's name)")
+		title, description, icon = headFlags(fs, "of a new artifact", " (default: the entry's name)")
 		kind = fs.String("kind", "", kindNames()+" (default: from the entry)")
 		entry = fs.String("entry", "", "the file the artifact opens on (default: "+
 			strings.Join(artifacts.DefaultEntries(), ", ")+")")
+		fs.Var(&exclude, "exclude", "leave out of the directory every file and folder this pattern "+
+			"matches, by its path or (with no slash) its name, e.g. *.map or drafts; repeat for more")
 		label = fs.String("label", "", "a label for the version")
 		contract = fs.String("contract", "", "the runtime contract the page pins: latest or an exact version")
 		fs.Var(&caps, "capabilities", "what the page uses, comma-separated: "+
@@ -824,11 +993,24 @@ func artifactsPublish(environ config.Source, args []string, stdout, stderr io.Wr
 	if err != nil {
 		return err
 	}
+	// A NEW VERSION DESCRIBES NOTHING BUT ITSELF: the head's fields and the
+	// kind are the artifact's, so naming one beside -artifact is refused
+	// rather than dropped, which would read as a change that never landed.
+	if *target != "" {
+		named := namedHeadFields(flags)
+		if isFlagSet(flags, "kind") {
+			return errors.New("-kind describes a new artifact; a new version keeps the artifact's kind")
+		}
+		if len(named) > 0 {
+			return fmt.Errorf("-%s describes a new artifact; change an existing one's with "+
+				"`crewlet artifacts update %s -%s ...`", named[0], *target, named[0])
+		}
+	}
 	key, err := operation(*opID, "publish")
 	if err != nil {
 		return err
 	}
-	files, err := collectFiles(pos[0])
+	files, err := collectFiles(pos[0], exclude)
 	if err != nil {
 		return err
 	}
@@ -847,7 +1029,8 @@ func artifactsPublish(environ config.Source, args []string, stdout, stderr io.Wr
 		}
 	}
 	p := publishing{client: client, files: files, key: key, stdout: stdout}
-	if err := p.run(*target, entryPath, *title, created, *label, *contract, *item, *force, caps.list); err != nil {
+	head := newHead{title: *title, description: *description, icon: *icon, kind: string(created)}
+	if err := p.run(*target, entryPath, head, *label, *contract, *item, *force, caps.list); err != nil {
 		return unknownOutcome(err, "publish", key)
 	}
 	return nil
@@ -861,13 +1044,7 @@ type capabilitiesFlag struct {
 	list []artifacts.Capability // nil until the flag is named
 }
 
-func (f *capabilitiesFlag) String() string {
-	names := make([]string, len(f.list))
-	for i, c := range f.list {
-		names[i] = string(c)
-	}
-	return strings.Join(names, ",")
-}
+func (f *capabilitiesFlag) String() string { return joinCapabilities(f.list, ",") }
 
 // Set parses a comma-separated set. `none`, or an empty value, declares none;
 // a name this build does not serve is refused before any byte moves.
@@ -890,12 +1067,15 @@ func (f *capabilitiesFlag) Set(value string) error {
 
 // capabilityNames lists every capability this build serves, for the flag's
 // help and its refusal.
-func capabilityNames() string {
-	names := make([]string, len(artifacts.Capabilities))
-	for i, c := range artifacts.Capabilities {
+func capabilityNames() string { return joinCapabilities(artifacts.Capabilities, ", ") }
+
+// joinCapabilities is a capability set as text, its names joined by sep.
+func joinCapabilities(caps []artifacts.Capability, sep string) string {
+	names := make([]string, len(caps))
+	for i, c := range caps {
 		names[i] = string(c)
 	}
-	return strings.Join(names, ", ")
+	return strings.Join(names, sep)
 }
 
 // publishing is one publish in flight.
@@ -906,9 +1086,15 @@ type publishing struct {
 	stdout io.Writer
 }
 
+// newHead is what a publish that creates an artifact says about it; a new
+// version of an existing one sends none of it.
+type newHead struct {
+	title, description, icon, kind string
+}
+
 // run declares the files, sends the ones the artifact does not hold, and
 // publishes the version.
-func (p publishing) run(target, entry, title string, kind artifacts.Kind, label, contract, item string, force bool,
+func (p publishing) run(target, entry string, head newHead, label, contract, item string, force bool,
 	caps []artifacts.Capability) error {
 
 	ctx := context.Background()
@@ -960,6 +1146,10 @@ func (p publishing) run(target, entry, title string, kind artifacts.Kind, label,
 			Line    int    `json:"line"`
 			Message string `json:"message"`
 		} `json:"warnings"`
+		Files *struct {
+			Stored  int `json:"stored"`
+			Carried int `json:"carried"`
+		} `json:"files"`
 	}
 	body := map[string]any{"upload": intent.Upload, "files": specs, "entry": entry,
 		"label": label, "contract": contract, "work_item": item}
@@ -968,10 +1158,11 @@ func (p publishing) run(target, entry, title string, kind artifacts.Kind, label,
 		body["capabilities"] = caps
 	}
 	if target == "" {
-		if title == "" {
-			title = strings.TrimSuffix(path.Base(entry), path.Ext(entry))
+		if head.title == "" {
+			head.title = strings.TrimSuffix(path.Base(entry), path.Ext(entry))
 		}
-		body["title"], body["kind"] = title, kind
+		body["title"], body["kind"] = head.title, head.kind
+		body["description"], body["icon"] = head.description, head.icon
 		if err := p.client.write(ctx, http.MethodPost, "/artifacts", publishKey, nil, body,
 			&answer); err != nil {
 			return err
@@ -987,8 +1178,17 @@ func (p publishing) run(target, entry, title string, kind artifacts.Kind, label,
 			return err
 		}
 	}
-	fmt.Fprintln(p.stdout, outcomeLine(fmt.Sprintf("published %s version %d (%d sent, %d carried)",
-		answer.Artifact, answer.Number, len(intent.Transfers), len(intent.Carried)), answer.writtenAnswer))
+	// WHAT MOVED AND WHAT LANDED ARE TWO COUNTS: the transfers are what this
+	// command sent, and the node's count of the manifest is what the
+	// version holds new. A page the upload sent can still be one the
+	// artifact held (it is stored linted, so its author's digest never
+	// matches), which the intent cannot know and the manifest does.
+	files := fmt.Sprintf("files: %d sent", len(intent.Transfers))
+	if answer.Files != nil {
+		files += fmt.Sprintf(", %d new, %d already held", answer.Files.Stored, answer.Files.Carried)
+	}
+	fmt.Fprintln(p.stdout, outcomeLine(fmt.Sprintf("published %s version %d (%s)",
+		answer.Artifact, answer.Number, files), answer.writtenAnswer))
 	for _, w := range answer.Warnings {
 		fmt.Fprintf(p.stdout, "  warning: %s:%d: %s\n", w.Path, w.Line, w.Message)
 	}

@@ -1,4 +1,4 @@
-# ADR-0039 — A cold store will live in object storage and return through the log; the hot store keeps what that needs from its first release
+# ADR-0039: A cold store will live in object storage and return through the log; the hot store keeps what that needs from its first release
 
 - **Status:** accepted
 - **Authority:** `internal/artifactdata`

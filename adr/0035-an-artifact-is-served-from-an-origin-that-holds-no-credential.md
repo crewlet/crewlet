@@ -1,4 +1,4 @@
-# ADR-0035 — An artifact is served from an origin that holds no credential
+# ADR-0035: An artifact is served from an origin that holds no credential
 
 - **Status:** accepted
 - **Authority:** `internal/artifactserve`

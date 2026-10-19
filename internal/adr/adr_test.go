@@ -62,29 +62,10 @@ func TestEveryRecordCarriesItsFields(t *testing.T) {
 func TestTwoRecordsWithOneNumberAreRefused(t *testing.T) {
 	t.Parallel()
 	record := func(n int, title string) string {
-		return "# ADR-" + fmt.Sprintf("%04d", n) + " — " + title + "\n\n" +
-			"- **Status:** accepted\n" +
-			"- **Authority:** `internal/adr`\n" +
-			"- **Enforced-by:** nothing\n" +
-			"- **Tag-status:** unreleased\n\n" +
-			"## The decision\n\nA body.\n"
-	}
-	tree := func(t *testing.T, files map[string]string) string {
-		t.Helper()
-		root := t.TempDir()
-		dir := filepath.Join(root, adr.Dir)
-		if err := os.MkdirAll(dir, 0o750); err != nil {
-			t.Fatal(err)
-		}
-		for name, body := range files {
-			if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
-				t.Fatal(err)
-			}
-		}
-		return root
+		return recordUnder("# ADR-" + fmt.Sprintf("%04d", n) + ": " + title)
 	}
 
-	control := tree(t, map[string]string{
+	control := recordTree(t, map[string]string{
 		"0001-one-decision.md":     record(1, "One decision"),
 		"0002-another-decision.md": record(2, "Another decision"),
 	})
@@ -94,7 +75,7 @@ func TestTwoRecordsWithOneNumberAreRefused(t *testing.T) {
 			"err %v — the refusal below would prove nothing", len(records), err)
 	}
 
-	duplicated := tree(t, map[string]string{
+	duplicated := recordTree(t, map[string]string{
 		"0001-one-decision.md":     record(1, "One decision"),
 		"0001-another-decision.md": record(1, "Another decision"),
 	})
@@ -215,6 +196,77 @@ func TestEveryRecordIsAnchoredAtItsAuthority(t *testing.T) {
 // the walk, stops finding them.
 const minCitations = 100
 
+// recordUnder is a record with every [adr.Required] field, opening with the
+// given title line.
+func recordUnder(heading string) string {
+	return heading + "\n\n" +
+		"- **Status:** accepted\n" +
+		"- **Authority:** `internal/adr`\n" +
+		"- **Enforced-by:** nothing\n" +
+		"- **Tag-status:** unreleased\n\n" +
+		"## The decision\n\nA body.\n"
+}
+
+// recordTree writes files (name to body) into a fresh tree's [adr.Dir] and
+// answers the tree's root.
+func recordTree(t *testing.T, files map[string]string) string {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, adr.Dir)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+// A RECORD'S HEADING SEPARATES ITS ID FROM ITS TITLE WITH A COLON, and the em
+// dash form it replaced is refused rather than skipped.
+//
+// The gate once required an em dash there, which this repository's prose no
+// longer takes. A heading in the old form still opens with "# ", so the reader
+// names it and the form it wants instead of reading on and reporting a record
+// with no heading at all. The control proves the colon form loads, with the id
+// and a title that keeps a colon of its own.
+func TestARecordHeadingIsTheColonForm(t *testing.T) {
+	t.Parallel()
+	const name = "0001-one-decision.md"
+	records, err := adr.Load(recordTree(t, map[string]string{
+		name: recordUnder("# ADR-0001: One decision: and its qualifier"),
+	}))
+	if err != nil || len(records) != 1 {
+		t.Fatalf("control: a colon heading loaded %d record(s), err %v; the "+
+			"refusals below would prove nothing", len(records), err)
+	}
+	if got := records[0]; got.ID != "ADR-0001" || got.Title != "One decision: and its qualifier" {
+		t.Errorf("a colon heading read as id %q and title %q", got.ID, got.Title)
+	}
+
+	for label, line := range map[string]string{
+		"an em dash":       "# ADR-0001 \u2014 One decision",
+		"no separator":     "# ADR-0001 One decision",
+		"no space after":   "# ADR-0001:One decision",
+		"a space before":   "# ADR-0001 : One decision",
+		"no title":         "# ADR-0001: ",
+		"a three digit id": "# ADR-001: One decision",
+	} {
+		t.Run(label, func(t *testing.T) {
+			t.Parallel()
+			_, err := adr.Load(recordTree(t, map[string]string{name: recordUnder(line)}))
+			if err == nil {
+				t.Fatalf("a record opening %q loaded", line)
+			}
+			if !strings.Contains(err.Error(), "`# ADR-NNNN: Title`") {
+				t.Errorf("the refusal of %q does not name the colon form: %v", line, err)
+			}
+		})
+	}
+}
+
 // THE BACKWARD CHECK, ON A TREE WHOSE VERDICT IS KNOWN — through the same walk,
 // the same prefilter and the same matcher the gate runs.
 //
@@ -239,7 +291,7 @@ func TestACitationOfARecordNobodyWroteIsReported(t *testing.T) {
 		"internal/x/x.go":      "// The rule is " + nobodys + "'s.\npackage x\n",
 		"internal/x/x_test.go": "package x // cites nothing\n",
 		"docs/page.md":         "# Page\n\nSee " + live + " and " + nobodys + ".\n",
-		"adr/0000-template.md": "# " + id("0000") + " — Title\n",
+		"adr/0000-template.md": "# " + id("0000") + ": Title\n",
 		"static/bundle/b.go":   "// " + id("9998") + "\npackage b\n",
 		"docs/notes.txt":       id("9997") + "\n",
 	} {

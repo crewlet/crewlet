@@ -1,4 +1,4 @@
-# ADR-0022 — A turn is charged to one work item, per segment, and never split
+# ADR-0022: A turn is charged to one work item, per segment, and never split
 
 - **Status:** accepted
 - **Authority:** `internal/engine`

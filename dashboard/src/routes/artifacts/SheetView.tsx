@@ -41,7 +41,7 @@ import { useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { STATE_COLLECTION } from "~/contract/artifacts.ts";
 import type { ArtifactDetail, DataCollection } from "~/protocol/index.ts";
-import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
+import { stepRefusal, type ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
 import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import { cellPresence, useArtifactPeople } from "~/lib/artifacts/people.ts";
 import { inferredColumns, sheetColumns, sheetRows } from "~/lib/artifacts/sheet.ts";
@@ -178,14 +178,19 @@ export function SheetView({
             onUndo={() =>
               void store.undo().then((result) => {
                 if (result === null) announce("Nothing of yours to undo.");
-                else if (result.verdict !== "applied" && result.verdict !== "pending") {
-                  announce("That change was overtaken by another and cannot be undone.");
+                else {
+                  const refused = stepRefusal(result, "undone");
+                  if (refused) announce(refused);
                 }
               })
             }
             onRedo={() =>
               void store.redo().then((result) => {
                 if (result === null) announce("Nothing to redo.");
+                else {
+                  const refused = stepRefusal(result, "redone");
+                  if (refused) announce(refused);
+                }
               })
             }
             onOpenLink={(raw) => {

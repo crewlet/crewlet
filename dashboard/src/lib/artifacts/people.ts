@@ -21,6 +21,7 @@ import {
   type SheetPerson,
 } from "@crewlethq/ui";
 import type { ArtifactAudience, ArtifactPresenceMember, OrgProjection } from "~/protocol/index.ts";
+import type { BridgePerson } from "~/runtime/bridge.ts";
 import { indexOrg, principalOfSeat, type OrgIndex, type Unit } from "../seats.ts";
 import { useOrg } from "../store-hooks.ts";
 import { plural } from "../format.ts";
@@ -40,6 +41,10 @@ export interface ArtifactPeople {
   unitPrincipal: (key: string) => Principal;
   /** Every seat as a person cell offers it. */
   sheetPeople: SheetPerson[];
+  /** A seat as an artifact page is told it: display facts only. `kind` is the engine's where it said one. */
+  pagePerson: (handle: string, kind?: "human" | "agent") => BridgePerson;
+  /** Every seat as an artifact page is told it. */
+  pagePeople: BridgePerson[];
 }
 
 /** A unit as a principal: everybody in it and below it. */
@@ -71,6 +76,18 @@ export function memberTurn(
 export function artifactPeople(org: OrgProjection | null | undefined): ArtifactPeople {
   const index = indexOrg(org);
   const units = new Map(index.units.map((u) => [u.id, u]));
+  const pagePerson = (handle: string, kind?: "human" | "agent"): BridgePerson => {
+    const seat = index.byHandle.get(handle);
+    const person: BridgePerson = {
+      seat: handle,
+      kind: kind ?? (seat?.kind === "agent" ? "agent" : "human"),
+      displayName: seat?.name ?? (handle || "Somebody"),
+    };
+    if (seat?.kind === "agent" && seat.avatar) {
+      person.avatar = { character: seat.avatar.character, hue: seat.avatar.color };
+    }
+    return person;
+  };
   return {
     index,
     company: org?.name?.trim() || "the company",
@@ -86,6 +103,8 @@ export function artifactPeople(org: OrgProjection | null | undefined): ArtifactP
       }
       return person;
     }),
+    pagePerson,
+    pagePeople: index.seats.map((seat) => pagePerson(seat.handle)),
   };
 }
 

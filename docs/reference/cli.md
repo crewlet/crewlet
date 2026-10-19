@@ -30,9 +30,9 @@ subcommand below is served by it.
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it. The token takes `admin` |
 | `crewlet seats pause <handle> [-stop] [-reason TEXT] [-op-id ID]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round. Taken by the seat's holder, whoever leads it, or an administrator, and recorded under the caller's own name, kind and credential |
 | `crewlet seats resume <handle> [-op-id ID]` | Lift the pause; what waited is delivered first, in order. The same authority as `pause` |
-| `crewlet artifacts list\|get\|versions\|assets\|usage` | Read the company's artifacts through a running node, as the token's principal: the listing it may see (`-scope`, `-kind`, `-q`, `-status`, `-work-item`), one artifact's head and audience, its versions, its assets, and the company's usage against its quota (an administrator's). See [`crewlet artifacts`](#crewlet-artifacts) |
+| `crewlet artifacts list\|get\|versions\|assets\|usage` | Read the company's artifacts through a running node, as the token's principal: the listing it may see (`-scope`, `-kind`, `-q`, `-status`, `-work-item`), one artifact's head (its runtime contract and capabilities among it) and audience, its versions, each with its contract and capabilities, its assets, and the company's usage against its quota (an administrator's). See [`crewlet artifacts`](#crewlet-artifacts) |
 | `crewlet artifacts publish <dir\|file> [-artifact ID] [-op-id ID]` | Publish a directory or a file as a new artifact, or as the next version of one: an upload intent first, then only the files the artifact does not already hold are sent, then the version is published against the head it read |
-| `crewlet artifacts restore\|label\|share\|unshare\|trash\|untrash\|purge` | Roll back to a version, label one, share with a seat, a unit or the company, withdraw a share, move to and from the trash, and purge for good (an administrator's, with a person present; the id is asked twice) |
+| `crewlet artifacts update\|restore\|label\|share\|unshare\|trash\|untrash\|purge` | Change the title, description or icon, roll back to a version, label one, share with a seat, a unit or the company, withdraw a share, move to and from the trash, and purge for good (an administrator's, with a person present; the id is asked twice) |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load a company file as a new active `company_config` revision — through a running node's `PUT /config`, which activates it fleet-wide, or offline into this node's store, which the node publishes at its next start; the line it prints says which it did |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -1270,9 +1270,10 @@ to decide whether it can still vouch for a retry.
 crewlet artifacts list [-scope mine|shared|company|agents|all] [-kind html|doc|slides|dashboard|sheet]
     [-q TEXT] [-status live|trashed] [-work-item KEY] [-limit N]
 crewlet artifacts get <id>
-crewlet artifacts publish <dir|file> [-artifact ID] [-title TEXT] [-kind html|doc|slides|dashboard|sheet]
-    [-entry PATH] [-label TEXT] [-contract VERSION] [-capabilities a,b]
-    [-work-item KEY] [-force] [-op-id ID]
+crewlet artifacts publish <dir|file> [-artifact ID] [-title TEXT] [-description TEXT]
+    [-icon NAME] [-kind html|doc|slides|dashboard|sheet] [-entry PATH] [-exclude PATTERN]... [-label TEXT]
+    [-contract VERSION] [-capabilities a,b] [-work-item KEY] [-force] [-op-id ID]
+crewlet artifacts update <id> [-title TEXT] [-description TEXT] [-icon NAME] [-op-id ID]
 crewlet artifacts versions <id>
 crewlet artifacts restore <id> <version> [-label TEXT] [-op-id ID]
 crewlet artifacts label <id> <version> <label> [-op-id ID]
@@ -1298,27 +1299,61 @@ and a person present, which a machine token never is.
 
 **`publish` moves only the bytes the artifact does not hold.** It declares
 every file first (its path, its SHA-256 and its size; a directory is walked,
-and any name starting with a dot is left out with everything beneath it), and
+any name starting with a dot is left out with everything beneath it, and a
+symbolic link inside it is never followed), and
 the node answers which files the artifact already holds, which are carried by
 their digest and move no byte, and how each of the rest is sent: straight to
 the bucket on a presigned put where the object store offers one, through the
-node otherwise. Then the version is published. A new artifact opens on the
-one default entry the files hold (`index.html` for `html`, `index.md` for
-`doc`, `deck.json` for `slides`, `dashboard.json` for `dashboard`; with
-`-kind`, that kind's own), else the only file, unless `-entry` names another.
-Files holding two default entries are refused before a byte moves, since which
-one the artifact opens on, and so what kind it is, is the author's to say: name
-it with `-entry` or the kind with `-kind`. Its title defaults to the entry's
-name and its kind to the one whose entry the entry may be (`html` for an HTML
-page, `doc` for a Markdown file, `slides` for `deck.json` and `dashboard` for
-`dashboard.json`, each told by its path, never by JSON alone). A new version of `-artifact` names the
-head it read as its base, so a version somebody else published meanwhile is
+node otherwise. Then the version is published.
+
+`-exclude PATTERN` leaves files out of a directory, once per pattern
+(`-exclude '*.map' -exclude drafts`). A pattern with no slash matches a file's
+or a folder's name at any depth; one with a slash matches its path from the
+directory published (`notes/*.md`, where `*` stops at a slash). A folder a
+pattern matches is left out with everything beneath it, and a leading `./` or
+a trailing `/` is ignored. The grammar is Go's `path.Match`: `*` and `?`
+within one name, `[...]` for a class, `\` to escape. A malformed pattern, one
+reaching outside the directory, or `-exclude` beside a single file is refused
+before anything is sent. Quote a pattern so the shell does not expand it.
+
+A new artifact opens on the one default entry the files hold (`index.html` for
+`html`, `index.md` for `doc`, `deck.json` for `slides`, `dashboard.json` for
+`dashboard`; with `-kind`, that kind's own), else the only file, unless
+`-entry` names another. Files holding two default entries are refused before a
+byte moves, since which one the artifact opens on, and so what kind it is, is
+the author's to say: name it with `-entry` or the kind with `-kind`. Its title
+defaults to the entry's name and its kind to the one whose entry the entry may
+be (`html` for an HTML page, `doc` for a Markdown file, `slides` for
+`deck.json` and `dashboard` for `dashboard.json`, each told by its path, never
+by JSON alone), and `-description` and `-icon` set the gallery card's subtitle
+and the tab's icon word. Those four describe a new
+artifact only: naming `-title`, `-description`, `-icon` or `-kind` beside
+`-artifact` is refused before any byte moves, since a version keeps the
+artifact's kind and `update` is what changes the rest. A new version of
+`-artifact` names the head it read as its base, so a version somebody else published meanwhile is
 refused rather than overwritten; `-force` publishes over it, a person's
 gesture. A new version keeps the head's runtime contract and capabilities
 unless `-contract` or `-capabilities` names others: `-capabilities db,state`
 declares exactly that set, `-capabilities none` declares none, and a name this
-build does not serve is refused before any byte moves. The publish policy's
-warnings are printed beneath the result.
+build does not serve is refused before any byte moves. The result line counts
+the files two ways: how many this command sent, and how many of the version's
+files are new and how many the artifact already held, as the node counted the
+manifest that landed. The two differ for an unchanged page: a page is stored
+in its linted form, so its own digest never matches what the artifact holds
+and it is sent, and the node then finds the linted page already held and
+carries it. The publish policy's warnings are printed beneath the result.
+
+**`get` and `versions` show each version's runtime contract and
+capabilities**: `get` the head version's on its `contract` and `can` lines,
+`versions` one `contract` and `can` per version. Either reads `none` where
+there is none (a Markdown document or a sheet pins no contract; a version
+publishing `-capabilities none` declares none), so a version whose
+capabilities were stripped shows as such.
+
+**`update` changes the title, the description or the icon** (`PATCH
+/artifacts/{id}`, an editor's) and sends exactly the flags it names: an
+empty value clears the description or the icon, a field it does not name is
+left as it is, and a call that names none is refused before anything is sent.
 
 Every write sends an operation id as the request's `Idempotency-Key`: `-op-id`
 takes one in the engine's operation-id grammar, and without it the command

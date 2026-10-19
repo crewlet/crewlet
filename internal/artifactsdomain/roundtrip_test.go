@@ -1,7 +1,9 @@
 package artifactsdomain_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -774,6 +776,31 @@ func TestANativeSheetHoldsNoFile(t *testing.T) {
 	if !errors.Is(err, artifactsdomain.ErrInvalid) || !errors.Is(err, manifest.ErrInvalid) {
 		t.Errorf("an HTML artifact with no entry answered %v, want the manifest's refusal "+
 			"as the domain's", err)
+	}
+}
+
+// NO CAPABILITY IS AN EMPTY SET ON THE WIRE, NEVER A MISSING FIELD: a head
+// and a version that declare nothing answer `"capabilities": []`, so a reader
+// (the CLI's `get` and `versions`, the dashboard's frame) tells a version
+// whose capabilities were stripped from one whose answer lost the field.
+func TestNoCapabilityIsAnEmptySetOnTheWire(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	page := n.create(person("jane", artifacts.RoleOwner), "Plain page",
+		upload(t, "index.html", "<p>plain</p>")).Artifact
+	v, err := n.reader.Version(t.Context(), page, 1)
+	if err != nil {
+		t.Fatalf("read version 1: %v", err)
+	}
+	for what, value := range map[string]any{"the head": n.head(page), "the version": v,
+		"the summary": v.VersionSummary} {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatalf("encode %s: %v", what, err)
+		}
+		if !bytes.Contains(raw, []byte(`"capabilities":[]`)) {
+			t.Errorf("%s encodes no empty capability set: %s", what, raw)
+		}
 	}
 }
 

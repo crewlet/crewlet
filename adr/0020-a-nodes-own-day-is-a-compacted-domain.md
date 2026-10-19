@@ -1,4 +1,4 @@
-# ADR-0020 — A node's own day is a compacted domain, and every node writes only its own
+# ADR-0020: A node's own day is a compacted domain, and every node writes only its own
 
 - **Status:** accepted
 - **Authority:** `internal/usage`

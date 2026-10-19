@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -29,7 +30,11 @@ type fakeArtifactsNode struct {
 	puts      map[string]string
 	creates   []map[string]any
 	publishes []map[string]any
+	patches   []map[string]any
 	ifMatch   []string
+	files     map[string]int
+	head      map[string]any
+	versions  []map[string]any
 	shares    []map[string]any
 	purges    int
 	refuse    map[string]any
@@ -85,15 +90,24 @@ func newFakeArtifactsNode(t *testing.T) *fakeArtifactsNode {
 			n.keys = append(n.keys, r.Header.Get(opkey.Header))
 			n.ifMatch = append(n.ifMatch, r.Header.Get("If-Match"))
 			n.mu.Unlock()
-			answer(w, http.StatusOK, map[string]any{"artifact": cliArtifact, "number": number,
-				"outcome": "applied"})
+			out := map[string]any{"artifact": cliArtifact, "number": number, "outcome": "applied"}
+			if n.files != nil {
+				out["files"] = n.files
+			}
+			answer(w, http.StatusOK, out)
 		}
 	}
 	mux.HandleFunc("POST /artifacts", record(&n.creates, 1))
 	mux.HandleFunc("POST /artifacts/{id}/versions", record(&n.publishes, 4))
 	mux.HandleFunc("PUT /artifacts/{id}/shares", record(&n.shares, 0))
+	mux.HandleFunc("PATCH /artifacts/{id}", record(&n.patches, 0))
 	mux.HandleFunc("GET /artifacts/{id}", func(w http.ResponseWriter, r *http.Request) {
-		answer(w, http.StatusOK, map[string]any{"id": r.PathValue("id"), "head_number": 3})
+		head := map[string]any{"id": r.PathValue("id"), "head_number": 3}
+		maps.Copy(head, n.head)
+		answer(w, http.StatusOK, head)
+	})
+	mux.HandleFunc("GET /artifacts/{id}/versions", func(w http.ResponseWriter, r *http.Request) {
+		answer(w, http.StatusOK, map[string]any{"versions": n.versions})
 	})
 	mux.HandleFunc("GET /artifacts/sources", func(w http.ResponseWriter, _ *http.Request) {
 		answer(w, http.StatusOK, map[string]any{"sources": dashspec.Catalogue()})
@@ -167,6 +181,201 @@ func TestArtifactsPublishCreatesFromADirectory(t *testing.T) {
 	}
 }
 
+// tree writes files (slash-separated path to body) under a fresh directory.
+func tree(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, body := range files {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// declaredPaths is every path the node's first upload intent declared, sorted.
+func (n *fakeArtifactsNode) declaredPaths() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	var out []string
+	for _, e := range n.intents[0].Entries {
+		out = append(out, e.Path)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// -exclude LEAVES OUT WHAT IT MATCHES, AND ONLY THAT: a pattern without a slash
+// matches a name at any depth, one with a slash the path from the directory, a
+// directory matched takes everything beneath it, and the walker's own rules
+// (no dotted name, no symbolic link followed) hold beside it.
+func TestArtifactsPublishExcludesWhatThePatternsMatch(t *testing.T) {
+	t.Parallel()
+	outside := tree(t, map[string]string{"secret.txt": "outside", "dir/also.txt": "outside"})
+	dir := tree(t, map[string]string{
+		"index.html":         "<!doctype html>",
+		"app.js":             "1",
+		"app.js.map":         "{}",
+		"lib/vendor.js.map":  "{}",
+		"lib/vendor.js":      "2",
+		"drafts/old.html":    "old",
+		"drafts/deep/x.html": "x",
+		"notes/a.md":         "a",
+		"notes/keep.txt":     "k",
+		"notes/sub/b.md":     "b",
+		".env":               "SECRET=1",
+		"img/.hidden.png":    "h",
+		"img/logo.svg":       "<svg/>",
+	})
+	for link, target := range map[string]string{"linked.txt": "secret.txt", "linked": "dir"} {
+		if err := os.Symlink(filepath.Join(outside, target), filepath.Join(dir, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	node := newFakeArtifactsNode(t)
+	if _, stderr, err := cli(t, "artifacts", "publish", dir, "-exclude", "*.map", "-exclude", "./drafts/",
+		"-exclude", "notes/*.md", bootstrapForURL(t, node.server.URL)); err != nil {
+		t.Fatalf("publish: %v\n%s", err, stderr)
+	}
+	want := []string{"app.js", "img/logo.svg", "index.html", "lib/vendor.js", "notes/keep.txt", "notes/sub/b.md"}
+	if got := node.declaredPaths(); !slices.Equal(got, want) {
+		t.Errorf("declared %v, want %v", got, want)
+	}
+}
+
+// A MALFORMED OR ESCAPING PATTERN IS REFUSED BEFORE ANYTHING IS SENT, and so is
+// -exclude beside a single file, which has nothing to leave out.
+func TestArtifactsPublishRefusesABadExclusion(t *testing.T) {
+	t.Parallel()
+	dir := site(t)
+	for name, args := range map[string][]string{
+		"malformed":     {dir, "-exclude", "[a-"},
+		"escaping":      {dir, "-exclude", "../site"},
+		"absolute":      {dir, "-exclude", "/index.html"},
+		"empty":         {dir, "-exclude", " "},
+		"a single file": {filepath.Join(dir, "index.html"), "-exclude", "*.css"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			node := newFakeArtifactsNode(t)
+			args := append(append([]string{"artifacts", "publish"}, args...), bootstrapForURL(t, node.server.URL))
+			if _, _, err := cli(t, args...); err == nil {
+				t.Fatal("the publish was not refused")
+			}
+			if len(node.intents) != 0 {
+				t.Errorf("declared %d uploads before refusing", len(node.intents))
+			}
+		})
+	}
+}
+
+// A ROOT THAT IS ITSELF A LINK IS WALKED WHERE IT POINTS: naming it is the
+// operator's choice, and walked as a link it held nothing to publish.
+func TestArtifactsPublishWalksALinkedRoot(t *testing.T) {
+	t.Parallel()
+	target := tree(t, map[string]string{"index.html": "<!doctype html>", "css/app.css": "a{}"})
+	link := filepath.Join(t.TempDir(), "dist")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	node := newFakeArtifactsNode(t)
+	if _, stderr, err := cli(t, "artifacts", "publish", link, bootstrapForURL(t, node.server.URL)); err != nil {
+		t.Fatalf("publish: %v\n%s", err, stderr)
+	}
+	if got := node.declaredPaths(); !slices.Equal(got, []string{"css/app.css", "index.html"}) {
+		t.Errorf("declared %v", got)
+	}
+}
+
+// A NEW ARTIFACT CARRIES ITS DESCRIPTION AND ICON in the create, beside its
+// title.
+func TestArtifactsPublishDescribesANewArtifact(t *testing.T) {
+	t.Parallel()
+	node := newFakeArtifactsNode(t)
+	if _, stderr, err := cli(t, "artifacts", "publish", site(t), "-description", "The Q3 launch plan",
+		"-icon", "rocket", bootstrapForURL(t, node.server.URL)); err != nil {
+		t.Fatalf("publish: %v\n%s", err, stderr)
+	}
+	create := node.creates[0]
+	if create["title"] != "index" || create["description"] != "The Q3 launch plan" || create["icon"] != "rocket" {
+		t.Errorf("created %v", create)
+	}
+}
+
+// A NEW VERSION DESCRIBES NOTHING BUT ITSELF: a head field or the kind named
+// beside -artifact is refused before anything is sent, pointing at `update`,
+// rather than dropped as if it had landed.
+func TestArtifactsPublishRefusesHeadFieldsOnANewVersion(t *testing.T) {
+	t.Parallel()
+	for _, flag := range []string{"-title", "-description", "-icon", "-kind"} {
+		t.Run(flag, func(t *testing.T) {
+			t.Parallel()
+			node := newFakeArtifactsNode(t)
+			_, _, err := cli(t, "artifacts", "publish", site(t), "-artifact", cliArtifact, flag, "html",
+				bootstrapForURL(t, node.server.URL))
+			if err == nil || !strings.Contains(err.Error(), flag) {
+				t.Fatalf("publish %s on a new version = %v, want it refused by name", flag, err)
+			}
+			if flag != "-kind" && !strings.Contains(err.Error(), "crewlet artifacts update") {
+				t.Errorf("the refusal %q does not point at update", err)
+			}
+			if len(node.intents) != 0 || len(node.publishes) != 0 {
+				t.Errorf("sent %d intents and %d publishes before refusing", len(node.intents),
+					len(node.publishes))
+			}
+		})
+	}
+}
+
+// AN UPDATE SENDS EXACTLY THE FIELDS IT NAMES, an empty one included (which
+// clears it), and refuses a call that names none before anything is sent.
+func TestArtifactsUpdateSendsOnlyTheNamedFields(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		args []string
+		want map[string]any
+		says string
+	}{
+		{"title", []string{"-title", "Launch plan"}, map[string]any{"title": "Launch plan"},
+			"updated the title of " + cliArtifact},
+		{"clear the description", []string{"-description", "", "-icon", "rocket"},
+			map[string]any{"description": "", "icon": "rocket"},
+			"updated the description and icon of " + cliArtifact},
+		{"every field", []string{"-icon", "chart", "-title", "T", "-description", "D"},
+			map[string]any{"title": "T", "description": "D", "icon": "chart"},
+			"updated the title, description and icon of " + cliArtifact},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			node := newFakeArtifactsNode(t)
+			args := append([]string{"artifacts", "update", cliArtifact}, tc.args...)
+			stdout, stderr, err := cli(t, append(args, bootstrapForURL(t, node.server.URL))...)
+			if err != nil {
+				t.Fatalf("update: %v\n%s", err, stderr)
+			}
+			if len(node.patches) != 1 || !maps.Equal(node.patches[0], tc.want) {
+				t.Errorf("patched %v, want %v", node.patches, tc.want)
+			}
+			if len(node.keys) != 1 || node.keys[0] == "" {
+				t.Errorf("the update was keyed %v", node.keys)
+			}
+			if !strings.Contains(stdout, tc.says) {
+				t.Errorf("printed %q, want %q", stdout, tc.says)
+			}
+		})
+	}
+	node := newFakeArtifactsNode(t)
+	_, _, err := cli(t, "artifacts", "update", cliArtifact, bootstrapForURL(t, node.server.URL))
+	if err == nil || !strings.Contains(err.Error(), "name what to change") || len(node.patches) != 0 {
+		t.Errorf("an update naming nothing = %v, %d sent", err, len(node.patches))
+	}
+}
+
 // A NEW VERSION SENDS ONLY THE BYTES THE ARTIFACT DOES NOT HOLD: the files the
 // intent found are carried by their digest, the rest uploaded, and the publish
 // names the head it read as its base.
@@ -192,6 +401,72 @@ func TestArtifactsPublishSendsOnlyNewBytes(t *testing.T) {
 	}
 	if !carriedBy["style.css"] || !carriedBy["img/logo.svg"] || carriedBy["index.html"] {
 		t.Errorf("the publish carried %v", carriedBy)
+	}
+}
+
+// THE PUBLISH LINE COUNTS WHAT IT SENT AND WHAT THE VERSION HOLDS NEW
+// SEPARATELY: a page the intent asked for is sent, and the node may still find
+// its linted form already held, so "sent" is the transfers and "new" and
+// "already held" are the node's count of the manifest that landed.
+func TestArtifactsPublishCountsWhatWasSentAndWhatWasHeld(t *testing.T) {
+	t.Parallel()
+	node := newFakeArtifactsNode(t)
+	node.carried = []string{"style.css", "img/logo.svg"}
+	node.files = map[string]int{"stored": 0, "carried": 3}
+	stdout, stderr, err := cli(t, "artifacts", "publish", site(t), "-artifact", cliArtifact,
+		bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatalf("publish: %v\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "version 4 (files: 1 sent, 0 new, 3 already held)") {
+		t.Errorf("printed %q", stdout)
+	}
+
+	// A node that answers no count (a rollback's answer has none) is
+	// reported by what was sent alone, never as nothing held.
+	bare := newFakeArtifactsNode(t)
+	stdout, stderr, err = cli(t, "artifacts", "publish", site(t), bootstrapForURL(t, bare.server.URL))
+	if err != nil {
+		t.Fatalf("publish: %v\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "version 1 (files: 3 sent)") {
+		t.Errorf("printed %q", stdout)
+	}
+}
+
+// GET AND VERSIONS SHOW EACH VERSION'S RUNTIME CONTRACT AND CAPABILITIES, an
+// empty set as `none` rather than a missing line, so a version whose
+// capabilities were stripped is visible as such.
+func TestArtifactsGetAndVersionsShowTheContractAndCapabilities(t *testing.T) {
+	t.Parallel()
+	node := newFakeArtifactsNode(t)
+	cfg := bootstrapForURL(t, node.server.URL)
+	node.head = map[string]any{"contract": "1.0.0", "capabilities": []string{"db", "state"}}
+	stdout, stderr, err := cli(t, "artifacts", "get", cliArtifact, cfg)
+	if err != nil {
+		t.Fatalf("get: %v\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "  contract 1.0.0\n") || !strings.Contains(stdout, "  can      db,state\n") {
+		t.Errorf("get printed %q", stdout)
+	}
+	node.head = map[string]any{"kind": "doc", "capabilities": []string{}}
+	if stdout, _, _ = cli(t, "artifacts", "get", cliArtifact, cfg); !strings.Contains(stdout, "  contract none\n") ||
+		!strings.Contains(stdout, "  can      none\n") {
+		t.Errorf("get of a version declaring nothing printed %q", stdout)
+	}
+
+	node.versions = []map[string]any{
+		{"number": 2, "contract": "1.0.0", "capabilities": []string{}, "files": 1, "bytes": 9},
+		{"number": 1, "contract": "1.0.0", "capabilities": []string{"db"}, "files": 1, "bytes": 9},
+	}
+	stdout, stderr, err = cli(t, "artifacts", "versions", cliArtifact, cfg)
+	if err != nil {
+		t.Fatalf("versions: %v\n%s", err, stderr)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], "contract 1.0.0  can none") ||
+		!strings.Contains(lines[1], "contract 1.0.0  can db") {
+		t.Errorf("versions printed %q", stdout)
 	}
 }
 
