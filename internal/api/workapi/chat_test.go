@@ -390,6 +390,14 @@ func TestAChatDestructionConfirmsWhatItDestroys(t *testing.T) {
 				t.Fatalf("answered %d %v, want %d %s", got.status, got.body,
 					tc.status, tc.code)
 			}
+			// WRITTEN FOR THE PERSON WHO SENT IT: these routes are a
+			// person's alone, so what each refusal says is short sentences
+			// saying what to change, with no dash-joined rationale.
+			if detail := got.detail(); detail == "" || strings.Contains(detail, "—") ||
+				!strings.HasSuffix(detail, ".") {
+				t.Errorf("the refusal reads %q, want short sentences a person "+
+					"reads, with no em dash", detail)
+			}
 			if made := r.rooms.all(); len(made) != 0 {
 				t.Errorf("a request that confirmed nothing destroyed %+v", made)
 			}
