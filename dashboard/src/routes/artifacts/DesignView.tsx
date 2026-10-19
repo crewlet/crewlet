@@ -29,7 +29,9 @@ import {
   Callout,
   CanvasBoard,
   Modal,
+  SegmentedControl,
   Skeleton,
+  SlideStage,
   useToast,
   type CanvasBoardItem,
   type CanvasHandle,
@@ -137,6 +139,13 @@ function Design({
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [opened, setOpened] = useState<string | null>(null);
+  // HOW AN OPENED BOARD IS SHOWN: fitted to the dialog, letterboxed as
+  // Present is, or at its own size with scroll. Each board opens fitted.
+  const [openedSize, setOpenedSize] = useState<"fit" | "actual">("fit");
+  const openBoard = useCallback((path: string) => {
+    setOpenedSize("fit");
+    setOpened(path);
+  }, []);
   const [printing, setPrinting] = useState<string | null>(null);
 
   const shown = draft ?? base.canvas;
@@ -307,7 +316,20 @@ function Design({
           <ol>
             {boards.map((b) => (
               <li key={b.id}>
-                <button type="button" className="design-board-link" onClick={() => reveal(b)}>
+                {/* A click selects the board and brings it into view; Enter or a
+                    double-click opens it at its own size, which the name says. */}
+                <button
+                  type="button"
+                  className="design-board-link"
+                  aria-label={`${b.title}, press Enter or double-click to open`}
+                  onClick={() => reveal(b)}
+                  onDoubleClick={() => openBoard(b.id)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter") return;
+                    event.preventDefault();
+                    openBoard(b.id);
+                  }}
+                >
                   {b.title}
                 </button>
               </li>
@@ -326,7 +348,7 @@ function Design({
             onBoardChange={(id, rect) => change((c) => moveBoard(c, id, rect))}
             onNoteChange={(note) => change((c) => changeNote(c, note))}
             onNoteRemove={(id) => change((c) => removeNote(c, id))}
-            onOpen={setOpened}
+            onOpen={openBoard}
             onActivate={setActive}
             canvasRef={canvasRef}
           />
@@ -340,21 +362,56 @@ function Design({
         size="xl"
         headerActions={
           openedBoard ? (
-            <Button size="small" variant="secondary" onClick={() => void print(openedBoard.id)}>
-              Print
-            </Button>
+            <>
+              <SegmentedControl
+                label="Board size"
+                semantics="radio"
+                size="sm"
+                options={[
+                  { value: "fit", label: "Fit" },
+                  { value: "actual", label: "Actual size" },
+                ]}
+                value={openedSize}
+                onValueChange={(v: string) => setOpenedSize(v === "actual" ? "actual" : "fit")}
+              />
+              <Button size="small" variant="secondary" onClick={() => void print(openedBoard.id)}>
+                Print
+              </Button>
+            </>
           ) : undefined
         }
       >
-        {openedBoard && (
-          // AT ITS OWN SIZE, scrolled where it is larger than the dialog: the
-          // page lays itself out for the width its board was drawn at.
-          <div className="design-opened">
-            <div style={{ width: openedBoard.w, height: openedBoard.h }}>
-              {frameOf(openedBoard, "design-opened-frame")}
+        {openedBoard &&
+          (openedSize === "fit" ? (
+            // FITTED: the page lays itself out at its board's own size and
+            // is scaled as a whole into the dialog, letterboxed, so it reads
+            // as the board drawn on the canvas does, only larger.
+            <div className="design-opened design-opened--fit">
+              <SlideStage
+                label={`${openedBoard.title}, ${openedBoard.w} by ${openedBoard.h}`}
+                fit="contain"
+                width={openedBoard.w}
+                height={openedBoard.h}
+              >
+                {frameOf(openedBoard, "design-opened-frame")}
+              </SlideStage>
             </div>
-          </div>
-        )}
+          ) : (
+            // AT ITS OWN SIZE, scrolled both ways where it is larger than
+            // the dialog.
+            <div
+              className="design-opened design-opened--actual"
+              role="region"
+              aria-label={`${openedBoard.title} at actual size`}
+              // The box scrolls, so a keyboard reader can reach it to.
+              // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+              tabIndex={0}
+            >
+              <div style={{ width: openedBoard.w, height: openedBoard.h }}>
+                {frameOf(openedBoard, "design-opened-frame")}
+              </div>
+            </div>
+          ))}
       </Modal>
       {printedBoard && (
         <BoardPrint

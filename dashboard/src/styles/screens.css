@@ -11291,10 +11291,23 @@ a.live-row:focus-visible {
 :is(.design-board-frame, .design-opened-frame, .design-print-frame) .artifact-note {
   display: none;
 }
-/* The dialog's own body bounds the height; a board wider than the dialog
-   scrolls sideways inside it. */
+/* An opened board: fitted into the dialog by its stage, or at its own size
+   with scroll both ways. The dialog is portaled outside the page, so the
+   bound is the window's, never the page scroller's. */
 .design-opened {
-  overflow-x: auto;
+  min-width: 0;
+}
+.design-opened--fit {
+  display: grid;
+  height: 70vh;
+}
+.design-opened--actual {
+  height: 70vh;
+  overflow: auto;
+}
+.design-opened--actual:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
 }
 
 /* PRINT: one board over the whole window, at its corner and its own size,
