@@ -40,19 +40,31 @@ import type {
 } from "~/protocol/index.ts";
 import {
   allDays,
+  cellText,
   chartTimeOf,
   csvOf,
   effectiveAgg,
   exportName,
+  figureFormat,
   fold,
+  foldSeries,
   formatDay,
   formatNumber,
+  scaleFormat,
   tableLayout,
   wordsOf,
 } from "~/lib/artifacts/dashboard.ts";
+import { tableMeasure } from "~/lib/artifacts/tableMeasure.ts";
 
 /** The widget types drawn as a chart, which a reader may save as an image. */
 const CHARTS = new Set<Widget["type"]>(["timeseries", "columns", "activity", "bars", "share"]);
+
+/**
+ * What a figure says when its dataset answered no rows, the same on every
+ * chart: the design system's own default speaks of "this window", and a board's
+ * dataset may be a file, a collection or a filtered calculation with none.
+ */
+const NO_ROWS = "No data to show.";
 
 /** Why a chart could not be saved as an image, in a reader's words. */
 const PNG_REFUSALS: Record<ElementToPngError["reason"], string> = {
@@ -184,11 +196,23 @@ function Figure({
   const label = (key: string | undefined) => column(key)?.label ?? key ?? "";
   const num = (v: DashboardValue) => formatNumber(v, w.format, w.unit);
   const title = w.title ?? "";
+  // A tile's number at a glance, its unit beside it at the tile's quieter step.
+  const figure = (v: DashboardValue) => formatNumber(v, figureFormat(w));
   switch (w.type) {
     case "stat": {
       const agg = effectiveAgg(w);
       const value = fold(agg, column(w.value)?.type ?? "number", rows, w.value ?? "");
-      return <StatCard flush label={w.value ? label(w.value) : datasetTitle} value={num(value)} />;
+      // THE FRAME'S TITLE NAMES THE NUMBER, so the tile's own label (the
+      // column it folds) is said to a screen reader and not drawn under it.
+      return (
+        <StatCard
+          flush
+          hideLabel
+          label={w.value ? label(w.value) : datasetTitle}
+          value={figure(value)}
+          unit={value === null ? undefined : w.unit}
+        />
+      );
     }
     case "meter": {
       const agg = effectiveAgg(w);
@@ -196,20 +220,44 @@ function Figure({
       const max = w.max ?? fold(agg, "number", rows, w.max_field ?? "");
       const v = typeof value === "number" ? value : 0;
       const m = typeof max === "number" && max > 0 ? max : 1;
+      const of = (x: DashboardValue) => formatNumber(x, figureFormat(w), w.unit);
+      const named = w.value ? label(w.value) : datasetTitle;
+      // A METER IS A STAT WITH ITS BAR: the number at the tile's display
+      // step, what it is out of on the quiet line under it (beside it, a
+      // tile two columns wide cut the maximum to "of 10…"), and the bar under
+      // both. The tile is the bar's words drawn; a screen reader hears them
+      // once, from the meter.
       return (
-        <Meter
-          value={v}
-          max={m}
-          label={w.value ? label(w.value) : datasetTitle}
-          valueText={`${num(value)} of ${num(max)}`}
-        />
+        <div className="dashboard-meter">
+          <StatCard
+            flush
+            hideLabel
+            aria-hidden
+            label={named}
+            value={figure(value)}
+            unit={value === null ? undefined : w.unit}
+            sub={`of ${of(max)}`}
+          />
+          <Meter
+            value={v}
+            max={m}
+            hideLabel
+            label={named}
+            valueText={`${of(value)} of ${of(max)}`}
+            // A QUANTITY, NOT A VERDICT: the spec says nothing of whether a
+            // full bar is a fault or the goal, so the bar is painted as the
+            // number it is and never in a warning or a danger hue it was not
+            // given.
+            tone="quantity"
+          />
+        </div>
       );
     }
     case "timeseries":
     case "columns": {
       const { series, buckets, from, to } = seriesOf(w, rows, label, column(w.by));
       const days = allDays(rows.map((r) => r[w.x ?? ""] ?? null));
-      const time = days ? { formatTime: formatDay } : {};
+      const time = days ? { formatTime: (at: number) => formatDay(at) } : {};
       if (w.type === "timeseries") {
         return (
           <TimeSeries
@@ -217,6 +265,7 @@ function Figure({
             from={from}
             to={to}
             format={(v) => num(v)}
+            emptyLabel={NO_ROWS}
             {...time}
             series={series.map((s) => ({
               id: s.id,
@@ -232,15 +281,23 @@ function Figure({
           series={series}
           buckets={buckets}
           format={(v) => num(v)}
+          formatScale={scaleFormat(w)}
+          emptyLabel={NO_ROWS}
           {...time}
         />
       );
     }
     case "activity": {
       const y = w.y?.[0] ?? "";
+      const days = allDays(rows.map((r) => r[w.x ?? ""] ?? null));
       return (
         <ActivityStrip
           label={title}
+          emptyLabel={NO_ROWS}
+          reading={{
+            formatTime: days ? (at) => formatDay(at) : (at) => new Date(at).toLocaleString(),
+            format: (v) => num(v),
+          }}
           buckets={timed(rows, w.x ?? "").map((r) => ({
             t: chartTimeOf(r[w.x ?? ""] ?? null),
             v: numberOr0(r[y]),
@@ -251,6 +308,7 @@ function Figure({
     case "bars":
       return (
         <BarList
+          emptyLabel={NO_ROWS}
           limit={w.limit ?? 10}
           data={rows.map((r, i) => ({
             id: String(i),
@@ -264,12 +322,16 @@ function Figure({
       // A SHARE IS NEVER DRAWN WITHOUT ITS LEGEND: the bar names none of its
       // parts, so the legend, keyed from the same list, says which part is
       // which and how much it holds.
-      const parts = rows.slice(0, w.limit ?? 8).map((r, i) => ({
-        id: String(i),
-        label: wordsOf(column(w.label), r[w.label ?? ""] ?? null),
-        value: numberOr0(r[w.value ?? ""]),
-        shown: num(r[w.value ?? ""] ?? null),
-      }));
+      const parts = shareParts(
+        rows.slice(0, w.limit ?? 8).map((r, i) => ({
+          id: String(i),
+          label: wordsOf(column(w.label), r[w.label ?? ""] ?? null),
+          value: numberOr0(r[w.value ?? ""]),
+        })),
+      ).map((p) => ({ ...p, shown: num(p.value) }));
+      if (!parts.some((p) => p.value > 0)) {
+        return <StackedBar format={(v) => num(v)} segments={[]} emptyLabel={NO_ROWS} />;
+      }
       return (
         <div className="dashboard-share">
           <StackedBar
@@ -286,6 +348,7 @@ function Figure({
       const { widths, flex, flexMin } = tableLayout(
         shown.map((key) => ({ key, label: label(key), column: column(key) })),
         drawn,
+        tableMeasure(),
       );
       const table: Record<string, DataTableColumn> = {};
       for (const key of shown) {
@@ -305,7 +368,7 @@ function Figure({
           // over every row.
           sortable: false,
           ...(c?.type === "number" ? { align: "right" as const } : {}),
-          render: (_row, value) => cell(value as DashboardValue, c),
+          render: (_row, value) => cellText(c, value as DashboardValue),
         };
       }
       return (
@@ -332,15 +395,18 @@ function Figure({
 }
 
 /** A table cell's words. */
-function cell(v: DashboardValue, c: DashboardColumn | undefined): ReactNode {
-  if (v === null) return "";
-  if (typeof v === "boolean") return v ? "Yes" : "No";
-  if (c?.type === "number" && typeof v === "number") return formatNumber(v, "number");
-  return wordsOf(c, v);
-}
-
 function numberOr0(v: DashboardValue | undefined): number {
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
+}
+
+/** A share's parts, held to the hues a reader can tell apart, the rest summed as "Other" (see foldSeries). */
+function shareParts(
+  parts: readonly { id: string; label: string; value: number }[],
+): { id: string; label: string; value: number }[] {
+  const { series, fold: into } = foldSeries(parts.map((p) => ({ id: p.id, name: p.label })));
+  const sum = new Map<string, number>();
+  for (const p of parts) sum.set(into(p.id), (sum.get(into(p.id)) ?? 0) + p.value);
+  return series.map((s) => ({ id: s.id, label: s.name, value: sum.get(s.id) ?? 0 }));
 }
 
 /** Rows with a place on the time axis at `x`, oldest first. */
@@ -381,10 +447,27 @@ function seriesOf(
     }
     byT.set(t, values);
   }
-  const buckets = [...byT.entries()].map(([t, values]) => ({ t, values }));
+  const all = [...names.entries()].map(([id, name]) => ({ id, name }));
+  // A split's series are its values in no order of their own, so the ones
+  // kept are the biggest over the window; columns named by the author keep
+  // the author's order.
+  const totals = new Map<string, number>();
+  for (const values of byT.values()) {
+    for (const [id, v] of Object.entries(values))
+      totals.set(id, (totals.get(id) ?? 0) + Math.abs(v));
+  }
+  const ranked = w.by
+    ? [...all].sort((a, b) => (totals.get(b.id) ?? 0) - (totals.get(a.id) ?? 0))
+    : all;
+  const { series, fold: into } = foldSeries(ranked);
+  const buckets = [...byT.entries()].map(([t, values]) => {
+    const folded: Record<string, number> = {};
+    for (const [id, v] of Object.entries(values)) folded[into(id)] = (folded[into(id)] ?? 0) + v;
+    return { t, values: folded };
+  });
   const ts = buckets.map((b) => b.t);
   return {
-    series: [...names.entries()].map(([id, name]) => ({ id, name })),
+    series,
     buckets,
     from: ts.length ? Math.min(...ts) : 0,
     to: ts.length ? Math.max(...ts) : 0,
