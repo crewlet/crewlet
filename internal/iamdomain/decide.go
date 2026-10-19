@@ -510,9 +510,8 @@ func (w *Writer) Redeem(ctx context.Context, in Redemption) (statelog.Result, er
 		// own answer is an invalid value an administrator typed, and wrapped
 		// here it told a surface the invitee had sent a bad request, when
 		// what they hold is a link the company's chart has since retired.
-		return statelog.Result{}, fmt.Errorf("%w: invitation %s is for a "+
-			"seat that's no longer available (%v)",
-			ErrRefused, in.Invitation, err)
+		return statelog.Result{}, forbidden("invitation %s is for a "+
+			"seat that's no longer available (%v)", in.Invitation, err)
 	}
 	return w.enrol(ctx, enrolment{
 		personID: in.PersonID, kind: iam.KindPerson, stage: in.Stage,
@@ -593,8 +592,8 @@ func (in Redemption) validate() error {
 		// REFUSED rather than invalid: it is what a link without its
 		// secret comes to, and its remedy is the one every way a link
 		// stops working has — ask for a new one.
-		return fmt.Errorf("%w: invitation %s needs the full "+
-			"link, not just its id", ErrRefused, in.Invitation)
+		return forbidden("invitation %s needs the full "+
+			"link, not just its id", in.Invitation)
 	case in.Seat == "":
 		// A CALLER'S FAULT, never the invitee's: every invitation holds a
 		// seat ([Writer.Invite]), and the surface redeeming one hands on the
@@ -857,8 +856,7 @@ func (w *Writer) createsNobodyTwice(ctx context.Context, tx *sql.Tx,
 //     operation under a new key.
 func (e *enrolment) alreadyEnrolled() error {
 	if e.invitation != "" {
-		return fmt.Errorf("%w: invitation %s has already been used",
-			ErrRefused, e.invitation)
+		return forbidden("invitation %s has already been used", e.invitation)
 	}
 	return fmt.Errorf("%w: person %s already exists, and request %s didn't "+
 		"create them. Use a new key to add someone new",
@@ -977,8 +975,8 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 		Scan(&held, &expires, &spent, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return "", fmt.Errorf("%w: this node doesn't have invitation %s",
-			ErrRefused, e.invitation)
+		return "", forbidden("this node doesn't have invitation %s",
+			e.invitation)
 	case err != nil:
 		return "", fmt.Errorf("iamdomain: read invitation %s: %w", e.invitation, err)
 	}
@@ -993,18 +991,16 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 		// naming an invitation's id — which every snapshot and proxy log
 		// holds — is not holding its link. An invitation issued before
 		// links carried a secret has no verifier and admits nobody.
-		return "", fmt.Errorf("%w: that isn't the link for invitation %s",
-			ErrRefused, e.invitation)
-	case held != e.blind:
-		return "", fmt.Errorf("%w: invitation %s is for a "+
-			"different email address",
-			ErrRefused, e.invitation)
-	case spent != 0:
-		return "", fmt.Errorf("%w: invitation %s has already been used",
-			ErrRefused, e.invitation)
-	case expires == 0 || !w.Now().Before(time.UnixMilli(expires)):
-		return "", fmt.Errorf("%w: invitation %s has expired", ErrRefused,
+		return "", forbidden("that isn't the link for invitation %s",
 			e.invitation)
+	case held != e.blind:
+		return "", forbidden("invitation %s is for a "+
+			"different email address", e.invitation)
+	case spent != 0:
+		return "", forbidden("invitation %s has already been used",
+			e.invitation)
+	case expires == 0 || !w.Now().Before(time.UnixMilli(expires)):
+		return "", forbidden("invitation %s has expired", e.invitation)
 	}
 	// WHAT WAS OFFERED, READ THROUGH [iam.Expand]: an invitation offering
 	// admin offers every app with it, and an invitation carrying a name
@@ -1013,8 +1009,8 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 	offered := iam.Expand(invitation.Grants)
 	for _, g := range e.grants {
 		if !slices.Contains(offered, g) {
-			return "", fmt.Errorf("%w: invitation %s gives %v, which "+
-				"doesn't include %s", ErrRefused, e.invitation,
+			return "", forbidden("invitation %s gives %v, which "+
+				"doesn't include %s", e.invitation,
 				invitation.Grants, g)
 		}
 	}
@@ -1023,8 +1019,8 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 	// offered, and one it carried and the enrolment dropped would spend
 	// the link without the binding its issuer decided on.
 	if e.seat != invitation.Seat {
-		return "", fmt.Errorf("%w: invitation %s is for seat %q, not %q",
-			ErrRefused, e.invitation, invitation.Seat, e.seat)
+		return "", forbidden("invitation %s is for seat %q, not %q",
+			e.invitation, invitation.Seat, e.seat)
 	}
 	return invitation.InvitedBy, nil
 }
@@ -1710,8 +1706,8 @@ func (w *Writer) CloseSession(ctx context.Context, lineage, person, reason,
 			return fmt.Errorf("iamdomain: read session %s's owner: %w",
 				lineage, err)
 		case owner != person:
-			return fmt.Errorf("%w: session %s belongs to person %s, not %s",
-				ErrRefused, lineage, owner, person)
+			return forbidden("session %s belongs to person %s, not %s",
+				lineage, owner, person)
 		}
 		return nil
 	}
@@ -2094,8 +2090,8 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 		}
 		if owner.Kind == iam.KindMachine &&
 			strings.HasPrefix(login, iam.TokenLoginPrefix) {
-			return fmt.Errorf("%w: %s belongs to an API token, not an "+
-				"account, so it can't have access tokens", ErrRefused, login)
+			return forbidden("%s belongs to an API token, not an "+
+				"account, so it can't have access tokens", login)
 		}
 		if err = w.mayMintFor(in, owner); err != nil {
 			return err
@@ -2243,8 +2239,8 @@ func (w *Writer) tokenGrants(asked, owner []iam.Grant) ([]iam.Grant, error) {
 	holds := iam.Expand(owner)
 	for _, g := range grants {
 		if !g.Valid() || !slices.Contains(holds, g) {
-			return nil, fmt.Errorf("%w: a token can only have its owner's "+
-				"access, and %s isn't in %v", ErrRefused, g, owner)
+			return nil, forbidden("a token can only have its owner's "+
+				"access, and %s isn't in %v", g, owner)
 		}
 	}
 	if err := w.MayConfer(nil, grants); err != nil {
@@ -2257,11 +2253,10 @@ func (w *Writer) tokenGrants(asked, owner []iam.Grant) ([]iam.Grant, error) {
 func tokenOwnable(personID string, owner Person) error {
 	switch {
 	case owner.Kind != iam.KindPerson && owner.Kind != iam.KindMachine:
-		return fmt.Errorf("%w: %s isn't a person or service account here",
-			ErrRefused, personID)
+		return forbidden("%s isn't a person or service account here", personID)
 	case !owner.Stage.MayAct():
-		return fmt.Errorf("%w: %s is %q, so a token can't act for them",
-			ErrRefused, personID, owner.Stage)
+		return forbidden("%s is %q, so a token can't act for them",
+			personID, owner.Stage)
 	}
 	return nil
 }
@@ -2290,7 +2285,12 @@ func tokenOwnable(personID string, owner Person) error {
 // minted from a token renews for ever, a year at a time, with nobody present —
 // the route refuses such a request, and the record refuses it again for the
 // route's reason, since a party is composed as the token's OWNER and would
-// otherwise pass the person arm below as that owner.
+// otherwise pass the person arm below as that owner — as [ErrTokenRefused],
+// so a surface answers it as the route does: a person must be present.
+//
+// ONLY THE SERVICE ACCOUNT'S ARM IS LIFTED BY A PERMISSION, and its refusal
+// names admin; a person's token minted by anybody else, and any mint through a
+// token, name none ([Refusal]).
 //
 // AND NOTHING THROUGH THE DASHBOARD ASSISTANT, for the same reason: it is
 // composed as its person, so the person arm would admit it, and a token it
@@ -2301,27 +2301,25 @@ func tokenOwnable(personID string, owner Person) error {
 // token's owner.
 func (w *Writer) mayMintFor(in TokenMint, owner Person) error {
 	if strings.HasPrefix(w.OperatorID, iam.MachineTokenPrefix) {
-		return fmt.Errorf("%w: you're using the access token %s, and a token "+
+		return forbidden("%w. You're using the access token %s, and a token "+
 			"can't create another. Sign in to create one",
-			ErrRefused, w.OperatorID)
+			ErrTokenRefused, w.OperatorID)
 	}
 	if strings.HasPrefix(w.OperatorID, iam.AssistPrefix) {
-		return fmt.Errorf("%w: %w. Create the token yourself from your account "+
-			"page (%s)", ErrRefused, ErrAssistRefused, w.OperatorID)
+		return forbidden("%w. Create the token yourself from your account "+
+			"page (%s)", ErrAssistRefused, w.OperatorID)
 	}
 	switch owner.Kind {
 	case iam.KindPerson:
 		if w.Principal == "" || w.Principal != in.PersonID {
-			return fmt.Errorf("%w: %s is a person, so only they can create "+
+			return forbidden("%s is a person, so only they can create "+
 				"their personal access tokens. Admins create tokens for "+
-				"service accounts only",
-				ErrRefused, in.PersonID)
+				"service accounts only", in.PersonID)
 		}
 	case iam.KindMachine:
 		if !w.Can(iam.GrantAdmin) {
-			return fmt.Errorf("%w: creating a token for the service "+
-				"account %s needs %s", ErrRefused, in.PersonID,
-				iam.GrantAdmin)
+			return needs([]iam.Grant{iam.GrantAdmin}, "creating a token for the "+
+				"service account %s needs %s", in.PersonID, iam.GrantAdmin)
 		}
 	}
 	return nil
@@ -2909,8 +2907,8 @@ func (w *Writer) SetPassword(ctx context.Context, in PasswordSet) (
 			return err
 		}
 		if person.Kind != iam.KindPerson {
-			return fmt.Errorf("%w: %s is a %s, and only people have passwords",
-				ErrRefused, in.PersonID, person.Kind)
+			return forbidden("%s is a %s, and only people have passwords",
+				in.PersonID, person.Kind)
 		}
 		counters, err := countersOf(ctx, tx, in.PersonID)
 		if err != nil {
@@ -3199,6 +3197,10 @@ func keepsStanding(held, updated Person) error {
 // grant the caller may not confer is refused with nothing moved. The record's
 // own decide asks again in the snapshot the grants land from, and that answer
 // is the authority — the early one is read from rows that may be a moment old.
+//
+// A PERMISSION THE PARTY LACKS IS NAMED ([Refusal.Grants]), since holding it is
+// the remedy; a name this build does not know names none, since no permission
+// would make it one.
 func (w *Writer) MayConfer(before, after []iam.Grant) error {
 	held := iam.Expand(before)
 	for _, g := range after {
@@ -3206,12 +3208,11 @@ func (w *Writer) MayConfer(before, after []iam.Grant) error {
 			continue
 		}
 		if !g.Valid() {
-			return fmt.Errorf("%w: %q isn't a permission. Choose from %v",
-				ErrRefused, g, iam.AllGrants)
+			return forbidden("%q isn't a permission. Choose from %v",
+				g, iam.AllGrants)
 		}
-		return fmt.Errorf("%w: you can't give %s because you don't have "+
-			"it (you have %v)",
-			ErrRefused, g, w.Grants)
+		return needs([]iam.Grant{g}, "you can't give %s because you don't "+
+			"have it (you have %v)", g, w.Grants)
 	}
 	return nil
 }
