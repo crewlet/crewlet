@@ -7,7 +7,7 @@
  */
 
 import { useState, type ReactNode } from "react";
-import { ArtifactBar } from "@crewlethq/ui";
+import { ArtifactBar, EditingStatus } from "@crewlethq/ui";
 import { KindControlsSink, type KindControls } from "~/lib/artifacts/kindControls.ts";
 
 export function WithKindBar({ children }: { children: ReactNode }) {
@@ -20,6 +20,13 @@ export function WithKindBar({ children }: { children: ReactNode }) {
         kind="slides"
         kindLabel="Artifact"
         {...(controls?.modes ? { modes: controls.modes } : {})}
+        {...(controls?.editing
+          ? {
+              status: (
+                <EditingStatus dirty={controls.editing.dirty} saving={controls.editing.saving} />
+              ),
+            }
+          : {})}
         kindTools={controls?.tools ?? []}
         menu={controls?.menu ?? []}
       />

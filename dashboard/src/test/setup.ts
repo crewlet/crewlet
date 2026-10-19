@@ -119,3 +119,20 @@ for (const area of ["localStorage", "sessionStorage"] as const) {
     Object.defineProperty(globalThis, area, { writable: true, value: memoryStorage() });
   }
 }
+
+// A RANGE HAS NO LAYOUT EITHER, and the rich editor measures one to keep the
+// caret in view and to place what floats beside it. An empty rectangle is
+// what a browser answers for a collapsed range in a hidden element, so it is
+// a value rather than a pretence; a suite in the node environment has no DOM.
+if (typeof Range !== "undefined") {
+  const empty = () => new DOMRect(0, 0, 0, 0);
+  if (typeof Range.prototype.getBoundingClientRect !== "function") {
+    Range.prototype.getBoundingClientRect = empty;
+  }
+  if (typeof Range.prototype.getClientRects !== "function") {
+    Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
+  }
+}
+if (typeof document !== "undefined" && typeof document.elementFromPoint !== "function") {
+  document.elementFromPoint = () => null;
+}

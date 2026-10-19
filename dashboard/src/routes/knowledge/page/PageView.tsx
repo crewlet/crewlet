@@ -16,9 +16,10 @@
  * The eye ([WatchControl]), History, Edit and More. More holds the star,
  * which is why this page tells the frame to draw none of its own
  * ([useOwnStar]): one control per action on screen. History swaps the outline
- * for the revisions and the comments for the page's changes; Edit writes
- * through `save_page` as the person signed in, against the revision they
- * opened (`Editor.tsx`). For a reader who cannot write, every
+ * for the revisions and the comments for the page's changes; Edit turns the
+ * page itself into the editor, the bar into the editing state with Cancel and
+ * Save, and writes through `save_page` as the person signed in, against the
+ * revision they opened (`Editor.tsx`). For a reader who cannot write, every
  * control stays drawn and says why.
  *
  * # What a wiki cannot tell you, and this can
@@ -39,6 +40,7 @@ import {
   EmptyState,
   Menu,
   Skeleton,
+  preloadRichEditor,
   useToast,
 } from "@crewlethq/ui";
 import {
@@ -339,51 +341,59 @@ export function PageView({ id }: { id: string }) {
 
   return (
     <>
-      <KnowledgeBar>
-        {page && (
-          <>
-            <WatchControl page={page} />
-            {/* ON A PHONE HISTORY AND MORE FOLD into the frame's menu, which
+      {/* WHILE EDITING, THE BAR IS THE EDITOR'S: its state, Cancel and Save
+          (`Editor.tsx`), drawn into the same slot. */}
+      {!editing && (
+        <KnowledgeBar>
+          {page && (
+            <>
+              <WatchControl page={page} />
+              {/* ON A PHONE HISTORY AND MORE FOLD into the frame's menu, which
                 holds the same entries (`usePageMenu`), and Edit stays. */}
-            <span className="page-action-folds">
+              <span className="page-action-folds">
+                <Button
+                  size="small"
+                  variant="ghost"
+                  leadingIcon={<ClockGlyph size="sm" />}
+                  disabledReason={
+                    history.length === 0 ? "Nobody has saved over it yet." : undefined
+                  }
+                  aria-pressed={reading}
+                  onClick={toggleHistory}
+                >
+                  History
+                </Button>
+              </span>
               <Button
                 size="small"
-                variant="ghost"
-                leadingIcon={<ClockGlyph size="sm" />}
-                disabledReason={history.length === 0 ? "Nobody has saved over it yet." : undefined}
-                aria-pressed={reading}
-                onClick={toggleHistory}
+                variant="secondary"
+                leadingIcon={<PencilGlyph size="sm" />}
+                disabledReason={
+                  canEdit.can ? (editing ? "You are editing it." : undefined) : canEdit.reason
+                }
+                title={canEdit.can ? undefined : canEdit.reason}
+                onPointerEnter={preloadRichEditor}
+                onFocus={preloadRichEditor}
+                onClick={() => {
+                  setVersion("");
+                  setEdit("1");
+                }}
               >
-                History
+                Edit
               </Button>
-            </span>
-            <Button
-              size="small"
-              variant="secondary"
-              leadingIcon={<PencilGlyph size="sm" />}
-              disabledReason={
-                canEdit.can ? (editing ? "You are editing it." : undefined) : canEdit.reason
-              }
-              title={canEdit.can ? undefined : canEdit.reason}
-              onClick={() => {
-                setVersion("");
-                setEdit("1");
-              }}
-            >
-              Edit
-            </Button>
-            <span className="page-action-folds">
-              <Menu
-                label={`More for “${page.title}”`}
-                icon={<EllipsisGlyph size="sm" />}
-                triggerVariant="ghost"
-                align="end"
-                items={menu}
-              />
-            </span>
-          </>
-        )}
-      </KnowledgeBar>
+              <span className="page-action-folds">
+                <Menu
+                  label={`More for “${page.title}”`}
+                  icon={<EllipsisGlyph size="sm" />}
+                  triggerVariant="ghost"
+                  align="end"
+                  items={menu}
+                />
+              </span>
+            </>
+          )}
+        </KnowledgeBar>
+      )}
 
       {loading && !data && <Skeleton variant="text" rows={10} label="Loading the page" />}
       <QueryState error={error} refusal={refusal} loading={loading}>
@@ -406,7 +416,12 @@ export function PageView({ id }: { id: string }) {
               <DocumentTitle>{page.title}</DocumentTitle>
               <PageProps detail={data} spaceName={spaceName} who={who} now={now} />
               {editing ? (
-                <PageEditor key={page.id} detail={data} onDone={() => setEdit("")} />
+                <PageEditor
+                  key={page.id}
+                  detail={data}
+                  reading={<PageBody detail={data} body={body} />}
+                  onDone={() => setEdit("")}
+                />
               ) : reading ? (
                 <VersionView
                   pageID={page.id}
@@ -422,7 +437,7 @@ export function PageView({ id }: { id: string }) {
               {edit === "1" && !canEdit.can && (
                 <p className="knowledge-note">You cannot edit it here: {canEdit.reason}</p>
               )}
-              {reading ? (
+              {editing ? null : reading ? (
                 <PageChanges pageID={page.id} who={who} now={now} />
               ) : (
                 <>

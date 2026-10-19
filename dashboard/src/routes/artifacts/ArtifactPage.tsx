@@ -62,6 +62,7 @@ import {
   type MenuEntry,
   type NodeHue,
   type PeopleRailSelf,
+  EditingStatus,
 } from "@crewlethq/ui";
 import {
   CopyGlyph,
@@ -783,6 +784,9 @@ function Loaded({
               />
             ) : undefined
           }
+          {...(kind?.editing
+            ? { status: <EditingStatus dirty={kind.editing.dirty} saving={kind.editing.saving} /> }
+            : {})}
           kindTools={kind?.tools ?? []}
           tools={tools}
           menu={menu}

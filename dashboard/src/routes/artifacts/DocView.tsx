@@ -18,10 +18,12 @@
  * somebody moves this reader to the tab they are on: the tab is said to the
  * room as the region `tab:<path>`.
  *
- * A PERSON'S EDIT IS A VERSION (D54, D69): Edit opens the doc's tabs to rename,
- * reorder, add and remove and each tab's Markdown, and Save publishes the
- * whole change as one version against the version it started from
- * (`DocEditor`).
+ * A PERSON'S EDIT IS A VERSION (D54, D69): Edit turns the doc itself into the
+ * editor, each tab's text edited in place and its tabs renamed, reordered,
+ * added and removed beside it, and the bar's Edit into the editing state,
+ * Cancel and Save, which publishes the whole change as one version against
+ * the version it started from (`DocEditor`). ONE CONTROL ON THE BAR becomes
+ * the other, so the bar stays one slim row either way.
  */
 
 import { useEffect, useId, useMemo, useState } from "react";
@@ -121,40 +123,45 @@ function Doc({
     </Document>
   );
 
-  // EDIT AND PRINT ARE THE PAGE BAR'S (`lib/artifacts/kindControls.ts`): Edit labelled at its
-  // end while the doc is read, Print in its More. While editing, the editor's
-  // own Save and Cancel are the controls, and the bar offers neither.
-  useKindControls(
-    primary && !editing
-      ? {
-          ...(editable
-            ? {
-                tools: [
-                  {
-                    key: "edit",
-                    label: "Edit",
-                    icon: <PencilGlyph size="sm" />,
-                    labelled: true,
-                    onSelect: () => setEditing(true),
-                  },
-                ],
-              }
-            : {}),
-          menu: [
-            {
-              key: "print",
-              label: "Print or save as PDF",
-              icon: <FileTextGlyph size="sm" />,
-              onSelect: () => window.print(),
-            },
-          ],
-        }
-      : null,
-  );
+  if (editing) {
+    // WHILE EDITING, THE EDITOR'S CONTROLS ARE THE BAR'S: it publishes its
+    // state, Cancel and Save itself (`DocEditor`), in Edit's place.
+    return (
+      <div className="doc-view">
+        <DocEditor
+          detail={detail}
+          version={version}
+          doc={doc}
+          selected={tabParam}
+          onSelect={choose}
+          image={(path) => tabImages({ path }, loaded)}
+          imageVersion={loaded}
+          reading={(path) => {
+            const t = doc.tabs.find((x) => x.path === path);
+            return t ? (
+              <Document>{renderMarkdown(t.text, { image: tabImages(t, loaded) })}</Document>
+            ) : null;
+          }}
+          onDraft={setDrafting}
+          onDone={() => {
+            setEditing(false);
+            setDrafting(false);
+          }}
+          onPublished={(n) => {
+            setEditing(false);
+            setDrafting(false);
+            onPublished?.(n);
+          }}
+        />
+        {primary && <DocPrint doc={doc} loaded={loaded} />}
+      </div>
+    );
+  }
 
   return (
     <div className="doc-view">
-      {many && !editing && (
+      {primary && <ReadingControls editable={editable} onEdit={() => setEditing(true)} />}
+      {many && (
         <div className="doc-bar">
           <Tabs
             variant="underline"
@@ -167,44 +174,57 @@ function Doc({
           />
         </div>
       )}
-      {editing ? (
-        <DocEditor
-          detail={detail}
-          version={version}
-          doc={doc}
-          selected={tabParam}
-          onSelect={choose}
-          image={(path) => tabImages({ path }, loaded)}
-          onDraft={setDrafting}
-          onDone={() => {
-            setEditing(false);
-            setDrafting(false);
-          }}
-          onPublished={(n) => {
-            setEditing(false);
-            setDrafting(false);
-            onPublished?.(n);
-          }}
-        />
-      ) : (
-        <div className="doc-read">
-          <div className="doc-read-side">
-            <OnThisPage body={tab.text} />
-          </div>
-          <div className="doc-read-page">
-            {many ? (
-              <TabPanel id={panel} value={tab.path}>
-                {body}
-              </TabPanel>
-            ) : (
-              body
-            )}
-          </div>
+      <div className="doc-read">
+        <div className="doc-read-side">
+          <OnThisPage body={tab.text} />
         </div>
-      )}
+        <div className="doc-read-page">
+          {many ? (
+            <TabPanel id={panel} value={tab.path}>
+              {body}
+            </TabPanel>
+          ) : (
+            body
+          )}
+        </div>
+      </div>
       {primary && <DocPrint doc={doc} loaded={loaded} />}
     </div>
   );
+}
+
+/**
+ * EDIT AND PRINT ARE THE PAGE BAR'S (`lib/artifacts/kindControls.ts`): Edit
+ * labelled at its end while the doc is read, Print in its More. Published by
+ * a component that is mounted only while the doc is read, so the editor's
+ * own controls take the bar the moment Edit is pressed, and nothing has to
+ * decide which of the two published last.
+ */
+function ReadingControls({ editable, onEdit }: { editable: boolean; onEdit: () => void }) {
+  useKindControls({
+    ...(editable
+      ? {
+          tools: [
+            {
+              key: "edit",
+              label: "Edit",
+              icon: <PencilGlyph size="sm" />,
+              labelled: true,
+              onSelect: onEdit,
+            },
+          ],
+        }
+      : {}),
+    menu: [
+      {
+        key: "print",
+        label: "Print or save as PDF",
+        icon: <FileTextGlyph size="sm" />,
+        onSelect: () => window.print(),
+      },
+    ],
+  });
+  return null;
 }
 
 /**

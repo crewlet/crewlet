@@ -5,7 +5,7 @@
  */
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { DocView } from "./DocView.tsx";
@@ -14,6 +14,9 @@ import { Router } from "~/app/router.tsx";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
 import type { ArtifactDetail, ArtifactDoc } from "~/protocol/index.ts";
+import { append, loadRichEditor, retype } from "~/test/richEditor.ts";
+
+beforeAll(() => loadRichEditor());
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -155,11 +158,16 @@ function show(onPublished = vi.fn()) {
   return onPublished;
 }
 
-/** Opens the editor on the tab on show and replaces its text. */
-async function editTo(text: string) {
+/** The editor's document, by the name it carries for the tab it edits. */
+const editor = () => screen.getByRole("textbox", { name: /^The text of/ });
+
+/** The editing state the page bar carries, apart from the editor's own live regions. */
+const barStatus = () => document.querySelector(".crewlet-artifact-bar__status") as HTMLElement;
+
+/** Opens the editor on the tab on show and retypes one run of its text. */
+async function edit(from: string, to: string) {
   fireEvent.click((await screen.findAllByRole("button", { name: "Edit" }))[0]!);
-  const box = screen.getByRole("textbox", { name: /in Markdown/ });
-  fireEvent.change(box, { target: { value: text } });
+  await retype(editor(), from, to);
 }
 
 test("draws the tab on show with its outline, and moves between tabs", async () => {
@@ -175,7 +183,7 @@ test("draws the tab on show with its outline, and moves between tabs", async () 
 
 test("saves an edit as the one changed passage, against the version it started from", async () => {
   const onPublished = show();
-  await editTo(START.replace("ten minutes", "five minutes"));
+  await edit("ten minutes", "five minutes");
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(onPublished).toHaveBeenCalledWith(3));
   const publish = sent.find((r) => r.method === "POST")!;
@@ -189,6 +197,25 @@ test("saves an edit as the one changed passage, against the version it started f
   expect(body.edits[0]!.path).toBe("tabs/start.md");
   expect(body.edits[0]!.old_str).toBe("ten");
   expect(body.edits[0]!.new_str).toBe("five");
+});
+
+test("the page bar carries the editing state, Cancel and Save while the doc is edited", async () => {
+  show();
+  fireEvent.click((await screen.findAllByRole("button", { name: "Edit" }))[0]!);
+  await screen.findByRole("button", { name: "Save" });
+  expect(barStatus().textContent).toContain("Editing");
+  expect(barStatus().textContent).not.toContain("Unsaved changes");
+  expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+  await retype(editor(), "ten minutes", "five minutes");
+  await waitFor(() => expect(barStatus().textContent).toContain("Unsaved changes"));
+  // THE BAR DRAWS A LABELLED TOOL ONCE PER WIDTH; the first is the one on show here.
+  fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]!);
+  fireEvent.click(await screen.findByRole("button", { name: "Discard" }));
+  expect((await screen.findAllByRole("button", { name: "Edit" })).length).toBeGreaterThan(0);
+  expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+  expect(screen.getByRole("article", { name: "On-call handbook, Start" }).textContent).toContain(
+    "ten minutes",
+  );
 });
 
 test("a save that raced another publish is merged onto it, and saved again against it", async () => {
@@ -205,12 +232,11 @@ test("a save that raced another publish is merged onto it, and saved again again
   };
   publishAnswer = () => json(412, { error: "version_moved", detail: "moved", live: { number: 3 } });
   show();
-  await editTo(START.replace("ten minutes", "five minutes"));
+  await edit("ten minutes", "five minutes");
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   expect(await screen.findByText("Version 3 is merged into your draft.")).toBeDefined();
-  const box = screen.getByRole("textbox", { name: /in Markdown/ }) as HTMLTextAreaElement;
-  expect(box.value).toContain("Read this before your first shift.");
-  expect(box.value).toContain("five minutes");
+  expect(editor().textContent).toContain("Read this before your first shift.");
+  expect(editor().textContent).toContain("five minutes");
 
   publishAnswer = () => json(201, { number: 4 });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -228,15 +254,14 @@ test("where both changed the same lines, the person settles each before saving",
   };
   publishAnswer = () => json(412, { error: "version_moved", detail: "moved", live: { number: 3 } });
   show();
-  await editTo(START.replace("ten minutes", "five minutes"));
+  await edit("ten minutes", "five minutes");
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   const clash = await screen.findByRole("region", {
     name: /You and version 3 changed the same lines/,
   });
   fireEvent.click(within(clash).getByRole("radio", { name: "Theirs" }));
   fireEvent.click(within(clash).getByRole("button", { name: "Apply to my draft" }));
-  const box = screen.getByRole("textbox", { name: /in Markdown/ }) as HTMLTextAreaElement;
-  expect(box.value).toContain("two minutes");
+  expect(editor().textContent).toContain("two minutes");
 });
 
 test("adds, renames, moves and removes tabs, and saves them as one version", async () => {
@@ -251,9 +276,9 @@ test("adds, renames, moves and removes tabs, and saves them as one version", asy
     target: { value: "Budget" },
   });
   fireEvent.click(screen.getByRole("button", { name: /Add tab/ }));
-  const added = screen.getByRole("textbox", { name: /in Markdown/ }) as HTMLTextAreaElement;
-  expect(added.value).toBe("# Budget\n");
-  fireEvent.change(added, { target: { value: "# Budget\n\nTwo seats.\n" } });
+  // The new tab opens on its title as its heading, in the editor.
+  expect(within(editor()).getByRole("heading", { name: "Budget" })).toBeDefined();
+  await append(editor(), "Two seats.");
   fireEvent.click(within(tabs).getByRole("button", { name: "Move Budget up" }));
   fireEvent.click(within(tabs).getByRole("button", { name: "Remove On call" }));
   const save = screen.getByRole("button", { name: "Save" });

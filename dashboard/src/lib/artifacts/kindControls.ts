@@ -30,6 +30,12 @@ export interface KindControls {
   tools?: readonly ArtifactBarTool[];
   /** Its rows in More: Print, the presenter's window. */
   menu?: readonly MenuEntry[];
+  /**
+   * What the view is doing now, said before its tools: a doc being edited,
+   * and whether anything differs from what was opened or a save is out. The
+   * bar draws it as the design system's `EditingStatus`.
+   */
+  editing?: { dirty: boolean; saving: boolean };
 }
 
 /** Set by the artifact's page; a no-op where a view is drawn without one. */
@@ -62,9 +68,11 @@ function drawnKey(c: KindControls | null): string {
       t.pressed ?? false,
       t.disabledReason ?? "",
       t.labelled ?? false,
+      t.emphasis ?? "",
       t.badge ?? "",
       t.keys ?? [],
     ]),
+    c.editing ? [c.editing.dirty, c.editing.saving] : null,
     (c.menu ?? []).map((e) =>
       e.kind === "separator"
         ? [e.key]
@@ -79,6 +87,7 @@ function throughLatest(latest: MutableRefObject<KindControls | null>): KindContr
   const tool = (key: string) => latest.current?.tools?.find((t) => t.key === key);
   const row = (key: string) => latest.current?.menu?.find((e) => e.key === key);
   return {
+    ...(now.editing ? { editing: now.editing } : {}),
     ...(now.modes
       ? {
           modes: {

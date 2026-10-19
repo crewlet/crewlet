@@ -1,6 +1,14 @@
 /**
  * Editing a page, as the signed-in person (`save_page`, ADR-0024).
  *
+ * # Edited in place
+ *
+ * The body is edited where it is read (`RichEditor` from the design system):
+ * the page keeps its look while it is edited, and the page bar's Edit becomes
+ * the editing state, Cancel and Save. The body stays Markdown, and a save with
+ * no edit sends the bytes that were opened, so the line merge below sees only
+ * the lines somebody actually changed.
+ *
  * # Against the version the person opened
  *
  * A save states the version it edited (`base_version`), because there is no
@@ -27,34 +35,37 @@
  * or keep both. Nothing is saved until they press Save.
  */
 
-import { useId, useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   Button,
   Callout,
   ConfirmModal,
-  Document,
-  FormField,
+  EditingStatus,
   Input,
-  MarkdownEditor,
   MergeConflicts,
-  markdownWords,
+  RichEditor,
   VersionCompare,
+  markdownWords,
 } from "@crewlethq/ui";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { PAGE_MESSAGE_MAX_BYTES } from "~/contract/pages.ts";
 import { plural, textBudget } from "~/lib/format.ts";
-import { renderMarkdown } from "~/lib/markdown.ts";
 import { clashesOf, merge3, mergedText, type Merge } from "~/lib/merge.ts";
 import { useAct } from "~/lib/useAct.ts";
 import type { PageDetail } from "~/protocol/index.ts";
-import { LinkPageButton } from "./LinkPicker.tsx";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { linkPageCommand } from "./LinkPicker.tsx";
 
-/** A page's markdown as the reader will see it, for an editor's Preview. */
-export function previewMarkdown(value: string) {
-  return <Document>{renderMarkdown(value)}</Document>;
-}
-
-export function PageEditor({ detail, onDone }: { detail: PageDetail; onDone: () => void }) {
+export function PageEditor({
+  detail,
+  reading,
+  onDone,
+}: {
+  detail: PageDetail;
+  /** The body as it reads, drawn while the editor's code loads so nothing moves. */
+  reading: ReactNode;
+  onDone: () => void;
+}) {
   const page = detail.page;
   const save = useAct("save_page");
   // WHAT THIS EDIT IS AGAINST, its version and that version's body, held
@@ -71,7 +82,9 @@ export function PageEditor({ detail, onDone }: { detail: PageDetail; onDone: () 
     merge: Merge;
   } | null>(null);
   const [merged, setMerged] = useState<number | null>(null);
-  const messageID = useId();
+  // ONE COMMAND LIST for the life of the edit, so the editor's menu is not
+  // rebuilt on every keystroke.
+  const [commands] = useState(() => [linkPageCommand(page.id)]);
 
   const moved = page.version > base.version;
   const dirty = draft !== base.body;
@@ -103,125 +116,24 @@ export function PageEditor({ detail, onDone }: { detail: PageDetail; onDone: () 
   };
 
   // ESCAPE LEAVES, asking first when there is something to lose: the same key
-  // every sheet in the product closes on.
+  // every sheet in the product closes on. The editor calls it only when no
+  // menu or panel of its own is open, whose Escape closes that and nothing else.
   const leave = () => (dirty ? setDiscard(true) : onDone());
 
   return (
-    // THE FIELD'S ESCAPE, and only the field's: a picker's own Escape closes
-    // the picker and nothing else.
-    <section
-      className="knowledge-editor"
-      aria-label={`Editing “${page.title}”`}
-      onKeyDown={(event) => {
-        if (event.key !== "Escape" || !(event.target instanceof HTMLTextAreaElement)) return;
-        event.preventDefault();
-        leave();
-      }}
-    >
-      {moved && !merging && (
-        <Callout
-          variant="warning"
-          title={`Somebody saved revision ${page.version} while you edited.`}
-        >
-          Someone saved revision {page.version} since you started. Bring their change in first.
-          <span className="knowledge-callout-actions">
-            <Button size="small" variant="secondary" onClick={() => setTheirs(!theirs)}>
-              {theirs ? "Hide their change" : "View their change"}
-            </Button>
-            <Button
-              size="small"
-              variant="secondary"
-              onClick={() => {
-                const theirBody = page.body ?? "";
-                const merge = merge3(base.body, draft, theirBody);
-                setTheirs(false);
-                save.dismiss();
-                if (merge.conflicts === 0) {
-                  setDraft(mergedText(merge));
-                  setBase({ version: page.version, body: theirBody });
-                  setMerged(page.version);
-                } else {
-                  setMerging({ version: page.version, body: theirBody, merge });
-                }
-              }}
-            >
-              Keep editing on top of it
-            </Button>
-          </span>
-        </Callout>
-      )}
-      {moved && theirs && !merging && (
-        <div className="knowledge-theirs">
-          <VersionCompare
-            title="What changed since you started"
-            fromLabel={`rev ${base.version}`}
-            toLabel="the saved page"
-            lens="changes"
-            before={base.body}
-            after={page.body ?? ""}
-            labels={{
-              identicalTitle: "The body did not change",
-              identicalDescription: "Only the title, labels or position changed.",
-            }}
-          />
-        </div>
-      )}
-      {merging && (
-        <MergeConflicts
-          clashes={clashesOf(merging.merge)}
-          theirs={`revision ${merging.version}`}
-          onCancel={() => setMerging(null)}
-          onApply={(choices) => {
-            setDraft(mergedText(merging.merge, choices));
-            setBase({ version: merging.version, body: merging.body });
-            setMerged(merging.version);
-            setMerging(null);
-          }}
-        />
-      )}
-      {merged !== null && !moved && !merging && (
-        <p className="knowledge-note" role="status">
-          Revision {merged} is merged into your draft.
-        </p>
-      )}
-
-      <MarkdownEditor
-        value={draft}
-        onChange={setDraft}
-        label={`The body of “${page.title}”, in markdown`}
-        renderPreview={previewMarkdown}
-        disabled={merging !== null}
-        rows={22}
-        actions={(editor) => <LinkPageButton editor={editor} exclude={page.id} />}
-        onSubmit={() => {
-          // THE SHORTCUT GOES THROUGH THE SAME GATE THE BUTTON DOES, so a
-          // second one while the first answer is out sends nothing.
-          if (pressable(save, blocked)) void press();
-        }}
-        footer={<span>{plural(markdownWords(draft), "word")} · Markdown</span>}
-      />
-
-      <FormField
-        label="What changed"
-        htmlFor={messageID}
-        helper={
-          messageBudget.over
-            ? undefined
-            : (messageBudget.line ?? "One line, kept with the revision. Optional.")
-        }
-        error={messageBudget.over ? messageBudget.line : undefined}
-      >
-        <Input
-          id={messageID}
-          value={message}
-          error={messageBudget.over}
-          onChange={(event) => setMessage(event.target.value)}
-        />
-      </FormField>
-
-      <div className="knowledge-editor-foot">
+    <>
+      {/* THE PAGE BAR WHILE EDITING: the state, Cancel and Save, where Edit
+          was, so the control a writer pressed is where they finish, and
+          nothing else: the search the bar holds while reading is not what an
+          edit is for, and on a phone it pushed Save out of the bar. */}
+      <PageActions>
+        <EditingStatus dirty={dirty} saving={save.busy} />
+        <Button size="small" variant="ghost" onClick={leave} disabled={save.busy}>
+          Cancel
+        </Button>
         <WriteButton
           write={save}
+          size="small"
           variant="primary"
           showRefusal={false}
           blocked={blocked}
@@ -229,27 +141,127 @@ export function PageEditor({ detail, onDone }: { detail: PageDetail; onDone: () 
         >
           Save
         </WriteButton>
-        <Button variant="ghost" onClick={leave} disabled={save.busy}>
-          Cancel
-        </Button>
-        <span className="knowledge-note">Saved as you, against revision {base.version}.</span>
-      </div>
-      {/* A REFUSAL FOR RACING A NEWER REVISION is the callout above, which says
-          what to do about it; the sentence would say it twice. */}
-      {!moved && <RefusalNote write={save} />}
+      </PageActions>
+      <section className="knowledge-editor" aria-label={`Editing “${page.title}”`}>
+        {moved && !merging && (
+          <Callout
+            variant="warning"
+            title={`Somebody saved revision ${page.version} while you edited.`}
+          >
+            Someone saved revision {page.version} since you started. Bring their change in first.
+            <span className="knowledge-callout-actions">
+              <Button size="small" variant="secondary" onClick={() => setTheirs(!theirs)}>
+                {theirs ? "Hide their change" : "View their change"}
+              </Button>
+              <Button
+                size="small"
+                variant="secondary"
+                onClick={() => {
+                  const theirBody = page.body ?? "";
+                  const merge = merge3(base.body, draft, theirBody);
+                  setTheirs(false);
+                  save.dismiss();
+                  if (merge.conflicts === 0) {
+                    setDraft(mergedText(merge));
+                    setBase({ version: page.version, body: theirBody });
+                    setMerged(page.version);
+                  } else {
+                    setMerging({ version: page.version, body: theirBody, merge });
+                  }
+                }}
+              >
+                Keep editing on top of it
+              </Button>
+            </span>
+          </Callout>
+        )}
+        {moved && theirs && !merging && (
+          <div className="knowledge-theirs">
+            <VersionCompare
+              title="What changed since you started"
+              fromLabel={`rev ${base.version}`}
+              toLabel="the saved page"
+              lens="changes"
+              before={base.body}
+              after={page.body ?? ""}
+              labels={{
+                identicalTitle: "The body did not change",
+                identicalDescription: "Only the title, labels or position changed.",
+              }}
+            />
+          </div>
+        )}
+        {merging && (
+          <MergeConflicts
+            clashes={clashesOf(merging.merge)}
+            theirs={`revision ${merging.version}`}
+            onCancel={() => setMerging(null)}
+            onApply={(choices) => {
+              setDraft(mergedText(merging.merge, choices));
+              setBase({ version: merging.version, body: merging.body });
+              setMerged(merging.version);
+              setMerging(null);
+            }}
+          />
+        )}
+        {merged !== null && !moved && !merging && (
+          <p className="knowledge-note" role="status">
+            Revision {merged} is merged into your draft.
+          </p>
+        )}
 
-      {discard && (
-        <ConfirmModal
-          open
-          destructive
-          title="Discard your edit?"
-          message="The page stays as it is."
-          cancelLabel="Keep editing"
-          confirmLabel="Discard"
-          onClose={() => setDiscard(false)}
-          onConfirm={onDone}
+        <RichEditor
+          value={draft}
+          onChange={setDraft}
+          label={`The body of “${page.title}”`}
+          placeholder="Write the page, or type a slash for blocks"
+          disabled={merging !== null}
+          autoFocus
+          commands={commands}
+          fallback={reading}
+          onEscape={leave}
+          onSubmit={() => {
+            // THE SHORTCUT GOES THROUGH THE SAME GATE THE BUTTON DOES, so a
+            // second one while the first answer is out sends nothing.
+            if (pressable(save, blocked)) void press();
+          }}
         />
-      )}
-    </section>
+
+        <div className="knowledge-editor-foot">
+          <Input
+            containerClassName="knowledge-editor-note"
+            aria-label="What changed, kept with the revision"
+            placeholder="What changed (optional)"
+            value={message}
+            error={messageBudget.over}
+            onChange={(event) => setMessage(event.target.value)}
+          />
+          <span className="knowledge-note">
+            {plural(markdownWords(draft), "word")} · Saved as you, against revision {base.version}
+          </span>
+        </div>
+        {messageBudget.line && (
+          <p className="knowledge-note" role={messageBudget.over ? "alert" : undefined}>
+            {messageBudget.line}
+          </p>
+        )}
+        {/* A REFUSAL FOR RACING A NEWER REVISION is the callout above, which
+            says what to do about it; the sentence would say it twice. */}
+        {!moved && <RefusalNote write={save} />}
+
+        {discard && (
+          <ConfirmModal
+            open
+            destructive
+            title="Discard your edit?"
+            message="The page stays as it is."
+            cancelLabel="Keep editing"
+            confirmLabel="Discard"
+            onClose={() => setDiscard(false)}
+            onConfirm={onDone}
+          />
+        )}
+      </section>
+    </>
   );
 }

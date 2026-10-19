@@ -19,31 +19,37 @@
  * settles each clash in `MergeConflicts`, and where both changed a title, the
  * order, or one removed a tab the other changed, they keep theirs or take the
  * newer one. Nothing is saved until they press Save.
+ *
+ * # Edited in place
+ *
+ * A tab's text is edited where it is read (`RichEditor`), so the doc keeps its
+ * look while it is edited; the bar's Edit becomes the editing state, Cancel
+ * and Save. The text stays Markdown, and a tab nobody edited is written back
+ * byte for byte, so the version's patch holds only the tabs that changed.
  */
 
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Button,
   Callout,
   ConfirmModal,
   ConflictNote,
   DocTabsEditor,
-  Document,
-  FormField,
   Input,
-  MarkdownEditor,
   MergeConflicts,
+  RichEditor,
   markdownWords,
   useToast,
 } from "@crewlethq/ui";
+import { CheckGlyph, XGlyph } from "@crewlethq/icons/glyphs";
 import type { ArtifactDetail, ArtifactDoc } from "~/protocol/index.ts";
 import { newActOpID } from "~/protocol/index.ts";
 import { ARTIFACT_LABEL_MAX_BYTES } from "~/contract/artifacts.ts";
 import { plural, textBudget } from "~/lib/format.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
-import { renderMarkdown } from "~/lib/markdown.ts";
 import { clashesOf } from "~/lib/merge.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useKindControls } from "~/lib/artifacts/kindControls.ts";
 import { publishVersion, readDoc, uploadTexts, versionText } from "~/lib/artifacts/api.ts";
 import {
   DOC_INDEX,
@@ -73,6 +79,8 @@ export function DocEditor({
   selected,
   onSelect,
   image,
+  imageVersion,
+  reading,
   onDraft,
   onDone,
   onPublished,
@@ -83,8 +91,12 @@ export function DocEditor({
   /** The tab whose text is open, as the address names it ("" for the first). */
   selected: string;
   onSelect: (path: string) => void;
-  /** How the preview shows the pictures of the tab at path. */
+  /** Where the pictures of the tab at path are shown from. */
   image: (path: string) => (src: string) => string | null;
+  /** Changes when another of the version's pictures has loaded. */
+  imageVersion: unknown;
+  /** The open tab as it reads, drawn while the editor's code loads. */
+  reading: (path: string) => ReactNode;
   /** Whether a change is drafted, for the room. */
   onDraft: (drafting: boolean) => void;
   onDone: () => void;
@@ -98,7 +110,6 @@ export function DocEditor({
   const [label, setLabel] = useState("");
   const [saving, setSaving] = useState(false);
   const [discard, setDiscard] = useState(false);
-  const labelID = useId();
   // WHAT THE SAVE IS AGAINST: the version opened, or the newer one a refused
   // save was merged onto.
   const against = merge?.live ?? base;
@@ -201,151 +212,160 @@ export function DocEditor({
   };
 
   const leave = () => (dirty ? setDiscard(true) : onDone());
+  const busy = save.busy || saving;
+
+  // THE BAR WHILE EDITING (`lib/artifacts/kindControls.ts`): the state,
+  // Cancel and Save, in Edit's place, so the control a writer pressed is
+  // where they finish. Save keeps its word at every width; the reason it
+  // cannot be pressed is the one the shortcut reads too.
+  useKindControls({
+    editing: { dirty, saving: busy },
+    tools: [
+      {
+        key: "cancel",
+        label: "Cancel",
+        icon: <XGlyph size="sm" />,
+        labelled: true,
+        ...(busy ? { disabledReason: "Saving the doc." } : {}),
+        onSelect: leave,
+      },
+      {
+        key: "save",
+        label: "Save",
+        icon: <CheckGlyph size="sm" />,
+        labelled: true,
+        emphasis: "primary",
+        ...(busy
+          ? { disabledReason: "Saving the doc." }
+          : blocked
+            ? { disabledReason: blocked }
+            : {}),
+        onSelect: () => void press(),
+      },
+    ],
+  });
 
   return (
-    <div
-      className="doc-read"
-      onKeyDown={(event) => {
-        if (event.key !== "Escape" || !(event.target instanceof HTMLTextAreaElement)) return;
-        event.preventDefault();
-        leave();
-      }}
-    >
-      <div className="doc-read-side">
-        <DocTabsEditor
-          label={`Tabs of ${detail.title}`}
-          items={draft.order.map((p) => ({ key: p, title: draft.tabs[p]!.title }))}
-          selected={path}
-          onSelect={onSelect}
-          onRename={(p, title) => setDraft((d) => renameTab(d, p, title))}
-          onReorder={(order) => setDraft((d) => reorderTabs(d, order))}
-          onRemove={(p) => {
-            setDraft((d) => removeTab(d, p));
-            if (p === path) onSelect("");
-          }}
-          onAdd={(title) => {
-            const added = addTab(draft, title, taken, path);
-            setDraft(added.draft);
-            onSelect(added.path);
-          }}
-          titleProblem={tabTitleProblem}
-          addBlocked={addTabProblem(draft) ?? undefined}
-          disabled={clash !== undefined || saving}
-        />
-      </div>
-      <section
-        className="doc-editor doc-read-page"
-        aria-label={many ? `Editing “${tab.title}”` : `Editing “${detail.title}”`}
-      >
-        {merge && conflicts.length === 0 && (
-          <Callout variant="info" title={`Version ${merge.live.base} is merged into your draft.`}>
-            Somebody published while you were editing
-            {merge.theirs.length > 0 ? ` (${merge.theirs.join(", ")})` : ""}. Their changes are kept
-            beside yours. Save again to publish both.
-          </Callout>
-        )}
-        {merge && clash?.kind === "text" && (
-          <MergeConflicts
-            key={clash.path}
-            clashes={clashesOf(clash.merge)}
-            theirs={`version ${merge.live.base}`}
-            labels={{
-              heading: (count, theirs) =>
-                count === 1
-                  ? `You and ${theirs} changed the same lines of “${clash.title}”`
-                  : `You and ${theirs} changed the same lines of “${clash.title}” in ${count} places`,
+    <>
+      <div className="doc-read doc-read--editing">
+        <div className="doc-read-side">
+          <DocTabsEditor
+            label={`Tabs of ${detail.title}`}
+            items={draft.order.map((p) => ({ key: p, title: draft.tabs[p]!.title }))}
+            selected={path}
+            onSelect={onSelect}
+            onRename={(p, title) => setDraft((d) => renameTab(d, p, title))}
+            onReorder={(order) => setDraft((d) => reorderTabs(d, order))}
+            onRemove={(p) => {
+              setDraft((d) => removeTab(d, p));
+              if (p === path) onSelect("");
             }}
-            onCancel={onDone}
-            onApply={(choices) => settle(resolveDoc(merge, clash, choices))}
-          />
-        )}
-        {merge && !clash && conflicts.length > 0 && (
-          <div className="doc-conflicts">
-            {conflicts.map((c) => (
-              <ConflictNote
-                key={conflictKey(c)}
-                subject={conflictSubject(c)}
-                message={conflictSentence(c, merge.live.base)}
-                actions={
-                  <>
-                    <Button
-                      size="small"
-                      variant="secondary"
-                      onClick={() => settle(resolveDoc(merge, c, "mine"))}
-                    >
-                      Keep mine
-                    </Button>
-                    <Button
-                      size="small"
-                      variant="ghost"
-                      onClick={() => settle(resolveDoc(merge, c, "theirs"))}
-                    >
-                      Take theirs
-                    </Button>
-                  </>
-                }
-              />
-            ))}
-          </div>
-        )}
-
-        {!clash && (
-          <MarkdownEditor
-            key={path}
-            value={tab.text}
-            onChange={(text) => setDraft((d) => setTabText(d, path, text))}
-            label={
-              many
-                ? `The text of “${tab.title}”, in Markdown`
-                : `The text of “${detail.title}”, in Markdown`
-            }
-            renderPreview={(value) => (
-              <Document>{renderMarkdown(value, { image: image(path) })}</Document>
-            )}
-            disabled={saving}
-            rows={22}
-            onSubmit={() => {
-              if (!save.busy && !saving && !blocked) void press();
+            onAdd={(title) => {
+              const added = addTab(draft, title, taken, path);
+              setDraft(added.draft);
+              onSelect(added.path);
             }}
-            footer={<span>{plural(markdownWords(tab.text), "word")} · Markdown</span>}
+            titleProblem={tabTitleProblem}
+            addBlocked={addTabProblem(draft) ?? undefined}
+            disabled={clash !== undefined || saving}
           />
-        )}
-
-        <FormField
-          label="Label"
-          htmlFor={labelID}
-          helper={
-            labelBudget.over
-              ? undefined
-              : (labelBudget.line ?? "Names the version this save makes, which keeps it. Optional.")
-          }
-          error={labelBudget.over ? labelBudget.line : undefined}
-        >
-          <Input
-            id={labelID}
-            value={label}
-            error={labelBudget.over}
-            onChange={(event) => setLabel(event.target.value)}
-          />
-        </FormField>
-
-        <div className="doc-editor-foot">
-          <Button
-            variant="primary"
-            loading={save.busy || saving}
-            disabledReason={blocked}
-            onClick={() => void press()}
-          >
-            Save
-          </Button>
-          <Button variant="ghost" onClick={leave} disabled={save.busy || saving}>
-            Cancel
-          </Button>
-          <span className="doc-note">
-            Saved as you, as a new version based on version {against.base}.
-          </span>
         </div>
-      </section>
+        <section
+          className="doc-editor doc-read-page"
+          aria-label={many ? `Editing “${tab.title}”` : `Editing “${detail.title}”`}
+        >
+          {merge && conflicts.length === 0 && (
+            <Callout variant="info" title={`Version ${merge.live.base} is merged into your draft.`}>
+              Somebody published while you were editing
+              {merge.theirs.length > 0 ? ` (${merge.theirs.join(", ")})` : ""}. Their changes are
+              kept beside yours. Save again to publish both.
+            </Callout>
+          )}
+          {merge && clash?.kind === "text" && (
+            <MergeConflicts
+              key={clash.path}
+              clashes={clashesOf(clash.merge)}
+              theirs={`version ${merge.live.base}`}
+              labels={{
+                heading: (count, theirs) =>
+                  count === 1
+                    ? `You and ${theirs} changed the same lines of “${clash.title}”`
+                    : `You and ${theirs} changed the same lines of “${clash.title}” in ${count} places`,
+              }}
+              onCancel={onDone}
+              onApply={(choices) => settle(resolveDoc(merge, clash, choices))}
+            />
+          )}
+          {merge && !clash && conflicts.length > 0 && (
+            <div className="doc-conflicts">
+              {conflicts.map((c) => (
+                <ConflictNote
+                  key={conflictKey(c)}
+                  subject={conflictSubject(c)}
+                  message={conflictSentence(c, merge.live.base)}
+                  actions={
+                    <>
+                      <Button
+                        size="small"
+                        variant="secondary"
+                        onClick={() => settle(resolveDoc(merge, c, "mine"))}
+                      >
+                        Keep mine
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="ghost"
+                        onClick={() => settle(resolveDoc(merge, c, "theirs"))}
+                      >
+                        Take theirs
+                      </Button>
+                    </>
+                  }
+                />
+              ))}
+            </div>
+          )}
+
+          {!clash && (
+            <RichEditor
+              key={path}
+              value={tab.text}
+              onChange={(text) => setDraft((d) => setTabText(d, path, text))}
+              label={many ? `The text of “${tab.title}”` : `The text of “${detail.title}”`}
+              placeholder="Write, or type a slash for blocks"
+              disabled={saving}
+              autoFocus
+              resolveImage={image(path)}
+              imageVersion={imageVersion}
+              fallback={reading(path)}
+              onEscape={leave}
+              onSubmit={() => {
+                if (!busy && !blocked) void press();
+              }}
+            />
+          )}
+
+          <div className="doc-editor-foot">
+            <Input
+              containerClassName="doc-editor-label"
+              aria-label="Label for the version this save makes"
+              placeholder="Label this version (optional)"
+              value={label}
+              error={labelBudget.over}
+              onChange={(event) => setLabel(event.target.value)}
+            />
+            <span className="doc-note">
+              {plural(markdownWords(tab.text), "word")} · Saved as you, as a new version based on
+              version {against.base}
+            </span>
+          </div>
+          {labelBudget.line && (
+            <p className="doc-note" role={labelBudget.over ? "alert" : undefined}>
+              {labelBudget.line}
+            </p>
+          )}
+        </section>
+      </div>
 
       {discard && (
         <ConfirmModal
@@ -359,7 +379,7 @@ export function DocEditor({
           onConfirm={onDone}
         />
       )}
-    </div>
+    </>
   );
 }
 

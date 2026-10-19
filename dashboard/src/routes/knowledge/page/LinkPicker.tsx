@@ -1,27 +1,19 @@
 /**
- * "Link a page", for every place a page's markdown is written: the editor and
- * the composer.
+ * "Link to a page", for every place a page's Markdown is written: the editor
+ * and the composer. An entry of the rich editor's slash menu, whose panel is
+ * the picker below.
  *
  * # The link is the address the backlinks read
  *
- * It inserts `[title](#/knowledge/pages/{id})`: `PAGE_ADDRESS_PREFIX` plus the
- * id, which is exactly what `pages.Links` reads back, so a link made here lists
- * this page in the other one's "Linked from" once the index has read the save.
- * A title would break on the first rename; the id does not.
+ * It inserts a link to `#/knowledge/pages/{id}`: `PAGE_ADDRESS_PREFIX` plus
+ * the id, which is exactly what `pages.Links` reads back, so a link made here
+ * lists this page in the other one's "Linked from" once the index has read the
+ * save. A title would break on the first rename; the id does not.
  */
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import {
-  Button,
-  FormField,
-  Input,
-  KeyChip,
-  List,
-  ListItem,
-  Popover,
-  type MarkdownEditorApi,
-} from "@crewlethq/ui";
-import { LinkGlyph } from "@crewlethq/icons/glyphs";
+import { FormField, Input, KeyChip, List, ListItem, type RichEditorCommand } from "@crewlethq/ui";
+import { FileTextGlyph } from "@crewlethq/icons/glyphs";
 import { PAGE_ADDRESS_PREFIX } from "~/contract/links.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { PageGlyph } from "../parts.tsx";
@@ -29,52 +21,24 @@ import { PageGlyph } from "../parts.tsx";
 /** How many titles the picker lists: enough to recognise one, short enough to scan. */
 const PICKER_HITS = 8;
 
-/** The markdown link to a page, by its id. */
-export function pageLink(title: string, id: string): string {
-  // A `]` in a title would close the label early; escaped, it renders as itself.
-  return `[${title.replace(/([[\]\\])/g, "\\$1")}](${PAGE_ADDRESS_PREFIX}${id})`;
-}
-
 /**
- * The button in an editor's bar that opens the picker, and inserts the chosen
- * page's link at the caret. In Preview there is no caret, so it says so.
+ * The slash menu's "Link to a page". `exclude` is the page being edited,
+ * which a link to itself would not help.
  */
-export function LinkPageButton({
-  editor,
-  exclude,
-}: {
-  editor: MarkdownEditorApi;
-  /** The page being edited, which a link to itself would not help. */
-  exclude?: string | undefined;
-}) {
-  return (
-    <Popover
-      label="Link a page"
-      align="end"
-      trigger={(open, toggle) => (
-        <Button
-          size="small"
-          variant="ghost"
-          leadingIcon={<LinkGlyph size="sm" />}
-          aria-expanded={open}
-          disabledReason={editor.mode === "write" ? undefined : "Switch to Write to link a page."}
-          onClick={toggle}
-        >
-          Link a page
-        </Button>
-      )}
-    >
-      {(close) => (
-        <PagePicker
-          exclude={exclude}
-          onPick={(page) => {
-            close();
-            editor.insert(pageLink(page.title, page.id));
-          }}
-        />
-      )}
-    </Popover>
-  );
+export function linkPageCommand(exclude?: string): RichEditorCommand {
+  return {
+    key: "link-page",
+    label: "Link to a page",
+    description: "A page of this company, by its title",
+    icon: <FileTextGlyph size="sm" />,
+    keywords: ["page", "link", "wiki", "knowledge"],
+    panel: (editor) => (
+      <PagePicker
+        exclude={exclude}
+        onPick={(page) => editor.insertLink(page.title, `${PAGE_ADDRESS_PREFIX}${page.id}`)}
+      />
+    ),
+  };
 }
 
 /**

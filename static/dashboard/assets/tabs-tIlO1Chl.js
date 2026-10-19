@@ -1,0 +1,1 @@
+import{D as e}from"./common-BFTMA1Jk.js";import{yr as t}from"./waiting-CiBdOlAu.js";function n(n,r,i=`section`,a=r[0]){let[o,s]=t(n,a,i),c=r.includes(o)?o:a;return e({tab:{run:(e,t)=>s(r[t]),when:e=>i===`section`&&e<r.length}}),[c,s]}export{n as t};

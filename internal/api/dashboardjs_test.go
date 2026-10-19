@@ -1034,8 +1034,15 @@ const (
 	// single-bundle build this replaced sent 403 KB here, the org builder —
 	// about 43% of the source — among it; the frame alone (the sidebar, the
 	// header, the palette, the socket client, React and the design system's
-	// sheet) measured about 230 KB when this budget was set.
-	initialBudget = 300 << 10
+	// sheet) measured about 230 KB when this budget was set. It had grown to
+	// 297 KiB by the time the rich editor came, which adds about 4 KiB here
+	// although its code is fetched only to edit: the shell sends every design
+	// system stylesheet in its one sheet, by rule (see
+	// TestNoLazyStylesheetCarriesTheDesignSystem), so the editor's 1.8 KiB of
+	// rules ride the first paint, and the Markdown grammar the reader's
+	// renderer and the editor share became a chunk of its own. It moved to
+	// 310 KiB then, still under two seconds on that link.
+	initialBudget = 310 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1055,8 +1062,13 @@ const (
 	// version compare) took it from about 2.85 MiB to about 3.05 MiB, the
 	// screen that room was left for, and it moved to 3.5 MiB then: room for
 	// the screens still to come, while a bundle that doubled from the 2.3 MB
-	// baseline is still refused.
-	treeBudget = 7 << 19
+	// baseline is still refused. The rich editor that Knowledge pages and doc
+	// tabs are edited in took it from about 3.23 MiB to about 3.53 MiB: its
+	// chunk is about 270 KB raw, ProseMirror being 228 KB of it, and the
+	// notices of the ten packages it brings add 15 KB. That chunk is fetched
+	// only when somebody edits, so no reader's first paint pays for it, and it
+	// moved to 4 MiB then, which still refuses a doubled baseline.
+	treeBudget = 4 << 20
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

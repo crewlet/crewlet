@@ -6,13 +6,13 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import type { ReactNode } from "react";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { PageView } from "./PageView.tsx";
 import { withoutRepeatedTitle } from "./body.ts";
-import { pageLink } from "./LinkPicker.tsx";
+import { linkPageCommand } from "./LinkPicker.tsx";
 import { followersOf } from "./Watch.tsx";
 import { Composer } from "../Composer.tsx";
 import { Router } from "~/app/router.tsx";
@@ -29,6 +29,7 @@ import { PAGE_TITLE_MAX_BYTES, type PageReadsAnswer } from "~/contract/pages.ts"
 import type { PageDetail } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { loadRichEditor, readOnly, retype } from "~/test/richEditor.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -625,7 +626,9 @@ function racing(bodies: Record<number, string>) {
   };
 }
 
-const box = () => screen.getByRole("textbox", { name: /The body of/ }) as HTMLTextAreaElement;
+const box = () => screen.getByRole("textbox", { name: /The body of/ });
+
+beforeAll(() => loadRichEditor());
 
 test("keeping on top of somebody else's save keeps their change in the draft", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
@@ -636,16 +639,14 @@ test("keeping on top of somebody else's save keeps their change in the draft", a
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
-  fireEvent.change(box(), {
-    target: { value: "## Steps\n\nmine\n\n## Escalation\n\npage the CTO" },
-  });
+  await retype(box(), "old", "mine");
 
   // Somebody saves revision 15, and the page's own poll brings it.
   await race.save(15);
   expect(screen.getByText(/Somebody saved revision 15 while you edited/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   // The shortcut goes through the same gate as the button.
-  fireEvent.keyDown(box(), { key: "Enter", metaKey: true });
+  fireEvent.keyDown(box(), { key: "Enter", ctrlKey: true });
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
@@ -654,9 +655,9 @@ test("keeping on top of somebody else's save keeps their change in the draft", a
   fireEvent.click(screen.getByRole("button", { name: "View their change" }));
   expect(screen.getByText("Maya added this line.")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Keep editing on top of it" }));
-  expect(box().value).toBe(
-    "## Steps\n\nmine\n\n## Escalation\n\npage the CTO\n\nMaya added this line.",
-  );
+  // Their line is in the draft the writer is looking at, beside theirs.
+  expect(within(box()).getByText("Maya added this line.")).toBeTruthy();
+  expect(within(box()).getByText("mine")).toBeTruthy();
   expect(screen.getByText("Revision 15 is merged into your draft.").getAttribute("role")).toBe(
     "status",
   );
@@ -684,7 +685,7 @@ test("an overlapping change is settled by the person before the base moves", asy
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
-  fireEvent.change(box(), { target: { value: "## Steps\n\nmine" } });
+  await retype(box(), "old", "mine");
   await race.save(15);
 
   fireEvent.click(screen.getByRole("button", { name: "Keep editing on top of it" }));
@@ -694,12 +695,12 @@ test("an overlapping change is settled by the person before the base moves", asy
   // Nothing is pre-chosen, and the draft is held while the clash is open.
   const apply = within(resolve).getByRole("button", { name: "Apply to my draft" });
   expect(apply.getAttribute("aria-disabled")).toBe("true");
-  expect(box().disabled).toBe(true);
+  expect(readOnly(box())).toBe(true);
   expect(screen.getByText(/Saved as you, against revision 14/)).toBeTruthy();
 
   fireEvent.click(within(resolve).getByRole("radio", { name: "Both" }));
   fireEvent.click(apply);
-  expect(box().value).toBe("## Steps\n\nmine\ntheirs");
+  expect(readOnly(box())).toBe(false);
   expect(screen.getByText(/Saved as you, against revision 15/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await act(async () => {
@@ -759,8 +760,26 @@ test("the trail names the space and every page above this one", () => {
 });
 
 // A LINK THE EDITOR MAKES IS THE ADDRESS THE BACKLINKS READ.
-test("Link a page writes the page's id address, which a rename does not break", () => {
-  expect(pageLink("Node [drain]", "p-9")).toBe(`[Node \\[drain\\]](${PAGE_ADDRESS_PREFIX}p-9)`);
+test("Link to a page links the page's id address, which a rename does not break", async () => {
+  const insertLink = vi.fn();
+  const command = linkPageCommand(ID);
+  mount(<>{command.panel({ insertLink, close: () => {} })}</>, {
+    pages: () =>
+      Promise.resolve({
+        pages: [
+          { id: ID, title: "Node runbook", container: "ENG", folder: false },
+          { id: "p-9", title: "Node [drain]", container: "ENG", folder: false },
+        ],
+      }),
+  });
+  fireEvent.change(screen.getByRole("textbox", { name: "Link to the page" }), {
+    target: { value: "Node" },
+  });
+  await settle();
+  // The page being edited is not offered: a link to itself helps nobody.
+  expect(screen.queryByText("Node runbook")).toBeNull();
+  fireEvent.click(screen.getByText("Node [drain]"));
+  expect(insertLink).toHaveBeenCalledWith("Node [drain]", `${PAGE_ADDRESS_PREFIX}p-9`);
 });
 
 test("only an exact repeat of the title on the first line is dropped", () => {

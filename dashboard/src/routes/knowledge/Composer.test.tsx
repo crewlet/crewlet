@@ -14,8 +14,8 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { LayerHost, ToastProvider } from "@crewlethq/ui";
+import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { LayerHost, ToastProvider, parseMarkdown } from "@crewlethq/ui";
 
 import { Composer, TEMPLATES } from "./Composer.tsx";
 import { Router } from "~/app/router.tsx";
@@ -24,6 +24,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { reloadForTest } from "~/lib/prefs.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
+import { fill, loadRichEditor } from "~/test/richEditor.ts";
 import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
@@ -190,13 +191,21 @@ async function settle() {
 }
 
 const title = () => screen.getByRole("textbox", { name: "Title" });
-const body = () => screen.getByRole("textbox", { name: "The page, in markdown" });
+const body = () => screen.getByRole("textbox", { name: "The page" });
+
+beforeAll(() => loadRichEditor());
+
+/** The first heading a template opens on, which the editor draws. */
+function firstHeading(markdown: string): string {
+  const first = parseMarkdown(markdown).find((b) => b.kind === "heading");
+  return first && first.kind === "heading" ? first.text : "";
+}
 
 test("Publish writes the page as the person, filed where it was asked for", async () => {
   mount();
   await settle();
   fireEvent.change(title(), { target: { value: "Postmortem template" } });
-  fireEvent.change(body(), { target: { value: "## What happened\n\nOne line." } });
+  await fill(body(), [{ text: "What happened", heading: 2 }, { text: "One line." }]);
   await settle();
   fireEvent.click(screen.getByRole("button", { name: "Publish" }));
   await settle();
@@ -220,7 +229,7 @@ test("Save as draft is the same write with the draft status, and carries the lab
   mount();
   await settle();
   fireEvent.change(title(), { target: { value: "Postmortem template" } });
-  fireEvent.change(body(), { target: { value: "Draft text" } });
+  await fill(body(), [{ text: "Draft text" }]);
   // NO CHOICES TO PICK FROM, so the field is a plain text box.
   const labels = screen.getByRole("textbox", { name: "Labels" });
   fireEvent.change(labels, { target: { value: "ops" } });
@@ -235,7 +244,7 @@ test("a title already taken in the space is said, and holds both presses", async
   mount();
   await settle();
   fireEvent.change(title(), { target: { value: "Deploy runbook" } });
-  fireEvent.change(body(), { target: { value: "Text" } });
+  await fill(body(), [{ text: "Text" }]);
   // SAID UNDER THE FIELD, and again as the reason both presses are held.
   await waitFor(() =>
     expect(
@@ -254,17 +263,15 @@ test("a template starts an empty page, and never replaces what was written", asy
   mount();
   await settle();
   fireEvent.click(screen.getByRole("radio", { name: "Runbook" }));
-  expect((body() as HTMLTextAreaElement).value).toBe(
-    TEMPLATES.find((t) => t.value === "runbook")!.body,
-  );
+  const runbook = TEMPLATES.find((t) => t.value === "runbook")!.body;
+  expect(within(body()).getByText(firstHeading(runbook))).toBeTruthy();
   // STILL THE TEMPLATE'S OWN TEXT: another template may take its place.
   fireEvent.click(screen.getByRole("radio", { name: "Decision record" }));
-  expect((body() as HTMLTextAreaElement).value).toBe(
-    TEMPLATES.find((t) => t.value === "decision")!.body,
-  );
-  fireEvent.change(body(), { target: { value: "Something I wrote." } });
+  const decision = TEMPLATES.find((t) => t.value === "decision")!.body;
+  expect(within(body()).getByText(firstHeading(decision))).toBeTruthy();
+  await fill(body(), [{ text: "Something I wrote." }]);
   fireEvent.click(screen.getByRole("radio", { name: "Runbook" }));
-  expect((body() as HTMLTextAreaElement).value).toBe("Something I wrote.");
+  expect(body().textContent).toBe("Something I wrote.");
   expect(screen.getByText("Clear the page first to start from a template.")).toBeTruthy();
 });
 

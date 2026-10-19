@@ -1112,7 +1112,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/knowledge/diaries` · `#/knowledge/diaries/{handle}` | **Agent diaries** — every agent's diary at a glance, each counted by the node holding the agent; one agent's diary and episodes *(needs Admin access)*. Handles live here as they do under `seats/` | |
 | `#/artifacts` · `#/artifacts/mine` · `#/artifacts/shared` · `#/artifacts/company` · `#/artifacts/agents` | **Artifacts**: For you (what the reader opened most lately and what was shared with them, their pins first), then Mine, Shared with you, Company and By agents, each the engine's `artifacts` listing under one scope, every row decided by `get_artifact`. A list or cards. No permission opens the workspace: a share alone admits a reader (D01), and the engine decides every artifact. An administrator also sees the company's storage against its quotas | `kind=html\|doc\|slides\|sheet` · `q=` · `sort=updated\|created\|title\|opened` · `shape=list\|cards` (all four kept across the sections) · `status=trashed` (Mine: the reader's own trash) |
 | `#/artifacts/new` | **New artifact**: a native sheet, blank or from the Review sheet template, or a doc or a deck from the engine's starter, owned by the reader *(needs Artifacts access)*. A page is published by an agent's tool or the CLI, not typed here | `kind=sheet\|doc\|slides` · `template=review\|blank` · `item=` (the task it is made for, which lists it on that task's Artifacts card) |
-| `#/artifacts/{id}` | **Artifact**: addressed by its id, drawn under ONE slim bar in the frame's place ([An open artifact is the screen](#an-open-artifact-is-the-screen)). A page runs in a sandboxed frame on the artifact origin, edge to edge, a doc is rendered here tab by tab by the dashboard's own Markdown renderer with its outline beside it, Edit (text and tabs: add, rename, reorder, remove; each save a version, a raced save merged onto the newer one) and Print, a deck is drawn from its canonical tree with Edit, Grid and Present in the bar, a sheet is drawn from its schema. The bar holds the way back, the title (renamed in place by an editor), the version chip, the kind's views, who is here, and the controls that open a panel at the side: Details (what the page header and its fact line used to say), History (versions, Compare, Restore, labels and the change record), Data where it keeps any (rows, the schema editor and every write, with Undo), People (who is here, with Follow) and, from More, Settings (details, what it can do, its owner, the trash); Share and More close the bar. A reader with no relation is told it is not there or not theirs, in one card | `panel=details\|history\|data\|people\|settings` (pushes; the old `tab=` and `rail=people` are read as the panel they became and rewritten) · `expand=1` (the panel takes the workspace) · `version=` · `against=` · `lens=` · `sheet=` (which collection a sheet draws) · `doctab=` (which tab of a doc is on show) · `data=rows\|schema\|history` · `mode=grid\|present\|presenter` · `slide=` · `follow=` |
+| `#/artifacts/{id}` | **Artifact**: addressed by its id, drawn under ONE slim bar in the frame's place ([An open artifact is the screen](#an-open-artifact-is-the-screen)). A page runs in a sandboxed frame on the artifact origin, edge to edge, a doc is rendered here tab by tab by the dashboard's own Markdown renderer with its outline beside it, Edit (the text in place, in the rich editor, and the tabs: add, rename, reorder, remove; each save a version, a raced save merged onto the newer one) and Print, a deck is drawn from its canonical tree with Edit, Grid and Present in the bar, a sheet is drawn from its schema. The bar holds the way back, the title (renamed in place by an editor), the version chip, the kind's views, who is here, and the controls that open a panel at the side: Details (what the page header and its fact line used to say), History (versions, Compare, Restore, labels and the change record), Data where it keeps any (rows, the schema editor and every write, with Undo), People (who is here, with Follow) and, from More, Settings (details, what it can do, its owner, the trash); Share and More close the bar. A reader with no relation is told it is not there or not theirs, in one card | `panel=details\|history\|data\|people\|settings` (pushes; the old `tab=` and `rail=people` are read as the panel they became and rewritten) · `expand=1` (the panel takes the workspace) · `version=` · `against=` · `lens=` · `sheet=` (which collection a sheet draws) · `doctab=` (which tab of a doc is on show) · `data=rows\|schema\|history` · `mode=grid\|present\|presenter` · `slide=` · `follow=` |
 | `#/spend` | **Spend › Overview**: the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent beside by provider and by team, and the three most expensive tasks beside the auxiliary model by purpose (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across the sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
 | `#/spend/tasks` | **Expensive tasks** — the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs *(needs Tracker access)* | `window=7d\|30d\|90d\|<from>/<to>` (kept across the sections) |
 | `#/spend/budgets` | **Budgets** — the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. ONE address: Settings lists it as a cross-link | `window=` is not read here, and is carried through to the other sections |
@@ -2151,7 +2151,7 @@ application draws one bar and opens the rest on demand, and so does this.
 | Where | What |
 |---|---|
 | Start | the frame's navigation toggle on a narrow window, the way back to the gallery, the kind's glyph, the title as the page's `h1` (an editor renames it in place: Enter takes it, Escape puts it back, and a refusal is said at the field), and the version chip (`v3`, or `v2 of 3` in the accent while an older version is on show) whose menu picks a version |
-| Middle | the kind's own views, as one segmented control: a deck's Edit, Grid and Present. A view PUBLISHES them (`lib/artifacts/kindControls.ts`), with its own tools (a doc's Edit) and its rows in More (Print, the presenter's window), so no kind draws a second row of chrome over itself |
+| Middle | the kind's own views, as one segmented control: a deck's Edit, Grid and Present. A view PUBLISHES them (`lib/artifacts/kindControls.ts`), with its own tools (a doc's Edit) and its rows in More (Print, the presenter's window), so no kind draws a second row of chrome over itself. While a doc is edited it publishes its editing state in their place ("Editing", and "Unsaved changes" once anything differs), with Cancel and Save, so the writer finishes where they pressed Edit |
 | End | who is here (the presence stack), Details, History, Data where the artifact keeps any, People, then Share and More (Rename, Change icon, Settings, the kind's rows, Open in a new tab, Copy link, Pin, Move to the trash) |
 
 Every control is an icon with its name and its key in a tooltip, and its
@@ -3461,12 +3461,23 @@ schema — and the dashboard printed them as literal characters: a reader saw
 `## Decision`, `- [ ] ship it` and `[the guide](https://…)` as the text an
 agent typed rather than as the document it wrote.
 
-`lib/markdown.ts` renders a CommonMark subset to React nodes. It is in-tree
-for the same reason the rest of this engine writes its own small pieces: a
-markdown library's real surface is its HTML passthrough and the sanitiser that
-has to follow it, and this renderer needs **neither** — it emits no raw HTML
-under any input, so there is no `dangerouslySetInnerHTML` on the path and
+`lib/markdown.ts` renders a CommonMark subset to React nodes. The grammar it
+reads is the design system's (`parseMarkdown` and `markdownInline` from
+`@crewlethq/ui`), the same grammar the rich editor reads a body by, so what a
+writer edits and what a reader sees cannot disagree about where a list ends or
+what a backslash escapes. It is written in-tree rather than taken from a
+markdown library for the reason the rest of this engine writes its own small
+pieces: a library's real surface is its HTML passthrough and the sanitiser
+that has to follow it, and this renderer needs **neither**. It emits no raw
+HTML under any input, so there is no `dangerouslySetInnerHTML` on the path and
 nothing to sanitise.
+
+Beyond the usual blocks it reads three things a page or a doc uses: a
+**backslash escape** (`\*` is an asterisk), an **escaped pipe** in a table
+cell (`a \| b`, a pipe of that cell, inside a code span too, as GitHub reads
+it), and a **callout** in GitHub's alert syntax, a quote whose first line is
+`[!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]` or `[!CAUTION]`, drawn as a
+tinted note with its tone named on a line of its own.
 
 Two rules are load-bearing, because a page is written by an agent acting on
 content it read somewhere else:
@@ -6730,9 +6741,13 @@ page is one column and the outline is not drawn.
   page's changes, each drawn as the person, the change and the turn that made
   it. It reads one revision in the page's place, as what it changed against
   the one saved before it (by line) or as its full text.
-- **Edit writes as you.** The editor is the design system's `MarkdownEditor`
-  (a formatting bar, Write and Preview, Link a page) and saves through
-  `save_page` on
+- **Edit writes as you, in place.** The page itself becomes the editor (the
+  design system's `RichEditor`, [ADR-0044](../../adr/0044-a-page-is-edited-in-place-and-saved-as-the-markdown-it-was.md)): it looks the same while it is
+  edited as when it is read, blocks come from a slash menu or from Markdown
+  typed as Markdown, a selection gets a formatting toolbar, and the page bar's
+  Edit becomes the editing state, Cancel and Save. The body stays Markdown,
+  and a save with no edit sends the bytes that were opened, so only the lines
+  a writer changed ever move. It saves through `save_page` on
   [`/operator/act`](api-endpoints.md#operatoract--the-dashboards-write-surface)
   with the revision it was opened on as `base_version`. The page keeps being
   read while it is open (every 20 s), so a save by somebody else is SEEN
@@ -6747,9 +6762,11 @@ page is one column and the outline is not drawn.
   merge is precisely what the engine's refusal of a stale base exists to
   prevent: the next save would be accepted against the new revision and
   delete what they wrote. Save and Command or Control with Enter read one
-  answer for whether a save can be sent. A page link is inserted by picking a
-  page, and is written in the address the backlinks read
-  (`PAGE_ADDRESS_PREFIX`, held against `pages.AddressPrefix` by a test).
+  answer for whether a save can be sent. A page link is inserted from the
+  slash menu's "Link to a page", by picking a page, and is written in the
+  address the backlinks read (`PAGE_ADDRESS_PREFIX`, held against
+  `pages.AddressPrefix` by a test). The note kept with the revision is a line
+  under the page, beside its word count.
 
 ### The composer: a new page
 
@@ -7823,12 +7840,12 @@ follows it and the workspace is back in the entry with every other test green �
 so `internal/api`'s `TestTheDashboardFitsItsBudget` measures the crawl described above
 and fails a build over any of four numbers:
 
-| What | Budget | Measured as |
-|---|---|---|
-| The initial load: the entry, its static imports and the linked stylesheet | 300 KiB | gzip at the best level, which is what the engine serves |
-| Each chunk fetched later: a workspace, the org builder, a lazy stylesheet | 150 KiB | the same |
-| Every font face the build embeds | 90 KB | as served — woff2 is never recompressed |
-| The whole of `static/dashboard`, which every binary and image carries | 3.5 MiB | raw |
+| What | Budget | Measured as | Why this number |
+|---|---|---|---|
+| The initial load: the entry, its static imports and the linked stylesheet | 310 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own |
+| Each chunk fetched later: a workspace, the org builder, a lazy stylesheet | 150 KiB | the same | Half the initial load, for the first click into a screen the idle prefetch has not reached |
+| Every font face the build embeds | 90 KB | as served — woff2 is never recompressed | The four Geist faces (83,736 bytes) and room to re-cut them, never a fifth |
+| The whole of `static/dashboard`, which every binary and image carries | 4 MiB | raw | Every binary carries it, opened or not. 3 MiB, then 3.5 MiB for the artifacts workspace, then 4 MiB for the rich editor, whose chunk is about 276 KB raw (ProseMirror 228 KB of it) plus 15 KB of its packages' notices: it measured 3.54 MiB after it. A doubled 2.3 MB baseline is still refused |
 
 The initial load is the shell's scripts and stylesheet and everything they reach
 through a static `import`, derived from the modules themselves rather than from

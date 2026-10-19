@@ -1,15 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
+import { parseMarkdown, safeHref } from "@crewlethq/ui";
 import {
   MODEL_WORDS,
   type RenderOptions,
   nestSections,
   outline,
-  parseBlocks,
   plainText,
   renderInline,
   renderMarkdown,
-  safeHref,
   splitSections,
   UnbrokenCode,
   imageSources,
@@ -238,7 +237,7 @@ describe("a company page", () => {
 describe("the block parser", () => {
   it("does not read a line of pipes as a table without its delimiter", () => {
     // A shell pipeline in a paragraph is not a one-column table.
-    const blocks = parseBlocks("run `cat x | grep y` and see");
+    const blocks = parseMarkdown("run `cat x | grep y` and see");
     expect(blocks).toHaveLength(1);
     expect(blocks[0]?.kind).toBe("paragraph");
   });
@@ -254,8 +253,10 @@ describe("the block parser", () => {
     // sample is CONTENT. Read as a close it ended the block on its first line
     // and the whole sample was thrown away — an empty code block where a page
     // was teaching somebody how to write one.
-    const blocks = parseBlocks("```sh\n```ts\n# install deps\n```");
-    expect(blocks).toEqual([{ kind: "code", lang: "sh", text: "```ts\n# install deps" }]);
+    const blocks = parseMarkdown("```sh\n```ts\n# install deps\n```");
+    expect(blocks).toEqual([
+      { kind: "code", lang: "sh", text: "```ts\n# install deps", fence: "```" },
+    ]);
   });
 
   it("renders an unterminated fence rather than dropping the rest", () => {
@@ -270,12 +271,12 @@ describe("the block parser", () => {
   });
 
   it("treats a bulleted run after a numbered one as its own list", () => {
-    const blocks = parseBlocks("1. one\n2. two\n- a\n- b");
+    const blocks = parseMarkdown("1. one\n2. two\n- a\n- b");
     expect(blocks.map((b) => b.kind)).toEqual(["list", "list"]);
   });
 
   it("answers an empty document with nothing rather than throwing", () => {
-    expect(parseBlocks("")).toEqual([]);
+    expect(parseMarkdown("")).toEqual([]);
     expect(renderMarkdown("")).toEqual([]);
   });
 });
@@ -288,6 +289,35 @@ describe("the block parser", () => {
  * differently — so the property that matters is not what a section LOOKS like
  * but that the split loses nothing and invents nothing.
  */
+describe("what the shared grammar adds", () => {
+  it("draws an escaped character as itself", () => {
+    const el = draw("a \\*literal\\* star and a \\# hash");
+    expect(el.textContent).toBe("a *literal* star and a # hash");
+    expect(el.querySelector("em")).toBeNull();
+  });
+
+  it("draws a callout as a note with its tone named", () => {
+    const el = draw("> [!WARNING]\n> A restart drops every session.");
+    const note = el.querySelector('[role="note"]');
+    expect(note?.getAttribute("data-callout")).toBe("warning");
+    expect(note?.querySelector("[data-callout-label]")?.textContent).toBe("Warning");
+    expect(note?.querySelector("[data-callout-body] p")?.textContent).toBe(
+      "A restart drops every session.",
+    );
+    expect(plainText("> [!NOTE]\n> Read me")).toBe("Read me");
+  });
+
+  it("keeps an escaped pipe inside its table cell", () => {
+    const el = draw("| a | b |\n|---|---|\n| x \\| y | z |");
+    expect([...el.querySelectorAll("td")].map((td) => td.textContent)).toEqual(["x | y", "z"]);
+  });
+
+  it("reads a link whose label holds an escaped bracket", () => {
+    const el = draw("[a \\] b](#/knowledge/pages/7)");
+    expect(el.querySelector("a")?.textContent).toBe("a ] b");
+  });
+});
+
 describe("sectioning", () => {
   it("splits on ATX headings and keeps the run before the first one", () => {
     const sections = splitSections("lead line\n\n# One\nunder one\n\n## Two\nunder two");
