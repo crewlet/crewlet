@@ -86,7 +86,7 @@ func Key(w http.ResponseWriter, r *http.Request, now time.Time) (string, bool) {
 	if given == "" {
 		return scope(r.Context(), statelog.NewOpID(now, "")), true
 	}
-	return scoped(w, r, given)
+	return scoped(w, r, given, false)
 }
 
 // Require is [Key] for a route on which the caller MUST name the operation:
@@ -101,23 +101,41 @@ func Key(w http.ResponseWriter, r *http.Request, now time.Time) (string, bool) {
 func Require(w http.ResponseWriter, r *http.Request) (string, bool) {
 	given := strings.TrimSpace(r.Header.Get(Header))
 	if given == "" {
-		Refuse(w, errNoKey)
+		refuseWith(w, noKey)
 		return "", false
 	}
-	return scoped(w, r, given)
+	return scoped(w, r, given, true)
 }
 
-// errNoKey is [Require]'s refusal of a request that named no operation.
-var errNoKey = errors.New("send a " + Header + " header. Use one new id per " +
-	"change, and send the same one on every retry")
+// noKey is [Require]'s refusal of a request that named no operation.
+const noKey = "This request needs an " + Header + " header: send a UUIDv7 you " +
+	"mint for the change, and the same one on every retry of it."
 
-// scoped holds a caller's key to the grammar and scopes it.
-func scoped(w http.ResponseWriter, r *http.Request, given string) (string, bool) {
+// scoped holds a caller's key to the grammar and scopes it. required says the
+// route takes no request without one, so its refusal never offers leaving the
+// header out.
+func scoped(w http.ResponseWriter, r *http.Request, given string, required bool) (string, bool) {
 	if err := statelog.CheckCallerOpID(given); err != nil {
-		Refuse(w, err)
+		refuseWith(w, keyRefusal(err, required))
 		return "", false
 	}
 	return scope(r.Context(), given), true
+}
+
+// keyRefusal is a key the grammar refused, said as one sentence about the
+// header: what is wrong with it, then how to send one that is not, and only
+// where the route allows it, that the header can be left out.
+func keyRefusal(err error, required bool) string {
+	var refused *statelog.CallerOpIDError
+	if !errors.As(err, &refused) {
+		return err.Error()
+	}
+	remedy := "send a UUIDv7 you mint for the change, or the op_id an earlier " +
+		"answer returned, unchanged"
+	if !required {
+		remedy += ", or leave the header out to start the change afresh"
+	}
+	return "The " + Header + " " + refused.Fault + "; " + remedy + "."
 }
 
 // scope is key as the operation of the principal on ctx: derived from the
@@ -182,8 +200,13 @@ const scopeNamespace = "crewlet.opkey.scope"
 // have minted" whichever route it sent it to. The field names the header,
 // because a key is sent there rather than in the body or the query.
 func Refuse(w http.ResponseWriter, err error) {
+	refuseWith(w, err.Error())
+}
+
+// refuseWith is [Refuse] with the detail already a sentence for the caller.
+func refuseWith(w http.ResponseWriter, detail string) {
 	httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeOpIDInvalid,
-		httpjson.Detail{"field": Header, "detail": err.Error()})
+		httpjson.Detail{"field": Header, "detail": detail})
 }
 
 // UnknownDetail is what the 503 of an UNKNOWN outcome says to do: retry with

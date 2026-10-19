@@ -1094,9 +1094,8 @@ var codes = map[Code]string{
 		"delete has not moved. The reason is in this node's log.",
 	CodeConfirmRequired: "This change needs a confirmation that repeats what it " +
 		"acts on. The detail says what to repeat.",
-	CodeOpIDInvalid: "That operation id is not one this engine would have " +
-		"issued for this request, so nothing was judged or written. Send back " +
-		"the id an earlier answer carried, or none for a new request.",
+	CodeOpIDInvalid: "That operation id was refused, so nothing was judged or " +
+		"written: the detail says what is wrong with it and what to send instead.",
 	CodeInvalidGate: "That is not a node id any node can run under, so " +
 		"nothing was judged or written. The detail says what a node id may hold.",
 	CodeEvictionRefused: "That node is still reaching the fleet, so it was " +
