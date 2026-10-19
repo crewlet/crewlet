@@ -10472,10 +10472,11 @@ a.live-row:focus-visible {
   gap: var(--spacing-4);
 }
 
+/* AN ARTIFACT THE READER CANNOT OPEN, refused or in the trash: one
+   composition, the kit's empty state on the page, at the same place. */
 .artifacts-denied {
   display: flex;
   justify-content: center;
-  padding-block: var(--spacing-6);
 }
 
 /* AN ARTIFACT'S PAGE is the artifact, under one slim bar the page draws in
@@ -10587,6 +10588,15 @@ a.live-row:focus-visible {
 .artifact-panel-body {
   container: page / inline-size;
   min-width: 0;
+  /* ONE RHYTHM BETWEEN A PANEL'S SECTIONS, in every panel: they ran 16 in
+     Details, 20 in History, 12 in Data, and nothing at all between a sheet's
+     note and its Changes. */
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+.artifact-panel-body > .artifact-data {
+  gap: var(--spacing-4);
 }
 /* The details: the artifact's own sentence, then its facts and the link. */
 .artifact-details {
@@ -10799,7 +10809,7 @@ a.live-row:focus-visible {
 .artifact-history-tab {
   display: grid;
   grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr);
-  gap: var(--spacing-5);
+  gap: var(--spacing-4);
   align-items: start;
 }
 /* TWO COLUMNS DOWN TO A SMALL LAPTOP: one column below 720 px, where a
@@ -10867,7 +10877,7 @@ a.live-row:focus-visible {
 .artifact-settings {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-5);
+  gap: var(--spacing-4);
   max-width: var(--size-measure);
 }
 .artifact-form {

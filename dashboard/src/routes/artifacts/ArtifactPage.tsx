@@ -126,7 +126,14 @@ import {
   type KindControls,
   type RegionNames,
 } from "~/lib/artifacts/kindControls.ts";
-import { PANEL_SPECS, panelOf, spelledTheOldWay, withPanel, type PanelName } from "./panels.ts";
+import {
+  PANEL_SPECS,
+  panelOf,
+  panelTitle,
+  spelledTheOldWay,
+  withPanel,
+  type PanelName,
+} from "./panels.ts";
 import { useArtifactPresence } from "./presence.ts";
 import { followMoves, followTarget, moves } from "~/lib/artifacts/follow.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -249,12 +256,16 @@ function Trashed({ detail, onChanged }: { detail: ArtifactDetail; onChanged: () 
         <EmptyState
           icon={<TrashGlyph size="xl" />}
           title="This artifact is in the trash"
-          description={`${trashedBy} moved it to the trash. ${purgeSentence(detail.trashed_at)}`}
+          // WHY THE WAY BACK IS HELD, said where it is read: a held Restore
+          // otherwise only said so under the pointer.
+          description={`${trashedBy} moved it to the trash. ${purgeSentence(detail.trashed_at)}${
+            restore.can || restore.block === "loading" ? "" : ` ${restore.reason}`
+          }`}
           action={
             <span className="artifact-actions">
               <Button
                 size="small"
-                variant="secondary"
+                variant="primary"
                 loading={gesture.busy}
                 disabledReason={restore.can ? undefined : restore.reason}
                 onClick={async () => {
@@ -366,8 +377,9 @@ function Loaded({
   const presence = useArtifactPresence(room, people, showing);
   const viewer = useViewer();
   // THE NAME THE ROOM KNOWS THIS READER BY: their seat, or the login of a
-  // reader acting under none, as the engine names every member.
-  const selfName = viewer.handle || viewer.login;
+  // reader acting under none, as the engine names every member (its
+  // `iam.RecordOwner`, which the frame holds as `owner`).
+  const selfName = viewer.owner;
   const [follow, setFollow] = useParam("follow", "");
   const [sheetParam] = useParam("sheet", "");
   const [slideParam] = useParam("slide", "");
@@ -555,7 +567,7 @@ function Loaded({
     },
     {
       key: "history",
-      label: "Versions and history",
+      label: panelTitle("history", !contentIsData(detail.kind)),
       icon: <RotateCcwClockGlyph size="sm" />,
       keys: ["h"],
       pressed: panel === "history",
@@ -874,7 +886,7 @@ function Loaded({
           panel ? (
             <ArtifactPanel
               key={panel}
-              title={PANEL_SPECS[panel].title}
+              title={panelTitle(panel, !contentIsData(detail.kind))}
               size={PANEL_SPECS[panel].size}
               focusOnOpen={readerOpened.current}
               onClose={() => openPanel(null)}
