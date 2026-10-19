@@ -13,7 +13,7 @@ the ones the engine enforces at publish; the page's runtime API is the
 | You want | Kind |
 |---|---|
 | A table people fill in together: a review, a sign-up, a tracker of decisions | `sheet`. Declare the schema and the dashboard draws it, with presence, per-cell history and accessibility, and no page code at all |
-| A document: a report, a plan, release notes | `doc`. The dashboard renders it; there is nothing to run |
+| A document: a report, a plan, release notes, a handbook in tabs | `doc`, Markdown in one file or in tabs. The dashboard renders it; there is nothing to run. See [Writing a doc](#writing-a-doc) |
 | A presentation: a pitch, a review, a talk | `slides`, a deck in Claude's slide format. The dashboard draws, presents and prints it, people fix text and order it in place, and nothing runs. See [Writing a deck](#writing-a-deck) |
 | A dashboard, a calculator, a custom view over shared data | `html`, with the capabilities it needs |
 
@@ -233,6 +233,37 @@ republish would cost. Every publish names `base_version`; when somebody else
 published since, the tool answers with the live version, who published it,
 when, the changed paths and the start of each changed file, so the agent
 merges and publishes again rather than discarding a colleague's work.
+
+---
+
+## Writing a doc
+
+A doc of one page is one Markdown file, `index.md` by default. A doc of
+several tabs is a directory: `doc.json`, the index, naming the Markdown file
+of each tab in order, with the tabs and any images beside it.
+
+```json
+{ "v": 1, "tabs": [ { "path": "tabs/plan.md", "title": "Plan" },
+                    { "path": "tabs/risks.md", "title": "Risks" } ] }
+```
+
+- **The index is checked at publish.** `v` is `1`; there are 1 to 32 tabs;
+  every tab names a Markdown file the version holds, once, under a title of
+  at most 120 bytes; and the tabs total at most 16 MiB. A publish outside
+  that is refused under the code `doc_format`, each finding naming the rule
+  it broke (`index`, `reference`, `bound` or `encoding`). A Markdown file the
+  index does not name is a file of the version, which a tab may link to, and
+  not a tab.
+- **Nothing in it runs.** The dashboard draws every tab with its own Markdown
+  renderer, so a doc carries no script, no styles and no HTML that becomes
+  markup. Images are files of the version, named by their path.
+- **Publish it** with `crewlet artifacts publish <dir>` (a `doc.json` or a
+  lone `.md` file makes it a `doc`), or from an agent with `create_artifact`,
+  `kind: "doc"` and either `content` (one tab) or `files` with
+  `entry: "doc.json"`. Revise a tab with `edits` on its file against your base
+  version; `get_artifact` with `view: "outline"` lists the tabs, each with its
+  file and size, so you read only the tab you change. A patch that removes a
+  tab's file must drop the tab from `doc.json` in the same version.
 
 ---
 

@@ -6,12 +6,13 @@ like a document, shared like a file, served like a web page, and it can keep
 **shared data** that every viewer reads and writes together, while everybody
 in it sees who else is there.
 
-Three kinds ship in this release:
+Four kinds ship in this release:
 
 | Kind | What it is | Who draws it |
 |---|---|---|
 | `html` | A page of HTML, CSS and script, with any files it references | The page itself, inside a sandboxed frame on an origin of its own |
-| `doc` | A document | The dashboard's own renderer; it carries no author code |
+| `doc` | A document of one Markdown file, or of several tabs ordered by a `doc.json` index | The dashboard's own renderer; it carries no author code |
+| `slides` | A deck of 16:9 slides in Claude's slide format | The dashboard, from the deck's canonical tree |
 | `sheet` | A native sheet: rows and typed columns, with no page at all | The dashboard, from the sheet's schema alone |
 
 The motivating case is a review table an agent hands to a team: the agent
@@ -560,6 +561,30 @@ them.
 | `store.objects.nats_max_bytes` | A | The `nats` object bucket's reservation on the broker |
 | `artifacts.agents_manage_others` | B | Let agents publish over, update and reshare artifacts they do not own (default `false`) |
 | `artifacts.seen_by` | B | `editors` (default) or `nobody` |
+
+---
+
+## Docs
+
+A `doc` artifact is Markdown: one file (`index.md` by default), or several
+tabs, each its own Markdown file, ordered and titled by a `doc.json` index
+(`{"v": 1, "tabs": [{"path": "tabs/plan.md", "title": "Plan"}]}`). The
+[authoring guide](../guides/artifact-authoring.md#writing-a-doc) is the whole
+contract.
+
+- **Held to the format at publish.** Every version is read whole through one
+  reader (`internal/artifacts/docindex`), carried tabs included: an index that
+  names a file the version does not hold, a tab that is not Markdown, a path
+  twice, more than 32 tabs or more than 16 MiB of text is refused, each
+  finding naming its rule, under the code `doc_format`.
+- **Drawn by the dashboard, never as markup.** The engine answers a version tab
+  by tab (`GET /artifacts/{id}/versions/{n}/doc`), and the dashboard draws each
+  with the element-constructing Markdown renderer Knowledge pages use, which
+  also decides what a heading is, so the outline and the page it points into
+  cannot disagree.
+- **Searched by every tab**, each title and its text, not by the index.
+- **Covered natively in the gallery**: the first tab's opening, from the
+  version's outline, drawn at card size.
 
 ---
 

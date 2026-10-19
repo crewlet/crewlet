@@ -14,7 +14,7 @@ import (
 func TestEveryEntryRuleCanBeMet(t *testing.T) {
 	t.Parallel()
 	for _, s := range artifacts.KindSpecs() {
-		if !s.Entry.Optional && len(s.Entry.Essences) == 0 {
+		if !s.Entry.Optional && len(s.Entry.Essences) == 0 && len(s.Entry.Indexes) == 0 {
 			t.Errorf("%s must name an entry and admits no type", s.Kind)
 		}
 		if s.Store == artifacts.StoreContent && !s.Entry.Optional {
@@ -30,27 +30,25 @@ func TestEveryEntryRuleCanBeMet(t *testing.T) {
 }
 
 // INFERENCE NAMES ONE KIND: no two kinds that take any path open on the same
-// type, no two kinds fix the same path, and a default entry infers its own
-// kind, so a publish that names no kind becomes the kind whose default it used.
+// type, no two kinds hold an index at the same path, and a default entry
+// infers its own kind, so a publish that names no kind becomes the kind whose
+// default it used.
 func TestAnEntryInfersExactlyOneKind(t *testing.T) {
 	t.Parallel()
 	seen := map[string]artifacts.Kind{}
 	fixed := map[string]artifacts.Kind{}
 	for _, s := range artifacts.KindSpecs() {
-		if s.Entry.Fixed {
-			for _, d := range s.Entry.Defaults {
-				if other, dup := fixed[d]; dup {
-					t.Errorf("%s and %s both fix their entry at %s", other, s.Kind, d)
-				}
-				fixed[d] = s.Kind
+		for _, i := range s.Entry.Indexes {
+			if other, dup := fixed[i.Path]; dup {
+				t.Errorf("%s and %s both hold an index at %s", other, s.Kind, i.Path)
 			}
-		} else {
-			for _, e := range s.Entry.Essences {
-				if other, dup := seen[e]; dup {
-					t.Errorf("%s and %s both open on %s, so inference picks by order", other, s.Kind, e)
-				}
-				seen[e] = s.Kind
+			fixed[i.Path] = s.Kind
+		}
+		for _, e := range s.Entry.Essences {
+			if other, dup := seen[e]; dup {
+				t.Errorf("%s and %s both open on %s, so inference picks by order", other, s.Kind, e)
 			}
+			seen[e] = s.Kind
 		}
 		for _, d := range s.Entry.Defaults {
 			typ, _ := mediatype.For(d)
@@ -63,6 +61,12 @@ func TestAnEntryInfersExactlyOneKind(t *testing.T) {
 		t.Errorf("a PDF entry infers %q, and no kind opens on one", k)
 	}
 	if k, ok := artifacts.KindFor("data.json", "application/json"); ok {
-		t.Errorf("a JSON file that is no kind's fixed entry infers %q", k)
+		t.Errorf("a JSON file that is no kind's index infers %q", k)
+	}
+	if k, _ := artifacts.KindFor("doc.json", "application/json"); k != artifacts.KindDoc {
+		t.Errorf("doc.json infers %q, not a doc", k)
+	}
+	if k, _ := artifacts.KindFor("tabs/plan.md", "text/markdown"); k != artifacts.KindDoc {
+		t.Errorf("a Markdown file at any path infers %q, not a doc", k)
 	}
 }

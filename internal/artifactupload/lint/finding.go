@@ -63,6 +63,12 @@ const (
 	// subset does not take, a bound passed, or a file the deck names that the
 	// version does not hold. The message names the rule broken.
 	CodeSlideFormat Code = "slide_format"
+
+	// CodeDocFormat is a doc outside the doc format
+	// (internal/artifacts/docindex): a `doc.json` that does not read, a tab
+	// naming a file the version does not hold or one that is not Markdown,
+	// or a bound passed. The message names the rule broken.
+	CodeDocFormat Code = "doc_format"
 )
 
 // The warnings: legal, and almost certainly not what the author meant.
@@ -97,7 +103,7 @@ func (c Code) Refusing() bool {
 	return slices.Contains([]Code{
 		CodeRemoteScript, CodeRemoteStylesheet, CodeUnpinned, CodeRemoteImport,
 		CodeFormOffOrigin, CodeRefreshOffOrigin, CodeJavaScriptURL, CodePlaceholder,
-		CodeVendorOff, CodeVendorFailed, CodeUnparseable, CodeSlideFormat,
+		CodeVendorOff, CodeVendorFailed, CodeUnparseable, CodeSlideFormat, CodeDocFormat,
 	}, c)
 }
 

@@ -26,8 +26,11 @@ func TestEveryKindAnswersEveryFacet(t *testing.T) {
 			t.Errorf("%s keeps store %q", s.Kind, s.Store)
 		case !s.Format.Valid():
 			t.Errorf("%s validates format %q", s.Kind, s.Format)
-		case s.Entry.Fixed && len(s.Entry.Defaults) == 0:
-			t.Errorf("%s fixes its entry's path and names none", s.Kind)
+		case len(s.Entry.Essences) == 0 && len(s.Entry.Indexes) > 0 &&
+			!slices.ContainsFunc(s.Entry.Indexes, func(i EntryIndex) bool {
+				return slices.Contains(s.Entry.Defaults, i.Path)
+			}):
+			t.Errorf("%s opens only on an index and defaults to none of them", s.Kind)
 		case s.Search == SearchFormat && s.Format == FormatNone:
 			t.Errorf("%s searches its format's text and validates no format", s.Kind)
 		case !s.Search.Valid():

@@ -239,8 +239,8 @@ func (r *run) searchText(ctx context.Context, m artifacts.Manifest) (string, err
 	switch {
 	case spec.Search == artifacts.SearchEntry:
 		return r.entryText(ctx, m)
-	case spec.Search == artifacts.SearchFormat && r.deck != nil:
-		return truncateText(r.deck.Text(), int(artifacts.MaxSearchTextBytes)), nil
+	case spec.Search == artifacts.SearchFormat && r.formatted != nil:
+		return truncateText(r.formatted.Text(), int(artifacts.MaxSearchTextBytes)), nil
 	}
 	return "", fmt.Errorf("artifactupload: a %s artifact's search rule %q is not one this "+
 		"pipeline extracts", r.kind, spec.Search)
