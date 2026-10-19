@@ -2038,10 +2038,10 @@ crewlet llm list
 crewlet llm doctor [KEY] [-no-smoke]
 crewlet llm login  <KEY> [-from-host | -capture-token | -token-stdin |
                           -username U -password-stdin] [-home PATH]
-                          [-print-token]
+                          [-print-token] [-api URL]
 crewlet llm status <KEY>
 crewlet llm logout <KEY>
-crewlet llm export <KEY> [-secret-store]
+crewlet llm export <KEY> [-secret-store] [-api URL]
 crewlet llm import <KEY>          # bundle on stdin
 ```
 
@@ -2149,6 +2149,21 @@ already authenticated. `-secret-store` writes it to the [secret
 store](../concepts/secret-store.md) instead of stdout; without it the blob goes
 to stdout in the clear, which is what you want when piping into your own
 secret manager and never what you want in a shell history.
+
+A token `login` stores and a bundle `export -secret-store` stores land in the
+rows of the store `-config` names — this node's own, which its engine moves
+into the fleet's store at its next start — or, with `-api`, go through the
+running node it names, which puts them on every node at once. The command
+says which, as `secrets set` does. Like every `crewlet llm` command it first
+reads the company's `${VAR}` references out of that store, so it runs where
+no engine is holding it: on a node whose engine is up it is refused before
+anything is written, and a stopped node reaches the running fleet with `-api`.
+The store is the **fleet's**, so one export reaches every node: each one
+whose credential directory for the provider is empty, and where nobody has
+logged the entry out since its last login (below), restores the same login at
+boot and at every apply it publishes, and every copy then descends from one
+refresh token — see [Move a login onto another
+host](../concepts/subscription-llm-backends.md#4-move-a-login-onto-another-host).
 
 **`import`** is the other half, and it reads the bundle from **stdin** — a
 credential on argv is visible in `ps` and lands in shell history, and the
