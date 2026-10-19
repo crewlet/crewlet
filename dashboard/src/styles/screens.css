@@ -7852,19 +7852,14 @@ a.work-cal-chip {
 
 /* ---- Home's board ------------------------------------------------------ */
 
-/* A BOARD'S PAGE GRID: blocks on twelve columns, each spanning its own width
-   (`grid-column: span N`, which ArrangeFrame sets), on the page as in a group.
+/* A BOARD'S PAGE GRID is the design system's ArrangeGrid: blocks on twelve
+   columns, each spanning its own width (`grid-column: span N`, which
+   ArrangeFrame sets), on the page as in a group, whose body is the same grid.
    ONE GRID FOR EVERY BOARD, Home's and a dashboard's, so a widget is laid out
-   at one width wherever it stands. A group's own body is the design system's
-   ArrangeGroup, on the same twelve columns. The chrome of a block being
-   arranged (its ring, toolbar, resize handles and the column lanes) is the
-   design system's ArrangeFrame and ArrangeBoard. */
-.board-grid {
-  display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  gap: var(--spacing-4);
-  align-items: stretch;
-}
+   at one width wherever it stands; the rows open a step while the board is
+   arranged, for each block's toolbar. The chrome of a block being arranged
+   (its ring, toolbar, resize handles and the column lanes) is the design
+   system's ArrangeFrame and ArrangeBoard. */
 .home-board-cell {
   display: flex;
   flex-direction: column;
@@ -7936,15 +7931,6 @@ a.work-cal-chip {
   width: 1px;
   height: var(--spacing-5);
   background: var(--color-border-default);
-}
-
-/* The board while it is arranged. */
-
-/* More room between rows while editing: each toolbar sits on its widget's
-   top edge, half in the gap above it. */
-.home-board.is-editing .board-grid,
-.home-group-body {
-  row-gap: var(--spacing-5);
 }
 
 /* Widgets. */

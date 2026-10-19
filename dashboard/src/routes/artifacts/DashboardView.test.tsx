@@ -312,8 +312,9 @@ test("the Sources rail lists every dataset with how it is kept current", async (
 test("each widget is a cell of the board's twelve-column grid", async () => {
   mount(dataStore());
   await waitFor(() => expect(widget("pipeline")).toBeTruthy());
-  const grid = document.querySelector(".dashboard-board > .board-grid");
+  const grid = document.querySelector<HTMLElement>(".dashboard-board > .crewlet-arrange-grid");
   expect(grid).toBeTruthy();
+  expect(grid?.style.getPropertyValue("--crewlet-arrange-columns")).toBe("12");
   const cells = [...document.querySelectorAll(".dashboard-cell")].filter(
     (c) => !c.parentElement?.closest(".dashboard-cell"),
   );

@@ -20,6 +20,7 @@ import { useRef, useState } from "react";
 import {
   ArrangeBoard,
   ArrangeFrame,
+  ArrangeGrid,
   ArrangeGroup,
   Button,
   Card,
@@ -143,7 +144,7 @@ export function DashboardView({
       </div>
       <div className="dashboard-body">
         <ArrangeBoard editing={false} columns={DASHBOARD_COLUMNS} className="dashboard-board">
-          <div className="board-grid">
+          <ArrangeGrid>
             {spec.widgets.map((w) =>
               w.type === "group" ? (
                 <ArrangeFrame
@@ -179,7 +180,7 @@ export function DashboardView({
                 renderLeaf(w)
               ),
             )}
-          </div>
+          </ArrangeGrid>
         </ArrangeBoard>
         {/* ONE CARD, as every panel beside a board is: the rail's heading is
             the card's, and the entries are rows of it rather than loose
