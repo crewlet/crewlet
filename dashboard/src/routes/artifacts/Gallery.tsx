@@ -135,7 +135,7 @@ const EMPTY: Readonly<Record<ArtifactSection, { title: string; hint: string }>> 
   },
   mine: {
     title: "You have not made an artifact yet",
-    hint: "Start a sheet, or ask an agent to publish a page or a document.",
+    hint: "Start a sheet, or ask an agent to publish an HTML page or a doc.",
   },
   shared: {
     title: "Nothing is shared with you",
@@ -147,7 +147,7 @@ const EMPTY: Readonly<Record<ArtifactSection, { title: string; hint: string }>> 
   },
   agents: {
     title: "No agent has published an artifact you can read",
-    hint: "When an agent shares a page, a document or a sheet with you, it appears here.",
+    hint: "When an agent shares an HTML page, a doc or a sheet with you, it appears here.",
   },
 };
 
@@ -805,7 +805,7 @@ function Usage() {
               label="Data"
               value={fmtBytes(d.usage.footprint)}
               unit={`of ${fmtBytes(d.data_bytes)}`}
-              sub={`In ${plural(d.usage.stores, "sheet or page", "sheets and pages")}`}
+              sub={`Kept by ${plural(d.usage.stores, "artifact", "artifacts")}`}
               trendPlacement="below"
               trend={
                 <Meter

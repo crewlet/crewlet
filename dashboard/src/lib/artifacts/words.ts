@@ -28,9 +28,13 @@ import type {
 } from "~/protocol/index.ts";
 import { fmtDate, parseUTC, plural } from "../format.ts";
 
-/** What each kind is called, in the eyebrow, the gallery's Type column and its filter. */
+/**
+ * What each kind is called, in the eyebrow, the gallery's Type column and its
+ * filter. An `html` artifact is "HTML", never "Page": a page is Knowledge's
+ * word, and "Page" beside Knowledge's Pages named two things one way.
+ */
 export const KIND_WORDS: Readonly<Record<ArtifactKind, string>> = {
-  html: "Page",
+  html: "HTML",
   doc: "Doc",
   slides: "Slides",
   dashboard: "Dashboard",
@@ -43,7 +47,7 @@ export const KINDS: readonly ArtifactKind[] = ARTIFACT_KINDS;
 
 /** What each kind is called where a sentence names several of it: "docs, slides and sheets". */
 export const KIND_PLURAL_WORDS: Readonly<Record<ArtifactKind, string>> = {
-  html: "pages",
+  html: "HTML pages",
   doc: "docs",
   slides: "slides",
   dashboard: "dashboards",
@@ -53,7 +57,7 @@ export const KIND_PLURAL_WORDS: Readonly<Record<ArtifactKind, string>> = {
 
 /**
  * Every kind in one phrase, for a sentence that says what Artifacts holds:
- * "pages, docs, slides, dashboards, sheets and designs". Derived from the
+ * "HTML pages, docs, slides, dashboards, sheets and designs". Derived from the
  * kind table, so a kind the engine grows is named wherever the workspace
  * describes itself, rather than each description listing the three it knew.
  */
