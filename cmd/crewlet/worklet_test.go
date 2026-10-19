@@ -260,7 +260,7 @@ func TestEveryPurgeThatNamesItsOperationIsRetriedUnderIt(t *testing.T) {
 		says      string
 	}{
 		{"an unknown", "unknown", false, "No acknowledgement"},
-		{"an unvouched unknown", "unknown", true, "another node with -url"},
+		{"an unvouched unknown", "unknown", true, "another node with -api"},
 		{"a refusal", "", false, "This attempt wrote nothing"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

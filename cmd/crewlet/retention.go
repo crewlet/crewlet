@@ -74,7 +74,7 @@ func runRetention(environ config.Source, args []string, stdout, stderr io.Writer
 	case "", "help":
 		fmt.Fprintln(stderr, "usage: crewlet retention "+
 			"status|snapshots|ack|evict|readmit|reanchor|verify|"+
-			"set-capacity|maintenance [<config.yaml>] [-url]")
+			"set-capacity|maintenance [<config.yaml>] [-api URL]")
 		return flag.ErrHelp
 	default:
 		return fmt.Errorf("unknown retention command %q", sub)
@@ -1008,7 +1008,7 @@ type gateAdviceContext struct {
 // # Why the command line renders them, and not the node
 //
 // The node used to send one sentence in this command's vocabulary — "evict it
-// with -force", "run it again without -op-id", "(-url)" — and the dashboard
+// with -force", "run it again without -op-id", "(-api)" — and the dashboard
 // rendered that sentence word for word beside a dialog with none of those
 // flags. So the node now says WHAT to do as a closed set of actions and a
 // sentence naming no surface's controls, and each surface says HOW: here, as
@@ -1031,7 +1031,7 @@ func gateAdvice(actions []string, c gateAdviceContext) []string {
 			}
 		case statelog.GateOtherNode:
 			out = append(out, "run it through another node the fleet still counts: "+
-				"-url <that node> "+c.again)
+				"-api <that node> "+c.again)
 		case statelog.GateReanchor:
 			out = append(out, "crewlet retention reanchor -stream "+c.stream+
 				", then run this again with "+c.again)

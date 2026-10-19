@@ -58,7 +58,7 @@ import (
 // artifactsUsage is the command's usage. THE KINDS ARE THE TABLE'S, never a
 // list typed here: a typed list went stale the day a kind was added, and
 // offered `-kind` values the node refuses beside omitting ones it serves.
-var artifactsUsage = `usage: crewlet artifacts <command> [arguments] [<config.yaml>] [-url URL]
+var artifactsUsage = `usage: crewlet artifacts <command> [arguments] [<config.yaml>] [-api URL]
 
   list [-scope mine|shared|company|agents|all] [-kind ` + kindChoices() + `]
        [-q TEXT] [-status live|trashed] [-work-item KEY] [-limit N]
@@ -162,7 +162,7 @@ func unknownOutcome(err error, gesture, op string) error {
 	if errors.As(err, &refused) && refused.Unsettled {
 		if refused.Unvouched {
 			return fmt.Errorf("%w\n\nThis node cannot tell whether it landed: run it through "+
-				"another node with -url <that node> -op-id %s, never a fresh id", err, op)
+				"another node with -api <that node> -op-id %s, never a fresh id", err, op)
 		}
 		return fmt.Errorf("%w\n\nTo find out, %s", err, retry)
 	}

@@ -1259,7 +1259,7 @@ crewlet budgets show                       # usage per scope
 
 | Flag | Default | What it does |
 |---|---|---|
-| `-url` | the `api` block of the config named on the command line | The running node's base URL. A wildcard bind (`0.0.0.0`, `::`) becomes the loopback address, because a wildcard is not something anything can dial |
+| `-api URL` | the `api` block of the config named on the command line | The running node's base URL. A wildcard bind (`0.0.0.0`, `::`) becomes the loopback address, because a wildcard is not something anything can dial |
 
 **The credential is `CREWLET_API_TOKEN` and nothing else**, here and on every
 command that talks to a running node: `backup`, `retention`, `worklet`,
@@ -1330,7 +1330,7 @@ where a counter zeroed by hand left no record of who made the room or why.
 ## `crewlet backup`
 
 ```
-crewlet backup [<config.yaml>] -dir <absolute path> [-url URL] [-wait DURATION]
+crewlet backup [<config.yaml>] -dir <absolute path> [-api URL] [-wait DURATION]
 ```
 
 Copies what a running node holds — its own store file, the replicated
@@ -1387,7 +1387,7 @@ what the copy is a copy *of*, and how a restore uses it.
 
 ```
 crewlet worklet purge <item> -reason TEXT -confirm <item-key>
-    [-op-id ID] [<config.yaml>] [-url URL]
+    [-op-id ID] [<config.yaml>] [-api URL]
 ```
 
 The gestures on work items that belong on a **shell**. Everything else a
@@ -1453,8 +1453,8 @@ duration to state, and `crewlet retention status` names which nodes those are.
 ## `crewlet objects`
 
 ```
-crewlet objects status [-json] [<config.yaml>] [-url URL]
-crewlet objects migrate -to s3 -target <path> [-final] [-wait D] [-json] [<config.yaml>] [-url URL]
+crewlet objects status [-json] [<config.yaml>] [-api URL]
+crewlet objects migrate -to s3 -target <path> [-final] [-wait D] [-json] [<config.yaml>] [-api URL]
 ```
 
 Where the company's files are kept, and what the
@@ -1535,9 +1535,9 @@ report as it answered it. The token takes `admin`.
 ## `crewlet fleet broker`
 
 ```
-crewlet fleet broker list [-json] [<config.yaml>] [-url URL]
-crewlet fleet broker remove <node> -confirm <node> [-force] [<config.yaml>] [-url URL]
-crewlet fleet broker remove -peer <peer> -confirm <peer> [-force] [<config.yaml>] [-url URL]
+crewlet fleet broker list [-json] [<config.yaml>] [-api URL]
+crewlet fleet broker remove <node> -confirm <node> [-force] [<config.yaml>] [-api URL]
+crewlet fleet broker remove -peer <peer> -confirm <peer> [-force] [<config.yaml>] [-api URL]
 ```
 
 The fleet broker's membership. Two records say who its members are: every node
@@ -1618,9 +1618,9 @@ member.
 
 ```
 crewlet seats pause <handle> [-stop] [-reason TEXT]
-    [-op-id ID] [<config.yaml>] [-url URL]
+    [-op-id ID] [<config.yaml>] [-api URL]
 crewlet seats resume <handle>
-    [-op-id ID] [<config.yaml>] [-url URL]
+    [-op-id ID] [<config.yaml>] [-api URL]
 ```
 
 Pause an agent seat, or resume it — the same `pause_seat` and `resume_seat`
@@ -1675,7 +1675,7 @@ crewlet artifacts purge <id> -confirm <id> [-op-id ID]
 crewlet artifacts assets <id>
 crewlet artifacts sources [<name>]
 crewlet artifacts usage
-    ... [<config.yaml>] [-url URL]
+    ... [<config.yaml>] [-api URL]
 ```
 
 The company's artifacts from a shell, through the same routes the dashboard is
@@ -1762,7 +1762,7 @@ board's viewer, so the list holds no row; see the
 
 ```
 crewlet retention status|snapshots|ack|evict|readmit|set-capacity|maintenance|reanchor|verify
-    [<config.yaml>] [-url URL]
+    [<config.yaml>] [-api URL]
 ```
 
 What the state log is holding, why it is not shrinking, and the gestures that
@@ -1947,7 +1947,7 @@ Not the same command now — it is refused the same way until the ceiling moves
 `-op-id` is what finishes it, because a fresh id is a second eviction that
 writes every log already holding the record again — here the tracker's and the
 identity estate's — and re-dates the eviction there. A node that is
-itself `evicted` cannot write, so it prints `-url <that node>` with the same
+itself `evicted` cannot write, so it prints `-api <that node>` with the same
 `-op-id`; a `wrong_stream` log needs a [reanchor](#crewlet-retention-reanchor)
 first, and then the same `-op-id`; and a `superseded` operation — an eviction
 retried after a readmission took the node back — is a new gesture, without
@@ -2012,7 +2012,7 @@ A readmission that cannot be **judged** is refused as well, with nothing
 written: `503 readmission_unjudged`, when the positions register, a published
 floor or a log's first surviving sequence could not be read. The node's
 position is not what is wrong there, so it is not told to catch up: the
-command is asked again, on this node or through another (`-url <that node>`).
+command is asked again, on this node or through another (`-api <that node>`).
 And either gesture on a node in a
 [capacity window](../guides/retention.md#changing-a-logs-ceiling) is refused `409 not_publishing`
 before anything is judged; its line points at `crewlet retention status`, which

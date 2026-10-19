@@ -2361,7 +2361,7 @@ crewlet budgets show      # the durable counters, read from a running node
 ```
 
 It talks to a node rather than to a file: the counters are the fleet's, and on
-the default topology they live inside the running engine. `-url` names another
+the default topology they live inside the running engine. `-api` names another
 node, and without it the address is taken from the `api` block of the config
 on the command line; the credential is `CREWLET_API_TOKEN`, never a flag.
 There is no reset command: a window's allowance comes back when the window

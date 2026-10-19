@@ -528,7 +528,7 @@ func TestADomainOperationIDNamesOneOperation(t *testing.T) {
 // -op-id. For an evicted node, a log rebuilt under it, a full log or an
 // operation superseded since, the same command fails the same way for ever.
 // And the advice was a sentence in the command line's vocabulary, which the
-// dashboard rendered word for word beside a dialog with no -op-id, -url or
+// dashboard rendered word for word beside a dialog with no -op-id, -api or
 // -force: the remedy is now a closed set of actions each surface renders in its
 // own words, and the sentence beside it names none of them.
 func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
@@ -648,7 +648,7 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 			!strings.Contains(remedy.Detail, tc.detail) {
 			t.Errorf("%s: detail = %q, want it to name %q", name, remedy.Detail, tc.detail)
 		}
-		for _, flag := range []string{"-op-id", "-url", "-force", "crewlet "} {
+		for _, flag := range []string{"-op-id", "-api", "-force", "crewlet "} {
 			if strings.Contains(remedy.Detail, flag) {
 				t.Errorf("%s: detail %q names %q, which only the command line has",
 					name, remedy.Detail, flag)

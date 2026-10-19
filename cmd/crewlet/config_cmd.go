@@ -144,12 +144,12 @@ func runConfig(environ config.Source, args []string, stdout, stderr io.Writer) e
 		dryRun   bool
 	)
 	var (
-		apiURL  string
+		apiURL  = new(string)
 		summary string
 	)
 	switch sub {
 	case "import":
-		fs.StringVar(&apiURL, "api", "",
+		apiURL = nodeAPIFlag(fs,
 			"import through a running node's API; default is the "+
 				"api.host:port in -config when the engine holds the store")
 		fs.StringVar(&summary, "summary", "",
@@ -187,7 +187,7 @@ func runConfig(environ config.Source, args []string, stdout, stderr io.Writer) e
 		return importCompany(ctx, importTarget{
 			bootstrapPath: *bootstrapPath,
 			path:          subject,
-			apiURL:        apiURL,
+			apiURL:        *apiURL,
 			summary:       summary,
 			environ:       environ,
 		}, stdout)

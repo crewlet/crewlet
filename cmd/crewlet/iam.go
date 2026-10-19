@@ -172,7 +172,7 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	fs.SetOutput(stderr)
 	bootstrapPath := fs.String("config", defaultBootstrapPath,
 		"node config file: the node this command reaches")
-	apiURL := fs.String("api", "",
+	apiURL := nodeAPIFlag(fs,
 		"the running node's API; default is the api.host:port in -config")
 	asJSON := fs.Bool("json", false, "print the raw answer")
 	reason := fs.String("reason", "", "recorded on the change")

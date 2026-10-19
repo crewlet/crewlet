@@ -834,7 +834,7 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
   ordinary writes does not refuse an eviction at all.
 - `evicted` — the node you ran it on is itself evicted and writes nothing: run
   the gesture, under the same `-op-id`, through a node the fleet still counts
-  (`-url`). Where the answer names a **position**, the gesture's record on that
+  (`-api`). Where the answer names a **position**, the gesture's record on that
   log landed and applies nowhere, and it holds the operation id there for the
   log's duplicate window (two minutes) from when it landed: the same `-op-id`
   sent sooner — through any node — is collapsed onto that record and answered
@@ -846,7 +846,7 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
   applies nowhere. It holds the operation id for the log's duplicate window
   (two minutes) from when it landed: once that has passed, run the gesture,
   under the same `-op-id`, through a node on the log's current generation
-  (`-url`).
+  (`-api`).
 - **Another node's copy** — `evicted`, `overtaken` or `abandoned`,
   with a hint naming another node as the writer of the record at that position.
   The `-op-id` you sent had already been written under by that node — you ran
@@ -863,7 +863,7 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
   ledger's sweep reached it. The node
   published nothing and answers the same gesture the same way every time, so
   it is not offered as a retry: run it, under the same `-op-id`, through a node
-  whose ledger reaches back that far (`-url`). The dashboard says the same and
+  whose ledger reaches back that far (`-api`). The dashboard says the same and
   sends you to another node's dashboard.
 - `wrong_stream` — the log was rebuilt under this node:
   [re-anchor it](#re-anchoring-a-recreated-or-restored-log) first, then run the
