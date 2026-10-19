@@ -135,7 +135,7 @@ As with every MCP surface, the engine hardcodes no tool names — a bundled `mcp
 
 ## How code authoring works
 
-Agents that the founder has gated with `role.sandbox.enabled` author code through the **code sandbox**, not through any GitLab tool. The executor has a `run_sandbox` tool: a coding agent (Claude Code / OpenCode) runs inside an isolated E2B sandbox and opens a merge request **as the agent's own GitLab identity** (the PAT the role declares as `GITLAB_TOKEN` in `role.sandbox.env` — by convention the same PAT as its `mcp_env.gitlab` header). The call is detached — the executor's loop suspends and resumes with the result when the run completes, so the agent reports the MR in the same turn. The full design is in [Code Sandbox](../concepts/code-sandbox.md).
+Agents that the founder has gated with `role.sandbox.enabled` author code through the **code sandbox**, not through any GitLab tool. The executor has a `run_sandbox` tool: a coding agent (Claude Code / OpenCode) runs inside a sandbox — a remote E2B VM, or a box on the engine host — and opens a merge request **as the agent's own GitLab identity** (the PAT the role declares as `GITLAB_TOKEN` in `role.sandbox.env` — by convention the same PAT as its `mcp_env.gitlab` header). The call is detached — the executor's loop suspends and resumes with the result when the run completes, so the agent reports the MR in the same turn. The full design is in [Code Sandbox](../concepts/code-sandbox.md).
 
 The GitLab **git-auth recipe** is config you write, not engine code — the engine ships no git-auth, the same stance as GitHub. Without it a headless `git clone https://gitlab.com/...` dies with `could not read Username`: git has no way to supply the token on its own. The GitLab form of the [recipe on the sandbox page](../concepts/code-sandbox.md#the-git-auth-recipe):
 
@@ -144,8 +144,10 @@ providers:
   sandbox:
     setup:
       - name: git-auth
-        files:
-          /usr/local/bin/git-credential-crewlet: |
+        commands:
+          - mkdir -p "$HOME/.local/bin"
+          - |
+            cat > "$HOME/.local/bin/git-credential-crewlet" <<'SH'
             #!/bin/sh
             # Supply this seat's GitLab token for gitlab.com credential
             # requests ONLY. Reads $GITLAB_TOKEN from the environment
@@ -160,9 +162,9 @@ providers:
             [ -n "$ok" ] || exit 0
             echo "username=oauth2"
             echo "password=$GITLAB_TOKEN"
-        commands:
-          - chmod +x /usr/local/bin/git-credential-crewlet
-          - 'git config --global credential."https://gitlab.com".helper /usr/local/bin/git-credential-crewlet'
+            SH
+          - chmod +x "$HOME/.local/bin/git-credential-crewlet"
+          - 'git config --global credential."https://gitlab.com".helper "!''$HOME/.local/bin/git-credential-crewlet''"'
           - 'git config --global --add url."https://gitlab.com/".insteadOf "git@gitlab.com:"'
           - 'git config --global --add url."https://gitlab.com/".insteadOf "ssh://git@gitlab.com/"'
           - 'git config --global user.name "$CREWLET_AGENT_HANDLE"'
@@ -182,7 +184,7 @@ providers:
           is preconfigured.
 ```
 
-Every security property of the GitHub form holds here and for the same reasons — the helper is scoped to the host at **both** layers (the `credential."https://…".helper` key *and* the `host=` check in the script), it stays silent with no token so public clones fall through to anonymous, the `insteadOf` rewrites use `--add` because the key is multi-valued, and the commit identity comes from the engine's generic `$CREWLET_AGENT_*` facts. Two GitLab-specific wrinkles: the basic-auth **username is arbitrary** for PAT auth (GitLab ignores it — the token is the password, so `oauth2` is a conventional placeholder), and the helper must match the host **including a non-standard port** when the instance runs on one (the dev compose serves `gitlab.local:8929`), so template the host from your `integrations.gitlab.url` rather than copying `gitlab.com` blindly.
+Every security property of the GitHub form holds here and for the same reasons — the helper is scoped to the host at **both** layers (the `credential."https://…".helper` key *and* the `host=` check in the script), it stays silent with no token so public clones fall through to anonymous, the `insteadOf` rewrites use `--add` because the key is multi-valued, and the commit identity comes from the engine's generic `$CREWLET_AGENT_*` facts. And the helper is written into the box's home by a command and registered as a quoted shell snippet, as there: git is given the helper's absolute path, which only the box's shell knows (`"$HOME"`, expanded), the helper is made executable, both in commands, and the path is quoted because git runs a helper's value through the shell and a box's home may hold a space ([Local sandboxes](../concepts/code-sandbox.md#local-sandboxes)); this way the one step works in every cell, which is how `examples/nimbus.company.yaml` ships it. Two GitLab-specific wrinkles: the basic-auth **username is arbitrary** for PAT auth (GitLab ignores it — the token is the password, so `oauth2` is a conventional placeholder), and the helper must match the host **including a non-standard port** when the instance runs on one (the dev compose serves `gitlab.local:8929`), so template the host from your `integrations.gitlab.url` rather than copying `gitlab.com` blindly.
 
 Once an MR exists, GitLab tools stay in the picture on the **read/review/track** side: agents read its diff, comment, approve, and follow the MR's webhooks to report back to the original requester. As with GitHub, capture context via `reflect_and_persist(ttl_days=30)` whenever you kick off async work (a sandbox coding job) so the original ask + repo + MR number surface in your `## Personal memory` block on the review-notification turn.
 
