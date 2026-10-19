@@ -173,6 +173,20 @@ func (a *Applier) applyRename(ctx context.Context, tx *sql.Tx, at applyContext,
 		}
 		n, _ = res.RowsAffected()
 		rows += int(n)
+		// AND WHAT THE PAGE IS DERIVED AS MOVES WITH ITS TITLE, because one
+		// of the marks is a function of it: a page is the onboarding page
+		// when its title is [OnboardingTitle]. Left to the next save, a
+		// page renamed to that title was not the page every seat reads
+		// first, and the page renamed away from it went on being one. Only
+		// when the head write landed: a guard that skipped it is a record
+		// already past this one, whose own apply derived the row.
+		if n > 0 {
+			derived, deriveErr := a.writeSkillRow(ctx, tx, at, head)
+			if deriveErr != nil {
+				return 0, deriveErr
+			}
+			rows += derived
+		}
 	}
 
 	entry, err := a.writeHistory(ctx, tx, at, p.PageID, ChangeRenamed, "")
