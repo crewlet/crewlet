@@ -441,7 +441,7 @@ func Catalogue() []Instrument {
 			Attributes: []string{"domain"},
 			Shows: "How much of the ceiling ordinary writes are held to is " +
 				"left — on every log that claims identity (the tracker, the " +
-				"pages and the identity estate), the ceiling " +
+				"pages, the identity estate and chat), the ceiling " +
 				"less the gate reserve kept above it for evictions. At zero the log " +
 				"refuses every write AND every linearizable read, and the " +
 				"remedy is a fleet-wide maintenance cycle, so this is the one " +
@@ -576,7 +576,7 @@ func Catalogue() []Instrument {
 			Name: TrackerFeedUnreadable, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"source"},
 			Shows: "Change records this build could not translate into a " +
-				"wake. Both domain consumers are deliberately uncapped, so " +
+				"wake. Every domain feed's consumer is deliberately uncapped, so " +
 				"such a record is never dropped — it redelivers for ever at " +
 				"the head of the consumer with every wake behind it " +
 				"waiting, which has no other symptom at all.",

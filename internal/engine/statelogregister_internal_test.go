@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -112,7 +113,7 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 	// The shipped answers, so that a domain silently losing its read index
 	// is a failure here rather than a strongest read level nobody notices
 	// has stopped being available — for EVERY registered domain, since a
-	// table naming three of five pinned nothing about the identity
+	// table naming three of six pinned nothing about the identity
 	// estate's, and docs/guides/consistency.md publishes all of them.
 	shipped := map[string]bool{
 		tracker.Domain{}.Name():   true,
@@ -123,6 +124,7 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 
 		artifactsdomain.Domain{}.Name(): true,
 		artifactdata.Domain{}.Name():    true,
+		chat.Domain{}.Name():            true,
 	}
 	for name, want := range shipped {
 		if got, held := stated[name]; !held || got != want {
@@ -163,8 +165,8 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 //
 // The shipped figures are pinned, so moving one is a change in this diff:
 // the reference company's 125 a day per seat on the tracker's, the knowledge
-// base's, the artifacts log's and the artifact datastore's logs, and zero on
-// the identity estate's.
+// base's, the artifacts log's and the artifact datastore's logs, chat's own
+// 120 on its log, and zero on the identity estate's.
 func TestEveryBarrierDeclaresItsReadModel(t *testing.T) {
 	shipped := map[string]*int{
 		tracker.Domain{}.Name():   new(statelog.LinearizableReadsPerSeatDay),
@@ -175,6 +177,7 @@ func TestEveryBarrierDeclaresItsReadModel(t *testing.T) {
 
 		artifactsdomain.Domain{}.Name(): new(statelog.LinearizableReadsPerSeatDay),
 		artifactdata.Domain{}.Name():    new(statelog.LinearizableReadsPerSeatDay),
+		chat.Domain{}.Name():            new(chat.LinearizableReadsPerSeatDay),
 	}
 	for _, entry := range register() {
 		name := entry.Domain.Name()
@@ -270,10 +273,10 @@ func TestEveryIdentityLogHasANodeGateWriter(t *testing.T) {
 			claims++
 		}
 	}
-	if claims < 5 {
+	if claims < 6 {
 		t.Fatalf("the register holds %d identity-claiming domain(s), want the "+
-			"tracker, the pages, the identity estate, the artifacts and the "+
-			"artifact datastore", claims)
+			"tracker, the pages, the identity estate, the artifacts, the "+
+			"artifact datastore and chat", claims)
 	}
 
 	// CONTROL, both ways round.
@@ -322,10 +325,10 @@ func TestAGenerationRecordIsKeptExactlyWhereIdentityIsClaimed(t *testing.T) {
 			claims++
 		}
 	}
-	if claims < 5 {
+	if claims < 6 {
 		t.Fatalf("the register holds %d identity-claiming domain(s) keeping a "+
 			"generation record, want the tracker, the pages, the identity "+
-			"estate, the artifacts and the artifact datastore", claims)
+			"estate, the artifacts, the artifact datastore and chat", claims)
 	}
 
 	// CONTROL, both ways round.
@@ -488,7 +491,7 @@ func TestEveryRegisteredDomainHasACeilingCase(t *testing.T) {
 // offer's terms are compared in and the order every operator surface reports.
 //
 // AND THE SET: the org chart is part of the company document, applied with
-// every revision, so the core runs exactly these seven logs.
+// every revision, so the core runs exactly these eight logs.
 func TestTheRegisteredOrderIsTheDeclaredOrder(t *testing.T) {
 	want := []string{
 		tracker.Domain{}.Name(),
@@ -498,6 +501,7 @@ func TestTheRegisteredOrderIsTheDeclaredOrder(t *testing.T) {
 		usage.Domain{}.Name(),
 		artifactsdomain.Domain{}.Name(),
 		artifactdata.Domain{}.Name(),
+		chat.Domain{}.Name(),
 	}
 	got := []string{}
 	for _, domain := range registeredDomains() {

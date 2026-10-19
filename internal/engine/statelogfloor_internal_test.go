@@ -588,10 +588,10 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 	// and writes each, and a case naming two of them left the identity
 	// estate's unasked.
 	identity := identityLogs(t, s)
-	if identity[0] != running || len(identity) < 5 {
+	if identity[0] != running || len(identity) < 6 {
 		t.Fatalf("the identity-claiming logs are %v, want the tracker's first and "+
 			"at least the knowledge base's, the identity estate's, the artifacts "+
-			"log's and the artifact datastore's after it", logNames(identity))
+			"log's, the artifact datastore's and chat's after it", logNames(identity))
 	}
 	others := identity[1:]
 

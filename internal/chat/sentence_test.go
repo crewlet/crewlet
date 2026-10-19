@@ -1,0 +1,86 @@
+package chat_test
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/crewlet/crewlet/internal/chat"
+)
+
+// A REFUSAL A PERSON IS SHOWN READS AS AN INSTRUCTION, never as a package
+// path.
+//
+// The operator's act transport prints a refused argument and a forbidden
+// gesture as the tool wrote them, and every chat write a person makes from the
+// dashboard goes through it — so "chat: invalid: body: …" reached a person
+// whose only question was what to change. Each refusal here is the store's
+// own, made the way a caller meets it, so a sentence that drifts from the
+// errors the store really builds is caught rather than one built by hand.
+func TestARefusalReadsAsAPersonsSentence(t *testing.T) {
+	t.Parallel()
+	r := newWriteRound(t, agents().withPeople("jane", "bob"))
+	room := r.room(person("jane"), "launch")
+	said := r.say(person("jane"), room.Channel.ID, "we ship on friday", "k-1")
+
+	_, forbidden := r.store.Edit(t.Context(), person("bob"), room.Channel.ID,
+		said.Message.ID, chat.EditMessage{Body: "we ship on monday"})
+	archived := true
+	if _, err := r.store.PatchChannel(t.Context(), person("jane"), room.Channel.ID,
+		chat.ChannelPatch{Archived: &archived}, chat.ChannelAuthority{Archive: true}); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	r.drain()
+	_, closed := r.store.Post(t.Context(), keyed(person("jane"), requested("k-2")), room.Channel.ID,
+		chat.NewMessage{Body: "anybody there?"})
+
+	for _, c := range []struct {
+		name string
+		err  error
+		mark error
+		// opens is how the person's sentence begins, and says is a phrase
+		// of the rule it states.
+		opens, says string
+	}{
+		{"a field refused", chat.ChannelPatch{}.Validate(), chat.ErrInvalid,
+			"`patch`: ", "a patch sets no field"},
+		{"a gesture not this actor's", forbidden, chat.ErrForbidden,
+			"message " + said.Message.ID, "only its author may edit it"},
+		{"a room that takes nothing more", closed, chat.ErrArchived,
+			room.Channel.ID + " was archived", "reopen it before posting"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if !errors.Is(c.err, c.mark) {
+				t.Fatalf("the store answered %v, not the refusal this case is about", c.err)
+			}
+			got := chat.Sentence(c.err)
+			if !strings.HasPrefix(got, c.opens) || !strings.Contains(got, c.says) {
+				t.Errorf("Sentence(%q) = %q, want it to open %q and say %q",
+					c.err, got, c.opens, c.says)
+			}
+			if strings.Contains(got, "chat:") {
+				t.Errorf("the person's sentence carries the package's prefix: %q", got)
+			}
+			// AND THE ERROR ITSELF IS UNCHANGED: a log line and every
+			// errors.Is still read the Go error.
+			if !strings.HasPrefix(c.err.Error(), "chat: ") {
+				t.Errorf("the error's own message lost its prefix: %q", c.err)
+			}
+		})
+	}
+
+	// A REFUSAL A CALLER WRAPPED IS ITS WHOLE MESSAGE: the context it was
+	// given is never dropped to tidy a prefix away, and an error this
+	// package never wrote as a refusal is said as it stands.
+	for name, err := range map[string]error{
+		"a wrapped field refusal": fmt.Errorf("open #launch: %w", chat.ChannelPatch{}.Validate()),
+		"a wrapped forbidden":     fmt.Errorf("edit: %w", forbidden),
+		"a conflict":              fmt.Errorf("%w: room kept moving", chat.ErrConflict),
+		"anything else":           errors.New("disk I/O"),
+	} {
+		if got := chat.Sentence(err); got != err.Error() {
+			t.Errorf("%s: Sentence = %q, want the whole message %q", name, got, err)
+		}
+	}
+}
