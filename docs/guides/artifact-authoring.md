@@ -13,7 +13,7 @@ the ones the engine enforces at publish; the page's runtime API is the
 | You want | Kind |
 |---|---|
 | A table people fill in together: a review, a sign-up, a tracker of decisions | `sheet`. Declare the schema and the dashboard draws it, with presence, per-cell history and accessibility, and no page code at all |
-| A document: a report, a plan, release notes | `markdown`. The dashboard renders it; there is nothing to run |
+| A document: a report, a plan, release notes | `doc`. The dashboard renders it; there is nothing to run |
 | A presentation: a pitch, a review, a talk | `slides`, a deck in Claude's slide format. The dashboard draws, presents and prints it, people fix text and order it in place, and nothing runs. See [Writing a deck](#writing-a-deck) |
 | A dashboard: figures over the company's work, spend and agents, or over data an agent collects | `dashboard`, a closed spec of datasets and widgets the dashboard draws, every figure answered as its viewer and citing its source. See [Writing a dashboard](#writing-a-dashboard) |
 | A calculator, a custom view over shared data, anything the formats above cannot draw | `html`, with the capabilities it needs |

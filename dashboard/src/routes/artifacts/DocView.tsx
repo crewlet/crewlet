@@ -1,7 +1,7 @@
 /**
- * A document artifact, rendered here.
+ * A doc, rendered here.
  *
- * A Markdown document runs no author code, so it is not framed on the
+ * A doc is Markdown and runs no author code, so it is not framed on the
  * artifact origin: the engine answers its source as JSON
  * (`GET /artifacts/{id}/versions/{n}/source`) and the dashboard renders it
  * with its own element-constructing renderer (`lib/markdown.ts`), which builds
@@ -19,7 +19,7 @@ import { useRest } from "~/lib/useRest.ts";
 import { readSource } from "~/lib/artifacts/api.ts";
 import { fmtBytes } from "~/lib/format.ts";
 
-export function MarkdownView({ detail, version }: { detail: ArtifactDetail; version: number }) {
+export function DocView({ detail, version }: { detail: ArtifactDetail; version: number }) {
   const source = useRest<ArtifactSource>(version > 0 ? `${detail.id}:${version}` : null, (signal) =>
     readSource(detail.id, version, signal),
   );

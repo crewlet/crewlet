@@ -11,7 +11,7 @@ Five kinds ship in this release:
 | Kind | What it is | Who draws it |
 |---|---|---|
 | `html` | A page of HTML, CSS and script, with any files it references | The page itself, inside a sandboxed frame on an origin of its own |
-| `markdown` | A document | The dashboard's own renderer; it carries no author code |
+| `doc` | A document | The dashboard's own renderer; it carries no author code |
 | `slides` | A deck of 16:9 slides in Claude's slide format | The dashboard's own renderer, from the deck's canonical tree |
 | `dashboard` | A board of figures over datasets: the artifact's own store, the engine's own domains, files and calculations | The dashboard's own widgets, every live figure answered as its viewer |
 | `sheet` | A native sheet: rows and typed columns, with no page at all | The dashboard, from the sheet's schema alone |
@@ -94,7 +94,7 @@ store** and, when a version declares it, a **datastore**.
 
 **A kind is native or framed.** An `html` page runs its author's code, and
 only on the artifact origin, in a sandboxed frame (see [Serving](#serving)). A
-`markdown` document, a `slides` deck, a `dashboard` and a `sheet` carry no author code: the
+`doc`, a `slides` deck, a `dashboard` and a `sheet` carry no author code: the
 dashboard draws each from a closed format with its own components, so nothing
 one holds can become script on the dashboard's origin, and a publish outside
 the format is refused with a named error rather than silently dropped on read.

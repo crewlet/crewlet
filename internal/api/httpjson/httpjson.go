@@ -920,7 +920,7 @@ const (
 	// operator sets one; no retry here changes it.
 	CodeArtifactOriginUnset Code = "artifact_origin_unset"
 	// CodeArtifactNotFramed is a frame asked for an artifact the dashboard
-	// renders itself (a Markdown document, a native sheet), which runs no
+	// renders itself (a doc, a native sheet), which runs no
 	// author code and so is never opened on the artifact origin. 409.
 	CodeArtifactNotFramed Code = "artifact_not_framed"
 )

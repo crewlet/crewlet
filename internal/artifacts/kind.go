@@ -210,7 +210,7 @@ var kindSpecs = []KindSpec{
 		Search:  SearchEntry,
 	},
 	{
-		Kind:    KindMarkdown,
+		Kind:    KindDoc,
 		Summary: "is a document the dashboard draws",
 		Render:  RenderNative,
 		Entry:   EntryRule{Essences: []string{"text/markdown"}, Defaults: []string{"index.md"}},

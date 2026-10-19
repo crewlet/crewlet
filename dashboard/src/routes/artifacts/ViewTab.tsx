@@ -12,7 +12,7 @@ import type { ArtifactDetail, ArtifactKind, ArtifactVersionSummary } from "~/pro
 import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
 import { FrameView } from "./FrameView.tsx";
-import { MarkdownView } from "./MarkdownView.tsx";
+import { DocView } from "./DocView.tsx";
 import { SheetView } from "./SheetView.tsx";
 import { SlidesView } from "./SlidesView.tsx";
 import type { PresenceReport } from "./presence.ts";
@@ -48,7 +48,7 @@ export const KIND_VIEWS: Readonly<Record<ArtifactKind, (props: KindViewProps) =>
       bridgeStores={bridgeStores}
     />
   ),
-  markdown: ({ detail, version }) => <MarkdownView detail={detail} version={version} />,
+  doc: ({ detail, version }) => <DocView detail={detail} version={version} />,
   slides: ({ detail, version, presence, onPublished }) => (
     <SlidesView
       detail={detail}

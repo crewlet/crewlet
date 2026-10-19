@@ -56,9 +56,9 @@ const (
 	// origin inside a sandboxed frame.
 	KindHTML Kind = "html"
 
-	// KindMarkdown is a document the dashboard renders with its own
+	// KindDoc is a document: Markdown the dashboard renders with its own
 	// element-constructing renderer. It carries no author code.
-	KindMarkdown Kind = "markdown"
+	KindDoc Kind = "doc"
 
 	// KindSlides is a deck: an index and one slide file each, in the closed
 	// slide format (internal/artifacts/slideformat), which the dashboard

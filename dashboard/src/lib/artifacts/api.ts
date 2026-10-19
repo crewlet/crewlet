@@ -294,7 +294,7 @@ export function publishVersion(
   return { method: "POST", path: `${base(id)}/versions`, body, headers: ifMatch(head) };
 }
 
-/** A version's entry as text, for a Markdown document the dashboard renders itself. */
+/** A version's entry as text, for a doc the dashboard renders itself. */
 export async function readSource(
   id: string,
   version: number,

@@ -332,7 +332,7 @@ func TestArtifactsPublishInfersTheKindFromTheEntry(t *testing.T) {
 		t.Fatalf("publish: %v\n%s", err, stderr)
 	}
 	create := node.creates[0]
-	if create["kind"] != string(artifacts.KindMarkdown) || create["entry"] != "index.md" {
+	if create["kind"] != string(artifacts.KindDoc) || create["entry"] != "index.md" {
 		t.Errorf("created %v", create)
 	}
 }
@@ -373,11 +373,11 @@ func TestArtifactsPublishRefusesTwoCandidateEntries(t *testing.T) {
 	if len(node.intents) != 0 {
 		t.Fatalf("the refused publish declared %d uploads", len(node.intents))
 	}
-	if _, stderr, err := cli(t, "artifacts", "publish", dir, "-kind", "markdown",
+	if _, stderr, err := cli(t, "artifacts", "publish", dir, "-kind", "doc",
 		bootstrapForURL(t, node.server.URL)); err != nil {
 		t.Fatalf("publish with -kind: %v\n%s", err, stderr)
 	}
-	if create := node.creates[0]; create["kind"] != "markdown" || create["entry"] != "index.md" {
+	if create := node.creates[0]; create["kind"] != "doc" || create["entry"] != "index.md" {
 		t.Errorf("created %v", create)
 	}
 }
