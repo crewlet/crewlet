@@ -196,7 +196,7 @@ func (s *Service) transfer(w http.ResponseWriter, r *http.Request) {
 	c := lookup
 	if u.Artifact.IsZero() {
 		d := authz.Decide(r.Context(), p, authz.ActionArtifactCreate,
-			authz.Object{Kind: authz.KindArtifact}, s.gate.Chart, s.gate.now())
+			authz.Object{Kind: authz.KindArtifact}, s.gate.Chart, s.gate.decidedAt(r.Context()))
 		if d.Unknown() || !d.Allowed {
 			operator.RefuseDecision(w, r, authz.ActionArtifactCreate, d)
 			return

@@ -501,6 +501,10 @@ func reads(r *http.Request) bool {
 // a tool's gate refusing one ([operator.AuditRefusal]): the verb a person
 // asked for and was not allowed is exactly what an audit is opened to find,
 // whether the verb had a tool behind it or not.
+//
+// AT THE INSTANT THE ROUTE DECIDED ([authz.DecidedAt]), as every later check
+// of one request is: the row was read after the route admitted the request,
+// and a proof the route judged fresh is not judged again a read later.
 func (s *Service) decide(w http.ResponseWriter, r *http.Request,
 	action authz.Action, object authz.Object) (authz.Decision, bool) {
 
@@ -509,7 +513,8 @@ func (s *Service) decide(w http.ResponseWriter, r *http.Request,
 	if how == iam.Unknown {
 		d = authz.Decision{Err: iam.Reason(r.Context())}
 	} else {
-		d = authz.Decide(r.Context(), principal, action, object, s.chart, time.Now())
+		d = authz.Decide(r.Context(), principal, action, object, s.chart,
+			authz.DecidedAt(r.Context()))
 	}
 	if d.Unknown() || !d.Allowed {
 		if how == iam.Resolved {
