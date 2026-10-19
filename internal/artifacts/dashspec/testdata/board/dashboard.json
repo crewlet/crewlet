@@ -1,0 +1,273 @@
+{
+  "v": 1,
+  "title": "Delivery",
+  "params": [
+    {
+      "key": "scope",
+      "label": "Whose work",
+      "default": "mine",
+      "options": [
+        {
+          "value": "mine",
+          "label": "Mine"
+        },
+        {
+          "value": "all",
+          "label": "Everybody"
+        }
+      ]
+    },
+    {
+      "key": "region",
+      "label": "Region",
+      "default": "",
+      "options": [
+        {
+          "value": "",
+          "label": "All"
+        },
+        {
+          "value": "emea",
+          "label": "EMEA"
+        },
+        {
+          "value": "amer",
+          "label": "Americas"
+        }
+      ]
+    }
+  ],
+  "datasets": [
+    {
+      "id": "work",
+      "title": "My open work",
+      "source": "engine",
+      "engine": {
+        "name": "tracker.items",
+        "params": {
+          "scope": {
+            "param": "scope"
+          },
+          "limit": 200
+        }
+      },
+      "refresh": {
+        "every_seconds": 120
+      }
+    },
+    {
+      "id": "spend",
+      "title": "Spend by seat",
+      "source": "engine",
+      "engine": {
+        "name": "spend.seats",
+        "params": {
+          "days": 7
+        }
+      }
+    },
+    {
+      "id": "deals",
+      "title": "Pipeline",
+      "source": "store",
+      "store": {
+        "collection": "deals"
+      },
+      "columns": [
+        {
+          "key": "name",
+          "type": "text"
+        },
+        {
+          "key": "stage",
+          "type": "text"
+        },
+        {
+          "key": "amount",
+          "type": "number"
+        },
+        {
+          "key": "region",
+          "type": "text"
+        },
+        {
+          "key": "closed",
+          "type": "date"
+        }
+      ]
+    },
+    {
+      "id": "targets",
+      "title": "Quarter targets",
+      "source": "file",
+      "file": {
+        "path": "data/targets.csv"
+      },
+      "columns": [
+        {
+          "key": "region",
+          "type": "text"
+        },
+        {
+          "key": "target",
+          "type": "number"
+        }
+      ],
+      "key": "region"
+    },
+    {
+      "id": "by_region",
+      "title": "Pipeline by region",
+      "source": "calc",
+      "calc": {
+        "from": "deals",
+        "steps": [
+          {
+            "op": "filter",
+            "where": [
+              {
+                "column": "region",
+                "cmp": "eq",
+                "value": {
+                  "param": "region"
+                }
+              },
+              {
+                "column": "amount",
+                "cmp": "present"
+              }
+            ]
+          },
+          {
+            "op": "group",
+            "by": [
+              "region"
+            ],
+            "aggregates": [
+              {
+                "column": "amount",
+                "agg": "sum",
+                "of": "amount"
+              },
+              {
+                "column": "deals",
+                "agg": "count"
+              }
+            ]
+          },
+          {
+            "op": "join",
+            "with": "targets",
+            "on": "region",
+            "columns": [
+              "target"
+            ]
+          },
+          {
+            "op": "compute",
+            "column": "attainment",
+            "fn": "div",
+            "left": "amount",
+            "right": "target"
+          },
+          {
+            "op": "sort",
+            "order": [
+              {
+                "column": "attainment",
+                "desc": true
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "total",
+      "title": "Pipeline total",
+      "source": "calc",
+      "calc": {
+        "from": "by_region",
+        "steps": [
+          {
+            "op": "group",
+            "aggregates": [
+              {
+                "column": "amount",
+                "agg": "sum",
+                "of": "amount"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "widgets": [
+    {
+      "id": "total_stat",
+      "type": "stat",
+      "title": "Pipeline",
+      "dataset": "total",
+      "value": "amount",
+      "format": "compact",
+      "w": 3
+    },
+    {
+      "id": "open_stat",
+      "type": "stat",
+      "title": "Open items",
+      "dataset": "work",
+      "agg": "count",
+      "w": 3
+    },
+    {
+      "id": "attain",
+      "type": "bars",
+      "title": "Attainment",
+      "dataset": "by_region",
+      "label": "region",
+      "value": "attainment",
+      "format": "percent",
+      "w": 6
+    },
+    {
+      "id": "spend_group",
+      "type": "group",
+      "title": "Spend",
+      "tone": "purple",
+      "w": 12,
+      "children": [
+        {
+          "id": "spend_bars",
+          "type": "share",
+          "title": "Tokens by seat",
+          "dataset": "spend",
+          "label": "handle",
+          "value": "total_tokens",
+          "w": 6
+        },
+        {
+          "id": "spend_note",
+          "type": "note",
+          "text": "Spend is the last seven company days.",
+          "w": 6
+        }
+      ]
+    },
+    {
+      "id": "work_table",
+      "type": "table",
+      "title": "My work",
+      "dataset": "work",
+      "columns": [
+        "key",
+        "title",
+        "status",
+        "due"
+      ],
+      "limit": 20,
+      "w": 12
+    }
+  ]
+}
