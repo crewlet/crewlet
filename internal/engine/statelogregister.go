@@ -493,9 +493,12 @@ func register() []registration {
 			NewGate: func(s *stateLog, _ *runningLog,
 				publisher *statelog.Publisher) (gateWrite, error) {
 
+				// THE NODE'S OWN KIND, which no record of this writer
+				// carries: every eviction and readmission is published
+				// as `by`, through [iamdomain.Writer.As] below.
 				w, err := iamdomain.NewWriter(iamdomain.WriterDeps{
 					Publisher: publisher, DB: s.estate().Reader(),
-					Actor: s.nodeID, ActorKind: iam.KindMachine,
+					Actor: s.nodeID, ActorKind: iamdomain.NodeKind,
 				})
 				if err != nil {
 					return nil, err

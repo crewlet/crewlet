@@ -141,9 +141,13 @@ func evictedOnLog(t *testing.T, rig *writeRig, node string) (bool, bool) {
 // shape — every operator recorded as a machine made an administrator outside
 // the org chart read as a service account.
 //
+// A record that names nobody is the node's, recorded as the node's own writer
+// records itself: under its id, as the engine.
+//
 // Mutation: drop the login-shape split and the administrator is a machine;
-// stamp the record with anything but the facts' generation and writer and the
-// envelope names another.
+// record the nobody-named arm as a machine and both its rows fail; stamp the
+// record with anything but the facts' generation and writer and the envelope
+// names another.
 func TestAGenerationRecordNamesItsAuthorAndCarriesItsStamp(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 9, 30, 9, 0, 0, 0, time.UTC)
@@ -183,17 +187,18 @@ func TestAGenerationRecordNamesItsAuthorAndCarriesItsStamp(t *testing.T) {
 			actor: "token:ops", kind: iam.KindMachine,
 		},
 		// NOBODY NAMED IS THE NODE, as its own writer records itself —
-		// never an empty author column.
+		// the engine, never an empty author column and never a machine
+		// named after the node.
 		"nobody named": {
 			facts: statelog.GenerationFacts{},
-			actor: "node-a", kind: iam.KindMachine,
+			actor: "node-a", kind: iam.KindEngine,
 		},
 		// AND A NAME OF SPACES NAMES NOBODY, as it does on every other
 		// log's generation record ([statelog.GenerationFacts.Author]):
 		// this one read it as a person called "  ".
 		"a name of spaces": {
 			facts: statelog.GenerationFacts{By: "  ", ByKind: iam.ActorHuman},
-			actor: "node-a", kind: iam.KindMachine,
+			actor: "node-a", kind: iam.KindEngine,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
