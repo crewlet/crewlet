@@ -208,10 +208,10 @@ func TestAMintTheDomainRefusesIsAnsweredForWhatItIs(t *testing.T) {
 // admin minting for a service account that holds admin reaches the domain
 // asking for exactly that — the owner the route names, the minter the caller,
 // the permissions as typed — and the answer names them. An OMITTED list
-// reaches it as nil, which the domain reads as everything the owner holds;
-// `[]` as an empty set, a token that reads the overview alone; and a name this
-// build does not know is refused `400` naming the set before the owner is read
-// or the domain asked.
+// reaches it as nil, which the domain reads as everything the owner holds that
+// the minting party may confer; `[]` as an empty set, a token that reads the
+// overview alone; and a name this build does not know is refused `400` naming
+// the set before the owner is read or the domain asked.
 //
 // Mutation: default an omitted list here rather than in the domain and the
 // nil case goes red; forward an unknown name and the writer is asked.
