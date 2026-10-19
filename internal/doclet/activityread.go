@@ -19,11 +19,14 @@ import (
 //
 // `pages_history` has one row per change since the domain landed — the kind,
 // who made it, whether it was quiet, an excerpt, and the TURN that made it —
-// and the schema ships two indexes naming readers that were never written:
-// `pages_history_page_idx` "one page's activity" and `pages_history_created_idx`
-// "the company-wide digest". Nothing read a single row of either. A wiki that
-// recorded every edit, replicated it, snapshotted it, and offered no way to
-// ask what had changed.
+// and the schema shipped two indexes naming readers that were never written:
+// "one page's activity" and "the company-wide digest". Nothing read a single
+// row through either. A wiki that recorded every edit, replicated it,
+// snapshotted it, and offered no way to ask what had changed. The feed below
+// is both readers, and it reads in LOG order: the company's history through
+// `pages_history_version_idx`, one page's through `pages_history_page_idx`
+// (replicated 0063), while the digest's index on `created_at` went at
+// replicated 0064 with nothing ever having read it.
 //
 // # And a revision list without bodies is not a history
 //
