@@ -1,4 +1,4 @@
-# ADR-0042 — A kind is native or framed, and one table decides it
+# ADR-0042: A kind is native or framed, and one table decides it
 
 - **Status:** accepted
 - **Authority:** `internal/artifacts`

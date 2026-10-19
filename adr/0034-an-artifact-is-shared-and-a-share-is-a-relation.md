@@ -1,4 +1,4 @@
-# ADR-0034 — An artifact is shared, and a share is a relation
+# ADR-0034: An artifact is shared, and a share is a relation
 
 - **Status:** accepted
 - **Authority:** `internal/authz`

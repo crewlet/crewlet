@@ -54,7 +54,7 @@ export function ListedArtifactCard({
       href={href(artifactPath(item.id))}
       owner={people.seatPrincipal(item.owner)}
       updatedAt={item.updated_at}
-      updatedBy={people.seatName(item.updated_by.Name)}
+      updatedBy={people.seatName(item.updated_by.name)}
       pinned={item.pinned ?? false}
       version={item.head_number > 0 ? item.head_number : undefined}
       size={size}

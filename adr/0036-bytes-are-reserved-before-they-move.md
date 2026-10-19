@@ -1,4 +1,4 @@
-# ADR-0036 — Bytes are reserved before they move, and a carried object is named again only by a record that finds it named
+# ADR-0036: Bytes are reserved before they move, and a carried object is named again only by a record that finds it named
 
 - **Status:** accepted
 - **Authority:** `internal/artifactupload`

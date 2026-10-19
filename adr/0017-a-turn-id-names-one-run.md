@@ -1,4 +1,4 @@
-# ADR-0017 — A turn id names one RUN; the work key names the unit of work
+# ADR-0017: A turn id names one RUN; the work key names the unit of work
 
 - **Status:** accepted
 - **Authority:** `internal/workkey`

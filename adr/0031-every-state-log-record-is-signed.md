@@ -1,4 +1,4 @@
-# ADR-0031 — Every state-log record is signed, and the framework verifies before a domain decodes
+# ADR-0031: Every state-log record is signed, and the framework verifies before a domain decodes
 
 - **Status:** accepted
 - **Authority:** `internal/statelog`

@@ -295,6 +295,33 @@ func TestAWritesOutcomeIsAnsweredInTheEnginesVocabulary(t *testing.T) {
 	if w.Code != http.StatusConflict || errorOf(t, w) != "stale_version" || !strings.Contains(w.Body.String(), `"version":4`) {
 		t.Fatalf("a conflict: %d %s", w.Code, w.Body.String())
 	}
+	// A REFUSED WRITE IS A RECORD THE LOG APPLIED, and the answer says how
+	// the write ended in one field: never an `outcome` of `applied` beside
+	// the refusal.
+	data.answer = artifactdata.WriteResult{Verdict: artifacts.DataInvalid, Reason: "score is a number",
+		Seq: 7, Result: statelog.Result{Outcome: statelog.OutcomeApplied}}
+	w = do(t, mux, person("bob"), "POST", path, tick, true)
+	var refused map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &refused); err != nil {
+		t.Fatalf("a refused write's body: %v", err)
+	}
+	if w.Code != http.StatusUnprocessableEntity || refused["error"] != "invalid" || refused["verdict"] != "invalid" ||
+		refused["detail"] != "Score is a number." {
+		t.Fatalf("a refused write: %d %s", w.Code, w.Body.String())
+	}
+	if _, said := refused["outcome"]; said {
+		t.Fatalf("a refused write answers the log's outcome beside its verdict: %s", w.Body.String())
+	}
+	data.answer = artifactdata.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomePending}}
+	w = do(t, mux, person("bob"), "POST", path, tick, true)
+	var pending map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &pending); err != nil || w.Code != http.StatusAccepted ||
+		pending["verdict"] != "pending" {
+		t.Fatalf("a write this node has not applied: %d %s", w.Code, w.Body.String())
+	}
+	if _, said := pending["outcome"]; said {
+		t.Fatalf("a pending write answers the log's outcome beside its verdict: %s", w.Body.String())
+	}
 	data.err = &artifactdata.RateLimited{Scope: "principal", Cost: 3, RetryAfter: 2500 * time.Millisecond}
 	w = do(t, mux, person("bob"), "POST", path, tick, true)
 	if w.Code != http.StatusTooManyRequests || w.Header().Get("Retry-After") != "3" || errorOf(t, w) != "write_budget" {

@@ -2,6 +2,7 @@ package iam
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -428,5 +429,37 @@ func TestACallerWhoMayNotLookNeverReachesTheDirectory(t *testing.T) {
 			refuse); err != nil {
 			t.Errorf("OwnerOf(%q) asked the gate: %v", typed, err)
 		}
+	}
+}
+
+// TestAnActorAnswersInTheAPIsSnakeCase holds the wire keys every surface that
+// encodes an author shares: an untagged struct answered `Name`, `Kind` and
+// `OperatorID`, the only PascalCase keys in the API. A credential the author
+// acted under is said beside the name, and a row with none says nothing.
+func TestAnActorAnswersInTheAPIsSnakeCase(t *testing.T) {
+	cases := []struct {
+		name string
+		in   Actor
+		want string
+	}{
+		{"with a credential", Actor{Name: "maya", Kind: ActorHuman, OperatorID: "session:0192f00e"},
+			`{"name":"maya","kind":"human","operator_id":"session:0192f00e"}`},
+		{"without one", Actor{Name: "compactor", Kind: ActorSystem},
+			`{"name":"compactor","kind":"system"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := json.Marshal(tc.in)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("an actor encodes as %s, want %s", got, tc.want)
+			}
+			var back Actor
+			if err := json.Unmarshal(got, &back); err != nil || back != tc.in {
+				t.Fatalf("an actor reads back as %+v (%v), want %+v", back, err, tc.in)
+			}
+		})
 	}
 }

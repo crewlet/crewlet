@@ -46,6 +46,7 @@ export type RuntimeCapability = (typeof ARTIFACT_CAPABILITIES)[number];
 /** Every method a page may call, and the capability each needs (none for `openLink`). */
 export const BRIDGE_METHODS = {
   "identity.me": "identity",
+  "identity.people": "identity",
   "data.schema": "db",
   "data.get": "db",
   "data.list": "db",
@@ -53,6 +54,8 @@ export const BRIDGE_METHODS = {
   "data.subscribe": "db",
   "data.unsubscribe": "db",
   "data.write": "db",
+  "data.undo": "db",
+  "data.redo": "db",
   "state.get": "state",
   "state.set": "state",
   "state.delete": "state",
@@ -73,12 +76,27 @@ export type BridgeErrorCode =
   | "rate_limited"
   | "unavailable";
 
-/** Who is viewing, as a page is told: display facts only, never a token, a login or an address. */
-export interface BridgeViewer {
-  /** The viewer's seat handle: the value a person column stores. */
+/** An agent's face, as the chart draws it: one of the character family and its node hue. */
+export interface BridgeAvatar {
+  character: string;
+  hue: string;
+}
+
+/**
+ * Somebody a page may name, as the chart the viewer's tab holds says them:
+ * display facts only, never a token, a login or an address.
+ */
+export interface BridgePerson {
+  /** The seat handle: the value a person column stores. */
   seat: string;
   kind: "human" | "agent";
   displayName: string;
+  /** An agent's face; a person has none. */
+  avatar?: BridgeAvatar;
+}
+
+/** Who is viewing, as a page is told. */
+export interface BridgeViewer extends BridgePerson {
   role: (typeof ARTIFACT_ROLES)[number];
 }
 
@@ -142,11 +160,9 @@ export type BridgeEvent =
   | { type: typeof BRIDGE_MESSAGE.event; topic: "connection"; state: BridgeConnection }
   | { type: typeof BRIDGE_MESSAGE.event; topic: "identity"; viewer: BridgeViewer | null };
 
-/** One member of the room, as a page reads it. */
-export interface BridgeMember {
+/** One member of the room, as a page reads it: the session, and the person the chart says holds it. */
+export interface BridgeMember extends BridgePerson {
   session: string;
-  seat: string;
-  kind: "human" | "agent";
   activity: (typeof PRESENCE_ACTIVITIES)[number];
   focus: { version?: number; region?: string; collection?: string; doc?: string; field?: string };
   at: string;
@@ -196,16 +212,29 @@ export function readCall(data: unknown): BridgeCall | null {
   return { type: BRIDGE_MESSAGE.call, id, method, params };
 }
 
-/** Reads a viewer, or null. */
-export function readViewer(data: unknown): BridgeViewer | null {
+/** Reads a person, or null. An avatar that is not exactly one is left off rather than refusing the person. */
+export function readPerson(data: unknown): BridgePerson | null {
   const v = record(data);
   if (!v) return null;
-  const { seat, kind, displayName, role } = v;
+  const { seat, kind, displayName } = v;
   if (typeof seat !== "string" || typeof displayName !== "string") return null;
   if (kind !== "human" && kind !== "agent") return null;
+  const person: BridgePerson = { seat, kind, displayName };
+  const avatar = record(v["avatar"]);
+  if (avatar && typeof avatar["character"] === "string" && typeof avatar["hue"] === "string") {
+    person.avatar = { character: avatar["character"], hue: avatar["hue"] };
+  }
+  return person;
+}
+
+/** Reads a viewer, or null. */
+export function readViewer(data: unknown): BridgeViewer | null {
+  const person = readPerson(data);
+  const role = record(data)?.["role"];
+  if (!person) return null;
   if (typeof role !== "string" || !(ARTIFACT_ROLES as readonly string[]).includes(role))
     return null;
-  return { seat, kind, displayName, role: role as BridgeViewer["role"] };
+  return { ...person, role: role as BridgeViewer["role"] };
 }
 
 /** Reads the init message, or null. */
@@ -271,12 +300,11 @@ export function readDoc(data: unknown): BridgeDoc | null {
 /** Reads a member of the room, or null. */
 function readMember(data: unknown): BridgeMember | null {
   const m = record(data);
-  if (!m) return null;
-  const { session, seat, kind, activity, at } = m;
+  const person = readPerson(data);
+  if (!m || !person) return null;
+  const { session, activity, at } = m;
   const focus = record(m["focus"]) ?? {};
-  if (typeof session !== "string" || typeof seat !== "string" || typeof at !== "string")
-    return null;
-  if (kind !== "human" && kind !== "agent") return null;
+  if (typeof session !== "string" || typeof at !== "string") return null;
   if (
     typeof activity !== "string" ||
     !(PRESENCE_ACTIVITIES as readonly string[]).includes(activity)
@@ -288,7 +316,7 @@ function readMember(data: unknown): BridgeMember | null {
   for (const key of ["region", "collection", "doc", "field"] as const) {
     if (typeof focus[key] === "string") out[key] = focus[key];
   }
-  return { session, seat, kind, activity: activity as BridgeMember["activity"], focus: out, at };
+  return { ...person, session, activity: activity as BridgeMember["activity"], focus: out, at };
 }
 
 /** Reads an event, or null. */

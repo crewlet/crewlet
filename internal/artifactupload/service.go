@@ -48,15 +48,16 @@ type Presigner interface {
 	PresignPut(ctx context.Context, k objstore.Key, r objstore.PresignRequest) (objstore.Presigned, error)
 }
 
-// Runtimes is the page runtime contracts this build serves (the embedded
-// runtime tree the artifact origin answers `/_crewlet/runtime/` from).
-type Runtimes interface {
-	// Latest is the newest contract served, empty when the build serves
+// Releases is the versions of one embedded tree this build serves: the page
+// runtime contracts (the tree the artifact origin answers `/_crewlet/runtime/`
+// from) or the artifact kit's releases ([artifacts.KitPrefix]).
+type Releases interface {
+	// Latest is the newest version served, empty when the build serves
 	// none.
 	Latest() string
 
-	// Serves reports whether an exact contract is one this build serves.
-	Serves(contract string) bool
+	// Serves reports whether an exact version is one this build serves.
+	Serves(version string) bool
 }
 
 // Meter is where the pipeline's measurements go: the node's metrics recorder.
@@ -100,7 +101,11 @@ type Deps struct {
 	Hosts lint.Allowlist
 
 	// Runtimes are the runtime contracts a page may pin.
-	Runtimes Runtimes
+	Runtimes Releases
+
+	// Kits are the artifact kit releases a page may link, which the
+	// publish judges a page's kit links against.
+	Kits Releases
 
 	// Meter records the pipeline's measurements; nil records none.
 	Meter Meter
@@ -125,7 +130,8 @@ type Service struct {
 	limits   func() artifacts.Limits
 	vendor   *vendor.Cache
 	hosts    lint.Allowlist
-	runtimes Runtimes
+	runtimes Releases
+	kits     Releases
 	meter    Meter
 	judged   Objectives
 	now      func() time.Time
@@ -150,6 +156,9 @@ func New(deps Deps) (*Service, error) {
 	case deps.Runtimes == nil:
 		return nil, errors.New("artifactupload: the runtime contracts are required: a page " +
 			"pins one at publish")
+	case deps.Kits == nil:
+		return nil, errors.New("artifactupload: the kit releases are required: a page's " +
+			"links to the kit are judged against them at publish")
 	case len(deps.Hosts.Hosts) == 0:
 		return nil, errors.New("artifactupload: the CDN allowlist is required: the linter " +
 			"holds every page's scripts to it")
@@ -157,7 +166,7 @@ func New(deps Deps) (*Service, error) {
 	s := &Service{
 		objects: deps.Objects, res: deps.Reservations, writes: deps.Writes, reads: deps.Reads,
 		presign: deps.Presign, limits: deps.Limits, vendor: deps.Vendor, hosts: deps.Hosts,
-		runtimes: deps.Runtimes, meter: deps.Meter, judged: deps.Objectives, now: deps.Now,
+		runtimes: deps.Runtimes, kits: deps.Kits, meter: deps.Meter, judged: deps.Objectives, now: deps.Now,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
@@ -193,8 +202,30 @@ const MaxHold = objstore.MaxPresignTerm + time.Duration((artifacts.MaxTextFileBy
 // holdUntil is the end of a hold whose bytes are stored no later than last.
 func holdUntil(last time.Time) time.Time { return last.Add(holdTail) }
 
-// Report is what the linter found: refusals never reach here (they are
-// errors); warnings ride on success.
+// Report is what a publish found and did beside the version it landed:
+// the linter's warnings (its refusals are errors and never reach here), and
+// where the version's files came from.
 type Report struct {
 	Warnings []lint.Finding `json:"warnings,omitempty"`
+
+	// Files counts the version's files by where their bytes came from; nil
+	// where the pipeline did not compose the manifest (a rollback, whose
+	// files the domain copies from the version it restores).
+	Files *FileCounts `json:"files,omitempty"`
+}
+
+// FileCounts is one version's files by where their bytes came from.
+//
+// IT IS COUNTED FROM THE MANIFEST THAT LANDED, never from the upload intent:
+// the intent judges a file by the digest of its author's bytes, while a page
+// is stored in its linted form, so an unchanged page never matches what the
+// artifact holds, is sent, and is then found held once linted. Only the
+// manifest knows that.
+type FileCounts struct {
+	// Stored are the files whose bytes this publish stored as new objects.
+	Stored int `json:"stored"`
+
+	// Carried are the files whose bytes the artifact already held, however
+	// they arrived: named as carried, or sent and then found held.
+	Carried int `json:"carried"`
 }

@@ -43,7 +43,11 @@ type StorageBudget struct {
 	// when the broker states no limit this client can read.
 	Limit int64
 
-	// Committed is what already counts against Limit.
+	// Committed is what already counts against Limit: the ceilings the
+	// broker has granted. Carried where Limit is unstated as well, because
+	// what an account has reserved is reported whether or not it has a
+	// limit, and a node that sizes from its own disk in place of the limit
+	// has to take the reservations already granted off that figure too.
 	Committed int64
 
 	// Source is who sets Limit, which is what an operator changes to raise
@@ -258,7 +262,11 @@ func accountBudget(info *jetstream.AccountInfo, replicas int, memory bool) Stora
 		limit, reserved = tier.Limits.MaxMemory, tier.ReservedMemory
 	}
 	if limit < 0 {
-		return StorageBudget{Limit: -1, Source: BudgetUnstated}
+		// THE RESERVATIONS ARE CARRIED WITH NO LIMIT TO HOLD THEM TO: a
+		// node that stands its free space in for the limit
+		// ([internal/engine]'s state-log sizing) spends them from it, as
+		// the broker's own cap does.
+		return StorageBudget{Limit: -1, Committed: int64(reserved), Source: BudgetUnstated}
 	}
 	// A TIER THAT IS THERE AND STATES NOTHING is the missing tier's other
 	// shape, and ZERO IS NOT THE SAME TEST AS BELOW ZERO: a tier declared

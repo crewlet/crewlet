@@ -38,6 +38,9 @@ import (
 // but the CDN. Every property a case asserts is a claim about the pieces
 // agreeing.
 
+// testKit is the one kit release a harness serves.
+const testKit = "0.20.0"
+
 // start is every harness's first instant.
 var start = time.Date(2031, 4, 7, 9, 0, 0, 0, time.UTC)
 
@@ -142,7 +145,11 @@ func newHarness(t *testing.T, o options) *harness {
 	h.objects = store
 	h.domain = newDomainNode(t, h.clock)
 	h.cdn = newFakeCDN(t)
-	runtimes, err := artifactupload.RuntimesIn(fstest.MapFS{"1.0.0/runtime.js": {Data: []byte("//")}})
+	runtimes, err := artifactupload.ReleasesIn(fstest.MapFS{"1.0.0/runtime.js": {Data: []byte("//")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kits, err := artifactupload.ReleasesIn(fstest.MapFS{testKit + "/kit.css": {Data: []byte(":root{}")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +160,7 @@ func newHarness(t *testing.T, o options) *harness {
 			defer h.mu.Unlock()
 			return h.limits
 		},
-		Hosts: lint.DefaultAllowlist(), Runtimes: runtimes, Meter: h.meter, Objectives: h.judged,
+		Hosts: lint.DefaultAllowlist(), Runtimes: runtimes, Kits: kits, Meter: h.meter, Objectives: h.judged,
 		Now: h.clock.Now,
 	}
 	if o.presign {

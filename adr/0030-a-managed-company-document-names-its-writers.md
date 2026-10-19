@@ -1,4 +1,4 @@
-# ADR-0030 — A managed company document names its writers, and every other credential is refused a change
+# ADR-0030: A managed company document names its writers, and every other credential is refused a change
 
 - **Status:** accepted
 - **Authority:** `internal/api/configapi`

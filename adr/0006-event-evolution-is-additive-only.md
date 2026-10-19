@@ -1,4 +1,4 @@
-# ADR-0006 — Event evolution is additive-only and unknown types round-trip
+# ADR-0006: Event evolution is additive-only and unknown types round-trip
 
 - **Status:** accepted
 - **Authority:** `internal/events`
