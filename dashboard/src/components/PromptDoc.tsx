@@ -79,9 +79,8 @@ import {
   type KeyboardEvent,
   type RefObject,
 } from "react";
-import { Button, CodeBlock, Input, Select, cx } from "@crewlethq/ui";
+import { Button, CodeBlock, cx, Input, SegmentedControl, Select } from "@crewlethq/ui";
 import { ChevronLeftGlyph, ChevronRightGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
-import { Segmented } from "~/ui/primitives.tsx";
 import { MODEL_WORDS, plainText, renderInline, renderMarkdown } from "~/lib/markdown.ts";
 import type { SectionNode } from "~/lib/markdown.ts";
 import {
@@ -205,11 +204,13 @@ export function PromptRecord({
   return (
     <div className="prompt-doc col gap-3">
       <div className="row gap-2 wrap">
-        <Segmented<View>
+        <SegmentedControl<View>
+          semantics="radio"
+          activate="manual"
           size="sm"
-          ariaLabel="How to show the prompt"
+          label="How to show the prompt"
           value={view}
-          onChange={setView}
+          onValueChange={setView}
           options={[
             { value: "read", label: "Rendered", title: "The prompt as the markdown it is" },
             { value: "source", label: "Source", title: "The record, exactly as it was sent" },

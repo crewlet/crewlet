@@ -559,22 +559,6 @@ describe("the frame's layout", () => {
     );
   });
 
-  // A SEGMENTED CONTROL HUGS ITS OPTIONS. As a flex column's or a grid's child
-  // an `auto` width is stretched, and Configuration's collection picker drew
-  // as a full-width band with its options at the left, beside a lens control
-  // that hugged its own. A width that is not `auto` is never stretched.
-  test("a segmented control is its options' width wherever it sits", () => {
-    const own = block(sheet("components.css"), ".segmented");
-    expect(own).toMatch(/(^|[\s;])width:\s*fit-content/);
-    // And nothing sets it back to the container's width.
-    for (const name of ["base.css", "frame.css", "screens.css"]) {
-      if (!sheet(name).includes(".segmented")) continue;
-      for (const { sel, body } of mentioning(sheet(name), ".segmented")) {
-        expect(body, `${sel} stretches the control`).not.toMatch(/(^|[\s;])width:\s*100%/);
-      }
-    }
-  });
-
   // NO WORD ALONE ON A NOTE'S LAST LINE. At the measure, Secrets' note broke
   // to a second line holding "value." and nothing else — a sentence that
   // stopped rather than one that ended. Every screen's note reflows its tail,
@@ -1417,15 +1401,6 @@ test("an org unit's head wraps rather than shrinking its name", () => {
   expect(name).toMatch(/flex:\s*0 0 auto/);
   expect(name).toMatch(/max-width:\s*100%/);
   expect(block(css, ".org-unit-count")).toMatch(/white-space:\s*nowrap/);
-});
-
-// A SEGMENTED GROUP WIDER THAN ITS CONTAINER WRAPS. Its options never shrink,
-// so on one unbroken row a phone clipped the spend chart's "Split by" at
-// "Worke", with the rest of the choice unreachable.
-test("a segmented control wraps within its container rather than overflowing it", () => {
-  const b = block(sheet("components.css"), ".segmented");
-  expect(b).toMatch(/flex-wrap:\s*wrap/);
-  expect(b).toMatch(/max-width:\s*100%/);
 });
 
 // A STAT'S SECOND LINE KEEPS ITS ENDING. The kit's sub is one `nowrap` line

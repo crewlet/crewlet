@@ -1784,7 +1784,7 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
    COUNTS OF is said beside them — over the loaded page or over the whole
    window, which the rail's own `over` decides — and only where a number is
    actually drawn: a caption about numbers that are not on screen qualifies
-   nothing. A dimension with nothing to count is a `.segmented`, not this.
+   nothing. A dimension with nothing to count is a SegmentedControl, not this.
    See ui/FacetRail.tsx. */
 
 .facet-row {
