@@ -586,11 +586,37 @@ var ErrLoggedOut = errors.New("cliagent: the entry was logged out, so its config
 // file, the logout stands and the bundle stays out.
 func (p *Provider) loggedOutError() error {
 	return fmt.Errorf("%w: `crewlet llm logout` removed the login in %s, and the bundle stays out "+
-		"until a login is written there again — sign in with `crewlet llm login %s`, "+
-		"`crewlet llm login %s -from-host` or `crewlet llm import %s` (a headless token signs the "+
+		"until a login is written there again — sign in with %s (a headless token signs the "+
 		"entry in without ending the logout); a state directory with no record of the logout "+
 		"(a fresh volume) restores it, so to retire the bundle %s",
-		ErrLoggedOut, p.ws.CredentialsDir(), p.key, p.key, p.key, p.retireBundle())
+		ErrLoggedOut, p.ws.CredentialsDir(), p.loginRoutes(), p.retireBundle())
+}
+
+// loginRoutes names the commands that write a login into this entry's
+// credential directory — what ends a logout — as THIS PROFILE offers them.
+//
+// From the profile, never a fixed list: a fixed list named `crewlet llm login
+// <key>` to an entry whose CLI declares no login subcommand (qwen-code, grok,
+// gemini-cli), and the one remedy offered first was a command that refuses.
+// `-from-host` needs a login it can find in a person's home, the CLI's own
+// export or a file the profile names; an import needs nothing, so it is always
+// there.
+func (p *Provider) loginRoutes() string {
+	var routes []string
+	if len(p.profile.LoginArgs) > 0 {
+		routes = append(routes, fmt.Sprintf("`crewlet llm login %s`", p.key))
+	}
+	if p.profile.StdinLogin != nil {
+		routes = append(routes, fmt.Sprintf("`crewlet llm login %s -username <name> -password-stdin`", p.key))
+	}
+	if p.profile.CredentialStore != nil || len(p.hostSources()) > 0 {
+		routes = append(routes, fmt.Sprintf("`crewlet llm login %s -from-host`", p.key))
+	}
+	routes = append(routes, fmt.Sprintf("`crewlet llm import %s`", p.key))
+	if len(routes) == 1 {
+		return routes[0]
+	}
+	return strings.Join(routes[:len(routes)-1], ", ") + " or " + routes[len(routes)-1]
 }
 
 // LogoutNotice is what `crewlet llm logout` tells the operator about the
@@ -616,12 +642,12 @@ func (p *Provider) LogoutNotice() (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("Its configured credential bundle (%s) is not restored onto this host until "+
-		"a login is written into its credential directory again (`crewlet llm login %s`, "+
-		"`-from-host` or `crewlet llm import %s`; a headless token from `-capture-token` or "+
-		"`-token-stdin` signs it in without ending this) — not at the engine's next boot or apply, "+
-		"and not by `crewlet llm status`, `export`, `doctor` or `list`. A state directory with no "+
-		"record of this logout, such as a fresh volume, still restores it; to retire the bundle, %s.",
-		p.bundleSource(), p.key, p.key, p.retireBundle()), nil
+		"a login is written into its credential directory again (%s; a headless token from "+
+		"`-capture-token` or `-token-stdin` signs it in without ending this) — not at the engine's "+
+		"next boot or apply, and not by `crewlet llm status`, `export`, `doctor` or `list`. A state "+
+		"directory with no record of this logout, such as a fresh volume, still restores it; to "+
+		"retire the bundle, %s.",
+		p.bundleSource(), p.loginRoutes(), p.retireBundle()), nil
 }
 
 // bundleSource names where the entry's configured bundle came from.

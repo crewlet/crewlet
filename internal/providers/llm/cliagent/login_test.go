@@ -568,12 +568,17 @@ func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
 	if p.Workspace().HasLogin() {
 		t.Fatalf("the restore after a logout brought the login back: %v", p.Workspace().LoginFiles())
 	}
-	for _, want := range []string{"`crewlet llm login sub`", "-from-host", "`crewlet llm import sub`",
+	for _, want := range []string{"`crewlet llm login sub -from-host`", "`crewlet llm import sub`",
 		"a headless token signs the entry in without ending the logout",
 		"fresh volume", "crewlet secrets unset " + BundleVarName("sub")} {
 		if err != nil && !strings.Contains(err.Error(), want) {
 			t.Errorf("the decline does not name %q: %v", want, err)
 		}
+	}
+	// This profile declares no login subcommand, so the decline does not send
+	// the operator to one: `crewlet llm login sub` would only refuse.
+	if err != nil && strings.Contains(err.Error(), "`crewlet llm login sub`") {
+		t.Errorf("the decline names a brokered login the profile does not have: %v", err)
 	}
 	// Recorded in the state directory, where no bundle reaches it.
 	if _, statErr := os.Stat(filepath.Join(p.Workspace().Root(), loggedOutFile)); statErr != nil {
@@ -586,11 +591,14 @@ func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
 	// from: the conventional secret here, the field where one is set — and
 	// that a headless token, which writes no login there, does not end it.
 	notice := logoutNotice(t, p)
-	for _, want := range []string{BundleVarName("sub"), "fresh volume", "`crewlet llm login sub`",
+	for _, want := range []string{BundleVarName("sub"), "fresh volume", "`crewlet llm login sub -from-host`",
 		"`-token-stdin` signs it in without ending this"} {
 		if !strings.Contains(notice, want) {
 			t.Errorf("the logout notice does not name %q: %s", want, notice)
 		}
+	}
+	if strings.Contains(notice, "`crewlet llm login sub`") {
+		t.Errorf("the notice names a brokered login the profile does not have: %s", notice)
 	}
 	p.bundleConfigured = true
 	if notice := logoutNotice(t, p); !strings.Contains(notice, "providers.llm.sub.cli.auth.credential_bundle") {
@@ -599,6 +607,55 @@ func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
 	p.bundle = ""
 	if notice := logoutNotice(t, p); notice != "" {
 		t.Errorf("an entry with no bundle was told about one: %s", notice)
+	}
+}
+
+// THE WAY BACK FROM A LOGOUT IS WHAT THE PROFILE OFFERS. The decline and the
+// notice once named `crewlet llm login <key>` to every entry, including ones
+// whose CLI declares no login subcommand (qwen-code, grok, gemini-cli), so the
+// first remedy an operator tried refused. Each route is named exactly when the
+// profile has what it needs, and an import, which needs nothing, always is.
+//
+// Mutation: name any route unconditionally, and its "absent" case is red.
+func TestALogoutsRemedyNamesOnlyTheLoginsTheProfileHas(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		edit        func(p *cliprofile.Profile)
+		want, never []string
+	}{
+		"a login subcommand": {
+			edit: func(p *cliprofile.Profile) { p.LoginArgs = []string{"login"} },
+			want: []string{"`crewlet llm login sub`", "`crewlet llm login sub -from-host`", "`crewlet llm import sub`"},
+		},
+		"a credential login": {
+			edit:  func(p *cliprofile.Profile) { p.StdinLogin = &cliprofile.StdinLogin{Args: []string{"login"}} },
+			want:  []string{"`crewlet llm login sub -username <name> -password-stdin`", "`crewlet llm import sub`"},
+			never: []string{"`crewlet llm login sub`"},
+		},
+		"nothing a person's home holds": {
+			edit: func(p *cliprofile.Profile) {
+				p.HostCredentialPaths, p.CredentialPaths = nil, nil
+			},
+			want:  []string{"`crewlet llm import sub`"},
+			never: []string{"`crewlet llm login sub`", "-from-host"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			p := loginProvider(t)
+			tc.edit(&p.profile)
+			routes := p.loginRoutes()
+			for _, want := range tc.want {
+				if !strings.Contains(routes, want) {
+					t.Errorf("the routes %q do not name %q", routes, want)
+				}
+			}
+			for _, never := range tc.never {
+				if strings.Contains(routes, never) {
+					t.Errorf("the routes %q name %q, which this profile does not offer", routes, never)
+				}
+			}
+		})
 	}
 }
 

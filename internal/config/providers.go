@@ -913,7 +913,9 @@ type CLIAgentAuth struct {
 	// document its export printed) as one blob, restored into an empty
 	// credential directory whenever the engine builds a company to run (boot
 	// and every apply it publishes), so a fresh container comes up already
-	// logged in — and withheld after `crewlet llm logout` until a sign-in.
+	// logged in — and withheld after `crewlet llm logout` until a login is
+	// written into the credential directory again (`crewlet llm login`,
+	// `-from-host` or `crewlet llm import`; a headless token does not end it).
 	CredentialBundle string `secret:"true" yaml:"credential_bundle,omitempty" json:"credential_bundle,omitempty" desc:"${VAR} holding a bundle exported by crewlet llm export."`
 }
 
