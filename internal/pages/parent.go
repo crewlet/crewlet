@@ -112,8 +112,7 @@ func judgeParent(ctx context.Context, tx *sql.Tx, pageID, container,
 			return parentBeneath, parent, nil
 		}
 		var next string
-		err := tx.QueryRowContext(ctx,
-			`SELECT parent_id FROM pages_heads WHERE id = ?`, at).Scan(&next)
+		err := tx.QueryRowContext(ctx, parentOfStatement, at).Scan(&next)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			next = ""
@@ -195,3 +194,7 @@ func salvageParent(ctx context.Context, tx *sql.Tx, at applyContext, pageID,
 			"applies"))
 	return have, nil
 }
+
+// parentOfStatement is one step of a parent walk: a page's parent, by its key,
+// named for the plan gate.
+const parentOfStatement = `SELECT parent_id FROM pages_heads WHERE id = ?`
