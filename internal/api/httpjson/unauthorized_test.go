@@ -11,12 +11,19 @@ import (
 )
 
 // unauthorizedSays is the message a refusal on authority is answered with,
-// built the way every surface builds one — through authz.RefusalDetail, so the
+// built the way every surface builds one — through authz.RefusalFields, so the
 // keys this package reads are the ones authz writes.
 func unauthorizedSays(reason authz.Reason, grants ...iam.Grant) string {
-	body := httpjson.Envelope(httpjson.CodeUnauthorized, authz.RefusalDetail(reason, grants))
+	body := httpjson.Envelope(httpjson.CodeUnauthorized, fieldsOf(reason, grants...))
 	message, _ := body["message"].(string)
 	return message
+}
+
+// fieldsOf is the detail authz.RefusalFields answers a refusal for reason
+// with, naming grants.
+func fieldsOf(reason authz.Reason, grants ...iam.Grant) httpjson.Detail {
+	_, _, detail := authz.RefusalFields(authz.Decision{Reason: reason, Grants: grants})
+	return detail
 }
 
 // A REFUSAL SAYS THE RULE THAT REFUSED, AND NAMES A PERMISSION ONLY WHERE ONE
@@ -113,8 +120,8 @@ func TestUnauthorizedSaysTheRuleThatRefused(t *testing.T) {
 	// no rule refuses by.
 	for name, detail := range map[string]httpjson.Detail{
 		"no reason":                 {},
-		"no grant named":            authz.RefusalDetail(authz.ReasonNoGrant, nil),
-		"an admission":              authz.RefusalDetail(authz.ReasonGrant, nil),
+		"no grant named":            fieldsOf(authz.ReasonNoGrant),
+		"an admission":              fieldsOf(authz.ReasonGrant),
 		"a reason off a newer peer": {authz.DetailReason: "invented"},
 	} {
 		if got := httpjson.Envelope(httpjson.CodeUnauthorized, detail)["message"]; got != generic {

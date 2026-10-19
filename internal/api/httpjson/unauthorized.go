@@ -23,7 +23,7 @@ import (
 // The two keys of a refusal on authority the sentence is chosen by: the
 // deciding rule's reason and the grants that would have admitted the caller —
 // internal/authz's DetailReason and DetailGrants, which every surface refusing
-// on authority writes through authz.RefusalDetail. Spelled here because this
+// on authority writes through authz.RefusalFields. Spelled here because this
 // package imports no engine machinery, and held to authz's by this package's
 // tests, which build every refusal they read through authz itself.
 const (

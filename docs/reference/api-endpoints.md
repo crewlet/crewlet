@@ -715,7 +715,11 @@ as the first, which tells them to go and get a new credential.
 **A `403` says which rule refused, and what would have admitted you.** Beside
 `"error": "unauthorized"` it carries two detail fields wherever the authority
 table made the refusal — every question, the policy every `/config/*` and
-`/iam/*` route is mounted with, and the snapshot mirrors alike:
+`/iam/*` route is mounted with, and the snapshot mirrors alike. Which code a
+refusal is answered with is the table's own mapping on every surface, the
+WebSocket's frames included — `unauthorized`, `step_up_required` for a stale
+proof, `token_refused` for a machine token where a person must be present — and
+no route spells one of those codes for itself:
 
 ```json
 {
