@@ -289,6 +289,11 @@ test("a click on a listed board only selects it; Enter or a double-click opens i
   const row = screen.getByRole("button", { name: "Pricing, press Enter or double-click to open" });
   fireEvent.click(row);
   expect(screen.queryByRole("dialog")).toBeNull();
+  // Selected on the canvas too, and marked in the list.
+  expect(
+    screen.getByRole("region", { name: "Pricing, 1440 by 900" }).hasAttribute("data-selected"),
+  ).toBe(true);
+  expect(row.getAttribute("aria-current")).toBe("true");
   fireEvent.keyDown(row, { key: "Enter" });
   expect(await screen.findByRole("dialog")).toBeTruthy();
   fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
@@ -297,6 +302,19 @@ test("a click on a listed board only selects it; Enter or a double-click opens i
     screen.getByRole("button", { name: "Hero, press Enter or double-click to open" }),
   );
   expect(await screen.findByRole("dialog")).toBeTruthy();
+});
+
+test("the board picked on the canvas is the one marked in the list", async () => {
+  await mount();
+  const hero = screen.getByRole("region", { name: "Hero, 1440 by 900" });
+  fireEvent.click(hero.querySelector(".crewlet-canvas-board__shield")!);
+  const row = (name: string) =>
+    screen.getByRole("button", { name: `${name}, press Enter or double-click to open` });
+  expect(row("Hero").getAttribute("aria-current")).toBe("true");
+  expect(row("Pricing").hasAttribute("aria-current")).toBe(false);
+  // A click on the field clears the selection, and the mark with it.
+  fireEvent.click(document.querySelector(".crewlet-canvas__viewport")!);
+  expect(row("Hero").hasAttribute("aria-current")).toBe(false);
 });
 
 test("an opened board fits the dialog, letterboxed, and shows at its own size on request", async () => {
@@ -313,6 +331,11 @@ test("an opened board fits the dialog, letterboxed, and shows at its own size on
   expect(stage!.getAttribute("aria-label")).toBe("Pricing, 1440 by 900");
   expect((stage!.querySelector(".crewlet-slide-stage__frame") as HTMLElement).style.width).toBe(
     "1440px",
+  );
+  // The stage takes the board's proportions, so a narrow window draws it
+  // short rather than letterboxed in a tall box.
+  expect((dialog.querySelector(".design-opened--fit") as HTMLElement).style.aspectRatio).toBe(
+    "1440 / 900",
   );
   fireEvent.click(within(dialog).getByRole("radio", { name: "Actual size" }));
   const actual = within(dialog).getByRole("region", { name: "Pricing at actual size" });

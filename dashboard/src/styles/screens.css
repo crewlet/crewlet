@@ -11259,15 +11259,19 @@ a.live-row:focus-visible {
   }
 }
 
-/* A DESIGN: the canvas fills the view beside its list of boards. */
+/* A DESIGN: the canvas fills the view beside its list of boards. The view is
+   the body's whole height, so the canvas takes what its bar and any notice
+   leave of it, down to the body's own padding. */
 .design-view {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
   min-width: 0;
+  height: max(28rem, var(--artifact-view, 100cqb));
 }
 .design-bar {
   display: flex;
+  flex: none;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-2);
@@ -11278,12 +11282,23 @@ a.live-row:focus-visible {
   font-size: var(--font-size-compact);
 }
 /* The board list is as wide as its longest name, and no wider than 12rem, so
-   the canvas keeps the room at a laptop's width. */
+   the canvas keeps the room at a laptop's width. It scrolls on its own when a
+   design has more boards than the canvas is tall. */
 .design-body {
   display: grid;
+  flex: 1 1 auto;
   grid-template-columns: fit-content(12rem) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: var(--spacing-3);
   min-width: 0;
+  min-height: 0;
+}
+/* The names' letters stand on the count's left edge above them: the rows'
+   own padding is taken back, so only a row's hover reaches past it. */
+.design-boards {
+  min-height: 0;
+  margin-inline-start: calc(-1 * var(--spacing-2));
+  overflow-y: auto;
 }
 .design-boards ol {
   margin: 0;
@@ -11291,7 +11306,9 @@ a.live-row:focus-visible {
   list-style: none;
 }
 .design-board-link {
+  display: block;
   width: 100%;
+  overflow: hidden;
   padding: var(--spacing-1) var(--spacing-2);
   border: none;
   border-radius: var(--radius-sm);
@@ -11300,19 +11317,33 @@ a.live-row:focus-visible {
   font: inherit;
   font-size: var(--font-size-compact);
   text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   cursor: pointer;
 }
 .design-board-link:hover {
   background: var(--color-surface-hover);
   color: var(--color-text-primary);
 }
+/* The board selected on the canvas: the navigation rail's current row, lifted
+   with a hairline (an outline, so forced colours keep it). Declared after the
+   hover, so a row draws one or the other. */
+.design-board-link[aria-current="true"] {
+  background: var(--color-surface-elevated);
+  outline: 1px solid var(--color-border-default);
+  outline-offset: -1px;
+  color: var(--color-text-primary);
+}
 .design-board-link:focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: var(--size-focus-ring-inset-offset);
 }
-.design-canvas,
+.design-canvas {
+  min-width: 0;
+  min-height: 0;
+}
 .design-skeleton {
-  height: max(28rem, calc(var(--artifact-view, 100cqb) - 3.5rem));
+  height: max(28rem, var(--artifact-view, 100cqb));
   min-width: 0;
 }
 @media (width < 640px) {
@@ -11346,7 +11377,8 @@ a.live-row:focus-visible {
 }
 .design-opened--fit {
   display: grid;
-  height: 70vh;
+  width: 100%;
+  max-height: 70vh;
 }
 .design-opened--actual {
   height: 70vh;
