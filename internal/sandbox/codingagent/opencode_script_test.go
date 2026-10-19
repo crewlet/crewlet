@@ -36,7 +36,15 @@ import (
 //   - `run` keeps its stdin and the password it presented, puts FAKE_REFRESH
 //     in the database where that is set — a login refreshed mid-run — and
 //     then works for FAKE_RUN_SLEEP seconds, and until the case's directory holds
-//     the file FAKE_RUN_UNTIL names, before it exits.
+//     the file FAKE_RUN_UNTIL names, before it exits. Where only FAKE_RUN_SLEEP
+//     is set, the run BECOMES the sleep (`exec`), because every case that sets
+//     it ends the run by a signal, and a shell left in front of the sleep can
+//     swallow one: the fake is a `#!/bin/sh` script, dash catches SIGINT in a
+//     script file and holds one that lands while it forks a foreground
+//     command until that command returns, so a group SIGINT sent the moment
+//     `refreshed` appears could miss the sleep and wait out all sixty seconds
+//     of it — the interrupt case failed so, now and then, under load. With no
+//     shell left there is nothing to hold it.
 //
 // FAKE_SERVE=listen-only is a server that says where it listens and never
 // prints a password; FAKE_SERVE=silent one that says nothing at all; and
@@ -94,6 +102,7 @@ run)
   if [ -n "${FAKE_REFRESH+set}" ]; then printf '%s' "$FAKE_REFRESH" > "$d/db"; fi
   : > "$d/refreshed"
   echo '{"type":"text","part":{"text":"done"}}'
+  [ -z "${FAKE_RUN_SLEEP:-}" ] || [ -n "${FAKE_RUN_UNTIL:-}" ] || exec sleep "$FAKE_RUN_SLEEP"
   [ -z "${FAKE_RUN_SLEEP:-}" ] || sleep "$FAKE_RUN_SLEEP"
   [ -z "${FAKE_RUN_UNTIL:-}" ] || while [ ! -e "$d/$FAKE_RUN_UNTIL" ]; do sleep 0.05; done
   exit "${FAKE_RUN_EXIT:-0}" ;;
