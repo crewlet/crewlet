@@ -354,9 +354,8 @@ func readCommentTx(ctx context.Context, tx *sql.Tx, pageID, commentID string) (
 	Comment, error) {
 
 	var document []byte
-	err := tx.QueryRowContext(ctx,
-		`SELECT document FROM pages_comments WHERE id = ? AND page_id = ?`,
-		commentID, pageID).Scan(&document)
+	err := tx.QueryRowContext(ctx, commentTxStatement, commentID, pageID).
+		Scan(&document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return Comment{}, fmt.Errorf("%w: comment %s on page %s",
@@ -424,9 +423,7 @@ type commentAsk struct {
 func (s *Store) Thread(ctx context.Context, pageID string) ([]Comment, error) {
 	var out []Comment
 	err := s.db.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx,
-			`SELECT document FROM pages_comments WHERE page_id = ?
-			  ORDER BY created_at, id`, pageID)
+		rows, err := tx.QueryContext(ctx, threadStatement, pageID)
 		if err != nil {
 			return fmt.Errorf("doclet: read the thread on %s: %w", pageID, err)
 		}
@@ -467,10 +464,8 @@ func (s *Store) Revision(ctx context.Context, pageID string, version int) (
 	err := s.db.Read(ctx, func(tx *sql.Tx) error {
 		var author, message, title, body string
 		var created int64
-		err := tx.QueryRowContext(ctx, `
-			SELECT title, body, message, author, created_at
-			  FROM pages_revisions WHERE page_id = ? AND edit_version = ?`,
-			pageID, version).Scan(&title, &body, &message, &author, &created)
+		err := tx.QueryRowContext(ctx, revisionStatement, pageID, version).
+			Scan(&title, &body, &message, &author, &created)
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("%w: revision %d of page %s", ErrNotFound,
 				version, pageID)
@@ -488,3 +483,15 @@ func (s *Store) Revision(ctx context.Context, pageID string, version int) (
 	})
 	return out, err
 }
+
+// commentTxStatement is [readCommentTx]'s read of one comment on one page, by
+// its key, named for the plan gate.
+const commentTxStatement = `SELECT document FROM pages_comments WHERE id = ? AND page_id = ?`
+
+// revisionStatement reads one immutable body by its page and its number — the
+// statement [Store.Revision] and [Reader.Revision] both read it with, named for
+// the plan gate.
+const revisionStatement = `
+			SELECT title, body, message, author, created_at
+			  FROM pages_revisions
+			 WHERE page_id = ? AND edit_version = ?`

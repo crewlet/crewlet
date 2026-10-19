@@ -308,8 +308,7 @@ var errPageMoved = errors.New("doclet: the page moved to another space under thi
 func (s *Store) containerOf(ctx context.Context, pageID string) (string, error) {
 	var container string
 	err := s.db.Read(ctx, func(tx *sql.Tx) error {
-		err := tx.QueryRowContext(ctx,
-			`SELECT container FROM pages_heads WHERE id = ?`, pageID).Scan(&container)
+		err := tx.QueryRowContext(ctx, containerOfStatement, pageID).Scan(&container)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -862,9 +861,7 @@ const HeadRevision = `MAX(version, scoped_through)`
 func readHeadTx(ctx context.Context, tx *sql.Tx, id string) (Page, uint64, error) {
 	var document []byte
 	var revision int64
-	err := tx.QueryRowContext(ctx,
-		`SELECT document, `+HeadRevision+` FROM pages_heads WHERE id = ?`, id).
-		Scan(&document, &revision)
+	err := tx.QueryRowContext(ctx, headTxStatement, id).Scan(&document, &revision)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return Page{}, 0, fmt.Errorf("%w: page %s", ErrNotFound, id)
@@ -902,3 +899,11 @@ func nullableTime(t *time.Time) any {
 type SkillDetector interface {
 	IsSkill(body string) bool
 }
+
+// The store's own reads of one page's row by its key, named for the plan gate:
+// the space it is in ([Store.containerOf]), and its head inside a decision
+// ([readHeadTx]).
+const (
+	containerOfStatement = `SELECT container FROM pages_heads WHERE id = ?`
+	headTxStatement      = `SELECT document, ` + HeadRevision + ` FROM pages_heads WHERE id = ?`
+)
