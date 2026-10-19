@@ -335,10 +335,9 @@ func generationActor(f statelog.GenerationFacts) (string, iam.Kind) {
 	case iam.ActorSystem:
 		return party.Name, iam.KindEngine
 	}
-	// AN OPERATOR, a machine named by its principal kind and a kind nobody
-	// stated alike, by the login's shape: a person's where it is one, and a
-	// machine's otherwise — the kind a credential nobody enrolled, a Tier A
-	// token, is recorded under.
+	// AN OPERATOR, and a kind nobody stated, by the login's shape: a
+	// person's where it is one, and a machine's otherwise — the kind a
+	// credential nobody enrolled, a Tier A token, is recorded under.
 	if iam.ValidLogin(party.Name) {
 		return party.Name, iam.KindPerson
 	}
