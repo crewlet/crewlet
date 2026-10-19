@@ -139,12 +139,16 @@ const scrubMarker = redact.Marker + "credential]"
 // account of what it rejected unreadable for nothing.
 const minScrubbedValue = 8
 
+// minTokenRun is the shortest [tokenRun]: sixteen characters, below which a run
+// is a word or a path segment rather than a key — and every credential a shipped
+// CLI keeps is far longer. It is also the shortest piece of one that
+// [scrubAuxiliary] takes out where a CLI quoted only part of it.
+const minTokenRun = 16
+
 // tokenRun is a run of the characters a credential is spelled in — letters,
 // digits and the URL-safe and base64 punctuation a JWT, an OAuth token or an
-// API key carries — at least sixteen long: shorter, and a run is a word or a
-// path segment rather than a key, and every credential a shipped CLI keeps is
-// far longer.
-var tokenRun = regexp.MustCompile(`[A-Za-z0-9_\-.+/=~]{16,}`)
+// API key carries — at least [minTokenRun] long.
+var tokenRun = regexp.MustCompile(fmt.Sprintf(`[A-Za-z0-9_\-.+/=~]{%d,}`, minTokenRun))
 
 // scrubAuxiliary takes out of stderr everything the command was handed and
 // printed — handed being its stdin and its stdout — and then runs
@@ -157,53 +161,64 @@ var tokenRun = regexp.MustCompile(`[A-Za-z0-9_\-.+/=~]{16,}`)
 //
 //   - the whole of it, so a CLI echoing a document entire leaves one marker;
 //   - where it is JSON, every string value at least [minScrubbedValue] long,
-//     at any depth, and every [tokenRun] inside one (a CLI may quote a token
-//     out of a longer value, `Bearer …`);
+//     at any depth, and the [tokenRun]s inside each one (a CLI may quote a
+//     token out of a longer value, `Bearer …`);
 //   - where it is not — a truncated document, a timed-out export's partial
-//     output — every [tokenRun] in it.
+//     output — the [tokenRun]s in it.
 //
-// Longest first, so a value never leaves part of a longer one behind.
-// [redact.Secrets] stays as the second layer for anything this did not know.
+// The whole texts and the values are taken out where stderr repeats them
+// exactly, longest first, so a value never leaves part of a longer one behind.
+// A token run is taken out wherever stderr shares [minTokenRun] or more
+// consecutive characters with it ([maskShared]), not only where it repeats the
+// run whole: a parser's error quotes a WINDOW of its input — the bytes either
+// side of where it stopped — and a window cuts a credential wherever it falls,
+// so matched whole, the forty characters a window kept of a seventy-character
+// token went into the error intact. [redact.Secrets] stays as the second layer
+// for anything this did not know.
 func scrubAuxiliary(stderr string, handed ...string) string {
 	if strings.TrimSpace(stderr) == "" {
 		return stderr
 	}
-	var secrets []string
+	var exact, runs []string
 	for _, text := range handed {
-		secrets = append(secrets, secretsIn(text)...)
+		e, r := secretsIn(text)
+		exact = append(exact, e...)
+		runs = append(runs, r...)
 	}
-	slices.SortFunc(secrets, func(a, b string) int {
+	slices.SortFunc(exact, func(a, b string) int {
 		return cmp.Or(cmp.Compare(len(b), len(a)), strings.Compare(a, b))
 	})
-	secrets = slices.Compact(secrets)
-	pairs := make([]string, 0, 2*len(secrets))
-	for _, s := range secrets {
+	exact = slices.Compact(exact)
+	pairs := make([]string, 0, 2*len(exact))
+	for _, s := range exact {
 		pairs = append(pairs, s, scrubMarker)
 	}
 	if len(pairs) > 0 {
 		stderr = strings.NewReplacer(pairs...).Replace(stderr)
 	}
-	return redact.Secrets(stderr)
+	return redact.Secrets(maskShared(stderr, runs))
 }
 
-// secretsIn is what [scrubAuxiliary] takes out of a text it was handed.
-func secretsIn(text string) []string {
+// secretsIn is what [scrubAuxiliary] takes out of a text it was handed: what
+// is taken out where stderr repeats it exactly, and the token runs taken out
+// wherever stderr shares a piece of one.
+func secretsIn(text string) (exact, runs []string) {
 	trimmed := strings.TrimSpace(text)
 	if len(trimmed) < minScrubbedValue {
-		return nil
+		return nil, nil
 	}
-	found := []string{trimmed}
+	exact = []string{trimmed}
 	var doc any
 	if err := json.Unmarshal([]byte(trimmed), &doc); err != nil {
-		return append(found, tokenRun.FindAllString(trimmed, -1)...)
+		return exact, tokenRun.FindAllString(trimmed, -1)
 	}
 	var walk func(any)
 	walk = func(v any) {
 		switch v := v.(type) {
 		case string:
 			if len(v) >= minScrubbedValue {
-				found = append(found, v)
-				found = append(found, tokenRun.FindAllString(v, -1)...)
+				exact = append(exact, v)
+				runs = append(runs, tokenRun.FindAllString(v, -1)...)
 			}
 		case []any:
 			for _, item := range v {
@@ -216,5 +231,55 @@ func secretsIn(text string) []string {
 		}
 	}
 	walk(doc)
-	return found
+	return exact, runs
+}
+
+// maskShared replaces every stretch of stderr that shares [minTokenRun] or more
+// consecutive characters with one of runs by one [scrubMarker].
+//
+// The pieces are indexed from the RUNS' side — every minTokenRun-long window of
+// every run — and stderr's own token runs are scanned against them, so the
+// index is as large as the credential material handed in, the same order as
+// the exact replacement's own, and a stretch of stderr no credential shares is
+// read once and kept.
+func maskShared(stderr string, runs []string) string {
+	pieces := map[string]struct{}{}
+	for _, run := range runs {
+		for i := 0; i+minTokenRun <= len(run); i++ {
+			pieces[run[i:i+minTokenRun]] = struct{}{}
+		}
+	}
+	if len(pieces) == 0 {
+		return stderr
+	}
+	var covered []bool
+	for _, loc := range tokenRun.FindAllStringIndex(stderr, -1) {
+		for i := loc[0]; i+minTokenRun <= loc[1]; i++ {
+			if _, shared := pieces[stderr[i:i+minTokenRun]]; !shared {
+				continue
+			}
+			if covered == nil {
+				covered = make([]bool, len(stderr))
+			}
+			for k := i; k < i+minTokenRun; k++ {
+				covered[k] = true
+			}
+		}
+	}
+	if covered == nil {
+		return stderr
+	}
+	var b strings.Builder
+	for i := 0; i < len(stderr); {
+		if !covered[i] {
+			b.WriteByte(stderr[i])
+			i++
+			continue
+		}
+		for i < len(stderr) && covered[i] {
+			i++
+		}
+		b.WriteString(scrubMarker)
+	}
+	return b.String()
 }

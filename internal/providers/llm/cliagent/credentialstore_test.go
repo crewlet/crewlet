@@ -36,7 +36,9 @@ import (
 //     FAKE_STORE_DROP.
 //
 // And three ways to fail or to race: FAKE_STORE_IMPORT_REJECT refuses every
-// document, quoting it; FAKE_STORE_EXPORT_FAIL fails every export after
+// document, quoting it whole, and a document that does not parse is refused
+// quoting only its last [fakeQuotedTail] bytes, as a parser's error quotes the
+// context it stopped in; FAKE_STORE_EXPORT_FAIL fails every export after
 // printing its logins (FAKE_STORE_EXPORT_FAIL_ONCE only the first, marking
 // the file it names; FAKE_STORE_EXPORT_FAIL_KEY every one made while the
 // database holds a login with that key), quoting them on stderr too under
@@ -117,9 +119,16 @@ func fakeStore() {
 	case "store-import":
 		doc, _ := io.ReadAll(os.Stdin)
 		var in []map[string]string
-		if err := json.Unmarshal(doc, &in); err != nil || os.Getenv("FAKE_STORE_IMPORT_REJECT") == "1" {
+		if os.Getenv("FAKE_STORE_IMPORT_REJECT") == "1" {
 			// Quoting what it rejected, as a CLI may.
 			fmt.Fprintf(os.Stderr, "invalid document: %s", doc)
+			os.Exit(1)
+		}
+		if err := json.Unmarshal(doc, &in); err != nil {
+			// Quoting a WINDOW of it, as a parser does: a window cuts
+			// whatever it falls across, a credential included.
+			fmt.Fprintf(os.Stderr, "invalid document: unexpected end near %q",
+				doc[max(0, len(doc)-fakeQuotedTail):])
 			os.Exit(1)
 		}
 		creds := read()
@@ -171,6 +180,10 @@ func fakeStore() {
 		fmt.Print("key=" + key)
 	}
 }
+
+// fakeQuotedTail is how much of a document [fakeStore] quotes when it cannot
+// parse it.
+const fakeQuotedTail = 40
 
 // storeProvider builds a provider whose CLI is [fakeStore].
 func storeProvider(t *testing.T, env map[string]string, extra map[string]any) *Provider {
@@ -318,7 +331,7 @@ func TestADatabaseWithNoLoginNeverReplacesTheSharedOne(t *testing.T) {
 // words around it, which only the scrub of what the import was handed does.
 func TestAnImportThatFailsFailsTheCallWithoutRepeatingTheDocument(t *testing.T) {
 	t.Parallel()
-	p := storeProvider(t, nil, nil)
+	p := storeProvider(t, map[string]string{"FAKE_STORE_IMPORT_REJECT": "1"}, nil)
 	secret := "sk-ant-" + strings.Repeat("Q", 40)
 	document := "not a document " + secret
 	writeDocument(t, p, document)

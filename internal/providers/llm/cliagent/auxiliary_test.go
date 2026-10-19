@@ -47,16 +47,21 @@ func exampleDocument(t *testing.T) string {
 	return string(raw)
 }
 
-// assertNoSecret fails when err repeats any of the example credentials, or
-// the document they came in.
+// assertNoSecret fails when err repeats any of the example credentials — whole,
+// or any piece of one [minTokenRun] characters long — or the document they came
+// in.
 func assertNoSecret(t *testing.T, err error, document string) {
 	t.Helper()
 	if err == nil {
 		t.Fatal("no error to inspect")
 	}
 	for _, secret := range exampleSecrets {
-		if strings.Contains(err.Error(), secret) {
-			t.Errorf("the failure repeats the credential %q: %v", secret[:8], err)
+		for i := 0; i+minTokenRun <= len(secret); i++ {
+			if strings.Contains(err.Error(), secret[i:i+minTokenRun]) {
+				t.Errorf("the failure repeats a piece of the credential %q (from byte %d): %v",
+					secret[:8], i, err)
+				break
+			}
 		}
 	}
 	if document != "" && strings.Contains(err.Error(), document) {
@@ -67,18 +72,35 @@ func assertNoSecret(t *testing.T, err error, document string) {
 // AN IMPORT THE CLI REFUSES REPEATS NONE OF THE LOGIN IT WAS HANDED, whatever
 // its stderr quotes — including the credential shapes no redaction rule knows,
 // because what an import is handed is exactly what the engine knows is secret.
+//
+// Mutation: drop the token runs of a text that is not JSON (secretsIn), and
+// the truncated cases are red; match a token run only whole (maskShared), and
+// the window that cuts one is.
 func TestARefusedImportRepeatsNoneOfTheLogin(t *testing.T) {
 	t.Parallel()
 	document := exampleDocument(t)
-	for name, doc := range map[string]string{
-		"a document the CLI rejects": document,
-		// Truncated mid-token, so it is not JSON at all: what is scrubbed
-		// then is every credential-shaped run in it.
-		"a truncated document": document[:strings.Index(document, exampleGoogle)+len(exampleGoogle)],
+	cutAfter := func(secret string) string {
+		return document[:strings.Index(document, secret)+len(secret)]
+	}
+	for name, c := range map[string]struct {
+		doc string
+		env map[string]string
+	}{
+		// Quoted whole.
+		"a document the CLI rejects": {document, map[string]string{"FAKE_STORE_IMPORT_REJECT": "1"}},
+		// Truncated, so it is not JSON at all, and the fake quotes the window
+		// it stopped in — the Google key whole, and none of the document
+		// around it: what is scrubbed then is every credential-shaped run in
+		// it, wherever stderr repeats one.
+		"a truncated document": {cutAfter(exampleGoogle), nil},
+		// Truncated at the end of the JWT, so the window begins INSIDE it and
+		// keeps its last forty characters, which no whole run matches.
+		"a document cut inside a credential": {cutAfter(exampleJWT), nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			p := storeProvider(t, map[string]string{"FAKE_STORE_IMPORT_REJECT": "1"}, nil)
+			doc := c.doc
+			p := storeProvider(t, c.env, nil)
 			writeDocument(t, p, doc)
 			_, err := ask(t, p, llm.Request{})
 			assertNoSecret(t, err, doc)
@@ -170,6 +192,39 @@ func TestTheScrubLeavesTheCLIsOwnWords(t *testing.T) {
 	}
 	if !strings.Contains(got, redact.Marker) {
 		t.Errorf("redact.Secrets did not run over what was left: %q", got)
+	}
+}
+
+// A PIECE OF A HANDED CREDENTIAL IS SCRUBBED, not only the whole of one. A CLI
+// that cannot parse its input quotes the window it stopped in, which takes one
+// token whole out of a truncated document — matched by no whole-text
+// replacement, since it is not the document — or cuts one wherever the window
+// begins, matched by no whole token either.
+//
+// Mutation: drop the token runs of a text that is not JSON (secretsIn), and
+// both are red; match a token run only whole (maskShared), and the cut one is.
+func TestAPieceOfAHandedCredentialIsScrubbed(t *testing.T) {
+	t.Parallel()
+	document := exampleDocument(t)
+	truncated := document[:strings.Index(document, exampleRefresh)+len(exampleRefresh)/2]
+	if json.Valid([]byte(truncated)) {
+		t.Fatal("the premise: the truncated document is not JSON")
+	}
+	for name, quoted := range map[string]string{
+		"a token whole":       exampleJWT,
+		"a token cut by half": exampleJWT[len(exampleJWT)/2:],
+	} {
+		got := scrubAuxiliary("unexpected token near \""+quoted+"\" at offset 112", truncated)
+		if strings.Contains(got, quoted) {
+			t.Errorf("%s: the scrub left it: %q", name, got)
+		}
+		if !strings.Contains(got, scrubMarker) || !strings.Contains(got, "at offset 112") {
+			t.Errorf("%s: the scrub did not leave a marker among the CLI's own words: %q", name, got)
+		}
+	}
+	// A piece shorter than a token run is a word, and the CLI's own: kept.
+	if got := scrubAuxiliary("near "+exampleJWT[:minTokenRun-1]+"!", truncated); !strings.Contains(got, exampleJWT[:minTokenRun-1]) {
+		t.Errorf("a piece shorter than a token run was taken out: %q", got)
 	}
 }
 
