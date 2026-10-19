@@ -1294,8 +1294,10 @@ func TestTheKnowledgeQuestionSearchesPagesOnlyWithDoclet(t *testing.T) {
 				map[string]any{"q": "deploy"})
 			if c.refused {
 				var refusal *queries.Refusal
-				if !errors.As(err, &refusal) || !slices.Equal(refusal.Grants, iam.Apps) {
-					t.Fatalf("answered %v, want a refusal naming every app %v", err, iam.Apps)
+				both := []iam.Grant{iam.GrantWorklet, iam.GrantDoclet}
+				if !errors.As(err, &refusal) || !slices.Equal(refusal.Grants, both) {
+					t.Fatalf("answered %v, want a refusal naming the two apps it "+
+						"searches, %v", err, both)
 				}
 				if calls.Load() != 0 {
 					t.Error("a refused caller was searched for")

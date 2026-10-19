@@ -4405,7 +4405,7 @@ same, under its own login:
 | Offline | Offline. Reconnect to make changes. |
 | Not yet known | Checking who you are before anything can be changed. |
 | Anonymous | Sign in to make changes. |
-| Without any app the change needs: Worklet for a change to work, Doclet for one to a page, any app for a question answered from whichever the reader holds (the act's own `apps`, which the engine holds to its authority table) | This change needs Worklet access. An admin can give it to you. (Doclet, for a page; Worklet or Doclet or Artifacts, for a question.) |
+| Without any app the change needs: Worklet for a change to work, Doclet for one to a page, either for a question answered from both (the act's own `apps`, which the engine holds to its authority table) | This change needs Worklet access. An admin can give it to you. (Doclet, for a page; Worklet or Doclet, for a question.) |
 | Somebody the engine does not make this change for | This can’t be changed from here. |
 | Looking at somebody else's record | The screen's own sentence, naming whose record it is — My work read on a report's day holds every control on it (`HoldWrites`), and releases exactly the one change it offers there, a lead's reorder of that queue. |
 

@@ -54,11 +54,12 @@ func scopeOf(t *testing.T, tool string) string {
 }
 
 // appsOf is the apps a row has to declare, read off the authority table: the
-// row's own app for a change one app opens, every app for one ANY app opens
-// ([authz.ClassAnyApp] — a question answered from whichever halves the caller
-// holds), and none for a change no app holds. Read on the tool's OWN verb,
-// the one [builtin.Admits] asks when the act transport offers it, and in the
-// engine's order ([iam.Apps]), which is the order a lock names them in.
+// row's own app for a change one app opens, its set for one ANY OF SEVERAL
+// apps opens ([authz.ClassAnyApp], [authz.AnyOf] — a question answered from
+// whichever halves the caller holds), and none for a change no app holds.
+// Read on the tool's OWN verb, the one [builtin.Admits] asks when the act
+// transport offers it, and in the row's order, which is the order its refusal
+// names them in.
 func appsOf(t *testing.T, tool string) []string {
 	t.Helper()
 	action := authz.Action(tool)
@@ -67,8 +68,9 @@ func appsOf(t *testing.T, tool string) []string {
 		t.Fatalf("%s has no row in the authority table", tool)
 	}
 	if class == authz.ClassAnyApp {
-		out := make([]string, 0, len(iam.Apps))
-		for _, app := range iam.Apps {
+		set, _ := authz.AnyOf(action)
+		out := make([]string, 0, len(set))
+		for _, app := range set {
 			out = append(out, string(app))
 		}
 		return out

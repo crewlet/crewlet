@@ -2358,7 +2358,7 @@ unlocks.
 |---|---|---|
 | **Everybody** | The overview's reads that a tool or a route asks about, such as who to ask (`lookup_colleague`) and who holds each human seat (`GET /iam/seats`); the route to a work item's thread (`work.thread`), which admits the request and leaves the decision to `comment_on_work_item` once the item is read; listing artifacts (`list_artifacts`), a filter answering only the artifacts reading admits; the dashboard source catalogue (`list_dashboard_sources`), which names reads and holds no row; and a browser's report that an artifact finished rendering (`artifacts.ready`) | Any principal whose stage may act |
 | **App** | Every Worklet and Doclet read and write: the board, a project, its files, its views and reading its catalogue (writing it is Admin's); filing, updating, merging and placing work, and a project's tags; reading, listing, searching, writing, saving and commenting on pages | The row's app (`worklet` or `doclet`), which an administrator holds through `Expand` |
-| **Any app** | A person's question answered from what the company has written down (`answer_knowledge`), which a principal no seat binds (a token or a service account bound to none) is refused, because it runs on the bound seat's model | Either app; the answer searches the pages only for a `doclet` holder and the board only for a `worklet` holder |
+| **Any app** | A person's question answered from what the company has written down (`answer_knowledge`), which a principal no seat binds (a token or a service account bound to none) is refused, because it runs on the bound seat's model | Any one of the apps the row names — here `tracker` or `knowledge`, and no other: the answer searches the pages only for a `doclet` holder and the board only for a `worklet` holder |
 | **App or asked** | Reading one work item, and commenting on it (`get_work_item`, `comment_on_work_item`) | `worklet`, or the person an open ask on the item names, and on the comment only their answer to it ([You may answer what you were asked](#what-each-app-opens)) |
 | **Self** | The caller's own diary, episodes, skills and onboarding marker | The caller, and **nobody else** — not even admin |
 | **Own record** | Marking an inbox, pinned views | The owner, or admin, with `worklet` |
@@ -2573,10 +2573,12 @@ something sends them to go and ask for an authority they already hold.
 Admin is checked *before* the chart on every rule that has an admin path, so
 an administrator is never told "I cannot tell" by a node that is merely
 lagging. **A refusal names the least that would change it** — any one of the
-permissions it lists, added to what the caller holds, admits them: `[tracker]`
-on a tracker row, `[admin]` to somebody missing a relation, both apps where
-either would do, and nothing at all where no permission would — a seat-only
-verb asked by a person.
+permissions it lists, added to what the caller holds, admits them: `[worklet]`
+on a Worklet row, `[admin]` to somebody missing a relation, the apps a gesture
+draws on where any one of them would do — `[worklet, doclet]` for a question
+answered from both, never an app it reads nothing of — and nothing at all where
+no permission would: a seat-only verb asked by a person, or a verb made as a
+seat asked by a credential bound to none.
 
 ### Some gestures ask how recently you proved who you are
 
