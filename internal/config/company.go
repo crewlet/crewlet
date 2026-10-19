@@ -67,6 +67,9 @@ type Company struct {
 	// search.
 	Knowledge Knowledge `yaml:"knowledge,omitempty" json:"knowledge"`
 
+	// Chat is which chat surface this company talks on.
+	Chat Chat `yaml:"chat,omitempty" json:"chat,omitempty"`
+
 	// Artifacts is the company's artifacts policy. See [CompanyArtifacts].
 	Artifacts CompanyArtifacts `yaml:"artifacts,omitempty" json:"artifacts,omitzero"`
 
@@ -262,11 +265,11 @@ func (c *Company) ValidateRunnable() error {
 // whose code work hands a cli-agent entry to another CLI's coding agent
 // ([Company.validateSandboxCodingAgents]), a sandbox gate saying what nothing
 // reads ([Company.validateSandboxGates]), a setup step writing a file a box
-// it reaches refuses ([Company.validateSetupFileHomes]), and the three
-// WHOLE-DOCUMENT rules
-// in [Company.validateFileRules] — an `mcp_env` key naming no server, two
-// seats declaring one email, and a reference that is shaped like neither a
-// handle nor a key.
+// it reaches refuses ([Company.validateSetupFileHomes]), two units declaring
+// one channel on native chat ([Company.validateUnitRooms]), and the three
+// WHOLE-DOCUMENT rules in [Company.validateFileRules] — an `mcp_env` key
+// naming no server, two seats declaring one email, and a reference that is
+// shaped like neither a handle nor a key.
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
@@ -279,7 +282,7 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 		c.validateSetupStepNames(), c.validateHumanSeatApps(), c.validateAvatars(),
 		c.validateCLIAgentCredentials(), c.validateCLIAgentModels(),
 		c.validateSandboxCodingAgents(), c.validateSandboxGates(), c.validateSetupFileHomes(),
-		c.validateFileRules())
+		c.validateUnitRooms(), c.validateFileRules())
 }
 
 // validateUnitIDs requires an id on every authored unit, at any depth. See
@@ -538,6 +541,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	p.wrap(c.Scheduling.validate(field("scheduling")))
 	p.wrap(c.Integrations.validate(field("integrations")))
 	p.wrap(c.validateKnowledgeBackend())
+	p.wrap(c.validateChat())
 	p.wrap(c.validateContainerKeys())
 	p.wrap(c.validateProviderKeys())
 	p.wrap(c.validateWorkers())
@@ -579,6 +583,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 		p.wrap(c.Units[i].validate(idx(field("units"), i)))
 	}
 	p.wrap(c.Tracker.Native.validate(field("tracker.native")))
+	p.wrap(c.Chat.Native.validate(field("chat.native")))
 	// A NATIVE BLOCK ON A COMPANY THAT IS NOT NATIVE describes nothing,
 	// and the failure that produces is silence: an operator sets an inbox
 	// horizon for inbox rows somebody else's tracker will never write.
@@ -1094,14 +1099,18 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 	if c == nil {
 		return false
 	}
+	// A CHAT VENDOR IS DECLARED WHERE [chatVendors] SAYS, which is the one
+	// statement of it the chat backend is derived from too: Slack counts on
+	// a seat's own app as well as on the org block.
+	if vendor, ok := chatVendorNamed(surface); ok {
+		return vendor.declaredAt(c) != ""
+	}
 	in := c.Integrations
 	switch surface {
 	case "jira":
 		return in.Jira != nil
 	case "confluence":
 		return in.Confluence != nil
-	case "mattermost":
-		return in.Mattermost != nil
 	case "github":
 		return in.GitHub != nil
 	case "gitlab":
@@ -1110,16 +1119,6 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 		return in.Datadog != nil
 	case "atlassian":
 		return in.Atlassian != nil
-	case "slack":
-		if in.Slack != nil {
-			return true
-		}
-		for role := range c.EachRole() {
-			if role.Integrations.Slack != nil {
-				return true
-			}
-		}
-		return false
 	default:
 		// A SURFACE THIS BUILD DOES NOT KNOW, which on a rolling upgrade is
 		// a peer's. True rather than false, because the only caller deletes
