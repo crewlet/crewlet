@@ -63,26 +63,23 @@ func TestTheChangeFeedIsReadInItsOwnOrder(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			statement, args := pageActivityStatement(compilePageActivity(c.q),
 				MaxPageChanges+1)
-			plan := explainPlan(t, db, statement, args)
-			details := make([]string, len(plan))
-			for i, line := range plan {
-				details[i] = line.detail
-			}
+			plan := storetest.PlanTree(t, db, statement, args)
+			details := storetest.Details(plan)
 			shown := strings.Join(details, "\n")
 			kinds := len(slices.Compact(slices.Sorted(slices.Values(c.q.ActorKinds))))
 			sought := 0
 			for _, line := range plan {
 				switch {
-				case strings.HasPrefix(line.detail, "SCAN pages_history") &&
-					!strings.Contains(line.detail, "INDEX"):
+				case strings.HasPrefix(line.Detail, "SCAN pages_history") &&
+					!strings.Contains(line.Detail, "INDEX"):
 					t.Errorf("this read reads every change from the heap:\n%s", shown)
-				case strings.HasPrefix(line.detail, "SEARCH h USING") &&
-					strings.Contains(line.detail, "INDEX "+writers+" "):
+				case strings.HasPrefix(line.Detail, "SEARCH h USING") &&
+					strings.Contains(line.Detail, "INDEX "+writers+" "):
 					sought++
-				case strings.Contains(line.detail, "FOR ORDER BY") && c.unsorted:
+				case strings.Contains(line.Detail, "FOR ORDER BY") && c.unsorted:
 					t.Errorf("this read sorts what it read, where an index is "+
 						"in the feed's order:\n%s", shown)
-				case strings.Contains(line.detail, "FOR ORDER BY") && line.parent != 0:
+				case strings.Contains(line.Detail, "FOR ORDER BY") && line.Parent != 0:
 					t.Errorf("an arm sorts what it read rather than reading one "+
 						"kind's range in its order:\n%s", shown)
 				}
@@ -103,42 +100,6 @@ func TestTheChangeFeedIsReadInItsOwnOrder(t *testing.T) {
 			}
 		})
 	}
-}
-
-// planLine is one line of a plan and the line it sits under — 0 for the
-// statement's own top level — which is what tells a sort of a whole statement
-// from a sort inside one of its subqueries.
-type planLine struct {
-	parent int
-	detail string
-}
-
-// explainPlan is the planner's account of one statement.
-func explainPlan(t *testing.T, db store.ReplicatedHandle, statement string, args []any) []planLine {
-	t.Helper()
-	var plan []planLine
-	if err := db.Read(t.Context(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+statement, args...)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var id, notUsed int
-			var line planLine
-			if err := rows.Scan(&id, &line.parent, &notUsed, &line.detail); err != nil {
-				return err
-			}
-			plan = append(plan, line)
-		}
-		return rows.Err()
-	}); err != nil {
-		t.Fatalf("EXPLAIN QUERY PLAN:\n%s\n%v", statement, err)
-	}
-	if len(plan) == 0 {
-		t.Fatalf("the planner said nothing about:\n%s", statement)
-	}
-	return plan
 }
 
 // The history the feed is planned against: changes across pages in a few
@@ -242,21 +203,18 @@ func TestAListingIsReadInItsOrder(t *testing.T) {
 			}
 			for read, from := range reads {
 				statement, args := listRowsStatement(shape.spec, from, DefaultLimit+1)
-				plan := explainPlan(t, db, statement, args)
-				details := make([]string, len(plan))
-				for i, line := range plan {
-					details[i] = line.detail
-				}
+				plan := storetest.PlanTree(t, db, statement, args)
+				details := storetest.Details(plan)
 				shown := strings.Join(details, "\n")
 				for _, line := range plan {
 					switch {
-					case strings.HasPrefix(line.detail, "SCAN pages_heads AS p") &&
-						!strings.Contains(line.detail, "INDEX"):
+					case strings.HasPrefix(line.Detail, "SCAN pages_heads AS p") &&
+						!strings.Contains(line.Detail, "INDEX"):
 						t.Errorf("%s reads every page from the heap:\n%s", read, shown)
-					case strings.Contains(line.detail, "FOR ORDER BY") && line.parent == 0:
+					case strings.Contains(line.Detail, "FOR ORDER BY") && line.Parent == 0:
 						t.Errorf("%s sorts what it read, where an index is in the "+
 							"listing's order:\n%s", read, shown)
-					case strings.Contains(line.detail, "FOR ORDER BY"):
+					case strings.Contains(line.Detail, "FOR ORDER BY"):
 						t.Errorf("%s sorts a listed page's history for its last "+
 							"save, where pages_history_page_idx holds it in log "+
 							"order:\n%s", read, shown)
@@ -321,11 +279,8 @@ func TestAListingCountsChildrenBySeekingTheirParents(t *testing.T) {
 				"the window":      {rows, rowsArgs},
 				"the child count": {children, childArgs},
 			} {
-				plan := explainPlan(t, db, statement.sql, statement.args)
-				details := make([]string, len(plan))
-				for i, line := range plan {
-					details[i] = line.detail
-				}
+				plan := storetest.PlanTree(t, db, statement.sql, statement.args)
+				details := storetest.Details(plan)
 				shown := strings.Join(details, "\n")
 				if line, unnested := storetest.Decorrelated(details); unnested {
 					t.Errorf("%s answers a per-row aggregate by reading its whole "+
