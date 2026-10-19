@@ -249,8 +249,8 @@ func Read(src Source) (Deck, error) {
 		if err != nil {
 			return Deck{}, fmt.Errorf("slideformat: read %s: %w", p, err)
 		}
-		slide, problems := ParseSlide(p, id, body, files)
-		add(problems...)
+		slide, slideFindings := ParseSlide(p, id, body, files)
+		add(slideFindings...)
 		deck.Slides = append(deck.Slides, slide)
 	}
 	deck.Sections = sections(idx)

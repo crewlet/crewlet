@@ -101,7 +101,7 @@ func TestADeckInTheFormatReads(t *testing.T) {
 		t.Errorf("slides in order %q", ids)
 	}
 	plan := deck.Slides[3]
-	if plan.Title != "The plan" || plan.Transition != "push" || !strings.Contains(plan.Notes, "Recieve") {
+	if plan.Title != "The plan" || plan.Transition != "push" || !strings.Contains(plan.Notes, "Take the questions") {
 		t.Errorf("slide 4 read as %+v", plan)
 	}
 	if !deck.Slides[11].Hidden || deck.Slides[0].Transition != "fade" {
@@ -143,8 +143,8 @@ func TestASlideOutsideTheSubsetIsRefused(t *testing.T) {
 		{"script", head + "\n<script>alert(1)</script></section>", "a slide runs no code", RuleElement, 2},
 		{"event", head + `<p onclick="x()">Hi</p></section>`, "event handler", RuleAttribute, 1},
 		{"class", head + `<p class="big">Hi</p></section>`, "style the element inline", RuleAttribute, 1},
-		{"url in style", head + `<div style="background:url(https://x.test/a.png)"></div></section>`, "url(", RuleStyle, 1},
-		{"var", head + `<p style="color:var(--a)">Hi</p></section>`, "var(", RuleStyle, 1},
+		{"url in style", head + `<div style="background:url(https://x.test/a.png)"></div></section>`, `"url(" is not allowed in a slide (no URLs`, RuleStyle, 1},
+		{"var", head + `<p style="color:var(--a)">Hi</p></section>`, `"var(" is not allowed in a slide`, RuleStyle, 1},
 		{"z-index", head + `<p style="z-index:2">Hi</p></section>`, "paint order is source order", RuleStyle, 1},
 		{"em", head + `<p style="font-size:2em">Hi</p></section>`, "no em", RuleStyle, 1},
 		{"font too small", head + `<p style="font-size:4px">Hi</p></section>`, "from 8px to 400px", RuleStyle, 1},

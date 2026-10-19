@@ -316,7 +316,7 @@
       "path": "slides/plan.html",
       "title": "The plan",
       "transition": "push",
-      "notes": "Recieve the questions first, then show the two cards.",
+      "notes": "Take the questions first, then show the two cards.",
       "root": {
         "tag": "section",
         "style": [

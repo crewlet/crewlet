@@ -311,8 +311,9 @@ func offset(calcOK bool) valueFunc {
 	}
 }
 
-func lengthOnly(lo, hi float64) valueFunc {
-	return func(v string, _ *styleCtx) (string, error) { return lengthIn(v, lo, hi) }
+// lengthUpTo reads LEN from 0 to hi pixels.
+func lengthUpTo(hi float64) valueFunc {
+	return func(v string, _ *styleCtx) (string, error) { return lengthIn(v, 0, hi) }
 }
 
 func numberOnly(lo, hi float64) valueFunc {
@@ -584,9 +585,9 @@ func font(v string, c *styleCtx) (string, error) {
 		return "", err
 	}
 	if hasLH {
-		l, err := lineHeight(lh, c)
-		if err != nil {
-			return "", err
+		l, lhErr := lineHeight(lh, c)
+		if lhErr != nil {
+			return "", lhErr
 		}
 		s += "/" + l
 	}
@@ -769,39 +770,40 @@ func background(v string, c *styleCtx) (string, error) {
 
 var borderStyles = []string{"solid", "dashed", "dotted", "double", "none"}
 
+// maxBorder is the widest stroke a border draws, Claude's format's bound.
+const maxBorder = 16
+
 // border reads `[LEN] style [COLOR]`, the style word required; a side also
 // takes `none`.
-func border(max float64) valueFunc {
-	return func(v string, _ *styleCtx) (string, error) {
-		w := words(strings.ToLower(v))
-		if len(w) == 1 && w[0] == "none" {
-			return "none", nil
-		}
-		var out []string
-		i := 0
-		if i < len(w) {
-			if l, ok := length(w[i]); ok {
-				if l < 0 || l > max {
-					return "", want("a width from 0 to %spx", fmtNum(max))
-				}
-				out = append(out, px(l))
-				i++
-			}
-		}
-		if i >= len(w) || !slices.Contains(borderStyles, w[i]) {
-			return "", want("[width] solid, dashed, dotted, double or none [colour]: the style word is required")
-		}
-		out = append(out, w[i])
-		i++
-		if i < len(w) {
-			col, err := color(strings.Join(w[i:], " "))
-			if err != nil {
-				return "", err
-			}
-			out = append(out, col)
-		}
-		return strings.Join(out, " "), nil
+func border(v string, _ *styleCtx) (string, error) {
+	w := words(strings.ToLower(v))
+	if len(w) == 1 && w[0] == "none" {
+		return "none", nil
 	}
+	var out []string
+	i := 0
+	if i < len(w) {
+		if l, ok := length(w[i]); ok {
+			if l < 0 || l > maxBorder {
+				return "", want("a width from 0 to %dpx", maxBorder)
+			}
+			out = append(out, px(l))
+			i++
+		}
+	}
+	if i >= len(w) || !slices.Contains(borderStyles, w[i]) {
+		return "", want("[width] solid, dashed, dotted, double or none [colour]: the style word is required")
+	}
+	out = append(out, w[i])
+	i++
+	if i < len(w) {
+		col, err := color(strings.Join(w[i:], " "))
+		if err != nil {
+			return "", err
+		}
+		out = append(out, col)
+	}
+	return strings.Join(out, " "), nil
 }
 
 // shadows reads up to eight comma-separated shadows: `[inset] x y [blur

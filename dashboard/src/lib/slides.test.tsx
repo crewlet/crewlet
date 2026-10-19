@@ -157,7 +157,7 @@ describe("writing a slide back", () => {
       src
         .trimEnd()
         .endsWith(
-          "<aside>Recieve the questions first, then show the two cards.</aside>\n</section>",
+          "<aside>Take the questions first, then show the two cards.</aside>\n</section>",
         ),
     ).toBe(true);
   });
