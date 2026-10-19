@@ -299,6 +299,9 @@ test("a sheet's version names nothing a reader sees change, so it draws no chip"
   detail = { ...detail, kind: "sheet" } as ArtifactDetail;
   mount(`#/artifacts/${ID}`);
   expect(screen.queryByRole("button", { name: /^Versions:/ })).toBeNull();
+  // AND ITS PANEL PROMISES NO VERSIONS: it is the sheet's History.
+  fireEvent.click(tool("History"));
+  expect(screen.getByRole("complementary", { name: "History" })).toBeTruthy();
 });
 
 test("Escape from inside a panel closes it and hands focus back to its control", () => {

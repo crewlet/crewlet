@@ -126,7 +126,14 @@ import {
   type KindControls,
   type RegionNames,
 } from "~/lib/artifacts/kindControls.ts";
-import { PANEL_SPECS, panelOf, spelledTheOldWay, withPanel, type PanelName } from "./panels.ts";
+import {
+  PANEL_SPECS,
+  panelOf,
+  panelTitle,
+  spelledTheOldWay,
+  withPanel,
+  type PanelName,
+} from "./panels.ts";
 import { useArtifactPresence } from "./presence.ts";
 import { followMoves, followTarget, moves } from "~/lib/artifacts/follow.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -555,7 +562,7 @@ function Loaded({
     },
     {
       key: "history",
-      label: "Versions and history",
+      label: panelTitle("history", !contentIsData(detail.kind)),
       icon: <RotateCcwClockGlyph size="sm" />,
       keys: ["h"],
       pressed: panel === "history",
@@ -874,7 +881,7 @@ function Loaded({
           panel ? (
             <ArtifactPanel
               key={panel}
-              title={PANEL_SPECS[panel].title}
+              title={panelTitle(panel, !contentIsData(detail.kind))}
               size={PANEL_SPECS[panel].size}
               focusOnOpen={readerOpened.current}
               onClose={() => openPanel(null)}
