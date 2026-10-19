@@ -150,9 +150,13 @@ less than 1 GiB, so setting them only moves the figure up.
   of the last two is derived from the disk at all, because the identity log
   grows with headcount and the usage log's size is a count of node-days rather
   than a rate, so more disk buys either nothing. They are scaled down together
-  whenever they ask for more than half the free space, which on a first boot
-  is every volume with less than about 355 GiB free (at their clamps the seven
-  ask for about 177 GiB); from there up each log gets what it asked for.
+  whenever they ask for more than the pool they share — half of what the
+  broker's three quarters leave once the object bucket's quarter is reserved,
+  so nine thirty-seconds of the free space — which on a first boot is every
+  volume with less than about 632 GiB free (at their clamps the seven ask for
+  177.5 GiB, nine thirty-seconds of 632); from there up each log gets what it
+  asked for. With the objects in S3 no bucket is reserved and the pool is
+  three eighths of the free space, so from about 474 GiB free.
 - **The ceilings are fixed when the streams are created.** Moving the node to
   a bigger volume, or setting `stream.tracker_log_max_bytes`,
   `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
