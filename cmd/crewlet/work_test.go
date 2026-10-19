@@ -291,7 +291,7 @@ func TestAPendingPurgeSaysNotToRunItAgain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a pending purge was reported as a failure: %v", err)
 	}
-	if !strings.Contains(stdout, "Do not run this again") {
+	if !strings.Contains(stdout, "Don't run this again") {
 		t.Errorf("a pending purge read as something to retry:\n%s", stdout)
 	}
 }
