@@ -225,6 +225,9 @@ func TestASetupFileAnE2BBoxRefusesIsRefusedOnTheWrite(t *testing.T) {
 		{"/home/user/.local/..", nil},
 		{"/home", nil},
 		{"/", nil},
+		// The home through `~/..`, which only expanding the tilde BEFORE
+		// cleaning refuses: cleaned first, it is `user`, a file under it.
+		{"~/../user", nil},
 	}
 	for _, tc := range refused {
 		t.Run("refused "+tc.file, func(t *testing.T) {
@@ -242,9 +245,16 @@ func TestASetupFileAnE2BBoxRefusesIsRefusedOnTheWrite(t *testing.T) {
 			}
 		})
 	}
+	// A trailing slash or a "." segment names the same file in every cell:
+	// the box writes a file's cleaned path, as both local cells do. And a
+	// `~/..` climbs from the home the tilde names, as the box's own agent
+	// expands it, so `~/../user/.npmrc` is `/home/user/.npmrc` and taken —
+	// a key both orders admit, which is why the refused `~/../user` above
+	// is the case that holds the order.
 	for _, file := range []string{
 		".npmrc", "~/.npmrc", "/home/user/.npmrc", "/usr/local/bin/helper",
 		"../shared/x", "/home/username/x", "/home/use",
+		"/home/user/.npmrc/", "/home/user/./.npmrc", "~/../user/.npmrc",
 	} {
 		t.Run("taken "+file, func(t *testing.T) {
 			t.Parallel()

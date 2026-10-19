@@ -946,6 +946,50 @@ func TestE2BFilesRoundTripAndMissingIsEmpty(t *testing.T) {
 	}
 }
 
+// A FILE'S PATH MEANS IN AN E2B BOX WHAT IT MEANS IN EVERY OTHER CELL.
+//
+// envd cleans a relative or `~/` path by joining it onto the home, and takes
+// an absolute one verbatim — so `/home/user/.npmrc/`, sent as written, made
+// `.npmrc` a directory and was refused as one, on a key both local cells
+// clean and write as a file and the setup-file rule admits. What reaches
+// envd is the cleaned path, the `~/` form kept for envd to expand and cleaned
+// only after its tilde.
+func TestE2BWritesAFileAtItsCleanedPath(t *testing.T) {
+	t.Parallel()
+	stub := newE2BStub()
+	provider, _ := newE2B(t, stub)
+	box, err := provider.Create(context.Background(), sandbox.Spec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for written, sent := range map[string]string{
+		"/home/user/.npmrc/":         "/home/user/.npmrc",
+		"/home/user/./tools/../.pip": "/home/user/.pip",
+		"~/.config/tool.toml/":       "~/.config/tool.toml",
+		// Cleaned AFTER the tilde, never across it: a lexical clean of
+		// the whole path removes `~` as an ordinary element, and envd
+		// would then join `user/.npmrc` onto the home rather than expand
+		// the tilde to the home and resolve `..` above it.
+		"~/../user/.npmrc": "~/../user/.npmrc",
+		"~/a/../../x":      "~/../x",
+		// A relative path goes to envd as written: cleaned here, this one
+		// would become the `~/x` envd expands to the home, while every
+		// other cell and validation place it at <home>/~/x.
+		"a/../~/x": "a/../~/x",
+	} {
+		if err := box.WriteFile(context.Background(), written, []byte(written)); err != nil {
+			t.Errorf("WriteFile(%q): %v", written, err)
+			continue
+		}
+		stub.mu.Lock()
+		got, held := stub.files[sent]
+		stub.mu.Unlock()
+		if !held || string(got) != written {
+			t.Errorf("WriteFile(%q) did not reach envd as %q", written, sent)
+		}
+	}
+}
+
 // THE FILE CONTRACT, against a fake envd that serves downloads the way envd
 // does — through ServeContent, so a range is answered by the same code.
 //

@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -770,6 +771,7 @@ func keepLast(r io.Reader, n int) ([]byte, int64, error) {
 
 // writeFile puts a file into the box.
 func (c *envdClient) writeFile(ctx context.Context, path string, content []byte) error {
+	path = envdPath(path)
 	var body bytes.Buffer
 	form := multipart.NewWriter(&body)
 	// THE PART NAME IS THE PATH'S BASENAME and envd reads the destination
@@ -819,6 +821,39 @@ func (c *envdClient) authorize(req *http.Request) {
 	// and a file call without it or a signature; a header is the form both
 	// accept, and the one E2B's SDKs send.
 	req.Header.Set("X-Access-Token", c.token)
+}
+
+// envdPath is a path to write as every other cell writes it: an absolute one
+// lexically clean, and every other form as envd itself reads it.
+//
+// ONE MEANING IN EVERY CELL. envd joins a relative or `~/` path onto the
+// account's home, which cleans it, but takes an absolute path VERBATIM: it
+// creates the path's parent and then writes the path, so `/home/user/.npmrc/`
+// made `/home/user/.npmrc` a directory and was refused as one ("path is a
+// directory"), while both local cells clean the same key through
+// hostbox.InHome and write the file. The setup-file rule in internal/config
+// cleans before it judges, so it admitted a key every e2b box then failed on.
+// Cleaned here, an absolute key lands where the other forms do, and the
+// upload's part is named for the file rather than for the empty element after
+// a trailing slash.
+//
+// NEVER CLEANED ACROSS THE TILDE. To a lexical clean `~` is an ordinary
+// element a following `..` removes: `~/../user/.npmrc` cleans to
+// `user/.npmrc`, which envd joins onto the home as `/home/user/user/.npmrc`,
+// where envd's own expansion — and the config rule, which resolves `~/` the
+// same way — put it at `/home/user/.npmrc`. So a `~/` path keeps its prefix and
+// only what follows it is cleaned, and any other form (a relative path, `~`,
+// `~name`) goes to envd as written: its join cleans a relative path itself,
+// and cleaning one here could even MAKE a tilde form, `a/../~/x` becoming the
+// `~/x` envd would read as the home.
+func envdPath(p string) string {
+	if path.IsAbs(p) {
+		return path.Clean(p)
+	}
+	if rest, ok := strings.CutPrefix(p, "~/"); ok {
+		return "~/" + path.Clean(rest)
+	}
+	return p
 }
 
 // baseName is the last path element, without importing path/filepath for a
