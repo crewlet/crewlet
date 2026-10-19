@@ -14,7 +14,9 @@
 import { rest } from "~/protocol/index.ts";
 import type {
   ArtifactAudience,
+  ArtifactDeckAnswer,
   ArtifactFrame,
+  ArtifactOutline,
   ArtifactSource,
   DataCollection,
   DataOp,
@@ -223,6 +225,46 @@ export async function mintFrame(id: string, version: number): Promise<ArtifactFr
     `/artifacts/${encodeURIComponent(id)}/tickets`,
     version > 0 ? { version } : {},
   )) as ArtifactFrame;
+}
+
+/** One text file of a version, read as text: a slide's source an edit replaces whole. */
+export async function versionText(
+  id: string,
+  number: number,
+  path: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  return (await versionFile(id, number, path, signal)).text();
+}
+
+/** A deck's version as its canonical tree (`GET …/versions/{n}/deck`): what every slide is drawn from. */
+export async function readDeck(
+  id: string,
+  version: number,
+  signal: AbortSignal,
+): Promise<ArtifactDeckAnswer> {
+  return (await rest.get(`${base(id)}/versions/${version}/deck`, signal)) as ArtifactDeckAnswer;
+}
+
+/** A version's outline (`GET …/versions/{n}/outline`): what the gallery draws a native cover from. */
+export async function readOutline(
+  id: string,
+  version: number,
+  signal: AbortSignal,
+): Promise<ArtifactOutline> {
+  return (await rest.get(`${base(id)}/versions/${version}/outline`, signal)) as ArtifactOutline;
+}
+
+/**
+ * Publish a new version based on `head` (`POST …/versions` with `If-Match`):
+ * a deck's save, a patch of whole-file edits and removes.
+ */
+export function publishVersion(
+  id: string,
+  head: number,
+  body: { mode: "patch"; edits: unknown[]; files: unknown[]; label?: string },
+): Omit<KeyedRequest, "key"> {
+  return { method: "POST", path: `${base(id)}/versions`, body, headers: ifMatch(head) };
 }
 
 /** A version's entry as text, for a Markdown document the dashboard renders itself. */

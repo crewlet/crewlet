@@ -2,8 +2,8 @@
  * The View tab: an artifact drawn as its kind is drawn, from the dashboard's
  * half of the kind table ([KIND_VIEWS]). A framed kind runs in a sandboxed
  * frame on the artifact origin; a native kind is drawn here from its closed
- * format (a document by the element-constructing Markdown renderer, a sheet
- * from its schema), since it runs no author code.
+ * format (a document by the element-constructing Markdown renderer, a deck by
+ * the slide renderer, a sheet from its schema), since it runs no author code.
  */
 
 import type { ReactNode } from "react";
@@ -14,6 +14,7 @@ import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
 import { FrameView } from "./FrameView.tsx";
 import { MarkdownView } from "./MarkdownView.tsx";
 import { SheetView } from "./SheetView.tsx";
+import { SlidesView } from "./SlidesView.tsx";
 import type { PresenceReport } from "./presence.ts";
 
 /** Everything a kind's view may draw from; each kind takes what it needs. */
@@ -27,6 +28,12 @@ export interface KindViewProps {
   presence: PresenceReport;
   drawn: PresenceMember[];
   bridgeStores: Set<ArtifactDataStore>;
+  /**
+   * A version this reader published from the view landed: show it. Absent
+   * for a secondary drawing (a side of a compare), which is read only and
+   * says nothing to the room.
+   */
+  onPublished?: ((version: number) => void) | undefined;
 }
 
 /** How each kind draws one version: a record over every kind, so a new kind fails the build until it is drawn. */
@@ -42,6 +49,14 @@ export const KIND_VIEWS: Readonly<Record<ArtifactKind, (props: KindViewProps) =>
     />
   ),
   markdown: ({ detail, version }) => <MarkdownView detail={detail} version={version} />,
+  slides: ({ detail, version, presence, onPublished }) => (
+    <SlidesView
+      detail={detail}
+      version={version}
+      presence={presence}
+      {...(onPublished ? { onPublished } : {})}
+    />
+  ),
   sheet: ({ detail, store, room, presence, drawn }) =>
     store ? (
       <SheetView detail={detail} store={store} room={room} presence={presence} drawn={drawn} />

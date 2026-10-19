@@ -799,3 +799,53 @@ func (p *parser) openSVG(tok html.Token, selfClosing bool, line int) bool {
 	p.stack = append(p.stack, &frame{node: &node, line: line})
 	return true
 }
+
+// ---- the subset, as lists ------------------------------------------------- //
+//
+// The dashboard's renderer holds the same allowlists again (contract/
+// artifacts.ts), gated equal to these, so a tree this package would not have
+// produced is still never drawn as anything but text.
+
+// Elements are every HTML element a slide may hold, sorted.
+func Elements() []string {
+	set := []string{"section", "aside"}
+	for _, t := range []string{"section", "div", "ul", "ol", "table", "tr", "a", "p"} {
+		set = union(set, children(t))
+	}
+	return slices.Sorted(slices.Values(set))
+}
+
+// StyleProperties are every inline style property a slide may declare,
+// sorted.
+func StyleProperties() []string {
+	out := make([]string, 0, len(properties))
+	for p := range properties {
+		out = append(out, p)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// SVGElements are every element an inline drawing may hold, as SVG spells
+// them, sorted.
+func SVGElements() []string {
+	out := make([]string, 0, len(svgElements))
+	for _, name := range svgElements {
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// SVGAttributes are every attribute an inline drawing may carry, as SVG
+// spells them, sorted.
+func SVGAttributes() []string {
+	var out []string
+	for _, name := range svgAttrs {
+		if !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	slices.Sort(out)
+	return out
+}

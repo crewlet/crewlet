@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/clientsource"
 )
@@ -128,4 +129,43 @@ func names[S ~string](set []S) []string {
 		out[i] = string(v)
 	}
 	return out
+}
+
+// THE RENDERER DRAWS THE SLIDE SUBSET AND NOTHING ELSE.
+//
+// The engine refuses a slide outside the subset at publish, and the
+// dashboard's element-constructing renderer allows the same elements,
+// properties, drawing elements and attributes again, so a tree that reached
+// it some other way is drawn as text rather than as whatever it names. The two
+// lists are one list: a property the engine admits that the renderer drops
+// would publish and then not show, and one the renderer draws that the engine
+// refuses is an allowlist wider than its source.
+func TestTheRendererDrawsTheSlideSubset(t *testing.T) {
+	t.Parallel()
+	tree := clientsource.Tree(t)
+	for name, engine := range map[string][]string{
+		"SLIDE_ELEMENTS":         slideformat.Elements(),
+		"SLIDE_STYLE_PROPERTIES": slideformat.StyleProperties(),
+		"SLIDE_SVG_ELEMENTS":     slideformat.SVGElements(),
+		"SLIDE_SVG_ATTRIBUTES":   slideformat.SVGAttributes(),
+		"SLIDE_TRANSITIONS":      slideformat.Transitions,
+		"SLIDE_SHAPES":           slideformat.ShapeKinds,
+		"SLIDE_ICONS":            slideformat.Icons,
+	} {
+		body, err := clientsource.Literal(tree, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if client := clientsource.Strings(body); !slices.Equal(client, engine) {
+			t.Errorf("the dashboard's %s is %q and the engine's is %q: change contract/artifacts.ts "+
+				"to the engine's", name, client, engine)
+		}
+	}
+	for name, want := range map[string]int{"SLIDE_STAGE_WIDTH": slideformat.StageWidth,
+		"SLIDE_STAGE_HEIGHT": slideformat.StageHeight} {
+		got, err := clientsource.Scalar(tree, name)
+		if err != nil || got != strconv.Itoa(want) {
+			t.Errorf("%s is %q (%v), want %d", name, got, err, want)
+		}
+	}
 }
