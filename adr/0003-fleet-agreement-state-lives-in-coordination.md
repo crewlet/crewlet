@@ -1,4 +1,4 @@
-# ADR-0003 — Fleet-agreement state lives in coordination, never a node's own file
+# ADR-0003: Fleet-agreement state lives in coordination, never a node's own file
 
 - **Status:** accepted
 - **Authority:** `internal/coord`

@@ -17,7 +17,7 @@ import (
 // The artifact origin serves the page runtime from `artifacts/runtime/<contract>/`
 // and the design system's kit from `artifacts/kit/<version>/`, both out of this
 // package's embed, and the upload pipeline pins every new version to the newest
-// contract embedded (artifactupload.RuntimesIn). The dashboard's third build
+// contract embedded (artifactupload.ReleasesIn). The dashboard's third build
 // writes both trees, so a source that moved the contract or the kit's version
 // without a rebuild would leave the bridge telling a page one contract while
 // the origin serves another, and every page that pinned the new one a 404. So
@@ -34,13 +34,13 @@ func TestTheEmbeddedArtifactTreeServesWhatTheDashboardBuilds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set, err := artifactupload.RuntimesIn(runtimes)
+	set, err := artifactupload.ReleasesIn(runtimes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !set.Serves(contract) {
 		t.Errorf("the dashboard builds runtime contract %s and the embed serves %v: "+
-			"run `make dashboard` and commit static/artifacts", contract, set.Contracts())
+			"run `make dashboard` and commit static/artifacts", contract, set.Versions())
 	}
 	if latest := set.Latest(); latest != contract {
 		t.Errorf("a new version would pin contract %s, the newest embedded, and the "+

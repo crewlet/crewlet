@@ -132,8 +132,8 @@ interface IdentityApi {
 
 Never a token, a login or an email address. `people` answers from the chart
 the viewer's dashboard already holds, so a page learns no one the viewer could
-not see there, and a seat it does not list (one that has left) is drawn by its
-handle. When the viewer's share is removed while the page is open, the host
+not see there; a seat a value names that it does not list is one that has left
+the company. When the viewer's share is removed while the page is open, the host
 withdraws the page's room and every later call rejects with `forbidden`.
 
 ### Data

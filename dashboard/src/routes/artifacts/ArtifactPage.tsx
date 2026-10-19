@@ -113,7 +113,7 @@ const TAB_WORDS: Readonly<Record<Tab, string>> = {
 
 /** Whether an artifact keeps a datastore a person can open: a sheet always, a page that declared it. */
 function hasData(detail: ArtifactDetail): boolean {
-  return detail.kind === "sheet" || (detail.capabilities ?? []).includes("db");
+  return detail.kind === "sheet" || detail.capabilities.includes("db");
 }
 
 export function ArtifactPage({ id }: { id: string }) {

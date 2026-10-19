@@ -1,4 +1,4 @@
-# ADR-0015 — An alarm fires at a threshold another decision already made
+# ADR-0015: An alarm fires at a threshold another decision already made
 
 - **Status:** accepted
 - **Authority:** `internal/statelog`

@@ -1,4 +1,4 @@
-# ADR-0026 — The estate names an object, and a store the fleet shares keeps its bytes
+# ADR-0026: The estate names an object, and a store the fleet shares keeps its bytes
 
 - **Status:** accepted
 - **Authority:** `internal/objstore`

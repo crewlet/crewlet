@@ -1,4 +1,4 @@
-# ADR-0016 — A coordination protocol bump refuses where an event envelope round-trips
+# ADR-0016: A coordination protocol bump refuses where an event envelope round-trips
 
 - **Status:** accepted
 - **Authority:** `internal/coord`

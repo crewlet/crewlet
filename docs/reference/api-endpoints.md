@@ -6264,7 +6264,10 @@ A file is named by `upload: true` (its bytes came through the upload),
 file at that path); in `mode: patch` a file left out is carried from the base
 and `remove: true` drops one, and `edits` (`old_str`/`new_str`, each matching
 exactly once) change the base version's text. The answer is the new
-version's `number` and the policy linter's `warnings`; `work_item` names the
+version's `number`, the policy linter's `warnings` and `files`
+(`{"stored", "carried"}`: how many of the version's files this publish stored
+new and how many the artifact already held, counted from the manifest that
+landed, so an unchanged page the upload sent is counted as held); `work_item` names the
 tracker item the version is made for, which lists the artifact there
 (`GET /artifacts?work_item=CRW-412`).
 
@@ -6289,6 +6292,11 @@ a person present, and the version is marked forced.
 | `GET /artifacts/{id}/access` | `artifact_access` | The share dialog's list: the owner, each share with the seats a unit share reaches today, and an agent owner's leads; to a viewer, the owner and a count |
 | `GET /artifacts/usage` | `artifact_usage` | The company's counters against the Tier A quotas; `artifacts.usage`, an administrator's |
 | `GET /artifacts/trail` | `artifact_trail` | **The company trail of every artifact**: every artifact's history rows across the company, private ones included, newest first in the log's order, each naming its `artifact`, its current `title` and `owner`, the op, the actor and whether only the admin path admitted them. `op=` narrows it to one op (`read_elevated` lists every administrator's override, so one nobody would find in an artifact's own history is found here), with `cursor` and `limit`; an op the log does not record is `400 bad_params`. `audit.read`, an administrator's, decided by no relation to any artifact |
+
+A head and every version carry `capabilities`, the set the version declares,
+always present and `[]` for none, so a version that declares nothing is told
+from one whose field went missing; `contract` is absent for a kind that runs
+no page runtime (a Markdown document, a sheet).
 
 The same questions are asked over the socket by name. Every question about one
 artifact is decided by `get_artifact` and records the admin path's override

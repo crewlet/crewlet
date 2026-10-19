@@ -1,4 +1,4 @@
-# ADR-0024 — The dashboard acts as the principal its session resolves to
+# ADR-0024: The dashboard acts as the principal its session resolves to
 
 - **Status:** accepted
 - **Authority:** `internal/api/operator`

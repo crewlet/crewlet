@@ -14,6 +14,7 @@ import {
   type OpenPage,
   type PageError,
 } from "~/test/artifactPage.ts";
+import { PageHost } from "~/routes/artifacts/host.ts";
 
 const engine = new MemoryEngine(
   [
@@ -39,6 +40,7 @@ engine.unreadable.add("payroll");
 let page: OpenPage;
 beforeAll(async () => {
   page = await openPage({
+    host: (options) => new PageHost(options),
     capabilities: ["db", "identity", "presence"],
     engine,
     viewer: { seat: "maya", kind: "human", displayName: "Maya Ortiz", role: "editor" },

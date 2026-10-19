@@ -32,6 +32,7 @@ const version = (n: number, files: ArtifactEntry[]) => ({
   number: n,
   version_id: `v${n}`,
   base: n - 1,
+  capabilities: [],
   files: files.length,
   bytes: 64 * files.length,
   author: { name: "ada", kind: "agent" },

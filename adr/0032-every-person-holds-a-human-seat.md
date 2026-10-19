@@ -1,4 +1,4 @@
-# ADR-0032 — Every person holds a human seat
+# ADR-0032: Every person holds a human seat
 
 - **Status:** accepted
 - **Authority:** `internal/iamdomain`
