@@ -534,13 +534,10 @@
   padding: var(--spacing-3);
 }
 
-/* The reader's own preferences, in the account row's popover (`app/sidebar/UserBlock.tsx`). */
+/* The Preferences popover's body, beside the account row (`app/sidebar/UserBlock.tsx`). */
 /* AS WIDE AS ITS ROWS, the label column and the one control column: they are
    the widest thing the popover holds, so they set its width (over the kit's
-   own floor), and the block FILLS that width rather than declaring one, so
-   the rule the account block draws above it runs from edge to edge. A
-   `max-content` width here sized the block to the rows alone, and beside a
-   wider block the rule stopped short of the panel's edge. */
+   own floor), and the body declares no width of its own. */
 .preferences {
   display: flex;
   flex-direction: column;
@@ -576,37 +573,6 @@
 .preferences-theme-menu {
   --crewlet-select-menu-max-height: 42rem;
   min-width: 17.25rem;
-}
-
-/* THE SESSION'S OWN GESTURES, above the preferences in the same popover: who
-   this browser is signed in as, its grants, and the ways to change how it
-   proves it or to end it. Ruled off from the preferences under it, because
-   the two are different kinds of thing — a session's and a browser's.
-
-   IT FILLS THE POPOVER'S WIDTH AND NEVER SETS IT: inline-size containment
-   keeps a long grants line or login from widening the panel past the rows
-   below, so the two blocks are one column and the rule between them spans
-   it. A width of its own (it was 18rem) made the popover that wide for every
-   viewer — a signed-out one is offered Sign in here too — and left the rows
-   under it in a narrower column with the rule stopping short. */
-.preferences-account {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--spacing-2);
-  contain: inline-size;
-  padding: var(--spacing-3) var(--spacing-3) 0;
-}
-/* THE LOGIN IS CUT AT THE COLUMN'S EDGE. A start-aligned item in a column is
-   as wide as its content, and an unwrapped line's content is all of it, so
-   `.truncate` never had an edge to cut at and a long login ran out of the
-   panel. */
-.preferences-account > .truncate {
-  max-width: 100%;
-}
-.preferences-account + .preferences {
-  border-top: 1px solid var(--color-border-default);
-  margin-top: var(--spacing-3);
 }
 
 /* ---- The page header -----------------------------------------------------

@@ -513,6 +513,36 @@ test("no stat tile builds its caption by joining a list", () => {
   ).toBeGreaterThan(30);
 });
 
+/**
+ * A MENU'S GLYPH IS ITS ICON, NEVER PART OF ITS LABEL.
+ *
+ * `Menu` hands `icon` to its button as the leading icon, which sits a gap away
+ * from the word. A glyph written into `trigger` beside the word is label text
+ * instead, drawn flush against it: the knowledge outline's "+Create", the
+ * search page's "+Filter" and its ranking picker's chevron all shipped that
+ * way. A glyph after the words is `trailingIcon`.
+ */
+test("no menu trigger carries its glyph inside the label", () => {
+  const offenders: string[] = [];
+  let seen = 0;
+  for (const { path, text } of sources()) {
+    for (const el of elements(text, "Menu")) {
+      seen++;
+      if (!/trigger=\{\s*<>[\s\S]*?Glyph[\s\S]*?<\/>\s*\}/.test(el.text)) continue;
+      const line = text.slice(0, el.at).split("\n").length;
+      offenders.push(`${path}:${line}`);
+    }
+  }
+  expect(
+    offenders,
+    "pass the words as `trigger` and the glyph as `icon` or `trailingIcon`",
+  ).toEqual([]);
+  // THE OTHER SIDE: a rename or a broken scan reads no menus at all.
+  expect(seen, "nothing here reads as a Menu any more: this rule covers nothing").toBeGreaterThan(
+    10,
+  );
+});
+
 /*
  * AND THE SCANNER ACTUALLY READS THE SHAPE THE RULE IS FOR. A gate that only
  * ever saw single-line props would pass a reverted multi-line ternary — which is
