@@ -98,7 +98,7 @@ import { RailBoundary } from "../boundaries.tsx";
 import { preload } from "../lazyScreen.ts";
 import { UserBlock } from "./UserBlock.tsx";
 import { goSignIn } from "~/lib/session.ts";
-import { useKeyHints } from "~/lib/media.ts";
+import { useKeyHints } from "~/app/layout.ts";
 
 export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const route = useRoute();

@@ -11185,8 +11185,17 @@ a.live-row:focus-visible {
   scroll-margin-top: var(--sticky-top);
   scroll-margin-bottom: var(--spacing-4);
 }
+/* THE SHOW TAKES THE KEYS, and says so: a ring a little outside its edge,
+   in the page's padding, so a keyboard reader sees the arrows will move the
+   slides and the ring never draws over the slide itself. Full screen is the
+   room's screen, where the show is all there is: the ring is transparent
+   there, and forced colors still paints it. */
 .slides-show:focus-visible {
-  outline: none;
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--spacing-1);
+}
+.slides-show:fullscreen:focus-visible {
+  outline-color: transparent;
 }
 /* FULL SCREEN IS A PROJECTOR: the slide fills the screen on black, and its
    controls float over its foot, put away with the cursor while the pointer
@@ -11627,6 +11636,16 @@ a.live-row:focus-visible {
   flex-direction: column;
   justify-content: flex-end;
   height: 100%;
+}
+/* A DATASET'S ROWS ARE A LIST TABLE: 32px rows over the 13px cells, the
+   rhythm every table of an artifact keeps (a sheet's row), set through the
+   compact table's own hooks: the inset is what the row leaves around a line
+   of text and its 1px rule, so the row is the token's height and no more
+   (the header takes the same inset). At the list row's 36px a widget's table
+   was the one table of the artifacts screens that stood taller. */
+.dashboard-rows.crewlet-data-table--compact {
+  --crewlet-data-table-row-height: var(--size-sheet-row);
+  --crewlet-data-table-cell-pad-y: calc((var(--size-sheet-row) - 1lh - 1px) / 2);
 }
 /* A meter: the number as a stat draws it, and the bar a step under it. */
 .dashboard-meter {

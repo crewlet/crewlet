@@ -41,7 +41,16 @@
  */
 
 import { useMemo } from "react";
-import { ButtonLink, Callout, EmptyState, InlineCode, Menu, Skeleton, Tag } from "@crewlethq/ui";
+import {
+  ButtonLink,
+  Callout,
+  EmptyState,
+  InlineCode,
+  Menu,
+  Skeleton,
+  Tag,
+  useMediaMatch,
+} from "@crewlethq/ui";
 import {
   ActivityGlyph,
   EllipsisGlyph,
@@ -76,7 +85,6 @@ import { refToken } from "~/app/frame/objects.ts";
 import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
-import { useMediaQuery } from "~/lib/media.ts";
 import { ListPosition } from "./ListPosition.tsx";
 import { ItemEditNote, ItemEditsProvider } from "./item/edit.tsx";
 import { Checklists, ItemDescription, ItemTitle, Subtasks } from "./item/Body.tsx";
@@ -237,7 +245,7 @@ export function WorkItem({ id }: { id: string }) {
   // THE TASK AND ITS RAIL EACH SCROLL ON THEIR OWN, so the page takes the
   // window's height rather than growing — above a phone, where the two are one
   // column and the page scrolls as any other.
-  const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
+  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
   useFillScreen(!phone);
   const live = item ? liveOn(agents, item) : null;
   const statusFor = useMemo(() => {
