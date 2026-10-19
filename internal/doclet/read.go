@@ -1242,6 +1242,13 @@ func pageLabelsStatement(n int) string {
 // document, by id and by address; the page's thread and its revision list; one
 // step of its breadcrumb; the per-container counts of the rail; and the skill
 // pages of a container.
+//
+// THE REVISION LIST IS IN ITS KEY'S ORDER, newest first by the page's own
+// version number, which `pages_revisions`' key (page_id, edit_version) holds:
+// revision N is the body at version N, written in that order, so it is the
+// order of the log positions too. Ordered by the position column instead,
+// which no index of the table holds, it sought the page's revisions and then
+// sorted them all (measured).
 const (
 	derivedAsStatement       = `SELECT skill, onboarding FROM pages_skills WHERE page_id = ?`
 	scopeByIDStatement       = `SELECT id, container FROM pages_heads WHERE id = ?`
@@ -1252,7 +1259,7 @@ const (
 	threadStatement = `SELECT document FROM pages_comments
 		  WHERE page_id = ? ORDER BY created_at, id`
 	revisionListStatement = `SELECT edit_version, author, message, created_at FROM pages_revisions
-		  WHERE page_id = ? ORDER BY version DESC LIMIT ?`
+		  WHERE page_id = ? ORDER BY edit_version DESC LIMIT ?`
 	ancestorStatement = `
 			SELECT p.id, p.container, p.parent_id, p.title, p.status, p.author,
 			       p.edit_version, COALESCE(k.skill, 0), COALESCE(k.onboarding, 0),
