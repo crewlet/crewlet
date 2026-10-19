@@ -24,27 +24,23 @@ import {
   ArrangeGroup,
   Button,
   Card,
-  DataTable,
   DatasetSource,
   DatasetSourceList,
   FormField,
   Select,
   Skeleton,
-  type DataTableColumn,
   type SurfaceTone,
 } from "@crewlethq/ui";
 import { DASHBOARD_COLUMNS } from "~/contract/artifacts.ts";
 import type {
   ArtifactDetail,
   DashboardBoardDataset,
-  DashboardValue,
   DashboardWidget as Widget,
 } from "~/protocol/index.ts";
 import { QueryState } from "~/components/common.tsx";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
 import {
   boardSpan,
-  cellText,
   datasetStatus,
   definitionWords,
   refreshWords,
@@ -53,7 +49,7 @@ import {
 import { useBoardData, type BoardDataOptions } from "~/lib/artifacts/useBoardData.ts";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
 import { useWidth } from "~/lib/useWidth.ts";
-import { DashboardWidget } from "./DashboardWidget.tsx";
+import { DashboardWidget, RowsTable } from "./DashboardWidget.tsx";
 import type { PresenceReport } from "./presence.ts";
 
 /** The height of one board row, in pixels: the Home board's. */
@@ -239,22 +235,10 @@ export function DashboardView({
                     now={now}
                   >
                     {isSelected && got?.status === "ready" && got.table ? (
-                      <DataTable
-                        variant="compact"
-                        columns={Object.fromEntries(
-                          got.table.columns.map((c): [string, DataTableColumn] => [
-                            c.key,
-                            {
-                              label: c.label ?? c.key,
-                              render: (_row, value) => cellText(c, value as DashboardValue),
-                            },
-                          ]),
-                        )}
-                        data={got.table.rows
-                          .slice(0, PREVIEW_ROWS)
-                          .map((r, i) => ({ ...r, __row: i }))}
-                        getRowKey={(r) => Number(r.__row)}
-                        emptyMessage="No rows."
+                      <RowsTable
+                        columns={got.table.columns}
+                        shown={got.table.columns.map((c) => c.key)}
+                        rows={got.table.rows.slice(0, PREVIEW_ROWS)}
                       />
                     ) : null}
                   </DatasetSource>

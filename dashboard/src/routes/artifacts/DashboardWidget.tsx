@@ -342,54 +342,14 @@ function Figure({
         </div>
       );
     }
-    case "table": {
-      const shown = w.columns ?? columns.map((c) => c.key);
-      const drawn = rows.slice(0, w.limit ?? 100);
-      const { widths, flex, flexMin } = tableLayout(
-        shown.map((key) => ({ key, label: label(key), column: column(key) })),
-        drawn,
-        tableMeasure(),
-      );
-      const table: Record<string, DataTableColumn> = {};
-      for (const key of shown) {
-        const c = column(key);
-        table[key] = {
-          label: label(key),
-          // HELD, BUT FOR THE PROSE: a held `width` the table leaves alone,
-          // so a short column keeps its words whole; the one column given a
-          // `defaultWidth` is fitted to the room the others leave (see
-          // tableLayout).
-          ...(key === flex
-            ? { defaultWidth: widths[key] ?? 0, minWidth: flexMin }
-            : { width: widths[key] ?? 0 }),
-          // A WIDGET'S ROWS ARE IN ITS DATASET'S ORDER: the dataset sorts
-          // and cuts them ("sort by day descending; keep the first 8"), and
-          // sorting what is left by another column would read as an order
-          // over every row.
-          sortable: false,
-          ...(c?.type === "number" ? { align: "right" as const } : {}),
-          render: (_row, value) => cellText(c, value as DashboardValue),
-        };
-      }
+    case "table":
       return (
-        <DataTable
-          variant="compact"
-          // NO CHROME ROW: the rows are the widget's, already cut to its
-          // limit, so a pager and a settings control over two rows were a
-          // band of controls with nothing to do.
-          paginated={false}
-          showSettings={false}
-          // NEVER BROKEN MID-WORD: a value too long for its column ends in
-          // an ellipsis, and only the prose column is ever narrower than
-          // what it holds.
-          defaultWrapLines={false}
-          columns={table}
-          data={drawn.map((r, i) => ({ ...r, __row: i }))}
-          getRowKey={(r) => Number(r.__row)}
-          emptyMessage="No rows."
+        <RowsTable
+          columns={columns}
+          shown={w.columns ?? columns.map((c) => c.key)}
+          rows={rows.slice(0, w.limit ?? 100)}
         />
       );
-    }
   }
   return null;
 }
@@ -397,6 +357,68 @@ function Figure({
 /** A table cell's words. */
 function numberOr0(v: DashboardValue | undefined): number {
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
+}
+
+/**
+ * A dataset's rows as a table: a widget's, and the Sources rail's preview of
+ * a dataset, drawn by one rule so the two never read one row two ways.
+ */
+export function RowsTable({
+  columns,
+  shown,
+  rows,
+}: {
+  columns: readonly DashboardColumn[];
+  /** The columns drawn, by key, in order. */
+  shown: readonly string[];
+  /** The rows drawn, already cut. */
+  rows: readonly DashboardRow[];
+}) {
+  const column = (key: string) => columns.find((c) => c.key === key);
+  const label = (key: string) => column(key)?.label ?? key;
+  const { widths, flex, flexMin } = tableLayout(
+    shown.map((key) => ({ key, label: label(key), column: column(key) })),
+    rows,
+    tableMeasure(),
+  );
+  const table: Record<string, DataTableColumn> = {};
+  for (const key of shown) {
+    const c = column(key);
+    table[key] = {
+      label: label(key),
+      // HELD, BUT FOR THE PROSE: a held `width` the table leaves alone, so a
+      // short column keeps its words whole; the one column given a
+      // `defaultWidth` is fitted to the room the others leave (see
+      // tableLayout).
+      ...(key === flex
+        ? { defaultWidth: widths[key] ?? 0, minWidth: flexMin }
+        : { width: widths[key] ?? 0 }),
+      // THE ROWS ARE IN THEIR DATASET'S ORDER: the dataset sorts and cuts
+      // them ("sort by day descending; keep the first 8"), and sorting what
+      // is left by another column would read as an order over every row.
+      sortable: false,
+      ...(c?.type === "number" ? { align: "right" as const } : {}),
+      render: (_row, value) => cellText(c, value as DashboardValue),
+    };
+  }
+  return (
+    <DataTable
+      variant="compact"
+      // NO CHROME ROW: the rows are already cut to what is drawn, so a pager
+      // and a settings control over two rows were a band of controls with
+      // nothing to do.
+      paginated={false}
+      showSettings={false}
+      // NEVER BROKEN MID-WORD: a value too long for its column ends in an
+      // ellipsis, and only the prose column is ever narrower than what it
+      // holds; a table wider than its box scrolls sideways.
+      defaultWrapLines={false}
+      columns={table}
+      data={rows.map((r, i) => ({ ...r, __row: i }))}
+      getRowKey={(r) => Number(r.__row)}
+      emptyMessage="No rows."
+    />
+  );
 }
 
 /** A share's parts, held to the hues a reader can tell apart, the rest summed as "Other" (see foldSeries). */
