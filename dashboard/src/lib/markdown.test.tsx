@@ -800,7 +800,14 @@ describe("pictures a host resolves", () => {
       </div>,
     );
     expect(imageSources(source)).toEqual([...new Set(asked)]);
-    expect(imageSources(source)).toEqual(["img/logo.png", "img/list.png", "img/cell.png"]);
+    // The picture inside a link's label is a picture too, as a badge that
+    // links somewhere is: the grammar reads it whole before the label ends.
+    expect(imageSources(source)).toEqual([
+      "img/logo.png",
+      "img/chart.png",
+      "img/list.png",
+      "img/cell.png",
+    ]);
   });
 
   it("shows an image through the resolver, and its alt text where the resolver has none", () => {
