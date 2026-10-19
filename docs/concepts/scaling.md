@@ -32,7 +32,7 @@ node:
 
 | Role | What it does |
 |---|---|
-| `data` | Holds the company's durable state on its own disk: a full copy of the replicated estate, and the event log. `workers`' duties and `ingress`'s retention, capacity, eviction and backup surfaces read this node's own copy directly, so both require it (the API's tracker and knowledge-base routes go through the [estate router](#how-a-request-reaches-the-estate) instead). It does not decide the node's broker — its `stream` block does ([broker kinds](../guides/fleet.md#the-broker-members-and-leaves)) — but a data node on a leaf is refused, so every data node is a broker member holding a share of its replicas and a vote in its quorums. A node without it is [stateless](#a-node-that-holds-no-data) |
+| `data` | Holds the company's durable state on its own disk: a full copy of the replicated estate, and the event log. `workers`' duties and `ingress`'s retention, capacity, eviction and backup surfaces read this node's own copy directly, so both require it (the API's tracker, knowledge-base and chat routes go through the [estate router](#how-a-request-reaches-the-estate) instead). It does not decide the node's broker — its `stream` block does ([broker kinds](../guides/fleet.md#the-broker-members-and-leaves)) — but a data node on a leaf is refused, so every data node is a broker member holding a share of its replicas and a vote in its quorums. A node without it is [stateless](#a-node-that-holds-no-data) |
 | `ingress` | Serves the HTTP API — every integration's webhooks, the dashboard, the REST and WebSocket read surface, and the box-mode tool bridge, which relays each call to the node holding the run's seat |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns, and answers their box-mode runs' tool calls, relayed to it from an `ingress` node when `CREWLET_MCP_BRIDGE_URL` is set |
 | `workers` | The company-wide [singleton duties](seat-ownership.md#singleton-duties): the scheduler tick, the sandbox waiter, the maintenance sweep (retention, removed-seat mailbox retirement, and forgetting the chat read state of a human seat the company no longer has), the integration reconcile loop, the learning passes (skill clustering, curation, episode compaction, promotion), the state logs' trim, the embedding duty, the identity sweep, the object store's collector, the trash reaper and Chatlet's message horizon. These read their work list from the **org**, never from the node's own seats: a `workers` node runs no seats at all, so a duty that iterated the local seats would cover nothing. Creating every seat's mailbox is not among them: every node converges those, at start, on each apply and on its own seat sweep — see [What a mailbox costs](#what-a-mailbox-costs) for why running it everywhere is affordable |
@@ -75,7 +75,7 @@ The other shape is a node that holds **none** of it. A node without `data`
 keeps a scratch store (deleted at every boot, with no replicated estate at
 all), joins an embedded fleet as a **leaf** of the members' broker — no
 JetStream, no replica, no vote — and runs `seats` only. Its seats' tools read
-and write the tracker and the knowledge base through a data node over the
+and write the tracker, the knowledge base and chat through a data node over the
 broker — the same router a data node's own seats go through, which answers
 from the node's own copy where it has one — carrying the node's own writes as a
 floor so whichever data node answers has applied them. The identity
@@ -104,8 +104,8 @@ and [ADR-0025](https://github.com/crewlet/crewlet/blob/main/adr/0025-a-node-with
 
 The replicated estate is one estate, and every data node holds the whole of it.
 Every node, with `data` or without, still reaches it through one **router**,
-and a seat's tools behave the same on either kind of node. So do the operator's surfaces: the API's tracker and
-knowledge-base routes, a project's file rows and the operator's own MCP go
+and a seat's tools behave the same on either kind of node. So do the operator's surfaces: the API's tracker,
+knowledge-base and chat routes, a project's file rows and the operator's own MCP go
 through the same router, so a data node whose copy is out of service answers
 its operator from a peer's copy, exactly as it answers its seats.
 
@@ -138,14 +138,16 @@ flowchart TD
   copy is out of service (`out_of_service`), whose copy lags its logs (asked
   again last), or that is behind the caller's floor. What may be repeated once
   a node *may* have run a write is the operation's own rule: a tracker write,
-  and a knowledge-base write carrying its caller's key (a seat's always does),
-  moves on under the same operation id; a knowledge-base write with no key
-  that went unanswered is reported as unknown and never sent twice; and a
+  a knowledge-base or chat write carrying its caller's key (a seat's always
+  does), and a chat erase or prune under its own operation, moves on under the
+  same operation id; a knowledge-base or chat write with no key that went
+  unanswered is reported as unknown and never sent twice; and a
   write one data node answered *unvouched* — its ledger cannot say whether the
   operation landed — is asked of the next under the same id before the caller
   is told the outcome is unknown.
 - **Every request and every answer is signed.** A data node runs a write as
-  the actor the request names, so the request is an instruction, and an
+  the actor the request names, and answers a chat read for the viewer it
+  names, so the request is an instruction, and an
   unsigned one would be an instruction anybody who can reach the broker's port
   could write. Each request envelope and each reply carries a MAC under the
   fleet keyring every node already holds, in a key domain of its own
@@ -459,6 +461,17 @@ What each one decides:
   instead would either replay the whole subject on every handoff or lose
   whatever arrived while a seat was unowned. The suite asserts it rather than
   taking the broker's word for it.
+- **A chat broadcast's fan-out is bounded by the node's own turn budget.** This
+  is the constant Chatlet adds, and it is borrowed rather than chosen:
+  `@channel` wakes at most **32** agents, which is `node.DefaultMaxConcurrent`.
+  The reasoning is the one that makes an agent company different from a human
+  one — a person in a busy room reads passively and an agent has no passive
+  read, so every wake is a two-phase turn against that budget. Uncapped, one
+  broadcast in a large room would occupy a node's entire turn capacity and
+  every other trigger would queue behind a message that was addressed to
+  nobody in particular. The channel says when it truncated, rather than
+  quietly waking fewer than the gesture implied. See
+  [Chatlet § Who gets woken](chatlet.md#who-gets-woken).
 - **The broker imposes no floor on the lease TTL** — so the **45-second TTL**
   is not a number any broker measurement sets. Creating a mailbox costs
   ~1.7 ms and a clean handoff returns the mail in about a millisecond, so a
@@ -575,6 +588,12 @@ theoretical one:
   node can host them, but the scheduler tick, the curator, clustering, the
   sandbox waiter and the object store's collector are each one logical
   instance at a time. A fleet does not parallelise them.
+- **Chatlet does not reach a person who is not looking at it.** The engine
+  has never sent anything as itself — no email, no push, no SMS — so a mention
+  on `chat.backend: chatlet` becomes an unread count and a mention feed, and
+  nothing more. That is a property of the product rather than of the fleet,
+  and it does not change with node count. See
+  [Chatlet § What is not here](chatlet.md#what-is-not-here).
 - **A rolling upgrade across a protocol bump has a visible outage window**, and
   a rollback across one needs a full drain. See
   [Mixed-version fleets](seat-ownership.md#mixed-version-fleets).

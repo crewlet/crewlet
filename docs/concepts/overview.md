@@ -44,7 +44,7 @@ The hierarchy is informational + delegation-routing, not a special upward escala
 
 - **Event-driven** — agents are reactive; events trigger agent work, agent work produces events
 - **Concurrent by default** — a seat's turn, its MCP children and the node's own duties run in parallel, and every shared structure is checked under the race detector
-- **Provider-agnostic**: pluggable LLM, storage, tracker, knowledge and embedding backends, each behind a small contract; external tools via MCP. Only the LLM is required: the tracker and the knowledge base ship with the engine, so a company with one signed-in coding CLI and nothing else runs
+- **Provider-agnostic**: pluggable LLM, storage, tracker, knowledge and embedding backends, each behind a small contract; external tools via MCP. Only the LLM is required: the tracker, the knowledge base and chat ship with the engine, so a company with one signed-in coding CLI and nothing else runs
 - **Config-driven** — a company is a YAML document, validated against a schema generated from the same types the engine runs on
 - **Extension-oriented**: anything beyond running the company is built outside the process, not added to the core
 - **Observable**: structured logging, OpenTelemetry tracing, and an event store the dashboard reads, from day one
@@ -63,7 +63,7 @@ flowchart TB
         API["<b>ingress — API + dashboard</b><br/>webhook routes · REST · /config · /secrets<br/>/ws/stream · OTLP ingest · /health · /ready"]
         SEAT["<b>seats — the agents</b><br/>Seat host: leases, mailboxes, MCP children<br/>Turn engine: executor → reviewer, one per running turn<br/>Post-turn reflection, where the seat's memory is held<br/>Tool registry: builtins · per-role MCP · a2a_ask<br/>Provider chain: fallback models, each a coding CLI"]
         DUTY["<b>workers — company-wide singletons</b><br/>scheduler · sandbox waiter · maintenance sweep · learning passes<br/>log trim · embeddings · identity sweep · object collector<br/>chat prune · trash reaper · integration reconcile"]
-        CORE["<b>always on, whatever the roles</b><br/>notification service — parse, resolve, wake<br/>config reconciler · node presence · observability edge<br/>usage publisher, on a data node"]
+        CORE["<b>always on, whatever the roles</b><br/>notification service — parse, resolve, wake<br/>config reconciler · node presence · observability edge · chat hub<br/>usage publisher, on a data node"]
     end
 
     STREAM[("<b>Event stream</b><br/><i>embedded NATS JetStream by default</i><br/>crewlet.agent.SEAT-ID.inbox · .control · .reflect<br/>crewlet.notifications.inbound · crewlet.events.*<br/>crewlet.config.* · crewlet.memory.* · dlq.*")]
@@ -168,10 +168,10 @@ adr/                      # Architecture decision records — a decision that
                           #   binds more than one package, with the gate that
                           #   anchors each one to its authority
 cmd/crewlet/              # The one binary: run, validate, schema, migrate,
-                          #   budgets, backup, retention, work, objects,
-                          #   fleet, seats, secrets, config, iam, llm, search,
-                          #   and the six integration CLIs — gitlab/github/
-                          #   jira/slack
+                          #   budgets, backup, retention, worklet, objects,
+                          #   fleet, seats, artifacts, chatlet, secrets, config,
+                          #   iam, llm, search, assistant, and the six
+                          #   integration CLIs — gitlab/github/jira/slack
                           #   `provision`, confluence `import|resync`,
                           #   mattermost `provision|doctor`
 internal/
@@ -218,7 +218,8 @@ internal/
 │                         #   answer
 ├── search/               # Both halves of knowledge search — the BM25 index
 │                         #   and the two-stage semantic retrieval — plus the
-│                         #   embedding domain and the fleet's bucket fan-out
+│                         #   embedding domain, the fleet's bucket fan-out and
+│                         #   chat's own keyword index
 ├── textindex/            # The analyzer and the BM25 arithmetic, as pure
 │                         #   functions: Turso has no fts5
 ├── changefeed/           # How a committed record becomes a WAKE, derived by

@@ -152,7 +152,9 @@ operation id.
 What "under that id" means depends on who is asking. A **seat** derives its
 ids from its turn, the call's arguments and how many different calls to the
 same tool it made first, so it runs a gesture again by repeating the call with
-exactly the same arguments — before calling that tool with anything else. The
+exactly the same arguments — before calling that tool with anything else, or
+the tool that undoes it (`leave_channel` for `join_channel`), which counts
+with it. The
 **operator's MCP** has no turn, so every write's answer carries its `op_id` and
 a call that brings it back is that operation again
 ([`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant))
@@ -610,7 +612,15 @@ transaction per other applier on the node — about two seconds each — so with
 every state-log domain applying and a burst in flight, the legitimate
 wait is already past five seconds and grows with each domain the engine gains.
 (The usage domain's transactions are a node-day's handful of rows, and weigh
-nothing here outside a replay.)
+nothing here outside a replay.) Chat's hourly prune is one of the bulk ones: a
+prune record removes up to an hour of one room's history in one transaction,
+about 3 300 rows where the whole declared census talks in one room and about
+8 300 near the supported 50 000 messages a day — some four seconds on its own,
+so a queue four deep then reaches the ten seconds two attempts of the default
+allow. A company running chat near that rate should set
+`store.busy_timeout_seconds: 7` before it sees the line: two attempts of 7
+cover fourteen seconds, and 7 still leaves three under the dashboard's own
+query timeout.
 
 That is why `store_tx_retry` on a node applying a burst is a **signal to raise
 the knob, not a fault**: the writer rejoins the line and the work lands, one
@@ -635,8 +645,8 @@ whose scope meets it is retained too. That is bounded rather than open-ended:
 the **deferral grace** is 30 minutes, past which `deferred_old` fires — naming
 the log, the position of the oldest record held and the record version it was
 written at against the one this build reads. Where the node's copy is judged
-by that log (the tracker's and the knowledge base's are; the identity
-estate's, the vectors' and the usage log's are not) the node takes its copy
+by that log (the tracker's, the knowledge base's and chat's are; the
+identity estate's, the vectors' and the usage log's are not) the node takes its copy
 out of service at the same moment — its seats stay, and read the estate from
 the other data nodes — because both are measured from one instant — the
 position heartbeat's first sighting of the record — and the alarm says which of
@@ -947,7 +957,7 @@ ceiling it holds, but every log this boot creates is sized without knowing
 what it holds, so it can come out larger or smaller than a boot that read it
 would make, and keeps that ceiling. The node logs `statelog_ceiling_unread`
 naming the stream; once it is up, `crewlet retention set-capacity` changes
-either log.
+any log's ceiling.
 
 **A boot that still cannot reserve a log says why.** When even the floors, or
 a ceiling you set, do not fit, the node refuses to boot with an error naming
@@ -1012,7 +1022,7 @@ replication:
 | `statelog_apply_retrying` | `WARN` | The applier hit a failure it retries in place. Written once, when the run of failures starts. |
 | `statelog_apply_faulted` | `ERROR` | The same failure has outlived the retry budget (30 seconds): this node's rows have stopped moving, its reads refuse and it stops serving the estate — its seats read it from the other data nodes — until a retry succeeds. Written once per run of failures, when it crosses the budget — not on every retry. While it lasts, the node's status and every refused read name the current error, and `crewlet.statelog.apply.retries` counts the attempts. |
 | `statelog_apply_recovered` | `INFO` | A retry succeeded and the run of failures is over, with how long it lasted (`after`) and the last error it saw. A failure after it starts a new run, written again from `statelog_apply_retrying`. |
-| `statelog_applier_stopped` | `ERROR` | The applier stopped for good — a gate this build cannot read, a hole that will not close, a recreated stream, a record written in a generation this node never entered — naming the stream, the position its rows froze at and why. Every read of that domain refuses from then on, and for the tracker or the knowledge base the node also stops serving the estate: the seats it holds stay and read it from the other data nodes, and a new one is admitted only on a data node whose copy is sound. What resumes it is a build that can read what this one could not, at its next boot; for a recreated stream, [`crewlet retention reanchor`](retention.md#re-anchoring-a-recreated-or-restored-log) of that one stream, which resumes it in place with no restart; and for a log a peer re-anchored, the snapshot this node [adopts on its own](retention.md#a-node-a-peer-re-anchored-past). Written once per stop. |
+| `statelog_applier_stopped` | `ERROR` | The applier stopped for good — a gate this build cannot read, a hole that will not close, a recreated stream, a record written in a generation this node never entered — naming the stream, the position its rows froze at and why. Every read of that domain refuses from then on, and for the tracker, the knowledge base or chat — every domain whose health judges the copy — the node also stops serving the estate: the seats it holds stay and read it from the other data nodes, and a new one is admitted only on a data node whose copy is sound. What resumes it is a build that can read what this one could not, at its next boot; for a recreated stream, [`crewlet retention reanchor`](retention.md#re-anchoring-a-recreated-or-restored-log) of that one stream, which resumes it in place with no restart; and for a log a peer re-anchored, the snapshot this node [adopts on its own](retention.md#a-node-a-peer-re-anchored-past). Written once per stop. |
 | `statelog_adopted` | `INFO` | The node replaced its replicated database with a peer's snapshot, naming the donor, the artefact's `sha256` (the donor's `statelog_snapshot_sent` carries the same one) and when it was taken (`taken_at`), which is how old the history it installed is. |
 | `statelog_record_gated` | `WARN` | A durable record this node's applier **dropped**: it applies on no node, and this line is its only witness. Each data node's applier writes it once per record, when the transaction that drops it commits. It names the `domain`, the record's `position` and `kind`, the node that published it (`writer`, empty for a record that names none) and the `gate` that dropped it. The domain's own gates: `evicted` — the `writer` was [evicted](retention.md#eviction) below this position and not readmitted; `deleted` — the record is about a task (its turns' records included) or a page a purge destroyed, whose marker holds every writer's record on it for ever. The framework's: `abandoned` for a record written in a generation a reanchor skipped because only an evicted peer held it ([retention](retention.md#a-node-a-peer-re-anchored-past)), and `overtaken` for one a node wrote in the old generation after a restored reanchor's own record, before it learned of the move ([retention](retention.md#re-anchoring-a-recreated-or-restored-log)). A record more than one gate holds is logged under the first the applier asks — the framework's two, then the writer's eviction, then the object's marker — so a write refused over the same record can name another (`statelog_write_gated` names the one that holds it now). Counted by `crewlet.statelog.records_gated` under the same `gate`, which the `records_gated` alarm reads. |
 | `statelog_write_gated` | `WARN` | A write **refused** because what it appended applies nowhere, naming the `domain`, `subject` and `op_id`, the `gate` it was refused under, a `position` and a `writer`. When `writer` names a node other than the one whose log this is, the record at `position` is *that* node's copy of the operation, which this write's append was collapsed onto — not a record this node published — and under every gate but `deleted` the refusal is about that node and names it ([above](#who-a-refusal-names)). When `writer` is this node, the record at `position` is its own, or another operation's — the newest on the subject — at which the gate holds this node, so whatever it appended under the operation applies nowhere. The gate is the one that holds the record now, which can differ from the one the applier logged: once a task or page is purged, a record an eviction dropped on it is refused `deleted`. It is a refusal, counted under `crewlet.statelog.publish.refusals` by its reason, and not a second drop: the drop is the `statelog_record_gated` line each data node's applier writes once, which `crewlet.statelog.records_gated` and the `records_gated` alarm count. |

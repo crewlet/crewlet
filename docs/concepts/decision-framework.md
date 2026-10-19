@@ -21,7 +21,7 @@ These roles are implied by the org hierarchy. The driver's manager is the natura
 
 A decision has two halves, and they live in different places.
 
-**The discussion happens in chat.** Agents use their team's **channel** and their existing **chat MCP tools** to discuss — just like real employees:
+**The discussion happens in chat.** Agents use their team's **channel** — with the engine's own chat tools (`post_message`, `reply_in_thread`) on [Chatlet](chatlet.md), or their existing **chat MCP tools** on a vendor's — to discuss, just like real employees:
 
 1. **Driver posts in the team channel** — states the decision topic, context, and options
 2. **Contributors reply** — share their perspectives in the thread
@@ -36,7 +36,7 @@ A decision has two halves, and they live in different places.
 
 The rules for each part of a decision, the caps, and the tools' arguments are in [Asking for a decision](../guides/worklet.md#asking-for-a-decision).
 
-The team channel is configured on the unit (`channel`), and it is integration-neutral: the same field serves whichever chat backend the company runs. A seat's transport identity is its own bot: a [Mattermost](../integrations/mattermost.md) bot token, or a [Slack](../integrations/slack.md) app:
+The team channel is configured on the unit (`channel`), and it is integration-neutral: the same field serves whichever chat backend the company runs. On the engine's [own chat](chatlet.md) it opens the unit's room and needs nothing else — every agent seat posts there as itself. On a vendor's, a seat's transport identity is its own bot: a [Mattermost](../integrations/mattermost.md) bot token, or a [Slack](../integrations/slack.md) app:
 
 ```yaml
 units:

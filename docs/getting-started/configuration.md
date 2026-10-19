@@ -1301,7 +1301,12 @@ store:
                                     #   in the engine's own FIFO queue for that
                                     #   lock. Raise it on a node applying a
                                     #   burst, where `store_tx_retry` in the
-                                    #   log names it; see guides/replication.md
+                                    #   log names it — to 7 for chat near the
+                                    #   supported 50 000 messages a day, whose
+                                    #   queue reaches the ten seconds two 5s
+                                    #   waits allow. Keep it under 10, the
+                                    #   dashboard's query timeout; see
+                                    #   guides/replication.md
   # objects:                        # where the company's FILES are kept — see
                                     #   concepts/object-store.md. EVERY node
                                     #   carries the same block, a node without
@@ -1654,10 +1659,10 @@ holds, so the token that brings them in has to hold `admin` — `grants:
 [admin]` — on a node that serves it. On a running deployment it is the way back
 in when an administrator has locked themselves out. Each entry states its own
 `grants` — required and non-empty, because a credential's blast radius belongs
-where it is pinned, naming only `admin`, `worklet`, `doclet` and `artifacts`
-(an unknown name is refused naming the set, and `admin` on a `refuse` node is refused
-too) — and its value must be at least 26 characters, checked on what the
-`${VAR}` resolves to. A value may not start with `cwl_ast_`, the prefix the
+where it is pinned, naming only `admin`, `worklet`, `doclet`, `artifacts`
+and `chatlet` (an unknown name is refused naming the set, and `admin` on a
+`refuse` node is refused too) — and its value must be at least 26 characters,
+checked on what the `${VAR}` resolves to. A value may not start with `cwl_ast_`, the prefix the
 engine reserves for the Dashboard Assistant's in-process grants: the request
 guard reads that shape as a grant, so such a token could never authenticate.
 
@@ -2066,7 +2071,7 @@ Everything else a tracker could be told is either a fact about the **operator** 
 
 **Every broker member needs a stream that survives a restart.** A state-log domain's write-ahead log lives on the stream, and an embedded member with no `stream.store_dir` — a single node included — keeps its streams in memory, so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses it from the Tier A file alone, and so does the engine at boot. A node without `data` is no member: it joins the members' broker as a leaf and keeps no stream of its own, so it is refused a `store_dir` instead, and a node dialling an external cluster keeps nothing either — that cluster's storage is its operator's.
 
-It applies whatever backends a company names, and whether the node has a company at all. Worklet or Doclet puts its items or its pages there, but the **identity estate** (the people who can sign in) is a domain too, and every node that holds the estate runs it from boot. This rule used to be judged on the two files together and ask about the backends: it let a company on Jira and Confluence through, and then a node started with no company, both of which started logs in memory and lost them on the first restart with nothing having warned.
+It applies whatever backends a company names, and whether the node has a company at all. Worklet, Doclet or Chatlet puts its items, its pages or its messages there, but the **identity estate** (the people who can sign in) is a domain too, and every node that holds the estate runs it from boot. This rule used to be judged on the two files together and ask about the backends: it let a company on Jira and Confluence through, and then a node started with no company, both of which started logs in memory and lost them on the first restart with nothing having warned.
 
 ---
 
@@ -2080,6 +2085,8 @@ chat:
 Which **chat surface** this company talks on, the third axis and the same shape as the two above. Unset derives `vendor` when the company declares a vendor chat surface and `chatlet` otherwise — and for chat "declares" means `integrations.mattermost`, `integrations.slack`, **or any seat's own `integrations.slack` app**, because Slack's credentials are per seat and a company with seven working Slack apps may never have written the org-level block at all. Naming `chatlet` beside any of them is refused: conversations would live in two places, a person would reply in one of them, and nothing anywhere could say which thread was the real one. Naming `vendor` with none of them declared is refused too, since there is no surface to talk on. `none` is a company whose seats are woken by the tracker, the code host and schedules only.
 
 The value is `vendor` rather than a product name — the other two axes name theirs — because a company legitimately runs **both** Mattermost and Slack: they are different workspaces with different people in them, and an org migrating between them runs the pair for months.
+
+See [Chatlet](../concepts/chatlet.md) for what Chatlet is, who a message wakes, and what it deliberately does not do.
 
 ### Chatlet's own policy
 
@@ -2110,7 +2117,7 @@ chat:
 
 Everything else Chatlet could be told is either the operator's — how big the log may grow (Tier A's `stream.chat_log_max_bytes`) and how long its replay window is kept — or a decision the engine makes once for everybody. How much of a thread a woken seat is shown is one of those: the engine reads the thread at turn start for every chat surface alike and bounds it at one byte budget, keeping whole messages and condensing the middle of a long thread (see [the thread a turn was woken in](../concepts/agent-runtime.md#the-thread-a-turn-was-woken-in)).
 
-**A channel two units both declare is refused on Chatlet.** A unit's room belongs to the one unit that names it — its members are that unit's subtree, and its lead answers what nobody else did — so a second unit naming the same channel would be left out of a room its seats are told is theirs. `crewlet validate` reports it beside each of the units: give each its own channel, or leave a child unit's empty so it inherits its parent's room. It is an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to), so a stored revision that carries the shape still runs, with the refusal reported as a warning instead. On Mattermost or Slack the same shape is only a warning, because there it is one a real company writes on purpose: everything scoped to one unit lands in the other's room, and every seat in both is told that channel is its team's own.
+**A channel two units both declare is refused on Chatlet.** A unit's room belongs to the one unit that names it — its members are that unit's subtree, and its lead answers what nobody else did — so a second unit naming the same channel would be left out of a room its seats are told is theirs. `crewlet validate` reports it beside each of the units: give each its own channel, or leave a child unit's empty so it inherits its parent's room. It is an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to), so a stored revision that carries the shape still runs, with the refusal reported as a warning instead. Moving a channel from one unit to another, by contrast, is an ordinary edit: the room follows the channel at the next apply, with the new unit's people in it and what was said in it kept (see [unit rooms](../concepts/chatlet.md#what-a-company-gets)). On Mattermost or Slack the same shape is only a warning, because there it is one a real company writes on purpose: everything scoped to one unit lands in the other's room, and every seat in both is told that channel is its team's own.
 
 **A Chatlet company where no unit declares a `channel` at all** is warned about at the first unit: a unit's room is the one kind whose members the org chart keeps, so without one no team has a room of its own until somebody opens one by hand and adds its seats. A child unit that names none and inherits its parent's is neither a warning nor a refusal — that is the field working as intended.
 

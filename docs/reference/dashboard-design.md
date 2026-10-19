@@ -415,7 +415,7 @@ share does not move.
 ## Information architecture
 
 **One sidebar, and three nouns that keep it one.** The sidebar lists where a
-reader can go (fourteen **workspaces**, in three runs and a foot) and the
+reader can go (fifteen **workspaces**, in three runs and a foot) and the
 few objects they keep coming back to: the views and artifacts they pinned and
 the pages they starred. A workspace's own **sections** are paths drawn as tabs
 in its page header (Settings draws its fifteen as a column of four groups, and
@@ -439,7 +439,11 @@ list a section of Settings.
   ([Worklet's scope](#worklets-scope-is-named-and-switched-in-the-trail)).
 - A **section** is a **path segment** inside a workspace, drawn by one
   renderer: `tabs` in the page header, `lenses` beside Worklet's scope in the
-  trail, or `column` for Settings.
+  trail, `column` for Settings, or `rail` for Chatlet, whose screen draws them
+  beside its rooms. Chatlet draws no tabs because the header draws them on a
+  section's own page and never on an object's, and a room is the object page a
+  chat reader spends their time on, so Mentions and Search sit at the head of
+  the rail, drawn from the same table, and the frame draws nothing for them.
 - An **object tab** is a `tab=` query on an object's own page (a seat's
   Overview, Work, Turns…), bound to 1–9.
 
@@ -669,9 +673,9 @@ what needs you, what reached you, what is yours. Then **Company**, what the
 company decides: who it is, the policies its agents read, its org chart, its
 schedules, the services and apps it runs, and, last, the ceilings it sets on
 what it spends. Then **Workspace**, what the company does with all of that:
-its work, what it knows, what it made and what is running. The engine stands
-beside the company's name in the head, and the foot is the reader, with
-Settings and Preferences as glyphs beside them.
+its work, what its people say to each other, what it knows, what it made and
+what is running. The engine stands beside the company's name in the head, and
+the foot is the reader, with Settings and Preferences as glyphs beside them.
 
 | Row | Route | Figure |
 |---|---|---|
@@ -687,6 +691,7 @@ Settings and Preferences as glyphs beside them.
 | **Budgets** | `#/company/budgets` | none (tokens only; nothing in this product renders money) |
 | *Workspace* | | |
 | **Worklet** | `#/worklet` | none |
+| **Chatlet** | `#/chatlet` | none (the unread counts are per room, on the screen's own rail). Locked, like Worklet, for a reader without Chatlet access; a reader who holds it but whose credential acts as no seat is answered by the screen itself, since every chat page is read as a seat |
 | **Doclet** | `#/doclet` | none |
 | **Artifacts** | `#/artifacts` | none, and never a lock: a share alone admits a reader, and starting a sheet is the one thing in it the Artifacts access gates |
 | **Live** | `#/live` | the agents working now, beside the working mark, the chrome's one pulsing dot. On Live because a count says how many of something the DESTINATION holds, and Live › Now running holds the running turns, one row each; on the org chart's row it sent a reader looking for a running turn to the chart |
@@ -814,7 +819,8 @@ Teams and every seat page's status), Schedules, Budgets, Live › Now running an
 Coding runs, and Settings › Token spend: what every seat is doing, what it has spent,
 what it may spend and who answers to whom, which everybody who works here
 reads. An APP's sections need that app: Inbox, My work, Worklet and Settings ›
-Expensive tasks need Worklet, and Doclet needs Doclet. And the
+Expensive tasks need Worklet, and Doclet needs Doclet, and every
+section of Chatlet is chat's. And the
 company-wide TRANSCRIPTS (Live › Turns, Agent-to-agent and the Event log,
 Doclet › Agent diaries, and a seat's Turns and Memory tabs to anybody but its
 lead) and every other Settings page are admin's; Company › Integrations is
@@ -898,7 +904,7 @@ is named from the reading the refusal was decided on (`useHeldReading`), never
 from the viewer beside it, which has not answered in the moment between the
 session's answer and the socket's — named off it, the refusal told a person
 signed in that nobody was. It names ACCESS by the word People gives
-it (Admin, Worklet, Doclet) rather than a credential,
+it (Admin, Worklet, Doclet, Chatlet) rather than a credential,
 because a signed-in person lacks access, and "needs an operator credential"
 sent them looking for a credential they have no use for. A screen that mounted anyway was
 refused and drew the refusal as data: "0 nodes" in its header, four tiles of 0
@@ -923,6 +929,21 @@ kept in the tab's storage: replacing the builder the moment the reader's
 access was withdrawn would take the draft off screen while the person who wrote it is
 still there to copy it out, and the builder says for itself which of its
 saves the reader's access reaches.
+
+**Chatlet is guarded whole, and keeps two refusals of its own.** Every chat page
+is read AS A SEAT — the engine answers for the seat the session's principal
+holds, with no handle parameter anywhere in the chat family and no arm, an
+administrator's included, that reads somebody else's rooms — so the
+workspace's row and all three of its sections name the Chatlet app, and a reader
+without it meets the frame's refusal on every chat page, a room included. What
+the frame cannot say is chat's own. A principal that holds Chatlet and acts as NO
+seat — a deployment's own token, a service account — reads nothing there, not
+even a public room, so the screen says that ("Chatlet is read as the seat you
+hold"), naming the binding that would give the credential one (`crewlet iam
+bind`). And a company whose chat is NOT the engine's own — `chat.backend:
+vendor` or `none` — is told so, with the vendor it runs on, rather than shown
+rooms it cannot have or offered a room it cannot hold. The row stays, as
+Knowledge's does with no backend.
 
 **A figure beside a row says what it counts.** The kit's `NavItem` takes a
 figure only with the words that name it, and two kinds of figure are two
@@ -2152,7 +2173,7 @@ not bind — a key the legend offered and nothing answered.
 **`/` searches what you are looking at.** A screen with a search box of its
 own (the seat filter, the event log, the tools catalogue, the audit log's
 actor, work search and a list's key-or-title box, Doclet and its
-page finder) registers it with `useSearchTarget`, and `/` focuses it with its
+page finder, Search chat) registers it with `useSearchTarget`, and `/` focuses it with its
 text selected to type over; on a screen with none, `/` opens the palette. It
 opened the palette everywhere, so on those screens the key a reader pressed to
 search the screen took them away from it.
@@ -4062,8 +4083,10 @@ naming its size and the limit, where the answer would be: sent, all three
 would be refused, and a list that lost its tasks and pages with nothing saying
 why reads as nothing matching. Worklet's search and Doclet's do the
 same with a phrase in their address, and so do the two pickers that find a
-task — handing one over and linking one — in place of their list. Every
-`work_search` and `knowledge` read is asked through one hook,
+task — handing one over and linking one — in place of their list, and the
+chat screen's search and its room finder, whose `chat_search` takes the same
+bound. Every `work_search`, `knowledge` and `chat_search` read is asked
+through one hook,
 `useSearchQuery` (`lib/useSearchQuery.ts`), which applies the bound, says why
 and holds no answer from a shorter phrase under one it never sent; a source
 test fails on a ranked search asked any other way, so a new picker cannot skip
@@ -4465,7 +4488,7 @@ same, under its own login:
 | Offline | Offline. Reconnect to make changes. |
 | Not yet known | Checking who you are before anything can be changed. |
 | Anonymous | Sign in to make changes. |
-| Without any app the change needs: Worklet for a change to work, Doclet for one to a page, either for a question answered from both (the act's own `apps`, which the engine holds to its authority table) | This change needs Worklet access. An admin can give it to you. (Doclet, for a page; Worklet or Doclet, for a question.) |
+| Without any app the change needs: Worklet for a change to work, Doclet for one to a page, Chatlet for one in a room, either for a question answered from both (the act's own `apps`, which the engine holds to its authority table) | This change needs Worklet access. An admin can give it to you. (Doclet, for a page; Chatlet, in a room; Worklet or Doclet, for a question.) |
 | Somebody the engine does not make this change for | This can’t be changed from here. |
 | Looking at somebody else's record | The screen's own sentence, naming whose record it is — My work read on a report's day holds every control on it (`HoldWrites`), and releases exactly the one change it offers there, a lead's reorder of that queue. |
 
@@ -4592,7 +4615,7 @@ route and is not a read, every argument is one the tool takes, every required
 one can be sent. It carries a row for each tool a control presses and no
 other — `app/source.test.ts` holds it to the `useAct("…")` calls both ways — so
 a tool arrives in it with the control that sends it. The controls
-(`components/writes.tsx`):
+(`components/writes.tsx`, and chat's in its own screen, `routes/chatlet`):
 
 | Control | Where | Tool |
 |---|---|---|
@@ -4620,6 +4643,17 @@ a tool arrives in it with the control that sends it. The controls
 | Save (with "What changed") | A page's editor | `save_page{page, base_version, body, message?}`, against the revision the edit started from |
 | Watch · Stop watching (the eye) | A page's bar | `save_page{page, base_version, watch}`: the person's own subscription, nothing else |
 | Comment · Reply | A page's comments | `comment_on_page{page, body}` / `{page, body, reply_to}` |
+| Send (`Mod+Enter`) | A chat room's composer | `post_message{channel, body}` — under the operation key the outbox keeps (`Idempotency-Key`), so a retry after a lost answer is the same message rather than a second one |
+| Reply | A chat thread's composer | `reply_in_thread{channel, reply_to, body}` |
+| Edit, then Save | A chat message of your own | `edit_message{channel, message_id, body}` — the author's alone, never an admin's on somebody else's words, and taken in an archived room. Save is held over a rewrite that is the message as it stands or is empty; the editor closes on an answer that took it and keeps your words on any other |
+| Delete (pressed twice) | A chat message of your own, and anybody's to an admin | `delete_message{channel, message_id}` — the author's, or an admin's moderation, and the tombstone records who. Reaches past membership and past an archive; held on a room this build cannot classify, and while another message's delete is out |
+| A reaction | A chat message's reaction chips | `react_to_message{channel, message_id, emoji, remove}` — quiet, no toast; a refusal is said above the transcript. Held outside a private room you are not in, as a post is; an archived room takes it |
+| Join · Leave | A chat room's header; Join in **Find a room** | `join_channel{channel}` / `leave_channel{channel}` — refused on a unit's room and a direct conversation, so neither offers it |
+| Mute · Unmute | A chat room's header | `mark_chat_read{mute}` / `{unmute}` — this room alone, every other room's state kept |
+| New room | The chat rail | `create_channel{channel, kind, topic?, members?}` |
+| New direct message | The chat rail | `open_dm{to}` — a direct conversation's identity is who is in it, so opening one again reaches the same room |
+| Topic · Purpose | A chat room's settings dialog | `update_channel{channel, topic?, purpose?}` — only the fields changed. Archiving and the room's horizon are not offered anywhere in the dashboard, and the dialog says so: an archive closes the room for everybody in it, and the horizon decides what survives on every data node and is an administrator's step-up gesture (`PUT /chatlet/channels/{channel_id}/retention`) |
+| — (the read cursor, no control) | Written as you read a chat room | `mark_chat_read{cursors}` — every `READ_FLUSH_MS` (15 s) and at once on leaving the room, hiding the tab or closing it; quiet, and on no log (`domain: null`). Its answer is your seat's read state as it left it, and the tab applies it as it would the push — so the rail asks again once, when the revision moves |
 
 A change to the **company's configuration** is not an act. The company
 document — its ceiling, an MCP server, a model — is a new configuration
@@ -4692,7 +4726,11 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   answer's own `traffic_known`. The budgets answer says `durable: false` when
   the counter could not be READ.
 - **Not configured** vs **empty.** A knowledge search with no backend says so;
-  a company with no seats says roles come from the configuration.
+  a company with no seats says roles come from the configuration; and Chatlet on
+  a company whose `chat.backend` is `vendor` or `none` says which — "This
+  company's chat is on Mattermost", naming the field — from the `viewer`
+  answer, before it asks a chat question the engine does not serve there and
+  draws the `unknown_query` it would get as a node fault.
 - **Everything in the window** vs **everything that arrived.** Where a screen
   narrows client-side it says so, naming the SOURCE rather than hedging the
   whole answer. **Audit** is the case that made this a rule: it composes four
@@ -7212,6 +7250,138 @@ table the socket's query errors use.
 
 ---
 
+## Chatlet: a rail, a room, and where you have read to
+
+The company's own chat (`chat.backend: chatlet`), read AS A SEAT: the engine
+answers every chat question for the seat the session's principal holds, so the
+workspace is guarded whole and a principal that acts as no seat is told so and
+how to give it one (see [The sidebar](#the-sidebar)). On a company whose chat
+is a vendor's or none, the screen says which — named from the `viewer` answer —
+and asks nothing.
+
+- **The rail is the row's renderer** (`rail`, `app/nav.ts`). It starts with the
+  three gestures that start a conversation — **New room**, **Message** (a direct
+  conversation) and **Find a room**, the first two held as the change their
+  dialog makes is held (a reader the engine opens no room for is told so on the
+  button) — then the row's other sections as links (Mentions, Search chat), then
+  the seat's own **Rooms**, newest activity first: the room's name (`#` for a
+  room, the people for a direct conversation), the last thing said, how long
+  ago, `muted` and `following` where they hold, and the unread count. The count
+  is the ENGINE'S, against the seat's own read cursor, and it stops at `99+`
+  only where the answer says it stopped counting; when the cursors could not be
+  read the badges are absent and a callout says so, because a zero would claim
+  the reader is caught up. A rail past its bound says so too: it is sorted by
+  activity, which cannot be paged.
+- **A room** (`#/chatlet/{id}`) is the transcript, paged back on request, who is
+  looking at it, typing in it or working on a reply in it, and the composer
+  (`Mod+Enter` sends; `Enter` is a new line). A message's links are drawn under
+  it, in the room and in a thread alike, as rendered prose draws an address in
+  an agent's words (`links: "checked"`), whoever wrote the message: an address
+  on a host the company configured opens as the dashboard rebuilds it, in a new
+  tab; any other, a link to the company's own dashboard among them, is drawn
+  whole and inert with the host it names; and one whose scheme the allowlist
+  refuses is its words. The person's own assistant reads
+  every box open on the room as one draft, the message, the reply in a thread
+  open beside it and each message open for a rewrite, and proposes text into
+  any of them; Send, Reply and Save stay the person's. A room that takes no messages from
+  you — archived, a private room you are outside, a kind this build cannot
+  classify — closes the box and says why in it; a browser that cannot send
+  (offline, a reader the engine posts nothing for) leaves the box open and holds
+  Send, with the sentence written beside it, as every composer does. Its header
+  holds Join or Leave, Mute and the settings dialog, whose opener is held where
+  the engine would refuse its Save — outside a private room, on a kind this
+  build cannot classify — and not on an archived room, which keeps its topic.
+  Each of a message's changes (Edit, Delete, a reaction) is held by its own
+  tool, because the engine serves each to a person on its own — and by that
+  tool's own rule in the room rather than the composer's: an archive closes a
+  room to new messages and to nothing else, a delete reaches past membership,
+  and every one of them is drawn and held with its sentence where the engine
+  would refuse it, never hidden. A room whose own read failed says so on every
+  control rather than reading for ever. A public room or a unit's room is
+  readable by every seat, joined or not, so arriving from a search outside a
+  room whose whole transcript is on screen is ordinary. A public room's header
+  then offers to join it; a unit's room offers neither Join nor Leave, because
+  its membership is the org chart's — a seat is in it by being in the unit — and
+  says so instead. A message is not drawn until the engine has it: what you sent
+  waits beneath the transcript until a read carries it — with **Ask again under
+  the same id** where nobody can say whether it landed (the engine derives the
+  message's id from the request's operation key, so a fresh key would say it
+  twice), **Try again** where the node refused it, and **Take it off the
+  screen**, which unsays nothing. It waits there while you look at another
+  room, and is there when you come back.
+- **A thread** is `thread=` on its room, opened beside the transcript, or
+  under it on a screen too narrow for both (see [The frame](#the-frame)). It
+  is one level deep, so a reply offers no thread of its own.
+- **Mentions** (`#/chatlet/mentions`) is every message that named your seat, in
+  every room: the whole away story, because the engine sends no email, push or
+  SMS. Each row is the moment you were named and is dated by it. An edit that
+  still names you leaves the row where it was, with the new words and marked
+  edited; one that names you anew puts it at the top; a delete takes it away.
+- **Search chat** (`#/chatlet/search`, `q=` and `in=`) ranks what was said in every
+  room your seat may READ — wider than your rail — by keyword alone: chat is not
+  in the vector corpus
+  ([ADR-0065](../../adr/0065-chat-is-a-keyword-corpus-and-takes-no-vectors.md)).
+  A phrase past the engine's bound is not sent, and the screen says why.
+- **On Home**, Chatlet offers two widgets for the reader's board
+  (`routes/chatlet/home.widgets.tsx`; see
+  [Home is the reader's board](#home-is-the-readers-board)), each asking what
+  its page asks and re-reading on the frames its page re-reads on: **Unread
+  rooms**, the rail's rooms with something unread and the engine's count on
+  each — a muted room left out and counted, a rail cut at the engine's bound
+  said to count only the reader's most recently active rooms, and where the
+  cursors could not be read a sentence saying so, none of them ever drawn as
+  "caught up" — and **Mentions**, the feed's newest page, a mention in a
+  thread opening the thread. Neither marks anything read. Like every chat page
+  they are the Chatlet app's, and a credential acting as no seat, or a company
+  whose chat is a vendor's or none, is told so in a line and asked nothing.
+- **Live, by evidence.** A chat frame carries no body: it says a room moved, and
+  the screen re-reads, a burst coalesced into one read. What a reader has paged
+  to is read again only where a frame names something on it: a room's newest
+  page on every frame in it, and then — once that page has caught up with the
+  frame on the log — the page that ends at an edited, deleted or reacted-to
+  message it does not reach, or every page held below it for an erase or a
+  prune; a thread's first page for its root, the page holding a changed reply,
+  and its last page for a new reply; Mentions' newest page on every frame, and
+  a page held below it for a change to a mention on it, an erase or prune in a
+  room it holds a mention from, or a membership change. A page read again is
+  put back only once it still meets the page after it: a room joined makes the
+  mentions said in it visible, so a page can come back holding the same number
+  over a shorter range, and the range it no longer reaches is read in before
+  anything moves rather than drawn as a hole. A tab that let a frame go unseen —
+  a bound, or a frame naming no room, which is the engine saying it dropped
+  some — reads everything it holds again, because what it missed is unknown.
+  Presence is pushed whole for the rooms the tab says it has open. Your seat's
+  read state reaches every tab of yours as `chat_cursor_moved` — the one that
+  wrote it included, which also has the write's own answer — and the rail asks
+  again once when its revision moves, whichever of the two lands first.
+- **Where you have read to** is written as you read — every `READ_FLUSH_MS`
+  (15 s), at once on leaving a room, hiding the tab or closing it — through
+  `mark_chat_read`, the same audited act every other change is. A badge
+  therefore clears when a flush lands, not on the scroll. A message counts as
+  read only once it has been on screen while the room is in view: the tab in
+  front, and nothing over the page. The assistant as the whole window or over
+  the page's end edge covers the room, and so does a dialog or the palette;
+  the assistant's column only narrows the page. What arrived while the room
+  was covered counts once it is in view again.
+- **A seat that moves is a new screen.** A write goes out as the seat the
+  engine resolves when it arrives, so the whole screen is mounted under the
+  seat the viewer names and is drawn again when the directory binds the person
+  elsewhere: the last seat's unsent messages with their Retry, a draft, an open
+  thread and a half-filled dialog go with it, and what it had read and not yet
+  written is not written as the next seat — a cursor only moves forward, so it
+  would mark rooms read for good. A different person signing in hands the
+  whole tab over by a reload with its storage emptied, which is the same thing
+  for every screen.
+- **Offline**, chat is every other socket screen: it keeps what it last read,
+  the frame's banner says the live channel is down, and it reads again on
+  reconnect. Nothing is said while the socket is down; a message is never
+  queued for later.
+- **On a narrow screen**, a phone's or one the assistant's column has
+  narrowed, the rail stacks above the room and each takes its share. The
+  screen still takes the window's height, because a transcript inside a page
+  that also scrolls is two scrollers under one wheel. The widths are in
+  [The frame](#the-frame).
+
 ## Doclet: the spaces, a landing, and search with real modes
 
 Doclet is the approved **Home** layout. No column of navigation stands
@@ -8670,7 +8840,12 @@ changes, the configuration history, the credential rows,
 and **Runtime**, the runtime audit (`events{source: "operator"}`), which is
 every call a person made through a running node whatever became of it: each
 operator tool call that is not a proven read — through the act route, an
-assistant over `/operator/mcp` or the human write surface — and every backup.
+assistant over `/operator/mcp` or the human write surface, whose chat erase,
+prune and horizon are rows named by their verbs (`chat.erase`, `chat.prune`,
+`chat.channel.retention`) — and every backup. **Chatlet is not a source of its
+own**: the other four are change records and a transcript is content — a
+private room's is not an administrator's to read — while what a person *did*
+in chat is already here, every chat write being a call this source records.
 A runtime row names the tool (or "backup" and its directory), who made the
 call as the engine recorded it (`actor` and `actor_kind`: the seat a bound
 person acted as, or a credential's own login) with the credential it came

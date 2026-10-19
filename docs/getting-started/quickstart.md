@@ -61,8 +61,9 @@ stream:
                           #   survives a restart — including the people
                           #   who sign in, whom every node keeps on a
                           #   state log whatever backends the company
-                          #   names, and its items and pages, which are on
-                          #   Worklet and Doclet here. The engine
+                          #   names, and its items, pages and messages,
+                          #   which are on Worklet, Doclet and Chatlet
+                          #   here. The engine
                           #   REFUSES to boot without one rather than lose
                           #   them at the first restart
 
@@ -160,8 +161,10 @@ roles:
   # you connect later. It is also the seat you join on in step 4: every
   # person holds a human seat, so a company with none admits nobody.
   # `contact` is optional — without one you are reached through the
-  # dashboard only, and agents cannot @-mention you on chat; scope
-  # `manages` to the top seat so you aren't copied on everything.
+  # dashboard only, whose chat is the engine's own and mentions you by your
+  # handle, and agents cannot @-mention you on a vendor's chat you connect
+  # later; scope `manages` to the top seat so you aren't copied on
+  # everything.
   - name: Your Name
     handle: founder             # see the note under this block — set these now
     kind: human
@@ -195,6 +198,10 @@ units:
     type: team
     lead: pm                    # the lead seat's HANDLE
     purpose: "Define what gets built and why"
+    # The team's room. Chat defaults to Chatlet too, so this opens
+    # a channel called `product` with this unit's seats in it — and it is an
+    # address, so it is `product` rather than `#product` or `Product Team`.
+    channel: product
     # A unit's identity on the tracker and the knowledge base. Both default
     # to Worklet and Doclet, so these two keys are all it takes to
     # give the team somewhere to file work and write things down: no site,
@@ -215,6 +222,7 @@ units:
     type: team
     lead: cto
     purpose: "Build and ship the product"
+    channel: engineering
     project: ENG
     space: ENG
     goals:
@@ -572,9 +580,10 @@ greeting.
 
 The sidebar reads top to bottom: Home, Inbox and My work; the Company group
 (Overview, Policies, Org chart, Schedules, Integrations and Budgets); the
-Workspace group (Worklet, Doclet, Artifacts and Live); and Settings at its
-foot. Each workspace's sections are tabs in its page header. `g` then a
-letter jumps between them, and `?` lists every key.
+Workspace group (Worklet, Chatlet, Doclet, Artifacts and Live); and Settings at
+its foot. Each workspace's sections are tabs in its page header, or Chatlet's
+rail beside its rooms. `g` then a letter jumps between them, and `?` lists
+every key.
 While an agent is working, the Live row counts the seats at work and a
 **Running** group under the sidebar's shortcuts (after Projects, Pinned and
 Starred) lists up to four running turns. Press one to watch it — its
@@ -616,6 +625,14 @@ row in **Asked of me**. Signed in with the API token instead, the dashboard says
 so rather than guessing — a token bound to no seat is an ordinary state, not a
 fault, and its day is the one kept under its own login. See [Humans in the Org
 Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api).
+
+**Chatlet** is yours the same way, and only that way. Its rooms are the engine's
+own — `chat.backend` defaults to `chatlet` — and every one of them is read and
+spoken in as your seat, because a room shows each speaker by seat and its
+members are seats: the units' channels above are already open, with their
+seats in them. Signed in with the API token instead, Chatlet reads nothing at
+all, not even a public room, because that credential acts as no seat. See
+[Chatlet](../concepts/chatlet.md#people).
 
 **⌘K (Ctrl+K elsewhere) searches everything and acts on it.** Type to find a
 screen, a task, a page or a colleague — `#` narrows to tasks, `@` to agents,
@@ -704,10 +721,10 @@ so you can sign in on it with the founder token before any company exists. You
 cannot invite yourself yet — there is no seat to put you on, so an invitation
 there answers `409 no_active_revision` — and the company comes first: import
 or create it with your human seat in it, then invite yourself onto that seat
-as above. Worklet's and Doclet's routes
+as above. Worklet's, Doclet's and Chatlet's routes
 answer `503 no_active_revision` until the first revision arrives. That
-revision brings up everything the company needs, Worklet and Doclet
-included, with their projects and spaces, and the
+revision brings up everything the company needs, Worklet, Doclet and Chatlet
+included, with their projects, spaces and rooms, and the
 [code sandbox](../concepts/code-sandbox.md) when it configures
 `providers.sandbox` — under the same API, with nothing restarted:
 
@@ -802,8 +819,8 @@ instead (`-api-port 8001`) when something should probe it: without the
 [Probes on a node without ingress](../reference/api-endpoints.md#probes-on-a-node-without-ingress).
 
 The agents node claims the seats once the data node answers that its copy of
-the company's records is level with its logs, and its seats' tracker and knowledge
-tools read and write through it. See
+the company's records is level with its logs, and its seats' tracker, knowledge
+and chat tools read and write through it. See
 [Running One Agent Somewhere Else](../guides/satellite-nodes.md) for what a
 node without data can and cannot do.
 
@@ -844,10 +861,19 @@ through external surfaces — pick yours in
 base, code host, chat, sandbox — with the hosted vs self-hosted options for
 each), then wire them in:
 
-- Connect chat — on Slack or on Mattermost, both below — so agents
-  collaborate in channels and you can DM them. Whichever you pick, first add
-  the integration's block to `company.yaml` — the page's *Configure in YAML*
-  section — with a `${VAR}` for each credential: the provisioner mints
+- **You already have chat.** `chat.backend` defaults to the engine's own, so
+  the units you gave a `channel` above have rooms in the dashboard right now,
+  with their seats in them — and you are in them as your own seat once you
+  have signed in (above): post in one and its team's agents wake to answer.
+  What it does not do is reach you when you are not looking — the engine
+  sends no email, no push and no SMS, so a mention becomes an unread count
+  and a mention feed. See [Chatlet](../concepts/chatlet.md).
+- Connect a **vendor** chat instead — Slack or Mattermost, both below — if
+  your people already live in one, or if being notified while away matters.
+  It is exclusive with the engine's own — one live chat home, or a person
+  answers in the place the agents are not reading. Whichever you pick, first
+  add the integration's block to `company.yaml` — the page's *Configure in
+  YAML* section — with a `${VAR}` for each credential: the provisioner mints
   exactly the variables the file names. It records what it mints through the
   running node, as the founder token, and the `crewlet config import` that
   ends each snippet is what hands the engine both: the node took its company
@@ -862,7 +888,7 @@ each), then wire them in:
   crewlet slack provision company.yaml -secret-store -public-url https://your-server.com
   crewlet config import company.yaml        # the block, with what was just minted
   ```
-  To try chat on this machine first,
+  To try a vendor chat on this machine first,
   [Mattermost](../integrations/mattermost.md) ships in this repo's
   `docker-compose.yml` and needs no account, no inbound URL and no clicks.
   Its block names the instance as `url: "${MATTERMOST_URL}"` and
