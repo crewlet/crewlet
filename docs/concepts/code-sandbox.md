@@ -142,8 +142,12 @@ roles:
         servers: [github, atlassian]    # which of the role's MCP servers the coding agent gets
       setup:                            # per-role provisioning steps, applied after the
         - name: node                    #   engine-wide providers.sandbox.setup
-          commands: ["corepack enable"]
-          brief: "Node 22 + pnpm are preinstalled; use pnpm for installs."
+          # No `corepack enable`: it writes pnpm's shim beside the Node binary,
+          # and a setup command runs as the box's own account — `user` on E2B,
+          # the engine's on the host for `direct` — which cannot write there
+          # when Node was installed as root. `corepack pnpm …` needs no shim.
+          commands: ["command -v corepack >/dev/null || { echo 'no corepack on PATH' >&2; exit 1; }"]
+          brief: "Node and corepack are installed; run the repo's pinned package manager through corepack (`corepack pnpm install`), never a bare `pnpm`."
 ```
 
 `role.sandbox.env` is where **external-service tokens are declared** — the engine names no tool-specific variable of its own (see [Credentials and the run environment](#credentials-and-the-run-environment)). By convention a seat points `GITHUB_TOKEN` / `GITLAB_TOKEN` at the *same* `${VAR}` as its `mcp_env` code-host credential, so PRs/MRs land under the agent's own identity — see [GitHub](../integrations/github.md) and [GitLab](../integrations/gitlab.md).
