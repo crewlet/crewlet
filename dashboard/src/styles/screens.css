@@ -11006,10 +11006,16 @@ a.live-row:focus-visible {
 }
 
 /* PRESENT: the slide as large as fits; full screen on the reader's press. */
+/* THE SHOW IS SEEN WHOLE: its height is measured (`useFitInView`) from the
+   room between its top and the foot of the view, and its scroll margins are
+   what that room keeps clear, so the slide's foot and the count under it are
+   never below the fold. */
 .slides-show {
   display: flex;
   flex-direction: column;
-  height: max(24rem, calc(100cqb - var(--sticky-top) - 12rem));
+  height: var(--slides-show-height, calc(100cqb - var(--sticky-top)));
+  scroll-margin-top: var(--sticky-top);
+  scroll-margin-bottom: var(--spacing-4);
   background: var(--color-surface-inset);
 }
 .slides-show:fullscreen {

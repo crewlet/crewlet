@@ -26,7 +26,16 @@
  * next at the lectern moves the room's screen.
  */
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import {
   announce,
   Button,
@@ -74,7 +83,8 @@ import {
   type DeckMerge,
 } from "~/lib/artifacts/deck.ts";
 import { renderSlide, withText, type SlideRenderContext } from "~/lib/slides.tsx";
-import { SLIDE_TRANSITIONS } from "~/contract/artifacts.ts";
+import { SLIDE_STAGE_HEIGHT, SLIDE_STAGE_WIDTH, SLIDE_TRANSITIONS } from "~/contract/artifacts.ts";
+import { useFitInView } from "~/lib/useFitInView.ts";
 import type { PresenceReport } from "./presence.ts";
 
 /** The views of a deck, as `mode=` names them; "" is the editor (or the reader's slides). */
@@ -646,7 +656,16 @@ function useShowKeys(
   return { shown, at, to };
 }
 
-/** Present, in this window: the slide as large as fits, full screen on the reader's press. */
+/** What a show asks for at its width: the slide at that width, and the bar under it. */
+function showNeed(el: HTMLElement): number {
+  const bar = el.querySelector<HTMLElement>(".slides-show-bar")?.offsetHeight ?? 0;
+  return (el.clientWidth * SLIDE_STAGE_HEIGHT) / SLIDE_STAGE_WIDTH + bar;
+}
+
+/**
+ * Present, in this window: the slide as large as fits in the view, its foot
+ * and the count under it on screen, and full screen on the reader's press.
+ */
 function DeckShow({
   slides,
   current,
@@ -662,6 +681,12 @@ function DeckShow({
 }) {
   const box = useRef<HTMLDivElement>(null);
   const fullscreen = useFullscreen(box);
+  const height = useFitInView(box, showNeed);
+  // THE SHOW TAKES THE KEYS as it opens: focus left on the control that
+  // opened it would spend the arrows on that control instead of the slides.
+  useEffect(() => {
+    box.current?.focus({ preventScroll: true });
+  }, []);
   const { shown, at, to } = useShowKeys(slides, current, onGo, () => {
     if (fullscreen.active) fullscreen.exit();
     else onExit();
@@ -676,7 +701,16 @@ function DeckShow({
     previous.current = current;
   }, [current]);
   return (
-    <div className="slides-show" ref={box}>
+    <div
+      className="slides-show"
+      ref={box}
+      role="region"
+      aria-label="Slide show"
+      tabIndex={-1}
+      style={
+        height === null ? undefined : ({ "--slides-show-height": `${height}px` } as CSSProperties)
+      }
+    >
       <div className="slides-show-stage" key={current.id} data-transition={transition || undefined}>
         <SlideStage
           fit="contain"
