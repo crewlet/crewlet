@@ -49,6 +49,7 @@ const version = (n: number, label = ""): ArtifactVersionSummary =>
     author: { name: "ada", kind: "human" },
     created_at: "2026-10-18T10:00:00Z",
     position: n,
+    capabilities: [],
     ...(label ? { label } : {}),
   }) as unknown as ArtifactVersionSummary;
 
@@ -83,7 +84,9 @@ const mount = () => {
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = async (what) =>
     what === "artifact_version"
-      ? { manifest: { entry: "index.html", files: [] } }
+      ? // A WHOLE VERSION, as the engine answers it: its summary's fields
+        // (capabilities among them) beside its manifest.
+        { ...versions[0], manifest: { entry: "index.html", files: [] } }
       : { entries: [] };
   return render(
     <ClientContext.Provider value={{ store, socket }}>
