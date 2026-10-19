@@ -23,8 +23,11 @@ test("no board keeps a grid of its own", () => {
 
 // A ROW OF STATS SHARES ONE BASELINE: each stat stands on the foot of its
 // frame, over the citation, whether its title took one line or two.
-test("a stat stands on the foot of its frame", () => {
-  const body = /\n\.dashboard-figure\[data-figure="stat"\] \{([^}]*)\}/.exec(css)?.[1] ?? "";
+test("a stat or a meter stands on the foot of its frame", () => {
+  const body =
+    /\n\.dashboard-figure:is\(\[data-figure="stat"\], \[data-figure="meter"\]\) \{([^}]*)\}/.exec(
+      css,
+    )?.[1] ?? "";
   expect(body).toMatch(/justify-content:\s*flex-end;/);
   expect(body).toMatch(/height:\s*100%;/);
 });

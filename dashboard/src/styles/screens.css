@@ -11378,10 +11378,11 @@ a.live-row:focus-visible {
 .dashboard-figure {
   min-width: 0;
 }
-/* A STAT STANDS ON THE FOOT OF ITS FRAME, over the citation, so the values of
-   a row of stats share one baseline whether a title or a label above them
-   took one line or two. */
-.dashboard-figure[data-figure="stat"] {
+/* A STAT OR A METER STANDS ON THE FOOT OF ITS FRAME, over the citation, so
+   the values of a row share one baseline whether a title or a label above
+   them took one line or two, and a frame the board makes taller than its
+   figure holds its air above the figure, never as a gap under it. */
+.dashboard-figure:is([data-figure="stat"], [data-figure="meter"]) {
   display: flex;
   flex-direction: column;
   justify-content: flex-end;

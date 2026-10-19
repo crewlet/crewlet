@@ -116,7 +116,7 @@ test("a table reaches its frame's sides, with no pager or settings over its rows
   expect(screen.queryByRole("button", { name: /sort/i })).toBeNull();
 });
 
-test("a stat stands on its frame's foot, and no other figure does", () => {
+test("a figure says its type, which the stylesheet stands a stat and a meter on", () => {
   draw({ id: "n", type: "stat", title: "Deploys", agg: "count", w: 3 }, [], [{}]);
   expect(document.querySelector(".dashboard-figure")?.getAttribute("data-figure")).toBe("stat");
   cleanup();
