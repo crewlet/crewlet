@@ -201,6 +201,75 @@ func TestARequiredKeyIsRefusedWhenAbsent(t *testing.T) {
 	}
 }
 
+// A REFUSED KEY IS SAID IN ONE SENTENCE that never contradicts the route: what
+// is wrong with the key, how to send one that is not, and that the header may
+// be left out only where the route mints one itself. The refusal used to say
+// "or none for a new request" above a detail telling the caller to send one,
+// on a route that refuses a request without one ("Send a Idempotency-Key
+// header").
+//
+// Mutation: offer leaving the header out on a required route, or put a remedy
+// back in the code's own message, and a case goes red.
+func TestARefusedKeyIsOneSentenceTheRouteHolds(t *testing.T) {
+	t.Parallel()
+	jane := person("jane.doe")
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	invented := uuid.New().String() // a v4: no instant, so no node could vouch for it
+	const notOurs = "The Idempotency-Key is not an operation id this engine accepts, " +
+		"which is a UUIDv7, optionally followed by a dot and a name; send a UUIDv7 " +
+		"you mint for the change, or the op_id an earlier answer returned, unchanged"
+	refusal := func(rec *httptest.ResponseRecorder) (detail, message string) {
+		t.Helper()
+		assertRefusedNamingTheHeader(t, rec)
+		var body map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		detail, _ = body["detail"].(string)
+		message, _ = body["message"].(string)
+		return detail, message
+	}
+	for name, tc := range map[string]struct {
+		send func(*httptest.ResponseRecorder) bool
+		want string
+	}{
+		"a required route with no key": {
+			send: func(rec *httptest.ResponseRecorder) bool {
+				_, ok := opkey.Require(rec, request(jane, ""))
+				return ok
+			},
+			want: "This request needs an Idempotency-Key header: send a UUIDv7 you " +
+				"mint for the change, and the same one on every retry of it.",
+		},
+		"a required route with a key it does not accept": {
+			send: func(rec *httptest.ResponseRecorder) bool {
+				_, ok := opkey.Require(rec, request(jane, invented))
+				return ok
+			},
+			want: notOurs + ".",
+		},
+		"a route that mints a key with one it does not accept": {
+			send: func(rec *httptest.ResponseRecorder) bool {
+				_, ok := opkey.Key(rec, request(jane, invented), now)
+				return ok
+			},
+			want: notOurs + ", or leave the header out to start the change afresh.",
+		},
+	} {
+		rec := httptest.NewRecorder()
+		if tc.send(rec) {
+			t.Errorf("%s: the key was taken", name)
+			continue
+		}
+		detail, message := refusal(rec)
+		if detail != tc.want {
+			t.Errorf("%s: the detail reads\n%q\nwant\n%q", name, detail, tc.want)
+		}
+		if strings.Contains(message, "none") || strings.Contains(message, "Send back") {
+			t.Errorf("%s: the code's own message prescribes a remedy the detail may "+
+				"contradict: %q", name, message)
+		}
+	}
+}
+
 // person is a resolved principal by its login, with an ID of its own.
 func person(login string) iam.Principal {
 	return iam.Principal{
