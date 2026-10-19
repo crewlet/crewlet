@@ -1267,10 +1267,10 @@ to decide whether it can still vouch for a retry.
 ## `crewlet artifacts`
 
 ```
-crewlet artifacts list [-scope mine|shared|company|agents|all] [-kind html|markdown|slides|sheet]
+crewlet artifacts list [-scope mine|shared|company|agents|all] [-kind html|markdown|slides|sheet|design]
     [-q TEXT] [-status live|trashed] [-work-item KEY] [-limit N]
 crewlet artifacts get <id>
-crewlet artifacts publish <dir|file> [-artifact ID] [-title TEXT] [-kind html|markdown|slides|sheet]
+crewlet artifacts publish <dir|file> [-artifact ID] [-title TEXT] [-kind html|markdown|slides|sheet|design]
     [-entry PATH] [-label TEXT] [-contract VERSION] [-capabilities a,b]
     [-work-item KEY] [-force] [-op-id ID]
 crewlet artifacts versions <id>
@@ -1302,12 +1302,14 @@ the node answers which files the artifact already holds, which are carried by
 their digest and move no byte, and how each of the rest is sent: straight to
 the bucket on a presigned put where the object store offers one, through the
 node otherwise. Then the version is published. A new artifact opens on the
-one default entry it holds, `index.html`, `index.md` or `deck.json`, else the
+one default entry it holds, `index.html`, `index.md`, `deck.json` or
+`canvas.json`, else the
 only file, unless `-entry` names another; a directory holding two default
 entries is refused until `-entry` or `-kind` settles which it is. Its kind is
 the one whose entry that file is: `html` for a page, `markdown` for a `.md`
-file, `slides` for `deck.json` (a deck is told by that path, never by JSON
-alone), and `-kind` names it outright. Its title defaults to the entry's name. A new version of `-artifact` names the
+file, `slides` for `deck.json` and `design` for `canvas.json` (a deck and a
+design are told by those paths, never by JSON alone), and `-kind` names it
+outright. Its title defaults to the entry's name. A new version of `-artifact` names the
 head it read as its base, so a version somebody else published meanwhile is
 refused rather than overwritten; `-force` publishes over it, a person's
 gesture. A new version keeps the head's runtime contract and capabilities

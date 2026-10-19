@@ -82,6 +82,7 @@ interface Crewlet {
   readonly presence: PresenceApi;            // capability "presence"
   readonly assets: AssetsApi;                // capability "assets"
   openLink(url: string): Promise<boolean>;   // always available
+  print(): Promise<boolean>;                 // always available; a design's artboards print
   readonly theme: ThemeApi;                  // always available
 }
 
@@ -324,6 +325,25 @@ The frame cannot open a window. `openLink` asks the host, which shows the
 viewer the destination and opens it in a new tab with no opener if they
 confirm. It resolves `true` when the viewer opened it and `false` when they
 did not. Only `https:` and `http:` URLs are accepted.
+
+### Printing a board
+
+```ts
+crewlet.print(): Promise<boolean>
+```
+
+The frame has no print dialog of its own (its sandbox never allows modals).
+`print` asks the host, which needs no capability for it. On a `design`'s
+artboard, the dashboard covers the window with that board alone, framed at its
+own size, and hands the browser a page of the board's size holding nothing
+else, which the reader can save as a PDF; the promise resolves `true` once the
+print was handed over.
+
+It is refused with `forbidden` unless the reader acted just now (a click or a
+key press in the page, or in the dashboard around it), so a page cannot put a
+print dialog in front of the reader on its own; call it from a button's click
+handler. It is refused with `unavailable` where the host offers no print, as
+on a plain `html` page, which the reader prints from the browser.
 
 ### Theme
 

@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/artifactserve`
-- **Enforced-by:** `internal/artifactserve.TestTheArtifactListenerServesOnlyTheServingRoutes`, `internal/artifactserve.TestTheArtifactListenerReadsNoCookie`, `internal/artifactserve.TestAnArtifactGetsAnOriginOnlyOnASiteOfItsOwn`, `internal/artifactserve.TestEveryServedDocumentCarriesAFreshNonce`, `internal/artifactserve.TestARevokedShareStopsTheNextDocumentRequest`, `internal/artifactserve.TestAStaleServingNodeAnswersUnavailableRatherThanServe`, `internal/api/artifactsapi.TestTheAPIOriginNeverRendersAnArtifact`
+- **Enforced-by:** `internal/artifactserve.TestTheArtifactListenerServesOnlyTheServingRoutes`, `internal/artifactserve.TestTheArtifactListenerReadsNoCookie`, `internal/artifactserve.TestAnArtifactGetsAnOriginOnlyOnASiteOfItsOwn`, `internal/artifactserve.TestEveryServedDocumentCarriesAFreshNonce`, `internal/artifactserve.TestARevokedShareStopsTheNextDocumentRequest`, `internal/artifactserve.TestAStaleServingNodeAnswersUnavailableRatherThanServe`, `internal/api/artifactsapi.TestTheAPIOriginNeverRendersAnArtifact`, `internal/artifactserve.TestEveryBoardIsADocumentUnderItsOwnTicket`, `internal/artifactserve.TestADesignTicketOpensItsOwnBoardAndNoOther`, `internal/artifactserve.TestADesignFrameNamesAPageOfItsVersion`, `internal/artifactserve.TestEveryBoardFailsClosedOnItsNextDocument`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -72,6 +72,75 @@ that only an `editor` publishes, every version names who published it, and
 the linter refuses every remote script a page states. `internal/api/pagepolicy`
 says why a nonce-based policy cannot close the channel.
 
+## One document per ticket
+
+*Amendment, for kinds that frame more than one document per version.*
+
+A `design` is the first kind whose viewer holds several frames of one version
+at once: every artboard is an HTML page of its own, framed beside the others on
+a canvas the dashboard draws natively from `canvas.json`. The kind table says
+how each kind's pages are served (`artifacts.KindSpec.Documents`), and the
+origin decides by it on every document request:
+
+- **A page** (`DocumentsSite`) opens its entry in one frame, and that frame may
+  load any HTML page of the version under the same ticket, as a multi-page site
+  navigates. Nothing about a page changes.
+- **A design** (`DocumentsEach`) frames each artboard on its own. The ticket
+  names the one page it was minted for (the claim `d`, required on every
+  ticket and bounded like any path), the bare ticket path opens that page, and
+  the origin serves **that page and no other as a document** under the ticket.
+  A board that navigates to another board, fetches it, or loads an HTML asset
+  as a document is answered with an empty `404`, counted under the `document`
+  refusal reason. Stylesheets, scripts, images and other subresources of the
+  version still load under the ticket, as they do for a page.
+- **The mint refuses a frame that names no page of the version.** A design's
+  frame always names its board; its canvas, a stylesheet, or a path the
+  version does not hold is refused before any ticket exists, and the ticket
+  route answers `422 invalid`.
+
+**Every guarantee above holds per board.** Each board's frame is minted under
+a ticket of its own, bound to the viewer's credential and the artifact's access
+epoch; each document response carries a fresh nonce under the same strict
+policy; each board's every document request is decided again, so a withdrawn
+share or a revoked credential stops every board on screen at its next document
+request, and a stale node answers each with `503`; no response reads a cookie
+or sets one.
+
+**Why this is safe.** A board is exactly as isolated as one `html` page: the
+same origin rules, the same sandbox tokens, the same policy, the same
+decisions. Framing several of them adds no authority, since a viewer could
+open each page of a multi-page `html` version in turn. The one-document rule
+is not what keeps a board from widening anything (another board would run the
+same author's code under the same grant); it keeps **the documents a viewer
+runs equal to the tickets the dashboard minted**, so a frame never becomes a
+board the dashboard did not open there, and the ready report and the
+visibility budget count what is actually running.
+
+**The visibility budget is a resource bound, not a security boundary.** The
+dashboard frames a board only while it is on screen and drawn at least 160
+pixels wide, at most twelve at once (`liveBoards` in `@crewlethq/ui`); every
+other board is a placeholder that runs nothing. Nothing on the origin relies on
+it: a client that framed every board would hold more tickets, each still
+decided as above.
+
+**Print is the host's.** A sandboxed frame never holds `allow-modals`, so a
+board cannot open a print dialog. `crewlet.print()` asks the dashboard over
+the bridge, which refuses it unless the reader acted on the dashboard document
+just now (its transient user activation, which a click inside the frame
+reaches), and then prints a view holding that board alone, framed afresh under
+its own ticket, on a page of the board's size.
+
+The cases that fail if a guarantee regresses are
+`internal/artifactserve`'s `TestEveryBoardIsADocumentUnderItsOwnTicket` (a
+ticket per board, a fresh nonce under the strict policy, the bare path is the
+board), `TestADesignTicketOpensItsOwnBoardAndNoOther` (the one-document rule,
+and a page's site navigation kept), `TestADesignFrameNamesAPageOfItsVersion`
+(the mint's refusals) and `TestEveryBoardFailsClosedOnItsNextDocument`
+(revocation, a stale copy and the absent cookie, board by board), with
+`internal/artifactserve/ticket`'s `TestATicketAtEveryBoundOpens` holding the
+document claim within the token bound and `internal/api/artifactsapi`'s
+`TestADesignFrameNamesItsBoard` holding the ticket route's `document` field.
+
 ## Why the obvious alternatives are wrong
 
 **Serving artifacts from the dashboard origin under a path** is the shape every
@@ -122,4 +191,6 @@ again for the ticket's principal on every document request. It does not decide
 the same thirty-second bound, nor **public links**, which get a registrable
 domain of their own when they are built. Markdown artifacts are rendered by the
 dashboard's own element-constructing renderer and never reach the artifact
-origin at all.
+origin at all; neither do a deck's slides or a design's canvas, which the
+dashboard draws natively. A design's artboards are framed, one document per
+ticket, as above.

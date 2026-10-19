@@ -406,6 +406,16 @@ A few things worth knowing when deploying Crewlet:
   `img-src` admits `blob:` for the object URLs it makes of a deck's images,
   which only script already running on that origin can mint. A defect in
   either list is a security issue; report it as one.
+- **A design's canvas runs nothing, and its boards are framed one document
+  per ticket.** A `design`'s `canvas.json` is drawn on the dashboard's own
+  origin, so it is a closed format read strictly at publish (numbers within
+  bounds, paths of the version, plain text, colour names the dashboard maps to
+  its own palette, no unknown field), and the dashboard draws it with its own
+  components. Each artboard is an HTML page framed on the artifact origin like
+  any page, under a ticket minted for that board, which opens that page and
+  no other as a document. A board cannot open a print dialog: the host prints
+  it, and only on the reader's own gesture. See ADR-0035, "One document per
+  ticket".
 - **Artifacts run on an origin of their own, and where that origin lives is
   your decision.** An artifact is HTML and script written by a person or an
   agent, so the engine never renders one on the dashboard's origin: the

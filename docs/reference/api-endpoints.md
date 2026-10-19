@@ -6296,19 +6296,28 @@ as every read route does.
 
 The API origin **never renders an artifact**:
 
-- `POST /artifacts/{id}/tickets` (`{"version": n}`, the head by default) mints
-  the frame the dashboard embeds a page in: `frame_url` on the artifact
+- `POST /artifacts/{id}/tickets` (`{"version": n, "document": "path"}`, the
+  head by default) mints the frame the dashboard embeds a page in, or one
+  artboard of a design: `frame_url` on the artifact
   origin under a one-hour view ticket bound to the caller's own sign-in or
   token, the `origin` its bridge must hear from, and the `sandbox` and `allow`
   attributes the dashboard sets verbatim. The page is re-authorized on every
   document request there, so a withdrawn share, a sign-out or the trash closes
-  it at once. A Markdown document, a deck or a sheet is `409 artifact_not_framed`, and
+  it at once. `document` names the page the frame opens: left out for a
+  page's entry, and always one artboard's path for a design, whose ticket
+  then opens that page and no other as a document. A `document` that is not
+  an HTML page of the version (a design's `canvas.json`, a stylesheet, a path
+  the version does not hold, or none for a design) is `422 invalid`. A
+  Markdown document, a deck or a sheet is `409 artifact_not_framed`, and
   a deployment with no `api.artifacts.external_url` is
   `409 artifact_origin_unset`. Minting a frame records that the caller opened
   the artifact, at most once in fifteen minutes.
 - `GET /artifacts/{id}/versions/{n}/source` answers a version's entry as JSON
   (`text`, `content_type`, `size`), read back and checked against its digest:
-  how the dashboard renders a Markdown document, which runs no author code.
+  how the dashboard renders a Markdown document, which runs no author code,
+  and reads a design's `canvas.json`, which it draws natively. Reading the
+  source of a native kind or a design records that the caller opened it (a
+  design's canvas is drawn whether or not any artboard is framed).
 - `GET /artifacts/{id}/versions/{n}/deck` answers a deck's version (a
   `slides` artifact) as its **canonical tree**: the title, the cover, the
   outline's sections, the typefaces and every slide in order, each its id,
@@ -6321,7 +6330,11 @@ The API origin **never renders an artifact**:
 - `GET /artifacts/{id}/versions/{n}/outline` answers a version's structure
   without every file: for a deck, its title, slide count, cover, sections and
   each slide's id, title and hidden flag, plus the cover slide's tree, which
-  the gallery draws as the card's cover; for any other kind, its kind alone. A
+  the gallery draws as the card's cover; for a design (`design`), its title,
+  board count, cover board, the `bounds` every board and note fits in, each
+  board's `path`, `title`, `x`, `y`, `w` and `h` in the canvas's order and the
+  number of `notes`, read from `canvas.json` alone, which the gallery draws as
+  a schematic; for any other kind, its kind alone. A
   cover is not an open, so none is recorded. A node keeps the decks it has read
   by version (16 MiB of their files at most), since a version never changes.
 - `GET /artifacts/{id}/versions/{n}/files/{path}` streams one file as an
