@@ -51,7 +51,7 @@ var goPackages = map[string]bool{
 	"statelog": true, "statelogtest": true, "static": true, "steer": true,
 	"store": true, "storetest": true, "stream": true, "structured": true,
 	"subagent": true, "textcut": true, "textindex": true, "tokens": true,
-	"toolloop": true, "tools": true, "topics": true, "tracing": true,
+	"toolloop": true, "toolname": true, "tools": true, "topics": true, "tracing": true,
 	"tracker": true, "turn": true, "turnctx": true, "types": true,
 	"usage": true, "version": true, "webhooks": true, "whsec": true,
 	"workapi": true, "workkey": true,
