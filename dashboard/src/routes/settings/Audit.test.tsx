@@ -653,7 +653,7 @@ test("artifactDetail: a refusal says why in words, and an override says it was o
     ),
   ).toBe("Refused: a newer version was published first");
   expect(artifactDetail(trailRow({ op: "trash", elevated: true, number: 0 }) as never, NAMES)).toBe(
-    "Moved it to the trash, admitted only as an administrator",
+    "Moved it to the trash (as an administrator)",
   );
   expect(
     artifactDetail(
