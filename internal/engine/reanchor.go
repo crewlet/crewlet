@@ -177,7 +177,7 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 		// THE OPERATOR IN THE THREE COLUMNS EVERY WRITE CARRIES — the
 		// author, the kind of party and the credential — in the actor
 		// vocabulary, which every domain's generation record reads.
-		By: req.By.Name, ByKind: string(req.By.Kind), OperatorID: req.By.OperatorID,
+		By: req.By.Name, ByKind: req.By.Kind, OperatorID: req.By.OperatorID,
 		NodeID: c.nodeID,
 		// THE BRING-UP BUDGET OF THIS BROKER, for the steps after the
 		// append: the consumer's rebuild is a delete and a create of a
