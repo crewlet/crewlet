@@ -10758,14 +10758,24 @@ a.live-row:focus-visible {
 .artifact-history-reason {
   color: var(--color-text-tertiary);
 }
+/* NARROW (a phone, a side panel), WHO AND WHEN SHARE THE FIRST LINE and what
+   they did runs the width under it. Placed by line, not left to the flow: the
+   sentence spanning the row pushed the time onto a third line of its own. */
 @container page (width < 640px) {
   .artifact-history-row {
     grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: var(--spacing-1);
   }
   .artifact-history-row--action {
     grid-template-columns: minmax(0, 1fr) auto 4.5rem;
   }
+  .artifact-history-who,
+  .artifact-history-when,
+  .artifact-history-action {
+    grid-row: 1;
+  }
   .artifact-history-what {
+    grid-row: 2;
     grid-column: 1 / -1;
   }
 }
