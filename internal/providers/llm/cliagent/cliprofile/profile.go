@@ -1744,8 +1744,18 @@ func (p *Profile) validateRelocations(add func(string, ...any)) {
 // path the built-in kept under it: a [Profile.ConfigEnv] or
 // [Profile.WorkConfigEnv] variable pointed at a different directory than
 // builtin points it at, while a path this profile keeps in that scope
-// ([Profile.kept]) still lies under the built-in's directory and under none of
-// this profile's.
+// ([Profile.kept]) still lies under the built-in's directory and is not
+// reached through the moved variable — outside the new directory, or under it
+// only because the new directory is the old one's ancestor.
+//
+// EACH VARIABLE ON ITS OWN. A path is reached through the variable that points
+// at its directory, so another variable's directory excuses nothing (`{CODEX_HOME:
+// ., CODEX_EXTRA: .codex}` left the login where only CODEX_HOME was read), and
+// an ANCESTOR excuses nothing either: the CLI reads `$VAR/auth.json`, so with
+// CODEX_HOME at `.` it reads `auth.json` while the login sits at
+// `.codex/auth.json`, under the new directory and unreached. A path still under
+// the old directory is reached only where the new directory lies strictly
+// inside the old one and the path inside the new.
 //
 // The CLI finds those paths through the variable ([Profile.KeptUnder]), so a
 // moved directory with the paths left where they were loaded and was admitted
@@ -1773,37 +1783,40 @@ func (p *Profile) strandedBy(builtin *Profile) []string {
 		{"config_env", SeedHome, builtin.ConfigEnv, p.ConfigEnv},
 		{"work_config_env", SeedWork, builtin.WorkConfigEnv, p.WorkConfigEnv},
 	} {
-		var dirs []string
-		for _, rel := range r.now {
-			if strings.TrimSpace(rel) != "" && staysInside(rel) {
-				dirs = append(dirs, rel)
-			}
-		}
 		for _, name := range slices.Sorted(maps.Keys(r.was)) {
 			// An override merges into the built-in's map key by key, so the
 			// variable is still there; empty (a YAML null) or escaping its
 			// root, it is refused on its own. The same directory, however
-			// spelled, strands nothing: every path under it is under one of
-			// this profile's directories below.
+			// spelled, strands nothing.
 			was, now := filepath.Clean(r.was[name]), r.now[name]
 			if strings.TrimSpace(now) == "" || !staysInside(now) {
 				continue
 			}
+			now = filepath.Clean(now)
+			if now == was {
+				continue
+			}
 			var left []string
+			example := ""
 			for _, k := range p.kept(r.scope) {
-				if within(k.path, was) && !slices.ContainsFunc(dirs, func(dir string) bool {
-					return within(k.path, dir)
-				}) {
-					left = append(left, fmt.Sprintf("%s %q", k.label, k.path))
+				if !within(k.path, was) || (within(k.path, now) && !within(was, now)) {
+					continue
+				}
+				left = append(left, fmt.Sprintf("%s %q", k.label, k.path))
+				if example == "" {
+					if rel, err := filepath.Rel(was, filepath.Clean(k.path)); err == nil {
+						example = fmt.Sprintf(" (%q becomes %q)", k.path, filepath.Join(now, rel))
+					}
 				}
 			}
 			if len(left) == 0 {
 				continue
 			}
 			bad = append(bad, fmt.Sprintf("%s moves %s from %s to %s, and %s still lie "+
-				"under %s, where the CLI no longer looks for them — move them under %s in "+
-				"the same override", r.field, name, was, filepath.Clean(now),
-				strings.Join(left, ", "), was, filepath.Clean(now)))
+				"where the CLI found them through %s, which it no longer reads them from — "+
+				"re-root them from %s to %s in the same override, each at the same place "+
+				"under the new directory%s", r.field, name, was, now,
+				strings.Join(left, ", "), was, was, now, example))
 		}
 	}
 	return bad

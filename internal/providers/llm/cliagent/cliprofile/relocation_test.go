@@ -169,7 +169,7 @@ func TestAMovedRelocationTakesWhatItKeepsWithIt(t *testing.T) {
 				`work_config_env moves OPENCODE_CONFIG_DIR from .crewlet-config to .elsewhere`,
 				`seed_files[0].path ".crewlet-config/opencode.json"`,
 				`system_prompt_file.name ".crewlet-config/agents/crewlet-seat.md"`,
-				"move them under .elsewhere",
+				"re-root them from .crewlet-config to .elsewhere",
 			},
 		},
 		"opencode's directory moved with its agent file but not its policy": {
@@ -218,9 +218,49 @@ func TestAMovedRelocationTakesWhatItKeepsWithIt(t *testing.T) {
 			agent:     "codex",
 			overrides: map[string]any{"config_env": map[string]any{"CODEX_HOME": ".codex/"}},
 		},
-		"codex's home moved to a directory still holding its paths": {
+		"codex's home moved to the home itself": {
+			agent:     "codex",
+			overrides: map[string]any{"config_env": map[string]any{"CODEX_HOME": "."}},
+			left: []string{
+				`config_env moves CODEX_HOME from .codex to .`,
+				`credential_paths[0] ".codex/auth.json"`,
+				`(".codex/auth.json" becomes "auth.json")`,
+			},
+		},
+		// Another variable's directory reaches nothing CODEX_HOME's paths are
+		// read through.
+		"codex's home moved with another variable on its old directory": {
 			agent:     "codex",
 			overrides: map[string]any{"config_env": map[string]any{"CODEX_HOME": ".", "CODEX_EXTRA": ".codex"}},
+			left:      []string{`credential_paths[0] ".codex/auth.json"`},
+		},
+		"codex's home moved to the home and its paths re-rooted": {
+			agent: "codex",
+			overrides: map[string]any{
+				"config_env":       map[string]any{"CODEX_HOME": "."},
+				"credential_paths": []any{"auth.json"},
+				"volatile_paths":   []any{"sessions", "history.jsonl", "log"},
+			},
+		},
+		"codex's home moved inside its old directory, with its paths": {
+			agent: "codex",
+			overrides: map[string]any{
+				"config_env":       map[string]any{"CODEX_HOME": ".codex/inner"},
+				"credential_paths": []any{".codex/inner/auth.json"},
+				"volatile_paths":   []any{".codex/inner/sessions", ".codex/inner/history.jsonl", ".codex/inner/log"},
+			},
+		},
+		// The parent of pi's .pi/agent holds every path pi kept there, and pi
+		// reads none of them: it looks for $PI_CODING_AGENT_DIR/auth.json.
+		"pi's directory moved to its parent": {
+			agent:     "pi",
+			overrides: map[string]any{"config_env": map[string]any{"PI_CODING_AGENT_DIR": ".pi"}},
+			left:      []string{`config_env moves PI_CODING_AGENT_DIR from .pi/agent to .pi`},
+		},
+		"opencode's directory moved to the call's directory itself": {
+			agent:     "opencode",
+			overrides: map[string]any{"work_config_env": map[string]any{"OPENCODE_CONFIG_DIR": "."}},
+			left:      []string{`work_config_env moves OPENCODE_CONFIG_DIR from .crewlet-config to .`},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
