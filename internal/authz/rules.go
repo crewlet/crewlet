@@ -525,6 +525,19 @@ type rule struct {
 	// app was decided somewhere else.
 	app iam.Grant
 
+	// anyOf is the apps a [ClassAnyApp] row admits on, any ONE of them, and
+	// the set its refusal names. Empty on every other class, and a walk
+	// holds both halves: a ClassAnyApp row names at least two apps and no
+	// other row names any.
+	//
+	// ON THE ROW AND NEVER "EVERY APP". The class used to iterate [iam.Apps],
+	// which was right only while every app was something its one verb
+	// searches: a gesture answered from the pages and the board admitted a
+	// holder of any third app to a search of nothing, and told everybody it
+	// refused that the third app would do. Which apps a gesture draws on is
+	// a fact about that gesture, so the row says it.
+	anyOf []iam.Grant
+
 	// humanOnly marks a verb NO AGENT may take, whatever its class would
 	// allow — purging a task beyond recovery, taking a project out of
 	// circulation, writing the chart. It is a fact about the VERB rather
@@ -847,17 +860,19 @@ var rules = map[Action]rule{
 		assist: AssistApprove},
 
 	// A QUESTION ANSWERED FROM WHAT THE COMPANY WROTE DOWN draws on
-	// whichever apps the asker uses: the tool searches the pages only for a
-	// knowledge holder and the board only for a tracker holder, so either
-	// app admits and a caller with neither has nothing it could search. And
+	// whichever of its two apps the asker uses: the tool searches the pages
+	// only for a knowledge holder and the board only for a tracker holder,
+	// so either app admits and a caller with neither has nothing it could
+	// search — whatever else they hold. And
 	// a person's alone: it runs on the auxiliary model of the seat the
 	// asker holds, and a seat has search_knowledge and a model of its own.
 	// And SEATED: a principal no seat binds — a Tier A token's session or a
 	// service account, never a person, who holds a human seat for as long
 	// as they are here (ADR-0032) — has no seat whose model to answer on
 	// and nobody the spend is charged for.
-	ActionKnowledgeAnswer: {class: ClassAnyApp, humanOnly: true, seated: true,
-		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionKnowledgeAnswer: {class: ClassAnyApp,
+		anyOf:     []iam.Grant{iam.GrantWorklet, iam.GrantDoclet},
+		humanOnly: true, seated: true, recency: iam.RecencyAny, assist: AssistApprove},
 
 	// --- everybody's overview ---------------------------------------- //
 	//
@@ -1238,6 +1253,18 @@ func PresenceOf(a Action) (Presence, bool) {
 func AppOf(a Action) (iam.Grant, bool) {
 	r, ok := rules[a]
 	return r.app, ok
+}
+
+// AnyOf reports the apps a [ClassAnyApp] verb admits on, any one of them —
+// see [rule.anyOf] — and whether the table knows the verb at all. Nil for
+// every other class.
+//
+// EXPORTED FOR THE WALKS, and for a caller that has to NAME the set a refusal
+// it did not make would have named, on [ClassOf]'s terms. A copy, so no
+// caller edits the row. Use [Decide].
+func AnyOf(a Action) ([]iam.Grant, bool) {
+	r, ok := rules[a]
+	return slices.Clone(r.anyOf), ok
 }
 
 // HumanOnlyOf reports whether NO AGENT may take a verb — see [rule.humanOnly]

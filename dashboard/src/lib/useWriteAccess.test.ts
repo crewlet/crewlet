@@ -115,13 +115,13 @@ test("a change in an app the reader lacks names that app", () => {
 });
 
 // A CHANGE THAT NEEDS AN APP AND LANDS IN NO LOG. `answer_knowledge` spends a
-// model call and writes nothing a question reads, and it is any app's: a
-// reader holding none is told any would do, where reading the app off the log
-// the write lands in told them the engine does not make the change.
-// The CONTROL is a reader holding one app, whom the app does not hold — what
-// holds them is the engine's own list. Mutation: read the app off `domain`
-// again and the first reads `not_served`.
-test("a change any app opens names every app to a reader holding none", () => {
+// model call and writes nothing a question reads, and it is either of the two
+// apps it answers from: a reader holding neither is told either would do,
+// where reading the app off the log the write lands in told them the engine
+// does not make the change. The CONTROL is a reader holding one app, whom the
+// app does not hold — what holds them is the engine's own list. Mutation: read
+// the app off `domain` again and the first reads `not_served`.
+test("a change several apps open names each of them to a reader holding none", () => {
   const none: ViewerState = {
     ...BOUND,
     grants: [],
@@ -132,7 +132,7 @@ test("a change any app opens names every app to a reader holding none", () => {
   expect(writeAccess("answer_knowledge", none, "open", EVERY)).toEqual({
     can: false,
     block: "no_access",
-    reason: "This change needs Worklet or Doclet or Artifacts access. An admin can give it to you.",
+    reason: "This change needs Worklet or Doclet access. An admin can give it to you.",
   });
   expect(
     writeAccess("answer_knowledge", { ...none, grants: ["doclet"], doclet: true }, "open", EVERY),

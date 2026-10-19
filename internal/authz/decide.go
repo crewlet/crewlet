@@ -37,10 +37,12 @@ const (
 	// administrator holds through [iam.Expand].
 	ClassApp Class = "app"
 
-	// ClassAnyApp — a gesture that draws on whichever apps the caller uses:
-	// a question answered from the company's pages and its work, which
-	// searches each half only for a caller who holds its app. Whoever holds
-	// any one app; a caller with none is told every app would do.
+	// ClassAnyApp — a gesture that draws on whichever of SEVERAL apps the
+	// caller uses: a question answered from the company's pages and its
+	// work, which searches each half only for a caller who holds its app.
+	// Whoever holds any one of the row's apps ([rule.anyOf]); a caller with
+	// none of them is told that any one of THEM would do — never an app the
+	// gesture draws nothing from.
 	ClassAnyApp Class = "any_app"
 
 	// ClassAppOrAsked — a work item somebody may be ASKED about. Whoever
@@ -494,15 +496,17 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 		return granted(p, r.app)
 
 	case ClassAnyApp:
-		// ANY ONE APP, and a refusal names every one of them: holding
-		// either would admit, and admin is left out because it covers
-		// both ([Decision.Grants]).
-		for _, app := range iam.Apps {
+		// ANY ONE OF THE ROW'S APPS, and a refusal names every one of
+		// them: holding any would admit, and admin is left out because it
+		// covers them all ([Decision.Grants]). A row naming none admits
+		// nobody and names nothing, on [granted]'s reasoning about an
+		// empty permission — a walk refuses such a row.
+		for _, app := range r.anyOf {
 			if p.Can(app) {
-				return consulting(Decision{Allowed: true, Reason: ReasonGrant}, iam.Apps...)
+				return consulting(Decision{Allowed: true, Reason: ReasonGrant}, r.anyOf...)
 			}
 		}
-		return consulting(Decision{Reason: ReasonNoGrant}, iam.Apps...)
+		return consulting(Decision{Reason: ReasonNoGrant}, r.anyOf...)
 
 	case ClassAppOrAsked:
 		if p.Can(r.app) {

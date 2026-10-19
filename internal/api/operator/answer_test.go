@@ -152,10 +152,11 @@ func TestOnlyAPersonBoundToASeatMayAsk(t *testing.T) {
 		Args: map[string]any{"q": "How do we deploy?"},
 	})
 	var refused *builtin.DecisionRefused
+	both, _ := authz.AnyOf(authz.ActionKnowledgeAnswer)
 	if err != nil || !res.Failed || model.asked() != 0 || !errors.As(res.Cause, &refused) ||
-		!slices.Equal(refused.Decision.Grants, iam.Apps) {
+		!slices.Equal(refused.Decision.Grants, both) {
 		t.Fatalf("a bound person holding neither app was answered, or refused "+
-			"other than by the table naming both apps: (%+v, %v)", res, err)
+			"other than by the table naming both apps %v: (%+v, %v)", both, res, err)
 	}
 
 	status, answer = act(t, h, "founder", builtin.AnswerKnowledgeTool,
