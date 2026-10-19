@@ -39,6 +39,7 @@ import {
   Button,
   Callout,
   CanvasBoard,
+  LayersList,
   Modal,
   SegmentedControl,
   Skeleton,
@@ -166,6 +167,7 @@ function Design({
   // else publishes, and its save is merged onto their version.
   const editable = primary && publish.can && (version === detail.head_number || draft !== null);
   const boards = useMemo(() => boardItems(shown), [shown]);
+  const boardLayers = useMemo(() => boards.map((b) => ({ id: b.id, label: b.title })), [boards]);
   const notes = useMemo(() => noteItems(shown), [shown]);
 
   const { at } = presence;
@@ -325,34 +327,17 @@ function Design({
         </Callout>
       )}
       <div className="design-body">
-        <nav className="design-boards" aria-label="Boards">
-          <ol>
-            {boards.map((b) => (
-              <li key={b.id}>
-                {/* A click selects the board and brings it into view; Enter or a
-                    double-click opens it at its own size, which the name says.
-                    A long name is cut to one line, and the whole of it is the
-                    native tip, as a design tool's layer list does. */}
-                <button
-                  type="button"
-                  className="design-board-link"
-                  aria-label={`${b.title}, press Enter or double-click to open`}
-                  aria-current={selectedBoard === b.id ? "true" : undefined}
-                  title={b.title}
-                  onClick={() => pick(b)}
-                  onDoubleClick={() => openBoard(b.id)}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter") return;
-                    event.preventDefault();
-                    openBoard(b.id);
-                  }}
-                >
-                  {b.title}
-                </button>
-              </li>
-            ))}
-          </ol>
-        </nav>
+        <LayersList
+          className="design-boards"
+          label="Boards"
+          items={boardLayers}
+          selected={selectedBoard}
+          onSelect={(id) => {
+            const b = boards.find((x) => x.id === id);
+            if (b) pick(b);
+          }}
+          onOpen={openBoard}
+        />
         <div className="design-canvas">
           <CanvasBoard
             label={shown.title || detail.title}
