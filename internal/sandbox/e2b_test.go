@@ -76,6 +76,9 @@ type e2bStub struct {
 	// streamDelay is how long the stub waits between frames, standing in
 	// for a command that takes real time.
 	streamDelay time.Duration
+	// trailer is the payload of the stream's last frame; nil is the clean
+	// close, `{}`.
+	trailer any
 	// ignoreRange serves every download whole with 200, standing in for an
 	// envd that does not honour a Range request.
 	ignoreRange bool
@@ -231,7 +234,11 @@ func (s *e2bStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte{0, 0, 0, 0, 8, 'n', 'o', 't', ' ', 'j', 's', 'o', 'n'})
 			return
 		}
-		_, _ = w.Write(connectFrame(0x02, map[string]any{}))
+		trailer := s.trailer
+		if trailer == nil {
+			trailer = map[string]any{}
+		}
+		_, _ = w.Write(connectFrame(0x02, trailer))
 
 	case r.URL.Path == "/files":
 		if !s.envdAdmits(w, r) {
@@ -340,6 +347,19 @@ func dataEvent(stdout, stderr string) any {
 func endEvent(exit int) any {
 	return map[string]any{"event": map[string]any{
 		"end": map[string]any{"exitCode": exit}}}
+}
+
+// signalEnd is the end event envd sends for a process a signal ended, as
+// os.ProcessState reports one: no exit code, and the signal in its status and
+// its error alike. `exited` is false, which protobuf's JSON leaves out.
+func signalEnd(status string) any {
+	return map[string]any{"event": map[string]any{
+		"end": map[string]any{"exitCode": -1, "status": status, "error": status}}}
+}
+
+// trailerError is the last frame of a stream envd ended with an error.
+func trailerError(code, message string) any {
+	return map[string]any{"error": map[string]any{"code": code, "message": message}}
 }
 
 // newE2B points a provider at the stub.
@@ -727,10 +747,130 @@ func TestE2BExecWithNoVerdictIsAFailure(t *testing.T) {
 	if res.ExitCode == 0 {
 		t.Errorf("exit = 0 on an abandoned command")
 	}
+	if !strings.Contains(err.Error(), "went away") {
+		t.Errorf("error = %q, want it to say the box went away", err)
+	}
 	// WHAT WAS CAPTURED IS KEPT: it is the only evidence of how far the
 	// command got.
 	if res.Stdout != "half a log" {
 		t.Errorf("the partial output was dropped: %q", res.Stdout)
+	}
+}
+
+// A COMMAND A SIGNAL ENDED REPORTS 128 PLUS THE SIGNAL, AS A SHELL DOES.
+//
+// envd waits on the shell a command runs as, and when a signal ends that shell
+// itself — `kill -9 $$`, or an out-of-memory kill of the one program it
+// exec'd into — its end event carries an exit code of -1 and the signal in its
+// status. Read as a missing verdict, a box that was still there was reported
+// as one that went away mid-command, and a setup step as a command with no
+// exit status at all. Each case is a status envd writes; mutate the signal
+// reading out and every one goes red.
+func TestE2BExecReadsASignalAsAShellReportsOne(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		status string
+		exit   int
+		named  string
+	}{
+		{"signal: killed", 137, "killed by signal 9 (killed)"},
+		{"signal: terminated", 143, "killed by signal 15 (terminated)"},
+		{"signal: segmentation fault (core dumped)", 139, "killed by signal 11 (segmentation fault)"},
+		// Go's own spelling of a signal it has no description for.
+		{"signal: signal 34", 162, "killed by signal 34 (signal 34)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.status, func(t *testing.T) {
+			t.Parallel()
+			stub := newE2BStub()
+			stub.frames = []any{startEvent(9), dataEvent("", "installing\n"), signalEnd(tc.status)}
+			provider, _ := newE2B(t, stub)
+			box, err := provider.Create(context.Background(), sandbox.Spec{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, err := box.Exec(context.Background(), "npm ci", sandbox.ExecOptions{})
+			if err != nil {
+				t.Fatalf("a signalled command was reported as no verdict: %v", err)
+			}
+			if res.ExitCode != tc.exit {
+				t.Errorf("exit = %d, want %d", res.ExitCode, tc.exit)
+			}
+			if want := "installing\n" + tc.named; res.Stderr != want {
+				t.Errorf("stderr = %q, want what it printed and then the signal: %q", res.Stderr, want)
+			}
+
+			// AND A SETUP STEP SAYS SO: the status, not "no exit status".
+			err = sandbox.ApplySetup(context.Background(), box,
+				[]sandbox.SetupStep{{Name: "deps", Commands: []string{"npm ci"}}}, nil)
+			var setup *sandbox.SetupError
+			if !errors.As(err, &setup) || !setup.Exited || setup.Exit != tc.exit {
+				t.Errorf("setup = %v, want command #1 failed (exit %d)", err, tc.exit)
+			}
+		})
+	}
+}
+
+// A COMMAND THAT OUTLIVED ITS TIMEOUT REPORTS 124, AS A LOCAL BOX DOES.
+//
+// The command's timeout_seconds travels as Connect-Timeout-Ms, and when it runs
+// out envd closes the stream with `deadline_exceeded` — usually before any end
+// event, at best after one reporting the kill. Read as a missing verdict, a
+// setup step that ran past its budget was reported as a box that went away,
+// sending the operator to the box rather than to the step's timeout.
+func TestE2BExecReadsATimeoutAsALocalBoxReportsOne(t *testing.T) {
+	t.Parallel()
+	cases := map[string][]any{
+		"the stream closed before any end event": {startEvent(9), dataEvent("", "pulling image\n")},
+		"an end event reporting the kill beside it": {
+			startEvent(9), dataEvent("", "pulling image\n"), signalEnd("signal: killed"),
+		},
+	}
+	for name, frames := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			stub := newE2BStub()
+			stub.frames = frames
+			stub.trailer = trailerError("deadline_exceeded", "context deadline exceeded")
+			provider, _ := newE2B(t, stub)
+			box, err := provider.Create(context.Background(), sandbox.Spec{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, err := box.Exec(context.Background(), "docker pull x", sandbox.ExecOptions{TimeoutSec: 5})
+			if err != nil {
+				t.Fatalf("a command that ran out its timeout was reported as no verdict: %v", err)
+			}
+			if res.ExitCode != 124 {
+				t.Errorf("exit = %d, want 124", res.ExitCode)
+			}
+			if want := "timed out after 5s\npulling image"; res.Stderr != want {
+				t.Errorf("stderr = %q, want the timeout and then what it printed: %q", res.Stderr, want)
+			}
+		})
+	}
+}
+
+// A STREAM ENVD ENDED WITH ANOTHER ERROR SAYS WHICH, rather than claiming the
+// box went away: the agent answered, and its code is the account of what
+// happened.
+func TestE2BExecNamesTheErrorAStreamEndedWith(t *testing.T) {
+	t.Parallel()
+	stub := newE2BStub()
+	stub.frames = []any{startEvent(9)}
+	stub.trailer = trailerError("unavailable", "the box is pausing")
+	provider, _ := newE2B(t, stub)
+	box, err := provider.Create(context.Background(), sandbox.Spec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := box.Exec(context.Background(), "make", sandbox.ExecOptions{})
+	if err == nil || res.ExitCode == 0 {
+		t.Fatalf("a stream that ended on an error reported success: %+v", res)
+	}
+	if msg := err.Error(); !strings.Contains(msg, "unavailable") ||
+		!strings.Contains(msg, "the box is pausing") || strings.Contains(msg, "went away") {
+		t.Errorf("error = %q, want envd's own code and message", msg)
 	}
 }
 
