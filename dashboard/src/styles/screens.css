@@ -10531,8 +10531,7 @@ a.live-row:focus-visible {
 .artifact-workspace {
   flex: 1 1 auto;
   /* THE BODY'S INSET, the shell's own step: the wide one, and on a phone the
-     shell's phone gutter (below), so an artifact's edge sits where every
-     other screen's does. */
+     16px every artifact surface and the shell keep there (below). */
   --artifact-inset: var(--spacing-5);
 }
 /* THE BODY IS THE SCROLLER, and so it is the size container its views
@@ -10555,12 +10554,19 @@ a.live-row:focus-visible {
   padding: var(--artifact-inset);
   scrollbar-gutter: stable;
 }
-/* A PHONE OVERLAYS ITS SCROLLBAR, so a reserved gutter there only widened the
-   end edge past the start one. */
+/*
+ * ON A PHONE the body stands 16px in from both edges, as the shell does: it
+ * folded to 12px. Its scrollbar gutter is reserved on BOTH edges there, so the
+ * two sides match whatever scrollbar the device draws: an overlay scrollbar
+ * (a phone's) reserves nothing on either side, and a classic one (a narrow
+ * desktop window) the same on each, where `stable` alone reserved it at the
+ * end edge only and stood the content 11px further from the right than the
+ * left.
+ */
 @container crewlet-artifact-workspace (width < 640px) {
   .artifact-body {
     --artifact-inset: var(--spacing-4);
-    scrollbar-gutter: auto;
+    scrollbar-gutter: stable both-edges;
   }
 }
 .artifact-body--html {
