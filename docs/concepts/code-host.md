@@ -803,14 +803,29 @@ repository against the rows — every pack hashed as the bundle its push stored,
 every multi-pack-index, bitmap and commit-graph held to its own checksum (the
 one check that names a damaged bitmap: no git command can), the refs against
 what was written, git's own connectivity check — and, asked
-to, to repair what it finds damaged, linking in every pack it found whole so
-the repair downloads only the rest ([`POST
+to, to repair what it finds ([`POST
 /code/repos/{name}/verify`](../reference/api-endpoints.md#post-codereposnameverify)).
+Where everything it found is the copy's own directory out of place — a file
+the engine does not write there, a fixed file edited or replaced by a link, a
+pack no row names, a shape git is refused in — it reads the copy whole IN
+PLACE, as a shape a request meets is: every pack, the multi-pack-index, its
+bitmap and the graph kept, nothing downloaded. Damage — a pack missing, at
+another size or not its row's bytes, an index failing its checksum — is
+rebuilt into the next copy, and so is whatever the read in place leaves —
+something writing into the directory as the node puts it right, a shape among
+it — linking in every pack the check found whole so the rebuild downloads only
+the rest: a rebuilt copy has no index, bitmap or graph until the node writes
+them again, minutes to hours of slower clones of a large repository, which a
+directory put right in place never costs.
 The sync that first brings the copy up to date repairs nothing for a check: damage
 its own git meets there is the check's first finding, repaired only when the
 check was asked to repair, so a check never hides what it was asked to name —
 and an index file that sync's own checksum check found damaged and put right
-(the copy's first sync since the node started) is named first too.
+(the copy's first sync since the node started) is named first too. The read in
+place is the check's in the same way: what its git meets is the second check's
+first finding and is rebuilt under the operator's repair, never left to the
+repair a request's failure asks for, which would download every pack again and
+can be held back by how recently the copy was last rebuilt.
 A check reads every byte of the copy, so it runs on the node's own time — the
 request that asked for it is answered in place when the check ends within a
 quarter of a second, a small copy's, and otherwise the check is read until it
@@ -1258,7 +1273,7 @@ reference](../reference/metrics.md)).
 | `code_hook_protocol`, `code_hook_refused` | `WARN` | A push's hook spoke out of turn — git's version block or its commands not what git sends — or a connection to the hook socket named no session the engine started; the push fails and nothing is stored. A failure of the push's own work after the hook spoke is `code_push_unchecked`. |
 | `code_hook_panic` | `ERROR` | The engine failed while serving one push's hook: that push was refused and its stack logged, and the node goes on serving. |
 | `code_host_stop_unfinished` | `WARN` | The node stopped with git requests still running past its stop's wait. |
-| `code_verify_finished` | `INFO` | A check of this node's copy of a repository ended: the `packs` it checked, how many files the sync before it had found damaged and `repaired_by_sync` in place, the `problems` it found, and whether a repair `rebuilt` it. Its report is read at `GET /code/repos/{name}/verify/{id}` for an hour after. |
+| `code_verify_finished` | `INFO` | A check of this node's copy of a repository ended: the `packs` it checked, how many files the sync before it had found damaged and `repaired_by_sync` in place, the `problems` it found, and how a repair put it right: `repaired_in_place`, its own directory read whole in place, and `rebuilt`, a new copy (both, a rebuild of what the read in place left). Its report is read at `GET /code/repos/{name}/verify/{id}` for an hour after. |
 | `code_verify_failed` | `WARN` | A check of this node's copy of a repository could not end — a stop cut it short, a pack the object store lacks stopped its repair — with what the sync before it had `repaired_by_sync` and the `problems` it had found by then. |
 
 A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.cache`. Every line at `INFO` and above is here; its `DEBUG` lines (each sync, each background index written, a run stopped from outside) are left out.

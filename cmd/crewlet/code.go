@@ -712,12 +712,13 @@ type codeVerificationView struct {
 	State    string    `json:"state"`
 	Deadline time.Time `json:"deadline"`
 	Report   *struct {
-		Packs          int      `json:"packs"`
-		Refs           int      `json:"refs"`
-		RepairedBySync []string `json:"repaired_by_sync"`
-		Problems       []string `json:"problems"`
-		Rebuilt        bool     `json:"rebuilt"`
-		Found          []string `json:"found"`
+		Packs           int      `json:"packs"`
+		Refs            int      `json:"refs"`
+		RepairedBySync  []string `json:"repaired_by_sync"`
+		Problems        []string `json:"problems"`
+		RepairedInPlace bool     `json:"repaired_in_place"`
+		Rebuilt         bool     `json:"rebuilt"`
+		Found           []string `json:"found"`
 	} `json:"report"`
 	Error  string `json:"error"`
 	Detail string `json:"detail"`
@@ -775,8 +776,9 @@ func productionVerifyWaits() codeVerifyWaits {
 }
 
 // codeVerify is `crewlet code verify`: a check of THIS node's cache of each
-// repository against its rows, and with -repair a rebuild of a copy found
-// damaged. Every repository is verified before the command answers, and it
+// repository against its rows, and with -repair a repair of what it finds —
+// in place where only the copy's own directory is out of place, by a rebuild
+// otherwise. Every repository is verified before the command answers, and it
 // exits non-zero when any is not clean — the hook a cron runs on each git
 // node. A repository the node holds no copy of is passed over: nothing there
 // can be damaged.
@@ -795,7 +797,8 @@ func codeVerify(args []string, stdout, stderr io.Writer) error {
 			named = append(named, v)
 			return nil
 		})
-		repair = fs.Bool("repair", false, "rebuild a copy found damaged, then check the rebuilt one")
+		repair = fs.Bool("repair", false, "repair what the check finds — in place where only the copy's "+
+			"directory is out of place, by a rebuild otherwise — then check the copy again")
 		asJSON = fs.Bool("json", false, "print each verification as the node answered it")
 	})
 	if err != nil {
@@ -968,8 +971,8 @@ func sleepFor(ctx context.Context, d time.Duration) bool {
 // header says its node ends the check it is running, waits.grace past it —
 // the deadline the node states, measured against the answer's own Date (the
 // node's clock) so the two clocks need not agree; zero while it states none
-// (bringing the copy to its rows, or a repair's rebuild, whose reads of the
-// object store are bounded each on its own).
+// (bringing the copy to its rows, or a repair — a read in place or a
+// rebuild — whose reads of the object store are bounded each on its own).
 func checkEndsBy(v codeVerificationView, header http.Header, received time.Time, grace time.Duration) time.Time {
 	if v.Deadline.IsZero() {
 		return time.Time{}
@@ -1051,21 +1054,24 @@ func awaitVerification(ctx context.Context, client *nodeClient, name string, v *
 }
 
 // renderVerification prints what a verification that ended found, answering
-// whether the copy is clean: no problem left — a repair that rebuilt a copy
-// whole included, with what it had found. What the sync before the check
-// repaired in place is told first and leaves the copy clean: the copy checked
-// no longer holds it, though the disk that damaged it may hold more.
+// whether the copy is clean: no problem left — a repair that left the copy
+// whole included, with what it had found and how it repaired it: in place,
+// the copy's own directory put right with every pack and index it holds
+// kept, or by a rebuild, or in place and then rebuilt for what that left.
+// What the sync before the check repaired in place is told first and leaves
+// the copy clean: the copy checked no longer holds it, though the disk that
+// damaged it may hold more.
 func renderVerification(stdout, stderr io.Writer, name string, v codeVerificationView, repair,
 	quiet bool,
 ) bool {
 	var (
 		packs, refs               int
 		repaired, problems, found []string
-		rebuilt                   bool
+		inPlace, rebuilt          bool
 	)
 	if r := v.Report; r != nil {
-		packs, refs, repaired, problems, found, rebuilt = r.Packs, r.Refs, r.RepairedBySync, r.Problems, r.Found,
-			r.Rebuilt
+		packs, refs, repaired, problems, found = r.Packs, r.Refs, r.RepairedBySync, r.Problems, r.Found
+		inPlace, rebuilt = r.RepairedInPlace, r.Rebuilt
 	}
 	out := stdout
 	if quiet {
@@ -1095,31 +1101,46 @@ func renderVerification(stdout, stderr io.Writer, name string, v codeVerificatio
 			fmt.Fprintf(out, "  %s\n", p)
 		}
 	}
-	if rebuilt {
+	switch {
+	case inPlace && rebuilt:
+		fmt.Fprintf(out, "%s: out of place, repaired in place and then rebuilt for what that left (%s); "+
+			"the check before the repair found:\n", name, counts)
+	case inPlace:
+		fmt.Fprintf(out, "%s: out of place, and repaired in place (%s); the check before the repair found:\n",
+			name, counts)
+	case rebuilt:
 		fmt.Fprintf(out, "%s: damaged, and rebuilt (%s); the check before the rebuild found:\n", name, counts)
+	}
+	if inPlace || rebuilt {
 		for _, p := range found {
 			fmt.Fprintf(out, "  %s\n", p)
 		}
 	}
 	if len(problems) == 0 {
-		if rebuilt {
+		switch {
+		case rebuilt:
 			fmt.Fprintf(out, "%s: the rebuilt copy is whole\n", name)
-		} else {
+		case inPlace:
+			fmt.Fprintf(out, "%s: the repaired copy is whole\n", name)
+		default:
 			fmt.Fprintf(out, "%s: ok (%s)\n", name, counts)
 		}
 		return true
 	}
-	if rebuilt {
+	switch {
+	case rebuilt:
 		fmt.Fprintf(out, "%s: the rebuilt copy still has %d problem(s) — what a rebuild leaves is in the "+
 			"object store or the rows, and each says which:\n", name, len(problems))
-	} else {
+	case inPlace:
+		fmt.Fprintf(out, "%s: the copy repaired in place still has %d problem(s):\n", name, len(problems))
+	default:
 		fmt.Fprintf(out, "%s: %d problem(s) (%s):\n", name, len(problems), counts)
 	}
 	for _, p := range problems {
 		fmt.Fprintf(out, "  %s\n", p)
 	}
 	if !repair {
-		fmt.Fprintf(out, "  run it again with -repair to rebuild this node's copy\n")
+		fmt.Fprintf(out, "  run it again with -repair to repair this node's copy\n")
 	}
 	return false
 }

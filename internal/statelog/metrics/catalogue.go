@@ -962,8 +962,16 @@ func Catalogue() []Instrument {
 				"against its row, the ref file against the digest written " +
 				"with it, the directory's shape, " +
 				"and git's connectivity check. `verify` is that check, asked " +
-				"to repair what it " +
-				"found, rebuilding the repository the same way. `stored` is " +
+				"to repair what it found: read whole IN PLACE, as `shape` " +
+				"is, where everything it found is the copy's own " +
+				"directory out of place — a file or entry the engine does " +
+				"not write there, a pack no row names, its shape — every " +
+				"pack, index, bitmap and graph kept and none downloaded; " +
+				"rebuilt into a new directory otherwise, or for what that " +
+				"read leaves — a shape written past its sweep included, " +
+				"never counted under `shape` — each counted once it has " +
+				"read the copy whole, so a read in place that shape " +
+				"stopped is not. `stored` is " +
 				"no read of the rows' history at all: a pack whose stored " +
 				"files — the pack, its index or its reverse index — a check " +
 				"before serving or a scrub behind it found failing their " +

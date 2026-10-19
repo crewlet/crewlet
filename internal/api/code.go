@@ -211,10 +211,10 @@ func (a *App) mountCode(mux httpjson.Router) {
 		mux.Handle(host.PatternUploadPack, a.gitRoute(GitRoutes.UploadPack))
 		mux.Handle(host.PatternReceivePack, a.gitRoute(GitRoutes.ReceivePack))
 		// A WRITE TO THE DRAIN GATE, refused while draining like every
-		// POST: a check is new work on the node, a repair a rebuild. Only
-		// where git is served: it checks THIS node's cache, which a node
-		// without the role does not keep — and so is the read of one, which
-		// a draining node still answers.
+		// POST: a check is new work on the node, a repair a write into its
+		// copy. Only where git is served: it checks THIS node's cache, which
+		// a node without the role does not keep — and so is the read of one,
+		// which a draining node still answers.
 		mux.HandleFunc("POST /code/repos/{name}/verify", a.serveCodeVerify)
 		mux.HandleFunc("GET /code/repos/{name}/verify/{id}", a.serveCodeVerification)
 	}
@@ -401,13 +401,13 @@ func verificationPath(v host.Verification) string {
 }
 
 // serveCodeVerify begins a check of THIS node's cache of one repository
-// against its rows — and with `?repair=true` a rebuild of what it finds
-// damaged. The check reads every byte of the repository, which can outlive a
-// balancer's read timeout, so it runs on the node's own lifetime rather than
-// the request's (host.Server.StartVerify): the request waits for it up to
-// host.VerifyHold and answers `200` with the verification ended — a small
-// copy's check is answered where it was asked — or `202 Accepted` with it
-// running, its address in `Location`, where its caller reads the outcome
+// against its rows — and with `?repair=true` a repair of whatever it finds
+// out of place. The check reads every byte of the repository, which can
+// outlive a balancer's read timeout, so it runs on the node's own lifetime
+// rather than the request's (host.Server.StartVerify): the request waits for
+// it up to host.VerifyHold and answers `200` with the verification ended — a
+// small copy's check is answered where it was asked — or `202 Accepted` with
+// it running, its address in `Location`, where its caller reads the outcome
 // ([App.serveCodeVerification]).
 //
 // WHAT IS REFUSED IS REFUSED AT ONCE, having read nothing of the repository:

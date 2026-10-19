@@ -998,6 +998,72 @@ func TestWhatTheSyncRepairedIsToldAndLeavesTheCopyClean(t *testing.T) {
 	}
 }
 
+// A REPAIR IS TOLD AS THE NODE MADE IT. A check asked to repair puts the copy's
+// own directory right IN PLACE, keeping every pack and index, and rebuilds
+// only what that cannot end (cache.Verification.Run): an operator reading
+// "rebuilt" for a repair in place would expect the bitmapless clones a new
+// copy has until the node indexes it again, and one reading neither would
+// not know the copy had been touched at all. Each way is told with what the
+// check before it found, and a copy left whole is clean.
+//
+// Mutation: drop the in-place cases from the heading's switch, and the
+// repaired copy prints only "the repaired copy is whole" with nothing found
+// before it.
+func TestARepairIsToldAsTheNodeMadeIt(t *testing.T) {
+	t.Parallel()
+	const found = `"found":["an entry the cache does not write: description"]`
+	for _, tc := range []struct {
+		name, report, want string
+		clean              bool
+	}{{
+		name:   "in place",
+		report: `{"packs":3,"refs":2,"repaired_in_place":true,` + found + `}`,
+		want: "web: out of place, and repaired in place (3 packs, 2 refs); the check before the repair found:\n" +
+			"  an entry the cache does not write: description\n" +
+			"web: the repaired copy is whole\n",
+		clean: true,
+	}, {
+		name:   "in place, then rebuilt",
+		report: `{"packs":3,"refs":2,"repaired_in_place":true,"rebuilt":true,` + found + `}`,
+		want: "web: out of place, repaired in place and then rebuilt for what that left (3 packs, 2 refs); the " +
+			"check before the repair found:\n" +
+			"  an entry the cache does not write: description\n" +
+			"web: the rebuilt copy is whole\n",
+		clean: true,
+	}, {
+		name:   "rebuilt",
+		report: `{"packs":3,"refs":2,"rebuilt":true,"found":["pack p hashes to a; its row says b"]}`,
+		want: "web: damaged, and rebuilt (3 packs, 2 refs); the check before the rebuild found:\n" +
+			"  pack p hashes to a; its row says b\n" +
+			"web: the rebuilt copy is whole\n",
+		clean: true,
+	}, {
+		name: "in place, left a problem",
+		report: `{"packs":3,"refs":2,"repaired_in_place":true,` + found +
+			`,"problems":["an entry the cache does not write: hooks/post-update"]}`,
+		want: "web: out of place, and repaired in place (3 packs, 2 refs); the check before the repair found:\n" +
+			"  an entry the cache does not write: description\n" +
+			"web: the copy repaired in place still has 1 problem(s):\n" +
+			"  an entry the cache does not write: hooks/post-update\n",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var v codeVerificationView
+			if err := json.Unmarshal([]byte(`{"id":"v1","repo":"web","state":"done","report":`+tc.report+`}`),
+				&v); err != nil {
+				t.Fatal(err)
+			}
+			var out, errOut strings.Builder
+			if clean := renderVerification(&out, &errOut, "web", v, true, false); clean != tc.clean {
+				t.Errorf("clean = %v, want %v", clean, tc.clean)
+			}
+			if out.String() != tc.want {
+				t.Errorf("rendered\n%s\nwant\n%s", out.String(), tc.want)
+			}
+		})
+	}
+}
+
 // A VERIFY WAITS FOR THE NODE'S CHECK, AS THE NODE SAYS TO. Against the routes'
 // contract, scripted: a check that ended while its request waited is answered
 // at once, with no read after; a refusal the node says clears by waiting is

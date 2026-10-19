@@ -174,45 +174,271 @@ func TestVerifysRepairDownloadsOnlyWhatItFoundDamaged(t *testing.T) {
 	}
 }
 
-// A REBUILD VERIFY HAS SHOWN WHOLE ENDS ITS LINE: the cache cannot see a
+// VERIFY REPAIRS THE COPY'S OWN DIRECTORY IN PLACE. A copy the maintainer has
+// indexed — its multi-pack-index, the bitmap and the commit-graph written —
+// is found holding entries outside its image and nothing else wrong: a stray
+// file at its root, a loose ref and a symbolic link at config over a file
+// holding exactly the configuration the pool requires. Asked to repair, the
+// check reads the copy whole IN PLACE: the same incarnation, nothing
+// downloaded, counted once under reason verify, every entry moved aside and
+// config written again — and the index, its bitmap and the graph are the very
+// files they were, where a rebuild into a new incarnation left none of them
+// until the maintainer wrote them again.
+//
+// What that read leaves — something writing into the directory past its
+// sweep — is rebuilt, SEEDED with every pack the check found whole, so
+// nothing is downloaded, and counted under reason verify: Found what the
+// first check found, both repairs reported, and the rebuilt copy clean. A
+// SHAPE written there past the sweep stops the read in place at the pool's
+// own shape check; that is the check's finding too, answered to it with the
+// copy as it stands, never handed to the repair a git process asks for —
+// which would rebuild the copy unseeded, under reason shape, or be refused
+// by the window a copy rebuilt at a git process's word stands in. The read
+// that stopped at its shape check read nothing whole, so only the rebuild is
+// counted.
+//
+// Mutations: route a report whose problems are all the copy's own directory
+// to the rebuild (inPlaceOnly false), and the first arm's copy is a new
+// incarnation without its bitmap; make the read in place an ordinary caller
+// rather than a check, and the shape arms rebuild with every pack downloaded
+// again, counted under shape, or are refused behind the earlier rebuild.
+func TestVerifyRepairsTheCopysOwnDirectoryInPlace(t *testing.T) {
+	t.Parallel()
+	stray := func(t *testing.T, dir string) {
+		write(t, filepath.Join(dir, "description"), "written again past the sweep\n")
+	}
+	shape := func(t *testing.T, dir string) {
+		write(t, filepath.Join(dir, "config"), gitproc.RepoConfig+"[core]\n\tsharedRepository = group\n")
+	}
+	for name, tc := range map[string]struct {
+		// replant, when set, writes into the incarnation the read in place
+		// has just swept: something writing into the directory past the
+		// sweep.
+		replant func(t *testing.T, dir string)
+		// always: replant past EVERY sweep once armed, the rebuild's own
+		// included — something that keeps writing into the directory, which
+		// no repair on this node ends.
+		always bool
+		// behind: the copy stands one rebuild along its line, made at a git
+		// process's word, whose window refuses another such rebuild.
+		behind bool
+		// verifies is what rebuilds{reason=verify} counts: the read in
+		// place once it has read the copy whole — not one a shape stopped
+		// at its sweep's check — and a rebuild once it is made.
+		verifies uint64
+	}{
+		"the read in place ends it":                     {verifies: 1},
+		"what it leaves is rebuilt":                     {replant: stray, verifies: 2},
+		"a shape it leaves is rebuilt":                  {replant: shape, verifies: 1},
+		"a shape it leaves is rebuilt behind a rebuild": {replant: shape, behind: true, verifies: 1},
+		"a shape written past every sweep is named":     {replant: shape, always: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, onMemory)
+			clk := newClock()
+			repo := w.repo(t, 1)
+			var tip string
+			for range 3 {
+				tip, _ = w.push(t, repo, "refs/heads/main", nil)
+			}
+			// armed, once set, has the next full round's sweep replant: the
+			// read in place's, since every other round the check makes of a
+			// copy this process has read whole is a delta — and with always,
+			// every sweep after it.
+			var armed atomic.Bool
+			c := w.open(t, clk.on, func(o *cache.Options) {
+				cache.AfterSweep(o, func(dir string) {
+					fire := armed.Load()
+					if !tc.always {
+						fire = armed.CompareAndSwap(true, false)
+					}
+					if fire {
+						tc.replant(t, dir)
+					}
+				})
+			})
+			s := w.sync(t, c, repo)
+			if tc.behind {
+				rebuilt, err := cache.RebuildWhole(t.Context(), c, s, cache.Failure{Reason: cache.RebuildCorrupt})
+				if err != nil {
+					t.Fatalf("Rebuild: %v", err)
+				}
+				t.Cleanup(rebuilt.Release)
+				s = rebuilt
+				if _, err := cache.RebuildWhole(t.Context(), c, s, cache.Failure{Reason: cache.RebuildCorrupt}); !errors.Is(err, cache.ErrRebuildRefused) {
+					t.Fatalf("a second rebuild of a rebuild's product = %v, want ErrRebuildRefused: the case needs "+
+						"the copy inside the window a rebuild at a git process's word opens", err)
+				}
+			}
+			dir := s.Dir
+			clk.Add(cache.MidxDebounce)
+			if ran := cache.MaintainerPass(c); len(ran) != 1 {
+				t.Fatalf("the maintainer ran %v, want the repository", ran)
+			}
+			packDir := filepath.Join(dir, "objects", "pack")
+			derived := []string{filepath.Join(packDir, "multi-pack-index"), bitmapOf(t, packDir),
+				filepath.Join(dir, "objects", "info", "commit-graph")}
+			held := map[string]os.FileInfo{}
+			for _, path := range derived {
+				info, err := os.Stat(path)
+				if err != nil {
+					t.Fatalf("the maintainer left no %s: the case needs every derived file written", path)
+				}
+				held[path] = info
+			}
+
+			write(t, filepath.Join(dir, "description"), "a stray\n")
+			write(t, filepath.Join(dir, "refs", "heads", "loose"), tip+"\n")
+			target := filepath.Join(t.TempDir(), "config")
+			write(t, target, gitproc.RepoConfig)
+			if err := os.Remove(filepath.Join(dir, "config")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, filepath.Join(dir, "config")); err != nil {
+				t.Fatal(err)
+			}
+			found := []string{"unexpected description", "unexpected refs/heads/loose", "unexpected config",
+				"missing config"}
+			incarnation, gets := cache.Repos(c)[repo], w.objects.total()
+			before := map[cache.RebuildReason]uint64{}
+			for _, reason := range cache.RebuildReasons {
+				before[reason] = rebuilds(w, reason)
+			}
+
+			leftBehind := tc.replant != nil
+			armed.Store(leftBehind)
+			report, err := verify(t.Context(), c, repo, true)
+			if tc.always {
+				// The rebuild meets the shape past its own sweep too and
+				// fails: the operator is answered with the second check's
+				// report, the read in place's own finding first.
+				met := "reading it whole in place met the copy damaged (" + string(cache.RebuildShape) + ")"
+				if err == nil || !errors.Is(err, gitproc.ErrRepoShape) || !report.RepairedInPlace ||
+					report.Rebuilt || len(report.Problems) == 0 || !strings.HasPrefix(report.Problems[0], met) {
+					t.Errorf("Verify(repair) of a copy written into past every sweep = in place %v, rebuilt %v, "+
+						"problems %q, %v; want the rebuild's shape refusal beside the second check's report, %q "+
+						"first", report.RepairedInPlace, report.Rebuilt, report.Problems, err, met)
+				}
+				for _, reason := range cache.RebuildReasons {
+					if got := rebuilds(w, reason) - before[reason]; got != 0 {
+						t.Errorf("%s{reason=%s} = %d, want none: nothing read the copy whole",
+							metrics.CodeCacheRebuilds, reason, got)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Verify(repair): %v", err)
+			}
+			problemsOf(t, "Verify's repair found first", report.Found, found...)
+			if !report.RepairedInPlace || report.Rebuilt != leftBehind || len(report.Problems) != 0 {
+				t.Fatalf("Verify(repair) = in place %v, rebuilt %v, problems %q; want it repaired in place, "+
+					"rebuilt %t, nothing left", report.RepairedInPlace, report.Rebuilt, report.Problems, leftBehind)
+			}
+			if got := w.objects.total() - gets; got != 0 {
+				t.Errorf("the repair asked the object store for %d objects, want none: every pack was found whole",
+					got)
+			}
+			// Every repair Verify made is counted under verify, and nothing
+			// under any other reason.
+			want := map[cache.RebuildReason]uint64{cache.RebuildVerify: tc.verifies}
+			for _, reason := range cache.RebuildReasons {
+				if got := rebuilds(w, reason) - before[reason]; got != want[reason] {
+					t.Errorf("%s{reason=%s} = %d, want %d", metrics.CodeCacheRebuilds, reason, got, want[reason])
+				}
+			}
+			if leftBehind {
+				if got := cache.Repos(c)[repo]; got != incarnation+1 {
+					t.Errorf("what the read in place left was answered in incarnation %d, want the rebuild's %d",
+						got, incarnation+1)
+				}
+				return
+			}
+			if got := cache.Repos(c)[repo]; got != incarnation {
+				t.Errorf("the repair left incarnation %d, want the same %d", got, incarnation)
+			}
+			for path, before := range held {
+				after, err := os.Stat(path)
+				if err != nil || !os.SameFile(before, after) {
+					t.Errorf("%s after the repair: %v — want the very file the maintainer wrote", filepath.Base(path),
+						err)
+				}
+			}
+			if info, err := os.Lstat(filepath.Join(dir, "config")); err != nil || !info.Mode().IsRegular() ||
+				read(t, filepath.Join(dir, "config")) != gitproc.RepoConfig {
+				t.Errorf("config after the repair: %v, %v — want the regular file holding gitproc.RepoConfig", info, err)
+			}
+		})
+	}
+}
+
+// A REPAIR VERIFY HAS SHOWN WHOLE ENDS ITS LINE: the cache cannot see a
 // request succeed, so a rebuild it made at a git process's word holds the
 // repository to a window before the next — which an operator's repair is not
 // held to, since the damage is named — and a repair Verify then checked
 // against every row is known to have ended what it was made for, so damage
-// found on it later is new damage, rebuilt at once.
+// found on it later is new damage, rebuilt at once — whichever way Verify
+// repaired it: by a rebuild (a pack hashing to another bundle), or in place
+// (a loose ref, the copy's own directory out of place).
 //
 // Driven through the whole rebuild itself (cache.RebuildWhole): a request
 // reaches it only once its in-place round and its scrub found nothing to
 // fetch again (TestARequestsPackDamageIsRepairedInPlaceFirst).
-func TestARebuildVerifyHasShownWholeEndsItsLine(t *testing.T) {
+//
+// Mutation: end no line after a repair in place, and the in-place arm's next
+// rebuild is refused for the window of the line it stands in.
+func TestARepairVerifyHasShownWholeEndsItsLine(t *testing.T) {
 	t.Parallel()
-	w := newSyncWorld(t, onMemory)
-	repo := w.repo(t, 1)
-	w.push(t, repo, "refs/heads/main", nil)
-	c := w.open(t)
-	s := w.sync(t, c, repo)
-	first, err := cache.RebuildWhole(t.Context(), c, s, cache.Failure{Reason: cache.RebuildCorrupt})
-	if err != nil {
-		t.Fatalf("Rebuild: %v", err)
-	}
-	defer first.Release()
-	write(t, filepath.Join(first.Dir, "refs", "heads", "loose"), "x\n")
-	if _, err := cache.RebuildWhole(t.Context(), c, first, cache.Failure{Reason: cache.RebuildCorrupt}); !errors.Is(err, cache.ErrRebuildRefused) {
-		t.Fatalf("a second rebuild of a rebuild's product = %v, want ErrRebuildRefused", err)
-	}
-	repaired, err := verify(t.Context(), c, repo, true)
-	if err != nil || !repaired.Rebuilt || len(repaired.Problems) != 0 {
-		t.Fatalf("Verify with repair of a repository a request may not rebuild = %+v, %v; want a clean rebuild",
-			repaired, err)
-	}
-	rebuilt := w.sync(t, c, repo)
-	again, err := cache.RebuildWhole(t.Context(), c, rebuilt, cache.Failure{Reason: cache.RebuildCorrupt})
-	if err != nil {
-		t.Fatalf("a rebuild of the incarnation a verified repair made: %v", err)
-	}
-	defer again.Release()
-	if cache.Incarnation(again) != cache.Incarnation(rebuilt)+1 {
-		t.Errorf("the rebuild answered incarnation %d, want %d", cache.Incarnation(again), cache.Incarnation(rebuilt)+1)
+	for name, tc := range map[string]struct {
+		spoil   func(t *testing.T, dir string)
+		inPlace bool
+	}{
+		"a rebuild": {func(t *testing.T, dir string) {
+			packs := packFiles(t, dir)
+			for _, f := range packs {
+				if strings.HasSuffix(f, ".pack") {
+					damage(t, filepath.Join(dir, "objects", "pack", f), 28, []byte{0xff, 0xff, 0xff, 0xff})
+				}
+			}
+		}, false},
+		"a repair in place": {func(t *testing.T, dir string) {
+			write(t, filepath.Join(dir, "refs", "heads", "loose"), "x\n")
+		}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, onMemory)
+			repo := w.repo(t, 1)
+			w.push(t, repo, "refs/heads/main", nil)
+			c := w.open(t)
+			s := w.sync(t, c, repo)
+			first, err := cache.RebuildWhole(t.Context(), c, s, cache.Failure{Reason: cache.RebuildCorrupt})
+			if err != nil {
+				t.Fatalf("Rebuild: %v", err)
+			}
+			defer first.Release()
+			tc.spoil(t, first.Dir)
+			if _, err := cache.RebuildWhole(t.Context(), c, first, cache.Failure{Reason: cache.RebuildCorrupt}); !errors.Is(err, cache.ErrRebuildRefused) {
+				t.Fatalf("a second rebuild of a rebuild's product = %v, want ErrRebuildRefused", err)
+			}
+			repaired, err := verify(t.Context(), c, repo, true)
+			if err != nil || repaired.Rebuilt == tc.inPlace || repaired.RepairedInPlace != tc.inPlace ||
+				len(repaired.Problems) != 0 {
+				t.Fatalf("Verify with repair of a repository a request may not rebuild = %+v, %v; want a clean "+
+					"repair, in place %t", repaired, err, tc.inPlace)
+			}
+			rebuilt := w.sync(t, c, repo)
+			again, err := cache.RebuildWhole(t.Context(), c, rebuilt, cache.Failure{Reason: cache.RebuildCorrupt})
+			if err != nil {
+				t.Fatalf("a rebuild of the incarnation a verified repair left: %v", err)
+			}
+			defer again.Release()
+			if cache.Incarnation(again) != cache.Incarnation(rebuilt)+1 {
+				t.Errorf("the rebuild answered incarnation %d, want %d", cache.Incarnation(again),
+					cache.Incarnation(rebuilt)+1)
+			}
+		})
 	}
 }
 
@@ -753,27 +979,30 @@ func TestStopEndsARoundWaitingForAListing(t *testing.T) {
 // and names the damage first among its problems. Repaired under it, a plain
 // check downloaded the repository (or put the directory right in place) and
 // reported the repaired copy clean, the damage it was asked to name hidden.
-// Asked to repair, it rebuilds under reason verify, the sync's damage among
-// what it found.
+// Asked to repair, it repairs under reason verify, the sync's damage among
+// what it found: a shape — the copy's own directory — in place, the same
+// incarnation read whole with nothing downloaded; an object gone, by a
+// rebuild.
 //
 // Mutation: answer a checking caller of a damaged round as every other
 // (damagedRound), and the plain check names nothing and the copy is repaired.
 func TestACheckNamesTheDamageItsSyncMeets(t *testing.T) {
 	t.Parallel()
 	for name, d := range map[string]struct {
-		reason cache.RebuildReason
-		spoil  func(t *testing.T, dir string)
+		reason  cache.RebuildReason
+		spoil   func(t *testing.T, dir string)
+		inPlace bool
 	}{
 		"its shape": {cache.RebuildShape, func(t *testing.T, dir string) {
 			write(t, filepath.Join(dir, "config"), gitproc.RepoConfig+"[core]\n\tsharedRepository = group\n")
-		}},
+		}, true},
 		"an object gone from its packs": {cache.RebuildMissing, func(t *testing.T, dir string) {
 			for _, f := range packFiles(t, dir) {
 				if err := os.Remove(filepath.Join(dir, "objects", "pack", f)); err != nil {
 					t.Fatal(err)
 				}
 			}
-		}},
+		}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -811,14 +1040,24 @@ func TestACheckNamesTheDamageItsSyncMeets(t *testing.T) {
 				}
 			}
 
+			before = w.objects.total()
 			report, err = verify(t.Context(), c, repo, true)
 			if err != nil {
 				t.Fatalf("Verify(repair): %v", err)
 			}
-			if !report.Rebuilt || len(report.Problems) != 0 || len(report.Found) == 0 ||
-				!strings.HasPrefix(report.Found[0], met) {
-				t.Errorf("a repairing check's report = rebuilt %v, found %q, problems %q; want the sync's damage "+
-					"found and nothing left", report.Rebuilt, report.Found, report.Problems)
+			if report.Rebuilt == d.inPlace || report.RepairedInPlace != d.inPlace || len(report.Problems) != 0 ||
+				len(report.Found) == 0 || !strings.HasPrefix(report.Found[0], met) {
+				t.Errorf("a repairing check's report = rebuilt %v, in place %v, found %q, problems %q; want the "+
+					"sync's damage found and nothing left, repaired in place %t", report.Rebuilt,
+					report.RepairedInPlace, report.Found, report.Problems, d.inPlace)
+			}
+			if d.inPlace {
+				if got := cache.Repos(c)[repo]; got != 1 {
+					t.Errorf("a repair in place left incarnation %d, want the same 1", got)
+				}
+				if got := w.objects.total() - before; got != 0 {
+					t.Errorf("a repair in place asked the object store for %d objects, want none", got)
+				}
 			}
 			if got := counter(w.rec, metrics.CodeCacheRebuilds, "reason", "verify"); got != 1 {
 				t.Errorf("%s{reason=verify} = %d, want the repair's one", metrics.CodeCacheRebuilds, got)

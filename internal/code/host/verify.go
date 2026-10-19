@@ -19,14 +19,14 @@ import (
 
 // A VERIFY IS AN OPERATION THAT OUTLIVES ITS REQUEST. An operator's check of
 // this node's cache of a repository reads every byte of it — a hash of every
-// pack, then git's connectivity check over the whole history — and with a
-// repair rebuilds and checks again: about nine seconds a gigabyte measured
-// (cache.BenchmarkVerify, the connectivity check most of it), twice that with
-// a repair, minutes for a large repository. Answered in one request, the check
-// outlived every
+// pack, then git's connectivity check over the whole history — and, asked to
+// repair, puts the copy right, in place or by a rebuild, and checks it again:
+// about nine seconds a gigabyte measured (cache.BenchmarkVerify, the
+// connectivity check most of it), twice that with a repair, minutes for a
+// large repository. Answered in one request, the check outlived every
 // balancer's read timeout in front of the API (nginx's default is sixty
 // seconds), and the timeout's close cancelled the request and with it the
-// check and any rebuild in flight — so a large repository could never be
+// check and any repair in flight — so a large repository could never be
 // verified, or repaired, through a default proxy, each retry cut at the same
 // point. So [Server.StartVerify] decides at once everything it can decide
 // without reading the repository — the name, the copy this node holds, a
@@ -93,7 +93,8 @@ type Verification struct {
 	ID uuid.UUID
 	// Repo is the repository's name and RepoID its id.
 	Repo, RepoID string
-	// Repair: a cache found damaged is rebuilt and checked again.
+	// Repair: what the check finds is repaired — in place, or by a rebuild
+	// (cache.VerifyRun.Repair) — and the copy checked again.
 	Repair bool
 	// State is where it is; Started and Ended (zero while it runs) when.
 	State          VerifyState
@@ -109,10 +110,10 @@ type Verification struct {
 	// Deadline is, while it checks the copy, when this node ends that check
 	// by: the bound of the check pass running (cache.CheckBudget over what
 	// the copy holds), counted from the pass's start. Zero while it brings
-	// the copy to the rows it is checked against first, or rebuilds it for
-	// a repair — whose reads of the object store are bounded each on its
-	// own (objstore.ReadBudget, objstore.Stall), as every sync's are —
-	// and once it has ended.
+	// the copy to the rows it is checked against first, or repairs it — a
+	// read in place, a rebuild — whose reads of the object store are
+	// bounded each on its own (objstore.ReadBudget, objstore.Stall), as
+	// every sync's are — and once it has ended.
 	Deadline time.Time
 
 	// ended is closed once the verification has ended: what
@@ -205,7 +206,7 @@ func (r *verifications) sweep(now time.Time) int {
 }
 
 // StartVerify begins a check of this node's cache of the repository named
-// name, rebuilding it when repair finds it damaged (cache.Verification.Run),
+// name, repairing what it finds when repair is set (cache.Verification.Run),
 // and answers the verification RUNNING — whose end [Server.Verification]
 // reads. What it refuses, it refuses at once, having read nothing of the
 // repository:
@@ -364,7 +365,7 @@ func (s *Server) runVerify(id uuid.UUID, ended chan struct{}, checked *cache.Ver
 	}
 	s.log.Info("code_verify_finished", "repo", report.Name, "verify", id, "repair", how.Repair,
 		"packs", report.Packs, "repaired_by_sync", len(report.RepairedBySync), "problems", len(report.Problems),
-		"rebuilt", report.Rebuilt)
+		"repaired_in_place", report.RepairedInPlace, "rebuilt", report.Rebuilt)
 }
 
 // AwaitVerification answers the verification id of the repository named name

@@ -495,11 +495,25 @@
 // while it is admitted. Each pass of it is bounded by what the copy holds
 // ([CheckBudget]) and ended there ([ErrPastBound]), so a check wedged on a
 // disk holds neither its slot nor the operator who asked. Asked to repair, it
-// rebuilds the repository — linking
-// in every pack it has just found whole and downloading only the rest, so one
-// damaged pack costs one GET — and checks the rebuild the same way; a rebuild
-// it has seen whole has ended the damage it was for, so that incarnation's
-// next failure is rebuilt at once.
+// repairs the way what it found asks: where every problem is the copy's OWN
+// DIRECTORY out of place — an entry outside the image, a fixed file missing or
+// not what a full round writes, a pack no row names, a shape the pool refuses
+// — it reads the copy whole IN PLACE, the full round's sweep putting the
+// directory right with every pack, the multi-pack-index, its bitmap and the
+// graph kept and nothing downloaded; DAMAGE — a pack missing, at another size
+// or not its row's bytes, a derived file failing its checksum — and whatever
+// the read in place leaves, a shape something wrote past its sweep included,
+// it rebuilds into the next incarnation, linking in every pack it has just
+// found whole and downloading only the rest, so one damaged pack costs one
+// GET. The read in place is the check's own, as the sync before it is:
+// damage its git meets is named to the check, never handed to the repair a
+// git process asks for, whose rebuild links nothing and stands in that
+// process's windows. Rebuilt for what a sweep puts right, a copy had
+// no index, bitmap or graph until the maintainer wrote them again — hours of
+// bitmapless clones of a large repository, and for good on a node whose
+// memory now refuses a bitmap. Either way the repaired copy is checked the
+// same way, and a repair it has seen whole has ended the damage it was for,
+// so that incarnation's next failure is rebuilt at once.
 //
 // # What any git process reports damaged is repaired
 //

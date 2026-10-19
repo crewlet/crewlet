@@ -333,8 +333,11 @@ but it is what that node serves, so run it:
   node holds no copy of is passed over;
 - **when git prints an error about a repository on one node and not on the
   others**, with `-repo` naming it;
-- and with **`-repair`** to rebuild a copy it found damaged: the packs it found
-  whole are kept, the rest downloaded again, and the rebuilt copy checked.
+- and with **`-repair`** to repair what it found, and check the copy again: a
+  copy whose own directory is all that is out of place — a file nothing in the
+  engine writes, an edited config, a stray pack — is put right in place, its
+  packs and indexes kept and nothing downloaded; a damaged one is rebuilt, the
+  packs it found whole kept and the rest downloaded again.
 
 ```sh
 crewlet code verify -url https://git-1.internal.example.com:8080

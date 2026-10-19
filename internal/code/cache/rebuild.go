@@ -213,8 +213,12 @@ const (
 	RebuildRewound RebuildReason = "rewound"
 	// RebuildVerify is an operator's repair: a check ([Verification.Run])
 	// found the cache holding something its rows do not say, and was asked
-	// to repair it.
-	// The cache's own, never a git process's: Rebuild refuses it.
+	// to repair it — IN PLACE when everything it found is the copy's own
+	// directory out of place (a full round of the same incarnation, every
+	// pack and derived file kept, counted as it converges), and by a rebuild
+	// into the next incarnation otherwise or for what that leaves, each
+	// counted once. The cache's own, never a git process's: Rebuild refuses
+	// it.
 	RebuildVerify RebuildReason = "verify"
 	// RebuildStored is a pack's STORED files — its .pack, .idx or .rev —
 	// installed again from its bundle IN PLACE, one GET a pack, renamed over

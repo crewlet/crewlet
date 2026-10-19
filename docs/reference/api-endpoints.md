@@ -224,7 +224,7 @@ every other route.
 | `GET` | `/code/repos` | The repositories the engine hosts, a page at a time, at the caller's freshness. **Always needs a token** (see [The code reads](#the-code-reads)) |
 | `GET` | `/code/repos/{name}` | One repository in detail (same) |
 | `GET` | `/code/repos/{name}/pushes` | One repository's push history, newest first, each push naming the person who made it (same) |
-| `POST` | `/code/repos/{name}/verify` | Begin a check of this git node's copy of one repository against its rows, `?repair=true` to rebuild what is damaged: answered `200` with its report where the check ends within a quarter of a second, else `202`, the check running on (see [below](#post-codereposnameverify)) |
+| `POST` | `/code/repos/{name}/verify` | Begin a check of this git node's copy of one repository against its rows, `?repair=true` to repair what it finds — in place, or by a rebuild: answered `200` with its report where the check ends within a quarter of a second, else `202`, the check running on (see [below](#post-codereposnameverify)) |
 | `GET` | `/code/repos/{name}/verify/{id}` | A check begun above: running, done with its report, or failed with why and what it found (see [below](#get-codereposnameverifyid)) |
 
 > **Auth.** Writes and every route of the always-guarded surfaces — `/config`,
@@ -4099,10 +4099,14 @@ through a drain.
 
 Begins a check of **this node's** copy of one repository against its rows —
 every pack against the bytes its row names, the refs against what was written,
-and git's own connectivity check — and, with `?repair=true`, a rebuild of a
-copy found damaged (every pack the check found whole linked rather than
-downloaded again) that is then checked the same way. `repair` is `true` or
-`false`; anything else is `400 bad_params`.
+and git's own connectivity check — and, with `?repair=true`, a repair of what
+it finds, after which the copy is checked the same way: **in place** where
+everything it found is the copy's own directory out of place (a file the
+engine does not write there, a fixed file edited or replaced by a link, a pack
+no row names, a shape the node refuses to run git in) — every pack and index
+kept, nothing downloaded — and a **rebuild** otherwise, or of what that leaves
+(every pack the check found whole linked rather than downloaded again).
+`repair` is `true` or `false`; anything else is `400 bad_params`.
 
 Before it checks, the node brings its copy to the **log's head**, which
 appends a barrier to the code log — or, with `min_position`, to that position
@@ -4157,7 +4161,8 @@ read nothing — so a retry costs nothing either:
   cannot hold the check at all — the sentence says to run it on a node with
   more.
 
-A write to the drain — a repair rebuilds — so a draining node refuses it.
+A write to the drain — a repair writes into the node's copy — so a draining
+node refuses it.
 Mounted only where git is served.
 
 ### `GET /code/repos/{name}/verify/{id}`
@@ -4167,7 +4172,10 @@ A verification begun by the `POST` above: `state` is `running`, `done` — with
 `repaired_by_sync` what the node's sync before the check found damaged and
 repaired in place (a file the copy no longer holds, so no problem of it and
 nothing a repair rebuilds), every `problems` sentence naming the file and both
-values (none is a copy exactly its rows), and after a repair `rebuilt` and, as
+values (none is a copy exactly its rows), and after a repair how it was made —
+`repaired_in_place` where the copy's own directory was put right in place,
+`rebuilt` where it was rebuilt, both where a rebuild followed for what the read
+in place left — with `problems` what the check after it found and, as
 `found`, what the first check found — or
 `failed`, with `error` (`unavailable` for what a retry or a restart clears, a
 stop among them; `query_failed` otherwise), `detail`, its sentence — a pack the
@@ -4180,8 +4188,9 @@ about 1.1 seconds a mebibyte, git's connectivity check given a second of it
 and the hashing a tenth, against a measured 9 ms — and a pass still running
 then is ended, `failed` saying it ran past its bound, rather than holding its
 slot. A client waits by it. It is absent while the node first brings its copy
-to the rows it checks against, and while a repair rebuilds it: each read of
-the object store those make is bounded on its own, as every sync's is.
+to the rows it checks against, and while a repair reads it whole in place or
+rebuilds it: each read of the object store those make is bounded on its own,
+as every sync's is.
 
 The node keeps a verification **an hour after it ends**, until the
 repository's next verify begins, and never across a restart: a verification it

@@ -26,7 +26,7 @@ subcommand below is served by it.
 | `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a person or an operator token. Its children move onto its own parent rather than being destroyed with it |
 | `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: objects listed and deleted and unfinished uploads abandoned by the last collection; files named, **missing**, **damaged** and **unanswered** by the last audit to finish, with those files listed. `-json` prints the fleet view's `objects` block as the node answered it |
 | `crewlet code status [config] [-repo NAME] [-json]` | The [code host's](../concepts/code-host.md) repositories as a running node reads them — status, owner, default branch and its head, refs, packs, size and last push — or with `-repo` one repository in detail with its newest pushes: who made each and what became of every ref |
-| `crewlet code verify [config] [-repo NAME]… [-repair] [-json]` | Check **this node's** cache of every repository — or the named ones — against their rows, and with `-repair` rebuild a copy found damaged. Every git node keeps its own cache, so verify each. **Exits non-zero when any copy is not clean**, after checking every one — the hook for a cron on each git node |
+| `crewlet code verify [config] [-repo NAME]… [-repair] [-json]` | Check **this node's** cache of every repository — or the named ones — against their rows, and with `-repair` repair what it finds — in place where only the copy's own directory is out of place, by a rebuild otherwise. Every git node keeps its own cache, so verify each. **Exits non-zero when any copy is not clean**, after checking every one — the hook for a cron on each git node |
 | `crewlet code export <name> <file.bundle> [config] [-git PATH]` | Write one repository — every ref and every object — to a git bundle on this machine, through your own git; `git clone <file.bundle>` restores it |
 | `crewlet code import <source-url> <name> [config] [-git PATH] [-dry-run]` | Push another host's repository — GitHub, GitLab, any URL your git clones — into a declared one, as you, in steps that each fit `code.limits.max_push_bytes`: your own git clones the source and pushes it, and the engine dials nothing. Refuses before pushing anything what it can see in the source (a blob past the blob limit, a history already past the repository limit as one pack), stops before any step that would take the repository past that limit, skips a forge's pull refs, and **resumes** where a failed run stopped when run again |
 | `crewlet code credential [-token-env NAME] get` | git's credential helper for the code host: answers git with the API token in `$CREWLET_API_TOKEN` as the password, over HTTPS (or plain http to this machine) only, and stores nothing |
@@ -886,9 +886,15 @@ either exits non-zero.
 
 Checks **this node's** copy of each repository against its rows — every pack's
 bytes against the digest its row names, the refs against what was written, and
-git's own connectivity check — and with `-repair` rebuilds a copy found damaged
-(every pack found whole linked rather than downloaded again) and checks the
-rebuilt one. Every git node keeps its own cache, so **verify each** (`-url`
+git's own connectivity check — and with `-repair` repairs what it finds and
+checks the copy again. Where everything it found is the copy's **own directory
+out of place** — a file the engine does not write there, a fixed file edited
+or replaced by a link, a pack no row names, a shape the node refuses to run
+git in — the copy is put right **in place**: every pack, the
+multi-pack-index, its bitmap and the commit-graph kept, nothing downloaded.
+A pack missing or damaged, or an index failing its checksum, is **rebuilt**
+into a new copy (every pack found whole linked rather than downloaded again),
+and so is whatever a repair in place leaves. Every git node keeps its own cache, so **verify each** (`-url`
 names the node); with requests routed by repository, a repository is cached on
 one or two of them.
 
@@ -907,7 +913,7 @@ docs: not held on this node — nothing here to check (verify the git nodes that
 api: 2 problem(s) (14 packs, 9 refs):
   pack 01a13ca4-… (pack-166cc99…) hashes to c953e5ea…; its row says b5999284…
   fsck: error: inflate: data stream error (incorrect data check) (and 2 more)
-  run it again with -repair to rebuild this node's copy
+  run it again with -repair to repair this node's copy
 ```
 
 and with `-repair`:
@@ -917,6 +923,18 @@ api: damaged, and rebuilt (14 packs, 9 refs); the check before the rebuild found
   pack 01a13ca4-… (pack-166cc99…) hashes to c953e5ea…; its row says b5999284…
 api: the rebuilt copy is whole
 ```
+
+or, for a copy whose directory alone was out of place:
+
+```
+web: out of place, and repaired in place (212 packs, 41 refs); the check before the repair found:
+  unexpected description
+web: the repaired copy is whole
+```
+
+A rebuilt copy has no multi-pack-index, bitmap or commit-graph until the node
+writes them again — minutes to hours for a large repository, its clones slower
+meanwhile — which is why nothing a repair in place can end is rebuilt.
 
 Damage the node had **already repaired** when the check began — its sync
 before the check held a file to its checksum and dropped or fetched it again in

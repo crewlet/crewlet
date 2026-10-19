@@ -72,12 +72,48 @@ type VerifyReport struct {
 	// each a sentence naming the file and both values; none is a cache
 	// exactly its rows.
 	Problems []string `json:"problems,omitempty"`
-	// Rebuilt: the problems sent the repository to a rebuild, and Problems
-	// is what the incarnation that replaced the damaged one holds — a
-	// problem a rebuild left is in the object store or the rows, and its own
-	// words say which. Found is what the check before the rebuild found.
-	Rebuilt bool     `json:"rebuilt,omitempty"`
-	Found   []string `json:"found,omitempty"`
+	// RepairedInPlace: every problem the first check found was the copy's
+	// OWN DIRECTORY's (inPlaceOnly), and the repair read the copy whole IN
+	// PLACE — the same incarnation, every pack and derived file it holds
+	// kept, nothing downloaded — and checked it again; Problems is what that
+	// check found. Rebuilt: the problems — the first check's, or what the
+	// read in place left — sent the repository to a rebuild, and Problems is
+	// what the incarnation that replaced the damaged one holds — a problem a
+	// rebuild left is in the object store or the rows, and its own words say
+	// which. Found is what the first check found, before either.
+	RepairedInPlace bool     `json:"repaired_in_place,omitempty"`
+	Rebuilt         bool     `json:"rebuilt,omitempty"`
+	Found           []string `json:"found,omitempty"`
+
+	// damaged: a problem is DAMAGE no read of the copy in place ends — a
+	// pack the rows name missing, at another size or hashing to anything
+	// but its row's bundle, a derived file failing its checksum, or damage
+	// the sync's own git met that is no shape — so a repair rebuilds. A
+	// report with problems and none of these is the copy's own directory
+	// out of place (inPlaceOnly).
+	damaged bool
+}
+
+// inPlaceOnly reports whether r found problems and every one is the copy's
+// OWN DIRECTORY out of place, which a full round of the copy repairs in place
+// (sweep.go): an entry outside the image, a fixed file missing or not what a
+// full round writes, packed-refs not the file this cache wrote, a pack no row
+// names, a shape the pool refuses, or git's connectivity check failing over
+// packs that all hash to their rows.
+func (r VerifyReport) inPlaceOnly() bool { return len(r.Problems) > 0 && !r.damaged }
+
+// met names first among r's problems the damage d that a sync's own git met
+// in the copy r checks — by says which sync — when there was any: a check
+// names what it finds, and the copy was handed to it as it stands
+// (damagedRound). A shape is the copy's own directory, which a read in place
+// puts right; anything else git met is damage.
+func (r *VerifyReport) met(by string, d *damaged) {
+	if d == nil {
+		return
+	}
+	r.Problems = append([]string{fmt.Sprintf("%s met the copy damaged (%s): %v", by, d.reason, d.err)},
+		r.Problems...)
+	r.damaged = r.damaged || d.reason != RebuildShape
 }
 
 // Verification is one check of a repository's cache this node holds:
@@ -231,7 +267,7 @@ func (v *Verification) Release() {
 // position it held, and names that damage first among its problems
 // (damagedRound). Repaired under it instead, a plain check would download the
 // repository and report the repaired copy clean, the damage it was asked to
-// name hidden; only Repair repairs, by the rebuild below. (A request waiting
+// name hidden; only Repair repairs, by the repair below. (A request waiting
 // on the same round is still answered by the repair its own damage asks.)
 //
 //  1. its directory listed against the image grammar (sweep.go) — every
@@ -265,27 +301,53 @@ func (v *Verification) Release() {
 // maintainer wrote them again: minutes to hours of bitmapless clones of a
 // large repository, for nothing.
 //
-// With repair and any problem, the repository is rebuilt — a whole read at
-// the log's head into the next incarnation (Rebuild), counted under reason
-// verify and refused by none of a git process's windows, since an operator
-// asked and the damage is named — SEEDED with every pack step 3 found whole,
-// linked rather than downloaded (seedRebuild), so a repair asks the object
-// store only for what it found damaged — and the rebuilt incarnation checked
-// again:
-// Rebuilt, Found the first check's problems, Problems the second's. A rebuild
-// that fails answers the first report beside its failure, which names what
-// it could not repair. A rebuild that left no problem has ENDED the damage it
-// was for, so the incarnation it made is rebuilt at once on any later
-// failure rather than held to the window a rebuild made at a git process's
-// word is (rebuild.go): that window exists because the cache never sees a
-// request succeed, and Verify has just seen the whole of it whole.
+// With repair and any problem, the copy is repaired and checked again, the
+// way the problems ask (check classes each where it is found):
+//
+//   - when every one is the copy's OWN DIRECTORY out of place — an entry
+//     outside the image, a fixed file missing or not what a full round
+//     writes, packed-refs not the file this cache wrote, a pack no row names,
+//     a shape the pool refuses, git's connectivity check failing over packs
+//     that all hash to their rows — it is read whole IN PLACE
+//     (repairInPlace), counted under reason verify once it has read the copy
+//     whole: the full round's sweep moves the entries aside and writes the
+//     fixed files again, reusing every pack, the multi-pack-index, its bitmap
+//     and the graph, with no download and no new incarnation;
+//     RepairedInPlace, Found the first check's problems, Problems the
+//     second's. Rebuilt instead, the copy had no index, bitmap or graph until
+//     the maintainer wrote them again — minutes to hours of bitmapless clones
+//     of a large repository, and for good on a node whose memory now refuses
+//     the bitmap — for what the sweep puts right. The read is the CHECK's, as
+//     the sync before it is: damage its own git meets — a shape written past
+//     its sweep, refused by the pool's own shape check — is the second
+//     check's finding, first, never handed to the repair a git process asks
+//     for, whose rebuild would be unseeded, counted under shape and refused by
+//     its windows. What that read leaves is rebuilt, below.
+//   - otherwise — a pack missing, at another size or hashing to another
+//     bundle, a derived file failing its checksum, damage the sync's git met
+//     that is no shape — the repository is rebuilt: a whole read at the log's
+//     head into the next incarnation (Rebuild), counted under reason verify
+//     and refused by none of a git process's windows, since an operator asked
+//     and the damage is named — SEEDED with every pack step 3 found whole,
+//     linked rather than downloaded (seedRebuild), so a repair asks the
+//     object store only for what it found damaged — and the rebuilt
+//     incarnation checked again: Rebuilt, Found the first check's problems,
+//     Problems the second's.
+//
+// A repair that fails answers the report before it beside its failure, which
+// names what it could not repair. A repair that left no problem has ENDED the
+// damage it was for (endLine), so the incarnation is rebuilt at once on any
+// later failure rather than held to the window a rebuild made at a git
+// process's word is (rebuild.go): that window exists because the cache never
+// sees a request succeed, and Verify has just seen the whole of it whole.
 //
 // EACH CHECK PASS HAS A BOUND OF ITS OWN, CheckBudget over what the copy it
 // checks holds, counted from the pass's start and told to how.Checking as it
 // begins: a pass past it is ended, ErrPastBound. The sync before it and a
-// repair's rebuild are not under it — each read of the object store they
-// make is bounded on its own (objstore.ReadBudget, objstore.Stall), as
-// every sync's is — and how.Checking is told zero as a rebuild begins.
+// repair — the read in place, the rebuild — are not under it — each read of
+// the object store they make is bounded on its own (objstore.ReadBudget,
+// objstore.Stall), as every sync's is — and how.Checking is told zero as a
+// repair begins.
 //
 // EVERY ANSWER CARRIES THE REPORT SO FAR beside its error — what the check
 // found before it failed, the repository named whenever it was known — so a
@@ -321,14 +383,61 @@ func (v *Verification) Run(ctx context.Context, how VerifyRun) (VerifyReport, er
 	// and is no problem of the copy this check was handed, which no longer
 	// holds it.
 	report.RepairedBySync = slices.Clone(found)
-	if damage != nil {
-		// What the sync's own git met is a finding of the check's, first:
-		// the copy is checked as it stands, never repaired under it.
-		report.Problems = append([]string{fmt.Sprintf("the sync before the check met the copy damaged (%s): %v",
-			damage.reason, damage.err)}, report.Problems...)
-	}
+	// What the sync's own git met is a finding of the check's, first: the
+	// copy is checked as it stands, never repaired under it.
+	report.met("the sync before the check", damage)
 	if err != nil || !repair || len(report.Problems) == 0 {
 		return report, err
+	}
+	first := report
+	if first.inPlaceOnly() {
+		// THE COPY'S OWN DIRECTORY OUT OF PLACE is repaired IN PLACE first
+		// (repairInPlace): a rebuild would make a new incarnation with no
+		// multi-pack-index, bitmap or graph until the maintainer wrote them
+		// again — minutes to hours of bitmapless clones of a large
+		// repository, and on a node whose memory now refuses a bitmap, for
+		// good — for what a full round of the copy puts right with every
+		// pack and derived file it holds kept.
+		if how.Checking != nil {
+			how.Checking(0)
+		}
+		var (
+			inPlace     Synced
+			met         *damaged
+			repaired    []string
+			second      VerifyReport
+			secondWhole []string
+		)
+		if inPlace, met, repaired, err = c.repairInPlace(ctx, s); err != nil {
+			return report, fmt.Errorf("cache: verify %s: reading it whole in place could not repair it: %w",
+				report.label(), err)
+		}
+		defer inPlace.Release()
+		if err = v.charge(inPlace); err != nil {
+			return report, err
+		}
+		second, secondWhole, err = v.pass(ctx, inPlace, how.Checking)
+		second.RepairedInPlace, second.Found = true, first.Problems
+		second.RepairedBySync = append(slices.Clone(first.RepairedBySync), repaired...)
+		// What the read's own git met — a shape written past its sweep, met
+		// by the pool's own shape check — is the second check's finding,
+		// first, as the first sync's is the first's: answered to the check
+		// with the copy as it stands, it is rebuilt below under this
+		// operator's repair, seeded with what the check found whole, rather
+		// than handed to the repair a git process asks for.
+		second.met("reading it whole in place", met)
+		if err != nil {
+			return second, err
+		}
+		if len(second.Problems) == 0 {
+			endLine(inPlace)
+			return second, nil
+		}
+		// WHAT THE READ IN PLACE LEFT — something writing into the directory
+		// past the sweep, or damage the first check could not see behind a
+		// directory git refused — is rebuilt, seeded with what this check
+		// found whole.
+		s, report, whole = inPlace, second, secondWhole
 	}
 	if how.Checking != nil {
 		how.Checking(0)
@@ -342,19 +451,74 @@ func (v *Verification) Run(ctx context.Context, how VerifyRun) (VerifyReport, er
 		return report, err
 	}
 	second, _, err := v.pass(ctx, rebuilt, how.Checking)
-	second.Rebuilt, second.Found, second.RepairedBySync = true, report.Problems, report.RepairedBySync
+	second.Rebuilt, second.RepairedInPlace = true, report.RepairedInPlace
+	second.Found, second.RepairedBySync = first.Problems, first.RepairedBySync
 	if err == nil && len(second.Problems) == 0 {
-		rebuilt.entry.mu.Lock()
-		rebuilt.inc.rebuilds, rebuilt.inc.unmoved = 0, false
-		rebuilt.entry.mu.Unlock()
+		endLine(rebuilt)
 	}
 	return second, err
 }
 
+// endLine records that Verify has just seen the incarnation s pins whole
+// after a repair: the damage its line of rebuilds was for has ENDED, so its
+// next failure is new damage, rebuilt at once rather than held to the window
+// a rebuild made at a git process's word is (rebuild.go) — that window exists
+// because the cache never sees a request succeed, and Verify has seen the
+// whole of the copy whole.
+func endLine(s Synced) {
+	s.entry.mu.Lock()
+	s.inc.rebuilds, s.inc.unmoved = 0, false
+	s.entry.mu.Unlock()
+}
+
+// repairInPlace is Verify's repair of a copy whose problems are all its own
+// directory's (VerifyReport.inPlaceOnly): the incarnation s pins marked to be
+// read WHOLE, IN PLACE (markWhole), counted under RebuildVerify once the read
+// has converged, and the copy answered pinned by a linearizable round begun
+// after the mark — a full one, whose sweep moves every entry outside the
+// image into trash/ and writes config, HEAD, packed-refs and the state again,
+// reusing every pack, the multi-pack-index, its bitmap and the graph, with no
+// download and no new incarnation. An incarnation replaced or purged since s
+// was pinned answers as the current one does, by an ordinary linearizable
+// sync, which the check after it holds to its rows.
+//
+// THE READ IS THE CHECK'S, as the sync before the first pass is (Cache.sync):
+// a round whose own git meets damage — a shape something wrote past the
+// sweep, refused by the pool's own shape check — answers it with that damage
+// and the copy pinned as it stands, beside what the round's own check
+// repaired, rather than with the repair a git process asks for
+// (damagedRound). As an ordinary caller, the read had that damage rebuilt at
+// a git process's word: unseeded — every pack downloaded again, though the
+// check had just found each whole — counted under shape, and refused by the
+// window a copy already rebuilt at a git process's word stands in, the
+// operator's repair failing with the shape left in place. Answered to the
+// check, it is the second check's finding, and Verification.Run rebuilds it
+// under the operator's repair: seeded, counted under verify, held to none of
+// those windows.
+func (c *Cache) repairInPlace(ctx context.Context, s Synced) (Synced, *damaged, []string, error) {
+	e := s.entry
+	linearizable := statelog.Freshness{Level: statelog.ReadLinearizable}
+	e.mu.Lock()
+	if e.dead || e.current != s.inc {
+		e.mu.Unlock()
+		return c.sync(ctx, e.id, linearizable, true)
+	}
+	c.markWhole(s.inc, Failure{Reason: RebuildVerify}, dropRequest)
+	w := newWaiter(linearizable)
+	w.checks = true
+	c.join(e, w)
+	e.mu.Unlock()
+	got, err := c.await(ctx, e, w)
+	// Written before the answer's close, which await waited for, or never:
+	// a caller that left is handed nothing (Cache.run, damagedRound).
+	return got, w.damage, w.found, err
+}
+
 // VerifyRun is how a [Verification] runs.
 type VerifyRun struct {
-	// Repair rebuilds a copy the check finds damaged, and checks the
-	// rebuilt one.
+	// Repair repairs a copy the check finds anything wrong with — in place
+	// where every problem is the copy's own directory out of place, by a
+	// rebuild otherwise or for what that leaves — and checks it again.
 	Repair bool
 	// Fresh is what the copy is brought to before it is checked: the zero
 	// value is the log's head — linearizable, a barrier appended to the
@@ -365,8 +529,9 @@ type VerifyRun struct {
 	Fresh statelog.Freshness
 	// Checking, when set, is told the bound of each check pass as the pass
 	// begins (CheckBudget over what the copy it checks holds), and zero as
-	// a repair's rebuild begins: what the caller says of when the node ends
-	// what it is doing. Called on the verification's own goroutine.
+	// a repair — a read in place, a rebuild — begins: what the caller says of
+	// when the node ends what it is doing. Called on the verification's own
+	// goroutine.
 	Checking func(bound time.Duration)
 }
 
@@ -470,6 +635,16 @@ func (r VerifyReport) label() string {
 // slot. Beside its report it answers the checksums of the packs it held WHOLE
 // to their rows — every section at its row's size and the bundle hashing to
 // the row's Hash — which a repair need not download again.
+//
+// EACH PROBLEM IS CLASSED BY WHAT REPAIRS IT, where it is found: the
+// listing's (an entry outside the image, a fixed file missing or not what a
+// full round writes), packed-refs not the file this cache wrote, a pack no
+// row names and git's connectivity check failing are the copy's own directory
+// — or the rows, which no repair on this node ends — and a full round of the
+// copy puts the directory right in place (sweep.go, refs.go); a pack the rows
+// name missing, at another size or hashing to another bundle, and a derived
+// file failing its checksum, are DAMAGE (VerifyReport.damaged). Classed by its
+// sentence instead, a reworded problem would move between them unseen.
 func (c *Cache) check(ctx context.Context, s Synced, slot *gitproc.Reserved) (VerifyReport, []string, error) {
 	e, inc := s.entry, s.inc
 	r := VerifyReport{Repo: e.id, Name: s.Repo.Name, Position: s.Position}
@@ -491,13 +666,16 @@ func (c *Cache) check(ctx context.Context, s Synced, slot *gitproc.Reserved) (Ve
 			snap.streamCreated.Format(time.RFC3339Nano), l.stream.Format(time.RFC3339Nano))
 	}
 
-	packs, whole, problems, err := checkPacks(ctx, inc.dir, l, snap)
-	r.Packs, r.Problems = packs, append(r.Problems, problems...)
+	packs, whole, held, err := checkPacks(ctx, inc.dir, l, snap)
+	r.Packs, r.Problems = packs, append(r.Problems, held.damaged...)
+	r.Problems = append(r.Problems, held.strays...)
+	r.damaged = len(held.damaged) > 0
 	if err != nil {
 		return r, whole, fmt.Errorf("cache: verify %s: %w", r.label(), err)
 	}
-	problems, err = c.checkDerived(ctx, inc.dir, l)
+	problems, err := c.checkDerived(ctx, inc.dir, l)
 	r.Problems = append(r.Problems, problems...)
+	r.damaged = r.damaged || len(problems) > 0
 	if err != nil {
 		return r, whole, fmt.Errorf("cache: verify %s: %w", r.label(), err)
 	}
@@ -509,6 +687,13 @@ func (c *Cache) check(ctx context.Context, s Synced, slot *gitproc.Reserved) (Ve
 	if err != nil {
 		return r, whole, fmt.Errorf("cache: verify %s: %w", r.label(), err)
 	}
+	// git's connectivity check failing is NO DAMAGE OF ITS OWN: over packs
+	// every one of which hashes to its row's bundle — what makes a report
+	// damaged above — it is the directory's (a loose ref, a stray object, a
+	// HEAD or a shape git refuses), which a read in place puts right, or the
+	// rows', which nothing on this node does: a rebuild links the same packs
+	// and writes the same refs. Counted as damage, a stray loose ref fsck
+	// trips over sent the copy to a rebuild.
 	problem, err = c.fsck(ctx, e, inc, r.label(), slot)
 	if problem != "" {
 		r.Problems = append(r.Problems, problem)
@@ -695,12 +880,22 @@ func (c *Cache) list(ctx context.Context, e *entry, inc *incarnation) (*listing,
 	return l, nil
 }
 
+// packFindings is what checkPacks found, by what repairs it: damaged, a pack
+// the rows name missing, at another size or hashing to another bundle — the
+// object store's bytes again, which a rebuild fetches; strays, a pack no row
+// names, which a full round of the copy moves aside in place (sweep.go).
+type packFindings struct {
+	damaged, strays []string
+}
+
 // checkPacks holds every pack a row added at or before the listing's position
 // to its row, one at a time, and names every pack file no row names; it
-// answers how many packs it checked, and the checksums of those it found
-// whole. A row added after the listing is not asked about: what the listing
-// saw of it says nothing.
-func checkPacks(ctx context.Context, dir string, l *listing, snap snapshot) (int, []string, []string, error) {
+// answers how many packs it checked, the checksums of those it found whole,
+// and what it found. A row added after the listing is not asked about: what
+// the listing saw of it says nothing.
+func checkPacks(ctx context.Context, dir string, l *listing, snap snapshot) (int, []string, packFindings,
+	error) {
+
 	rows := make([]code.PackRow, 0, len(snap.packs))
 	for _, p := range snap.packs {
 		rows = append(rows, p)
@@ -708,7 +903,8 @@ func checkPacks(ctx context.Context, dir string, l *listing, snap snapshot) (int
 	slices.SortFunc(rows, func(a, b code.PackRow) int {
 		return cmp.Or(cmp.Compare(a.PackID, b.PackID), cmp.Compare(a.Part, b.Part))
 	})
-	var problems, whole []string
+	var found packFindings
+	var whole []string
 	named := map[string]bool{}
 	checked := 0
 	buf := make([]byte, copyBuffer)
@@ -721,11 +917,11 @@ func checkPacks(ctx context.Context, dir string, l *listing, snap snapshot) (int
 		label := "pack " + row.PackID + " (pack-" + row.GitChecksum + ")"
 		files := l.packs[row.GitChecksum]
 		if _, ok := files[".idx"]; !ok {
-			problems = append(problems, label+" is missing")
+			found.damaged = append(found.damaged, label+" is missing")
 			continue
 		}
 		if _, ok := files[".pack"]; !ok {
-			problems = append(problems, label+" is missing")
+			found.damaged = append(found.damaged, label+" is missing")
 			continue
 		}
 		ref, sized := row.Ref(), true
@@ -736,10 +932,10 @@ func checkPacks(ctx context.Context, dir string, l *listing, snap snapshot) (int
 			got, ok := files[section.ext]
 			switch {
 			case !ok:
-				problems = append(problems, fmt.Sprintf("%s: its %s is missing", label, section.ext))
+				found.damaged = append(found.damaged, fmt.Sprintf("%s: its %s is missing", label, section.ext))
 				sized = false
 			case got != section.want:
-				problems = append(problems, fmt.Sprintf("%s: its %s is %d bytes; its row says %d",
+				found.damaged = append(found.damaged, fmt.Sprintf("%s: its %s is %d bytes; its row says %d",
 					label, section.ext, got, section.want))
 				sized = false
 			}
@@ -750,11 +946,12 @@ func checkPacks(ctx context.Context, dir string, l *listing, snap snapshot) (int
 		sum, err := hashBundle(ctx, filepath.Join(dir, "objects", "pack", "pack-"+row.GitChecksum), buf, nil)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
-			problems = append(problems, label+" is missing")
+			found.damaged = append(found.damaged, label+" is missing")
 		case err != nil:
-			return checked, whole, problems, fmt.Errorf("hashing %s: %w", label, err)
+			return checked, whole, found, fmt.Errorf("hashing %s: %w", label, err)
 		case sum != row.Hash:
-			problems = append(problems, fmt.Sprintf("%s hashes to %s; its row says %s", label, sum, row.Hash))
+			found.damaged = append(found.damaged, fmt.Sprintf("%s hashes to %s; its row says %s", label, sum,
+				row.Hash))
 		default:
 			whole = append(whole, row.GitChecksum)
 		}
@@ -767,9 +964,9 @@ func checkPacks(ctx context.Context, dir string, l *listing, snap snapshot) (int
 	}
 	slices.Sort(strays)
 	for _, cs := range strays {
-		problems = append(problems, "stray pack pack-"+cs+" (no row names it)")
+		found.strays = append(found.strays, "stray pack pack-"+cs+" (no row names it)")
 	}
-	return checked, whole, problems, nil
+	return checked, whole, found, nil
 }
 
 // checkDerived is step 4: every derived file the listing found held to its
