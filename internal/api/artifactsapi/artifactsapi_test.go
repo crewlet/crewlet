@@ -513,6 +513,47 @@ func TestTheShareDialogGrantsRevokesAndListsAccess(t *testing.T) {
 	}
 }
 
+// A SHARE NAMES A SEAT OR A UNIT THE COMPANY HOLDS, OR THE COMPANY. A login
+// named as a seat (`token:maya`) was answered 200 and written, counted in
+// Maya's Shared listing and admitted by nothing, since the authority table
+// matches a seat share against a principal's seat alone; a seat or a unit
+// nobody holds was written the same way. Each is refused with the sentence
+// that says why, and nothing is written, on the share and on a create alike.
+func TestAShareNamesOnlyAnAudienceTheCompanyHolds(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	for _, c := range []struct{ audience, says string }{
+		{`{"kind":"seat","id":"token:maya"}`, "is not a seat handle"},
+		{`{"kind":"seat","id":"maya.ortiz"}`, "is not a seat handle"},
+		{`{"kind":"seat","id":"ghost"}`, `the company has no seat "ghost"`},
+		{`{"kind":"unit","id":"NOPE"}`, `the company has no unit "NOPE"`},
+		{`{"kind":"link","id":"x"}`, "not one this build shares with"},
+	} {
+		grant := `{"audience":` + c.audience + `,"role":"viewer"}`
+		w := g.do(person("jane"), "PUT", at(page, "/shares"), grant, keyed()...)
+		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(fields(t, w)["detail"].(string), c.says) {
+			t.Errorf("sharing with %s: %d %s", c.audience, w.Code, w.Body)
+		}
+		create := `{"kind":"html","title":"Plan","upload":"u-1","files":[{"path":"index.html","upload":true}],` +
+			`"shares":[` + grant + `]}`
+		if w := g.do(person("dana"), "POST", "/artifacts", create, keyed()...); w.Code != http.StatusUnprocessableEntity {
+			t.Errorf("creating shared with %s: %d %s", c.audience, w.Code, w.Body)
+		}
+	}
+	if calls := g.writes.all(); len(calls) != 0 {
+		t.Errorf("a refused share was written: %+v", calls)
+	}
+	if len(g.pipeline.creates) != 0 {
+		t.Errorf("a refused create reached the pipeline: %+v", g.pipeline.creates)
+	}
+	for _, ok := range []string{`{"kind":"seat","id":"bob"}`, `{"kind":"unit","id":"ENG"}`, `{"kind":"company"}`} {
+		if w := g.do(person("jane"), "PUT", at(page, "/shares"), `{"audience":`+ok+`,"role":"viewer"}`,
+			keyed()...); w.Code != http.StatusOK {
+			t.Errorf("sharing with %s: %d %s", ok, w.Code, w.Body)
+		}
+	}
+}
+
 // A READER BELOW EDITOR SEES THE OWNER AND A COUNT, NOT THE AUDIENCE, and not
 // the elevated reads in the history.
 func TestAViewerSeesTheOwnerAndACountNotTheAudience(t *testing.T) {
