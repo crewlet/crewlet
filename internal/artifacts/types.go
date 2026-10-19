@@ -60,6 +60,12 @@ const (
 	// element-constructing renderer. It carries no author code.
 	KindDoc Kind = "doc"
 
+	// KindSlides is a deck: an index and one slide file each, in the closed
+	// slide format (internal/artifacts/slideformat), which the dashboard
+	// draws, presents and prints with its own element-constructing renderer.
+	// It carries no author code.
+	KindSlides Kind = "slides"
+
 	// KindSheet is a native sheet: its content is its datastore and the
 	// dashboard draws it from the schema alone, so there is nothing for a
 	// model to get wrong and no page script at all.

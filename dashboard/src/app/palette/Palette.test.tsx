@@ -1345,9 +1345,13 @@ describe("a screen found by what it holds", () => {
   test("every label match ranks above a keyword match, however good", () => {
     const nav = { to: vi.fn() } as unknown as Parameters<typeof destinationHits>[1];
     const hits = destinationHits("s", nav, Infinity, null).map((h) => h.label);
-    expect(hits.at(-1)).toBe("Account");
+    // THE LABEL MATCHES COME FIRST, then the screens only a keyword found
+    // ("Account", "New artifact"), and never one after the other.
+    const firstKeyword = hits.findIndex((label) => !label.toLowerCase().includes("s"));
+    expect(hits.slice(firstKeyword)).toEqual(expect.arrayContaining(["Account", "New artifact"]));
+    for (const label of hits.slice(firstKeyword)) expect(label.toLowerCase()).not.toContain("s");
+    for (const label of hits.slice(0, firstKeyword)) expect(label.toLowerCase()).toContain("s");
     expect(hits).toContain("Tasks");
-    for (const label of hits.slice(0, -1)) expect(label.toLowerCase()).toContain("s");
   });
 
   // THE HINT IS PROSE AND IS NEVER SEARCHED: People & access's mentions "API

@@ -5328,6 +5328,85 @@ export interface ArtifactSource {
   text: string;
 }
 
+/** One declaration of a slide's canonical style (`slideformat.Decl`). */
+export interface SlideDecl {
+  p: string;
+  v: string;
+}
+
+/** One element, or one run of text, of a slide (`slideformat.Node`): an element has a tag, a run of text has text alone. */
+export interface SlideNode {
+  tag?: string;
+  text?: string;
+  attrs?: Record<string, string>;
+  style?: SlideDecl[];
+  children?: SlideNode[];
+}
+
+/** One slide of a deck, read (`slideformat.Slide`). */
+export interface DeckSlide {
+  id: string;
+  path: string;
+  title: string;
+  hidden?: boolean;
+  transition?: string;
+  notes?: string;
+  /** The `<section>`, its notes taken out. */
+  root: SlideNode;
+}
+
+/** One run of a deck's outline (`slideformat.Section`). */
+export interface DeckSection {
+  description: string;
+  start: string;
+}
+
+/** One typeface a deck loads from a font file of its version (`slideformat.Face`). */
+export interface DeckFace {
+  family: string;
+  src: string;
+}
+
+/** A version's deck as the dashboard draws it (`slideformat.Deck`). */
+export interface ArtifactDeck {
+  title: string;
+  cover: string;
+  sections: DeckSection[] | null;
+  faces: DeckFace[] | null;
+  slides: DeckSlide[] | null;
+}
+
+/** `GET /artifacts/{id}/versions/{n}/deck` (`artifactsapi.DeckAnswer`). */
+export interface ArtifactDeckAnswer {
+  artifact: string;
+  version: number;
+  deck: ArtifactDeck;
+}
+
+/** One slide of a deck's outline (`slideformat.OutlineSlide`). */
+export interface DeckOutlineSlide {
+  id: string;
+  path: string;
+  title: string;
+  hidden?: boolean;
+  notes?: boolean;
+}
+
+/** `GET /artifacts/{id}/versions/{n}/outline` (`artifactsapi.OutlineAnswer`). */
+export interface ArtifactOutline {
+  artifact: string;
+  kind: ArtifactKind;
+  version: number;
+  slides?: {
+    title: string;
+    count: number;
+    cover: string;
+    sections: DeckSection[] | null;
+    slides: DeckOutlineSlide[] | null;
+    cover_slide: DeckSlide;
+  };
+}
+
 /** One finding of the publish linter (`lint.Finding`). */
 export interface ArtifactLintFinding {
   path: string;

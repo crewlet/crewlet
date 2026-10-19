@@ -114,6 +114,10 @@ type CreateRequest struct {
 	Label        string                 `json:"label,omitempty"`
 	Contract     string                 `json:"contract,omitempty"`
 	Capabilities []artifacts.Capability `json:"capabilities,omitempty"`
+
+	// Starter begins the artifact from its kind's starter content (a deck's
+	// four example slides), which the engine holds; it names no files.
+	Starter bool `json:"starter,omitempty"`
 }
 
 // StageNamespace scopes the derivation of a publish's own reservation from the
@@ -136,6 +140,17 @@ func (s *Service) create(ctx context.Context, c artifactsdomain.Call, req Create
 	if !req.Kind.Valid() {
 		return artifactsdomain.Published{}, Report{}, fmt.Errorf("%w: kind %q is not one of %v",
 			ErrInvalid, req.Kind, artifacts.Kinds)
+	}
+	if req.Starter {
+		if req.Upload != "" || len(req.Files) > 0 || req.Entry != "" {
+			return artifactsdomain.Published{}, Report{}, fmt.Errorf("%w: a create from the "+
+				"kind's starter names no upload, files or entry: the starter is all of them", ErrInvalid)
+		}
+		files, entry, err := starter(req.Kind, req.Title)
+		if err != nil {
+			return artifactsdomain.Published{}, Report{}, err
+		}
+		req.Files, req.Entry = files, entry
 	}
 	for _, f := range req.Files {
 		if f.Carry != "" || f.From != 0 || f.Remove {

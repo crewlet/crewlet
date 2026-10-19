@@ -24,6 +24,12 @@ func TestEveryKindAnswersEveryFacet(t *testing.T) {
 			t.Errorf("%s renders %q", s.Kind, s.Render)
 		case !s.Store.Valid():
 			t.Errorf("%s keeps store %q", s.Kind, s.Store)
+		case !s.Format.Valid():
+			t.Errorf("%s validates format %q", s.Kind, s.Format)
+		case s.Entry.Fixed && len(s.Entry.Defaults) == 0:
+			t.Errorf("%s fixes its entry's path and names none", s.Kind)
+		case s.Search == SearchFormat && s.Format == FormatNone:
+			t.Errorf("%s searches its format's text and validates no format", s.Kind)
 		case !s.Search.Valid():
 			t.Errorf("%s searches by %q", s.Kind, s.Search)
 		}

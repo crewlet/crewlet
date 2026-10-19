@@ -790,7 +790,7 @@ The policy depends on what was served:
 
 | Response | `Content-Security-Policy` |
 |---|---|
-| The dashboard shell (`/dashboard`), `/favicon.ico` and every `/static/*` asset | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https:; require-trusted-types-for 'script'; trusted-types 'none'` (Trusted Types enforced with no policy, since the dashboard writes no markup or script sink), then `frame-src` naming the artifact origin on a deployment that serves artifacts |
+| The dashboard shell (`/dashboard`), `/favicon.ico` and every `/static/*` asset | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https:; require-trusted-types-for 'script'; trusted-types 'none'` (Trusted Types enforced with no policy, since the dashboard writes no markup or script sink), then `frame-src` naming the artifact origin on a deployment that serves artifacts |
 | The landing pages [`/webhooks/github-app`](#get-webhooksgithub-app) and [`/webhooks/slack-oauth`](#get-webhooksslack-oauth) | `default-src 'none'; img-src data:` (a page's mark is inlined, since `/static/` is not served on the [public listener](#which-listener-serves-what) these pages move to), then `style-src` and `script-src` naming the `sha256` hash of each page's own inline block (`'none'` where a page has none), then `base-uri 'none'; form-action 'none'; frame-ancestors 'none'` |
 | Everything else: JSON, plain text, the redirect from `/`, a `404` or a `401` | `default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'` |
 
@@ -6204,7 +6204,7 @@ for. The domain's applier decides from the record alone.
 | `POST /artifacts/uploads` | `create_artifact` | An upload intent for a new artifact |
 | `POST /artifacts/{id}/uploads` | `publish_artifact`, or `upload_artifact_asset` with `asset: true` | An upload intent for the next version, or into the asset store |
 | `PUT /artifacts/uploads/{upload}/files/{path}` | the intent's own verb, decided again | One file's bytes, streamed through the engine |
-| `POST /artifacts` | `create_artifact` | A new artifact and its first version, owned by the caller |
+| `POST /artifacts` | `create_artifact` | A new artifact and its first version, owned by the caller. `"starter": true` begins it from its kind's starter content, which the engine holds and publishes inline (a deck's four example slides), naming no upload, files or entry; a kind with no starter is `422 invalid` |
 | `POST /artifacts/{id}/versions` | `publish_artifact`; `artifacts.publish.force` beside it when forced | The next version, based on `If-Match: "<n>"` |
 | `POST /artifacts/{id}/versions/{n}/restore` | `publish_artifact` | Version `n` again as a new version, every file carried, based on `If-Match` |
 | `PATCH /artifacts/{id}` | `update_artifact` | The title, the description or the icon |
@@ -6302,13 +6302,28 @@ The API origin **never renders an artifact**:
   token, the `origin` its bridge must hear from, and the `sandbox` and `allow`
   attributes the dashboard sets verbatim. The page is re-authorized on every
   document request there, so a withdrawn share, a sign-out or the trash closes
-  it at once. A doc or a sheet is `409 artifact_not_framed`, and
+  it at once. A doc, a deck or a sheet is `409 artifact_not_framed`, and
   a deployment with no `api.artifacts.external_url` is
   `409 artifact_origin_unset`. Minting a frame records that the caller opened
   the artifact, at most once in fifteen minutes.
 - `GET /artifacts/{id}/versions/{n}/source` answers a version's entry as JSON
   (`text`, `content_type`, `size`), read back and checked against its digest:
   how the dashboard renders a doc, which runs no author code.
+- `GET /artifacts/{id}/versions/{n}/deck` answers a deck's version (a
+  `slides` artifact) as its **canonical tree**: the title, the cover, the
+  outline's sections, the typefaces and every slide in order, each its id,
+  title, notes, transition, hidden flag and the `<section>` as elements,
+  attributes and canonical style declarations, read through the same
+  [slide format](slide-format.md) parser the publish was held to. The
+  dashboard draws, presents and prints a deck from this answer alone and never
+  parses a slide's markup. Reading it records that the caller opened the deck,
+  as a frame's ticket does for a page. Any other kind is `409 content_refused`.
+- `GET /artifacts/{id}/versions/{n}/outline` answers a version's structure
+  without every file: for a deck, its title, slide count, cover, sections and
+  each slide's id, title and hidden flag, plus the cover slide's tree, which
+  the gallery draws as the card's cover; for any other kind, its kind alone. A
+  cover is not an open, so none is recorded. A node keeps the decks it has read
+  by version (16 MiB of their files at most), since a version never changes.
 - `GET /artifacts/{id}/versions/{n}/files/{path}` streams one file as an
   **attachment**, any text and anything a browser could run (HTML, SVG, a
   script) as `text/plain`, under the API's own `default-src 'none'` policy and

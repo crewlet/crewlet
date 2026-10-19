@@ -57,6 +57,12 @@ const (
 	// could verify: refused, since a page whose scripts the linter cannot
 	// account for is one whose policy it cannot vouch for.
 	CodeUnparseable Code = "unparseable"
+
+	// CodeSlideFormat is a deck outside the slide format
+	// (internal/artifacts/slideformat): an element, attribute or style the
+	// subset does not take, a bound passed, or a file the deck names that the
+	// version does not hold. The message names the rule broken.
+	CodeSlideFormat Code = "slide_format"
 )
 
 // The warnings: legal, and almost certainly not what the author meant.
@@ -91,7 +97,7 @@ func (c Code) Refusing() bool {
 	return slices.Contains([]Code{
 		CodeRemoteScript, CodeRemoteStylesheet, CodeUnpinned, CodeRemoteImport,
 		CodeFormOffOrigin, CodeRefreshOffOrigin, CodeJavaScriptURL, CodePlaceholder,
-		CodeVendorOff, CodeVendorFailed, CodeUnparseable,
+		CodeVendorOff, CodeVendorFailed, CodeUnparseable, CodeSlideFormat,
 	}, c)
 }
 
@@ -124,7 +130,7 @@ func (r *Refusal) Error() string {
 	for i, f := range r.Findings {
 		lines[i] = f.String()
 	}
-	return "the page breaks the artifact policy: " + strings.Join(lines, "; ")
+	return "the version breaks the artifact policy: " + strings.Join(lines, "; ")
 }
 
 // Unwrap makes every refusal an [ErrRefused].

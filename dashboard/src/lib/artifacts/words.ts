@@ -28,6 +28,7 @@ import { plural } from "../format.ts";
 export const KIND_WORDS: Readonly<Record<ArtifactKind, string>> = {
   html: "Page",
   doc: "Doc",
+  slides: "Slides",
   sheet: "Sheet",
 };
 

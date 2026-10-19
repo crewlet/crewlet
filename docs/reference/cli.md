@@ -1267,10 +1267,10 @@ to decide whether it can still vouch for a retry.
 ## `crewlet artifacts`
 
 ```
-crewlet artifacts list [-scope mine|shared|company|agents|all] [-kind html|doc|sheet]
+crewlet artifacts list [-scope mine|shared|company|agents|all] [-kind html|doc|slides|sheet]
     [-q TEXT] [-status live|trashed] [-work-item KEY] [-limit N]
 crewlet artifacts get <id>
-crewlet artifacts publish <dir|file> [-artifact ID] [-title TEXT] [-kind html|doc]
+crewlet artifacts publish <dir|file> [-artifact ID] [-title TEXT] [-kind html|doc|slides|sheet]
     [-entry PATH] [-label TEXT] [-contract VERSION] [-capabilities a,b]
     [-work-item KEY] [-force] [-op-id ID]
 crewlet artifacts versions <id>
@@ -1302,13 +1302,12 @@ the node answers which files the artifact already holds, which are carried by
 their digest and move no byte, and how each of the rest is sent: straight to
 the bucket on a presigned put where the object store offers one, through the
 node otherwise. Then the version is published. A new artifact opens on the
-one default entry the files hold (`index.html` for `html`, `index.md` for
-`doc`; with `-kind`, that kind's own), else the only file, unless `-entry`
-names another. Files holding two default entries are refused before a byte
-moves, since which one the artifact opens on, and so what kind it is, is the
-author's to say: name it with `-entry` or the kind with `-kind`. Its title
-defaults to the entry's name and its kind to the one whose entry the entry's
-type may be (`html` for an HTML page, `doc` for a Markdown file). A new version of `-artifact` names the
+one default entry it holds, `index.html`, `index.md` or `deck.json`, else the
+only file, unless `-entry` names another; a directory holding two default
+entries is refused until `-entry` or `-kind` settles which it is. Its kind is
+the one whose entry that file is: `html` for a page, `doc` for a `.md`
+file, `slides` for `deck.json` (a deck is told by that path, never by JSON
+alone), and `-kind` names it outright. Its title defaults to the entry's name. A new version of `-artifact` names the
 head it read as its base, so a version somebody else published meanwhile is
 refused rather than overwritten; `-force` publishes over it, a person's
 gesture. A new version keeps the head's runtime contract and capabilities

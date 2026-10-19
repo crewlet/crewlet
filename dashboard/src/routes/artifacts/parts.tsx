@@ -14,15 +14,24 @@ import {
   type ToastApi,
 } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
-import { queryErrorCode, type ArtifactListItem } from "~/protocol/index.ts";
+import { queryErrorCode, type ArtifactKind, type ArtifactListItem } from "~/protocol/index.ts";
 import { artifactPath } from "~/lib/artifacts/api.ts";
 import type { ArtifactPeople } from "~/lib/artifacts/people.ts";
+import { SlidesCover } from "./SlidesCover.tsx";
 
 /**
  * A listed artifact as the design system's card: a gallery's card, or a row
  * in a task's rail (`compact`). One mapping, so an artifact reads the same
  * wherever it is listed.
  */
+/**
+ * The native cover each kind draws on its gallery card (D64), from the kind's
+ * own structure and never a screenshot; a kind with none shows its glyph.
+ */
+const KIND_COVERS: Partial<Record<ArtifactKind, (item: ArtifactListItem) => ReactNode>> = {
+  slides: (item) => <SlidesCover item={item} />,
+};
+
 export function ListedArtifactCard({
   item,
   people,
@@ -46,6 +55,9 @@ export function ListedArtifactCard({
       version={item.head_number > 0 ? item.head_number : undefined}
       size={size}
       now={now}
+      {...(size !== "compact" && KIND_COVERS[item.kind]
+        ? { preview: KIND_COVERS[item.kind]!(item) }
+        : {})}
     />
   );
 }
