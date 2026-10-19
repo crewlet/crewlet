@@ -194,8 +194,6 @@ func Fail(w http.ResponseWriter, cause error, sentence, key string, about httpjs
 		// worded — so "you may not" reads the same in a turn, in an
 		// assistant and here, and a screen can say what would change it.
 		refuseDecision(w, refused.Decision, detail)
-	case errors.Is(cause, builtin.ErrRefused):
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized, detail)
 	case errors.Is(cause, iam.ErrNoHolder), errors.Is(cause, iam.ErrHolderUnseated):
 		// A LOGIN NOBODY HOLDS, and a holder whose seat the chart no longer
 		// has, name no record — which the caller only learns once the
