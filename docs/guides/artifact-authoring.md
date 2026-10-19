@@ -261,7 +261,8 @@ style and bound; the short version:
   of the version named by their path (`images/team.png`), never URLs.
 - **Publish it** with `crewlet artifacts publish <dir>` (a `deck.json` makes it
   `slides`), or from an agent with `create_artifact`, `kind: "slides"` and
-  `files`. Revise one slide at a time with `edits` on its file against your
+  `files`. In the dashboard, New › Deck starts one from four example slides
+  you edit in place. Revise one slide at a time with `edits` on its file against your
   base version; `get_artifact` with `view: "outline"` lists the slides first.
 
 ---

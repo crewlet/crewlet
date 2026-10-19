@@ -301,3 +301,8 @@ A refusal lists every finding at once (up to 50), each as
   presenter, a phone included, and is moved to the slide they are on.
 - **Print.** Print draws every shown slide on its own 16:9 page, so the
   browser's Save as PDF is the deck as a PDF.
+- **Compare.** History compares two versions By slide: each slide's two
+  versions side by side, paired by id, with changed, added, removed and moved
+  slides said in words, and unchanged ones folded away.
+- **Start.** New › Deck, or `POST /artifacts` with `"kind": "slides"` and
+  `"starter": true`, begins a deck from the engine's starter slides.

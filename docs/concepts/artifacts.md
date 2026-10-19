@@ -594,6 +594,15 @@ whole contract.
   phone included) moves the follower to the same slide with no transport of
   its own.
 - **Printed to PDF** one 16:9 page per shown slide, by the browser.
+- **Compared by slide.** History's comparison of two versions of a deck has
+  a By slide lens beside Files: each slide's two versions side by side,
+  paired by id, a slide one version lacks in its place, and every change said
+  in words (changed, added, removed, moved), where a move is what the order
+  changed rather than every slide whose number shifted.
+- **Started from a template.** New › Deck begins a deck from the engine's
+  starter (a cover, an agenda, two columns and a closing slide, each with
+  notes), published inline and held to the format like any version, so the
+  dashboard sends no upload.
 - **Covered natively in the gallery**: the cover slide drawn at card size from
   the version's outline, never a screenshot.
 
