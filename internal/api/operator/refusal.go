@@ -258,22 +258,22 @@ func refusedFor(err error, reason statelog.Reason) bool {
 	return errors.As(err, &refused) && refused.Reason == reason
 }
 
-// refuseDecision writes one authority REFUSAL in the engine's envelope: `403
-// step_up_required` naming the window for a stale proof, and `403
-// unauthorized` with the rule's reason and grants otherwise — each beside
+// refuseDecision writes one authority REFUSAL in the engine's envelope, in the
+// status and code the authority table's own mapping gives it
+// ([authz.RefusalFields]) — `step_up_required` naming the window for a stale
+// proof, `token_refused` for a machine token on a verb that needs a person,
+// `unauthorized` with the rule's reason and grants otherwise — each beside
 // whatever else detail carries (the sentence a tool's gate worded it with).
+//
+// THROUGH THE ONE MAPPING rather than a copy of it: this surface's copy knew
+// the first and the last and answered a token's refusal `unauthorized`, whose
+// sentence asks for a permission no token could carry.
 func refuseDecision(w http.ResponseWriter, d authz.Decision, detail httpjson.Detail) {
-	if d.Reason == authz.ReasonStepUp {
-		for k, v := range authz.StepUpDetail(d) {
-			detail[k] = v
-		}
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeStepUpRequired, detail)
-		return
-	}
-	for k, v := range authz.RefusalDetail(d.Reason, d.Grants) {
+	status, code, fields := authz.RefusalFields(d)
+	for k, v := range fields {
 		detail[k] = v
 	}
-	httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized, detail)
+	httpjson.FailWithFields(w, status, code, detail)
 }
 
 // RefuseDecision answers an authority decision a SURFACE took itself — on a
