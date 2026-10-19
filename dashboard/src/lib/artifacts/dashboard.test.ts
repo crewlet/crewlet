@@ -159,3 +159,57 @@ test("the rail says what a dataset reads", () => {
     }),
   ).toBe("From deals; group by all rows: amount = sum(amount)");
 });
+
+import { allDays, chartTimeOf, formatDay, tableWidths, wordsOf } from "./dashboard.ts";
+
+test("a calendar day is drawn at its own midnight in the reader's zone, never the evening before", () => {
+  // The suite runs in Europe/Berlin (vitest.config.ts): midnight UTC there is
+  // already the day, so the West's case is held by the local constructor.
+  const at = chartTimeOf("2026-10-01");
+  const d = new Date(at);
+  expect([d.getFullYear(), d.getMonth(), d.getDate(), d.getHours()]).toEqual([2026, 9, 1, 0]);
+  expect(chartTimeOf("2026-10-01T12:00:00Z")).toBe(Date.parse("2026-10-01T12:00:00Z"));
+  expect(Number.isNaN(chartTimeOf(3))).toBe(true);
+});
+
+test("a time axis of days is labelled with dates, never a time of day", () => {
+  expect(allDays(["2026-10-01", "2026-10-02"])).toBe(true);
+  expect(allDays(["2026-10-01", "2026-10-02T10:00:00Z"])).toBe(false);
+  expect(allDays([])).toBe(false);
+  const label = formatDay(chartTimeOf("2026-10-01"));
+  expect(label).toMatch(/2026/);
+  expect(label).not.toMatch(/\d:\d\d|AM|PM/);
+});
+
+test("an id is shown in its column's own words, as the domain's own screens show it", () => {
+  expect(wordsOf({ key: "status", type: "text", words: "tracker_status" }, "in_progress")).toBe(
+    "In progress",
+  );
+  expect(wordsOf({ key: "g", type: "text", words: "tracker_status_group" }, "not_started")).toBe(
+    "Not started",
+  );
+  expect(wordsOf({ key: "p", type: "text", words: "tracker_priority" }, "high")).toBe("High");
+  expect(wordsOf({ key: "a", type: "text", words: "agent_activity" }, "working")).toBe("Working");
+  expect(wordsOf({ key: "x", type: "text" }, "in_progress")).toBe("in_progress");
+  expect(wordsOf(undefined, null)).toBe("");
+});
+
+test("a table column starts as wide as what it holds, within its bounds", () => {
+  const rows: DashboardRow[] = [
+    { outcome: "succeeded", n: 4, notes: "x".repeat(200) },
+    { outcome: "failed", n: 12, notes: "short" },
+  ];
+  const widths = tableWidths(
+    [
+      { key: "outcome", label: "Outcome", column: { key: "outcome", type: "text" } },
+      { key: "n", label: "N", column: { key: "n", type: "number" } },
+      { key: "notes", label: "Notes", column: { key: "notes", type: "text" } },
+    ],
+    rows,
+  );
+  // "OUTCOME" with its sort control is wider than "succeeded": 7 x 8.5 + 52.
+  expect(widths.outcome).toBe(112);
+  expect(widths.outcome).toBeGreaterThanOrEqual(9 * 7.5 + 28);
+  expect(widths.n).toBe(72);
+  expect(widths.notes).toBe(320);
+});

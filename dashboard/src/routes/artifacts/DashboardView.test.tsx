@@ -301,3 +301,18 @@ test("the Sources rail lists every dataset with how it is kept current", async (
   expect(within(rail).getByText("When its inputs change")).toBeTruthy();
   expect(within(rail).getByText("The deals collection of this dashboard's data")).toBeTruthy();
 });
+
+// EVERY WIDGET STANDS ON THE BOARD'S TWELVE-COLUMN GRID, the one Home's board
+// uses: a frame says how many columns it spans, and only a grid parent reads
+// that, so a frame placed straight in the board stacks at full width.
+test("each widget is a cell of the board's twelve-column grid", async () => {
+  mount(dataStore());
+  await waitFor(() => expect(widget("pipeline")).toBeTruthy());
+  const grid = document.querySelector(".dashboard-board > .board-grid");
+  expect(grid).toBeTruthy();
+  const cells = [...document.querySelectorAll(".dashboard-cell")].filter(
+    (c) => !c.parentElement?.closest(".dashboard-cell"),
+  );
+  expect(cells.length).toBe(board.board.widgets.length);
+  for (const cell of cells) expect(cell.parentElement).toBe(grid);
+});

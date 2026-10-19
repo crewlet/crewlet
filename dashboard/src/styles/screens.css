@@ -7852,13 +7852,14 @@ a.work-cal-chip {
 
 /* ---- Home's board ------------------------------------------------------ */
 
-/* THE READER'S BOARD (`routes/home/board/`): blocks on twelve columns, each
-   spanning its own width, in groups or on the page. Measured from the page
-   column; below Home's stacking width every block spans the page
-   (`data-stacked`, set from the page's own width in `Home.tsx`). The chrome
-   of a block being arranged (its ring, toolbar, resize handles and the column
-   lanes) is the design system's ArrangeFrame and ArrangeBoard. */
-.home-board-grid {
+/* A BOARD'S PAGE GRID: blocks on twelve columns, each spanning its own width
+   (`grid-column: span N`, which ArrangeFrame sets), on the page as in a group.
+   ONE GRID FOR EVERY BOARD, Home's and a dashboard's, so a widget is laid out
+   at one width wherever it stands. A group's own body is the design system's
+   ArrangeGroup, on the same twelve columns. The chrome of a block being
+   arranged (its ring, toolbar, resize handles and the column lanes) is the
+   design system's ArrangeFrame and ArrangeBoard. */
+.board-grid {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: var(--spacing-4);
@@ -7941,7 +7942,7 @@ a.work-cal-chip {
 
 /* More room between rows while editing: each toolbar sits on its widget's
    top edge, half in the gap above it. */
-.home-board.is-editing .home-board-grid,
+.home-board.is-editing .board-grid,
 .home-group-body {
   row-gap: var(--spacing-5);
 }
@@ -11386,6 +11387,12 @@ a.live-row:focus-visible {
 }
 .dashboard-figure {
   min-width: 0;
+}
+/* A share: the bar, and under it the legend naming each part and its value. */
+.dashboard-share {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
 }
 .dashboard-sources {
   display: flex;

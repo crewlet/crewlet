@@ -142,41 +142,43 @@ export function DashboardView({
       </div>
       <div className="dashboard-body">
         <ArrangeBoard editing={false} columns={DASHBOARD_COLUMNS} className="dashboard-board">
-          {spec.widgets.map((w) =>
-            w.type === "group" ? (
-              <ArrangeFrame
-                key={w.id}
-                name={w.title ?? w.id}
-                editing={false}
-                container
-                columns={stacked ? DASHBOARD_COLUMNS : w.w}
-                rows={null}
-                rowHeight={ROW}
-                className="dashboard-cell"
-              >
-                <ArrangeGroup
-                  title={w.title ?? ""}
-                  tone={(w.tone ?? "none") as SurfaceTone}
-                  collapsed={collapsed.has(w.id)}
-                  onCollapsedChange={(c) =>
-                    setCollapsed((prev) => {
-                      const next = new Set(prev);
-                      if (c) next.add(w.id);
-                      else next.delete(w.id);
-                      return next;
-                    })
-                  }
-                  count={w.children?.length ?? 0}
-                  columns={DASHBOARD_COLUMNS}
-                  empty="This group holds no widgets."
+          <div className="board-grid">
+            {spec.widgets.map((w) =>
+              w.type === "group" ? (
+                <ArrangeFrame
+                  key={w.id}
+                  name={w.title ?? w.id}
+                  editing={false}
+                  container
+                  columns={stacked ? DASHBOARD_COLUMNS : w.w}
+                  rows={null}
+                  rowHeight={ROW}
+                  className="dashboard-cell"
                 >
-                  {(w.children ?? []).map(renderLeaf)}
-                </ArrangeGroup>
-              </ArrangeFrame>
-            ) : (
-              renderLeaf(w)
-            ),
-          )}
+                  <ArrangeGroup
+                    title={w.title ?? ""}
+                    tone={(w.tone ?? "none") as SurfaceTone}
+                    collapsed={collapsed.has(w.id)}
+                    onCollapsedChange={(c) =>
+                      setCollapsed((prev) => {
+                        const next = new Set(prev);
+                        if (c) next.add(w.id);
+                        else next.delete(w.id);
+                        return next;
+                      })
+                    }
+                    count={w.children?.length ?? 0}
+                    columns={DASHBOARD_COLUMNS}
+                    empty="This group holds no widgets."
+                  >
+                    {(w.children ?? []).map(renderLeaf)}
+                  </ArrangeGroup>
+                </ArrangeFrame>
+              ) : (
+                renderLeaf(w)
+              ),
+            )}
+          </div>
         </ArrangeBoard>
         <aside className="dashboard-sources" aria-label="Sources">
           <h2 className="dashboard-sources-title">Sources</h2>
