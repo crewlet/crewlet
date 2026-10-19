@@ -362,7 +362,7 @@ func (h *Handler) decideRows(ctx context.Context, c artifacts.TicketClaims) (
 		log.WarnContext(ctx, "artifacts_serve_rows_unavailable", "artifact", c.Artifact.String(),
 			"error", err)
 		return verdict{}, artifactsdomain.Version{}, unavailable(err)
-	case head.Status != artifactsdomain.StatusLive || head.Kind != artifacts.KindHTML:
+	case head.Status != artifactsdomain.StatusLive || !head.Kind.Framed():
 		return verdict{}, artifactsdomain.Version{}, refused()
 	case head.AccessEpoch < c.AccessEpoch:
 		log.WarnContext(ctx, "artifacts_serve_copy_behind_ticket", "artifact", c.Artifact.String(),

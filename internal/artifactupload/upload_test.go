@@ -62,7 +62,7 @@ func TestNoByteIsAcceptedBeforeItsReservation(t *testing.T) {
 	// THE PIPELINE'S OWN BYTES ARE HELD TO IT TOO: inline content past the
 	// budget is refused before it is stored.
 	_, _, err = h.svc.Create(t.Context(), h.person("ada", h.opKey("create")), artifactupload.CreateRequest{
-		Kind: artifacts.KindMarkdown, Title: "x", Owner: "ada", OwnerKind: "human", Entry: "a.md",
+		Kind: artifacts.KindDoc, Title: "x", Owner: "ada", OwnerKind: "human", Entry: "a.md",
 		Files: []artifactupload.FileSpec{{Path: "a.md", Inline: []byte(strings.Repeat("m", 100))}},
 	})
 	if !errors.As(err, &pending) {
@@ -72,9 +72,10 @@ func TestNoByteIsAcceptedBeforeItsReservation(t *testing.T) {
 		t.Fatalf("content past the budget was stored: %d objects", len(h.stored()))
 	}
 
-	// A SIGNED PUT IS HANDED OUT ONLY ONCE ITS BYTES ARE HELD.
+	// A SIGNED PUT IS HANDED OUT ONLY ONCE ITS BYTES ARE HELD, to a client
+	// through the API (the CLI, a script).
 	d := newHarness(t, options{presign: true})
-	direct, err := d.svc.Intend(t.Context(), d.person("ada", ""), artifacts.ID{}, declare(files))
+	direct, err := d.svc.Intend(t.Context(), d.client("ada", ""), artifacts.ID{}, declare(files))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,6 +89,14 @@ func TestNoByteIsAcceptedBeforeItsReservation(t *testing.T) {
 	}
 	if len(tool.Transfers) != 1 || tool.Transfers[0].Direct {
 		t.Fatalf("an agent's tool was handed a direct transfer: %+v", tool)
+	}
+	// NOR DOES THE DASHBOARD: its own policy reaches only its own origin.
+	screen, err := d.svc.Intend(t.Context(), d.person("ada", ""), artifacts.ID{}, declare(files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(screen.Transfers) != 1 || screen.Transfers[0].Direct {
+		t.Fatalf("the dashboard was handed a direct transfer: %+v", screen)
 	}
 }
 
@@ -128,7 +137,7 @@ func TestFinalizeRefusesBytesThatDoNotMatchTheirDigest(t *testing.T) {
 
 	// THE BUCKET'S BYTES ARE READ BACK.
 	d := newHarness(t, options{presign: true})
-	dc := d.person("ada", d.opKey("create"))
+	dc := d.client("ada", d.opKey("create"))
 	direct, err := d.svc.Intend(t.Context(), dc, artifacts.ID{}, declare(files))
 	if err != nil {
 		t.Fatal(err)
@@ -339,14 +348,14 @@ func TestContentIsHeldToItsTypeAndAgentsToNoCredential(t *testing.T) {
 	h := newHarness(t, options{})
 	key := "AKIA" + "IOSFODNN7EXAMPLE"
 	_, _, err := h.svc.Create(t.Context(), h.agent("bot", "turn-1", h.opKey("c")), artifactupload.CreateRequest{
-		Kind: artifacts.KindMarkdown, Title: "x", Owner: "bot", OwnerKind: "agent", Entry: "a.md",
+		Kind: artifacts.KindDoc, Title: "x", Owner: "bot", OwnerKind: "agent", Entry: "a.md",
 		Files: []artifactupload.FileSpec{{Path: "a.md", Inline: []byte("# Setup\n\nkey: " + key + "\n")}},
 	})
 	if !errors.Is(err, artifactupload.ErrCredential) || !strings.Contains(err.Error(), "line 3") {
 		t.Fatalf("an agent's credential answered %v", err)
 	}
 	if _, _, err := h.svc.Create(t.Context(), h.person("ada", h.opKey("c")), artifactupload.CreateRequest{
-		Kind: artifacts.KindMarkdown, Title: "x", Owner: "ada", OwnerKind: "human", Entry: "a.md",
+		Kind: artifacts.KindDoc, Title: "x", Owner: "ada", OwnerKind: "human", Entry: "a.md",
 		Files: []artifactupload.FileSpec{{Path: "a.md", Inline: []byte("# Setup\n\nkey: " + key + "\n")}},
 	}); err != nil {
 		t.Fatalf("a person's page was held to the agent rule: %v", err)

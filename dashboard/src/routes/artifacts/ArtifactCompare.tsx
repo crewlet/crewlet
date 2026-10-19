@@ -12,7 +12,10 @@
  *   never colour alone).
  * - SIDE BY SIDE: both versions drawn, a page in two frames or a document
  *   rendered twice. Data is live and not versioned with the page, so both
- *   show today's data, and the pane says so.
+ *   show today's data, and the pane says so. A kind compared ITEM BY ITEM
+ *   draws its own comparison in this lens instead (`KIND_ITEM_COMPARES`): a
+ *   deck By slide, each slide's two versions side by side, paired by id, with
+ *   added, removed and moved slides said in words.
  *
  * The older version is always the left side and the "from" half, whichever of
  * the two the reader picked first, so a comparison reads forward in time.
@@ -22,7 +25,7 @@
  * manifests compared by digest, the per-file fetch and the two renderings.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Callout, DiffList, Select, Skeleton, VersionCompare, type DiffRow } from "@crewlethq/ui";
 import type { ArtifactDetail, ArtifactEntry, ArtifactVersionSummary } from "~/protocol/index.ts";
 import { QueryState } from "~/components/common.tsx";
@@ -41,9 +44,10 @@ import {
 } from "~/lib/artifacts/compare.ts";
 import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
-import { FrameView } from "./FrameView.tsx";
-import { MarkdownView } from "./MarkdownView.tsx";
+import { contentIsData, dataBesideVersions } from "~/lib/artifacts/kinds.ts";
 import type { PresenceReport } from "./presence.ts";
+import { SlidesCompare } from "./SlidesCompare.tsx";
+import { KIND_VIEWS } from "./ViewTab.tsx";
 
 /** How two versions are compared. */
 export type CompareLens = "source" | "visual";
@@ -51,10 +55,26 @@ export type CompareLens = "source" | "visual";
 /** The lenses, as the URL spells them. */
 export const COMPARE_LENSES: readonly CompareLens[] = ["source", "visual"];
 
-/** Whether a kind of artifact can be drawn side by side: a page or a document, never a sheet. */
+/** Whether a kind of artifact can be drawn side by side: one whose versions hold what it draws, never a sheet. */
 export function drawnSideBySide(kind: ArtifactDetail["kind"]): boolean {
-  return kind === "html" || kind === "markdown";
+  return !contentIsData(kind);
 }
+
+/**
+ * The kinds compared item by item rather than as two whole drawings: the
+ * lens's name and the comparison drawn in it.
+ */
+const KIND_ITEM_COMPARES: Partial<
+  Record<
+    ArtifactDetail["kind"],
+    { label: string; draw: (detail: ArtifactDetail, older: number, newer: number) => ReactNode }
+  >
+> = {
+  slides: {
+    label: "By slide",
+    draw: (detail, older, newer) => <SlidesCompare detail={detail} older={older} newer={newer} />,
+  },
+};
 
 /** The most changed runs of lines one file shows before it says how many more there are. */
 const SHOWN_HUNKS = 200;
@@ -83,19 +103,18 @@ export function ArtifactCompare({
   const older = Math.min(picked, against);
   const newer = Math.max(picked, against);
   const visual = drawnSideBySide(detail.kind);
+  const items = KIND_ITEM_COMPARES[detail.kind];
   const side = (n: number) =>
-    detail.kind === "html" ? (
-      <FrameView
-        detail={detail}
-        version={n}
-        versions={versions}
-        room={room}
-        presence={presence}
-        bridgeStores={bridgeStores}
-      />
-    ) : (
-      <MarkdownView detail={detail} version={n} />
-    );
+    KIND_VIEWS[detail.kind]({
+      detail,
+      version: n,
+      versions,
+      store: null,
+      room,
+      presence,
+      drawn: [],
+      bridgeStores,
+    });
   // THE PANES ARE HANDED OVER ONLY FOR A KIND DRAWN SIDE BY SIDE, and uilet
   // mounts them only while that lens is on show, so no frame runs behind the
   // Files lens. Without `onLensChange` a sheet gets no switch and shows Files.
@@ -109,15 +128,16 @@ export function ArtifactCompare({
       onLensChange={
         visual ? (next) => onLens(next === "versions" ? "visual" : "source") : undefined
       }
-      labels={{ changes: "Files", versions: "Side by side" }}
+      labels={{ changes: "Files", versions: items?.label ?? "Side by side" }}
       changes={<SourceCompare detail={detail} older={older} newer={newer} />}
+      versions={visual && items ? items.draw(detail, older, newer) : undefined}
       note={
-        detail.kind === "html"
+        dataBesideVersions(detail.kind)
           ? "Both versions show today's data: a page's data is live and is not versioned with it."
           : undefined
       }
-      from={visual ? side(older) : undefined}
-      to={visual ? side(newer) : undefined}
+      from={visual && !items ? side(older) : undefined}
+      to={visual && !items ? side(newer) : undefined}
     />
   );
 }

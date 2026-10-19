@@ -215,7 +215,7 @@ func TestEveryWriteNamesItsOperation(t *testing.T) {
 // THE API ORIGIN NEVER RENDERS AN ARTIFACT: a version's file
 // is an attachment, any text and anything a browser could run is plain text,
 // and the API's own policy forbids it loading or being framed; a page is
-// opened only in a frame on the artifact origin, and a Markdown document only
+// opened only in a frame on the artifact origin, and a doc only
 // as JSON for the dashboard to render.
 func TestTheAPIOriginNeverRendersAnArtifact(t *testing.T) {
 	t.Parallel()
@@ -247,7 +247,7 @@ func TestTheAPIOriginNeverRendersAnArtifact(t *testing.T) {
 	src := g.do(person("bob"), "GET", at(notes, "/versions/1/source"), ``)
 	if src.Code != http.StatusOK || !strings.HasPrefix(src.Result().Header.Get("Content-Type"), "application/json") ||
 		fields(t, src)["text"] != string(notesMD) {
-		t.Errorf("a Markdown document's source: %d %q %s", src.Code, src.Result().Header.Get("Content-Type"), src.Body)
+		t.Errorf("a doc's source: %d %q %s", src.Code, src.Result().Header.Get("Content-Type"), src.Body)
 	}
 	frame := g.do(person("bob"), "POST", at(page, "/tickets"), ``)
 	if frame.Code != http.StatusCreated || !strings.HasPrefix(fields(t, frame)["frame_url"].(string),
@@ -257,7 +257,7 @@ func TestTheAPIOriginNeverRendersAnArtifact(t *testing.T) {
 }
 
 // A FRAME OPENS ONE VERSION OF A PAGE FOR ONE CREDENTIAL, and only a page: a
-// Markdown document is the dashboard's to render, a deployment with no artifact
+// doc is the dashboard's to render, a deployment with no artifact
 // origin says so, and the frame is bound to the credential the caller signed in
 // through with the version's declared capabilities.
 func TestAFrameOpensOneVersionOfAPageForOneCredential(t *testing.T) {
@@ -265,7 +265,7 @@ func TestAFrameOpensOneVersionOfAPageForOneCredential(t *testing.T) {
 	g := newRig(t, true)
 	if w := g.do(person("bob"), "POST", at(notes, "/tickets"), ``); w.Code != http.StatusConflict ||
 		errorOf(t, w) != "artifact_not_framed" {
-		t.Errorf("a Markdown document's frame: %d %s", w.Code, w.Body)
+		t.Errorf("a doc's frame: %d %s", w.Code, w.Body)
 	}
 	if w := g.do(person("jane"), "POST", at(binned, "/tickets"), ``); w.Code != http.StatusConflict ||
 		errorOf(t, w) != "artifact_trashed" {
@@ -701,8 +701,8 @@ func TestEveryRouteIsGuardedAndDocumented(t *testing.T) {
 	if err := g.svc.Routes(rec); err != nil {
 		t.Fatal(err)
 	}
-	if len(rec.patterns) != 22 {
-		t.Fatalf("the surface mounts %d routes, and this case knows 22: %v", len(rec.patterns), rec.patterns)
+	if len(rec.patterns) != 25 {
+		t.Fatalf("the surface mounts %d routes, and this case knows 25: %v", len(rec.patterns), rec.patterns)
 	}
 	doc, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "reference", "api-endpoints.md"))
 	if err != nil {

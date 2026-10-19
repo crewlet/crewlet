@@ -1267,12 +1267,13 @@ to decide whether it can still vouch for a retry.
 ## `crewlet artifacts`
 
 ```
-crewlet artifacts list [-scope mine|shared|company|agents|all] [-kind html|markdown|sheet]
+crewlet artifacts list [-scope mine|shared|company|agents|all] [-kind html|doc|slides|sheet]
     [-q TEXT] [-status live|trashed] [-work-item KEY] [-limit N]
 crewlet artifacts get <id>
 crewlet artifacts publish <dir|file> [-artifact ID] [-title TEXT] [-description TEXT]
-    [-icon NAME] [-kind html|markdown] [-entry PATH] [-exclude PATTERN]... [-label TEXT]
-    [-contract VERSION] [-capabilities a,b] [-work-item KEY] [-force] [-op-id ID]
+    [-icon NAME] [-kind html|doc|slides|sheet] [-entry PATH] [-exclude PATTERN]...
+    [-label TEXT] [-contract VERSION] [-capabilities a,b] [-work-item KEY] [-force]
+    [-op-id ID]
 crewlet artifacts update <id> [-title TEXT] [-description TEXT] [-icon NAME] [-op-id ID]
 crewlet artifacts versions <id>
 crewlet artifacts restore <id> <version> [-label TEXT] [-op-id ID]
@@ -1315,10 +1316,14 @@ within one name, `[...]` for a class, `\` to escape. A malformed pattern, one
 reaching outside the directory, or `-exclude` beside a single file is refused
 before anything is sent. Quote a pattern so the shell does not expand it.
 
-A new artifact opens on
-`index.html`, else `index.md`, else the only file, unless `-entry` names
-another; its title defaults to the entry's name and its kind to `markdown`
-for a `.md` entry and `html` otherwise, and `-description` and `-icon` set the
+A new artifact opens on the
+one default entry it holds, `index.html`, `index.md`, `doc.json` or
+`deck.json`, else the only file, unless `-entry` names another; a directory
+holding two default entries is refused until `-entry` or `-kind` settles which
+it is. Its kind is the one whose entry that file is: `html` for a page, `doc`
+for a `.md` file or a tabbed doc's `doc.json`, `slides` for `deck.json` (an
+index is told by its path, never by JSON alone), and `-kind` names it outright.
+Its title defaults to the entry's name, and `-description` and `-icon` set the
 gallery card's subtitle and the tab's icon word. Those four describe a new
 artifact only: naming `-title`, `-description`, `-icon` or `-kind` beside
 `-artifact` is refused before any byte moves, since a version keeps the

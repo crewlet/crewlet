@@ -1,55 +1,75 @@
 /**
- * The View tab: an artifact drawn as its kind is drawn. A page runs in a
- * sandboxed frame on the artifact origin; a document is rendered here, by the
- * dashboard's own element-constructing Markdown renderer, since it runs no
- * author code; a sheet is drawn natively from its schema.
+ * The View tab: an artifact drawn as its kind is drawn, from the dashboard's
+ * half of the kind table ([KIND_VIEWS]). A framed kind runs in a sandboxed
+ * frame on the artifact origin; a native kind is drawn here from its closed
+ * format (a doc by the element-constructing Markdown renderer, a deck by
+ * the slide renderer, a sheet from its schema), since it runs no author code.
  */
 
+import type { ReactNode } from "react";
 import type { PresenceMember } from "@crewlethq/ui";
-import type { ArtifactDetail, ArtifactVersionSummary } from "~/protocol/index.ts";
+import type { ArtifactDetail, ArtifactKind, ArtifactVersionSummary } from "~/protocol/index.ts";
 import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
 import { FrameView } from "./FrameView.tsx";
-import { MarkdownView } from "./MarkdownView.tsx";
+import { DocView } from "./DocView.tsx";
 import { SheetView } from "./SheetView.tsx";
+import { SlidesView } from "./SlidesView.tsx";
 import type { PresenceReport } from "./presence.ts";
 
-export function ViewTab({
-  detail,
-  version,
-  versions,
-  store,
-  room,
-  presence,
-  drawn,
-  bridgeStores,
-}: {
+/** Everything a kind's view may draw from; each kind takes what it needs. */
+export interface KindViewProps {
   detail: ArtifactDetail;
   version: number;
   versions: ArtifactVersionSummary[];
+  /** The artifact's datastore, null where it keeps none or it is not open. */
   store: ArtifactDataStore | null;
   room: ArtifactRoom;
   presence: PresenceReport;
   drawn: PresenceMember[];
   bridgeStores: Set<ArtifactDataStore>;
-}) {
-  switch (detail.kind) {
-    case "html":
-      return (
-        <FrameView
-          detail={detail}
-          version={version}
-          versions={versions}
-          room={room}
-          presence={presence}
-          bridgeStores={bridgeStores}
-        />
-      );
-    case "markdown":
-      return <MarkdownView detail={detail} version={version} />;
-    case "sheet":
-      return store ? (
-        <SheetView detail={detail} store={store} room={room} presence={presence} drawn={drawn} />
-      ) : null;
-  }
+  /**
+   * A version this reader published from the view landed: show it. Absent
+   * for a secondary drawing (a side of a compare), which is read only and
+   * says nothing to the room.
+   */
+  onPublished?: ((version: number) => void) | undefined;
+}
+
+/** How each kind draws one version: a record over every kind, so a new kind fails the build until it is drawn. */
+export const KIND_VIEWS: Readonly<Record<ArtifactKind, (props: KindViewProps) => ReactNode>> = {
+  html: ({ detail, version, versions, room, presence, bridgeStores }) => (
+    <FrameView
+      detail={detail}
+      version={version}
+      versions={versions}
+      room={room}
+      presence={presence}
+      bridgeStores={bridgeStores}
+    />
+  ),
+  doc: ({ detail, version, presence, onPublished }) => (
+    <DocView
+      detail={detail}
+      version={version}
+      presence={presence}
+      {...(onPublished ? { onPublished } : {})}
+    />
+  ),
+  slides: ({ detail, version, presence, onPublished }) => (
+    <SlidesView
+      detail={detail}
+      version={version}
+      presence={presence}
+      {...(onPublished ? { onPublished } : {})}
+    />
+  ),
+  sheet: ({ detail, store, room, presence, drawn }) =>
+    store ? (
+      <SheetView detail={detail} store={store} room={room} presence={presence} drawn={drawn} />
+    ) : null,
+};
+
+export function ViewTab(props: KindViewProps) {
+  return KIND_VIEWS[props.detail.kind](props);
 }

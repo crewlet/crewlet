@@ -71,6 +71,7 @@ import { memberTurn, presenceMembers, useArtifactPeople } from "~/lib/artifacts/
 import { useArtifactRoom } from "~/lib/artifacts/room.ts";
 import { useDataStore } from "~/lib/artifacts/useDataStore.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
+import { keepsData } from "~/lib/artifacts/kinds.ts";
 import { KIND_WORDS, ROLE_WORDS } from "~/lib/artifacts/words.ts";
 import type {
   ArtifactDetail,
@@ -85,7 +86,7 @@ import { HistoryTab } from "./HistoryTab.tsx";
 import { DataTab } from "./DataTab.tsx";
 import { PurgeControl, SettingsTab } from "./SettingsTab.tsx";
 import { useArtifactPresence } from "./presence.ts";
-import { followMoves, followTarget, moves } from "~/lib/artifacts/follow.ts";
+import { followMoves, followTarget, moves, slideOfRegion } from "~/lib/artifacts/follow.ts";
 import { useViewer } from "~/lib/viewer.ts";
 
 /** The head is pushed (`artifact_changed`); this read is the floor under a push the socket missed. */
@@ -102,11 +103,6 @@ const TAB_WORDS: Readonly<Record<Tab, string>> = {
   settings: "Settings",
 };
 
-/** Whether an artifact keeps a datastore a person can open: a sheet always, a page that declared it. */
-function hasData(detail: ArtifactDetail): boolean {
-  return detail.kind === "sheet" || detail.capabilities.includes("db");
-}
-
 export function ArtifactPage({ id }: { id: string }) {
   const detail = useQuery("artifact", { id }, { pollMs: DETAIL_POLL_MS });
   const versions = useQuery(
@@ -121,7 +117,7 @@ export function ArtifactPage({ id }: { id: string }) {
 
   // THE SHEET AND THE DATA TAB write as the dashboard; a page's bridge
   // writes as the page's version, through a store of its own (ViewTab).
-  const store = useDataStore(id, { via: "dashboard" }, live === true && hasData(head!));
+  const store = useDataStore(id, { via: "dashboard" }, live === true && keepsData(head!));
   const bridgeStores = useRef(new Set<ArtifactDataStore>());
 
   const room = useArtifactRoom(id, live === true, {
@@ -244,7 +240,7 @@ function Loaded({
   const now = useNow();
   const toast = useToast();
   const connection = useConnection();
-  const tabs = useMemo(() => TABS.filter((t) => t !== "data" || hasData(detail)), [detail]);
+  const tabs = useMemo(() => TABS.filter((t) => t !== "data" || keepsData(detail)), [detail]);
   const [tab, setTab] = useTab("tab", tabs);
   const [versionParam, setVersion] = useParam("version", "");
   const asked = Number(versionParam);
@@ -266,6 +262,8 @@ function Loaded({
   const peopleOpen = rail === "people";
   const [follow, setFollow] = useParam("follow", "");
   const [sheetParam] = useParam("sheet", "");
+  const [slideParam] = useParam("slide", "");
+  const [doctabParam] = useParam("doctab", "");
   // WHO IS FOLLOWED is somebody else in the room: following oneself moves
   // nothing, and a seat that left is said once and then let go.
   const followed = follow && follow !== viewer.handle ? follow : "";
@@ -294,6 +292,8 @@ function Loaded({
       showing,
       tab,
       sheet: sheetParam,
+      slide: slideParam,
+      doctab: doctabParam,
     });
     if (!moves(move)) return;
     // ONE REPLACE FOR THE WHOLE MOVE: following is not a place the reader
@@ -301,6 +301,8 @@ function Loaded({
     nav.filter({
       ...(move.version !== undefined ? { version: move.version || null } : {}),
       ...(move.sheet !== undefined ? { sheet: move.sheet } : {}),
+      ...(move.slide !== undefined ? { slide: move.slide } : {}),
+      ...(move.doctab !== undefined ? { doctab: move.doctab } : {}),
       ...(move.tab !== undefined ? { tab: null } : {}),
     });
   }, [
@@ -312,6 +314,8 @@ function Loaded({
     showing,
     tab,
     sheetParam,
+    slideParam,
+    doctabParam,
     nav,
     setFollow,
   ]);
@@ -509,7 +513,9 @@ function Loaded({
           onStop={stopFollowing}
           labels={{
             following: (name) => {
-              const where = target.focus.region ? ` They are in ${target.focus.region}.` : "";
+              // A SLIDE IS MOVED TO, not said: the view is already on it.
+              const region = target.focus.region;
+              const where = region && !slideOfRegion(region) ? ` They are in ${region}.` : "";
               return `Following ${name}.${where} Press Esc or scroll to stop.`;
             },
           }}
@@ -563,6 +569,11 @@ function Loaded({
               presence={presence}
               drawn={drawn}
               bridgeStores={bridgeStores}
+              onPublished={(n: number) => {
+                refetch();
+                setVersion("");
+                setShownHead(n);
+              }}
             />
           )}
           {tab === "data" && store && <DataTab detail={detail} store={store} />}

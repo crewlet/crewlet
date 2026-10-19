@@ -1,0 +1,1582 @@
+{
+  "title": "Quarterly plan",
+  "cover": "cover",
+  "sections": [
+    {
+      "description": "Where we are",
+      "start": "cover"
+    },
+    {
+      "description": "What we will do",
+      "start": "plan"
+    },
+    {
+      "description": "What we need",
+      "start": "ask"
+    }
+  ],
+  "faces": [],
+  "slides": [
+    {
+      "id": "cover",
+      "path": "slides/cover.html",
+      "title": "Quarterly plan",
+      "transition": "fade",
+      "notes": "Welcome everyone. This deck covers the plan for the next quarter.",
+      "root": {
+        "tag": "section",
+        "style": [
+          {
+            "p": "background",
+            "v": "#13233a"
+          },
+          {
+            "p": "color",
+            "v": "#f4f1ea"
+          },
+          {
+            "p": "font-family",
+            "v": "'Georgia', serif"
+          },
+          {
+            "p": "padding",
+            "v": "128px"
+          },
+          {
+            "p": "display",
+            "v": "flex"
+          },
+          {
+            "p": "flex-direction",
+            "v": "column"
+          },
+          {
+            "p": "justify-content",
+            "v": "center"
+          },
+          {
+            "p": "gap",
+            "v": "32px"
+          }
+        ],
+        "children": [
+          {
+            "tag": "h1",
+            "style": [
+              {
+                "p": "font-size",
+                "v": "120px"
+              },
+              {
+                "p": "font-weight",
+                "v": "600"
+              },
+              {
+                "p": "line-height",
+                "v": "1.05"
+              },
+              {
+                "p": "letter-spacing",
+                "v": "-2px"
+              }
+            ],
+            "children": [
+              {
+                "text": "Quarterly plan"
+              }
+            ]
+          },
+          {
+            "tag": "p",
+            "style": [
+              {
+                "p": "font-size",
+                "v": "40px"
+              },
+              {
+                "p": "color",
+                "v": "#c9d3e0"
+              }
+            ],
+            "children": [
+              {
+                "text": "Fall release, October"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "agenda",
+      "path": "slides/agenda.html",
+      "title": "Agenda",
+      "notes": "Three parts, about ten minutes each.",
+      "root": {
+        "tag": "section",
+        "style": [
+          {
+            "p": "background",
+            "v": "#fbfbf8"
+          },
+          {
+            "p": "color",
+            "v": "#1a1a1a"
+          },
+          {
+            "p": "font-family",
+            "v": "'Georgia', serif"
+          },
+          {
+            "p": "padding",
+            "v": "128px"
+          },
+          {
+            "p": "display",
+            "v": "flex"
+          },
+          {
+            "p": "flex-direction",
+            "v": "column"
+          },
+          {
+            "p": "gap",
+            "v": "48px"
+          }
+        ],
+        "children": [
+          {
+            "tag": "h2",
+            "style": [
+              {
+                "p": "font-size",
+                "v": "72px"
+              },
+              {
+                "p": "font-weight",
+                "v": "400"
+              },
+              {
+                "p": "line-height",
+                "v": "1.1"
+              }
+            ],
+            "children": [
+              {
+                "text": "Agenda"
+              }
+            ]
+          },
+          {
+            "tag": "ol",
+            "style": [
+              {
+                "p": "font-size",
+                "v": "40px"
+              },
+              {
+                "p": "line-height",
+                "v": "1.5"
+              }
+            ],
+            "children": [
+              {
+                "tag": "li",
+                "children": [
+                  {
+                    "text": "Where we are"
+                  }
+                ]
+              },
+              {
+                "tag": "li",
+                "children": [
+                  {
+                    "text": "What we will do"
+                  }
+                ]
+              },
+              {
+                "tag": "li",
+                "children": [
+                  {
+                    "text": "What we need"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "problem",
+      "path": "slides/problem.html",
+      "title": "The problem",
+      "root": {
+        "tag": "section",
+        "style": [
+          {
+            "p": "background",
+            "v": "#fbfbf8"
+          },
+          {
+            "p": "color",
+            "v": "#1a1a1a"
+          },
+          {
+            "p": "font-family",
+            "v": "'Georgia', serif"
+          },
+          {
+            "p": "padding",
+            "v": "128px"
+          },
+          {
+            "p": "display",
+            "v": "flex"
+          },
+          {
+            "p": "flex-direction",
+            "v": "column"
+          },
+          {
+            "p": "gap",
+            "v": "48px"
+          }
+        ],
+        "children": [
+          {
+            "tag": "h2",
+            "style": [
+              {
+                "p": "font-size",
+                "v": "72px"
+              },
+              {
+                "p": "font-weight",
+                "v": "400"
+              },
+              {
+                "p": "line-height",
+                "v": "1.1"
+              }
+            ],
+            "children": [
+              {
+                "text": "The problem"
+              }
+            ]
+          },
+          {
+            "tag": "p",
+            "style": [
+              {
+                "p": "font-size",
+                "v": "44px"
+              },
+              {
+                "p": "line-height",
+                "v": "1.3"
+              }
+            ],
+            "children": [
+              {
+                "text": "Customers wait "
+              },
+              {
+                "tag": "b",
+                "children": [
+                  {
+                    "text": "three days"
+                  }
+                ]
+              },
+              {
+                "text": " for an answer, and "
+              },
+              {
+                "tag": "i",
+                "children": [
+                  {
+                    "text": "half"
+                  }
+                ]
+              },
+              {
+                "text": " of them ask twice."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "plan",
+      "path": "slides/plan.html",
+      "title": "The plan",
+      "transition": "push",
+      "notes": "Take the questions first, then show the two cards.",
+      "root": {
+        "tag": "section",
+        "style": [
+          {
+            "p": "background",
+            "v": "#fbfbf8"
+          },
+          {
+            "p": "color",
+            "v": "#1a1a1a"
+          },
+          {
+            "p": "font-family",
+            "v": "'Georgia', serif"
+          },
+          {
+            "p": "padding",
+            "v": "128px"
+          },
+          {
+            "p": "display",
+            "v": "flex"
+          },
+          {
+            "p": "flex-direction",
+            "v": "column"
+          },
+          {
+            "p": "gap",
+            "v": "48px"
+          }
+        ],
+        "children": [
+          {
+            "tag": "h2",
+            "style": [
+              {
+                "p": "font-size",
+                "v": "72px"
+              },
+              {
+                "p": "font-weight",
+                "v": "400"
+              },
+              {
+                "p": "line-height",
+                "v": "1.1"
+              }
+            ],
+            "children": [
+              {
+                "text": "The plan"
+              }
+            ]
+          },
+          {
+            "tag": "div",
+            "style": [
+              {
+                "p": "display",
+                "v": "flex"
+              },
+              {
+                "p": "gap",
+                "v": "32px"
+              }
+            ],
+            "children": [
+              {
+                "tag": "div",
+                "style": [
+                  {
+                    "p": "flex",
+                    "v": "1"
+                  },
+                  {
+                    "p": "display",
+                    "v": "flex"
+                  },
+                  {
+                    "p": "flex-direction",
+                    "v": "column"
+                  },
+                  {
+                    "p": "gap",
+                    "v": "12px"
+                  },
+                  {
+                    "p": "background",
+                    "v": "#ffffff"
+                  },
+                  {
+                    "p": "padding",
+                    "v": "40px"
+                  },
+                  {
+                    "p": "border",
+                    "v": "1px solid #e3e6e4"
+                  },
+                  {
+                    "p": "border-radius",
+                    "v": "16px"
+                  }
+                ],
+                "children": [
+                  {
+                    "tag": "h3",
+                    "style": [
+                      {
+                        "p": "font-size",
+                        "v": "36px"
+                      },
+                      {
+                        "p": "font-weight",
+                        "v": "600"
+                      }
+                    ],
+                    "children": [
+                      {
+                        "text": "One queue"
+                      }
+                    ]
+                  },
+                  {
+                    "tag": "p",
+                    "style": [
+                      {
+                        "p": "font-size",
+                        "v": "28px"
+                      }
+                    ],
+                    "children": [
+                      {
+                        "text": "Every request lands in one plcae."
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "tag": "div",
+                "style": [
+                  {
+                    "p": "flex",
+                    "v": "1"
+                  },
+                  {
+                    "p": "display",
+                    "v": "flex"
+                  },
+                  {
+                    "p": "flex-direction",
+                    "v": "column"
+                  },
+                  {
+                    "p": "gap",
+                    "v": "12px"
+                  },
+                  {
+                    "p": "background",
+                    "v": "#ffffff"
+                  },
+                  {
+                    "p": "padding",
+                    "v": "40px"
+                  },
+                  {
+                    "p": "border",
+                    "v": "1px solid #e3e6e4"
+                  },
+                  {
+                    "p": "border-radius",
+                    "v": "16px"
+                  }
+                ],
+                "children": [
+                  {
+                    "tag": "h3",
+                    "style": [
+                      {
+                        "p": "font-size",
+                        "v": "36px"
+                      },
+                      {
+                        "p": "font-weight",
+                        "v": "600"
+                      }
+                    ],
+                    "children": [
+                      {
+                        "text": "One owner"
+                      }
+                    ]
+                  },
+                  {
+                    "tag": "p",
+                    "style": [
+                      {
+                        "p": "font-size",
+                        "v": "28px"
+                      }
+                    ],
+                    "children": [
+                      {
+                        "text": "Each request has a person who answers it."
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "numbers",
+      "path": "slides/numbers.html",
+      "title": "Numbers",
+      "root": {
+        "tag": "section",
+        "style": [
+          {
+            "p": "background",
+            "v": "#fbfbf8"
+          },
+          {
+            "p": "color",
+            "v": "#1a1a1a"
+          },
+          {
+            "p": "font-family",
+            "v": "'Georgia', serif"
+          },
+          {
+            "p": "padding",
+            "v": "128px"
+          },
+          {
+            "p": "display",
+            "v": "flex"
+          },
+          {
+            "p": "flex-direction",
+            "v": "column"
+          },
+          {
+            "p": "gap",
+            "v": "48px"
+          }
+        ],
+        "children": [
+          {
+            "tag": "h2",
+            "style": [
+              {
+                "p": "font-size",
+                "v": "72px"
+              },
+              {
+                "p": "font-weight",
+                "v": "400"
+              },
+              {
+                "p": "line-height",
+                "v": "1.1"
+              }
+            ],
+            "children": [
+              {
+                "text": "Numbers"
+              }
+            ]
+          },
+          {
+            "tag": "table",
+            "style": [
+              {
+                "p": "font-size",
+                "v": "28px"
+              },
+              {
+                "p": "color",
+                "v": "#1a1a1a"
+              }
+            ],
+            "children": [
+              {
+                "tag": "tr",
+                "children": [
+                  {
+                    "tag": "th",
+                    "style": [
+                      {
+                        "p": "width",
+                        "v": "50%"
+                      }
+                    ],
+                    "children": [
+                      {
+                        "text": "Measure"
+                      }
+                    ]
+                  },
+                  {
+                    "tag": "th",
+                    "style": [
+                      {
+                        "p": "width",
+                        "v": "25%"
+                      }
+                    ],
+                    "children": [
+                      {
+                        "text": "Now"
+                      }
+                    ]
+                  },
+                  {
+                    "tag": "th",
+                    "style": [
+                      {
+                        "p": "width",
+                        "v": "25%"
+                      }
+                    ],
+                    "children": [
+                      {
+                        "text": "Goal"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "tag": "tr",
+                "style": [
+                  {
+                    "p": "background",
+                    "v": "#f1efe8"
+                  }
+                ],
+                "children": [
+                  {
+                    "tag": "td",
+                    "children": [
+                      {
+                        "text": "First answer"
+                      }
+                    ]
+                  },
+                  {
+                    "tag": "td",
+                    "children": [
+                      {
+                        "text": "3 days"
+                      }
+                    ]
+                  },
+                  {
+                    "tag": "td",
+                    "children": [
+                      {
+                        "text": "4 hours"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "tag": "tr",
+                "children": [
+                  {
+                    "tag": "td",
+                    "children": [
+                      {
+                        "text": "Asked twice"
+                      }
+                    ]
+                  },
+                  {
+                    "tag": "td",
+                    "children": [
+                      {
+                        "text": "48%"
+                      }
+                    ]
+                  },
+                  {
+                    "tag": "td",
+                    "children": [
+                      {
+                        "text": "10%"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "team",
+      "path": "slides/team.html",
+      "title": "Team",
+      "root": {
+        "tag": "section",
+        "style": [
+          {
+            "p": "background",
+            "v": "#fbfbf8"
+          },
+          {
+            "p": "color",
+            "v": "#1a1a1a"
+          },
+          {
+            "p": "font-family",
+            "v": "'Georgia', serif"
+          },
+          {
+            "p": "padding",
+            "v": "128px"
+          },
+          {
+            "p": "display",
+            "v": "flex"
+          },
+          {
+            "p": "flex-direction",
+            "v": "column"
+          },
+          {
+            "p": "gap",
+            "v": "48px"
+          }
+        ],
+        "children": [
+          {
+            "tag": "h2",
+            "style": [
+              {
+                "p": "font-size",
+                "v": "72px"
+              },
+              {
+                "p": "font-weight",
+                "v": "400"
+              },
+              {
+                "p": "line-height",
+                "v": "1.1"
+              }
+            ],
+            "children": [
+              {
+                "text": "Team"
+              }
+            ]
+          },
+          {
+            "tag": "div",
+            "style": [
+              {
+                "p": "display",
+                "v": "flex"
+              },
+              {
+                "p": "gap",
+                "v": "48px"
+              },
+              {
+                "p": "align-items",
+                "v": "center"
+              }
+            ],
+            "children": [
+              {
+                "tag": "img",
+                "attrs": {
+                  "alt": "The support team",
+                  "src": "images/team.png"
+                },
+                "style": [
+                  {
+                    "p": "width",
+                    "v": "480px"
+                  },
+                  {
+                    "p": "height",
+                    "v": "360px"
+                  },
+                  {
+                    "p": "object-fit",
+                    "v": "cover"
+                  },
+                  {
+                    "p": "border-radius",
+                    "v": "16px"
+                  }
+                ]
+              },
+              {
+                "tag": "ul",
+                "style": [
+                  {
+                    "p": "font-size",
+                    "v": "32px"
+                  },
+                  {
+                    "p": "line-height",
+                    "v": "1.5"
+                  }
+                ],
+                "children": [
+                  {
+                    "tag": "li",
+                    "children": [
+                      {
+                        "text": "Four people"
+                      }
+                    ]
+                  },
+                  {
+                    "tag": "li",
+                    "children": [
+                      {
+                        "text": "Two time zones"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "timeline",
+      "path": "slides/timeline.html",
+      "title": "Timeline",
+      "root": {
+        "tag": "section",
+        "style": [
+          {
+            "p": "background",
+            "v": "#fbfbf8"
+          },
+          {
+            "p": "color",
+            "v": "#1a1a1a"
+          },
+          {
+            "p": "font-family",
+            "v": "'Georgia', serif"
+          },
+          {
+            "p": "padding",
+            "v": "128px"
+          },
+          {
+            "p": "display",
+            "v": "flex"
+          },
+          {
+            "p": "flex-direction",
+            "v": "column"
+          },
+          {
+            "p": "gap",
+            "v": "48px"
+          }
+        ],
+        "children": [
+          {
+            "tag": "h2",
+            "style": [
+              {
+                "p": "font-size",
+                "v": "72px"
+              },
+              {
+                "p": "font-weight",
+                "v": "400"
+              },
+              {
+                "p": "line-height",
+                "v": "1.1"
+              }
+            ],
+            "children": [
+              {
+                "text": "Timeline"
+              }
+            ]
+          },
+          {
+            "tag": "div",
+            "style": [
+              {
+                "p": "display",
+                "v": "grid"
+              },
+              {
+                "p": "grid-template-columns",
+                "v": "repeat(3, 1fr)"
+              },
+              {
+                "p": "gap",
+                "v": "24px"
+              }
+            ],
+            "children": [
+              {
+                "tag": "p",
+                "style": [
+                  {
+                    "p": "font-size",
+                    "v": "28px"
+                  },
+                  {
+                    "p": "background",
+                    "v": "#e8eef6"
+                  },
+                  {
+                    "p": "padding",
+                    "v": "24px"
+                  },
+                  {
+                    "p": "border-radius",
+                    "v": "12px"
+                  }
+                ],
+                "children": [
+                  {
+                    "text": "October: one queue"
+                  }
+                ]
+              },
+              {
+                "tag": "p",
+                "style": [
+                  {
+                    "p": "font-size",
+                    "v": "28px"
+                  },
+                  {
+                    "p": "background",
+                    "v": "#e8eef6"
+                  },
+                  {
+                    "p": "padding",
+                    "v": "24px"
+                  },
+                  {
+                    "p": "border-radius",
+                    "v": "12px"
+                  }
+                ],
+                "children": [
+                  {
+                    "text": "November: owners"
+                  }
+                ]
+              },
+              {
+                "tag": "p",
+                "style": [
+                  {
+                    "p": "font-size",
+                    "v": "28px"
+                  },
+                  {
+                    "p": "background",
+                    "v": "#e8eef6"
+                  },
+                  {
+                    "p": "padding",
+                    "v": "24px"
+                  },
+                  {
+                    "p": "border-radius",
+                    "v": "12px"
+                  }
+                ],
+                "children": [
+                  {
+                    "text": "December: review"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "tag": "p",
+            "style": [
+              {
+                "p": "position",
+                "v": "absolute"
+              },
+              {
+                "p": "left",
+                "v": "128px"
+              },
+              {
+                "p": "bottom",
+                "v": "64px"
+              },
+              {
+                "p": "width",
+                "v": "800px"
+              },
+              {
+                "p": "font-size",
+                "v": "24px"
+              },
+              {
+                "p": "color",
+                "v": "#6a7179"
+              }
+            ],
+            "children": [
+              {
+                "text": "Dates are targets"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "risks",
+      "path": "slides/risks.html",
+      "title": "Risks",
+      "root": {
+        "tag": "section",
+        "style": [
+          {
+            "p": "background",
+            "v": "#fbfbf8"
+          },
+          {
+            "p": "color",
+            "v": "#1a1a1a"
+          },
+          {
+            "p": "font-family",
+            "v": "'Georgia', serif"
+          },
+          {
+            "p": "padding",
+            "v": "128px"
+          },
+          {
+            "p": "display",
+            "v": "flex"
+          },
+          {
+            "p": "flex-direction",
+            "v": "column"
+          },
+          {
+            "p": "gap",
+            "v": "48px"
+          }
+        ],
+        "children": [
+          {
+            "tag": "h2",
+            "style": [
+              {
+                "p": "font-size",
+                "v": "72px"
+              },
+              {
+                "p": "font-weight",
+                "v": "400"
+              },
+              {
+                "p": "line-height",
+                "v": "1.1"
+              }
+            ],
+            "children": [
+              {
+                "text": "Risks"
+              }
+            ]
+          },
+          {
+            "tag": "div",
+            "style": [
+              {
+                "p": "display",
+                "v": "flex"
+              },
+              {
+                "p": "gap",
+                "v": "24px"
+              },
+              {
+                "p": "align-items",
+                "v": "center"
+              }
+            ],
+            "children": [
+              {
+                "tag": "x-icon",
+                "attrs": {
+                  "name": "Warning"
+                },
+                "style": [
+                  {
+                    "p": "width",
+                    "v": "64px"
+                  },
+                  {
+                    "p": "height",
+                    "v": "64px"
+                  },
+                  {
+                    "p": "color",
+                    "v": "#b45309"
+                  }
+                ]
+              },
+              {
+                "tag": "p",
+                "style": [
+                  {
+                    "p": "font-size",
+                    "v": "32px"
+                  }
+                ],
+                "children": [
+                  {
+                    "text": "Hiring takes longer than planned."
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "tag": "x-shape",
+            "attrs": {
+              "kind": "arrow-right"
+            },
+            "style": [
+              {
+                "p": "position",
+                "v": "absolute"
+              },
+              {
+                "p": "left",
+                "v": "1500px"
+              },
+              {
+                "p": "top",
+                "v": "800px"
+              },
+              {
+                "p": "width",
+                "v": "200px"
+              },
+              {
+                "p": "height",
+                "v": "100px"
+              },
+              {
+                "p": "background",
+                "v": "#b45309"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "chart",
+      "path": "slides/chart.html",
+      "title": "Requests by week",
+      "root": {
+        "tag": "section",
+        "style": [
+          {
+            "p": "background",
+            "v": "#fbfbf8"
+          },
+          {
+            "p": "color",
+            "v": "#1a1a1a"
+          },
+          {
+            "p": "font-family",
+            "v": "'Georgia', serif"
+          },
+          {
+            "p": "padding",
+            "v": "128px"
+          },
+          {
+            "p": "display",
+            "v": "flex"
+          },
+          {
+            "p": "flex-direction",
+            "v": "column"
+          },
+          {
+            "p": "gap",
+            "v": "48px"
+          }
+        ],
+        "children": [
+          {
+            "tag": "h2",
+            "style": [
+              {
+                "p": "font-size",
+                "v": "72px"
+              },
+              {
+                "p": "font-weight",
+                "v": "400"
+              },
+              {
+                "p": "line-height",
+                "v": "1.1"
+              }
+            ],
+            "children": [
+              {
+                "text": "Requests by week"
+              }
+            ]
+          },
+          {
+            "tag": "svg",
+            "attrs": {
+              "aria-label": "Requests rose from 120 to 180 over four weeks",
+              "height": "400",
+              "viewBox": "0 0 800 400",
+              "width": "800"
+            },
+            "children": [
+              {
+                "tag": "defs",
+                "children": [
+                  {
+                    "tag": "linearGradient",
+                    "attrs": {
+                      "id": "bar",
+                      "x1": "0",
+                      "x2": "0",
+                      "y1": "0",
+                      "y2": "1"
+                    },
+                    "children": [
+                      {
+                        "tag": "stop",
+                        "attrs": {
+                          "offset": "0",
+                          "stop-color": "#3b6ea5"
+                        }
+                      },
+                      {
+                        "tag": "stop",
+                        "attrs": {
+                          "offset": "1",
+                          "stop-color": "#13233a"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "tag": "rect",
+                "attrs": {
+                  "fill": "url(#bar)",
+                  "height": "240",
+                  "width": "120",
+                  "x": "40",
+                  "y": "160"
+                }
+              },
+              {
+                "tag": "rect",
+                "attrs": {
+                  "fill": "url(#bar)",
+                  "height": "280",
+                  "width": "120",
+                  "x": "240",
+                  "y": "120"
+                }
+              },
+              {
+                "tag": "rect",
+                "attrs": {
+                  "fill": "url(#bar)",
+                  "height": "320",
+                  "width": "120",
+                  "x": "440",
+                  "y": "80"
+                }
+              },
+              {
+                "tag": "rect",
+                "attrs": {
+                  "fill": "url(#bar)",
+                  "height": "360",
+                  "width": "120",
+                  "x": "640",
+                  "y": "40"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "quote",
+      "path": "slides/quote.html",
+      "title": "I asked twice and got two different answers.",
+      "root": {
+        "tag": "section",
+        "style": [
+          {
+            "p": "background",
+            "v": "#f4f1ea"
+          },
+          {
+            "p": "color",
+            "v": "#13233a"
+          },
+          {
+            "p": "font-family",
+            "v": "'Georgia', serif"
+          },
+          {
+            "p": "padding",
+            "v": "128px"
+          },
+          {
+            "p": "display",
+            "v": "flex"
+          },
+          {
+            "p": "flex-direction",
+            "v": "column"
+          },
+          {
+            "p": "justify-content",
+            "v": "center"
+          }
+        ],
+        "children": [
+          {
+            "tag": "p",
+            "style": [
+              {
+                "p": "font-size",
+                "v": "64px"
+              },
+              {
+                "p": "line-height",
+                "v": "1.2"
+              },
+              {
+                "p": "font-style",
+                "v": "italic"
+              },
+              {
+                "p": "border-left",
+                "v": "8px solid #b45309"
+              },
+              {
+                "p": "padding",
+                "v": "0 0 0 48px"
+              }
+            ],
+            "children": [
+              {
+                "text": "I asked twice and got two different answers."
+              }
+            ]
+          },
+          {
+            "tag": "p",
+            "style": [
+              {
+                "p": "font-size",
+                "v": "28px"
+              },
+              {
+                "p": "color",
+                "v": "#6a7179"
+              }
+            ],
+            "children": [
+              {
+                "text": "A customer, September"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "ask",
+      "path": "slides/ask.html",
+      "title": "What we need",
+      "root": {
+        "tag": "section",
+        "style": [
+          {
+            "p": "background",
+            "v": "#fbfbf8"
+          },
+          {
+            "p": "color",
+            "v": "#1a1a1a"
+          },
+          {
+            "p": "font-family",
+            "v": "'Georgia', serif"
+          },
+          {
+            "p": "padding",
+            "v": "128px"
+          },
+          {
+            "p": "display",
+            "v": "flex"
+          },
+          {
+            "p": "flex-direction",
+            "v": "column"
+          },
+          {
+            "p": "gap",
+            "v": "48px"
+          }
+        ],
+        "children": [
+          {
+            "tag": "h2",
+            "style": [
+              {
+                "p": "font-size",
+                "v": "72px"
+              },
+              {
+                "p": "font-weight",
+                "v": "400"
+              },
+              {
+                "p": "line-height",
+                "v": "1.1"
+              }
+            ],
+            "children": [
+              {
+                "text": "What we need"
+              }
+            ]
+          },
+          {
+            "tag": "p",
+            "style": [
+              {
+                "p": "font-size",
+                "v": "44px"
+              }
+            ],
+            "children": [
+              {
+                "text": "Two more people, and "
+              },
+              {
+                "tag": "a",
+                "attrs": {
+                  "href": "https://example.com/plan"
+                },
+                "children": [
+                  {
+                    "text": "the plan"
+                  }
+                ]
+              },
+              {
+                "text": " approved this week."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "thanks",
+      "path": "slides/thanks.html",
+      "title": "Thank you",
+      "hidden": true,
+      "root": {
+        "tag": "section",
+        "style": [
+          {
+            "p": "background",
+            "v": "linear-gradient(135deg, #13233a 0%, #3b6ea5 100%)"
+          },
+          {
+            "p": "color",
+            "v": "#f4f1ea"
+          },
+          {
+            "p": "font-family",
+            "v": "'Georgia', serif"
+          },
+          {
+            "p": "padding",
+            "v": "128px"
+          },
+          {
+            "p": "display",
+            "v": "flex"
+          },
+          {
+            "p": "flex-direction",
+            "v": "column"
+          },
+          {
+            "p": "justify-content",
+            "v": "center"
+          },
+          {
+            "p": "align-items",
+            "v": "center"
+          }
+        ],
+        "children": [
+          {
+            "tag": "h1",
+            "style": [
+              {
+                "p": "font-size",
+                "v": "120px"
+              }
+            ],
+            "children": [
+              {
+                "text": "Thank you"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

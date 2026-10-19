@@ -3393,8 +3393,7 @@ a.knowledge-reader-how:hover {
   gap: var(--spacing-4);
 }
 .knowledge-editor-foot,
-.knowledge-callout-actions,
-.knowledge-resolve-foot {
+.knowledge-callout-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -3406,54 +3405,6 @@ a.knowledge-reader-how:hover {
 }
 .knowledge-theirs {
   min-width: 0;
-}
-.knowledge-resolve {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  padding: var(--spacing-4);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-lg);
-}
-.knowledge-resolve-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-4);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.knowledge-resolve-item {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-}
-.knowledge-resolve-sides {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--spacing-3);
-}
-.knowledge-resolve-side {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
-  margin: 0;
-}
-.knowledge-resolve-side figcaption {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.knowledge-resolve-side pre {
-  margin: 0;
-  padding: var(--spacing-2);
-  overflow-x: auto;
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-inset);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  white-space: pre-wrap;
 }
 .knowledge-picker {
   display: flex;
@@ -10572,8 +10523,84 @@ a.live-row:focus-visible {
   min-width: 0;
 }
 
-.artifact-document {
+/* A DOC: its tabs and actions in one bar, then the outline beside the tab on
+   show, as a Knowledge page reads; one column on a narrow page. */
+.doc-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+.doc-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-4);
+  min-width: 0;
+}
+.doc-bar > [role="tablist"] {
+  flex: 1 1 20rem;
+  min-width: 0;
+}
+.doc-bar-actions {
+  display: flex;
+  gap: var(--spacing-2);
+  margin-left: auto;
+}
+.doc-read {
+  display: grid;
+  grid-template-columns: var(--size-shell-rail) minmax(0, var(--size-content-max));
+  gap: var(--spacing-6);
+  align-items: start;
+  min-width: 0;
+}
+.doc-read-side {
+  position: sticky;
+  top: var(--sticky-top);
+  max-height: calc(100cqb - var(--sticky-top) - 2 * var(--spacing-5));
+  overflow-y: auto;
+  min-width: 0;
+}
+@container page (width < 760px) {
+  .doc-read {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .doc-read-side {
+    display: none;
+  }
+}
+.doc-read-page {
+  min-width: 0;
   max-width: var(--size-measure);
+}
+.doc-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+.doc-conflicts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+.doc-editor-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.doc-note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+/* A doc prints its tabs in order, each from a new page under its title. */
+.doc-print-tab + .doc-print-tab {
+  break-before: page;
+}
+.doc-print-title {
+  margin: 0 0 var(--spacing-4);
+  font-size: var(--font-size-2xl);
 }
 
 .artifact-sheet,
@@ -10844,4 +10871,295 @@ a.live-row:focus-visible {
   .artifact-with-rail > .artifact-people {
     order: 0;
   }
+}
+
+/* ---- a slide deck (routes/artifacts/SlidesView.tsx) ---------------------- */
+
+.slides-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.slides-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* THE EDITOR: the filmstrip beside the stage, under it on a phone. */
+.slides-edit {
+  display: grid;
+  grid-template-columns: 11rem minmax(0, 1fr);
+  align-items: start;
+  gap: var(--spacing-4);
+}
+.slides-edit > .slides-conflicts,
+.slides-edit > .slides-merged {
+  grid-column: 1 / -1;
+}
+.slides-strip {
+  max-height: max(24rem, calc(100cqb - var(--sticky-top) - 12rem));
+  overflow: auto;
+}
+.slides-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.slides-panel {
+  display: grid;
+  gap: var(--spacing-3);
+  max-width: var(--size-measure);
+}
+.slides-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.slides-notes {
+  max-width: var(--size-measure);
+  padding: var(--spacing-3);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+  white-space: pre-wrap;
+}
+.slides-notes p {
+  margin: 0;
+}
+.slides-conflicts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+@media (width < 640px) {
+  .slides-edit {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .slides-strip {
+    order: 2;
+    max-height: none;
+  }
+}
+
+/* PRESENT: the slide as large as fits; full screen on the reader's press. */
+.slides-show {
+  display: flex;
+  flex-direction: column;
+  height: max(24rem, calc(100cqb - var(--sticky-top) - 12rem));
+  background: var(--color-surface-inset);
+}
+.slides-show:fullscreen {
+  height: 100%;
+}
+.slides-show-stage {
+  flex: 1;
+  min-height: 0;
+}
+.slides-show-stage[data-transition="fade"] {
+  animation: slides-fade var(--motion-duration-moderate) var(--motion-easing-out);
+}
+.slides-show-stage[data-transition="push"] {
+  animation: slides-push var(--motion-duration-moderate) var(--motion-easing-out);
+}
+@keyframes slides-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes slides-push {
+  from {
+    transform: translateX(8%);
+    opacity: 0;
+  }
+}
+.slides-show-bar {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2);
+}
+.slides-show-count {
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.slides-presenter {
+  height: max(30rem, calc(100cqb - var(--sticky-top) - 10rem));
+}
+
+/* A SLIDE IS AUTHORED CONTENT, laid out exactly as the slide format says
+   (Claude's: format.md and styles.md) and the same in every theme: its own
+   colour scheme is light, so a slide that names no colour reads in the
+   system's ink on the system's paper whatever the dashboard's theme is. Every
+   rule here is a default an inline declaration of the slide overrides. */
+.slide-canvas {
+  position: relative;
+  box-sizing: border-box;
+  overflow: hidden;
+  color-scheme: light;
+  background: Canvas;
+  color: CanvasText;
+  font-family: sans-serif;
+  font-size: 32px;
+  font-weight: 400;
+  line-height: 1.4;
+  text-align: left;
+}
+.slide-canvas * {
+  box-sizing: border-box;
+  margin: 0;
+}
+/* NO DISPLAY IS A COLUMN: a section or a div that names none lays its
+   children out top to bottom; one that names `display:flex` is a row, as in
+   any stylesheet. */
+.slide-canvas:not([data-display]),
+.slide-div:not([data-display]) {
+  display: flex;
+  flex-direction: column;
+}
+/* THE DOCUMENT'S OWN ELEMENT RULES (base.css and the kit's baseline give
+   headings the display face, the product's ink and tight tracking, links the
+   accent, tables the full width) are the dashboard's, not the slide's: each
+   is put back to what the slide format says here. */
+.slide-h1,
+.slide-h2,
+.slide-h3 {
+  font-family: inherit;
+  color: inherit;
+  letter-spacing: normal;
+}
+.slide-h1 {
+  font-size: 96px;
+  font-weight: 600;
+  line-height: 1.1;
+}
+.slide-h2 {
+  font-size: 64px;
+  font-weight: 600;
+  line-height: 1.15;
+}
+.slide-h3 {
+  font-size: 44px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.slide-ul,
+.slide-ol {
+  padding-inline-start: 1.2em;
+}
+.slide-text-box > .slide-ul,
+.slide-text-box > .slide-ol {
+  padding-inline-start: var(--slide-indent, 1.2em);
+}
+.slide-a,
+.slide-a:hover {
+  color: inherit;
+  text-decoration: underline;
+}
+.slide-table {
+  width: auto;
+  border-collapse: collapse;
+}
+.slide-th,
+.slide-td {
+  padding: 0.35em 0.6em;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  text-align: left;
+  vertical-align: top;
+}
+.slide-th {
+  font-weight: 600;
+}
+.slide-hr {
+  align-self: stretch;
+  height: 0;
+  border: 0;
+  border-top: 2px solid currentColor;
+}
+.slide-img,
+.slide-svg {
+  display: block;
+  max-width: none;
+}
+.slide-img-pending {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+.slide-shape {
+  display: block;
+  background: currentColor;
+}
+.slide-shape-rounded {
+  border-radius: 24px;
+}
+.slide-shape-ellipse {
+  border-radius: 50%;
+}
+.slide-shape-line {
+  height: 0;
+  background: transparent;
+  border-top: 2px solid currentColor;
+}
+.slide-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+}
+/* A RUN OF TEXT EDITED IN PLACE is outlined where the pointer or the caret
+   is, in the dashboard's focus colour, which is chrome rather than slide. */
+.slide-run:hover {
+  outline: 2px dashed var(--color-focus);
+  outline-offset: 2px;
+}
+.slide-run:focus {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* PRINT: what a `PrintOnly` holds, and nothing else of the dashboard. Drawn
+   always and shown only in print, and only while a deck or a doc is open. */
+.print-only {
+  display: none;
+}
+@media print {
+  body:has(> .print-only) > :not(.print-only) {
+    display: none;
+  }
+  .print-only {
+    display: block;
+  }
+}
+
+/* A deck prints one slide to a 16:9 page. */
+@page deck {
+  size: 1920px 1080px;
+  margin: 0;
+}
+@media print {
+  .slides-print-page {
+    page: deck;
+    break-after: page;
+  }
+}
+
+/* A DECK'S GALLERY COVER: its cover slide at card size, and how many slides. */
+.slides-cover {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+.slides-cover-count {
+  position: absolute;
+  right: var(--spacing-1);
+  bottom: var(--spacing-1);
+  padding: 0 var(--spacing-1);
+  border-radius: var(--radius-xs);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-2xs);
 }

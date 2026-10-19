@@ -23,7 +23,7 @@ import (
 
 // HOW A VERSION IS VIEWED FROM THE API ORIGIN, which never renders one: a frame
 // minted for the artifact origin (an HTML artifact runs there, sandboxed, and
-// nowhere else), a Markdown document's source as JSON for the dashboard to
+// nowhere else), a doc's source as JSON for the dashboard to
 // render itself (it runs no author code), and a file's raw bytes as an
 // attachment, text as plain text, under the API's own policy.
 
@@ -55,7 +55,7 @@ func (s *Service) ticket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
-	case a.Head.Kind != artifacts.KindHTML:
+	case !a.Head.Kind.Framed():
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeArtifactNotFramed, map[string]string{
 			"detail": "a " + string(a.Head.Kind) + " artifact is rendered by the dashboard: read " +
 				"its source, or its data"})
@@ -238,7 +238,7 @@ func (s *Service) sendFile(w http.ResponseWriter, r *http.Request, id artifacts.
 }
 
 // Source is a version's entry as text, for the dashboard to render itself: a
-// Markdown document (which runs no author code, and so is shown on the
+// doc's Markdown (which runs no author code, and so is shown on the
 // dashboard rather than in a frame), or an HTML page's source.
 type Source struct {
 	Artifact    artifacts.ID   `json:"artifact"`
@@ -254,7 +254,7 @@ type Source struct {
 // /artifacts/{id}/versions/{n}/source`), decided by `get_artifact`: read back
 // through the object store, checked against its digest, at most
 // [artifacts.MaxEntryBytes] (the bound every entry is published under). An
-// open of a Markdown document records that the caller opened it, as a frame's
+// open of a native kind's source records that the caller opened it, as a frame's
 // ticket does for a page.
 func (s *Service) source(w http.ResponseWriter, r *http.Request) {
 	n, ok := pathVersion(w, r)
@@ -284,7 +284,9 @@ func (s *Service) source(w http.ResponseWriter, r *http.Request) {
 		contentFailed(w, r, a.Head.ID, entry.Path, err)
 		return
 	}
-	if a.Head.Kind == artifacts.KindMarkdown {
+	// A NATIVE KIND IS OPENED BY READING IT, since no ticket is minted for
+	// it: the open is recorded here, as a frame's ticket records a page's.
+	if !a.Head.Kind.Framed() {
 		s.gate.markOpened(r.Context(), a)
 	}
 	httpjson.Write(w, http.StatusOK, Source{

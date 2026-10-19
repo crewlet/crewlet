@@ -12,6 +12,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/docindex"
+	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactserve"
 	"github.com/crewlet/crewlet/internal/artifactupload"
@@ -130,6 +132,11 @@ type Service struct {
 	frames  Framer
 	ready   Beacon
 	pace    func() time.Time
+
+	// decks and docs are what this node read of each version for the
+	// dashboard, through the kind's format.
+	decks *formatCache[slideformat.Deck]
+	docs  *formatCache[docindex.Doc]
 }
 
 // New builds the surface.
@@ -157,7 +164,8 @@ func New(opts Options) (*Service, error) {
 		pace = time.Now
 	}
 	return &Service{gate: opts.Gate, reads: opts.Reads, writes: opts.Writes, uploads: opts.Uploads,
-		objects: opts.Objects, frames: opts.Frames, ready: opts.Ready, pace: pace}, nil
+		objects: opts.Objects, frames: opts.Frames, ready: opts.Ready, pace: pace,
+		decks: newDeckCache(opts.Objects), docs: newDocCache(opts.Objects)}, nil
 }
 
 // Gate is the surface's admission, which the read questions take too.
@@ -222,6 +230,9 @@ func (s *Service) Routes(mux authz.Mux) error {
 		{"POST /artifacts/{id}/tickets", pre, s.ticket},
 		{patternFiles, pre, s.file},
 		{"GET /artifacts/{id}/versions/{n}/source", pre, s.source},
+		{"GET /artifacts/{id}/versions/{n}/deck", pre, s.deck},
+		{"GET /artifacts/{id}/versions/{n}/doc", pre, s.doc},
+		{"GET /artifacts/{id}/versions/{n}/outline", pre, s.outline},
 		{"POST /artifacts/ready", ready, s.reportReady},
 	} {
 		if err := router.Handle(route.pattern, route.policy, route.handler); err != nil {

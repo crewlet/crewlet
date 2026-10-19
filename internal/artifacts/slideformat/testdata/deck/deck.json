@@ -1,0 +1,33 @@
+{
+  "v": 4,
+  "title": "Quarterly plan",
+  "order": [
+    "cover",
+    "agenda",
+    "problem",
+    "plan",
+    "numbers",
+    "team",
+    "timeline",
+    "risks",
+    "chart",
+    "quote",
+    "ask",
+    "thanks"
+  ],
+  "cover": "cover",
+  "sections": {
+    "s1": {
+      "description": "Where we are",
+      "start": "cover"
+    },
+    "s2": {
+      "description": "What we will do",
+      "start": "plan"
+    },
+    "s3": {
+      "description": "What we need",
+      "start": "ask"
+    }
+  }
+}

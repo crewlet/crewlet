@@ -30,7 +30,7 @@
  * `skill_loaded_by`, `linked_from`); nothing here is counted in the browser.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   Button,
   DescriptionList,
@@ -38,10 +38,7 @@ import {
   DocumentTitle,
   EmptyState,
   Menu,
-  Outline,
   Skeleton,
-  scrollToHeading,
-  useActiveHeading,
   useToast,
 } from "@crewlethq/ui";
 import {
@@ -60,10 +57,10 @@ import type { PageMenuEntry } from "~/app/header/PageHeader.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
-import { outline, renderMarkdown } from "~/lib/markdown.ts";
+import { renderMarkdown } from "~/lib/markdown.ts";
+import { OnThisPage } from "~/components/OnThisPage.tsx";
 import { copyPageLink } from "~/lib/pageLink.ts";
 import { loadedBy } from "~/lib/pageReads.ts";
-import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
 import { MaxStars, starredIn, useStarred, useToggleStar } from "~/lib/starred.ts";
 import { useReader } from "~/lib/reader.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -88,12 +85,6 @@ import { WatchControl } from "./Watch.tsx";
 /** How often a page reads itself again, and how often who read it. */
 const PAGE_POLL_MS = 20_000;
 const READS_POLL_MS = 60_000;
-
-/**
- * Where a heading counts as the one being read: a fifth of the way down the
- * scroller, so the section filling the screen is the one marked.
- */
-const READING_LINE = 0.2;
 
 /** What kind of page this is, when it is not plain prose, as one line. */
 function kindOf(detail: PageDetail, who: Who): string {
@@ -212,34 +203,6 @@ function PageBody({ detail, body }: { detail: PageDetail; body: string }) {
         </ul>
       )}
     </div>
-  );
-}
-
-/** "On this page", following the scroll. */
-function OnThisPage({ body }: { body: string }) {
-  const headings = useMemo(() => {
-    const all = outline(body);
-    if (all.length === 0) return [];
-    // THE TWO TOP LEVELS THE DOCUMENT USES, its sections and their parts: a
-    // third would make the outline the document.
-    const top = Math.min(...all.map((h) => h.level));
-    return all.filter((h) => h.level <= top + 1);
-  }, [body]);
-  const [root, setRoot] = useState<HTMLElement | null>(null);
-  useEffect(() => setRoot(document.getElementById(SCREEN_SCROLL_ID)), []);
-  const ids = useMemo(() => headings.map((h) => h.id), [headings]);
-  const active = useActiveHeading(ids, {
-    root,
-    offset: Math.round((root?.clientHeight ?? 0) * READING_LINE),
-  });
-  if (headings.length < 2) return null;
-  return (
-    <Outline
-      label="On this page"
-      items={headings.map((h) => ({ id: h.id, label: h.text, level: h.level }))}
-      activeId={active}
-      onSelect={(id) => scrollToHeading(id)}
-    />
   );
 }
 
