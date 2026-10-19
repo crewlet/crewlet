@@ -188,6 +188,14 @@ func (h *harness) setLimits(change func(*artifacts.Limits)) {
 	change(&h.limits)
 }
 
+// client is a call by a person through the API with a bearer credential: the
+// CLI, a script. The one caller a presigned put is handed to.
+func (h *harness) client(handle, key string) artifactsdomain.Call {
+	c := h.person(handle, key)
+	c.Authority.Origin = artifacts.OriginAPI
+	return c
+}
+
 // person is a call by a person through the dashboard.
 func (h *harness) person(handle, key string) artifactsdomain.Call {
 	h.mu.Lock()

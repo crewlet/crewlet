@@ -45,8 +45,8 @@ const VendorPrefix = "_vendor/"
 // outstanding. Only then does it mint one key per file on the engine's clock
 // and answer how each file is transferred: a presigned put straight to the
 // bucket, bound to the file's exact length, type and digest, where the object
-// store proved it can take one and the caller is not an agent's tool (a
-// sandbox is never handed a credential); a put through the engine otherwise.
+// store proved it can take one and the caller can reach it ([reachesBucket]);
+// a put through the engine otherwise.
 //
 // The authority verb is the caller's to have decided. An intent with the
 // caller's operation key is idempotent: the retry an unknown outcome asks for
@@ -142,7 +142,7 @@ func (s *Service) intend(ctx context.Context, c artifactsdomain.Call, id artifac
 	if !id.IsZero() {
 		r.Artifact = id.String()
 	}
-	direct := s.presign != nil && c.Authority.Origin != artifacts.OriginTool
+	direct := s.presign != nil && reachesBucket(c.Authority.Origin)
 	for _, d := range plan.Upload {
 		t := transportEngine
 		if direct {
@@ -426,4 +426,13 @@ func classify(err error) error {
 		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	return err
+}
+
+// reachesBucket reports whether a caller through origin is handed a presigned
+// put straight to the bucket. Two never are: an agent's tool, since a sandbox
+// is never handed a credential, and the dashboard's own screens, whose policy
+// (`connect-src 'self'`) reaches only the dashboard's origin, so a put to the
+// bucket would be refused by the reader's own browser.
+func reachesBucket(origin artifacts.WriteOrigin) bool {
+	return origin != artifacts.OriginTool && origin != artifacts.OriginDashboard
 }
