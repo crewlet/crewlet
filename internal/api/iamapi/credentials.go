@@ -91,10 +91,11 @@ type mintBody struct {
 
 	// Grants are what the token carries. They NARROW the owner's and never
 	// widen them — see [iamdomain.Writer.MintToken]. Omitted, the token
-	// carries every permission the owner holds, admin included: a token
-	// acts as its owner, and what keeps it off a gesture that needs a
-	// person is the gesture's own row, not a permission it cannot carry.
-	// A name this build does not know is refused naming the set.
+	// carries every permission the owner holds that the minting party may
+	// confer, admin included where the minter holds it: a token acts as its
+	// owner, and what keeps it off a gesture that needs a person is the
+	// gesture's own row, not a permission it cannot carry. A name this
+	// build does not know is refused naming the set.
 	Grants []iam.Grant `json:"grants"`
 }
 
