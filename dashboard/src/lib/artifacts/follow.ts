@@ -11,9 +11,10 @@
  * viewing over idle), then the most recent.
  *
  * WHAT FOLLOWS is what a member's presence says: the version they have open,
- * and for a native sheet the collection they are on. A page's own regions are
- * the page's to scroll to, so a region is said in words beside the follow
- * rather than moved to.
+ * for a native sheet the collection they are on, and for a deck the slide
+ * they are on (the region `slide:<id>`), which is how a phone follows a
+ * presenter. A page's own regions are the page's to scroll to, so any other
+ * region is said in words beside the follow rather than moved to.
  */
 
 import type { ArtifactKind, ArtifactPresenceMember, PresenceActivity } from "~/protocol/index.ts";
@@ -55,6 +56,8 @@ export interface FollowView {
   tab: string;
   /** For a sheet, the collection on show. */
   sheet: string;
+  /** For a deck, the slide on show ("" for its first). */
+  slide: string;
 }
 
 /** What to move so the reader's view is the followed member's: each field only where it differs. */
@@ -64,6 +67,13 @@ export interface FollowMove {
   tab?: "view";
   /** The `sheet=` to address. */
   sheet?: string;
+  /** The `slide=` to address. */
+  slide?: string;
+}
+
+/** The slide a presence region names, or "" for a region that names none. */
+export function slideOfRegion(region: string | undefined): string {
+  return region?.startsWith("slide:") ? region.slice("slide:".length) : "";
 }
 
 /** The moves that bring view to where target is. */
@@ -73,9 +83,13 @@ export function followMoves(target: ArtifactPresenceMember, view: FollowView): F
   if (f.version && f.version > 0 && f.version <= view.head && f.version !== view.showing) {
     out.version = f.version === view.head ? "" : String(f.version);
   }
+  const slide = slideOfRegion(f.region);
   if (view.kind === "sheet" && f.collection) {
     if (view.tab !== "view") out.tab = "view";
     if (f.collection !== view.sheet) out.sheet = f.collection;
+  } else if (slide) {
+    if (view.tab !== "view") out.tab = "view";
+    if (slide !== view.slide) out.slide = slide;
   } else if ((out.version !== undefined || f.version) && view.tab !== "view") {
     out.tab = "view";
   }
@@ -84,5 +98,7 @@ export function followMoves(target: ArtifactPresenceMember, view: FollowView): F
 
 /** Whether a move moves anything. */
 export function moves(m: FollowMove): boolean {
-  return m.version !== undefined || m.tab !== undefined || m.sheet !== undefined;
+  return (
+    m.version !== undefined || m.tab !== undefined || m.sheet !== undefined || m.slide !== undefined
+  );
 }

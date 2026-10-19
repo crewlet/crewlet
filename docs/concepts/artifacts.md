@@ -90,6 +90,16 @@ store** and, when a version declares it, a **datastore**.
   `presence` (who else is here) and `assets`. A publish declaring a capability
   this build does not know is refused rather than served without it.
 
+**A kind is native or framed.** An `html` page runs its author's code, and
+only on the artifact origin, in a sandboxed frame (see [Serving](#serving)). A
+`markdown` document, a `slides` deck and a `sheet` carry no author code: the
+dashboard draws each from a closed format with its own components, so nothing
+one holds can become script on the dashboard's origin, and a publish outside
+the format is refused with a named error rather than silently dropped on read.
+A native kind declares no capabilities, since there is no page to grant them
+to. Every rule the engine and the dashboard decide by kind is one row of one
+table (`internal/artifacts/kind.go`).
+
 A person may also publish to a **source key** (the republish-in-place address
 an agent or the CLI uses), so publishing the same source twice updates one
 artifact instead of creating two.
@@ -553,10 +563,57 @@ them.
 
 ---
 
+## Decks
+
+A `slides` artifact is a deck in Claude's slide format: a `deck.json` index
+and one `slides/<id>.html` per slide, each a `<section>` on a 1920 by 1080
+stage styled from a closed inline subset, with its speaker notes in an
+`<aside>`. The [Slide Format](../reference/slide-format.md) reference is the
+whole contract.
+
+- **Held to the format at publish.** Every version is read whole through one
+  parser (`internal/artifacts/slideformat`), carried slides included, so a
+  patch that removes an image a slide shows is refused as surely as a slide
+  that names a stylesheet. The refusal names each file, line and rule.
+- **Drawn from its tree, never its markup.** The engine answers a version as
+  the canonical tree its publish was held to, and the dashboard constructs
+  every element itself, holding the same allowlists again. Images and
+  typefaces are files of the version the dashboard reads with the viewer's
+  own sign-in; a slide names no address the browser fetches.
+- **Edited as versions.** A person with `editor` fixes text in place, edits
+  notes, reorders, deletes slides and renames the deck; Save publishes a
+  version based on the one they opened. A save refused because somebody
+  published since is merged onto their version slide by slide, and a slide
+  both changed differently is the person's to resolve. An agent revises a
+  deck the same way, one slide file at a time, and a stale publish hands it
+  the slides that changed.
+- **Presented and followed.** Present draws the slide full screen with the
+  keys a clicker sends; the Presenter window shows the slide, the next one,
+  the notes and a timer and moves the room's screen. Where a reader is in a
+  deck is their presence region `slide:<id>`, so following the presenter (a
+  phone included) moves the follower to the same slide with no transport of
+  its own.
+- **Printed to PDF** one 16:9 page per shown slide, by the browser.
+- **Compared by slide.** History's comparison of two versions of a deck has
+  a By slide lens beside Files: each slide's two versions side by side,
+  paired by id, a slide one version lacks in its place, and every change said
+  in words (changed, added, removed, moved), where a move is what the order
+  changed rather than every slide whose number shifted.
+- **Started from a template.** New › Deck begins a deck from the engine's
+  starter (a cover, an agenda, two columns and a closing slide, each with
+  notes), published inline and held to the format like any version, so the
+  dashboard sends no upload.
+- **Covered natively in the gallery**: the cover slide drawn at card size from
+  the version's outline, never a screenshot.
+
+---
+
 ## What this release does not do
 
 Comments, mentions and reviews; watches that wake an agent when data changes;
-decisions inside a sheet; canvas boards; live tracker and knowledge data inside
+decisions inside a sheet; canvas boards; slide builds, magic moves, live
+embeds and connectors on a slide, and PowerPoint or Google Slides export of a
+deck; live tracker and knowledge data inside
 a page; a page asking a model a question; viewer uploads and device features;
 public links outside the company; moving idle stores to object storage;
 point-in-time recovery from a log archive; concurrent co-editing of long text;

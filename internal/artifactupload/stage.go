@@ -17,7 +17,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
-	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
@@ -233,83 +232,20 @@ func (r *run) manifest(mode manifest.Mode, entry string) (artifacts.Manifest, []
 	return m, uploaded, nil
 }
 
-// checkFormat holds the version's own files to its kind's format, answering
-// every problem as a policy refusal on the format's file, and keeps what the
-// format read for the search text.
-func (r *run) checkFormat(ctx context.Context, m artifacts.Manifest) error {
-	spec, _ := r.kind.Spec()
-	switch spec.Format {
-	case artifacts.FormatNone:
-		return nil
-	case artifacts.FormatCanvas:
-		e, ok := manifest.EntryAt(m, canvasformat.Path)
-		if !ok || m.Entry != canvasformat.Path {
-			return &lint.Refusal{Findings: []lint.Finding{{Path: canvasformat.Path,
-				Code: lint.CodeFormat, Message: "a design opens on its canvas: publish " +
-					canvasformat.Path + " and name it the entry"}}}
-		}
-		text, err := r.fileText(ctx, e)
-		if err != nil {
-			return err
-		}
-		canvas, err := canvasformat.Parse(text, m)
-		var refused *canvasformat.Error
-		switch {
-		case errors.As(err, &refused):
-			findings := make([]lint.Finding, len(refused.Problems))
-			for i, p := range refused.Problems {
-				findings[i] = lint.Finding{Path: canvasformat.Path, Code: lint.CodeFormat,
-					Message: p.String()}
-			}
-			return &lint.Refusal{Findings: findings}
-		case err != nil:
-			return err
-		}
-		r.canvas = &canvas
-		return nil
-	}
-	return fmt.Errorf("artifactupload: a %s artifact's format %q is not one this pipeline "+
-		"validates", r.kind, spec.Format)
-}
-
 // searchText is the text the gallery indexes the version by, as the kind's
 // search rule extracts it, at most [artifacts.MaxSearchTextBytes].
 func (r *run) searchText(ctx context.Context, m artifacts.Manifest) (string, error) {
 	spec, _ := r.kind.Spec()
-	switch spec.Search {
-	case artifacts.SearchEntry:
+	switch {
+	case spec.Search == artifacts.SearchEntry:
 		return r.entryText(ctx, m)
-	case artifacts.SearchCanvas:
+	case spec.Search == artifacts.SearchFormat && r.deck != nil:
+		return truncateText(r.deck.Text(), int(artifacts.MaxSearchTextBytes)), nil
+	case spec.Search == artifacts.SearchFormat && r.canvas != nil:
 		return r.canvasText(ctx, m)
 	}
 	return "", fmt.Errorf("artifactupload: a %s artifact's search rule %q is not one this "+
 		"pipeline extracts", r.kind, spec.Search)
-}
-
-// canvasText is what a design says: the canvas's own words, then each
-// artboard's readable text in the canvas's order, until the bound.
-func (r *run) canvasText(ctx context.Context, m artifacts.Manifest) (string, error) {
-	if r.canvas == nil {
-		return "", errors.New("artifactupload: a design's search text was asked for before " +
-			"its canvas was read")
-	}
-	limit := int(artifacts.MaxSearchTextBytes)
-	parts := []string{r.canvas.SearchText()}
-	used := len(parts[0])
-	for _, p := range r.canvas.Order {
-		if used >= limit {
-			break
-		}
-		e, _ := manifest.EntryAt(m, p)
-		text, err := r.fileText(ctx, e)
-		if err != nil {
-			return "", err
-		}
-		page := lint.Text(lint.Source(text), limit-used)
-		parts = append(parts, page)
-		used += len(page) + 1
-	}
-	return truncateText(strings.Join(parts, "\n"), limit), nil
 }
 
 // entryText is the entry's readable text: a page's text without its markup,
@@ -326,28 +262,19 @@ func (r *run) entryText(ctx context.Context, m artifacts.Manifest) (string, erro
 	if !typ.Text {
 		return "", nil
 	}
-	text, err := r.fileText(ctx, e)
-	if err != nil {
-		return "", err
+	var text []byte
+	if f := r.files[e.Path]; f != nil && f.text != nil && !f.carried {
+		text = f.text
+	} else {
+		if text, err = readObject(ctx, r.s.objects, e.Object, true); err != nil {
+			return "", fmt.Errorf("artifactupload: read the entry %q: %w", e.Path, err)
+		}
 	}
 	limit := int(artifacts.MaxSearchTextBytes)
 	if typ.Essence() == "text/html" {
 		return lint.Text(lint.Source(text), limit), nil
 	}
 	return truncateText(string(text), limit), nil
-}
-
-// fileText is the bytes a file of the version holds: what this publish brings
-// for it, else its object, read back and checked.
-func (r *run) fileText(ctx context.Context, e artifacts.Entry) ([]byte, error) {
-	if f := r.files[e.Path]; f != nil && f.text != nil && !f.carried {
-		return f.text, nil
-	}
-	text, err := readObject(ctx, r.s.objects, e.Object, true)
-	if err != nil {
-		return nil, fmt.Errorf("artifactupload: read %q: %w", e.Path, err)
-	}
-	return text, nil
 }
 
 // truncateText cuts s to at most n bytes at a character boundary.

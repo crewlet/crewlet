@@ -1,27 +1,29 @@
 /**
- * New sheet: a native sheet, blank or from the Review sheet template, made by
- * the person signed in and owned by them.
+ * New artifact: a native sheet, blank or from the Review sheet template, or a
+ * slide deck from the engine's starter, made by the person signed in and owned
+ * by them. `kind=slides` opens on the deck.
  *
  * A PAGE OR A DOCUMENT IS PUBLISHED, NOT TYPED HERE: an agent's tool or the
- * CLI publishes those. What a person starts in the dashboard is a sheet,
- * whose content is its datastore, so it is two engine writes: the artifact,
- * then its schema. Each is keyed, so a retry is the same operation; a schema
- * the engine refused after the sheet was made leaves the sheet in place, and
- * its page says so and offers the schema editor.
+ * CLI publishes those. A sheet's content is its datastore, so it is two engine
+ * writes: the artifact, then its schema. Each is keyed, so a retry is the same
+ * operation; a schema the engine refused after the sheet was made leaves the
+ * sheet in place, and its page says so and offers the schema editor. A deck is
+ * one write: the engine publishes its own starter slides, held to the slide
+ * format, and the person edits them in place from there.
  *
  * `item=` names the task the sheet is made for, which lists it on that task's
  * Artifacts card.
  */
 
 import { useState } from "react";
-import { Button, ChoiceList, FormField, Input, useToast } from "@crewlethq/ui";
+import { Button, ChoiceList, FormField, Input, SegmentedControl, useToast } from "@crewlethq/ui";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { Section } from "~/components/common.tsx";
 import { utf8Bytes } from "~/lib/format.ts";
 import { keyedWrite, useKeyedGesture } from "~/lib/keyedWrite.ts";
 import { newActOpID } from "~/protocol/index.ts";
 import { ARTIFACT_TITLE_MAX_BYTES } from "~/contract/artifacts.ts";
-import { artifactPath, configureSchema, createSheet } from "~/lib/artifacts/api.ts";
+import { artifactPath, configureSchema, createDeck, createSheet } from "~/lib/artifacts/api.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { SHEET_TEMPLATES, type SheetTemplate } from "~/lib/artifacts/schema.ts";
 
@@ -33,6 +35,8 @@ export function NewArtifact() {
   const toast = useToast();
   const [item] = useParam("item", "");
   const [templateParam] = useParam("template", "review");
+  const [kindParam, setKind] = useParam("kind", "sheet");
+  const kind: "sheet" | "slides" = kindParam === "slides" ? "slides" : "sheet";
   const [template, setTemplate] = useState<SheetTemplate>(
     templateParam === "blank" ? "blank" : "review",
   );
@@ -47,6 +51,17 @@ export function NewArtifact() {
       : bytes > ARTIFACT_TITLE_MAX_BYTES
         ? `The title is ${bytes} bytes and the most is ${ARTIFACT_TITLE_MAX_BYTES}.`
         : undefined;
+
+  const startDeck = async () => {
+    const answer = await create.run(
+      createDeck({ title: title.trim(), ...(workItem ? { workItem } : {}) }),
+    );
+    if (answer?.kind !== "done") return;
+    const id = typeof answer.body.artifact === "string" ? answer.body.artifact : "";
+    if (!id) return;
+    toast.ok(`Started “${title.trim()}”`);
+    nav.to(artifactPath(id));
+  };
 
   const start = async () => {
     const answer = await create.run(
@@ -71,8 +86,26 @@ export function NewArtifact() {
   };
 
   return (
-    <Section title="New sheet" hint="A sheet everyone you share it with fills in together, live">
+    <Section
+      title={kind === "slides" ? "New deck" : "New sheet"}
+      hint={
+        kind === "slides"
+          ? "A slide deck you edit in place, present full screen and print"
+          : "A sheet everyone you share it with fills in together, live"
+      }
+    >
       <div className="artifact-form">
+        <SegmentedControl
+          label="Kind"
+          semantics="radio"
+          size="sm"
+          options={[
+            { value: "sheet", label: "Sheet" },
+            { value: "slides", label: "Deck" },
+          ]}
+          value={kind}
+          onValueChange={(v: string) => setKind(v)}
+        />
         <FormField label="Title" error={titleWrong}>
           {(field) => (
             <Input
@@ -81,21 +114,28 @@ export function NewArtifact() {
               aria-invalid={field.invalid}
               width="md"
               value={title}
-              placeholder="Integration requirements review"
+              placeholder={kind === "slides" ? "Quarterly plan" : "Integration requirements review"}
               onChange={(e) => setTitle(e.target.value)}
             />
           )}
         </FormField>
-        <ChoiceList
-          label="Start from"
-          value={template}
-          onChange={(value) => setTemplate(value === "blank" ? "blank" : "review")}
-          options={SHEET_TEMPLATES.map((t) => ({
-            value: t.key,
-            label: t.label,
-            detail: t.description,
-          }))}
-        />
+        {kind === "sheet" ? (
+          <ChoiceList
+            label="Start from"
+            value={template}
+            onChange={(value) => setTemplate(value === "blank" ? "blank" : "review")}
+            options={SHEET_TEMPLATES.map((t) => ({
+              value: t.key,
+              label: t.label,
+              detail: t.description,
+            }))}
+          />
+        ) : (
+          <p className="artifact-note">
+            It starts from four example slides (a cover, an agenda, two columns and a closing
+            slide), each with notes on what to put there.
+          </p>
+        )}
         {workItem && <p className="artifact-note">It will be listed on {workItem}.</p>}
         {create.answer && create.answer.kind !== "done" && (
           <p className="artifact-refusal">{create.answer.text}</p>
@@ -115,9 +155,9 @@ export function NewArtifact() {
                   ? "Give it a title."
                   : (titleWrong ?? undefined)
             }
-            onClick={() => void start()}
+            onClick={() => void (kind === "slides" ? startDeck() : start())}
           >
-            Start the sheet
+            {kind === "slides" ? "Start the deck" : "Start the sheet"}
           </Button>
         </div>
       </div>

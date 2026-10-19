@@ -704,11 +704,13 @@ func kindFor(asked artifacts.Kind, entry string) (artifacts.Kind, error) {
 	if asked != "" {
 		return asked, nil
 	}
-	typ, _ := mediatype.For(entry)
-	if kind, ok := artifacts.KindFor(entry, typ.Essence()); ok {
-		return kind, nil
+	typ, ok := mediatype.For(entry)
+	if ok {
+		if kind, ok := artifacts.KindFor(entry, typ.Essence()); ok {
+			return kind, nil
+		}
 	}
-	return "", fmt.Errorf("name the kind with -kind: no one kind opens on %s", entry)
+	return "", fmt.Errorf("name the kind with -kind: no kind opens on %s", entry)
 }
 
 // kindNames lists every kind this build serves, for the flags' help.

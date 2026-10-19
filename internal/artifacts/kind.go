@@ -80,18 +80,45 @@ const (
 	// its markup), and nothing when the version names no entry.
 	SearchEntry Search = "entry"
 
-	// SearchCanvas indexes a design's canvas (its title, the artboards'
-	// titles and the notes' text) and then each artboard's readable text,
-	// in the canvas's order: the canvas file itself is layout, and a search
-	// over its JSON would match coordinates.
-	SearchCanvas Search = "canvas"
+	// SearchFormat indexes the readable text the kind's own format extracts
+	// from every file it holds (a deck's slides and their speaker notes), not
+	// the entry alone, whose text is only the index.
+	SearchFormat Search = "format"
 )
 
 // Searches are every search extraction this build knows.
-var Searches = []Search{SearchEntry, SearchCanvas}
+var Searches = []Search{SearchEntry, SearchFormat}
 
 // Valid reports whether s is a search extraction this build knows.
 func (s Search) Valid() bool { return slices.Contains(Searches, s) }
+
+// Format is the closed format a kind's own files are validated against at
+// publish, beyond the per-file bounds every version is held to.
+type Format string
+
+const (
+	// FormatNone holds a version's files to the per-file bounds alone: a
+	// framed page is linted as a page instead, and a sheet's content is its
+	// datastore.
+	FormatNone Format = "none"
+
+	// FormatSlides is the slide format (internal/artifacts/slideformat): a
+	// deck index naming one slide file each, every slide parsed into the
+	// closed element and style subset, refused at publish when outside it.
+	FormatSlides Format = "slides"
+
+	// FormatDesign is a design's canvas (internal/artifacts/canvasformat):
+	// `canvas.json` laying out one board per HTML page of the version, and
+	// the notes beside them, refused at publish when outside its schema or
+	// out of step with the version's pages.
+	FormatDesign Format = "design"
+)
+
+// Formats are every format this build validates.
+var Formats = []Format{FormatNone, FormatSlides, FormatDesign}
+
+// Valid reports whether f is a format this build validates.
+func (f Format) Valid() bool { return slices.Contains(Formats, f) }
 
 // Documents is which of a version's files the artifact origin serves as a
 // document, and how many of them one ticket opens.
@@ -127,25 +154,6 @@ var DocumentRules = []Documents{DocumentsNone, DocumentsSite, DocumentsEach}
 // Valid reports whether d is a document rule this build serves by.
 func (d Documents) Valid() bool { return slices.Contains(DocumentRules, d) }
 
-// Format is the validator a kind's own files are held to at publish, beyond
-// the entry's media type.
-type Format string
-
-const (
-	// FormatNone holds a kind to its entry rule alone.
-	FormatNone Format = "none"
-
-	// FormatCanvas holds a design's `canvas.json` to its schema and to the
-	// version's files (internal/artifacts/canvasformat).
-	FormatCanvas Format = "canvas"
-)
-
-// Formats are every format validator this build runs.
-var Formats = []Format{FormatNone, FormatCanvas}
-
-// Valid reports whether f is a format this build validates.
-func (f Format) Valid() bool { return slices.Contains(Formats, f) }
-
 // EntryRule is what a kind's entry, the file a version opens on, may be.
 type EntryRule struct {
 	// Optional reports a version may name no entry at all: a native sheet's
@@ -159,10 +167,22 @@ type EntryRule struct {
 	// Defaults are the entry paths a publish that names none looks for, in
 	// preference order. The first is where a create's single `content` lands.
 	Defaults []string
+
+	// Fixed reports the entry may only be one of [EntryRule.Defaults]: a
+	// format whose index is a file of a common type (a deck's `deck.json`)
+	// is told apart by its path, never by its type alone.
+	Fixed bool
 }
 
 // Admits reports whether a file served as essence may be this kind's entry.
 func (r EntryRule) Admits(essence string) bool { return slices.Contains(r.Essences, essence) }
+
+// AdmitsAt reports whether the file at path, served as essence, may be this
+// kind's entry: a type the rule admits, at one of its paths where the rule
+// fixes them.
+func (r EntryRule) AdmitsAt(path, essence string) bool {
+	return r.Admits(essence) && (!r.Fixed || slices.Contains(r.Defaults, path))
+}
 
 // KindSpec is everything the engine and the dashboard decide by kind.
 type KindSpec struct {
@@ -182,16 +202,15 @@ type KindSpec struct {
 	// Store is what the kind's datastore is to it.
 	Store Store
 
+	// Format is the closed format the kind's files are validated against.
+	Format Format
+
 	// Search is what a version contributes to the gallery's search text.
 	Search Search
 
 	// Documents is which files the artifact origin serves as a document,
 	// and how many one ticket opens.
 	Documents Documents
-
-	// Format is what the kind's own files are validated against at
-	// publish.
-	Format Format
 }
 
 // Framed reports the kind runs author code on the artifact origin: the only
@@ -218,44 +237,61 @@ func (s KindSpec) Capabilities() []Capability {
 // kindSpecs is the table, in the order every listing of kinds follows.
 var kindSpecs = []KindSpec{
 	{
-		Kind:      KindHTML,
-		Summary:   "runs the page's own code in a sandbox",
-		Render:    RenderFramed,
-		Entry:     EntryRule{Essences: []string{"text/html"}, Defaults: []string{"index.html"}},
-		Store:     StoreDeclared,
-		Search:    SearchEntry,
+		Kind:    KindHTML,
+		Summary: "runs the page's own code in a sandbox",
+		Render:  RenderFramed,
+		Entry:   EntryRule{Essences: []string{"text/html"}, Defaults: []string{"index.html"}},
+		Store:   StoreDeclared,
+		Format:  FormatNone,
+		Search:  SearchEntry,
+
 		Documents: DocumentsSite,
-		Format:    FormatNone,
 	},
 	{
-		Kind:      KindMarkdown,
-		Summary:   "is a document the dashboard draws",
-		Render:    RenderNative,
-		Entry:     EntryRule{Essences: []string{"text/markdown"}, Defaults: []string{"index.md"}},
-		Store:     StoreNone,
-		Search:    SearchEntry,
+		Kind:    KindMarkdown,
+		Summary: "is a document the dashboard draws",
+		Render:  RenderNative,
+		Entry:   EntryRule{Essences: []string{"text/markdown"}, Defaults: []string{"index.md"}},
+		Store:   StoreNone,
+		Format:  FormatNone,
+		Search:  SearchEntry,
+
 		Documents: DocumentsNone,
-		Format:    FormatNone,
 	},
 	{
-		Kind:      KindSheet,
-		Summary:   "is a table drawn from its datastore",
-		Render:    RenderNative,
-		Entry:     EntryRule{Optional: true},
-		Store:     StoreContent,
-		Search:    SearchEntry,
+		Kind:    KindSlides,
+		Summary: "is a deck of 16:9 slides the dashboard draws and presents",
+		Render:  RenderNative,
+		Entry: EntryRule{Essences: []string{"application/json"}, Defaults: []string{"deck.json"},
+			Fixed: true},
+		Store:  StoreNone,
+		Format: FormatSlides,
+		Search: SearchFormat,
+
 		Documents: DocumentsNone,
-		Format:    FormatNone,
 	},
 	{
-		Kind:      KindDesign,
-		Summary:   "is a canvas of artboards, each an HTML page run in a sandbox",
-		Render:    RenderFramed,
-		Entry:     EntryRule{Essences: []string{"application/json"}, Defaults: []string{"canvas.json"}},
-		Store:     StoreDeclared,
-		Search:    SearchCanvas,
+		Kind:    KindSheet,
+		Summary: "is a table drawn from its datastore",
+		Render:  RenderNative,
+		Entry:   EntryRule{Optional: true},
+		Store:   StoreContent,
+		Format:  FormatNone,
+		Search:  SearchEntry,
+
+		Documents: DocumentsNone,
+	},
+	{
+		Kind:    KindDesign,
+		Summary: "is a canvas of artboards, each an HTML page run in a sandbox",
+		Render:  RenderFramed,
+		Entry: EntryRule{Essences: []string{"application/json"}, Defaults: []string{"canvas.json"},
+			Fixed: true},
+		Store:  StoreDeclared,
+		Format: FormatDesign,
+		Search: SearchFormat,
+
 		Documents: DocumentsEach,
-		Format:    FormatCanvas,
 	},
 }
 
@@ -298,28 +334,22 @@ func (k Kind) Framed() bool {
 	return ok && s.Framed()
 }
 
-// KindFor is the kind a publish that names none is created as, inferred from
-// its entry: the kind whose default entry is that path (`canvas.json` is a
-// design), else the ONE kind whose entry a file served as essence may be, and
-// false when no kind, or more than one, opens on it. A JSON file other than a
-// default is a format only its name tells apart, so two kinds admitting an
-// essence is an answer the caller asks the author for rather than a guess.
+// KindFor is the kind whose entry the file at path, served as essence, may
+// be, and false when no kind opens on such a file. It is how a publish that
+// names no kind infers one from its entry.
+//
+// A FIXED PATH WINS: `deck.json` is a deck's index whatever else opens on
+// JSON, so a kind that fixes its entry's path is asked first, and a kind that
+// takes any path of its type only after.
 func KindFor(path, essence string) (Kind, bool) {
-	for _, s := range kindSpecs {
-		if slices.Contains(s.Entry.Defaults, path) {
-			return s.Kind, true
+	for _, fixed := range []bool{true, false} {
+		for _, s := range kindSpecs {
+			if s.Entry.Fixed == fixed && s.Entry.AdmitsAt(path, essence) {
+				return s.Kind, true
+			}
 		}
 	}
-	var found []Kind
-	for _, s := range kindSpecs {
-		if s.Entry.Admits(essence) {
-			found = append(found, s.Kind)
-		}
-	}
-	if len(found) != 1 {
-		return "", false
-	}
-	return found[0], true
+	return "", false
 }
 
 // DefaultEntries are every kind's default entry paths, in the table's order:

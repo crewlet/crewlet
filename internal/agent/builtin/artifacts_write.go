@@ -151,8 +151,8 @@ func (t *createArtifact) Name() string { return CreateArtifactTool }
 
 func (t *createArtifact) Description() string {
 	return "Create a NEW artifact in this Crewlet company (not claude.ai): an " +
-		"interactive HTML page, a design canvas of HTML artboards, a document, or a " +
-		"sheet, shared with the " +
+		"interactive HTML page, a design canvas of HTML artboards, a document, a " +
+		"slide deck, or a sheet, shared with the " +
 		"colleagues who must use it. Load the artifacts tool skill first: it is the " +
 		"design contract every page is held to. When a person asked for it, they are " +
 		"made an editor. To change an existing artifact use publish_artifact; the answer " +

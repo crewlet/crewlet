@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
+	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload/edits"
 	"github.com/crewlet/crewlet/internal/artifactupload/lint"
@@ -63,11 +64,15 @@ type run struct {
 	// for the dark-mode warning.
 	read [][]byte
 
-	warnings []lint.Finding
+	// deck is the version's deck where the kind's format is the slide
+	// format, read whole by [run.checkFormat].
+	deck *slideformat.Deck
 
-	// canvas is a design version's canvas, as its format check read it:
-	// what its search text is drawn from.
+	// canvas is the version's canvas where the kind's format is a design's,
+	// read by [run.checkFormat]: what its search text is drawn from.
 	canvas *canvasformat.Canvas
+
+	warnings []lint.Finding
 }
 
 // pending is one file of the new version, as the run assembles it.
@@ -233,11 +238,16 @@ func (r *run) compose(ctx context.Context, mode manifest.Mode, specs []FileSpec,
 	if err := r.checkNewText(); err != nil {
 		return artifactsdomain.PublishInput{}, err
 	}
-	if err := r.lintFiles(ctx); err != nil {
-		return artifactsdomain.PublishInput{}, err
-	}
-	if err := r.carryVendored(ctx); err != nil {
-		return artifactsdomain.PublishInput{}, err
+	// ONLY A FRAMED KIND'S FILES ARE PAGES: a native kind serves no document
+	// on the artifact origin, so its HTML (a deck's slides) is its format's
+	// to judge, never linted, nonce-marked or given CDN copies as a page.
+	if r.kind.Framed() {
+		if err := r.lintFiles(ctx); err != nil {
+			return artifactsdomain.PublishInput{}, err
+		}
+		if err := r.carryVendored(ctx); err != nil {
+			return artifactsdomain.PublishInput{}, err
+		}
 	}
 	resolved, err := r.s.resolveContract(r.kind, contract, r.headContract, caps)
 	if err != nil {
@@ -250,7 +260,7 @@ func (r *run) compose(ctx context.Context, mode manifest.Mode, specs []FileSpec,
 	if err != nil {
 		return artifactsdomain.PublishInput{}, err
 	}
-	if err = r.checkFormat(ctx, m); err != nil {
+	if err := r.checkFormat(ctx, m); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		return artifactsdomain.PublishInput{}, err
 	}
 	search, err := r.searchText(ctx, m)

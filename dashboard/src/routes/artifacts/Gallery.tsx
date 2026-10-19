@@ -386,7 +386,7 @@ function GalleryBar({
           href={href(["artifacts", "new"])}
           leadingIcon={<PlusGlyph size="sm" />}
         >
-          New sheet
+          New
         </ButtonLink>
       ) : (
         <Button
@@ -396,7 +396,7 @@ function GalleryBar({
           disabledReason={canAuthor}
           title={canAuthor}
         >
-          New sheet
+          New
         </Button>
       )}
     </PageActions>

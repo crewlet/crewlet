@@ -58,10 +58,17 @@ const (
 	// account for is one whose policy it cannot vouch for.
 	CodeUnparseable Code = "unparseable"
 
-	// CodeFormat is a kind's own file outside its format: a design's
-	// `canvas.json` that names a board no page backs, or a field the format
-	// does not have. The format's validator says which, at its place.
-	CodeFormat Code = "format_invalid"
+	// CodeSlideFormat is a deck outside the slide format
+	// (internal/artifacts/slideformat): an element, attribute or style the
+	// subset does not take, a bound passed, or a file the deck names that the
+	// version does not hold. The message names the rule broken.
+	CodeSlideFormat Code = "slide_format"
+
+	// CodeDesignFormat is a design's canvas outside its format
+	// (internal/artifacts/canvasformat): a board no page backs, a page no
+	// board frames, a bound passed or a field the format does not have. The
+	// message names the place in canvas.json.
+	CodeDesignFormat Code = "design_format"
 )
 
 // The warnings: legal, and almost certainly not what the author meant.
@@ -96,7 +103,8 @@ func (c Code) Refusing() bool {
 	return slices.Contains([]Code{
 		CodeRemoteScript, CodeRemoteStylesheet, CodeUnpinned, CodeRemoteImport,
 		CodeFormOffOrigin, CodeRefreshOffOrigin, CodeJavaScriptURL, CodePlaceholder,
-		CodeVendorOff, CodeVendorFailed, CodeUnparseable, CodeFormat,
+		CodeVendorOff, CodeVendorFailed, CodeUnparseable, CodeSlideFormat,
+		CodeDesignFormat,
 	}, c)
 }
 

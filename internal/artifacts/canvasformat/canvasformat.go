@@ -173,8 +173,13 @@ type Note struct {
 	Color NoteColor `json:"color,omitempty"`
 }
 
-// Rect is a rectangle on the canvas.
-type Rect struct{ X, Y, W, H int }
+// Rect is a rectangle on the canvas, in canvas pixels.
+type Rect struct {
+	X int `json:"x"`
+	Y int `json:"y"`
+	W int `json:"w"`
+	H int `json:"h"`
+}
 
 // Rect is the board's frame.
 func (b Board) Rect() Rect { return Rect{b.X, b.Y, b.W, b.H} }
@@ -502,4 +507,20 @@ func (c Canvas) CheckAnchor(a Anchor) error {
 			a.X, a.Y, a.Board, b.W, b.H)
 	}
 	return nil
+}
+
+// Source is a stored version's files as the canvas reads them.
+type Source interface {
+	// Read answers the bytes of the version's file at path.
+	Read(path string) ([]byte, error)
+}
+
+// Read reads a stored version's canvas from src and holds it to the version,
+// m, exactly as [Parse] held it at publish.
+func Read(src Source, m artifacts.Manifest) (Canvas, error) {
+	data, err := src.Read(Path)
+	if err != nil {
+		return Canvas{}, err
+	}
+	return Parse(data, m)
 }

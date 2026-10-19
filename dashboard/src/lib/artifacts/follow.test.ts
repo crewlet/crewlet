@@ -17,7 +17,7 @@ function member(over: Partial<ArtifactPresenceMember>): ArtifactPresenceMember {
   };
 }
 
-const page: FollowView = { kind: "html", head: 12, showing: 12, tab: "view", sheet: "" };
+const page: FollowView = { kind: "html", head: 12, showing: 12, tab: "view", sheet: "", slide: "" };
 
 describe("the room, one entry a seat", () => {
   test("keeps a person's most active tab", () => {
@@ -60,7 +60,14 @@ describe("following somebody", () => {
   });
 
   test("moves a sheet to the collection they are on", () => {
-    const sheet: FollowView = { kind: "sheet", head: 1, showing: 1, tab: "data", sheet: "review" };
+    const sheet: FollowView = {
+      kind: "sheet",
+      head: 1,
+      showing: 1,
+      tab: "data",
+      sheet: "review",
+      slide: "",
+    };
     expect(
       followMoves(member({ focus: { collection: "budget", doc: "r1", field: "amount" } }), sheet),
     ).toEqual({ tab: "view", sheet: "budget" });
@@ -73,5 +80,38 @@ describe("following somebody", () => {
 
   test("never opens a version past the head this reader knows", () => {
     expect(moves(followMoves(member({ focus: { version: 13 } }), page))).toBe(false);
+  });
+});
+
+describe("following a presenter through a deck", () => {
+  const deck: FollowView = {
+    kind: "slides",
+    head: 3,
+    showing: 3,
+    tab: "view",
+    sheet: "",
+    slide: "",
+  };
+  const presenter = (region: string) =>
+    ({
+      session: "s",
+      seat: "maya",
+      kind: "human",
+      activity: "viewing",
+      focus: { version: 3, region },
+      at: "",
+    }) as never;
+
+  test("moves the follower to the slide the presenter is on", () => {
+    expect(followMoves(presenter("slide:plan"), deck)).toEqual({ slide: "plan" });
+    expect(followMoves(presenter("slide:plan"), { ...deck, slide: "plan" })).toEqual({});
+    expect(followMoves(presenter("slide:plan"), { ...deck, tab: "history" })).toEqual({
+      tab: "view",
+      slide: "plan",
+    });
+  });
+
+  test("says another region in words rather than moving to it", () => {
+    expect(followMoves(presenter("chart"), deck)).toEqual({});
   });
 });

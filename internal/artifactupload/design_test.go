@@ -51,13 +51,13 @@ func landingFiles() map[string]string {
 
 // createDesign makes a design from files through an upload, the path a
 // sandbox build takes, answering the outcome as the pipeline does.
-func createDesign(h *harness, files map[string]string, entry string) (artifactsdomain.Published, error) {
+func createDesign(h *harness, files map[string]string) (artifactsdomain.Published, error) {
 	h.t.Helper()
 	c := h.person("ada", h.opKey("create"))
 	up := h.upload(c, artifacts.ID{}, files)
 	got, _, err := h.svc.Create(h.t.Context(), c, artifactupload.CreateRequest{
 		Kind: artifacts.KindDesign, Title: "Landing page", Owner: c.Authority.Actor.Name,
-		OwnerKind: c.Authority.Actor.Kind, Upload: up, Files: specs(files), Entry: entry,
+		OwnerKind: c.Authority.Actor.Kind, Upload: up, Files: specs(files), Entry: canvasformat.Path,
 	})
 	return got, err
 }
@@ -69,7 +69,7 @@ func createDesign(h *harness, files map[string]string, entry string) (artifactsd
 func TestADesignIsPublishedBoardByBoard(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, options{})
-	got, err := createDesign(h, landingFiles(), canvasformat.Path)
+	got, err := createDesign(h, landingFiles())
 	if err != nil {
 		t.Fatalf("the landing page was refused: %v", err)
 	}
@@ -111,20 +111,17 @@ func TestACanvasOutsideItsFormatIsRefused(t *testing.T) {
 	t.Parallel()
 	cases := map[string]struct {
 		change func(map[string]string)
-		entry  string
 		want   string
 	}{
-		"a board with no page": {func(f map[string]string) { delete(f, "mobile.html") }, "",
+		"a board with no page": {func(f map[string]string) { delete(f, "mobile.html") },
 			"mobile.html is not an HTML page"},
-		"a page with no board": {func(f map[string]string) { f["extra.html"] = artboard("Extra") }, "",
+		"a page with no board": {func(f map[string]string) { f["extra.html"] = artboard("Extra") },
 			"extra.html is an HTML page of this version that no board frames"},
-		"not JSON": {func(f map[string]string) { f["canvas.json"] = "{" }, "",
+		"not JSON": {func(f map[string]string) { f["canvas.json"] = "{" },
 			"the file is not a canvas"},
 		"an unknown field": {func(f map[string]string) {
 			f["canvas.json"] = strings.Replace(landingCanvas, `"v": 1,`, `"v": 1, "pages": [],`, 1)
-		}, "", `unknown field "pages"`},
-		"another entry": {func(f map[string]string) { f["data.json"] = `{"rows": []}` }, "data.json",
-			"a design opens on its canvas"},
+		}, `unknown field "pages"`},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -132,18 +129,14 @@ func TestACanvasOutsideItsFormatIsRefused(t *testing.T) {
 			h := newHarness(t, options{})
 			files := landingFiles()
 			c.change(files)
-			entry := c.entry
-			if entry == "" {
-				entry = canvasformat.Path
-			}
-			_, err := createDesign(h, files, entry)
+			_, err := createDesign(h, files)
 			var refusal *lint.Refusal
 			if !errors.As(err, &refusal) {
 				t.Fatalf("answered %v, want a policy refusal", err)
 			}
 			found := false
 			for _, f := range refusal.Findings {
-				if f.Path == canvasformat.Path && f.Code == lint.CodeFormat &&
+				if f.Path == canvasformat.Path && f.Code == lint.CodeDesignFormat &&
 					strings.Contains(f.Message, c.want) {
 					found = true
 				}
@@ -170,7 +163,7 @@ func TestACanvasOutsideItsFormatIsRefused(t *testing.T) {
 func TestARearrangementChangesOnlyTheCanvas(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, options{})
-	created, err := createDesign(h, landingFiles(), canvasformat.Path)
+	created, err := createDesign(h, landingFiles())
 	if err != nil {
 		t.Fatal(err)
 	}
