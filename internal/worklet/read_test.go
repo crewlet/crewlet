@@ -1078,3 +1078,48 @@ func TestAPersonFilterFindsTheWorkThePersonIsOn(t *testing.T) {
 		}
 	}
 }
+
+// A LINKED PAGE'S FILTER IS THE TASKS THAT LINK THAT PAGE, read off the page's
+// own edges.
+//
+// The filter is answered from the reverse edge — the tasks whose relations
+// name the page as their other end — so it must be exactly those tasks, at a
+// project and at the workspace, flat and with subtasks rolled up, and a task
+// linking another page, or another task, is not one.
+func TestALinkedPageFilterIsTheTasksLinkingThePage(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"t-a", "t-b", "t-c", "t-d"} {
+		task := newTask(id)
+		task.Key = ""
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, task, nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+	r.relate("t-a", "s-1", worklet.RelationPage)
+	r.relate("t-c", "s-1", worklet.RelationPage)
+	r.relate("t-b", "s-2", worklet.RelationPage)
+	// AN EDGE OF ANOTHER KIND, which links a task rather than a page.
+	r.relate("t-d", "t-a", worklet.RelationLinked)
+
+	for name, params := range map[string]map[string]any{
+		"in a project":         {"container": "project:ENG", "linked_page": "s-1"},
+		"at the workspace":     {"linked_page": "s-1"},
+		"flat":                 {"linked_page": "s-1", "subtasks": "separate"},
+		"of a page none links": {"linked_page": "s-9"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			want := []string{"t-a", "t-c"}
+			if params["linked_page"] == "s-9" {
+				want = []string{}
+			}
+			got := ids(r.ask(withKey(params, "sort", "title")))
+			slices.Sort(got)
+			if !slices.Equal(got, want) {
+				t.Errorf("linked_page=%v answers %v, want %v", params["linked_page"],
+					got, want)
+			}
+		})
+	}
+}

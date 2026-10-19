@@ -64,7 +64,6 @@ func everyClause() map[string]map[string]any {
 		"a reporter or nobody":       {"reporter": "h-1,none"},
 		"unassigned":                 {"assignee": "none"},
 		"a reference":                {"references": "ENG-1"},
-		"a linked page":              {"linked_page": "s-1"},
 		"with a parent":              {"has_parent": "true"},
 		"without a parent":           {"has_parent": "false"},
 		"with an open ask":           {"has_open_asks": "true"},

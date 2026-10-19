@@ -152,6 +152,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 			}
 			holdTagFilter(t, plan, q)
 			holdPeopleFilter(t, plan, q)
+			holdLinkedPageFilter(t, plan, q)
 			// ONE ITEM'S SUBTASKS ARE READ THROUGH THE TREE ([taskSource]),
 			// because the planner otherwise answers `parent=` from the
 			// project's board or the listing's order — measured: a
@@ -443,6 +444,7 @@ func registeredQueries() map[string]map[string]any {
 		"several keys":      {"key": "ENG-1,ENG-7"},
 		"tagged":            {"container": "project:P01", "tag": "urgent"},
 		"blocked":           {"container": "project:P01", "blocked": "true"},
+		"a linked page":     {"container": "project:P01", "linked_page": "s-1"},
 		"with dependencies": {"container": "project:P01", "has_dependencies": "true"},
 		// ONE REGISTERED QUERY PER TYPED COLUMN, because the four
 		// partial indexes on tracker_field_values are one per column and
@@ -471,6 +473,7 @@ func registeredQueries() map[string]map[string]any {
 		"the children everywhere":     {"parent": "t-00001"},
 		"without subtasks everywhere": {"has_children": "false"},
 		"one subtree everywhere":      {"root": "t-00001"},
+		"a linked page everywhere":    {"linked_page": "s-1"},
 		"by spend everywhere":         {"sort": "-spend_tokens"},
 
 		// EVERY TAG MODE AT BOTH SCOPES, each held to the plan its mode
@@ -835,6 +838,25 @@ func taskPasses() map[string]plannedRead {
 	return map[string]plannedRead{
 		"every reopen count cleared":     {clearReopensStatement, nil},
 		"every project's active recount": {activeCountsStatement, []any{string(GroupActive), string(GroupActive)}},
+	}
+}
+
+// holdLinkedPageFilter fails a plan whose `linked_page=` filter does not SEEK
+// the page's own edges through the reverse edge's index — spelled rather than
+// named by a constant, since the index is what is under test.
+//
+// A FILTER THAT NAMES ONE PAGE IS A FEW TASKS, and read as a probe of every
+// row's own relations it was the whole listing walked to find them: at the
+// workspace every task in the company, newest first, for the page and again
+// for the count it carries.
+func holdLinkedPageFilter(t *testing.T, plan []string, q Query) {
+	t.Helper()
+	if q.LinkedPage == "" {
+		return
+	}
+	if !seeks(plan, "tracker_relations_other_idx") {
+		t.Errorf("linked_page= does not seek the page's own edges through "+
+			"tracker_relations_other_idx:\n%s", strings.Join(plan, "\n"))
 	}
 }
 

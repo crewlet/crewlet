@@ -1116,9 +1116,16 @@ func compilePredicate(q Query, now time.Time, fields map[string]resolvedField,
 			"WHERE r.from_task = "+on.col("id")+" AND k.key = ?)", q.References)
 	}
 	if q.LinkedPage != "" {
-		add("EXISTS (SELECT 1 FROM tracker_relations x WHERE x.task_id = "+
-			on.col("id")+" AND x.kind = ? AND x.other_id = ?)",
-			string(RelationPage), q.LinkedPage)
+		// THE PAGE'S OWN EDGES, through the reverse edge the tracker keeps
+		// for this question (`tracker_relations_other_idx`): a list of the
+		// few tasks that link the page, which the row is then a member of.
+		// As a probe of each row's own relations it was a walk of the
+		// whole listing — measured, at the workspace every task in the
+		// company newest first, and the count it carries every live task —
+		// to keep the handful that link one page.
+		add(on.col("id")+" IN (SELECT x.task_id FROM tracker_relations x "+
+			"WHERE x.other_id = ? AND x.kind = ?)", q.LinkedPage,
+			string(RelationPage))
 	}
 	if q.Blocked != nil {
 		clause := "EXISTS (SELECT 1 FROM tracker_task_deps d " +
