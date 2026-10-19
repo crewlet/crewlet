@@ -1,4 +1,4 @@
-# ADR-0026 — The estate names an object, and a store the fleet shares keeps its bytes
+# ADR-0026: The estate names an object, and a store the fleet shares keeps its bytes
 
 - **Status:** accepted
 - **Authority:** `internal/objstore`
@@ -76,3 +76,19 @@ its files.
 Where anything other than a file's bytes lives: the estate is still whole on
 every data node. And when an object may be deleted, which is
 [ADR-0027](0027-a-deletion-from-the-shared-store-needs-no-lock.md).
+
+## Amendment: the engine establishes the digest, and derived state is an object too
+
+Two later records extend this one without changing its rule.
+
+[ADR-0036](0036-bytes-are-reserved-before-they-move.md): a row's SHA-256 is
+established by the engine, by reading the stored bytes back through the
+verifying reader **before** the record that names them is decided, whatever
+carried the bytes there (the engine's own stream, or a client's presigned put
+straight to an S3 bucket). A read path that cannot check what it serves, such
+as a presigned `GET`, is not offered.
+
+[ADR-0039](0039-a-cold-store-lives-in-object-storage-and-returns-through-the-log.md):
+an object may be state the engine derives (a datastore checkpoint, a history
+segment) as well as a file somebody uploaded, under the same rules: a random
+key per upload, a row carrying its SHA-256 and size, and every read verified.

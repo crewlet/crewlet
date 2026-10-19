@@ -76,15 +76,22 @@ func TestAGrantDeltaIsSortedAndDeduplicated(t *testing.T) {
 		t.Errorf("removed %v", removed)
 	}
 	if a, r := grantDelta([]iam.Grant{iam.GrantAdmin},
-		[]iam.Grant{iam.GrantAdmin, iam.GrantTracker, iam.GrantKnowledge}); a != nil ||
-		r != nil {
+		append([]iam.Grant{iam.GrantAdmin}, iam.Apps...)); a != nil || r != nil {
 		t.Errorf("spelling out the apps admin includes is %v / %v, want nothing", a, r)
 	}
+	// EVERY APP BUT THE ONE KEPT, read off the vocabulary so an app added to
+	// it is counted here with no second edit.
+	notKept := []string{string(iam.GrantAdmin)}
+	for _, app := range iam.Apps {
+		if app != iam.GrantKnowledge {
+			notKept = append(notKept, string(app))
+		}
+	}
+	slices.Sort(notKept)
 	if a, r := grantDelta([]iam.Grant{iam.GrantAdmin},
-		[]iam.Grant{iam.GrantKnowledge}); a != nil ||
-		!slices.Equal(r, []string{"admin", "tracker"}) {
-		t.Errorf("taking admin away is %v / %v, want admin and the app not kept "+
-			"removed", a, r)
+		[]iam.Grant{iam.GrantKnowledge}); a != nil || !slices.Equal(r, notKept) {
+		t.Errorf("taking admin away is %v / %v, want admin and every app not kept "+
+			"removed (%v)", a, r, notKept)
 	}
 	if a, r := grantDelta(nil, nil); a != nil || r != nil {
 		t.Errorf("an empty change is %v / %v, want nothing", a, r)

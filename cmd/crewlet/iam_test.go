@@ -329,7 +329,10 @@ func TestStrippingGrantsIsSpeltAndNotImplied(t *testing.T) {
 // Mutation: send admin alone and every row below fails.
 func TestTheCLIStoresEveryAppWithAdmin(t *testing.T) {
 	t.Parallel()
-	every := []string{"admin", "tracker", "knowledge"}
+	every := []string{string(iam.GrantAdmin)}
+	for _, app := range iam.Apps {
+		every = append(every, string(app))
+	}
 	for _, flagged := range []string{"admin", "knowledge,admin", " admin , tracker "} {
 		granted, err := iamGrants(flagged)
 		if err != nil {

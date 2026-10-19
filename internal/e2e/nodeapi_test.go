@@ -272,6 +272,9 @@ func wireAPI(
 		// as `crewlet run` wires it.
 		FleetBroker: e.FleetBroker(),
 		Backup:      copier,
+		// THE MOVE OF THE COMPANY'S FILES to an S3 bucket, which only the
+		// engine can make, as cmd/crewlet hands it: api.New requires it.
+		Objects: e,
 		// THE RUNTIME AUDIT, onto this node's own queue as cmd/crewlet
 		// hands it: api.New requires it.
 		Audit: backends.Queue,

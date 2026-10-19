@@ -18,7 +18,7 @@
 
 import { RANGE_MS, daysLabel, isRange, companyDays, type Offer, type Window } from "~/lib/range.ts";
 import { plural } from "~/lib/format.ts";
-import { toCsv } from "~/lib/csv.ts";
+import { toCsv } from "@crewlethq/ui";
 import type {
   AgentSpendRow,
   Bucket,

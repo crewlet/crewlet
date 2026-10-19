@@ -559,14 +559,16 @@ func (s *Store) retitle(ctx context.Context, actor Actor, pageID, title,
 	}, nil
 }
 
-// Trash moves a page out of every reader's way, reversibly.
+// Trash moves a page out of every reader's way, reversibly, until the trash
+// reaper purges it once it has been in the trash past the trash term
+// ([Store.PurgeTrashed]).
 func (s *Store) Trash(ctx context.Context, actor Actor, pageID string) (Written, error) {
-	return s.status(ctx, actor, pageID, OpTombstone, ChangeRemoved, "")
+	return s.status(ctx, actor, pageID, statusMove{op: OpTombstone, kind: ChangeRemoved})
 }
 
 // Restore takes a trashed page back.
 func (s *Store) Restore(ctx context.Context, actor Actor, pageID string) (Written, error) {
-	return s.status(ctx, actor, pageID, OpRestore, ChangeStatus, "")
+	return s.status(ctx, actor, pageID, statusMove{op: OpRestore, kind: ChangeStatus})
 }
 
 // Purge destroys a page permanently, and writes the marker that makes the
@@ -576,16 +578,39 @@ func (s *Store) Restore(ctx context.Context, actor Actor, pageID string) (Writte
 // never existed from one that was deliberately destroyed, and without it a
 // redelivery months later would resurrect it.
 func (s *Store) Purge(ctx context.Context, actor Actor, pageID, reason string) (Written, error) {
-	return s.status(ctx, actor, pageID, OpPurge, ChangeRemoved, reason)
+	return s.status(ctx, actor, pageID, statusMove{
+		op: OpPurge, kind: ChangeRemoved, reason: reason,
+	})
+}
+
+// statusMove is one move of a page's status, as [Store.status] makes it.
+type statusMove struct {
+	op     OpKind
+	kind   ChangeKind
+	reason string
+
+	// quiet publishes the record with no routing snapshot, so it wakes
+	// nobody ([Store.notifyOf]).
+	quiet bool
+
+	// admit refuses a head this move may not be made on. It is asked
+	// INSIDE THE SNAPSHOT the record is decided in, so the broker's
+	// arbitration on the page holds it: a write that lands on the page
+	// between the snapshot and the append sends the decision round again,
+	// and the head that round reads is the one asked. Nil admits every
+	// head, which is what a person's trash, restore and purge are: the
+	// authority to make them was decided before the store was reached.
+	admit func(Page) error
 }
 
 // status is one move of a page's status: a trash, a restore or a purge.
 func (s *Store) status(ctx context.Context, actor Actor, pageID string,
-	op OpKind, kind ChangeKind, reason string) (Written, error) {
+	move statusMove) (Written, error) {
 
 	if err := actor.validate(); err != nil {
 		return Written{}, err
 	}
+	op, kind, reason := move.op, move.kind, move.reason
 	at := s.now()
 	opID, opErr := s.operation(actor, string(op), pageID, reason)
 	if opErr != nil {
@@ -609,6 +634,11 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 				if moved := inContainer(head, container); moved != nil {
 					return statelog.Decision{}, moved
 				}
+				if move.admit != nil {
+					if err := move.admit(head); err != nil {
+						return statelog.Decision{}, err
+					}
+				}
 				out, read = head, revision
 				// THE ANSWER IS THE PAGE THE APPLY WILL PRODUCE, as a save's
 				// is: a trash reported the page as it stood before, so the
@@ -622,7 +652,7 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 				case OpRestore:
 					out.Status, out.TrashedAt, out.UpdatedAt = StatusPublished, nil, at
 				}
-				notify := s.notifyOf(false, kind, head, "", nil)
+				notify := s.notifyOf(move.quiet, kind, head, "", nil)
 				return s.decide(stamp, actor, subject, op, statusScope(op, head.Container),
 					opID, StatusPayload{V: DocumentVersion, Reason: reason}, notify, at)
 			},
@@ -764,7 +794,7 @@ func (s *Store) EnsureContainer(ctx context.Context, activatedAt time.Time,
 			// A LATER ACTIVATION OVER THE SAME SETTINGS IS STILL WRITTEN,
 			// stamp and all — a re-stamp — because a row at the older
 			// stamp is open to any activation between the two.
-			return s.decide(stamp, Actor{Handle: "system", Kind: AuthorOperator},
+			return s.decide(stamp, SystemActor("system"),
 				subject, OpPatch, ScopeSet{Subject: true}, opID,
 				ContainerPayload{
 					V: DocumentVersion, Key: key, Name: name, Purpose: purpose,

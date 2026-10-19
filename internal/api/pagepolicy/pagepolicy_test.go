@@ -66,23 +66,29 @@ func TestTheDashboardPolicyLetsTheManifestFormReachACodeHost(t *testing.T) {
 		directives[name] = value
 	}
 	for name, want := range map[string]string{
-		"default-src":     "'self'",
-		"script-src":      "'self'",
-		"style-src":       "'self'",
-		"img-src":         "'self' data:",
+		"default-src": "'self'",
+		"script-src":  "'self'",
+		"style-src":   "'self'",
+		// blob: is the object URL the dashboard makes of a native deck's
+		// image, which only script on this origin can mint.
+		"img-src":         "'self' data: blob:",
 		"font-src":        "'self'",
 		"connect-src":     "'self'",
 		"object-src":      "'none'",
 		"base-uri":        "'none'",
 		"frame-ancestors": "'none'",
 		"form-action":     "'self' https:",
+		// TRUSTED TYPES, enforced with no policy: the dashboard reaches no
+		// markup or script sink (dashboard/src/app/trustedTypes.test.ts).
+		"require-trusted-types-for": "'script'",
+		"trusted-types":             "'none'",
 	} {
 		if got := directives[name]; got != want {
 			t.Errorf("%s = %q, want %q", name, got, want)
 		}
 	}
-	if len(directives) != 10 {
-		t.Errorf("the dashboard policy has %d directives, want exactly the ten above: %s",
+	if len(directives) != 12 {
+		t.Errorf("the dashboard policy has %d directives, want exactly the twelve above: %s",
 			len(directives), pagepolicy.Dashboard)
 	}
 }

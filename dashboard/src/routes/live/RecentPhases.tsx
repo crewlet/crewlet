@@ -31,19 +31,29 @@
  */
 
 import { useCallback, useMemo, useState } from "react";
-import { Button, Card, EmptyState, EmptyValue, Skeleton, Tag } from "@crewlethq/ui";
+import {
+  Button,
+  Card,
+  EmptyState,
+  EmptyValue,
+  Skeleton,
+  Tag,
+  TableNumberCell,
+  TableDateCell,
+  TableEntityCell,
+} from "@crewlethq/ui";
 import { BrainGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import type { GridColumn } from "~/app/frame/DataGrid.tsx";
-import { DateCell, NumberCell, SeatLabel, TokenCell } from "~/app/frame/cells.tsx";
+import { plainSeat } from "~/app/frame/cells.tsx";
 import { rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { useClient, useEngineHealth, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { eventHistoryLabel, plural } from "~/lib/format.ts";
+import { eventHistoryLabel, plural, fmtCount } from "~/lib/format.ts";
 import {
   decisionLabel,
   decisionTone,
@@ -189,7 +199,11 @@ export function RecentPhases({
         // question here.
         cell: (r) => {
           const name = nameOf(r);
-          return name ? <SeatLabel name={name} kind="agent" /> : <EmptyValue label="No seat" />;
+          return name ? (
+            <TableEntityCell {...plainSeat({ name: name, kind: "agent" })} />
+          ) : (
+            <EmptyValue label="No seat" />
+          );
         },
         sortValue: (r) => nameOf(r),
       },
@@ -241,7 +255,7 @@ export function RecentPhases({
         header: "Rounds",
         align: "right",
         shrink: true,
-        cell: (r) => <NumberCell value={r.roundsUsed} />,
+        cell: (r) => <TableNumberCell value={r.roundsUsed} format={fmtCount} />,
         sortValue: (r) => r.roundsUsed,
       },
       {
@@ -249,14 +263,14 @@ export function RecentPhases({
         header: "Tokens",
         align: "right",
         shrink: true,
-        cell: (r) => <TokenCell value={r.totalTokens} />,
+        cell: (r) => <TableNumberCell value={r.totalTokens} format={fmtCount} />,
         sortValue: (r) => r.totalTokens,
       },
       {
         key: "when",
         header: "When",
         shrink: true,
-        cell: (r) => <DateCell at={r.at} now={now} />,
+        cell: (r) => <TableDateCell value={r.at} now={now} />,
         sortValue: (r) => Date.parse(r.at) || 0,
       },
     ],

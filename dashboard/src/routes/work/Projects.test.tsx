@@ -806,16 +806,18 @@ test("the segments carry the census counts", async () => {
       complete: true,
     },
   });
-  const { container } = mount();
+  mount();
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
-  const options = [...container.querySelectorAll(".segmented button")];
+  const options = within(screen.getByRole("radiogroup", { name: "Which projects" })).getAllByRole(
+    "radio",
+  );
   expect(options.map((o) => o.textContent)).toEqual(["Active1", "Archived12", "All"]);
   // THE COUNT IS INSIDE THE RADIO, so the option announces "Archived 12"
   // rather than leaving the figure as loose text beside a control.
-  expect(options[1]?.querySelector(".count-chip")?.textContent).toBe("12");
+  expect(options[1]?.querySelector(".crewlet-count")?.textContent).toBe("12");
   // AND `All` CARRIES NONE: its count is the two beside it added up, which is
   // arithmetic on screen rather than a fact.
-  expect(options[2]?.querySelector(".count-chip")).toBeNull();
+  expect(options[2]?.querySelector(".crewlet-count")).toBeNull();
 });
 
 // AND NO COUNTS BEFORE THE ENGINE HAS ANSWERED. Three zeroes on a control
@@ -825,7 +827,7 @@ test("the segments carry no counts until the census arrives", async () => {
   serving({ work_projects: { projects: [project()], total: 1, complete: true } });
   const { container } = mount();
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
-  expect(container.querySelectorAll(".segmented .count-chip")).toHaveLength(0);
+  expect(container.querySelectorAll('[role="radiogroup"] .crewlet-count')).toHaveLength(0);
 });
 
 // THE LEAD'S TARGET IS A DAY, drawn as that day — and a project with none says

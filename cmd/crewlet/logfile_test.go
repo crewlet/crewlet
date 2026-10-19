@@ -117,7 +117,7 @@ func TestAttachingTheLogFileAddsASinkAndDetachesIt(t *testing.T) {
 	var console bytes.Buffer
 	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
 	t.Cleanup(func() {
-		logging.Configure(slog.LevelError+1, logging.FormatText, io.Discard)
+		silenceProcessLog()
 	})
 
 	path := filepath.Join(t.TempDir(), "crewlet.log")
@@ -364,7 +364,7 @@ func TestAttachingWithStderrOffSilencesAndRestoresTheConsole(t *testing.T) {
 	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
 	t.Cleanup(func() {
 		logging.SetConsole(true)
-		logging.Configure(slog.LevelError+1, logging.FormatText, io.Discard)
+		silenceProcessLog()
 	})
 
 	path := filepath.Join(t.TempDir(), "crewlet.log")
@@ -430,7 +430,7 @@ func TestTheHandoverReachesStderrAtEveryLevel(t *testing.T) {
 			logging.Configure(level, logging.FormatText, &console)
 			t.Cleanup(func() {
 				logging.SetConsole(true)
-				logging.Configure(slog.LevelError+1, logging.FormatText, io.Discard)
+				silenceProcessLog()
 			})
 
 			path := filepath.Join(t.TempDir(), "crewlet.log")
@@ -457,7 +457,7 @@ func TestNoHandoverNoticeWhenStderrStaysOn(t *testing.T) {
 	var console bytes.Buffer
 	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
 	t.Cleanup(func() {
-		logging.Configure(slog.LevelError+1, logging.FormatText, io.Discard)
+		silenceProcessLog()
 	})
 
 	path := filepath.Join(t.TempDir(), "crewlet.log")

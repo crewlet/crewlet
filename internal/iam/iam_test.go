@@ -53,15 +53,15 @@ func TestTheZeroValueOfEveryNamedTypeIsInvalid(t *testing.T) {
 
 // TestEveryDeclaredSetIsTheSizeItClaims pins the counts the package doc and
 // the constants' own comments state, so a member added or removed without a
-// reader is caught rather than quietly changing what "the three" means.
+// reader is caught rather than quietly changing what a count in a doc means.
 func TestEveryDeclaredSetIsTheSizeItClaims(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		got  int
 		want int
 	}{
-		{"AllGrants", len(AllGrants), 3},
-		{"Apps", len(Apps), 2},
+		{"AllGrants", len(AllGrants), 4},
+		{"Apps", len(Apps), 3},
 		{"AdminPostures", len(AdminPostures), 2},
 		{"Kinds", len(Kinds), 4},
 		{"ActorKinds", len(ActorKinds), 4},

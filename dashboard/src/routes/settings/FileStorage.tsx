@@ -8,10 +8,20 @@
  * and names the node that ran the pass.
  */
 
-import { Callout, Card, EmptyState, EmptyValue, InlineCode } from "@crewlethq/ui";
+import {
+  Callout,
+  Card,
+  EmptyState,
+  EmptyValue,
+  InlineCode,
+  TableKeyCell,
+  TableDateCell,
+  TableTextCell,
+} from "@crewlethq/ui";
+import { href } from "~/app/router.tsx";
 import { DatabaseGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, KeyCell, TextCell } from "~/app/frame/cells.tsx";
+
 import { fmtCount, plural } from "~/lib/format.ts";
 import type {
   FleetObjects,
@@ -191,31 +201,36 @@ export function FileStorage({ objects, now }: { objects?: FleetObjects; now: num
             key: "pass",
             header: "Pass",
             shrink: true,
-            cell: (r) => <TextCell>{r.pass}</TextCell>,
+            cell: (r) => <TableTextCell>{r.pass}</TableTextCell>,
           },
           {
             key: "at",
             header: "Last ran",
             shrink: true,
-            cell: (r) => <DateCell at={r.at} now={now} />,
+            cell: (r) => <TableDateCell value={r.at} now={now} />,
           },
           {
             key: "result",
             header: "Found",
             cell: (r) =>
-              r.result ? <TextCell>{r.result}</TextCell> : <EmptyValue label="Not run yet" />,
+              r.result ? (
+                <TableTextCell>{r.result}</TableTextCell>
+              ) : (
+                <EmptyValue label="Not run yet" />
+              ),
           },
           {
             key: "cadence",
             header: "Runs",
             shrink: true,
-            cell: (r) => <TextCell>{r.cadence}</TextCell>,
+            cell: (r) => <TableTextCell>{r.cadence}</TableTextCell>,
           },
         ]}
       />
       <Card.Body padding="md">
         <span className="secondary">
-          Run by <KeyCell value={reported.node} path={["settings", "nodes", reported.node]} />
+          Run by{" "}
+          <TableKeyCell value={reported.node} href={href(["settings", "nodes", reported.node])} />
         </span>
       </Card.Body>
     </Card>

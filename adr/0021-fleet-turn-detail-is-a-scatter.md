@@ -1,4 +1,4 @@
-# ADR-0021 — The fleet's turn-level detail is read from every node at query time, and every answer says which nodes it covers
+# ADR-0021: The fleet's turn-level detail is read from every node at query time, and every answer says which nodes it covers
 
 - **Status:** accepted
 - **Authority:** `internal/eventfan`

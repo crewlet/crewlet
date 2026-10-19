@@ -1,0 +1,140 @@
+/**
+ * The rich editor's round trip, held to the bodies this engine actually has.
+ *
+ * A Knowledge page and a doc's tab are stored as Markdown, and the bytes are
+ * the record: a page's save is merged line by line, a doc's is a patch of the
+ * lines that moved. So opening a body in the editor and saving it with no edit
+ * must write the body back BYTE FOR BYTE, and a body the editor rewrites must
+ * still read, to the dashboard's own renderer, as what the writer saw.
+ *
+ * THE CORPUS IS EVERY MARKDOWN FILE THE REPOSITORY HOLDS (the product docs,
+ * the ADRs, the examples and the bundled skills, which are the pages agents
+ * write and read), the renderer's own fixtures, a body holding every block the
+ * editor writes, the composer's templates, and the doc fixtures, so a
+ * construct the editor cannot carry is found here rather than in somebody's
+ * diff.
+ */
+
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+import { render } from "@testing-library/react";
+import { describe, expect, test } from "vitest";
+import { canonicalMarkdown, roundTripMarkdown } from "@crewlethq/ui/RichEditorMarkdown";
+import { renderMarkdown } from "./markdown.ts";
+import { TEMPLATES } from "~/routes/knowledge/Composer.tsx";
+import { repoRoot } from "~/test/engineFiles.ts";
+
+const SKIP = new Set(["node_modules", ".git", "static", "dashboard"]);
+
+function markdownUnder(dir: string): string[] {
+  const out: string[] = [];
+  for (const name of readdirSync(dir)) {
+    if (SKIP.has(name)) continue;
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) out.push(...markdownUnder(path));
+    else if (name.endsWith(".md")) out.push(path);
+  }
+  return out;
+}
+
+const root = repoRoot();
+const fixtures = join(root, "dashboard", "src", "test", "markdown");
+const corpus: { name: string; text: string }[] = [
+  ...["docs", "adr", "examples", "skills"]
+    .flatMap((dir) => markdownUnder(join(root, dir)))
+    .map((path) => ({ name: relative(root, path), text: readFileSync(path, "utf8") })),
+  ...readdirSync(fixtures).map((name) => ({
+    name: `fixture ${name}`,
+    text: readFileSync(join(fixtures, name), "utf8"),
+  })),
+  ...TEMPLATES.map((t) => ({ name: `template ${t.value}`, text: t.body })),
+];
+
+/** Elements whose box starts a new line of text. */
+const BLOCK = new Set([
+  "P",
+  "H1",
+  "H2",
+  "H3",
+  "H4",
+  "H5",
+  "H6",
+  "LI",
+  "UL",
+  "OL",
+  "PRE",
+  "BLOCKQUOTE",
+  "TABLE",
+  "TR",
+  "TH",
+  "TD",
+  "DIV",
+  "HR",
+  "BR",
+]);
+
+/**
+ * What a reader sees of a body: its text as a browser sets it (a run of
+ * whitespace is one space wherever it falls, and none at a line's ends), and
+ * the elements that carry meaning, with what each points at. A span's
+ * boundaries, two equal marks' nesting order and a code span's wrapping hint
+ * are not seen, so they are not compared.
+ */
+function seen(markdown: string): { text: string; elements: string[] } {
+  const { container, unmount } = render(<div>{renderMarkdown(markdown)}</div>);
+  let text = "";
+  const elements: string[] = [];
+  const walk = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      text += node.textContent ?? "";
+      return;
+    }
+    if (!(node instanceof HTMLElement)) return;
+    const tag = node.tagName;
+    if (BLOCK.has(tag)) text += "\n";
+    if (tag !== "SPAN" && tag !== "DIV") {
+      const at =
+        node.getAttribute("href") ?? node.getAttribute("src") ?? node.getAttribute("start");
+      elements.push(
+        `${tag}${at ? `(${at})` : ""}${node.style.textAlign ? `[${node.style.textAlign}]` : ""}`,
+      );
+    }
+    if (tag === "INPUT") elements.push(`checked=${(node as HTMLInputElement).checked}`);
+    if (node.dataset.callout) elements.push(`callout=${node.dataset.callout}`);
+    node.childNodes.forEach(walk);
+    if (BLOCK.has(tag)) text += "\n";
+  };
+  walk(container);
+  unmount();
+  return {
+    text: text
+      .replace(/[ \t\n]*\n[ \t\n]*/g, "\n")
+      .replace(/[ \t]+/g, " ")
+      .trim(),
+    // Inline formatting is compared by what is there, not by how it nests.
+    elements: [...elements].sort(),
+  };
+}
+
+describe("the rich editor's round trip", () => {
+  test("reads a corpus large enough to mean something", () => {
+    expect(corpus.length).toBeGreaterThan(100);
+    expect(corpus.some((c) => c.name === "fixture every-block.md")).toBe(true);
+  });
+
+  test.each(corpus)("a load and a save with no edit change nothing in $name", ({ text }) => {
+    expect(roundTripMarkdown(text)).toBe(text);
+  });
+
+  test.each(corpus)("$name rewritten whole reads as it did", ({ text }) => {
+    const before = seen(text);
+    const after = seen(canonicalMarkdown(text));
+    expect(after.elements).toEqual(before.elements);
+    // Compared where they first part, so a failure names the passage.
+    let at = 0;
+    while (at < before.text.length && before.text[at] === after.text[at]) at++;
+    expect(after.text.slice(Math.max(0, at - 80), at + 80)).toBe(
+      before.text.slice(Math.max(0, at - 80), at + 80),
+    );
+  });
+});

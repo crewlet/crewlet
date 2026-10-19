@@ -20,6 +20,7 @@ export {
   queryErrorCode,
   unavailableRetryMs,
 } from "./socket.ts";
+export type { RoomListener } from "./socket.ts";
 export { retryAfterMs } from "./retry.ts";
 export { api } from "./api.ts";
 export {

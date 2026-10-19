@@ -3,7 +3,7 @@
  * of the links inside it.
  *
  * The row used to BE the `<a>` whenever `rowHref` was given, and cells link
- * all the time — `SeatCell` goes to a seat, `KeyCell` to a work item — so
+ * all the time (`linkedSeat` goes to a seat, `TableKeyCell` to a work item), so
  * every such grid shipped `<a>` inside `<a>`. The HTML parser does not nest
  * them: it CLOSES the outer one at the inner, which left the row link
  * covering the cells before the first seat chip and nothing after it. Both

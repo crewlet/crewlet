@@ -73,6 +73,12 @@ func (c leadPairs) LeadsAnyone(_ context.Context, actor string) (bool, error) {
 	return false, nil
 }
 
+// MemberOf answers that nobody sits in any unit: no case here shares an
+// artifact with a team.
+func (leadPairs) MemberOf(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
 // seatLeads is the chart the seat gestures are decided against: jane and omar
 // each lead the CTO's seat, and nobody leads anybody else.
 var seatLeads = leadPairs{{"jane", "agent-cto"}: true, {"omar", "agent-cto"}: true}

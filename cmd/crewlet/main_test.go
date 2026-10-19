@@ -699,6 +699,9 @@ func TestAMergedNodeSeedsItsDashboardFromItsStore(t *testing.T) {
 func TestANodeNamedByTheEnvironmentAnswersAsItself(t *testing.T) {
 	const name = "node-from-env"
 	t.Setenv(config.NodeIDEnvVar, name)
+	// THE BACKUP'S REASON IS THE LOG'S ALONE (the body says backup_failed),
+	// so a red run prints it rather than discarding it.
+	keepProcessLog(t)
 	e := testEngine(t)
 	boot := bootstrapFor(t, 0)
 	boot.API.Port = reservePort(t)
@@ -1417,6 +1420,33 @@ func TestValidateReadsTheFileItWasGiven(t *testing.T) {
 	if !strings.Contains(err.Error(), "nonsense") {
 		t.Errorf("the error does not name the field in the file given: %v", err)
 	}
+}
+
+// A TIER A DOCUMENT WHOSE BROKER CANNOT HOLD A FRESH NODE IS SAID AT VALIDATE,
+// through the same list a node logs at every start ([engine.BootstrapWarnings]):
+// stream.store_max_bytes accepts a value the boot then refuses.
+func TestValidateWarnsOfABrokerLimitBelowTheFloor(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := writeYAML(t, "crewlet.yaml", "store:\n  path: "+filepath.Join(dir, "c.db")+"\n"+
+		"stream:\n  store_dir: "+filepath.Join(dir, "s")+"\n  store_max_bytes: 6442450944\n"+
+		fixtureKeyring)
+	var out, errOut bytes.Buffer
+	if err := run([]string{"validate", path, "-json"}, &out, &errOut); err != nil {
+		t.Fatalf("validate: %v (%s)", err, out.String())
+	}
+	var got struct {
+		Warnings []config.Warning `json:"warnings"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("the -json output is not JSON: %v\n%s", err, out.String())
+	}
+	for _, w := range got.Warnings {
+		if w.Path == "stream.store_max_bytes" && strings.Contains(w.Message, "refuses to boot") {
+			return
+		}
+	}
+	t.Errorf("no advisory names stream.store_max_bytes below the floor: %+v", got.Warnings)
 }
 
 // AND A LEFTOVER IS REFUSED rather than ignored, which is the only way an

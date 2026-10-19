@@ -44,9 +44,11 @@ import {
   unitSettings,
   unitTally,
   UNIT_TOTAL_HINT,
+  principalOfSeat,
   workingLongestFirst,
   type SeatState,
 } from "./seats.ts";
+import { principalOfUnit } from "./artifacts/people.ts";
 import { AVATAR_STATUSES } from "@crewlethq/ui";
 import type {
   AgentRow,
@@ -1131,4 +1133,21 @@ test("working seats run oldest first, and one with no readable start sorts after
   // THE TWO UNKNOWNS TIE, so they keep the push's order rather than whatever
   // a NaN comparison happens to leave.
   expect(order).toEqual(["early", "late", "none", "garbled"]);
+});
+
+// THE LINE UNDER A NAME IS A UNIT OR NOTHING. The share dialog's owner row read
+// "Miles / miles": the handle said the name again in lower case.
+test("a seat's principal is subtitled by its unit, never its handle", () => {
+  const at = (handle: string) => principalOfSeat(index.byHandle.get(handle), handle);
+  expect(at("dev-a").detail).toBe("Backend");
+  expect(at("jane-founder").detail).toBeUndefined();
+  expect(principalOfSeat(undefined, "gone").detail).toBeUndefined();
+});
+
+// A COUNT OF NONE IS LEFT OUT of a team's line: "0 people, 2 agents" was half
+// about what the team does not hold.
+test("a unit's principal counts only what it holds", () => {
+  const unit = (id: string) => index.units.find((u) => u.id === id);
+  expect(principalOfUnit(unit("backend"), "backend").detail).toBe("3 agents");
+  expect(principalOfUnit(unit("eng"), "eng").detail).toBe("4 agents");
 });

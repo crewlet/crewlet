@@ -56,8 +56,10 @@ func (r *roundTrip) named(t *testing.T, k objstore.Key) int {
 func (r *roundTrip) referenced(t *testing.T, among ...objstore.Key) map[objstore.Key]bool {
 	t.Helper()
 	// THROUGH THE DECLARED LIST, exactly as the engine builds the
-	// collector's sources, so this reads the statement the collector runs.
-	sources, err := collect.Sources(references.All, tracker.ObjectEstate{Reader: r.reader})
+	// collector's sources, so this reads the statement the collector runs:
+	// the tracker's own declarations in it, since this harness runs no other
+	// domain's estate.
+	sources, err := collect.Sources(trackerReferences(), tracker.ObjectEstate{Reader: r.reader})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,6 +73,17 @@ func (r *roundTrip) referenced(t *testing.T, among ...objstore.Key) map[objstore
 	out := make(map[objstore.Key]bool, len(set))
 	for k := range set {
 		out[k] = true
+	}
+	return out
+}
+
+// trackerReferences is the declared list's tables of the tracker's own domain.
+func trackerReferences() []objstore.ReferenceTable {
+	var out []objstore.ReferenceTable
+	for _, table := range references.All {
+		if table.Domain == (tracker.Domain{}).Name() {
+			out = append(out, table)
+		}
 	}
 	return out
 }
@@ -95,12 +108,12 @@ func (w *readWatch) Read(ctx context.Context, at statelog.Position, fn func(*sql
 func (r *roundTrip) every(t *testing.T) map[objstore.Key][]collect.Reference {
 	t.Helper()
 	watch := &readWatch{ObjectEstate: tracker.ObjectEstate{Reader: r.reader}}
-	sources, err := collect.Sources(references.All, watch)
+	sources, err := collect.Sources(trackerReferences(), watch)
 	if err != nil {
 		t.Fatal(err)
 	}
 	out := map[objstore.Key][]collect.Reference{}
-	complete, err := sources[0].Each(t.Context(), statelog.Position{}, func(ref collect.Reference) error {
+	complete, err := sources[0].Each(t.Context(), statelog.Position{}, objstore.Key{}, func(ref collect.Reference) error {
 		if watch.open.Load() {
 			// RETURNED, never t.Fatal: a goroutine exit inside the
 			// read would leave the read's connection held.

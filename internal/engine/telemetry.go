@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -155,6 +156,13 @@ type turnTelemetry struct {
 	// spent (turnspend.go).
 	auxSpent *auxspend.Tally
 
+	// boundary is the token every fence this segment writes carries: the
+	// chat thread its prompt is handed and every foreign text its tools read
+	// ([turnctx.Turn.Boundary]). Minted fresh for each segment, a resumed one
+	// included, because the prompt and the tools must agree on it and both
+	// are assembled from here.
+	boundary provenance.Boundary
+
 	// budget is the meter this segment is charged through — its rounds, its
 	// judge, its workers and, through [turnTelemetry.aux], every in-turn
 	// auxiliary call — or nil where there is no counter. Set by the frame
@@ -261,6 +269,7 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 	t.workItem, t.workItemBasis = workItemOf(req)
 	t.written = &turnctx.Written{}
 	t.auxSpent = auxspend.NewTally()
+	t.boundary = provenance.NewBoundary()
 	rebased, err := rebaseFor(ctx, e.rebases(), builtin.Actor{
 		TurnID: t.runID, WorkKey: t.workKey, WorkSince: t.workSince,
 	}, t.startedAt)
@@ -362,6 +371,9 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			// the meter every one of them is charged through and asks.
 			AuxSpend: t.auxSpent,
 			Budget:   t.budget.auxiliary(),
+			// AND THE FENCE TOKEN the prompt's thread was written with,
+			// so every tool answer of the segment is fenced alike.
+			Boundary: t.boundary,
 		},
 	}
 }
@@ -874,6 +886,9 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 	// A FRESH TALLY, never the parked one's: what the segments before this
 	// one spent on auxiliary calls is in what they charged or carried.
 	t.auxSpent = auxspend.NewTally()
+	// AND A FRESH FENCE TOKEN: the parked conversation's fences keep the
+	// token they were written with, and their content carries none.
+	t.boundary = provenance.NewBoundary()
 	// THE SEGMENT, for its charge: the job it collected and what that job
 	// cost, and what the segments before it spent that nothing paid for.
 	t.resumed, t.launchID = true, in.Run.LaunchID

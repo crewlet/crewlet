@@ -59,6 +59,7 @@ const LOADERS = {
   org: () => import("~/routes/org/index.ts"),
   live: () => import("~/routes/live/index.ts"),
   knowledge: () => import("~/routes/knowledge/index.ts"),
+  artifacts: () => import("~/routes/artifacts/index.ts"),
   spend: () => import("~/routes/spend/index.ts"),
   settings: () => import("~/routes/settings/index.ts"),
   account: () => import("~/routes/account/index.ts"),

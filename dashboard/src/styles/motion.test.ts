@@ -79,6 +79,20 @@ const ANIMATED: { selector: string; kind: Kind; why: string }[] = [
       "reader who asked for less motion.",
   },
   {
+    selector: '.slides-show-slide[data-transition="fade"]',
+    kind: "entrance",
+    why:
+      "A slide arriving in Present, after the presenter pressed next: the previous slide's " +
+      "authored transition, played once because somebody moved the show.",
+  },
+  {
+    selector: '.slides-show-slide[data-transition="push"]',
+    kind: "entrance",
+    why:
+      "A slide arriving in Present, after the presenter pressed next: the previous slide's " +
+      "authored transition, played once because somebody moved the show.",
+  },
+  {
     selector: ".prose.md.stream > :last-child::after",
     kind: "steady",
     why: "The caret on text being streamed: live for as long as the model is writing.",

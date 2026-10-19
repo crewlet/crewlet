@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Expense splitter</title>
+
+<style>
+:root { --bg: #ffffff; --fg: #1d1d1f; --muted: #6b6b70; --accent: #3b5bdb; --card: #f5f5f7; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111114; --fg: #f2f2f5; --muted: #a0a0a8; --accent: #7b93ff; --card: #1c1c21; }
+}
+body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+main { max-width: 960px; margin: 0 auto; padding: 16px; }
+.card { background: var(--card); border-radius: 12px; padding: 16px; margin: 12px 0; }
+button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--muted); background: var(--card); color: var(--fg); cursor: pointer; }
+
+</style>
+</head>
+<body>
+<main>
+<h1>Expenses</h1>
+<div class="card"><input id="what" placeholder="What"><input id="amount" type="number" placeholder="Amount"><button onclick="add()">Add</button></div>
+<table class="card"><tbody id="rows"></tbody></table><p>Total: <strong id="total">0</strong></p>
+</main>
+<script>
+const items = [];
+function add() {
+  items.push({ what: document.getElementById("what").value, amount: Number(document.getElementById("amount").value) });
+  render();
+}
+function removeItem(i) { items.splice(i, 1); render(); }
+function render() {
+  document.getElementById("rows").innerHTML = items.map((item, i) =>
+    `<tr><td>${item.what}</td><td>${item.amount.toFixed(2)}</td><td><button onclick="removeItem(${i})">Remove</button></td></tr>`).join("");
+  document.getElementById("total").textContent = items.reduce((s, x) => s + x.amount, 0).toFixed(2);
+}
+</script>
+</body>
+</html>

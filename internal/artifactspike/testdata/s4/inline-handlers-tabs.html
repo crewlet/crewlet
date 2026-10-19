@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Onboarding guide</title>
+
+<style>
+:root { --bg: #ffffff; --fg: #1d1d1f; --muted: #6b6b70; --accent: #3b5bdb; --card: #f5f5f7; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111114; --fg: #f2f2f5; --muted: #a0a0a8; --accent: #7b93ff; --card: #1c1c21; }
+}
+body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+main { max-width: 960px; margin: 0 auto; padding: 16px; }
+.card { background: var(--card); border-radius: 12px; padding: 16px; margin: 12px 0; }
+button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--muted); background: var(--card); color: var(--fg); cursor: pointer; }
+
+</style>
+</head>
+<body>
+<main>
+<h1>Onboarding guide</h1><nav><button onclick="show('tab1')">Section 1</button><button onclick="show('tab2')">Section 2</button><button onclick="show('tab3')">Section 3</button><button onclick="show('tab4')">Section 4</button><button onclick="show('tab5')">Section 5</button><button onclick="show('tab6')">Section 6</button><button onclick="show('tab7')">Section 7</button><button onclick="show('tab8')">Section 8</button></nav><section id="tab1" class="card panel" hidden><h2>Section 1</h2><p>Notes for section 1.</p><button onclick="toggleDone(this)">Mark done</button></section><section id="tab2" class="card panel" hidden><h2>Section 2</h2><p>Notes for section 2.</p><button onclick="toggleDone(this)">Mark done</button></section><section id="tab3" class="card panel" hidden><h2>Section 3</h2><p>Notes for section 3.</p><button onclick="toggleDone(this)">Mark done</button></section><section id="tab4" class="card panel" hidden><h2>Section 4</h2><p>Notes for section 4.</p><button onclick="toggleDone(this)">Mark done</button></section><section id="tab5" class="card panel" hidden><h2>Section 5</h2><p>Notes for section 5.</p><button onclick="toggleDone(this)">Mark done</button></section><section id="tab6" class="card panel" hidden><h2>Section 6</h2><p>Notes for section 6.</p><button onclick="toggleDone(this)">Mark done</button></section><section id="tab7" class="card panel" hidden><h2>Section 7</h2><p>Notes for section 7.</p><button onclick="toggleDone(this)">Mark done</button></section><section id="tab8" class="card panel" hidden><h2>Section 8</h2><p>Notes for section 8.</p><button onclick="toggleDone(this)">Mark done</button></section>
+</main>
+<script>
+function show(id) { document.querySelectorAll(".panel").forEach(p => { p.hidden = p.id !== id; }); }
+function toggleDone(button) { button.textContent = button.textContent === "Done" ? "Mark done" : "Done"; }
+show("tab1");
+</script>
+</body>
+</html>

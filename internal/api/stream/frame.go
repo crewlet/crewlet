@@ -115,10 +115,10 @@ func (p FramePosture) ServesQueries() bool { return p == FrameLive }
 // Route is how a push kind reaches the clients it is for.
 //
 // A CLOSED SET WITH A TOTAL TABLE behind it ([RouteOf]), because the fan-out
-// has three genuinely different shapes now and the difference is not
-// inspectable from a kind's name. A kind with no route would fall to whichever
-// branch the switch ended on — which, for a per-seat frame, is every tab in
-// the company.
+// has three genuinely different shapes and the difference is not inspectable
+// from a kind's name. A kind with no route would fall to whichever branch the
+// switch ended on, which, for a per-seat or per-artifact frame, is every tab
+// in the company.
 type Route string
 
 const (
@@ -127,12 +127,14 @@ const (
 	// sees.
 	RouteBroadcast Route = "broadcast"
 
-	// RouteSeat reaches only the clients watching the frame's own seat,
-	// through the hub's seat index. The frame names that seat in
-	// [Envelope.Seat], and a frame of such a kind with no seat on it is
-	// DROPPED rather than fanned out — broadcasting a targeted frame is
-	// the failure mode this route exists to make impossible.
-	RouteSeat Route = "seat"
+	// RouteRoom reaches only the clients in the frame's own room, through
+	// the hub's room index: a seat's room (the sockets whose watch of that
+	// seat was allowed) or an artifact's (the sockets whose join of it was
+	// allowed). The frame is built for its room ([PushSeat],
+	// [PushArtifact]), and a frame of such a kind with no room on it is
+	// DROPPED rather than fanned out: broadcasting a targeted frame is the
+	// failure mode this route exists to make impossible.
+	RouteRoom Route = "room"
 
 	// RouteDirect goes to one client, from that client's own goroutine —
 	// its snapshot, its pong, its query answers. Never broadcast:
@@ -145,7 +147,7 @@ const (
 // value, which is what [RouteOf] answers for a kind with no entry.
 func (r Route) Valid() bool {
 	switch r {
-	case RouteBroadcast, RouteSeat, RouteDirect:
+	case RouteBroadcast, RouteRoom, RouteDirect:
 		return true
 	default:
 		return false

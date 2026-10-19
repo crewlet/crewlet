@@ -35,14 +35,25 @@
  */
 
 import { useMemo, type ReactNode } from "react";
+import { Mark } from "~/ui/glyph.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { usePageCoverage, usePageLabels } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
-import { Button, EmptyState, EmptyValue, Skeleton, Tag, InlineCode } from "@crewlethq/ui";
+import { linkedSeat } from "~/app/frame/cells.tsx";
+import {
+  Button,
+  EmptyState,
+  EmptyValue,
+  Skeleton,
+  Tag,
+  InlineCode,
+  TableKeyCell,
+  TableEntityCell,
+  TableTextCell,
+} from "@crewlethq/ui";
 import { ArrowRightGlyph, LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -265,7 +276,9 @@ export function SavedViews({ id }: { id?: string }) {
               key: "name",
               header: "View",
               sortValue: (v) => v.name,
-              cell: (v) => <TextCell icon="columns-3">{v.name}</TextCell>,
+              cell: (v) => (
+                <TableTextCell icon={<Mark name={"columns-3"} size="xs" />}>{v.name}</TableTextCell>
+              ),
             },
             {
               key: "type",
@@ -283,7 +296,7 @@ export function SavedViews({ id }: { id?: string }) {
               // every other column in the product that does.
               //
               // AND AN ABSENT OWNER IS NOT AN ABSENT PERSON, which is why
-              // `SeatCell`'s own dash is not what draws here: empty means the
+              // `linkedSeat`'s own dash is not what draws here: empty means the
               // view is SHARED, a setting somebody chose.
               cell: (v) =>
                 v.owner ? (
@@ -371,7 +384,7 @@ export function SavedViews({ id }: { id?: string }) {
 function OwnerCell({ owner, index }: { owner: string; index: OrgIndex }) {
   const seat = index.byHandle.get(owner);
   return seat ? (
-    <SeatCell handle={owner} name={seat.name} kind={seat.kind} />
+    <TableEntityCell {...linkedSeat({ handle: owner, name: seat.name, kind: seat.kind })} />
   ) : (
     <span className="mono truncate" title={`${owner} holds no seat`}>
       {owner}
@@ -394,7 +407,7 @@ function viewFacts(view: WorkView, index: OrgIndex): Fact[] {
         <span className="t-caption">shared</span>
       ),
     },
-    { label: "Container", value: <KeyCell value={containerRef(view)} /> },
+    { label: "Container", value: <TableKeyCell value={containerRef(view)} /> },
     {
       // NO DASH HERE, which is the opposite of the grid's answer to the same
       // absence and is exactly why [viewMarks] decides neither: [FactLine] drops

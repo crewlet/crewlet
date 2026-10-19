@@ -36,19 +36,12 @@
  * `model.ts` for how each clause reads for none, one and many.
  */
 
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-  type RefObject,
-} from "react";
+import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrangeBoard,
   ArrangeFrame,
+  ArrangeGrid,
   ArrangeGroup,
   Button,
   ConfirmModal,
@@ -108,25 +101,6 @@ const store = boardStore(shippedBoard());
  */
 const STACKS_BELOW = 928;
 
-/**
- * Whether the page is narrower than `STACKS_BELOW`, from its own width: the
- * page is a container whose width the sidebar and the peek decide, so the
- * window's says nothing. A block's span is its frame's `columns`, so a stacked
- * page passes every block all twelve rather than overriding the span it set.
- */
-function useStacked(node: RefObject<HTMLElement | null>): boolean {
-  const [stacked, setStacked] = useState(false);
-  useLayoutEffect(() => {
-    const el = node.current;
-    if (!el) return;
-    const measure = () => setStacked(el.clientWidth > 0 && el.clientWidth < STACKS_BELOW);
-    measure();
-    const watch = new ResizeObserver(measure);
-    watch.observe(el);
-    return () => watch.disconnect();
-  }, [node]);
-  return stacked;
-}
 const HISTORY = 50;
 /** Keystrokes in one settings field within this long are one step of Undo. */
 const COALESCE_MS = 1000;
@@ -152,7 +126,7 @@ export function Home() {
   const last = useRef<{ key: string; at: number } | null>(null);
   const editing = draft !== null;
   const root = useRef<HTMLDivElement>(null);
-  const stacked = useStacked(root);
+  const stacked = useNarrowerThan(root, STACKS_BELOW);
   const board = draft ?? saved;
   const changed = draft !== null && !sameBoard(draft, saved);
 
@@ -412,11 +386,7 @@ export function Home() {
                   )
               : undefined
           }
-          bodyProps={
-            editing
-              ? { ...reorder.listProps(groupList(g.id)), className: "home-group-body" }
-              : undefined
-          }
+          bodyProps={editing ? reorder.listProps(groupList(g.id)) : undefined}
           empty={editing ? "Drag widgets here, or add them from the tray." : "This group is empty."}
         >
           {children.map((id) => renderLeaf(id))}
@@ -435,7 +405,7 @@ export function Home() {
     <HomeDataProvider value={data}>
       <div
         ref={root}
-        className={editing ? "home home-board is-editing" : "home home-board"}
+        className="home"
         data-stacked={stacked ? "" : undefined}
         {...(editing ? reorder.listProps(PAGE) : {})}
         // Links open in a new tab while arranging, the add sheet's preview
@@ -491,13 +461,13 @@ export function Home() {
           />
         ) : (
           <ArrangeBoard editing={editing} columns={stacked ? 1 : COLUMNS}>
-            <div className="home-board-grid">
+            <ArrangeGrid>
               {page.map((id) => {
                 const w = findWidget(board, id);
                 if (!w) return null;
                 return w.kind === "group" ? renderGroup(w) : renderLeaf(id);
               })}
-            </div>
+            </ArrangeGrid>
           </ArrangeBoard>
         )}
         {settingsWidget && (

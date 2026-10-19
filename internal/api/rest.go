@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
@@ -157,6 +158,33 @@ var namedRoutes = []struct {
 	// identity rather than anything the tracker holds, and a node with no
 	// native tracker still has a viewer.
 	{method: "GET", pattern: "/viewer", what: "viewer"},
+	// THE ARTIFACTS. The literals `/artifacts/usage` and `/artifacts/trail`
+	// beat the `{id}` wildcard, so neither is read as an artifact of that id; every other
+	// read names the artifact, and a version by its number. The writes, the
+	// downloads and the source are the artifacts surface's own routes
+	// (internal/api/artifactsapi), mounted beside these.
+	{method: "GET", pattern: "/artifacts", what: "artifacts"},
+	{method: "GET", pattern: "/artifacts/usage", what: "artifact_usage"},
+	{method: "GET", pattern: "/artifacts/trail", what: "artifact_trail"},
+	{method: "GET", pattern: "/artifacts/{id}", what: "artifact", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/artifacts/{id}/versions", what: "artifact_versions", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/artifacts/{id}/versions/{n}", what: "artifact_version", path: map[string]string{"id": "id", "n": "n"}},
+	{method: "GET", pattern: "/artifacts/{id}/history", what: "artifact_history", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/artifacts/{id}/assets", what: "artifact_assets", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/artifacts/{id}/seen-by", what: "artifact_seen_by", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/artifacts/{id}/access", what: "artifact_access", path: map[string]string{"id": "id"}},
+	// AN ARTIFACT'S DATA. The literal segments beat the collection
+	// wildcard, so none is read as a collection of that name: each is a
+	// name the datastore reserves (internal/artifactdata). The company's
+	// datastore usage sits under /artifacts/data, a literal no artifact id
+	// can be.
+	{method: "GET", pattern: "/artifacts/data/usage", what: "artifact_data_usage"},
+	{method: "GET", pattern: "/artifacts/{id}/data/schema", what: "artifact_data_schema", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/artifacts/{id}/data/history", what: "artifact_data_history", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/artifacts/{id}/data/state", what: "artifact_data_state", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/artifacts/{id}/data/{collection}/query", what: "artifact_data_query", path: map[string]string{"id": "id", "collection": "collection"}},
+	{method: "GET", pattern: "/artifacts/{id}/data/{collection}/{doc}", what: "artifact_data_doc", path: map[string]string{"id": "id", "collection": "collection", "doc": "doc"}},
+	{method: "GET", pattern: "/artifacts/{id}/data/{collection}", what: "artifact_data", path: map[string]string{"id": "id", "collection": "collection"}},
 }
 
 // mountReads registers the named read routes.
@@ -216,26 +244,18 @@ func (a *App) serveFrom(kind stream.Kind, build func(stream.Audience) any) http.
 		if !ok {
 			return
 		}
-		if !principal.Stage.MayAct() {
-			// THE AUTHORITY TABLE'S FIRST CHECK, as every question's: a
-			// person whose stage may not act reads nothing, the overview
-			// included.
-			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-				authz.RefusalDetail(authz.ReasonStage, nil))
-			return
-		}
-		audience := a.stream.AudienceFor(r.Context(), principal)
-		if !audience.Receives(kind) {
+		out, err := a.overview(r.Context(), principal, kind, build)
+		var refusal *queries.Refusal
+		if errors.As(err, &refusal) {
 			// THE SAME TWO FIELDS every refusal on authority carries,
 			// rather than a sentence naming the permission: a client
 			// reading `grants` off a refused question reads it off this
 			// too.
-			need, _ := stream.NeedOf(kind)
 			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-				authz.RefusalDetail(authz.ReasonNoGrant, need.Grants()))
+				authz.RefusalDetail(refusal.Reason, refusal.Grants))
 			return
 		}
-		writeJSON(w, http.StatusOK, stream.ShapeFor(build(audience), audience))
+		writeJSON(w, http.StatusOK, out)
 	}
 }
 

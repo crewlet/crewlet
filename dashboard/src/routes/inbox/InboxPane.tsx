@@ -38,6 +38,7 @@ import {
   ReadingPaneTitle,
   Stack,
   Text,
+  safeHref,
 } from "@crewlethq/ui";
 import {
   ActivityGlyph,
@@ -58,7 +59,7 @@ import { Composer } from "~/components/Composer.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime } from "~/lib/format.ts";
-import { renderMarkdown, safeHref } from "~/lib/markdown.ts";
+import { renderMarkdown } from "~/lib/markdown.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { Attention } from "~/lib/attention.ts";
 import { detailItem, itemAddress } from "~/lib/work.ts";

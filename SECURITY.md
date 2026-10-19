@@ -185,11 +185,11 @@ A few things worth knowing when deploying Crewlet:
   company's spend must not reach somebody, do not give them a credential
   (`docs/concepts/identity-and-access.md#everybodys-overview`).
 - **Carrying a credential is not the same as being allowed to use it.** Every
-  route and every socket question declares who may ask it — everybody, one of
-  the [three permissions](docs/concepts/identity-and-access.md#access-admin-and-one-permission-per-app)
-  (`admin`, `tracker`, `knowledge`), or a verb the answer decides record by
-  record — and both transports are decided by the same registry, so a question
-  cannot be reached by choosing a channel. A route registered without saying
+  route and every socket question declares who may ask it (everybody, one of
+  the [permissions](docs/concepts/identity-and-access.md#access-admin-and-one-permission-per-app),
+  `admin`, `tracker`, `knowledge` or `artifacts`, or a verb the answer decides
+  record by record), and both transports are decided by the same registry, so
+  a question cannot be reached by choosing a channel. A route registered without saying
   so is a build failure rather than a route that answers to anyone.
 - **`admin` is host access: it runs code on every engine host.** It is
   deliberately one permission over the whole company — its configuration, its
@@ -281,7 +281,7 @@ A few things worth knowing when deploying Crewlet:
   than silent.
 - **A Tier A token is a real credential and is checked as one.** Each entry
   states its own `grants` — required and non-empty, naming only `admin`,
-  `tracker` and `knowledge`, and refused for `admin` on a node that refuses it
+  `tracker`, `knowledge` and `artifacts`, and refused for `admin` on a node that refuses it
   — and its value must clear
   a 26-character floor on what the `${VAR}` *resolves to*, so a reference
   cannot be the way around the rule. At least one is required on every node
@@ -366,6 +366,21 @@ A few things worth knowing when deploying Crewlet:
   `docs/guides/retention.md#the-configuration-archive-and-the-one-thing-a-purge-cannot-reach`),
   and backups hold what they held until you delete them, so apply your own
   retention to those.
+- **An artifact page can send what its viewers may read to a site its
+  author chooses.** Pages run on the separate artifact origin in a sandboxed
+  frame, and their policy keeps a viewer's datastore row from running as
+  script and keeps fetches, sockets, images and media on the artifact's own
+  origin. It does not stop the page's OWN script from loading a script from
+  another site (the strict policy's `'strict-dynamic'` trusts every script a
+  page's scripts create, and a page can read its own nonce), and a script
+  load carries whatever the page puts in its URL. A page whose author means
+  to can therefore send each viewer's readable rows, and who the bridge says
+  the viewer is, to a third party without a click. Only someone holding
+  `editor` (or the owner) publishes, every version names who published it,
+  and the publish-time linter refuses literal remote scripts, so an honest
+  page never does this by accident; share `editor` with seats and people you
+  would trust with every viewer's readable rows. See
+  `internal/api/pagepolicy` for why a nonce-based policy cannot close this.
 - **Sandbox isolation depends on the cell a seat runs in.** A coding agent
   runs fully permissioned — the sandbox boundary, not the agent's own
   permission prompts, is the isolation model — so where it runs is the
@@ -381,3 +396,44 @@ A few things worth knowing when deploying Crewlet:
   command or serves a file only for a holder of that box's access token,
   which the engine reads from E2B and never stores
   (`docs/concepts/code-sandbox.md#sandbox-backends`).
+- **A deck runs nothing, and its renderer is a trust boundary.** A `slides`
+  artifact is drawn on the dashboard's own origin, so it is held to a closed
+  subset at publish (no script, no event attribute, no embedded page, no style
+  value naming a URL, a drawing that references only its own ids, images and
+  typefaces only as files of the version), and the dashboard builds every
+  element from the engine's parsed tree with the same allowlists again,
+  never parsing a slide's markup or writing it into the page. The dashboard's
+  `img-src` admits `blob:` for the object URLs it makes of a deck's images,
+  which only script already running on that origin can mint. A defect in
+  either list is a security issue; report it as one.
+- **A design's canvas runs nothing, and its boards are framed one document
+  per ticket.** A `design`'s `canvas.json` is drawn on the dashboard's own
+  origin, so it is a closed format read strictly at publish (numbers within
+  bounds, paths of the version, plain text, colour names the dashboard maps to
+  its own palette, no unknown field), and the dashboard draws it with its own
+  components. Each artboard is an HTML page framed on the artifact origin like
+  any page, under a ticket minted for that board, which opens that page and
+  no other as a document. A board cannot open a print dialog: the host prints
+  it, and only on the reader's own gesture. See ADR-0035, "One document per
+  ticket".
+- **Artifacts run on an origin of their own, and where that origin lives is
+  your decision.** An artifact is HTML and script written by a person or an
+  agent, so the engine never renders one on the dashboard's origin: the
+  `api.artifacts` listener serves artifact bytes and nothing else, holds no
+  credential, never reads a cookie and never sets one, and a page reaches the
+  engine only through the dashboard, as the viewer. Give the listener a host
+  on a **registrable domain other than the dashboard's** (for example
+  `https://{artifact}.example-usercontent.net` beside
+  `https://crewlet.example.com`): only then does each artifact get a real
+  origin of its own. On the dashboard's own site, on a second port of its
+  host, or with one plain hostname, every artifact is served with an opaque
+  origin instead, which is safe but leaves browser storage unavailable to
+  pages, and `crewlet validate` warns about the same-site case. An origin
+  equal to the dashboard's, the public listener's or any
+  `api.auth.allowed_origins` entry, or a parent domain of the API host, is
+  refused outright. Revoking a share stops the next document request; a node
+  whose copy of the shares is stale asks a peer and answers `503` rather than
+  serve from it. Put TLS in front of the listener exactly as you do for the
+  dashboard, and never front `/t/` paths with a shared cache: only
+  `/_crewlet/runtime/` and `/_crewlet/kit/` are cacheable. See
+  `docs/guides/artifacts-serving.md`.

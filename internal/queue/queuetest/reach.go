@@ -40,7 +40,7 @@ const reachWithin = 500 * time.Millisecond
 //
 // THE WHOLE MATRIX, for the reason lifecycleVerbs gives: a case that sent the
 // two verbs somebody thought of — Publish and Ask, the two a tool sends — would
-// certify those two and leave the other twelve to whatever their backend
+// certify those two and leave the other fourteen to whatever their backend
 // happened to do.
 func (s *suite) runReachability(t *testing.T) {
 	ctx := t.Context()
@@ -199,7 +199,7 @@ func (s *suite) runReachability(t *testing.T) {
 
 // brokerVerbs sends every verb that has to REACH the broker, concurrently and
 // under ctx, and reports what each answered. The complement of the attachment
-// verbs runReachability sends itself, and together with them the fourteen
+// verbs runReachability sends itself, and together with them the sixteen
 // lifecycleVerbs sends.
 func brokerVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbResult {
 	topic := ns + ".broker"
@@ -236,6 +236,14 @@ func brokerVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbResul
 		}},
 		{"Ask", func() error {
 			_, err := q.Ask(ctx, topic, []byte("reach"), 1)
+			return err
+		}},
+		{"Broadcast", func() error { return q.Broadcast(ctx, topic, []byte("reach")) }},
+		{"Listen", func() error {
+			stop, err := q.Listen(ctx, ns+".>", func(string, []byte) {})
+			if stop != nil {
+				_ = stop(context.WithoutCancel(ctx))
+			}
 			return err
 		}},
 	}

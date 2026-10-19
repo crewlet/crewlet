@@ -9,9 +9,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifactdata"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/schedule"
@@ -104,6 +107,11 @@ type retention struct {
 	// percentiles rather than states. Nil records nothing, which every
 	// condition reads as "nothing to report".
 	metrics *metrics.Recorder
+
+	// objectives is the node's service objective meter, whose burning
+	// objectives the `objective_burn` alarm reads. Nil (a test's retention)
+	// reads as nothing burning.
+	objectives *objectives.Meter
 
 	// volumes identifies the volume a directory is on and measures what it
 	// has free ([measureVolume], nil); a parameter for the tests.
@@ -231,6 +239,7 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		cfg:         boot.Stream.TrackerRetention,
 		backupOwner: boot.Retention.BackupOwner,
 		metrics:     e.metrics,
+		objectives:  e.objectives,
 		claim:       e.workerDuty(retentionDutyName, retentionDutyTTL),
 		nodeID:      s.nodeID,
 		alarms:      statelog.NewTracker(e.metrics, nil),
@@ -931,7 +940,7 @@ type evictionLister interface {
 	Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error)
 }
 
-// The three identity-claiming domains this build registers, held to the
+// The five identity-claiming domains this build registers, held to the
 // interface — and to the log probe a stranded node asks
 // ([statelog.EvictionProbe]) — at compile time, so a reshaped method is a
 // build failure rather than a boot refusal.
@@ -939,6 +948,8 @@ var (
 	_ evictionLister = tracker.Domain{}
 	_ evictionLister = pages.Domain{}
 	_ evictionLister = iamdomain.Domain{}
+	_ evictionLister = artifactsdomain.Domain{}
+	_ evictionLister = artifactdata.Domain{}
 
 	// AND EVERY ONE READS ITS GATE RECORDS OFF THE LOG — an eviction and the
 	// readmission that lifts it — which [checkRegister] refuses a registered
@@ -946,6 +957,8 @@ var (
 	_ statelog.EvictionProbe = tracker.Domain{}
 	_ statelog.EvictionProbe = pages.Domain{}
 	_ statelog.EvictionProbe = iamdomain.Domain{}
+	_ statelog.EvictionProbe = artifactsdomain.Domain{}
+	_ statelog.EvictionProbe = artifactdata.Domain{}
 )
 
 // tombstones is every eviction this node has applied for one domain's log.

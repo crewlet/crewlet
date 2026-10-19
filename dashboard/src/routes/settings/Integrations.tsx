@@ -35,7 +35,14 @@ import {
   EmptyState,
   EmptyValue,
   InlineCode,
+  SegmentedControl,
   Skeleton,
+  TableDateCell,
+  TableEntityCell,
+  TableKeyCell,
+  TableNumberCell,
+  TableStatusCell,
+  TableTextCell,
   Tag,
   type Tone,
 } from "@crewlethq/ui";
@@ -57,20 +64,20 @@ import { VendorMark, type Vendor } from "@crewlethq/icons";
 import { TOOL_TONE } from "~/lib/toolState.ts";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
-import {
-  DateCell,
-  DurationCell,
-  KeyCell,
-  NumberCell,
-  SeatCell,
-  StatusCell,
-  TextCell,
-} from "~/app/frame/cells.tsx";
+import { linkedSeat } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { fmtDate, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
+import {
+  fmtDate,
+  fmtDateTime,
+  plural,
+  relTime,
+  tsKey,
+  fmtCount,
+  fmtDuration,
+} from "~/lib/format.ts";
 import { useRecheck } from "./recheck.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -93,7 +100,6 @@ import {
   type ReconcileStatus,
 } from "~/contract/integrations.ts";
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
-import { Segmented } from "~/ui/primitives.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
 // THE TONE VOCABULARY IS uilet's NOW. This screen used to declare its own
@@ -400,7 +406,7 @@ export function entryState(
  * is a FLOOR: `null` is this process reporting that it could not read its own
  * event log, and folding that in as 0 would turn "nobody looked" into "nothing
  * arrived there". Where no surface can say at all the answer stays null, which
- * is the em dash [NumberCell] draws and the one this screen means by it.
+ * is the absence [TableNumberCell] draws and the one this screen means by it.
  */
 function total(
   present: Present[],
@@ -488,7 +494,11 @@ export function integrationFacts(
     {
       label: "Delivered",
       value: (
-        <NumberCell value={counted((r) => r.inbound)} title="Deliveries that reached a seat" />
+        <TableNumberCell
+          value={counted((r) => r.inbound)}
+          title="Deliveries that reached a seat"
+          format={fmtCount}
+        />
       ),
       note: covered,
     },
@@ -501,15 +511,22 @@ export function integrationFacts(
       // read together and the first one states what they all cover.
       label: "Dropped",
       value: (
-        <NumberCell
+        <TableNumberCell
           value={counted((r) => r.skipped)}
           title="verified, and turned into work for nobody"
+          format={fmtCount}
         />
       ),
     },
     {
       label: "Coalesced",
-      value: <NumberCell value={counted((r) => r.coalesced)} title="Merged into a pending wake" />,
+      value: (
+        <TableNumberCell
+          value={counted((r) => r.coalesced)}
+          title="Merged into a pending wake"
+          format={fmtCount}
+        />
+      ),
     },
     {
       // THE LOOP'S OWN CLOCK, which is the one thing a card never says: it
@@ -517,11 +534,15 @@ export function integrationFacts(
       // surface checked a moment ago and one nothing has looked at in an hour
       // read identically.
       label: "Last pass",
-      value: <DateCell at={latestOf(present, (r) => r.reconcile?.last_attempt_at)} now={now} />,
+      value: (
+        <TableDateCell value={latestOf(present, (r) => r.reconcile?.last_attempt_at)} now={now} />
+      ),
     },
     {
       label: "Next pass",
-      value: <DateCell at={soonestOf(present, (r) => r.reconcile?.next_attempt_at)} now={now} />,
+      value: (
+        <TableDateCell value={soonestOf(present, (r) => r.reconcile?.next_attempt_at)} now={now} />
+      ),
     },
   ];
 }
@@ -2099,7 +2120,7 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
                 header: "Arrived",
                 shrink: true,
                 sortValue: (e) => tsKey(e.timestamp),
-                cell: (e) => <DateCell at={e.timestamp} now={now} />,
+                cell: (e) => <TableDateCell value={e.timestamp} now={now} />,
               },
               {
                 key: "event",
@@ -2115,7 +2136,7 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
               {
                 key: "summary",
                 header: "What it said",
-                cell: (e) => <TextCell>{e.summary}</TextCell>,
+                cell: (e) => <TableTextCell>{e.summary}</TableTextCell>,
               },
               {
                 key: "for",
@@ -2128,7 +2149,9 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
                     // name, linking to the seat. A delivery is addressed to a
                     // colleague, and a colleague should not be a chip on this
                     // grid and an avatar on the next.
-                    <SeatCell handle={e.tags.recipient} {...who(e.tags.recipient)} />
+                    <TableEntityCell
+                      {...linkedSeat({ handle: e.tags.recipient, ...who(e.tags.recipient) })}
+                    />
                   ) : (
                     // NOT THE CELL'S OWN "nobody" DASH: a company-wide
                     // delivery is routed by the notification spine rather than
@@ -2144,7 +2167,7 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
                 sortValue: (e) => e.tags?.delivery_key ?? "",
                 cell: (e) =>
                   e.tags?.delivery_key ? (
-                    <KeyCell value={e.tags.delivery_key} />
+                    <TableKeyCell value={e.tags.delivery_key} />
                   ) : (
                     // A DASH THAT SAYS WHICH ABSENCE THIS IS. Not every
                     // provider sends an id of its own, and a blank cell and an
@@ -2362,29 +2385,6 @@ function useSetupRun(
 }
 
 /**
- * A uilet variant, said in the tone names `app/frame/cells.tsx` still takes.
- *
- * The inverse of `app/frame/tone.ts`, and it exists for exactly as long as
- * that file does: one cell in this screen is a frame component this port may
- * not edit. `brand` and `info` have no status-cell spelling of their own and
- * take neutral, which is what the cell drew for them before.
- */
-function cellTone(variant: Tone): "positive" | "caution" | "critical" | "info" | "neutral" {
-  switch (variant) {
-    case "success":
-      return "positive";
-    case "warning":
-      return "caution";
-    case "danger":
-      return "critical";
-    case "info":
-      return "info";
-    default:
-      return "neutral";
-  }
-}
-
-/**
  * How a pass ended, in the vocabulary the rest of this screen already uses.
  *
  * THE RUN'S REPORT IS WHERE THE TONE COMES FROM, not its findings. A run
@@ -2443,7 +2443,7 @@ function passState(run: SetupRun): { glyph: string; label: string; tone: Tone; t
  *
  * NULL RATHER THAN "now minus started", which is the obvious alternative and
  * is a different measurement: a run whose node died mid-pass would report a
- * duration that grows for ever. [DurationCell] draws "not measured" for this,
+ * duration that grows for ever. [TableNumberCell] draws "not measured" for this,
  * which is exactly what it is until the run ends.
  */
 function passMs(run: SetupRun): number | null {
@@ -2508,7 +2508,7 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
       header: "Ran",
       shrink: true,
       sortValue: (run) => tsKey(run.started_at),
-      cell: (run) => <DateCell at={run.started_at} now={now} />,
+      cell: (run) => <TableDateCell value={run.started_at} now={now} />,
     },
     // THE SURFACE ONLY WHERE THERE IS MORE THAN ONE. A column whose every
     // value is the tool's own name is a column that says nothing.
@@ -2519,7 +2519,7 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
             header: "Surface",
             shrink: true,
             sortValue: (run: SetupRun) => named.get(run.key) ?? run.key,
-            cell: (run: SetupRun) => <TextCell>{named.get(run.key) ?? run.key}</TextCell>,
+            cell: (run: SetupRun) => <TableTextCell>{named.get(run.key) ?? run.key}</TableTextCell>,
           },
         ]
       : []),
@@ -2531,17 +2531,11 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
       cell: (run) => {
         const state = passState(run);
         return (
-          <StatusCell
+          <TableStatusCell
             glyph={state.glyph}
             label={state.label}
-            // `app/frame/cells.tsx` still speaks OUR tone names, and it is
-            // another port's file, so the spelling is turned back at this one
-            // seam rather than this screen keeping a second vocabulary for
-            // the one cell that needs it. It goes when that file takes
-            // uilet's `Tone` — see `app/frame/tone.ts`, which is this same
-            // translation in the other direction.
-            tone={cellTone(state.tone)}
             title={state.title}
+            tone={state.tone}
           />
         );
       },
@@ -2555,7 +2549,9 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
       // yet, and a column sorted by "shortest" that put every live pass at
       // the top would be ordering on a measurement nobody made.
       sortValue: (run) => passMs(run) ?? -1,
-      cell: (run) => <DurationCell ms={passMs(run)} />,
+      cell: (run) => (
+        <TableNumberCell value={passMs(run)} format={fmtDuration} emptyLabel="Not measured" />
+      ),
     },
     {
       key: "findings",
@@ -2567,18 +2563,19 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
       // converged third-party app reports an EMPTY slice rather than saying it
       // is fine (`integration.Classify`), so "found nothing" and "nothing
       // recorded" must not draw the same mark. That is the whole of
-      // [NumberCell].
+      // [TableNumberCell].
       cell: (run) => (
-        <NumberCell
+        <TableNumberCell
           value={run.findings?.length ?? 0}
           title="what this pass observed that was not fine"
+          format={fmtCount}
         />
       ),
     },
     {
       key: "detail",
       header: "What it concluded",
-      cell: (run) => <TextCell>{concludedLine(run)}</TextCell>,
+      cell: (run) => <TableTextCell>{concludedLine(run)}</TableTextCell>,
     },
   ];
 
@@ -2786,7 +2783,7 @@ function LastDelivery({ surface, name, now }: { surface: string; name: string; n
         </span>
       </div>
       {row ? (
-        <DateCell at={row.timestamp} now={now} />
+        <TableDateCell value={row.timestamp} now={now} />
       ) : (
         <EmptyValue label="No delivery is recorded for this surface" />
       )}
@@ -3152,11 +3149,13 @@ export function Integrations({ kind }: { kind?: string }) {
         <div className="int-bar">
           <PageNote>Connect the tools the company already uses.</PageNote>
           {data && (
-            <Segmented<Show>
-              ariaLabel="Which integrations to show"
+            <SegmentedControl<Show>
+              semantics="radio"
+              activate="manual"
+              label="Which integrations to show"
               size="sm"
               value={show}
-              onChange={setShow}
+              onValueChange={setShow}
               options={[
                 { value: "all", label: "All" },
                 { value: "connected", label: "Connected", count: configured.length },

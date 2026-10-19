@@ -13,8 +13,8 @@ import (
 // Class is one authority rule, shared by every action that obeys it.
 //
 // THE RULES ARE THE CLOSED SET, NOT THE VERBS. There are dozens of verbs and
-// fifteen ways to decide one, so a table keyed on the verb would state
-// fifteen rules dozens of times and drift on whichever copy somebody edited.
+// sixteen ways to decide one, so a table keyed on the verb would state
+// sixteen rules dozens of times and drift on whichever copy somebody edited.
 // A verb picks its class in [rules] and the class is written once, here.
 type Class string
 
@@ -180,22 +180,34 @@ const (
 	// beside the people manager, and a directory GESTURE did not, and with
 	// both of those folded into admin the two rules said the same thing.
 	ClassDirectory Class = "directory"
+
+	// ClassShared is one artifact, decided by the caller's ROLE on it, the
+	// best of owning it, a share naming their seat, a unit they sit in or
+	// the whole company, and leading the agent that owns it. The row names
+	// the least role it admits ([rule.minRole]); the owner holds every role.
+	// See "An artifact is decided per object, by its shares" in the package
+	// doc, and [decideShared] for the order of its arms.
+	//
+	// A RELATION CLASS, so a row that also names the `artifacts` app asks it
+	// beside the role ([withApp]): an editor without the app writes the
+	// artifact's data and does not publish it.
+	ClassShared Class = "shared"
 )
 
-// Classes are the fifteen, in declaration order.
+// Classes are the sixteen, in declaration order.
 var Classes = []Class{
 	ClassEverybody, ClassApp, ClassAnyApp, ClassAppOrAsked, ClassSelf,
 	ClassOwnRecord, ClassOwnOrLead, ClassSavedView, ClassContainer,
 	ClassTidy, ClassSubtree, ClassDestructive, ClassAuthored, ClassAdmin,
-	ClassDirectory,
+	ClassDirectory, ClassShared,
 }
 
 // relationClasses are the classes that decide on the principal's RELATION to
-// the object — its owner, its lead, its author — and that ask the row's app
-// beside the relation ([withApp]).
+// the object (its owner, its lead, its author, a share) and that ask the
+// row's app beside the relation ([withApp]).
 var relationClasses = []Class{
 	ClassOwnRecord, ClassOwnOrLead, ClassSavedView, ClassContainer,
-	ClassTidy, ClassDestructive, ClassAuthored,
+	ClassTidy, ClassDestructive, ClassAuthored, ClassShared,
 }
 
 // Decide answers whether p may do a to o.
@@ -226,11 +238,16 @@ var relationClasses = []Class{
 // covers every arm, for the same reason: a machine token is refused a verb
 // that needs somebody at a keyboard before any class weighs what it carries
 // ([rule.presence]). Where the bar spares the self arm it is asked once the
-// class has said which arm admitted.
+// class has said which arm admitted. One exception keeps a bar from naming
+// what it should not: an artifact the caller holds no relation to is answered
+// not found, exactly as the shared class answers them ([concealed]).
 //
 // THE ADMIN PATH IS CHECKED BEFORE THE CHART, on every class that has one,
 // because the chart can fail and the permission cannot: an administrator must
-// not be told "I cannot tell" by a node that is behind.
+// not be told "I cannot tell" by a node that is behind. [ClassShared] asks an
+// administrator's relations first, so an admission a share already makes is
+// not recorded as an override, and still decides the admin path before any
+// chart failure could reach the answer.
 //
 // THE ROW'S APP IS ASKED AFTER THE RELATION ([withApp]), so a refusal names
 // what would actually admit: a lead short of the app is told the app, and a
@@ -257,18 +274,18 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 	// permission is told it is a seat, not that it lacks a capability it
 	// plainly has. See [rule.humanOnly].
 	if r.humanOnly && p.Kind == iam.KindSeat {
-		return Decision{Reason: ReasonSeatRefused}
+		return concealed(ctx, p, r, o, chart, Decision{Reason: ReasonSeatRefused})
 	}
 	// AND NOTHING BUT AN AGENT TAKES A SEAT-ONLY ONE, for the mirror
 	// reason: a person holding admin is told the verb is an agent's, not
 	// sent to ask for a permission that would change nothing. See
 	// [rule.seatOnly].
 	if r.seatOnly && p.Kind != iam.KindSeat {
-		return Decision{Reason: ReasonSeatOnly}
+		return concealed(ctx, p, r, o, chart, Decision{Reason: ReasonSeatOnly})
 	}
 	_, throughToken := p.MachineToken()
 	if throughToken && r.presence == PresenceRequired {
-		return Decision{Reason: ReasonTokenRefused}
+		return concealed(ctx, p, r, o, chart, Decision{Reason: ReasonTokenRefused})
 	}
 	d := withApp(p, r, decideClass(ctx, p, r, o, chart))
 	// THE PROOF LAST, and only over an ADMISSION: a refusal is already
@@ -290,6 +307,43 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 		return d
 	}
 	return Decision{Reason: ReasonStepUp, Recency: need, Grants: d.Grants}
+}
+
+// concealed is a bar on the VERB (an agent taking a person's verb, a token
+// taking one that needs somebody present) answered for the object it was
+// asked of: the bar itself, except where the object is an artifact the caller
+// holds NO RELATION to, which is answered exactly as [ClassShared] answers
+// such a caller, not found.
+//
+// THE BAR WOULD OTHERWISE BE AN EXISTENCE ORACLE. A surface reads the head
+// before it decides, so an id nothing holds is answered 404 there, and a bar
+// rendered as a 403 for an existing artifact tells a caller with no relation
+// that a private artifact exists (03 section 2.7: a caller with no relation is
+// answered as an unknown id). The relations are asked only on that path, and
+// the bar keeps its own name for everybody the artifact is disclosed to (its
+// audience and an administrator), so a person is still told the verb is not a
+// token's, and an agent that it is not a seat's.
+//
+// A RELATION THE CHART COULD NOT ANSWER is unknown rather than either answer:
+// the bar names the artifact's existence, the not found denies it, and the
+// node cannot tell which of the two is true for this caller.
+func concealed(ctx context.Context, p iam.Principal, r rule, o Object, chart Chart,
+	bar Decision) Decision {
+
+	if r.class != ClassShared || o.Unresolved || (o.Owner == "" && len(o.Shares) == 0) ||
+		p.Can(adminGrant) {
+
+		return bar
+	}
+	rel := relate(ctx, p, o, chart)
+	switch {
+	case rel.role != "":
+		return bar
+	case rel.err != nil:
+		return Decision{Reason: ReasonNotShared, Err: rel.err}
+	}
+	return consulting(Decision{Reason: ReasonNotShared, Standing: rel.standing(false)},
+		adminGrant)
 }
 
 // recencyFor is the proof a row asks of the arm that admitted d: the row's own
@@ -536,6 +590,9 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 		// exception — telling somebody without admin that they "are not
 		// that person" sends them to the wrong fix.
 		return consulting(Decision{Reason: ReasonNoGrant}, adminGrant)
+
+	case ClassShared:
+		return decideShared(ctx, p, r, o, chart)
 	}
 	// UNREACHABLE WHILE Classes AND THIS SWITCH AGREE, which a test in
 	// this package asserts in both directions. It is a refusal rather

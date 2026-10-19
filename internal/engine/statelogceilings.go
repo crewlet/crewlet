@@ -228,18 +228,22 @@ func unmeasuredDetail(fields []string) string {
 // UNSTATED IS NOT UNBOUNDED. An external broker whose account states no limit
 // still refuses a reservation its servers cannot back, and a client cannot
 // read their caps; the volume this node measured is the one figure it has, so
-// the same share of that bounds it.
+// it stands in for the limit, under the same rule ([logsGrantable]).
 //
-// # Why the held ceilings are added back to the one figure and not the other
+// # What each figure is, and what is taken off it
 //
 // The broker's figure is what it has LEFT, and a reservation spends it: once
 // the logs exist their ceilings are gone from it, so adding them back is what
 // hands a restart the number the creating boot had. Free space is spent by
 // bytes written and never by a reservation, so it still contains every ceiling
-// the logs hold. Adding them to it as well counted each one twice — a restart
-// sizing from its own disk divided a pool larger than its first boot's by half
-// of what the logs hold, and a log created beside them was handed that half on
-// top of the share.
+// the broker has granted, the logs' and every other stream's. Adding the logs'
+// ceilings to it as well counted each one twice: a restart sizing from its own
+// disk divided a pool larger than its first boot's by half of what the logs
+// hold. And taking nothing off it counted the OTHER reservations as room: the
+// object bucket is reserved before the logs are sized ([objectsReservation]),
+// a quarter of the same free space, and a pool of half of it on top reached
+// three quarters of the volume, the whole of an operator's server's default
+// cap, so that server refused the last log created.
 func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 	free int64, volume string) (map[string]domainCeiling, error) {
 
@@ -272,12 +276,12 @@ func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 			//
 			// But every log this boot DOES create is sized without
 			// knowing what that one holds: the division counts it at
-			// its ask rather than at its ceiling, and where the pool is
-			// the broker's figure its reservation is not added back to
-			// it either. Either can move a created log's ceiling up or
-			// down, and a created ceiling is kept for good — so the
-			// line says so, because the boot that follows succeeds and
-			// nothing else will.
+			// its ask rather than at its ceiling, and its reservation,
+			// which the broker reports among the ones it has granted,
+			// is not added back to the pool either. Either can move a
+			// created log's ceiling up or down, and a created ceiling is
+			// kept for good, so the line says so, because the boot that
+			// follows succeeds and nothing else will.
 			log.WarnContext(ctx, "statelog_ceiling_unread",
 				"domain", read.domain.Name(), "stream", read.domain.Stream().Name,
 				"error", read.err.Error(),
@@ -300,10 +304,7 @@ func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 			"detail", "the state logs' ceilings are sized from this node's free "+
 				"space instead, and the broker still refuses one it cannot reserve")
 	}
-	grantable := free
-	if available := budget.Available(); err == nil && available >= 0 {
-		grantable = available + holding
-	}
+	grantable := logsGrantable(budget, err, free, holding)
 	// A LIMIT OF ZERO FROM AN ACCOUNT THAT DECLARES NONE FOR THIS NODE IS
 	// SAID OUT LOUD, because the boot that follows does not say it.
 	//
@@ -359,6 +360,28 @@ func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 				"gives an existing log's reservation back and raises this one")
 	}
 	return sized, nil
+}
+
+// logsGrantable is what the broker can grant the state logs if they held
+// nothing: the figure [StreamBudgetShare] is taken of.
+//
+// ONE RULE FOR EVERY BROKER: the limit, less every reservation the broker has
+// granted to a stream that is not a state log. Where the broker states its
+// limit, that is what it has left with the logs' own ceilings (holding) added
+// back. Where it states none this node can read, the stream volume's free
+// space stands in for the limit, and what the broker reports reserved beyond
+// the logs' own (the object bucket's, say) comes off it: free space already
+// contains the logs' ceilings, because a reservation never spends it, but no
+// byte of it can be granted twice. A budget that could not be read reports no
+// reservation, so free space is all this node has.
+func logsGrantable(budget jetstream.StorageBudget, readErr error, free, holding int64) int64 {
+	if readErr != nil {
+		return free
+	}
+	if available := budget.Available(); available >= 0 {
+		return available + holding
+	}
+	return max(free-max(budget.Committed-holding, 0), 0)
 }
 
 // heldCeiling is one log's answer to [domainHost.DomainStreamCeiling]: the
@@ -655,6 +678,14 @@ func (s *stateLog) specOf(domain statelog.Domain) (statelog.StreamSpec, domainCe
 // that fails the same way. What is left is more room for the broker, or a
 // smaller ceiling for the log it refused, which the FIELD's own floor bounds.
 //
+// # And how much room is enough
+//
+// "More room" alone sent an operator to add a little and be refused again by
+// the next log. So wherever a limit is in play the refusal quotes the least a
+// fresh node of this configuration reserves ([BrokerFloor]), split into the
+// logs at their floors and the nats object bucket, with the setting that
+// moves the bucket.
+//
 // # Where the ceiling came from, in one of three words
 //
 // SET, DERIVED or FIXED, because each says something different about what a
@@ -695,6 +726,9 @@ func (s *stateLog) storageRefused(ctx context.Context, host domainHost,
 	if ceiling.Bytes > ceiling.Floor {
 		remedy += fmt.Sprintf(", or set %s to a smaller ceiling, no lower than "+
 			"its %d-byte floor", ceiling.Field, ceiling.Floor)
+	}
+	if s.floor.Limit > 0 && (err != nil || !noApplicableLimit(budget.Source)) {
+		remedy += "; " + s.floor.Sentence()
 	}
 	return fmt.Errorf("engine: the broker refused to reserve the %s log's "+
 		"ceiling: %s needed %d bytes and %s. %s. %s; the state logs that already "+

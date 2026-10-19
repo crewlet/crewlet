@@ -24,15 +24,15 @@
  * decides. Treated as a conflict, the person places it; merged, the browser
  * would pick an order and present it as what somebody wrote.
  *
- * Over the diff in `diff.ts`, so its cap applies: a document past
- * `MaxDiffLines` diffs as a whole-document replacement, and two of those
+ * Over uilet's line diff (`diffLines` from @crewlethq/ui), so its cap applies: a document past
+ * `MAX_DIFF_LINES` diffs as a whole-document replacement, and two of those
  * conflict as a whole — which is honest about a comparison the browser
  * declined to make.
  *
  * PURE, and in `lib/` for the reason the rest of this directory gives.
  */
 
-import { diffLines, lines } from "./diff.ts";
+import { diffLines, splitLines, type MergeClash } from "@crewlethq/ui";
 
 /** One side's change to the ancestor: replace `[start, end)` with `lines`. */
 interface Hunk {
@@ -130,7 +130,7 @@ function over(ancestor: string[], start: number, end: number, made: Hunk[]): str
  * The result is a sequence of clean passages and conflicts, in document order.
  */
 export function merge3(base: string, mine: string, theirs: string): Merge {
-  const ancestor = lines(base);
+  const ancestor = splitLines(base);
   const all = [...hunks(base, mine, "mine"), ...hunks(base, theirs, "theirs")].sort(
     (a, b) => a.start - b.start || a.end - b.end,
   );
@@ -206,4 +206,11 @@ export function mergedText(merge: Merge, choices: Resolution[] = []): string {
   }
   if (out.length === 0) return "";
   return out.join("\n") + (merge.trailingNewline ? "\n" : "");
+}
+
+/** The merge's conflicts as `MergeConflicts` (@crewlethq/ui) draws them, in order. */
+export function clashesOf(merge: Merge): MergeClash[] {
+  return merge.chunks.flatMap((c) =>
+    c.kind === "conflict" ? [{ theirs: c.theirs, mine: c.mine }] : [],
+  );
 }

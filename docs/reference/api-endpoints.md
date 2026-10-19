@@ -168,9 +168,9 @@ the dashboard shell, the Slack OAuth landing — answer as what they are.
 
 ## While a node is starting
 
-`crewlet run` binds `api.port` — and `api.public`, where the node serves one —
-as soon as it has read and checked its Tier A, before it opens its store, and
-logs `api_bound`. A port somebody else holds therefore fails the boot at once,
+`crewlet run` binds `api.port` — and `api.public` and `api.artifacts`, where
+the node serves them — as soon as it has read and checked its Tier A, before it
+opens its store, and logs `api_bound`. A port somebody else holds therefore fails the boot at once,
 naming the address. Until the node's own surface takes the socket over (logged
 as `api_listening`, or `api_probes_listening` on a node without `ingress`), it
 answers its probes and tells a caller to come back for any route it will
@@ -181,6 +181,7 @@ serve — and only for one it will serve:
 | `GET /health`, on `api.port` | `503` while the node recovers what it holds, then `200`, `status: "starting"` both times | The `503` is what a startup probe sized for the node's store bounds; nothing after the recovery holds it. See the phases below. |
 | `GET /ready`, on `api.port` | `503`, `reason: "starting"` | The node does no work and takes no traffic until it serves, so no load balancer and no rollout counts it. |
 | A route this listener will serve | `503 starting`, with `Retry-After: 10` | The caller is told to come back rather than meeting a refused connection, which reads as a node that is not there. On an `ingress` node that is every route of [Which listener serves what](#which-listener-serves-what) on the listener that serves it; on a node without `ingress` it is its agent-mode tool bridge (`/mcp/{token}`), on `api.public` when that is set and beside the probes otherwise. |
+| A request on the artifact origin (`api.artifacts`) | An empty `503` with `Retry-After: 10` for a ticketed path, the runtime or the kit, and the empty `404` or `405` the origin gives anything else | The origin's own refusal under its own inert headers, never a JSON body, which would be a document an artifact page could read. |
 | Anything else | The `404` that listener answers once the node serves | So a socket says no more while the node starts than it does afterwards, and nobody is sent back to wait for a route this node will never serve. On `api.public` that is the router's own `404 no_route`, the probes included; on `api.port` of an `ingress` node with `api.public` set, the `404` naming `api.public` for a route outside parties call; and on `api.port` of a node without `ingress`, the router's own `404` for every path but the two above (once it serves, its guard answers `401` for a path that asks for a credential, and a `404` says no more than that). |
 
 Nothing here asks for a credential, since nothing is served that one could
@@ -364,6 +365,9 @@ node means nothing was done.
 | `GET` | `/containers` | Every knowledge container this node knows about, with how many pages each holds. The engine materialises one per `space:` the org chart names, plus the two reserved ones, on every config apply and every boot; each carries `chart_epoch`, the activation its name and purpose were last written from (Unix milliseconds), so a configuration activated earlier never overwrites them |
 | `POST` | `/work/items` `/pages` | **File an item, write a page** — and the rest of the [write surface](#the-human-write-surface): the same tools a seat and your own assistant hold, as the person you signed in as. Guarded, and absent on a company whose tracker or knowledge base is not native |
 | `PATCH` | `/work/items/{key}` | Change an item — and its `/comments`, `/rank`, `/depend`, `/relate`, `/restore` and `/purge` beside it. See [below](#the-human-write-surface) for every route and the authority each takes |
+| `GET` | `/artifacts/{id}/data/{collection}` `/{collection}/{doc}` `/{collection}/query` `/history` `/schema` `/state` | **An artifact's datastore, read**: a collection's documents, one document, a query over its field index, the store's history, its schema and the caller's own per-viewer state, each decided per artifact and shaped by the collection's read rule (see [below](#artifactsiddata-an-artifacts-datastore-auth-gated)) |
+| `POST` `PUT` | `/artifacts/{id}/data/writes` `/undo` `/state` `/schema` | **An artifact's datastore, written**: one atomic batch of ops, an undo, a per-viewer state key, a schema change. `Idempotency-Key` required; each answers the verdict the applier wrote |
+| `GET` | `/artifacts/{id}/data/export.csv` | One collection as CSV, to an editor of the artifact |
 | `POST` | `/auth/login` | **Sign in.** Login or address, password, and a second factor where one is held. **Unguarded**, and throttled on the login **as typed** from the caller's source: a failure costs the next attempt a wait, never a lockout — see [below](#a-failure-costs-a-wait-never-a-lockout). Every failure answers one code after the same argon2id derivation — see [below](#every-failed-sign-in-is-one-refusal). A node that cannot read the identity estate or record the session answers `503` — and **every `503` under `/auth` carries a `Retry-After`**, so a client can tell "ask again in a moment" from a node that is gone. A write whose outcome nobody can establish — the second factor's spend, the session's own start — is that `503` with the `op_id`, and **never a session**: a code whose spend may not have landed is a code that still works. A success answers `{person, login, seat?, expires_at, position, status}`, and `status` is `signed_in` — or, where `api.auth.totp` is `required` (its default) and the person holds no second factor, `second_factor_enrolment_required`: the session it opened may only enrol one (see [A required second factor is enrolled before anything else](../concepts/identity-and-access.md#a-required-second-factor-is-enrolled-before-anything-else)). `POST /auth/invite/{id}` and a password `POST /auth/step-up` answer the same shape, restricted on the same rule |
 | `GET` | `/auth/config` | What a sign-in page needs to know before anybody has signed in: `{min_password_length, second_factor}` — the deployment's own `api.auth.min_password_length`, never below the engine's twelve, which is exactly the floor every password a person sets is held to, and `required` or `optional` from `api.auth.totp` (unset is `required`). Password sign-in is always served, so there is no backend to report. **Unguarded**, and it carries **no user list and no count of people** |
 | `GET` | `/auth/invite/{id}` | **Renders an invitation and never spends it** — a link is followed by mail clients prefetching, scanners and preview cards, and one spent by a GET is an account created for somebody who never saw it. **Unguarded**: holding the link is the credential — the **secret** it carries after the id, presented in the `X-Crewlet-Invite-Secret` header and never in the URL. The link a person follows is the dashboard's screen, `<api.external_url>/dashboard#/invite/<id>.<secret>`, whose fragment no browser sends to a server; the screen calls this route with the two halves apart. Answers the address it is for, who sent it (`invited_by` — a person by their seat's name as the chart gives it, since a person writes as their seat's handle, and absent for a machine — a Tier A token or a service account — whose coloned login, `token:founder`, is nothing the person holding the link would recognise), the password floor, the `seat` redeeming it binds (**always present**, because every invitation names the human seat its invitee will hold: `{handle, name}` as the chart calls it now, or `{}` where the company this node runs no longer holds it as a human seat, which the redemption refuses as a link that no longer works), a `login` **proposed** from the address in the person grammar (`jane.doe@example.com` → `jane.doe`, `jane@example.com` → `jane.example`) for the form to pre-fill, and `signed_in_as` — the login of the session the browser asking is already signed in with, absent for one signed in as nobody — because redeeming ends that session, and the form says so first. Absent, redeemed, expired and a missing or wrong secret are one `410` — the same bytes, so a guessed secret against a leaked id does not say the id exists — and an id nobody issued or a secret that is not the link's is a **failed attempt**, counted on the audit trail's per-minute failure row (`iam_login_failures`) under the source it came from: walking ids or secrets is guessing at a link, and that source's count climbing is what shows it. It meets no [curve](#a-failure-costs-a-wait-never-a-lockout) — the secret is 256 bits nobody walks, and a curve keyed on the address a link came from is one a stranger there holds shut for everybody else. A link that **proved itself** and is spent — redeemed, expired, its address enrolled — is the same `410` and is not counted: that is the link's holder, or a mail scanner re-reading it, and a guesser who does not hold the link can never reach the difference. A node whose identity rows cannot **vouch** for a link that does not open — behind the identity log, or holding a record it could not apply — answers `503 identity_unavailable` instead, for an id it does not hold and a wrong secret alike, and counts nothing: the link may have been issued through a peer |
@@ -610,8 +614,8 @@ trusted, and every start of the node logs the same warning as
 
 Holding a credential is not the same as being allowed to use it here. Every
 route and every socket question declares who may ask it — **everybody**, one
-of the [three permissions](../concepts/identity-and-access.md#access-admin-and-one-permission-per-app)
-(`admin`, `tracker`, `knowledge`), or a verb of the authority table that the
+of the [permissions](../concepts/identity-and-access.md#access-admin-and-one-permission-per-app)
+(`admin`, `tracker`, `knowledge`, `artifacts`), or a verb of the authority table that the
 answer decides record by record — and a principal that does not carry what it
 declares is refused, a Tier A token included, whose declared permissions are
 read through the node's `api.auth.admin` posture on every request.
@@ -662,7 +666,7 @@ told they lead nobody goes looking for an authority they already hold.
 | **everybody** | The [overview](../concepts/identity-and-access.md#everybodys-overview), for every principal the guard resolved whose stage may act: `/agents`, `/agents/activity` and the `agent` and `live_call` questions — an agent's **status**, with its **body** to an administrator and to whoever leads the seat ([below](#a-status-reader-never-receives-a-transcript)) — `/org`, `/tools`, `/schedules` and their runs, `/budgets`, `/sandbox-runs` (status; the same body rule), `/tokens/*`, `/viewer`, `/stream/snapshot`, `/ws/stream`, `GET /iam/seats` (masked per reader), the `seat_activity` and `colleague` questions, and the cross-app answers filtered row by row — `/feed`, `decisions` and the `knowledge` question |
 | `tracker` | The reads under `/work/*`, the [write surface's](#the-human-write-surface) item routes, a project's files (`GET`/`PUT /work/files/…`; removing one is the project lead's), every `work_*` question, the socket's `inbox_changed` push, and `/operator/mcp`'s tracker half. Some verbs also ask a RELATION beside the app: re-routing, a project's policy and taking an item out of circulation are its project lead's, and a person's inbox, queue and person view are their own and their lead's |
 | `knowledge` | The reads under `/pages/*` and `/containers`, the page questions, and writing the company's own pages. A rename, the trash and a restore are also the container's lead's or the page's creator's; see [the write surface](#the-human-write-surface) |
-| `admin` | Running the company and the engine, and **host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `cli-agent` model, a `run_in: self` sandbox), so a holder can run anything there and read whatever a process there can, the keyring included — see [Identity and Access](../concepts/identity-and-access.md#what-admin-runs). Every route under `/config*` (the org chart's leads may also read and write what is inside the units they lead — [A lead edits their own team](#a-lead-edits-their-own-team)), `/integrations`, `/credential-pool`, `/mcp-servers`, `/setup`, every `/secrets` route, every `/iam/*` route about anybody but the caller, the deployment's own controls (`/fleet`, `/fleet/broker*`, every `/work/retention*` route, `/backup`, `/backups`), the company-wide trail (`/events*`, the socket's `event` push and the snapshot's `events` section, the turn, phase, trace and A2A-channel questions, `/iam/audit`), a seat's resolved model chain and tool sources on `/org`, the workspace catalogue's writes, a page in the tool-skills container, and the two purges (`/work/items/{key}/purge`, `/pages/{id}/purge`). It **includes every app**, and it is the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
+| `admin` | Running the company and the engine, and **host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `cli-agent` model, a `run_in: self` sandbox), so a holder can run anything there and read whatever a process there can, the keyring included (see [Identity and Access](../concepts/identity-and-access.md#what-admin-runs)). Every route under `/config*` (the org chart's leads may also read and write what is inside the units they lead: [A lead edits their own team](#a-lead-edits-their-own-team)), `/integrations`, `/credential-pool`, `/mcp-servers`, `/setup`, every `/secrets` route, every `/iam/*` route about anybody but the caller, the deployment's own controls (`/fleet`, `/fleet/broker*`, every `/work/retention*` route, `/backup`, `/backups`), the company-wide trail (`/events*`, the socket's `event` push and the snapshot's `events` section, the turn, phase, trace and A2A-channel questions, `/iam/audit`, `/artifacts/trail`), a seat's resolved model chain and tool sources on `/org`, the workspace catalogue's writes, a page in the tool-skills container, and the two purges (`/work/items/{key}/purge`, `/pages/{id}/purge`). It **includes every app**, and it is the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
 | `audit.seat.read` | One seat's own trail — `/agents/{id}/memory`, `/agents/{id}/memory/episodes/{episode}`, `/agents/{id}/conversations`, `memory_overview` (filtered to the seats the caller may read), `turns?seat=` and `phases?seat=`, and a coding run's tail (`/sandbox-runs/{turn_id}/tail`) — decided per seat: **its lead**, or `admin` |
 
 A question asked on the socket is decided by the same declaration the REST
@@ -698,7 +702,7 @@ is told what they lack, not sent to confirm who they are first.
 
 | Window | Setting (default) | What asks for it |
 |---|---|---|
-| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*`, `/setup`'s writes, `PUT`/`DELETE /secrets/{name}`, `POST /secrets/rekey` and revealing a value (`GET /secrets/{name}?reveal=true`), the deployment's own controls — `POST /backup`, every `POST /work/retention*` and both `POST /fleet/broker/remove*` — the two purges (`POST /work/items/{key}/purge`, `POST /pages/{id}/purge`), and every `/iam` write: `POST /iam/people`, `PATCH /iam/people/{id}`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `DELETE /iam/invitations/{id}`, `POST /iam/people/{id}/mfa/reset`, `POST /iam/people/{id}/password-reset`, `POST /iam/credentials`, `DELETE /iam/credentials/{id}`, ending somebody else's sessions and `POST /iam/invalidate-all`; and your own `POST /auth/totp` and `POST /auth/totp/recovery` |
+| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*`, `/setup`'s writes, `PUT`/`DELETE /secrets/{name}`, `POST /secrets/rekey` and revealing a value (`GET /secrets/{name}?reveal=true`), the deployment's own controls — `POST /backup`, `POST /objects/migrate`, every `POST /work/retention*` and both `POST /fleet/broker/remove*` — the two purges (`POST /work/items/{key}/purge`, `POST /pages/{id}/purge`), and every `/iam` write: `POST /iam/people`, `PATCH /iam/people/{id}`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `DELETE /iam/invitations/{id}`, `POST /iam/people/{id}/mfa/reset`, `POST /iam/people/{id}/password-reset`, `POST /iam/credentials`, `DELETE /iam/credentials/{id}`, ending somebody else's sessions and `POST /iam/invalidate-all`; and your own `POST /auth/totp` and `POST /auth/totp/recovery` |
 | none | | Every read, the two deployment reads (`GET /work/retention/maintenance`, `GET /work/retention/reanchor`) included; ending your own sessions (`DELETE /iam/people/{id}/sessions` naming yourself), which is the first thing to do on finding somebody else in your account — an administrator ending somebody else's asks `step_up`; changing your own password (`POST /auth/password`), whose current password — and code, from somebody who holds a second factor — is itself the proof; and every work and knowledge verb but the two purges — the tools, `/operator/mcp`, `/operator/act` and the rest of the human write surface |
 
 A proof that is too old is **`403 step_up_required`**, the code the sign-in
@@ -786,7 +790,7 @@ The policy depends on what was served:
 
 | Response | `Content-Security-Policy` |
 |---|---|
-| The dashboard shell (`/dashboard`), `/favicon.ico` and every `/static/*` asset | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https:` |
+| The dashboard shell (`/dashboard`), `/favicon.ico` and every `/static/*` asset | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https:; require-trusted-types-for 'script'; trusted-types 'none'` (Trusted Types enforced with no policy, since the dashboard writes no markup or script sink), then `frame-src` naming the artifact origin on a deployment that serves artifacts |
 | The landing pages [`/webhooks/github-app`](#get-webhooksgithub-app) and [`/webhooks/slack-oauth`](#get-webhooksslack-oauth) | `default-src 'none'; img-src data:` (a page's mark is inlined, since `/static/` is not served on the [public listener](#which-listener-serves-what) these pages move to), then `style-src` and `script-src` naming the `sha256` hash of each page's own inline block (`'none'` where a page has none), then `base-uri 'none'; form-action 'none'; frame-ancestors 'none'` |
 | Everything else: JSON, plain text, the redirect from `/`, a `404` or a `401` | `default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'` |
 
@@ -2269,6 +2273,67 @@ build cannot represent that the write does not name.
 - **A renamed MCP server or setup step is a new identity**, so it keeps
   nothing of the old one's unknown settings.
 
+### `/artifacts/{id}/data/*`: an artifact's datastore (auth-gated)
+
+An artifact page published with the `db` capability keeps its rows in the
+artifact's **datastore**: named collections of JSON documents, each collection
+declaring its columns (checkbox, chip, select, person, status, text, long
+text, number, date) and its rules (who reads its rows, who writes them, which
+fields only a person may set, which are written once). Every route here is
+decided **per artifact**: the caller's role on it, through the owner's own
+standing or a share, is read from the artifact's head on every request and
+stamped into the write, and the applier decides the write from that stamp and
+the store's rows alone, so every data node reaches the same verdict. An
+artifact the caller has no relation to is answered `404` `not_found`, exactly
+as one that does not exist.
+
+| Method | Path | What it does |
+|---|---|---|
+| `GET` | `/artifacts/{id}/data/{collection}` | One page of a collection's documents (`limit`, 100 by default and at most 500, and the `cursor` a page answered as `after`), each with its fields, who created and last changed it, and its `version`. `since=` a version answers only what changed after it, deletions included, which is the catch-up a page runs after a reconnect. Each page answers `through`, the `since` of the next catch-up, which a client adopts only once the read's last page (the one with no `after`) is in: a whole read's pages answer the version its first page was read at, so a document that changed under a page already read is caught up rather than skipped. A catch-up from before a read rule changed, a collection was dropped with its deletions, or a row changed hands in an `own_rows` or `private` collection answers `resync` (read whole). The query `artifact_data` |
+| `GET` | `/artifacts/{id}/data/{collection}/{doc}` | One document. The query `artifact_data_doc` |
+| `GET` | `/artifacts/{id}/data/{collection}/query` | `q=` a query as JSON: up to 16 filters (`eq`, `ne`, `lt`, `le`, `gt`, `ge`, `in`, `contains`, `prefix`) on declared columns, ANDed, an `order_by` and a `limit`, compiled to the field index rather than run over the rows. Every top-level field is indexed, and a nested path (`a.b`) once the collection lists it in `indexed`; a filter or an order on any other path is `400` `bad_params`, naming it. The query `artifact_data_query` |
+| `GET` | `/artifacts/{id}/data/history` | The store's last seven days of writes, newest first, narrowed by `collection`, `doc`, `field` (one cell's history) or `actor`: who wrote, through which surface, the verdict, each changed field's value before and after (a value over 4 KiB as its hash) and whether it can still be undone. In an `own_rows` or `private` collection each change is shown by the row's creator when it was made, never its creator now, so a row deleted and created again by somebody else shows them only their own changes. The query `artifact_data_history` |
+| `GET` | `/artifacts/{id}/data/schema` | The store's collections, its footprint against its quota, its state digest and the caller's role. A collection only editors may read is left out for anybody below editor. The query `artifact_data_schema` |
+| `GET` | `/artifacts/{id}/data/state` | The caller's own per-viewer state keys on this artifact, and nobody else's. The query `artifact_data_state` |
+| `GET` | `/artifacts/data/usage` | The company's datastore footprint against `artifacts.limits.data_bytes` *(needs `admin`)*. The query `artifact_data_usage` |
+| `POST` | `/artifacts/{id}/data/writes` | **One atomic batch**: `{"ops": [...]}`, 1 to 100 ops of `set`, `merge`, `delete`, `increment`, `append`, `add` and `remove`, at most 1 MiB, applied all or none. An op carrying `if_version` is refused as a conflict when its document moved since; one without it is a blind write, and where two blind writes meet, each field keeps the value the log ordered last |
+| `POST` | `/artifacts/{id}/data/undo` | `{"seq": N}`: reverts one write of the last seven days, as a write of the caller's own under the same rules, conditioned on every document it changed being where it left them, so a document changed since is `409` `stale_version` naming it. A write older than the history, one that was refused, a schema change, one holding a value the history kept only as its hash, and one whose undo would restore more than one write carries (a bulk delete of large rows, whose inverse is over 1 MiB) are `409` `not_undoable`, and the detail says which. The history's `undoable` is false for every one of them, so a client never offers an undo that cannot land |
+| `POST` | `/artifacts/{id}/data/state` | `{"key", "value"}` or `{"key", "delete": true}`: sets or removes one of the caller's own per-viewer state keys, the backing of the page runtime's state API |
+| `PUT` | `/artifacts/{id}/data/schema` | `{"collections": [...]}`, every collection the store keeps after the change *(editor and above)*. Decided against every write before it; a change that would rewrite more documents than one record carries is `422` `migration_too_large` |
+| `GET` | `/artifacts/{id}/data/export.csv` | `collection=` one collection as CSV, streamed a page at a time *(editor and above)*, under the collection's read rule, with any cell a spreadsheet would run as a formula written as text. An artifact in the trash is `410` `data_gone` |
+
+Every read here is a read of the artifact's content: an artifact in the trash
+answers none of them (the questions `404` `not_found`), and an administrator
+only the admin path admits is recorded as reading it before a row is sent, or
+answered `503` with nothing when that record cannot be written. Every write
+route takes an `Idempotency-Key`, refuses a field it does not declare, and
+refuses a write to an artifact in the trash (`410` `data_gone`) until it is
+restored. A write from a browser session states the surface it
+came through as `via`: `dashboard`, or `bridge` with the `version` of the page
+whose script made it, which must declare `db` (or `state`, for a state key) or
+the write is `403`. A bearer credential's write is stamped as the API's
+whatever it says.
+
+**A write answers its verdict**, read back from the node's own rows once it
+has applied the record. `verdict` is the one field that says how the write
+ended, beside `op_id`, `position` and, once decided, the `seq` an undo names;
+a refusal carries it next to its `error`:
+
+| Status | `error` | When |
+|---|---|---|
+| `200` | | `verdict: "applied"`, with the write's `seq`, which an undo names |
+| `202` | | `verdict: "pending"`: the record landed and this node has not applied it yet, so its verdict is on the `position` answered |
+| `409` | `stale_version` | An `if_version` that no longer matches; `conflict` names the documents |
+| `422` | `invalid` | A value outside its column's type, a field the collection does not declare, a long text written whole without its guard |
+| `403` | `forbidden` | The caller's role, or the column's rule, does not let them write it |
+| `413` | `data_quota` | The write would take the store or the company past its footprint quota. A write that shrinks the store is never refused for it |
+| `410` | `data_gone` | The store was purged |
+| `429` | `write_budget` | This node's write budget for the caller on this store, or for the store, is spent. Weighed by the rows a batch's apply writes, which are each named document's whole field index rather than the fields the batch names, in units of sixteen rows (20 units a second with a burst of 100 per caller and store; 40 a second with a burst of 100 per store), with `Retry-After`, `scope` and `retry_after_ms` saying when it holds the cost again. Per node, never a lockout |
+
+Every refused write is still on the log and in the store's history with its
+reason, applied identically on every data node, so `GET .../history` answers
+what was refused as well as what landed.
+
 ## Setting an integration up
 
 Connecting an integration means putting values in two places: a credential
@@ -3239,7 +3304,8 @@ is the `admin` [`fleet`](#get-fleet) answer, and what each alarm measured is
     ],
     "complete": true
   },
-  "identity": "ready"
+  "identity": "ready",
+  "objects": {"direct_upload": "available"}
 }
 ```
 
@@ -3279,6 +3345,7 @@ exists](../concepts/identity-and-access.md#how-the-first-person-exists)):
 | `nodes` | How many nodes hold a presence lease — the fleet this node's fan-outs (search, fleet history) divide their work by. **Absent** when the presence read failed or did not finish inside the probe's coordination budget (an eighth of the 15-second reconcile interval, under two seconds) (it runs beside the posture read, so a wedged broker slows `/health` by that budget rather than hanging it); never `0`, since the node answering is itself one. A screen says "node count unavailable" for an absence rather than guessing. |
 | `alarms` | `{count, worst}`: how many of this node's [alarms](alarms.md) are firing, one per kind however many logs it stands on, and `worst`, the one that has been firing **longest** (absent when `count` is 0) — the table asserts no severity of its own, and the condition that has gone unanswered longest is the one the dashboard's engine panel names first. `worst` is a KIND and names no log: an alarm that stands on logs (`log_headroom`, `log_ceiling_short`, `trim_blocked`, `deferred_old`, `floor_unknown`, `census_drift`, and `backup_age` for the logs the backup term has held past their replay window, which raise no `trim_blocked` of their own) lists them in its `domains`, each with its own measurement, on the operator-only [`/work/retention`](#get-workretention--what-the-log-is-holding) answer, which this public body points at rather than restates. From the **same** evaluation the `crewlet.alarm.active` gauge (one series per kind) and the `alarm_raised` / `alarm_cleared` log lines come from — and a condition that is a property of a log writes those lines per log, so a second log joining an alarm already up, and the first one leaving it, are each said — which runs every ten seconds on every node running a state log. **Absent** before that evaluation first runs, and on a node running none — one without the `data` role: neither has looked, and `{count: 0}` would read as healthy. |
 | `seeded_from` | Which nodes this node's live projection was seeded from at boot — the activity feed and each seat's last turn, which the pushed screens start from, and the live spend window behind the [`tokens` push](#pushes) — in the fleet [`coverage`](#reading-the-fleets-history-coverage) shape. Absent until the seed has run. A seed that missed a node started those surfaces a node short, and this is where that stays visible after the log line has scrolled away. |
+| `objects` | `{direct_upload}`: whether an upload may go straight to the object store's S3 bucket on a presigned put. `available`, or `unavailable (<reason>)`: always so on the default `nats` backend, whose bucket only the fleet reaches, and on an `s3` bucket whose provider the boot probe could not prove refuses a body that does not match its `x-amz-checksum-sha256` and a second put under `If-None-Match: *` (see [The boot probe](../concepts/object-store.md#the-boot-probe-and-direct-uploads)). Unavailable is no fault: every upload then streams through the engine. Absent on a node running no object store. |
 | `unproven_seconds` | Each seat whose teardown this node could not prove, mapped to how long it has been stranded, present only when one is. Such a seat is still leased by this node, so no peer can claim it, and this node will not run it: it is absent from `seats` for exactly that reason. Alert on the duration rather than on the field's presence: a release that fails once and succeeds on the next heartbeat is a working system. See [Seat ownership](../concepts/seat-ownership.md#what-ownership-looks-like-from-outside). |
 
 Per-socket facts, such as how many envelopes *this* connection dropped or
@@ -3921,9 +3988,12 @@ Server → client kinds:
 | `org` / `tools` / `schedules` | On the same edge as `seats`: every published company. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The whole [health envelope](#the-health-envelope), exactly what `GET /health` answers. There is no query for it. |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
-| `error`    | Reply to a client `query` that could not be answered, or a `watch` that was not installed. | `{ id, what, error, reason?, grants?, retry_after?, refusal?, detail? }` where `error` is a code — and an `unauthorized` one adds `reason` and `grants`, exactly as the REST envelope does: the rule that decided, and the grants any one of which would have admitted the caller (an EMPTY list means no grant would, because what is missing is a relation such as leading that person). A **watch refusal** has no `id` and names `what: "watch"`: `unauthorized` when the caller may not watch that seat — with its `reason` and `grants` — `unavailable` when this node could not read the chart that decides it or the directory a login resolves through — carrying `retry_after` as a query's `unavailable` does, by the same rule and with the same `0` for a read no wait clears, but never the `refusal` or `detail` behind it, because what the directory says about a login names the seat it is bound to — and `not_found` when a login names no record, which only `admin` is ever told. For a query, the codes are: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *here* — a projection still catching up after a restart or a fresh join, a coordination store it could not reach, no copy of the estate to answer from (the tracker and the knowledge base are read through the [estate router](../concepts/scaling.md#how-a-request-reaches-the-estate), so a copy out of service or a data node restarting is a holder to ask again rather than a fault), or a refusal by its state log — so a client does not report a fault. A query's `unavailable` frame also carries `retry_after`, the whole seconds before asking this node again, and, where a state-log refusal is behind it, `refusal` (its code — `behind`, `log_full`, `deferred`, `broker_refused`, …) and `detail` (its own words, the remedy). **A `retry_after` of `0` is the answer, never an omission**: waiting will not change it — a log at its byte ceiling, a record this node cannot decode, a barrier its broker refused — so the client asks another node or waits for an operator rather than polling this one; see [Read consistency](../guides/consistency.md#the-fourteen-refusals). Its REST twin is `503` with the same `refusal` and `detail` in the body and `Retry-After` carrying the hint, absent where the hint is zero. **A work, page or search question on a node that has not been handed a company yet** is `unavailable` with `refusal: "no_active_revision"`, the tracker's and the knowledge base's own sentence as its `detail`, and `retry_after: 15` — the reconcile poll that brings the company — and its REST twin is `503 no_active_revision` with the same detail and `Retry-After: 15`, as every other surface over those two halves answers such a node. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`, and it carries **`detail`**: the refusal's own sentence, which names the parameter to change and what it accepts (`days is 91, and a spend window is 1 to 90 company days — ask for at most 90`), written for the person who will read it: no class name, the engine's or a finer one (`tokens.ErrWindowLength`, which a Go caller tests with `errors.Is`), and no echo of the query's name — the REST `400` body carries the same `detail` beside its `error`. A frame has ONE `detail` key, `unavailable`'s words and `bad_params`'s sentence alike. Every other code's text stays in the node's log, since a failure's own text can carry a path. The dashboard asks again after exactly a frame's `retry_after` — and not at all after a `0` — and keeps no wait of its own, so this hint and the `Retry-After` on a REST refusal are the only retry clock it has. |
+| `error`    | Reply to a client `query` that could not be answered, a `watch` that was not installed, or an `artifact_join` refused or an artifact's room withdrawn (`what: "artifact_join"`, naming the `artifact`; see `artifact_join` below). | `{ id, what, error, reason?, grants?, retry_after?, refusal?, detail? }` where `error` is a code — and an `unauthorized` one adds `reason` and `grants`, exactly as the REST envelope does: the rule that decided, and the grants any one of which would have admitted the caller (an EMPTY list means no grant would, because what is missing is a relation such as leading that person). A **watch refusal** has no `id` and names `what: "watch"`: `unauthorized` when the caller may not watch that seat — with its `reason` and `grants` — `unavailable` when this node could not read the chart that decides it or the directory a login resolves through — carrying `retry_after` as a query's `unavailable` does, by the same rule and with the same `0` for a read no wait clears, but never the `refusal` or `detail` behind it, because what the directory says about a login names the seat it is bound to — and `not_found` when a login names no record, which only `admin` is ever told. For a query, the codes are: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *here* — a projection still catching up after a restart or a fresh join, a coordination store it could not reach, no copy of the estate to answer from (the tracker and the knowledge base are read through the [estate router](../concepts/scaling.md#how-a-request-reaches-the-estate), so a copy out of service or a data node restarting is a holder to ask again rather than a fault), or a refusal by its state log — so a client does not report a fault. A query's `unavailable` frame also carries `retry_after`, the whole seconds before asking this node again, and, where a state-log refusal is behind it, `refusal` (its code — `behind`, `log_full`, `deferred`, `broker_refused`, …) and `detail` (its own words, the remedy). **A `retry_after` of `0` is the answer, never an omission**: waiting will not change it — a log at its byte ceiling, a record this node cannot decode, a barrier its broker refused — so the client asks another node or waits for an operator rather than polling this one; see [Read consistency](../guides/consistency.md#the-fourteen-refusals). Its REST twin is `503` with the same `refusal` and `detail` in the body and `Retry-After` carrying the hint, absent where the hint is zero. **A work, page or search question on a node that has not been handed a company yet** is `unavailable` with `refusal: "no_active_revision"`, the tracker's and the knowledge base's own sentence as its `detail`, and `retry_after: 15` — the reconcile poll that brings the company — and its REST twin is `503 no_active_revision` with the same detail and `Retry-After: 15`, as every other surface over those two halves answers such a node. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`, and it carries **`detail`**: the refusal's own sentence, which names the parameter to change and what it accepts (`days is 91, and a spend window is 1 to 90 company days — ask for at most 90`), written for the person who will read it: no class name, the engine's or a finer one (`tokens.ErrWindowLength`, which a Go caller tests with `errors.Is`), and no echo of the query's name — the REST `400` body carries the same `detail` beside its `error`. A frame has ONE `detail` key, `unavailable`'s words and `bad_params`'s sentence alike. Every other code's text stays in the node's log, since a failure's own text can carry a path. The dashboard asks again after exactly a frame's `retry_after` — and not at all after a `0` — and keeps no wait of its own, so this hint and the `Retry-After` on a REST refusal are the only retry clock it has. |
 | `pong`     | Reply to a client `ping`. | `null` |
 | `inbox_changed` | A committed tracker batch wrote the watched seat one or more notices. Every node serving the API holds the estate — `ingress` requires `data` — and applies every tracker record, so each node pushes to its OWN sockets from its own applier after the batch commits. While a node's own copy is out of service it stays in rotation and pushes a sound data node's movements instead, relayed over the broker, and withholds its own applier's; every switch of source sends each watched seat one frame with `unread_delta: 0` and an empty `subject` and `reason`, because what moved during the switch is not replayed — read the inbox again, as on any frame. One frame per seat per batch. | `{ handle, unread_delta, subject, reason }`, and the frame itself carries `seat`. **Identifiers and a count, never content**: `subject` is the id of the object the newest of those notices was written on — the task for a task commit, and the PERSON for a `prioritised` notice, whose task `work_inbox` names as `task` — and `reason` the reason it was routed under, and what the notices say is read through `work_inbox`, the question that decides who may read them. `unread_delta` is a **hint** — the notices the batch wrote, which a redelivery the engine has already collapsed may count twice — so a client re-asks rather than adding it to a badge. **Routed by seat**: it reaches only the clients whose `watch` for that seat was allowed, never every tab. It needs `tracker`, the permission `work_inbox` takes. |
+| `artifact_changed` | A committed artifacts batch moved an artifact whose room this socket is in: a version published, its title, description, icon or a label, its shares, its assets, the trash, a restore, a transfer or a purge. Each node pushes from its own applier. | `{ artifact, what, head, position }`, where `what` is `version`, `meta`, `share`, `asset`, `trash`, `restore`, `purge`, `transfer` or `reset` (this node cannot say which artifacts moved, so re-read). **A hint, never content**: re-read through the questions that decide what you may see. |
+| `artifact_data` | A committed datastore batch changed documents of an artifact whose room this socket is in. Each node pushes from its own applier, after the commit. | `{ artifact, deltas?, keys?, reread?, schema?, resync?, gone?, through }`. **Shaped per reader**: a document in an `own_rows`, `editors` or `private` collection is pushed only to the members its rule admits, by the role each member's join decided, and a batch a member may see none of is not pushed to them at all. The changed documents travel inline (`deltas`: `collection`, `doc`, `version`, `deleted`, `body`, `read`, `created_by`, `updated_by`, `updated_at`) while the frame stays within 64 KiB, and as `keys` with `reread: true` past it. `schema` says the collections changed; `resync` says this node's pushes may have gaps (read whole); `gone` says the datastore was purged. `through` is the store's version after the batch, the `since` of the next catch-up. |
+| `artifact_presence` | Who is in an artifact's room changed: somebody joined, left, or moved what they are doing or looking at, on this node or another. Coalesced to at most ten a second per room, each carrying at most ten new or changed members (the one waiting longest first, the rest in the frames that follow). | `{ artifact, upsert, leave, counts?, truncated }`: the members now presented that are new or changed (`session`, `seat`, `kind`, `activity`, `focus`, `at`, and for an agent `turn`, the run of the turn whose tool call put it there), and the sessions no longer presented. Past 50 members a room presents the 50 most recently active with `truncated: true` and `counts: { human, agent }` of the rest, and returns to everybody below 40. **Told, never stored**: see [Presence](#presence-in-an-artifacts-room). |
 
 #### Client frames
 
@@ -3933,6 +4003,9 @@ Client → server kinds:
 |--------|---------|
 | `ping` | Keepalive; server replies with `pong`. |
 | `watch` | Become a recipient for one seat's seat-routed frames: `{ kind: "watch", seat }`. An empty `seat` clears it (always allowed), and one socket watches one seat at a time — a tab is looking at one screen, so a second watch replaces the first. **`seat` names a record the way `work_inbox`'s `handle` does**: a seat's handle, either of your own names, or somebody's **login**, which is resolved to the record their notices are kept under — the seat the identity directory binds them to — and the watch is installed there, because that is the name every `inbox_changed` frame for them is pushed to; see [Whose record a personal question answers for](#whose-record-a-personal-question-answers-for), whose rules it follows to the letter, the directory asked only once the watch is decided as far as it can be without it. A login that names nobody answers `not_found` to `admin` and is refused like any other seat to everybody else. **It is decided like `work_inbox` about the same seat**, because it buys that seat's `inbox_changed` frames: the seat's own holder, whoever leads it through the chart, or `admin` — and `tracker` either way. Three answers, and none closes the socket. **Allowed** installs the watch. **Refused** installs nothing, drops any watch the socket held, and replies `error` with `unauthorized`. It is not a `4403` close, because a client reads that as "this browser may not have the live channel at all" when all that was refused is one seat's frames. **Undecidable** (this node could not read the chart, or the directory a login resolves through) installs nothing either and replies `unavailable`, with the `retry_after` that says when asking again can change the answer — `0` where no wait will. Installing would hand the seat's frames to somebody this node could not show was allowed them. Refusing would tell a lead they lead nobody because the node is behind. **Every time the socket's credential is decided again by an identity record that names it, and on every published company, which is when a lead can move, so is the current watch**: a refusal withdraws it and says so, and an undecidable answer keeps it, since nothing has been learned against a decision this node already made. A watch with nobody resolved behind it closes the socket with **4401**. |
+| `artifact_join` | Enter an artifact's room: `{ kind, id, artifact, since? }`, where `since` is the `through` this tab last held. **Decided like reading the artifact** (`get_artifact`, the owner, a share naming you, your unit or the company, or leading the agent that owns it), three-valued, and none of the answers closes the socket. **Allowed** answers `result` with `{ artifact, session, role, roster, through, resync }`: your session in the room, your role, the room as it presents now with you in it, the datastore's version, and `resync: true` when `since` is absent or older than the datastore can still account for (read the collections whole) and `false` when a catch-up with `since` is enough. **Refused** answers `error` with `not_found` and the `artifact`, in exactly the words an artifact nobody holds is answered with. **Undecidable** answers `unavailable` with `retry_after`. A socket is in at most **8** rooms; a ninth is `bad_params`. **The join is decided again** on every decision of the socket's credential and on every share, unshare, trash, transfer or purge of the artifact: a refusal withdraws the room with an `error` frame (`what: "artifact_join"`, `error: "not_found"`, `artifact`, no `id`) on a socket that stays open, and a role that moved shapes the pushes after it. From the moment such a movement lands until its decision does, the room's `artifact_data` pushes are held back, and a member the decision keeps is sent `resync`. **An undecidable answer fails closed**, as the join does: the room stays joined (its `artifact_changed` and `artifact_presence` frames keep flowing) but its `artifact_data` pushes stay held back, and the node asks again after a backoff (250 ms, doubling to at most 30 s, or the refusal's own longer wait) until a decision lands, which then resumes the room with `resync` or withdraws it. A room is never kept at the role it held before a share was withdrawn on an answer nobody could vouch for. |
+| `artifact_leave` | Leave an artifact's room: `{ kind, artifact }`. No answer; leaving a room the socket is not in is not an error. A socket that closes leaves every room it was in. |
+| `presence` | Say what you are doing in a room you are in: `{ kind, artifact, activity, focus }`, where `activity` is `viewing`, `editing` or `idle` and `focus` is `{ version?, region?, collection?, doc?, field? }`. No answer. **Who** is doing it is never the frame's to say: the room shows the seat your credential resolved to. At most **ten a second** per socket; frames past that are dropped. |
 | `query` | Request one thing, answered with exactly one `result` or `error` frame. `{ kind, id, what, params }` — `id` is any client-chosen value echoed back on the reply. **There is no per-frame credential**: every question is asked as the principal the handshake resolved (and each decision of the credential since), and decided by what it is registered under — the overview's questions for everybody, an app's for that app, admin's for admin, and a seat's trail by `audit.seat.read`. Queries run concurrently with each other and with the push stream, so one database read cannot stall a tab's live rows — at most **four** at a time per **socket**, which is a tab's share of the node's reader pool: the pool's floor is sized as two full dashboards at four each, and a fifth query waits on its own socket rather than in the pool the engine's own reads share. |
 
 #### Queries
@@ -3999,6 +4072,13 @@ REST route calls, so the two surfaces cannot diverge:
 | `containers` | `{}` | `GET /containers`. A separate question from `pages` rather than a facet of it: a browser draws the container list once and the page list on every navigation |
 | `page_activity` | `{page, container, kinds, actor_kinds, since, cursor, limit}` | What happened to a page, or to everything in a container — the wiki's own change log, mirroring `work_activity`. `kinds` is a CSV of the ten change kinds and `actor_kinds` of the three author kinds (`agent`, `human`, `operator`), the latter refused when it names one this build does not have — `work_activity`'s note says why. `since` bounds the window and `cursor` pages it: the same unit, two parameters, because the cursor moves with every page and the bound does not. The answer carries `log_seq` and `applied_through` as a tracker answer does — this node's checkpoint on the pages log and the prefix of it whose records it applied, read in the transaction that read the changes — so a node holding a record it cannot decode says it is behind |
 | `page_revision` | `{page, version}` | One revision's own body, message and author. Revision N is the body AT version N — including the newest — so a reader comparing two versions asks for both rather than for one and the head |
+| `artifact_data` | `{id, collection, since, cursor, limit}` | `GET /artifacts/{id}/data/{collection}`. One page of a collection's documents under its read rule, or with `since` the documents changed after that version, deletions included |
+| `artifact_data_doc` | `{id, collection, doc}` | `GET /artifacts/{id}/data/{collection}/{doc}` |
+| `artifact_data_query` | `{id, collection, q}` | `GET /artifacts/{id}/data/{collection}/query`. `q` is the query as JSON: `where`, `order_by`, `limit`, `after` |
+| `artifact_data_history` | `{id, collection, doc, field, actor, cursor, limit}` | `GET /artifacts/{id}/data/history`. Seven days of writes, refusals included, with each changed field's values before and after |
+| `artifact_data_schema` | `{id}` | `GET /artifacts/{id}/data/schema`. The collections the caller may read, the store's footprint and state digest, and the caller's role |
+| `artifact_data_state` | `{id}` | `GET /artifacts/{id}/data/state`. The caller's own per-viewer state keys |
+| `artifact_data_usage` | `{}` | `GET /artifacts/data/usage` *(needs `admin`)*. The company's datastore footprint against its quota |
 | `config` | `{}` | `GET /config` *(needs `admin`)* |
 | `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(needs `admin`)* |
 | `config_diff` | `{revision_id}` | [`GET /config/revisions/{id}/diff`](#get-configrevisionsiddiff) — the listing is cut at 500 and `changes_total` is how many there are *(needs `admin`)* |
@@ -4163,12 +4243,27 @@ three:
 | Route | Kinds | Reaches |
 |---|---|---|
 | broadcast | `event`, `agents`, `seats`, `sandboxes`, `tokens`, `budget`, `schedules`, `org`, `tools`, `health` | Every connected client whose posture takes the kind. |
-| seat | `inbox_changed` | Only the clients whose `watch` for the seat the frame names in its own `seat` field was allowed — see `watch` above. |
+| room | `inbox_changed`, `artifact_changed`, `artifact_data`, `artifact_presence` | Only the clients in the frame's room: a seat's room (the clients whose `watch` for that seat was allowed; the frame names the seat in its own `seat` field) or an artifact's room (the clients whose `artifact_join` was allowed; the payload names the artifact). |
 | direct | `snapshot`, `result`, `error`, `pong` | The one client it answers. |
 
-A seat-routed frame that lost its `seat` is **dropped**, never fanned out: a
-result carries one client's correlation id and a per-seat frame carries one
-seat's audience, so the unsafe default in both cases is "everybody".
+One keyed index holds both kinds of room. A room-routed frame that lost its
+room is **dropped**, never fanned out: a result carries one client's
+correlation id and a targeted frame carries one room's audience, so the unsafe
+default in both cases is "everybody".
+
+### Presence in an artifact's room
+
+Presence is **told, never stored**: who is in a room and what they are looking
+at lives in the memory of the node holding each socket and crosses between
+nodes on an ephemeral broadcast, with no row, no log record and no coordination
+key. Every frame between nodes is sealed under the fleet keyring
+(`secrets.keys`) with a 60-second validity inside the seal, and a frame the
+fleet did not seal shows nobody. Each node rebroadcasts its members every 15
+seconds, a member not heard for 45 seconds is dropped, and a node gaining a
+room's first socket asks its peers once so a newcomer sees the room at once.
+Everybody who can open the artifact and has it open is in the roster; there is
+no invisible mode. An agent reading or writing the artifact appears in the room
+too, as an `agent`, for 45 seconds after its last call.
 
 ### A degraded node keeps the socket open
 
@@ -4595,8 +4690,14 @@ The **same tools a seat holds**, not a parallel implementation: `list_work_items
 `get_work_item`, `create_work_item`, `update_work_item`, `comment_on_work_item`,
 `merge_work_item`, `move_work_item`, `search_work_items`, `get_work_catalogue`, `list_projects`, `describe_project`, `write_project`,
 `task_activity`, `my_work`,
-`list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`, and
-`search_knowledge`. A schema, a default, a trimmed field and the wording of a
+`list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`,
+`search_knowledge`, and, wherever the node takes artifact uploads,
+`list_artifacts`, `get_artifact`, `create_artifact`, `publish_artifact`,
+`update_artifact`, `share_artifact`, `unshare_artifact`,
+`upload_artifact_asset`, `read_artifact_data`, `query_artifact_data`,
+`write_artifact_data` and `set_artifact_schema` (see
+[Artifacts](../guides/tools-and-mcp.md#artifacts)); each artifact write answers
+its `op_id` here as the tracker's do. A schema, a default, a trimmed field and the wording of a
 refusal are each written once — two copies of "file an item" drift on exactly
 the parts nobody looks at, and only one of the two is ever tested.
 
@@ -6034,6 +6135,311 @@ question. A node in a [capacity window](../guides/retention.md#changing-a-logs-c
 refuses every reanchor `409 reanchor_refused`, naming its mode: the reanchor
 appends a generation record, and the window's mode appends nothing.
 
+## Artifacts
+
+An **artifact** is a page, a doc or a native sheet a person or a
+seat publishes for others to open: immutable numbered versions of its files,
+shared with seats, units or the whole company at a role (`viewer`,
+`commenter`, `contributor`, `editor`; the owner holds every role). Its records
+are the `artifacts` state log's, every data node holds them, and its bytes are
+objects in the [object store](../concepts/object-store.md). The routes below
+are served on `api.port`; the pages themselves are served only on the
+separate artifact origin (`api.artifacts`), inside a sandboxed frame, and
+never here.
+
+### Who may do what
+
+Every route decides one verb of the authority table on the artifact's own
+owner and shares, **before** a version, a file or a byte is read:
+
+- **A caller with no relation to an artifact is answered `404 not_found`**,
+  byte for byte as an id nothing holds, on every route, so nothing says a
+  private artifact exists.
+- **A relation below the verb's role** is `403 unauthorized` with `reason:
+  role` and `role` naming what it needs, which the owner can share.
+- **Authoring asks the artifacts app** beside the role: creating, publishing,
+  renaming, labelling, adding an asset. Reading and sharing ask the relation
+  alone, so a person invited with no app reads what was shared with them.
+- **An agent is kept to `contributor`** on an artifact it does not own unless
+  the company sets `artifacts.agents_manage_others`. **The lead of an agent**
+  holds owner on that agent's artifacts, and nothing on a person's.
+- **Trash, restore and transfer are a person's**; a transfer and a forced
+  publish need a person present, which a machine token never is
+  (`403 token_refused`). **A purge is an administrator's**, with a proof of
+  identity inside the step-up window (`403 step_up_required` otherwise) and a
+  person present.
+- **An administrator may open any artifact.** Every read only the admin path
+  admits writes an elevated-read record first (one per day, administrator,
+  artifact and version), which the artifact's history shows its owner and
+  editors and the company trail (`GET /artifacts/trail`) shows every
+  administrator; a read whose record cannot be written is answered `503` and not
+  served. That covers every read of content: a version's files, source and
+  frame, every datastore question and the CSV export, a room's join, and the
+  live entry a `412 version_moved` hands back. An administrator who holds a
+  share is admitted as that share, at its role, and the admin path (owner,
+  recorded) opens only for a verb their relations do not reach. A listing
+  never shows an artifact on the admin path.
+- **The trash stops serving content at once.** A trashed artifact's head, its
+  versions and its history stay readable to its audience for the trash view;
+  its files, source and frames are `409 artifact_trashed`, its datastore
+  questions `404 not_found`, its export `410 data_gone`, and a room's join is
+  refused, before anything is read or recorded.
+- **A purge is committed before anything it removes is gone.** Its first step
+  stamps the artifact on its own record (`purge_begun_at` on the head, and into
+  the trash if it was live), and only then does the datastore go, which no
+  restore can bring back. From that step on a restore is `409 artifact_purging`
+  and the artifact is never served or written again; a purge that stopped part
+  way finishes on its retry under the same key, an administrator's purge, or
+  the trash reaper's next pass, which takes every begun purge whatever its
+  trash term.
+
+What the decision concluded is stamped into the record every write forms: the
+caller's role on the artifact, whether only the admin path admitted them, the
+Tier A quotas in force, the surface the request came through (`dashboard` for
+a browser session, `api` for a bearer token) and the work item it was made
+for. The domain's applier decides from the record alone.
+
+### Writes
+
+| Method and path | Verb | What it does |
+|---|---|---|
+| `POST /artifacts/uploads` | `create_artifact` | An upload intent for a new artifact |
+| `POST /artifacts/{id}/uploads` | `publish_artifact`, or `upload_artifact_asset` with `asset: true` | An upload intent for the next version, or into the asset store |
+| `PUT /artifacts/uploads/{upload}/files/{path}` | the intent's own verb, decided again | One file's bytes, streamed through the engine |
+| `POST /artifacts` | `create_artifact` | A new artifact and its first version, owned by the caller. `"starter": true` begins it from its kind's starter content, which the engine holds and publishes inline (a deck's four example slides), naming no upload, files or entry; a kind with no starter is `422 invalid` |
+| `POST /artifacts/{id}/versions` | `publish_artifact`; `artifacts.publish.force` beside it when forced | The next version, based on `If-Match: "<n>"` |
+| `POST /artifacts/{id}/versions/{n}/restore` | `publish_artifact` | Version `n` again as a new version, every file carried, based on `If-Match` |
+| `PATCH /artifacts/{id}` | `update_artifact` | The title, the description or the icon |
+| `PATCH /artifacts/{id}/versions/{n}` | `update_artifact` | Version `n`'s label (`{"label": ""}` clears it); a labelled version is kept past the hundred unlabelled ones |
+| `PUT /artifacts/{id}/shares` | `share_artifact` | `{"audience": {"kind": "seat", "id": "bob"}, "role": "editor"}`; never above the sharer's own role, and never the company from an agent |
+| `DELETE /artifacts/{id}/shares/{audience}` | `unshare_artifact` | The audience as `seat:<handle>`, `unit:<key>` or `company` |
+| `POST /artifacts/{id}/transfer` | `artifacts.transfer` | `{"to": "<seat>"}` |
+| `DELETE /artifacts/{id}` | `artifacts.trash` | Into the trash: every frame stops loading at once, and it is purged after thirty days |
+| `POST /artifacts/{id}/restore` | `artifacts.restore` | Out of the trash; `409 artifact_purging` once a purge has begun on it |
+| `POST /artifacts/{id}/purge` | `artifacts.purge` | Gone for good, in three steps: the artifact is committed to its purge (into the trash, never restored again), its datastore goes, then its own rows |
+| `POST /artifacts/{id}/assets` | `upload_artifact_asset` | `{"upload": "<upload>", "name": "<name>"}`: finalize an asset |
+| `DELETE /artifacts/{id}/assets/{asset}` | `upload_artifact_asset` | Remove one |
+| `PUT`, `DELETE /artifacts/{id}/pin` | `artifacts.pin` | The caller's own pin |
+
+Every write but the transfer carries an `Idempotency-Key`, from which every
+record id is derived, so a retry under the same key is the same operation
+(`400 op_id_invalid` without one). A write answers `200` with its `outcome`,
+`202` for one durable and not yet applied on this node, and `503` with
+`outcome: unknown` and the `op_id` for one nobody could account for: send it
+again under the same key, never a fresh one. The transfer needs no key: the
+upload claims each file before a byte is read, and a second put of it is
+refused `409 upload_consumed`.
+
+### Publishing a version
+
+Bytes are **reserved before they move**. An intent declares every file's path,
+SHA-256 and size; the node answers which of them the artifact already holds
+(`carried`, which move no byte) and how each of the rest is sent (`transfers`):
+a presigned `PUT` straight to the bucket where the S3 backend proved it can
+take one, a `PUT` to this API otherwise. Then the publish names the upload and
+every file of the version.
+
+```bash
+# 1. declare the files
+curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  -H "Idempotency-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"entries":[{"path":"index.html","sha256":"<hex>","size":5120}]}' \
+  "http://localhost:8000/artifacts/$ID/uploads"
+
+# 2. send each file the answer lists under transfers
+curl -X PUT -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  --data-binary @index.html \
+  "http://localhost:8000/artifacts/uploads/$UPLOAD/files/index.html"
+
+# 3. publish, based on the head you read
+curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  -H "Idempotency-Key: $KEY2" -H 'If-Match: "3"' -H "Content-Type: application/json" \
+  -d '{"upload":"'$UPLOAD'","files":[{"path":"index.html","upload":true},
+       {"path":"style.css","carry":"<hex>"}],"capabilities":["db"]}' \
+  "http://localhost:8000/artifacts/$ID/versions"
+```
+
+A file is named by `upload: true` (its bytes came through the upload),
+`carry: "<sha256>"` (bytes the artifact holds), or `from: <n>` (version `n`'s
+file at that path); in `mode: patch` a file left out is carried from the base
+and `remove: true` drops one, and `edits` (`old_str`/`new_str`, each matching
+exactly once) change the base version's text. The answer is the new
+version's `number`, the policy linter's `warnings` and `files`
+(`{"stored", "carried"}`: how many of the version's files this publish stored
+new and how many the artifact already held, counted from the manifest that
+landed, so an unchanged page the upload sent is counted as held); `work_item` names the
+tracker item the version is made for, which lists the artifact there
+(`GET /artifacts?work_item=CRW-412`).
+
+**A publish based on a head that has moved** is `412 version_moved`, carrying
+the live `head`, the live version (`live`, its manifest included) and, where
+the entry is text, up to 1 MiB of it (`entry.text`, `entry.truncated` past
+that): merge onto it and publish again with `If-Match` naming the live number.
+`"force": true` publishes over the moved head instead, a person's gesture with
+a person present, and the version is marked forced.
+
+### Reads
+
+| Path | Question | Answers |
+|---|---|---|
+| `GET /artifacts` | `artifacts` | One page of what the caller can see: `scope` (`mine`, `shared`, `company`, `agents`, `all`), `kind`, `q`, `status` (`live`, `trashed`), `pinned`, `work_item`, `sort` (`updated`, `created`, `title`, `opened`), `cursor`, `limit`. Filtered for the caller's relations and decided row by row, never refused |
+| `GET /artifacts/{id}` | `artifact` | The head, the caller's `role`, whether they may publish (`writer`), and the shares to the owner and editors (`share_count` below) |
+| `GET /artifacts/{id}/versions` | `artifact_versions` | The retained versions, newest first |
+| `GET /artifacts/{id}/versions/{n}` | `artifact_version` | One version and its manifest |
+| `GET /artifacts/{id}/history` | `artifact_history` | Every publish, share, trash and elevated read, newest first; below editor, without the elevated reads or who a share named |
+| `GET /artifacts/{id}/assets` | `artifact_assets` | The asset store |
+| `GET /artifacts/{id}/seen-by` | `artifact_seen_by` | Who has opened it, to the owner and editors while the company's `artifacts.seen_by` is `editors` (`shown: false` otherwise) |
+| `GET /artifacts/{id}/access` | `artifact_access` | The share dialog's list: the owner, each share with the seats a unit share reaches today, and an agent owner's leads; to a viewer, the owner and a count |
+| `GET /artifacts/usage` | `artifact_usage` | The company's counters against the Tier A quotas; `artifacts.usage`, an administrator's |
+| `GET /artifacts/trail` | `artifact_trail` | **The company trail of every artifact**: every artifact's history rows across the company, private ones included, newest first in the log's order, each naming its `artifact`, its current `title` and `owner`, the op, the actor and whether only the admin path admitted them. `op=` narrows it to one op (`read_elevated` lists every administrator's override, so one nobody would find in an artifact's own history is found here), with `cursor` and `limit`; an op the log does not record is `400 bad_params`. `audit.read`, an administrator's, decided by no relation to any artifact |
+
+A head and every version carry `capabilities`, the set the version declares,
+always present and `[]` for none, so a version that declares nothing is told
+from one whose field went missing; `contract` is absent for a kind that runs
+no page runtime (a Markdown document, a sheet).
+
+The same questions are asked over the socket by name. Every question about one
+artifact is decided by `get_artifact` and records the admin path's override
+as every read route does.
+
+### Viewing a version
+
+The API origin **never renders an artifact**:
+
+- `POST /artifacts/{id}/tickets` (`{"version": n, "document": "path"}`, the
+  head by default) mints the frame the dashboard embeds a page in, or one
+  artboard of a design: `frame_url` on the artifact
+  origin under a one-hour view ticket bound to the caller's own sign-in or
+  token, the `origin` its bridge must hear from, and the `sandbox` and `allow`
+  attributes the dashboard sets verbatim. The page is re-authorized on every
+  document request there, so a withdrawn share, a sign-out or the trash closes
+  it at once. `document` names the page the frame opens: left out for a
+  page's entry, and always one artboard's path for a design, whose ticket
+  then opens that page and no other as a document. A `document` that is not
+  an HTML page of the version (a design's `canvas.json`, a stylesheet, a path
+  the version does not hold, or none for a design) is `422 invalid`. A
+  doc, a deck or a sheet is `409 artifact_not_framed`, and
+  a deployment with no `api.artifacts.external_url` is
+  `409 artifact_origin_unset`. Minting a frame records that the caller opened
+  the artifact, at most once in fifteen minutes.
+- `GET /artifacts/{id}/versions/{n}/source` answers a version's entry as JSON
+  (`text`, `content_type`, `size`), read back and checked against its digest:
+  how the dashboard reads a design's `canvas.json`, which it draws natively.
+  Reading a design's source records that the caller opened it (its canvas is
+  drawn whether or not any artboard is framed).
+- `GET /artifacts/{id}/versions/{n}/deck` answers a deck's version (a
+  `slides` artifact) as its **canonical tree**: the title, the cover, the
+  outline's sections, the typefaces and every slide in order, each its id,
+  title, notes, transition, hidden flag and the `<section>` as elements,
+  attributes and canonical style declarations, read through the same
+  [slide format](slide-format.md) parser the publish was held to. The
+  dashboard draws, presents and prints a deck from this answer alone and never
+  parses a slide's markup. Reading it records that the caller opened the deck,
+  as a frame's ticket does for a page. Any other kind is `409 content_refused`.
+- `GET /artifacts/{id}/versions/{n}/doc` answers a doc's version (a `doc`
+  artifact) **tab by tab**: `indexed` (whether it opens on a `doc.json` index
+  rather than one Markdown file) and every tab in the index's order, each its
+  `path`, `title` and Markdown `text`, read through the same
+  [doc format](../guides/artifact-authoring.md#writing-a-doc) the publish was
+  held to. This is how the dashboard draws a doc, which runs no author code:
+  with its own element-constructing renderer, never as markup. Reading it
+  records that the caller opened the doc. Any other kind is
+  `409 content_refused`.
+- `GET /artifacts/{id}/versions/{n}/outline` answers a version's structure
+  without every file: for a deck, its title, slide count, cover, sections and
+  each slide's id, title and hidden flag, plus the cover slide's tree; for a
+  doc, each tab's `path`, `title` and size in `bytes`, plus the `cover`: the
+  first tab's opening as Markdown, cut at a line boundary within 1 KiB; for a
+  dashboard, its title, every widget's id, type, title, width and dataset, and
+  its first three stats' labels with their datasets' titles (never a value,
+  which is each viewer's); for a design (`design`), its title, board count,
+  cover board, the `bounds` every board and note fits in, each board's `path`,
+  `title`, `x`, `y`, `w` and `h` in the canvas's order and the number of
+  `notes`, read from `canvas.json` alone. The gallery draws each as the card's
+  cover (a design's as a schematic). Any other kind answers its kind alone. A
+  cover is not an open, so none is recorded. A node keeps the decks, docs and
+  canvases it has read by version (16 MiB of their files at most for each),
+  and the boards (64 MiB of their spec and file datasets), since a version
+  never changes.
+- `GET /artifacts/{id}/versions/{n}/dashboard` answers a dashboard's version
+  (a `dashboard` artifact) as its **board**: the spec held to the
+  [dashboard spec](dashboard-spec.md) format again on read, and every dataset's
+  shape (its columns and key), how it is kept current (`live`, `signal`,
+  `interval`, `manual`, `fixed` or `derived`, with the collection, the push or
+  the interval it follows) and, for an engine dataset, the catalogue's words
+  for what it reads and who may read it. It carries **no row**: every reader is
+  answered the same board. Reading it records that the caller opened the
+  dashboard. Any other kind is `409 content_refused`.
+- `GET /artifacts/{id}/versions/{n}/sources/{dataset}` answers one dataset of
+  a dashboard **as its viewer** ([ADR-0043](../../adr/0043-a-dashboards-live-data-is-read-as-its-viewer.md)):
+  the query string is the board's filters, each refused unless the board offers
+  it and the value is one of its choices (`400 bad_params`). An `engine`
+  dataset is answered by the same question the dashboard's own screens ask, on
+  the caller's own request, so a viewer without the tracker is never handed a
+  task; a `store` dataset is read under the collection's read rule; a `calc`
+  dataset is computed from its inputs read the same way. The answer is
+  `{artifact, version, dataset, status}` and: for `ready`, `table` (`columns`,
+  `key`, `rows`, `truncated`) and `as_of`, when the rows were true; for
+  `refused`, `refusal` (the `dataset` whose source refused, which for a
+  calculation may be an input, the rule's `reason` and the `grants` that
+  would admit the caller) and a `detail` sentence; for `unanswered`, a
+  `detail` saying why this node cannot answer it for this caller (a domain it
+  does not run, a personal scope for a credential that names no person). An
+  engine answer is kept for 30 seconds per principal and arguments; a node
+  answers at most two live reads a second per viewer on one artifact (a burst
+  of 64) and twenty a second for everybody on it (a burst of 320), past which
+  it is `429 read_budget` with a `Retry-After`.
+- `GET /artifacts/sources` answers the **engine source catalogue** a
+  dashboard's `engine` datasets may read: each source's name, domain, purpose,
+  who may read it, its typed parameters, its columns and key, the push that
+  announces a change and the most rows it answers. Any resolved caller.
+- `GET /artifacts/{id}/versions/{n}/files/{path}` streams one file as an
+  **attachment**, any text and anything a browser could run (HTML, SVG, a
+  script) as `text/plain`, under the API's own `default-src 'none'` policy and
+  `Cache-Control: private, no-store`, with its SHA-256 as a strong `ETag`.
+- `POST /artifacts/ready` (`artifacts.ready`, everybody's) is the dashboard's
+  **ready report** for the [artifact-ready objective](service-objectives.md):
+  `{"frame_url", "outcome": "ready" | "failed", "elapsed_ms"}`, the frame
+  exactly as the ticket route answered it, how it ended (the page's bridge
+  hello, or a frame that failed or never said hello), and the milliseconds
+  since the frame was handed over, by the browser's clock. Answered `204` once
+  counted. The frame must be a live one this deployment minted for the
+  caller's own sign-in or token (`422 invalid` otherwise, the same answer as a
+  URL that is no frame); each frame reports once (`409 conflict`), never a
+  time longer than the frame has existed (`422 invalid`), and one credential
+  sends at most a sustained report a second after a burst of thirty
+  (`429 throttled`, with `Retry-After`). A deployment with no
+  `api.artifacts.external_url` is `409 artifact_origin_unset`.
+
+### Refusals
+
+| Status | `error` | When |
+|---|---|---|
+| `400` | `bad_if_match` | `If-Match` is not `"<n>"` |
+| `400` | `op_id_invalid` | No `Idempotency-Key`, or one outside the operation-id grammar |
+| `403` | `unauthorized` | The authority table refused; `reason: role` names the `role` needed |
+| `403` | `token_refused` / `step_up_required` | A machine token on a verb that needs a person present, or a proof of identity older than the verb's window |
+| `403` | `forbidden` | A share above the sharer's own role, or the company from an agent |
+| `404` | `not_found` | No such artifact for this caller, or no such version, asset or file |
+| `404` | `upload_not_found` | No such upload of this caller's |
+| `409` | `artifact_trashed` | The artifact is in the trash |
+| `409` | `artifact_purging` | A restore of an artifact whose purge has begun; the purge finishes on its own |
+| `409` | `carried_object_gone` / `upload_missing` | A carried file's bytes are gone, or a declared file has not arrived; `paths` names them |
+| `409` | `upload_consumed` / `upload_expired` | The upload is used, or an uploaded object is too old to name; upload again |
+| `409` | `label_taken` / `source_taken` | Another version holds the label, or another of the owner's artifacts the source address |
+| `409` | `artifact_not_framed` / `artifact_origin_unset` | See [Viewing a version](#viewing-a-version) |
+| `409` | `conflict` | A frame whose ready time was already reported; see [Viewing a version](#viewing-a-version) |
+| `410` | `upload_expired` | The upload's window closed before it was finished |
+| `412` | `version_moved` | The head moved past the base; see [Publishing a version](#publishing-a-version) |
+| `413` | `quota_exceeded` | The company's quota; `key` names the Tier A setting an operator raises |
+| `415` | `media_type_refused` | A file type an artifact may not publish |
+| `422` | `upload_mismatch` / `content_refused` | Bytes that are not the declared ones, or not what their type promises |
+| `422` | `edit_refused` / `policy_refused` | An edit that matched zero or several times (`index`, `matches`), or a page the publish policy refuses (`findings`) |
+| `422` | `capability_unknown` / `contract_unknown` / `credential_refused` / `invalid` | A capability or runtime this build does not serve, a credential in what an agent published, or a value the domain refuses |
+| `429` | `uploads_outstanding` | The pending-upload budget is spent; `Retry-After` is when the earliest hold lapses |
+| `429` | `throttled` | Ready reports past one credential's rate; `Retry-After` is when the next is admitted |
+| `503` | `unavailable` | This node could not decide or reach the estate; the `Retry-After` says when to come back |
+
 ## Agent Memory
 
 ### `GET /agents/{id}/memory`
@@ -6911,6 +7317,54 @@ should give it a long one: `crewlet backup` and the dashboard both wait up to
 store and the stream estate and a client that gave up early would report a
 failure while the engine finishes a good backup. Taking one from the dashboard
 is **Settings › Backups & retention › Take a backup**.
+
+### `POST /objects/migrate`
+
+Copies every object the company's files name from the fleet's object store
+into an S3-compatible bucket, and on the final pass moves the fleet's record
+of where its files are. `crewlet objects migrate --to s3` is a client of this
+route; the procedure is in [Moving the files to a
+bucket](../concepts/object-store.md#moving-the-files-to-a-bucket).
+
+| Parameter | Meaning |
+|-----------|---------|
+| `target` | Required. An absolute path **on the engine's host** to a Tier A file whose `store.objects` block names the bucket (`backend: s3`): the file every node runs with once the move is made. Its `${VAR}` references resolve from the engine's environment, so the bucket's credential never crosses this API. |
+| `final` | `true` runs the final pass, which seals the `nats` bucket and moves the fleet's record. Without it the pass only copies. |
+
+```json
+{
+  "from": "nats",
+  "to": "s3:https://s3.example.com/crewlet-files/acme/",
+  "final": true,
+  "sealed": true,
+  "moved": true,
+  "direct_upload": "available",
+  "pass": {"referenced": 18211, "present": 18190, "copied": 21,
+           "copied_bytes": 4194304, "unreadable": 0, "complete": true},
+  "next": "The fleet's files are in …"
+}
+```
+
+`pass.present` counts objects the bucket already held at their size (and
+digest, where the provider keeps one), so a pass that stopped resumes by
+running again. `pass.unreadable` counts objects the fleet's own store could not
+give back whole, missing or damaged there, named in `pass.unreadable_files`;
+no copy can bring them back, and `objects_missing` already counts them.
+
+It is **synchronous** and runs to its end even if the client gives up, for the
+backup's reason. It needs `admin` and a recent proof of identity, like every
+deployment control. Refusals:
+
+- **409 `objects_migration_refused`**, with the reason in `detail`: a target
+  that is not an absolute path, does not load, names no bucket, names the
+  store the fleet already uses, or fails the bucket's probe; a node holding no
+  copy of the company's records (run it against a data node); and for the
+  final pass, a node not in `maintenance` mode, any node still admitted to
+  publish, an estate this node has not applied to the end, or one it holds
+  incomplete.
+- **503 `objects_migration_failed`**, with a `Retry-After`: the fleet's store
+  or the bucket stopped answering. The body's `report` counts what was copied;
+  the stores' own words are in this node's log. Run it again.
 
 ### `GET /backups`
 

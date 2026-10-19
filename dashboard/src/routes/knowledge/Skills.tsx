@@ -26,11 +26,23 @@
  */
 
 import { useMemo } from "react";
-import { AvatarStack, Button, Card, EmptyState, EmptyValue, Select } from "@crewlethq/ui";
+import { Mark } from "~/ui/glyph.tsx";
+import {
+  AvatarStack,
+  Button,
+  Card,
+  EmptyState,
+  EmptyValue,
+  SegmentedControl,
+  Select,
+  TableDateCell,
+  TableNumberCell,
+  TableTextCell,
+} from "@crewlethq/ui";
 import { WandSparklesGlyph } from "@crewlethq/icons/glyphs";
 import { href, useParam } from "~/app/router.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, NumberCell, TextCell } from "~/app/frame/cells.tsx";
+
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -40,10 +52,9 @@ import { TRAIL_WORDS, mayReadTrail } from "~/routes/agents/seat/profile.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
-import { plural, tsKey } from "~/lib/format.ts";
+import { plural, tsKey, fmtCount } from "~/lib/format.ts";
 import { loadedBy } from "~/lib/pageReads.ts";
 import { seatBadge } from "~/ui/SeatAvatar.tsx";
-import { Segmented } from "~/ui/primitives.tsx";
 import type { SkillLoad } from "~/contract/pages.ts";
 import type { PageSummary } from "~/protocol/index.ts";
 import { usePagedPages } from "./usePagedPages.ts";
@@ -56,10 +67,12 @@ export function Skills() {
   return (
     <>
       <div className="toolbar">
-        <Segmented
-          ariaLabel="Which skills"
+        <SegmentedControl
+          semantics="radio"
+          activate="manual"
+          label="Which skills"
           value={kind}
-          onChange={setKind}
+          onValueChange={setKind}
           options={[
             { value: "pages", label: "Tool skills", title: "Pages the engine offers a phase" },
             { value: "learned", label: "Learned", title: "What one agent drew from its own work" },
@@ -114,7 +127,11 @@ function ToolSkills() {
               key: "title",
               header: "Skill",
               sortValue: (r) => r.title,
-              cell: (r) => <TextCell icon="wand-sparkles">{r.title}</TextCell>,
+              cell: (r) => (
+                <TableTextCell icon={<Mark name={"wand-sparkles"} size="xs" />}>
+                  {r.title}
+                </TableTextCell>
+              ),
             },
             {
               key: "loaded",
@@ -157,7 +174,7 @@ function ToolSkills() {
                 return l === null ? (
                   <EmptyValue label="Not recorded on this node" />
                 ) : (
-                  <NumberCell value={l.reduce((n, x) => n + x.loaded, 0)} />
+                  <TableNumberCell value={l.reduce((n, x) => n + x.loaded, 0)} format={fmtCount} />
                 );
               },
             },
@@ -167,7 +184,7 @@ function ToolSkills() {
               shrink: true,
               align: "right",
               sortValue: (r) => tsKey(r.updated_at),
-              cell: (r) => <DateCell at={r.updated_at} now={now} />,
+              cell: (r) => <TableDateCell value={r.updated_at} now={now} />,
             },
           ]}
         />
@@ -275,7 +292,7 @@ function LearnedSkills() {
                 shrink: true,
                 align: "right",
                 sortValue: (r) => r.uses,
-                cell: (r) => <NumberCell value={r.uses} />,
+                cell: (r) => <TableNumberCell value={r.uses} format={fmtCount} />,
               },
               {
                 key: "version",
@@ -283,7 +300,7 @@ function LearnedSkills() {
                 shrink: true,
                 align: "right",
                 sortValue: (r) => r.version,
-                cell: (r) => <NumberCell value={r.version} />,
+                cell: (r) => <TableNumberCell value={r.version} format={fmtCount} />,
               },
               {
                 key: "updated",
@@ -291,7 +308,7 @@ function LearnedSkills() {
                 shrink: true,
                 align: "right",
                 sortValue: (r) => tsKey(r.updated_at),
-                cell: (r) => <DateCell at={r.updated_at} now={now} />,
+                cell: (r) => <TableDateCell value={r.updated_at} now={now} />,
               },
             ]}
           />

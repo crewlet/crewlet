@@ -46,46 +46,19 @@
  * answer asks for hands back the same link rather than a second person.
  */
 
-import { useCallback, useState } from "react";
-import { isAbort, newActOpID, rest, RestError, type QueryValue } from "~/protocol/index.ts";
-import { refusalText } from "./refusal.ts";
-import { youNeedWords } from "./access.ts";
+import {
+  keyedWrite,
+  useKeyedGesture,
+  type KeyedAnswer,
+  type KeyedGesture,
+  type KeyedRequest,
+} from "./keyedWrite.ts";
 
-/** What one `/iam` write came to. */
-export type IamAnswer =
-  | {
-      kind: "done";
-      /** `202`: durable, and this node has not applied it yet. */
-      pending: boolean;
-      /** The engine's answer, verbatim — a link, a token, an id. */
-      body: Record<string, unknown>;
-    }
-  | {
-      kind: "unknown";
-      /** The key a retry sends, or "" on a route that reads none. */
-      key: string;
-      text: string;
-    }
-  | {
-      kind: "refused";
-      text: string;
-      /**
-       * `409 stale`: what the gesture was about has moved on, so sending it
-       * again is refused again — a dialog offers only a way out.
-       */
-      stale: boolean;
-    };
+/** What one `/iam` write came to: the generic keyed answer (`keyedWrite.ts`). */
+export type IamAnswer = KeyedAnswer;
 
-export interface IamRequest {
+export interface IamRequest extends Omit<KeyedRequest, "method" | "headers"> {
   method: "POST" | "PATCH" | "DELETE";
-  path: string;
-  body?: unknown;
-  query?: Record<string, QueryValue>;
-  /**
-   * The gesture's operation key, sent as `Idempotency-Key`; absent on the two
-   * routes that read none.
-   */
-  key?: string;
 }
 
 /** The steps of a sequence that landed before it was refused, as words. */
@@ -95,137 +68,16 @@ const LANDED: Record<string, string> = {
 };
 
 /**
- * One `/iam` write, answered as a value — it rejects only for the caller's own
+ * One `/iam` write, answered as a value: it rejects only for the caller's own
  * abort, which is not an answer.
  */
-export async function iamWrite(req: IamRequest): Promise<IamAnswer> {
-  try {
-    const answer = await rest.request(req.method, req.path, {
-      ...(req.body === undefined ? {} : { body: req.body }),
-      ...(req.query ? { query: req.query } : {}),
-      ...(req.key ? { headers: { "Idempotency-Key": req.key } } : {}),
-    });
-    const body =
-      answer.body && typeof answer.body === "object"
-        ? (answer.body as Record<string, unknown>)
-        : {};
-    return { kind: "done", pending: answer.status === 202, body };
-  } catch (err) {
-    if (isAbort(err)) throw err;
-    return refusalOf(err, req.key ?? "");
-  }
-}
-
-/** What a failed request means: a refusal, or an outcome nobody knows. */
-function refusalOf(err: unknown, sent: string): IamAnswer {
-  if (!(err instanceof RestError)) {
-    return { kind: "refused", text: refusalText(err), stale: false };
-  }
-  // WHAT AN EDIT HAD ALREADY CHANGED when a later step was refused or went
-  // unconfirmed — said either way, or a half-landed edit reads as one that
-  // changed nothing.
-  const landed = Array.isArray(err.body.landed)
-    ? err.body.landed.filter((s): s is string => typeof s === "string")
-    : [];
-  const changed =
-    landed.length > 0
-      ? ` What did change: ${landed.map((s) => LANDED[s] ?? s).join(" and ")}.`
-      : "";
-  const unknown = err.unanswered || (err.status === 503 && err.body.outcome === "unknown");
-  if (unknown) {
-    const key = sent ? (typeof err.body.op_id === "string" ? err.body.op_id : sent) : "";
-    // KEYED, A RETRY IS THE SAME OPERATION, which the engine applies once:
-    // that promise is the whole of what the reader needs.
-    if (key) {
-      return {
-        kind: "unknown",
-        key,
-        text: `${changed.trim()} Try again. It won’t happen twice.`.trim(),
-      };
-    }
-    const said = err.unanswered
-      ? "No answer came back, so nothing here knows whether this landed."
-      : "The engine could not confirm whether this landed.";
-    const next = asked(err.detail) || "Try again: this makes a new one.";
-    return { kind: "unknown", key, text: `${said}${changed} ${next}` };
-  }
-  // A CONFIRMATION THE PERSON CANCELLED is no refusal of theirs: the engine's
-  // sentence told them to confirm, which they had just declined, so the
-  // dialog says what happened and keeps its button ready to try again.
-  if (err.code === "step_up_required") {
-    return {
-      kind: "refused",
-      text: `You didn’t confirm, so nothing changed.${changed}`,
-      stale: false,
-    };
-  }
-  // ONLY A RULE'S REFUSAL names access the caller lacks, and then it is ONE
-  // sentence naming that access, as a refused change says it everywhere
-  // (`WriteButton`'s `RefusalNote`): the engine's own sentence lists every
-  // access in general, and the two side by side said it twice. A step-up
-  // refusal names the access that ADMITTED them, so it never comes here.
-  const parts =
-    err.code === "unauthorized" && err.grants.length > 0
-      ? [`${youNeedWords(err.grants)} Ask an admin.`]
-      : [refusalText(err)];
-  return {
-    kind: "refused",
-    text: parts.join(" ") + changed,
-    stale: err.status === 409 && err.code === "stale",
-  };
-}
-
-/** The engine's own sentence, capitalised, or "". */
-function asked(detail: string): string {
-  const trimmed = detail.trim();
-  return trimmed ? trimmed[0]!.toUpperCase() + trimmed.slice(1) : "";
+export function iamWrite(req: IamRequest): Promise<IamAnswer> {
+  return keyedWrite(req, { landed: LANDED });
 }
 
 /** One gesture's write: its key, its answer, and whether it is out. */
-export interface IamGesture {
-  busy: boolean;
-  /** The last answer, or null before one. */
-  answer: IamAnswer | null;
-  /**
-   * Send the write. `keyed: false` for the two routes that read no key. The
-   * key is the unknown answer's where the last one was unknown and this is
-   * the request it was for — the retry it asked for — and a fresh one
-   * otherwise.
-   */
-  run: (req: Omit<IamRequest, "key">, keyed?: boolean) => Promise<IamAnswer | null>;
-  /** Forget the last answer, for a dialog that opens again. */
-  reset: () => void;
-}
+export type IamGesture = KeyedGesture<IamRequest>;
 
 export function useIamGesture(): IamGesture {
-  const [busy, setBusy] = useState(false);
-  const [answer, setAnswer] = useState<IamAnswer | null>(null);
-  // THE REQUEST THE LAST ANSWER WAS FOR, which an unknown answer's key names.
-  const [sent, setSent] = useState("");
-  const run = useCallback(
-    async (req: Omit<IamRequest, "key">, keyed = true) => {
-      if (busy) return null;
-      const request = JSON.stringify([req.method, req.path, req.query ?? null, req.body ?? null]);
-      const key = keyed
-        ? answer?.kind === "unknown" && answer.key && sent === request
-          ? answer.key
-          : newActOpID()
-        : undefined;
-      setBusy(true);
-      try {
-        const next = await iamWrite({ ...req, ...(key ? { key } : {}) });
-        setSent(request);
-        setAnswer(next);
-        return next;
-      } finally {
-        setBusy(false);
-      }
-    },
-    [answer, busy, sent],
-  );
-  const reset = useCallback(() => {
-    setSent("");
-    setAnswer(null);
-  }, []);
-  return { busy, answer, run, reset };
+  return useKeyedGesture(iamWrite);
 }

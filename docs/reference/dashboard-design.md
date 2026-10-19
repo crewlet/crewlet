@@ -46,7 +46,7 @@ phase is one colour on every chart. `contract/spend.ts`' `PHASE_BANDS` is that
 fold written out by phase, and `internal/api/queries` holds it against the
 engine's in both directions.
 
-There are four exceptions, and each is held to exactly what makes it one.
+There are five exceptions, and each is held to exactly what makes it one.
 
 The first is a **third-party app's own mark** on the Integrations
 screen (`VendorMark`, from `@crewlethq/icons`): Slack's four colours,
@@ -96,6 +96,21 @@ something some scanners do and others do not, so a code inverted to suit the
 dark theme is one some authenticator apps will not read. Its two inks are the
 `color.qr` tokens, which are the same in every palette; nothing reads state
 from them and nothing else is painted with them.
+
+The fifth is a **collaborator's presence colour** in an artifact (D22): the
+hue a person or an agent present in it wears on the marks they make on its
+content, so a reader matches an outlined cell to a face in the presence stack
+at a glance. It is held to exactly that. It is drawn only on another
+collaborator's cell outline, name flag and the ring round their badge in the
+stack while they are present (`PresenceRing`, `CursorFlag`, `PresenceStack`
+from `@crewlethq/ui`), always with their name beside it, never on chrome and
+never read as state. An agent wears the hue its profile icon names (the third
+exception); a person is given one of the six node hues for the session, in the
+order they joined, skipping hues already worn in the room, never a hash of a
+name and never stored on them. Past six people hues repeat and the flag tells
+them apart, and the same fact is in words in every cell's description and the
+presence list, so nothing relies on colour alone. The reader's own place is
+the focus ring, as everywhere.
 
 A seat's badge takes one of three **status glyphs**, or none, from what it is DOING,
 and what it is doing is the ENGINE'S word, never the dashboard's. Every seat row carries
@@ -381,7 +396,7 @@ share does not move.
 
 **One sidebar, and three nouns that keep it one.** The sidebar lists where a
 reader can go — nine **workspaces** — and the few objects they keep coming back
-to: the views they pinned and the pages they starred. A
+to: the views and artifacts they pinned and the pages they starred. A
 workspace's own **sections** are paths drawn as tabs in its page header
 (Settings draws its eleven, and cross-links to the reader's Account and to
 Budgets, as a grouped column; Work draws its as the lenses of the scope its
@@ -630,7 +645,7 @@ and the code cannot disagree about which addresses exist.
 
 The order is the product's story: you first — what needs you, what reached
 you, what is yours — then the company's work, its agents, what is running,
-what it knows and what it spent, and the machine last.
+what it knows, what it made and what it spent, and the machine last.
 
 | Row | Route | Figure |
 |---|---|---|
@@ -641,6 +656,7 @@ what it knows and what it spent, and the machine last.
 | **Agents** | `#/agents` | — |
 | **Live** | `#/live` | the agents working now, beside the working mark — the chrome's one pulsing dot. On Live because a count says how many of something the DESTINATION holds, and Live › Now running holds the running turns, one row each; on Agents it sent a reader looking for a running turn to the org chart |
 | **Knowledge** | `#/knowledge` | — |
+| **Artifacts** | `#/artifacts` | none, and never a lock: a share alone admits a reader, and starting a sheet is the one thing in it the Artifacts access gates |
 | **Spend** | `#/spend` | — (tokens only; nothing in this product renders money) |
 | **Settings** | `#/settings` | — never a lock: its You group (the reader's Account and Appearance) needs nothing, and a section closed to the reader is locked in Settings' own column |
 
@@ -654,7 +670,12 @@ pinned row RUNS the view, `#/work/tasks?view=<key>` or its project's list for a 
 saved on a project, rather than opening the inventory page about it — and the
 total beside it is that list's own: the engine counts a pinned view with every
 task filtered on its own, as every surface that runs a view asks for it, never
-in the grammar's tree mode, where an open epic's finished subtasks rode along),
+in the grammar's tree mode, where an open epic's finished subtasks rode along;
+then the ARTIFACTS this reader pinned, each a row to its page with its kind's
+glyph, listed for every reader the engine serves because a share alone admits
+a reader to Artifacts, and read from the one listing For you and an artifact's
+Pin item read (`lib/artifacts/pins.ts`), so a pin made anywhere moves the
+sidebar at once),
 **Starred** (drawn only when there is one), and **Running** — one row per seat
 the engine says is working, drawn while one is: the seat's badge with its
 status glyph, its name, the key of the item its turn is charged to as the lead,
@@ -979,7 +1000,7 @@ it; on this screen the company is the subject, and the product is in the mark
 and the tab.
 
 `g` then a letter jumps to a workspace (`g h`, `g i`, `g m`, `g w`, `g a`,
-`g l`, `g k`, `g t`, `g s`, and `g u` for your Account). A chord rather than a
+`g l`, `g k`, `g f` for Artifacts, `g t`, `g s`, and `g u` for your Account). A chord rather than a
 modifier, because every single-modifier combination worth having is already
 the browser's. `g r` is the one `g` sequence that is not a workspace: it
 watches the running turn when exactly one seat is working, and opens Live ›
@@ -1089,6 +1110,9 @@ a screen, and every workspace and section the code declares is below.
 | `#/knowledge/pages/{id}` | **Page**: addressed by its id, which a rename does not change. The document with its outline, its properties, its comments and what it is connected to; edited as you | `edit=1` · `version=` (History: one revision in the document's place) · `lens=diff\|full` |
 | `#/knowledge/skills` | **Agent skills** — the tool skills the engine offers a phase, who loaded each; and what one agent learned | `kind=pages\|learned` · `seat=` (learned) |
 | `#/knowledge/diaries` · `#/knowledge/diaries/{handle}` | **Agent diaries** — every agent's diary at a glance, each counted by the node holding the agent; one agent's diary and episodes *(needs Admin access)*. Handles live here as they do under `seats/` | |
+| `#/artifacts` · `#/artifacts/mine` · `#/artifacts/shared` · `#/artifacts/company` · `#/artifacts/agents` | **Artifacts**: For you (what the reader opened most lately and what was shared with them, their pins first), then Mine, Shared with you, Company and By agents, each the engine's `artifacts` listing under one scope, every row decided by `get_artifact`. A list or cards. No permission opens the workspace: a share alone admits a reader (D01), and the engine decides every artifact. An administrator also sees the company's storage against its quotas | `kind=html\|doc\|slides\|sheet` · `q=` · `sort=updated\|created\|title\|opened` · `shape=list\|cards` (all four kept across the sections) · `status=trashed` (Mine: the reader's own trash) |
+| `#/artifacts/new` | **New artifact**: a native sheet, blank or from the Review sheet template, or a doc or a deck from the engine's starter, owned by the reader *(needs Artifacts access)*. A page is published by an agent's tool or the CLI, not typed here | `kind=sheet\|doc\|slides` · `template=review\|blank` · `item=` (the task it is made for, which lists it on that task's Artifacts card) |
+| `#/artifacts/{id}` | **Artifact**: addressed by its id, drawn under ONE slim bar in the frame's place ([An open artifact is the screen](#an-open-artifact-is-the-screen)). A page runs in a sandboxed frame on the artifact origin, edge to edge, a doc is rendered here tab by tab by the dashboard's own Markdown renderer with its outline beside it, Edit (the text in place, in the rich editor, and the tabs: add, rename, reorder, remove; each save a version, a raced save merged onto the newer one) and Print, a deck is drawn from its canonical tree with Edit, Grid and Present in the bar, a sheet is drawn from its schema. The bar holds the way back, the title (renamed in place by an editor), the version chip, the kind's views, who is here, and the controls that open a panel at the side: Details (what the page header and its fact line used to say), History (versions, Compare, Restore, labels and the change record), Data where it keeps any (rows, the schema editor and every write, with Undo), People (who is here, with Follow) and, from More, Settings (details, what it can do, its owner, the trash); Share and More close the bar. A reader with no relation is told it is not there or not theirs, in one card | `panel=details\|history\|data\|people\|settings` (pushes; the old `tab=` and `rail=people` are read as the panel they became and rewritten) · `expand=1` (the panel takes the workspace) · `version=` · `against=` · `lens=` · `sheet=` (which collection a sheet draws) · `doctab=` (which tab of a doc is on show) · `data=rows\|schema\|history` · `mode=grid\|present\|presenter` · `slide=` · `follow=` |
 | `#/spend` | **Spend › Overview**: the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent beside by provider and by team, and the three most expensive tasks beside the auxiliary model by purpose (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across the sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
 | `#/spend/tasks` | **Expensive tasks** — the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs *(needs Tracker access)* | `window=7d\|30d\|90d\|<from>/<to>` (kept across the sections) |
 | `#/spend/budgets` | **Budgets** — the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. ONE address: Settings lists it as a cross-link | `window=` is not read here, and is carried through to the other sections |
@@ -1101,7 +1125,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/settings/nodes` · `#/settings/nodes/{node}` | **Nodes** — leases (each seat's holder and **since** when), duties, config rollout, the fleet broker's members as the nodes advertise them and as its metadata group counts them, and where the company's files are kept (the object store's backend and its collector's last passes) *(needs Admin access)* | |
 | `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(needs Admin access)* — `revisions` lands on the History lens; one revision's page draws no lenses | `lens=active\|entities\|audit\|diff` |
 | `#/settings/backups` · `#/settings/backups/{domain}` | **Backups & retention** — take a backup, what the fleet has backed up and the backup history, each state-log domain and what holds its trim; one domain *(needs Admin access)*. Domains live only under `backups/` | `at=alarms` (brings the alarm list into view) |
-| `#/settings/audit` | **Audit log** — every write a person or a token made, every call they made at runtime, and every configuration revision labelled with the kind of writer it recorded (`agent`, `human`, `operator` or `system`) *(needs Admin access)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials\|runtime` |
+| `#/settings/audit` | **Audit log**: every write a person or a token made, every call they made at runtime, the identity estate's own trail, every artifact's history (an administrator's read of somebody's private artifact said in words), and every configuration revision labelled with the kind of writer it recorded (`agent`, `human`, `operator` or `system`) *(needs Admin access)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials\|runtime\|identity\|artifacts` |
 | `#/settings/appearance` | **Appearance**: the mode, the density and the theme gallery for this browser, with a pane previewing the theme the pointer rests on. Not guarded: it is the reader's own and asks the engine nothing. No tail | |
 | `#/account` | **Account** — the signed-in reader's own page, opened from the reader's own name in the user block at the sidebar's foot, from its menu, from Settings' **You** group (it has no sidebar row) or `g u`: the profile the directory holds and the reader's access, "Your access" (an administrator changes both), the password (changed with the current one, which ends every other session and personal token and keeps this browser), the second factor and recovery codes, where they are signed in (this browser marked, any other signed out by name, or everywhere), and their personal access tokens (minted — the value shown once — and revoked). A credential that is not a person's, a Tier A token's session whether or not it is bound to a seat, is told what it is and offered none of it, and asks the directory nothing; the engine answers a seat-bound token's session with a person's `kind`, so the page reads the login's grammar (`ownsAccount` in `lib/login.ts`) | |
 | `#/login` | **Sign in** *(outside the frame)* — a login or address and a password, the second factor when the engine asks for it, or an API token exchanged for a one-hour session | `next=` — where to go once signed in: a hash route of this dashboard, and anything else lands on Home; `login=` fills the login, and `after=reset` says the password was just set — what a reset link's own **Sign in** sends. Neither is a credential |
@@ -1835,6 +1859,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the one width the dashboard derives itself — where the peek becomes a column |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied. The two positions that last one compares (`applied_through` against `log_seq`) are PACKED on the wire — (generation × 2^40) + sequence, so they compare with a plain `<` across a re-anchor — and are printed unpacked (`positionWords` in `components/work.tsx`): the bare sequence in a log's first generation and `generation:sequence` past it. The stride is the engine's `statelog.GenerationStride`, and a gate in internal/api holds the dashboard's copy (`GENERATION_STRIDE`) to it |
 | `ObjectHeader` | an object's eyebrow, title (a level-two heading in every frame: on a page the last crumb is the `h1` and already names the object, and a peek sits inside a page that has one), state marks and up to six facts, in the same order wherever the object appears — though a peek whose body is a properties rail passes none, because a header and a rail stacked in one column are [one reading](#an-objects-own-facts). A fact may carry a `note` saying where its value came from, for the facts a reader can reasonably doubt, and only those. A fact that is one token (an id, a build) or a set of chips (a node's roles) takes two tracks, so it is never broken mid-token or stacked chip over chip. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
+| `OwnPageHeader` | a screen that draws its own head in the frame's place: the frame draws the slot it is portalled into, with the state bar under it, instead of the page bar. ONE screen does, an open artifact, for the reason [An open artifact is the screen](#an-open-artifact-is-the-screen) gives; `FrameNavToggle` is the frame's navigation toggle for that head to place first |
 | `useTab` | which OBJECT tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has six — so the hook resolves the parameter against the tabs this object HAS. It binds `1`–`9`; the strip itself is `@crewlethq/ui`'s `Tabs` |
 | `ObjectTabs` + `tabFit` | an object's own tabs as the kit's underline row, drawing the tabs that FIT and folding the rest into a "More" menu at its end — the tab the reader is on always drawn — by the same arithmetic (`foldTabs`) the section strip folds with; the widths are read off a hidden, inert twin of the row |
 | `DetailRail` | the peek's chrome: resizable, a column of the sheet where the frame leaves the list beside it its floor (1160 px on most screens, 1396 beside Settings' column), a drawer under that |
@@ -1951,6 +1976,7 @@ for the keys is the reader who does not know `?` yet.
 | In a list | `j` and `k` walk the rows — on a task opened from a list, they open the next and the previous task — `Enter` opens one |
 | With a peek open | `[` and `]` step through the list it was opened from, `Esc` closes it |
 | On a page with tabs | `1`–`9` go to that tab |
+| On an open artifact | `i` its details, `h` its versions and history, `d` its data (where it keeps any), `p` who is here, each pressed again to close what it opened; `s` Share. `Esc` from inside a panel closes it (bound by the design system's `ArtifactPanel`, and listed with the layer's Escape) |
 | On a chart | `+`, `-` zoom and `0` fits, with focus in the chart (bound by the design system's canvas) |
 | In the org builder | `Mod+Z` undo, `Mod+Shift+Z` redo |
 | Writing a reply | `Mod+Enter` sends it (the Inbox's composer; `Enter` alone is a new line) |
@@ -2100,6 +2126,67 @@ show its ancestry beside the controls takes a line of its own.
   and has no row, so it is kept like any other page. Knowledge's landing and
   its pages are the exception: a page is starred from its own More menu, so
   neither draws the frame's star (`useOwnStar`).
+
+### An open artifact is the screen
+
+Every object page in the frame is read the same way: the page bar with its
+trail, then the object's header (its eyebrow, title, facts and actions), then
+its tabs. An open artifact is the one deliberate exception, and it draws ONE
+slim bar instead, the height of a large row (`size.row.lg`, 48 px), with the
+artifact at full size under it.
+
+**Why.** An artifact is not read the way a task or a seat is. A task's page is
+its facts; an artifact's page is the artifact, a deck, a page, a sheet, a
+canvas, and every pixel of chrome above it is a pixel it is drawn smaller in.
+The frame's bar, an object header with a fact line and a tab strip stacked
+over it cost about 280 px at 1440 (a deck's slide was drawn a third smaller
+for it) and most of a phone's first screen, to say things a reader asks after
+once: who owns it, when it changed, their role. And the tabs split one object
+into four places the reader had to leave the artifact to visit. A document
+application draws one bar and opens the rest on demand, and so does this.
+
+**The bar** is the kit's `ArtifactBar`, drawn in the frame's place
+(`OwnPageHeader`, so the frame draws no page bar and no trail under it):
+
+| Where | What |
+|---|---|
+| Start | the frame's navigation toggle on a narrow window, the way back to the gallery, the kind's glyph, the title as the page's `h1` (an editor renames it in place: Enter takes it, Escape puts it back, and a refusal is said at the field), and the version chip (`v3`, or `v2 of 3` in the accent while an older version is on show) whose menu picks a version |
+| Middle | the kind's own views, as one segmented control: a deck's Edit, Grid and Present. A view PUBLISHES them (`lib/artifacts/kindControls.ts`), with its own tools (a doc's Edit) and its rows in More (Print, the presenter's window), so no kind draws a second row of chrome over itself. While a doc is edited it publishes its editing state in their place ("Editing", and "Unsaved changes" once anything differs), with Cancel and Save, so the writer finishes where they pressed Edit |
+| End | who is here (the presence stack), Details, History, Data where the artifact keeps any, People, then Share and More (Rename, Change icon, Settings, the kind's rows, Open in a new tab, Copy link, Pin, Move to the trash) |
+
+Every control is an icon with its name and its key in a tooltip, and its
+name is the button's accessible name; a panel's control is pressed while its
+panel is open.
+
+**It folds by its own width**, a container query, since the sidebar or a
+panel beside it decides its room: under 860 px the presence stack folds (the
+People control counts who is here instead), under 720 px Share's word goes
+and it stays as its glyph, and under 640 px the views and every unlabelled
+control fold into More as rows with their keys, and the kind's glyph gives
+the title its room. Both arrangements are drawn and the stylesheet shows one,
+as the page bar's phone More does, so no control is in two places a reader
+can see at once.
+
+**The panels** are the kit's `ArtifactPanel` in its `ArtifactWorkspace`: one
+at a time at the artifact's side, named by its heading, `panel=` in the
+address (opening one pushes, so Back closes it). Beside the artifact where
+the workspace holds two useful columns (960 px), over its end edge where it
+does not, and the whole screen on a phone. Data and History can take the
+whole workspace (`expand=1`, and a comparison always does), with the
+artifact kept mounted behind them. Opening a panel moves focus to its
+heading; closing it from inside hands focus back to the control that opened
+it; a panel a link opened takes no focus. The old addresses still open:
+`tab=data`, `tab=history`, `tab=settings` and `rail=people` are read as the
+panel each became and rewritten in place.
+
+**What did not move**: the notices (an administrator's opening, a room that
+could not be joined, offline, a newer version published) are one-line
+banners across the top of the workspace, and following somebody is the
+`FollowBanner` there. The page still asks the frame for the window's height
+(`useFillScreen`), so the body scrolls inside itself and a panel beside it
+stays in view however far the artifact is read; a kind's view measures the
+body (`--artifact-view`) rather than reserving room for a header that is not
+there.
 
 ### Moving, and going back
 
@@ -3374,12 +3461,23 @@ schema — and the dashboard printed them as literal characters: a reader saw
 `## Decision`, `- [ ] ship it` and `[the guide](https://…)` as the text an
 agent typed rather than as the document it wrote.
 
-`lib/markdown.ts` renders a CommonMark subset to React nodes. It is in-tree
-for the same reason the rest of this engine writes its own small pieces: a
-markdown library's real surface is its HTML passthrough and the sanitiser that
-has to follow it, and this renderer needs **neither** — it emits no raw HTML
-under any input, so there is no `dangerouslySetInnerHTML` on the path and
+`lib/markdown.ts` renders a CommonMark subset to React nodes. The grammar it
+reads is the design system's (`parseMarkdown` and `markdownInline` from
+`@crewlethq/ui`), the same grammar the rich editor reads a body by, so what a
+writer edits and what a reader sees cannot disagree about where a list ends or
+what a backslash escapes. It is written in-tree rather than taken from a
+markdown library for the reason the rest of this engine writes its own small
+pieces: a library's real surface is its HTML passthrough and the sanitiser
+that has to follow it, and this renderer needs **neither**. It emits no raw
+HTML under any input, so there is no `dangerouslySetInnerHTML` on the path and
 nothing to sanitise.
+
+Beyond the usual blocks it reads three things a page or a doc uses: a
+**backslash escape** (`\*` is an asterisk), an **escaped pipe** in a table
+cell (`a \| b`, a pipe of that cell, inside a code span too, as GitHub reads
+it), and a **callout** in GitHub's alert syntax, a quote whose first line is
+`[!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]` or `[!CAUTION]`, drawn as a
+tinted note with its tone named on a line of its own.
 
 Two rules are load-bearing, because a page is written by an agent acting on
 content it read somewhere else:
@@ -3490,16 +3588,17 @@ It is the design system's `CommandPalette` — the combobox, the scope tabs, the
 answer's live region and the key legend are the kit's — and `app/palette/` is
 what it searches and what a row does.
 
-### Five scopes, three sigils
+### Six scopes, three sigils
 
-A launcher with one index answers "where do I go", and four questions do not
+A launcher with one index answers "where do I go", and five questions do not
 fit that shape, so each is a tab under the field:
 
 | Scope | Searches | Sigil |
 |---|---|---|
-| **All** | screens and **Switch project…**, a pasted event / trace / turn id, three projects ranked as the switcher ranks them, three tasks and three pages (two of each under an answer), agents, people and teams, tools, the three actions, the answer's remaining sources, and **Search all work for “…”**, the full ranked search; when nothing is typed, recents, then **Running now**: a row per seat working as the palette opened, oldest first, its badge, its name and what it is doing ("Executing ENG-412"), each going to the turn's watch link | |
+| **All** | screens and **Switch project…**, a pasted event / trace / turn id, three projects ranked as the switcher ranks them, three tasks and three pages (two of each under an answer), agents, people and teams, the tools the company connected (never the engine's own agent tools, which Settings › Tools & MCP lists), **Find “…” in artifacts**, which carries the term into Artifacts, the three actions, the answer's remaining sources, and **Search all work for “…”**, the full ranked search; when nothing is typed, recents, then **Running now**: a row per seat working as the palette opened, oldest first, its badge, its name and what it is doing ("Executing ENG-412"), each going to the turn's watch link | |
 | **Tasks** | `work_search`, hybrid, eight hits, and a row to the full search screen | `#` |
 | **Pages** | `knowledge`, the company's one knowledge backend | |
+| **Artifacts** | `artifacts` with the term over everything the reader can open, eight hits, each row its kind | |
 | **Agents** | the org chart — the engine's own name tiers first (`colleague`), each seat's status glyph from the agents push, then people and teams | `@` |
 | **Actions** | the per-browser commands (Change theme…, a step listing the themes in their groups, which a query narrows by name, tag or group, whose highlight previews behind the palette, whose Enter applies and closes with an Undo toast, and from which Escape or an empty Backspace goes back to Actions; the mode; density; copy link, the one place a page's address is copied from, a refusal said in a toast; sign in as somebody else; clear recents; the key legend; Switch project…) and the three changes; the legend names who they are made as | `>` |
 
@@ -3530,8 +3629,9 @@ term: the answer on hand is remembered against the term it answers.
 The pill at the end of the scope row is the mode the search was SERVED in —
 "Hybrid search", or "Keyword search" on a company with no embeddings — never
 the mode asked. At most three of the socket's four query slots are the
-palette's (`work_search`, `knowledge`, `colleague`; a picker holds two), so the
-screen under it keeps one. The company's projects (`work_projects`) are read
+palette's (`work_search`, `knowledge`, `colleague`; a picker holds two;
+Artifacts asks `artifacts` alone), so the screen under it keeps one. That is
+why All offers a row into Artifacts rather than asking the listing itself. The company's projects (`work_projects`) are read
 once as the palette opens, before a term can be typed, so they never contend
 with the three. A term longer than the engine resolves to a colleague (200
 bytes — a pasted log line) is not sent to `colleague`, and the chart's own
@@ -3830,6 +3930,17 @@ its author. That refusal, and every other that says the screen is out of date
 (`conflict`, `not_found`, `exists`, `already_answered`), asks the write's
 questions again without raising your read floor, so the page redraws what is
 there now and your next press is made against it.
+
+**One exception: a cell of a sheet (D23).** A native sheet, and a page's
+sheet through the bridge, draw the reader's value at once, MARKED AS PENDING (a
+dashed underline and "Saving" in the cell's description and the sheet's sync
+strip), and make it solid when the engine confirms it; a refusal reverts the
+cell and says why on it, and a write nobody could confirm is kept for Retry
+under its own key. What is drawn solid is what the engine holds. A sheet that
+waited for the engine on every checkbox would be unusable by thirty people at
+once, and the pending mark is what keeps it honest. Everything else an
+artifact's screens write (sharing, a schema change, a version label, the trash)
+is confirmed like every other write.
 
 ### What a screen can change today
 
@@ -6630,9 +6741,13 @@ page is one column and the outline is not drawn.
   page's changes, each drawn as the person, the change and the turn that made
   it. It reads one revision in the page's place, as what it changed against
   the one saved before it (by line) or as its full text.
-- **Edit writes as you.** The editor is the design system's `MarkdownEditor`
-  (a formatting bar, Write and Preview, Link a page) and saves through
-  `save_page` on
+- **Edit writes as you, in place.** The page itself becomes the editor (the
+  design system's `RichEditor`, [ADR-0044](../../adr/0044-a-page-is-edited-in-place-and-saved-as-the-markdown-it-was.md)): it looks the same while it is
+  edited as when it is read, blocks come from a slash menu or from Markdown
+  typed as Markdown, a selection gets a formatting toolbar, and the page bar's
+  Edit becomes the editing state, Cancel and Save. The body stays Markdown,
+  and a save with no edit sends the bytes that were opened, so only the lines
+  a writer changed ever move. It saves through `save_page` on
   [`/operator/act`](api-endpoints.md#operatoract--the-dashboards-write-surface)
   with the revision it was opened on as `base_version`. The page keeps being
   read while it is open (every 20 s), so a save by somebody else is SEEN
@@ -6647,9 +6762,11 @@ page is one column and the outline is not drawn.
   merge is precisely what the engine's refusal of a stale base exists to
   prevent: the next save would be accepted against the new revision and
   delete what they wrote. Save and Command or Control with Enter read one
-  answer for whether a save can be sent. A page link is inserted by picking a
-  page, and is written in the address the backlinks read
-  (`PAGE_ADDRESS_PREFIX`, held against `pages.AddressPrefix` by a test).
+  answer for whether a save can be sent. A page link is inserted from the
+  slash menu's "Link to a page", by picking a page, and is written in the
+  address the backlinks read (`PAGE_ADDRESS_PREFIX`, held against
+  `pages.AddressPrefix` by a test). The note kept with the revision is a line
+  under the page, beside its word count.
 
 ### The composer: a new page
 
@@ -7723,12 +7840,12 @@ follows it and the workspace is back in the entry with every other test green �
 so `internal/api`'s `TestTheDashboardFitsItsBudget` measures the crawl described above
 and fails a build over any of four numbers:
 
-| What | Budget | Measured as |
-|---|---|---|
-| The initial load: the entry, its static imports and the linked stylesheet | 300 KiB | gzip at the best level, which is what the engine serves |
-| Each chunk fetched later: a workspace, the org builder, a lazy stylesheet | 150 KiB | the same |
-| Every font face the build embeds | 90 KB | as served — woff2 is never recompressed |
-| The whole of `static/dashboard`, which every binary and image carries | 3 MiB | raw |
+| What | Budget | Measured as | Why this number |
+|---|---|---|---|
+| The initial load: the entry, its static imports and the linked stylesheet | 310 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own |
+| Each chunk fetched later: a workspace, the org builder, a lazy stylesheet | 150 KiB | the same | Half the initial load, for the first click into a screen the idle prefetch has not reached |
+| Every font face the build embeds | 90 KB | as served — woff2 is never recompressed | The four Geist faces (83,736 bytes) and room to re-cut them, never a fifth |
+| The whole of `static/dashboard`, which every binary and image carries | 4 MiB | raw | Every binary carries it, opened or not. 3 MiB, then 3.5 MiB for the artifacts workspace, then 4 MiB for the rich editor, whose chunk is about 276 KB raw (ProseMirror 228 KB of it) plus 15 KB of its packages' notices: it measured 3.54 MiB after it. A doubled 2.3 MB baseline is still refused |
 
 The initial load is the shell's scripts and stylesheet and everything they reach
 through a static `import`, derived from the modules themselves rather than from
@@ -8727,11 +8844,18 @@ to.
     the client declares no price field at all, because a field
     `protocol/types.ts` declares is one a component is a single line away from
     drawing. The engine's price stays on its API for anyone who asks for it
-    ([API endpoints](api-endpoints.md#token-spend-breakdown)). The one place it
-    can be read on a screen is a record shown **verbatim**, as the engine
+    ([API endpoints](api-endpoints.md#token-spend-breakdown)). One of the two
+    places it can be read on a screen is a record shown **verbatim**, as the engine
     stored it — an event's own payload — because a verbatim view that dropped
     a field would misreport the record, and nothing there is drawn as a
-    figure. Three gates hold the rule, each over a different artefact: the
+    figure. The other is an artifact sheet's own cells: a number column whose
+    schema declares a currency is the author's data, drawn by the design
+    system's sheet model in the format the author chose, and never a figure the
+    engine recorded, so the sheet draws it as declared. The bundle gate admits
+    exactly that construct and the currency signs the sheet strips from typed
+    input before parsing a number, each written as the whole construct, so a
+    currency format or a sign anywhere else is still refused. Three gates hold
+    the rule, each over a different artefact: the
     SOURCE, where `src/money.test.tsx` parses every shipped module — comments
     excluded, so a note explaining the rule can name what it forbids; the
     SCREENS, where the same suite renders the landing screen, Spend, a task, a

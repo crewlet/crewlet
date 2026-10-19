@@ -164,3 +164,63 @@ func TestATokenCarriesWhatItsMintAndItsOwnerShare(t *testing.T) {
 		})
 	}
 }
+
+// A TOKEN HELD BY NAME IS DECIDED BY THE SAME TABLE, BUT THE TWO FACTS ONLY A
+// BEARER HAS.
+//
+// A view ticket minted through a machine token names the token and never
+// carries its secret, so the artifact origin decides it by its rows: every
+// fact that ends a good token ends it there too, and an absent row is a node
+// that cannot tell (it has no mint position to cover) rather than a refusal.
+// Mutation: answer an absent row refused, and a frame whose token a lagging
+// node has not applied yet is ended; skip the ending facts, and a revoked
+// token keeps opening frames.
+func TestATokenHeldByNameIsDecidedByItsRows(t *testing.T) {
+	t.Parallel()
+	token, verifier := mintToken(t, 1<<40|100)
+	for _, tc := range []struct {
+		name   string
+		mutate func(*credential.TokenRow)
+		want   credential.TokenAnswer
+	}{
+		{"a token nothing is wrong with", nil, credential.TokenValid},
+		{"a node past the stall grace", func(r *credential.TokenRow) { r.Lag = 2 * stall },
+			credential.TokenUnknown},
+		{"a node holding an undecodable record about the owner",
+			func(r *credential.TokenRow) { r.Deferred = true }, credential.TokenUnknown},
+		{"no row at all", func(r *credential.TokenRow) {
+			*r = credential.TokenRow{Applied: r.Applied}
+		}, credential.TokenUnknown},
+		{"an id naming a password", func(r *credential.TokenRow) { r.IsToken = false },
+			credential.TokenRefused},
+		{"a revoked token", func(r *credential.TokenRow) { r.RevokedAt = checkAt },
+			credential.TokenRefused},
+		{"an expired token", func(r *credential.TokenRow) { r.ExpiresAt = checkAt },
+			credential.TokenRefused},
+		{"an owner who is gone", func(r *credential.TokenRow) { r.Owner.Found = false },
+			credential.TokenRefused},
+		{"a suspended owner", func(r *credential.TokenRow) { r.Owner.Stage = iam.StageSuspended },
+			credential.TokenRefused},
+		{"an owner signed out everywhere since the mint",
+			func(r *credential.TokenRow) { r.Owner.Epoch = r.Epoch + 1 }, credential.TokenRefused},
+		{"every credential invalidated since the mint",
+			func(r *credential.TokenRow) { r.FleetGeneration = r.Generation + 1 },
+			credential.TokenRefused},
+		// THE SECRET IS NOT ASKED: a row whose verifier names some other
+		// secret entirely is still the token the ticket was minted through.
+		{"a verifier no presented secret would match",
+			func(r *credential.TokenRow) { r.Verifier = otherSecret(r.Verifier) },
+			credential.TokenValid},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			row := liveRow(token, verifier)
+			if tc.mutate != nil {
+				tc.mutate(&row)
+			}
+			if got := credential.CheckHeld(row, checkAt, stall); got.Answer != tc.want {
+				t.Errorf("%s answered %q (%s), want %q", tc.name, got.Answer, got.Detail, tc.want)
+			}
+		})
+	}
+}

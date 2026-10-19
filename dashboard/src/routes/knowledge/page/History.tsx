@@ -17,98 +17,15 @@
  */
 
 import { useMemo } from "react";
-import { Button, cx, Document, EmptyState, SegmentedControl } from "@crewlethq/ui";
-import { CheckGlyph, ClockGlyph } from "@crewlethq/icons/glyphs";
+import { Button, Document, EmptyState, VersionCompare } from "@crewlethq/ui";
+import { ClockGlyph } from "@crewlethq/icons/glyphs";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { collapse, diffLines, diffStat, type DiffSection } from "~/lib/diff.ts";
-import { fmtDateTime, plural, relTime } from "~/lib/format.ts";
+import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { PageRevision } from "~/protocol/index.ts";
 import { Face, changeNote, changeWords, changedBy, type Who } from "../parts.tsx";
-
-/**
- * A line diff, rendered as the document it is.
- *
- * MONOSPACE AND LINE-NUMBERED on both sides, because the two numbers are what
- * a reader uses to find the paragraph in the version beside it. A skipped run
- * is a row of its own saying how many lines it stands for: a gap silently
- * closed makes a document edited at both ends look like one rewritten in the
- * middle.
- */
-export function DiffPane({ sections }: { sections: DiffSection[] }) {
-  return (
-    <div className="diff">
-      {sections.map((section, s) => (
-        <div key={s} className="diff-section">
-          {section.skipped > 0 && (
-            <div className="diff-skip">{plural(section.skipped, "unchanged line")}</div>
-          )}
-          {section.lines.map((line, i) => (
-            // THE CLASS NAMES ARE LITERALS, never assembled from the value:
-            // a stylesheet gate that cannot see a class cannot tell a rule
-            // this file relies on from one nothing uses.
-            <div
-              key={i}
-              className={cx(
-                "diff-line",
-                line.kind === "add" && "is-add",
-                line.kind === "remove" && "is-remove",
-              )}
-            >
-              <span className="diff-no">{line.before ?? ""}</span>
-              <span className="diff-no">{line.after ?? ""}</span>
-              <span className="diff-mark">
-                {line.kind === "add" ? "+" : line.kind === "remove" ? "−" : " "}
-              </span>
-              <span className="diff-text">{line.text || " "}</span>
-            </div>
-          ))}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/**
- * What one body became from another: the stat line and the pane, or the
- * sentence that says nothing in the prose moved.
- */
-export function BodyDiff({
-  before,
-  after,
-  against,
-}: {
-  before: string;
-  after: string;
-  against: string;
-}) {
-  const diff = useMemo(() => collapse(diffLines(before, after)), [before, after]);
-  const stat = useMemo(() => diffStat(diff.flatMap((section) => section.lines)), [diff]);
-  if (stat.identical) {
-    // IDENTICAL IS ITS OWN ANSWER: a save that changed only the title leaves
-    // the body untouched, and a pane of unmarked lines reads as one that
-    // failed to load.
-    return (
-      <EmptyState
-        size="compact"
-        icon={<CheckGlyph size="xl" />}
-        title="The body did not change"
-        description="Only the title, labels or position changed."
-      />
-    );
-  }
-  return (
-    <>
-      <p className="knowledge-note">
-        <span className="diff-add-ink">+{stat.added}</span>{" "}
-        <span className="diff-del-ink">−{stat.removed}</span> against {against}
-      </p>
-      <DiffPane sections={diff} />
-    </>
-  );
-}
 
 /**
  * One saved version, read in the page in place of the current body.
@@ -116,6 +33,11 @@ export function BodyDiff({
  * The PREVIOUS version is the one below it in the history, not `version - 1`:
  * a page keeps a bounded number of revisions, so on a trimmed page
  * `version - 1` is a read that comes back not found.
+ *
+ * The two `page_revision` reads and their states live here; the head, the
+ * lens switch and the line diff are uilet's [VersionCompare]. THE FIRST
+ * VERSION HAS NOTHING TO COMPARE WITH, so it is handed only its full text and
+ * no switch is drawn, rather than a diff that says "everything".
  */
 export function VersionView({
   pageID,
@@ -139,86 +61,85 @@ export function VersionView({
     return i >= 0 ? (history[i + 1]?.version ?? 0) : 0;
   }, [history, version]);
   const [lens, setLens] = useParam("lens", "diff", "filter");
+  // READ WHATEVER THE LENS, so the switch stays on screen from either side
+  // instead of appearing only once the reader has asked for the changes.
   const prior = useQuery(
     "page_revision",
     { page: pageID, version: previous },
-    { enabled: previous > 0 && lens === "diff" },
+    { enabled: previous > 0 },
   );
   const rev = history.find((r) => r.version === version);
   const by = rev?.author ?? "";
+  const text = body.data?.body;
+
+  const full = body.data ? (
+    text ? (
+      <Document>{renderMarkdown(text)}</Document>
+    ) : (
+      <p className="knowledge-note">This revision had no body.</p>
+    )
+  ) : (
+    <QueryState error={body.error} refusal={body.refusal} loading={body.loading}>
+      {/* NOT FOUND IS NOT A FAILURE: a page keeps a bounded number of
+          revisions, and saying which of the two happened is the point. */}
+      {!body.loading && (
+        <EmptyState
+          size="compact"
+          icon={<ClockGlyph size="xl" />}
+          title="This node no longer holds that revision"
+          description="Only recent revisions are kept."
+        />
+      )}
+    </QueryState>
+  );
+  const compared =
+    body.data && previous > 0
+      ? prior.data
+        ? { before: prior.data.body ?? "", after: text ?? "" }
+        : {
+            changes: (
+              <QueryState error={prior.error} refusal={prior.refusal} loading={prior.loading} />
+            ),
+          }
+      : {};
 
   return (
-    <section className="knowledge-version" aria-label={`Revision ${version}`}>
-      <div className="knowledge-version-head">
-        {by && <Face handle={by} who={who} />}
-        <span className="knowledge-version-what">
-          Revision {version}
-          {rev && (
-            <>
-              {" · "}
-              <b>{by ? who(by).name : "the engine"}</b>
-              {" · "}
-              <time dateTime={rev.created_at} title={fmtDateTime(rev.created_at)}>
-                {relTime(rev.created_at, now)}
-              </time>
-              {rev.message && <> · &ldquo;{rev.message}&rdquo;</>}
-            </>
-          )}
-        </span>
-        <span className="spacer" />
-        {/* THE FIRST VERSION HAS NOTHING TO COMPARE WITH, which is a fact about
-            the page rather than a lens the reader failed to pick, so the
-            control is absent rather than offering a diff that says
-            "everything". */}
-        {previous > 0 && (
-          <SegmentedControl
-            semantics="radio"
-            activate="manual"
-            size="sm"
-            label="What to show of this revision"
-            value={lens === "full" ? "full" : "diff"}
-            onValueChange={setLens}
-            options={[
-              { value: "diff", label: "Changes", title: `What changed from rev ${previous}` },
-              { value: "full", label: "Full text" },
-            ]}
-          />
-        )}
+    <VersionCompare
+      title={
+        <>
+          {by && <Face handle={by} who={who} />} Revision {version}
+        </>
+      }
+      description={
+        rev && (
+          <>
+            {by ? who(by).name : "The engine"}
+            {" · "}
+            <time dateTime={rev.created_at} title={fmtDateTime(rev.created_at)}>
+              {relTime(rev.created_at, now)}
+            </time>
+            {rev.message && <> · &ldquo;{rev.message}&rdquo;</>}
+          </>
+        )
+      }
+      fromLabel={`rev ${previous}`}
+      toLabel={`rev ${version}`}
+      lens={lens === "full" ? "versions" : "changes"}
+      onLensChange={(next) => setLens(next === "versions" ? "full" : "diff")}
+      labels={{
+        lens: "What to show of this revision",
+        versions: "Full text",
+        identicalTitle: "The body did not change",
+        identicalDescription: "Only the title, labels or position changed.",
+      }}
+      {...compared}
+      to={full}
+      actions={
         <Button size="small" variant="ghost" onClick={onClose}>
           Back to the page
         </Button>
-      </div>
-      <QueryState error={body.error} refusal={body.refusal} loading={body.loading}>
-        {body.data ? (
-          lens !== "full" && previous > 0 ? (
-            <QueryState error={prior.error} refusal={prior.refusal} loading={prior.loading}>
-              {prior.data && (
-                <BodyDiff
-                  before={prior.data.body ?? ""}
-                  after={body.data.body ?? ""}
-                  against={`rev ${previous}`}
-                />
-              )}
-            </QueryState>
-          ) : body.data.body ? (
-            <Document>{renderMarkdown(body.data.body)}</Document>
-          ) : (
-            <p className="knowledge-note">This revision had no body.</p>
-          )
-        ) : (
-          // NOT FOUND IS NOT A FAILURE: a page keeps a bounded number of
-          // revisions, and saying which of the two happened is the point.
-          !body.loading && (
-            <EmptyState
-              size="compact"
-              icon={<ClockGlyph size="xl" />}
-              title="This node no longer holds that revision"
-              description="Only recent revisions are kept."
-            />
-          )
-        )}
-      </QueryState>
-    </section>
+      }
+    />
   );
 }
 

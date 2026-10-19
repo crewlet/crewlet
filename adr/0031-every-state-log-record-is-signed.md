@@ -1,4 +1,4 @@
-# ADR-0031 — Every state-log record is signed, and the framework verifies before a domain decodes
+# ADR-0031: Every state-log record is signed, and the framework verifies before a domain decodes
 
 - **Status:** accepted
 - **Authority:** `internal/statelog`
@@ -122,3 +122,14 @@ It does not decide what a reader does once verification fails — only that it
 must not decode. The change feed acknowledges and derives no wake; the applier
 retains or stops. Both follow from what each can do with a record it cannot
 attribute, and neither is forced by this record.
+
+## Amendment: presence frames are sealed too
+
+Signing reaches one channel that is not a state log. An artifact presence frame
+([ADR-0038](0038-presence-is-told-never-stored.md)) names a person, and its
+reader acts on it by showing that person in a room, so a forged one is not
+harmless the way a forged read answer is. Every presence frame a node
+broadcasts is sealed one way under the fleet keyring, in a key domain of its
+own, with a short validity inside the seal, through the same
+`internal/signedask` implementation (which gains a one-way form beside request
+and reply); a frame that does not open shows nobody.

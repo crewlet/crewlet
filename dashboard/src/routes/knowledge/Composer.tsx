@@ -38,7 +38,7 @@ import {
   EmptyState,
   FormField,
   Input,
-  MarkdownEditor,
+  RichEditor,
   SegmentedControl,
   Select,
   TagsInput,
@@ -61,10 +61,12 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useQuiet } from "~/lib/useQuiet.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import type { PageSummary, PageStatus } from "~/protocol/index.ts";
-import { previewMarkdown } from "./page/Editor.tsx";
-import { LinkPageButton } from "./page/LinkPicker.tsx";
+import { linkPageCommand } from "./page/LinkPicker.tsx";
 import { KnowledgeBar, PageGlyph, pagePath, useSpaces } from "./parts.tsx";
 import { PAGES_WINDOW } from "./usePagedPages.ts";
+
+/** The composer's own entry in the slash menu: a new page links to any page. */
+const COMMANDS = [linkPageCommand()];
 
 /** What a page can start from: a blank page, or the outline of a page the company writes often. */
 export const TEMPLATES = [
@@ -401,27 +403,28 @@ export function Composer() {
             />
           </FormField>
 
-          <MarkdownEditor
+          <RichEditor
             value={body}
             onChange={setBody}
-            label="The page, in markdown"
-            placeholder="Write in markdown"
-            renderPreview={previewMarkdown}
-            rows={18}
-            invalid={bodyBytes > PAGE_BODY_MAX_BYTES}
-            actions={(editor) => <LinkPageButton editor={editor} />}
+            label="The page"
+            placeholder="Write the page, or type a slash for blocks"
+            commands={COMMANDS}
             onSubmit={() => {
               if (pressable(write, blocked)) void press("published");
             }}
-            footer={
-              <span className="knowledge-composer-count">
-                <span>{plural(markdownWords(body), "word")}</span>
-                <span>
-                  {fmtBytes(bodyBytes)} of {fmtBytes(PAGE_BODY_MAX_BYTES)} · Markdown
-                </span>
-              </span>
-            }
           />
+          <p
+            className={
+              bodyBytes > PAGE_BODY_MAX_BYTES
+                ? "knowledge-composer-count is-over"
+                : "knowledge-composer-count"
+            }
+          >
+            <span>{plural(markdownWords(body), "word")}</span>
+            <span>
+              {fmtBytes(bodyBytes)} of {fmtBytes(PAGE_BODY_MAX_BYTES)}
+            </span>
+          </p>
           <RefusalNote write={write} />
         </div>
 

@@ -4,6 +4,7 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
@@ -261,6 +262,70 @@ const (
 	// cannot be taken back for anybody, and it signs out the whole company
 	// including the person making it.
 	ActionSessionInvalidate Action = "iam.invalidate"
+
+	// --- artifacts ---------------------------------------------------- //
+	//
+	// ONE ARTIFACT IS THE OBJECT OF EVERY ONE OF THEM: its versions, files,
+	// assets, data, presence and view tickets are all decided as the
+	// artifact, by the caller's role on it ([ClassShared]). The tools are
+	// named for what a seat and a person's assistant call; the dotted verbs
+	// are a person's gestures on the HTTP surface, which no tool offers.
+	//
+	// READING. Listing is a FILTER and never a refusal: it answers the rows
+	// reading admits ([Visible]). Reading one is everything a viewer sees,
+	// its history and its presence included, so there is no separate verb
+	// for either.
+	ActionArtifactList Action = "list_artifacts"
+	ActionArtifactRead Action = "get_artifact"
+	// THE DASHBOARD SOURCE CATALOGUE is the engine's own vocabulary, read
+	// before a board exists, so it is everybody's: what a source ANSWERS is
+	// decided as each board's viewer, never by who listed it.
+	ActionDashboardSources Action = "list_dashboard_sources"
+	// AUTHORING, each asking the `artifacts` app beside the role.
+	ActionArtifactCreate  Action = "create_artifact"
+	ActionArtifactPublish Action = "publish_artifact"
+	ActionArtifactUpdate  Action = "update_artifact"
+	ActionArtifactAsset   Action = "upload_artifact_asset"
+	ActionArtifactSchema  Action = "set_artifact_schema"
+	// SHARING is the owner's: the owner, the lead of an agent owner, or
+	// admin. What a share may name and grant is the artifacts domain's to
+	// refuse where the record is formed.
+	ActionArtifactShare   Action = "share_artifact"
+	ActionArtifactUnshare Action = "unshare_artifact"
+	// THE DATA, which every participant reaches and the collection's own
+	// rules then decide row by row once the store is read: the row admits,
+	// the domain decides, as `work.thread` does for a work item's thread.
+	ActionArtifactDataRead  Action = "read_artifact_data"
+	ActionArtifactDataQuery Action = "query_artifact_data"
+	ActionArtifactDataWrite Action = "write_artifact_data"
+
+	// ActionArtifactForce discards a newer version than the one the writer
+	// read: a publish asks it from inside, once it knows the base is stale.
+	// A PERSON'S, PRESENT: a seat merges and never throws away a
+	// colleague's version, and no pipeline does either.
+	ActionArtifactForce Action = "artifacts.publish.force"
+	// TAKING ONE OUT OF CIRCULATION AND BACK is the owner's and a person's:
+	// trashing stops every viewer at once, so a model persuaded by a row it
+	// read must not be able to take a team's sheet offline.
+	ActionArtifactTrash   Action = "artifacts.trash"
+	ActionArtifactRestore Action = "artifacts.restore"
+	// BEYOND RECOVERY is admin's, as every purge is; the trash reaper purges
+	// an owner's trash once its term is up.
+	ActionArtifactPurge Action = "artifacts.purge"
+	// HANDING ONE TO ANOTHER SEAT is how ownership moves, and the only way.
+	ActionArtifactTransfer Action = "artifacts.transfer"
+	// A person's own pin of an artifact in their sidebar: their record, on
+	// an artifact they may read.
+	ActionArtifactPin Action = "artifacts.pin"
+	// THE WHOLE DATA, whatever each collection's read rule, which is why it
+	// is an editor's.
+	ActionArtifactExport Action = "artifacts.export"
+	// What the company's artifacts hold against its quotas: admin's.
+	ActionArtifactUsage Action = "artifacts.usage"
+	// A viewer's browser reporting that an artifact finished rendering, for
+	// the service objective: everybody's, because it carries no artifact
+	// content and a reader of any artifact sends it.
+	ActionArtifactReady Action = "artifacts.ready"
 )
 
 // Presence is which arms of a verb need a PERSON present: refused to a request
@@ -307,8 +372,9 @@ func (p Presence) Valid() bool { return slices.Contains(Presences, p) }
 type rule struct {
 	class Class
 
-	// app is the app this verb belongs to — [iam.GrantTracker],
-	// [iam.GrantKnowledge] — or empty for a verb that belongs to none. It is
+	// app is the app this verb belongs to ([iam.GrantTracker],
+	// [iam.GrantKnowledge], [iam.GrantArtifacts]), or empty for a verb that
+	// belongs to none. It is
 	// the requirement of [ClassApp] and [ClassAppOrAsked], and it is ANDED
 	// onto every relation class ([withApp]): a project's lead who does not
 	// use the tracker does not set its policy, and a comment's author who no
@@ -407,6 +473,31 @@ type rule struct {
 	// window of everybody. A walk holds a set one to naming a real window
 	// on a class that has a self arm at all.
 	selfRecency iam.Recency
+
+	// minRole is the least ROLE on an artifact a [ClassShared] row admits:
+	// viewer to read, contributor and up to write what the page itself is
+	// made of, owner to share and take it out of circulation.
+	//
+	// REQUIRED ON EVERY SHARED ROW AND REFUSED ON EVERY OTHER, by a walk in
+	// this package's tests, for [rule.recency]'s reason: a zero role read as
+	// the lowest would be a shared verb somebody added without deciding,
+	// shipped open to every viewer. [artifacts.Role.Includes] already admits
+	// nobody on a zero requirement; the walk makes that a build failure
+	// instead of a verb nobody can take.
+	minRole artifacts.Role
+
+	// steerable says an agent's OWN object on this verb is steerable by
+	// whoever woke it: the requester ceiling ([DecideWithin]) spares an
+	// agent acting on what it owns, so "please fix the typo in your table"
+	// from a colleague who only views it is still a request it can carry
+	// out, as it carries out an edit to any other work it owns.
+	//
+	// THE ZERO IS THE CEILING ALWAYS APPLYING, the safe direction: a verb
+	// that discloses content is never steerable, or anybody who can message
+	// an agent could have it read its private work back to them. And
+	// neither is sharing, which hands the artifact to whoever the share
+	// names: a steerable share would be that same read, one step removed.
+	steerable bool
 }
 
 // rules is THE authority table: every verb this engine knows, and how it is
@@ -717,6 +808,75 @@ var rules = map[Action]rule{
 	// day nobody can sign in.
 	ActionSessionInvalidate: {class: ClassAdmin, recency: iam.RecencyStepUp,
 		presence: PresenceRequired},
+
+	// --- artifacts ------------------------------------------------------- //
+	//
+	// A SHARE IS A RELATION AND THE APP GATES AUTHORING ONLY. Reading,
+	// filling in data and sharing ask the role alone; creating, publishing,
+	// renaming, adding an asset, reshaping the data and taking one out of
+	// circulation ask the `artifacts` app beside it ([withApp]). See "An
+	// artifact is decided per object, by its shares" in the package doc.
+	//
+	// LISTING IS EVERYBODY'S, because it is a filter over what reading
+	// admits ([Visible]): a caller is shown the artifacts they may open and
+	// told nothing about the rest.
+	ActionArtifactList: {class: ClassEverybody, recency: iam.RecencyAny},
+	// THE CATALOGUE IS EVERYBODY'S: it names reads and who may make them,
+	// and holds no row of any domain.
+	ActionDashboardSources: {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionArtifactRead: {class: ClassShared, minRole: artifacts.RoleViewer,
+		recency: iam.RecencyAny},
+	// CREATING IS THE APP AND NOTHING ELSE: there is no artifact yet to hold
+	// a relation to, and its creator becomes its owner.
+	ActionArtifactCreate: {class: ClassApp, app: iam.GrantArtifacts,
+		recency: iam.RecencyAny, steerable: true},
+	ActionArtifactPublish: {class: ClassShared, app: iam.GrantArtifacts,
+		minRole: artifacts.RoleEditor, recency: iam.RecencyAny, steerable: true},
+	ActionArtifactUpdate: {class: ClassShared, app: iam.GrantArtifacts,
+		minRole: artifacts.RoleEditor, recency: iam.RecencyAny, steerable: true},
+	ActionArtifactAsset: {class: ClassShared, app: iam.GrantArtifacts,
+		minRole: artifacts.RoleEditor, recency: iam.RecencyAny, steerable: true},
+	ActionArtifactSchema: {class: ClassShared, app: iam.GrantArtifacts,
+		minRole: artifacts.RoleEditor, recency: iam.RecencyAny, steerable: true},
+	ActionArtifactShare: {class: ClassShared, minRole: artifacts.RoleOwner,
+		recency: iam.RecencyAny},
+	ActionArtifactUnshare: {class: ClassShared, minRole: artifacts.RoleOwner,
+		recency: iam.RecencyAny},
+	// EVERY PARTICIPANT REACHES THE DATA, and the collection decides: a
+	// viewer may append to a collection that takes contributions, and an
+	// editor may be kept out of another's private rows.
+	ActionArtifactDataRead: {class: ClassShared, minRole: artifacts.RoleViewer,
+		recency: iam.RecencyAny},
+	ActionArtifactDataQuery: {class: ClassShared, minRole: artifacts.RoleViewer,
+		recency: iam.RecencyAny},
+	ActionArtifactDataWrite: {class: ClassShared, minRole: artifacts.RoleViewer,
+		recency: iam.RecencyAny, steerable: true},
+	// DISCARDING A NEWER VERSION is a person's, present: refused to every
+	// seat before the class is read, and to every machine token.
+	ActionArtifactForce: {class: ClassShared, app: iam.GrantArtifacts,
+		minRole: artifacts.RoleEditor, humanOnly: true, presence: PresenceRequired,
+		recency: iam.RecencyAny},
+	// TRASH AND RESTORE are the owner's, beside the app, and never an
+	// agent's: a trashed artifact stops serving at once.
+	ActionArtifactTrash: {class: ClassShared, app: iam.GrantArtifacts,
+		minRole: artifacts.RoleOwner, humanOnly: true, recency: iam.RecencyAny},
+	ActionArtifactRestore: {class: ClassShared, app: iam.GrantArtifacts,
+		minRole: artifacts.RoleOwner, humanOnly: true, recency: iam.RecencyAny},
+	// A PURGE IS ADMIN'S, A PERSON'S AND A RECENT PROOF'S, as every other
+	// purge is: nothing undoes it.
+	ActionArtifactPurge: {class: ClassAdmin, humanOnly: true,
+		presence: PresenceRequired, recency: iam.RecencyStepUp},
+	// OWNERSHIP MOVES BY A PERSON'S GESTURE, never a token's and never a
+	// seat's: an agent handing its work to itself, or a pipeline moving
+	// somebody's work away from them, is the escalation the rule closes.
+	ActionArtifactTransfer: {class: ClassShared, minRole: artifacts.RoleOwner,
+		humanOnly: true, presence: PresenceRequired, recency: iam.RecencyAny},
+	ActionArtifactPin: {class: ClassShared, minRole: artifacts.RoleViewer,
+		humanOnly: true, recency: iam.RecencyAny},
+	ActionArtifactExport: {class: ClassShared, minRole: artifacts.RoleEditor,
+		recency: iam.RecencyAny},
+	ActionArtifactUsage: {class: ClassAdmin, recency: iam.RecencyAny},
+	ActionArtifactReady: {class: ClassEverybody, recency: iam.RecencyAny},
 }
 
 // RecencyOf reports how recent a proof a verb asks for, and whether the table
@@ -783,6 +943,28 @@ func HumanOnlyOf(a Action) (bool, bool) {
 func SeatOnlyOf(a Action) (bool, bool) {
 	r, ok := rules[a]
 	return r.seatOnly, ok
+}
+
+// MinRoleOf reports the least artifact role a verb's row admits (see
+// [rule.minRole]), empty for a row that is not [ClassShared], and whether the
+// table knows the verb at all.
+//
+// EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
+func MinRoleOf(a Action) (artifacts.Role, bool) {
+	r, ok := rules[a]
+	return r.minRole, ok
+}
+
+// SteerableOf reports whether the requester ceiling spares an agent acting on
+// its own object on this verb (see [rule.steerable]), and whether the table
+// knows the verb at all.
+//
+// EXPORTED FOR THE WALKS, and for the one held outside this package that
+// pairs it with the tools' own annotations: a steerable verb must be a write.
+// Use [DecideWithin].
+func SteerableOf(a Action) (bool, bool) {
+	r, ok := rules[a]
+	return r.steerable, ok
 }
 
 // Actions is every verb this build authorizes, sorted, for the walks that ask

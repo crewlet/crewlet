@@ -66,16 +66,25 @@
 
 import { useMemo, useRef, useState } from "react";
 import { useSearchTarget } from "~/app/searchTarget.ts";
-import { useParam } from "~/app/router.tsx";
+import { useParam, href } from "~/app/router.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
+import { linkedSeat } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { StatusBadge, TypeIcon } from "~/components/work.tsx";
-import { Button, Callout, EmptyState, EmptyValue, Input } from "@crewlethq/ui";
-import { Segmented } from "~/ui/primitives.tsx";
+import {
+  Button,
+  Callout,
+  EmptyState,
+  EmptyValue,
+  Input,
+  SegmentedControl,
+  TableEntityCell,
+  TableKeyCell,
+  TableTextCell,
+} from "@crewlethq/ui";
 import { SEARCH_MODES, asSearchMode, modeLabel, servedNote } from "~/lib/search.ts";
 import { ClockGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
@@ -168,10 +177,12 @@ export function WorkSearch() {
           />
         </div>
         <div className="work-search-how">
-          <Segmented
+          <SegmentedControl
+            semantics="radio"
+            activate="manual"
             value={mode}
-            onChange={setMode}
-            ariaLabel="Rank by"
+            onValueChange={setMode}
+            label="Rank by"
             options={SEARCH_MODES.map((m) => ({ value: m.value, label: m.label, title: m.hint }))}
           />
           <Button variant="primary" leadingIcon={<SearchGlyph size="sm" />} type="submit">
@@ -273,7 +284,7 @@ export function WorkSearch() {
                         Status column below gives about the six statuses: a
                         ranked answer spans every project, so the shipped word is
                         the only one true of the whole list. */}
-                    <TextCell mark={<TypeIcon type={r.type} />}>{r.title}</TextCell>
+                    <TableTextCell mark={<TypeIcon type={r.type} />}>{r.title}</TableTextCell>
                     {/* THE INDEX'S OWN EXCERPT — the half a board row cannot
                         have, because a board row does not know what you
                         asked. It is a CUT of a markdown body, so it is drawn
@@ -291,7 +302,7 @@ export function WorkSearch() {
                 // this node yet is a dash that says so on hover, rather than a
                 // faint em dash of this screen's own that means whatever the
                 // next screen's faint em dash means.
-                cell: (r) => <KeyCell value={r.key} />,
+                cell: (r) => <TableKeyCell value={r.key} />,
               },
               {
                 key: "project",
@@ -301,13 +312,13 @@ export function WorkSearch() {
                 // every other key in the product wears and links to the
                 // project rather than sitting in a chip. Colour is spent on
                 // state here, and which project an item is in is identity.
-                cell: (r) => <KeyCell value={r.project} path={["work", r.project]} />,
+                cell: (r) => <TableKeyCell value={r.project} href={href(["work", r.project])} />,
               },
               {
                 key: "status",
                 header: "Status",
                 shrink: true,
-                // THE TRACKER'S OWN STATUS BADGE, not a `StatusCell` and not
+                // THE TRACKER'S OWN STATUS BADGE, not a `TableStatusCell` and not
                 // the raw slug this column used to print. Six statuses with a
                 // tone each is a VOCABULARY rather than two lifecycle states,
                 // and a company may rename any of them — `StatusBadge` is the
@@ -332,11 +343,13 @@ export function WorkSearch() {
                 cell: (r) => {
                   const who = r.assignee ? index.byHandle.get(r.assignee) : undefined;
                   return (
-                    <SeatCell
-                      handle={r.assignee}
-                      name={who?.name}
-                      kind={who?.kind}
-                      avatar={who?.avatar}
+                    <TableEntityCell
+                      {...linkedSeat({
+                        handle: r.assignee,
+                        name: who?.name,
+                        kind: who?.kind,
+                        avatar: who?.avatar,
+                      })}
                     />
                   );
                 },

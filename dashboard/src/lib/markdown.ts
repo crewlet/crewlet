@@ -7,28 +7,22 @@
  * reader saw `## Decision` and `- [ ] ship it` as literal characters, and a
  * link as its own URL in angle brackets.
  *
- * HAND-ROLLED, and the two reasons are the ones the rest of this engine gives
- * for its own small implementations. A markdown library's real surface is its
- * HTML passthrough and the sanitiser that has to follow it, and this renderer
- * needs NEITHER: it never emits raw HTML, at all, under any input, so there is
- * nothing to sanitise and no `dangerouslySetInnerHTML` anywhere on this path.
- * And the subset a company's own pages actually use is small enough to read in
- * one sitting, which a dependency's is not.
+ * THE GRAMMAR IS THE DESIGN SYSTEM'S (`parseMarkdown` and `markdownInline`
+ * from @crewlethq/ui), and this file is the dashboard's RENDERER of it. The
+ * rich editor a writer edits a page in reads the body by that same grammar,
+ * so what an editor shows and what a reader sees cannot disagree about where
+ * a list ends or what a backslash escapes. What the grammar reads and what it
+ * deliberately does not (raw HTML is text, never parsed) is written there.
  *
- * WHAT IT RENDERS: ATX headings, paragraphs, emphasis and strong, inline code,
- * fenced code, links, images, bullet and ordered lists (nested), task list
- * items, block quotes, tables, thematic breaks, hard line breaks.
+ * NO MARKUP IS EVER PARSED OR EMITTED. The grammar answers plain objects and
+ * this file builds React elements from them, so there is nothing to sanitise
+ * and no `dangerouslySetInnerHTML` anywhere on this path, which is what lets
+ * the dashboard enforce Trusted Types with no policy at all.
  *
- * WHAT IT DELIBERATELY DOES NOT: raw HTML (rendered as its own text, never
- * parsed), reference links, footnotes, bare autolink literals, setext
- * headings. Each is a shape these documents do not use, and every one of them
- * is a place a renderer grows a parser nobody exercises.
- *
- * A LINK'S HREF IS RESTRICTED to `http:`, `https:`, `mailto:` and the app's
- * own `#/` routes. Anything else renders as TEXT rather than as a link: a page
- * is written by an agent acting on content it read somewhere else, so a href
- * in one is untrusted input, and an allowlist is the only form of this check
- * that is safe by construction rather than by exhaustive denial.
+ * A LINK'S HREF IS RESTRICTED by `safeHref` to `http:`, `https:`, `mailto:`
+ * and the app's own `#/` routes. Anything else renders as TEXT rather than as
+ * a link: a page is written by an agent acting on content it read somewhere
+ * else, so a href in one is untrusted input.
  *
  * IT ALSO SPLITS A DOCUMENT INTO ITS SECTIONS ([splitSections],
  * [headingLines]) without rendering anything, for a surface that needs the
@@ -36,7 +30,7 @@
  * which its screen outlines (by its builder's section map where it has one,
  * see `promptmap.ts`) and then renders one section at a time. A walk that
  * rendered as it split could hand back neither. Both share this file's
- * [HEADING] and [FENCE] through one walk rather than restating them; see its
+ * the grammar's heading and fence readers through one walk rather than restating them; see its
  * own note.
  *
  * AND IT READS TWO KINDS OF AUTHOR ([RenderOptions]): a document's — soft line
@@ -45,311 +39,19 @@
  */
 
 import { createElement, type ReactNode } from "react";
-import { Highlight, InlineCode } from "@crewlethq/ui";
-
-/** One parsed block. The renderer walks these; nothing else does. */
-type Block =
-  | { kind: "heading"; level: number; text: string }
-  | { kind: "paragraph"; text: string }
-  | { kind: "code"; lang: string; text: string }
-  | { kind: "quote"; blocks: Block[] }
-  | { kind: "list"; ordered: boolean; start: number; items: ListItem[] }
-  | { kind: "table"; head: string[]; align: Align[]; rows: string[][] }
-  | { kind: "rule" };
-
-type Align = "left" | "center" | "right";
-
-interface ListItem {
-  /** null when the item is not a task item — which is not "unticked". */
-  checked: boolean | null;
-  blocks: Block[];
-}
-
-/**
- * The schemes a link may carry.
- *
- * AN ALLOWLIST, never a denylist. `javascript:` is the one everybody
- * remembers; `data:`, `vbscript:`, a whitespace character inside the scheme
- * and a protocol-relative `//host` are the ones they do not, and a renderer
- * that enumerated the bad ones would be wrong the moment a browser grew one
- * more.
- */
-const SAFE_SCHEME = /^(https?:|mailto:)/i;
-
-/**
- * Every character a browser drops before it resolves a URL's scheme.
- *
- * They are removed so that the string CHECKED is the string emitted — see
- * [safeHref], where returning the normalised value rather than the raw one is
- * the whole of the guarantee. Stripping them is not itself the defence: an
- * allowlist cannot be slipped past by ADDING noise, only by a denylist.
- */
-const URL_NOISE = /[\u0000-\u0020]/g;
-
-/**
- * Whether a href may be rendered as a link at all, and in what form.
- *
- * In-app routes (`#/work/ENG-1`) are allowed because they are how a page
- * points at this company's own objects and they cannot leave the app.
- * Everything else must carry an allowed scheme — including, deliberately, a
- * bare `/path` or `guide.html`, which would resolve against whatever origin
- * serves the dashboard and mean nothing to a reader.
- */
-export function safeHref(raw: string): string | null {
-  const href = raw.trim();
-  if (href === "") return null;
-  // NORMALISE, THEN CHECK, THEN EMIT THE NORMALISED ONE. A browser drops the
-  // characters in URL_NOISE before resolving a scheme, so a href and its
-  // stripped form can reach different destinations — and a function that
-  // checked one and returned the other would be checking a string nobody
-  // navigates to. The safety comes from the allowlist below; this is what
-  // makes the allowlist's subject and the rendered href the same value.
-  const clean = href.replace(URL_NOISE, "");
-  if (clean.startsWith("#/")) return clean;
-  if (SAFE_SCHEME.test(clean)) return clean;
-  return null;
-}
-
-// --- block parsing ---------------------------------------------------------
-
-const HEADING = /^(#{1,6})\s+(.*)$/;
-const FENCE = /^(```|~~~)\s*([A-Za-z0-9_+-]*)\s*$/;
-const RULE = /^(?:\s*(?:-{3,}|\*{3,}|_{3,})\s*)$/;
-const BULLET = /^(\s*)([-*+])\s+(.*)$/;
-const ORDERED = /^(\s*)(\d{1,9})[.)]\s+(.*)$/;
-const QUOTE = /^\s{0,3}>\s?(.*)$/;
-const TABLE_RULE = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/;
-
-/**
- * What CLOSES a fence opened with each marker.
- *
- * NOT `line.startsWith(marker)`, which is what both walks did. A closing fence
- * carries NO INFO STRING, so a literal ```` ```ts ```` line inside a
- * ```` ```sh ```` sample is content — and reading it as a close ended the block
- * on its first line. `parseBlocks` then rendered an EMPTY code block and threw
- * the sample away; the section walk went further and promoted every `# ` line
- * in the rest of it to a heading of the document. A page teaching somebody how
- * to write a fenced block is exactly that input, and a prompt carries page
- * bodies verbatim.
- *
- * A LONGER RUN OF THE SAME CHARACTER STILL CLOSES, which is CommonMark's rule
- * and free here: [FENCE] only ever opens on three, so a four-backtick line is
- * not an opening this file can have made.
- */
-const FENCE_CLOSE: Record<string, RegExp> = {
-  "```": /^`{3,}[ \t]*$/,
-  "~~~": /^~{3,}[ \t]*$/,
-};
-
-function closesFence(line: string, marker: string): boolean {
-  return FENCE_CLOSE[marker]?.test(line) ?? false;
-}
-
-/** Split a document into blocks. Pure, and the only thing that reads lines. */
-export function parseBlocks(source: string): Block[] {
-  const lines = (source ?? "").replace(/\r\n?/g, "\n").split("\n");
-  const out: Block[] = [];
-  let i = 0;
-
-  const paragraph: string[] = [];
-  const flush = () => {
-    if (paragraph.length) {
-      out.push({ kind: "paragraph", text: paragraph.join("\n") });
-      paragraph.length = 0;
-    }
-  };
-
-  while (i < lines.length) {
-    const line = lines[i] ?? "";
-
-    if (line.trim() === "") {
-      flush();
-      i++;
-      continue;
-    }
-
-    const fence = FENCE.exec(line);
-    if (fence) {
-      flush();
-      const marker = fence[1] ?? "```";
-      const body: string[] = [];
-      i++;
-      while (i < lines.length && !closesFence(lines[i] ?? "", marker)) {
-        body.push(lines[i] ?? "");
-        i++;
-      }
-      // A fence that is never closed still renders what it opened: the
-      // alternative is dropping the rest of a document over a missing line.
-      // Its last line is the document's own terminating newline rather than
-      // a blank line somebody typed, so it is not content — a closed fence
-      // never carries its closing line either.
-      if (i >= lines.length && body.length > 0 && body[body.length - 1] === "") {
-        body.pop();
-      }
-      i++;
-      out.push({ kind: "code", lang: fence[2] ?? "", text: body.join("\n") });
-      continue;
-    }
-
-    if (RULE.test(line)) {
-      flush();
-      out.push({ kind: "rule" });
-      i++;
-      continue;
-    }
-
-    const heading = HEADING.exec(line);
-    if (heading) {
-      flush();
-      out.push({
-        kind: "heading",
-        level: (heading[1] ?? "#").length,
-        // Closing hashes are decoration, not content.
-        text: (heading[2] ?? "").replace(/\s+#+\s*$/, "").trim(),
-      });
-      i++;
-      continue;
-    }
-
-    if (QUOTE.test(line)) {
-      flush();
-      const inner: string[] = [];
-      while (i < lines.length && QUOTE.test(lines[i] ?? "")) {
-        inner.push(QUOTE.exec(lines[i] ?? "")?.[1] ?? "");
-        i++;
-      }
-      out.push({ kind: "quote", blocks: parseBlocks(inner.join("\n")) });
-      continue;
-    }
-
-    // A TABLE IS A HEADER PLUS ITS RULE, checked together: a line of pipes
-    // with no delimiter under it is a paragraph that happens to contain
-    // pipes, which is what a shell command or a file path looks like.
-    if (line.includes("|") && TABLE_RULE.test(lines[i + 1] ?? "")) {
-      flush();
-      const head = splitRow(line);
-      const align = splitRow(lines[i + 1] ?? "").map(alignOf);
-      i += 2;
-      const rows: string[][] = [];
-      while (i < lines.length && (lines[i] ?? "").includes("|") && (lines[i] ?? "").trim() !== "") {
-        rows.push(splitRow(lines[i] ?? ""));
-        i++;
-      }
-      out.push({ kind: "table", head, align, rows });
-      continue;
-    }
-
-    if (BULLET.test(line) || ORDERED.test(line)) {
-      flush();
-      const [list, next] = parseList(lines, i);
-      out.push(list);
-      i = next;
-      continue;
-    }
-
-    paragraph.push(line);
-    i++;
-  }
-  flush();
-  return out;
-}
-
-function alignOf(cell: string): Align {
-  const t = cell.trim();
-  if (t.startsWith(":") && t.endsWith(":")) return "center";
-  if (t.endsWith(":")) return "right";
-  return "left";
-}
-
-/** Split one table row, dropping the optional leading and trailing pipes. */
-function splitRow(line: string): string[] {
-  let t = line.trim();
-  if (t.startsWith("|")) t = t.slice(1);
-  if (t.endsWith("|")) t = t.slice(0, -1);
-  return t.split("|").map((c) => c.trim());
-}
-
-const TASK = /^\[([ xX])\]\s+(.*)$/;
-
-/**
- * Parse one list and everything nested under it.
- *
- * NESTING IS BY INDENT, measured against the FIRST item's marker rather than
- * against a fixed two spaces — which is what makes a four-space-indented
- * document render flat.
- */
-function parseList(lines: string[], start: number): [Block, number] {
-  const head = lines[start] ?? "";
-  const first = BULLET.exec(head) ?? ORDERED.exec(head);
-  const baseIndent = (first?.[1] ?? "").length;
-  const ordered = ORDERED.test(head) && !BULLET.test(head);
-  const startNumber = ordered ? Number(ORDERED.exec(head)?.[2] ?? 1) : 1;
-
-  const items: ListItem[] = [];
-  let i = start;
-  let own: string[] = [];
-  let checked: boolean | null = null;
-  let open = false;
-
-  const close = () => {
-    if (!open) return;
-    items.push({ checked, blocks: parseBlocks(own.join("\n")) });
-    own = [];
-    checked = null;
-    open = false;
-  };
-
-  while (i < lines.length) {
-    const line = lines[i] ?? "";
-    const bullet = BULLET.exec(line);
-    const numbered = ORDERED.exec(line);
-    const marker = bullet ?? numbered;
-    const indent = (marker?.[1] ?? "").length;
-
-    if (marker && indent === baseIndent) {
-      // A marker of the OTHER kind at this level ends the list: a bulleted
-      // list and a numbered one are two lists, not one with mixed markers.
-      if (ordered !== (numbered !== null && bullet === null)) break;
-      close();
-      open = true;
-      const body = (bullet ? bullet[3] : numbered?.[3]) ?? "";
-      const task = TASK.exec(body);
-      if (task) {
-        checked = (task[1] ?? " ").toLowerCase() === "x";
-        own.push(task[2] ?? "");
-      } else {
-        own.push(body);
-      }
-      i++;
-      continue;
-    }
-    if (marker && indent > baseIndent) {
-      // Nested: the whole indented run goes to this item's own parse, with
-      // the base indent removed so the inner list measures from zero.
-      own.push(line.slice(baseIndent));
-      i++;
-      continue;
-    }
-    if (line.trim() === "") {
-      // A blank line inside a list ends it only if nothing continues it.
-      const following = lines[i + 1] ?? "";
-      const continues =
-        BULLET.test(following) || ORDERED.test(following) || /^\s{2,}\S/.test(following);
-      if (!continues) break;
-      own.push("");
-      i++;
-      continue;
-    }
-    if (marker === null && /^\s{2,}\S/.test(line) && open) {
-      own.push(line.slice(baseIndent));
-      i++;
-      continue;
-    }
-    break;
-  }
-  close();
-  return [{ kind: "list", ordered, start: startNumber, items }, i];
-}
+import {
+  Highlight,
+  InlineCode,
+  MARKDOWN_CALLOUT_NAMES,
+  markdownClosesFence,
+  markdownFenceOf,
+  markdownHeadingOf,
+  markdownInline,
+  parseMarkdown,
+  safeHref,
+  type MarkdownBlock,
+  type MarkdownFence,
+} from "@crewlethq/ui";
 
 // --- sectioning ------------------------------------------------------------
 
@@ -370,7 +72,7 @@ export interface Section {
 /**
  * Split a document into its ATX-heading sections.
  *
- * WHY IT IS NOT [parseBlocks]. That walk answers "what does this document
+ * WHY IT IS NOT [parseMarkdown]. That walk answers "what does this document
  * RENDER to", and a caller that wants sections wants something it cannot get
  * from the answer: the source back, unchanged, grouped under the headings
  * somebody wrote. A phase prompt is the case — the headings are the only
@@ -380,8 +82,8 @@ export interface Section {
  * markdown out of React nodes to do either.
  *
  * WHY IT IS HERE AND NOT BESIDE THAT CALLER: what a heading IS and where a
- * fenced block suspends the grammar are decisions [parseBlocks] has already
- * made, and [HEADING] and [FENCE] are the two constants this shares with it.
+ * fenced block suspends the grammar are decisions [parseMarkdown] has already
+ * made, and the grammar's heading and fence readers are the two constants this shares with it.
  * Written again next to the screen that needed sections, the two would drift
  * exactly as `textcut`'s four copies and `whsec`'s two did — and the drift
  * that costs here is the fence, which nobody remembers until a `# ` inside a
@@ -396,7 +98,7 @@ export interface Section {
  * keeping them would open every section on an empty line. Every other line of
  * the source appears in exactly one section, in order, byte for byte — LINE
  * ENDINGS INCLUDED, which is why this reads lines through [readLines] rather
- * than normalising them the way [parseBlocks] does.
+ * than normalising them the way [parseMarkdown] does.
  */
 export function splitSections(source: string): Section[] {
   const out: Section[] = [];
@@ -468,36 +170,26 @@ export function headingLines(source: string): HeadingLine[] {
 function* walkLines(
   source: string,
 ): Generator<{ line: Line; at: number; heading: { level: number; title: string } | null }> {
-  // The fence marker currently open, or "" outside one.
-  let fence = "";
+  // The fence marker currently open, or null outside one.
+  let fence: MarkdownFence | null = null;
   let at = 0;
   for (const line of readLines(source)) {
     const start = at;
     at += line.text.length + line.eol.length;
-    if (fence !== "") {
-      if (closesFence(line.text, fence)) fence = "";
+    if (fence !== null) {
+      if (markdownClosesFence(line.text, fence)) fence = null;
       yield { line, at: start, heading: null };
       continue;
     }
-    const opened = FENCE.exec(line.text);
+    const opened = markdownFenceOf(line.text);
     if (opened) {
-      fence = opened[1] ?? "```";
+      fence = opened.marker;
       yield { line, at: start, heading: null };
       continue;
     }
-    const heading = HEADING.exec(line.text);
-    yield {
-      line,
-      at: start,
-      heading: heading
-        ? {
-            level: (heading[1] ?? "#").length,
-            // Closing hashes are decoration, not content — the same rule
-            // [parseBlocks] applies to the same line.
-            title: (heading[2] ?? "").replace(/\s+#+\s*$/, "").trim(),
-          }
-        : null,
-    };
+    // Closing hashes are decoration, not content: the same reader
+    // [parseMarkdown] applies to the same line.
+    yield { line, at: start, heading: markdownHeadingOf(line.text) };
   }
 }
 
@@ -551,7 +243,7 @@ interface Line {
 /**
  * Split a source into lines, KEEPING each one's own line break.
  *
- * [parseBlocks] normalises `\r\n` away, which is right for a renderer: a break
+ * [parseMarkdown] normalises `\r\n` away, which is right for a renderer: a break
  * becomes a React node and the bytes behind it are gone either way. A SECTION
  * IS A SLICE OF A RECORD, though, and the same normalisation handed back a
  * body that could not be found in the document it came out of — a prompt
@@ -603,123 +295,6 @@ function trimBlankLines(lines: Line[]): Line[] {
 export const UnbrokenCode = 32;
 
 /**
- * The inline grammar, as one alternation.
- *
- * ORDER MATTERS AND CODE COMES FIRST: a backtick span is opaque, so
- * `**not bold**` inside one stays literal. Images precede links because their
- * syntax is a link with a `!` in front of it.
- *
- * A DESTINATION MAY CARRY ONE LEVEL OF BALANCED PARENTHESES, which is what a
- * Wikipedia URL needs — and also what stopped a refused
- * `[label](javascript:alert(1))` from rendering its closing bracket as a stray
- * character beside the label.
- *
- * EMPHASIS FOLLOWS COMMONMARK'S DELIMITER-RUN RULES, and it did not: a `*` or
- * `_` opened wherever it stood and closed at the next one. Most documents
- * never noticed. A model's words and a prompt do, because they are full of
- * snake_case names nobody fenced — `submit_work`, `result_summary`, a tool
- * catalogue line `- list_mcp_server_tools: …` — and the old rule turned
- * "call submit_work with the result_summary" into "call submit" + italic "work
- * with the result" + "summary", eating both underscores, in the one reader
- * whose job is showing what a model was told. So, as the spec has it (W is
- * whitespace or either end of the text, P is punctuation or a symbol):
- *
- *  - a run OPENS only when LEFT-FLANKING — not followed by W, and either not
- *    followed by P or preceded by W or P — and CLOSES only when
- *    RIGHT-FLANKING, the mirror image; so `*foo *` is not emphasis;
- *  - an UNDERSCORE run also opens only after W or P and closes only before W
- *    or P, so one inside a word is a letter of it: `snake_case_name` stays
- *    itself, while `_word_` and `__init__` are still emphasis;
- *  - an ASTERISK inside a word still works both ways, as CommonMark says:
- *    `foo*bar*` is emphasis, and so is `2*3 and 4*5` — arithmetic that means
- *    to stay literal goes in a code span.
- *
- * Every rule is a lookaround, which is why the walk ([inlineMatches]) runs the
- * pattern over the WHOLE text from a moving index rather than over what is
- * left after each construct. Sliced, a run right after a construct was judged
- * against the start of the text instead of its real neighbour — the same
- * answer today only because every construct happens to end in punctuation,
- * which is a coincidence of the grammar rather than a rule a new construct
- * would know to keep.
- *
- * NAMED GROUPS, so what a match is reads by name rather than by a position
- * that every new alternative renumbers.
- */
-// The classes the flanking rules are written in. NOT_WP is whatever is
-// neither whitespace nor punctuation — a letter, a digit, a mark.
-const NOT_WP = String.raw`[^\s\p{P}\p{S}]`;
-const WP = String.raw`[\s\p{P}\p{S}]`;
-const PUNCT = String.raw`[\p{P}\p{S}]`;
-/** `d` as a left-flanking run: after W or P and before anything but W, or after anything else and before neither. */
-const leftFlanking = (d: string) =>
-  String.raw`(?:(?<!${NOT_WP})${d}(?!\s|$)|(?<=${NOT_WP})${d}(?!${WP}|$))`;
-/** `d` as a right-flanking run — the mirror image of [leftFlanking]. */
-const rightFlanking = (d: string) =>
-  String.raw`(?:(?<=${NOT_WP})${d}|(?<=${PUNCT})${d}(?!${NOT_WP}))`;
-/** An underscore run that may open: after W or P, before anything but W. */
-const underOpens = (d: string) => String.raw`(?<!${NOT_WP})${d}(?!\s|$)`;
-/** An underscore run that may close: after anything but W, before W or P. */
-const underCloses = (d: string) => String.raw`(?<!\s)${d}(?!${NOT_WP})`;
-/** A link or image destination, captured as `name`. */
-const destination = (name: string) =>
-  String.raw`(?<${name}>(?:[^()\s]|\([^()\s]*\))*)(?:\s+"[^"]*")?\)`;
-
-const INLINE_SOURCE = [
-  String.raw`(?<tick>\x60+)(?<code>[\s\S]*?)\k<tick>`,
-  String.raw`!\[(?<alt>[^\]]*)\]\(` + destination("src"),
-  String.raw`\[(?<label>[^\]]*)\]\(` + destination("href"),
-  String.raw`<(?<auto>(?:https?:|mailto:)[^>\s]+)>`,
-  // A strong run closes on a `**` no third asterisk follows, so `***both***`
-  // is strong around emphasis rather than strong around `*both` and a stray.
-  leftFlanking(String.raw`\*\*`) +
-    String.raw`(?<strong>[\s\S]+?)` +
-    rightFlanking(String.raw`\*\*(?!\*)`),
-  underOpens("__") + String.raw`(?<strongUnder>[\s\S]+?)` + underCloses("__"),
-  leftFlanking(String.raw`\*`) + String.raw`(?<em>[\s\S]+?)` + rightFlanking(String.raw`\*`),
-  underOpens("_") + String.raw`(?<emUnder>[\s\S]+?)` + underCloses("_"),
-  String.raw`~~(?<del>[\s\S]+?)~~`,
-].join("|");
-
-/** What one inline construct captured, by name. */
-interface InlineGroups {
-  tick?: string;
-  code?: string;
-  alt?: string;
-  src?: string;
-  label?: string;
-  href?: string;
-  auto?: string;
-  strong?: string;
-  strongUnder?: string;
-  em?: string;
-  emUnder?: string;
-  del?: string;
-}
-
-/** One inline construct: where it starts and ends in the text, and what it captured. */
-interface InlineMatch {
-  index: number;
-  end: number;
-  groups: InlineGroups;
-}
-
-/**
- * Every inline construct of `text`, in order — THE ONE WALK both [renderInline]
- * and [inlineText] read, so the two can never disagree about where a construct
- * begins.
- *
- * A fresh pattern per walk: the walk is re-entered for a construct's own
- * content before the outer one has finished, and a shared `g` pattern carries
- * its position in `lastIndex`.
- */
-function* inlineMatches(text: string): Generator<InlineMatch> {
-  const pattern = new RegExp(INLINE_SOURCE, "gu");
-  for (let m = pattern.exec(text); m !== null; m = pattern.exec(text)) {
-    yield { index: m.index, end: m.index + m[0].length, groups: (m.groups ?? {}) as InlineGroups };
-  }
-}
-
-/**
  * How a renderer reads what a document's author did not mark up.
  *
  * TWO READERS WRITE MARKDOWN WITH DIFFERENT HABITS, and the defaults are the
@@ -760,10 +335,19 @@ export interface RenderOptions {
    * match the search never made.
    */
   highlight?: readonly string[];
+  /**
+   * Where an image's source is shown from, in place of the source itself: a
+   * doc's pictures are files of its version, fetched with the reader's own
+   * credential and shown through an object URL, never loaded from an address
+   * the text names. It answers null for a source it does not show (not a file
+   * of the version, or not loaded yet), which renders as the alt text. Without
+   * it, a source is shown only when it is a safe link ([safeHref]).
+   */
+  image?: (src: string) => string | null;
 }
 
 /** What the inline walk needs of [RenderOptions], and one thing only it does. */
-export interface InlineOptions extends Pick<RenderOptions, "breaks" | "highlight"> {
+export interface InlineOptions extends Pick<RenderOptions, "breaks" | "highlight" | "image"> {
   /**
    * `anchor` (the default): a link is a link. `text`: a link is its label and
    * an autolink its address, as plain text — for a run drawn INSIDE a control,
@@ -785,14 +369,17 @@ export function renderInline(
   let n = 0;
   const hard = options.breaks === "hard";
 
-  for (const { index, end, groups: g } of inlineMatches(text)) {
+  for (const { index, end, groups: g } of markdownInline(text)) {
     if (index > at) {
       out.push(breakLines(text.slice(at, index), `${keyPrefix}-t${n++}`, hard, options.highlight));
     }
     const key = `${keyPrefix}-${n++}`;
     at = end;
 
-    if (g.tick !== undefined) {
+    if (g.esc !== undefined) {
+      // AN ESCAPED CHARACTER IS ITSELF: `\*` is an asterisk somebody meant.
+      out.push(createElement("span", { key }, g.esc));
+    } else if (g.tick !== undefined) {
       // A code span loses ONE leading and trailing space, which is how
       // CommonMark lets a span start with a backtick of its own.
       const code = (g.code ?? "").replace(/^ | $/g, "");
@@ -803,7 +390,7 @@ export function renderInline(
       // whole would overflow a phone's column.
       out.push(createElement(InlineCode, { key, whole: code.length <= UnbrokenCode }, code));
     } else if (g.src !== undefined) {
-      const src = safeHref(g.src);
+      const src = options.image ? options.image(g.src) : safeHref(g.src);
       // AN IMAGE WITH A REFUSED SOURCE RENDERS AS ITS ALT TEXT, which is
       // what alt text is for — not as a broken image and not as nothing.
       out.push(
@@ -893,7 +480,7 @@ function soften(text: string): string {
 // --- block rendering -------------------------------------------------------
 
 function renderBlock(
-  block: Block,
+  block: MarkdownBlock,
   key: string,
   options: RenderOptions,
   anchor?: string,
@@ -944,6 +531,21 @@ function renderBlock(
         "blockquote",
         { key },
         block.blocks.map((b, i) => renderBlock(b, `${key}-${i}`, options)),
+      );
+    case "callout":
+      // A CALLOUT IS A NOTE with its tone named on a line of its own, in the
+      // shape `Document` sets (`data-callout`, `data-callout-label`,
+      // `data-callout-body`). The tone's name is the grammar's, the word the
+      // editor draws too, so a writer and a reader see the same one.
+      return createElement(
+        "div",
+        { key, role: "note", "data-callout": block.tone },
+        createElement("p", { "data-callout-label": "" }, MARKDOWN_CALLOUT_NAMES[block.tone]),
+        createElement(
+          "div",
+          { "data-callout-body": "" },
+          block.blocks.map((b, i) => renderBlock(b, `${key}-${i}`, options)),
+        ),
       );
     case "rule":
       return createElement("hr", { key });
@@ -1051,7 +653,7 @@ function renderBlock(
  * since they choose between elements this file builds and nothing else.
  */
 export function renderMarkdown(source: string, options: RenderOptions = {}): ReactNode[] {
-  const blocks = parseBlocks(source ?? "");
+  const blocks = parseMarkdown(source ?? "");
   if (!options.anchors || options.headings === "text") {
     return blocks.map((block, i) => renderBlock(block, `b${i}`, options));
   }
@@ -1087,7 +689,7 @@ export interface Heading {
  * block rather than a section of the document, and it gets no anchor.
  */
 export function outline(source: string): Heading[] {
-  const blocks = parseBlocks(source ?? "");
+  const blocks = parseMarkdown(source ?? "");
   const ids = anchorIds(blocks);
   const out: Heading[] = [];
   blocks.forEach((block, i) => {
@@ -1104,7 +706,7 @@ export function outline(source: string): Heading[] {
  * suffixed `-2`, `-3` in order — so two "Escalation" sections are two
  * addresses, and an anchor never collides with an id the frame itself uses.
  */
-function anchorIds(blocks: Block[]): Map<number, string> {
+function anchorIds(blocks: MarkdownBlock[]): Map<number, string> {
   const ids = new Map<number, string>();
   const seen = new Map<string, number>();
   blocks.forEach((block, i) => {
@@ -1127,7 +729,7 @@ function anchorIds(blocks: Block[]): Map<number, string> {
 /**
  * One run of inline markdown as the text it renders to.
  *
- * THE SAME WALK AS [renderInline] ([inlineMatches]), deliberately. What a code
+ * THE SAME WALK AS [renderInline] ([markdownInline]), deliberately. What a code
  * span is, where a destination ends and which emphasis run closes which are
  * decisions this file has already made once; a second set of them for the text
  * case is the drift `textcut` and `whsec` each record in their own package docs.
@@ -1138,11 +740,13 @@ function inlineText(text: string): string {
   const out: string[] = [];
   let at = 0;
 
-  for (const { index, end, groups: g } of inlineMatches(text)) {
+  for (const { index, end, groups: g } of markdownInline(text)) {
     if (index > at) out.push(text.slice(at, index));
     at = end;
 
-    if (g.tick !== undefined) {
+    if (g.esc !== undefined) {
+      out.push(g.esc);
+    } else if (g.tick !== undefined) {
       // A code span's own content, minus the one padding space CommonMark lets
       // a span carry so it can start with a backtick.
       out.push((g.code ?? "").replace(/^ | $/g, ""));
@@ -1166,7 +770,7 @@ function inlineText(text: string): string {
 }
 
 /** One block as text. Every case is the prose the block renders to. */
-function blockText(block: Block): string {
+function blockText(block: MarkdownBlock): string {
   switch (block.kind) {
     case "heading":
     case "paragraph":
@@ -1176,6 +780,7 @@ function blockText(block: Block): string {
       // comment said; the backticks are the only part that was never content.
       return block.text;
     case "quote":
+    case "callout":
       return block.blocks.map(blockText).join(" ");
     case "list":
       return block.items
@@ -1196,6 +801,48 @@ function blockText(block: Block): string {
       // renders to nothing rather than to three dashes in a sentence.
       return "";
   }
+}
+
+/**
+ * Every image source the document names, once each, in order: what a host
+ * resolves before [renderMarkdown] draws it with an `image` option.
+ *
+ * THE SAME WALK the renderer takes ([parseMarkdown], then [markdownInline] into
+ * every run a block renders), so a source listed here is one the renderer
+ * will ask for, and one inside a code span, which renders as text, is not.
+ */
+export function imageSources(source: string): string[] {
+  const out = new Set<string>();
+  const inline = (text: string) => {
+    for (const { groups: g } of markdownInline(text)) {
+      if (g.esc !== undefined || g.tick !== undefined || g.auto !== undefined) continue;
+      if (g.src !== undefined) out.add(g.src);
+      else inline(g.label ?? g.strong ?? g.strongUnder ?? g.em ?? g.emUnder ?? g.del ?? "");
+    }
+  };
+  const block = (b: MarkdownBlock) => {
+    switch (b.kind) {
+      case "heading":
+      case "paragraph":
+        inline(b.text);
+        return;
+      case "quote":
+      case "callout":
+        b.blocks.forEach(block);
+        return;
+      case "list":
+        for (const item of b.items) item.blocks.forEach(block);
+        return;
+      case "table":
+        for (const row of [b.head, ...b.rows]) row.forEach(inline);
+        return;
+      case "code":
+      case "rule":
+        return;
+    }
+  };
+  parseMarkdown(source ?? "").forEach(block);
+  return [...out];
 }
 
 /**
@@ -1223,7 +870,7 @@ function blockText(block: Block): string {
  * typed, and the row already links to the full text.
  */
 export function plainText(source: string): string {
-  return parseBlocks(source ?? "")
+  return parseMarkdown(source ?? "")
     .map(blockText)
     .join(" ")
     .replace(/\s+/g, " ")

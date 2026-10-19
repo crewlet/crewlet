@@ -1,7 +1,7 @@
 /**
  * What a ranked hit says it IS.
  *
- * The Item column drew `<TextCell icon="check">` — one hardcoded mark on every
+ * The Item column drew `<TableTextCell icon="check">`: one hardcoded mark on every
  * row, whatever the item was — and that is wrong twice over. A bug, an epic and
  * a spike are three drawings on the board, the list, the table, the timeline and
  * the item's own header, and one here. And a TICK is this product's completion

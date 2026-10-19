@@ -33,14 +33,15 @@
  */
 
 import { useMemo } from "react";
-import { Card, EmptyValue, InlineCode, Skeleton, Tag } from "@crewlethq/ui";
+import { Mark } from "~/ui/glyph.tsx";
+import { Card, EmptyValue, InlineCode, Skeleton, Tag, TableTextCell } from "@crewlethq/ui";
 import { ServerGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 
 import { href } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { TextCell } from "~/app/frame/cells.tsx";
+
 import { QueryState } from "~/components/common.tsx";
 import {
   Checks,
@@ -195,7 +196,11 @@ export function DomainScreen({ name }: { name: string }) {
                     {
                       key: "node",
                       header: "Node",
-                      cell: (p) => <TextCell icon="server">{p.node_id}</TextCell>,
+                      cell: (p) => (
+                        <TableTextCell icon={<Mark name={"server"} size="xs" />}>
+                          {p.node_id}
+                        </TableTextCell>
+                      ),
                       sortValue: (p) => p.node_id,
                     },
                     {

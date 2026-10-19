@@ -59,7 +59,10 @@ import (
 // every node charges (budget.go), the [PositionRegister] and its neighbours
 // the state log trims against, the [Rebases] a retried unit of work inherits
 // its instant from, the [ObjectStores] backend the fleet's files are in, the
-// [Custody] of a stateless node's event batches, and the [Markers] sweep that
+// [TrashReaps] account of the trash reaper's last pass, the
+// [Custody] of a stateless node's event batches, the [UploadReservations]
+// that hold the company's bytes before an artifact's upload moves them, and
+// the [Markers] sweep that
 // keeps every removal from being read again for ever. The list above is the
 // migration, not the estate.
 //
@@ -228,6 +231,24 @@ const (
 	// import the store, so coordtest's retention guard holds the two
 	// together.
 	CustodyRetention = 32 * 24 * time.Hour
+
+	// UploadRetention is how long an upload reservation's records outlive
+	// their last write (see [UploadReservations]), and so the uploads
+	// bucket's age.
+	//
+	// THIRTY HOURS: the longest a reservation must still be readable after
+	// its last write is the hold it keeps on bytes nothing names yet, which
+	// lasts until the object collector could have deleted them: the
+	// collector's grace (a day, objstore/collect.PendingGrace), two of its
+	// passes, and the transfer window an upload is given (an hour at most,
+	// objstore.MaxPresignTerm) with the pace of its largest file. That is
+	// twenty-seven hours and a few minutes; the rest is margin, so a record
+	// the bucket ages out is one whose hold has already lapsed. Shorter would
+	// forget a hold on bytes still in the store, which the ledger would then
+	// stop counting; longer keeps records nobody reads. This package cannot
+	// import the object store, so internal/artifactupload's tests hold the
+	// two together.
+	UploadRetention = 30 * time.Hour
 
 	// SandboxRunRetention is absent for the same reason as the channel
 	// bucket's, one step sharper: a detached coding run can sit parked on
@@ -1423,6 +1444,7 @@ type Fleet interface {
 	Integrations
 	Mailboxes
 	ObjectStores
+	TrashReaps
 	SeatPauses
 	PositionRegister
 	HoldRegister
@@ -1431,7 +1453,14 @@ type Fleet interface {
 	MaintenanceRegister
 	Markers
 	Custody
+	UploadReservations
 }
+
+// ErrObjectBackendMoved is a move of the fleet's object backend from a store
+// that is not the recorded one: another migration moved it, or the caller
+// read a record that changed. The answer is to read the record again, never
+// to retry the write.
+var ErrObjectBackendMoved = errors.New("coord: the fleet's object backend is not the one the move names")
 
 // ObjectStores is what the whole fleet has to agree on about the object store
 // (ADR-0026): which backend its files are in, and what its collector last
@@ -1460,6 +1489,15 @@ type ObjectStores interface {
 	// caller must not open a backend it could not check.
 	AgreeObjectBackend(ctx context.Context, identity string) (string, error)
 
+	// MoveObjectBackend replaces the recorded backend `from` with `to`,
+	// conditional on `from` being what is recorded: the one write that
+	// moves the fleet's files to another store, made by `crewlet objects
+	// migrate --to s3` once every object is copied, inside a maintenance
+	// window. It answers [ErrObjectBackendMoved] where another backend is
+	// recorded, and nil where `to` already is (the move was made, and a
+	// retry of it is the same move). An error is UNKNOWN.
+	MoveObjectBackend(ctx context.Context, from, to string) error
+
 	// RecordObjectCollection stores what the collector last found, an
 	// opaque value its owner (internal/engine) encodes, replacing the last
 	// one: the duty moves between nodes, and every node's status surface
@@ -1469,6 +1507,34 @@ type ObjectStores interface {
 	// ObjectCollection reads the last report, false when none was ever
 	// written.
 	ObjectCollection(ctx context.Context) ([]byte, bool, error)
+}
+
+// TrashReaps is where the trash reaper's last report is kept (internal/
+// trashreap): which node ran the latest pass, against which cutoff, what each
+// domain's trash gave up, and when the next pass is due.
+//
+// # Why the fleet keeps it, and not the node that ran it
+//
+// The reaper is a fleet duty, so it moves: the node that ran the last pass is
+// rarely the one asked about it, and a node that takes the duty over reads
+// when the next pass is due from here rather than reaping again at once. The
+// report is a whole account rather than a delta, so the last write is the
+// answer, whoever wrote it.
+//
+// # Nothing else, and no lock
+//
+// A purge is decided by its domain against that domain's own trash, in a
+// snapshot the broker arbitrates, so two reapers that overlap while the duty
+// moves purge nothing twice. The record is an account of what happened and
+// never a claim anybody reads to decide a purge.
+type TrashReaps interface {
+	// RecordTrashReap stores the reaper's last report, an opaque value its
+	// owner (internal/trashreap) encodes, replacing the one before.
+	RecordTrashReap(ctx context.Context, value []byte) error
+
+	// TrashReap reads the last report, false when none was ever written.
+	// An error is UNKNOWN: the caller must not read it as "never ran".
+	TrashReap(ctx context.Context) ([]byte, bool, error)
 }
 
 // Follows is which chat threads each seat is following.

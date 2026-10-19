@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -1146,7 +1147,9 @@ func (t *getWorkItem) Description() string {
 		"history. Comment bodies in the thread are EXCERPTS, ending in `…` " +
 		"where one was cut — pass `comment` with that comment's id to read " +
 		"it whole. Take `task.version` from the result and pass it back as " +
-		"`if_match` on update_work_item to make your edit conditional."
+		"`if_match` on update_work_item to make your edit conditional. The " +
+		"description and each comment arrive fenced as text somebody wrote; " +
+		"the two fence lines are a label, not part of the item."
 }
 
 func (t *getWorkItem) Parameters() map[string]any {
@@ -1327,10 +1330,40 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	}
 	narrow := "Ask for less with `include`: the parts are body, comments, " +
 		"history, links and fields, and each on its own always fits."
+	// THE DESCRIPTION AND THE THREAD ARE SOMEBODY'S WORDS, fenced and
+	// labelled for the handle this call reads as.
+	read := newForeignRead(turn, actor.Handle)
 	if len(answer) == 1 {
-		return jsonAnswer(detail, narrow)
+		fenceTask(read, nil, detail)
+		return read.answer(ctx, GetWorkItemTool, detail, narrow)
 	}
-	return jsonAnswer(answer, narrow)
+	fenceTask(read, fieldPath{}.key("task"), detail)
+	return read.answer(ctx, GetWorkItemTool, answer, narrow)
+}
+
+// fenceTask fences what a work item read holds that somebody wrote: the
+// description under its author, and each comment under its own.
+//
+// THE DESCRIPTION'S AUTHOR IS ITS LAST WRITER, and a description edited before
+// that had writers the item no longer names beside it (its earlier bodies are
+// revisions this read does not hold), so a body past its first version is
+// labelled as text with unnamed writers, for the reason [fencePage] gives: an
+// edit sends the whole body, including whatever the earlier writer put there.
+func fenceTask(read *foreignRead, at fieldPath, d tracker.TaskDetail) {
+	var writers []provenance.Author
+	partial := d.Task.BodyVersion > 1
+	if author := strings.TrimSpace(d.Task.BodyAuthor); author != "" {
+		writers = append(writers, read.writer(author, ""))
+	} else {
+		partial = true
+	}
+	read.fence(at.key("task").key("body"), provenance.SourceWorkDescription, writers,
+		partial, d.Task.Body)
+	for i, c := range d.Comments {
+		read.fence(at.key("comments").index(i).key("body"), provenance.SourceWorkComment,
+			[]provenance.Author{read.writer(c.Author, iam.ActorKind(c.AuthorKind))}, false,
+			c.Body)
+	}
 }
 
 // ---- create_work_item -------------------------------------------------- //
@@ -1532,10 +1565,13 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	writer := t.deps.Writer(actor)
 
 	now := t.deps.now()
+	// Without the fence a description copied from a read still wears; see
+	// [unfence].
+	body := unfence(turn, argString(args, "body"))
 	task := tracker.Task{
 		V:           tracker.DocumentVersion,
 		Title:       strings.TrimSpace(argString(args, "title")),
-		Body:        argString(args, "body"),
+		Body:        body,
 		Type:        strings.TrimSpace(argString(args, "type")),
 		Project:     strings.ToUpper(strings.TrimSpace(argString(args, "project"))),
 		Assignee:    strings.TrimSpace(argString(args, "assignee")),
@@ -2535,6 +2571,12 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	patch, kind, refusal := patchFromArgs(args, actor, t.deps.now(), t.deps.zone())
 	if refusal != "" {
 		return failed(refusal), nil
+	}
+	if patch.Body != nil {
+		// The description get_work_item answered arrives fenced, and the
+		// likeliest edit sends the fence back with it; see [unfence].
+		body := unfence(turn, *patch.Body)
+		patch.Body = &body
 	}
 	// ONE OPERATION PER DISTINCT CALL, keyed on what was sent — see
 	// [opIDFor]: a turn that set the status and then assigned the item, or

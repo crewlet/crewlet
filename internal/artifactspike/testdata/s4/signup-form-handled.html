@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beta waitlist</title>
+
+<style>
+:root { --bg: #ffffff; --fg: #1d1d1f; --muted: #6b6b70; --accent: #3b5bdb; --card: #f5f5f7; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111114; --fg: #f2f2f5; --muted: #a0a0a8; --accent: #7b93ff; --card: #1c1c21; }
+}
+body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+main { max-width: 960px; margin: 0 auto; padding: 16px; }
+.card { background: var(--card); border-radius: 12px; padding: 16px; margin: 12px 0; }
+button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--muted); background: var(--card); color: var(--fg); cursor: pointer; }
+label { display: block; margin: 8px 0; } input { width: 100%; padding: 8px; box-sizing: border-box; }
+</style>
+</head>
+<body>
+<main>
+<h1>Join the beta</h1>
+<form class="card" id="signup">
+  <label>Email <input type="email" id="email" required></label>
+  <button type="submit">Join</button>
+  <p id="thanks" hidden>Thanks, you are on the list.</p>
+</form>
+</main>
+<script>
+document.getElementById("signup").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const list = JSON.parse(localStorage.getItem("waitlist") || "[]");
+  list.push(document.getElementById("email").value);
+  localStorage.setItem("waitlist", JSON.stringify(list));
+  document.getElementById("thanks").hidden = false;
+});
+</script>
+</body>
+</html>

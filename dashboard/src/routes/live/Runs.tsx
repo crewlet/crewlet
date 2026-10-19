@@ -30,6 +30,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import { uiletTone } from "~/ui/primitives.tsx";
 import { useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import {
@@ -45,10 +46,14 @@ import {
   StatGroup,
   Tag,
   InlineCode,
+  TableDateCell,
+  TableEntityCell,
+  TableStatusCell,
+  TableTextCell,
 } from "@crewlethq/ui";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, SeatLabel, StatusCell, TextCell } from "~/app/frame/cells.tsx";
+import { plainSeat } from "~/app/frame/cells.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
@@ -598,7 +603,7 @@ export function Runs() {
                 header: "Status",
                 shrink: true,
                 sortValue: (r) => r.status,
-                // A BADGE, NOT `StatusCell`: the engine's seven words are a
+                // A BADGE, NOT `TableStatusCell`: the engine's seven words are a
                 // vocabulary rather than two lifecycle states, and this is the
                 // pill the Inbox and Live now draw for the same run — a third
                 // rendering of one status is a third thing to keep in step.
@@ -613,13 +618,13 @@ export function Runs() {
                 // drawn one letter wide.
                 floor: "9rem",
                 sortValue: (r) => r.role || r.agent_handle,
-                // NOT `SeatCell` or `SeatChip`: both are anchors and every row
+                // NOT `linkedSeat` or `SeatChip`: both are anchors and every row
                 // here is one, and an anchor inside an anchor is markup no
                 // browser agrees about. The seat is one ⌘-click away from the
                 // run's own page, where it is a link again.
                 cell: (r) =>
                   r.role || r.agent_handle ? (
-                    <SeatLabel {...seatBadge(r.role || r.agent_handle)} />
+                    <TableEntityCell {...plainSeat({ ...seatBadge(r.role || r.agent_handle) })} />
                   ) : (
                     <EmptyValue label="No seat" />
                   ),
@@ -630,7 +635,7 @@ export function Runs() {
                 floor: "10rem",
                 cell: (r) =>
                   r.task_description ? (
-                    <TextCell>{r.task_description}</TextCell>
+                    <TableTextCell>{r.task_description}</TableTextCell>
                   ) : (
                     <EmptyValue label={r.body_withheld ? WITHHELD_WORDS : "No task recorded"} />
                   ),
@@ -676,11 +681,11 @@ export function Runs() {
                 drop: 3,
                 sortValue: (r) => (r.box_exists ? 1 : 0),
                 cell: (r) => (
-                  <StatusCell
+                  <TableStatusCell
                     glyph={r.box_exists ? "●" : "○"}
                     label={r.box_exists ? "up" : "reclaimed"}
-                    tone={r.box_exists ? "info" : "neutral"}
                     title={r.box_exists ? "the sandbox is still there" : "Sandbox reclaimed"}
+                    tone={uiletTone(r.box_exists ? "info" : "neutral")}
                   />
                 ),
               },
@@ -689,7 +694,7 @@ export function Runs() {
                 header: "Updated",
                 shrink: true,
                 sortValue: (r) => tsKey(r.updated_at || r.started_at),
-                cell: (r) => <DateCell at={r.updated_at || r.started_at} now={now} />,
+                cell: (r) => <TableDateCell value={r.updated_at || r.started_at} now={now} />,
               },
             ]}
           />

@@ -79,6 +79,9 @@ import {
   Inline,
   InlineCode,
   Stack,
+  TableDateCell,
+  TableEntityCell,
+  TableTextCell,
 } from "@crewlethq/ui";
 import { KeyGlyph, MonitorGlyph, ShieldUserGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
@@ -90,7 +93,7 @@ import {
   MintTokenDialog,
 } from "~/components/people.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, SeatCell, SeatLabel, TextCell } from "~/app/frame/cells.tsx";
+import { linkedSeat, plainSeat } from "~/app/frame/cells.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { LayerBoundary } from "~/app/boundaries.tsx";
 import { href } from "~/app/router.tsx";
@@ -366,9 +369,13 @@ function SeatFact({ handle }: { handle: string }) {
   return (
     <Inline as="span" gap={2} wrap>
       {linked ? (
-        <SeatCell handle={handle} name={held.name} kind={held.kind} avatar={held.avatar} />
+        <TableEntityCell
+          {...linkedSeat({ handle: handle, name: held.name, kind: held.kind, avatar: held.avatar })}
+        />
       ) : (
-        <SeatLabel name={held.name} kind={held.kind} avatar={held.avatar} />
+        <TableEntityCell
+          {...plainSeat({ name: held.name, kind: held.kind, avatar: held.avatar })}
+        />
       )}
       <Text variant="cell" mono tone="tertiary">
         {at}
@@ -832,14 +839,14 @@ function Sessions({
               key: "started",
               header: "Signed in",
               sortValue: (s) => s.created_at ?? "",
-              cell: (s) => <DateCell at={s.created_at} now={now} />,
+              cell: (s) => <TableDateCell value={s.created_at} now={now} />,
             },
             {
               key: "ends",
               header: "Ends",
               shrink: true,
               sortValue: (s) => s.expires_at ?? "",
-              cell: (s) => <DateCell at={s.expires_at} now={now} />,
+              cell: (s) => <TableDateCell value={s.expires_at} now={now} />,
             },
             {
               key: "end",
@@ -933,7 +940,7 @@ function Tokens({
               key: "label",
               header: "Token",
               sortValue: (c) => c.label ?? "",
-              cell: (c) => <TextCell>{c.label || c.id}</TextCell>,
+              cell: (c) => <TableTextCell>{c.label || c.id}</TableTextCell>,
             },
             {
               key: "state",
@@ -956,7 +963,7 @@ function Tokens({
               header: "Created",
               shrink: true,
               sortValue: (c) => c.created_at ?? "",
-              cell: (c) => <DateCell at={c.created_at} now={now} />,
+              cell: (c) => <TableDateCell value={c.created_at} now={now} />,
             },
             {
               key: "expires",

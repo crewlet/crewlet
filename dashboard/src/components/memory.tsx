@@ -16,10 +16,21 @@
  */
 
 import { useState, type CSSProperties } from "react";
-import { Button, Card, EmptyState, EmptyValue, Modal, Tag } from "@crewlethq/ui";
+import {
+  Button,
+  Card,
+  EmptyState,
+  EmptyValue,
+  Modal,
+  Tag,
+  TableKeyCell,
+  TableNumberCell,
+  TableDateCell,
+  TableTextCell,
+} from "@crewlethq/ui";
 import { BookOpenGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, DurationCell, KeyCell, TextCell } from "~/app/frame/cells.tsx";
+
 import { QueryState } from "~/components/common.tsx";
 import {
   conversationLabel,
@@ -28,6 +39,7 @@ import {
   plural,
   tsKey,
   utf8Bytes,
+  fmtDuration,
 } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { decisionLabel, decisionTone } from "~/lib/phases.ts";
@@ -220,7 +232,7 @@ function WholeEpisode({
  */
 function EpisodeWokenCell({ seat, episode: e }: { seat: string; episode: EpisodeRow }) {
   if (e.compacted) {
-    return <TextCell>{plural(Math.max(e.count, 1), "turn")} like this</TextCell>;
+    return <TableTextCell>{plural(Math.max(e.count, 1), "turn")} like this</TableTextCell>;
   }
   if (!e.task_summary && !e.ask) return <EmptyValue label="Not recorded" />;
   const opening = isOpening(e.ask, e.ask_bytes);
@@ -301,7 +313,7 @@ export function EpisodesCard({
             // trims trailing zeros, so a raw compare puts `:07Z`
             // before `:07.42Z`.
             sortValue: (e) => tsKey(e.created_at),
-            cell: (e) => <DateCell at={e.created_at} now={now} />,
+            cell: (e) => <TableDateCell value={e.created_at} now={now} />,
           },
           {
             key: "woke",
@@ -348,7 +360,13 @@ export function EpisodesCard({
             align: "right",
             shrink: true,
             sortValue: (e) => e.duration_ms ?? null,
-            cell: (e) => <DurationCell ms={e.duration_ms} />,
+            cell: (e) => (
+              <TableNumberCell
+                value={e.duration_ms}
+                format={fmtDuration}
+                emptyLabel="Not measured"
+              />
+            ),
           },
           {
             key: "conv",
@@ -360,7 +378,10 @@ export function EpisodesCard({
             shrink: true,
             cell: (e) =>
               e.conversation_key ? (
-                <KeyCell value={e.conversation_key} text={conversationLabel(e.conversation_key)} />
+                <TableKeyCell
+                  value={e.conversation_key}
+                  text={conversationLabel(e.conversation_key)}
+                />
               ) : (
                 <EmptyValue label="Not part of a conversation" />
               ),

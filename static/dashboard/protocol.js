@@ -1467,6 +1467,13 @@ var FALLBACK_MS = 5e3;
 */
 var WATCH_WHAT = "watch";
 /**
+* What an artifact room's join, its refusal and its withdrawal name in `what`:
+* the engine's `artifactJoinWhat`. A join's answer carries its id; a
+* withdrawal, which the engine sends when the reader's access narrows while
+* they are in the room, carries none and names the artifact instead.
+*/
+var ARTIFACT_JOIN_WHAT = "artifact_join";
+/**
 * Every {@link QueryErrorCode}, as a value a rejection's message can be tested
 * against.
 *
@@ -1625,6 +1632,14 @@ var LiveSocket = class {
 	*/
 	watched = "";
 	watchRetry = 0;
+	/**
+	* The artifact rooms this tab is in, by artifact id. HELD HERE rather than
+	* only sent, for the watch's reason: a room lives in the engine's routing
+	* index for ONE socket, so every open joins each again.
+	*/
+	rooms = /* @__PURE__ */ new Map();
+	/** Join frames out now, by their id, to the artifact each names. */
+	joins = /* @__PURE__ */ new Map();
 	/** Seats, by AGENT ID, whose live call is being fetched whole, each with
 	*  whether a push found the call behind again while the fetch was out — see
 	*  `fetchCalls`. */
@@ -1706,6 +1721,9 @@ var LiveSocket = class {
 		document.removeEventListener("visibilitychange", this.onVisible);
 		clearTimeout(this.reconnectTimer);
 		clearTimeout(this.watchRetry);
+		for (const room of this.rooms.values()) clearTimeout(room.retry);
+		this.rooms.clear();
+		this.joins.clear();
 		this.stopPing();
 		this.stopFallback();
 		this.failInflight("closed");
@@ -1815,6 +1833,151 @@ var LiveSocket = class {
 			this.sendWatch();
 		}, wait);
 	}
+	/**
+	* Be in an artifact's room for as long as `listener` is: hear what moves on
+	* the artifact (`artifact_changed`), what its datastore commits
+	* (`artifact_data`) and who else is there (`artifact_presence`). Returns the
+	* way out.
+	*
+	* ONE JOIN PER ARTIFACT however many screens listen: the first listener
+	* joins, the last to leave leaves, and every open of the socket joins each
+	* room again with the `through` the tab last held, so the engine answers
+	* whether a catch-up is enough (`resync: false`) or the datastore must be
+	* read whole. The engine decides a join as it decides reading the artifact,
+	* and refuses one in the words an artifact nobody holds is answered with; a
+	* refusal, and a room the engine withdraws when the reader's access narrows,
+	* reach every listener's `refused`, and no push follows.
+	*/
+	room(artifact, listener) {
+		const id = artifact.trim();
+		let room = this.rooms.get(id);
+		if (!room) {
+			if (this.rooms.size >= 8) {
+				listener.refused?.(new QueryError("bad_params", null, `a tab is in at most 8 artifact rooms at once`));
+				return () => {};
+			}
+			room = {
+				listeners: /* @__PURE__ */ new Set(),
+				joining: 0,
+				joined: false,
+				since: 0,
+				retry: 0
+			};
+			this.rooms.set(id, room);
+			room.listeners.add(listener);
+			this.sendJoin(id);
+		} else room.listeners.add(listener);
+		return () => this.unlisten(id, listener);
+	}
+	/**
+	* Say what this tab is doing in a room it is in: what it is looking at and
+	* whether it is editing. Who is doing it is never the frame's to say: the
+	* engine shows the seat the socket's credential resolved to. A frame for a
+	* room the engine has not put this socket in is not sent, since it would be
+	* dropped there; the next one after the join lands says it again.
+	*/
+	presence(artifact, activity, focus) {
+		if (!this.rooms.get(artifact)?.joined || !this.connected || !this.sock) return;
+		try {
+			this.sock.send(JSON.stringify({
+				kind: "presence",
+				artifact,
+				activity,
+				focus
+			}));
+		} catch {}
+	}
+	unlisten(artifact, listener) {
+		const room = this.rooms.get(artifact);
+		if (!room || !room.listeners.delete(listener) || room.listeners.size > 0) return;
+		clearTimeout(room.retry);
+		this.rooms.delete(artifact);
+		if (room.joining) this.joins.delete(room.joining);
+		if (!this.connected || !this.sock) return;
+		try {
+			this.sock.send(JSON.stringify({
+				kind: "artifact_leave",
+				artifact
+			}));
+		} catch {}
+	}
+	sendJoin(artifact) {
+		const room = this.rooms.get(artifact);
+		if (!room || !this.connected || !this.sock) return;
+		clearTimeout(room.retry);
+		room.retry = 0;
+		if (room.joining) this.joins.delete(room.joining);
+		const id = this.nextQueryId++;
+		room.joining = id;
+		this.joins.set(id, artifact);
+		const frame = {
+			kind: "artifact_join",
+			id,
+			artifact,
+			...room.since > 0 ? { since: room.since } : {}
+		};
+		try {
+			this.sock.send(JSON.stringify(frame));
+		} catch {}
+	}
+	/** A join's answer: the room as it presents now, and where the datastore stands. */
+	joinAnswered(id, answer) {
+		const artifact = this.joins.get(id);
+		if (artifact === void 0) return;
+		this.joins.delete(id);
+		const room = this.rooms.get(artifact);
+		if (!room || room.joining !== id) return;
+		room.joining = 0;
+		room.joined = true;
+		if (typeof answer.through === "number" && answer.through > 0) room.since = answer.through;
+		for (const listener of [...room.listeners]) listener.joined?.(answer);
+	}
+	/**
+	* A join the engine refused, or a room it withdrew (no id). `unavailable` is
+	* a node that could not decide, asked again on the frame's `retry_after`
+	* (`unavailableRetryMs`); every other code is a decision, said to the
+	* listeners, which stay registered so a later open of the socket (after a
+	* share is put right) asks again.
+	*/
+	joinRefused(msg) {
+		let artifact = msg.artifact ?? "";
+		if (msg.id !== void 0) {
+			const joined = this.joins.get(msg.id);
+			if (joined === void 0) return;
+			this.joins.delete(msg.id);
+			artifact = joined;
+		}
+		const room = this.rooms.get(artifact);
+		if (!room || msg.id !== void 0 && room.joining !== msg.id) return;
+		room.joining = 0;
+		room.joined = false;
+		const code = msg.error || "query_failed";
+		const refusal = refusalOf$1(msg);
+		if (code === "unavailable") {
+			const wait = unavailableRetryMs(refusal);
+			if (wait !== null) room.retry = setTimeout(() => {
+				room.retry = 0;
+				this.sendJoin(artifact);
+			}, wait);
+		}
+		const error = new QueryError(code, refusal, badParamsDetail(msg));
+		for (const listener of [...room.listeners]) listener.refused?.(error);
+	}
+	/** Hands a room's push to its listeners, reading the room off the payload's own `artifact`. */
+	roomPush(kind, data) {
+		if (!data || typeof data !== "object") return;
+		const artifact = data.artifact;
+		if (typeof artifact !== "string") return;
+		const room = this.rooms.get(artifact);
+		if (!room?.joined) return;
+		if (kind === "data") {
+			const through = data.through;
+			if (typeof through === "number" && through > room.since) room.since = through;
+		}
+		for (const listener of [...room.listeners]) if (kind === "changed") listener.changed?.(data);
+		else if (kind === "data") listener.data?.(data);
+		else listener.presence?.(data);
+	}
 	connect() {
 		if (this.isClosed || this.refused || this.held || this.sock && (this.sock.readyState === WebSocket.OPEN || this.sock.readyState === WebSocket.CONNECTING)) return;
 		const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -1838,6 +2001,7 @@ var LiveSocket = class {
 			this.startPing();
 			this.flushQueries();
 			if (this.watched !== "") this.sendWatch();
+			for (const artifact of this.rooms.keys()) this.sendJoin(artifact);
 		};
 		sock.onmessage = (e) => this.onMessage(String(e.data));
 		sock.onclose = (e) => {
@@ -1845,6 +2009,13 @@ var LiveSocket = class {
 			this.sock = null;
 			clearTimeout(this.watchRetry);
 			this.watchRetry = 0;
+			this.joins.clear();
+			for (const room of this.rooms.values()) {
+				clearTimeout(room.retry);
+				room.retry = 0;
+				room.joining = 0;
+				room.joined = false;
+			}
 			for (const entry of this.inflight.values()) {
 				clearTimeout(entry.timer);
 				entry.timer = 0;
@@ -2059,12 +2230,29 @@ var LiveSocket = class {
 			case "inbox_changed":
 				this.store.applyInboxChanged(msg.data);
 				break;
+			case "artifact_changed":
+				this.roomPush("changed", msg.data);
+				break;
+			case "artifact_data":
+				this.roomPush("data", msg.data);
+				break;
+			case "artifact_presence":
+				this.roomPush("presence", msg.data);
+				break;
 			case "result":
+				if (msg.id !== void 0 && this.joins.has(msg.id)) {
+					this.joinAnswered(msg.id, msg.data);
+					break;
+				}
 				this.settle(msg.id, null, msg.data);
 				break;
 			case "error":
 				if (msg.what === WATCH_WHAT && msg.id === void 0) {
 					this.watchAnswered(msg);
+					break;
+				}
+				if (msg.what === ARTIFACT_JOIN_WHAT) {
+					this.joinRefused(msg);
 					break;
 				}
 				this.settle(msg.id, msg.error || "query_failed", null, refusalOf$1(msg), badParamsDetail(msg));

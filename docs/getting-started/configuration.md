@@ -1153,6 +1153,36 @@ stream:
                                     #   company. Crossing it refuses the append
                                     #   and the log_headroom alarm names
                                     #   `usage`
+  # artifacts_log_max_bytes: 4294967296
+                                    #   the artifacts log, the ordered stream
+                                    #   every artifact's create, publish,
+                                    #   share, trash and purge goes through
+                                    #   (1..256 GiB). UNSET DERIVES a quarter of
+                                    #   the mutation log's ceiling, set or
+                                    #   derived (so 1..16 GiB from a volume
+                                    #   alone): a record names a version's
+                                    #   files by object, and the object store
+                                    #   keeps their bytes, so the log grows with
+                                    #   how often people and agents publish
+                                    #   rather than with what they publish.
+                                    #   Crossing it refuses the append
+  # artifact_data_log_max_bytes: 4294967296
+                                    #   the artifact datastore's log, the
+                                    #   ordered stream every write, undo and
+                                    #   schema change of an artifact's
+                                    #   datastore goes through (1..512 GiB).
+                                    #   UNSET DERIVES a quarter of the
+                                    #   mutation log's ceiling, set or
+                                    #   derived (so 1..16 GiB from a volume
+                                    #   alone). Its records carry the rows
+                                    #   themselves, so the log grows with how
+                                    #   much pages and seats write: a company
+                                    #   whose pages write heavily sets it
+                                    #   higher, which is why it accepts twice
+                                    #   the artifacts log's bound. Crossing it
+                                    #   refuses the append, and the top of it
+                                    #   is kept for gate records as on the
+                                    #   tracker's log
   # tracker_retention:              # when the log may be trimmed. Every term
                                     #   here is a statement about the OPERATOR's
                                     #   estate rather than the company's policy,
@@ -1296,6 +1326,15 @@ store:
                                     #   copies on its members like every stream
                                     #   and backed up with them. s3: an
                                     #   S3-compatible bucket, named below
+  #   nats_max_bytes: 0             #   the nats bucket's byte RESERVATION on
+                                    #   the broker, 1 GiB..64 TiB. Unset
+                                    #   derives the smaller of a quarter of the
+                                    #   broker's limit and what its state logs'
+                                    #   half and a 1 GiB coordination floor
+                                    #   leave. A full bucket refuses uploads,
+                                    #   never the fleet's leases. An existing
+                                    #   bucket keeps the reservation it was
+                                    #   created with. REFUSED with backend s3
   #   s3:                           #   REFUSED unless backend is s3
   #     endpoint: ""                #   the S3 API's base URL; empty is Amazon
                                     #   S3's own for the region. R2, MinIO,
@@ -1304,13 +1343,14 @@ store:
   #     region: eu-west-1           #   REQUIRED — every request is signed for
                                     #   a region, even where the provider
                                     #   ignores it (R2: auto, MinIO: us-east-1)
-  #     bucket: acme-files          #   REQUIRED. Checked at boot: a node that
-                                    #   cannot reach it, or whose credentials it
-                                    #   refuses, does not start
-  #     prefix: ""                  #   prepended to every key — an object is
-                                    #   `<prefix>files/<key>` — so one bucket
-                                    #   can hold more than one company; e.g.
-                                    #   `acme/`
+  #     bucket: acme-files          #   REQUIRED. Probed at boot under the
+                                    #   prefix: a node that cannot store and
+                                    #   delete an object there does not start
+  #     prefix: ""                  #   prepended to every key: an object is
+                                    #   `<prefix>files/<key>`, e.g. `acme/`.
+                                    #   Companies sharing one bucket are kept
+                                    #   apart only by credentials scoped to
+                                    #   their own prefix, never by the prefix
   #     path_style: false           #   address the bucket in the path rather
                                     #   than the host name; MinIO and most
                                     #   self-hosted gateways need it
@@ -1389,6 +1429,21 @@ api:
                         #   where VENDORS and sandboxes reach this listener:
                         #   every webhook, app manifest and per-run sandbox
                         #   endpoint is built on it
+  artifacts:            # optional: the artifact origin, a THIRD listener that
+    port: 8001          #   serves the files of artifact versions, their assets
+                        #   and the embedded page runtime, and nothing else: no
+                        #   API route, no probe, no cookie. Ingress nodes only;
+                        #   0 / unset serves no artifacts on this node.
+                        #   host defaults to every interface
+    external_url: "https://{artifact}.example-usercontent.net"
+                        # REQUIRED once artifacts.port is set on an ingress
+                        #   node. {artifact} at the start of the leftmost
+                        #   label gives every artifact an origin of its own
+                        #   (wildcard DNS and TLS, on a registrable domain
+                        #   that is not the dashboard's); a plain origin
+                        #   (https://artifacts.example.com, or a second port
+                        #   on the dashboard's host) serves every document
+                        #   with an opaque origin
   auth:
     admin: serve        # serve | refuse. Required once port is set: whether
                         #   THIS node grants admin to those who hold it.
@@ -1427,7 +1482,7 @@ api:
                         #   by colons (ci-pipeline, ci:release), at most 58
                         #   characters so the login stays within 64
         token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26+ chars, on the RESOLVED value
-        grants: [admin]  # admin, tracker, knowledge: what it may do, and
+        grants: [admin]  # admin, tracker, knowledge, artifacts: what it may do, and
                         #   the most an invitation or a create it makes may
                         #   confer — the first person's included. admin
                         #   includes every app; on a node whose admin is
@@ -1542,10 +1597,44 @@ file opens on one port — `api.port`, `api.public.port`, `stream.cluster.port`
 and `stream.leaf.port` — when they bind the same address or either binds every
 interface; `-roles`, `-api-host` and `-api-port` are held to the same rules.
 
+**`api.artifacts` is where artifacts are opened**, on a listener of its own,
+because an artifact is a page somebody (or some agent) wrote, and nothing it
+runs may share an origin with the dashboard's session. It serves four routes:
+one file of a version under a view ticket (`/t/{ticket}/...`), one asset of
+the ticket's artifact (`/t/{ticket}/_assets/{asset}`), and the embedded
+runtime and kit (`/_crewlet/runtime/{contract}/...`, `/_crewlet/kit/{version}/...`),
+public and cached for a year. Every other path, `/health` included, is an empty
+`404`; it never reads a cookie and never sets one. A ticket is minted by the
+dashboard for the signed-in viewer, lives an hour (never past the credential it
+was minted through), and every document request is authorized again: a share
+withdrawn, a session ended or an artifact trashed stops the next one. A node
+whose own copy of the artifacts or identity log is out of service or more than
+the stall grace behind decides through a data node whose copy answers, and
+answers `503` with `Retry-After` when none does. **`api.artifacts.external_url`**
+decides the origin mode: a template naming `{artifact}` at the start of its
+leftmost label gives each artifact a real origin, but only on a registrable
+domain other than the dashboard's (checked against the Public Suffix List); on
+the dashboard's own site, or with a plain origin, every document is served with
+an opaque origin, its browser storage unavailable, and `crewlet validate` warns
+about the same-site template. Validation refuses an artifact origin equal to
+`api.external_url`'s, `api.public.external_url`'s or an `api.auth.allowed_origins`
+entry, a parent domain of the API's host, plain `http` off loopback, and a port
+with no `external_url` on an ingress node. Whatever proxy stands in front of
+the listener must pass the original `Host` (every request is checked against
+the host its ticket's artifact is served on) and the `Sec-Fetch-*` headers
+through, must leave the response headers alone, and must never cache a `/t/`
+path in a shared cache. The dashboard on every ingress node names this origin
+in its `frame-src`, whether or not that node binds the listener itself. A
+page's policy keeps a viewer's row from running as script and its fetches,
+sockets, images and media on its own origin, but a script the page's own
+script creates may load from any site, so a page whose author means to can
+send what its viewers may read elsewhere: share `editor` accordingly (see
+the artifact note in `SECURITY.md`).
+
 **`api.auth.admin` says whether this node serves admin**, and it is required
 once a port is set: `serve`, or `refuse`. A person's
 [permissions](../concepts/identity-and-access.md#access-admin-and-one-permission-per-app)
-— `admin`, `tracker`, `knowledge` — live in the replicated store and are
+(`admin`, `tracker`, `knowledge`, `artifacts`) live in the replicated store and are
 written by an administrator; this is each node's statement, in the tier that
 holds the keyring and never read from Tier B, of whether `admin` counts here at
 all. A `refuse` node clamps admin away from every principal composed on it and
@@ -1571,8 +1660,8 @@ holds, so the token that brings them in has to hold `admin` — `grants:
 [admin]` — on a node that serves it. On a running deployment it is the way back
 in when an administrator has locked themselves out. Each entry states its own
 `grants` — required and non-empty, because a credential's blast radius belongs
-where it is pinned, naming only `admin`, `tracker` and `knowledge` (an unknown
-name is refused naming the three, and `admin` on a `refuse` node is refused
+where it is pinned, naming only `admin`, `tracker`, `knowledge` and `artifacts`
+(an unknown name is refused naming the set, and `admin` on a `refuse` node is refused
 too) — and its value must be at least 26 characters, checked on what the
 `${VAR}` resolves to.
 

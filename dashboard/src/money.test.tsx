@@ -627,7 +627,8 @@ describe("the screens", () => {
             pricedPhase("2026-09-13T10:01:30Z"),
             // THE TURN'S OWN RECORD CARRIES NO PRICE, because the engine
             // puts none there: this screen shows it verbatim, and a verbatim
-            // record is the one place rule 19 does not reach (see its text).
+            // record is one of the two places rule 19 does not reach (see
+            // its text; the other is an artifact sheet's own cells).
             {
               ...pricedPhase("2026-09-13T10:02:00Z"),
               id: "done",

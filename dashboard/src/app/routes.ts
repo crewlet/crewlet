@@ -88,6 +88,14 @@ const ME_SECTIONS: readonly MeSection[] = [
 ];
 
 /**
+ * The Artifacts gallery's sections: For you (its landing), then the scopes the
+ * engine's listing answers by (`artifactsdomain.ListScope`).
+ */
+export type ArtifactSection = "for-you" | "mine" | "shared" | "company" | "agents";
+
+const ARTIFACT_SECTIONS: readonly ArtifactSection[] = ["mine", "shared", "company", "agents"];
+
+/**
  * The screens drawn outside the frame. An invitation's and a reset link's one
  * segment is `<id>.<secret>`, kept whole: the screen itself says when that is
  * not a whole link — a link cut short by a mail client is the ordinary way it
@@ -133,6 +141,9 @@ export type FramedScreen =
   | { screen: "skills" }
   | { screen: "diaries" }
   | { screen: "diary"; handle: string }
+  | { screen: "artifacts"; section: ArtifactSection }
+  | { screen: "artifact"; id: string }
+  | { screen: "new-artifact" }
   | { screen: "spend" }
   | { screen: "spend-tasks" }
   | { screen: "budgets" }
@@ -225,6 +236,8 @@ export function resolve(path: string[]): Route {
       return live(rest, screen, under);
     case "knowledge":
       return knowledge(rest, screen, under);
+    case "artifacts":
+      return artifactsRoute(rest, screen, under);
     case "spend":
       if (rest.length === 0) return screen({ screen: "spend" });
       // A CLOSED SET, so an unknown tail is Not Found rather than the spend
@@ -398,6 +411,27 @@ function knowledge(rest: string[], screen: Make, under: Under): Route {
     return missing("knowledge", under("Knowledge"));
   }
   return screen({ screen: "container", key: first });
+}
+
+function artifactsRoute(rest: string[], screen: Make, under: Under): Route {
+  const [first, ...tail] = rest;
+  if (first === undefined) return screen({ screen: "artifacts", section: "for-you" });
+  // NOTHING IS ADDRESSED UNDER AN ARTIFACT: its tabs, its version and its
+  // compare are queries on its own address (`tab=`, `version=`, `against=`),
+  // so a link survives a reload and a pasted address in chat.
+  if (tail.length > 0) return missing("artifacts", under("Artifacts"));
+  if (ARTIFACT_SECTIONS.includes(first as ArtifactSection)) {
+    return screen({ screen: "artifacts", section: first as ArtifactSection });
+  }
+  if (first === "new") return screen({ screen: "new-artifact" });
+  // AN ARTIFACT BY ITS ID, the uuid the engine derived from the operation
+  // that created it; a word here names nothing the engine could have minted.
+  if (ID_SHAPE.test(first)) return screen({ screen: "artifact", id: first });
+  return missing(
+    "artifacts",
+    under("Artifacts"),
+    "an artifact is opened from the gallery, a task or a link somebody shared",
+  );
 }
 
 function settings(rest: string[], screen: Make, under: Under): Route {

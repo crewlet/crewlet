@@ -253,6 +253,9 @@ func withRequired(opts api.Options) api.Options {
 	if opts.Backup == nil {
 		opts.Backup = &fakeBackup{}
 	}
+	if opts.Objects == nil {
+		opts.Objects = &fakeMigrator{}
+	}
 	if opts.Nodes == nil {
 		opts.Nodes = &fakeNodeGate{}
 	}

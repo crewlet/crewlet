@@ -20,11 +20,12 @@
  */
 
 import { useMemo } from "react";
-import { Card, EmptyState, Tag } from "@crewlethq/ui";
+import { fmtCount } from "~/lib/format.ts";
+import { Card, EmptyState, Tag, TableKeyCell, TableNumberCell } from "@crewlethq/ui";
 import { PlugGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { KeyCell, NumberCell } from "~/app/frame/cells.tsx";
+
 import { href } from "~/app/router.tsx";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { reachOf, SERVER_STATE_WORDS } from "~/lib/mcpServers.ts";
@@ -131,7 +132,7 @@ export function McpServers({
               sortValue: (s) => s.name,
               cell: (s) => (
                 <span className="col" style={{ gap: 2 }}>
-                  <KeyCell value={s.name} />
+                  <TableKeyCell value={s.name} />
                   {!s.configured && <span className="t-caption">not in this configuration</span>}
                   {unlistedLine(s) && <span className="t-caption">{unlistedLine(s)}</span>}
                 </span>
@@ -183,7 +184,7 @@ export function McpServers({
               // many tools the server serves is unknown, not zero — a 0 beside
               // a failing server reads as a server that offers nothing.
               sortValue: (s) => toolsOf(s),
-              cell: (s) => <NumberCell value={toolsOf(s)} />,
+              cell: (s) => <TableNumberCell value={toolsOf(s)} format={fmtCount} />,
             },
             {
               key: "nodes",
@@ -347,7 +348,7 @@ export function ServerHeader({
           { label: "Transport", value: server.transport || "unknown" },
           { label: "Instances", value: server.shared ? "one for the company" : "one per seat" },
           { label: "Reaches", value: reach },
-          { label: "Tools", value: <NumberCell value={toolsOf(server)} /> },
+          { label: "Tools", value: <TableNumberCell value={toolsOf(server)} format={fmtCount} /> },
         ]}
       />
       {/* THE LAUNCH WHOLE, as its own block rather than a fact: a fact track

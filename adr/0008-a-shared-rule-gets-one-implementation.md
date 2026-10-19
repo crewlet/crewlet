@@ -1,4 +1,4 @@
-# ADR-0008 — A rule more than one package needs gets exactly one implementation
+# ADR-0008: A rule more than one package needs gets exactly one implementation
 
 - **Status:** accepted
 - **Authority:** `internal/httpx`

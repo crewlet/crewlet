@@ -39,6 +39,9 @@ import {
   StatGroup,
   Tag,
   useToast,
+  TableKeyCell,
+  TableDateCell,
+  TableTextCell,
 } from "@crewlethq/ui";
 import {
   PlusGlyph,
@@ -50,7 +53,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, KeyCell, TextCell } from "~/app/frame/cells.tsx";
+
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
@@ -571,7 +574,7 @@ export function Secrets({ name }: { name?: string }) {
                 // one a fact the credential's peek carries.
                 floor: "max-content",
                 sortValue: (s) => s.name,
-                cell: (s) => <KeyCell value={s.name} />,
+                cell: (s) => <TableKeyCell value={s.name} />,
               },
               {
                 // NEVER GIVES WAY: what reads a name is what breaks when it
@@ -608,7 +611,7 @@ export function Secrets({ name }: { name?: string }) {
                 // column repeats itself down the list.
                 drop: 1,
                 sortValue: (s) => s.key_id,
-                cell: (s) => <KeyCell value={s.key_id} />,
+                cell: (s) => <TableKeyCell value={s.key_id} />,
               },
               {
                 key: "by",
@@ -621,7 +624,7 @@ export function Secrets({ name }: { name?: string }) {
                 // for an empty string the reader would read as a name.
                 cell: (s) =>
                   s.updated_by ? (
-                    <TextCell>{authorLabel(s.updated_by, s.operator_id)}</TextCell>
+                    <TableTextCell>{authorLabel(s.updated_by, s.operator_id)}</TableTextCell>
                   ) : (
                     <EmptyValue label="Nobody recorded" />
                   ),
@@ -632,7 +635,7 @@ export function Secrets({ name }: { name?: string }) {
                 shrink: true,
                 drop: 4,
                 sortValue: (s) => tsKey(s.updated_at),
-                cell: (s) => <DateCell at={s.updated_at} now={now} />,
+                cell: (s) => <TableDateCell value={s.updated_at} now={now} />,
               },
               {
                 key: "act",

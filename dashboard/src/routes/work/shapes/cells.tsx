@@ -33,7 +33,7 @@
  */
 
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
-import { Button, EmptyValue, Menu } from "@crewlethq/ui";
+import { ConflictNote, EmptyValue, Menu } from "@crewlethq/ui";
 import { RefusalNote } from "~/components/WriteButton.tsx";
 import { Assignee, PriorityMark, StatusBadge, type RowChrome } from "~/components/work.tsx";
 import { useAct } from "~/lib/useAct.ts";
@@ -90,7 +90,7 @@ export function InlineEdits({
   return (
     <EditsContext.Provider value={value}>
       {lost && write.refusal ? (
-        <ConflictNote
+        <WorkConflictNote
           item={lost.item}
           label={lost.label}
           seatName={seatName}
@@ -116,10 +116,13 @@ export function InlineEdits({
 }
 
 /**
- * "Changed by Maya since you opened it" — the refusal of a lost race, with the
+ * "Changed by Maya since you opened it": the refusal of a lost race, with the
  * name of whoever won it.
+ *
+ * uilet's [ConflictNote] draws it; this container is where the task's history
+ * is asked who that was, which only the engine can answer.
  */
-export function ConflictNote({
+export function WorkConflictNote({
   item,
   label,
   seatName,
@@ -136,23 +139,17 @@ export function ConflictNote({
   onDismiss: () => void;
 }) {
   const newest = useQuery("work_activity", { task: item, limit: 1 });
-  const record = newest.data?.records?.[0];
   // WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person the directory binds to
   // a seat writes AS that seat, and anybody bound to none under their login,
   // which is a name and drawn as one.
-  const actor = record?.actor ?? "";
-  const who = actor ? (seatName?.(actor) ?? actor) : "";
+  const actor = newest.data?.records?.[0]?.actor ?? "";
   return (
-    <span className="write-refusal" role="alert">
-      <span>
-        {who
-          ? `${label} was changed by ${who} since you opened it. Look again, then retry.`
-          : fallback}
-      </span>
-      <Button size="small" variant="ghost" onClick={onDismiss}>
-        Dismiss
-      </Button>
-    </span>
+    <ConflictNote
+      subject={label}
+      changedBy={actor ? (seatName?.(actor) ?? actor) : undefined}
+      message={fallback}
+      onDismiss={onDismiss}
+    />
   );
 }
 
@@ -212,7 +209,7 @@ function CellPicker({
 }
 
 /** A status cell: the badge, or for a writer the picker drawn as the badge. */
-export function StatusCell({ row, defs }: { row: WorkSummary; defs?: WorkStatusDef[] }) {
+export function WorkStatusCell({ row, defs }: { row: WorkSummary; defs?: WorkStatusDef[] }) {
   const edits = useEdits();
   const badge = <StatusBadge status={row.status} defs={defs} />;
   if (!edits) return badge;

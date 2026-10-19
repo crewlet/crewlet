@@ -128,6 +128,13 @@ var alarmMeaning = map[Kind]string{
 		"and some were not there, or were there at the wrong size or under the " +
 		"wrong digest. Those files cannot be downloaded or read until they are " +
 		"restored.",
+	KindObjectsBucketNearCeiling: "The fleet's own object bucket on the broker holds " +
+		"more than four fifths of the bytes it reserves. A full bucket refuses every " +
+		"upload, though nothing else on the broker is affected.",
+	KindObjectiveBurn: "A service objective this node measures (publishing, serving a " +
+		"document, a frame becoming ready in a viewer's browser, a datastore verdict) " +
+		"is failing fast enough to spend its month's error budget early: in both the " +
+		"long and the short window of one of the two burn-rate pairs.",
 }
 
 const alarmHeader = `# Alarms

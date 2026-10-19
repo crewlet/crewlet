@@ -8,7 +8,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // The thread so far: what was already said where this turn was woken.
@@ -26,6 +28,15 @@ import (
 // needed to just hand it over was already on the node — the channel and the
 // thread root are on the trigger's own metadata, and each seat's
 // authenticated client is held by its transport.
+//
+// # It is fenced
+//
+// Every message in it is somebody else's words, frozen into the system prompt
+// of every round, so the messages sit inside one [provenance.Fence] carrying
+// the turn's token and the speakers as its authors: a message that spells a
+// closing marker, or an instruction to the seat, stays a line somebody said.
+// The preamble and the engine's own notices stay outside it, because they are
+// the engine telling the seat how to read the thread.
 //
 // # It does not turn the trigger thick
 //
@@ -240,6 +251,9 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 	// waiting runs beside lines: the id of the message a line rendered when
 	// that message was waiting for this turn, and "" for every other line.
 	waiting := make([]string, 0, len(read.Messages))
+	// authors runs beside them too: who said each line, so the fence names
+	// the speakers of what it holds and nobody whose message was left out.
+	authors := make([]provenance.Author, 0, len(read.Messages))
 	waitingFor := waitingMessages(read, r.Message)
 	// rootSlot says the read carried a root at all; rootShown says it
 	// rendered as a message rather than as its stand-in. The two are apart
@@ -250,8 +264,11 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 		line := f.renderPost(m, backend)
 		if i == 0 {
 			if line == "" {
+				// THE ENGINE'S WORDS in the root's slot, so the engine is
+				// their author.
 				lines = append(lines, UnrenderableRootLine)
 				waiting = append(waiting, "")
+				authors = append(authors, provenance.Author{Kind: iam.ActorSystem})
 				continue
 			}
 			rootShown = true
@@ -260,6 +277,7 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 		}
 		lines = append(lines, line)
 		waiting = append(waiting, waitingFor[i])
+		authors = append(authors, f.author(r, m, backend))
 	}
 	posts := len(lines)
 	if rootSlot && !rootShown {
@@ -292,9 +310,12 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 	// The same split, beside the lines: splitThread keeps the root's slot
 	// and the newest, so a middle is lines[1 : 1+len(middle)].
 	var waitingMiddle []string
+	var authorsMiddle []provenance.Author
 	if len(middle) > 0 {
 		waitingMiddle = waiting[1 : 1+len(middle)]
 		waiting = append(append([]string{}, waiting[0]), waiting[1+len(middle):]...)
+		authorsMiddle = authors[1 : 1+len(middle)]
+		authors = append(append([]provenance.Author{}, authors[0]), authors[1+len(middle):]...)
 	}
 	posts = len(lines)
 	if rootSlot && !rootShown {
@@ -318,10 +339,14 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 			// about text nobody rewrote.
 			lines = append(append(append([]string{}, lines[0]), middle...), lines[1:]...)
 			waiting = append(append(append([]string{}, waiting[0]), waitingMiddle...), waiting[1:]...)
+			authors = append(append(append([]provenance.Author{}, authors[0]), authorsMiddle...), authors[1:]...)
 			posts += len(middle)
 			middle = nil
 		case err == nil:
+			// A REWRITE OF THEIR WORDS is still theirs to answer for: a
+			// condensation carries what an instruction in the middle said.
 			condensed = res.Text
+			authors = append(authors, authorsMiddle...)
 		default:
 			log.DebugContext(ctx, "prefetch_thread_not_condensed", "seat", r.Seat.Handle(),
 				"messages", len(middle), "error", err.Error())
@@ -339,25 +364,29 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 	// short before anything renderable leaves the preamble standing alone
 	// — and that preamble is itself the instruction the seat needs.
 	if len(lines) > 0 {
-		b.WriteString("\n" + lines[0])
-	}
-	if condensed != "" {
-		// MARKED AS A REWRITE, and as standing for a stated number of
-		// messages: a seat that took it for what somebody wrote would
-		// quote a model's paraphrase back at them.
-		b.WriteString("\n_(" + strconv.Itoa(len(middle)) + " earlier message(s), condensed by " +
-			"a model — identifiers verbatim, wording not:)_\n" + condensed)
+		var said strings.Builder
+		said.WriteString(lines[0])
+		if condensed != "" {
+			// MARKED AS A REWRITE, and as standing for a stated number of
+			// messages: a seat that took it for what somebody wrote would
+			// quote a model's paraphrase back at them.
+			said.WriteString("\n_(" + strconv.Itoa(len(middle)) + " earlier message(s), condensed by " +
+				"a model (identifiers verbatim, wording not):)_\n" + condensed)
+		}
+		for _, line := range lines[1:] {
+			said.WriteString("\n" + line)
+		}
+		b.WriteString("\n" + provenance.Fence(r.Boundary, provenance.SourceChatThread,
+			provenance.TrustFor(r.Seat.Handle(), authors), authors, said.String()))
 	}
 	if dropped > 0 {
-		// SAID OUT LOUD. A silently shortened thread reads as the whole
+		// SAID OUT LOUD, and OUTSIDE THE FENCE, because it is the engine
+		// speaking. A silently shortened thread reads as the whole
 		// conversation, and a seat that believes it has seen everything
 		// will not go and look for the rest.
 		b.WriteString("\n_(" + strconv.Itoa(dropped) + " earlier message(s) in this " +
 			"thread are not shown; read the thread itself with your chat tools if " +
 			"you need them.)_")
-	}
-	for _, line := range lines[1:] {
-		b.WriteString("\n" + line)
 	}
 	var answered []string
 	for _, id := range waiting {
@@ -435,6 +464,29 @@ func (f *Fetcher) renderPost(m notify.Message, backend string) string {
 		return ""
 	}
 	return "- **" + f.speaker(m, backend) + "**: " + text
+}
+
+// author is who said it, as the fence names them: the seat itself for its own
+// replies, a colleague's seat where the party registry knows the sender, and
+// otherwise somebody nothing vouches for. The SAME lookup [Fetcher.speaker]
+// makes, so the line and the fence cannot name two different people.
+func (f *Fetcher) author(r Request, m notify.Message, backend string) provenance.Author {
+	if m.Own {
+		return provenance.Author{Kind: iam.ActorAgent, Seat: r.Seat.Handle()}
+	}
+	if f.src.Parties != nil && backend != "" && m.SenderID != "" {
+		if party, ok := f.src.Parties.ByExternalID(backend, m.SenderID); ok &&
+			strings.TrimSpace(party.Handle) != "" {
+			kind := iam.ActorAgent
+			if party.Human {
+				kind = iam.ActorHuman
+			}
+			return provenance.Author{Kind: kind, Seat: strings.TrimSpace(party.Handle)}
+		}
+	}
+	// AN OUTSIDE PARTY: a person or a bot in a shared channel the company
+	// does not know. Its kind is not something the backend's answer proves.
+	return provenance.Author{}
 }
 
 // speaker names who said it.

@@ -40,6 +40,9 @@ import {
   StatGroup,
   Tag,
   InlineCode,
+  TableDateCell,
+  TableEntityCell,
+  TableTextCell,
 } from "@crewlethq/ui";
 import {
   CalendarGlyph,
@@ -48,7 +51,7 @@ import {
   ClockGlyph,
 } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
+import { linkedSeat } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
@@ -313,7 +316,7 @@ export function scopeLabel(scopeType: string, name: string, who: Who): string {
  * Where a schedule is declared, in a cell: a role's SEAT, or a unit.
  *
  * A ROLE SCOPE IS A SEAT and a unit scope is not, which is why only half of
- * this is a person: `SeatCell` is the one rendering of a seat in a grid, and a
+ * this is a person: `linkedSeat` is the one rendering of a seat in a grid, and a
  * unit is a name with no avatar, no state and no page of people behind it.
  * ONE CELL FOR BOTH GRIDS: the company's fires drew a role's scope as its raw
  * handle in an outline pill (`agent-pm`) one card below the grid that drew the
@@ -330,7 +333,7 @@ export function ScopeCell({
   who: Who;
 }) {
   return scopeType === "role" ? (
-    <SeatCell handle={name} {...who(name)} />
+    <TableEntityCell {...linkedSeat({ handle: name, ...who(name) })} />
   ) : (
     <Tag appearance="outline">{name}</Tag>
   );
@@ -758,7 +761,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 key: "task",
                 header: "Task",
                 floor: "8rem",
-                cell: (s) => <TextCell>{s.task}</TextCell>,
+                cell: (s) => <TableTextCell>{s.task}</TableTextCell>,
               },
               {
                 // WHO A FIRE REACHES, resolved by the engine from the scope
@@ -782,7 +785,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 header: "Next",
                 shrink: true,
                 sortValue: (s) => tsKey(s.next_run) || Number.MAX_SAFE_INTEGER,
-                // NOT `DateCell`: this is the only column in the product that
+                // NOT `TableDateCell`: this is the only column in the product that
                 // reads FORWARD, and `relTime` spells a future instant as an
                 // elapsed one.
                 cell: (s) =>
@@ -811,7 +814,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                   if (!run) return <EmptyValue label="This schedule has never fired" />;
                   return (
                     <span className="row gap-1">
-                      <DateCell at={run.fired_at} now={now} />
+                      <TableDateCell value={run.fired_at} now={now} />
                       {run.outcome && <OutcomeTag outcome={run.outcome} />}
                     </span>
                   );
@@ -848,7 +851,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 header: "Fired",
                 shrink: true,
                 sortValue: (r) => tsKey(r.fired_at),
-                cell: (r) => <DateCell at={r.fired_at} now={now} />,
+                cell: (r) => <TableDateCell value={r.fired_at} now={now} />,
               },
               {
                 // THE ROW'S IDENTITY KEEPS ITS NAME WHOLE, as the grid above
@@ -861,7 +864,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 header: "Schedule",
                 floor: NAME_FLOOR,
                 sortValue: (r) => r.schedule_name,
-                cell: (r) => <TextCell>{r.schedule_name}</TextCell>,
+                cell: (r) => <TableTextCell>{r.schedule_name}</TableTextCell>,
               },
               {
                 // GOES FIRST: a role schedule's scope IS the seat it wakes, so
@@ -884,7 +887,11 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 header: "Woke",
                 shrink: true,
                 drop: 3,
-                cell: (r) => <SeatCell handle={r.target_handle} {...who(r.target_handle)} />,
+                cell: (r) => (
+                  <TableEntityCell
+                    {...linkedSeat({ handle: r.target_handle, ...who(r.target_handle) })}
+                  />
+                ),
               },
               {
                 key: "outcome",
@@ -896,7 +903,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 // word a skip row says.
                 width: OUTCOME_WIDTH,
                 sortValue: (r) => r.outcome,
-                // A BADGE, NOT `StatusCell`: the ledger's two words are a
+                // A BADGE, NOT `TableStatusCell`: the ledger's two words are a
                 // dispatch vocabulary rather than a lifecycle, and this is
                 // the pill the Last column above draws for the same value.
                 // AN ABSENT OUTCOME IS NOT A WORD, though — a badge reading
@@ -911,7 +918,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
               {
                 // THE TICK, which is not the instant it ran: a catchup run
                 // fires now for a tick that was due earlier, and the pair is
-                // the only way to see that. ABSOLUTE rather than `DateCell`
+                // the only way to see that. ABSOLUTE rather than `TableDateCell`
                 // for exactly that reason — two relative times an hour apart
                 // read as one fire, and the tick's own label is the ledger's
                 // at-most-once key. It gives way second: beside Fired it
@@ -1056,7 +1063,7 @@ function OneSchedule({
                 header: "Fired",
                 shrink: true,
                 sortValue: (r) => tsKey(r.fired_at),
-                cell: (r) => <DateCell at={r.fired_at} now={now} />,
+                cell: (r) => <TableDateCell value={r.fired_at} now={now} />,
               },
               {
                 // THE ONE COLUMN THAT FILLS. Every column here was sized to
@@ -1067,7 +1074,11 @@ function OneSchedule({
                 key: "target",
                 header: "Woke",
                 floor: WOKE_FLOOR,
-                cell: (r) => <SeatCell handle={r.target_handle} {...who(r.target_handle)} />,
+                cell: (r) => (
+                  <TableEntityCell
+                    {...linkedSeat({ handle: r.target_handle, ...who(r.target_handle) })}
+                  />
+                ),
               },
               {
                 key: "outcome",
@@ -1224,7 +1235,9 @@ export function SchedulePeek({ scope }: { scope: string }) {
                           </span>
                         </div>
                         <div className="row gap-1">
-                          <SeatCell handle={r.target_handle} {...who(r.target_handle)} />
+                          <TableEntityCell
+                            {...linkedSeat({ handle: r.target_handle, ...who(r.target_handle) })}
+                          />
                           <span className="spacer" />
                           {/* THE TICK BESIDE THE FIRE, which is the only way
                               to see a catchup: this ran now for something

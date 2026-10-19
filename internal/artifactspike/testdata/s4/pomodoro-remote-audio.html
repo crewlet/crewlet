@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Focus timer</title>
+
+<style>
+:root { --bg: #ffffff; --fg: #1d1d1f; --muted: #6b6b70; --accent: #3b5bdb; --card: #f5f5f7; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111114; --fg: #f2f2f5; --muted: #a0a0a8; --accent: #7b93ff; --card: #1c1c21; }
+}
+body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+main { max-width: 960px; margin: 0 auto; padding: 16px; }
+.card { background: var(--card); border-radius: 12px; padding: 16px; margin: 12px 0; }
+button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--muted); background: var(--card); color: var(--fg); cursor: pointer; }
+#clock { font-size: 64px; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+<div class="card"><h1 id="clock">25:00</h1><button id="start">Start</button><button id="reset">Reset</button></div>
+</main>
+<script>
+let left = 25 * 60, timer = null;
+const chime = new Audio("https://actions.google.com/sounds/v1/alarms/beep_short.ogg");
+function draw() { document.getElementById("clock").textContent = String(Math.floor(left / 60)).padStart(2, "0") + ":" + String(left % 60).padStart(2, "0"); }
+document.getElementById("start").addEventListener("click", () => {
+  if (timer) return;
+  timer = setInterval(() => { left--; draw(); if (left <= 0) { clearInterval(timer); timer = null; chime.play(); } }, 1000);
+});
+document.getElementById("reset").addEventListener("click", () => { clearInterval(timer); timer = null; left = 25 * 60; draw(); });
+draw();
+</script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+-- The company trail reads every artifact's history.
+--
+-- An administrator may open any artifact through the admin path, and each such
+-- read writes a `read_elevated` row into the artifact's own history (D09). An
+-- override recorded only there is one nobody finds when the owner has left the
+-- company or never opens the history, so the administrators' trail
+-- (`audit.read`) reads the history rows of every artifact at once, newest
+-- first in the log's own order, narrowed to one op where it asks for one
+-- (`read_elevated` for the overrides alone).
+--
+-- WHO HAS TO AGREE ON IT: every node, identically. These are indexes over the
+-- artifacts log's own replicated rows, which the applier alone writes.
+--
+-- # Two indexes, one per question
+--
+-- The trail pages by (position, artifact_id) descending, the total order every
+-- node applied the rows in. Unnarrowed it walks that order; narrowed to an op
+-- it walks the same order within the op, so a page of overrides reads only
+-- overrides rather than filtering a year of publishes and shares.
+CREATE INDEX artifact_history_trail_idx ON artifact_history (position, artifact_id);
+CREATE INDEX artifact_history_trail_op_idx ON artifact_history (op, position, artifact_id);

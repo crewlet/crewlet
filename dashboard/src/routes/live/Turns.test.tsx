@@ -235,7 +235,7 @@ test("a row draws the seat's badge and its item key as one token", async () => {
   ]);
   await screen.findByText("reviewed the work");
   const r = rowOf("reviewed the work");
-  expect(r.querySelector(".cell-seat .crewlet-avatar")).not.toBeNull();
+  expect(r.querySelector(".crewlet-table-cell__entity .crewlet-avatar")).not.toBeNull();
   const key = [...r.querySelectorAll("span")].find((s) => s.textContent === "ENG-22");
   expect(key?.classList.contains("item-key")).toBe(true);
 });

@@ -1501,70 +1501,6 @@
   cursor: pointer;
 }
 
-/* ---- Cells -------------------------------------------------------------- */
-
-.cell-date {
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-}
-
-.cell-seat {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-width: 0;
-  color: inherit;
-}
-
-/* A NO-OP UNTIL NOW, and nothing could see it: `.cell-seat` takes `color:
-   inherit` and a grid row's colour IS `--color-text-primary`, so "hover moves it to
-   `--color-text-primary`" moved it nowhere, and what actually answered the pointer was the
-   baseline's hover underline that this application never wanted. With that
-   reset, hovering a seat name changed nothing at all.
-
-   The step is the other direction here, and it has to be: the rungs move a
-   link TOWARD `--color-text-primary` when it starts at the accent ink, and this register
-   deliberately starts at `--color-text-primary` so a grid of seat names does not read as a
-   page of links. Onto the accent's one text rung is the same move in reverse,
-   and it says what the row's own wash cannot — that this NAME is the link
-   rather than the row. `.wl-who` in screens.css is the same object and takes
-   the same answer.
-
-   ONLY WHERE THE NAME IS THE LINK: `SeatLabel` wears the same class inside a
-   row that is itself the link, and an accent there would say the name goes
-   somewhere the row does not. */
-a.cell-seat:hover {
-  color: var(--color-brand-accent-ink);
-}
-
-.cell-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.cell-glyph {
-  font-size: var(--font-size-xs);
-  line-height: 1;
-}
-
-.cell-status.positive .cell-glyph {
-  color: var(--color-feedback-success);
-}
-.cell-status.caution .cell-glyph {
-  color: var(--color-feedback-warning);
-}
-.cell-status.critical .cell-glyph {
-  color: var(--color-feedback-danger);
-}
-.cell-status.info .cell-glyph {
-  color: var(--color-feedback-info);
-}
-.cell-status.neutral .cell-glyph {
-  color: var(--color-text-muted);
-}
-
 /* ---- The page's own one-line explanation --------------------------------- */
 
 /* NO WORD ALONE ON THE LAST LINE: at the measure, Secrets' note broke to a
@@ -1814,7 +1750,7 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
    COUNTS OF is said beside them — over the loaded page or over the whole
    window, which the rail's own `over` decides — and only where a number is
    actually drawn: a caption about numbers that are not on screen qualifies
-   nothing. A dimension with nothing to count is a `.segmented`, not this.
+   nothing. A dimension with nothing to count is a SegmentedControl, not this.
    See ui/FacetRail.tsx. */
 
 .facet-row {

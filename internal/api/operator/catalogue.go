@@ -136,6 +136,15 @@ type Halves struct {
 	// the company's own wiki is exactly as useful on Confluence.
 	Knowledge builtin.KnowledgeSearcher
 
+	// Artifacts are the artifacts tools' halves, or the zero value on a node
+	// that takes no artifact uploads. Every data node runs the artifacts
+	// domain, so they do not follow the company's native halves.
+	Artifacts builtin.ArtifactDeps
+
+	// ArtifactData is the datastore tools' own half, served beside the
+	// artifacts tools and only where they are.
+	ArtifactData builtin.ArtifactDataDeps
+
 	// Company names the company in the MCP server's own title, so an
 	// operator with two of these connected can tell which is which.
 	Company string
@@ -279,13 +288,17 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 	if !up {
 		return catalogue{}, false
 	}
-	work, kb := halves.Work, halves.Pages
+	work, kb, arts := halves.Work, halves.Pages, halves.Artifacts
 	work.Actor, kb.Actor = workActor, pageActor
+	// THE CALL'S OWN OPERATION, where its transport names one: an artifact
+	// write's records derive from it, as a page write's do.
+	arts.CallerKey = keyFrom
 	runs, pauses, steer, answer := s.runs, s.pauses, s.steer, s.answer
 	runs.Actor, pauses.Actor, steer.Actor, answer.Actor =
 		workActor, workActor, workActor, workActor
 	callables := builtin.OperatorTools(builtin.OperatorDeps{
-		Work: work, Pages: kb, Knowledge: halves.Knowledge, Org: s.org,
+		Work: work, Pages: kb, Knowledge: halves.Knowledge, Artifacts: arts,
+		ArtifactData: halves.ArtifactData, Org: s.org,
 		Authorize: s.authorize, Runs: runs, Pauses: pauses,
 		Steer: steer, Answer: answer,
 	})

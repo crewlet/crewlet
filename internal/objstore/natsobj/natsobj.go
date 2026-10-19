@@ -18,28 +18,52 @@
 // company whose files outgrow one member's disk takes the S3 backend
 // (internal/objstore/s3obj) instead.
 //
-// # The bucket's own format, and the library only for the put
+// # A byte reservation, and why it is not optional
 //
-// The bucket is a NATS object store in that store's own documented layout —
+// The bucket is created with a byte ceiling ([Config.MaxBytes]), and a bucket
+// found without one is refused unless the operator wrote the figure to give it. The state logs reserve their ceilings against the
+// broker's limit, and everything else on the broker (every seat's mailbox
+// and every coordination bucket, where the leases, ledgers and budget
+// counters live) shares what is left. A bucket with no ceiling grows into
+// that remainder, and the collector does not bound it: it deletes garbage,
+// never the files a company keeps. A full remainder refuses a lease heartbeat,
+// which is a fleet outage rather than a file outage; a full bucket refuses an
+// upload ([objstore.ErrFull]) and nothing else. So the bucket's growth is a
+// RESERVATION of its own, granted once by the broker at create time, and how
+// close it is to full is what [Backend.Usage] answers and an alarm reads.
+//
+// # The bucket's own format, written and read through the stream
+//
+// The bucket is a NATS object store in that store's own documented layout:
 // an object is a run of messages on `$O.<bucket>.C.<nuid>`, closed by one
-// message on `$O.<bucket>.M.<name, base64url>` naming them — so every object
-// stays readable by NATS's own tools (`nats object get`). The library writes
-// it: a put is the library's streaming put, made safe by two rules, each the
-// answer to a measured failure:
+// message on `$O.<bucket>.M.<name, base64url>` naming them, so every object
+// stays readable by NATS's own tools (`nats object get`). The library only
+// creates the bucket; every verb goes through the stream, because none of the
+// library's can be made safe.
 //
-//   - EVERY MESSAGE BUT THE LAST IS FULL ([MessageBytes]). The library sends
-//     one message per Read of the reader it is handed, so a reader that
-//     answers a few bytes at a time — a network body — would store an object
-//     as thousands of tiny messages; a put reads through a filler that
-//     answers only full ones, and ends the object only where its reader
-//     answers io.EOF itself ([objstore.Fill]) — never at a body cut short.
-//   - A PUT IS ENDED BY ITS READER, never by its context. A put whose
-//     context ends purges the pieces it stored under that same, dead
-//     context, which fails, and leaves them on the stream with nothing
-//     naming them; one whose reader fails purges them with a live one. So
-//     the library's put runs under a context that does not end with the
-//     caller's, and the caller giving up reaches it as a read error
-//     ([objstore.ContextReader]).
+// A PUT ([Backend.Put]) is this package's own, each rule the answer to a
+// measured failure:
+//
+//   - EVERY MESSAGE BUT THE LAST IS FULL ([MessageBytes]). A reader that
+//     answers a few bytes at a time (a network body) would otherwise store
+//     an object as thousands of tiny messages; a put reads through a filler
+//     that answers only full ones, and ends the object only where its reader
+//     answers io.EOF itself ([objstore.Fill]), never at a body cut short.
+//   - AT MOST A MEBIBYTE IS IN FLIGHT ([putWindow]), and each mebibyte is
+//     given the object store's pace ([objstore.MiBPace]) for its
+//     acknowledgements. The library's put sends every message of an object
+//     at once (128 for a 16 MiB file) and gives each acknowledgement the
+//     client's default five seconds, so on slow flushes with the logs busy
+//     the last one came late and a 16 MiB put failed (spike S7, finding 6):
+//     a put's success hung on the disk's flush time rather than on the pace
+//     every other leg of a transfer is held to.
+//   - A PUT IS ENDED BY ITS READER OR ITS CONTEXT, AND CLEANS UP UNDER A LIVE
+//     ONE. A failed put waits for what it has in flight, so no piece lands
+//     after the cleanup, then purges its pieces under a context of its own,
+//     never the caller's that may be what ended it. Metadata whose
+//     acknowledgement never came is read back from the stream's leader
+//     before anything is purged, so an object that did land is never left
+//     naming pieces that are gone.
 //
 // EVERYTHING ELSE IS READ AND REMOVED THROUGH THE STREAM ITSELF, because the
 // library's other verbs cannot be made safe:
@@ -76,6 +100,8 @@ package natsobj
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -128,18 +154,42 @@ type Config struct {
 	// Clustered says the broker is a cluster, which is what the
 	// provisioning budget branches on (see [jsprovision]).
 	Clustered bool
+
+	// MaxBytes is the byte reservation a bucket this node creates is given
+	// (store.objects.nats_max_bytes, or the share the engine derives),
+	// required, since a bucket with no ceiling is the failure the package
+	// doc describes. A bucket that exists keeps the ceiling it holds: its
+	// configuration has one writer, and a booting node is not it. The one
+	// exception is a bucket holding NO ceiling, which takes an explicit
+	// figure at boot (see [checkCeiling]).
+	MaxBytes int64
+
+	// Explicit says MaxBytes is what an operator wrote rather than what the
+	// engine derived, which is when a bucket held at another ceiling is
+	// worth a line: a derived figure follows the broker's free space and
+	// differs from the one a bucket was created at on most boots.
+	Explicit bool
 }
 
 // Backend is the objects in the broker's object store.
 type Backend struct {
-	// store is the library's handle on the bucket, which only a put goes
-	// through — see the package doc.
-	store jetstream.ObjectStore
 	// stream is the stream behind the bucket, which a get and a listing
 	// consume and a delete purges.
 	stream jetstream.Stream
 	// leader reads one object's metadata from the stream's leader.
 	leader *jsapi.Leader
+	// js is the JetStream client the bucket was opened through, which a
+	// seal updates the stream through.
+	js jetstream.JetStream
+	// puts is the client a put publishes its pieces and its metadata
+	// through: one of its own on the same connection, so its acknowledgement
+	// waits are this package's ([putWindow]) and no other publisher's
+	// asynchronous settings reach them.
+	puts jetstream.JetStream
+	// pace is what each window of a put is given for its acknowledgements;
+	// zero is [objstore.MiBPace]. Set by this package's own tests alone,
+	// through export_test.go.
+	pace time.Duration
 	// expiry is how long each pull a get or a walk sends waits; zero is
 	// [pullExpiry]. Set by this package's own tests alone, through
 	// export_test.go.
@@ -185,6 +235,11 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 		return nil, errors.New("natsobj: the nats object store needs the broker's " +
 			"JetStream, and this node has none")
 	}
+	if cfg.MaxBytes <= 0 {
+		return nil, fmt.Errorf("natsobj: the %s bucket needs a byte reservation, and "+
+			"this node was given %d: a bucket with no ceiling grows into the broker "+
+			"remainder the fleet's coordination records live in", Bucket, cfg.MaxBytes)
+	}
 	replicas := max(cfg.Replicas, 1)
 	// ONE BREADCRUMB OVER THE WHOLE OF IT, because either half can be the
 	// one that stalls and the operator's question is the same: which object
@@ -198,7 +253,7 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 	})
 	defer stop()
 
-	store, err := lookupBucket(ctx, js, timing)
+	_, err := lookupBucket(ctx, js, timing)
 	switch {
 	case err == nil:
 	case errors.Is(err, jetstream.ErrBucketNotFound), jsprovision.Unanswered(ctx, err):
@@ -215,7 +270,7 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 					"so the create below decides it: absent and it is made, "+
 					"present and it comes back as a peer's win and is read back")
 		}
-		if store, err = createBucket(ctx, js, timing, replicas); err != nil {
+		if _, err = createBucket(ctx, js, timing, replicas, cfg.MaxBytes); err != nil {
 			return nil, err
 		}
 	default:
@@ -233,18 +288,74 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 	}); err != nil {
 		return nil, fmt.Errorf("natsobj: bind the %s stream: %w", Stream, err)
 	}
-	if got := stream.CachedInfo().Config.Replicas; got < replicas {
+	held := stream.CachedInfo().Config
+	if held.MaxBytes <= 0 && cfg.Explicit {
+		bounded, boundErr := boundBucket(ctx, js, timing, held, cfg.MaxBytes)
+		if boundErr != nil {
+			return nil, boundErr
+		}
+		stream, held = bounded, bounded.CachedInfo().Config
+	}
+	if got := held.Replicas; got < replicas {
 		return nil, fmt.Errorf("natsobj: the %s bucket is replicated %dx and this "+
 			"node is configured for %dx (stream.replicas): an upload acknowledged "+
 			"there would prove fewer copies than this node promises — raise the "+
 			"bucket's replicas or align stream.replicas on every node",
 			Bucket, got, replicas)
 	}
+	if err := checkCeiling(ctx, held.MaxBytes, cfg); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
+		return nil, err
+	}
 	leader, err := jsapi.NewLeader(js, Stream)
 	if err != nil {
 		return nil, fmt.Errorf("natsobj: address the %s stream's leader: %w", Stream, err)
 	}
-	return &Backend{store: store, stream: stream, leader: leader}, nil
+	puts, err := jetstream.New(js.Conn())
+	if err != nil {
+		return nil, fmt.Errorf("natsobj: open the %s bucket's publisher: %w", Bucket, err)
+	}
+	return &Backend{stream: stream, leader: leader, js: js, puts: puts}, nil
+}
+
+// checkCeiling judges the ceiling the bucket holds against the one this node
+// was configured with.
+//
+// # No ceiling is refused unless an operator wrote one, and a different one is kept
+//
+// A bucket holding NO ceiling is refused, for the package doc's reason, when
+// the node's figure is one the engine derived: a derived share follows the
+// broker's free space, so writing it would let whichever node booted last
+// size the bucket. Every bucket a build before the reservation created holds
+// none, as does one made by hand or by another tool. The refusal names both
+// gestures that bound it: store.objects.nats_max_bytes, which [Open] applies
+// to such a bucket at boot ([boundBucket]) and which is the only one an
+// embedded broker can take, since nothing outside the engine reaches it; and
+// the broker's own `nats stream update`, since a bucket IS a stream.
+//
+// A bucket holding a DIFFERENT ceiling is kept as it is, as a state log's
+// stream is: the broker granted it once, and the capacity it reserves is the
+// one an operator sized for. Said out loud where the operator wrote the other
+// figure, since an edit to store.objects.nats_max_bytes reaches only a bucket
+// that does not exist yet.
+func checkCeiling(ctx context.Context, held int64, cfg Config) error {
+	switch {
+	case held <= 0:
+		return fmt.Errorf("natsobj: the %s bucket holds no byte ceiling, so its "+
+			"files grow into the broker remainder the fleet's leases and ledgers "+
+			"live in, and a full remainder stops the fleet rather than an upload. "+
+			"Give it one before this node starts: set store.objects.nats_max_bytes, "+
+			"which a node applies at boot to a bucket holding no ceiling (%d is "+
+			"the share this node derived), or run `nats stream update %s "+
+			"--max-bytes=%d` against the broker", Bucket, cfg.MaxBytes, Stream, cfg.MaxBytes)
+	case cfg.Explicit && held != cfg.MaxBytes:
+		log.WarnContext(ctx, "natsobj_bucket_ceiling_kept", "bucket", Bucket,
+			"holds", held, "configured", cfg.MaxBytes,
+			"detail", "store.objects.nats_max_bytes sizes a bucket this node "+
+				"creates, and this one exists: it keeps the ceiling the broker "+
+				"granted it. Change a bucket that exists with `nats stream update "+
+				Stream+" --max-bytes=<bytes>`")
+	}
+	return nil
 }
 
 // lookupBucket asks whether the bucket exists, under the lookup ceiling and at
@@ -261,6 +372,29 @@ func lookupBucket(ctx context.Context, js jetstream.JetStream, timing jsprovisio
 	return store, err
 }
 
+// boundBucket gives a bucket that holds no ceiling the one an operator wrote
+// in store.objects.nats_max_bytes, the one reservation gesture an embedded
+// broker can take. Only the ceiling changes: everything else the bucket's
+// stream holds is written back as it was read. The broker grants the
+// reservation in full or refuses it, and a refusal stops the boot with the
+// broker's reason, as a create the broker cannot grant does.
+func boundBucket(ctx context.Context, js jetstream.JetStream, timing jsprovision.Timing,
+	held jetstream.StreamConfig, maxBytes int64) (jetstream.Stream, error) {
+
+	held.MaxBytes = maxBytes
+	updateCtx, cancel := context.WithTimeout(ctx, timing.Budget)
+	defer cancel()
+	stream, err := js.UpdateStream(updateCtx, held)
+	if err != nil {
+		return nil, fmt.Errorf("natsobj: bound the %s bucket at %d bytes "+
+			"(store.objects.nats_max_bytes): %w", Bucket, maxBytes, err)
+	}
+	log.InfoContext(ctx, "natsobj_bucket_bounded", "bucket", Bucket, "max_bytes", maxBytes,
+		"detail", "the bucket held no byte ceiling and store.objects.nats_max_bytes "+
+			"names one, so this node gave it that reservation")
+	return stream, nil
+}
+
 // createBucket creates the bucket at replicas copies, or reads back the one a
 // peer made.
 //
@@ -268,7 +402,7 @@ func lookupBucket(ctx context.Context, js jetstream.JetStream, timing jsprovisio
 // read-back runs precisely when that deadline may have expired — see
 // [jsprovision.Settle].
 func createBucket(ctx context.Context, js jetstream.JetStream, timing jsprovision.Timing,
-	replicas int) (jetstream.ObjectStore, error) {
+	replicas int, maxBytes int64) (jetstream.ObjectStore, error) {
 
 	createCtx, cancel := context.WithTimeout(ctx, timing.Budget)
 	defer cancel()
@@ -277,14 +411,11 @@ func createBucket(ctx context.Context, js jetstream.JetStream, timing jsprovisio
 		var e error
 		// CREATE, NOT CreateOrUpdate — see [Open].
 		//
-		// NO BYTE CEILING (MaxBytes): the engine reserves one for the
-		// state logs alone — the company's own records, whose growth the
-		// trim governs — and every other stream it runs, the mailboxes
-		// and every coordination bucket, declares none and is bounded by
-		// what writes it. This one is bounded by the collector, which
-		// deletes what no row names a day after it was written. A ceiling
-		// here would be a reservation carved out of the budget the logs'
-		// ceilings draw on, for bytes no log is waiting for.
+		// WITH A BYTE CEILING (MaxBytes), which the broker grants in full
+		// as a reservation: see the package doc for why the bucket may not
+		// grow into the remainder the coordination records share. The
+		// library creates the stream to refuse a put past it rather than
+		// discard an old object.
 		store, e = js.CreateObjectStore(ctx, jetstream.ObjectStoreConfig{
 			Bucket: Bucket,
 			// WRITTEN ONCE, by whichever node creates the bucket: nothing
@@ -293,6 +424,7 @@ func createBucket(ctx context.Context, js jetstream.JetStream, timing jsprovisio
 			Description: "Crewlet files, one object per upload",
 			Storage:     jetstream.FileStorage,
 			Replicas:    replicas,
+			MaxBytes:    maxBytes,
 		})
 		return e
 	}, nil)
@@ -310,6 +442,16 @@ func createBucket(ctx context.Context, js jetstream.JetStream, timing jsprovisio
 		// and names neither the class nor the field that picks it.
 		return nil, fmt.Errorf("natsobj: create the %s bucket at %d copies: %w%s",
 			Bucket, replicas, err, jsprovision.NoApplicableLimitDetail(replicas))
+	}
+	if jsprovision.OutOfCapacity(err) {
+		// THE RESERVATION DOES NOT FIT, which the broker says without
+		// naming a number: the figure and the two fields that move it are
+		// what an operator needs, and the broker's own text is neither.
+		return nil, fmt.Errorf("natsobj: create the %s bucket at %d copies with a "+
+			"%d-byte reservation: %w. The broker cannot reserve it beside what it "+
+			"has already granted. Lower store.objects.nats_max_bytes, raise "+
+			"stream.store_max_bytes, or give the broker's volume more room",
+			Bucket, replicas, maxBytes, err)
 	}
 	if jsprovision.Refused(err) {
 		// REFUSED OUTRIGHT, so nothing was made and there is nothing to
@@ -333,38 +475,249 @@ func createBucket(ctx context.Context, js jetstream.JetStream, timing jsprovisio
 	return store, nil
 }
 
-// Put implements [objstore.Backend].
-//
-// UNDER [context.WithoutCancel] and with no deadline, so the library bounds
-// each message's acknowledgement by its own default instead, and every way
-// the put can fail — the caller's context ending among them — reaches it as a
-// failed read, which it cleans up after under a context that still works. See
-// the package doc.
+// Put implements [objstore.Backend]: the object's pieces published a window
+// at a time, each window's acknowledgements awaited at the object store's
+// pace, then the metadata naming them. See the package doc.
 func (b *Backend) Put(ctx context.Context, name string, r io.Reader, m objstore.PutMeta) error {
-	meta := jetstream.ObjectMeta{Name: name,
-		Opts: &jetstream.ObjectMetaOptions{ChunkSize: MessageBytes}}
+	id, err := pieceID()
+	if err != nil {
+		return fmt.Errorf("natsobj: put %s: %w", name, err)
+	}
+	subject := pieceSubject(id)
+	digest := sha256.New()
+	var (
+		size   uint64
+		pieces uint32
+		window = &inFlight{futs: make([]jetstream.PubAckFuture, 0, putWindow)}
+		buf    = make([]byte, MessageBytes)
+		body   = filler{r: objstore.ContextReader(ctx, r)}
+	)
+	for {
+		n, readErr := body.Read(buf)
+		if n > 0 {
+			// A COPY PER MESSAGE: the client keeps a message it has not
+			// had acknowledged, to send it again.
+			data := slices.Clone(buf[:n])
+			digest.Write(data)
+			fut, pubErr := b.puts.PublishMsgAsync(&nats.Msg{Subject: subject, Data: data})
+			if pubErr != nil {
+				return b.failPut(ctx, name, subject, window, pubErr)
+			}
+			window.futs = append(window.futs, fut)
+			size += uint64(n)
+			pieces++
+			if len(window.futs) == putWindow {
+				if err = b.settle(window); err != nil {
+					return b.failPut(ctx, name, subject, window, err)
+				}
+				window = &inFlight{futs: window.futs[:0]}
+			}
+		}
+		if readErr == io.EOF { //nolint:errorlint // the end is io.EOF itself and a wrapped EOF is a failure; see filler
+			break
+		}
+		if readErr != nil {
+			return b.failPut(ctx, name, subject, window, readErr)
+		}
+	}
+	if err = b.settle(window); err != nil {
+		return b.failPut(ctx, name, subject, window, err)
+	}
+	meta := jetstream.ObjectMeta{Name: name, Opts: &jetstream.ObjectMetaOptions{ChunkSize: MessageBytes}}
 	if m.ContentType != "" {
 		meta.Headers = nats.Header{"Content-Type": []string{m.ContentType}}
 	}
-	body := filler{r: objstore.ContextReader(ctx, r)}
-	if _, err := b.store.Put(context.WithoutCancel(ctx), meta, body); err != nil {
-		return fmt.Errorf("natsobj: put %s: %w", name, err)
+	info := jetstream.ObjectInfo{ObjectMeta: meta, Bucket: Bucket, NUID: id, Size: size,
+		ModTime: time.Now().UTC(), Chunks: pieces, Digest: jetstream.GetObjectDigestValue(digest)}
+	data, err := json.Marshal(info)
+	if err != nil {
+		return b.failPut(ctx, name, subject, nil, fmt.Errorf("encode the metadata: %w", err))
+	}
+	msg := nats.NewMsg(metaSubject(name))
+	msg.Header.Set(jetstream.MsgRollup, jetstream.MsgRollupSubject)
+	msg.Data = data
+	pubCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.windowPace())
+	defer cancel()
+	if _, err := b.puts.PublishMsg(pubCtx, msg); err != nil {
+		// THE ACKNOWLEDGEMENT DID NOT COME, which says nothing about
+		// whether the metadata landed: read it back before purging pieces
+		// a landed object would name.
+		readCtx, cancelRead := context.WithTimeout(context.WithoutCancel(ctx), cleanupBudget)
+		defer cancelRead()
+		if got, readErr := b.meta(readCtx, name); readErr == nil && got.NUID == id && !got.Deleted {
+			return nil
+		}
+		return b.failPut(ctx, name, subject, nil, fmt.Errorf("publish the metadata: %w", err))
 	}
 	return nil
 }
 
-// filler hands the library only full messages: every Read answers as many
-// bytes as it was asked for, short only at the end of the object.
+// putWindow is how many of an object's messages a put has in flight before
+// it waits for their acknowledgements: a mebibyte at [MessageBytes], so each
+// window is given exactly one pace of the object store ([objstore.MiBPace])
+// and an object of any size is held to the pace a transfer is promised.
 //
-// The library publishes one message per Read and cuts nothing itself, so
-// without this a body arriving a few hundred bytes at a time is stored as a
-// message per few hundred bytes — a gibibyte as millions of messages.
+// EIGHT, the same mebibyte a get reads ahead ([readAhead]): enough in flight
+// that the broker's replication pipeline stays full between acknowledgements
+// (spike S3 streamed at 13 to 24 MiB a second through the library's put), and
+// little enough that a busy log's slow flushes delay one mebibyte's
+// acknowledgements rather than a whole object's.
+const putWindow = 8
+
+// cleanupBudget bounds what a failed put does after it fails: its pieces'
+// purge, and the read-back of metadata whose acknowledgement never came. The
+// leader answers both in milliseconds when it answers at all.
+const cleanupBudget = 30 * time.Second
+
+// windowPace is what one window is given for its acknowledgements.
+func (b *Backend) windowPace() time.Duration {
+	if b.pace > 0 {
+		return b.pace
+	}
+	return objstore.MiBPace
+}
+
+// inFlight is one window of a put's pieces, published and not all
+// acknowledged: settled counts those acknowledged (or refused) from the front,
+// since an acknowledgement is read from its future once.
+type inFlight struct {
+	futs    []jetstream.PubAckFuture
+	settled int
+}
+
+// settle waits for every acknowledgement of a window still outstanding, for
+// at most the window's pace, answering the first refusal.
+func (b *Backend) settle(w *inFlight) error {
+	if w.settled == len(w.futs) {
+		return nil
+	}
+	timer := time.NewTimer(b.windowPace())
+	defer timer.Stop()
+	for w.settled < len(w.futs) {
+		select {
+		case <-w.futs[w.settled].Ok():
+			w.settled++
+		case err := <-w.futs[w.settled].Err():
+			w.settled++
+			return err
+		case <-timer.C:
+			return fmt.Errorf("%d of a window's %d pieces were not acknowledged within the "+
+				"object store's pace of %s: %w", len(w.futs)-w.settled, len(w.futs),
+				b.windowPace(), nats.ErrTimeout)
+		}
+	}
+	return nil
+}
+
+// failPut cleans up after a failed put and answers why it failed: what is
+// still in flight waited for, once more at most a window's pace (so no piece
+// lands after the purge), then the pieces purged, both under a context of
+// their own, detached from the put's cancellation (a put cancelled part way
+// still purges what it published) but carrying its values. A purge that
+// fails, or a piece that lands after it, leaves pieces no metadata names,
+// which the collector abandons ([Backend.Pending]); the put fails with its
+// own error either way.
+func (b *Backend) failPut(ctx context.Context, name, subject string, w *inFlight, cause error) error {
+	for w != nil && w.settled < len(w.futs) {
+		if err := b.settle(w); err != nil && w.settled < len(w.futs) && errors.Is(err, nats.ErrTimeout) {
+			break
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupBudget)
+	defer cancel()
+	if err := b.stream.Purge(ctx, jetstream.WithPurgeSubject(subject)); err != nil {
+		log.WarnContext(ctx, "natsobj_put_cleanup_failed", "object", name, "subject", subject,
+			"error", err.Error(), "detail", "a failed put's pieces could not be purged; the "+
+				"collector abandons them once they are past its grace")
+	}
+	if full(cause) {
+		// THE RESERVATION IS SPENT.
+		return fmt.Errorf("natsobj: put %s: %w (%s holds as many bytes as it reserves): %w",
+			name, objstore.ErrFull, Bucket, cause)
+	}
+	return fmt.Errorf("natsobj: put %s: %w", name, cause)
+}
+
+// pieceID is a fresh identifier for one put's pieces: one subject token, never
+// minted twice, which is what [Backend.Pending] and [Backend.Abandon] name an
+// unfinished upload by.
+func pieceID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("mint a piece identifier: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+
+// full reports a publish the broker refused because the bucket's stream holds
+// its MaxBytes.
 //
-// THROUGH [objstore.Fill], which is what keeps a failure a failure: the
-// library compares the error it is handed against io.EOF to find the end and
-// purges what it stored on anything else, so the end has to reach it as
-// io.EOF itself and every failure — a body cut short's io.ErrUnexpectedEOF
-// among them — as the failure it is.
+// BY THE SERVER'S OWN TEXT, [maxBytesExceeded]: a stream created to discard
+// nothing answers a message past its ceiling with its store's ErrMaxBytes,
+// carried back as the generic store failure (10077) every other store error
+// shares, so the code alone cannot tell a full bucket from a failing disk and
+// the description is the one part that does.
+func full(err error) bool { return strings.Contains(err.Error(), maxBytesExceeded) }
+
+// maxBytesExceeded is the pinned nats-server's ErrMaxBytes, verbatim
+// (server/store.go).
+const maxBytesExceeded = "maximum bytes exceeded"
+
+// Usage answers how much of the bucket's reservation its objects take, from
+// the stream's own state and configuration: the ceiling the BROKER enforces,
+// never the figure this node was configured with, since a bucket that exists
+// keeps the ceiling it was created at.
+//
+// Bytes counts every message the stream holds (pieces and metadata, and the
+// pieces of an upload in flight) because that is what the broker holds
+// against MaxBytes and what a put is refused on.
+func (b *Backend) Usage(ctx context.Context) (objstore.Usage, error) {
+	info, err := b.stream.Info(ctx)
+	if err != nil {
+		return objstore.Usage{}, fmt.Errorf("natsobj: read the %s stream's usage: %w", Stream, err)
+	}
+	return objstore.Usage{Bytes: int64(info.State.Bytes), MaxBytes: info.Config.MaxBytes}, nil
+}
+
+// Seal makes the bucket read-only for good: the broker refuses every put and
+// every delete after it, and every object stays readable.
+//
+// IT IS THE FENCE A MOVE TO ANOTHER STORE CLOSES BEHIND ITSELF. `crewlet
+// objects migrate --to s3` seals the bucket once its final pass has copied
+// every object and before it moves the fleet's record, so a node still
+// running on this bucket (one not yet restarted onto the new store) has its
+// uploads refused rather than stored where no node will look for them. A
+// sealed stream cannot be unsealed, which is the point: the bucket is kept
+// for an operator to read and delete, never to write again. Sealing a sealed
+// bucket is not an error.
+func (b *Backend) Seal(ctx context.Context) error {
+	info, err := b.stream.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("natsobj: read the %s stream before sealing it: %w", Stream, err)
+	}
+	if info.Config.Sealed {
+		return nil
+	}
+	cfg := info.Config
+	cfg.Sealed = true
+	if _, err := b.js.UpdateStream(ctx, cfg); err != nil {
+		return fmt.Errorf("natsobj: seal the %s stream: %w", Stream, err)
+	}
+	return nil
+}
+
+// filler hands a put only full messages: every Read answers as many bytes as
+// it was asked for, short only at the end of the object.
+//
+// A put publishes one message per Read, so without this a body arriving a few
+// hundred bytes at a time is stored as a message per few hundred bytes, a
+// gibibyte as millions of messages.
+//
+// THROUGH [objstore.Fill], which is what keeps a failure a failure: the put
+// compares the error against io.EOF to find the end and purges what it stored
+// on anything else, so the end has to reach it as io.EOF itself and every
+// failure (a body cut short's io.ErrUnexpectedEOF among them) as the failure
+// it is.
 type filler struct {
 	r io.Reader
 }

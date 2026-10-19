@@ -1,4 +1,4 @@
-# ADR-0019 — A token budget is a periodic window, and the window's turnover is its only reset
+# ADR-0019: A token budget is a periodic window, and the window's turnover is its only reset
 
 - **Status:** accepted
 - **Authority:** `internal/coord`

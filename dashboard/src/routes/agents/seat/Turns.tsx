@@ -33,18 +33,21 @@
  */
 
 import { useMemo, useRef } from "react";
-import { BarList, Button, Card, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
+import {
+  BarList,
+  Button,
+  Card,
+  EmptyState,
+  Skeleton,
+  Tag,
+  TableNumberCell,
+  TableDateCell,
+} from "@crewlethq/ui";
 import { BrainGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { peekHref } from "~/app/frame/DetailRail.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import {
-  DateCell,
-  NumberCell,
-  TokenCell,
-  TurnWhatCell,
-  UnsettledCell,
-} from "~/app/frame/cells.tsx";
+import { TurnWhatCell, UnsettledCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { fmtCount, plural, tsKey } from "~/lib/format.ts";
@@ -303,7 +306,7 @@ export function Turns({
                 header: "Started",
                 shrink: true,
                 sortValue: (t) => tsKey(t.started_at),
-                cell: (t) => <DateCell at={t.started_at} now={now} />,
+                cell: (t) => <TableDateCell value={t.started_at} now={now} />,
               },
               {
                 key: "summary",
@@ -331,7 +334,12 @@ export function Turns({
                 label: "Iterations",
                 shrink: true,
                 sortValue: (t) => (t.complete ? t.iterations : null),
-                cell: (t) => (t.complete ? <NumberCell value={t.iterations} /> : <UnsettledCell />),
+                cell: (t) =>
+                  t.complete ? (
+                    <TableNumberCell value={t.iterations} format={fmtCount} />
+                  ) : (
+                    <UnsettledCell />
+                  ),
               },
               {
                 key: "tokens",
@@ -339,7 +347,11 @@ export function Turns({
                 shrink: true,
                 sortValue: (t) => (t.complete ? t.total_tokens : null),
                 cell: (t) =>
-                  t.complete ? <TokenCell value={t.total_tokens} /> : <UnsettledCell />,
+                  t.complete ? (
+                    <TableNumberCell value={t.total_tokens} format={fmtCount} />
+                  ) : (
+                    <UnsettledCell />
+                  ),
               },
               {
                 key: "state",

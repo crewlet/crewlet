@@ -27,6 +27,7 @@
 package references
 
 import (
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -34,6 +35,8 @@ import (
 // All is every replicated table whose rows keep objects alive.
 var All = []objstore.ReferenceTable{
 	tracker.FileObjectReferences,
+	artifactsdomain.ObjectReferences,
+	artifactsdomain.AssetReferences,
 }
 
 // ObjectColumn is the name every referencing table gives its key column, and

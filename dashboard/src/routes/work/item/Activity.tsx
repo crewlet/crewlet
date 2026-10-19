@@ -50,7 +50,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { Button, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
+import { Button, EmptyState, SegmentedControl, Skeleton, Tag } from "@crewlethq/ui";
 import {
   ArrowRightGlyph,
   BellGlyph,
@@ -70,7 +70,6 @@ import { AsksTag, type RowChrome } from "~/components/work.tsx";
 import { Composer, type ComposeMode } from "~/components/Composer.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { Mark } from "~/ui/glyph.tsx";
-import { Segmented } from "~/ui/primitives.tsx";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -298,11 +297,13 @@ export function Activity({
         </h2>
         <span className="spacer" />
         {!asked && (
-          <Segmented<ActivityTab>
-            ariaLabel="Which activity"
+          <SegmentedControl<ActivityTab>
+            semantics="radio"
+            activate="manual"
+            label="Which activity"
             size="sm"
             value={tab}
-            onChange={setTab}
+            onValueChange={setTab}
             options={ACTIVITY_TABS.map((value) => ({ value, label: TAB_LABEL[value] }))}
           />
         )}

@@ -20,7 +20,7 @@
  * two cannot silently disagree.
  */
 
-import { Callout, Card, CodeBlock, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
+import { Callout, Card, CodeBlock, EmptyState, Skeleton, TableKeyCell, Tag } from "@crewlethq/ui";
 import {
   CircleAlertGlyph,
   ClockGlyph,
@@ -218,7 +218,7 @@ function Conversations({ seat, now }: { seat: Seat; now: number }) {
                       setThread(row.key === thread ? "" : row.key);
                     }}
                   >
-                    <span className="mono t-cell key-cell">{conversationLabel(row.key)}</span>
+                    <TableKeyCell value={row.key} text={conversationLabel(row.key)} />
                     <span className="t-caption">
                       {plural(row.turns, "turn")} ·{" "}
                       <span title={fmtDateTime(row.last_at)}>{relTime(row.last_at, now)}</span>

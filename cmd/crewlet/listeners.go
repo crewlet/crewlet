@@ -11,23 +11,27 @@ import (
 )
 
 // nodeListeners is the sockets `crewlet run` binds before the boot: api.port,
-// and api.public where this node serves one, each answering internal/api's
-// boot surface until [serveAPI] hands it the node's own.
+// api.public where this node serves one and api.artifacts where it serves the
+// artifact origin, each answering internal/api's boot surface until
+// [serveAPI] hands it the node's own.
 type nodeListeners struct {
-	api    *apiListener
-	public *apiListener
-	boot   *api.Boot
+	api       *apiListener
+	public    *apiListener
+	artifacts *apiListener
+	boot      *api.Boot
 }
 
 // bindListeners binds the node's listeners on the addresses boot names and
 // serves them the boot surface, or binds nothing when api.port is 0, which is
-// the hard off switch for both.
+// the hard off switch for every one of them.
 //
 // bridge says whether this node will have an agent-mode tool bridge, which is
 // what decides whether a node without the ingress role binds api.public at all
 // ([api.PublicListener]), and whether its boot surface tells a call to the
-// bridge to come back ([api.NewBoot]). A failed bind of either closes what was bound and
-// fails the boot, naming the address, before anything slow has run.
+// bridge to come back ([api.NewBoot]). The artifact origin is bound by
+// [api.ArtifactsListener]'s rule: on an ingress node whose file sets a port for
+// it. A failed bind of any of them closes what was bound and fails the boot,
+// naming the address, before anything slow has run.
 //
 // THE NODE ID IS THE ONE THE ENGINE WILL RUN UNDER, resolved by the same rule,
 // so /health names the node by the name its peers will know it by from its
@@ -55,6 +59,15 @@ func bindListeners(ctx context.Context, boot *config.Bootstrap, nodeID string, b
 			return nil, err
 		}
 	}
+	artifactsAddr := ""
+	if api.ArtifactsListener(boot, nodeID) {
+		l.artifacts, artifactsAddr, err = listenAPI(ctx, bind, boot.API.Artifacts.Addr(),
+			surface.Artifacts(), log)
+		if err != nil {
+			l.close(context.WithoutCancel(ctx), log)
+			return nil, err
+		}
+	}
 	// A SIGNAL BEFORE THE HANDOVER is a node stopping before it served, and
 	// the boot surface answers a drain's answers from then on, as far as a
 	// starting node can ([api.Boot]). The context is the signal context,
@@ -63,6 +76,8 @@ func bindListeners(ctx context.Context, boot *config.Bootstrap, nodeID string, b
 	log.InfoContext(ctx, "api_bound", "addr", addr, "node", nodeID,
 		// Empty unless this node binds api.public.
 		"public_addr", publicAddr,
+		// Empty unless this node binds api.artifacts.
+		"artifacts_addr", artifactsAddr,
 		"detail", "the listener answers from now on: /health 503 while this node "+
 			"recovers what it holds and 200 once it has, /ready 503, and every "+
 			"route the node will serve 503 starting until it serves "+
@@ -79,12 +94,16 @@ func (l *nodeListeners) recovered() {
 	}
 }
 
-// close closes both listeners, the public one first for [httpSurface.stop]'s
-// reason. It is the close of a boot that failed before the handover; after it
-// the sockets are the surface's, and [shutdown] closes them.
+// close closes every listener bound, in [httpSurface.stop]'s order and for its
+// reason: api.port, which carries the probes, last. It is the close of a boot
+// that failed before the handover; after it the sockets are the surface's, and
+// [shutdown] closes them.
 func (l *nodeListeners) close(ctx context.Context, log *slog.Logger) {
 	if l == nil {
 		return
+	}
+	if l.artifacts != nil {
+		shutdownListener(ctx, l.artifacts, "artifacts", log)
 	}
 	if l.public != nil {
 		shutdownListener(ctx, l.public, "public", log)

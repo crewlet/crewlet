@@ -10,6 +10,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerfit"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
@@ -21,6 +22,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/artifactdata"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
@@ -40,7 +43,9 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/observe"
+	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -147,6 +152,12 @@ type Engine struct {
 	// metrics is the process's one recorder, from [Options.Metrics].
 	metrics *metrics.Recorder
 
+	// objectives is the node's service objective meter, which every
+	// artifacts recording site counts its events into and the alarm table
+	// reads the burn rates from: ONE per process, so a burn is judged over
+	// every event this node measured. Never nil on an engine [New] built.
+	objectives *objectives.Meter
+
 	// searching is how many knowledge scans this node is running right
 	// now — the gauge behind `crewlet.tracker.search.concurrency`. On the
 	// ENGINE rather than on the searcher because the searcher is rebuilt
@@ -215,6 +226,20 @@ type Engine struct {
 	// moved on this node. Nil tells nobody — see
 	// [Engine.SetOnIdentityMoved].
 	onIdentity atomic.Pointer[func(iamdomain.Moved)]
+
+	// artifactsListeners is told what each committed artifacts batch moved
+	// on this node; see [Engine.OnArtifactsMoved].
+	artifactsListeners moveFanout[artifactsdomain.Moved]
+
+	// artifactDataListeners is told what each committed datastore batch
+	// moved on this node; see [Engine.OnArtifactDataMoved].
+	artifactDataListeners moveFanout[artifactdata.Moved]
+
+	// dataFootprint signals the datastore footprint sampler that a batch
+	// committed ([Engine.runDataFootprint]). Made by [Engine.startCore]
+	// before any applier runs; nil on a node without the estate, where
+	// nothing sends.
+	dataFootprint chan struct{}
 
 	// ownsBackends says whether Stop closes them. Ownership is a separate
 	// fact from use: a borrowed Backends is still the one this engine
@@ -495,6 +520,10 @@ type Engine struct {
 	// collector's duty. See objects.go.
 	objects *objectStore
 
+	// uploads is this node's artifact upload and publish pipeline, built on
+	// first use. See artifactupload.go.
+	uploads artifactUploads
+
 	// boot is the operator's Tier A configuration this engine was built
 	// from. Immutable; kept because the duties an apply or a later loop
 	// arms read Tier A — the trim's retention policy, the identity
@@ -708,6 +737,11 @@ type Engine struct {
 	// tick instead, so a model change lands without a restart.
 	embedding *embedDuty
 
+	// trashReaper is the trash reaper's duty loop (trashreap.go). On the
+	// ENGINE for the embedding duty's reason: a loop this process runs
+	// once, which an apply must not build a second of.
+	trashReaper trashReaper
+
 	// usage is this node's usage publisher: the loop that republishes the
 	// days this node's own event log holds. On the ENGINE for the embedding
 	// duty's reason — a second loop after an apply would be two writers on
@@ -728,6 +762,21 @@ type Engine struct {
 	// withdraws the node as their answerer. See steer.go.
 	steers         *steerDesk
 	stopSteerServe queue.Unsubscribe
+
+	// presenceWire seals this node's presence frames and opens its peers',
+	// and presence is the hub that holds its rooms. See presence.go.
+	presenceWire *presence.Wire
+	presence     *presence.Hub
+
+	// dataTurns is this node's tally of each turn segment's datastore ops,
+	// shared by every registry it builds ([builtin.DataTurns]).
+	dataTurns *builtin.DataTurns
+
+	// onArtifactsServing is told whenever this node's artifact copies leave
+	// or return to service, and stopArtifactWatchFn ends the watcher that
+	// tells it. See presence.go.
+	onArtifactsServing  atomic.Pointer[func(bool)]
+	stopArtifactWatchFn func()
 
 	// memoryReads answers a seat's memory from the node holding it, and
 	// stopMemoryServe withdraws this node as one of its answerers. See
@@ -1018,6 +1067,12 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err != nil {
 		return nil, err
 	}
+	// AND THE PRESENCE CHANNEL, which carries no instruction and is sealed
+	// all the same: a frame names a person (presence.go).
+	presenceWire, err := newPresenceWire(recordKeyring(opts.Bootstrap))
+	if err != nil {
+		return nil, err
+	}
 	// THE COMPLETION POLL'S CADENCE, whether or not this node will ever run a
 	// sandbox: an apply can bring it its first, and the poll starts there.
 	// See [checkSandboxPollInterval].
@@ -1141,6 +1196,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// auxiliary spend reaches the history like its phases do.
 		auxSpend:            auxspend.NewLedger(backends.Queue),
 		steers:              steers,
+		presenceWire:        presenceWire,
+		dataTurns:           builtin.NewDataTurns(nil),
 		mcpRetryBase:        opts.mcpRetryBase,
 		sandboxOtel:         otel,
 		sandboxPollInterval: opts.SandboxPollInterval,
@@ -1148,6 +1205,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		sandboxSeats:        map[string]bool{},
 		bridge:              bridge,
 		metrics:             opts.Metrics,
+		objectives:          newObjectives(opts.Metrics),
 		mode:                mode,
 		incarnation:         incarnation,
 		id:                  nodeID,
@@ -1317,6 +1375,13 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err = e.armInboxRelay(ctx); err != nil {
 		return nil, err
 	}
+	// AND FOR WHO IS IN EACH ARTIFACT'S ROOM, which every node holds for its
+	// own sockets and agents and tells its peers (see presence.go), and the
+	// watch on its artifact copies' service that the rooms follow.
+	if err = e.armPresence(ctx); err != nil {
+		return nil, err
+	}
+	e.armArtifactWatch(ctx)
 
 	// THE ADMISSION HANDSHAKE, BEFORE ANY PUBLISHER — and this is the
 	// earliest point at which it can run, because it needs the
@@ -2343,6 +2408,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// AND BEFORE the native runtime below, whose tracker reader it reads
 	// the references through.
 	e.stopObjectCollector()
+	// THE TRASH REAPER for the collector's reason, and before the native
+	// runtime below, whose knowledge store its passes purge through.
+	e.stopTrashReaper()
 	// AFTER every duty loop above has stopped and waited out its tick, so no
 	// tick of this node runs once a peer can take the duty, and no turn of
 	// this node can claim one again once it is given back.
@@ -2370,6 +2438,10 @@ func (e *Engine) teardown(ctx context.Context) {
 	// With it, and for the same reason: a note answered `accepted` by a
 	// node that is tearing down is a note no round will read.
 	e.stopSteer(ctx)
+	// And presence, whose leaves must reach the fleet while the broker is
+	// still there, and the watch the rooms follow.
+	e.stopArtifactWatch()
+	e.stopPresence(ctx)
 	// And the inbox relay's follower and answerer, which ask and answer on
 	// the same broker.
 	e.stopInboxRelay(ctx)
@@ -2469,6 +2541,23 @@ func (e *Engine) Cipher() secrets.Cipher { return e.cipher }
 // something the catalogue declares, and a second recorder would be a second
 // set of series for one process. Nil is legal and records nothing.
 func (e *Engine) Recorder() *metrics.Recorder { return e.metrics }
+
+// Objectives is the node's service objective meter: what the API's ready
+// reports are counted into beside the engine's own recording sites. Never nil
+// on an engine [New] built.
+func (e *Engine) Objectives() *objectives.Meter { return e.objectives }
+
+// newObjectives builds the node's objective meter over rec, which may be nil:
+// the events are then counted into the meter's own ledger alone, and the burn
+// alarm still judges them.
+func newObjectives(rec *metrics.Recorder) *objectives.Meter {
+	// A NIL RECORDER STAYS A NIL INTERFACE: one wrapped in it would be a
+	// recorder the meter calls into.
+	if rec == nil {
+		return objectives.NewMeter(nil, nil)
+	}
+	return objectives.NewMeter(rec, nil)
+}
 
 // Dispatch delivers one inbox partition to a seat.
 //
@@ -2715,7 +2804,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// thin trigger whose turn-start search was skipped — is served by the
 	// executor calling search_knowledge over the same seam, on a query it
 	// writes once it knows what the task needs.
-	blocks := e.prefetchFor(ctx, company, req, task, tel.aux())
+	blocks := e.prefetchFor(ctx, company, req, task, tel.aux(), tel.boundary)
 	// The skills OFFERED to this turn, carried onto its completion so the
 	// curator ages a skill on when it was last put in front of a model
 	// rather than archiving the ones a seat reads every turn.

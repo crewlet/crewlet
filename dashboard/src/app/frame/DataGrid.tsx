@@ -892,7 +892,7 @@ export function DataGrid<T>({
     // THE ROW'S OWN LINK IS AN OVERLAY, NOT THE ROW.
     //
     // The row used to BE an `<a>` when `rowHref` was given, and a cell that
-    // links — `SeatCell`, `SeatChip`, `KeyCell` — then put an anchor inside an
+    // links (`linkedSeat`, `SeatChip`, `TableKeyCell`) then put an anchor inside an
     // anchor. That is not merely invalid: the HTML parser CLOSES the outer one
     // at the inner one, so the row link covered only the cells before the
     // first seat chip and the rest of the row silently stopped being

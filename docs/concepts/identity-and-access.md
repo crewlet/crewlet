@@ -148,23 +148,24 @@ taken.
 
 What a principal may do comes from two things: the **permissions** it carries,
 and its **relations** in the org chart — the seat it holds, the team it leads,
-the work it wrote. There are three permissions, because there are three things
+the work it wrote. There are four permissions, because there are four things
 a company actually decides about somebody who joins it: whether they **run**
-it, and which of its two apps they **use**.
+it, and which of its three apps they **use**.
 
 | Permission | On the dashboard | What it is |
 |---|---|---|
 | `admin` | **Admin** | Runs the company and the engine — its configuration, its credentials, its people, its deployment and its company-wide trail. **It includes every app**, and it is host access ([below](#what-admin-runs)) |
 | `tracker` | **Tracker** | Uses the native [work tracker](../guides/work-tracker.md): reads it and writes it |
 | `knowledge` | **Knowledge** | Uses the native [knowledge base](knowledge-system.md): reads it and writes it |
+| `artifacts` | **Artifacts** | **Authors** artifacts: creates them, publishes their versions and shapes their data. It never gates opening one: what somebody may do on an artifact is decided by its [shares](#an-artifact-is-opened-by-its-shares) |
 
 They are stored in the `grants` field of a person's row, an invitation, a
 machine token and a Tier A token entry — the field keeps its name, and the
-dashboard calls the concept **Access**. `tracker` and `knowledge` are the
-**apps**, and `iam.Apps` is the one place an app is declared: an agent seat's
-own set, the dashboard's picker and the authority table's checks all read it,
-so a third app is a new member there and a new set of rows, and the build fails
-until both are in place.
+dashboard calls the concept **Access**. `tracker`, `knowledge` and `artifacts`
+are the **apps**, and `iam.Apps` is the one place an app is declared: an agent
+seat's own set, the dashboard's picker, the live socket's reader and the
+authority table's checks all read it, so a new app is a new member there and a
+new set of rows, and the build fails until both are in place.
 
 **Admin includes every app.** One function, `iam.Expand`, reads a set as it is
 compared — its own members, plus every app when it holds `admin` — and every
@@ -180,8 +181,9 @@ sees [the overview](#everybodys-overview) and manages their own account; what
 a permission adds is an app to use or a company to run. What a **lead** may do
 in their own team, an **author** to their own work and a **person** to their
 own record are relations the [authority
-table](#the-authority-table-one-function-decides) asks the chart about — and
-on an app's verb, *beside* the app. That is
+table](#the-authority-table-one-function-decides) asks the chart about, and so
+is a **share** of one artifact; on an app's verb each is asked *beside* the
+app. That is
 [ADR-0033](../../adr/0033-access-is-admin-and-one-permission-per-app.md).
 
 It replaced eleven grants — a read and a write for each surface, plus a
@@ -263,12 +265,22 @@ task need `tracker`; a page's `linked_from` tasks need `tracker`; and a
 question answered from the company's knowledge searches the pages only for a
 `knowledge` holder and the board only for a `tracker` holder.
 
+**An artifact row is never shown by its kind.** An artifact belongs to no app,
+and "no app" in that filter means everybody's, so artifact rows go through a
+second helper, `authz.Visible`, which reads each row: it is shown to its owner,
+to whoever it is shared with and to the lead of the agent that owns it. An
+administrator is shown it the same way. Opening a private artifact through the
+admin path is possible, and recorded (see [An artifact is opened by its
+shares](#an-artifact-is-opened-by-its-shares)), but no listing, feed or search
+hands an administrator private titles by that override.
+
 ### What each app opens
 
 | App | What it opens |
 |---|---|
 | `tracker` | Every tracker read and write — the board, a project, its files, its views and reading the workspace catalogue (writing it is admin's); filing, updating, commenting, merging and placing work — and every `work_*` question. A person's own **Inbox**, **My work** and person view, and the same for a report as their lead (or anybody, as an administrator). The `inbox_changed` push |
 | `knowledge` | Reading, listing and searching the company's pages (`get_page`, `list_pages`, `search_knowledge`, and the `pages`, `page`, `containers`, `page_activity`, `page_revision` and `page_reads` questions); writing, saving and commenting on them (`write_page`, `save_page`, `comment_on_page`) |
+| `artifacts` | Authoring artifacts, beside the role each asks: creating one (`create_artifact`), and on an artifact somebody holds editor on, publishing a version (`publish_artifact`), renaming it (`update_artifact`), adding an asset (`upload_artifact_asset`) and changing its datastore's schema (`set_artifact_schema`); trashing and restoring one they own (`artifacts.trash`, `artifacts.restore`). **Nothing else**: opening an artifact, reading and writing its data, being present on it, sharing it and exporting it ask only the role |
 
 **A relation asks the app beside it.** Leading a project, being the owner of an
 inbox, having written a comment, owning a saved view: each is a relation, and
@@ -305,6 +317,102 @@ Three narrow rules sit beside the apps, each the owner's own decision:
   tool-skills container — for a person and an agent alike, exactly as filing a
   task in a project the company does not declare is. See [Who may write
   where](knowledge-system.md#who-may-write-where).
+
+### An artifact is opened by its shares
+
+Every other object is decided per **app**: whoever holds `tracker` reads every
+task. An artifact is decided per **object**, because it is somebody's own work
+handed to the people it names. What a principal may do on one is their
+**role** on it, a ladder where each role includes every role below it:
+
+| Role | On the dashboard | What it adds |
+|---|---|---|
+| `viewer` | Can view | Opens the artifact, its versions and its history, and is present on it |
+| `commenter` | Can comment | Comments |
+| `contributor` | Can edit | Writes data where a collection's rules admit it; never the page itself |
+| `editor` | Can manage | Publishes versions, renames it, adds assets, changes the schema and exports the whole data, beside the `artifacts` app where the verb authors |
+| `owner` | Owner | Shares and unshares it, trashes and restores it, and hands it to another seat. Held by its owner, and never shared: ownership moves only by transfer |
+
+A principal's role is the **best** of their relations to it:
+
+- **owning it**, by the seat they hold (or, for a service account bound to no
+  seat, its login), which holds every role;
+- a share naming **their seat**, which follows the seat as an inbox does, so a
+  successor on the seat inherits it;
+- a share with **a unit they sit in**, or any unit above the one they sit in,
+  decided live against the running org chart (a unit's lead seated outside the
+  unit is not in it);
+- a share with **the whole company**, which admits every principal whose stage
+  may act, agents included;
+- **leading the agent that owns it**, which holds owner. A lead already steers,
+  pauses and reads the trail of their agents, and an agent that is paused or
+  removed must not orphan its work. A person's lead holds nothing on that
+  person's artifacts: a draft is theirs.
+
+Each verb names the least role it admits, and the table decides every surface
+(a tool, an HTTP route, a socket join, the artifact origin) with that one rule.
+Three answers sit around it:
+
+- **No relation at all is "not found".** Somebody holding no role is answered
+  exactly as for an id nothing holds, `404 not_found` with no reason, so a
+  private artifact's existence, id and title are never disclosed. That holds
+  for a bar on the verb as well: a machine token asking a verb that needs
+  somebody present (a transfer, a force publish), or an agent asking a
+  person's verb (trash, restore, pin, transfer), is told `not_found` when it
+  holds no relation, and the bar's own `403` only when the artifact is already
+  disclosed to it. Somebody holding a role below the verb's is refused `403`,
+  naming the role they need.
+- **An administrator may open anything, and it is recorded.** Admin is host
+  access, so a refusal would promise a privacy the engine cannot keep. The
+  admin path admits every artifact verb, after the administrator's own shares
+  are counted: an administrator a share already admits is admitted as the
+  sharer they are, **at the share's role**, so what they read is shaped and
+  what they write is stamped by that role and nothing beyond it reaches them
+  unrecorded. An admission only the admin path made stands at owner and is
+  marked as **elevated**: every read of the artifact's content it makes (a
+  version's files, its datastore, the export, a room's join, the live version
+  a stale publish answers with) writes an elevated-read record before anything
+  is shown, which the artifact's own history shows its owner and editors and
+  the company trail of every artifact (`artifact_trail`, `audit.read`) shows
+  every administrator, so an override is found even when its owner has left
+  or never opens the history. A read whose record cannot be written is not
+  answered. On a node that
+  [refuses admin](#access-admin-and-one-permission-per-app) the path does not
+  exist, and an administrator there opens only what is shared with them.
+- **The trash stops serving at once.** A trashed artifact keeps its head, its
+  versions list and its history for the trash view, and serves no content to
+  anybody: its files, its datastore and its rooms are refused until its owner
+  restores it, and an agent's read tools refuse it alike.
+- **A node behind its org chart says so.** A unit share or a lead the node
+  cannot read is "cannot tell", `503` with a `Retry-After`, only where it could
+  have changed the answer; an administrator is never told it.
+
+**What an agent may do on somebody else's artifact.** An agent never manages
+another principal's work by default: on an artifact it does not own it holds at
+most `contributor`, whatever it is shared and whoever it leads, so it reads the
+artifact and fills in its data and never publishes over it, renames it,
+reshapes it or reshares it. The company document's
+`artifacts.agents_manage_others: true` lifts that cap. An agent never trashes,
+restores, purges, transfers or force-publishes anything: those verbs are a
+person's.
+
+**Who the agent is acting for.** Inside a turn somebody woke, every artifact
+verb an agent takes is decided a second time for that requester, on the same
+artifact, and admitted only when both may take it: an agent never shows a
+requester an artifact the requester could not open, nor writes into one on
+their behalf what they could not write. The one exception is the agent's
+**edits to its own work** (publishing a fix, renaming it, adding an asset,
+reshaping or filling in its data, and creating a new one): anybody who can
+message an agent may have it change work it owns, as with every other piece of
+work an agent owns. Reading its own artifact back, and sharing it, are never
+exempt, and neither is what such an edit hands back: the live files a stale
+publish answers with, and a conflicting data write's current rows, are shown
+only where the requester could read them. A turn woken by somebody the company does not know reaches only those
+edits; a turn nobody woke (a schedule, a watch) is bounded by the agent alone.
+
+The decision is
+[ADR-0034](https://github.com/crewlet/crewlet/blob/main/adr/0034-an-artifact-is-shared-and-a-share-is-a-relation.md),
+and [Artifacts](artifacts.md) describes the model the roles act on.
 
 ### What admin runs
 
@@ -389,7 +497,11 @@ no token takes either, whatever they hold, because a person has no turn for a
 colleague's answer to land in and no executor for a run to resume; which seats
 may is the role registry's decision, which already says which seat runs which
 tool. Seat-only is the mirror of the **human-only** mark, and both are checked
-before anything else on the row ([The fifteen rules](#the-fifteen-rules)).
+before anything else on the row ([The sixteen rules](#the-sixteen-rules)). On
+an artifact, an agent holds what its relations grant, capped at `contributor`
+on work it does not own, and inside a turn somebody woke it is bounded by that
+person too ([An artifact is opened by its
+shares](#an-artifact-is-opened-by-its-shares)).
 
 ### Nobody confers what they do not hold
 
@@ -2229,11 +2341,11 @@ states what the table **decided** — never the inputs a caller resolved — and
 keeps only the half a chart cannot know: which facet of a write each answer
 unlocks.
 
-### The fifteen rules
+### The sixteen rules
 
 | Rule | Covers | Decided by |
 |---|---|---|
-| **Everybody** | The overview's reads that a tool or a route asks about — who to ask (`lookup_colleague`), who holds each human seat (`GET /iam/seats`) — and the route to a work item's thread (`work.thread`), which admits the request and leaves the decision to `comment_on_work_item` once the item is read | Any principal whose stage may act |
+| **Everybody** | The overview's reads that a tool or a route asks about, such as who to ask (`lookup_colleague`) and who holds each human seat (`GET /iam/seats`); the route to a work item's thread (`work.thread`), which admits the request and leaves the decision to `comment_on_work_item` once the item is read; listing artifacts (`list_artifacts`), a filter answering only the artifacts reading admits; the dashboard source catalogue (`list_dashboard_sources`), which names reads and holds no row; and a browser's report that an artifact finished rendering (`artifacts.ready`) | Any principal whose stage may act |
 | **App** | Every tracker and page read and write: the board, a project, its files, its views and reading its catalogue (writing it is Admin's); filing, updating, merging and placing work, and a project's tags; reading, listing, searching, writing, saving and commenting on pages | The row's app — `tracker` or `knowledge` — which an administrator holds through `Expand` |
 | **Any app** | A person's question answered from what the company has written down (`answer_knowledge`), which a principal no seat binds — a token or a service account bound to none — is refused, because it runs on the bound seat's model | Either app; the answer searches the pages only for a `knowledge` holder and the board only for a `tracker` holder |
 | **App or asked** | Reading one work item, and commenting on it (`get_work_item`, `comment_on_work_item`) | `tracker`, or the person an open ask on the item names — and on the comment only their answer to it ([You may answer what you were asked](#what-each-app-opens)) |
@@ -2246,7 +2358,8 @@ unlocks.
 | **Subtree** | The org chart — its seats and units — read and written through `/config` (`config.org.read`, `config.org.write`) | `admin` for any of it, or a person who **leads** the part concerned: a unit is in their subtree when they lead it or a unit above it, and a seat when its unit is. A write by a lead is judged change by change on **both sides** of it — see [A lead edits their own team](#a-lead-edits-their-own-team). The company root is nobody's subtree, and no agent takes either verb |
 | **Destructive** | Moving a task out of its project; removing a project's file | The project's lead, or admin — with `tracker` |
 | **Authored** | Editing and removing a comment, on a page or a work item | Whoever wrote it, or admin — with the comment's app |
-| **Admin** | Configuration, secrets, integrations, the deployment, the company-wide trail, the workspace catalogue, a page in the tool-skills container, every directory write, ending every session in the company, and the purges | `admin` |
+| **Admin** | Configuration, secrets, integrations, the deployment, the company-wide trail, the workspace catalogue, a page in the tool-skills container, every directory write, ending every session in the company, the purges (an artifact's among them, with a person present), and what the company's artifacts hold against their quotas | `admin` |
+| **Shared** | One artifact: reading it and its data, writing its data, publishing it, renaming it, its assets and schema, sharing it, trashing and restoring it, a forced publish, a transfer, a pin and an export | The caller's **role** on the artifact, the best of owning it, a share naming their seat, a unit they sit in or the whole company, and leading the agent that owns it; the verb names the least role it admits, and an authoring verb asks the `artifacts` app beside it. No relation is "not found". Admin through the admin path, marked elevated where nothing else admitted. An agent holds at most `contributor` on work it does not own unless the company allows more ([An artifact is opened by its shares](#an-artifact-is-opened-by-its-shares)) |
 | **Directory** | One person's directory row and what hangs off it — reading it, their credentials and sessions, minting and revoking their machine tokens, ending their sessions, changing how they prove who they are — and the directory's own listings: the people, the open invitations, `GET /iam/check` and the answering node's Tier A token labels joined to the rows holding their logins (`GET /iam/node-tokens`) | The person the row is about, by their **ID**, or admin |
 
 **Some verbs are no agent's, whatever their rule says.** Purging a task or a
@@ -2451,8 +2564,8 @@ verb asks for one:
 
 | Window | Sized by | Asked by |
 |---|---|---|
-| none | — | Every read; every work and knowledge verb but the two purges; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm; and changing your own password, whose current password is itself the proof |
-| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration writes, connecting an integration, writing a credential and revealing a secret's value, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures, ending every session in the company — purging a work item or a page, which nothing undoes, and every identity-directory write: enrolling, inviting, cancelling an invitation, editing or removing somebody, resetting their second factor, issuing them a password reset link, minting or revoking a machine token or any other credential, ending somebody else's sessions, and enrolling or replacing your own second factor or regenerating your recovery codes |
+| none | — | Every read; every work, knowledge and artifact verb but the three purges; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm; and changing your own password, whose current password is itself the proof |
+| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration writes, connecting an integration, writing a credential and revealing a secret's value, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures, ending every session in the company — purging a work item, a page or an artifact, which nothing undoes, and every identity-directory write: enrolling, inviting, cancelling an invitation, editing or removing somebody, resetting their second factor, issuing them a password reset link, minting or revoking a machine token or any other credential, ending somebody else's sessions, and enrolling or replacing your own second factor or regenerating your recovery codes |
 
 **One window, not two.** It is the practice of GitHub's sudo mode — one window
 over every sensitive gesture — at the stricter end of it (GitHub's is two
@@ -3116,7 +3229,7 @@ today is smaller, and lives in two places:
 
 - **Tier A, `api.auth`** — `tokens`, the deployment's own credentials,
   each carrying an id recorded as the author of anything written with it and
-  the `grants` it may use (`admin`, `tracker`, `knowledge`); `admin`, whether
+  the `grants` it may use (`admin`, `tracker`, `knowledge`, `artifacts`); `admin`, whether
   this node [serves admin](#access-admin-and-one-permission-per-app) at all
   (`serve` or `refuse`); what a password
   sign-in asks for — `totp` (unset is `required`), `accept_insecure` and

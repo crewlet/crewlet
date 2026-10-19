@@ -208,6 +208,7 @@ func TestEvictedNodeRefusesBeforeTheAppend(t *testing.T) {
 		"arbitrated": statelog.PatternArbitrated,
 		"create":     statelog.PatternCreate,
 		"additive":   statelog.PatternAdditive,
+		"sequenced":  statelog.PatternSequenced,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -282,6 +283,7 @@ func TestARebuiltLogRefusesEveryWriteBeforeTheAppend(t *testing.T) {
 		"arbitrated": statelog.PatternArbitrated,
 		"create":     statelog.PatternCreate,
 		"additive":   statelog.PatternAdditive,
+		"sequenced":  statelog.PatternSequenced,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -366,6 +368,7 @@ func TestFenceZeroAtTheAppendRefusesAsItselfInTheSameRound(t *testing.T) {
 		"arbitrated": statelog.PatternArbitrated,
 		"create":     statelog.PatternCreate,
 		"additive":   statelog.PatternAdditive,
+		"sequenced":  statelog.PatternSequenced,
 	}
 	// A WRITTEN SUBJECT reaches the append with the anchor as its
 	// expectation, and a FRESH one with zero — past a zero fence that
@@ -778,6 +781,66 @@ func TestAWriteThatKeepsLosingIsRefusedRatherThanRetriedForEver(t *testing.T) {
 	if got := h.rows.snapshots(); got != 16 {
 		t.Fatalf("took %d snapshots, want 16 — each round must decide again "+
 			"from a fresh one, or the retry is the same decision repeated", got)
+	}
+}
+
+// A SEQUENCED WRITE IS ORDERED BY THE LOG AND NEVER ARBITRATED: on the very
+// subject where an arbitrated write formed from a stale anchor loses every
+// round, it lands in ONE round with no expectation, taking one snapshot, and is
+// placed after the peer's record for the applier to decide.
+//
+// The alternative a sequenced domain is built to avoid is that conflict: a
+// shared sheet's every writer on one subject would otherwise spend sixteen
+// compare-and-set rounds behind a burst of clicks and be told "it kept
+// changing" for a write the applier could simply have judged in order.
+//
+// Mutation: make [statelog.PatternSequenced] form an expectation and the write
+// is rejected round after round to ErrConflict, exactly as the arbitrated case
+// above is.
+func TestASequencedWriteIsOrderedByTheLogAndNeverArbitrated(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
+		signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, "peer-op", "peer")))
+	if err != nil {
+		t.Fatalf("the peer's write: %v", err)
+	}
+	// THE STATE THAT EXHAUSTS AN ARBITRATED WRITE: an anchor that never
+	// reaches the peer's record, because this node cannot catch up.
+	h.anchorAt(probeSubject("a"), peer-1)
+	h.applier.mu.Lock()
+	h.applier.frozen = true
+	h.applier.mu.Unlock()
+
+	res, err := h.pub.Publish(t.Context(), statelog.Request{
+		Subject: probeSubject("a"),
+		Scope:   statelog.ScopeSet{Paths: []string{probeSubject("a").String()}},
+		OpID:    "op-1",
+		Pattern: statelog.PatternSequenced,
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return statelog.Decision{Payload: probeRecord(stamp, "op-1", "mine")}, nil
+		},
+	})
+	if errors.Is(err, statelog.ErrConflict) {
+		t.Fatalf("a sequenced write was refused as a lost race (%v): it carries "+
+			"no expectation, so there is no race for it to lose", err)
+	}
+	if res.Rounds != 1 {
+		t.Fatalf("the write ran %d round(s), want 1: a sequenced record is never "+
+			"rejected by the broker, so it never retakes its snapshot", res.Rounds)
+	}
+	if got := h.rows.snapshots(); got != 1 {
+		t.Fatalf("took %d snapshots, want 1", got)
+	}
+	if res.Position.Seq <= peer {
+		t.Fatalf("the write landed at %d, at or below the peer's %d: the log "+
+			"orders it after every record already there", res.Position.Seq, peer)
+	}
+	// AND IT WAS NOT A ZERO PUBLISH: no expectation is not an expectation
+	// of zero, which would have needed the zero fence's coordination read.
+	if got := h.fence.zeroes.Load(); got != 0 {
+		t.Fatalf("cleared %d zero publish(es) for a write that forms no "+
+			"expectation at all", got)
 	}
 }
 

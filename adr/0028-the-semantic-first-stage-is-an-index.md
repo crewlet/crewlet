@@ -1,4 +1,4 @@
-# ADR-0028 — The semantic first stage is an index
+# ADR-0028: The semantic first stage is an index
 
 - **Status:** accepted
 - **Authority:** `internal/search`

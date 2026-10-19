@@ -7,6 +7,13 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/crewlet/crewlet/internal/artifactdata"
+	"github.com/crewlet/crewlet/internal/artifactdata/canon"
+	"github.com/crewlet/crewlet/internal/artifactdata/query"
+	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/manifest"
+	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -75,6 +82,7 @@ var sentinels = []sentinel{
 	{"pages.ErrInvalid", pages.ErrInvalid},
 	{"pages.ErrNoActivation", pages.ErrNoActivation},
 	{"pages.ErrNotFound", pages.ErrNotFound},
+	{"pages.ErrNotInTrash", pages.ErrNotInTrash},
 	{"pages.ErrParent", pages.ErrParent},
 	{"pages.ErrReserved", pages.ErrReserved},
 	{"pages.ErrStaleVersion", pages.ErrStaleVersion},
@@ -131,6 +139,47 @@ var sentinels = []sentinel{
 	{"session.ErrNoCompany", session.ErrNoCompany},
 	{"session.ErrNoKeyring", session.ErrNoKeyring},
 
+	// THE ARTIFACTS ESTATE'S, which every data node answers for a node
+	// holding no data ([Artifacts]), and the vocabulary's beneath it: an
+	// audience, an id or a label a write refused, and the manifest grammar's
+	// and the media table's refusals a publish wraps.
+	{"artifactsdomain.ErrAboveOwnRole", artifactsdomain.ErrAboveOwnRole},
+	{"artifactsdomain.ErrAgentCompanyShare", artifactsdomain.ErrAgentCompanyShare},
+	{"artifactsdomain.ErrBadCursor", artifactsdomain.ErrBadCursor},
+	{"artifactsdomain.ErrConflict", artifactsdomain.ErrConflict},
+	{"artifactsdomain.ErrInvalid", artifactsdomain.ErrInvalid},
+	{"artifactsdomain.ErrLabelTaken", artifactsdomain.ErrLabelTaken},
+	{"artifactsdomain.ErrNotFound", artifactsdomain.ErrNotFound},
+	{"artifactsdomain.ErrNotInTrash", artifactsdomain.ErrNotInTrash},
+	{"artifactsdomain.ErrPurged", artifactsdomain.ErrPurged},
+	{"artifactsdomain.ErrPurging", artifactsdomain.ErrPurging},
+	{"artifactsdomain.ErrSourceTaken", artifactsdomain.ErrSourceTaken},
+	{"artifactsdomain.ErrTrashed", artifactsdomain.ErrTrashed},
+	{"artifactsdomain.ErrUploadStale", artifactsdomain.ErrUploadStale},
+
+	{"artifacts.ErrInvalidAudience", artifacts.ErrInvalidAudience},
+	{"artifacts.ErrInvalidID", artifacts.ErrInvalidID},
+	{"artifacts.ErrInvalidLabel", artifacts.ErrInvalidLabel},
+	{"manifest.ErrInvalid", manifest.ErrInvalid},
+	{"manifest.ErrReserved", manifest.ErrReserved},
+	{"mediatype.ErrRefused", mediatype.ErrRefused},
+
+	// THE DATASTORE'S, answered by a data node for a node holding no data
+	// ([ArtifactData]), and its encoder's and query compiler's beneath it.
+	{"artifactdata.ErrBadCursor", artifactdata.ErrBadCursor},
+	{"artifactdata.ErrConflict", artifactdata.ErrConflict},
+	{"artifactdata.ErrForbidden", artifactdata.ErrForbidden},
+	{"artifactdata.ErrGone", artifactdata.ErrGone},
+	{"artifactdata.ErrInvalid", artifactdata.ErrInvalid},
+	{"artifactdata.ErrMigrationTooLarge", artifactdata.ErrMigrationTooLarge},
+	{"artifactdata.ErrNotFound", artifactdata.ErrNotFound},
+	{"artifactdata.ErrNotUndoable", artifactdata.ErrNotUndoable},
+	{"canon.ErrDuplicateKey", canon.ErrDuplicateKey},
+	{"canon.ErrInvalid", canon.ErrInvalid},
+	{"canon.ErrTooDeep", canon.ErrTooDeep},
+	{"query.ErrInvalid", query.ErrInvalid},
+	{"query.ErrNotIndexed", query.ErrNotIndexed},
+
 	{"estate.ErrOutcomeUnknown", ErrOutcomeUnknown},
 }
 
@@ -172,6 +221,14 @@ var typedKinds = []typedKind{
 	{"iamdomain.InvitationRedeemed", reflect.TypeFor[*iamdomain.InvitationRedeemed]()},
 
 	{"iam.LookRefused", reflect.TypeFor[*iam.LookRefused]()},
+
+	{"artifactsdomain.CarriedObjectGone", reflect.TypeFor[*artifactsdomain.CarriedObjectGone]()},
+	{"artifactsdomain.ErrFutureVersion", reflect.TypeFor[*artifactsdomain.ErrFutureVersion]()},
+	{"artifactsdomain.QuotaExceeded", reflect.TypeFor[*artifactsdomain.QuotaExceeded]()},
+	{"artifactsdomain.VersionMoved", reflect.TypeFor[*artifactsdomain.VersionMoved]()},
+
+	{"artifactdata.ErrFutureVersion", reflect.TypeFor[*artifactdata.ErrFutureVersion]()},
+	{"artifactdata.RateLimited", reflect.TypeFor[*artifactdata.RateLimited]()},
 
 	{"estate.ErrUnserved", reflect.TypeFor[*ErrUnserved]()},
 }

@@ -54,9 +54,10 @@ import {
   confirmMatches,
   Inline,
   Stack,
+  TableDateCell,
 } from "@crewlethq/ui";
 import { BanGlyph, KeyGlyph, SendGlyph, UserPlusGlyph } from "@crewlethq/icons/glyphs";
-import { DateCell } from "~/app/frame/cells.tsx";
+
 import { QueryState } from "~/components/common.tsx";
 import {
   APPS,
@@ -120,7 +121,7 @@ export function ExpiresCell({
 }) {
   if (c.revoked && endedWord(c, now) !== "Expired") return <EmptyValue label="Already ended" />;
   return c.expires_at ? (
-    <DateCell at={c.expires_at} now={now} />
+    <TableDateCell value={c.expires_at} now={now} />
   ) : (
     <EmptyValue label="Does not expire" />
   );

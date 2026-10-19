@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Charts (import map)</title>
+<style>
+:root { --bg: #ffffff; --fg: #1d1d1f; }
+@media (prefers-color-scheme: dark) { :root { --bg: #111114; --fg: #f2f2f5; } }
+body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+</style>
+</head>
+<body>
+<main><h1>Weekly active users</h1><div id="chart"></div></main>
+<script type="importmap">
+{ "imports": { "charts": "https://esm.sh/frappe-charts@1.6.2" } }
+</script>
+<script type="module">
+import { Chart } from "charts";
+new Chart("#chart", { type: "bar", data: { labels: ["Mon", "Tue", "Wed"], datasets: [{ values: [420, 380, 510] }] } });
+</script>
+</body>
+</html>

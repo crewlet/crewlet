@@ -1,4 +1,4 @@
-# ADR-0010 — Tracing is configured by the standard OTel environment, not by Tier A
+# ADR-0010: Tracing is configured by the standard OTel environment, not by Tier A
 
 - **Status:** accepted
 - **Authority:** `internal/tracing`

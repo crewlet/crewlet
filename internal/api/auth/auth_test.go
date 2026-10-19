@@ -717,8 +717,8 @@ func TestTokenIDsAreTheLabelsTheGuardAccepts(t *testing.T) {
 // and this fails.
 func TestATierATokenCarriesWhatTheNodesAdminPostureAllows(t *testing.T) {
 	t.Parallel()
-	every := []iam.Grant{iam.GrantAdmin, iam.GrantTracker, iam.GrantKnowledge}
-	apps := []iam.Grant{iam.GrantTracker, iam.GrantKnowledge}
+	every := append([]iam.Grant{iam.GrantAdmin}, iam.Apps...)
+	apps := slices.Clone(iam.Apps)
 	for _, tc := range []struct {
 		posture iam.AdminPosture
 		listed  []iam.Grant
