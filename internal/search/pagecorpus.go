@@ -59,7 +59,9 @@ func (PageCorpus) Source() Source { return SourcePage }
 
 // pageLive is the population the page corpus embeds: published pages not in
 // the trash — one spelling for every statement that reads or counts it, for
-// [taskLive]'s reason.
+// [taskLive]'s reason. It is also, word for word, the predicate of
+// `pages_heads_live_updated_idx` (replicated 0065), which the planner reaches
+// only for a statement that states it.
 const pageLive = `p.status = 'published' AND p.trashed_at IS NULL`
 
 // pageBody is a page's body as a statement reads it, and pageOpening the part
@@ -75,6 +77,12 @@ const (
 // first, each with its key, its title and the digest of the vector it has
 // there — and not its body, which PageOpeningRead reads for the pages the
 // selection keeps ([selectStale]). Bound: the space twice, the limit.
+//
+// WALKED IN ITS ORDER through `pages_heads_live_updated_idx`, the live pages
+// by when they last changed (replicated 0065), so the LIMIT stops the walk at
+// the first batch of stale pages. With no index in that order every tick read
+// every page row in the company, drafts and the trash included, and sorted
+// the live ones before it could return one.
 const pageSelectionStatement = `
 	SELECT p.id, p.container, p.edit_version, p.title,
 	       CASE WHEN v.model = ? AND v.dim = ? THEN v.text_sha ELSE '' END
