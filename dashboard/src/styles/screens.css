@@ -11414,10 +11414,11 @@ a.live-row:focus-visible {
   min-height: 0;
 }
 /* The names' letters stand on the count's left edge above them: the rows'
-   own padding is taken back, so only a row's hover reaches past it. */
+   own padding and edge are taken back, so only a row's hover and the current
+   row's mark reach past it. */
 .design-boards {
   min-height: 0;
-  margin-inline-start: calc(-1 * var(--spacing-2));
+  margin-inline-start: calc(-1 * (var(--spacing-2) + 2px));
   overflow-y: auto;
 }
 .design-boards ol {
@@ -11431,7 +11432,10 @@ a.live-row:focus-visible {
   overflow: hidden;
   padding: var(--spacing-1) var(--spacing-2);
   border: none;
-  border-radius: var(--radius-md);
+  /* The current row's mark is held on every row in the resting ink, as the
+     document outline's is, so nothing moves when the selection does. */
+  border-inline-start: 2px solid transparent;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
   background: transparent;
   color: var(--color-text-secondary);
   font: inherit;
@@ -11445,13 +11449,11 @@ a.live-row:focus-visible {
   background: var(--color-surface-hover);
   color: var(--color-text-primary);
 }
-/* The board selected on the canvas: the navigation rail's current row, lifted
-   with a hairline (an outline, so forced colours keep it). Declared after the
-   hover, so a row draws one or the other. */
+/* The board selected on the canvas: the accent edge every current row in the
+   system takes (the document outline's open entry), in the primary ink. A
+   border, so forced colours keep it. */
 .design-board-link[aria-current="true"] {
-  background: var(--color-surface-elevated);
-  outline: 1px solid var(--color-border-default);
-  outline-offset: -1px;
+  border-inline-start-color: var(--color-brand-accent);
   color: var(--color-text-primary);
 }
 .design-board-link:focus-visible {
