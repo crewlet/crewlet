@@ -43,6 +43,7 @@ type Fleet struct {
 	budgets      map[string]coord.Tally
 	channels     map[string]coord.Channel
 	follows      map[string]followEntry
+	chatReads    map[string]coord.ChatReadState
 	fires        map[string]time.Time
 	custody      map[string]string
 	rebases      map[string]rebaseEntry
@@ -82,11 +83,12 @@ type Fleet struct {
 	runWatchers   map[string]map[*watcher[coord.SandboxRunUpdate]]struct{}
 
 	// version is the one counter every versioned write draws from, sandbox
-	// runs and mailbox records alike. Store-wide rather than per record, as
-	// a KV revision is, so a record deleted and created again never hands
-	// back a version an older incarnation of it already used: a caller still
-	// holding that version must lose, not win against a record it never
-	// read. A per-record counter restarting at 1 was exactly that bug.
+	// runs, mailbox records and chat read records alike. Store-wide rather
+	// than per record, as a KV revision is, so a record deleted and created
+	// again never hands back a version an older incarnation of it already
+	// used: a caller still holding that version must lose, not win against a
+	// record it never read. A per-record counter restarting at 1 was exactly
+	// that bug.
 	version uint64
 
 	epoch   int64
@@ -123,6 +125,7 @@ func NewFleet() *Fleet {
 		budgets:      map[string]coord.Tally{},
 		channels:     map[string]coord.Channel{},
 		follows:      map[string]followEntry{},
+		chatReads:    map[string]coord.ChatReadState{},
 		fires:        map[string]time.Time{},
 		custody:      map[string]string{},
 		rebases:      map[string]rebaseEntry{},
@@ -957,6 +960,115 @@ func (f *Fleet) Following(_ context.Context, backend, handle, channel, thread st
 		return "", false, nil
 	}
 	return entry.reason, true, nil
+}
+
+// ---- the per-person chat read state ------------------------------------ //
+
+// ChatRead reports one person's read state, the zero state meaning nobody has
+// opened chat as that person yet.
+func (f *Fleet) ChatRead(_ context.Context, handle string) (coord.ChatReadState, error) {
+	if handle == "" {
+		return coord.ChatReadState{}, errors.New(
+			"coord/memory: read a person's chat state needs a handle")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return cloneChatRead(f.chatReads[handle]), nil
+}
+
+// AdvanceChatRead merges a flush into one person's record.
+//
+// NO RETRY LOOP HERE and that is not a simplification: the real backend's
+// rounds exist to lose a compare-and-set against another PROCESS, and this
+// twin holds the whole fleet under one mutex. The MERGE is the shared half —
+// [coord.MergeChatRead] — so the twin and the backend cannot disagree about
+// what a flush does, which is the only part a conformance suite can check.
+func (f *Fleet) AdvanceChatRead(_ context.Context, handle string,
+	delta coord.ChatReadDelta) (coord.ChatReadState, error) {
+
+	if handle == "" {
+		return coord.ChatReadState{}, errors.New(
+			"coord/memory: advance a person's chat state needs a handle")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	merged, err := coord.MergeChatRead(f.chatReads[handle], delta)
+	if err != nil {
+		return coord.ChatReadState{}, err
+	}
+	// THE STORE-WIDE COUNTER, as every versioned write here draws from: a
+	// record forgotten and written again lands past every state the old
+	// one reported, which is what a screen ordering two states relies on.
+	f.version++
+	merged.Revision = f.version
+	f.chatReads[handle] = merged
+	return cloneChatRead(merged), nil
+}
+
+// SetChatReadAbsence stamps or clears a record's seat's absence from the
+// company, reporting whether the seat has a record; one without is left
+// without. The rule is [coord.ChatReadState.WithAbsence], shared with the
+// real backend.
+func (f *Fleet) SetChatReadAbsence(_ context.Context, handle string, since time.Time) (bool, error) {
+	if handle == "" {
+		return false, errors.New("coord/memory: stamp a person's chat absence needs a handle")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored, ok := f.chatReads[handle]
+	if !ok {
+		return false, nil
+	}
+	if next, changed := stored.WithAbsence(since); changed {
+		f.version++
+		next.Revision = f.version
+		f.chatReads[handle] = next
+	}
+	return true, nil
+}
+
+// ForgetChatRead removes a person's record if it has been stamped absent at or
+// before absentBy, reporting whether it did.
+func (f *Fleet) ForgetChatRead(_ context.Context, handle string, absentBy time.Time) (bool, error) {
+	if handle == "" {
+		return false, errors.New("coord/memory: forget a person's chat state needs a handle")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored, ok := f.chatReads[handle]
+	if !ok || !stored.AbsentBy(absentBy) {
+		return false, nil
+	}
+	delete(f.chatReads, handle)
+	return true, nil
+}
+
+// ChatReaders lists every seat holding read state, in handle order, each with
+// its absence stamp.
+func (f *Fleet) ChatReaders(_ context.Context) ([]coord.ChatReader, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	readers := make([]coord.ChatReader, 0, len(f.chatReads))
+	for handle, stored := range f.chatReads {
+		readers = append(readers, coord.ChatReader{Handle: handle, AbsentSince: stored.AbsentSince})
+	}
+	slices.SortFunc(readers, func(a, b coord.ChatReader) int { return cmp.Compare(a.Handle, b.Handle) })
+	return readers, nil
+}
+
+// cloneChatRead copies the maps and slices a caller could otherwise mutate
+// under the twin's own lock.
+//
+// The real backend hands back a decoded record that shares nothing with its
+// store; a twin that handed out its live map would let one caller's edit reach
+// another's read, and the suite would be proving a property only the twin has.
+func cloneChatRead(state coord.ChatReadState) coord.ChatReadState {
+	out := state
+	if state.Cursors != nil {
+		out.Cursors = maps.Clone(state.Cursors)
+	}
+	out.Muted = slices.Clone(state.Muted)
+	return out
 }
 
 // SweepMarkers removes nothing, because the twin keeps no markers: a delete

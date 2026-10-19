@@ -190,10 +190,10 @@
 // A lease's read-back, a renew's and a release's read, Get, the epoch and
 // hint reads, and every record the fleet store reads by key (fleet.go, the
 // mailboxes, the positions, the follows, the secrets, the token counters, the
-// object store's records, the seat pauses) go through ONE read:
-// `$JS.API.STREAM.MSG.GET` with `last_by_subj`, which only the stream leader
-// answers ([leaderReader], [getLatest]). NONE is the bucket handle's own Get,
-// and none may be — TestNothingReadsAKeyThroughADirectGet reads this
+// object store's records, the seat pauses, the chat read state) go through ONE
+// read: `$JS.API.STREAM.MSG.GET` with `last_by_subj`, which only the stream
+// leader answers ([leaderReader], [getLatest]). NONE is the bucket handle's own
+// Get, and none may be — TestNothingReadsAKeyThroughADirectGet reads this
 // package's source for one, because the partition case below holds only the
 // call sites it reads through, and every other read is a call site of its
 // own.
@@ -1775,6 +1775,16 @@ func (s *Store) validateTTL(l *lane, resource, owner string, ttl time.Duration) 
 // unavailable turns a transport failure into the contract's third answer.
 func unavailable(what string, err error) error {
 	return fmt.Errorf("%w: %s: %w", coord.ErrUnavailable, what, err)
+}
+
+// writeUnknown is a write this store sent and heard no answer to: unavailable,
+// and marked [coord.ErrWriteUnknown] because it may have landed.
+//
+// For the methods that read before they write, whose caller cannot otherwise
+// tell this failure from the read's — after which nothing was written — and
+// would tell a person a change that may have happened did not.
+func writeUnknown(what string, err error) error {
+	return fmt.Errorf("%w: %w: %s: %w", coord.ErrUnavailable, coord.ErrWriteUnknown, what, err)
 }
 
 // contended reports a compare-and-swap that never settled.

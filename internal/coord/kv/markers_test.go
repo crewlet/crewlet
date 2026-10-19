@@ -176,7 +176,7 @@ func TestEveryBucketTheBrokerNeverAgesIsSwept(t *testing.T) {
 		t.Fatalf("the sweep covers %v, and the buckets the broker never ages "+
 			"are %v", swept, ageless)
 	}
-	for _, must := range []string{"sandbox_runs", "secrets", "channels", "mailboxes", "statelog_positions"} {
+	for _, must := range []string{"sandbox_runs", "secrets", "channels", "mailboxes", "chat_reads", "statelog_positions"} {
 		if !slices.Contains(swept, must) {
 			t.Errorf("the %s bucket removes records and has no age, and the sweep does not cover it", must)
 		}

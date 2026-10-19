@@ -684,6 +684,7 @@ days keep none.
 | **`crewlet_token_windows`** · `crewlet_rate` | The token counters (one record per scope, a slot for each calendar window, aged 32 days past its last charge) and the rate windows of the notification valve and of a person's Dashboard Assistant turns, each window at most a minute wide and kept three |
 | **`crewlet_secrets`** · `crewlet_channels` · `crewlet_sandbox_runs` | The company's sealed credentials, open A2A channels, every agent seat's executor run |
 | `crewlet_follows` | The chat threads each seat follows, so the next reply wakes it whichever node claims that delivery. The bucket's age, 90 days, is the last-activity horizon |
+| `crewlet_chat_reads` | Per human seat — how far its person has read in each room of the engine's own chat, what they have muted and whether they are in do-not-disturb, inherited by the seat's next holder. **Not on the chat log**, deliberately: a cursor is a fact about one reader's attention that nobody replays and every data node would otherwise apply, and at a realistic flush rate it is the highest-volume thing the company writes. **No age** — an expired cursor would mark a room its reader had finished as unread |
 | `crewlet_objects` | The [object store](object-store.md)'s **backend record** (`nats` or `s3:<endpoint>/<bucket>/<prefix>`, written create-only by the first node to boot and compared by every node after it, which refuses to boot configured with another store), and the `object-collector` duty's **last report**, replaced by each pass so every node's `/fleet` shows it whoever ran it, and the `trash-reaper` duty's, which the next holder of the duty resumes from. **No age**: an expired record would let the next node record a different store and split the company's files between two |
 | `crewlet_custody` | Which data node keeps each batch of a stateless node's events: claimed create-only by the data node that wrote the batch, after it wrote it, so exactly one node's log keeps it ([custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)). The bucket's age, 32 days, outlasts the event log's retention, so a node settling a batch it wrote before a crash always finds the answer |
 | `crewlet_uploads` | The bytes an artifact's upload intents have **reserved** and no record names yet: one ledger of every hold the company has outstanding, written by compare-and-set so two intents racing for the last of a budget cannot both win, and one record per upload naming the keys the engine minted for it and how far each transfer got. The bucket's age, 30 hours, outlasts the longest hold a reservation keeps (until the [object collector](object-store.md) could have deleted the bytes), so an abandoned upload's record goes on its own |
@@ -756,8 +757,8 @@ They were moved, and the rule is now the one above. See
 **Retention here is a bucket's age, never a per-write TTL.** On the embedded
 broker a per-key TTL is create-only — an update clears it, leaving the key
 immortal — so a horizon has to be fixed when its bucket is created, and that is
-why there are twenty-one of them rather than one with prefixes: three in the lease
-store, eighteen in the fleet store. The lease store is the sharpest illustration: `crewlet_leases` has an age, *and that age is the
+why there are twenty-two of them rather than one with prefixes: three in the lease
+store, nineteen in the fleet store. The lease store is the sharpest illustration: `crewlet_leases` has an age, *and that age is the
 lease TTL* — a renew rewrites the key and restarts the clock, so a node that
 stops renewing stops holding and nothing has to notice it died. `crewlet_epochs`
 sits beside it with no age at all, because a fence that restarts is not a fence.

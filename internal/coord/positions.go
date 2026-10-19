@@ -229,6 +229,13 @@ type PositionRegister interface {
 // tidy: a hold decoded as a positions row is a node id of "" with a domains
 // map of zero values, which the trim reads as a node that has applied nothing
 // and pins the floor at zero for ever.
+//
+// The chat read state wants the same retention and is deliberately NOT a
+// ninth class: it is the busiest record the fleet writes, and as a class here
+// every person's flush would be ordered through the one raft group, and every
+// chat screen's read answered by the one leader, that serve the trim's inputs
+// and the capacity window. [ChatReads] has a bucket of its own for that (see
+// chatread.go's "Why a bucket of its own").
 func PositionKey(nodeID string) string { return DocumentKey("node", nodeID) }
 
 // Validate reports why a row cannot be written.

@@ -94,13 +94,32 @@ import (
 // losing says nothing about who holds it.
 const createRounds = 8
 
+// errCreateUnanswered marks the one failure of [createKey] after which the
+// key may hold the value: a write of its own that went out and was answered
+// with something other than a refusal — most often not answered at all.
+//
+// A MARK, because the loop reads between its writes and a caller holding only
+// the error could not otherwise tell that failure from a read's. The two ask
+// opposite things of a caller that reports to a person ([coord.ErrWriteUnknown]
+// is that caller's word for the first): after a read failed, every write this
+// create made had been REFUSED, so nothing was written. Package-private
+// because the callers that ignore it lose nothing by doing so — a create that
+// failed is unavailable to them either way — and a caller that needs it says
+// so in its own contract ([FleetStore.putChatReadAt]).
+var errCreateUnanswered = errors.New("the create was sent and its answer was not a refusal")
+
 // createKey writes value under key only when the key holds no live value,
 // answering the revision it wrote, or an error wrapping
 // [jetstream.ErrKeyExists] when the stream leader holds a live value there.
 //
-// Every other failure is returned as it came, for the caller to classify as
-// unavailable: a create that could not be made establishes nothing. See the
-// file doc for why this is not the bucket handle's own Create.
+// Every other failure is for the caller to classify as unavailable — a create
+// that could not be made establishes nothing — and THEY ARE TWO KINDS, told
+// apart by [errCreateUnanswered]. Marked: a write's own failure, which may
+// have landed. Unmarked: the leader reader could not be built (before any
+// write), a refused round could not read the key again, or every round was
+// refused ([contended]) — after each of which every write this call made had
+// been refused, so nothing was written. See the file doc for why this is not
+// the bucket handle's own Create.
 func createKey(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue,
 	key string, value []byte) (uint64, error) {
 
@@ -118,8 +137,14 @@ func createKey(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValu
 		case err == nil:
 			return revision, nil
 		case !isWrongLastSequence(err):
-			return 0, err
+			// NOT A REFUSAL, so nothing says the broker did not take it:
+			// the request went out and what came back — most often
+			// nothing in time — is not the answer to it.
+			return 0, fmt.Errorf("%w: %w", errCreateUnanswered, err)
 		}
+		// REFUSED, so this round wrote nothing, and neither did any round
+		// before it: a failure from here on is a create that left the key
+		// as it found it.
 		last, err := read.last(ctx, key)
 		switch {
 		case errors.Is(err, jetstream.ErrKeyNotFound):
