@@ -56,6 +56,12 @@ var Icons = []string{"Activity", "Book", "Chart", "Chat", "Check", "CheckCircle"
 	"Database", "Globe", "Home", "Key", "Lightning", "Link", "Lock", "PaperPlane", "Search",
 	"Settings", "Star", "Tool", "Trust", "Users", "Warning", "Wrench"}
 
+// IconGlyphPercent is how much of an `<x-icon>`'s box its glyph fills, in
+// percent of the box's width and height. The glyph sits centred in the box,
+// and the rest is padding. This is Claude's rule, so an icon a deck sized for
+// Claude's format draws the same size here: a 64px box draws a 32px glyph.
+const IconGlyphPercent = 50
+
 // ---- the canonical tree --------------------------------------------------- //
 
 // Node is one element or one run of text of a slide, as the dashboard draws

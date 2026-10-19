@@ -57,6 +57,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import {
   SLIDE_ELEMENTS,
+  SLIDE_ICON_GLYPH_PERCENT,
   SLIDE_ICONS,
   SLIDE_SHAPES,
   SLIDE_STAGE_HEIGHT,
@@ -291,7 +292,7 @@ function renderNode(node: SlideNode, ctx: SlideRenderContext, path: NodePath): R
       const Glyph = ICONS[attrs.name as SlideIcon];
       return (
         <span key={path} className="slide-icon" aria-hidden="true" style={style}>
-          {Glyph ? <Glyph size="50%" /> : null}
+          {Glyph ? <Glyph size={`${SLIDE_ICON_GLYPH_PERCENT}%`} /> : null}
         </span>
       );
     }

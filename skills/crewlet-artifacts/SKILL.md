@@ -162,7 +162,8 @@ is refused at publish with its file, line and rule, never dropped.
   `alt` and a sized `style`; `table` of `tr`, `th` and `td`; `hr`; an inline
   `svg` with `aria-label` (no script, no `style`, references only to its own
   `#id`s, 52 KB at most); `x-shape kind` and `x-icon name`. At most 200
-  elements a slide.
+  elements a slide. An `x-icon` draws its glyph at half its box, centred, so
+  size the box at twice the glyph you want (64px for a 32px glyph).
 - **Styles are inline and closed.** Lengths in px (a bare number is px), hex,
   `rgb()` or `hsl()` colours, gradients, shadows, transforms and filters, as
   the slide format reference lists. Never classes, `<style>`, `margin`,

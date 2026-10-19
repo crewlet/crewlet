@@ -292,6 +292,7 @@ var contract = []Entry{
 	{"SLIDE_ICONS", ReadLiteral, "internal/api/artifactsapi.TestTheRendererDrawsTheSlideSubset"},
 	{"SLIDE_STAGE_WIDTH", ReadScalar, "internal/api/artifactsapi.TestTheRendererDrawsTheSlideSubset"},
 	{"SLIDE_STAGE_HEIGHT", ReadScalar, "internal/api/artifactsapi.TestTheRendererDrawsTheSlideSubset"},
+	{"SLIDE_ICON_GLYPH_PERCENT", ReadScalar, "internal/api/artifactsapi.TestTheRendererDrawsTheSlideSubset"},
 	{"ARTIFACT_CAPABILITIES", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
 	{"ARTIFACT_ROLES", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
 	{"SHAREABLE_ROLES", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},

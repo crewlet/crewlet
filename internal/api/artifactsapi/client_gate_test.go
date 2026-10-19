@@ -167,7 +167,8 @@ func TestTheRendererDrawsTheSlideSubset(t *testing.T) {
 		}
 	}
 	for name, want := range map[string]int{"SLIDE_STAGE_WIDTH": slideformat.StageWidth,
-		"SLIDE_STAGE_HEIGHT": slideformat.StageHeight} {
+		"SLIDE_STAGE_HEIGHT":       slideformat.StageHeight,
+		"SLIDE_ICON_GLYPH_PERCENT": slideformat.IconGlyphPercent} {
 		got, err := clientsource.Scalar(tree, name)
 		if err != nil || got != strconv.Itoa(want) {
 			t.Errorf("%s is %q (%v), want %d", name, got, err, want)

@@ -128,6 +128,11 @@ A block is `h1` to `h3`, `p`, `ul`, `ol`, `div`, `img`, `table`, `hr`, `svg`,
 `x-shape` and `x-icon`. Text sits in a text element, never directly in a
 `section` or `div`.
 
+An `x-icon` draws its glyph at half its box, centred, as Claude's format
+does; the rest of the box is padding. A `width:64px; height:64px` icon draws
+a 32px glyph, so size the box at twice the glyph you want: at least 32px, and
+48px beside 24px body text.
+
 ## Styles
 
 Every style is inline, in `style`, from the table below, and only on the

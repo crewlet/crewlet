@@ -11,6 +11,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { render, within } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
+import { SLIDE_ICON_GLYPH_PERCENT } from "~/contract/artifacts.ts";
 import type { ArtifactDeck, DeckSlide, SlideNode } from "~/protocol/index.ts";
 import { nodeAt, renderSlide, slideSource, slideStyle, titleOf, withText } from "./slides.tsx";
 
@@ -36,6 +37,17 @@ describe("drawing a slide", () => {
       expect(canvas.textContent).toContain(s.title);
       unmount();
     }
+  });
+
+  test("an icon fills its declared box, its glyph drawn at half of it as in Claude's format", () => {
+    const { container } = render(<>{renderSlide(slide("risks"), ctx)}</>);
+    const icon = container.querySelector<HTMLElement>(".slide-icon")!;
+    expect(icon.style.width).toBe("64px");
+    expect(icon.style.height).toBe("64px");
+    const glyph = icon.querySelector("svg")!;
+    expect(glyph.getAttribute("width")).toBe(`${SLIDE_ICON_GLYPH_PERCENT}%`);
+    expect(glyph.getAttribute("height")).toBe(`${SLIDE_ICON_GLYPH_PERCENT}%`);
+    expect(SLIDE_ICON_GLYPH_PERCENT).toBe(50);
   });
 
   test("the notes are never on the slide", () => {

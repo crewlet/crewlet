@@ -492,3 +492,6 @@ export const SLIDE_STAGE_WIDTH = 1920;
 
 /** A slide's stage height, in CSS pixels (`slideformat.StageHeight`). */
 export const SLIDE_STAGE_HEIGHT = 1080;
+
+/** How much of an `x-icon`'s box its glyph fills, in percent (`slideformat.IconGlyphPercent`). */
+export const SLIDE_ICON_GLYPH_PERCENT = 50;

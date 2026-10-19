@@ -5,11 +5,13 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // dirSource reads a deck from a directory, typing files by extension.
@@ -335,5 +337,26 @@ func TestTheStarterDeckIsInTheFormat(t *testing.T) {
 		len(deck.Sections) != 3 || deck.Slides[1].Notes == "" {
 		t.Errorf("the starter read as %q with %d slides, cover %q", deck.Title, len(deck.Slides),
 			deck.Slides[0].Title)
+	}
+}
+
+// TestTheIconRuleIsWritten holds the reference and the skill to the rule the
+// renderer draws by: an icon's glyph fills half its box, as in Claude's
+// format, so an author sizes the box at twice the glyph.
+func TestTheIconRuleIsWritten(t *testing.T) {
+	t.Parallel()
+	if IconGlyphPercent != 50 {
+		t.Fatalf("IconGlyphPercent is %d: the pages below say half; change them with it", IconGlyphPercent)
+	}
+	const rule = "draws its glyph at half its box"
+	for _, rel := range []string{"docs/reference/slide-format.md",
+		"skills/crewlet-artifacts/SKILL.md", "examples/tool-skills/artifacts.md"} {
+		raw, err := os.ReadFile(filepath.Join(sourcetree.Root(t), filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(strings.Join(strings.Fields(string(raw)), " "), rule) {
+			t.Errorf("%s does not say an x-icon %s", rel, rule)
+		}
 	}
 }
