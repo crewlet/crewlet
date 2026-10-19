@@ -256,7 +256,11 @@ function Trashed({ detail, onChanged }: { detail: ArtifactDetail; onChanged: () 
         <EmptyState
           icon={<TrashGlyph size="xl" />}
           title="This artifact is in the trash"
-          description={`${trashedBy} moved it to the trash. ${purgeSentence(detail.trashed_at)}`}
+          // WHY THE WAY BACK IS HELD, said where it is read: a held Restore
+          // otherwise only said so under the pointer.
+          description={`${trashedBy} moved it to the trash. ${purgeSentence(detail.trashed_at)}${
+            restore.can || restore.block === "loading" ? "" : ` ${restore.reason}`
+          }`}
           action={
             <span className="artifact-actions">
               <Button

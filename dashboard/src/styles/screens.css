@@ -10466,10 +10466,11 @@ a.live-row:focus-visible {
   gap: var(--spacing-4);
 }
 
+/* AN ARTIFACT THE READER CANNOT OPEN, refused or in the trash: one
+   composition, the kit's empty state on the page, at the same place. */
 .artifacts-denied {
   display: flex;
   justify-content: center;
-  padding-block: var(--spacing-6);
 }
 
 /* AN ARTIFACT'S PAGE is the artifact, under one slim bar the page draws in
