@@ -11414,6 +11414,14 @@ a.live-row:focus-visible {
 .dashboard-filter {
   min-width: 12rem;
 }
+/* ON A PHONE EACH FILTER TAKES THE ROW, and Refresh the row under them: at
+   their least width two filters left one alone on a row and the next beside
+   Refresh, a ragged pair of rows that read as two groups. */
+@container (max-width: 30rem) {
+  .dashboard-filter {
+    flex: 1 1 100%;
+  }
+}
 .dashboard-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(16rem, 20rem);
