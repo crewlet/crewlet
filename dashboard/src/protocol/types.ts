@@ -5279,6 +5279,11 @@ export interface ArtifactSeenByAnswer {
 /** One share and the seats a unit share reaches today (`artifactsapi.ShareAccess`). */
 export interface ArtifactShareAccess extends ArtifactShare {
   members?: string[];
+  /**
+   * The share reaches nobody: a login named as a seat, which a build before the
+   * grant rule wrote. Listed so its owner removes it; never offered a role.
+   */
+  invalid?: boolean;
 }
 
 /** `artifact_access{id}`: the share dialog's list (`artifactsapi.Access`). */

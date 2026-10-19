@@ -22,7 +22,7 @@ import {
 } from "@crewlethq/ui";
 import type { ArtifactAudience, ArtifactPresenceMember, OrgProjection } from "~/protocol/index.ts";
 import type { BridgePerson } from "~/runtime/bridge.ts";
-import { loginKind, loginWords } from "../login.ts";
+import { loginKind, loginWords, tierATokenOf } from "../login.ts";
 import { indexOrg, principalOfSeat, type OrgIndex, type Unit } from "../seats.ts";
 import { useOrg } from "../store-hooks.ts";
 import { plural } from "../format.ts";
@@ -117,7 +117,12 @@ export function artifactPeople(org: OrgProjection | null | undefined): ArtifactP
     seatPrincipal: (handle) => {
       const seat = index.byHandle.get(handle);
       if (!seat && loginKind(handle) !== null) {
-        return { id: handle, kind: "person", name: loginWords(handle) };
+        // A TOKEN'S ID IS ITS NAME and "API token" the line under it, so a
+        // badge draws the id's initials: "review (API token)" drew "R(".
+        const token = tierATokenOf(handle);
+        return token
+          ? { id: handle, kind: "person", name: token, detail: "API token" }
+          : { id: handle, kind: "person", name: handle };
       }
       return principalOfSeat(seat, handle);
     },

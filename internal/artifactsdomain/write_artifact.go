@@ -192,9 +192,11 @@ func checkVersionInput(kind artifacts.Kind, in PublishInput) error {
 	return nil
 }
 
-// checkShare refuses a share the domain never writes: an audience this build
-// does not share with, a role that is not shareable, one above the sharer's
-// ceiling, and the company audience from an agent (D10).
+// checkShare refuses a share the domain never writes: an audience that cannot
+// be addressed, a role that is not shareable, one above the sharer's ceiling,
+// and the company audience from an agent (D10). Whether the audience may be
+// GRANTED is the write's own question, decided against what is stored
+// ([Writer.Share]).
 func checkShare(c Call, s artifacts.Share, ceiling artifacts.Role) error {
 	if err := s.Audience.Validate(); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalid, err)
@@ -525,6 +527,14 @@ func (w *Writer) Share(ctx context.Context, c Call, id artifacts.ID, s artifacts
 			role, held, err := shareRole(ctx, tx, id.String(), s.Audience)
 			if err != nil || (held && role == s.Role) {
 				return statelog.Decision{}, err
+			}
+			// A NEW AUDIENCE IS HELD TO THE GRANT RULE; one already stored is
+			// the owner's to change whatever it names, so a share written
+			// before the rule is never a record nobody can act on.
+			if !held {
+				if err := s.Audience.ValidateGrant(); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
+					return statelog.Decision{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+				}
 			}
 			return w.decision(stamp, c, subject, OpShare, scope, opID,
 				SharePayload{V: baseRecordVersion, Share: grant}, at)
