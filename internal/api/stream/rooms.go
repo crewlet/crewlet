@@ -387,10 +387,14 @@ func (s *Service) joinArtifact(ctx context.Context, client *Client, req request)
 			Through: through, Resync: resync}})
 }
 
-// presenceSeat is the seat handle a member is shown under: the seat a person
-// or an agent acts as, and nothing for a credential that holds none (an
-// operator's token), whose login is not a seat and is not shown.
-func presenceSeat(p iam.Principal) string { return p.Seat }
+// presenceSeat is the name a member is shown under: the one the principal's
+// own record and every write it makes are kept under ([iam.RecordOwner]), so
+// the room names a reader as the artifact's history does. That is the seat a
+// person or an agent acts as, and the login of one acting under none (an
+// unbound person, an operator's token). It used to be the seat alone, which
+// is nothing for those, and every such reader in a room was drawn as an
+// unnamed "somebody" while the history beside it named them.
+func presenceSeat(p iam.Principal) string { return iam.RecordOwner(p) }
 
 // presenceKind is the kind a member is shown as: an agent for a seat's own
 // credential, a person for a person, and an operator for a credential acting
