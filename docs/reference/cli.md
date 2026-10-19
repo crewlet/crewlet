@@ -2743,6 +2743,16 @@ instead — the bundle on stdout, kept in your own secret manager and piped to
 `crewlet llm import` on each host, or a login on each host. Without it the
 blob goes to stdout in the clear, which is what you want when piping into your
 own secret manager and never what you want in a shell history.
+Every node restores a stored bundle when it builds a company to run, at boot
+and at every configuration apply, into a credentials directory that is still
+empty.
+
+A token `login` stores and a bundle `export -secret-store` stores each say,
+as [`crewlet secrets set`](#crewlet-secrets) does, which store took the value
+and who reads it when: through a running node, the running fleet at its next
+configuration apply; with this node's engine stopped, that engine when it
+starts and a node already running on the same store at its next configuration
+apply.
 
 **`import`** is the other half, and it reads the bundle from **stdin** — a
 credential on argv is visible in `ps` and lands in shell history, and the

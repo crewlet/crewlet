@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,12 +123,19 @@ func codexBundle(t *testing.T, body string) string {
 	return blob
 }
 
-// runSub runs `crewlet llm <sub> sub` with extra flags against the company.
+// runSub runs `crewlet llm <sub> sub` with extra flags against the company,
+// with nothing on stdin.
 func runSub(t *testing.T, flags []string, sub string, extra ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	return runSubIn(t, strings.NewReader(""), flags, sub, extra...)
+}
+
+// runSubIn is [runSub] with stdin piped in.
+func runSubIn(t *testing.T, stdin io.Reader, flags []string, sub string, extra ...string) (stdout, stderr string, err error) {
 	t.Helper()
 	var out, errOut bytes.Buffer
 	args := append(append([]string{sub, "sub"}, extra...), flags...)
-	err = runLLM(noEnviron, args, &out, &errOut)
+	err = runLLM(noEnviron, args, stdin, &out, &errOut)
 	return out.String(), errOut.String(), err
 }
 
@@ -236,7 +244,7 @@ func TestTheCommandsThatAnswerAsTheEngineRestoreTheBundleFirst(t *testing.T) {
 				args = append(args, "sub")
 			}
 			args = append(append(args, c.extra...), flags...)
-			err := runLLM(noEnviron, args, &out, &errOut)
+			err := runLLM(noEnviron, args, strings.NewReader(""), &out, &errOut)
 			if (err != nil) != c.fails {
 				t.Fatalf("%s: %v\n%s%s", c.command, err, out.String(), errOut.String())
 			}
@@ -312,19 +320,8 @@ func TestTheCommandsThatReplaceTheLoginDoNotRestoreItFirst(t *testing.T) {
 	})
 	t.Run("import", func(t *testing.T) {
 		flags, login := bundledEntry(t, llmBundle(t, `{"token":"k-bundled"}`))
-		stdin := filepath.Join(t.TempDir(), "bundle")
-		if err := os.WriteFile(stdin, []byte(llmBundle(t, `{"token":"k-imported"}`)), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		f, err := os.Open(stdin) //nolint:gosec // the test's own file
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = f.Close() }()
-		was := os.Stdin
-		os.Stdin = f
-		defer func() { os.Stdin = was }()
-		if _, stderr, err := runSub(t, flags, "import"); err != nil {
+		stdin := strings.NewReader(llmBundle(t, `{"token":"k-imported"}`))
+		if _, stderr, err := runSubIn(t, stdin, flags, "import"); err != nil {
 			t.Fatalf("import: %v (%s)", err, stderr)
 		}
 		if got := readLogin(t, login); got != `{"token":"k-imported"}` {

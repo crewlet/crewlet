@@ -264,7 +264,7 @@ func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) 
 	case "artifacts":
 		return runArtifacts(environ, rest, stdout, stderr)
 	case "llm":
-		return runLLM(environ, rest, stdout, stderr)
+		return runLLM(environ, rest, os.Stdin, stdout, stderr)
 	case "search":
 		return runSearch(rest, stdout, stderr)
 	case "assistant":

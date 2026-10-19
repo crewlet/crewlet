@@ -85,7 +85,14 @@ Flags:
   -print-token   Write a captured token to stdout instead of the store (login only)
 `
 
-func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) error {
+// runLLM dispatches `crewlet llm`.
+//
+// STDIN IS AN ARGUMENT for every subcommand that reads it — a token or a
+// password `login` is handed, the prompts of a vendor's own login, and the
+// bundle `import` restores — as it is for `crewlet iam`, so a suite can pipe
+// one in and drive the write each of them ends in rather than swapping the
+// process's own os.Stdin under every other test.
+func runLLM(environ config.Source, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	if sub == "" || sub == "help" {
 		fmt.Fprintf(stdout, llmUsage, defaultCompanyPath, defaultBootstrapPath)
@@ -167,7 +174,7 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 			fromHost: *fromHost, captureToken: *captureToken,
 			tokenStdin: *tokenStdin, username: *username, passwordStdin: *passwordStdin,
 			companySecrets: companySecrets, companyPath: *companyPath,
-			printToken: *printToken, stdin: os.Stdin,
+			printToken: *printToken, stdin: stdin,
 		}, stdout, stderr)
 	case "status":
 		p, err := oneProvider(providers, key)
@@ -200,7 +207,7 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 	case "export":
 		return exportLLM(ctx, providers, key, *secretStore, companySecrets, stdout)
 	case "import":
-		return importLLM(ctx, providers, key, *companyPath, companySecrets, os.Stdin, stdout)
+		return importLLM(ctx, providers, key, *companyPath, companySecrets, stdin, stdout)
 	}
 	return nil
 }

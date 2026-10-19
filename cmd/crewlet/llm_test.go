@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"math/rand/v2"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -76,6 +78,112 @@ func TestALoginBundleRoundTripsThroughTheCLI(t *testing.T) {
 	if !strings.Contains(out.String(), "Verify it with `crewlet llm doctor sub`.") {
 		t.Errorf("the run does not say how to verify it, with no flag it was not given: %s",
 			out.String())
+	}
+}
+
+// A STORED CREDENTIAL SAYS WHICH STORE TOOK IT AND WHAT THAT STORE DOES NEXT.
+//
+// `crewlet llm login -token-stdin` and `llm export -secret-store` write into
+// the secret store through the node -api names, as `crewlet secrets set` does,
+// and the two ways in look alike afterwards: a value written through a running
+// node is read at the fleet's next configuration apply, and one written
+// directly with this node's engine stopped is read by that engine when it
+// starts, and by a node already running on the store at its next apply. So
+// each write names the store and says what it does next, in the words
+// `secrets set` uses.
+// Both are driven here end to end, the token read from the stdin the command
+// was handed. Mutation: drop either write's -api and it reaches no node; read
+// the token from os.Stdin again and the login reads nothing; drop the next
+// step from either line and its case is red.
+func TestAStoredLLMCredentialSaysWhereItWentAndWhatHappensNext(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	state := filepath.Join(dir, "state")
+	creds := filepath.Join(state, "custom", "credentials", "creds.json")
+	if err := os.MkdirAll(filepath.Dir(creds), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(creds, []byte(`{"token":"moved"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// ITS ONE SEAT IS A PERSON'S, as [doctorCompany]'s is: the entry is a
+	// `custom` stand-in for a CLI this suite cannot install, which can run
+	// no seat's executor.
+	company := writeFile(t, dir, "company.yaml", fmt.Sprintf(`name: Acme
+providers:
+  llm:
+    sub:
+      agent: custom
+      model: m
+      state_dir: %q
+      overrides:
+        binary: "true"
+        complete_args: ["-p"]
+        model_args: ["--model", "{model}"]
+        output: text
+        token_env: SUB_HEADLESS_TOKEN
+        credential_paths: [".fake/creds.json"]
+        host_credential_paths: [".fake/creds.json"]
+roles:
+  - name: CEO
+    handle: ceo
+    kind: human
+`, state))
+	bootstrap := bootstrapWithKeyring(t, "k1")
+
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		stdin string
+		// stored is the secret the node is asked to write, and value what
+		// it is asked to write there ("" for a bundle, whose bytes are the
+		// archive's).
+		stored, value string
+		says          []string
+	}{
+		{
+			name:   "an exported bundle",
+			args:   []string{"export", "sub", "-secret-store"},
+			stored: cliprofile.BundleVarName("sub"),
+			says:   []string{"at boot and at every\napply"},
+		},
+		{
+			name:   "a headless token",
+			args:   []string{"login", "sub", "-token-stdin"},
+			stdin:  "tok-from-stdin\n",
+			stored: "SUB_HEADLESS_TOKEN", value: "tok-from-stdin",
+			says: []string{`token: "${SUB_HEADLESS_TOKEN}"`},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			node := newFakeSecretsNode(t)
+			var out, errs bytes.Buffer
+			args := append(slices.Clone(tc.args), "-company", company,
+				"-config", bootstrap, "-api", node.server.URL)
+			if err := runLLM(tokenEnviron("ops-token"), args,
+				strings.NewReader(tc.stdin), &out, &errs); err != nil {
+				t.Fatalf("%s: %v\n%s", strings.Join(tc.args, " "), err, errs.String())
+			}
+			if want := "/secrets/" + tc.stored; node.last.method != http.MethodPut ||
+				node.last.path != want {
+				t.Fatalf("the node saw %q %q, want PUT %s", node.last.method,
+					node.last.path, want)
+			}
+			if tc.value != "" && node.last.body != tc.value {
+				t.Errorf("the node was sent %q, want %q", node.last.body, tc.value)
+			}
+			if node.last.auth != "Bearer ops-token" {
+				t.Errorf("the write carried %q, want the invocation's own token",
+					node.last.auth)
+			}
+			for _, want := range append([]string{node.server.URL, secretsFleetNote},
+				tc.says...) {
+				if !strings.Contains(out.String(), want) {
+					t.Errorf("the output does not say %q:\n%s", want, out.String())
+				}
+			}
+		})
 	}
 }
 
@@ -238,7 +346,7 @@ func TestDoctorReportsAnEntryThatDoesNotBuildBesideTheOthers(t *testing.T) {
 		healthyDoctorEntry(t, "claude", "m")+
 			healthyDoctorEntry(t, "broken", `"${CREWLET_DOCTOR_TEST_UNSET_MODEL}"`))...)
 	var out, notes bytes.Buffer
-	err := runLLM(noEnviron, args, &out, &notes)
+	err := runLLM(noEnviron, args, strings.NewReader(""), &out, &notes)
 	if err == nil || !strings.Contains(err.Error(), "1 of 2 providers have problems") {
 		t.Fatalf("err = %v\n%s", err, out.String())
 	}
@@ -274,7 +382,7 @@ func TestDoctorNamesTheSeatsThatLaunchOnAnEntry(t *testing.T) {
 	var out, notes bytes.Buffer
 	// Problems are expected — the claude-code entry's CLI is not there, and
 	// no bridge is set — so the exit is not the case; the report is.
-	_ = runLLM(noEnviron, args, &out, &notes)
+	_ = runLLM(noEnviron, args, strings.NewReader(""), &out, &notes)
 	reports := map[string]string{}
 	for _, section := range strings.Split(out.String(), "provider      : ")[1:] {
 		key, _, _ := strings.Cut(section, "\n")
@@ -305,14 +413,14 @@ func TestDoctorNamesTheEntriesItExamines(t *testing.T) {
 	t.Parallel()
 	var out, notes bytes.Buffer
 	err := runLLM(noEnviron, append([]string{"doctor", "nobody"},
-		doctorCompany(t, healthyDoctorEntry(t, "claude", "m"))...), &out, &notes)
+		doctorCompany(t, healthyDoctorEntry(t, "claude", "m"))...), strings.NewReader(""), &out, &notes)
 	if err == nil || !strings.Contains(err.Error(), `no provider "nobody" (doctor examines claude)`) {
 		t.Errorf("err = %v", err)
 	}
 
 	dir := t.TempDir()
 	company := writeFile(t, dir, "company.yaml", "name: Acme\nroles:\n  - name: CEO\n    handle: ceo\n")
-	err = runLLM(noEnviron, []string{"doctor", "-company", company, "-config", filepath.Join(dir, "absent.yaml")}, &out, &notes)
+	err = runLLM(noEnviron, []string{"doctor", "-company", company, "-config", filepath.Join(dir, "absent.yaml")}, strings.NewReader(""), &out, &notes)
 	if err == nil || !strings.Contains(err.Error(), "declares no providers.llm entries") {
 		t.Errorf("err = %v", err)
 	}
@@ -578,7 +686,7 @@ roles:
 			args := append([]string{"login", "claude", "-company", company(t, marker),
 				"-config", bootstrapWithKeyring(t, "k1")}, tc.flags...)
 			var out, errOut bytes.Buffer
-			err := runLLM(noEnviron, args, &out, &errOut)
+			err := runLLM(noEnviron, args, strings.NewReader(""), &out, &errOut)
 			refused(t, err, &out, &errOut)
 			if _, statErr := os.Stat(marker); !errors.Is(statErr, fs.ErrNotExist) {
 				t.Errorf("the token was minted before the refusal (marker: %v)", statErr)
@@ -620,7 +728,7 @@ roles:
 		var out, errOut bytes.Buffer
 		err := runLLM(noEnviron, []string{"doctor", "claude", "-no-smoke",
 			"-company", company(t, filepath.Join(t.TempDir(), "minted")),
-			"-config", bootstrapWithKeyring(t, "k1")}, &out, &errOut)
+			"-config", bootstrapWithKeyring(t, "k1")}, strings.NewReader(""), &out, &errOut)
 		if err == nil {
 			t.Fatalf("the doctor found no problem with MY-TOKEN:\n%s", out.String())
 		}
@@ -653,7 +761,7 @@ roles:
 		err := runLLM(tokenEnviron(cliFixtureToken), []string{"doctor", "claude", "-no-smoke",
 			"-company", company(t, filepath.Join(t.TempDir(), "minted")),
 			"-config", filepath.Join(t.TempDir(), "absent.yaml"), "-api", node.server.URL},
-			&out, &errOut)
+			strings.NewReader(""), &out, &errOut)
 		if err == nil || !strings.Contains(err.Error(), "1 of 1 providers have problems") {
 			t.Fatalf("the doctor = %v, want the entry's problem and a non-zero exit\n%s%s",
 				err, out.String(), errOut.String())
@@ -674,7 +782,7 @@ roles:
 		var out, errOut bytes.Buffer
 		err := runLLM(noEnviron, []string{"doctor", "claude", "-no-smoke",
 			"-company", company(t, filepath.Join(t.TempDir(), "minted")),
-			"-config", bootstrapWithKeyring(t, "k1")}, &out, &errOut)
+			"-config", bootstrapWithKeyring(t, "k1")}, strings.NewReader(""), &out, &errOut)
 		if err == nil || !strings.Contains(err.Error(), "1 of 1 providers have problems") {
 			t.Fatalf("the doctor = %v, want the entry's problem and a non-zero exit\n%s%s",
 				err, out.String(), errOut.String())
@@ -701,7 +809,7 @@ roles:
 		marker := filepath.Join(t.TempDir(), "minted")
 		var out, errOut bytes.Buffer
 		err := runLLM(noEnviron, []string{"login", "claude", "-from-host", "-home", home,
-			"-company", company(t, marker), "-config", bootstrapWithKeyring(t, "k1")}, &out, &errOut)
+			"-company", company(t, marker), "-config", bootstrapWithKeyring(t, "k1")}, strings.NewReader(""), &out, &errOut)
 		if err != nil {
 			t.Fatalf("-from-host: %v\n%s", err, errOut.String())
 		}
