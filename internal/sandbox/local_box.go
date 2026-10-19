@@ -330,7 +330,10 @@ func reap(proc *exec.Cmd) { _ = proc.Wait() }
 // mount namespace, so an in-box path IS a host path. Writing outside the box
 // would therefore hit the engine host's real /usr/local/bin (or worse), which
 // is why a setup step that provisions a system path is rejected here rather
-// than silently doing it. Container mode is the answer for those.
+// than silently doing it. Container mode is NOT the answer for those, though
+// it once said so: it writes files only under its mount and refuses the same
+// path ([containerBox.hostPath]). What works in every cell is the box's home:
+// a file named relative to it, or a setup command writing under "$HOME".
 func (b *directBox) resolve(path string) (string, error) {
 	rel := path
 	if filepath.IsAbs(path) {
@@ -366,8 +369,9 @@ func (b *directBox) resolve(path string) (string, error) {
 func (b *directBox) escapeError(path string) error {
 	return localErrorf("local sandbox (run_in %q) refuses to touch %q: it is outside "+
 		"the box at %s. Direct mode has no filesystem virtualisation, so this would write to "+
-		"the engine host itself. Put the file under the box's home, or use "+
-		"run_in %q.", Direct, path, b.layout.home(), Container)
+		"the engine host itself. Put the file under the box's home: name it relative to the "+
+		"home (\".npmrc\", \".local/bin/tool\"), which every cell writes under its home, or "+
+		"have a setup command write it under \"$HOME\".", Direct, path, b.layout.home())
 }
 
 func (b *directBox) WriteFile(ctx context.Context, path string, content []byte) error {
@@ -520,10 +524,15 @@ func (b *containerBox) hostPath(path string) (string, error) {
 	case strings.HasPrefix(path, prefix):
 		rel = path[len(prefix):]
 	case filepath.IsAbs(path):
-		// Outside the mount — reachable only from inside the container,
-		// which is exactly what container mode is for.
-		return "", localErrorf("%q is outside the sandbox home mount at %s; write it with a "+
-			"setup-step command instead of a file entry", path, DefaultHome)
+		// Outside the mount, so a write from out here cannot reach it. A
+		// command inside the container might, but only as whatever user the
+		// container runs as — the engine's own uid on a rootful runtime
+		// ([containerUserArgs]), which an image's system directories
+		// usually refuse — so the remedy that holds is the home.
+		return "", localErrorf("%q is outside the sandbox home mount at %s, the only place "+
+			"a file can be written into this box; name it relative to the home "+
+			"(\".npmrc\", \".local/bin/tool\"), which every cell writes under its home, or "+
+			"have a setup command write it under \"$HOME\"", path, DefaultHome)
 	}
 	resolved, err := hostbox.SafeJoin(b.layout.home(), rel)
 	switch {

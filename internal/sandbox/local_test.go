@@ -197,16 +197,42 @@ func TestDirectModeRefusesToWriteOutsideTheBox(t *testing.T) {
 	}
 }
 
-func TestDirectModeNamesTheContainerAlternativeWhenItRefuses(t *testing.T) {
+// A LOCAL BOX'S REFUSAL NAMES A REMEDY THAT WORKS IN EVERY LOCAL CELL.
+//
+// The direct box's used to end "or use run_in container", and a container box
+// refuses the same path: it writes a file only under its one mount, the home.
+// So an operator who followed it moved the seat and met the same refusal in
+// other words. What works in both is the box's home: a file named relative to
+// it, which a file entry can always write (a direct box's home is minted per
+// box, so no absolute path names it), or a setup command writing under
+// "$HOME".
+func TestALocalBoxsRefusalNamesARemedyThatWorks(t *testing.T) {
 	t.Parallel()
-	local := newDirect(t)
-	box := mustCreate(t, local, Spec{})
-	err := box.WriteFile(t.Context(), "/usr/local/bin/tool", []byte("x"))
-	if err == nil {
-		t.Fatal("expected a refusal")
+	const system = "/usr/local/bin/tool"
+	boxes := map[Placement]Sandbox{
+		Direct:    mustCreate(t, newDirect(t), Spec{}),
+		Container: &containerBox{layout: boxLayout{id: "box", root: t.TempDir()}, cli: containerCLI{path: "d"}, container: "c"},
 	}
-	if !strings.Contains(err.Error(), string(Container)) {
-		t.Fatalf("the refusal does not tell the operator what to do instead: %v", err)
+	for cell, box := range boxes {
+		err := box.WriteFile(t.Context(), system, []byte("x"))
+		if err == nil {
+			t.Fatalf("a %s box wrote %s, outside its home", cell, system)
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "relative to the home") {
+			t.Errorf("the %s box's refusal does not say to name the file relative to its "+
+				"home: %v", cell, err)
+		}
+		if !strings.Contains(msg, `"$HOME"`) || !strings.Contains(msg, "command") {
+			t.Errorf("the %s box's refusal does not say to have a setup command write the "+
+				"file under its home: %v", cell, err)
+		}
+		for other := range boxes {
+			if other != cell && strings.Contains(msg, string(other)) {
+				t.Errorf("the %s box's refusal sends the operator to %s, which refuses the "+
+					"same path: %v", cell, other, err)
+			}
+		}
 	}
 }
 
