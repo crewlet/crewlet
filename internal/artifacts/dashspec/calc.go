@@ -611,7 +611,7 @@ func resolveCondition(w Condition, t ColumnType, params map[string]string) (reso
 	}
 	v, err := Coerce(t, raw)
 	if err != nil {
-		return rc, false, fmt.Errorf("%w: the condition on %q: %v", ErrInvalid, w.Column, err)
+		return rc, false, fmt.Errorf("%w: the condition on %q: %w", ErrInvalid, w.Column, err)
 	}
 	rc.value = v
 	return rc, true, nil

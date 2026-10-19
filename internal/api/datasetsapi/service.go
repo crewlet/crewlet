@@ -420,7 +420,7 @@ func (s *Service) readEngine(rd *read, d dashspec.Dataset) result {
 	if hit, ok := s.cache.get(key, now); ok {
 		return hit
 	}
-	if err := s.charge(rd); err != nil {
+	if err = s.charge(rd); err != nil {
 		return result{err: err}
 	}
 	raw, err := s.ask(rd.ctx, src, args, rd.a.Principal)
