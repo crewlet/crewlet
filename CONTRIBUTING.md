@@ -585,6 +585,16 @@ fuller one whatever the change. Only a case whose subject is the derived
 limit, or a refusal below the floor, states a size of its own; one that
 reserves nothing, or only what the broker reports it has left, needs none.
 
+What a query plan says is read in `storetest`, once. The pinned driver may
+rewrite a correlated scalar subquery that selects one aggregate into a join
+against its whole child table, grouped by the correlation columns, and whether
+it does is chosen by its cost guess over a database nobody has ANALYZEd rather
+than by any line of the statement. So `storetest.Decorrelated` is the one check
+for it: the `scalar_subquery_<n>` operand the rewrite produces, never the
+`ephemeral_subquery_` index a FROM-clause subquery is joined through, held to
+the driver in both directions, so a driver bump that renames or stops the
+rewrite fails there before it blinds a gate.
+
 ### The end-to-end gates
 
 `internal/e2e` runs a real engine, a real broker and the real API, then
