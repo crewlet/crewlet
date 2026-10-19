@@ -516,15 +516,36 @@ export function fmtBytes(n: number | null | undefined): string {
 // ---------------------------------------------------------------------------
 
 /**
- * A clause as a sentence: its first letter capitalised and a full stop after
- * it. The engine writes a measurement as a clause, so its log line can carry
- * it after a colon ("backup_age: no verified backup has been recorded"); a
- * screen that prints it on its own line prints it as a sentence.
+ * A first word that is a LITERAL rather than prose: an address
+ * (`http://localhost:5199`, `example.com`), a path, a handle, a login
+ * (`token:review`), an identifier (`api.external_url`, `backup_age`) or
+ * anything quoted as code. Capitalised, it is a different value: the sign-in
+ * screen read "Http://localhost:5199 isn't an address for this deployment."
+ */
+const LITERAL_WORD = /^[`'"@/~$#<]|:\/\/|[:/_@\\]|\.[\p{L}\d]/u;
+
+/**
+ * The engine's own words, opened as a sentence: the first letter capitalised,
+ * unless the first word is a literal ([LITERAL_WORD]), which is written as the
+ * engine wrote it. No full stop is added; see [asSentence] for that.
+ */
+export function openSentence(text: string): string {
+  const s = text.trim();
+  if (s === "") return s;
+  const first = s.split(/\s/, 1)[0]!.replace(/[,;:.!?)]+$/, "");
+  if (LITERAL_WORD.test(first)) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * A clause as a sentence: its first letter capitalised ([openSentence]) and a
+ * full stop after it. The engine writes a measurement as a clause, so its log
+ * line can carry it after a colon ("backup_age: no verified backup has been
+ * recorded"); a screen that prints it on its own line prints it as a sentence.
  */
 export function asSentence(clause: string): string {
-  const s = clause.trim();
-  if (s === "") return s;
-  const head = s.charAt(0).toUpperCase() + s.slice(1);
+  const head = openSentence(clause);
+  if (head === "") return head;
   return /[.!?]$/.test(head) ? head : `${head}.`;
 }
 
