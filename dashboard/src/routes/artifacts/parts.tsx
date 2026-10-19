@@ -18,6 +18,7 @@ import { queryErrorCode, type ArtifactKind, type ArtifactListItem } from "~/prot
 import { artifactPath } from "~/lib/artifacts/api.ts";
 import type { ArtifactPeople } from "~/lib/artifacts/people.ts";
 import { SlidesCover } from "./SlidesCover.tsx";
+import { DesignCover } from "./DesignCover.tsx";
 
 /**
  * A listed artifact as the design system's card: a gallery's card, or a row
@@ -30,6 +31,7 @@ import { SlidesCover } from "./SlidesCover.tsx";
  */
 const KIND_COVERS: Partial<Record<ArtifactKind, (item: ArtifactListItem) => ReactNode>> = {
   slides: (item) => <SlidesCover item={item} />,
+  design: (item) => <DesignCover item={item} />,
 };
 
 export function ListedArtifactCard({

@@ -574,6 +574,11 @@ const crewlet = Object.freeze({
     }
     return bridge.call<boolean>("openLink", { url: parsed.href });
   },
+  // THE HOST PRINTS, never the frame: a sandboxed page has no print dialog of
+  // its own. The dashboard prints this page alone, at its own size, and only
+  // on the reader's own click (a call made with no gesture behind it is
+  // refused), resolving true once the print was handed to the browser.
+  print: () => bridge.call<boolean>("print"),
   theme: Object.freeze({
     get mode(): "light" | "dark" {
       return resolvedMode();

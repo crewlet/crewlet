@@ -43,7 +43,7 @@ export const BRIDGE_MESSAGE = {
 /** The capabilities a version declares, as the runtime names them (`artifacts.Capability`). */
 export type RuntimeCapability = (typeof ARTIFACT_CAPABILITIES)[number];
 
-/** Every method a page may call, and the capability each needs (none for `openLink`). */
+/** Every method a page may call, and the capability each needs (none for `openLink` and `print`). */
 export const BRIDGE_METHODS = {
   "identity.me": "identity",
   "data.schema": "db",
@@ -60,6 +60,7 @@ export const BRIDGE_METHODS = {
   "presence.set": "presence",
   "assets.list": "assets",
   openLink: null,
+  print: null,
 } as const satisfies Record<string, RuntimeCapability | null>;
 
 export type BridgeMethod = keyof typeof BRIDGE_METHODS;

@@ -11116,6 +11116,116 @@ a.live-row:focus-visible {
   }
 }
 
+/* A DESIGN: the canvas fills the view beside its list of boards. */
+.design-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.design-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.design-bar-count {
+  margin-right: auto;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-compact);
+}
+.design-body {
+  display: grid;
+  grid-template-columns: minmax(10rem, 14rem) minmax(0, 1fr);
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.design-boards ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.design-board-link {
+  width: 100%;
+  padding: var(--spacing-1) var(--spacing-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-compact);
+  text-align: left;
+  cursor: pointer;
+}
+.design-board-link:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+.design-board-link:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
+}
+.design-canvas,
+.design-skeleton {
+  height: max(28rem, calc(100cqb - var(--sticky-top) - 14rem));
+  min-width: 0;
+}
+@media (max-width: 48rem) {
+  .design-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .design-boards {
+    display: none;
+  }
+}
+
+/* An artboard's frame fills its board exactly; the board says its own state. */
+.design-board-frame,
+.design-print-frame {
+  gap: 0;
+  height: 100%;
+}
+.design-board-frame :is(.artifact-frame, .artifact-frame-skeleton),
+.design-print-frame :is(.artifact-frame, .artifact-frame-skeleton) {
+  height: 100%;
+}
+.design-board-frame .artifact-note,
+.design-print-frame .artifact-note {
+  display: none;
+}
+.design-opened-frame .artifact-frame {
+  height: 75vh;
+}
+
+/* PRINT: one board on a page of its own size, nothing else of the dashboard.
+   Kept laid out but unseen on screen, so its frame loads before the print. */
+.design-print {
+  position: fixed;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+@media print {
+  body:has(> .design-print) > :not(.design-print) {
+    display: none;
+  }
+  .design-print {
+    position: static;
+    visibility: visible;
+    page: design-board;
+  }
+}
+
+/* A DESIGN'S GALLERY COVER: its boards as a schematic, at card size. */
+.design-cover {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: var(--spacing-2);
+  box-sizing: border-box;
+}
+
 /* A DECK'S GALLERY COVER: its cover slide at card size, and how many slides. */
 .slides-cover {
   position: relative;

@@ -52,6 +52,19 @@ export interface PageHostOptions {
   newKey: () => string;
   /** Asks the reader whether to open a link, through the interstitial; resolves with their answer. */
   openLink: (url: URL) => Promise<boolean>;
+  /**
+   * Prints this page alone, as the reader's own print of it; resolves once
+   * the print was handed to the browser. Absent where the host offers no
+   * print, whose every request is then refused.
+   */
+  print?: (() => Promise<boolean>) | undefined;
+  /**
+   * Whether the reader acted on this document just now (a click or a key in
+   * the page counts, since a frame's activation reaches its host): the gate
+   * on a print, so a page cannot open the print dialog on its own. The
+   * browser's own `navigator.userActivation` outside a suite.
+   */
+  readerActed?: (() => boolean) | undefined;
   /** Says where the reader is in the room. */
   setPresence: (
     activity: "viewing" | "editing" | "idle",
@@ -490,6 +503,19 @@ export class PageHost {
           );
         }
         return this.options.openLink(url);
+      }
+      case "print": {
+        if (!this.options.print) {
+          throw new Refusal("unavailable", "this page cannot be printed here");
+        }
+        // ONLY ON THE READER'S GESTURE: a page that could print whenever it
+        // liked could put the print dialog in front of the reader at will.
+        const acted =
+          this.options.readerActed ?? (() => navigator.userActivation?.isActive ?? false);
+        if (!acted()) {
+          throw new Refusal("forbidden", "print runs only on the reader's own click or key press");
+        }
+        return this.options.print();
       }
     }
   }

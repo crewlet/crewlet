@@ -30,6 +30,7 @@ export const KIND_WORDS: Readonly<Record<ArtifactKind, string>> = {
   markdown: "Document",
   slides: "Slides",
   sheet: "Sheet",
+  design: "Design",
 };
 
 /** Every kind, in the engine's order, as the gallery's filter offers them. */

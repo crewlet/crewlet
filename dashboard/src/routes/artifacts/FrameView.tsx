@@ -11,6 +11,10 @@
  * THE PAGE TALKS TO THIS HOST, never to the engine: once the frame has checked
  * the page's hello it transfers one port, and every call on it is answered by
  * the [PageHost] built for this frame, bound to this artifact and version.
+ *
+ * ONE FRAME, ONE DOCUMENT. A page's frame opens its entry; a design's frame
+ * opens the one artboard it names (`document`), under a ticket minted for that
+ * board alone, so every board on a canvas is a frame of its own.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -65,6 +69,11 @@ export function FrameView({
   room,
   presence,
   bridgeStores,
+  document,
+  title,
+  print,
+  onReady,
+  className,
 }: {
   detail: ArtifactDetail;
   version: number;
@@ -72,11 +81,25 @@ export function FrameView({
   room: ArtifactRoom;
   presence: PresenceReport;
   bridgeStores: Set<ArtifactDataStore>;
+  /** The page the frame opens: a design's artboard. Left out, the version's entry. */
+  document?: string | undefined;
+  /** The frame's accessible name, where it is not the artifact's title. */
+  title?: string | undefined;
+  /** Prints this page alone when it asks (`crewlet.print()`); absent, a print is refused. */
+  print?: (() => Promise<boolean>) | undefined;
+  /** The page said hello and holds its port: it is drawn. */
+  onReady?: (() => void) | undefined;
+  className?: string | undefined;
 }) {
   const [attempt, setAttempt] = useState(0);
-  const frame = useRest<ArtifactFrame>(`${detail.id}:${version}:${attempt}`, () =>
-    mintFrame(detail.id, version),
+  const frame = useRest<ArtifactFrame>(`${detail.id}:${version}:${document ?? ""}:${attempt}`, () =>
+    mintFrame(detail.id, version, document),
   );
+  // The print a page asks for, read through a ref so a new callback never
+  // rebuilds the host and drops the page's port.
+  const printRef = useRef(print);
+  printRef.current = print;
+  const canPrint = print !== undefined;
   // WHEN THE FRAME WAS HANDED OVER, by this browser's clock: the ready report
   // measures from here to the page's hello.
   const handed = useRef(0);
@@ -120,6 +143,7 @@ export function FrameView({
       clientID,
       newKey: () => newActOpID(),
       openLink: (url) => new Promise<boolean>((answer) => setLink({ url, answer })),
+      ...(canPrint ? { print: () => printRef.current?.() ?? Promise.resolve(false) } : {}),
       setPresence: (activity, focus) => {
         const { version: _v, ...rest } = focus;
         presence.at(Object.keys(rest).length > 0 ? rest : null, activity === "editing");
@@ -127,7 +151,7 @@ export function FrameView({
     });
     // The presence report is read through its stable `at`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detail.id, version, capabilities, socket, store, needsData, clientID]);
+  }, [detail.id, version, capabilities, socket, store, needsData, clientID, canPrint]);
   useEffect(() => () => host?.stop(), [host]);
 
   // WHO IS VIEWING, to a page that declared it may know: display facts only.
@@ -189,7 +213,7 @@ export function FrameView({
     return (
       <Skeleton
         variant="box"
-        label={`Loading ${detail.title}`}
+        label={`Loading ${title ?? detail.title}`}
         className="artifact-frame-skeleton"
       />
     );
@@ -200,7 +224,7 @@ export function FrameView({
     reportReady(minted.frame_url, outcome, performance.now() - handed.current);
   };
   return (
-    <div className="artifact-frame-box">
+    <div className={className ? `artifact-frame-box ${className}` : "artifact-frame-box"}>
       <SandboxedFrame
         className="artifact-frame"
         src={minted.frame_url}
@@ -208,12 +232,13 @@ export function FrameView({
         mode={minted.mode}
         sandbox={minted.sandbox}
         allow={minted.allow}
-        title={detail.title}
+        title={title ?? detail.title}
         theme={theme}
         nonce={minted.nonce}
         onReady={(port) => {
           report("ready");
           host.attach(port);
+          onReady?.();
         }}
         onMessage={(data, port) => void host.receive(data, port)}
         onOpenLink={(url) => setLink({ url, answer: () => {} })}

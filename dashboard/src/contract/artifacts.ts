@@ -16,8 +16,8 @@
  * (`protocol/types.ts`), so this module stays the declarations a gate reads.
  */
 
-/** Every kind of artifact (`artifacts.Kinds`): a page that runs code, a document, a deck, a native sheet. */
-export const ARTIFACT_KINDS = ["html", "markdown", "slides", "sheet"] as const;
+/** Every kind of artifact (`artifacts.Kinds`): a page that runs code, a document, a deck, a native sheet, a design's canvas of framed artboards. */
+export const ARTIFACT_KINDS = ["html", "markdown", "slides", "sheet", "design"] as const;
 
 /**
  * What the engine decides by kind (`artifacts.KindSpecs`), the half a screen
@@ -31,6 +31,7 @@ export const ARTIFACT_KIND_SPECS = {
   markdown: { render: "native", store: "none" },
   slides: { render: "native", store: "none" },
   sheet: { render: "native", store: "content" },
+  design: { render: "framed", store: "declared" },
 } as const;
 
 /** Every runtime capability a version may declare (`artifacts.Capabilities`). */

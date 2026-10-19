@@ -239,13 +239,19 @@ export function versionFile(
  * Mint the frame a version is embedded in (`POST /artifacts/{id}/tickets`):
  * a view ticket bound to this browser's sign-in, the artifact origin's URL
  * under it, and the sandbox and allow attributes set verbatim. Zero is the
- * head. Not keyed: a ticket is a read, and the engine records the open itself.
+ * head. `document` names the page the frame opens: left out for a page's
+ * entry, one artboard's path for a design, whose every board is a frame of its
+ * own. Not keyed: a ticket is a read, and the engine records the open itself.
  */
-export async function mintFrame(id: string, version: number): Promise<ArtifactFrame> {
-  return (await rest.post(
-    `/artifacts/${encodeURIComponent(id)}/tickets`,
-    version > 0 ? { version } : {},
-  )) as ArtifactFrame;
+export async function mintFrame(
+  id: string,
+  version: number,
+  document?: string,
+): Promise<ArtifactFrame> {
+  return (await rest.post(`/artifacts/${encodeURIComponent(id)}/tickets`, {
+    ...(version > 0 ? { version } : {}),
+    ...(document ? { document } : {}),
+  })) as ArtifactFrame;
 }
 
 /** One text file of a version, read as text: a slide's source an edit replaces whole. */
