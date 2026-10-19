@@ -2039,10 +2039,12 @@ type CredentialSet struct {
 // restore runbook's invalidate-all, the one gesture that ends a credential a
 // restore brought back unrevoked without knowing which one it was.
 //
-// NIL GRANTS MEAN "EVERYTHING THE OWNER HOLDS": every permission this build
-// knows that the owner holds, admin included, expanded and in [iam.AllGrants]
-// order — resolved here, in the snapshot, and stated on the record, so what
-// the token carries is never re-derived by a node applying it.
+// NIL GRANTS MEAN "EVERYTHING THE OWNER HOLDS THAT THE MINTING PARTY MAY
+// CONFER": every permission this build knows that the owner holds, expanded and
+// in [iam.AllGrants] order, less any the minting party does not hold — admin
+// included where it does ([Writer.tokenGrants]) — resolved here, in the
+// snapshot, and stated on the record, so what the token carries is never
+// re-derived by a node applying it.
 func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, error) {
 	switch {
 	case in.PersonID == "" || in.ID == "" || in.OpID == "":
@@ -2169,7 +2171,7 @@ type TokenMint struct {
 	Label string
 
 	// Grants is what the token may carry, or nil for every grant the owner
-	// holds that a token may carry. See [Writer.MintToken].
+	// holds that the minting party may confer. See [Writer.MintToken].
 	Grants []iam.Grant
 
 	// ExpiresAt is REQUIRED, and at most [credential.MaxTokenLifetime]
@@ -2209,11 +2211,19 @@ var ErrInvalidToken = errors.New("invalid token request")
 
 // tokenGrants resolves what a token carries and refuses what it may not.
 //
-// OMITTED, IT IS EVERYTHING THE OWNER HOLDS: [iam.AdminServe]'s effective set
-// over the owner's row, which is every permission this build knows that the
-// owner holds through [iam.Expand], admin included, in [iam.AllGrants] order.
-// The posture is used here only as the form that clamps nothing; the node a
-// token is presented to applies its own on every request.
+// OMITTED, IT IS EVERYTHING THE OWNER HOLDS THAT THE MINTING PARTY MAY CONFER:
+// [iam.AdminServe]'s effective set over the owner's row — every permission
+// this build knows that the owner holds through [iam.Expand], admin included,
+// in [iam.AllGrants] order — less any the minting party does not hold. The
+// posture is used here only as the form that clamps nothing; the node a token
+// is presented to applies its own on every request. What the minting party
+// holds is the rule the asked arm keeps too ([Writer.MayConfer]): whoever
+// mints a token is shown its value. Defaulting to the owner's whole set and
+// then holding it to that rule refused every default mint on a node whose
+// `api.auth.admin` is `refuse` — a person holding admin signs in there
+// carrying their apps alone, so their own token, asked for nothing, was
+// refused for the admin they cannot confer on that node; it now carries their
+// apps, which is everything they could have asked for there.
 //
 // ASKED, every name must be one this build knows that the owner holds through
 // [iam.Expand]: a token minted [worklet] by an administrator whose row says
@@ -2223,7 +2233,12 @@ var ErrInvalidToken = errors.New("invalid token request")
 func (w *Writer) tokenGrants(asked, owner []iam.Grant) ([]iam.Grant, error) {
 	grants := asked
 	if grants == nil {
-		grants = iam.AdminServe.Effective(owner)
+		grants = []iam.Grant{}
+		for _, g := range iam.AdminServe.Effective(owner) {
+			if w.Can(g) {
+				grants = append(grants, g)
+			}
+		}
 	}
 	holds := iam.Expand(owner)
 	for _, g := range grants {

@@ -1755,8 +1755,11 @@ attributed to](../reference/api-endpoints.md#who-a-write-is-attributed-to).
 
 **It carries what it was minted with that its owner still holds.** The
 permissions are named at the mint (`-grants`); left out, the token carries
-every permission its owner holds, `admin` included. On every request the
-minted set is cut to the owner's **current** permissions — both sides
+every permission its owner holds that whoever mints it may confer — `admin`
+included where the minting session holds it, and the owner's apps alone on a
+node whose `api.auth.admin` is `refuse`, since a token carries nothing its
+minter does not hold. On every request the minted set is cut to the owner's
+**current** permissions — both sides
 expanded, so a token minted `[admin]` for an owner who has since lost admin
 keeps the apps they still hold — and to this node's [admin
 posture](#access-admin-and-one-permission-per-app); so demoting a person
