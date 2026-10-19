@@ -596,12 +596,15 @@ type GenerationFacts struct {
 	Inputs ReanchorInputs
 
 	// By names the operator as the audit trail records them, ByKind the
-	// kind of party that is (a person, a machine, a Tier A token), and
-	// OperatorID the credential they acted through — the three columns
-	// every other write carries, so a generation's audit row says who moved
-	// the log and through what, and never only a name — read for every
-	// domain by [GenerationFacts.Author]. Writer is this node.
-	By, ByKind, OperatorID, Writer string
+	// kind of actor that is — in the vocabulary [iam.ActorFor] records a
+	// party under — and OperatorID the credential they acted through: the
+	// three columns every other write carries, so a generation's audit row
+	// says who moved the log and through what, and never only a name — read
+	// for every domain by [GenerationFacts.Author]. Writer is this node.
+	By         string
+	ByKind     iam.ActorKind
+	OperatorID string
+	Writer     string
 
 	// At is the authored instant.
 	At time.Time
@@ -617,17 +620,19 @@ type GenerationFacts struct {
 // ONE MAPPING FOR EVERY DOMAIN'S GENERATION RECORD, because one reanchor names
 // one party and the audit feed reads the histories side by side: written once
 // per domain — the tracker's, the knowledge base's, the identity estate's, the
-// artifacts log's, the artifact datastore's and chat's — it was six copies of
-// one rule, already apart on what counts as nobody (a name of spaces was a
-// party to two of them and the node to the others). A domain only says what
-// the actor kind is in its own columns.
+// artifacts log's, the artifact datastore's, the Dashboard Assistant's and
+// chat's — it was seven copies of one rule, already apart on what counts as
+// nobody (a name of spaces was a party to two of them and the node to the
+// others). A domain only says what the actor kind is in its own columns.
 //
-// THE KIND IS READ IN EITHER VOCABULARY: the one [iam.ActorFor] records a
-// party under, which is what the engine's reanchor passes, or a principal's —
-// a seat is an agent, a person human, a machine an operator and the engine the
-// system. A kind in neither is an OPERATOR, a party acting on the company's
-// behalf that claims to be neither a seat nor a person, which is what a
-// reanchor was always recorded as.
+// THE KIND IS AN ACTOR KIND, the one [iam.ActorFor] records a party under,
+// which is what the engine's reanchor passes — typed, so a principal's word (a
+// seat, a person, a machine) is not one a caller can hand in without saying
+// it converts. A kind the actor vocabulary does not hold, the zero value of a
+// hand-built set of facts included, is an OPERATOR: a party acting on the
+// company's behalf that claims to be neither a seat nor a person nor the
+// engine, which is what [iam.ActorFor] itself answers for a kind it cannot
+// read.
 //
 // AN OPERATOR WITH NO CREDENTIAL BESIDE IT is a credential acting under its
 // own login — the one party whose name [iam.ActorFor] also records as its
@@ -638,17 +643,7 @@ func (f GenerationFacts) Author() (iam.Actor, bool) {
 	if strings.TrimSpace(f.By) == "" {
 		return iam.Actor{}, false
 	}
-	kind := iam.ActorKind(f.ByKind)
-	switch iam.Kind(f.ByKind) {
-	case iam.KindSeat:
-		kind = iam.ActorAgent
-	case iam.KindPerson:
-		kind = iam.ActorHuman
-	case iam.KindMachine:
-		kind = iam.ActorOperator
-	case iam.KindEngine:
-		kind = iam.ActorSystem
-	}
+	kind := f.ByKind
 	if !kind.Valid() {
 		kind = iam.ActorOperator
 	}
@@ -747,14 +742,16 @@ type ReanchorDeps struct {
 	// DB is the replicated estate, which holds the checkpoint.
 	DB Estate
 
-	// By names the operator for the record, ByKind the kind of party they
+	// By names the operator for the record, ByKind the kind of actor they
 	// are and OperatorID the credential they acted through
 	// ([GenerationFacts.By]); NodeID is this node — the writer the eviction
 	// gate compares against. All three about the operator travel, because a
 	// generation record that carried only a name recorded every reanchor as
 	// an operator acting through a credential named after themselves.
-	By, ByKind, OperatorID string
-	NodeID                 string
+	By         string
+	ByKind     iam.ActorKind
+	OperatorID string
+	NodeID     string
 
 	// CompletionBudget bounds the steps after the generation record is
 	// appended, which run on a context DETACHED from the caller's — see
