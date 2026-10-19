@@ -80,7 +80,7 @@ export function DataTab({ detail, store }: { detail: ArtifactDetail; store: Arti
     );
   }
   return (
-    <div className="artifact-data">
+    <div className={view === "rows" ? "artifact-data artifact-data--rows" : "artifact-data"}>
       <div className="artifact-data-bar">
         <SegmentedControl
           semantics="radio"
