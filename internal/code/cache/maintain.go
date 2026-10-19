@@ -247,13 +247,13 @@ func (c *Cache) indexRound(ctx context.Context, e *entry, inc *incarnation, snap
 		return false
 	}
 	c.vouchWritten(e, inc, before)
-	meta, err := c.image.ownedBytes(inc.dir)
+	m, err := c.image.derivedSizes(inc.dir)
 	e.mu.Lock()
-	// LastRun and Took stay the maintainer's: the round's index is no
+	// The maintained clock stays the maintainer's: the round's index is no
 	// maintenance run, and the bitmap the maintainer adds is due at once.
-	inc.midx.Packs, inc.midx.Bitmap = packs, false
+	c.made(inc, DerivedMidx, packs, w.Step)
 	if err == nil {
-		c.setSize(inc, inc.diskBytes, meta)
+		c.recordDerived(inc, m)
 	}
 	e.mu.Unlock()
 	if c.knobs != nil && c.knobs.roundIndexed != nil {
@@ -426,8 +426,8 @@ func (c *Cache) maintainerPass(ctx context.Context) []*maintRun {
 			}
 			if p.steps() && c.runnable(e) {
 				uncovered := inc.packs
-				if inc.midx.Bitmap {
-					uncovered -= inc.midx.Packs
+				if inc.bitmapped() {
+					uncovered -= inc.covered()
 				}
 				// An index repair is sorted with the graph-first runs: the
 				// copy it repairs has lost what it served clones with.
@@ -673,7 +673,7 @@ func (c *Cache) due(e *entry, now time.Time) bool {
 	}
 	settled := now.Sub(e.lastAdded) >= MidxDebounce ||
 		(!e.uncoveredSince.IsZero() && now.Sub(e.uncoveredSince) >= MidxMaxWait)
-	return settled && now.Sub(inc.midx.LastRun) >= max(MidxMinInterval, MidxDutyCycle*inc.midx.Took)
+	return settled && now.Sub(inc.maintained.LastRun) >= max(MidxMinInterval, MidxDutyCycle*inc.maintained.Took)
 }
 
 // holdsWork reports whether e's current incarnation is one the maintainer
@@ -691,7 +691,7 @@ func (c *Cache) holdsWork(e *entry) bool {
 // and the interval passed — and plan WHAT, on the node's memory. e.mu is
 // held.
 func (c *Cache) wantsRun(e *entry) bool {
-	return c.holdsWork(e) && (c.indexDue(e.current) || !e.current.midx.Graph)
+	return c.holdsWork(e) && (c.indexDue(e.current) || !e.current.graphed())
 }
 
 // indexDue reports whether inc wants the maintainer's BITMAPPED index
@@ -700,7 +700,7 @@ func (c *Cache) wantsRun(e *entry) bool {
 // beside it. One that is current and has its bitmap is due for its
 // commit-graph alone, if that is what it lacks.
 func (c *Cache) indexDue(inc *incarnation) bool {
-	return inc.midx.Packs == 0 || !inc.midx.Bitmap || inc.packs-inc.midx.Packs >= c.midxPacks
+	return inc.covered() == 0 || !inc.bitmapped() || inc.packs-inc.covered() >= c.midxPacks
 }
 
 // plan decides what a run over inc would take on a budget of budget, and
@@ -756,16 +756,16 @@ func (c *Cache) plan(inc *incarnation, budget int64, due bool) (p runPlan, refus
 		index = mw.bitmap
 	}
 	if refused&mw.bitmap != 0 {
-		outside := inc.packs - inc.midx.Packs
-		plainDue := inc.midx.Packs == 0 ||
-			(inc.midx.Bitmap && outside >= c.roundPacks) ||
-			(!inc.midx.Bitmap && outside >= c.midxPacks)
+		outside := inc.packs - inc.covered()
+		plainDue := inc.covered() == 0 ||
+			(inc.bitmapped() && outside >= c.roundPacks) ||
+			(!inc.bitmapped() && outside >= c.midxPacks)
 		if plainDue && fits(mw.plain) {
 			index = mw.plain
 		}
 	}
-	graph := (index != 0 || !inc.midx.Graph) && fits(mw.graph)
-	p.first = graph && !inc.midx.Graph && !inc.graphFailed
+	graph := (index != 0 || !inc.graphed()) && fits(mw.graph)
+	p.first = graph && !inc.graphed() && !inc.graphFailed
 	if due {
 		p.index = index
 	}
@@ -931,7 +931,7 @@ func (c *Cache) maintain(ctx context.Context, m *maintRun, p runPlan) {
 	case out.err != nil && !refused:
 		c.log.Warn("code_cache_maintenance_failed", "repo", e.id, "step", out.step, "error", out.err)
 	}
-	meta, merr := c.image.ownedBytes(inc.dir)
+	measured, merr := c.image.derivedSizes(inc.dir)
 	e.mu.Lock()
 	switch {
 	case out.indexed:
@@ -943,7 +943,7 @@ func (c *Cache) maintain(ctx context.Context, m *maintRun, p runPlan) {
 		inc.indexRepair = false
 	}
 	if out.indexed {
-		inc.midx.Packs, inc.midx.Bitmap = p.covers.Packs, p.index == c.mw.bitmap
+		c.made(inc, DerivedMidx, p.covers.Packs, Step(c.mw.name(p.index)))
 		// Every pack a delta added while the index was written arrived
 		// after the run began: the oldest one the index leaves out is
 		// no older than that. An incarnation replaced meanwhile says
@@ -958,7 +958,8 @@ func (c *Cache) maintain(ctx context.Context, m *maintRun, p runPlan) {
 	}
 	switch {
 	case out.graphed:
-		inc.midx.Graph, inc.graphFailed = true, false
+		c.made(inc, DerivedGraph, p.covers.Packs, Step(c.mw.name(c.mw.graph)))
+		inc.graphFailed = false
 	case p.first && out.step == procGraph && out.err != nil && !refused && !stopped:
 		// A GRAPH-FIRST RUN THAT FAILED waits for the ordinary rules
 		// (plan), so a step that keeps failing is not asked again every
@@ -972,10 +973,10 @@ func (c *Cache) maintain(ctx context.Context, m *maintRun, p runPlan) {
 		inc.unmoved = false
 	}
 	if !stopped && (p.duty() || out.err != nil) {
-		inc.midx.LastRun, inc.midx.Took = c.now(), took
+		inc.maintained = maintainedState{LastRun: c.now(), Took: took}
 	}
 	if merr == nil {
-		c.setSize(inc, inc.diskBytes, meta)
+		c.recordDerived(inc, measured)
 	}
 	retired := inc.retired
 	e.mu.Unlock()

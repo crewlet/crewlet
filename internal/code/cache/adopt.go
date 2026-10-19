@@ -358,7 +358,7 @@ func (c *Cache) placeStaging(e *entry, inc *incarnation, st *staging) (adoptOutc
 	e.mu.Lock()
 	inc.packs++
 	inc.objects += st.pack.Objects
-	c.setSize(inc, inc.diskBytes+st.pack.Size, inc.metaBytes)
+	c.setSize(inc, inc.diskBytes+st.pack.Size)
 	inc.unmoved = false
 	// No repair (incarnation.repairWrite): a push's pack adds what no
 	// failed request needed, and leaves whatever failed it as it was.

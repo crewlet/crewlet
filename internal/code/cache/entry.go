@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -247,7 +248,12 @@ type incarnation struct {
 	rebuilds int
 	unmoved  bool
 
-	// state is the state as last persisted; nil when there is none.
+	// state is the state as last persisted, but for its Derived map; nil when
+	// there is none. The map is derived's — moved there from a boot's state
+	// (fromState) and dropped from each state persist writes — because what a
+	// round reads of the state it last wrote is its position, its stream and
+	// whether there is one, never the map, and kept here too every repository
+	// would hold its derived record twice.
 	state *state
 	// at is the in-memory position, at or past state's: a round whose delta
 	// was empty moves it without rewriting the state, since nothing between
@@ -265,11 +271,17 @@ type incarnation struct {
 	// only ones the maintainer runs on, whose memory it estimates by it.
 	// Never persisted: a boot's first round is a full one.
 	objects int64
-	// diskBytes is the pack files and packed-refs; metaBytes the
-	// maintainer's files. Set only through setSize, which keeps the cache's
-	// total in step.
+	// diskBytes is the pack files and packed-refs, set only through setSize;
+	// metaBytes the derived files', the sum of derived's Bytes, set only
+	// through setDerived. Each keeps the cache's total in step.
 	diskBytes, metaBytes int64
-	midx                 midxState
+	// derived is what it records of each declared derived file on disk, by
+	// the declaration's name (state.go's derivedState): a declaration with
+	// no file on disk has no entry. maintained is its last maintenance run,
+	// the duty cycle's clock. Both are what its state persists; maintain.go
+	// reads the derived files through covered, bitmapped and graphed.
+	derived    map[DerivedName]derivedState
+	maintained maintainedState
 	// graphFailed: its graph-first run's commit-graph step failed (not a
 	// slot refused, not a run stopped from outside), so its graph is due
 	// only by the ordinary rules from now on (maintain.go, GRAPH FIRST),
@@ -392,7 +404,8 @@ type incarnation struct {
 // reading; e.mu is held.
 func repaired(inc *incarnation) { inc.repairWrite = time.Now() }
 
-// fromState sets inc's in-memory fields from a state read at boot.
+// fromState sets inc's in-memory fields from a state read at boot, taking
+// its derived map rather than a copy (incarnation.state).
 func (inc *incarnation) fromState(st *state) {
 	inc.state = st
 	inc.at = st.Position
@@ -402,15 +415,15 @@ func (inc *incarnation) fromState(st *state) {
 	inc.refs = st.Refs
 	inc.packs = st.Packs
 	inc.diskBytes = st.DiskBytes
-	inc.metaBytes = st.Midx.Bytes
-	inc.midx = st.Midx
+	inc.metaBytes = st.derivedBytes()
+	inc.derived, st.Derived = st.Derived, nil
+	inc.maintained = st.Maintained
 }
 
 // stateValue is the state inc's in-memory fields describe; the entry's mu is
-// held.
+// held. Its map is a copy: the state is encoded once the lock is let go,
+// while a measure or a write may change the incarnation's own.
 func (inc *incarnation) stateValue(id string) state {
-	midx := inc.midx
-	midx.Bytes = inc.metaBytes
 	return state{
 		Format:        stateFormat,
 		RepoID:        id,
@@ -421,9 +434,28 @@ func (inc *incarnation) stateValue(id string) state {
 		Refs:          inc.refs,
 		Packs:         inc.packs,
 		DiskBytes:     inc.diskBytes,
-		Midx:          midx,
+		Derived:       maps.Clone(inc.derived),
+		Maintained:    inc.maintained,
 	}
 }
+
+// covered is how many packs inc's multi-pack-index covers: none where there
+// is none, or where no write this cache recorded made the one on disk
+// (derivedState.covers). e.mu is held.
+func (inc *incarnation) covered() int { return inc.derived[DerivedMidx].covers() }
+
+// bitmapped reports that inc's multi-pack-index is the maintainer's with its
+// bitmap, rather than one without — a full round's, or the maintainer's
+// where the node's memory cannot hold the bitmap. e.mu is held.
+func (inc *incarnation) bitmapped() bool { return inc.derived[DerivedMidx].Step == StepBitmap }
+
+// graphed reports that the maintainer's commit-graph is on disk. Recorded
+// apart from the index, because the two are written by two processes and the
+// second can be refused a slot the first had: a repository whose index is
+// current and whose graph is missing is due for the graph alone, where read
+// only from the index it would never be due again until MidxPacks more packs
+// had landed. e.mu is held.
+func (inc *incarnation) graphed() bool { return inc.derived[DerivedGraph].Step == StepGraph }
 
 // used records a reader's use of inc — taking it (pin), letting it go
 // (release), or making a push's scratch over it (newScratch) — on the cache's
@@ -526,14 +558,68 @@ func (c *Cache) retire(e *entry, inc *incarnation) string {
 	return c.discard(inc)
 }
 
-// setSize sets what inc's files hold, keeping the cache's running total
-// (Cache.heldBytes) in step; the entry's mu is held. Every change to an
-// incarnation's sizes goes through here, so the total is never recomputed.
-func (c *Cache) setSize(inc *incarnation, disk, meta int64) {
+// setSize sets what inc's pack files and packed-refs hold, keeping the
+// cache's running total (Cache.heldBytes) in step; the entry's mu is held.
+// Every change to those sizes goes through here, and every change to the
+// derived files' through setDerived, so the total is never recomputed.
+func (c *Cache) setSize(inc *incarnation, disk int64) {
 	if !inc.discarded {
-		c.heldBytes.Add(disk + meta - inc.diskBytes - inc.metaBytes)
+		c.heldBytes.Add(disk - inc.diskBytes)
 	}
-	inc.diskBytes, inc.metaBytes = disk, meta
+	inc.diskBytes = disk
+}
+
+// setDerived records d as what inc holds of the declaration name on disk —
+// no entry when present is false, since a declaration with no file on disk
+// has none — keeping metaBytes, the entries' bytes together, and the cache's
+// running total in step; the entry's mu is held. EVERY CHANGE to what an
+// incarnation records of its derived files goes through here, so the bytes a
+// boot restores from the state (their sum) are the bytes the budget counted.
+func (c *Cache) setDerived(inc *incarnation, name DerivedName, d derivedState, present bool) {
+	was := inc.derived[name].Bytes
+	if present {
+		if inc.derived == nil {
+			inc.derived = map[DerivedName]derivedState{}
+		}
+		inc.derived[name] = d
+	} else {
+		delete(inc.derived, name)
+		d.Bytes = 0
+	}
+	if !inc.discarded {
+		c.heldBytes.Add(d.Bytes - was)
+	}
+	inc.metaBytes += d.Bytes - was
+}
+
+// made records that the write step has just written inc's derived file name
+// over covers packs: what the maintainer reads of it until a change drops it
+// or a measure finds it gone. Its bytes are a measure's (recordDerived). The
+// entry's mu is held.
+func (c *Cache) made(inc *incarnation, name DerivedName, covers int, step Step) {
+	d := inc.derived[name]
+	d.Covers, d.Step = covers, step
+	c.setDerived(inc, name, d, true)
+}
+
+// recordDerived sets what inc records of its derived files from one
+// measurement of them (image.derivedSizes): each declaration with a file on
+// disk takes that measure's bytes, keeping what it records of the write that
+// made it while its main file is there and forgetting it where it is not —
+// an index gone covers nothing, a graph gone is due again, and a part left
+// beside no main file (a bitmap a killed writer left with no index) is
+// counted, never read as made; a declaration with no file on disk has no
+// entry. The entry's mu is held.
+func (c *Cache) recordDerived(inc *incarnation, m derivedMeasure) {
+	c.image.each(c.image.all(), func(i int, d *Derived) {
+		bytes, present := m.bytes[d.Name]
+		s := inc.derived[d.Name]
+		if m.mains&(1<<i) == 0 {
+			s = derivedState{}
+		}
+		s.Bytes = bytes
+		c.setDerived(inc, d.Name, s, present)
+	})
 }
 
 // discard takes a retired incarnation nobody holds out of the cache — its

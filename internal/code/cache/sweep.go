@@ -333,31 +333,40 @@ func (im *image) present(dir string) ([]ownedFile, error) {
 	return out, nil
 }
 
-// ownedBytes is the size of every file of the incarnation at dir a
-// declaration owns, whatever its kind: what the budget counts of them. Each
-// owned directory is listed once, and ONLY THE FILES A DECLARATION OWNS GET
-// A STAT: objects/pack holds three files a pack beside the index's, with no
-// cap on the packs, and ownedBytes runs at the end of every maintenance run —
-// which a full round's stopMaintenance and every dropFor that stops a run
-// wait for, so the request that round answers waits on it too — and on the
-// full round that writes its own index. A stat of every entry there would put
-// three stats a pack on those waits: 12.9–13.3 ms at 1 000 packs and
-// 145–148 ms at 10 000, against 3.0–3.3 ms and 49–57 ms for the listing and
-// the owned files alone (measured on four cores over a warm page cache, three
-// runs each), the listing being what is left. A caller that has listed a
-// directory already — measure, objects/pack — reads it from its own listing
-// (ownedIn).
-func (im *image) ownedBytes(dir string) (int64, error) {
-	var total int64
+// derivedMeasure is one measurement of an incarnation's derived files: the
+// bytes each declaration's owned files hold, keyed by its name for every
+// declaration with a file on disk — none for one with none — and the
+// declarations whose main file (Owned.Main) is there. What
+// Cache.recordDerived sets an incarnation's record from.
+type derivedMeasure struct {
+	bytes map[DerivedName]int64
+	mains derivedSet
+}
+
+// derivedSizes measures every file of the incarnation at dir a declaration
+// owns, whatever its kind: what the budget counts of them, declaration by
+// declaration. Each owned directory is listed once, and ONLY THE FILES A
+// DECLARATION OWNS GET A STAT: objects/pack holds three files a pack beside
+// the index's, with no cap on the packs, and derivedSizes runs at the end of
+// every maintenance run — which a full round's stopMaintenance and every
+// dropFor that stops a run wait for, so the request that round answers waits
+// on it too — and on the full round that writes its own index. A stat of
+// every entry there would put three stats a pack on those waits: 12.9–13.3 ms
+// at 1 000 packs and 145–148 ms at 10 000, against 3.0–3.3 ms and 49–57 ms for
+// the listing and the owned files alone (measured on four cores over a warm
+// page cache, three runs each), the listing being what is left. A caller that
+// has listed a directory already — measure, objects/pack — reads it from its
+// own listing (ownedIn).
+func (im *image) derivedSizes(dir string) (derivedMeasure, error) {
+	m := derivedMeasure{bytes: map[DerivedName]int64{}}
 	for _, rel := range im.ownedDirs(im.all()) {
 		sizes, err := im.sizes(dir, rel, im.owns(rel))
 		if err != nil {
-			return 0, err
+			return derivedMeasure{}, err
 		}
-		n, _ := im.ownedIn(rel, sizes)
-		total += n
+		im.ownedIn(rel, sizes, &m)
 	}
-	return total, nil
+	return m, nil
 }
 
 // owns is whether a declaration owns name in the image directory rel: what a
@@ -399,24 +408,21 @@ func (im *image) sizes(dir, rel string, keep func(name string) bool) (map[string
 	return sizes, nil
 }
 
-// ownedIn is what the declarations own of one listing of the image directory
-// rel, whatever each entry's kind: the bytes of their files there, and the
-// declarations whose main file (Owned.Main) it holds — read from a listing a
-// caller already has, never from another.
-func (im *image) ownedIn(rel string, sizes map[string]int64) (int64, derivedSet) {
-	var total int64
-	var mains derivedSet
+// ownedIn adds to m what the declarations own of one listing of the image
+// directory rel, whatever each entry's kind: the bytes of each declaration's
+// files there, and the declarations whose main file (Owned.Main) it holds —
+// read from a listing a caller already has, never from another.
+func (im *image) ownedIn(rel string, sizes map[string]int64, m *derivedMeasure) {
 	for name, size := range sizes {
 		i, o := im.ownerOf(rel, name)
 		if i < 0 {
 			continue
 		}
-		total += size
+		m.bytes[im.decls[i].Name] += size
 		if o.Main {
-			mains |= 1 << i
+			m.mains |= 1 << i
 		}
 	}
-	return total, mains
 }
 
 // mainRel is the path, relative to an incarnation, of the file whose
@@ -836,7 +842,10 @@ func (c *Cache) dropFor(e *entry, inc *incarnation, ev Event, named derivedSet) 
 			e.mu.Lock()
 			unvouch(inc, filepath.Join(rel, d.Name()))
 			c.droppedDerived(inc, 1<<i)
-			c.setSize(inc, inc.diskBytes, max(inc.metaBytes-size, 0))
+			name := c.image.decls[i].Name
+			s := inc.derived[name]
+			s.Bytes = max(s.Bytes-size, 0)
+			c.setDerived(inc, name, s, true)
 			e.mu.Unlock()
 		}
 		if moved {
@@ -848,23 +857,13 @@ func (c *Cache) dropFor(e *entry, inc *incarnation, ev Event, named derivedSet) 
 	// What the incarnation records it holds follows what it holds, whatever
 	// kind of round dropped it: a delta measures nothing after, and a
 	// derived file recorded as present that is gone is one the maintainer
-	// never writes again.
+	// never writes again — so each dropped declaration's entry goes, its
+	// bytes with it: an index gone covers nothing and has no bitmap, a graph
+	// gone is due again.
 	e.mu.Lock()
-	c.image.each(drop, func(_ int, d *Derived) { forgot(inc, d.Name) })
+	c.image.each(drop, func(_ int, d *Derived) { c.setDerived(inc, d.Name, derivedState{}, false) })
 	e.mu.Unlock()
 	return drop, nil
-}
-
-// forgot takes the declaration name out of what inc records it holds on
-// disk (incarnation.midx, the state's record): an index gone covers nothing
-// and has no bitmap, and a graph gone is due again. e.mu is held.
-func forgot(inc *incarnation, name DerivedName) {
-	switch name {
-	case DerivedMidx:
-		inc.midx.Packs, inc.midx.Bitmap = 0, false
-	case DerivedGraph:
-		inc.midx.Graph = false
-	}
 }
 
 // droppedDerived stamps that this process has just dropped a file of each
@@ -876,9 +875,10 @@ func (c *Cache) droppedDerived(inc *incarnation, s derivedSet) {
 }
 
 // measure sets inc's counts from its directory: the packs installed (an .idx
-// with its .pack), the bytes of their files and packed-refs, and the derived
-// files'. A derived file whose main file is no longer on disk is no longer
-// recorded (forgot): an index gone covers nothing, a graph gone is due again.
+// with its .pack), the bytes of their files and packed-refs, and each derived
+// file's (recordDerived). A derived file whose main file is no longer on disk
+// is no longer recorded as made — an index gone covers nothing, a graph gone
+// is due again — and a declaration with no file on disk has no entry.
 //
 // EACH DIRECTORY IS LISTED ONCE. objects/pack holds three files a pack until
 // compaction, with no cap on the packs, and measure runs at every full round
@@ -905,7 +905,8 @@ func (c *Cache) measure(e *entry, inc *incarnation) error {
 		}
 		disk += size
 	}
-	meta, mains := c.image.ownedIn(packRel, sizes)
+	m := derivedMeasure{bytes: map[DerivedName]int64{}}
+	c.image.ownedIn(packRel, sizes, &m)
 	for _, rel := range c.image.ownedDirs(c.image.all()) {
 		if rel == packRel {
 			continue
@@ -914,8 +915,7 @@ func (c *Cache) measure(e *entry, inc *incarnation) error {
 		if err != nil {
 			return err
 		}
-		n, m := c.image.ownedIn(rel, other)
-		meta, mains = meta+n, mains|m
+		c.image.ownedIn(rel, other, &m)
 	}
 	switch info, lerr := os.Lstat(filepath.Join(inc.dir, "packed-refs")); {
 	case lerr == nil:
@@ -925,8 +925,8 @@ func (c *Cache) measure(e *entry, inc *incarnation) error {
 	}
 	e.mu.Lock()
 	inc.packs = packs
-	c.setSize(inc, disk, meta)
-	c.image.each(c.image.all()&^mains, func(_ int, d *Derived) { forgot(inc, d.Name) })
+	c.setSize(inc, disk)
+	c.recordDerived(inc, m)
 	e.mu.Unlock()
 	return nil
 }

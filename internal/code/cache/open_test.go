@@ -352,7 +352,7 @@ func TestTheHookIsSettledBeforeOpenReturns(t *testing.T) {
 func TestOpenKeepsOneIncarnationPerRepository(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	writeState(t, w.path("repos", repoA+".1.git"), stateDoc{Format: 1, RepoID: repoA, DiskBytes: 7})
+	writeState(t, w.path("repos", repoA+".1.git"), stateDoc{Format: 2, RepoID: repoA, DiskBytes: 7})
 	write(t, w.path("repos", repoA+".3.git", "objects", "pack", "pack-9.pack"), strings.Repeat("p", 300))
 	write(t, w.path("repos", repoA+".3.git", "packed-refs"), strings.Repeat("r", 20))
 	write(t, w.path("repos", repoA+".3.git", "HEAD"), "ref: refs/heads/main\n")

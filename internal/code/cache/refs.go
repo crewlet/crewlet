@@ -175,7 +175,7 @@ func (c *Cache) writeRefs(ctx context.Context, e *entry, inc *incarnation, snap 
 		inc.refsDigest, inc.refs = written.digest, written.refs
 	}
 	if placedRefs {
-		c.setSize(inc, inc.diskBytes+written.bytes-written.was, inc.metaBytes)
+		c.setSize(inc, inc.diskBytes+written.bytes-written.was)
 	}
 	e.mu.Unlock()
 	if len(staged) == 0 {

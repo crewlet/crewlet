@@ -124,7 +124,7 @@ func readBoot(ctx context.Context, root string) (*boot, int64, error) {
 			// this build reads: an interrupted rebuild's predecessor can
 			// hold a large repository's every pack.
 			if st, _ := readState(filepath.Join(repos, older.name), id); st != nil {
-				held += st.DiskBytes + st.Midx.Bytes
+				held += st.DiskBytes + st.derivedBytes()
 			} else if err = walk(older.name); err != nil {
 				return nil, 0, err
 			}
@@ -143,7 +143,7 @@ func readBoot(ctx context.Context, root string) (*boot, int64, error) {
 		}
 		k := kept{id: id, n: top.n, name: top.name, state: st, stateErr: stateErr, lastUsed: lastUsedOn(dir)}
 		if st != nil {
-			held += st.DiskBytes + st.Midx.Bytes
+			held += st.DiskBytes + st.derivedBytes()
 		} else {
 			if k.measured, err = measureIncarnation(ctx, dir, skipped); err != nil {
 				return nil, 0, err

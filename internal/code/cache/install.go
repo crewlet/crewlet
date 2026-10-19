@@ -630,7 +630,7 @@ func (c *Cache) placePack(e *entry, inc *incarnation, packDir string, s *stagedP
 		inc.packs++
 		inc.objects += s.p.Objects
 	}
-	c.setSize(inc, inc.diskBytes+s.p.Size-was, inc.metaBytes)
+	c.setSize(inc, inc.diskBytes+s.p.Size-was)
 	if over || repairs {
 		repaired(inc)
 	}
@@ -662,7 +662,7 @@ func (c *Cache) installHanded(e *entry, inc *incarnation, packDir string, p code
 	e.mu.Lock()
 	inc.packs++
 	inc.objects += p.Objects
-	c.setSize(inc, inc.diskBytes+p.Size, inc.metaBytes)
+	c.setSize(inc, inc.diskBytes+p.Size)
 	e.mu.Unlock()
 	c.vouchPack(e, inc, p.GitChecksum)
 	return true

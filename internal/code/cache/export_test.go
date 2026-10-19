@@ -237,8 +237,8 @@ func ForgetMaintenance(c *Cache, repoID string) error {
 			return err
 		}
 	}
-	inc.midx = midxState{}
-	c.setSize(inc, inc.diskBytes, 0)
+	c.image.each(c.image.all(), func(_ int, d *Derived) { c.setDerived(inc, d.Name, derivedState{}, false) })
+	inc.maintained = maintainedState{}
 	return nil
 }
 
@@ -339,7 +339,7 @@ func Indexed(c *Cache, repoID string) (packs int, bitmap, graph bool) {
 	e := lookup(c, repoID)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.current.midx.Packs, e.current.midx.Bitmap, e.current.midx.Graph
+	return e.current.covered(), e.current.bitmapped(), e.current.graphed()
 }
 
 // HoldOther charges mem against the node's budget as a process beside the
@@ -815,8 +815,11 @@ func WantIndex(c *Cache, repoID string) {
 	e := lookup(c, repoID)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.current.midx.Bitmap = false
-	e.current.midx.LastRun, e.current.midx.Took = time.Time{}, 0
+	inc := e.current
+	if inc.bitmapped() {
+		c.made(inc, DerivedMidx, inc.covered(), StepIndex)
+	}
+	inc.maintained = maintainedState{}
 }
 
 // testImage is the image of the build's declarations (DerivedFiles), for a

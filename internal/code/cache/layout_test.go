@@ -247,7 +247,8 @@ func TestPrepareMeasuresWhatTheCacheHolds(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "c")
 	prepare(t, dir).Release()
 
-	// A: its state says 9 100 + 400; its files are not what is counted.
+	// A: its state says 9 100 + 400 + 120 — the packs, and each derived
+	// file's entry; its files are not what is counted.
 	a := aState(repoA)
 	writeState(t, filepath.Join(dir, "repos", repoA+".3.git"), a)
 	write(t, filepath.Join(dir, "repos", repoA+".3.git", "objects", "pack", "pack-1.pack"), strings.Repeat("p", 1000))
@@ -269,7 +270,11 @@ func TestPrepareMeasuresWhatTheCacheHolds(t *testing.T) {
 	}
 	// B's older incarnation, which Open moves aside, counts by its state.
 	older := aState(repoB)
-	older.DiskBytes, older.Midx.Bytes = 50, 5
+	older.DiskBytes = 50
+	older.Derived = map[string]derivedDoc{
+		string(cache.DerivedMidx):  {Bytes: 5, Covers: 1, Step: string(cache.StepIndex)},
+		string(cache.DerivedGraph): {Bytes: 3, Covers: 1, Step: string(cache.StepGraph)},
+	}
 	writeState(t, filepath.Join(dir, "repos", repoB+".1.git"), older)
 	// A stray is walked whole.
 	write(t, filepath.Join(dir, "repos", "junk", "file"), strings.Repeat("j", 300))
@@ -280,8 +285,7 @@ func TestPrepareMeasuresWhatTheCacheHolds(t *testing.T) {
 	write(t, filepath.Join(dir, "home", "left-behind"), strings.Repeat("h", 40))
 
 	layout := prepare(t, dir)
-	want := (a.DiskBytes + a.Midx.Bytes) + (2000 + 100 + linkInfo.Size()) + (older.DiskBytes + older.Midx.Bytes) +
-		300 + 5000 + 7000 + 600 + 40
+	want := (9100 + 400 + 120) + (2000 + 100 + linkInfo.Size()) + (50 + 5 + 3) + 300 + 5000 + 7000 + 600 + 40
 	if layout.Held != want {
 		t.Errorf("Layout.Held = %d, want %d: what each state counts, the stateless walked, and the leftovers", layout.Held, want)
 	}

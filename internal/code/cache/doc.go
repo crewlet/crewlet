@@ -206,7 +206,20 @@
 // validate_headref, which checks only that prefix — text that climbs back out
 // of refs/ has git read the file it leads to), so every git process in the
 // copy failed, a request's and the round's own alike, and a link whose target
-// held a HEAD the sweep accepts was kept by every full round.
+// held a HEAD the sweep accepts was kept by every full round. The state file
+// (format 2) records each derived file AS ITS DECLARATION, in one map keyed
+// by the declaration's name — its files' bytes, the packs the write that made
+// it covered and which write that was — beside the repository's last
+// maintenance run, the duty cycle's clock; Layout.Held is the packs' bytes
+// and that map's together, and the maintainer reads whether an index is
+// there, has its bitmap and how many packs it covers, and whether a graph is
+// there, from the same entries. A declaration with no file on disk has no
+// entry, and files of one that no write this cache recorded made — a state
+// a previous process could not leave readable, a bitmap a killed writer left
+// with no index — are counted and never read as made, so the maintainer
+// writes them again. A state of format 1, which spelled the two files' facts
+// as fields of their own, is another build's: its incarnation is trashed and
+// the repository synced cold, since nothing migrates a disposable cache.
 //
 // Every reader reads the declarations and nothing spells a derived file
 // beside them: the IMAGE — one predicate a directory, by which the full
@@ -723,16 +736,26 @@
 // # Measured
 //
 // On four vCPUs of a 2.1 GHz Xeon shared with other builds, on ext4 (make
-// bench, six counts, medians; bench_test.go says what each arm is): a warm
-// boot — Prepare, Open and Stop — of 100 repositories takes 10 ms with 100
-// packs each and 7 ms with 1 000 each, so what a repository holds is not in
-// the figure, and of 1 000 repositories 38 ms, about 30 µs a repository past
-// a few milliseconds of fixed cost (the hook's settle among it): about a third
-// of a second at 10 000 repositories, config.CodeMaxRepos. The same 1 000
-// repositories with no state to count — every incarnation walked, which is
-// what every boot paid when Held was a walk of repos/ — take 1.4 s for their
-// 300 000 files, about 5 µs a file, so a node caching a million pushes would
-// have spent around fifteen seconds warm before it could serve. A step that
+// bench, six counts, medians; bench_test.go says what each arm is) — and the
+// warm boot on four of a 2.8 GHz one, measured again for the state's format
+// 2, each run alternated with one of the build before it so the machine's
+// load fell on both alike: a warm boot — Prepare, Open and Stop — of 100
+// repositories takes 17 ms with 100 packs each and 15 ms with 1 000 each, so
+// what a repository holds is not in the figure, and of 1 000 repositories
+// 57 ms, about 45 µs a repository past 12 ms of fixed cost (the hook's settle
+// among it): about half a second at 10 000 repositories, config.CodeMaxRepos.
+// Most of a repository's share is the read of its state (BenchmarkReadState:
+// 31 µs, 28 allocations and 5.7 KiB), and format 2's one map of the derived
+// files — an entry a declaration — is about 6 µs, five allocations and 1 KiB
+// of it: format 1, which spelled the two files' facts as fields, read in
+// 25 µs, so the map costs a boot of 10 000 repositories about 60 ms. The
+// declarations the read holds a state to are built once a process
+// (declaredSteps): built once a state they were 11 allocations and about
+// 3 µs more again. The same 1 000 repositories with no state to count —
+// every incarnation walked, which is what every boot paid when Held was a
+// walk of repos/ — take 2.0 s for their 300 000 files, about 7 µs a file, so
+// a node caching a million pushes would have spent around twenty seconds warm
+// before it could serve. A step that
 // renames 300 durable files into one directory costs 30 µs a file with one
 // directory sync after the step and 274 µs a file with a sync after every
 // rename, which is why durable.go syncs a step's directory once. A push's

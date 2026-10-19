@@ -56,9 +56,10 @@ func TestAFullRoundIndexesManyPacksBeforeItAnswers(t *testing.T) {
 			}
 		}
 		doc := readStateDoc(t, s.Dir)
-		if doc.Midx.Packs != caseRoundPacks || doc.Midx.Bitmap || !doc.Midx.LastRun.IsZero() || doc.Midx.Bytes == 0 {
-			t.Errorf("the state's midx is %+v, want %d packs, no bitmap, no maintenance run, its bytes", doc.Midx,
-				caseRoundPacks)
+		if midx := doc.midx(); midx.Covers != caseRoundPacks || midx.Step != string(cache.StepIndex) ||
+			!doc.Maintained.LastRun.IsZero() || midx.Bytes == 0 {
+			t.Errorf("the state records %+v and %+v, want an index over %d packs without a bitmap, its bytes, and "+
+				"no maintenance run", doc.Derived, doc.Maintained, caseRoundPacks)
 		}
 		if _, err := runGit(t, w.pool, s.Dir, "", "fsck", "--connectivity-only", "--no-progress"); err != nil {
 			t.Errorf("fsck over the round's index: %v", err)
@@ -70,8 +71,8 @@ func TestAFullRoundIndexesManyPacksBeforeItAnswers(t *testing.T) {
 		if ran := cache.MaintainerPass(c); len(ran) != 1 {
 			t.Fatalf("the maintainer ran %v over a round's index with no bitmap, want the repository", ran)
 		}
-		if doc := readStateDoc(t, s.Dir); doc.Midx.Packs != caseRoundPacks || !doc.Midx.Bitmap {
-			t.Errorf("after the maintainer the state's midx is %+v, want %d packs with the bitmap", doc.Midx, caseRoundPacks)
+		if midx := readStateDoc(t, s.Dir).midx(); midx.Covers != caseRoundPacks || midx.Step != string(cache.StepBitmap) {
+			t.Errorf("after the maintainer the state's index is %+v, want %d packs with the bitmap", midx, caseRoundPacks)
 		}
 		bitmapOf(t, filepath.Join(s.Dir, "objects", "pack"))
 	})
@@ -254,8 +255,8 @@ func TestARoundNeverReplacesAnIndexThatExists(t *testing.T) {
 		t.Fatalf("the maintainer ran %v after the round's own index, want the repository", ran)
 	}
 	bitmapOf(t, filepath.Join(s.Dir, "objects", "pack"))
-	if doc := readStateDoc(t, s.Dir); doc.Midx.Packs != caseRoundPacks || !doc.Midx.Bitmap {
-		t.Errorf("after the maintainer the state's midx is %+v, want %d packs with the bitmap", doc.Midx, caseRoundPacks)
+	if midx := readStateDoc(t, s.Dir).midx(); midx.Covers != caseRoundPacks || midx.Step != string(cache.StepBitmap) {
+		t.Errorf("after the maintainer the state's index is %+v, want %d packs with the bitmap", midx, caseRoundPacks)
 	}
 }
 
@@ -383,8 +384,13 @@ func TestTheMaintainerIndexesAfterABurst(t *testing.T) {
 	dst := filepath.Join(t.TempDir(), "clone.git")
 	w.client.Run(t, "", "-c", "protocol.version=2", "clone", "--bare", "--no-local", s.Dir, dst)
 	doc := readStateDoc(t, s.Dir)
-	if doc.Midx.Packs != 9 || !doc.Midx.Bitmap || !doc.Midx.LastRun.Equal(ranAt) || doc.Midx.Bytes != heldBy(t, s.Dir)-doc.DiskBytes {
-		t.Errorf("the persisted midx is %+v, want 9 packs, the bitmap, last run at %v and the maintainer's bytes", doc.Midx, ranAt)
+	midx, graph := doc.midx(), doc.graph()
+	if midx.Covers != 9 || midx.Step != string(cache.StepBitmap) || graph.Step != string(cache.StepGraph) ||
+		midx.Bytes == 0 || graph.Bytes == 0 || !doc.Maintained.LastRun.Equal(ranAt) ||
+		doc.derivedBytes() != heldBy(t, s.Dir)-doc.DiskBytes {
+		t.Errorf("the persisted derived files are %+v and the run %+v, want an index over 9 packs with the bitmap "+
+			"and the graph, each with its bytes and together all the maintainer's, and the last run at %v",
+			doc.Derived, doc.Maintained, ranAt)
 	}
 	if got := w.logs.lines(t, "code_cache_maintained"); len(got) != 2 || got[0]["first"] != true ||
 		got[1]["first"] != false || got[1]["packs"] != float64(9) || got[1]["index"] != "bitmap" {
@@ -517,7 +523,7 @@ func TestTheDutyCycleBoundsAHeavyRepository(t *testing.T) {
 	}
 	c.Stop(context.Background())
 	doc := readStateDoc(t, s.Dir)
-	doc.Midx.Took = 2 * time.Minute
+	doc.Maintained.Took = 2 * time.Minute
 	writeState(t, s.Dir, doc)
 
 	c = w.open(t, clk.on)
@@ -791,8 +797,8 @@ func TestASweepDropsTheMultiPackIndexWithAPack(t *testing.T) {
 	if _, err := runGit(t, w.pool, s.Dir, "", "fsck", "--connectivity-only", "--no-progress"); err != nil {
 		t.Errorf("fsck after a pack was removed under the index: %v", err)
 	}
-	if doc := readStateDoc(t, s.Dir); doc.Midx.Packs != 0 || doc.Midx.Bitmap || doc.Midx.Bytes != 0 {
-		t.Errorf("the state's midx is %+v after its files were dropped, want none", doc.Midx)
+	if doc := readStateDoc(t, s.Dir); len(doc.Derived) != 0 {
+		t.Errorf("the state records %+v after the derived files were dropped, want none", doc.Derived)
 	}
 
 	clk.Add(cache.MidxMinInterval)
@@ -823,8 +829,8 @@ func TestMaintenanceRunsOnlyInAFreeMaintenanceSlot(t *testing.T) {
 	if ran := cache.MaintainerPass(c); len(ran) != 0 {
 		t.Fatalf("the maintainer ran %v with the maintenance slot held", ran)
 	}
-	if doc := readStateDoc(t, s.Dir); !doc.Midx.LastRun.IsZero() || doc.Midx.Packs != 0 {
-		t.Errorf("a run refused a slot recorded %+v", doc.Midx)
+	if doc := readStateDoc(t, s.Dir); !doc.Maintained.LastRun.IsZero() || doc.midx().Covers != 0 {
+		t.Errorf("a run refused a slot recorded %+v and %+v", doc.Derived, doc.Maintained)
 	}
 	if got := w.logs.lines(t, "code_cache_maintenance_failed"); len(got) != 0 {
 		t.Errorf("a run refused a slot logged a failure: %v", got)
@@ -1111,8 +1117,8 @@ func TestACommitGraphRefusedASlotIsAskedForAgainAtOnce(t *testing.T) {
 	if statOK(t, graph) || statOK(t, midx) {
 		t.Fatal("a run refused its slot wrote a file")
 	}
-	if doc := readStateDoc(t, s.Dir); doc.Midx.Graph || !doc.Midx.LastRun.IsZero() {
-		t.Errorf("a run refused its slot recorded %+v, want nothing", doc.Midx)
+	if doc := readStateDoc(t, s.Dir); doc.graph().Step != "" || !doc.Maintained.LastRun.IsZero() {
+		t.Errorf("a run refused its slot recorded %+v and %+v, want nothing", doc.Derived, doc.Maintained)
 	}
 	if got := w.logs.lines(t, "code_cache_maintenance_failed"); len(got) != 0 {
 		t.Errorf("a step refused a slot was logged as a failure: %v", got)
@@ -1124,9 +1130,9 @@ func TestACommitGraphRefusedASlotIsAskedForAgainAtOnce(t *testing.T) {
 	if !statOK(t, graph) || statOK(t, midx) {
 		t.Error("the graph-first run did not write the graph alone")
 	}
-	if doc := readStateDoc(t, s.Dir); !doc.Midx.Graph || !doc.Midx.LastRun.IsZero() {
-		t.Errorf("the state's midx is %+v after the graph-first run, want its graph and no run the duty "+
-			"cycle counts", doc.Midx)
+	if doc := readStateDoc(t, s.Dir); doc.graph().Step != string(cache.StepGraph) || !doc.Maintained.LastRun.IsZero() {
+		t.Errorf("the state records %+v and %+v after the graph-first run, want its graph and no run the duty "+
+			"cycle counts", doc.Derived, doc.Maintained)
 	}
 	clk.Add(cache.MidxDebounce)
 	if ran := cache.MaintainerPass(c); len(ran) != 1 || !statOK(t, midx) {
@@ -1363,8 +1369,8 @@ func TestAGraphFirstRunIsStartedAheadOfABitmap(t *testing.T) {
 // files, however many the copy holds, while every file the runs wrote — the
 // graph-first run's graph, the bitmap run's index and bitmap — is counted.
 //
-// Mutation: ownedBytes sizes every entry it lists (a nil keep), and the end
-// of each run stats every pack's .pack, .idx and .rev.
+// Mutation: derivedSizes sizes every entry it lists (a nil keep), and the
+// end of each run stats every pack's .pack, .idx and .rev.
 func TestTheEndOfARunStatsOnlyTheDerivedFiles(t *testing.T) {
 	t.Parallel()
 	const pushes = 12
@@ -1463,8 +1469,8 @@ func TestARunStoppedFromOutsideIsNoRun(t *testing.T) {
 	case <-time.After(hangDetector):
 		t.Fatalf("the pass has not ended %v after Stop", hangDetector)
 	}
-	if doc := readStateDoc(t, s.Dir); !doc.Midx.LastRun.IsZero() || doc.Midx.Took != 0 {
-		t.Errorf("a run Stop ended persisted %+v, want no run", doc.Midx)
+	if doc := readStateDoc(t, s.Dir); !doc.Maintained.LastRun.IsZero() || doc.Maintained.Took != 0 {
+		t.Errorf("a run Stop ended persisted %+v, want no run", doc.Maintained)
 	}
 
 	c = w.open(t, clk.on)
@@ -1534,8 +1540,8 @@ func TestAFailedMaintenanceLeavesNothingBehind(t *testing.T) {
 	if got := w.logs.lines(t, "code_cache_maintenance_failed"); len(got) != 1 || got[0]["step"] != "commit-graph" {
 		t.Errorf("code_cache_maintenance_failed = %v, want one line at commit-graph, the graph-first run's first step", got)
 	}
-	if doc := readStateDoc(t, s.Dir); !doc.Midx.LastRun.Equal(ranAt) || doc.Midx.Packs != 0 {
-		t.Errorf("the failed run recorded %+v, want its end and no index", doc.Midx)
+	if doc := readStateDoc(t, s.Dir); !doc.Maintained.LastRun.Equal(ranAt) || doc.midx().Covers != 0 {
+		t.Errorf("the failed run recorded %+v and %+v, want its end and no index", doc.Derived, doc.Maintained)
 	}
 	clk.Add(time.Minute)
 	if ran := cache.MaintainerPass(c); len(ran) != 0 {

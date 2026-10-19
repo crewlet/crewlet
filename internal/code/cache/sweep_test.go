@@ -379,9 +379,9 @@ func TestADerivedFileFollowsItsDeclarationOnEveryEvent(t *testing.T) {
 	w.log.recreate(before)
 	s := w.sync(t, c, repo)
 	held("a full round that removes the packs a log gone back no longer names", false)
-	if doc := readStateDoc(t, s.Dir); doc.Midx.Packs != 0 || doc.Midx.Bitmap || doc.Midx.Graph || doc.Midx.Bytes != 0 {
+	if doc := readStateDoc(t, s.Dir); len(doc.Derived) != 0 {
 		t.Errorf("the state after the drop records %+v, want no index, no bitmap, no graph and none of their bytes",
-			doc.Midx)
+			doc.Derived)
 	}
 	if packs, bitmap, graph := cache.Indexed(c, repo); packs != 0 || bitmap || graph {
 		t.Errorf("the incarnation after the drop records an index over %d packs (bitmap %t) and a graph %t, "+
@@ -398,8 +398,9 @@ func TestADerivedFileFollowsItsDeclarationOnEveryEvent(t *testing.T) {
 // call site.
 //
 // Mutations: drop writeRefs' call to dropFor, and the changed declarations'
-// graph survives; drop dropFor's record of what it took (forgot), and the
-// incarnation still records the graph it no longer holds.
+// graph survives; drop dropFor's removal of each dropped declaration's entry
+// (its closing setDerived), and the incarnation still records the graph it
+// no longer holds.
 func TestTheCodeReadsTheDeclarations(t *testing.T) {
 	t.Parallel()
 	dropOnRefs := cache.DerivedFiles()
