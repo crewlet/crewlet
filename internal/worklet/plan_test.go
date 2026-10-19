@@ -63,12 +63,21 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	db := planStore(t)
 	history := historyPlanStore(t)
 
-	// THE TABLES THIS TEST CAN HONESTLY SPEAK FOR: the ones the task
-	// query set reads, and the history. Every other tracker table's
-	// indexes are claimed by their comments and not by a plan, and
-	// pretending otherwise would make this test pass by not looking.
-	covered := []string{"tracker_tasks", "tracker_task_tags",
-		"tracker_task_deps", "tracker_field_values", "tracker_history"}
+	// THE TABLES THIS TEST CAN HONESTLY SPEAK FOR: a task's own rows —
+	// the task, its tags, its dependency edges and their mirror, its
+	// relations and its field values — and the history. Every other
+	// tracker table's indexes are claimed by their comments and not by a
+	// plan, and pretending otherwise would make this test pass by not
+	// looking.
+	//
+	// THE RELATIONS AND THE MIRROR WERE OUTSIDE IT, and that was the same
+	// pretence: the query grammar's link filters, a task's links in its
+	// detail, the repair duties' selections and probes, a purge's reach and
+	// the backlinks of a page all read them, and none was planned.
+	taskTables := []string{"tracker_tasks", "tracker_task_tags",
+		"tracker_task_deps", "tracker_task_dependents", "tracker_relations",
+		"tracker_field_values"}
+	covered := append(slices.Clone(taskTables), "tracker_history")
 
 	// NO REGISTERED READER READS A COVERED TABLE WITH NO INDEX AT ALL —
 	// at any scope, a query's own subqueries and a duty's statement
@@ -295,7 +304,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	// field value from the heap once per field, and the subtree walk,
 	// which read the table from the heap once per level.
 	planned = append(planned, registered...)
-	for _, literal := range statementLiterals(t, covered[:4]...) {
+	for _, literal := range statementLiterals(t, taskTables...) {
 		if !slices.ContainsFunc(planned, func(statement string) bool {
 			return strings.Contains(statement, literal.text)
 		}) {
@@ -445,6 +454,7 @@ func registeredQueries() map[string]map[string]any {
 		"tagged":            {"container": "project:P01", "tag": "urgent"},
 		"blocked":           {"container": "project:P01", "blocked": "true"},
 		"a linked page":     {"container": "project:P01", "linked_page": "s-1"},
+		"one-sided edges":   {"container": "project:P01", "flag": "one_sided"},
 		"with dependencies": {"container": "project:P01", "has_dependencies": "true"},
 		// ONE REGISTERED QUERY PER TYPED COLUMN, because the four
 		// partial indexes on tracker_field_values are one per column and
@@ -474,6 +484,8 @@ func registeredQueries() map[string]map[string]any {
 		"without subtasks everywhere": {"has_children": "false"},
 		"one subtree everywhere":      {"root": "t-00001"},
 		"a linked page everywhere":    {"linked_page": "s-1"},
+		"one-sided edges everywhere":  {"flag": "one_sided"},
+		"refused mirrors everywhere":  {"flag": "one_sided_final"},
 		"by spend everywhere":         {"sort": "-spend_tokens"},
 
 		// EVERY TAG MODE AT BOTH SCOPES, each held to the plan its mode
@@ -647,6 +659,9 @@ func taskReads() map[string]indexedRead {
 			[]string{"t-00001", "t-00002", "t-00003"})), key, false},
 		"a page's backlinked tasks": {read(search.LinkedTasksRead(
 			[]string{"t-00001", "t-00002", "t-00003"})), key, false},
+		// AND THE BACKLINKS' TASKS NAMING A PAGE, through the reverse edge.
+		"a page's related tasks": {read(search.RelatedTasksRead("s-00001")),
+			"tracker_relations_other_idx", false},
 	}
 	const (
 		task, other = "t-00001", "t-00002"
@@ -658,6 +673,10 @@ func taskReads() map[string]indexedRead {
 		open        = "tracker_task_deps_open_idx"
 		board       = "tracker_tasks_board_idx"
 		queue       = "tracker_tasks_queue_idx"
+
+		relationsKey = "sqlite_autoindex_tracker_relations_1"
+		mirrorKey    = "sqlite_autoindex_tracker_task_dependents_1"
+		reverse      = "tracker_relations_other_idx"
 	)
 	for name, read := range map[string]indexedRead{
 		// THE APPLY PATH: a task read and rewritten by its key, its
@@ -678,6 +697,28 @@ func taskReads() map[string]indexedRead {
 		"a task's values cleared":      seek(values, clearFieldValuesStatement, task),
 		"a task's tags cleared":        seek(tags, childClearStatement("tracker_task_tags"), task),
 		"a task's edges cleared":       seek(dependents, clearDepsStatement, task),
+		// A TASK'S RELATIONS AND ITS MIRROR, cleared and written by the
+		// task; every edge waiting on a blocker re-judged against the
+		// blocker's mirror, found by its other end; and the purge's
+		// reads of who names the purged task.
+		"a task's relations cleared": seek(relationsKey,
+			childClearStatement("tracker_relations"), task),
+		"a task's relations written": seek(mirrorKey, store.InsertStatement(
+			relationsInsertPrefix, relationsInsertRow, relationsInsertConflict, 1),
+			task, other, "waiting_on", "waiting_on", other, task, 0, "", 1),
+		"a task's mirror cleared": seek(mirrorKey,
+			childClearStatement("tracker_task_dependents"), task),
+		"the edges waiting on a blocker re-judged": seek(reverse,
+			rejudgeEdgesStatement, task, task),
+		"the tasks relating to a purged task": seek(reverse, relatingStatement,
+			task, task),
+		"the blockers listing a purged task": seek("tracker_task_dependents_rev_idx",
+			mirroringStatement, task, task),
+		// THE ONE-SIDED REPAIR'S GATE: an EXISTS over the partial index
+		// that holds exactly the edges it repairs, which stops at the
+		// first and reads nothing on a healthy company.
+		"the one-sided repair's gate": walk("tracker_relations_repair_idx",
+			pendingOneSidedStatement),
 		"a task's edges written": seek(key, store.InsertStatement(depsInsertPrefix,
 			depsInsertRow, depsInsertConflict, 1), other, task, other, other),
 		"a blocker's edges settled": seek(blockers, clearDependentsStatement, "done", 1, task),
@@ -757,6 +798,7 @@ func taskReads() map[string]indexedRead {
 		for _, table := range []struct{ name, index string }{
 			{"tracker_task_tags ", tags}, {"tracker_task_deps ", dependents},
 			{"tracker_field_values ", values}, {"tracker_tasks ", key},
+			{"tracker_relations ", relationsKey}, {"tracker_task_dependents ", mirrorKey},
 		} {
 			if strings.HasPrefix(statement.sql, "DELETE FROM "+table.name) {
 				reads["a purge's delete from "+strings.TrimSpace(table.name)] =

@@ -74,8 +74,6 @@ func everyClause() map[string]map[string]any {
 		"not a status":               {"status": "!done,todo"},
 		"a priority":                 {"priority": "high"},
 		"a priority list":            {"priorities": "h-1"},
-		"a one-sided edge":           {"flag": "one_sided,cycle"},
-		"a final one-sided edge":     {"flag": "one_sided_final"},
 		"every task flag":            {"flag": "cycle,too_deep,inconsistent_project,key_collision"},
 		"archived only":              {"archived": "only"},
 		"not blocked":                {"blocked": "false"},
